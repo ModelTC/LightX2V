@@ -20,14 +20,16 @@ _H3_BLOCK_KEY_RE = re.compile(r"^transformer_blocks\.(\d+)\.")
 class MiniMaxH3ShardCheckpoint:
     """Index safetensors headers for selective loading, using upstream file discovery."""
 
-    def __init__(self, checkpoint_dir):
+    def __init__(self, checkpoint_dir, weight_map=None):
         checkpoint = Path(checkpoint_dir)
+        self.checkpoint_dir = checkpoint if checkpoint.is_dir() else checkpoint.parent
+        self.weight_map = {} if weight_map is None else dict(weight_map)
+        self._shard_headers = {}
+        if weight_map is not None:
+            return
         files = sorted(checkpoint.glob("*.safetensors")) if checkpoint.is_dir() else [checkpoint]
         if not files or any(not path.is_file() for path in files):
             raise FileNotFoundError(f"MiniMax-H3 safetensors checkpoint not found: {checkpoint}")
-        self.checkpoint_dir = checkpoint if checkpoint.is_dir() else checkpoint.parent
-        self.weight_map = {}
-        self._shard_headers = {}
         # Match the upstream model loader's directory/single-file discovery.
         # Read only headers here; tensor data is loaded when a block requests it.
         for path in files:

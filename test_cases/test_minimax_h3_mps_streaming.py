@@ -1,10 +1,12 @@
 """Run with PLATFORM=mps DTYPE=BF16 SENSITIVE_LAYER_DTYPE=BF16 python -m unittest test_cases.test_minimax_h3_mps_streaming."""
 
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -193,6 +195,98 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
         encoder.load()
         encoder.load_tokenizer.assert_called_once()
         encoder.load_text_encoder.assert_called_once()
+
+    @unittest.skipUnless(hasattr(torch.mps, "_host_alias_storage"), "Requires shared MPS storage")
+    def test_text_prefetch_overlaps_reads_and_recovers(self):
+        text_config = {
+            "hidden_size": 8,
+            "head_dim": 4,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "intermediate_size": 16,
+            "vocab_size": 16,
+            "rms_norm_eps": 1e-6,
+            "rope_theta": 10000,
+        }
+        config = {"text_encoder_host_pinned": False}
+        encoder = MiniMaxH3Qwen3VLTextEncoder
+        with tempfile.TemporaryDirectory() as directory, patch("lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl.MINIMAX_H3_TEXT_ENCODER_LAYER", 3):
+            generator = torch.Generator().manual_seed(1497)
+            tensors = {name: torch.randn(shape, generator=generator).to(torch.bfloat16) for name, shape in encoder._expected_weight_shapes(text_config).items()}
+            # Use indexed subdirectories and cross a shard boundary during prefetch.
+            (Path(directory) / "shards").mkdir()
+            indexed_weights = {}
+            for index in (0, 1):
+                shard_name = f"shards/model-{index}.safetensors"
+                shard = {name: tensor for name, tensor in tensors.items() if (".layers.1." in name) == bool(index)}
+                save_file(shard, str(Path(directory) / shard_name))
+                indexed_weights.update(dict.fromkeys(shard, shard_name))
+            (Path(directory) / "model.safetensors.index.json").write_text(json.dumps({"weight_map": indexed_weights}))
+            synchronous = _Qwen3VLTextBackboneWeights(config, text_config, num_layers=3, disk_streaming=True)
+            streaming = _Qwen3VLTextBackboneWeights({**config, "text_encoder_prefetch": True}, text_config, num_layers=3, disk_streaming=True)
+            weight_map, _ = encoder._preflight_native_checkpoint(synchronous, directory, text_config)
+            input_ids = torch.tensor([1, 3, 5, 7], device="mps")
+            try:
+                synchronous.init_disk_streaming(directory, weight_map)
+                expected = synchronous.forward(input_ids)
+                streaming.init_disk_streaming(directory, weight_map)
+                buffers = list(streaming.offload_cuda_buffers)
+                addresses = [layer.mlp.down_proj.weight.data_ptr() for layer in buffers]
+                self.assertEqual(len(set(addresses)), 2)
+                started, proceed = threading.Event(), threading.Event()
+                reads = []
+                load_block = streaming.load_block_into
+                forward = buffers[0].forward
+
+                def read(layer, index):
+                    reads.append((index, threading.get_ident()))
+                    if index == 1:
+                        started.set()
+                        if not proceed.wait(5):
+                            raise TimeoutError("Prefetch blocked the compute thread")
+                    load_block(layer, index)
+
+                def compute(hidden, positions):
+                    self.assertTrue(started.wait(5), "The next layer was not prefetched before compute")
+                    proceed.set()
+                    return forward(hidden, positions)
+
+                with patch.object(streaming, "load_block_into", side_effect=read), patch.object(buffers[0], "forward", side_effect=compute):
+                    actual = streaming.forward(input_ids)
+                torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+                self.assertEqual([index for index, _ in reads], [0, 1, 2])
+                self.assertEqual(reads[0][1], threading.get_ident())
+                self.assertTrue(all(worker != threading.get_ident() for _, worker in reads[1:]))
+                torch.testing.assert_close(streaming.forward(input_ids), expected, rtol=0, atol=0)
+                self.assertEqual([layer.mlp.down_proj.weight.data_ptr() for layer in buffers], addresses)
+
+                def fail_read(layer, index):
+                    if index == 1:
+                        raise OSError("test prefetch failure")
+                    load_block(layer, index)
+
+                for failure in ("read", "compute"):
+                    with self.subTest(failure=failure):
+                        injection = (
+                            patch.object(streaming, "load_block_into", side_effect=fail_read)
+                            if failure == "read"
+                            else patch.object(buffers[0], "forward", side_effect=RuntimeError("test compute failure"))
+                        )
+                        with injection, self.assertRaisesRegex((OSError, RuntimeError), "test .* failure"):
+                            streaming.forward(input_ids)
+                        self.assertIsNone(streaming.offload_manager.executor)
+                        self.assertEqual(streaming.offload_manager.prefetch_futures, [])
+                        torch.testing.assert_close(streaming.forward(input_ids), expected, rtol=0, atol=0)
+
+                streaming.release_disk_streaming_buffer()
+                self.assertIsNone(streaming.offload_manager)
+                self.assertIsNone(streaming.offload_cuda_buffers)
+                self.assertTrue(all(not layer.shared_host_tensors for layer in buffers))
+                self.assertTrue(all(module.weight is None and module.weight_cuda_buffer is None for layer in buffers for module in layer.weight_modules()))
+                torch.testing.assert_close(streaming.forward(input_ids), expected, rtol=0, atol=0)
+            finally:
+                synchronous.release_disk_streaming_buffer()
+                streaming.release_disk_streaming_buffer()
 
     def test_regular_encoder_still_preloads_visual_components(self):
         encoder = MiniMaxH3Qwen3VLTextEncoder.__new__(MiniMaxH3Qwen3VLTextEncoder)

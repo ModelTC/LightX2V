@@ -38,6 +38,8 @@ bash scripts/platforms/mps/run_minimax_h3_t2av.sh
 
 DiT 和文本编码器逐层从磁盘读取权重，VAE 在解码阶段加载。当前文本编码器磁盘加载仅支持 `--model-variant fl2av --task t2av`，不支持图像条件、量化或张量并行。
 
+Mac 配置默认开启 `text_encoder_prefetch=true`：文本编码器复用两套层权重缓冲区，后台线程将下一层直接读入空闲的 MPS 共享缓冲区，与当前层计算重叠。该模式要求 `torch.mps._host_alias_storage` 可用、文件 dtype 与推理 dtype 一致。设为 `false` 可恢复单缓冲区同步加载，减少一层权重的内存占用；两种模式均在文本编码结束后按 `text_encoder_release_block_offload_buffers` 释放缓冲区。
+
 默认开启 `dit_mps_shared_buffer=true`：两套 DiT 权重缓冲区交替计算和预读，在复用前等待 GPU 计算与磁盘读取完成。此模式要求：
 
 - PyTorch 提供私有接口 `torch.mps._host_alias_storage`，已在 PyTorch 2.14.0 验证。
