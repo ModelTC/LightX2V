@@ -38,7 +38,7 @@ bash scripts/platforms/mps/run_minimax_h3_t2av.sh
 
 DiT 和文本编码器逐层从磁盘读取权重，VAE 在解码阶段加载。当前文本编码器磁盘加载仅支持 `--model-variant fl2av --task t2av`，不支持图像条件、量化或张量并行。
 
-DiT 磁盘逐层加载（`dit_disk_streaming=true`）不支持 LoRA，包括启动时加载和运行时切换。请勿设置 `lora_configs`、传入 `lora_path` 或启用 `lora_dynamic_apply`。
+DiT 磁盘逐层加载（`dit_disk_streaming=true`）不支持 LoRA，包括启动时加载和运行时切换。
 
 Mac 配置默认开启 `text_encoder_prefetch=true`：文本编码器复用两套层权重缓冲区，后台线程将下一层直接读入空闲的 MPS 共享缓冲区，与当前层计算重叠。该模式要求 `torch.mps._host_alias_storage` 可用、文件 dtype 与推理 dtype 一致。设为 `false` 可恢复单缓冲区同步加载，减少一层权重的内存占用；两种模式均在文本编码结束后按 `text_encoder_release_block_offload_buffers` 释放缓冲区。
 

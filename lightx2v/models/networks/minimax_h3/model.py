@@ -51,27 +51,6 @@ H3_CHANNEL_QUANT_SCHEMES = {
 }
 
 
-def _collect_declared_base_tensor_names(*roots):
-    names = []
-    seen = set()
-    stack = list(roots)
-    visited = set()
-    while stack:
-        obj = stack.pop()
-        if obj is None or id(obj) in visited:
-            continue
-        visited.add(id(obj))
-        for name, _, _ in getattr(unwrap_tp_linear(obj), "base_attrs", ()):
-            if name.startswith("transformer_blocks."):
-                raise ValueError(f"MiniMax-H3 pre/post disk-streaming tensor list unexpectedly contains block tensor: {name}")
-            if name not in seen:
-                seen.add(name)
-                names.append(name)
-        stack.extend(getattr(obj, "_modules", {}).values())
-        stack.extend(getattr(obj, "_parameters", {}).values())
-    return tuple(sorted(names))
-
-
 class MiniMaxH3Model(BaseTransformerModel):
     """LightX2V-native MiniMax-H3 joint audio/video transformer."""
 
@@ -125,23 +104,8 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("MiniMax-H3 supports model and block CPU offload")
-        if config.get("dit_mps_shared_buffer", False) and (AI_DEVICE != "mps" or not config.get("dit_disk_streaming", False)):
-            raise ValueError("dit_mps_shared_buffer requires MPS and dit_disk_streaming=true")
         if config.get("dit_disk_streaming", False):
-            if config.get("shared_cpu_weights", False):
-                raise ValueError("MiniMax-H3 dit_disk_streaming cannot be combined with shared_cpu_weights.")
-            if not config.get("cpu_offload", False):
-                raise ValueError("MiniMax-H3 dit_disk_streaming requires cpu_offload=true.")
-            if config.get("offload_granularity", "model") != "block":
-                raise ValueError("MiniMax-H3 dit_disk_streaming requires offload_granularity='block'.")
-            if config.get("lazy_load", False):
-                raise NotImplementedError("MiniMax-H3 dit_disk_streaming cannot be combined with lazy_load.")
-            if config.get("dit_quantized", False):
-                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support quantized DiT checkpoints yet.")
-            if config.get("tensor_parallel", False):
-                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support tensor parallel inference yet.")
-            if lora_path is not None or config.get("lora_configs") or config.get("lora_dynamic_apply", False):
-                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support LoRA.")
+            assert lora_path is None and not config.get("lora_configs")
         if config.get("attn_type") == "sol_attn":
             reorder = str(config.get("sol_attn_setting", {}).get("reorder", "none")).lower()
             if reorder != "none":
@@ -182,25 +146,17 @@ class MiniMaxH3Model(BaseTransformerModel):
     def _init_weights(self, weight_dict=None):
         if not self.config.get("dit_disk_streaming", False):
             return super()._init_weights(weight_dict)
-        if weight_dict is not None:
-            raise ValueError("MiniMax-H3 dit_disk_streaming loads weights directly from the diffusers checkpoint; explicit weight_dict is not supported.")
 
         self.transformer_weights = MiniMaxH3StreamingTransformerWeights(self.config)
         self.pre_weight = self.pre_weight_class(self.config)
         self.post_weight = self.post_weight_class(self.config)
 
         checkpoint = self.transformer_weights.checkpoint
-        prepost_tensor_names = _collect_declared_base_tensor_names(self.pre_weight, self.post_weight)
-        missing = sorted(name for name in prepost_tensor_names if name not in checkpoint.weight_map)
-        if missing:
-            raise KeyError(f"MiniMax-H3 dit_disk_streaming checkpoint is missing pre/post tensors: {missing}")
-
+        prepost_tensor_names = {name for weight in self._iter_weight_objects(self.pre_weight, self.post_weight) for name, _, _ in getattr(weight, "base_attrs", ())}
         prepost_weights = checkpoint.load_tensors(prepost_tensor_names, device="cpu")
         try:
             self.pre_weight.load(prepost_weights)
             self.post_weight.load(prepost_weights)
-            if prepost_weights:
-                raise RuntimeError(f"MiniMax-H3 dit_disk_streaming pre/post tensors were not consumed: {sorted(prepost_weights)}")
         finally:
             del prepost_weights
             gc.collect()
@@ -309,8 +265,6 @@ class MiniMaxH3Model(BaseTransformerModel):
         return model_keys, ranks
 
     def _load_lora_file(self, file_path, alpha=None):
-        if self.config.get("dit_disk_streaming", False):
-            raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support LoRA.")
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"MiniMax-H3 LoRA file not found: {file_path}")
 

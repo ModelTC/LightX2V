@@ -38,7 +38,7 @@ def _empty_device_cache():
 
 
 class MiniMaxH3StreamingTransformerWeights(WeightModule):
-    """Own transient device blocks; MiniMaxH3Model validates the streaming configuration."""
+    """Own transient device blocks for disk streaming."""
 
     disk_streaming = True
 

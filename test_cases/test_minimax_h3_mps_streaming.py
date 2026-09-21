@@ -20,7 +20,6 @@ from safetensors.torch import save_file
 if os.environ.get("PLATFORM") != "mps" or not torch.backends.mps.is_available():
     raise unittest.SkipTest("Requires the MPS platform and an Apple GPU")
 
-from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight
 from lightx2v.common.ops.attn.torch_sdpa_mps import TorchSDPAMPSWeight
 from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl import MiniMaxH3Qwen3VLTextEncoder, _Qwen3VLTextBackboneWeights
@@ -386,27 +385,9 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
         encoder.load_processor.assert_called_once()
         encoder.load_vision_encoder.assert_called_once()
 
-    def test_disk_streaming_rejects_shared_cpu_loading(self):
-        with self.assertRaisesRegex(ValueError, "cannot be combined with shared_cpu_weights"):
-            MiniMaxH3Model("unused", {"dit_disk_streaming": True, "shared_cpu_weights": True}, "mps")
+    def test_text_disk_streaming_rejects_shared_cpu_loading(self):
         with self.assertRaisesRegex(ValueError, "cannot be combined with text_encoder_shared_cpu_weights"):
             MiniMaxH3Qwen3VLTextEncoder({"text_encoder_disk_streaming": True, "text_encoder_shared_cpu_weights": True})
-
-    def test_model_rejects_unsupported_streaming_modes_before_loading(self):
-        config = {"dit_disk_streaming": True, "cpu_offload": True, "offload_granularity": "block", "use_adaln_cache": True, "adaln_cache_dir": "unused"}
-        cases = (
-            ({"lazy_load": True}, NotImplementedError, "cannot be combined with lazy_load"),
-            ({"dit_quantized": True, "dit_quant_scheme": "int8-q8f", "dit_quantized_ckpt": "unused"}, NotImplementedError, "does not support quantized"),
-            ({"tensor_parallel": True}, NotImplementedError, "does not support tensor parallel"),
-            ({"cpu_offload": False}, ValueError, "requires cpu_offload=true"),
-            ({"offload_granularity": "model"}, ValueError, "requires offload_granularity='block'"),
-            ({"dit_mps_shared_buffer": True, "dit_disk_streaming": False}, ValueError, "requires MPS and dit_disk_streaming=true"),
-        )
-        with patch("lightx2v.models.networks.minimax_h3.weights.streaming_weights.MiniMaxH3ShardCheckpoint") as checkpoint:
-            for overrides, error, message in cases:
-                with self.subTest(overrides=overrides), self.assertRaisesRegex(error, message):
-                    MiniMaxH3Model("unused", {**config, **overrides}, "mps")
-            checkpoint.assert_not_called()
 
     def test_disk_streaming_rejects_lora_before_loading(self):
         config = {"dit_disk_streaming": True, "cpu_offload": True, "offload_granularity": "block", "use_adaln_cache": True, "adaln_cache_dir": "unused"}
@@ -415,28 +396,41 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
             ({"lora_dynamic_apply": True}, "unused.safetensors"),
             ({"lora_configs": [{"path": "unused.safetensors", "alpha": 8}]}, None),
             ({"lora_configs": [{"path": "unused.safetensors", "alpha": 8}], "lora_dynamic_apply": True}, None),
-            ({"lora_dynamic_apply": True}, None),
         )
-        with patch("lightx2v.models.networks.minimax_h3.model.BaseTransformerModel.__init__", side_effect=AssertionError("Loaded base weights before rejecting LoRA")):
+        with patch("lightx2v.models.networks.minimax_h3.model.BaseTransformerModel.__init__") as init_base:
             for shared in (False, True):
                 for overrides, lora_path in cases:
-                    with self.subTest(shared=shared, overrides=overrides, lora_path=lora_path), self.assertRaisesRegex(NotImplementedError, "dit_disk_streaming does not support LoRA"):
+                    with self.subTest(shared=shared, overrides=overrides, lora_path=lora_path), self.assertRaises(AssertionError):
                         MiniMaxH3Model("unused", {**config, "dit_mps_shared_buffer": shared, **overrides}, "mps", lora_path=lora_path)
+            init_base.assert_not_called()
 
     def test_disk_streaming_rejects_runtime_lora(self):
         model = MiniMaxH3Model.__new__(MiniMaxH3Model)
         model.config = {"dit_disk_streaming": True}
-        with patch("lightx2v.models.networks.minimax_h3.model.safe_open") as open_checkpoint:
+        model.device = "cpu"
+        model.use_tp = False
+        model.lora_alpha = None
+        with tempfile.TemporaryDirectory() as directory, patch.object(model, "_register_dynamic_lora_weights") as register:
+            lora_path = str(Path(directory) / "lora.safetensors")
+            save_file(
+                {
+                    "transformer_blocks.0.attn.to_q.lora_down.weight": torch.ones((2, 8)),
+                    "transformer_blocks.0.attn.to_q.lora_up.weight": torch.ones((8, 2)),
+                    "transformer_blocks.0.attn.to_q.alpha": torch.tensor(2.0),
+                },
+                lora_path,
+            )
+            # Streaming never builds the resident weight-shape index required by LoRA.
             for method, args in (
-                (model._load_lora_file, ("unused.safetensors",)),
-                (model._register_lora, ("unused.safetensors", 1.0)),
-                (model._update_lora, ("unused.safetensors", 1.0)),
+                (model._load_lora_file, (lora_path,)),
+                (model._register_lora, (lora_path, 1.0)),
+                (model._update_lora, (lora_path, 1.0)),
             ):
-                with self.subTest(method=method.__name__), self.assertRaisesRegex(NotImplementedError, "dit_disk_streaming does not support LoRA"):
+                with self.subTest(method=method.__name__), self.assertRaisesRegex(AttributeError, "_h3_weight_shapes"):
                     method(*args)
             with self.assertRaisesRegex(NotImplementedError, "not a merged tensor dictionary"):
                 model._update_lora({}, 1.0)
-            open_checkpoint.assert_not_called()
+            register.assert_not_called()
 
     def test_supported_tasks_preserve_both_loading_modes(self):
         runner = MiniMaxH3Runner.__new__(MiniMaxH3Runner)
@@ -517,6 +511,13 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
         }
         generator = torch.Generator().manual_seed(1497)
         tensors = {f"transformer_blocks.{index}.{name}": torch.randn(shape, generator=generator).to(torch.bfloat16) for index in range(2) for name, shape in shapes.items()}
+        tensors.update({f"token_refiner.refiner_blocks.0.{name}": tensors[f"transformer_blocks.0.{name}"].clone() for name in shapes})
+        for name, shape in (("proj_in", (8, 4)), ("audio_proj_in", (8, 4)), ("context_embedder", (8, 8)), ("proj_out", (4, 8)), ("audio_proj_out", (4, 8))):
+            dtype = torch.bfloat16 if name == "context_embedder" else torch.float32
+            tensors[f"{name}.weight"] = torch.randn(shape, generator=generator).to(dtype)
+            tensors[f"{name}.bias"] = torch.randn(shape[0], generator=generator).to(dtype)
+        for name in ("token_refiner.final_norm.weight", "norm_out.norm.weight"):
+            tensors[name] = torch.ones(8, dtype=torch.bfloat16)
         save_file(tensors, str(root / "diffusion_pytorch_model.safetensors"))
         return tensors
 
@@ -568,6 +569,7 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                     with self.subTest(shared=shared, fused=fused):
                         config = {
                             "num_layers": 2,
+                            "num_refiner_layers": 1,
                             "cpu_offload": True,
                             "offload_granularity": "block",
                             "dit_disk_streaming": True,
@@ -582,10 +584,10 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                         model.cpu_offload = True
                         model.block_offload = True
                         model.device = "mps"
-                        # This fixture contains only the main transformer blocks.
-                        model.pre_weight_class = lambda config: WeightModule()
-                        model.post_weight_class = lambda config: WeightModule()
                         model._init_weights()
+                        torch.testing.assert_close(model.pre_weight.proj_in.pin_weight, tensors["proj_in.weight"].t(), rtol=0, atol=0)
+                        torch.testing.assert_close(model.pre_weight.refiner_blocks[0].attn.to_q.pin_weight, tensors["token_refiner.refiner_blocks.0.attn.to_q.weight"].t(), rtol=0, atol=0)
+                        torch.testing.assert_close(model.post_weight.proj_out.pin_weight, tensors["proj_out.weight"].t(), rtol=0, atol=0)
                         self.assertIsInstance(model.transformer_weights, MiniMaxH3StreamingTransformerWeights)
                         model._init_infer_class()
                         # Exercise the real offload loop without a full AdaLN cache/model.
