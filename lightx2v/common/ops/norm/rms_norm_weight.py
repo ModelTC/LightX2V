@@ -5,24 +5,10 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v_platform.base.global_var import AI_DEVICE
-
-if str(AI_DEVICE) == "mps":
-    fused_norm_3drope = None
-    fused_qk_norm_3drope = None
-    fused_qk_rms_norm = None
-    rms_norm_kernel = None
-else:
-    from lightx2v.common.ops.norm.triton_ops import (
-        fused_norm_3drope,
-        fused_qk_norm_3drope,
-        fused_qk_rms_norm,
-        rms_norm_kernel,
-    )
-
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
     import sgl_kernel
@@ -508,6 +494,9 @@ class RMSWeightOnePass(RMSWeight):
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
+        from .triton_ops import rms_norm_kernel
+
+        self._kernel = rms_norm_kernel
         super().__init__(
             weight_name,
             create_cuda_buffer,
@@ -526,7 +515,7 @@ class RMSWeightOnePass(RMSWeight):
             return torch.nn.functional.rms_norm(input_tensor, (input_tensor.shape[-1],), eps=self.eps)
         if use_magi_custom_ops() and magi_register_custom_op is not None:
             return torch.ops.lightx2v.rms_norm(input_tensor, w, self.eps)
-        return rms_norm_kernel(input_tensor, w, self.eps)
+        return self._kernel(input_tensor, w, self.eps)
 
 
 def apply_qk_rms_norm(
@@ -541,6 +530,8 @@ def apply_qk_rms_norm(
         return query, key
 
     if use_triton and norm_q is not None and norm_k is not None and norm_q.eps == norm_k.eps and query.is_cuda and key.is_cuda and query.shape[-1] == key.shape[-1]:
+        from .triton_ops import fused_qk_rms_norm
+
         q_shape = query.shape
         k_shape = key.shape
         head_dim = q_shape[-1]
@@ -588,6 +579,9 @@ class RMSWeightFusedQKNorm3DRope:
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
+        from .triton_ops import fused_qk_norm_3drope
+
+        self._kernel = fused_qk_norm_3drope
         self.q_weight_name_t = q_weight_name_t
         self.q_weight_name_hw = q_weight_name_hw
         self.k_weight_name_t = k_weight_name_t
@@ -615,7 +609,7 @@ class RMSWeightFusedQKNorm3DRope:
         k : [seq, num_kv_heads, head_dim] bfloat16
         """
         cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
-        fused_qk_norm_3drope(
+        self._kernel(
             q,
             k,
             self._w_qt,
@@ -653,6 +647,9 @@ class RMSWeightDualNorm3DRope:
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
+        from .triton_ops import fused_norm_3drope
+
+        self._kernel = fused_norm_3drope
         self.weight_name_t = weight_name_t
         self.weight_name_hw = weight_name_hw
         self.create_cuda_buffer = create_cuda_buffer
@@ -670,7 +667,7 @@ class RMSWeightDualNorm3DRope:
     def apply(self, x, cos_sin):
         """In-place fused dual-RMSNorm + 3D Neox-RoPE on x: [seq, num_heads, head_dim]."""
         cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
-        fused_norm_3drope(
+        self._kernel(
             x,
             self._w_t,
             self._w_hw,

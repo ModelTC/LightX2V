@@ -7,12 +7,6 @@ from safetensors import safe_open
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
-
-if str(AI_DEVICE) == "mps":
-    norm_infer = None
-else:
-    from .triton_ops import norm_infer
 
 try:
     from magi_compiler import magi_register_custom_op
@@ -259,6 +253,9 @@ class LNWeight(LNWeightTemplate):
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
+        from .triton_ops import norm_infer
+
+        self._kernel = norm_infer
         super().__init__(
             weight_name,
             bias_name,
@@ -277,4 +274,4 @@ class LNWeight(LNWeightTemplate):
         b = self._get_actual_bias()
         if use_magi_custom_ops() and magi_register_custom_op is not None:
             return torch.ops.lightx2v.triton_layer_norm(input_tensor, w, b, self.eps)
-        return norm_infer(input_tensor, w, b, self.eps)
+        return self._kernel(input_tensor, w, b, self.eps)
