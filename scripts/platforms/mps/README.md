@@ -19,7 +19,7 @@ MiniMax-H3/
 
 ```bash
 export MODEL_PATH=/path/to/MiniMax-H3
-# 默认使用当前环境中的 python，也可设置 PYTHON=/path/to/python。
+# 缓存脚本默认使用当前环境中的 python，也可设置 PYTHON=/path/to/python。
 
 # 首次运行生成 AdaLN 缓存；已有匹配缓存时可跳过。
 bash scripts/platforms/mps/run_cache_minimax_h3_adaln.sh
@@ -28,7 +28,7 @@ bash scripts/platforms/mps/run_minimax_h3_t2av.sh
 
 默认配置为 `configs/platforms/mps/minimax_h3_t2av_4step_512_22.json`，生成 512×512、22 帧、4 步、BF16 的音视频，用于快速验证。输出为 `save_results/output_lightx2v_minimax_h3_t2av.mp4`。
 
-两个脚本均支持 `MODEL_PATH`、`PYTHON` 和 `CONFIG_JSON` 环境变量；推理脚本另支持 `PROMPT`、`SEED` 和 `SAVE_RESULT_PATH`。路径可以包含空格，脚本无需修改本地路径即可运行。
+推理脚本使用固定的本机仓库、模型、Python 路径和推理参数，调整时直接修改脚本。缓存脚本支持 `MODEL_PATH`、`PYTHON` 和 `CONFIG_JSON` 环境变量；生成缓存时请与推理脚本中的模型和配置保持一致。
 
 缓存生成与推理必须使用相同模型和配置，尤其是步数与 flow shift。MPS 配置默认将缓存写入 `~/.cache/lightx2v/adaln/diffusers`；更换权重后需重新生成。
 
