@@ -107,14 +107,26 @@ bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2.sh
 bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2.sh
 ```
 
+For 2048×2048 output, use the dedicated 2K presets. They process four local attention heads per pipelined stage, which reduces communication-launch overhead at the longer sequence length:
+
+```bash
+# Text-to-image
+bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2_2k.sh
+
+# Image-to-image
+bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2_2k.sh
+```
+
 The scripts launch two processes on GPUs 0 and 1. Keep `CUDA_VISIBLE_DEVICES`, `torchrun --nproc_per_node`, and `parallel.seq_p_size` consistent when changing the GPU count. The target-image token count must be divisible by `seq_p_size`.
 
 | GPU | Task | Output resolution | End-to-end latency |
 | --- | --- | ---: | ---: |
 | RTX 5090 ×2 | T2I | 1024×1024 | **3.954 s** |
 | RTX 5090 ×2 | I2I | 1024×1024 | **4.802 s** |
+| RTX 5090 ×2 | T2I | 2048×2048 | **17.298 s** |
+| RTX 5090 ×2 | I2I | 2048×2048 | **25.488 s** |
 
-These results use the same request settings and measurement boundary as the single-GPU table above, with the median latency of three consecutive requests.
+These results use the same request settings and measurement boundary as the single-GPU table above, with the median latency of three consecutive requests. The 2K I2I measurement also uses `resolution: 2048` for reference-image preprocessing.
 
 ## 4. Service Deployment and API Usage
 

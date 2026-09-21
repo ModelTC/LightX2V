@@ -27,6 +27,7 @@ class QwenImage21TransformerInfer:
             self.seq_p_quant_scheme = parallel.get("seq_p_quant_scheme")
             self.seq_p_tensor_fusion = parallel.get("seq_p_tensor_fusion", False)
             self.seq_p_head_parallel = parallel.get("seq_p_head_parallel", False)
+            self.seq_p_head_parallel_group_size = int(parallel.get("seq_p_head_parallel_group_size", 1))
         else:
             self.seq_p_group = None
 
@@ -101,6 +102,7 @@ class QwenImage21TransformerInfer:
                     quant_scheme=self.seq_p_quant_scheme,
                     tensor_fusion=self.seq_p_tensor_fusion,
                     head_parallel=self.seq_p_head_parallel,
+                    head_parallel_group_size=self.seq_p_head_parallel_group_size,
                     aux_first=True,
                     attention_kwargs={},
                 )

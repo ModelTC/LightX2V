@@ -107,14 +107,26 @@ bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2.sh
 bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2.sh
 ```
 
+输出 2048×2048 图像时使用专用的 2K 配置。该配置在每个流水阶段处理 4 个本地 attention head，以降低长序列下的通信启动开销：
+
+```bash
+# 文生图
+bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2_2k.sh
+
+# 图生图
+bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2_2k.sh
+```
+
 脚本默认在 GPU 0、1 上启动两个进程。调整卡数时，需保持 `CUDA_VISIBLE_DEVICES`、`torchrun --nproc_per_node` 与 `parallel.seq_p_size` 一致。目标图像 token 数必须能被 `seq_p_size` 整除。
 
 | GPU | 任务 | 输出分辨率 | 端到端耗时 |
 | --- | --- | ---: | ---: |
 | RTX 5090 ×2 | T2I | 1024×1024 | **3.954 s** |
 | RTX 5090 ×2 | I2I | 1024×1024 | **4.802 s** |
+| RTX 5090 ×2 | T2I | 2048×2048 | **17.298 s** |
+| RTX 5090 ×2 | I2I | 2048×2048 | **25.488 s** |
 
-以上结果使用与单卡表格相同的请求参数和计时范围，均为连续三次请求的中位数。
+以上结果使用与单卡表格相同的请求参数和计时范围，均为连续三次请求的中位数。2K I2I 测试还使用 `resolution: 2048` 处理参考图。
 
 ## 4. 服务化部署与 API 调用
 

@@ -66,6 +66,14 @@ class QwenImage21Runner(DefaultRunner):
                     f"qwen_image_21 Ulysses requires num_attention_heads ({config['num_attention_heads']}) "
                     f"to be divisible by seq_p_size ({seq_p_size})"
                 )
+            head_parallel_group_size = parallel.get("seq_p_head_parallel_group_size", 1)
+            if not isinstance(head_parallel_group_size, int) or isinstance(head_parallel_group_size, bool):
+                raise TypeError("qwen_image_21 seq_p_head_parallel_group_size must be an integer")
+            heads_per_rank = config["num_attention_heads"] // seq_p_size
+            if not 1 <= head_parallel_group_size <= heads_per_rank:
+                raise ValueError(f"qwen_image_21 seq_p_head_parallel_group_size must be in [1, {heads_per_rank}], got {head_parallel_group_size}")
+            if head_parallel_group_size != 1 and not parallel.get("seq_p_head_parallel", False):
+                raise ValueError("qwen_image_21 seq_p_head_parallel_group_size requires seq_p_head_parallel=true")
             if parallel.get("seq_p_quant_scheme") not in (None, "fp8", "fp4"):
                 raise ValueError("qwen_image_21 seq_p_quant_scheme supports only fp8 and fp4")
         if config.get("dit_quantized"):
