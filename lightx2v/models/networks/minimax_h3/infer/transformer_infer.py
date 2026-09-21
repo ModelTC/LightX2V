@@ -65,15 +65,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self._current_adaln_tables = None
         self._adaln_cache_hit = False
         if self.use_adaln_cache:
-            self._adaln_cache, self._norm_out_cache = load_persistent_adaln_cache(config, self._cache_device())
+            self._adaln_cache, self._norm_out_cache = load_persistent_adaln_cache(config, AI_DEVICE)
         self.init_compile(config)
-
-    @staticmethod
-    def _cache_device():
-        if str(AI_DEVICE) == "mps":
-            return torch.device("mps")
-        device_module = getattr(torch, AI_DEVICE)
-        return torch.device(AI_DEVICE, device_module.current_device())
 
     def _gather_tp_last_dim(self, tensor):
         if self.tp_size == 1:
