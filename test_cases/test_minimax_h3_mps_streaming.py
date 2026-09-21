@@ -19,10 +19,11 @@ from safetensors.torch import save_file
 if os.environ.get("PLATFORM") != "mps" or not torch.backends.mps.is_available():
     raise unittest.SkipTest("Requires the MPS platform and an Apple GPU")
 
-from lightx2v.common.offload.mps_manager import MpsSharedWeightAsyncStreamManager
 from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight
 from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl import MiniMaxH3Qwen3VLTextEncoder, _Qwen3VLTextBackboneWeights
 from lightx2v.models.networks.minimax_h3.infer.fused_qkv import prepare_qkv_norm_rope
+from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
+from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3AttentionWeights, MiniMaxH3TransformerWeights
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
@@ -408,9 +409,30 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
             separate = torch.cat([module.apply(hidden_states) for module in (block.attn.to_q, block.attn.to_k, block.attn.to_v)], dim=-1)
             torch.testing.assert_close(block.attn.to_qkv.apply(hidden_states), separate, rtol=1e-2, atol=1e-2)
 
+    def test_offload_infer_selection(self):
+        cases = (
+            ({"cpu_offload": False}, MiniMaxH3TransformerInfer),
+            ({"cpu_offload": True, "offload_granularity": "model"}, MiniMaxH3OffloadTransformerInfer),
+            ({"cpu_offload": True, "offload_granularity": "block"}, MiniMaxH3OffloadTransformerInfer),
+            ({"cpu_offload": True, "dit_disk_streaming": True}, MiniMaxH3TransformerInfer),
+            ({"cpu_offload": True, "dit_disk_streaming": True, "dit_mps_shared_buffer": True}, MiniMaxH3MpsOffloadTransformerInfer),
+        )
+        for config, expected in cases:
+            with self.subTest(config=config):
+                model = MiniMaxH3Model.__new__(MiniMaxH3Model)
+                model.config = config
+                model.cpu_offload = config["cpu_offload"]
+                model._init_infer_class()
+                self.assertIs(model.transformer_infer_class, expected)
+
     def test_streamed_weights_survive_block_changes_and_buffer_recreation(self):
         with tempfile.TemporaryDirectory() as directory:
             tensors = self._write_checkpoint(Path(directory))
+            hidden_states = torch.arange(24, dtype=torch.bfloat16, device="mps").reshape(3, 8) / 16
+            expected = hidden_states
+            for index in range(2):
+                expected = expected @ tensors[f"transformer_blocks.{index}.attn.to_q.weight"].to("mps").t()
+            pre_infer_out = SimpleNamespace(hidden_states=hidden_states)
             for shared in (False, True):
                 for fused in (False, True):
                     if shared and not hasattr(torch.mps, "_host_alias_storage"):
@@ -429,31 +451,36 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                         }
                         model = MiniMaxH3Model.__new__(MiniMaxH3Model)
                         model.config = config
+                        model.cpu_offload = True
                         model.block_offload = True
                         model.transformer_weights = MiniMaxH3TransformerWeights(config)
-                        manager = MpsSharedWeightAsyncStreamManager() if shared else None
-                        model.transformer_infer = SimpleNamespace(offload_manager=manager, compiled_blocks={})
+                        model._init_infer_class()
+                        # Exercise the real offload loop without a full AdaLN cache/model.
+                        infer = model.transformer_infer = model.transformer_infer_class({**config, "use_adaln_cache": False})
+                        weights = model.transformer_weights
+
+                        def run_block(index, block, hidden, pre):
+                            self._assert_block_weights(block, index, tensors)
+                            return block.attn.to_q.apply(hidden)
+
                         try:
                             # The release flag must never enter the CUDA-only loader
                             # or assume that disk streaming has resident CPU blocks.
-                            with patch.object(torch.cuda, "synchronize", side_effect=AssertionError("MPS called CUDA")):
+                            with patch.object(torch.cuda, "synchronize", side_effect=AssertionError("MPS called CUDA")), patch.object(infer, "run_block", side_effect=run_block):
                                 for _ in range(2):
                                     model.release_block_offload_buffers()
                                     self.assertIsNone(model.transformer_weights.streaming_block)
                                     model.ensure_block_offload_buffers()
-                                    weights = model.transformer_weights
-                                    if shared:
-                                        manager.init_cuda_buffer(weights.offload_block_cuda_buffers)
-                                        manager.init_first_buffer(weights)
-                                        for index in (0, 1, 0):
-                                            block = manager.cuda_buffers[0]
-                                            weights.prepare_streaming_block(block, index)
-                                            manager.prefetch_weights(1 - index, weights)
-                                            self._assert_block_weights(block, index, tensors)
-                                            manager.swap_blocks()
-                                    else:
-                                        for index in (0, 1, 0):
-                                            self._assert_block_weights(weights.load_streaming_block(index), index, tensors)
+                                    for _ in range(2):
+                                        torch.testing.assert_close(infer.infer(weights, pre_infer_out), expected, rtol=0, atol=0)
+                                if shared:
+                                    for failure in ("read", "compute"):
+                                        target, method = (weights, "load_block_into") if failure == "read" else (infer, "run_block")
+                                        with patch.object(target, method, side_effect=RuntimeError(f"test {failure} failure")), self.assertRaisesRegex(RuntimeError, f"test {failure} failure"):
+                                            infer.infer(weights, pre_infer_out)
+                                        self.assertIsNone(infer.offload_manager.executor)
+                                        self.assertEqual(infer.offload_manager.cuda_buffers, [])
+                                        torch.testing.assert_close(infer.infer(weights, pre_infer_out), expected, rtol=0, atol=0)
                         finally:
                             model.release_disk_streaming_buffer()
 

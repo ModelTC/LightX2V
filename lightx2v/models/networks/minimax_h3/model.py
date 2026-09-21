@@ -19,7 +19,7 @@ from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
     validate_fp8_f16_accum_checkpoint,
 )
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
-from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
+from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import MiniMaxH3PreInfer
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
@@ -654,7 +654,9 @@ class MiniMaxH3Model(BaseTransformerModel):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("MiniMax-H3 feature caching is not implemented")
         self.pre_infer_class = MiniMaxH3PreInfer
-        if self.config.get("dit_disk_streaming", False) and not self.config.get("dit_mps_shared_buffer", False):
+        if self.config.get("dit_mps_shared_buffer", False):
+            self.transformer_infer_class = MiniMaxH3MpsOffloadTransformerInfer
+        elif self.config.get("dit_disk_streaming", False):
             self.transformer_infer_class = MiniMaxH3TransformerInfer
         else:
             self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
