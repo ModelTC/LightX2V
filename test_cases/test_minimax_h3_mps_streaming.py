@@ -8,6 +8,7 @@ import tempfile
 import textwrap
 import threading
 import unittest
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -19,6 +20,7 @@ from safetensors.torch import save_file
 if os.environ.get("PLATFORM") != "mps" or not torch.backends.mps.is_available():
     raise unittest.SkipTest("Requires the MPS platform and an Apple GPU")
 
+from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight
 from lightx2v.common.ops.attn.torch_sdpa_mps import TorchSDPAMPSWeight
 from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl import MiniMaxH3Qwen3VLTextEncoder, _Qwen3VLTextBackboneWeights
@@ -26,7 +28,8 @@ from lightx2v.models.networks.minimax_h3.infer.fused_qkv import prepare_qkv_norm
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
-from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3AttentionWeights, MiniMaxH3TransformerWeights
+from lightx2v.models.networks.minimax_h3.weights.streaming_weights import MiniMaxH3StreamingTransformerWeights
+from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3AttentionWeights
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 from lightx2v.models.video_encoders.hf.minimax_h3.video_vae import MiniMaxH3VideoCausalConv3d
 
@@ -384,6 +387,22 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cannot be combined with text_encoder_shared_cpu_weights"):
             MiniMaxH3Qwen3VLTextEncoder({"text_encoder_disk_streaming": True, "text_encoder_shared_cpu_weights": True})
 
+    def test_model_rejects_unsupported_streaming_modes_before_loading(self):
+        config = {"dit_disk_streaming": True, "cpu_offload": True, "offload_granularity": "block", "use_adaln_cache": True, "adaln_cache_dir": "unused"}
+        cases = (
+            ({"lazy_load": True}, NotImplementedError, "cannot be combined with lazy_load"),
+            ({"dit_quantized": True, "dit_quant_scheme": "int8-q8f", "dit_quantized_ckpt": "unused"}, NotImplementedError, "does not support quantized"),
+            ({"tensor_parallel": True}, NotImplementedError, "does not support tensor parallel"),
+            ({"cpu_offload": False}, ValueError, "requires cpu_offload=true"),
+            ({"offload_granularity": "model"}, ValueError, "requires offload_granularity='block'"),
+            ({"dit_mps_shared_buffer": True, "dit_disk_streaming": False}, ValueError, "requires MPS and dit_disk_streaming=true"),
+        )
+        with patch("lightx2v.models.networks.minimax_h3.weights.streaming_weights.MiniMaxH3ShardCheckpoint") as checkpoint:
+            for overrides, error, message in cases:
+                with self.subTest(overrides=overrides), self.assertRaisesRegex(error, message):
+                    MiniMaxH3Model("unused", {**config, **overrides}, "mps")
+            checkpoint.assert_not_called()
+
     def test_supported_tasks_preserve_both_loading_modes(self):
         runner = MiniMaxH3Runner.__new__(MiniMaxH3Runner)
         runner.config = {"model_variant": "fl2av", "text_encoder_disk_streaming": True}
@@ -477,13 +496,14 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
         ):
             expected = tensors[f"transformer_blocks.{index}.{path}.weight"]
             torch.testing.assert_close(module.weight.cpu(), expected.t(), rtol=0, atol=0)
-        self.assertEqual(block.attn.has_fused_qkv, block.attn.use_fused_qkv)
+        self.assertEqual(block.attn.has_fused_qkv, block.attn.use_fused_qkv and not block.attn.to_q.has_lora_branch)
         if block.attn.use_fused_qkv:
             expected = torch.cat([tensors[f"transformer_blocks.{index}.attn.to_{part}.weight"] for part in ("q", "k", "v")])
             torch.testing.assert_close(block.attn.to_qkv.weight.cpu(), expected.t(), rtol=0, atol=0)
-            hidden_states = torch.arange(24, dtype=torch.bfloat16, device="mps").reshape(3, 8) / 16
-            separate = torch.cat([module.apply(hidden_states) for module in (block.attn.to_q, block.attn.to_k, block.attn.to_v)], dim=-1)
-            torch.testing.assert_close(block.attn.to_qkv.apply(hidden_states), separate, rtol=1e-2, atol=1e-2)
+            if block.attn.has_fused_qkv:
+                hidden_states = torch.arange(24, dtype=torch.bfloat16, device="mps").reshape(3, 8) / 16
+                separate = torch.cat([module.apply(hidden_states) for module in (block.attn.to_q, block.attn.to_k, block.attn.to_v)], dim=-1)
+                torch.testing.assert_close(block.attn.to_qkv.apply(hidden_states), separate, rtol=1e-2, atol=1e-2)
 
     def test_offload_infer_selection(self):
         cases = (
@@ -504,16 +524,24 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
     def test_streamed_weights_survive_block_changes_and_buffer_recreation(self):
         with tempfile.TemporaryDirectory() as directory:
             tensors = self._write_checkpoint(Path(directory))
-            hidden_states = torch.arange(24, dtype=torch.bfloat16, device="mps").reshape(3, 8) / 16
-            expected = hidden_states
+            adapter_dir = Path(directory) / "adapter"
+            adapter_dir.mkdir()
+            lora = {}
+            generator = torch.Generator().manual_seed(1497)
             for index in range(2):
-                expected = expected @ tensors[f"transformer_blocks.{index}.attn.to_q.weight"].to("mps").t()
+                prefix = f"transformer_blocks.{index}.attn.to_q"
+                lora[f"{prefix}.lora_down.weight"] = torch.randn((2, 8), generator=generator).to(torch.bfloat16) / 16
+                lora[f"{prefix}.lora_up.weight"] = torch.randn((8, 2), generator=generator).to(torch.bfloat16) / 16
+                lora[f"{prefix}.alpha"] = torch.tensor(2.0, dtype=torch.bfloat16)
+            lora_path = str(adapter_dir / "lora.safetensors")
+            save_file(lora, lora_path)
+            hidden_states = torch.arange(24, dtype=torch.bfloat16, device="mps").reshape(3, 8) / 16
             pre_infer_out = SimpleNamespace(hidden_states=hidden_states)
             for shared in (False, True):
-                for fused in (False, True):
+                for fused, use_lora in ((False, False), (True, False), (False, True), (True, True)):
                     if shared and not hasattr(torch.mps, "_host_alias_storage"):
                         continue
-                    with self.subTest(shared=shared, fused=fused):
+                    with self.subTest(shared=shared, fused=fused, lora=use_lora):
                         config = {
                             "num_layers": 2,
                             "cpu_offload": True,
@@ -529,11 +557,26 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                         model.config = config
                         model.cpu_offload = True
                         model.block_offload = True
-                        model.transformer_weights = MiniMaxH3TransformerWeights(config)
+                        model.device = "mps"
+                        model.lora_path = lora_path if use_lora else None
+                        model.lora_strength = 1.0
+                        model.lora_alpha = None
+                        # This fixture contains only the main transformer blocks.
+                        model.pre_weight_class = lambda config: WeightModule()
+                        model.post_weight_class = lambda config: WeightModule()
+                        model._init_weights()
+                        self.assertIsInstance(model.transformer_weights, MiniMaxH3StreamingTransformerWeights)
                         model._init_infer_class()
                         # Exercise the real offload loop without a full AdaLN cache/model.
                         infer = model.transformer_infer = model.transformer_infer_class({**config, "use_adaln_cache": False})
                         weights = model.transformer_weights
+                        expected = hidden_states
+                        for index in range(2):
+                            prefix = f"transformer_blocks.{index}.attn.to_q"
+                            value = expected @ tensors[f"{prefix}.weight"].to("mps").t()
+                            if use_lora:
+                                value = value + (expected @ lora[f"{prefix}.lora_down.weight"].to("mps").t()) @ lora[f"{prefix}.lora_up.weight"].to("mps").t()
+                            expected = value
 
                         def run_block(index, block, hidden, pre):
                             self._assert_block_weights(block, index, tensors)
@@ -544,8 +587,25 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                             # or assume that disk streaming has resident CPU blocks.
                             with patch.object(torch.cuda, "synchronize", side_effect=AssertionError("MPS called CUDA")), patch.object(infer, "run_block", side_effect=run_block):
                                 for _ in range(2):
+                                    old_blocks = list(weights.offload_block_cuda_buffers) if shared else [weights.streaming_block]
+                                    tensor_refs = []
+                                    for block in old_blocks:
+                                        for module in (block.attn.to_q, block.attn.to_qkv, block.ff.in_proj, block.norm1):
+                                            tensor_refs.extend(
+                                                weakref.ref(tensor)
+                                                for attr in ("weight", "weight_cuda_buffer", "lora_down", "lora_up")
+                                                for tensor in (getattr(module, attr, None),)
+                                                if isinstance(tensor, torch.Tensor)
+                                            )
+                                        if shared:
+                                            tensor_refs.extend(weakref.ref(tensor) for tensor in block.shared_host_tensors.values())
+                                    infer.get_compiled_block(0, weights.streaming_block)
                                     model.release_block_offload_buffers()
                                     self.assertIsNone(model.transformer_weights.streaming_block)
+                                    self.assertEqual(infer.compiled_blocks, {})
+                                    self.assertTrue(all(ref() is None for ref in tensor_refs))
+                                    if shared:
+                                        self.assertTrue(all(not block.shared_host_tensors for block in old_blocks))
                                     model.ensure_block_offload_buffers()
                                     for _ in range(2):
                                         torch.testing.assert_close(infer.infer(weights, pre_infer_out), expected, rtol=0, atol=0)

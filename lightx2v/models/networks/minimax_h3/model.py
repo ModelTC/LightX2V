@@ -26,6 +26,7 @@ from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH
 from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3PostWeights,
     MiniMaxH3PreWeights,
+    MiniMaxH3StreamingTransformerWeights,
     MiniMaxH3TransformerWeights,
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
@@ -125,6 +126,8 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("MiniMax-H3 supports model and block CPU offload")
+        if config.get("dit_mps_shared_buffer", False) and (AI_DEVICE != "mps" or not config.get("dit_disk_streaming", False)):
+            raise ValueError("dit_mps_shared_buffer requires MPS and dit_disk_streaming=true")
         if config.get("dit_disk_streaming", False):
             if config.get("shared_cpu_weights", False):
                 raise ValueError("MiniMax-H3 dit_disk_streaming cannot be combined with shared_cpu_weights.")
@@ -185,7 +188,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         if weight_dict is not None:
             raise ValueError("MiniMax-H3 dit_disk_streaming loads weights directly from the diffusers checkpoint; explicit weight_dict is not supported.")
 
-        self.transformer_weights = self.transformer_weight_class(self.config)
+        self.transformer_weights = MiniMaxH3StreamingTransformerWeights(self.config)
         self.pre_weight = self.pre_weight_class(self.config)
         self.post_weight = self.post_weight_class(self.config)
 
@@ -768,5 +771,5 @@ class MiniMaxH3Model(BaseTransformerModel):
     def release_disk_streaming_buffer(self):
         if self.config.get("dit_mps_shared_buffer", False):
             self.transformer_infer.offload_manager.close()
-            self.transformer_infer.compiled_blocks.clear()
+        self.transformer_infer.compiled_blocks.clear()
         self.transformer_weights.release_disk_streaming_buffer()
