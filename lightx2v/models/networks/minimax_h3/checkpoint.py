@@ -85,10 +85,6 @@ class MiniMaxH3ShardCheckpoint:
                         completed += count
 
     @property
-    def tensor_names(self):
-        return tuple(sorted(self.weight_map))
-
-    @property
     def block_indices(self):
         pattern = _H3_BLOCK_KEY_RE
         return tuple(sorted({int(match.group(1)) for name in self.weight_map if (match := pattern.match(name)) is not None}))
@@ -96,10 +92,6 @@ class MiniMaxH3ShardCheckpoint:
     def tensor_names_for_block(self, block_index):
         block_prefix = f"transformer_blocks.{int(block_index)}."
         return tuple(sorted(name for name in self.weight_map if name.startswith(block_prefix)))
-
-    def non_block_tensor_names(self):
-        pattern = _H3_BLOCK_KEY_RE
-        return tuple(sorted(name for name in self.weight_map if pattern.match(name) is None))
 
     def shard_for_tensor(self, name):
         try:

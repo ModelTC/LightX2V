@@ -98,28 +98,6 @@ def _resolve_qwen_layer_name(name, layer_index):
     return name
 
 
-def _load_selected_checkpoint_tensors(text_encoder_path, weight_map, names):
-    names = tuple(sorted(dict.fromkeys(names)))
-    missing = sorted(name for name in names if name not in weight_map)
-    if missing:
-        raise KeyError(f"MiniMax-H3 Qwen3-VL checkpoint is missing requested tensors: {missing}")
-
-    by_shard = defaultdict(list)
-    for name in names:
-        by_shard[weight_map[name]].append(name)
-
-    root = Path(text_encoder_path)
-    tensors = {}
-    for shard_name in sorted(by_shard):
-        shard_path = root / shard_name
-        if not shard_path.is_file():
-            raise FileNotFoundError(f"Safetensors shard from checkpoint index was not found: {shard_path}")
-        with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
-            for name in sorted(by_shard[shard_name]):
-                tensors[name] = checkpoint.get_tensor(name)
-    return tensors
-
-
 def _empty_device_cache():
     """Release cached accelerator allocations without assuming CUDA."""
     with suppress(Exception):
@@ -402,8 +380,6 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         self._offload_completion_event = None
         self.streaming_layer = None
         self.streaming_checkpoint = None
-        self._disk_streaming_text_encoder_path = None
-        self._disk_streaming_weight_map = None
         self.hidden_size = int(text_config["hidden_size"])
         self.head_dim = int(text_config["head_dim"])
         self.rope_theta = float(text_config["rope_theta"])
@@ -542,12 +518,10 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
     def init_disk_streaming(self, text_encoder_path=None, weight_map=None):
         if not self.disk_streaming:
             return
-        if text_encoder_path is not None:
-            self._disk_streaming_text_encoder_path = Path(text_encoder_path)
-        if weight_map is not None:
-            self._disk_streaming_weight_map = dict(weight_map)
-        if self._disk_streaming_text_encoder_path is None or self._disk_streaming_weight_map is None:
-            raise RuntimeError("Qwen3-VL disk streaming requires a checkpoint path and weight map")
+        if self.streaming_checkpoint is None:
+            if text_encoder_path is None or weight_map is None:
+                raise RuntimeError("Qwen3-VL disk streaming requires a checkpoint path and weight map")
+            self.streaming_checkpoint = MiniMaxH3ShardCheckpoint(text_encoder_path, weight_map)
         if self.streaming_layer is not None:
             return
 
@@ -565,11 +539,10 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
             for _ in range(2 if self.disk_prefetch else 1)
         )
         if self.disk_prefetch:
-            checkpoint = MiniMaxH3ShardCheckpoint(self._disk_streaming_text_encoder_path, self._disk_streaming_weight_map)
             for layer in buffers:
                 tensors = {}
                 for name in self._layer_tensor_names(layer, 0):
-                    dtype, shape, _, _ = checkpoint.tensor_metadata(name)
+                    dtype, shape, _, _ = self.streaming_checkpoint.tensor_metadata(name)
                     if dtype != GET_DTYPE():
                         raise ValueError(f"Text encoder prefetch requires matching file/inference dtypes: {name}")
                     tensors[name] = torch.empty(shape, dtype=dtype, device=AI_DEVICE)
@@ -581,7 +554,6 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
                         setattr(module, attr, buffer)
                         # Keep the file layout for I/O and the existing transposed view for GEMM.
                         layer.shared_host_tensors[name] = host_view(buffer.t() if transpose else buffer)
-            self.streaming_checkpoint = checkpoint
             self.offload_cuda_buffers = buffers
             self.offload_manager = MpsSharedWeightAsyncStreamManager()
             self.offload_manager.init_cuda_buffer(blocks_cuda_buffer=buffers)
@@ -590,11 +562,7 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
 
         self.streaming_layer = buffers[0]
         layer0_names = self._layer_tensor_names(self.streaming_layer, 0)
-        layer0_tensors = _load_selected_checkpoint_tensors(
-            self._disk_streaming_text_encoder_path,
-            self._disk_streaming_weight_map,
-            layer0_names,
-        )
+        layer0_tensors = self.streaming_checkpoint.load_tensors(layer0_names)
         try:
             self.streaming_layer.load(layer0_tensors)
             self.streaming_layer.load_state_dict(self._prepare_streaming_state_dict(layer0_tensors, 0), 0)
@@ -625,18 +593,8 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
             raise IndexError(f"Qwen3-VL layer index out of range: {layer_index}")
         self.init_disk_streaming()
 
-        if self.disk_prefetch:
-            torch_device_module.synchronize()
-            self.load_block_into(self.streaming_layer, layer_index)
-            torch_device_module.synchronize()
-            return self.streaming_layer
-
         layer_names = self._layer_tensor_names(self.streaming_layer, layer_index)
-        tensors = _load_selected_checkpoint_tensors(
-            self._disk_streaming_text_encoder_path,
-            self._disk_streaming_weight_map,
-            layer_names,
-        )
+        tensors = self.streaming_checkpoint.load_tensors(layer_names)
         try:
             self.streaming_layer.load_state_dict(self._prepare_streaming_state_dict(tensors, layer_index), layer_index)
         finally:
@@ -648,11 +606,7 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         if not self.disk_streaming:
             raise RuntimeError("Qwen3-VL streaming embedding requires text_encoder_disk_streaming=true")
         embedding_name = self.embed_tokens.weight_name
-        tensors = _load_selected_checkpoint_tensors(
-            self._disk_streaming_text_encoder_path,
-            self._disk_streaming_weight_map,
-            (embedding_name,),
-        )
+        tensors = self.streaming_checkpoint.load_tensors((embedding_name,))
         try:
             host_weight = tensors.pop(embedding_name)
             device_weight = host_weight.to(AI_DEVICE)
@@ -724,7 +678,6 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
                         setattr(storage, buffer_attr, None)
         self.offload_cuda_buffers = None
         self.streaming_layer = None
-        self.streaming_checkpoint = None
         gc.collect()
         _empty_device_cache()
         logger.info("MiniMax-H3 Qwen3-VL released its disk-streaming layer buffers")

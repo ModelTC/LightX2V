@@ -229,6 +229,8 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
             try:
                 synchronous.init_disk_streaming(directory, weight_map)
                 expected = synchronous.forward(input_ids)
+                synchronous.release_disk_streaming_buffer()
+                torch.testing.assert_close(synchronous.forward(input_ids), expected, rtol=0, atol=0)
                 streaming.init_disk_streaming(directory, weight_map)
                 buffers = list(streaming.offload_cuda_buffers)
                 addresses = [layer.mlp.down_proj.weight.data_ptr() for layer in buffers]
@@ -333,6 +335,40 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                     self.assertEqual(runner.model.post_weight.to_cpu.call_count, int(not resident))
                     self.assertEqual(runner.model.release_block_offload_buffers.call_count, int(explicit_release))
                     self.assertEqual(runner.model.release_disk_streaming_buffer.call_count, int(not explicit_release))
+
+    def test_cache_cleanup_thresholds_across_backends(self):
+        gib = 1024**3
+        runner = MiniMaxH3Runner.__new__(MiniMaxH3Runner)
+        runner.config = {}
+        # Headroom and reclaimable GiB, force, collect garbage, expected clear/GC.
+        cases = (
+            (5, 3, False, False, False, False),
+            (5, 3, False, True, False, True),
+            (3, 3, False, False, True, True),
+            (3, 1, False, False, False, True),
+            (5, 0, True, False, True, True),
+            (4, 3, False, False, False, False),
+            (3, 2, False, False, True, True),
+        )
+        for device in ("mps", "cuda", "xpu"):
+            for headroom, reclaimable, force, collect, cleared, collected in cases:
+                with self.subTest(device=device, headroom=headroom, reclaimable=reclaimable, force=force, collect=collect):
+                    backend = SimpleNamespace(empty_cache=Mock())
+                    if device == "mps":
+                        backend.recommended_max_memory = Mock(return_value=(8 + reclaimable + headroom) * gib)
+                        backend.driver_allocated_memory = Mock(return_value=(8 + reclaimable) * gib)
+                        backend.current_allocated_memory = Mock(return_value=8 * gib)
+                    else:
+                        backend.mem_get_info = Mock(return_value=(headroom * gib, 32 * gib))
+                        backend.memory_reserved = Mock(return_value=(8 + reclaimable) * gib)
+                        backend.memory_allocated = Mock(return_value=8 * gib)
+                    with (
+                        patch.multiple("lightx2v.models.runners.default_runner", AI_DEVICE=device, torch_device_module=backend),
+                        patch("lightx2v.models.runners.default_runner.gc.collect") as gc_collect,
+                    ):
+                        self.assertEqual(runner.maybe_empty_cache(force=force, collect_garbage=collect), cleared)
+                    self.assertEqual(backend.empty_cache.call_count, int(cleared))
+                    self.assertEqual(gc_collect.call_count, int(collected))
 
     @staticmethod
     def _write_checkpoint(root):

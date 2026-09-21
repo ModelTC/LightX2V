@@ -17,8 +17,6 @@ from safetensors import safe_open
 class LoraPair:
     down_key: str
     up_key: str
-    down_shape: tuple
-    up_shape: tuple
     rank: int
     alpha: float
 
@@ -76,7 +74,7 @@ class MiniMaxH3StreamingLora:
                 cast_alpha = torch.tensor(pair_alpha, dtype=self.dtype)
                 if not torch.isfinite(cast_alpha) or cast_alpha <= 0:
                     raise ValueError(f"MiniMax-H3 LoRA alpha is not representable in {self.dtype}: {name}")
-                pair = LoraPair(a_key, b_key, a_shape, b_shape, a_shape[0], float(pair_alpha))
+                pair = LoraPair(a_key, b_key, a_shape[0], float(pair_alpha))
                 self.pairs[weight_name] = pair
                 match = re.fullmatch(r"transformer_blocks\.(\d+)\.(.+)", weight_name)
                 if match:
