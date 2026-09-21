@@ -31,17 +31,18 @@ class GeneralMaskGenerator(ABC):
 @SPARSE_MASK_GENERATOR_REGISTER("sla_mask_generator")
 class SlaMaskGenerator(GeneralMaskGenerator):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
+        from .utils.sla_util import get_block_map
+
+        self._get_block_map = get_block_map
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
         sparsity_ratio = self.sparse_setting.get("sparsity_ratio", 0.8)
         self.topk_ratio = 1 - sparsity_ratio
 
     def __call__(self, q, k):
-        from .utils.sla_util import get_block_map
-
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
-        sparse_map, lut, topk = get_block_map(q, k, topk_ratio=self.topk_ratio, BLKQ=self.q_block_size, BLKK=self.k_block_size)
+        sparse_map, lut, topk = self._get_block_map(q, k, topk_ratio=self.topk_ratio, BLKQ=self.q_block_size, BLKK=self.k_block_size)
         # return: [B, H, Q_block_num, K_block_num]
         return sparse_map
 
@@ -49,18 +50,19 @@ class SlaMaskGenerator(GeneralMaskGenerator):
 @SPARSE_MASK_GENERATOR_REGISTER("sparge_mask_generator")
 class SpargeMaskGenerator(GeneralMaskGenerator):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
+        from .utils.sparge_util import get_block_map_meansim
+
+        self._get_block_map_meansim = get_block_map_meansim
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
         sparsity_ratio = self.sparse_setting.get("sparsity_ratio", 0.8)
         self.topk_ratio = 1 - sparsity_ratio
 
     def __call__(self, q, k):
-        from .utils.sparge_util import get_block_map_meansim
-
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
         smooth_k = k - k.mean(dim=-2, keepdim=True)
-        sparse_map = get_block_map_meansim(q, smooth_k, cdfthreshd=None, topk=self.topk_ratio, return_lut=False, BLKQ=self.q_block_size, BLKK=self.k_block_size)
+        sparse_map = self._get_block_map_meansim(q, smooth_k, cdfthreshd=None, topk=self.topk_ratio, return_lut=False, BLKQ=self.q_block_size, BLKK=self.k_block_size)
         # return: [B, H, Q_block_num, K_block_num]
         return sparse_map
 

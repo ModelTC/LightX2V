@@ -44,6 +44,7 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
             from lightx2v.utils.registry_factory import (
                 ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER,
                 RMS_WEIGHT_REGISTER, ROPE_REGISTER,
+                SPARSE_MASK_GENERATOR_REGISTER, SPARSE_OPERATOR_REGISTER,
             )
             from lightx2v.common.ops.attn.ulysses_prepost import create_ulysses_prepost_backend
 
@@ -65,6 +66,18 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                 lambda: RMS_WEIGHT_REGISTER["one-pass"]("norm.weight"),
                 lambda: MM_WEIGHT_REGISTER["fp8-triton"]("proj.weight", None),
                 lambda: MM_WEIGHT_REGISTER["int8-triton"]("proj.weight", None),
+                lambda: ATTN_WEIGHT_REGISTER["dynamic_sparse_attn"](),
+                lambda: ATTN_WEIGHT_REGISTER["spas_flash_attn4"](),
+                lambda: ATTN_WEIGHT_REGISTER["spas_sage_attn2"](),
+                lambda: ATTN_WEIGHT_REGISTER["spas_sage_attn3"](),
+                lambda: ATTN_WEIGHT_REGISTER["svg2_attn"](),
+                lambda: SPARSE_MASK_GENERATOR_REGISTER["sla_mask_generator"](),
+                lambda: SPARSE_MASK_GENERATOR_REGISTER["sparge_mask_generator"](),
+                lambda: SPARSE_OPERATOR_REGISTER["sla_triton_operator"](),
+                lambda: SPARSE_OPERATOR_REGISTER["spas_sage2_operator"](),
+                lambda: SPARSE_OPERATOR_REGISTER["spas_sage3_operator"](),
+                lambda: SPARSE_OPERATOR_REGISTER["spas_fa4_operator"](),
+                lambda: create_ulysses_prepost_backend("triton"),
             )
             for factory in factories:
                 try:

@@ -12,6 +12,15 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
 
+try:
+    import triton
+
+    from .svg2_attn_utils import _inverse_permute_kernel, _permute_kernel, batch_kmeans_Euclid, identify_dynamic_map
+except ModuleNotFoundError as exc:
+    if exc.name != "triton":
+        raise
+    triton = None
+
 
 def permute_tensor_by_labels_triton(
     tensor: torch.Tensor,
@@ -28,9 +37,8 @@ def permute_tensor_by_labels_triton(
     If these conditions are not met or the tensors reside on CPU, we fall back
     to the reference PyTorch implementation.
     """
-    import triton
-
-    from .svg2_attn_utils import _permute_kernel
+    if triton is None:
+        raise ModuleNotFoundError("SVG2 permutation requires Triton", name="triton")
 
     # Assertions – we only support the optimized CUDA path.
     assert dim == 2, "permute_tensor_by_labels currently only supports dim==2 (sequence dimension)"
@@ -80,9 +88,8 @@ def apply_inverse_permutation_triton(
     Returns:
         Tensor of shape (B, H, S, D).
     """
-    import triton
-
-    from .svg2_attn_utils import _inverse_permute_kernel
+    if triton is None:
+        raise ModuleNotFoundError("SVG2 permutation requires Triton", name="triton")
 
     assert dim == 2, "apply_inverse_permutation currently only supports dim==2"
     assert permuted_tensor.dim() == 4, "Expected tensor shape [B,H,S,D]"
@@ -119,6 +126,8 @@ class Svg2AttnWeight(AttnWeightTemplate):
     kmeans_iter_step = 2
 
     def __init__(self):
+        if triton is None:
+            raise ModuleNotFoundError("SVG2 attention requires Triton", name="triton")
         self.config = {}
 
     def apply(
@@ -214,8 +223,6 @@ class Svg2AttnWeight(AttnWeightTemplate):
         return o
 
     def semantic_aware_permutation(self, query, key, value):
-        from .svg2_attn_utils import identify_dynamic_map
-
         cfg, num_heads, seq_len, dim = query.size()
 
         # 1. Kmeans clustering
@@ -251,8 +258,6 @@ class Svg2AttnWeight(AttnWeightTemplate):
         return qlabels, qcentroids, qcluster_sizes, qiter, klabels, kcentroids, kcluster_sizes, kiter
 
     def kmeans_init(self, query, key):
-        from .svg2_attn_utils import batch_kmeans_Euclid
-
         cfg, num_heads, seq_len, dim = query.size()
         qlabels, qcentroids, qcluster_sizes, qiter = batch_kmeans_Euclid(query.view(cfg * num_heads, seq_len, dim), n_clusters=self.num_q_centroids, max_iters=self.kmeans_iter_init)
         klabels, kcentroids, kcluster_sizes, kiter = batch_kmeans_Euclid(key.view(cfg * num_heads, seq_len, dim), n_clusters=self.num_k_centroids, max_iters=self.kmeans_iter_init)
@@ -263,8 +268,6 @@ class Svg2AttnWeight(AttnWeightTemplate):
         return qlabels, qcentroids, qcluster_sizes, qiter, klabels, kcentroids, kcluster_sizes, kiter
 
     def kmeans_step(self, query, key):
-        from .svg2_attn_utils import batch_kmeans_Euclid
-
         cfg, num_heads, seq_len, dim = query.size()
         qlabels, qcentroids, qcluster_sizes, qiter = batch_kmeans_Euclid(
             query.view(cfg * num_heads, seq_len, dim),

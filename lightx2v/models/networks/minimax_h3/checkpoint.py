@@ -8,6 +8,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+if sys.platform == "darwin":
+    import fcntl
+
 import torch
 from safetensors import safe_open
 
@@ -66,8 +69,6 @@ class MiniMaxH3ShardCheckpoint:
         for shard_name, entries in sorted(by_shard.items()):
             with (self.checkpoint_dir / shard_name).open("rb", buffering=0) as source:
                 if sys.platform == "darwin":
-                    import fcntl
-
                     # Streaming weights should not compete with MPS allocations
                     # for a second copy in the filesystem cache.
                     fcntl.fcntl(source.fileno(), fcntl.F_NOCACHE, 1)

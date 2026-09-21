@@ -11,9 +11,17 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
 
+try:
+    from .kernels.svg import wan_hidden_states_placement_kernel, wan_sparse_head_placement_kernel
+except ModuleNotFoundError as exc:
+    if exc.name != "triton":
+        raise
+    wan_hidden_states_placement_kernel = wan_sparse_head_placement_kernel = None
+
 
 def wan_hidden_states_placement(hidden_states, hidden_states_out, best_mask_idx, context_length, num_frame, frame_size):
-    from .kernels.svg import wan_hidden_states_placement_kernel
+    if wan_hidden_states_placement_kernel is None:
+        raise ModuleNotFoundError("SVG placement requires Triton", name="triton")
 
     cfg, num_heads, seq_len, head_dim = hidden_states.shape
     BLOCK_SIZE = 128
@@ -43,7 +51,8 @@ def wan_hidden_states_placement(hidden_states, hidden_states_out, best_mask_idx,
 
 
 def wan_sparse_head_placement(query, key, value, query_out, key_out, value_out, best_mask_idx, context_length, num_frame, frame_size):
-    from .kernels.svg import wan_sparse_head_placement_kernel
+    if wan_sparse_head_placement_kernel is None:
+        raise ModuleNotFoundError("SVG placement requires Triton", name="triton")
 
     cfg, num_heads, seq_len, head_dim = query.shape
     BLOCK_SIZE = 128

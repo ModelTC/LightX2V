@@ -29,6 +29,13 @@ except ImportError:
 
 from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
 
+try:
+    from .triton_ops import fused_qk_rms_norm
+except ModuleNotFoundError as exc:
+    if exc.name != "triton":
+        raise
+    fused_qk_rms_norm = None
+
 
 @torch.library.custom_op(
     "lightx2v::rmsnorm_flashinfer",
@@ -530,7 +537,8 @@ def apply_qk_rms_norm(
         return query, key
 
     if use_triton and norm_q is not None and norm_k is not None and norm_q.eps == norm_k.eps and query.is_cuda and key.is_cuda and query.shape[-1] == key.shape[-1]:
-        from .triton_ops import fused_qk_rms_norm
+        if fused_qk_rms_norm is None:
+            raise ModuleNotFoundError("Fused QK RMSNorm requires Triton", name="triton")
 
         q_shape = query.shape
         k_shape = key.shape
