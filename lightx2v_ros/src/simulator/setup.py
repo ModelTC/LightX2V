@@ -18,6 +18,7 @@ setup(
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
+            "libero_evaluate = simulator.libero_node.evaluate:main",
             "libero_node = simulator.libero_node.main:main",
             "robolab_node = simulator.robolab_node.main:main",
             "robodojo_node = simulator.robodojo_node.main:main",

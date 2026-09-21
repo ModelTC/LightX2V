@@ -21,6 +21,7 @@ setup(
             "cosmos3_node = inference.cosmos3_node.main:main",
             "fastwam_node = inference.fastwam_node.main:main",
             "lingbot_va_node = inference.lingbot_va_node.main:main",
+            "openpi_node = inference.openpi_node.main:main",
         ],
     },
 )

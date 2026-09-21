@@ -27,6 +27,7 @@ dist/
 server_cache/
 *.pkl
 save_results/*
+/output_train/
 *.egg-info/
 lightx2v_train/output_train/*
 lightx2v_train/output_infer/*
