@@ -9,13 +9,6 @@ except ImportError:
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
-from .utils.sla_util import get_block_map, get_cuda_arch
-from .utils.sparge_util import (
-    block_map_incremental_lut_triton,
-    block_map_ordinal_lut_triton,
-    get_block_map_meansim,
-    sage2_block_sparse_attn,
-)
 
 try:
     from sageattn3_sparse import sage3_block_sparse_attn
@@ -164,6 +157,8 @@ class SparseSageAttn2Weight(AttnWeightTemplate):
     sparse_mode = "sla_mode"
 
     def __init__(self):
+        from .utils.sla_util import get_cuda_arch
+
         self.config = {}
         self.topk = 1 - self.sparsity_ratio
 
@@ -184,6 +179,9 @@ class SparseSageAttn2Weight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .utils.sla_util import get_block_map
+        from .utils.sparge_util import block_map_incremental_lut_triton, get_block_map_meansim, sage2_block_sparse_attn
+
         # (L, H, D) -> (B, L, H, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
@@ -234,6 +232,9 @@ class SparseSageAttn3Weight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .utils.sla_util import get_block_map
+        from .utils.sparge_util import block_map_ordinal_lut_triton, get_block_map_meansim
+
         # (L, H, D) -> (B, L, H, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()

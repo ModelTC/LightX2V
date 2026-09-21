@@ -1,15 +1,5 @@
 import torch
 
-from .kernels.ulysses_layout import (
-    attn_post,
-    attn_post_fp8,
-    attn_pre,
-    attn_pre_fp8,
-    qkv_post,
-    qkv_post_fp8,
-    qkv_pre,
-    qkv_pre_fp8,
-)
 from .utils.seq_p import pack_seq_p_tensor, unpack_seq_p_tensor, validate_quant_scheme
 
 
@@ -138,6 +128,8 @@ class TritonUlyssesPrePost:
 
     @classmethod
     def pack_qkv(cls, q, k, v, world_size, quant_scheme=None, qkv_fusion=True, head_index=None):
+        from .kernels.ulysses_layout import qkv_pre, qkv_pre_fp8
+
         cls._validate(q, k, v, quant_scheme)
         if quant_scheme == "fp8":
             payload, scale, _, _ = qkv_pre_fp8(q, k, v, world_size, head_index=head_index)
@@ -158,6 +150,8 @@ class TritonUlyssesPrePost:
         aux_first,
         head_index=None,
     ):
+        from .kernels.ulysses_layout import qkv_post, qkv_post_fp8
+
         payload, scale = packed[0]
         aux_len = 0 if aux_k is None else aux_k.shape[0]
         q_source = q if aux_q is None else aux_q
@@ -185,6 +179,8 @@ class TritonUlyssesPrePost:
 
     @staticmethod
     def pack_attn(output, local_len, world_size, shard_heads, hidden_dims, quant_scheme=None):
+        from .kernels.ulysses_layout import attn_pre, attn_pre_fp8
+
         if quant_scheme == "fp4":
             raise ValueError("prepost_backend='triton' does not support FP4 communication.")
         if quant_scheme == "fp8":
@@ -194,6 +190,8 @@ class TritonUlyssesPrePost:
 
     @staticmethod
     def unpack_attn(packed, output_dtype, hidden_dims):
+        from .kernels.ulysses_layout import attn_post, attn_post_fp8
+
         payload, scale = packed[0]
         if scale is None:
             return attn_post(payload)

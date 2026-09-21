@@ -7,50 +7,10 @@ except ImportError:
     flashinfer = None
 
 import torch
-import triton
-import triton.language as tl
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
-from .svg2_attn_utils import (
-    batch_kmeans_Euclid,
-    identify_dynamic_map,
-)
 from .template import AttnWeightTemplate
-
-
-@triton.jit
-def _permute_kernel(
-    X_ptr,
-    IDX_ptr,
-    Y_ptr,
-    S: tl.constexpr,
-    D: tl.constexpr,
-    BLOCK_S: tl.constexpr,
-):
-    """Each program permutes BLOCK_S tokens *all* hidden features (D). No inner python loop."""
-
-    pid_bh = tl.program_id(0)
-    tile_s = tl.program_id(1)
-
-    # Offsets along sequence
-    s_offsets = tile_s * BLOCK_S + tl.arange(0, BLOCK_S)
-    token_mask = s_offsets < S
-
-    # Gather source indices for these tokens
-    idx_ptrs = IDX_ptr + pid_bh * S + s_offsets
-    src_row_idx = tl.load(idx_ptrs, mask=token_mask, other=0).to(tl.int32)
-
-    # Broadcast to create 2-D pointer matrix (BLOCK_S, D)
-    d_offsets = tl.arange(0, D)
-
-    src_ptrs = X_ptr + (pid_bh * S + src_row_idx[:, None]) * D + d_offsets[None, :]
-    dst_ptrs = Y_ptr + (pid_bh * S + s_offsets[:, None]) * D + d_offsets[None, :]
-
-    full_mask = token_mask[:, None]
-
-    values = tl.load(src_ptrs, mask=full_mask, other=0.0)
-    tl.store(dst_ptrs, values, mask=full_mask)
 
 
 def permute_tensor_by_labels_triton(
@@ -68,6 +28,9 @@ def permute_tensor_by_labels_triton(
     If these conditions are not met or the tensors reside on CPU, we fall back
     to the reference PyTorch implementation.
     """
+    import triton
+
+    from .svg2_attn_utils import _permute_kernel
 
     # Assertions – we only support the optimized CUDA path.
     assert dim == 2, "permute_tensor_by_labels currently only supports dim==2 (sequence dimension)"
@@ -101,38 +64,6 @@ def permute_tensor_by_labels_triton(
     return permuted_tensor, sorted_indices
 
 
-@triton.jit
-def _inverse_permute_kernel(
-    X_ptr,
-    IDX_ptr,
-    Y_ptr,
-    S: tl.constexpr,
-    D: tl.constexpr,
-    BLOCK_S: tl.constexpr,
-):
-    """Inverse permutation: scatter BLOCK_S tokens back in one shot."""
-
-    pid_bh = tl.program_id(0)
-    tile_s = tl.program_id(1)
-
-    s_offsets = tile_s * BLOCK_S + tl.arange(0, BLOCK_S)
-    token_mask = s_offsets < S
-
-    idx_ptrs = IDX_ptr + pid_bh * S + s_offsets
-    src_pos_idx = s_offsets.to(tl.int32)
-    dst_pos_idx = tl.load(idx_ptrs, mask=token_mask, other=0).to(tl.int32)
-
-    d_offsets = tl.arange(0, D)
-
-    src_ptrs = X_ptr + (pid_bh * S + src_pos_idx[:, None]) * D + d_offsets[None, :]
-    dst_ptrs = Y_ptr + (pid_bh * S + dst_pos_idx[:, None]) * D + d_offsets[None, :]
-
-    full_mask = token_mask[:, None]
-
-    values = tl.load(src_ptrs, mask=full_mask, other=0.0)
-    tl.store(dst_ptrs, values, mask=full_mask)
-
-
 def apply_inverse_permutation_triton(
     permuted_tensor: torch.Tensor,
     sorted_indices: torch.Tensor,
@@ -149,6 +80,9 @@ def apply_inverse_permutation_triton(
     Returns:
         Tensor of shape (B, H, S, D).
     """
+    import triton
+
+    from .svg2_attn_utils import _inverse_permute_kernel
 
     assert dim == 2, "apply_inverse_permutation currently only supports dim==2"
     assert permuted_tensor.dim() == 4, "Expected tensor shape [B,H,S,D]"
@@ -280,6 +214,8 @@ class Svg2AttnWeight(AttnWeightTemplate):
         return o
 
     def semantic_aware_permutation(self, query, key, value):
+        from .svg2_attn_utils import identify_dynamic_map
+
         cfg, num_heads, seq_len, dim = query.size()
 
         # 1. Kmeans clustering
@@ -315,6 +251,8 @@ class Svg2AttnWeight(AttnWeightTemplate):
         return qlabels, qcentroids, qcluster_sizes, qiter, klabels, kcentroids, kcluster_sizes, kiter
 
     def kmeans_init(self, query, key):
+        from .svg2_attn_utils import batch_kmeans_Euclid
+
         cfg, num_heads, seq_len, dim = query.size()
         qlabels, qcentroids, qcluster_sizes, qiter = batch_kmeans_Euclid(query.view(cfg * num_heads, seq_len, dim), n_clusters=self.num_q_centroids, max_iters=self.kmeans_iter_init)
         klabels, kcentroids, kcluster_sizes, kiter = batch_kmeans_Euclid(key.view(cfg * num_heads, seq_len, dim), n_clusters=self.num_k_centroids, max_iters=self.kmeans_iter_init)
@@ -325,6 +263,8 @@ class Svg2AttnWeight(AttnWeightTemplate):
         return qlabels, qcentroids, qcluster_sizes, qiter, klabels, kcentroids, kcluster_sizes, kiter
 
     def kmeans_step(self, query, key):
+        from .svg2_attn_utils import batch_kmeans_Euclid
+
         cfg, num_heads, seq_len, dim = query.size()
         qlabels, qcentroids, qcluster_sizes, qiter = batch_kmeans_Euclid(
             query.view(cfg * num_heads, seq_len, dim),

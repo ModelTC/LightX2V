@@ -5,12 +5,7 @@ from loguru import logger
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
-from .kernels.sla_kernel import _attention
-from .kernels.sla_kernel_ar import _attention_ar
 from .template import AttnWeightTemplate
-from .utils.sla_util import get_block_map, get_cuda_arch
-from .utils.sla_util_blhd import get_block_map_blhd
-from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordinal_lut_triton, sage2_block_sparse_attn
 
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
@@ -46,6 +41,9 @@ def dynamic_sparse_sage2(
     block_k: int,
     arch: str,
 ) -> torch.Tensor:
+    from .utils.sla_util import get_block_map
+    from .utils.sparge_util import block_map_incremental_lut_triton, sage2_block_sparse_attn
+
     sparse_map, _, _ = get_block_map(q, k, topk_ratio=topk_ratio, BLKQ=block_q, BLKK=block_k)
     lut, valid_block_num = block_map_incremental_lut_triton(sparse_map)
     return sage2_block_sparse_attn(q, k, v, lut, valid_block_num, block_q, block_k, arch)
@@ -71,6 +69,8 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
     per_block_mean = False
 
     def __init__(self, config=None):
+        from .utils.sla_util import get_cuda_arch
+
         self.config = dict(config or {})
         self.sparsity_ratio = float(self.config.get("sparsity_ratio", type(self).sparsity_ratio))
         self.operator = self.config.get("operator", type(self).operator)
@@ -146,6 +146,9 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .kernels.sla_kernel import _attention
+        from .utils.sla_util import get_block_map
+
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
@@ -169,6 +172,9 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .kernels.sla_kernel_ar import _attention_ar
+        from .utils.sla_util_blhd import get_block_map_blhd
+
         # (L, H, D) -> (B, L, H, D)
         q = q.unsqueeze(0)
         k = k.unsqueeze(0)
@@ -212,6 +218,9 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .utils.sla_util import get_block_map
+        from .utils.sparge_util import block_map_ordinal_lut_triton
+
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
@@ -234,6 +243,9 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .utils.sla_util import get_block_map
+        from .utils.sparge_util import block_map_ordinal_lut_triton
+
         # (L, H, D) -> (B, L, H, D)
         qt = q.unsqueeze(0).transpose(1, 2).contiguous()
         kt = k.unsqueeze(0).transpose(1, 2).contiguous()
@@ -276,6 +288,8 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .utils.sla_util import get_block_map
+
         # (L, H, D) -> (B, H, L, D)
         q_block_map, k_block_map = q.unsqueeze(0).transpose(1, 2), k.unsqueeze(0).transpose(1, 2)
         q_block_map = q_block_map.contiguous()

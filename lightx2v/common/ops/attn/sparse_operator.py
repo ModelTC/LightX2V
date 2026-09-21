@@ -4,10 +4,6 @@ from loguru import logger
 from lightx2v.utils.registry_factory import SPARSE_OPERATOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-from .kernels.sla_kernel import _attention
-from .utils.sla_util import get_cuda_arch
-from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordinal_lut_triton, sage2_block_sparse_attn
-
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
     from flash_attn.cute.block_sparsity import BlockSparseTensorsTorch
@@ -57,6 +53,8 @@ class SlaTritonOperator:
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .kernels.sla_kernel import _attention
+
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
@@ -75,6 +73,8 @@ class SlaTritonOperator:
 @SPARSE_OPERATOR_REGISTER("spas_sage2_operator")
 class SparseSageAttentionV2Operator:
     def __init__(self, operator_setting={}):
+        from .utils.sla_util import get_cuda_arch
+
         self.operator_setting = operator_setting
 
         self.arch = get_cuda_arch(torch.cuda.current_device())
@@ -95,6 +95,8 @@ class SparseSageAttentionV2Operator:
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .utils.sparge_util import block_map_incremental_lut_triton, sage2_block_sparse_attn
+
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
@@ -127,6 +129,8 @@ class SparseSageAttentionV3Operator:
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .utils.sparge_util import block_map_ordinal_lut_triton
+
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
@@ -158,6 +162,8 @@ class SparseFlashAttentionV4Operator:
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .utils.sparge_util import block_map_ordinal_lut_triton
+
         # (L, H, D) -> (B, L, H, D)
         q = q.unsqueeze(0)
         k = k.unsqueeze(0)

@@ -1,9 +1,6 @@
 import torch
 from loguru import logger
 
-from .utils.sla_util import get_block_map
-from .utils.sparge_util import block_map_ordinal_lut_triton, get_block_map_meansim
-
 try:
     from flash_attn import flash_attn_func as flash_attn_func_v2
     from flash_attn.flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func_v2
@@ -238,6 +235,9 @@ class SparseFlashAttn4Weight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        from .utils.sla_util import get_block_map
+        from .utils.sparge_util import block_map_ordinal_lut_triton, get_block_map_meansim
+
         if len(q.shape) == 3:
             bs = 1
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)

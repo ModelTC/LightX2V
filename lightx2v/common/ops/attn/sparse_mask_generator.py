@@ -8,8 +8,6 @@ from lightx2v.utils.registry_factory import SPARSE_MASK_GENERATOR_REGISTER
 
 from .nbhd_attn import generate_nbhd_mask
 from .svg_attn import diagonal_band_mask_from_sparsity, get_attention_mask, wan_hidden_states_placement, wan_sparse_head_placement
-from .utils.sla_util import get_block_map
-from .utils.sparge_util import get_block_map_meansim
 
 
 class GeneralMaskGenerator(ABC):
@@ -38,6 +36,8 @@ class SlaMaskGenerator(GeneralMaskGenerator):
         self.topk_ratio = 1 - sparsity_ratio
 
     def __call__(self, q, k):
+        from .utils.sla_util import get_block_map
+
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
@@ -54,6 +54,8 @@ class SpargeMaskGenerator(GeneralMaskGenerator):
         self.topk_ratio = 1 - sparsity_ratio
 
     def __call__(self, q, k):
+        from .utils.sparge_util import get_block_map_meansim
+
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()

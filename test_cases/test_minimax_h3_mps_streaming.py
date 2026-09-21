@@ -1,7 +1,10 @@
 """Run with PLATFORM=mps DTYPE=BF16 SENSITIVE_LAYER_DTYPE=BF16 python -m unittest test_cases.test_minimax_h3_mps_streaming."""
 
 import os
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +27,59 @@ from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 
 
 class MiniMaxH3MPSStreamingTest(unittest.TestCase):
+    def test_ops_register_without_importing_triton(self):
+        # Use a fresh process so earlier tests cannot hide eager kernel imports.
+        script = textwrap.dedent("""
+            import importlib.abc
+            import sys
+            import torch
+
+            class WithoutTriton(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname == "triton" or fullname.startswith("triton."):
+                        raise ModuleNotFoundError("Triton is unavailable", name="triton")
+
+            sys.meta_path.insert(0, WithoutTriton())
+            import lightx2v.common.ops
+            from lightx2v.utils.registry_factory import (
+                ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER,
+                RMS_WEIGHT_REGISTER, ROPE_REGISTER,
+            )
+            from lightx2v.common.ops.attn.ulysses_prepost import create_ulysses_prepost_backend
+
+            assert {"torch_sdpa", "flash_attn2", "svg_attn", "svg2_attn", "ulysses"} <= ATTN_WEIGHT_REGISTER.keys()
+            assert "flashinfer_rope" in ROPE_REGISTER
+            ATTN_WEIGHT_REGISTER["torch_sdpa"]()
+            create_ulysses_prepost_backend("torch")
+            x = torch.randn(2, 8)
+            norm = LN_WEIGHT_REGISTER["torch"]()
+            torch.testing.assert_close(norm.apply(x), torch.nn.functional.layer_norm(x, (8,), eps=norm.eps))
+            assert "triton" not in sys.modules
+            assert "lightx2v.common.ops.attn.kernels.svg" not in sys.modules
+            assert "lightx2v.common.ops.attn.svg2_attn_utils" not in sys.modules
+
+            # Selecting an implementation that needs Triton must fail during
+            # construction, instead of storing None and failing during inference.
+            factories = (
+                lambda: LN_WEIGHT_REGISTER["Triton"](),
+                lambda: RMS_WEIGHT_REGISTER["one-pass"]("norm.weight"),
+                lambda: MM_WEIGHT_REGISTER["fp8-triton"]("proj.weight", None),
+                lambda: MM_WEIGHT_REGISTER["int8-triton"]("proj.weight", None),
+            )
+            for factory in factories:
+                try:
+                    factory()
+                except ModuleNotFoundError as error:
+                    assert error.name == "triton", error
+                else:
+                    raise AssertionError("A Triton implementation accepted a missing dependency")
+        """)
+        for platform in ("mps", "cuda"):
+            with self.subTest(platform=platform):
+                env = {**os.environ, "PLATFORM": platform, "SKIP_PLATFORM_CHECK": "1"}
+                result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rope_precision_preserves_non_mps_fusion(self):
         q = torch.zeros((2, 8), dtype=torch.bfloat16)
         norm = SimpleNamespace(weight=torch.ones(4, dtype=torch.bfloat16), sensitive_layer_dtype=torch.bfloat16, infer_dtype=torch.bfloat16)
