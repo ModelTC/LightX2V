@@ -19,4 +19,5 @@ from .sparse_operator import FlashinferOperator, FlexBlockOperator, MagiOperator
 from .svg2_attn import Svg2AttnWeight
 from .svg_attn import SvgAttnWeight
 from .torch_sdpa import TorchSDPAWeight
+from .torch_sdpa_mps import TorchSDPAMPSWeight
 from .ulysses_attn import UlyssesAttnWeight

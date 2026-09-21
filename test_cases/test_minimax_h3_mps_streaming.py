@@ -20,6 +20,7 @@ if os.environ.get("PLATFORM") != "mps" or not torch.backends.mps.is_available():
     raise unittest.SkipTest("Requires the MPS platform and an Apple GPU")
 
 from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight
+from lightx2v.common.ops.attn.torch_sdpa_mps import TorchSDPAMPSWeight
 from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl import MiniMaxH3Qwen3VLTextEncoder, _Qwen3VLTextBackboneWeights
 from lightx2v.models.networks.minimax_h3.infer.fused_qkv import prepare_qkv_norm_rope
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
@@ -51,9 +52,10 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
             )
             from lightx2v.common.ops.attn.ulysses_prepost import create_ulysses_prepost_backend
 
-            assert {"torch_sdpa", "flash_attn2", "svg_attn", "svg2_attn", "ulysses"} <= ATTN_WEIGHT_REGISTER.keys()
+            assert {"torch_sdpa", "torch_sdpa_mps", "flash_attn2", "svg_attn", "svg2_attn", "ulysses"} <= ATTN_WEIGHT_REGISTER.keys()
             assert "flashinfer_rope" in ROPE_REGISTER
             ATTN_WEIGHT_REGISTER["torch_sdpa"]()
+            ATTN_WEIGHT_REGISTER["torch_sdpa_mps"]()
             create_ulysses_prepost_backend("torch")
             x = torch.randn(2, 8)
             norm = LN_WEIGHT_REGISTER["torch"]()
@@ -109,29 +111,75 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
 
     def test_query_chunking_supports_other_shapes_and_grouped_query_attention(self):
         generator = torch.Generator().manual_seed(1497)
-        for batch, heads, kv_heads in ((1, 2, 2), (2, 4, 4), (2, 4, 2)):
-            with self.subTest(batch=batch, heads=heads, kv_heads=kv_heads):
-                q = torch.randn((batch, 9, heads, 8), generator=generator).to("mps")
-                k = torch.randn((batch, 11, kv_heads, 8), generator=generator).to("mps")
-                v = torch.randn((batch, 11, kv_heads, 8), generator=generator).to("mps")
+        for batch_shape, heads, kv_heads, dtype in (((), 2, 2, torch.float32), ((1,), 2, 2, torch.float32), ((2,), 4, 4, torch.float32), ((2,), 4, 2, torch.float32), ((), 4, 2, torch.bfloat16)):
+            with self.subTest(batch_shape=batch_shape, heads=heads, kv_heads=kv_heads, dtype=dtype):
+                q = torch.randn((*batch_shape, 9, heads, 8), generator=generator).to(device="mps", dtype=dtype)
+                k = torch.randn((*batch_shape, 11, kv_heads, 8), generator=generator).to(device="mps", dtype=dtype)
+                v = torch.randn((*batch_shape, 11, kv_heads, 8), generator=generator).to(device="mps", dtype=dtype)
                 expected = TorchSDPAWeight().apply(q, k, v)
                 with patch.object(F, "scaled_dot_product_attention", wraps=F.scaled_dot_product_attention) as sdpa:
-                    actual = TorchSDPAWeight().apply(q, k, v, mps_sdpa_query_chunk_size=3)
-                    self.assertEqual([call.args[0].shape[2] for call in sdpa.call_args_list], [3, 3, 3])
-                torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+                    actual = TorchSDPAMPSWeight().apply(q, k, v, mps_sdpa_query_chunk_size=4)
+                    self.assertEqual([call.args[0].shape[2] for call in sdpa.call_args_list], [4, 4, 1])
+                    self.assertEqual([call.args[1].shape[2] for call in sdpa.call_args_list], [11, 11, 11])
+                torch.testing.assert_close(actual, expected)
 
-    def test_query_chunking_preserves_masked_causal_and_cpu_attention(self):
+    def test_query_chunking_preserves_masked_causal_and_disabled_attention(self):
         generator = torch.Generator().manual_seed(1497)
-        source = torch.randn((1, 9, 2, 8), generator=generator)
-        cases = (("cpu", {}), ("mps", {"causal": True}), ("mps", {"attn_mask": torch.ones((9, 9), dtype=torch.bool, device="mps")}))
-        for device, kwargs in cases:
-            with self.subTest(device=device, kwargs=tuple(kwargs)):
-                q = source.to(device)
-                expected = TorchSDPAWeight().apply(q, q, q, **kwargs)
+        q = torch.randn((1, 9, 2, 8), generator=generator).to("mps")
+        cases = (
+            {"causal": True},
+            {"attn_mask": torch.ones((9, 9), dtype=torch.bool, device="mps").tril()},
+            {"attn_mask": torch.randn((9, 9), generator=generator).to("mps")},
+            {"drop_rate": 0.1},
+            {"mps_sdpa_query_chunk_size": 0},
+            {"mps_sdpa_query_chunk_size": -1},
+            {"mps_sdpa_query_chunk_size": 9},
+        )
+        for kwargs in cases:
+            with self.subTest(kwargs=tuple(kwargs)):
+                # MPS SDPA rejects dropout, so verify its forwarding on CPU.
+                inputs = q.cpu() if "drop_rate" in kwargs else q
+                torch.manual_seed(1497)
+                expected = TorchSDPAWeight().apply(inputs, inputs, inputs, **kwargs)
+                torch.manual_seed(1497)
                 with patch.object(F, "scaled_dot_product_attention", wraps=F.scaled_dot_product_attention) as sdpa:
-                    actual = TorchSDPAWeight().apply(q, q, q, mps_sdpa_query_chunk_size=3, **kwargs)
+                    actual = TorchSDPAMPSWeight().apply(inputs, inputs, inputs, **{"mps_sdpa_query_chunk_size": 3, **kwargs})
                     self.assertEqual(sdpa.call_count, 1)
                 torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    def test_plain_sdpa_ignores_mps_chunk_size(self):
+        for device in ("cpu", "mps"):
+            with self.subTest(device=device):
+                q = torch.randn((9, 2, 8), device=device)
+                expected = TorchSDPAWeight().apply(q, q, q)
+                with patch.object(F, "scaled_dot_product_attention", wraps=F.scaled_dot_product_attention) as sdpa:
+                    actual = TorchSDPAWeight().apply(q, q, q, mps_sdpa_query_chunk_size=3)
+                    self.assertEqual(sdpa.call_count, 1)
+                torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    def test_mps_configs_select_query_chunking(self):
+        config_dir = Path(__file__).resolve().parents[1] / "configs/platforms/mps"
+        for filename in ("minimax_h3_t2av.json", "minimax_h3_t2av_4step_512_22.json"):
+            with self.subTest(config=filename):
+                config = json.loads((config_dir / filename).read_text())
+                config["use_adaln_cache"] = False
+                weights = MiniMaxH3AttentionWeights("transformer_blocks.0.attn", config)
+                self.assertIsInstance(weights.calculate, TorchSDPAMPSWeight)
+                infer = MiniMaxH3TransformerInfer(config)
+                infer.scheduler = SimpleNamespace()
+                infer.block_idx = 0
+                chunk_size = config["mps_sdpa_query_chunk_size"]
+                q = torch.randn((chunk_size + 1, 2, 8), device="mps", dtype=torch.bfloat16)
+                expected = TorchSDPAWeight().apply(q, q, q)
+                pre_infer_out = SimpleNamespace(rotary_emb=None, sequence_parallel_state=None)
+                with (
+                    patch.object(infer, "_prepare_qkv", return_value=(q, q, q)),
+                    patch.object(weights.to_out, "apply", side_effect=lambda x: x),
+                    patch.object(F, "scaled_dot_product_attention", wraps=F.scaled_dot_product_attention) as sdpa,
+                ):
+                    actual = infer._attention(weights, None, pre_infer_out)
+                    self.assertEqual([call.args[0].shape[2] for call in sdpa.call_args_list], [chunk_size, 1])
+                torch.testing.assert_close(actual, expected)
 
     def test_native_and_streaming_text_weights_share_checkpoint_validation(self):
         text_config = {

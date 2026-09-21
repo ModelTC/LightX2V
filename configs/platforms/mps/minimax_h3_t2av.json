@@ -30,7 +30,7 @@
   "unload_modules": false,
   "warmup": false,
 
-  "attn_type": "torch_sdpa",
+  "attn_type": "torch_sdpa_mps",
   "mps_sdpa_query_chunk_size": 512,
   "rms_type": "torch_native",
   "rope_type": "torch_real_rope",

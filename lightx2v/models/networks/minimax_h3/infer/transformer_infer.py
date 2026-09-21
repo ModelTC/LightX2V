@@ -124,7 +124,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             "block_idx": self.block_idx,
         }
         if sp_state is None:
-            if self.config.get("attn_type") == "torch_sdpa":
+            if self.config.get("attn_type") == "torch_sdpa_mps":
                 attention_kwargs["mps_sdpa_query_chunk_size"] = self.config.get("mps_sdpa_query_chunk_size", 0)
             seq_len = q.shape[0]
             cu_seqlens = torch.tensor((0, seq_len), dtype=torch.int32, device=q.device)

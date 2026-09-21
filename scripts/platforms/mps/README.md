@@ -48,4 +48,4 @@ Mac 配置默认开启 `text_encoder_prefetch=true`：文本编码器复用两�
 
 缺少共享视图接口时，可将 `dit_mps_shared_buffer` 设为 `false`，使用单缓冲区磁盘加载。
 
-`mps_sdpa_query_chunk_size` 控制注意力的 query 分块大小，默认 512；每块仍访问完整的 key/value，设为 0 可关闭分块。
+MPS 配置使用独立的 `attn_type="torch_sdpa_mps"`。`mps_sdpa_query_chunk_size` 控制该实现的 query 分块大小，配置默认为 512；每块仍访问完整的 key/value，设为 0 可关闭分块。普通 `torch_sdpa` 不使用该参数。
