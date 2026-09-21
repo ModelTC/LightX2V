@@ -11,20 +11,53 @@ import math
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from PIL import Image
 from safetensors import safe_open
 from transformers import Qwen3VLProcessor
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.embedding.embedding_weight import EmbeddingWeight
+from lightx2v.common.ops.mm.mm_weight import MMWeightTP, unwrap_tp_weight
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV3D_WEIGHT_REGISTER, EMBEDDING_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-def qwen3vl_linear(config, weight_name, bias_name):
+class Qwen3VLVocabParallelEmbedding(EmbeddingWeight):
+    def __init__(self, weight_name, vocab_size, tp_group, tp_rank, tp_size):
+        super().__init__(weight_name)
+        if vocab_size % tp_size:
+            raise ValueError(f"Qwen-Image-2.1 QwenVL vocab_size ({vocab_size}) must be divisible by text TP size ({tp_size})")
+        self.tp_group = tp_group
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
+        self.vocab_per_rank = vocab_size // tp_size
+        self.vocab_start = tp_rank * self.vocab_per_rank
+        self.vocab_end = self.vocab_start + self.vocab_per_rank
+
+    def apply(self, input_indices):
+        outside = (input_indices < self.vocab_start) | (input_indices >= self.vocab_end)
+        local_indices = (input_indices - self.vocab_start).masked_fill(outside, 0)
+        output = super().apply(local_indices).masked_fill(outside.unsqueeze(-1), 0)
+        dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
+        return output
+
+
+def qwen3vl_linear(config, weight_name, bias_name, *, tp_group, tp_rank, tp_size, split_dim):
     mm_type = config.get("text_encoder_quant_scheme", "Default") if config.get("text_encoder_quantized", False) else "Default"
-    return MM_WEIGHT_REGISTER[mm_type](weight_name, bias_name)
+    if tp_size == 1:
+        return MM_WEIGHT_REGISTER[mm_type](weight_name, bias_name)
+    return MMWeightTP(
+        weight_name=weight_name,
+        bias_name=bias_name,
+        mm_type=mm_type,
+        tp_group=tp_group,
+        tp_rank=tp_rank,
+        tp_size=tp_size,
+        split_dim=split_dim,
+    )
 
 
 def rotate_half(x):
@@ -33,22 +66,46 @@ def rotate_half(x):
 
 
 class Qwen3VLTextLayer(WeightModule):
-    def __init__(self, index, text_config, runtime_config):
+    def __init__(self, index, text_config, runtime_config, tp_group=None, tp_rank=0, tp_size=1):
         super().__init__()
         self.config = text_config
+        self.heads = text_config["num_attention_heads"] // tp_size
+        self.kv_heads = text_config["num_key_value_heads"] // tp_size
         prefix = f"model.language_model.layers.{index}"
-        for name in ("q_proj", "k_proj", "v_proj", "o_proj"):
-            self.add_module(name, qwen3vl_linear(runtime_config, f"{prefix}.self_attn.{name}.weight", None))
-        for name in ("gate_proj", "up_proj", "down_proj"):
-            self.add_module(name, qwen3vl_linear(runtime_config, f"{prefix}.mlp.{name}.weight", None))
+        for name, split_dim in (("q_proj", "col"), ("k_proj", "col"), ("v_proj", "col"), ("o_proj", "row")):
+            self.add_module(
+                name,
+                qwen3vl_linear(
+                    runtime_config,
+                    f"{prefix}.self_attn.{name}.weight",
+                    None,
+                    tp_group=tp_group,
+                    tp_rank=tp_rank,
+                    tp_size=tp_size,
+                    split_dim=split_dim,
+                ),
+            )
+        for name, split_dim in (("gate_proj", "col"), ("up_proj", "col"), ("down_proj", "row")):
+            self.add_module(
+                name,
+                qwen3vl_linear(
+                    runtime_config,
+                    f"{prefix}.mlp.{name}.weight",
+                    None,
+                    tp_group=tp_group,
+                    tp_rank=tp_rank,
+                    tp_size=tp_size,
+                    split_dim=split_dim,
+                ),
+            )
         for name in ("input_layernorm", "post_attention_layernorm", "self_attn.q_norm", "self_attn.k_norm"):
             self.add_module(name.split(".")[-1], RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.{name}.weight", eps=text_config["rms_norm_eps"]))
         self.add_module("attention", ATTN_WEIGHT_REGISTER["torch_sdpa"]())
 
     def forward(self, x, cos, sin):
         h = self.input_layernorm.apply(x)
-        q = self.q_norm.apply(self.q_proj.apply(h).reshape(-1, self.config["num_attention_heads"], self.config["head_dim"]))
-        k = self.k_norm.apply(self.k_proj.apply(h).reshape(-1, self.config["num_key_value_heads"], self.config["head_dim"]))
+        q = self.q_norm.apply(self.q_proj.apply(h).reshape(-1, self.heads, self.config["head_dim"]))
+        k = self.k_norm.apply(self.k_proj.apply(h).reshape(-1, self.kv_heads, self.config["head_dim"]))
         v = self.v_proj.apply(h).reshape_as(k)
         q = q * cos[:, None] + rotate_half(q) * sin[:, None]
         k = k * cos[:, None] + rotate_half(k) * sin[:, None]
@@ -159,8 +216,21 @@ class QwenImage21TextEncoder(WeightModule):
         root = Path(config["model_path"])
         path = root / "text_encoder"
         self.cpu_offload = config.get("text_encoder_cpu_offload", False)
+        self.tensor_parallel = bool(config.get("text_encoder_tensor_parallel", False))
+        if self.tensor_parallel:
+            if not dist.is_initialized():
+                raise RuntimeError("Qwen-Image-2.1 QwenVL TP requires an initialized distributed process group")
+            self.tp_group = dist.group.WORLD
+            self.tp_size = dist.get_world_size(self.tp_group)
+            self.tp_rank = dist.get_rank(self.tp_group)
+        else:
+            self.tp_group = None
+            self.tp_size = 1
+            self.tp_rank = 0
+
         self.model_config = json.loads((path / "config.json").read_text())
         self.text_config = self.model_config["text_config"]
+        self._validate_tp()
 
         quantized = bool(config.get("text_encoder_quantized", False))
         quant_scheme = config.get("text_encoder_quant_scheme", "Default")
@@ -177,8 +247,25 @@ class QwenImage21TextEncoder(WeightModule):
         system_tokens = self.processor.apply_chat_template([{"role": "system", "content": [{"type": "text", "text": self.system}]}], tokenize=True, return_dict=False)
         self.drop_index = len(system_tokens[0])
         self.image_id = self.processor.tokenizer.encode("<|image_pad|>")[0]
-        self.add_module("embedding", EMBEDDING_WEIGHT_REGISTER["Default"]("model.language_model.embed_tokens.weight"))
-        self.add_module("layers", WeightModuleList(Qwen3VLTextLayer(i, self.text_config, config) for i in range(self.text_config["num_hidden_layers"])))
+
+        embedding_name = "model.language_model.embed_tokens.weight"
+        if self.tp_size > 1:
+            embedding = Qwen3VLVocabParallelEmbedding(
+                embedding_name,
+                self.text_config["vocab_size"],
+                self.tp_group,
+                self.tp_rank,
+                self.tp_size,
+            )
+        else:
+            embedding = EMBEDDING_WEIGHT_REGISTER["Default"](embedding_name)
+        self.add_module("embedding", embedding)
+        self.add_module(
+            "layers",
+            WeightModuleList(Qwen3VLTextLayer(i, self.text_config, config, self.tp_group, self.tp_rank, self.tp_size) for i in range(self.text_config["num_hidden_layers"])),
+        )
+        # TP currently covers only the language stack. Keep the BF16 vision
+        # tower replicated on every rank so I2I uses the validated path.
         self.add_module("vision", Qwen3VLVision(self.model_config["vision_config"]))
 
         required = set()
@@ -188,12 +275,13 @@ class QwenImage21TextEncoder(WeightModule):
                 for child in module._modules.values():
                     collect(child)
                 return
-            attrs = getattr(module, "base_attrs", None)
+            storage = unwrap_tp_weight(module)
+            attrs = getattr(storage, "base_attrs", None)
             if attrs is not None:
                 required.update(name for name, _, _ in attrs if name is not None)
                 return
             for attr in ("weight_name", "bias_name"):
-                name = getattr(module, attr, None)
+                name = getattr(storage, attr, None)
                 if name:
                     required.add(name)
 
@@ -207,7 +295,7 @@ class QwenImage21TextEncoder(WeightModule):
         for shard in sorted(path.glob("*.safetensors")):
             with safe_open(shard, framework="pt", device=device) as handle:
                 for name in original_names.intersection(handle.keys()):
-                    weights[name] = handle.get_tensor(name).to(GET_DTYPE())
+                    weights[name] = self._select_tp_shard(name, handle.get_tensor(name)).to(GET_DTYPE())
 
         if quantized:
             checkpoint_path = Path(config["text_encoder_quantized_ckpt"])
@@ -216,7 +304,7 @@ class QwenImage21TextEncoder(WeightModule):
             language_names = required - vision_names
             with safe_open(checkpoint_path, framework="pt", device=device) as handle:
                 for name in language_names.intersection(handle.keys()):
-                    tensor = handle.get_tensor(name)
+                    tensor = self._select_tp_shard(name, handle.get_tensor(name))
                     if tensor.dtype in (torch.float16, torch.bfloat16, torch.float32) and not name.endswith(".weight_scale"):
                         tensor = tensor.to(GET_DTYPE())
                     weights[name] = tensor
@@ -226,6 +314,48 @@ class QwenImage21TextEncoder(WeightModule):
         self.load(weights)
         if self.cpu_offload:
             self.to_cpu()
+
+    def _validate_tp(self):
+        if self.tp_size == 1:
+            return
+        values = {
+            "text num_attention_heads": self.text_config["num_attention_heads"],
+            "text num_key_value_heads": self.text_config["num_key_value_heads"],
+            "text intermediate_size": self.text_config["intermediate_size"],
+            "vocab_size": self.text_config["vocab_size"],
+        }
+        invalid = {name: value for name, value in values.items() if value % self.tp_size}
+        if invalid:
+            details = ", ".join(f"{name}={value}" for name, value in invalid.items())
+            raise ValueError(f"Qwen-Image-2.1 QwenVL TP size {self.tp_size} must divide {details}")
+
+    def _select_tp_shard(self, name, tensor):
+        if self.tp_size == 1:
+            return tensor
+        is_weight_scale = name.endswith(".weight_scale")
+        linear_weight_name = name.removesuffix("_scale") if is_weight_scale else name
+        if name == self.embedding.weight_name:
+            split_dim = 0
+        elif any(
+            pattern in linear_weight_name
+            for pattern in (
+                ".self_attn.q_proj.weight",
+                ".self_attn.k_proj.weight",
+                ".self_attn.v_proj.weight",
+                ".mlp.gate_proj.weight",
+                ".mlp.up_proj.weight",
+            )
+        ):
+            split_dim = 0
+        elif ".self_attn.o_proj.weight" in linear_weight_name or ".mlp.down_proj.weight" in linear_weight_name:
+            if is_weight_scale:
+                return tensor
+            split_dim = 1
+        else:
+            return tensor
+        if tensor.shape[split_dim] % self.tp_size:
+            raise ValueError(f"Cannot shard Qwen3-VL tensor {name} shape {tuple(tensor.shape)} across text TP size {self.tp_size}")
+        return torch.chunk(tensor, self.tp_size, dim=split_dim)[self.tp_rank].contiguous()
 
     def to_cpu(self, non_blocking=False):
         if not self.cpu_offload:
@@ -238,10 +368,13 @@ class QwenImage21TextEncoder(WeightModule):
                 for child in module._modules.values():
                     release(child)
                 return
+            storage = unwrap_tp_weight(module)
             for name in ("weight", "weight_scale", "bias"):
-                tensor = getattr(module, f"pin_{name}", None)
+                tensor = getattr(storage, f"pin_{name}", None)
                 if tensor is not None:
-                    setattr(module, name, tensor)
+                    setattr(storage, name, tensor)
+            if isinstance(module, MMWeightTP):
+                module._row_split_bias = None
 
         release(self)
 
