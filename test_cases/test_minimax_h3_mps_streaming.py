@@ -102,16 +102,20 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                 result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_rope_precision_preserves_non_mps_fusion(self):
+    def test_rope_precision_config_preserves_default_fusion(self):
         q = torch.zeros((2, 8), dtype=torch.bfloat16)
         norm = SimpleNamespace(weight=torch.ones(4, dtype=torch.bfloat16), sensitive_layer_dtype=torch.bfloat16, infer_dtype=torch.bfloat16)
         freqs = (torch.ones((2, 4)), torch.zeros((2, 4)))
         for device in ("mps", "cuda", "xpu"):
-            with self.subTest(device=device), patch("lightx2v.models.networks.minimax_h3.weights.transformer_weights.AI_DEVICE", device):
-                rope = MiniMaxH3AttentionWeights("transformer_blocks.0.attn", {"attn_type": "torch_sdpa"}).rope
-                self.assertEqual(rope.compute_dtype, torch.bfloat16 if device == "mps" else torch.float32)
-                prepared = prepare_qkv_norm_rope(q, q, q, norm, norm, rope, freqs)
-                self.assertEqual(prepared is not None, device != "mps")
+            for value, dtype in ((None, torch.float32), ("fp32", torch.float32), ("bf16", torch.bfloat16)):
+                with self.subTest(device=device, dtype=value), patch("lightx2v.models.networks.minimax_h3.weights.transformer_weights.AI_DEVICE", device):
+                    config = {"attn_type": "torch_sdpa"}
+                    if value is not None:
+                        config["rope_compute_dtype"] = value
+                    rope = MiniMaxH3AttentionWeights("transformer_blocks.0.attn", config).rope
+                    self.assertEqual(rope.compute_dtype, dtype)
+                    prepared = prepare_qkv_norm_rope(q, q, q, norm, norm, rope, freqs)
+                    self.assertEqual(prepared is not None, dtype == torch.float32)
 
     def test_query_chunking_supports_other_shapes_and_grouped_query_attention(self):
         generator = torch.Generator().manual_seed(1497)
@@ -168,6 +172,7 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                 config = json.loads((config_dir / filename).read_text())
                 config["use_adaln_cache"] = False
                 weights = MiniMaxH3AttentionWeights("transformer_blocks.0.attn", config)
+                self.assertEqual(weights.rope.compute_dtype, torch.bfloat16)
                 self.assertIsInstance(weights.calculate, TorchSDPAMPSWeight)
                 infer = MiniMaxH3TransformerInfer(config)
                 infer.scheduler = SimpleNamespace()

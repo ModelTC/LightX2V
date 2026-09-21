@@ -34,6 +34,7 @@
   "mps_sdpa_query_chunk_size": 512,
   "rms_type": "torch_native",
   "rope_type": "torch_real_rope",
+  "rope_compute_dtype": "bf16",
 
   "tensor_parallel": false,
   "dit_quantized": false,
