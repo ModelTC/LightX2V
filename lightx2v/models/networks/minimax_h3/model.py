@@ -190,7 +190,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         if not self.block_offload:
             return
         if self.config.get("dit_disk_streaming", False):
-            self.transformer_weights._ensure_streaming_block()
+            self.transformer_weights._ensure_streaming_buffers()
             return
         if self.transformer_infer.offload_manager is not None:
             return
@@ -574,10 +574,8 @@ class MiniMaxH3Model(BaseTransformerModel):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("MiniMax-H3 feature caching is not implemented")
         self.pre_infer_class = MiniMaxH3PreInfer
-        if self.config.get("dit_mps_shared_buffer", False):
+        if self.config.get("dit_disk_streaming", False):
             self.transformer_infer_class = MiniMaxH3MpsOffloadTransformerInfer
-        elif self.config.get("dit_disk_streaming", False):
-            self.transformer_infer_class = MiniMaxH3TransformerInfer
         else:
             self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
         self.post_infer_class = MiniMaxH3PostInfer
@@ -674,7 +672,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         return output
 
     def to_cpu(self):
-        if self.config.get("dit_mps_shared_buffer", False):
+        if self.config.get("dit_disk_streaming", False):
             self.release_disk_streaming_buffer()
         super().to_cpu()
         if hasattr(self.transformer_infer, "offload_manager"):
@@ -683,7 +681,6 @@ class MiniMaxH3Model(BaseTransformerModel):
             self.transformer_infer.offload_manager.need_init_first_buffer = True
 
     def release_disk_streaming_buffer(self):
-        if self.config.get("dit_mps_shared_buffer", False):
-            self.transformer_infer.offload_manager.close()
+        self.transformer_infer.offload_manager.close()
         self.transformer_infer.compiled_blocks.clear()
         self.transformer_weights.release_disk_streaming_buffer()

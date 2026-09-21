@@ -13,7 +13,7 @@ class MiniMaxH3MpsOffloadTransformerInfer(MiniMaxH3TransformerInfer):
         return id(block)
 
     def infer(self, block_weights, pre_infer_out):
-        block_weights._ensure_streaming_block()
+        block_weights._ensure_streaming_buffers()
         if not self.offload_manager.cuda_buffers:
             self.offload_manager.init_cuda_buffer(block_weights.offload_block_cuda_buffers)
         if self.use_adaln_cache:

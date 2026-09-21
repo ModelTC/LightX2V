@@ -89,10 +89,6 @@ class MiniMaxH3ShardCheckpoint:
         pattern = _H3_BLOCK_KEY_RE
         return tuple(sorted({int(match.group(1)) for name in self.weight_map if (match := pattern.match(name)) is not None}))
 
-    def tensor_names_for_block(self, block_index):
-        block_prefix = f"transformer_blocks.{int(block_index)}."
-        return tuple(sorted(name for name in self.weight_map if name.startswith(block_prefix)))
-
     def shard_for_tensor(self, name):
         try:
             return self.weight_map[name]

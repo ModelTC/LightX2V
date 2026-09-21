@@ -42,13 +42,11 @@ DiT 磁盘逐层加载（`dit_disk_streaming=true`）不支持 LoRA，包括启�
 
 Mac 配置默认开启 `text_encoder_prefetch=true`：文本编码器复用两套层权重缓冲区，后台线程将下一层直接读入空闲的 MPS 共享缓冲区，与当前层计算重叠。该模式要求 `torch.mps._host_alias_storage` 可用、文件 dtype 与推理 dtype 一致。设为 `false` 可恢复单缓冲区同步加载，减少一层权重的内存占用；两种模式均在文本编码结束后按 `text_encoder_release_block_offload_buffers` 释放缓冲区。
 
-默认开启 `dit_mps_shared_buffer=true`：两套 DiT 权重缓冲区交替计算和预读，在复用前等待 GPU 计算与磁盘读取完成。此模式要求：
+MPS 的 DiT 磁盘逐层加载固定使用两套共享权重缓冲区，交替计算和预读，在复用前等待 GPU 计算与磁盘读取完成。此模式要求：
 
 - PyTorch 提供私有接口 `torch.mps._host_alias_storage`，已在 PyTorch 2.14.0 验证。
 - `cpu_offload=true`、`offload_granularity="block"`、`dit_disk_streaming=true`。
 - 非量化权重，文件 dtype 与推理 dtype 一致，并启用 AdaLN 缓存。
-
-缺少共享视图接口时，可将 `dit_mps_shared_buffer` 设为 `false`，使用单缓冲区磁盘加载。
 
 MPS 配置使用独立的 `attn_type="torch_sdpa_mps"`。`mps_sdpa_query_chunk_size` 控制该实现的 query 分块大小，配置默认为 512；每块仍访问完整的 key/value，设为 0 可关闭分块。普通 `torch_sdpa` 不使用该参数。
 

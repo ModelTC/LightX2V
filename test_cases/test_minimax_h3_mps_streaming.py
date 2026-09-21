@@ -398,10 +398,9 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
             ({"lora_configs": [{"path": "unused.safetensors", "alpha": 8}], "lora_dynamic_apply": True}, None),
         )
         with patch("lightx2v.models.networks.minimax_h3.model.BaseTransformerModel.__init__") as init_base:
-            for shared in (False, True):
-                for overrides, lora_path in cases:
-                    with self.subTest(shared=shared, overrides=overrides, lora_path=lora_path), self.assertRaises(AssertionError):
-                        MiniMaxH3Model("unused", {**config, "dit_mps_shared_buffer": shared, **overrides}, "mps", lora_path=lora_path)
+            for overrides, lora_path in cases:
+                with self.subTest(overrides=overrides, lora_path=lora_path), self.assertRaises(AssertionError):
+                    MiniMaxH3Model("unused", {**config, **overrides}, "mps", lora_path=lora_path)
             init_base.assert_not_called()
 
     def test_disk_streaming_rejects_runtime_lora(self):
@@ -546,8 +545,7 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
             ({"cpu_offload": False}, MiniMaxH3TransformerInfer),
             ({"cpu_offload": True, "offload_granularity": "model"}, MiniMaxH3OffloadTransformerInfer),
             ({"cpu_offload": True, "offload_granularity": "block"}, MiniMaxH3OffloadTransformerInfer),
-            ({"cpu_offload": True, "dit_disk_streaming": True}, MiniMaxH3TransformerInfer),
-            ({"cpu_offload": True, "dit_disk_streaming": True, "dit_mps_shared_buffer": True}, MiniMaxH3MpsOffloadTransformerInfer),
+            ({"cpu_offload": True, "dit_disk_streaming": True}, MiniMaxH3MpsOffloadTransformerInfer),
         )
         for config, expected in cases:
             with self.subTest(config=config):
@@ -562,80 +560,75 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
             tensors = self._write_checkpoint(Path(directory))
             hidden_states = torch.arange(24, dtype=torch.bfloat16, device="mps").reshape(3, 8) / 16
             pre_infer_out = SimpleNamespace(hidden_states=hidden_states)
-            for shared in (False, True):
-                for fused in (False, True):
-                    if shared and not hasattr(torch.mps, "_host_alias_storage"):
-                        continue
-                    with self.subTest(shared=shared, fused=fused):
-                        config = {
-                            "num_layers": 2,
-                            "num_refiner_layers": 1,
-                            "cpu_offload": True,
-                            "offload_granularity": "block",
-                            "dit_disk_streaming": True,
-                            "dit_mps_shared_buffer": shared,
-                            "dit_original_ckpt": directory,
-                            "use_adaln_cache": True,
-                            "attn_type": "torch_sdpa",
-                            "use_fused_qkv": fused,
-                        }
-                        model = MiniMaxH3Model.__new__(MiniMaxH3Model)
-                        model.config = config
-                        model.cpu_offload = True
-                        model.block_offload = True
-                        model.device = "mps"
-                        model._init_weights()
-                        torch.testing.assert_close(model.pre_weight.proj_in.pin_weight, tensors["proj_in.weight"].t(), rtol=0, atol=0)
-                        torch.testing.assert_close(model.pre_weight.refiner_blocks[0].attn.to_q.pin_weight, tensors["token_refiner.refiner_blocks.0.attn.to_q.weight"].t(), rtol=0, atol=0)
-                        torch.testing.assert_close(model.post_weight.proj_out.pin_weight, tensors["proj_out.weight"].t(), rtol=0, atol=0)
-                        self.assertIsInstance(model.transformer_weights, MiniMaxH3StreamingTransformerWeights)
-                        model._init_infer_class()
-                        # Exercise the real offload loop without a full AdaLN cache/model.
-                        infer = model.transformer_infer = model.transformer_infer_class({**config, "use_adaln_cache": False})
-                        weights = model.transformer_weights
-                        expected = hidden_states
-                        for index in range(2):
-                            prefix = f"transformer_blocks.{index}.attn.to_q"
-                            expected = expected @ tensors[f"{prefix}.weight"].to("mps").t()
+            for fused in (False, True):
+                with self.subTest(fused=fused):
+                    config = {
+                        "num_layers": 2,
+                        "num_refiner_layers": 1,
+                        "cpu_offload": True,
+                        "offload_granularity": "block",
+                        "dit_disk_streaming": True,
+                        "dit_original_ckpt": directory,
+                        "use_adaln_cache": True,
+                        "attn_type": "torch_sdpa",
+                        "use_fused_qkv": fused,
+                    }
+                    model = MiniMaxH3Model.__new__(MiniMaxH3Model)
+                    model.config = config
+                    model.cpu_offload = True
+                    model.block_offload = True
+                    model.device = "mps"
+                    model._init_weights()
+                    torch.testing.assert_close(model.pre_weight.proj_in.pin_weight, tensors["proj_in.weight"].t(), rtol=0, atol=0)
+                    torch.testing.assert_close(model.pre_weight.refiner_blocks[0].attn.to_q.pin_weight, tensors["token_refiner.refiner_blocks.0.attn.to_q.weight"].t(), rtol=0, atol=0)
+                    torch.testing.assert_close(model.post_weight.proj_out.pin_weight, tensors["proj_out.weight"].t(), rtol=0, atol=0)
+                    self.assertIsInstance(model.transformer_weights, MiniMaxH3StreamingTransformerWeights)
+                    model._init_infer_class()
+                    # Exercise the real offload loop without a full AdaLN cache/model.
+                    infer = model.transformer_infer = model.transformer_infer_class({**config, "use_adaln_cache": False})
+                    weights = model.transformer_weights
+                    self.assertEqual(len(weights.offload_block_cuda_buffers), 2)
+                    expected = hidden_states
+                    for index in range(2):
+                        prefix = f"transformer_blocks.{index}.attn.to_q"
+                        expected = expected @ tensors[f"{prefix}.weight"].to("mps").t()
 
-                        def run_block(index, block, hidden, pre):
-                            self._assert_block_weights(block, index, tensors)
-                            return block.attn.to_q.apply(hidden)
+                    def run_block(index, block, hidden, pre):
+                        self._assert_block_weights(block, index, tensors)
+                        return block.attn.to_q.apply(hidden)
 
-                        try:
-                            # The release flag must never enter the CUDA-only loader
-                            # or assume that disk streaming has resident CPU blocks.
-                            with patch.object(torch.cuda, "synchronize", side_effect=AssertionError("MPS called CUDA")), patch.object(infer, "run_block", side_effect=run_block):
+                    try:
+                        # The release flag must never enter the CUDA-only loader
+                        # or assume that disk streaming has resident CPU blocks.
+                        with patch.object(torch.cuda, "synchronize", side_effect=AssertionError("MPS called CUDA")), patch.object(infer, "run_block", side_effect=run_block):
+                            for _ in range(2):
+                                old_blocks = list(weights.offload_block_cuda_buffers)
+                                tensor_refs = []
+                                for block in old_blocks:
+                                    for module in (block.attn.to_q, block.attn.to_qkv, block.ff.in_proj, block.norm1):
+                                        tensor_refs.extend(
+                                            weakref.ref(tensor) for attr in ("weight", "weight_cuda_buffer") for tensor in (getattr(module, attr, None),) if isinstance(tensor, torch.Tensor)
+                                        )
+                                    tensor_refs.extend(weakref.ref(tensor) for tensor in block.shared_host_tensors.values())
+                                infer.get_compiled_block(0, weights.offload_block_cuda_buffers[0])
+                                model.release_block_offload_buffers()
+                                self.assertEqual(len(weights.offload_block_cuda_buffers), 0)
+                                self.assertEqual(infer.compiled_blocks, {})
+                                self.assertTrue(all(ref() is None for ref in tensor_refs))
+                                self.assertTrue(all(not block.shared_host_tensors for block in old_blocks))
+                                model.ensure_block_offload_buffers()
+                                self.assertEqual(len(weights.offload_block_cuda_buffers), 2)
                                 for _ in range(2):
-                                    old_blocks = list(weights.offload_block_cuda_buffers) if shared else [weights.streaming_block]
-                                    tensor_refs = []
-                                    for block in old_blocks:
-                                        for module in (block.attn.to_q, block.attn.to_qkv, block.ff.in_proj, block.norm1):
-                                            tensor_refs.extend(
-                                                weakref.ref(tensor) for attr in ("weight", "weight_cuda_buffer") for tensor in (getattr(module, attr, None),) if isinstance(tensor, torch.Tensor)
-                                            )
-                                        if shared:
-                                            tensor_refs.extend(weakref.ref(tensor) for tensor in block.shared_host_tensors.values())
-                                    infer.get_compiled_block(0, weights.streaming_block)
-                                    model.release_block_offload_buffers()
-                                    self.assertIsNone(model.transformer_weights.streaming_block)
-                                    self.assertEqual(infer.compiled_blocks, {})
-                                    self.assertTrue(all(ref() is None for ref in tensor_refs))
-                                    if shared:
-                                        self.assertTrue(all(not block.shared_host_tensors for block in old_blocks))
-                                    model.ensure_block_offload_buffers()
-                                    for _ in range(2):
-                                        torch.testing.assert_close(infer.infer(weights, pre_infer_out), expected, rtol=0, atol=0)
-                                if shared:
-                                    for failure in ("read", "compute"):
-                                        target, method = (weights, "load_block_into") if failure == "read" else (infer, "run_block")
-                                        with patch.object(target, method, side_effect=RuntimeError(f"test {failure} failure")), self.assertRaisesRegex(RuntimeError, f"test {failure} failure"):
-                                            infer.infer(weights, pre_infer_out)
-                                        self.assertIsNone(infer.offload_manager.executor)
-                                        self.assertEqual(infer.offload_manager.cuda_buffers, [])
-                                        torch.testing.assert_close(infer.infer(weights, pre_infer_out), expected, rtol=0, atol=0)
-                        finally:
-                            model.release_disk_streaming_buffer()
+                                    torch.testing.assert_close(infer.infer(weights, pre_infer_out), expected, rtol=0, atol=0)
+                            for failure in ("read", "compute"):
+                                target, method = (weights, "load_block_into") if failure == "read" else (infer, "run_block")
+                                with patch.object(target, method, side_effect=RuntimeError(f"test {failure} failure")), self.assertRaisesRegex(RuntimeError, f"test {failure} failure"):
+                                    infer.infer(weights, pre_infer_out)
+                                self.assertIsNone(infer.offload_manager.executor)
+                                self.assertEqual(infer.offload_manager.cuda_buffers, [])
+                                torch.testing.assert_close(infer.infer(weights, pre_infer_out), expected, rtol=0, atol=0)
+                    finally:
+                        model.release_disk_streaming_buffer()
 
 
 if __name__ == "__main__":
