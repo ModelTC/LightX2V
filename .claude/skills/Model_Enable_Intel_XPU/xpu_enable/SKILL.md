@@ -725,20 +725,33 @@ touch lightx2v/models/schedulers/$MODEL/__init__.py
 
 使用新内核（CUTE attention、XPU RMSNorm、INT8 GEMM）需要先编译 `sycl_kernels`。
 
-**Windows**：
+**wheel 命名与 `XPU_TARGET` 强相关**：`build.sh`/`build.bat` 通过 `XPU_TARGET` 环境变量选择 AOT 目标，只能是 `bmg`（Battlemage 独立显卡，如 Arc Pro B60）或 `ptl-h`（Panther Lake-H 集成显卡，如 Arc 140V），**不设置时默认 `bmg`**。Linux 下 wheel 版本号会带上对应后缀（`+bmg` / `+ptlh`），Windows 下 wheel 版本号不带后缀（但 wheel tag 仍是 `cp311-abi3`）。**Arc 140V 等 PTL-H 平台必须显式设置 `XPU_TARGET=ptl-h`，否则默认编译出的是 BMG 版本，装上会在运行时报不支持/kernel 不可用。**
+
+**Windows**（PTL-H，如 Arc 140V）：
 ```cmd
 cd lightx2v_kernel_xpu
+set XPU_TARGET=ptl-h
 call build.bat
-pip install dist\sycl_kernels-0.0.1-cp311-win_amd64.whl --force-reinstall --no-deps
+pip install dist\sycl_kernels-0.0.1-cp311-abi3-win_amd64.whl --force-reinstall --no-deps
 ```
 
-**Linux**：
+**Linux**（PTL-H，如 Arc 140V）：
 ```bash
 source /opt/intel/oneapi/setvars.sh
 cd lightx2v_kernel_xpu
-./build.sh
-pip install dist/sycl_kernels-0.0.1-cp311-linux_x86_64.whl --force-reinstall --no-deps
+XPU_TARGET=ptl-h ./build.sh
+pip install dist/sycl_kernels-0.0.1+ptlh-cp311-abi3-linux_x86_64.whl --force-reinstall --no-deps
 ```
+
+**Linux**（BMG，如 Arc Pro B60，`XPU_TARGET` 不设时的默认值）：
+```bash
+source /opt/intel/oneapi/setvars.sh
+cd lightx2v_kernel_xpu
+XPU_TARGET=bmg ./build.sh   # 或不设 XPU_TARGET，默认就是 bmg
+pip install dist/sycl_kernels-0.0.1+bmg-cp311-abi3-linux_x86_64.whl --force-reinstall --no-deps
+```
+
+不确定实际生成的文件名时，直接用通配符安装即可：`pip install dist/sycl_kernels-*.whl --force-reinstall --no-deps`。
 
 版本对齐：oneAPI、oneDNN、PyTorch 版本必须匹配。**当前推荐**：PyTorch `2.13.0+xpu`，oneAPI `2026.0.0`。
 
