@@ -248,8 +248,10 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
             self.assertEqual(dtype, "BF16")
             try:
                 streaming.init_disk_streaming(directory, weight_map)
+                layer = streaming.offload_cuda_buffers[0]
                 for index in (0, 1, 0):
-                    layer = streaming.load_streaming_layer(index)
+                    streaming.load_block_into(layer, index)
+                    torch.mps.synchronize()
                     for actual, expected in zip(layer.weight_modules(), native.layers[index].weight_modules()):
                         torch.testing.assert_close(actual.weight.cpu(), expected.weight, rtol=0, atol=0)
             finally:
@@ -306,23 +308,31 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                 save_file(shard, str(Path(directory) / shard_name))
                 indexed_weights.update(dict.fromkeys(shard, shard_name))
             (Path(directory) / "model.safetensors.index.json").write_text(json.dumps({"weight_map": indexed_weights}))
-            synchronous = _Qwen3VLTextBackboneWeights(config, text_config, num_layers=3, disk_streaming=True)
-            streaming = _Qwen3VLTextBackboneWeights({**config, "text_encoder_prefetch": True}, text_config, num_layers=3, disk_streaming=True)
-            weight_map, _ = encoder._preflight_native_checkpoint(synchronous, directory, text_config)
-            input_ids = torch.tensor([1, 3, 5, 7], device="mps")
+            resident = _Qwen3VLTextBackboneWeights(config, text_config, num_layers=3)
+            encoder._load_native_weights(resident, directory, text_config)
+            resident.to_cuda()
+            streaming = _Qwen3VLTextBackboneWeights(config, text_config, num_layers=3, disk_streaming=True)
+            weight_map, _ = encoder._preflight_native_checkpoint(streaming, directory, text_config)
+            input_ids = torch.tensor([0, 15, 5, 5])
             try:
-                synchronous.init_disk_streaming(directory, weight_map)
-                expected = synchronous.forward(input_ids)
-                synchronous.release_disk_streaming_buffer()
-                torch.testing.assert_close(synchronous.forward(input_ids), expected, rtol=0, atol=0)
+                expected = resident.forward(input_ids.to("mps"))
                 streaming.init_disk_streaming(directory, weight_map)
                 buffers = list(streaming.offload_cuda_buffers)
                 addresses = [layer.mlp.down_proj.weight.data_ptr() for layer in buffers]
                 self.assertEqual(len(set(addresses)), 2)
+                buffer_refs = [weakref.ref(module.weight) for layer in buffers for module in layer.weight_modules()]
                 started, proceed = threading.Event(), threading.Event()
                 reads = []
                 load_block = streaming.load_block_into
                 forward = buffers[0].forward
+                embedding = F.embedding
+                embedding_refs = []
+
+                def cpu_embedding(indices, weight):
+                    self.assertEqual(indices.device.type, "cpu")
+                    self.assertEqual(weight.device.type, "cpu")
+                    embedding_refs.append(weakref.ref(weight))
+                    return embedding(indices, weight)
 
                 def read(layer, index):
                     reads.append((index, threading.get_ident()))
@@ -337,9 +347,17 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                     proceed.set()
                     return forward(hidden, positions)
 
-                with patch.object(streaming, "load_block_into", side_effect=read), patch.object(buffers[0], "forward", side_effect=compute):
+                with (
+                    patch.object(streaming, "load_block_into", side_effect=read),
+                    patch.object(buffers[0], "forward", side_effect=compute),
+                    patch("lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl.F.embedding", new=cpu_embedding),
+                ):
                     actual = streaming.forward(input_ids)
                 torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+                self.assertEqual(len(embedding_refs), 1)
+                self.assertIsNone(embedding_refs[0]())
+                self.assertIsNone(getattr(streaming.embed_tokens, "weight", None))
+                self.assertIsNone(getattr(streaming.embed_tokens, "pin_weight", None))
                 self.assertEqual([index for index, _ in reads], [0, 1, 2])
                 self.assertEqual(reads[0][1], threading.get_ident())
                 self.assertTrue(all(worker != threading.get_ident() for _, worker in reads[1:]))
@@ -369,9 +387,11 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                 self.assertIsNone(streaming.offload_cuda_buffers)
                 self.assertTrue(all(not layer.shared_host_tensors for layer in buffers))
                 self.assertTrue(all(module.weight is None and module.weight_cuda_buffer is None for layer in buffers for module in layer.weight_modules()))
+                self.assertTrue(all(reference() is None for reference in buffer_refs))
                 torch.testing.assert_close(streaming.forward(input_ids), expected, rtol=0, atol=0)
+                self.assertEqual(len(streaming.offload_cuda_buffers), 2)
             finally:
-                synchronous.release_disk_streaming_buffer()
+                resident.to_cpu()
                 streaming.release_disk_streaming_buffer()
 
     def test_regular_encoder_still_preloads_visual_components(self):
@@ -385,9 +405,57 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
         encoder.load_processor.assert_called_once()
         encoder.load_vision_encoder.assert_called_once()
 
-    def test_text_disk_streaming_rejects_shared_cpu_loading(self):
-        with self.assertRaisesRegex(ValueError, "cannot be combined with text_encoder_shared_cpu_weights"):
-            MiniMaxH3Qwen3VLTextEncoder({"text_encoder_disk_streaming": True, "text_encoder_shared_cpu_weights": True})
+    def test_text_disk_streaming_is_independent_of_cpu_offload(self):
+        text_config = {
+            "hidden_size": 8,
+            "head_dim": 4,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "intermediate_size": 16,
+            "vocab_size": 16,
+            "rms_norm_eps": 1e-6,
+            "rope_theta": 10000,
+        }
+        encoder_class = MiniMaxH3Qwen3VLTextEncoder
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl.MINIMAX_H3_TEXT_ENCODER_LAYER", 2),
+            patch("lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl.MINIMAX_H3_TEXT_HIDDEN_SIZE", 8),
+            patch("lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl._EXPECTED_RELEASE_CONFIG", text_config),
+        ):
+            generator = torch.Generator().manual_seed(1497)
+            tensors = {name: torch.randn(shape, generator=generator).to(torch.bfloat16) for name, shape in encoder_class._expected_weight_shapes(text_config).items()}
+            save_file(tensors, str(Path(directory) / "model.safetensors"))
+            (Path(directory) / "config.json").write_text(json.dumps(text_config))
+            expected = None
+            for overrides in (
+                {},
+                {"text_encoder_cpu_offload": False, "text_encoder_offload_granularity": "block"},
+                {"text_encoder_cpu_offload": True},
+                {"text_encoder_cpu_offload": True, "text_encoder_offload_granularity": "block"},
+            ):
+                config = {
+                    "text_encoder_path": directory,
+                    "text_encoder_disk_streaming": True,
+                    "text_encoder_load_on_init": False,
+                    "text_encoder_release_block_offload_buffers": True,
+                    **overrides,
+                }
+                with self.subTest(overrides=overrides):
+                    encoder = encoder_class(config)
+                    encoder.tokenizer = Mock(return_value={"input_ids": [0, 15, 5, 5]})
+                    try:
+                        with patch.object(_Qwen3VLTextBackboneWeights, "to_cuda", side_effect=AssertionError("Streaming must not migrate resident weights")):
+                            result = encoder.infer("test")
+                        if expected is None:
+                            expected = result["prompt_embeds"]
+                        torch.testing.assert_close(result["prompt_embeds"], expected, rtol=0, atol=0)
+                        self.assertEqual(result["prompt_embeds"].device.type, "mps")
+                        self.assertEqual(tuple(result["prompt_embeds"].shape), (4, 8))
+                        self.assertIsNone(encoder.text_encoder.offload_cuda_buffers)
+                        self.assertIsNone(encoder.text_encoder.offload_manager)
+                    finally:
+                        encoder.unload_text_encoder()
 
     def test_disk_streaming_rejects_lora_before_loading(self):
         config = {"dit_disk_streaming": True, "cpu_offload": True, "offload_granularity": "block", "use_adaln_cache": True, "adaln_cache_dir": "unused"}

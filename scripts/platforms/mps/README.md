@@ -40,7 +40,7 @@ DiT 和文本编码器逐层从磁盘读取权重，VAE 在解码阶段加载。
 
 DiT 磁盘逐层加载（`dit_disk_streaming=true`）不支持 LoRA，包括启动时加载和运行时切换。
 
-Mac 配置默认开启 `text_encoder_prefetch=true`：文本编码器复用两套层权重缓冲区，后台线程将下一层直接读入空闲的 MPS 共享缓冲区，与当前层计算重叠。该模式要求 `torch.mps._host_alias_storage` 可用、文件 dtype 与推理 dtype 一致。设为 `false` 可恢复单缓冲区同步加载，减少一层权重的内存占用；两种模式均在文本编码结束后按 `text_encoder_release_block_offload_buffers` 释放缓冲区。
+文本编码器磁盘逐层加载（`text_encoder_disk_streaming=true`）固定复用两套层权重缓冲区，后台线程将下一层直接读入空闲的 MPS 共享缓冲区，与当前层计算重叠。该模式要求 `torch.mps._host_alias_storage` 可用、文件 dtype 与推理 dtype 一致，不依赖普通 CPU offload 的开关和粒度配置。Embedding 在 CPU 上查表，仅将选出的 token 向量传到 MPS；层缓冲区在文本编码结束后按 `text_encoder_release_block_offload_buffers` 释放。
 
 MPS 的 DiT 磁盘逐层加载固定使用两套共享权重缓冲区，交替计算和预读，在复用前等待 GPU 计算与磁盘读取完成。此模式要求：
 

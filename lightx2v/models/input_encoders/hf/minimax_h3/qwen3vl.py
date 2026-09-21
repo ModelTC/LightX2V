@@ -41,6 +41,7 @@ from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight as _TorchSDPAWei
 from lightx2v.common.ops.embedding.embedding_weight import EmbeddingWeight as _EmbeddingWeight  # noqa: F401
 from lightx2v.common.ops.mm.mm_weight import MMWeight as _MMWeight  # noqa: F401
 from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightFP32Qwen as _RMSWeightFP32Qwen  # noqa: F401
+from lightx2v.common.ops.utils import resolve_block_name
 from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl_vision import MiniMaxH3Qwen3VLVisionTower
 from lightx2v.models.networks.minimax_h3.checkpoint import MiniMaxH3ShardCheckpoint
 from lightx2v.models.networks.minimax_h3.packing import VIDEO_TAG
@@ -76,7 +77,6 @@ MINIMAX_H3_TEXT_NUM_LAYERS = 64
 MINIMAX_H3_TEXT_TAG = 1
 
 _CHECKPOINT_PREFIX = "model.language_model"
-_QWEN_LAYER_PREFIX = f"{_CHECKPOINT_PREFIX}.layers"
 _EXPECTED_RELEASE_CONFIG = {
     "hidden_size": MINIMAX_H3_TEXT_HIDDEN_SIZE,
     "intermediate_size": 25600,
@@ -86,16 +86,6 @@ _EXPECTED_RELEASE_CONFIG = {
     "head_dim": 128,
     "vocab_size": 151936,
 }
-
-
-def _resolve_qwen_layer_name(name, layer_index):
-    layer_prefix = f"{_QWEN_LAYER_PREFIX}."
-    if not name.startswith(layer_prefix):
-        return name
-    parts = name.split(".", 4)
-    if len(parts) == 5 and parts[3].isdigit():
-        return f"{_QWEN_LAYER_PREFIX}.{int(layer_index)}.{parts[4]}"
-    return name
 
 
 def _empty_device_cache():
@@ -373,12 +363,10 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         self.num_layers = int(num_layers)
         self.attn_type = attn_type
         self.disk_streaming = bool(disk_streaming)
-        self.disk_prefetch = self.disk_streaming and bool(config.get("text_encoder_prefetch", False))
         self.block_offload = bool(block_offload) and not self.disk_streaming
         self.offload_manager = None
         self.offload_cuda_buffers = None
         self._offload_completion_event = None
-        self.streaming_layer = None
         self.streaming_checkpoint = None
         self.hidden_size = int(text_config["hidden_size"])
         self.head_dim = int(text_config["head_dim"])
@@ -426,10 +414,6 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         for layer in self.layers:
             modules.update((leaf.weight_name, leaf) for leaf in layer.weight_modules())
         return modules
-
-    @staticmethod
-    def _layer_tensor_names(layer, layer_index):
-        return tuple(sorted({_resolve_qwen_layer_name(name, layer_index) for module in layer.weight_modules() for name, _, _ in module.base_attrs}))
 
     def select_tp_shard(self, name, tensor):
         if self.tp_size == 1:
@@ -516,13 +500,9 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         )
 
     def init_disk_streaming(self, text_encoder_path=None, weight_map=None):
-        if not self.disk_streaming:
-            return
         if self.streaming_checkpoint is None:
-            if text_encoder_path is None or weight_map is None:
-                raise RuntimeError("Qwen3-VL disk streaming requires a checkpoint path and weight map")
             self.streaming_checkpoint = MiniMaxH3ShardCheckpoint(text_encoder_path, weight_map)
-        if self.streaming_layer is not None:
+        if self.offload_cuda_buffers is not None:
             return
 
         buffers = WeightModuleList(
@@ -536,149 +516,78 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
                 tp_size=self.tp_size,
                 create_cuda_buffer=True,
             )
-            for _ in range(2 if self.disk_prefetch else 1)
+            for _ in range(2)
         )
-        if self.disk_prefetch:
-            for layer in buffers:
-                tensors = {}
-                for name in self._layer_tensor_names(layer, 0):
+        for layer in buffers:
+            tensors = {}
+            for module in layer.weight_modules():
+                for name, _, _ in module.base_attrs:
                     dtype, shape, _, _ = self.streaming_checkpoint.tensor_metadata(name)
                     if dtype != GET_DTYPE():
                         raise ValueError(f"Text encoder prefetch requires matching file/inference dtypes: {name}")
                     tensors[name] = torch.empty(shape, dtype=dtype, device=AI_DEVICE)
-                layer.load(tensors)
-                layer.shared_host_tensors = {}
-                for module in layer.weight_modules():
-                    for name, attr, transpose in module.base_attrs:
-                        buffer = getattr(module, f"{attr}_cuda_buffer")
-                        setattr(module, attr, buffer)
-                        # Keep the file layout for I/O and the existing transposed view for GEMM.
-                        layer.shared_host_tensors[name] = host_view(buffer.t() if transpose else buffer)
-            self.offload_cuda_buffers = buffers
-            self.offload_manager = MpsSharedWeightAsyncStreamManager()
-            self.offload_manager.init_cuda_buffer(blocks_cuda_buffer=buffers)
-            self.streaming_layer = buffers[0]
-            return
-
-        self.streaming_layer = buffers[0]
-        layer0_names = self._layer_tensor_names(self.streaming_layer, 0)
-        layer0_tensors = self.streaming_checkpoint.load_tensors(layer0_names)
-        try:
-            self.streaming_layer.load(layer0_tensors)
-            self.streaming_layer.load_state_dict(self._prepare_streaming_state_dict(layer0_tensors, 0), 0)
-        finally:
-            del layer0_tensors
-            gc.collect()
+            layer.load(tensors)
+            layer.shared_host_tensors = {}
+            for module in layer.weight_modules():
+                for name, attr, transpose in module.base_attrs:
+                    buffer = getattr(module, f"{attr}_cuda_buffer")
+                    setattr(module, attr, buffer)
+                    # Keep the file layout for I/O and the existing transposed view for GEMM.
+                    layer.shared_host_tensors[name] = host_view(buffer.t() if transpose else buffer)
+        self.offload_cuda_buffers = buffers
+        self.offload_manager = MpsSharedWeightAsyncStreamManager()
+        self.offload_manager.init_cuda_buffer(blocks_cuda_buffer=buffers)
 
     def load_block_into(self, layer, layer_index):
         """Read the next layer into idle shared storage; called by the prefetch worker."""
-        destinations = {_resolve_qwen_layer_name(name, layer_index): tensor for name, tensor in layer.shared_host_tensors.items()}
+        destinations = {resolve_block_name(name, layer_index): tensor for name, tensor in layer.shared_host_tensors.items()}
         self.streaming_checkpoint.load_tensors_into(destinations)
 
-    def _prepare_streaming_state_dict(self, tensors, layer_index):
-        state_dict = dict(tensors)
-        for module in self.streaming_layer.weight_modules():
-            for name, _, transpose in module.base_attrs:
-                if transpose:
-                    actual_name = _resolve_qwen_layer_name(name, layer_index)
-                    if actual_name in state_dict:
-                        state_dict[actual_name] = state_dict[actual_name].t()
-        return state_dict
-
-    def load_streaming_layer(self, layer_index):
-        if not self.disk_streaming:
-            raise RuntimeError("Qwen3-VL load_streaming_layer requires text_encoder_disk_streaming=true")
-        layer_index = int(layer_index)
-        if layer_index < 0 or layer_index >= self.num_layers:
-            raise IndexError(f"Qwen3-VL layer index out of range: {layer_index}")
-        self.init_disk_streaming()
-
-        layer_names = self._layer_tensor_names(self.streaming_layer, layer_index)
-        tensors = self.streaming_checkpoint.load_tensors(layer_names)
-        try:
-            self.streaming_layer.load_state_dict(self._prepare_streaming_state_dict(tensors, layer_index), layer_index)
-        finally:
-            del tensors
-            gc.collect()
-        return self.streaming_layer
-
     def _forward_streaming_embedding(self, input_ids):
-        if not self.disk_streaming:
-            raise RuntimeError("Qwen3-VL streaming embedding requires text_encoder_disk_streaming=true")
         embedding_name = self.embed_tokens.weight_name
         tensors = self.streaming_checkpoint.load_tensors((embedding_name,))
-        try:
-            host_weight = tensors.pop(embedding_name)
-            device_weight = host_weight.to(AI_DEVICE)
-            self.embed_tokens.weight = device_weight
-            try:
-                hidden_states = self.embed_tokens.apply(input_ids)
-                torch_device_module.synchronize()
-            finally:
-                self.embed_tokens.weight = None
-                del device_weight
-                del host_weight
-        finally:
-            del tensors
-            gc.collect()
-            _empty_device_cache()
-        if hasattr(self.embed_tokens, "pin_weight"):
-            self.embed_tokens.pin_weight = None
-        return hidden_states
+        # Transfer only the selected token vectors, not the full vocabulary.
+        hidden_states = F.embedding(input_ids.cpu(), tensors[embedding_name])
+        return hidden_states.to(AI_DEVICE)
 
-    def _forward_with_disk_streaming(self, input_ids, position_ids, vision_mask, vision_embeds, deepstack_embeds):
-        if vision_mask is not None or vision_embeds is not None or deepstack_embeds is not None:
-            raise NotImplementedError("MiniMax-H3 Qwen3-VL disk streaming currently supports text-only t2av prompts.")
+    def _forward_with_disk_streaming(self, input_ids, position_ids):
         hidden_states = self._forward_streaming_embedding(input_ids)
         position_embeddings = self._position_embeddings(hidden_states, position_ids)
         self.init_disk_streaming()
-        manager = self.offload_manager if self.disk_prefetch else None
+        manager = self.offload_manager
         try:
-            if manager is not None:
-                # Restart at layer zero for every prompt, including after a failed request.
-                manager.init_cuda_buffer(blocks_cuda_buffer=self.offload_cuda_buffers)
-                manager.init_first_buffer(self)
+            # Restart at layer zero for every prompt, including after a failed request.
+            manager.init_cuda_buffer(blocks_cuda_buffer=self.offload_cuda_buffers)
+            manager.init_first_buffer(self)
             for layer_index in range(self.num_layers):
                 has_next = layer_index + 1 < self.num_layers
-                if manager is not None:
-                    layer = manager.cuda_buffers[0]
-                    if has_next:
-                        manager.prefetch_weights(layer_index + 1, self)
-                else:
-                    layer = self.load_streaming_layer(layer_index)
+                layer = manager.cuda_buffers[0]
+                if has_next:
+                    manager.prefetch_weights(layer_index + 1, self)
                 hidden_states = layer.forward(hidden_states, position_embeddings)
-                if manager is not None and has_next:
+                if has_next:
                     manager.swap_blocks()
                 else:
                     torch_device_module.synchronize()
         except Exception:
-            if manager is not None:
-                manager.close()
+            manager.close()
             raise
         return hidden_states
 
     def release_disk_streaming_buffer(self):
-        if self.streaming_layer is None:
+        if self.offload_cuda_buffers is None:
             return
-        if self.disk_prefetch and self.offload_manager is not None:
-            self.offload_manager.close()
-            self.offload_manager = None
-        with suppress(Exception):
-            torch_device_module.synchronize()
-        for layer in self.offload_cuda_buffers or [self.streaming_layer]:
-            if self.disk_prefetch:
-                layer.shared_host_tensors.clear()
+        self.offload_manager.close()
+        self.offload_manager = None
+        for layer in self.offload_cuda_buffers:
+            layer.shared_host_tensors.clear()
             for module in layer.weight_modules():
-                storage = unwrap_tp_linear(module)
-                for _, attr_name, _ in getattr(storage, "base_attrs", ()):
-                    if hasattr(storage, attr_name):
-                        setattr(storage, attr_name, None)
-                    buffer_attr = f"{attr_name}_cuda_buffer"
-                    if hasattr(storage, buffer_attr):
-                        setattr(storage, buffer_attr, None)
+                for _, attr, _ in module.base_attrs:
+                    setattr(module, attr, None)
+                    setattr(module, f"{attr}_cuda_buffer", None)
         self.offload_cuda_buffers = None
-        self.streaming_layer = None
         gc.collect()
+        torch_device_module.synchronize()
         _empty_device_cache()
         logger.info("MiniMax-H3 Qwen3-VL released its disk-streaming layer buffers")
 
@@ -698,9 +607,7 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
 
     @property
     def device(self):
-        if self.disk_streaming:
-            return torch.device(AI_DEVICE)
-        if self.block_offload:
+        if self.disk_streaming or self.block_offload:
             return torch.device(AI_DEVICE)
         return self.embed_tokens.weight.device
 
@@ -800,7 +707,7 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         if input_ids.ndim != 1:
             raise ValueError(f"MiniMax-H3's native Qwen3-VL backbone expects unbatched token IDs, got {tuple(input_ids.shape)}")
         if self.disk_streaming:
-            return self._forward_with_disk_streaming(input_ids, position_ids, vision_mask, vision_embeds, deepstack_embeds)
+            return self._forward_with_disk_streaming(input_ids, position_ids)
         if self.block_offload:
             return self._forward_with_block_offload(input_ids, position_ids, vision_mask, vision_embeds, deepstack_embeds)
 
@@ -847,19 +754,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
         if config.get("text_encoder_quantized", False) and not config.get("text_encoder_quantized_ckpt"):
             raise ValueError("MiniMax-H3 quantized text encoder requires text_encoder_quantized_ckpt")
         self.tensor_parallel = bool(config.get("text_encoder_tensor_parallel", config.get("tensor_parallel", False)))
-        if self.disk_streaming:
-            if config.get("text_encoder_shared_cpu_weights", False):
-                raise ValueError("MiniMax-H3 text_encoder_disk_streaming cannot be combined with text_encoder_shared_cpu_weights.")
-            if torch.device(AI_DEVICE).type != "mps":
-                raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming currently requires AI_DEVICE='mps'.")
-            if config.get("model_variant") != "fl2av":
-                raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming requires model_variant='fl2av' and supports t2av requests only.")
-            if GET_DTYPE() != torch.bfloat16:
-                raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming currently requires BF16.")
-            if config.get("text_encoder_quantized", False):
-                raise NotImplementedError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming does not support quantized text encoder weights.")
-            if self.tensor_parallel:
-                raise NotImplementedError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming does not support text encoder tensor parallel.")
         if self.tensor_parallel:
             if not dist.is_initialized():
                 raise RuntimeError("MiniMax-H3 text encoder TP requires an initialized distributed process group")
@@ -882,13 +776,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
         self.offload_granularity = config.get("text_encoder_offload_granularity", "model")
         if self.offload_granularity not in {"model", "block"}:
             raise ValueError(f"Unsupported text_encoder_offload_granularity={self.offload_granularity!r}; expected 'model' or 'block'")
-        if self.offload_granularity == "block" and not self.cpu_offload:
+        if self.offload_granularity == "block" and not self.cpu_offload and not self.disk_streaming:
             raise ValueError("text_encoder_offload_granularity='block' requires text_encoder_cpu_offload=true")
-        if self.disk_streaming:
-            if not self.cpu_offload:
-                raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming requires text_encoder_cpu_offload=true.")
-            if self.offload_granularity != "block":
-                raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming requires text_encoder_offload_granularity='block'.")
         self.block_offload = self.cpu_offload and self.offload_granularity == "block" and not self.disk_streaming
         self.release_block_offload_buffers = bool(config.get("text_encoder_release_block_offload_buffers", False))
         self.local_files_only = config.get("local_files_only", True)
@@ -1262,7 +1151,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
             self._load_native_weights(text_encoder, checkpoint_path, text_config)
         if self.block_offload:
             text_encoder.init_block_offload()
-        elif not self.cpu_offload:
+        elif not self.cpu_offload and not self.disk_streaming:
             text_encoder.to_cuda()
         self.text_encoder = text_encoder
         return self.text_encoder
@@ -1507,7 +1396,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 # configured to release them after text encoding.
                 self.text_encoder.init_block_offload()
             device = self.text_encoder.device
-            input_ids = input_ids.to(device)
+            if not self.disk_streaming:
+                input_ids = input_ids.to(device)
             prompt_embeds = self.text_encoder.forward(
                 input_ids,
                 None if position_ids is None else position_ids.to(device),
