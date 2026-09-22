@@ -48,7 +48,6 @@ class QwenImage21Runner(DefaultRunner):
             "disagg_mode",
             "lora_configs",
             "vae_tiling",
-            "use_compile",
         )
         for key in unsupported:
             if config.get(key):

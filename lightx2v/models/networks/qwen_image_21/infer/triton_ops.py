@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+from torch.utils._python_dispatch import _get_current_dispatch_mode
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -35,8 +36,11 @@ def fused_residual_norm_scale(x, update, gate, scale, eps):
     residual = torch.empty_like(x)
     hidden = torch.empty_like(x)
     width = x.shape[-1]
+    kernel = _residual_norm_scale_kernel
+    if torch.compiler.is_compiling() or _get_current_dispatch_mode() is not None:
+        kernel = torch.library.wrap_triton(kernel)
     with torch_device_module.device(x.device):
-        _residual_norm_scale_kernel[(x.shape[0],)](x, update, gate, scale, residual, hidden, width, eps, triton.next_power_of_2(width), enable_fp_fusion=False)
+        kernel[(x.shape[0],)](x, update, gate, scale, residual, hidden, width, eps, triton.next_power_of_2(width), enable_fp_fusion=False)
     return residual, hidden
 
 
@@ -54,8 +58,11 @@ def _silu_mul_kernel(Gate, Up, Output, NUMEL: tl.constexpr, BLOCK: tl.constexpr)
 def fused_silu_mul(gate, up):
     """Compute silu(gate) * up for equally shaped contiguous projection outputs."""
     output = torch.empty_like(gate)
+    kernel = _silu_mul_kernel
+    if torch.compiler.is_compiling() or _get_current_dispatch_mode() is not None:
+        kernel = torch.library.wrap_triton(kernel)
     with torch_device_module.device(gate.device):
-        _silu_mul_kernel[(triton.cdiv(gate.numel(), 1024),)](gate, up, output, gate.numel(), 1024, enable_fp_fusion=False)
+        kernel[(triton.cdiv(gate.numel(), 1024),)](gate, up, output, gate.numel(), 1024, enable_fp_fusion=False)
     return output
 
 
@@ -79,6 +86,19 @@ def _residual_add_kernel(X, Update, Gate, Output, NUMEL: tl.constexpr, WIDTH: tl
 def fused_residual_add(x, update, gate):
     """Compute x + gate * update, including the block's final FP16 clamp."""
     output = torch.empty_like(x)
+    kernel = _residual_add_kernel
+    if torch.compiler.is_compiling() or _get_current_dispatch_mode() is not None:
+        kernel = torch.library.wrap_triton(kernel)
     with torch_device_module.device(x.device):
-        _residual_add_kernel[(triton.cdiv(x.numel(), 1024),)](x, update, gate, output, x.numel(), x.shape[-1], x.dtype == torch.float16, 1024, enable_fp_fusion=False)
+        kernel[(triton.cdiv(x.numel(), 1024),)](
+            x,
+            update,
+            gate,
+            output,
+            x.numel(),
+            x.shape[-1],
+            x.dtype == torch.float16,
+            1024,
+            enable_fp_fusion=False,
+        )
     return output

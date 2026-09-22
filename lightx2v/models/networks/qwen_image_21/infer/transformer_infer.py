@@ -3,10 +3,11 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.ops.norm.rms_norm_weight import apply_qk_rms_norm
+from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.registry_factory import ROPE_REGISTER
 
 
-class QwenImage21TransformerInfer:
+class QwenImage21TransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
         if config.get("tensor_parallel", False):
@@ -36,28 +37,26 @@ class QwenImage21TransformerInfer:
             self.seq_p_head_parallel_group_size = int(parallel.get("seq_p_head_parallel_group_size", 1))
         else:
             self.seq_p_group = None
-
-    def set_scheduler(self, scheduler):
-        self.scheduler = scheduler
+        self.init_compile(config)
 
     def _modulation(self, state):
         # One timestep per stream; the same modulation is shared by all blocks.
         scale1, gate1, scale2, gate2 = state.modulation.chunk(4, -1)
         return 1 + scale1, gate1.tanh(), 1 + scale2, gate2.tanh()
 
-    def _qkv(self, block, x, scale, state):
+    def _qkv(self, block, x, scale, rotary, rotary_positions):
         h = block.norm1.apply(x) * scale
         q = block.q.apply(h).reshape(-1, self.heads, self.config["attention_head_dim"])
         k = block.k.apply(h).reshape_as(q)
         v = block.v.apply(h).reshape_as(q)
         q, k = apply_qk_rms_norm(q, k, block.norm_q, block.norm_k, use_triton=self.use_fused_qk_rms_norm)
-        q, k = self.rope.apply(q, k, state.rotary, positions=state.rotary_positions)
+        q, k = self.rope.apply(q, k, rotary, positions=rotary_positions)
         return q, k, v
 
     def _finish_block(self, block, x, attention, modulation):
         _, gate1, scale2, gate2 = modulation
         # Short sequences are launch-bound; eager Torch is faster there.
-        if self.use_fused_block_ops and x.shape[0] >= self.fused_block_min_tokens and not torch.compiler.is_compiling():
+        if self.use_fused_block_ops and x.shape[0] >= self.fused_block_min_tokens:
             x, h = self.block_ops.fused_residual_norm_scale(x, block.out.apply(attention), gate1, scale2, block.norm2.eps)
             hidden = self.block_ops.fused_silu_mul(block.gate.apply(h), block.up.apply(h))
             return self.block_ops.fused_residual_add(x, block.down.apply(hidden), gate2)
@@ -72,7 +71,7 @@ class QwenImage21TransformerInfer:
         x = state.hidden_states
         modulation = self._modulation(state)
         for index, block in enumerate(weights.blocks):
-            q, k, v = self._qkv(block, x, modulation[0], state)
+            q, k, v = self._qkv(block, x, modulation[0], state.rotary, state.rotary_positions)
             cache.store_kv(k, v, index)
             attention = x.new_empty((x.shape[0], self.heads * self.config["attention_head_dim"]))
             for begin, end, is_text in state.layout.segments:
@@ -83,6 +82,33 @@ class QwenImage21TransformerInfer:
                 attention[begin:end] = op.apply(q[begin:end], k[:end], v[:end], attn_mask=mask)
             x = self._finish_block(block, x, attention, modulation)
 
+    def infer_block(self, block, x, modulation, rotary, rotary_positions, cached_k, cached_v):
+        q, k, v = self._qkv(block, x, modulation[0], rotary, rotary_positions)
+        if self.seq_parallel:
+            attention, _ = block.calculate_parallel.apply(
+                q=q,
+                k=k,
+                v=v,
+                aux_q=None,
+                aux_k=cached_k,
+                aux_v=cached_v,
+                attention_module=block.attention,
+                seq_p_group=self.seq_p_group,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.seq_p_head_parallel,
+                head_parallel_group_size=self.seq_p_head_parallel_group_size,
+                aux_first=True,
+                attention_kwargs={},
+            )
+        else:
+            k = torch.cat((cached_k, k))
+            v = torch.cat((cached_v, v))
+            attention = block.attention.apply(q, k, v)
+        return self._finish_block(block, x, attention, modulation)
+
     def infer(self, weights, state, cache):
         """Denoise only target tokens, attending to the prefilled condition K/V."""
         if not cache.is_ready():
@@ -90,31 +116,14 @@ class QwenImage21TransformerInfer:
         x = state.hidden_states
         modulation = self._modulation(state)
         for index, block in enumerate(weights.blocks):
-            q, k, v = self._qkv(block, x, modulation[0], state)
-            cached_k = cache.k_cache(index)
-            cached_v = cache.v_cache(index)
-            if self.seq_parallel:
-                attention, _ = block.calculate_parallel.apply(
-                    q=q,
-                    k=k,
-                    v=v,
-                    aux_q=None,
-                    aux_k=cached_k,
-                    aux_v=cached_v,
-                    attention_module=block.attention,
-                    seq_p_group=self.seq_p_group,
-                    prepost_backend=self.seq_p_prepost_backend,
-                    a2a_backend=self.seq_p_a2a_backend,
-                    quant_scheme=self.seq_p_quant_scheme,
-                    tensor_fusion=self.seq_p_tensor_fusion,
-                    head_parallel=self.seq_p_head_parallel,
-                    head_parallel_group_size=self.seq_p_head_parallel_group_size,
-                    aux_first=True,
-                    attention_kwargs={},
-                )
-            else:
-                k = torch.cat((cached_k, k))
-                v = torch.cat((cached_v, v))
-                attention = block.attention.apply(q, k, v)
-            x = self._finish_block(block, x, attention, modulation)
+            x = self.run_block(
+                index,
+                block,
+                x,
+                modulation,
+                state.rotary,
+                state.rotary_positions,
+                cache.k_cache(index),
+                cache.v_cache(index),
+            )
         return x
