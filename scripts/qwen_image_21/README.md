@@ -88,7 +88,7 @@ Both tasks were measured on the current code with 40 steps, seed 42, CFG disable
 
 The 5090 stack above (FlashAttention3, FlashInfer RoPE, CUTLASS FP8, SageAttention2 CUDA kernels) is CUDA-only. The configs below run Qwen-Image-2.1 on AMD RDNA GPUs with a torch-op inference path (`torch_sdpa`, `torch_real_rope`, torch LayerNorm/modulation) plus ROCm-friendly quantization, `torch.compile`, and SageAttention2. They quantize the **released BF16 weights on load** — no `tools/convert` step and no `dit_quantized_ckpt`.
 
-Validated in the `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0` image (PyTorch 2.10, Triton 3.6). Install the runtime deps not baked into that image:
+Validated in the `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0` image (PyTorch 2.10, Triton 3.6) with the `transformers` 4.57.x line (`Qwen3VLProcessor` needs a recent release; pin to a version you have tested rather than only a lower bound). Install the runtime deps not baked into that image:
 
 ```bash
 pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf einops \
@@ -113,10 +113,10 @@ Per-GPU config (pick one for `--config_json`, all under `configs/platforms/amd_r
 
 | GPU (arch) | Quantization | Configs |
 | --- | --- | --- |
-| R9700 (gfx1201 / RDNA4) | FP8 via `torch._scaled_mm` | `qwen_image_21_r9700_fp8_compile_sage.json` (fastest), `..._fp8_compile.json`, `..._fp8_sage_25steps.json`, `qwen_image_21_r9700.json` (BF16 baseline) |
-| W7900 (gfx1100 / RDNA3) | INT8 via `torch._int_mm` (no FP8 on RDNA3) | `qwen_image_21_w7900_int8_compile_sage.json` (fastest), `..._int8_compile.json`, `..._int8_sage_25steps.json`, `qwen_image_21_w7900_int8.json` (baseline) |
+| R9700 (gfx1201 / RDNA4) | FP8 via `torch._scaled_mm` | `qwen_image_21_r9700_fp8_compile_sage.json` (fastest), `..._fp8_compile.json`, `..._fp8_compile_sage_25steps.json`, `qwen_image_21_r9700.json` (BF16 eager baseline) |
+| W7900 (gfx1100 / RDNA3) | INT8 via `torch._int_mm` (no FP8 on RDNA3) | `qwen_image_21_w7900_int8_compile_sage.json` (fastest), `..._int8_compile.json`, `..._int8_compile_sage_25steps.json`, `qwen_image_21_w7900_int8.json` (INT8 eager baseline) |
 
-The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered by the AMD ROCm platform ops in `lightx2v_platform/ops/mm/amd_rocm/`: per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. Both use `use_compile` and `attn_type: sage_attn2`. On gfx1201 the VAE runs through an im2col GEMM (`vae_conv_im2col`) to avoid a nondeterministic MIOpen convolution defect; gfx1100 uses the native conv. The required SageAttention/Inductor Triton `num_stages` workaround for ROCm is applied automatically.
+The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered by the AMD ROCm platform ops in `lightx2v_platform/ops/mm/amd_rocm/`: per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. Both use `use_compile` and `attn_type: sage_attn2`. The VAE runs native convolution — the AMD ROCm platform disables cuDNN/MIOpen, which sidesteps the nondeterministic-NaN convolution path observed on gfx1201. The SageAttention/Inductor Triton `num_stages` workaround (needed on gfx1201 / gfx1100) is installed automatically, and only when `attn_type: sage_attn2` is selected.
 
 | GPU | Quant | Steps | End-to-end |
 | --- | --- | ---: | ---: |
@@ -125,7 +125,7 @@ The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered 
 | W7900 | INT8 | 40 | ~46 s |
 | W7900 | INT8 | 25 | ~29 s |
 
-Measured at 1024×1024, seed 42, CFG disabled, single GPU, steady state after warmup. 25 steps (the ComfyUI default for this model) has no visible quality loss versus 40. Compilation is a one-time warmup cost (~1.5–3 min); SageAttention needs `TORCHINDUCTOR_COMPILE_THREADS=1`, which the code sets automatically on the SageAttention path.
+Measured at 1024×1024, seed 42, CFG disabled, single GPU, steady state after warmup (median of a few runs). End-to-end covers text encoding, condition-KV prefill, denoising, VAE decode and PNG save; it excludes model load and one-time initialization. In the tested prompts and seeds, 25 steps (a common ComfyUI setting for this model) showed no obvious visual degradation versus 40 — this is not a systematic quality evaluation. Compilation is a one-time warmup cost (~1.5–3 min); `TORCHINDUCTOR_COMPILE_THREADS=1` is set automatically on the SageAttention path.
 
 ## 4. Service Deployment and API Usage
 

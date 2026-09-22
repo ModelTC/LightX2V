@@ -12,6 +12,5 @@
     "enable_cfg": false,
     "sample_guide_scale": 1.0,
     "warmup": false,
-    "text_encoder_cpu_offload": true,
-    "vae_conv_im2col": true
+    "text_encoder_cpu_offload": true
 }

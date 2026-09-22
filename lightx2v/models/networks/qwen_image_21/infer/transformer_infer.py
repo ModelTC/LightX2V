@@ -32,15 +32,9 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
 
     def _qkv(self, block, x, scale, rotary, rotary_positions):
         h = block.norm1.apply(x) * scale
-        if hasattr(block, "qkv"):
-            q, k, v = block.qkv.apply(h).split(block.qkv.split_sizes, dim=-1)
-            q = q.reshape(-1, self.heads, self.head_dim)
-            k = k.reshape_as(q)
-            v = v.reshape_as(q)
-        else:
-            q = block.q.apply(h).reshape(-1, self.heads, self.head_dim)
-            k = block.k.apply(h).reshape_as(q)
-            v = block.v.apply(h).reshape_as(q)
+        q = block.q.apply(h).reshape(-1, self.heads, self.head_dim)
+        k = block.k.apply(h).reshape_as(q)
+        v = block.v.apply(h).reshape_as(q)
         q, k = apply_qk_rms_norm(q, k, block.norm_q, block.norm_k, use_triton=self.use_fused_qk_rms_norm)
         q, k = self.rope.apply(q, k, rotary, positions=rotary_positions)
         return q, k, v
@@ -62,11 +56,7 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
 
         x = x + gate1 * block.out.apply(attention)
         h = block.norm2.apply(x) * scale2
-        if hasattr(block, "gate_up"):
-            gate_out, up_out = block.gate_up.apply(h).split(block.gate_up.split_sizes, dim=-1)
-            mlp = F.silu(gate_out) * up_out
-        else:
-            mlp = F.silu(block.gate.apply(h)) * block.up.apply(h)
+        mlp = F.silu(block.gate.apply(h)) * block.up.apply(h)
         x = x + gate2 * block.down.apply(mlp)
         return x.clamp(-65504, 65504) if x.dtype == torch.float16 else x
 

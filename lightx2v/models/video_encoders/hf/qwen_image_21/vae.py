@@ -18,48 +18,14 @@ from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-# MIOpen convolutions on gfx1201 (RDNA4) return NaN nondeterministically for this
-# VAE's shapes. Express every conv as im2col + GEMM (hipBLASLt), which is reliable
-# on this hardware. The input is padded by the caller.
-def _im2col_conv2d(x, weight, bias, stride):
-    kh, kw = weight.shape[-2:]
-    sh, sw = stride
-    b, _, h, w = x.shape
-    cols = F.unfold(x, (kh, kw), stride=(sh, sw))  # (B, C*kh*kw, L)
-    out = torch.matmul(weight.reshape(weight.shape[0], -1), cols)  # (B, O, L)
-    out_h = (h - kh) // sh + 1
-    out_w = (w - kw) // sw + 1
-    out = out.reshape(b, weight.shape[0], out_h, out_w)
-    if bias is not None:
-        out = out + bias.reshape(1, -1, 1, 1)
-    return out
-
-
-class GemmConv2d(nn.Conv2d):
-    """nn.Conv2d that runs through im2col+GEMM (MIOpen-free) when enabled."""
-
-    im2col_conv = False
-
-    def forward(self, x):
-        if self.im2col_conv:
-            ph, pw = self.padding
-            padded = F.pad(x, (pw, pw, ph, ph)) if (ph or pw) else x
-            return _im2col_conv2d(padded, self.weight, self.bias, self.stride)
-        return super().forward(x)
-
-
 class ImageConv(nn.Conv2d):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.image_padding = (self.padding[1], self.padding[1], self.padding[0], self.padding[0])
         self.padding = (0, 0)
-        self.im2col_conv = False
 
     def forward(self, x):
-        padded = F.pad(x.squeeze(2), self.image_padding)
-        if self.im2col_conv:
-            return _im2col_conv2d(padded, self.weight, self.bias, self.stride).unsqueeze(2)
-        return super().forward(padded).unsqueeze(2)
+        return super().forward(F.pad(x.squeeze(2), self.image_padding)).unsqueeze(2)
 
 
 class ImageRMSNorm(nn.Module):
@@ -90,8 +56,8 @@ class AttentionBlock(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.norm = ImageRMSNorm(dim, images=True)
-        self.to_qkv = GemmConv2d(dim, dim * 3, 1)
-        self.proj = GemmConv2d(dim, dim, 1)
+        self.to_qkv = nn.Conv2d(dim, dim * 3, 1)
+        self.proj = nn.Conv2d(dim, dim, 1)
 
     def forward(self, x):
         b, c, _, h, w = x.shape
@@ -121,9 +87,9 @@ class Resample(nn.Module):
     def __init__(self, dim, up, temporal):
         super().__init__()
         if up:
-            self.resample = nn.Sequential(Upsample(), GemmConv2d(dim, dim, 3, padding=1))
+            self.resample = nn.Sequential(Upsample(), nn.Conv2d(dim, dim, 3, padding=1))
         else:
-            self.resample = nn.Sequential(nn.ZeroPad2d((0, 1, 0, 1)), GemmConv2d(dim, dim, 3, stride=2))
+            self.resample = nn.Sequential(nn.ZeroPad2d((0, 1, 0, 1)), nn.Conv2d(dim, dim, 3, stride=2))
         if temporal:
             self.time_conv = ImageConv(dim, dim * 2 if up else dim, 1)
 
@@ -215,11 +181,6 @@ class QwenImage21VAE(nn.Module):
         if not cfg["is_residual"] or cfg.get("patch_size") is not None or cfg["attn_scales"]:
             raise ValueError("Expected the released residual, unpatched Qwen-Image-2.1 image VAE")
         self.scale_factor = config["vae_scale_factor"]
-        # MIOpen convolutions on gfx1201 (RDNA4) return NaN for this decoder's
-        # large convs, so allow running the VAE on CPU (always fp32 there).
-        self.vae_device = torch.device("cpu") if str(config.get("vae_device", "")).lower() == "cpu" else torch.device(AI_DEVICE)
-        _vd = str(config.get("vae_dtype", "")).lower()
-        self.vae_dtype = torch.float32 if self.vae_device.type == "cpu" else {"fp32": torch.float32, "float32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}.get(_vd, GET_DTYPE())
         with torch.device("meta"):
             self.encoder = Encoder(cfg)
             self.decoder = Decoder(cfg)
@@ -231,21 +192,16 @@ class QwenImage21VAE(nn.Module):
         self.load_state_dict(state, strict=True, assign=True)
         self.register_buffer("latents_mean", torch.tensor(cfg["latents_mean"]).reshape(1, -1, 1, 1, 1), persistent=False)
         self.register_buffer("latents_std", torch.tensor(cfg["latents_std"]).reshape(1, -1, 1, 1, 1), persistent=False)
-        self.to(dtype=self.vae_dtype, device=self.vae_device)
-        if self.vae_device.type != "cpu" and config.get("vae_conv_im2col", False):
-            for module in self.modules():
-                if isinstance(module, (ImageConv, GemmConv2d)):
-                    module.im2col_conv = True
+        self.to(dtype=GET_DTYPE(), device=AI_DEVICE)
         self.eval().requires_grad_(False)
 
     @torch.inference_mode()
     def encode(self, image):
-        mean = self.quant_conv(self.encoder(image.to(device=self.vae_device, dtype=self.vae_dtype))).chunk(2, dim=1)[0]
+        mean = self.quant_conv(self.encoder(image.to(device=AI_DEVICE, dtype=GET_DTYPE()))).chunk(2, dim=1)[0]
         return ((mean - self.latents_mean) / self.latents_std).flatten(2).transpose(1, 2)
 
     @torch.inference_mode()
     def decode(self, latents, size):
         h, w = size
-        z = latents.transpose(1, 2).reshape(1, self.config["z_dim"], 1, h // self.scale_factor, w // self.scale_factor).to(device=self.vae_device, dtype=self.vae_dtype)
-        out = self.decoder(self.post_quant_conv(z * self.latents_std + self.latents_mean)).clamp(-1, 1)[:, :, 0]
-        return out.to(AI_DEVICE)
+        z = latents.transpose(1, 2).reshape(1, self.config["z_dim"], 1, h // self.scale_factor, w // self.scale_factor).to(GET_DTYPE())
+        return self.decoder(self.post_quant_conv(z * self.latents_std + self.latents_mean)).clamp(-1, 1)[:, :, 0]

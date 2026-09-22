@@ -13,7 +13,6 @@
     "sample_guide_scale": 1.0,
     "warmup": true,
     "text_encoder_cpu_offload": true,
-    "vae_conv_im2col": true,
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-rocm",
     "use_compile": true

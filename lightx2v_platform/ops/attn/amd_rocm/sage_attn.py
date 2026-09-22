@@ -102,10 +102,31 @@ def force_rocm_inductor_single_thread():
         logger.info("[SageAttention] ROCm: set inductor compile_threads=1 so the Triton num_stages clamp reaches torch.compile kernels")
 
 
+_VALIDATED_ARCHS = ("gfx1201", "gfx1100")
+
+
+def _is_validated_rocm_arch():
+    """True only on the RDNA arch(es) where this workaround is validated.
+
+    The num_stages>=3 pipeliner crash was reproduced and the clamp validated on
+    gfx1201 (R9700) and gfx1100 (W7900). Other archs (e.g. MI300) are left
+    untouched so their kernels keep their own num_stages tuning.
+    """
+    if getattr(torch.version, "hip", None) is None or not torch.cuda.is_available():
+        return False
+    try:
+        arch = torch.cuda.get_device_properties(0).gcnArchName
+    except Exception:
+        return False
+    return any(arch.startswith(a) for a in _VALIDATED_ARCHS)
+
+
 def apply_rocm_sage_patches():
+    """Install the Triton num_stages workaround. No-op unless running on a
+    validated RDNA arch; call this only when SageAttention is actually selected
+    (from SageAttn2Weight.__init__), not for every ROCm workload."""
+    if not _is_validated_rocm_arch():
+        return
     clamp_sageattn_triton_num_stages()
     clamp_triton_compile_num_stages()
     force_rocm_inductor_single_thread()
-
-
-apply_rocm_sage_patches()

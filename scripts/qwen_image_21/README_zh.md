@@ -88,7 +88,7 @@ RTX 5090 配置保留适用的通用优化，并使用：
 
 上面 5090 那套（FlashAttention3、FlashInfer RoPE、CUTLASS FP8、SageAttention2 的 CUDA kernel）都是 CUDA 专用。下面的配置让 Qwen-Image-2.1 跑在 AMD RDNA 显卡上，走 torch 算子推理路径（`torch_sdpa`、`torch_real_rope`、torch LayerNorm/modulation），配合 ROCm 可用的量化、`torch.compile` 和 SageAttention2。它们**在加载时直接量化官方 BF16 权重**——无需 `tools/convert` 转换、无需 `dit_quantized_ckpt`。
 
-验证环境为 `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0` 镜像（PyTorch 2.10、Triton 3.6）。安装该镜像未自带的运行时依赖：
+验证环境为 `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0` 镜像（PyTorch 2.10、Triton 3.6），transformers 使用 4.57.x（`Qwen3VLProcessor` 需要较新版本；请固定到你实测过的版本，而非只写下限）。安装该镜像未自带的运行时依赖：
 
 ```bash
 pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf einops \
@@ -113,10 +113,10 @@ PLATFORM=amd_rocm CUDA_VISIBLE_DEVICES=0 python -m lightx2v.infer \
 
 | 显卡（架构） | 量化 | 配置 |
 | --- | --- | --- |
-| R9700（gfx1201 / RDNA4） | FP8，走 `torch._scaled_mm` | `qwen_image_21_r9700_fp8_compile_sage.json`（最快）、`..._fp8_compile.json`、`..._fp8_sage_25steps.json`、`qwen_image_21_r9700.json`（BF16 基线） |
-| W7900（gfx1100 / RDNA3） | INT8，走 `torch._int_mm`（RDNA3 无 FP8） | `qwen_image_21_w7900_int8_compile_sage.json`（最快）、`..._int8_compile.json`、`..._int8_sage_25steps.json`、`qwen_image_21_w7900_int8.json`（基线） |
+| R9700（gfx1201 / RDNA4） | FP8，走 `torch._scaled_mm` | `qwen_image_21_r9700_fp8_compile_sage.json`（最快）、`..._fp8_compile.json`、`..._fp8_compile_sage_25steps.json`、`qwen_image_21_r9700.json`（BF16 eager 基线） |
+| W7900（gfx1100 / RDNA3） | INT8，走 `torch._int_mm`（RDNA3 无 FP8） | `qwen_image_21_w7900_int8_compile_sage.json`（最快）、`..._int8_compile.json`、`..._int8_compile_sage_25steps.json`、`qwen_image_21_w7900_int8.json`（INT8 eager 基线） |
 
-`dit_quant_scheme` 为 `fp8-rocm`（R9700）或 `int8-rocm`（W7900），由 `lightx2v_platform/ops/mm/amd_rocm/` 下的 AMD ROCm 平台算子注册：权重 per-channel 对称量化 + 激活 per-token 动态量化，均在加载时从 BF16 量化得到。两者都开启 `use_compile` 和 `attn_type: sage_attn2`。gfx1201 上 VAE 走 im2col GEMM（`vae_conv_im2col`）以规避 MIOpen 卷积的非确定性缺陷；gfx1100 用原生卷积。SageAttention/Inductor 在 ROCm 上所需的 Triton `num_stages` 规避会自动生效。
+`dit_quant_scheme` 为 `fp8-rocm`（R9700）或 `int8-rocm`（W7900），由 `lightx2v_platform/ops/mm/amd_rocm/` 下的 AMD ROCm 平台算子注册：权重 per-channel 对称量化 + 激活 per-token 动态量化，均在加载时从 BF16 量化得到。两者都开启 `use_compile` 和 `attn_type: sage_attn2`。VAE 走原生卷积——AMD ROCm 平台会关闭 cuDNN/MIOpen，从而绕开 gfx1201 上观察到的非确定性 NaN 卷积路径。SageAttention/Inductor 在 gfx1201 / gfx1100 上所需的 Triton `num_stages` 规避会自动装载，且仅在选择 `attn_type: sage_attn2` 时生效。
 
 | 显卡 | 量化 | 步数 | 端到端 |
 | --- | --- | ---: | ---: |
@@ -125,7 +125,7 @@ PLATFORM=amd_rocm CUDA_VISIBLE_DEVICES=0 python -m lightx2v.infer \
 | W7900 | INT8 | 40 | ~46 s |
 | W7900 | INT8 | 25 | ~29 s |
 
-测试条件：1024×1024、seed 42、关闭 CFG、单卡、warmup 后稳态。25 步（该模型在 ComfyUI 的默认步数）相比 40 步无可见画质损失。编译为一次性 warmup 开销（约 1.5–3 分钟）；SageAttention 需要 `TORCHINDUCTOR_COMPILE_THREADS=1`，代码在 SageAttention 路径上会自动设置。
+测试条件：1024×1024、seed 42、关闭 CFG、单卡、warmup 后稳态（多次取中位数）。端到端包含文本编码、condition-KV prefill、去噪、VAE 解码与 PNG 保存，不含模型加载与一次性初始化。在所测试的 prompt/seed 上，25 步（该模型在 ComfyUI 的常用步数）相比 40 步未观察到明显画质退化——这不是系统性画质评估。编译为一次性 warmup 开销（约 1.5–3 分钟）；`TORCHINDUCTOR_COMPILE_THREADS=1` 在 SageAttention 路径上会自动设置。
 
 ## 4. 服务化部署与 API 调用
 
