@@ -114,6 +114,7 @@ class BaseTransformerModel(ABC):
         """
         assert self.config.get("dit_quant_scheme", "Default") in [
             "fp8-rocm",
+            "int8-rocm",
             "fp8-pertensor",
             "fp8-musa",
             "fp8-triton",
