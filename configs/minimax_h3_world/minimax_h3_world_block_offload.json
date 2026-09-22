@@ -1,10 +1,7 @@
 {
   "infer_steps": 50,
   "num_frames": 124,
-  "size": [
-    480,
-    832
-  ],
+  "size": [480, 832],
   "fps": 24,
   "world_segments": [
     {"start_frame": 0, "end_frame": 68, "keys": ["W"]},
@@ -16,6 +13,9 @@
   "text_encoder_cpu_offload": true,
   "vae_cpu_offload": true,
   "use_adaln_cache": true,
+  "offload_granularity": "block",
+  "text_encoder_offload_granularity": "block",
+  "video_vae_offload_granularity": "block",
   "lazy_load": false,
   "unload_modules": false,
   "attn_type": "sage_attn2",
@@ -35,8 +35,5 @@
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
   "audio_sampling_rate": 32000,
-  "offload_granularity": "block",
-  "adaln_cache_dir": "/root/.cache/lightx2v/adaln",
-  "text_encoder_offload_granularity": "block",
-  "video_vae_offload_granularity": "block"
+  "adaln_cache_dir": "/root/.cache/lightx2v/adaln"
 }
