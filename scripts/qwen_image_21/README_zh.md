@@ -97,19 +97,18 @@ pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf eino
     PyJWT jsonschema sageattention
 ```
 
-运行时设置 `PLATFORM=amd_rocm`（这会激活 `lightx2v_platform/` 下的 AMD ROCm 平台后端：注册 ROCm 的 FP8/INT8 GEMM，并自动应用 SageAttention 的 Triton 规避）。单卡即可——条件编码器走 CPU offload。该 torch 原生路径**无需编译 aiter**：
+通过 `scripts/platforms/amd_rocm/` 下的平台脚本运行——脚本里会 `export PLATFORM=amd_rocm` 并 source 公共环境，从而激活 `lightx2v_platform/` 下的 AMD ROCm 平台后端（注册 ROCm 的 FP8/INT8 GEMM，并自动应用 SageAttention 的 Triton 规避）。单卡即可——条件编码器走 CPU offload，且该路径**无需编译 aiter**。
+
+先在脚本顶部设置 `lightx2v_path` 和 `model_path`，然后运行：
 
 ```bash
-PLATFORM=amd_rocm CUDA_VISIBLE_DEVICES=0 python -m lightx2v.infer \
-    --model_cls qwen_image_21 --task t2i \
-    --model_path /path/to/Qwen-Image-2.1 \
-    --config_json configs/platforms/amd_rocm/qwen_image_21_r9700_fp8_compile_sage.json \
-    --prompt "A capybara wearing a wizard hat, oil painting" \
-    --size 1024 1024 --seed 42 \
-    --save_result_path ./save_results/qwen_image_21_t2i.png
+# R9700（FP8）
+bash scripts/platforms/amd_rocm/qwen_image_21_r9700_t2i.sh
+# W7900（INT8）
+bash scripts/platforms/amd_rocm/qwen_image_21_w7900_t2i.sh
 ```
 
-各显卡对应配置（`--config_json` 选其一，均在 `configs/platforms/amd_rocm/` 下）：
+每个脚本默认选该卡最快的配置；改脚本里的 `--config_json` 可切换到其它配置。各配置（均在 `configs/platforms/amd_rocm/` 下）：
 
 | 显卡（架构） | 量化 | 配置 |
 | --- | --- | --- |

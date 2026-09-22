@@ -122,11 +122,16 @@ def _is_validated_rocm_arch():
 
 
 def apply_rocm_sage_patches():
-    """Install the Triton num_stages workaround. No-op unless running on a
-    validated RDNA arch; call this only when SageAttention is actually selected
-    (from SageAttn2Weight.__init__), not for every ROCm workload."""
+    """Install the Triton num_stages workaround. Applied automatically when the
+    amd_rocm attention ops load (i.e. under PLATFORM=amd_rocm). No-op unless
+    running on a validated RDNA arch, where Triton's pipeliner miscompiles at
+    num_stages>=3 — so this stays entirely inside the platform layer rather than
+    branching on the backend in shared inference code."""
     if not _is_validated_rocm_arch():
         return
     clamp_sageattn_triton_num_stages()
     clamp_triton_compile_num_stages()
     force_rocm_inductor_single_thread()
+
+
+apply_rocm_sage_patches()

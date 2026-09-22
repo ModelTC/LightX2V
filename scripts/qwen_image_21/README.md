@@ -97,19 +97,18 @@ pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf eino
     PyJWT jsonschema sageattention
 ```
 
-Run with `PLATFORM=amd_rocm` (this activates the AMD ROCm platform backend under `lightx2v_platform/`, which registers the ROCm FP8/INT8 GEMM and applies the SageAttention Triton workaround). A single GPU is enough — the text encoder is CPU-offloaded. No `aiter` build is required for this torch-native path:
+Run through the platform scripts under `scripts/platforms/amd_rocm/`, which `export PLATFORM=amd_rocm` and source the common env. This activates the AMD ROCm platform backend under `lightx2v_platform/` (registers the ROCm FP8/INT8 GEMM and applies the SageAttention Triton workaround). A single GPU is enough — the text encoder is CPU-offloaded, and no `aiter` build is required.
+
+Set `lightx2v_path` and `model_path` at the top of the script, then run:
 
 ```bash
-PLATFORM=amd_rocm CUDA_VISIBLE_DEVICES=0 python -m lightx2v.infer \
-    --model_cls qwen_image_21 --task t2i \
-    --model_path /path/to/Qwen-Image-2.1 \
-    --config_json configs/platforms/amd_rocm/qwen_image_21_r9700_fp8_compile_sage.json \
-    --prompt "A capybara wearing a wizard hat, oil painting" \
-    --size 1024 1024 --seed 42 \
-    --save_result_path ./save_results/qwen_image_21_t2i.png
+# R9700 (FP8)
+bash scripts/platforms/amd_rocm/qwen_image_21_r9700_t2i.sh
+# W7900 (INT8)
+bash scripts/platforms/amd_rocm/qwen_image_21_w7900_t2i.sh
 ```
 
-Per-GPU config (pick one for `--config_json`, all under `configs/platforms/amd_rocm/`):
+Each script selects the fastest config for that GPU; edit `--config_json` in the script to pick another. Per-GPU config (all under `configs/platforms/amd_rocm/`):
 
 | GPU (arch) | Quantization | Configs |
 | --- | --- | --- |

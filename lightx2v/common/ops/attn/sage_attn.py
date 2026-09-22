@@ -75,14 +75,6 @@ except ImportError:
 class SageAttn2Weight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
-        if getattr(torch.version, "hip", None) is not None:
-            # SageAttention's Triton kernels miscompile at num_stages>=3 on some
-            # RDNA archs; install the clamp before any compile. No-op off the
-            # validated archs. Scoped here so it only runs when SageAttention is
-            # actually selected, not for every ROCm workload.
-            from lightx2v_platform.ops.attn.amd_rocm.sage_attn import apply_rocm_sage_patches
-
-            apply_rocm_sage_patches()
 
     def apply(
         self,
