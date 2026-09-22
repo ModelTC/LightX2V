@@ -39,12 +39,12 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
         q, k = self.rope.apply(q, k, rotary, positions=rotary_positions)
         return q, k, v
 
-    def infer_block(self, block, x, scale1, gate1, scale2, gate2, rotary, rotary_positions, k_cache, v_cache):
-        q, k, v = self._qkv(block, x, scale1, rotary, rotary_positions)
+    def infer_block(self, block, x, modulation, rotary, rotary_positions, k_cache, v_cache):
+        q, k, v = self._qkv(block, x, modulation[0], rotary, rotary_positions)
         k = torch.cat((k_cache, k))
         v = torch.cat((v_cache, v))
         attention = block.attention.apply(q, k, v)
-        return self._finish_block(block, x, attention, (scale1, gate1, scale2, gate2))
+        return self._finish_block(block, x, attention, modulation)
 
     def _finish_block(self, block, x, attention, modulation):
         _, gate1, scale2, gate2 = modulation
@@ -81,7 +81,7 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
             raise RuntimeError("Condition KV must be prefilled before denoising")
         x = state.hidden_states
         # Shared across every block; kept outside the compiled block graph.
-        scale1, gate1, scale2, gate2 = self._modulation(state)
+        modulation = self._modulation(state)
         for index, block in enumerate(weights.blocks):
-            x = self.run_block(index, block, x, scale1, gate1, scale2, gate2, state.rotary, state.rotary_positions, cache.k_cache(index), cache.v_cache(index))
+            x = self.run_block(index, block, x, modulation, state.rotary, state.rotary_positions, cache.k_cache(index), cache.v_cache(index))
         return x
