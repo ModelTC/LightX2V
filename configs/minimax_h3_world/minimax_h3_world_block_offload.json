@@ -4,9 +4,7 @@
   "size": [480, 832],
   "fps": 24,
   "world_segments": [
-    {"start_frame": 0, "end_frame": 68, "keys": ["W"]},
-    {"start_frame": 68, "end_frame": 102, "keys": ["W", "J"]},
-    {"start_frame": 102, "end_frame": 124, "keys": []}
+    {"start_frame": 0, "end_frame": 124, "keys": ["W"]}
   ],
   "enable_cfg": false,
   "cpu_offload": true,
