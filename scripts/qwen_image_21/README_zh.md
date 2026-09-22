@@ -1,5 +1,7 @@
 # Qwen-Image-2.1 部署指南
 
+[English](README.md) | [简体中文](README_zh.md)
+
 ## 1. 模型下载
 
 官方模型权重：[Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1)。下载命令：
@@ -13,7 +15,7 @@ hf download Qwen/Qwen-Image-2.1 --local-dir Qwen/Qwen-Image-2.1
 根据 GPU 型号选择 [LightX2V Docker 镜像](https://hub.docker.com/r/lightx2v/lightx2v/tags)。在宿主机的工作目录中拉取对应镜像：
 
 ```bash
-# H100
+# H100, A100等
 docker pull lightx2v/lightx2v:26062001
 
 # RTX 5090
