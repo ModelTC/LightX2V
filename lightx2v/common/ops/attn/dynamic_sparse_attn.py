@@ -3,7 +3,7 @@ from functools import partial
 import torch
 from loguru import logger
 
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, SPARSE_OPERATOR_REGISTER
 
 from .kernels.sla_kernel import _attention
 from .kernels.sla_kernel_ar import _attention_ar
@@ -113,10 +113,15 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
                 block_q=self.BLKQ,
                 block_k=self.BLKK,
             )
+        elif self.operator in SPARSE_OPERATOR_REGISTER:
+            operator_setting = dict(self.config.get("operator_setting", {}))
+            operator_setting["topk_ratio"] = self.topk
+            self.sparse_operator = SPARSE_OPERATOR_REGISTER[self.operator](operator_setting)
+            self.BLKQ = self.sparse_operator.q_block_size
+            self.BLKK = self.sparse_operator.k_block_size
+            self.apply_func = self.apply_registered_operator
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
-
-        # logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
 
     def apply(
         self,
@@ -222,6 +227,42 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         out = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
+
+    def apply_registered_operator(
+        self,
+        q,
+        k,
+        v,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        if getattr(self.sparse_operator, "builds_block_indices", False):
+            sparse_map = None
+        else:
+            q_for_mask = q.unsqueeze(0).transpose(1, 2).contiguous()
+            k_for_mask = k.unsqueeze(0).transpose(1, 2).contiguous()
+            sparse_map, _, _ = get_block_map(
+                q_for_mask,
+                k_for_mask,
+                topk_ratio=self.topk,
+                BLKQ=self.BLKQ,
+                BLKK=self.BLKK,
+            )
+
+        return self.sparse_operator(
+            q,
+            k,
+            v,
+            sparse_map,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_kv=cu_seqlens_kv,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_kv=max_seqlen_kv,
+            **kwargs,
+        )
 
     def apply_fa4(
         self,
