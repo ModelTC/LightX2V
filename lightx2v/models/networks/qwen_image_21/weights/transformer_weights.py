@@ -8,15 +8,26 @@ class QwenImage21BlockWeights(WeightModule):
         super().__init__()
         prefix = f"transformer_blocks.{index}"
         mm_type = config["dit_quant_scheme"] if config.get("dit_quantized", False) else "Default"
-        for name, key in {
-            "q": "attn.to_q",
-            "k": "attn.to_k",
-            "v": "attn.to_v",
-            "out": "attn.to_out.0",
-            "up": "img_mlp.proj",
-            "gate": "img_mlp.gate_layer",
-            "down": "img_mlp.out",
-        }.items():
+        # Fuse q/k/v and gate/up into single fp8 GEMMs (fewer, larger GEMMs and
+        # one shared activation quantization instead of one per linear).
+        self.fused_qkv_mlp = bool(config.get("dit_fuse_qkv_mlp", False)) and mm_type == "fp8-rocm"
+        if self.fused_qkv_mlp:
+            from lightx2v.common.ops.mm.mm_weight import MMWeightFusedFp8Rocm
+
+            self.add_module("qkv", MMWeightFusedFp8Rocm([f"{prefix}.attn.to_q.weight", f"{prefix}.attn.to_k.weight", f"{prefix}.attn.to_v.weight"], bias_name=None))
+            self.add_module("gate_up", MMWeightFusedFp8Rocm([f"{prefix}.img_mlp.gate_layer.weight", f"{prefix}.img_mlp.proj.weight"], bias_name=None))
+            linear_keys = {"out": "attn.to_out.0", "down": "img_mlp.out"}
+        else:
+            linear_keys = {
+                "q": "attn.to_q",
+                "k": "attn.to_k",
+                "v": "attn.to_v",
+                "out": "attn.to_out.0",
+                "up": "img_mlp.proj",
+                "gate": "img_mlp.gate_layer",
+                "down": "img_mlp.out",
+            }
+        for name, key in linear_keys.items():
             linear = MM_WEIGHT_REGISTER[mm_type](f"{prefix}.{key}.weight", bias_name=None)
             if mm_type == "fp8-f16-accum":
                 linear.enable_fp8_f16_accum(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
