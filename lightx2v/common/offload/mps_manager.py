@@ -26,14 +26,12 @@ class MpsSharedWeightAsyncStreamManager(WeightAsyncStreamManager):
     def __init__(self, offload_granularity="block"):
         if offload_granularity != "block":
             raise ValueError("Shared MPS weight offload only supports block granularity")
-        super().__init__(offload_granularity)
+        # MPS prefetch uses a CPU worker and the default GPU stream.
+        self.offload_granularity = offload_granularity
+        self.need_init_first_buffer = True
         self.cuda_buffers = []
         self.init_lazy_load(num_workers=1)
         logger.info("MPS shared weight offload: two device buffers, direct file reads, one prefetch worker")
-
-    def _init_streams(self):
-        # Disk I/O runs on a CPU thread; GPU work stays on the default stream.
-        pass
 
     def init_cuda_buffer(self, blocks_cuda_buffer=None, phases_cuda_buffer=None):
         if blocks_cuda_buffer is None or len(blocks_cuda_buffer) != 2:
