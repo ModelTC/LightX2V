@@ -44,7 +44,6 @@ class QwenImage21Runner(DefaultRunner):
             "unload_modules",
             "shared_cpu_weights",
             "cfg_parallel",
-            "tensor_parallel",
             "pipefusion_parallel",
             "disagg_mode",
             "lora_configs",
@@ -60,15 +59,21 @@ class QwenImage21Runner(DefaultRunner):
             seq_p_attn_type = parallel.get("seq_p_attn_type", "ulysses")
             if seq_p_attn_type != "ulysses":
                 raise ValueError("qwen_image_21 sequence parallel currently supports only seq_p_attn_type='ulysses'")
-            if config["num_attention_heads"] % seq_p_size:
+            tensor_p_size = int(parallel.get("tensor_p_size", 1))
+            global_heads = int(config["num_attention_heads"])
+            if global_heads % tensor_p_size:
+                raise ValueError(f"qwen_image_21 TP requires num_attention_heads ({global_heads}) to be divisible by tensor_p_size ({tensor_p_size})")
+            local_heads = global_heads // tensor_p_size
+            if local_heads % seq_p_size:
                 raise ValueError(
-                    f"qwen_image_21 Ulysses requires num_attention_heads ({config['num_attention_heads']}) "
-                    f"to be divisible by seq_p_size ({seq_p_size})"
+                    "qwen_image_21 Ulysses requires TP-local attention heads to be divisible by "
+                    f"seq_p_size: global_heads={config['num_attention_heads']}, "
+                    f"tensor_p_size={tensor_p_size}, local_heads={local_heads}, seq_p_size={seq_p_size}"
                 )
             head_parallel_group_size = parallel.get("seq_p_head_parallel_group_size", 1)
             if not isinstance(head_parallel_group_size, int) or isinstance(head_parallel_group_size, bool):
                 raise TypeError("qwen_image_21 seq_p_head_parallel_group_size must be an integer")
-            heads_per_rank = config["num_attention_heads"] // seq_p_size
+            heads_per_rank = local_heads // seq_p_size
             if not 1 <= head_parallel_group_size <= heads_per_rank:
                 raise ValueError(f"qwen_image_21 seq_p_head_parallel_group_size must be in [1, {heads_per_rank}], got {head_parallel_group_size}")
             if head_parallel_group_size != 1 and not parallel.get("seq_p_head_parallel", False):

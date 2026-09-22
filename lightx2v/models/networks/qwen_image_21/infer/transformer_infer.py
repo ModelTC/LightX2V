@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.ops.norm.rms_norm_weight import apply_qk_rms_norm
@@ -8,7 +9,12 @@ from lightx2v.utils.registry_factory import ROPE_REGISTER
 class QwenImage21TransformerInfer:
     def __init__(self, config):
         self.config = config
-        self.heads = config["num_attention_heads"]
+        if config.get("tensor_parallel", False):
+            tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+            tp_size = dist.get_world_size(tp_group)
+        else:
+            tp_size = 1
+        self.heads = config["num_attention_heads"] // tp_size
         self.use_fused_qk_rms_norm = config.get("fused_qk_rms_norm", True)
         self.use_fused_block_ops = config.get("fused_block_ops", True) and config.get("modulate_type", "triton") == "triton"
         self.fused_block_min_tokens = config.get("fused_block_min_tokens", 1024)
@@ -68,7 +74,7 @@ class QwenImage21TransformerInfer:
         for index, block in enumerate(weights.blocks):
             q, k, v = self._qkv(block, x, modulation[0], state)
             cache.store_kv(k, v, index)
-            attention = torch.empty_like(x)
+            attention = x.new_empty((x.shape[0], self.heads * self.config["attention_head_dim"]))
             for begin, end, is_text in state.layout.segments:
                 mask = None
                 if is_text:
