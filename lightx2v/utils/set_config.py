@@ -182,8 +182,11 @@ def load_model_config(config):
             config.setdefault("vae_scale_factor_spatial", 8)
             config.setdefault("vae_scale_factor_temporal", 4)
             config.setdefault("vae_scale_factor", 8)
-    elif config["model_cls"] in ("minimax_h3", "minimax_h3_causal"):
+    elif config["model_cls"] in ("minimax_h3", "minimax_h3_causal", "minimax_h3_world"):
         causal = config["model_cls"] == "minimax_h3_causal"
+        world = config["model_cls"] == "minimax_h3_world"
+        if world and config.get("task") != "ia2av":
+            raise ValueError("H3-World requires task='ia2av'")
         if causal:
             if config.get("task") != "refa2v":
                 raise ValueError("MiniMax-H3 causal currently supports task='refa2v'; set --task refa2v when starting the model")
@@ -207,8 +210,9 @@ def load_model_config(config):
         config.update(model_config)
         if not causal:
             config["model_variant"] = model_variant
-            config.pop("task", None)
             config["dit_original_ckpt"] = transformer_path
+        if not (causal or world):
+            config.pop("task", None)
         if config.get("dit_quantized_ckpt"):
             config["dit_quantized"] = True
             config["dit_quant_scheme"] = {
@@ -275,7 +279,7 @@ def load_model_config(config):
         config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
         config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
         config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
-    if config["model_cls"] in ("minimax_h3", "minimax_h3_causal"):
+    if config["model_cls"] in ("minimax_h3", "minimax_h3_causal", "minimax_h3_world"):
         # The generic Diffusers-VAE heuristic above counts six encoder stages
         # and would incorrectly derive 32. H3 downsamples space by exactly 16.
         config["vae_spatial_scale_factor"] = 16
@@ -310,7 +314,7 @@ def load_model_config(config):
         logger.info(f"Auto-set LingBot-VA num_frames={config['num_frames']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
 
     if (
-        config["model_cls"] not in ("minimax_h3", "minimax_h3_causal")
+        config["model_cls"] not in ("minimax_h3", "minimax_h3_causal", "minimax_h3_world")
         and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]
         and config.get("num_frames") is not None
         and "vae_stride" in config
