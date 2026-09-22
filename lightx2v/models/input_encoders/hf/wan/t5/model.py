@@ -79,11 +79,11 @@ class T5OffloadSelfAttention(WeightModule):
         self.mm_type = mm_type
         self.add_module(
             "norm1",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](f"{block_prefix}.{self.block_index}.norm1.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
+            RMS_WEIGHT_REGISTER["torch" if AI_DEVICE == "npu" else "sgl-kernel"](f"{block_prefix}.{self.block_index}.norm1.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
         )
         self.add_module(
             "norm2",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](f"{block_prefix}.{self.block_index}.norm2.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
+            RMS_WEIGHT_REGISTER["torch" if AI_DEVICE == "npu" else "sgl-kernel"](f"{block_prefix}.{self.block_index}.norm2.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
         )
         self.add_module(
             "pos_embedding",

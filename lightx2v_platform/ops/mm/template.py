@@ -121,6 +121,13 @@ class MMWeightQuantTemplate(MMWeightTemplate):
     # weight load functions
     # =========================
     def load(self, weight_dict):
+        from lightx2v.common.offload.block_layout import BlockLoadContext
+
+        if isinstance(weight_dict, BlockLoadContext):
+            weight_dict.bind(self)
+            if self.bias_name is None:
+                self.bias = None
+            return
         self.load_quantized(weight_dict)
         if self.weight_need_transpose:
             if hasattr(self, "weight") and self.weight is not None:

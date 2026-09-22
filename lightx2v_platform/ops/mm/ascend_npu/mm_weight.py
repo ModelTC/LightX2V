@@ -1,3 +1,5 @@
+import torch
+
 from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate
 from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
 
@@ -34,6 +36,14 @@ class MMWeightWint8channelAint8channeldynamicNpu(MMWeightQuantTemplate):
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = True
         self.act_quant_func = self.act_quant_int8_perchannel_sym_npu
+        self.base_attrs = [(self.weight_name, "weight", self.weight_need_transpose), (self.weight_scale_name, "weight_scale", False)]
+        if self.bias_name is not None:
+            self.base_attrs.append((self.bias_name, "bias", False))
+
+    def load(self, weight_dict):
+        if not self.lazy_load and weight_dict[self.weight_name].dtype != torch.int8:
+            raise ValueError(f"int8-npu requires an INT8 checkpoint: {self.weight_name}")
+        super().load(weight_dict)
 
     def act_quant_int8_perchannel_sym_npu(self, x):
         input_tensor_quant, input_tensor_scale = torch_npu.npu_dynamic_quant(x)

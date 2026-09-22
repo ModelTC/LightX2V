@@ -68,7 +68,7 @@ class BlockBuffer:
 class BlockLoadContext(Mapping):
     """Bind preallocated views during one block load.
 
-    CPU loads consume checkpoint tensors; CUDA loads only bind views.
+    CPU loads consume checkpoint tensors; device loads only bind views.
     Do not retain this context after loading: it references the checkpoint.
     """
 
@@ -98,9 +98,16 @@ class BlockLoadContext(Mapping):
         if self.consumed != self.buffer.views.keys():
             raise ValueError("Operators did not load the complete block layout")
 
+    def bind(self, operator):
+        """Load platform operators directly into their planned block views."""
+        for name, attr, transpose in operator.base_attrs:
+            tensor = self.take(name, transpose)
+            buffer_attr = f"{attr}_cuda_buffer" if operator.create_cuda_buffer else f"pin_{attr}"
+            setattr(operator, buffer_attr, tensor)
+
 
 class ContiguousBlockTransfer:
-    """Copy immutable CPU blocks to two persistent CUDA slots, without packing."""
+    """Copy immutable CPU blocks to two persistent device slots, without packing."""
 
     def __init__(self, blocks, slots):
         if not blocks or len(slots) != 2:
@@ -131,10 +138,11 @@ class ContiguousBlockTransfer:
         self.sources = sources
         self.targets = targets
         self.device = device
-        self.streams = {}
+        self.device_module = getattr(torch, device.type)
+        self.streams = set()
         self.closed = False
-        self.ready = torch.cuda.Event()
-        self.ready.record(torch.cuda.current_stream(device))
+        self.ready = self.device_module.Event()
+        self.ready.record(self.device_module.current_stream(device))
 
     @torch.no_grad()
     def copy(self, block_idx, target):
@@ -143,10 +151,10 @@ class ContiguousBlockTransfer:
         if not 0 <= block_idx < len(self.sources):
             raise IndexError(block_idx)
         destination, auxiliary = self.targets[id(target)]
-        stream = torch.cuda.current_stream(self.device)
-        if stream.cuda_stream not in self.streams:
+        stream = self.device_module.current_stream(self.device)
+        if stream not in self.streams:
             stream.wait_event(self.ready)
-            self.streams[stream.cuda_stream] = stream
+            self.streams.add(stream)
         destination.storage.copy_(self.sources[block_idx].storage, non_blocking=True)
         destination.storage.record_stream(stream)
         for dst, src in auxiliary[block_idx]:
@@ -155,6 +163,6 @@ class ContiguousBlockTransfer:
             src.record_stream(stream)
 
     def close(self):
-        for stream in self.streams.values():
+        for stream in self.streams:
             stream.synchronize()
         self.closed = True
