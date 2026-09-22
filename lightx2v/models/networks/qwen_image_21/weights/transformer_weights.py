@@ -12,7 +12,7 @@ class QwenImage21BlockWeights(WeightModule):
         # one shared activation quantization instead of one per linear).
         self.fused_qkv_mlp = bool(config.get("dit_fuse_qkv_mlp", False)) and mm_type in ("fp8-rocm", "int8-rocm")
         if self.fused_qkv_mlp:
-            from lightx2v.common.ops.mm.mm_weight import MMWeightFusedFp8Rocm, MMWeightFusedInt8Rocm
+            from lightx2v_platform.ops.mm.amd_rocm.mm_weight import MMWeightFusedFp8Rocm, MMWeightFusedInt8Rocm
 
             fused_cls = MMWeightFusedInt8Rocm if mm_type == "int8-rocm" else MMWeightFusedFp8Rocm
             self.add_module("qkv", fused_cls([f"{prefix}.attn.to_q.weight", f"{prefix}.attn.to_k.weight", f"{prefix}.attn.to_v.weight"], bias_name=None))

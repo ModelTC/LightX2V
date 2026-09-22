@@ -97,26 +97,26 @@ pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf eino
     PyJWT jsonschema sageattention
 ```
 
-直接用 `python -m lightx2v.infer` 运行（单卡即可——条件编码器走 CPU offload）：
+运行时设置 `PLATFORM=amd_rocm`（这会激活 `lightx2v_platform/` 下的 AMD ROCm 平台后端：注册 ROCm 的 FP8/INT8 GEMM，并自动应用 SageAttention 的 Triton 规避）。单卡即可——条件编码器走 CPU offload。该 torch 原生路径**无需编译 aiter**：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -m lightx2v.infer \
+PLATFORM=amd_rocm CUDA_VISIBLE_DEVICES=0 python -m lightx2v.infer \
     --model_cls qwen_image_21 --task t2i \
     --model_path /path/to/Qwen-Image-2.1 \
-    --config_json configs/qwen_image_21/qwen_image_21_r9700_fp8_compile_sage.json \
+    --config_json configs/platforms/amd_rocm/qwen_image_21_r9700_fp8_compile_sage.json \
     --prompt "A capybara wearing a wizard hat, oil painting" \
     --size 1024 1024 --seed 42 \
     --save_result_path ./save_results/qwen_image_21_t2i.png
 ```
 
-各显卡对应配置（`--config_json` 选其一）：
+各显卡对应配置（`--config_json` 选其一，均在 `configs/platforms/amd_rocm/` 下）：
 
 | 显卡（架构） | 量化 | 配置 |
 | --- | --- | --- |
 | R9700（gfx1201 / RDNA4） | FP8，走 `torch._scaled_mm` | `qwen_image_21_r9700_fp8_compile_sage.json`（最快）、`..._fp8_compile.json`、`..._fp8_sage_25steps.json`、`qwen_image_21_r9700.json`（BF16 基线） |
 | W7900（gfx1100 / RDNA3） | INT8，走 `torch._int_mm`（RDNA3 无 FP8） | `qwen_image_21_w7900_int8_compile_sage.json`（最快）、`..._int8_compile.json`、`..._int8_sage_25steps.json`、`qwen_image_21_w7900_int8.json`（基线） |
 
-`dit_quant_scheme` 为 `fp8-rocm`（R9700）或 `int8-rocm`（W7900）：权重 per-channel 对称量化 + 激活 per-token 动态量化，均在加载时从 BF16 量化得到。两者都开启 `use_compile` 和 `attn_type: sage_attn2`。gfx1201 上 VAE 走 im2col GEMM（`vae_conv_im2col`）以规避 MIOpen 卷积的非确定性缺陷；gfx1100 用原生卷积。SageAttention/Inductor 在 ROCm 上所需的 Triton `num_stages` 规避会自动生效。
+`dit_quant_scheme` 为 `fp8-rocm`（R9700）或 `int8-rocm`（W7900），由 `lightx2v_platform/ops/mm/amd_rocm/` 下的 AMD ROCm 平台算子注册：权重 per-channel 对称量化 + 激活 per-token 动态量化，均在加载时从 BF16 量化得到。两者都开启 `use_compile` 和 `attn_type: sage_attn2`。gfx1201 上 VAE 走 im2col GEMM（`vae_conv_im2col`）以规避 MIOpen 卷积的非确定性缺陷；gfx1100 用原生卷积。SageAttention/Inductor 在 ROCm 上所需的 Triton `num_stages` 规避会自动生效。
 
 | 显卡 | 量化 | 步数 | 端到端 |
 | --- | --- | ---: | ---: |

@@ -97,26 +97,26 @@ pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf eino
     PyJWT jsonschema sageattention
 ```
 
-Run directly with `python -m lightx2v.infer` (a single GPU is enough — the text encoder is CPU-offloaded):
+Run with `PLATFORM=amd_rocm` (this activates the AMD ROCm platform backend under `lightx2v_platform/`, which registers the ROCm FP8/INT8 GEMM and applies the SageAttention Triton workaround). A single GPU is enough — the text encoder is CPU-offloaded. No `aiter` build is required for this torch-native path:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -m lightx2v.infer \
+PLATFORM=amd_rocm CUDA_VISIBLE_DEVICES=0 python -m lightx2v.infer \
     --model_cls qwen_image_21 --task t2i \
     --model_path /path/to/Qwen-Image-2.1 \
-    --config_json configs/qwen_image_21/qwen_image_21_r9700_fp8_compile_sage.json \
+    --config_json configs/platforms/amd_rocm/qwen_image_21_r9700_fp8_compile_sage.json \
     --prompt "A capybara wearing a wizard hat, oil painting" \
     --size 1024 1024 --seed 42 \
     --save_result_path ./save_results/qwen_image_21_t2i.png
 ```
 
-Per-GPU config (pick one for `--config_json`):
+Per-GPU config (pick one for `--config_json`, all under `configs/platforms/amd_rocm/`):
 
 | GPU (arch) | Quantization | Configs |
 | --- | --- | --- |
 | R9700 (gfx1201 / RDNA4) | FP8 via `torch._scaled_mm` | `qwen_image_21_r9700_fp8_compile_sage.json` (fastest), `..._fp8_compile.json`, `..._fp8_sage_25steps.json`, `qwen_image_21_r9700.json` (BF16 baseline) |
 | W7900 (gfx1100 / RDNA3) | INT8 via `torch._int_mm` (no FP8 on RDNA3) | `qwen_image_21_w7900_int8_compile_sage.json` (fastest), `..._int8_compile.json`, `..._int8_sage_25steps.json`, `qwen_image_21_w7900_int8.json` (baseline) |
 
-The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900): per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. Both use `use_compile` and `attn_type: sage_attn2`. On gfx1201 the VAE runs through an im2col GEMM (`vae_conv_im2col`) to avoid a nondeterministic MIOpen convolution defect; gfx1100 uses the native conv. The required SageAttention/Inductor Triton `num_stages` workaround for ROCm is applied automatically.
+The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered by the AMD ROCm platform ops in `lightx2v_platform/ops/mm/amd_rocm/`: per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. Both use `use_compile` and `attn_type: sage_attn2`. On gfx1201 the VAE runs through an im2col GEMM (`vae_conv_im2col`) to avoid a nondeterministic MIOpen convolution defect; gfx1100 uses the native conv. The required SageAttention/Inductor Triton `num_stages` workaround for ROCm is applied automatically.
 
 | GPU | Quant | Steps | End-to-end |
 | --- | --- | ---: | ---: |

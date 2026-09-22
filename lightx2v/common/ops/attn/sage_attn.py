@@ -39,110 +39,6 @@ else:
         sageattn = None
 
 
-def _clamp_sageattn_triton_num_stages_on_rocm(max_stages=2):
-    """Work around a Triton ROCm software-pipeliner bug.
-
-    On gfx1201 (ROCm/Triton), SageAttention's INT8 WMMA kernels fail to compile
-    at num_stages>=3 ("operation destroyed but still has uses" during the AMD
-    pipeliner pass). Clamp the launch-time num_stages on every SageAttention
-    Triton kernel so they compile; num_stages=2 runs correctly and is faster
-    than torch SDPA flash on this hardware.
-    """
-    if sageattn is None or getattr(torch.version, "hip", None) is None:
-        return
-    import importlib
-    import pkgutil
-
-    try:
-        import sageattention
-        from triton.runtime.jit import JITFunction
-    except ImportError:
-        return
-
-    patched = 0
-    for module_info in pkgutil.iter_modules(sageattention.__path__, sageattention.__name__ + "."):
-        try:
-            module = importlib.import_module(module_info.name)
-        except Exception:
-            continue
-        for value in vars(module).values():
-            if not isinstance(value, JITFunction) or getattr(value, "_rocm_num_stages_clamped", False):
-                continue
-            original_run = value.run
-
-            def run(*args, _original_run=original_run, **kwargs):
-                stages = kwargs.get("num_stages")
-                if isinstance(stages, int) and stages > max_stages:
-                    kwargs["num_stages"] = max_stages
-                return _original_run(*args, **kwargs)
-
-            try:
-                value.run = run
-                value._rocm_num_stages_clamped = True
-                patched += 1
-            except Exception:
-                continue
-    if patched:
-        logger.info(f"[SageAttention] ROCm: clamped Triton num_stages<={max_stages} on {patched} kernels")
-
-
-def _clamp_triton_compile_num_stages_on_rocm(max_stages=2):
-    """Clamp num_stages for every Triton compilation (including torch.compile /
-    Inductor kernels) on ROCm, where num_stages>=3 crashes the AMD pipeliner.
-
-    Inductor compiles in worker subprocesses; requires compile_threads=1 so this
-    main-process patch is in effect at compile time.
-    """
-    if getattr(torch.version, "hip", None) is None:
-        return
-    try:
-        import triton
-    except ImportError:
-        return
-    if getattr(triton.compile, "_rocm_num_stages_clamped", False):
-        return
-    _original_compile = triton.compile
-
-    def compile(*args, **kwargs):
-        options = kwargs.get("options")
-        if isinstance(options, dict) and isinstance(options.get("num_stages"), int) and options["num_stages"] > max_stages:
-            options["num_stages"] = max_stages
-        elif options is not None and isinstance(getattr(options, "num_stages", None), int) and options.num_stages > max_stages:
-            try:
-                options.num_stages = max_stages
-            except Exception:
-                pass
-        return _original_compile(*args, **kwargs)
-
-    compile._rocm_num_stages_clamped = True
-    triton.compile = compile
-
-
-def _force_rocm_inductor_single_thread():
-    """Make torch.compile / Inductor compile in-process on ROCm.
-
-    The num_stages clamp on ``triton.compile`` only takes effect in the process
-    that installed it. Inductor's default multi-threaded pool compiles kernels
-    in worker subprocesses that never see the clamp, so an Inductor-generated
-    kernel can still hit the num_stages>=3 pipeliner crash. Compiling in-process
-    keeps the clamp effective. Only pays the (one-time, warmup) single-threaded
-    compile cost on the SageAttention path that needs it.
-    """
-    if getattr(torch.version, "hip", None) is None:
-        return
-    try:
-        from torch._inductor import config as inductor_config
-    except ImportError:
-        return
-    if getattr(inductor_config, "compile_threads", 1) != 1:
-        inductor_config.compile_threads = 1
-        logger.info("[SageAttention] ROCm: set inductor compile_threads=1 so the Triton num_stages clamp reaches torch.compile kernels")
-
-
-_clamp_sageattn_triton_num_stages_on_rocm()
-_clamp_triton_compile_num_stages_on_rocm()
-
-
 if magi_register_custom_op is not None and sageattn is not None:
 
     @magi_register_custom_op(
@@ -179,7 +75,6 @@ except ImportError:
 class SageAttn2Weight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
-        _force_rocm_inductor_single_thread()
 
     def apply(
         self,
