@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-[Tech Blog](https://light-ai.top/LightX2V-BLOG/posts/SwiftVR/)
+[技术博客](https://light-ai.top/LightX2V-BLOG/posts/SwiftVR/)
 
 SwiftVR 支持图像与视频的恢复和超分辨率，统一使用 `--model_cls swiftvr --task sr`。
 
