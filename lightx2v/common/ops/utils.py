@@ -6,6 +6,7 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.offload.block_layout import BlockLoadContext
 from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -136,6 +137,8 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
     Returns:
         dict: {attr_name: tensor, ...} Dictionary of tensors located on CUDA device
     """
+    if isinstance(weight_dict, BlockLoadContext):
+        return {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs if name in weight_dict}
     result = {}
     for name, attr_name, transpose in base_attrs:
         tensor = get_source_tensor(name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32)
@@ -183,6 +186,8 @@ def create_default_tensors(base_attrs, weight_dict):
         device_tensors_dict: {attr_name: tensor, ...} Tensors located on the original weight device
         pin_tensors_dict: {attr_name: tensor, ...} Tensors with pinned memory on CPU
     """
+    if isinstance(weight_dict, BlockLoadContext):
+        return {}, {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs if name in weight_dict}
     device_tensors = {}
     pin_tensors = {}
 

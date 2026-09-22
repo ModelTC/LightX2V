@@ -225,6 +225,10 @@ class WanModel(BaseTransformerModel):
     # ------------------------------------------------------------------ TP --
 
     def _init_infer_class(self):
+        if "cpu_offload_layout" in self.config:
+            from lightx2v.models.networks.wan.weights.block_layout import validate_contiguous_config
+
+            validate_contiguous_config(self.config, self.lora_path)
         self.pre_infer_class = WanPreInfer
         self.post_infer_class = WanPostInfer
 
@@ -261,6 +265,11 @@ class WanModel(BaseTransformerModel):
             self.pre_infer.set_audio_rope(self.transformer_weights.blocks[0].compute_phases[2].rope_1d)
         if hasattr(self.transformer_infer, "offload_manager"):
             self._init_offload_manager()
+
+    def _init_offload_manager(self):
+        super()._init_offload_manager()
+        if self.config.get("cpu_offload_layout") == "contiguous":
+            self.transformer_infer.offload_manager.init_contiguous_blocks(self.transformer_weights.blocks)
 
     def _should_init_empty_model(self):
         if self.config.get("lora_configs") and self.config["lora_configs"] and not self.config.get("lora_dynamic_apply", False):

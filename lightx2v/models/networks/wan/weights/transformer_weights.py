@@ -337,6 +337,13 @@ class WanTransformerAttentionBlock(WeightModule):
 
         self.add_module("compute_phases", self.compute_phases)
 
+    def load(self, weight_dict):
+        if self.config.get("cpu_offload_layout") != "contiguous":
+            return super().load(weight_dict)
+        from lightx2v.models.networks.wan.weights.block_layout import load_contiguous_block
+
+        load_contiguous_block(self, weight_dict)
+
 
 class WanSelfAttention(WeightModule):
     def __init__(
