@@ -35,5 +35,5 @@
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
   "audio_sampling_rate": 32000,
-  "adaln_cache_dir": "/root/.cache/lightx2v/adaln"
+  "adaln_cache_dir": "~/.cache/lightx2v/adaln"
 }
