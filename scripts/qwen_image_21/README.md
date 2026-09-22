@@ -84,6 +84,49 @@ The RTX 5090 config retains the applicable general optimizations and uses:
 
 Both tasks were measured on the current code with 40 steps, seed 42, CFG disabled, and the median latency of three consecutive requests. I2I uses one 1024×1024 reference image and produces a 1024×1024 image. End-to-end latency covers input encoding, condition-KV prefill, denoising, VAE decoding, post-processing, and PNG saving; it excludes model loading and one-time runner initialization.
 
+### 3.3 AMD ROCm GPUs (Radeon AI PRO R9700 / Radeon PRO W7900)
+
+The 5090 stack above (FlashAttention3, FlashInfer RoPE, CUTLASS FP8, SageAttention2 CUDA kernels) is CUDA-only. The configs below run Qwen-Image-2.1 on AMD RDNA GPUs with a torch-op inference path (`torch_sdpa`, `torch_real_rope`, torch LayerNorm/modulation) plus ROCm-friendly quantization, `torch.compile`, and SageAttention2. They quantize the **released BF16 weights on load** — no `tools/convert` step and no `dit_quantized_ckpt`.
+
+Validated in the `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0` image (PyTorch 2.10, Triton 3.6). Install the runtime deps not baked into that image:
+
+```bash
+pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf einops \
+    qtorch langdetect tqdm imageio imageio-ffmpeg opencv-python-headless comfy-kitchen \
+    peft gguf prometheus_client fastapi uvicorn pydantic aiohttp pyzmq python-multipart \
+    PyJWT jsonschema sageattention
+```
+
+Run directly with `python -m lightx2v.infer` (a single GPU is enough — the text encoder is CPU-offloaded):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m lightx2v.infer \
+    --model_cls qwen_image_21 --task t2i \
+    --model_path /path/to/Qwen-Image-2.1 \
+    --config_json configs/qwen_image_21/qwen_image_21_r9700_fp8_compile_sage.json \
+    --prompt "A capybara wearing a wizard hat, oil painting" \
+    --size 1024 1024 --seed 42 \
+    --save_result_path ./save_results/qwen_image_21_t2i.png
+```
+
+Per-GPU config (pick one for `--config_json`):
+
+| GPU (arch) | Quantization | Configs |
+| --- | --- | --- |
+| R9700 (gfx1201 / RDNA4) | FP8 via `torch._scaled_mm` | `qwen_image_21_r9700_fp8_compile_sage.json` (fastest), `..._fp8_compile.json`, `..._fp8_sage_25steps.json`, `qwen_image_21_r9700.json` (BF16 baseline) |
+| W7900 (gfx1100 / RDNA3) | INT8 via `torch._int_mm` (no FP8 on RDNA3) | `qwen_image_21_w7900_int8_compile_sage.json` (fastest), `..._int8_compile.json`, `..._int8_sage_25steps.json`, `qwen_image_21_w7900_int8.json` (baseline) |
+
+The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900): per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. Both use `use_compile` and `attn_type: sage_attn2`. On gfx1201 the VAE runs through an im2col GEMM (`vae_conv_im2col`) to avoid a nondeterministic MIOpen convolution defect; gfx1100 uses the native conv. The required SageAttention/Inductor Triton `num_stages` workaround for ROCm is applied automatically.
+
+| GPU | Quant | Steps | End-to-end |
+| --- | --- | ---: | ---: |
+| R9700 | FP8 | 40 | ~24 s |
+| R9700 | FP8 | 25 | ~17 s |
+| W7900 | INT8 | 40 | ~46 s |
+| W7900 | INT8 | 25 | ~29 s |
+
+Measured at 1024×1024, seed 42, CFG disabled, single GPU, steady state after warmup. 25 steps (the ComfyUI default for this model) has no visible quality loss versus 40. Compilation is a one-time warmup cost (~1.5–3 min); SageAttention needs `TORCHINDUCTOR_COMPILE_THREADS=1`, which the code sets automatically on the SageAttention path.
+
 ## 4. Service Deployment and API Usage
 
 Set the repository path, model path, and GPU ID in `server/start_server.sh`, then start the server:
