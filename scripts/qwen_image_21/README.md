@@ -1,5 +1,7 @@
 # Qwen-Image-2.1 Deployment Guide
 
+[English](README.md) | [简体中文](README_zh.md)
+
 ## 1. Model Download
 
 Download the official weights from [Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1):
@@ -13,7 +15,7 @@ hf download Qwen/Qwen-Image-2.1 --local-dir Qwen/Qwen-Image-2.1
 Choose the [LightX2V Docker image](https://hub.docker.com/r/lightx2v/lightx2v/tags) for your GPU. Pull the corresponding image in a working directory on the host:
 
 ```bash
-# H100
+# H100, A100, etc.
 docker pull lightx2v/lightx2v:26062001
 
 # RTX 5090

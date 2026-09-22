@@ -51,6 +51,10 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年9月22日：** 🚀 我们支持并优化了[SwiftVR](https://huggingface.co/H-oliday/SwiftVR)，使用方法参考[这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/swiftvr)。
+
+- **2026年9月20日：** 🚀 我们day 0支持了[Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1)，使用方法参考[这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/qwen_image_21)。
+
 - **2026年8月27日：** 🚀 我们发布了 [MiniMax-H3 Turbo 8-step v1.0 768p 蒸馏 LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors)，用于通过 MiniMax-H3 快速生成 768p 音视频，并带来更高的视频与音频质量。
 
 - **2026年8月11日：** 🚀 我们发布并支持 [MiniMax-H3 Turbo 4-step v1.0 768p 蒸馏 LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors)。`configs/minimax_h3/dmd` 下的推理配置默认以 1344x768 分辨率运行 H3，使用 `video_flow_shift=6`、`audio_flow_shift=3`、LoRA alpha 128，并支持 4 步无 CFG 推理。

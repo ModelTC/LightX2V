@@ -2,6 +2,8 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
+[技术博客](https://light-ai.top/LightX2V-BLOG/posts/SwiftVR/)
+
 SwiftVR supports image and video restoration and super-resolution. Both use `--model_cls swiftvr --task sr`.
 
 ## 1. Model Download and Conversion
@@ -17,20 +19,25 @@ python tools/convert/examples/convert_swiftvr.py \
 
 ## 2. Environment Setup
 
-We recommend the LightX2V Docker environment. Run these commands on the host:
+Choose the [LightX2V Docker image](https://hub.docker.com/r/lightx2v/lightx2v/tags) for your GPU. Pull the corresponding image in a working directory on the host:
 
 ```bash
+# H100, A100, etc.
 docker pull lightx2v/lightx2v:26062001
-docker run --gpus all -itd --ipc=host --name swiftvr \
-  -v /path/to/workspace:/workspace -p 8000:8000 \
-  --entrypoint /bin/bash lightx2v/lightx2v:26062001
-docker exec -it swiftvr /bin/bash
+
+# RTX 5090
+docker pull lightx2v/lightx2v:26062001-cu130-5090-fix-260921
+```
+
+Start a container using the selected image:
+
+```bash
+docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings] --entrypoint /bin/bash [image_id]
 ```
 
 Inside the container, clone the source and install the dependencies:
 
 ```bash
-cd /workspace
 git clone https://github.com/ModelTC/LightX2V.git
 cd LightX2V
 python -m pip install "av>=17" decord imageio-ffmpeg huggingface_hub

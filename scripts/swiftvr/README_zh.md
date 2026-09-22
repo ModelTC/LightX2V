@@ -2,6 +2,8 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
+[Tech Blog](https://light-ai.top/LightX2V-BLOG/posts/SwiftVR/)
+
 SwiftVR 支持图像与视频的恢复和超分辨率，统一使用 `--model_cls swiftvr --task sr`。
 
 ## 1. 模型下载与转换
@@ -17,20 +19,25 @@ python tools/convert/examples/convert_swiftvr.py \
 
 ## 2. 环境安装
 
-推荐使用 LightX2V Docker 环境，在宿主机执行：
+根据 GPU 型号选择 [LightX2V Docker 镜像](https://hub.docker.com/r/lightx2v/lightx2v/tags)。在宿主机的工作目录中拉取对应镜像：
 
 ```bash
+# H100, A100等
 docker pull lightx2v/lightx2v:26062001
-docker run --gpus all -itd --ipc=host --name swiftvr \
-  -v /path/to/workspace:/workspace -p 8000:8000 \
-  --entrypoint /bin/bash lightx2v/lightx2v:26062001
-docker exec -it swiftvr /bin/bash
+
+# RTX 5090
+docker pull lightx2v/lightx2v:26062001-cu130-5090-fix-260921
+```
+
+使用所选镜像启动容器：
+
+```bash
+docker run --gpus all -itd --ipc=host --name [容器名] -v [挂载设置] --entrypoint /bin/bash [镜像id]
 ```
 
 在容器内下载源码并安装依赖：
 
 ```bash
-cd /workspace
 git clone https://github.com/ModelTC/LightX2V.git
 cd LightX2V
 python -m pip install "av>=17" decord imageio-ffmpeg huggingface_hub
