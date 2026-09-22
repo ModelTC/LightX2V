@@ -1,4 +1,3 @@
-import contextlib
 import math
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -185,32 +184,18 @@ class QwenImage21Runner(DefaultRunner):
             branches.append(("uncond", info.negative_prompt or ""))
         encoder = self.text_encoders[0]
         offload = self.config.get("text_encoder_cpu_offload", False)
-        # ROCm/R9700: empty_cache() does not physically return freed VRAM to the
-        # driver, so the ~15G text-encoder onload stays resident on the main GPU
-        # and starves the VAE decoder. Run it on a separate GPU when configured.
-        te_index = self.config.get("text_encoder_device_index", None)
-        dev_ctx = torch_device_module.device(te_index) if te_index is not None else contextlib.nullcontext()
-        # Resolve an explicit indexed device: a bare "cuda" would re-resolve to the
-        # current device (the text-encoder GPU) inside the context above.
-        main_device = torch.device(AI_DEVICE, torch_device_module.current_device())
         try:
-            with dev_ctx:
-                if offload:
-                    with ProfilingContext4DebugL1("Onload Text Encoder"):
-                        encoder.to_cuda()
-                for name, prompt in branches:
-                    branch = encoder.infer(prompt, images)
-                    # Pull encoder outputs onto the main GPU before leaving the
-                    # text-encoder device context.
-                    outputs[name] = {k: (v.to(main_device) if torch.is_tensor(v) else v) for k, v in branch.items()}
+            if offload:
+                with ProfilingContext4DebugL1("Onload Text Encoder"):
+                    encoder.to_cuda()
+            for name, prompt in branches:
+                branch = encoder.infer(prompt, images)
+                branch["layout"] = build_token_layout(branch["image_mask"], shapes, self.config["axes_dims_rope"], rope=self.model.transformer_infer.rope)
+                outputs[name] = branch
         finally:
             if offload:
                 with ProfilingContext4DebugL1("Offload Text Encoder"):
                     encoder.to_cpu()
-        # Build the DiT rope layout on the main GPU (outside the TE device context,
-        # otherwise freshly created rope tensors would land on the TE device).
-        for branch in outputs.values():
-            branch["layout"] = build_token_layout(branch["image_mask"], shapes, self.config["axes_dims_rope"], rope=self.model.transformer_infer.rope)
         return outputs
 
     @ProfilingContext4DebugL1("Run VAE Encoder")

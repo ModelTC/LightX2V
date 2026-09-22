@@ -56,8 +56,7 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
 
         x = x + gate1 * block.out.apply(attention)
         h = block.norm2.apply(x) * scale2
-        mlp = F.silu(block.gate.apply(h)) * block.up.apply(h)
-        x = x + gate2 * block.down.apply(mlp)
+        x = x + gate2 * block.down.apply(F.silu(block.gate.apply(h)) * block.up.apply(h))
         return x.clamp(-65504, 65504) if x.dtype == torch.float16 else x
 
     def prefill(self, weights, state, cache):

@@ -138,6 +138,14 @@ class AmdRocmDevice:
             logger.info("  - aiter sgl_kernel compatibility layer enabled (RMSNorm, GEMM)")
 
     @staticmethod
+    def on_sage_attn2_init():
+        """Install the ROCm Triton num_stages workaround when a SageAttention2
+        backend is constructed. Arch-gated (no-op off gfx1201 / gfx1100)."""
+        from lightx2v_platform.ops.attn.amd_rocm.sage_attn import apply_rocm_sage_patches
+
+        apply_rocm_sage_patches()
+
+    @staticmethod
     def is_available() -> bool:
         """Check if AMD ROCm is available."""
         return IS_AMD_ROCM and torch.cuda.is_available()

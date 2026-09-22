@@ -75,6 +75,14 @@ except ImportError:
 class SageAttn2Weight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
+        # Let the active platform run any SageAttention-specific setup (e.g. the
+        # ROCm Triton num_stages workaround). Uniform hook — no backend branch.
+        from lightx2v_platform.base.base import get_platform_device
+
+        device = get_platform_device()
+        hook = getattr(device, "on_sage_attn2_init", None)
+        if hook is not None:
+            hook()
 
     def apply(
         self,

@@ -6,6 +6,15 @@ from lightx2v_platform.base import global_var
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
+def get_platform_device():
+    """Return the active platform device class (or None before init).
+
+    Lets shared code query the current platform for optional hooks without
+    branching on a specific backend.
+    """
+    return PLATFORM_DEVICE_REGISTER.get(global_var.PLATFORM)
+
+
 def init_ai_device(platform="cuda"):
     platform_device = PLATFORM_DEVICE_REGISTER.get(platform, None)
     if platform_device is None:

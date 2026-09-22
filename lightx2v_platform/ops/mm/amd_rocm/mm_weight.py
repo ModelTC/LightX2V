@@ -15,7 +15,7 @@ from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
 
 def _gcn_arch():
     try:
-        return torch.cuda.get_device_properties(0).gcnArchName
+        return torch.cuda.get_device_properties(torch.cuda.current_device()).gcnArchName
     except Exception:
         return ""
 
@@ -60,7 +60,7 @@ class MMWeightWfp8channelAfp8channeldynamicRocm(MMWeightQuantTemplate):
             raise RuntimeError("fp8-rocm requires torch._scaled_mm, which is absent from this PyTorch/ROCm build.")
         arch = _gcn_arch()
         if not arch.startswith("gfx1201"):
-            raise RuntimeError(f"fp8-rocm is validated only on gfx1201 (RDNA4); detected '{arch}'. Use int8-rocm instead.")
+            raise RuntimeError(f"fp8-rocm (torch._scaled_mm) is validated only on gfx1201 (RDNA4); detected '{arch}'.")
 
     def load(self, weight_dict):
         weight = weight_dict[self.weight_name].to(AI_DEVICE).to(torch.float32)  # (N, K)

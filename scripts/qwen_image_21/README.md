@@ -110,12 +110,13 @@ bash scripts/platforms/amd_rocm/qwen_image_21_w7900_t2i.sh
 
 Each script selects the fastest config for that GPU; edit `--config_json` in the script to pick another. Per-GPU config (all under `configs/platforms/amd_rocm/`):
 
-| GPU (arch) | Quantization | Configs |
+| GPU (arch) | Config | Contents |
 | --- | --- | --- |
-| R9700 (gfx1201 / RDNA4) | FP8 via `torch._scaled_mm` | `qwen_image_21_r9700_fp8_compile_sage.json` (fastest), `..._fp8_compile.json`, `..._fp8_compile_sage_25steps.json`, `qwen_image_21_r9700.json` (BF16 eager baseline) |
-| W7900 (gfx1100 / RDNA3) | INT8 via `torch._int_mm` (no FP8 on RDNA3) | `qwen_image_21_w7900_int8_compile_sage.json` (fastest), `..._int8_compile.json`, `..._int8_compile_sage_25steps.json`, `qwen_image_21_w7900_int8.json` (INT8 eager baseline) |
+| R9700 (gfx1201 / RDNA4) | `qwen_image_21_r9700_fp8.json` | FP8 (`torch._scaled_mm`) + `torch.compile` + SageAttention2 |
+| W7900 (gfx1100 / RDNA3) | `qwen_image_21_w7900_int8.json` | INT8 (`torch._int_mm`) + `torch.compile` + SageAttention2 |
+| either | `qwen_image_21_bf16.json` | BF16 eager baseline |
 
-The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered by the AMD ROCm platform ops in `lightx2v_platform/ops/mm/amd_rocm/`: per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. Both use `use_compile` and `attn_type: sage_attn2`. The VAE runs native convolution — the AMD ROCm platform disables cuDNN/MIOpen, which sidesteps the nondeterministic-NaN convolution path observed on gfx1201. The SageAttention/Inductor Triton `num_stages` workaround (needed on gfx1201 / gfx1100) is installed automatically, and only when `attn_type: sage_attn2` is selected.
+The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered by the AMD ROCm platform ops in `lightx2v_platform/ops/mm/amd_rocm/`: per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. The VAE runs native convolution — the AMD ROCm platform disables cuDNN/MIOpen, which sidesteps the nondeterministic-NaN convolution path observed on gfx1201. The SageAttention/Inductor Triton `num_stages` workaround (needed on gfx1201 / gfx1100) is installed automatically, and only when a SageAttention2 backend is actually constructed. To trade a little quality for speed, lower `infer_steps` (e.g. 25) in the config or pass `--infer_steps 25`.
 
 | GPU | Quant | Steps | End-to-end |
 | --- | --- | ---: | ---: |
@@ -124,7 +125,7 @@ The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered 
 | W7900 | INT8 | 40 | ~46 s |
 | W7900 | INT8 | 25 | ~29 s |
 
-Measured at 1024×1024, seed 42, CFG disabled, single GPU, steady state after warmup (median of a few runs). End-to-end covers text encoding, condition-KV prefill, denoising, VAE decode and PNG save; it excludes model load and one-time initialization. In the tested prompts and seeds, 25 steps (a common ComfyUI setting for this model) showed no obvious visual degradation versus 40 — this is not a systematic quality evaluation. Compilation is a one-time warmup cost (~1.5–3 min); `TORCHINDUCTOR_COMPILE_THREADS=1` is set automatically on the SageAttention path.
+Measured at 1024×1024, seed 42, CFG disabled, single GPU, steady state after warmup (median of 3 runs). End-to-end covers text encoding, condition-KV prefill, denoising, VAE decode and PNG save; it excludes model load and one-time initialization. In the tested prompts and seeds, 25 steps showed no obvious visual degradation versus 40 — this is not a systematic quality evaluation. Compilation is a one-time warmup cost (~1.5–3 min); `TORCHINDUCTOR_COMPILE_THREADS=1` is set automatically on the SageAttention path.
 
 ## 4. Service Deployment and API Usage
 

@@ -2,7 +2,7 @@
     "infer_steps": 40,
     "resolution": 1024,
     "vae_scale_factor": 16,
-    "attn_type": "torch_sdpa",
+    "attn_type": "sage_attn2",
     "rope_type": "torch_real_rope",
     "rms_norm_type": "fp32_variance",
     "layer_norm_type": "torch",
@@ -11,8 +11,9 @@
     "fused_block_ops": false,
     "enable_cfg": false,
     "sample_guide_scale": 1.0,
-    "warmup": false,
+    "warmup": true,
     "text_encoder_cpu_offload": true,
     "dit_quantized": true,
-    "dit_quant_scheme": "int8-rocm"
+    "dit_quant_scheme": "int8-rocm",
+    "use_compile": true
 }

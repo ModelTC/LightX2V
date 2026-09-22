@@ -32,7 +32,8 @@ def clamp_sageattn_triton_num_stages(max_stages=2):
     for module_info in pkgutil.iter_modules(sageattention.__path__, sageattention.__name__ + "."):
         try:
             module = importlib.import_module(module_info.name)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[SageAttention] ROCm: skipped {module_info.name} while installing num_stages clamp: {e}")
             continue
         for value in vars(module).values():
             if not isinstance(value, JITFunction) or getattr(value, "_rocm_num_stages_clamped", False):
@@ -122,16 +123,13 @@ def _is_validated_rocm_arch():
 
 
 def apply_rocm_sage_patches():
-    """Install the Triton num_stages workaround. Applied automatically when the
-    amd_rocm attention ops load (i.e. under PLATFORM=amd_rocm). No-op unless
-    running on a validated RDNA arch, where Triton's pipeliner miscompiles at
-    num_stages>=3 — so this stays entirely inside the platform layer rather than
-    branching on the backend in shared inference code."""
+    """Install the Triton num_stages workaround. Called only when a SageAttention2
+    backend is actually constructed (via the amd_rocm platform's
+    on_sage_attn2_init hook), so non-SageAttention ROCm workloads are untouched.
+    No-op unless running on a validated RDNA arch, where Triton's pipeliner
+    miscompiles at num_stages>=3."""
     if not _is_validated_rocm_arch():
         return
     clamp_sageattn_triton_num_stages()
     clamp_triton_compile_num_stages()
     force_rocm_inductor_single_thread()
-
-
-apply_rocm_sage_patches()

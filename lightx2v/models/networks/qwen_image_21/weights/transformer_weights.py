@@ -8,7 +8,7 @@ class QwenImage21BlockWeights(WeightModule):
         super().__init__()
         prefix = f"transformer_blocks.{index}"
         mm_type = config["dit_quant_scheme"] if config.get("dit_quantized", False) else "Default"
-        linear_keys = {
+        for name, key in {
             "q": "attn.to_q",
             "k": "attn.to_k",
             "v": "attn.to_v",
@@ -16,8 +16,7 @@ class QwenImage21BlockWeights(WeightModule):
             "up": "img_mlp.proj",
             "gate": "img_mlp.gate_layer",
             "down": "img_mlp.out",
-        }
-        for name, key in linear_keys.items():
+        }.items():
             linear = MM_WEIGHT_REGISTER[mm_type](f"{prefix}.{key}.weight", bias_name=None)
             if mm_type == "fp8-f16-accum":
                 linear.enable_fp8_f16_accum(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
