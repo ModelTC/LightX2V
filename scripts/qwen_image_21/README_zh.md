@@ -116,7 +116,7 @@ bash scripts/platforms/amd_rocm/qwen_image_21_w7900_t2i.sh
 | W7900（gfx1100 / RDNA3） | `qwen_image_21_w7900_int8.json` | INT8（`torch._int_mm`）+ `torch.compile` + SageAttention2 |
 | 通用 | `qwen_image_21_bf16.json` | BF16 eager 基线 |
 
-`dit_quant_scheme` 为 `fp8-rocm`（R9700）或 `int8-rocm`（W7900），由 `lightx2v_platform/ops/mm/amd_rocm/` 下的 AMD ROCm 平台算子注册：权重 per-channel 对称量化 + 激活 per-token 动态量化，均在加载时从 BF16 量化得到。VAE 走原生卷积——AMD ROCm 平台会关闭 cuDNN/MIOpen，从而绕开 gfx1201 上观察到的非确定性 NaN 卷积路径。SageAttention/Inductor 在 gfx1201 / gfx1100 上所需的 Triton `num_stages` 规避会自动装载，且仅在真正构造 SageAttention2 backend 时才生效。想拿画质换速度，可把配置里的 `infer_steps` 调小（如 25）或传 `--infer_steps 25`。
+`dit_quant_scheme` 为 `fp8-rocm`（R9700）或 `int8-rocm`（W7900），由 `lightx2v_platform/ops/mm/amd_rocm/` 下的 AMD ROCm 平台算子注册：权重 per-channel 对称量化 + 激活 per-token 动态量化，均在加载时从 BF16 量化得到。VAE 走原生卷积——AMD ROCm 平台会关闭 cuDNN/MIOpen，从而绕开 gfx1201 上观察到的非确定性 NaN 卷积路径。SageAttention/Inductor 在 gfx1201 / gfx1100 上所需的 Triton `num_stages` 规避会自动装载，且仅在真正构造 SageAttention2 backend 时才生效；设 `LIGHTX2V_ROCM_TRITON_MAX_STAGES=0` 可禁用（例如 Triton 修复该 pipeliner bug 后）。想拿画质换速度，可把配置里的 `infer_steps` 调小（如 25）或传 `--infer_steps 25`。
 
 | 显卡 | 量化 | 步数 | 端到端 |
 | --- | --- | ---: | ---: |

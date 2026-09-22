@@ -7,12 +7,19 @@ kernels, and force Inductor to compile in-process so the clamp reaches them.
 
 Applied via the amd_rocm platform's ``on_sage_attn2_init`` hook: only when a
 SageAttention2 backend is built, and only on the validated archs.
+
+Toggle with the ``LIGHTX2V_ROCM_TRITON_MAX_STAGES`` env var (default 2): it is
+the clamp ceiling, and setting it to 0 (or a negative value) disables the whole
+workaround — e.g. once Triton fixes the pipeliner bug, so kernels can use their
+own num_stages again without a code change.
 """
+
+import os
 
 import torch
 from loguru import logger
 
-_MAX_STAGES = 2
+_MAX_STAGES = int(os.getenv("LIGHTX2V_ROCM_TRITON_MAX_STAGES", "2"))
 _VALIDATED_ARCHS = ("gfx1201", "gfx1100")
 
 
@@ -94,7 +101,11 @@ def _force_inductor_single_thread():
 
 
 def apply_rocm_sage_patches():
-    """Install the workaround. No-op off the validated RDNA archs."""
+    """Install the workaround. No-op when disabled (LIGHTX2V_ROCM_TRITON_MAX_STAGES<=0)
+    or off the validated RDNA archs."""
+    if _MAX_STAGES <= 0:
+        logger.info("[SageAttention] ROCm: num_stages workaround disabled via LIGHTX2V_ROCM_TRITON_MAX_STAGES")
+        return
     if not _is_validated_rocm_arch():
         return
     _clamp_sageattn_kernels()
