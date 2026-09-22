@@ -134,10 +134,11 @@ def inspect_fp8_encoder_conv_checkpoint(
     )
 
 
-def validate_safetensors_subset(module: nn.Module, component_dir: str | Path) -> SafetensorsSubsetReport:
-    """Validate exact key and shape parity without materializing checkpoint tensors."""
+def validate_safetensors_subset(module: nn.Module, component_dir: str | Path, *, key_mapping: dict[str, str] | None = None) -> SafetensorsSubsetReport:
+    """Validate keys, shapes and dtypes, optionally mapping checkpoint keys to module names."""
 
     files = _component_files(component_dir)
+    key_mapping = key_mapping or {}
     expected = _expected_specs(module)
     expected_roots = {key.partition(".")[0] for key in expected}
     found: set[str] = set()
@@ -147,23 +148,24 @@ def validate_safetensors_subset(module: nn.Module, component_dir: str | Path) ->
     for filename in files:
         with safe_open(filename, framework="pt", device="cpu") as checkpoint:
             for key in checkpoint.keys():
-                if key not in expected:
-                    if key.partition(".")[0] in expected_roots:
+                parameter_key = key_mapping.get(key, key)
+                if parameter_key not in expected:
+                    if parameter_key.partition(".")[0] in expected_roots:
                         unexpected.append(key)
                     else:
                         ignored += 1
                     continue
                 tensor_slice = checkpoint.get_slice(key)
                 shape = tuple(tensor_slice.get_shape())
-                expected_shape, expected_dtype = expected[key]
+                expected_shape, expected_dtype = expected[parameter_key]
                 if shape != expected_shape:
                     raise ValueError(f"Shape mismatch for {key!r}: model expects {expected_shape}, checkpoint contains {shape}")
                 checkpoint_dtype = str(tensor_slice.get_dtype())
                 if checkpoint_dtype != _SAFETENSORS_DTYPES.get(expected_dtype):
                     raise TypeError(f"Dtype mismatch for {key!r}: model expects {expected_dtype}, checkpoint contains {checkpoint_dtype}")
-                if key in found:
+                if parameter_key in found:
                     unexpected.append(f"duplicate:{key}")
-                found.add(key)
+                found.add(parameter_key)
 
     missing = sorted(set(expected) - found)
     if missing or unexpected:
@@ -177,25 +179,28 @@ def validate_safetensors_subset(module: nn.Module, component_dir: str | Path) ->
     return SafetensorsSubsetReport(Path(component_dir), files, tuple(sorted(found)), ignored)
 
 
-def load_safetensors_subset(module: nn.Module, component_dir: str | Path) -> SafetensorsSubsetReport:
+def load_safetensors_subset(module: nn.Module, component_dir: str | Path, *, key_mapping: dict[str, str] | None = None) -> SafetensorsSubsetReport:
     """Load exactly ``module.state_dict()`` from one or more original H3 shards.
 
+    ``key_mapping`` maps checkpoint keys to module parameter/buffer names.
     This also supports a module constructed on the ``meta`` device: each meta
     parameter is replaced directly by its CPU checkpoint tensor, avoiding a
     second full-size initialized copy of the VAE.
     """
 
-    report = validate_safetensors_subset(module, component_dir)
+    key_mapping = key_mapping or {}
+    report = validate_safetensors_subset(module, component_dir, key_mapping=key_mapping)
     expected = set(module.state_dict())
     loaded: set[str] = set()
 
     for filename in report.files:
         with safe_open(filename, framework="pt", device="cpu") as checkpoint:
             for key in checkpoint.keys():
-                if key not in expected:
+                parameter_key = key_mapping.get(key, key)
+                if parameter_key not in expected:
                     continue
-                _assign_tensor(module, key, checkpoint.get_tensor(key))
-                loaded.add(key)
+                _assign_tensor(module, parameter_key, checkpoint.get_tensor(key))
+                loaded.add(parameter_key)
 
     # validate_safetensors_subset already checked this, but keep the invariant
     # local to the mutating operation as well.

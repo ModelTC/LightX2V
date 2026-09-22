@@ -33,7 +33,7 @@ classifiers = [
 dependencies = [
     "numpy",
     "scipy",
-    "torch",
+    "torch>=2.1",
     "torchvision",
     "torchaudio",
     "diffusers",

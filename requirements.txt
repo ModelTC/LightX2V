@@ -2,7 +2,7 @@ packaging
 ninja
 numpy
 scipy
-torch
+torch>=2.1
 torchvision
 torchaudio
 torchao
