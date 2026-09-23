@@ -586,7 +586,31 @@ class MiniMaxH3Runner(DefaultRunner):
                 with ProfilingContext4DebugL1("step_pre"):
                     self.scheduler.step_pre(step_index)
                 with ProfilingContext4DebugL1("🚀 infer_main"):
-                    self.model.infer(self.inputs)
+                    import os
+                    trace_dir = os.environ.get("H3_TORCH_TRACE_DIR")
+                    if trace_dir and step_index == 1:
+                        from pathlib import Path
+                        import torch
+                        rank = int(os.environ.get("RANK", "0"))
+                        output_dir = Path(trace_dir)
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                        torch.cuda.synchronize()
+                        with torch.profiler.profile(
+                            activities=[
+                                torch.profiler.ProfilerActivity.CPU,
+                                torch.profiler.ProfilerActivity.CUDA,
+                            ],
+                            record_shapes=True,
+                            profile_memory=True,
+                            with_stack=True,
+                        )as prof:
+                            self.model.infer(self.inputs)
+                            torch.cuda.synchronize()
+                        prof.export_chrome_trace(
+                            str(output_dir / f"dit_step2.rank{rank}.json")
+                        )
+                    else:
+                        self.model.infer(self.inputs)
                 with ProfilingContext4DebugL1("step_post"):
                     self.scheduler.step_post()
                 if self.progress_callback:
