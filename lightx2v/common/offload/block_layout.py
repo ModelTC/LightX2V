@@ -1,6 +1,5 @@
 """Persistent, rank-local block storage populated during weight loading."""
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from math import prod
 
@@ -62,10 +61,9 @@ class BlockBuffer:
             for spec in layout.tensors:
                 self.storage[end : spec.offset].zero_()
                 end = spec.offset + spec.nbytes
-        self.views = {spec.name: spec.view(self.storage) for spec in layout.tensors}
 
 
-class BlockLoadContext(Mapping):
+class BlockLoadContext:
     """Bind preallocated views during one block load.
 
     CPU loads consume checkpoint tensors; device loads only bind views.
@@ -74,28 +72,17 @@ class BlockLoadContext(Mapping):
 
     def __init__(self, sources, buffer):
         self.sources = sources
-        self.buffer = buffer
-        self.consumed = set()
-
-    def __getitem__(self, key):
-        return self.sources[key]
-
-    def __iter__(self):
-        return iter(self.sources)
-
-    def __len__(self):
-        return len(self.sources)
+        self.views = {spec.name: spec.view(buffer.storage) for spec in buffer.layout.tensors}
 
     def take(self, name, transpose=False):
-        view = self.buffer.views[name]
+        view = self.views.pop(name)
         if view.device.type == "cpu":
             view.copy_(self.sources[name])
             self.sources.pop(name)
-        self.consumed.add(name)
         return view.t() if transpose else view
 
     def finish(self):
-        if self.consumed != self.buffer.views.keys():
+        if self.views:
             raise ValueError("Operators did not load the complete block layout")
 
     def bind(self, operator):

@@ -1,6 +1,10 @@
 """Loading contract for persistent Wan2.1 block storage."""
 
+import re
+from pathlib import Path
+
 import torch
+from safetensors import safe_open
 
 from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.common.offload.block_layout import BlockBuffer, BlockLayout, BlockLoadContext
@@ -10,9 +14,35 @@ from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightTemplate
 from lightx2v.common.ops.tensor.tensor import DefaultTensor
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.ops.mm.ascend_npu.mm_weight import MMWeightWint8channelAint8channeldynamicNpu
-from lightx2v_platform.ops.norm.norm_template import LayerNormWeightTemplate as PlatformLNWeight
-from lightx2v_platform.ops.norm.norm_template import RMSWeightTemplate as PlatformRMSWeight
+
+NPU_WEIGHT_TYPES = ()
+if AI_DEVICE == "npu":
+    from lightx2v_platform.ops.mm.ascend_npu.mm_weight import MMWeightWint8channelAint8channeldynamicNpu
+    from lightx2v_platform.ops.norm.ascend_npu.npu_layer_norm import NpuLayerNormWeight
+    from lightx2v_platform.ops.norm.ascend_npu.npu_rms_norm import NpuRmsNormWeight
+
+    NPU_WEIGHT_TYPES = (MMWeightWint8channelAint8channeldynamicNpu, NpuLayerNormWeight, NpuRmsNormWeight)
+
+
+def validate_npu_checkpoint(path, scheme):
+    """Reject incompatible matrix weights before the loader converts their dtype."""
+    path = Path(path)
+    files = sorted(path.glob("*.safetensors")) if path.is_dir() else [path]
+    expected = ("I8",) if scheme == "int8-npu" else ("BF16", "F16", "F32")
+    names = set()
+    for file in files:
+        with safe_open(file, framework="pt", device="cpu") as handle:
+            for name in handle.keys():
+                if not re.fullmatch(r"blocks\.\d+\..+", name):
+                    continue
+                if name in names:
+                    raise ValueError(f"Duplicate checkpoint weight: {name}")
+                names.add(name)
+                tensor = handle.get_slice(name)
+                if name.endswith(".weight") and len(tensor.get_shape()) == 2 and tensor.get_dtype() not in expected:
+                    raise ValueError(f"{scheme} requires {expected} matrix weights; {name} in {file} is {tensor.get_dtype()}. No implicit FP8 conversion is performed.")
+    if not names:
+        raise ValueError(f"No blocks.<index> weights found in {path}")
 
 
 def validate_contiguous_config(config, lora_path=None):
@@ -63,13 +93,10 @@ def _bindings(block):
         attrs = list(getattr(leaf, "base_attrs", ()))
         if isinstance(leaf, DefaultTensor):
             attrs.append((leaf.tensor_name, "tensor", False))
-        if attrs and not isinstance(
-            leaf,
-            (MMWeight, MMWeightWfp8channelAfp8channeldynamicVllm, MMWeightWint8channelAint8channeldynamicNpu, LNWeightTemplate, RMSWeightTemplate, PlatformLNWeight, PlatformRMSWeight, DefaultTensor),
-        ):
+        if attrs and not isinstance(leaf, (MMWeight, MMWeightWfp8channelAfp8channeldynamicVllm, LNWeightTemplate, RMSWeightTemplate, DefaultTensor) + NPU_WEIGHT_TYPES):
             raise ValueError(f"Unsupported contiguous weight operator: {type(leaf).__name__}")
         for name, attr, transpose in attrs:
-            weights[path, attr] = (leaf, name, attr, transpose)
+            weights[path, attr] = (leaf, name, transpose)
         for attr, name_attr in getattr(leaf, "lora_attrs", {}).items():
             tensor = getattr(leaf, attr, None)
             if tensor is not None:
@@ -84,7 +111,8 @@ def load_contiguous_block(block, weight_dict):
     """Load final block views; WanModel validates the configuration once."""
     weights, auxiliary = _bindings(block)
     entries = []
-    for key, (leaf, name, attr, transpose) in weights.items():
+    for key, (leaf, name, transpose) in weights.items():
+        _, attr = key
         source = weight_dict[name]
         if source.device.type != "cpu":
             raise ValueError(f"Expected a CPU checkpoint tensor: {name}")
@@ -98,12 +126,9 @@ def load_contiguous_block(block, weight_dict):
                 dtype = torch.float32 if leaf.scale_force_fp32 else dtype
             elif attr == "bias":
                 dtype = torch.float32 if leaf.bias_force_fp32 else leaf.infer_dtype
-        elif isinstance(leaf, MMWeightWint8channelAint8channeldynamicNpu):
-            if attr == "weight" and dtype != torch.int8:
-                raise ValueError(f"Expected INT8 NPU weight: {name}; FP8 checkpoints cannot be used as INT8")
-            if attr == "weight_scale" or (attr == "bias" and leaf.bias_force_fp32):
-                dtype = torch.float32
-        elif isinstance(leaf, (MMWeight, LNWeightTemplate, RMSWeightTemplate, PlatformLNWeight, PlatformRMSWeight)):
+        elif isinstance(leaf, NPU_WEIGHT_TYPES):
+            dtype = leaf.contiguous_dtype(attr, dtype)
+        elif isinstance(leaf, (MMWeight, LNWeightTemplate, RMSWeightTemplate)):
             # Floating-point operators keep the configured inference dtype.
             if dtype != GET_DTYPE():
                 raise ValueError(f"Expected the inference dtype for weight: {name}")
@@ -121,7 +146,8 @@ def load_contiguous_block(block, weight_dict):
 
     # Operator post-processing must preserve the planned views.
     for spec in buffer.layout.tensors:
-        leaf, _, attr, _ = weights[spec.key]
+        leaf, _, _ = weights[spec.key]
+        _, attr = spec.key
         buffer_attr = f"{attr}_cuda_buffer" if block.create_cuda_buffer else f"pin_{attr}"
         actual = getattr(leaf, buffer_attr)
         expected = spec.view(buffer.storage, operator=True)

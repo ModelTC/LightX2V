@@ -138,7 +138,7 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
         dict: {attr_name: tensor, ...} Dictionary of tensors located on CUDA device
     """
     if isinstance(weight_dict, BlockLoadContext):
-        return {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs if name in weight_dict}
+        return {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs}
     result = {}
     for name, attr_name, transpose in base_attrs:
         tensor = get_source_tensor(name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32)
@@ -187,7 +187,7 @@ def create_default_tensors(base_attrs, weight_dict):
         pin_tensors_dict: {attr_name: tensor, ...} Tensors with pinned memory on CPU
     """
     if isinstance(weight_dict, BlockLoadContext):
-        return {}, {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs if name in weight_dict}
+        return {}, {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs}
     device_tensors = {}
     pin_tensors = {}
 

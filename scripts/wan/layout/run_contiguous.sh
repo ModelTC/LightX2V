@@ -5,6 +5,7 @@ model_path="${lightx2v_path}/models/Wan2.1-I2V-14B-720P-Lightx2v"
 
 export CUDA_VISIBLE_DEVICES=0
 source "${lightx2v_path}/scripts/base/base.sh"
+export PROFILING_DEBUG_LEVEL=0
 
 python -m lightx2v.infer \
   --model_cls wan2.1 \

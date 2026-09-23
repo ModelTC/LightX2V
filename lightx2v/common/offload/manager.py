@@ -17,8 +17,6 @@ class WeightAsyncStreamManager(object):
         self.init_stream = torch_device_module.Stream(priority=0)
         self.need_init_first_buffer = True
         self.lazy_load = False
-        self.transfer_timer = None
-        self.diagnostic_timer = None
         torch_version = parse(torch.__version__.split("+")[0])
         # Legacy name: this is the active device backend's weight-loading stream, not a CUDA-only stream.
         if AI_DEVICE == "cuda" and torch_version >= parse("2.7"):
@@ -71,7 +69,6 @@ class WeightAsyncStreamManager(object):
 
     def init_first_buffer(self, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.init_stream):
-            ticket = self.transfer_timer.start(0, "initial", self.init_stream) if self.transfer_timer else None
             if hasattr(self, "contiguous_transfer"):
                 self.contiguous_transfer.copy(0, self.cuda_buffers[0])
             elif hasattr(self, "cpu_buffers"):
@@ -84,22 +81,17 @@ class WeightAsyncStreamManager(object):
                     self.cuda_buffers[0].load_state_dict(blocks[0].state_dict(), 0, adapter_block_idx)
                 else:
                     self.cuda_buffers[0].load_state_dict(blocks[0].compute_phases[0].state_dict(), 0, adapter_block_idx)
-            if self.transfer_timer:
-                self.transfer_timer.stop(ticket)
         self._sync()
         self.need_init_first_buffer = False
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.cuda_load_stream):
-            ticket = self.transfer_timer.start(block_idx, "prefetch", self.cuda_load_stream) if self.transfer_timer else None
             if hasattr(self, "contiguous_transfer"):
                 self.contiguous_transfer.copy(block_idx, self.cuda_buffers[1])
             elif hasattr(self, "cpu_buffers"):
                 self.cuda_buffers[1].load_state_dict(self.cpu_buffers[0].state_dict(), block_idx, adapter_block_idx)
             else:
                 self.cuda_buffers[1].load_state_dict(blocks[block_idx].state_dict(), block_idx, adapter_block_idx)
-            if self.transfer_timer:
-                self.transfer_timer.stop(ticket)
 
     def prefetch_phase(self, block_idx, phase_idx, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.cuda_load_stream):
@@ -111,11 +103,6 @@ class WeightAsyncStreamManager(object):
     def swap_blocks(self):
         if AI_DEVICE == "xpu":
             torch_device_module.synchronize()
-        elif self.diagnostic_timer is not None:
-            with self.diagnostic_timer.measure("wait_load", device_timing=False):
-                self.cuda_load_stream.synchronize()
-            with self.diagnostic_timer.measure("wait_compute", device_timing=False):
-                self.compute_stream.synchronize()
         else:
             self.cuda_load_stream.synchronize()
             self.compute_stream.synchronize()

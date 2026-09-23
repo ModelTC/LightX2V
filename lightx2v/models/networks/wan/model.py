@@ -229,6 +229,19 @@ class WanModel(BaseTransformerModel):
             from lightx2v.models.networks.wan.weights.block_layout import validate_contiguous_config
 
             validate_contiguous_config(self.config, self.lora_path)
+        if AI_DEVICE == "npu" and self.cpu_offload and self.offload_granularity == "block":
+            # Keep both block layouts in ND format before creating weight buffers.
+            torch.npu.config.allow_internal_format = False
+            scheme = self.config.get("dit_quant_scheme", "Default")
+            if scheme in ("Default", "int8-npu") and not self.lazy_load and not self.config.get("dummy_model"):
+                from lightx2v.models.networks.wan.weights.block_layout import validate_npu_checkpoint
+
+                checkpoint = (
+                    self.config.get("dit_quantized_ckpt") or self.model_path
+                    if self.dit_quantized
+                    else self.config.get("dit_original_ckpt") or self.config.get("transformer_model_path") or self.model_path
+                )
+                validate_npu_checkpoint(checkpoint, scheme)
         self.pre_infer_class = WanPreInfer
         self.post_infer_class = WanPostInfer
 

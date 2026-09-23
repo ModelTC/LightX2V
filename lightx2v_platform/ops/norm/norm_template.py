@@ -51,14 +51,8 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         self.config = {}
         self.lora_prefix = lora_prefix
         self.lora_path = lora_path
-        self.base_attrs = [(weight_name, "weight", False)] if weight_name is not None else []
 
     def load(self, weight_dict):
-        from lightx2v.common.offload.block_layout import BlockLoadContext
-
-        if isinstance(weight_dict, BlockLoadContext):
-            weight_dict.bind(self)
-            return
         if self.create_cuda_buffer:
             self._load_cuda_buffer(weight_dict)
         elif self.create_cpu_buffer:
@@ -167,18 +161,8 @@ class LayerNormWeightTemplate(metaclass=ABCMeta):
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
         self.config = {}
-        self.base_attrs = [(name, attr, False) for name, attr in ((weight_name, "weight"), (bias_name, "bias")) if name is not None]
 
     def load(self, weight_dict):
-        from lightx2v.common.offload.block_layout import BlockLoadContext
-
-        if isinstance(weight_dict, BlockLoadContext):
-            weight_dict.bind(self)
-            if self.weight_name is None:
-                self.weight = None
-            if self.bias_name is None:
-                self.bias = None
-            return
         if self.create_cuda_buffer:
             self._load_cuda_buffers(weight_dict)
         elif self.create_cpu_buffer:
