@@ -20,5 +20,6 @@
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-f16-accum",
     "dit_quantized_ckpt": "/path/to/Qwen-Image-2.1-fp8-f16-accum/qwen_image_21_fp8_f16_accum.safetensors",
-    "dit_fp8_activation_qmax": 7.0
+    "dit_fp8_activation_qmax": 7.0,
+    "vae_use_compile": true
 }

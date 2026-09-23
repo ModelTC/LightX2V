@@ -12,6 +12,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from loguru import logger
 from safetensors.torch import load_file
 
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import AvgDown3D, DupUp3D
@@ -190,8 +191,11 @@ class Decoder(nn.Module):
             x = block(x)
         return self.conv_out(F.silu(self.norm_out(x)))
 
+    def forward_mid(self, x):
+        return self.mid_block(self.conv_in(x))
+
     def forward(self, x):
-        return self.forward_up(self.mid_block(self.conv_in(x)))
+        return self.forward_up(self.forward_mid(x))
 
 
 class QwenImage21VAE(nn.Module):
@@ -221,6 +225,14 @@ class QwenImage21VAE(nn.Module):
         self.register_buffer("latents_std", torch.tensor(cfg["latents_std"]).reshape(1, -1, 1, 1, 1), persistent=False)
         self.to(dtype=GET_DTYPE(), device=AI_DEVICE)
         self.eval().requires_grad_(False)
+        if config.get("vae_use_compile", False):
+            logger.info("[Compile] Using torch.compile for Qwen-Image-2.1 VAE")
+            # These boundaries are shared by serial and spatial-parallel paths;
+            # collectives stay outside the compiled compute regions.
+            self.encoder.forward_down = torch.compile(self.encoder.forward_down, dynamic=None)
+            self.encoder.forward_mid = torch.compile(self.encoder.forward_mid, dynamic=None)
+            self.decoder.forward_mid = torch.compile(self.decoder.forward_mid, dynamic=None)
+            self.decoder.forward_up = torch.compile(self.decoder.forward_up, dynamic=None)
 
     @torch.inference_mode()
     def encode(self, image):
@@ -307,7 +319,7 @@ class QwenImage21VAE(nn.Module):
         if self.vae_decode_parallel_mode == "post_mid":
             # Preserve the decoder's global low-resolution attention exactly,
             # then parallelize the substantially more expensive upsampling path.
-            z = self.decoder.mid_block(self.decoder.conv_in(z))
+            z = self.decoder.forward_mid(z)
             shard = z[:, :, :, h_start:h_end, w_start:w_end].contiguous()
             decoded = self.decoder.forward_up(shard)
         else:

@@ -76,14 +76,15 @@ RTX 5090 配置保留适用的通用优化，并使用：
 
 - QwenVL 语言栈 FP8 权重常驻显存，视觉塔保持 BF16；
 - qmax 14 的 FP8 DiT block linear 权重、qmax 7 的动态 FP8 激活及 FP16 累加；
-- dense SageAttention2。
+- dense SageAttention2；
+- VAE 编译。
 
 | GPU | 任务 | 输出分辨率 | 端到端耗时 |
 | --- | --- | ---: | ---: |
 | RTX 5090 ×1 | T2I | 1024×1024 | **5.515 s** |
 | RTX 5090 ×1 | I2I | 1024×1024 | **6.796 s** |
 
-两类任务均使用当前代码，测试条件为 40 steps、seed 42、关闭 CFG，连续执行三次请求并取中位数。I2I 使用单张 1024×1024 参考图，输出尺寸为 1024×1024。端到端耗时包含输入编码、condition-KV prefill、去噪、VAE 解码、后处理和 PNG 保存，不包含模型加载及 Runner 的一次性初始化。
+表中数据测于启用 VAE 编译前，测试条件为 40 steps、seed 42、关闭 CFG，连续执行三次请求并取中位数。I2I 使用单张 1024×1024 参考图，输出尺寸为 1024×1024。端到端耗时包含输入编码、condition-KV prefill、去噪、VAE 解码、后处理和 PNG 保存，不包含模型加载及 Runner 的一次性初始化。
 
 ### 3.3 双 RTX 5090 序列并行案例
 
@@ -118,7 +119,9 @@ SP2 配置默认使用 `vae_decode_parallel_mode: full`。将其设为 `post_mid
 | RTX 5090 ×2 | T2I | 2048×2048 | **17.298 s** |
 | RTX 5090 ×2 | I2I | 2048×2048 | **25.488 s** |
 
-以上结果使用与单卡表格相同的请求参数和计时范围，均为连续三次请求的中位数。2K I2I 测试还使用 `resolution: 2048` 处理参考图。
+以上结果使用 `post_mid` VAE 解码，测于启用 VAE encoder 并行和 VAE 编译前；请求参数和计时范围与单卡表格相同，均为连续三次请求的中位数。2K I2I 测试还使用 `resolution: 2048` 处理参考图。
+
+上述单卡 QwenVL FP8 和双卡 2K SP2 配置已叠加 `vae_use_compile: true`；2K I2I SP2 配置还启用了 `vae_encode_parallel: true`，在全局 attention 前重组各卡编码特征。VAE 编译支持 encoder 空间并行及 decoder 的 `full` / `post_mid` 两种模式。首次遇到新输入形状可能产生编译开销，数值舍入变化也可能影响生成细节。
 
 ## 4. 服务化部署与 API 调用
 

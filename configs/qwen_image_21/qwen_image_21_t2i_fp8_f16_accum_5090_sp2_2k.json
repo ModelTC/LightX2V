@@ -20,6 +20,7 @@
     "dit_fp8_activation_qmax": 7.0,
     "vae_decode_parallel": true,
     "vae_decode_parallel_mode": "full",
+    "vae_use_compile": true,
     "parallel": {
         "seq_p_size": 2,
         "seq_p_attn_type": "ulysses",

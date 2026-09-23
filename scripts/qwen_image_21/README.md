@@ -76,14 +76,15 @@ The RTX 5090 config retains the applicable general optimizations and uses:
 
 - resident FP8 QwenVL language weights with a BF16 vision tower;
 - FP8 DiT block-linear weights with qmax 14, dynamic FP8 activations with qmax 7, and FP16 accumulation;
-- dense SageAttention2.
+- dense SageAttention2;
+- VAE compilation.
 
 | GPU | Task | Output resolution | End-to-end latency |
 | --- | --- | ---: | ---: |
 | RTX 5090 ×1 | T2I | 1024×1024 | **5.515 s** |
 | RTX 5090 ×1 | I2I | 1024×1024 | **6.796 s** |
 
-Both tasks were measured on the current code with 40 steps, seed 42, CFG disabled, and the median latency of three consecutive requests. I2I uses one 1024×1024 reference image and produces a 1024×1024 image. End-to-end latency covers input encoding, condition-KV prefill, denoising, VAE decoding, post-processing, and PNG saving; it excludes model loading and one-time runner initialization.
+The table was measured before enabling VAE compilation, with 40 steps, seed 42, CFG disabled, and the median latency of three consecutive requests. I2I uses one 1024×1024 reference image and produces a 1024×1024 image. End-to-end latency covers input encoding, condition-KV prefill, denoising, VAE decoding, post-processing, and PNG saving; it excludes model loading and one-time runner initialization.
 
 ### 3.3 Dual RTX 5090 sequence-parallel example
 
@@ -118,7 +119,9 @@ The scripts launch two processes on GPUs 0 and 1. Keep `CUDA_VISIBLE_DEVICES`, `
 | RTX 5090 ×2 | T2I | 2048×2048 | **17.298 s** |
 | RTX 5090 ×2 | I2I | 2048×2048 | **25.488 s** |
 
-These results use the same request settings and measurement boundary as the single-GPU table above, with the median latency of three consecutive requests. The 2K I2I measurement also uses `resolution: 2048` for reference-image preprocessing.
+These measurements use `post_mid` VAE decoding and precede VAE encoder parallelism and compilation. These results use the same request settings and measurement boundary as the single-GPU table above, with the median latency of three consecutive requests. The 2K I2I measurement also uses `resolution: 2048` for reference-image preprocessing.
+
+The single-GPU QwenVL FP8 and dual-GPU 2K SP2 configs above include `vae_use_compile: true`. The 2K I2I SP2 config also enables `vae_encode_parallel: true`, gathering spatial encoder features before global attention. VAE compilation supports encoder spatial parallelism and both `full` and `post_mid` decoder modes. New input shapes can incur compilation time, and numerical rounding changes can affect generated details.
 
 ## 4. Service Deployment and API Usage
 
