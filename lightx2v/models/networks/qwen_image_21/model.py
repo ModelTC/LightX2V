@@ -10,6 +10,7 @@ from lightx2v.common.kvcache.manager import KVCacheManager
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 
+from .infer.offload import QwenImage21OffloadTransformerInfer
 from .infer.post_infer import QwenImage21PostInfer
 from .infer.pre_infer import QwenImage21PreInfer
 from .infer.transformer_infer import QwenImage21TransformerInfer
@@ -24,6 +25,12 @@ class QwenImage21TransformerModel(BaseTransformerModel):
     post_weight_class = QwenImage21PostWeights
 
     def __init__(self, model_path, config, device):
+        if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {
+            "model",
+            "block",
+        }:
+            raise NotImplementedError("Qwen-Image-2.1 supports model and block CPU offload")
+        self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block"
         super().__init__(model_path, config, device)
         self._validate_tensor_parallel_config()
         self._init_infer_class()
@@ -181,13 +188,15 @@ class QwenImage21TransformerModel(BaseTransformerModel):
 
     def _init_infer_class(self):
         self.pre_infer_class = QwenImage21PreInfer
-        self.transformer_infer_class = QwenImage21TransformerInfer
+        self.transformer_infer_class = QwenImage21OffloadTransformerInfer if self.cpu_offload else QwenImage21TransformerInfer
         self.post_infer_class = QwenImage21PostInfer
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class()
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class()
+        if hasattr(self.transformer_infer, "offload_manager"):
+            self._init_offload_manager()
 
     def _seq_parallel_pre_process(self, state):
         world_size = dist.get_world_size(self.seq_p_group)
@@ -226,7 +235,8 @@ class QwenImage21TransformerModel(BaseTransformerModel):
             "num_heads": self.config["num_attention_heads"] // self.tp_size,
             "dim": self.config["num_attention_heads"] * self.config["attention_head_dim"] // self.tp_size,
         }
-        self.kv_cache_manager = KVCacheManager(cache_config, device=self.device)
+        cache_device = inputs["cond"]["prompt_embeds"].device
+        self.kv_cache_manager = KVCacheManager(cache_config, device=cache_device)
         try:
             for name in ("cond", "uncond"):
                 if name in inputs:

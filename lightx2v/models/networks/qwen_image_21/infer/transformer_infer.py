@@ -66,21 +66,28 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
         x = x + gate2 * block.down.apply(F.silu(block.gate.apply(h)) * block.up.apply(h))
         return x.clamp(-65504, 65504) if x.dtype == torch.float16 else x
 
+    def prefill_block(self, index, block, x, modulation, state, cache):
+        """Run one condition-prefix block and store its K/V."""
+        q, k, v = self._qkv(block, x, modulation[0], state.rotary, state.rotary_positions)
+        cache.store_kv(k, v, index)
+        attention = x.new_empty((x.shape[0], self.heads * self.config["attention_head_dim"]))
+        for begin, end, is_text in state.layout.segments:
+            mask = None
+            if is_text:
+                mask = torch.arange(end, device=x.device)[None] <= torch.arange(begin, end, device=x.device)[:, None]
+            op = block.prefix_attention if is_text else block.attention
+            attention[begin:end] = op.apply(q[begin:end], k[:end], v[:end], attn_mask=mask)
+        return self._finish_block(block, x, attention, modulation)
+
+    def _prefill_blocks(self, blocks, x, modulation, state, cache):
+        for index, block in enumerate(blocks):
+            x = self.prefill_block(index, block, x, modulation, state, cache)
+        return x
+
     def prefill(self, weights, state, cache):
         """Run the condition prefix once and store every layer's K/V."""
-        x = state.hidden_states
         modulation = self._modulation(state)
-        for index, block in enumerate(weights.blocks):
-            q, k, v = self._qkv(block, x, modulation[0], state.rotary, state.rotary_positions)
-            cache.store_kv(k, v, index)
-            attention = x.new_empty((x.shape[0], self.heads * self.config["attention_head_dim"]))
-            for begin, end, is_text in state.layout.segments:
-                mask = None
-                if is_text:
-                    mask = torch.arange(end, device=x.device)[None] <= torch.arange(begin, end, device=x.device)[:, None]
-                op = block.prefix_attention if is_text else block.attention
-                attention[begin:end] = op.apply(q[begin:end], k[:end], v[:end], attn_mask=mask)
-            x = self._finish_block(block, x, attention, modulation)
+        self._prefill_blocks(weights.blocks, state.hidden_states, modulation, state, cache)
 
     def infer_block(self, block, x, modulation, rotary, rotary_positions, cached_k, cached_v):
         q, k, v = self._qkv(block, x, modulation[0], rotary, rotary_positions)
@@ -109,13 +116,8 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
             attention = block.attention.apply(q, k, v)
         return self._finish_block(block, x, attention, modulation)
 
-    def infer(self, weights, state, cache):
-        """Denoise only target tokens, attending to the prefilled condition K/V."""
-        if not cache.is_ready():
-            raise RuntimeError("Condition KV must be prefilled before denoising")
-        x = state.hidden_states
-        modulation = self._modulation(state)
-        for index, block in enumerate(weights.blocks):
+    def _infer_blocks(self, blocks, x, modulation, state, cache):
+        for index, block in enumerate(blocks):
             x = self.run_block(
                 index,
                 block,
@@ -127,3 +129,10 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
                 cache.v_cache(index),
             )
         return x
+
+    def infer(self, weights, state, cache):
+        """Denoise only target tokens, attending to the prefilled condition K/V."""
+        if not cache.is_ready():
+            raise RuntimeError("Condition KV must be prefilled before denoising")
+        modulation = self._modulation(state)
+        return self._infer_blocks(weights.blocks, state.hidden_states, modulation, state, cache)

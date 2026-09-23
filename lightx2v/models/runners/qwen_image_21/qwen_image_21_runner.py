@@ -1,4 +1,5 @@
 import math
+from contextlib import suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -38,7 +39,6 @@ class QwenImage21Runner(DefaultRunner):
 
     def __init__(self, config):
         unsupported = (
-            "cpu_offload",
             "vae_cpu_offload",
             "lazy_load",
             "unload_modules",
@@ -52,6 +52,8 @@ class QwenImage21Runner(DefaultRunner):
         for key in unsupported:
             if config.get(key):
                 raise ValueError(f"qwen_image_21 does not yet support {key}")
+        if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
+            raise NotImplementedError("qwen_image_21 supports model and block CPU offload")
         if config.get("seq_parallel"):
             parallel = config["parallel"]
             seq_p_size = int(parallel.get("seq_p_size", 1))
@@ -118,6 +120,7 @@ class QwenImage21Runner(DefaultRunner):
             for task in ("t2i", "i2i"):
                 for height, width in self._WARMUP_RESOLUTIONS:
                     logger.info(f"Warmup: {task}, {height}x{width}")
+                    transformer_offloaded = not self.config.get("cpu_offload", False)
                     try:
                         self.scheduler.generator = None
                         request = {"task": task, "prompt": "warmup", "seed": 0, "size": [height, width]}
@@ -128,13 +131,20 @@ class QwenImage21Runner(DefaultRunner):
                         self.input_info = self.create_input_info(request)
                         self.inputs = self.run_input_encoder()
                         self.init_run()
+                        transformer_offloaded = False
                         self.model.prefill_condition_kv(self.inputs)
                         self.scheduler.step_pre(step_index=0)
                         self.model.infer(self.inputs)
                         self.scheduler.step_post()
+                        if self.config.get("cpu_offload", False):
+                            self._offload_transformer()
+                            transformer_offloaded = True
                         self.run_vae_decoder(self.scheduler.latents)
                         torch_device_module.synchronize()
                     finally:
+                        if self.config.get("cpu_offload", False) and not transformer_offloaded:
+                            with suppress(Exception):
+                                self._offload_transformer()
                         self.end_run()
                         self.__dict__.pop("inputs", None)
         logger.info("[Warmup] Warmup completed")
@@ -235,13 +245,48 @@ class QwenImage21Runner(DefaultRunner):
     def init_run(self):
         self.get_video_segment_num()
         self.scheduler.prepare(self.input_info)
+        if not self.config.get("cpu_offload", False):
+            logger.info("Qwen-Image-2.1 transformer is resident on the accelerator")
+        elif self.config.get("offload_granularity", "model") == "model":
+            logger.info("Moving the Qwen-Image-2.1 transformer to the accelerator")
+            self.model.to_cuda()
+        else:
+            logger.info("Qwen-Image-2.1 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
+            self.model.pre_weight.to_cuda()
+            self.model.post_weight.to_cuda()
+        torch_device_module.synchronize()
+
+    @ProfilingContext4DebugL2("Offload DiT")
+    def _offload_transformer(self):
+        if not self.config.get("cpu_offload", False):
+            return
+        self.model.clear_condition_kv()
+        if self.model.block_offload:
+            self.model.pre_weight.to_cpu()
+            self.model.post_weight.to_cpu()
+        else:
+            self.model.to_cpu()
+        torch_device_module.synchronize()
+        self.maybe_empty_cache(force=True, collect_garbage=True)
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
-        self.init_run()
-        with ProfilingContext4DebugL1("Prefill condition KV"):
-            self.model.prefill_condition_kv(self.inputs)
-        return self.run_segment()
+        should_offload_transformer = self.config.get("cpu_offload", False)
+        try:
+            self.init_run()
+            with ProfilingContext4DebugL1("Prefill condition KV"):
+                self.model.prefill_condition_kv(self.inputs)
+            result = self.run_segment()
+        except BaseException:
+            # Preserve an inference or partial-onload exception while making a
+            # best-effort return of the large transformer to host memory.
+            if should_offload_transformer:
+                with suppress(Exception):
+                    self._offload_transformer()
+            raise
+        if should_offload_transformer:
+            self._offload_transformer()
+        return result
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
