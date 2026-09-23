@@ -6,6 +6,8 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 try:
     from magi_compiler import magi_register_custom_op
 except ImportError:
@@ -17,14 +19,6 @@ from lightx2v.common.ops.mm.fp8_f16_accum import (
     validate_fp8_f16_accum_qmax,
 )
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
-from lightx2v.common.ops.mm.triton_kernels import (
-    fp8_gemm_bias_triton,
-    fp8_gemm_triton,
-    fp8_quantize_triton,
-    int8_gemm_bias_triton,
-    int8_gemm_triton,
-    int8_quantize_triton,
-)
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import GGMLTensor
@@ -32,7 +26,6 @@ from lightx2v.utils.ggml_tensor import dequantize_tensor as gguf_dequantize_tens
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
     from lightx2v_kernel.gemm import (
@@ -1587,6 +1580,8 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         if vllm_ops is not None:
             self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
         else:
+            from .triton_kernels import fp8_quantize_triton
+
             self.act_quant_func = fp8_quantize_triton
 
     def apply(self, input_tensor):
@@ -1645,6 +1640,8 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         if vllm_ops is not None:
             self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
         else:
+            from .triton_kernels import int8_quantize_triton
+
             self.act_quant_func = int8_quantize_triton
 
     def apply(self, input_tensor):
@@ -1697,15 +1694,19 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
             lora_prefix,
             lora_path,
         )
+        from .triton_kernels import fp8_gemm_bias_triton, fp8_gemm_triton, fp8_quantize_triton
+
         self.load_func = self.load_fp8_perchannel_sym
         self.act_quant_func = fp8_quantize_triton
+        self._gemm = fp8_gemm_triton
+        self._gemm_bias = fp8_gemm_bias_triton
         self.weight_need_transpose = False
         self.bias_force_fp32 = True
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
         if self.bias is not None:
-            output_tensor = fp8_gemm_bias_triton(
+            output_tensor = self._gemm_bias(
                 input_tensor_quant,
                 self.weight,
                 self._get_actual_bias(),
@@ -1714,7 +1715,7 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
                 output_dtype=self.infer_dtype,
             )
         else:
-            output_tensor = fp8_gemm_triton(
+            output_tensor = self._gemm(
                 input_tensor_quant,
                 self.weight,
                 input_tensor_scale,
@@ -1760,15 +1761,19 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
             lora_prefix,
             lora_path,
         )
+        from .triton_kernels import int8_gemm_bias_triton, int8_gemm_triton, int8_quantize_triton
+
         self.load_func = self.load_int8_perchannel_sym
         self.act_quant_func = int8_quantize_triton
+        self._gemm = int8_gemm_triton
+        self._gemm_bias = int8_gemm_bias_triton
         self.weight_need_transpose = False
         self.bias_force_fp32 = True
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
         if self.bias is not None:
-            output_tensor = int8_gemm_bias_triton(
+            output_tensor = self._gemm_bias(
                 input_tensor_quant,
                 self.weight,
                 self._get_actual_bias(),
@@ -1777,7 +1782,7 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
                 output_dtype=self.infer_dtype,
             )
         else:
-            output_tensor = int8_gemm_triton(
+            output_tensor = self._gemm(
                 input_tensor_quant,
                 self.weight,
                 input_tensor_scale,
@@ -2084,6 +2089,8 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         elif torchao_int8_quant:
             self.act_quant_func = self.act_quant_int8_perchannel_sym_torchao
         else:
+            from .triton_kernels import int8_quantize_triton
+
             self.act_quant_func = int8_quantize_triton
         self.weight_need_transpose = True
         self.scale_force_fp32 = True

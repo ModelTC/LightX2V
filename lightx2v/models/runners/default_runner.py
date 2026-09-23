@@ -270,23 +270,33 @@ class DefaultRunner(BaseRunner):
         min_free_bytes = float(self.config.get("empty_cache_min_free_gib", 4)) * gib
         min_reclaimable_bytes = float(self.config.get("empty_cache_min_reclaimable_gib", 2)) * gib
 
-        free_bytes, _ = torch_device_module.mem_get_info()
+        if AI_DEVICE == "mps":
+            free_bytes = max(torch_device_module.recommended_max_memory() - torch_device_module.driver_allocated_memory(), 0)
+        else:
+            free_bytes, _ = torch_device_module.mem_get_info()
         check_cache = force or free_bytes < min_free_bytes
         if collect_garbage or check_cache:
             gc.collect()
         if not check_cache:
             return False
 
-        allocated_bytes = torch_device_module.memory_allocated()
-        reserved_bytes = torch_device_module.memory_reserved()
+        if AI_DEVICE == "mps":
+            allocated_bytes = torch_device_module.current_allocated_memory()
+            reserved_bytes = torch_device_module.driver_allocated_memory()
+            recommended_max_bytes = torch_device_module.recommended_max_memory()
+            free_bytes = max(recommended_max_bytes - reserved_bytes, 0)
+            memory_info = (
+                f"headroom={free_bytes / gib:.2f} GiB, current_allocated={allocated_bytes / gib:.2f} GiB, "
+                f"driver_allocated={reserved_bytes / gib:.2f} GiB, recommended_max={recommended_max_bytes / gib:.2f} GiB"
+            )
+        else:
+            allocated_bytes = torch_device_module.memory_allocated()
+            reserved_bytes = torch_device_module.memory_reserved()
+            memory_info = f"free={free_bytes / gib:.2f} GiB, allocated={allocated_bytes / gib:.2f} GiB, reserved={reserved_bytes / gib:.2f} GiB"
         reclaimable_bytes = max(reserved_bytes - allocated_bytes, 0)
 
         if force or reclaimable_bytes >= min_reclaimable_bytes:
-            logger.info(
-                f"[Memory] Emptying device cache: free={free_bytes / gib:.2f} GiB, "
-                f"allocated={allocated_bytes / gib:.2f} GiB, reserved={reserved_bytes / gib:.2f} GiB, "
-                f"reclaimable={reclaimable_bytes / gib:.2f} GiB, force={force}"
-            )
+            logger.info(f"[Memory] Emptying {AI_DEVICE} cache: {memory_info}, reclaimable={reclaimable_bytes / gib:.2f} GiB, force={force}")
             torch_device_module.empty_cache()
             return True
 

@@ -30,7 +30,7 @@ def _make_schedule(infer_steps: int, shift: float, device) -> tuple[torch.Tensor
 def _layout_to_device(layout: MiniMaxH3PackedSequence, device) -> MiniMaxH3PackedSequence:
     return replace(
         layout,
-        position_ids=layout.position_ids.to(device),
+        position_ids=layout.position_ids.to(device=device, dtype=torch.float32),
         token_tags=layout.token_tags.to(device),
         video_indices=layout.video_indices.to(device),
         audio_indices=layout.audio_indices.to(device),

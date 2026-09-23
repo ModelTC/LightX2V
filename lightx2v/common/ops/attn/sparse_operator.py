@@ -4,10 +4,6 @@ from loguru import logger
 from lightx2v.utils.registry_factory import SPARSE_OPERATOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-from .kernels.sla_kernel import _attention
-from .utils.sla_util import get_cuda_arch
-from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordinal_lut_triton, sage2_block_sparse_attn
-
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
     from flash_attn.cute.block_sparsity import BlockSparseTensorsTorch
@@ -41,6 +37,9 @@ except ImportError:
 @SPARSE_OPERATOR_REGISTER("sla_triton_operator")
 class SlaTritonOperator:
     def __init__(self, operator_setting={}):
+        from .kernels.sla_kernel import _attention
+
+        self._attention = _attention
         self.q_block_size = 128
         self.k_block_size = 128
         self.operator_setting = operator_setting
@@ -67,7 +66,7 @@ class SlaTritonOperator:
         topk = int(mask.sum(dim=-1).max().item())
         lut = torch.topk(mask, topk, dim=-1, sorted=False).indices
 
-        out = _attention.apply(q, k, v, mask, lut, topk, self.q_block_size, self.k_block_size)
+        out = self._attention.apply(q, k, v, mask, lut, topk, self.q_block_size, self.k_block_size)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
 
@@ -75,6 +74,11 @@ class SlaTritonOperator:
 @SPARSE_OPERATOR_REGISTER("spas_sage2_operator")
 class SparseSageAttentionV2Operator:
     def __init__(self, operator_setting={}):
+        from .utils.sla_util import get_cuda_arch
+        from .utils.sparge_util import block_map_incremental_lut_triton, sage2_block_sparse_attn
+
+        self._block_map_incremental_lut_triton = block_map_incremental_lut_triton
+        self._sage2_block_sparse_attn = sage2_block_sparse_attn
         self.operator_setting = operator_setting
 
         self.arch = get_cuda_arch(torch.cuda.current_device())
@@ -101,8 +105,8 @@ class SparseSageAttentionV2Operator:
         v = v.unsqueeze(0).transpose(1, 2).contiguous()
 
         # (B, H, Q_block_num, K_block_num)
-        lut, valid_block_num = block_map_incremental_lut_triton(mask)
-        out = sage2_block_sparse_attn(q, k, v, lut, valid_block_num, self.q_block_size, self.k_block_size, self.arch)
+        lut, valid_block_num = self._block_map_incremental_lut_triton(mask)
+        out = self._sage2_block_sparse_attn(q, k, v, lut, valid_block_num, self.q_block_size, self.k_block_size, self.arch)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
 
@@ -110,6 +114,9 @@ class SparseSageAttentionV2Operator:
 @SPARSE_OPERATOR_REGISTER("spas_sage3_operator")
 class SparseSageAttentionV3Operator:
     def __init__(self, operator_setting={}):
+        from .utils.sparge_util import block_map_ordinal_lut_triton
+
+        self._block_map_ordinal_lut_triton = block_map_ordinal_lut_triton
         self.q_block_size = 128
         self.k_block_size = 128
         self.operator_setting = operator_setting
@@ -133,7 +140,7 @@ class SparseSageAttentionV3Operator:
         v = v.unsqueeze(0).transpose(1, 2).contiguous()
 
         # (B, H, Q_block_num, K_block_num)
-        lut, valid_block_num = block_map_ordinal_lut_triton(mask)
+        lut, valid_block_num = self._block_map_ordinal_lut_triton(mask)
         out = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
@@ -142,6 +149,9 @@ class SparseSageAttentionV3Operator:
 @SPARSE_OPERATOR_REGISTER("spas_fa4_operator")
 class SparseFlashAttentionV4Operator:
     def __init__(self, operator_setting={}):
+        from .utils.sparge_util import block_map_ordinal_lut_triton
+
+        self._block_map_ordinal_lut_triton = block_map_ordinal_lut_triton
         self.q_block_size = 128
         self.k_block_size = 128
         self.operator_setting = operator_setting
@@ -164,7 +174,7 @@ class SparseFlashAttentionV4Operator:
         v = v.unsqueeze(0)
 
         # (B, H, Q_block_num, K_block_num)
-        full_block_idx, full_block_cnt = block_map_ordinal_lut_triton(mask)
+        full_block_idx, full_block_cnt = self._block_map_ordinal_lut_triton(mask)
         mask_block_cnt = torch.zeros_like(full_block_cnt)
         mask_block_idx = torch.zeros_like(full_block_idx)
         block_sparse_tensors = BlockSparseTensorsTorch(

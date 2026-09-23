@@ -8,7 +8,7 @@ from PIL import Image, ImageOps
 from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
-from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3MpsQwen3VLTextEncoder, MiniMaxH3Qwen3VLTextEncoder
 from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
@@ -112,6 +112,8 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def get_supported_tasks(self):
         """Return tasks supported by the loaded transformer weights."""
+        if self.config.get("text_encoder_disk_streaming", False):
+            return ("t2av",)
         if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
         # Allow ref2av requests to use the base transformer for better visual quality.
@@ -205,11 +207,26 @@ class MiniMaxH3Runner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
+        if self._is_mps_low_memory_streaming():
+            self._validate_mps_low_memory_streaming_config()
         self.model = self.load_transformer()
         if self.config.get("dit_release_block_offload_buffers", False):
             self.model.release_block_offload_buffers()
         self.text_encoders = self.load_text_encoder()
+        if self._is_mps_low_memory_streaming():
+            self.video_vae = None
+            self.audio_vae = None
+            return
         self.video_vae, self.audio_vae = self.load_vae()
+
+    def _is_mps_low_memory_streaming(self):
+        return AI_DEVICE == "mps" and self.config.get("model_variant") == "fl2av" and self.config.get("dit_disk_streaming", False) and self.config.get("text_encoder_disk_streaming", False)
+
+    def _validate_mps_low_memory_streaming_config(self):
+        if not self.config.get("text_encoder_release_block_offload_buffers", False):
+            raise ValueError("MiniMax-H3 MPS low-memory streaming requires text_encoder_release_block_offload_buffers=true.")
+        if self.config.get("warmup", False):
+            raise ValueError("MiniMax-H3 MPS low-memory streaming requires warmup=false in the first implementation.")
 
     def load_transformer(self):
         model_kwargs = {
@@ -227,6 +244,8 @@ class MiniMaxH3Runner(DefaultRunner):
         return MiniMaxH3Model(**model_kwargs)
 
     def load_text_encoder(self):
+        if self.config.get("text_encoder_disk_streaming", False):
+            return [MiniMaxH3MpsQwen3VLTextEncoder(self.config)]
         return [MiniMaxH3Qwen3VLTextEncoder(self.config)]
 
     @staticmethod
@@ -474,6 +493,16 @@ class MiniMaxH3Runner(DefaultRunner):
             raise ValueError(f"MiniMax-H3 ref2av accepts at most {MAX_REFERENCE_AUDIOS} audio-bearing references")
         return references
 
+    def _ensure_vae_loaded(self):
+        if self.video_vae is None or self.audio_vae is None:
+            self.video_vae, self.audio_vae = self.load_vae()
+
+    def _release_low_memory_vae(self):
+        if self._is_mps_low_memory_streaming() and (self.video_vae is not None or self.audio_vae is not None):
+            self.video_vae = None
+            self.audio_vae = None
+            self.maybe_empty_cache(force=True, collect_garbage=True)
+
     def _encode_keyframes(self, keyframes):
         latents = []
         for image in keyframes:
@@ -566,10 +595,12 @@ class MiniMaxH3Runner(DefaultRunner):
         elif self.config.get("offload_granularity", "model") == "model":
             logger.info("Moving the native MiniMax-H3 transformer to the accelerator")
             self.model.to_cuda()
+        elif self.config.get("dit_disk_streaming", False):
+            logger.info("MiniMax-H3 diffusers disk offload enabled; prefetching directly into two shared MPS block buffers")
         else:
             logger.info("MiniMax-H3 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
-            if self.config.get("dit_release_block_offload_buffers", False):
-                self.model.ensure_block_offload_buffers()
+        if self.config.get("dit_release_block_offload_buffers", False):
+            self.model.ensure_block_offload_buffers()
         torch_device_module.synchronize()
 
     def run_segment(self, segment_idx=0):
@@ -604,6 +635,9 @@ class MiniMaxH3Runner(DefaultRunner):
                 self.model.post_weight.to_cpu()
             if self.config.get("dit_release_block_offload_buffers", False):
                 self.model.release_block_offload_buffers()
+            elif self._is_mps_low_memory_streaming():
+                logger.info("Releasing MiniMax-H3 disk-streaming DiT device block buffers")
+                self.model.release_disk_streaming_buffer()
         else:
             logger.info("Offloading MiniMax-H3 transformer before VAE decode")
             self.model.to_cpu()
@@ -628,6 +662,7 @@ class MiniMaxH3Runner(DefaultRunner):
         metrics_labels=["MiniMaxH3Runner"],
     )
     def run_vae_decoder(self, video_rows, audio_rows):
+        self._ensure_vae_loaded()
         video_rows = video_rows[self.scheduler.num_condition_video_rows :]
         audio_rows = audio_rows[self.scheduler.num_condition_audio_rows :]
         video_latents = unpatchify_video_tokens(
@@ -718,8 +753,9 @@ class MiniMaxH3Runner(DefaultRunner):
                 with suppress(Exception):
                     self._offload_transformer()
             try:
-                self.end_run()
+                self._release_low_memory_vae()
             finally:
+                self.end_run()
                 # Decoded FP32 video is large (roughly 1.5 GiB at the default
                 # shape). Returned tensors keep their own references/copies;
                 # the runner should not retain another request-sized result.

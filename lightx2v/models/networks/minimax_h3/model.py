@@ -1,3 +1,4 @@
+import gc
 import glob
 import math
 import os
@@ -17,17 +18,19 @@ from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
     validate_fp8_f16_accum_checkpoint,
 )
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
-from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
+from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import MiniMaxH3PreInfer
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
 from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3PostWeights,
     MiniMaxH3PreWeights,
+    MiniMaxH3StreamingTransformerWeights,
     MiniMaxH3TransformerWeights,
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 H3_CHANNEL_QUANT_SCHEMES = {
     "fp8-q8f",
@@ -101,6 +104,8 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("MiniMax-H3 supports model and block CPU offload")
+        if config.get("dit_disk_streaming", False):
+            assert lora_path is None and not config.get("lora_configs")
         if config.get("attn_type") == "sol_attn":
             reorder = str(config.get("sol_attn_setting", {}).get("reorder", "none")).lower()
             if reorder != "none":
@@ -138,6 +143,32 @@ class MiniMaxH3Model(BaseTransformerModel):
             self._h3_weight_shapes = {key: tuple(tensor.shape) for key, tensor in source.items() if isinstance(tensor, torch.Tensor) and tensor.ndim == 2}
         return super()._apply_weights(weight_dict)
 
+    def _init_weights(self, weight_dict=None):
+        if self.config.get("dit_disk_streaming", False):
+            return self._init_disk_streaming_weights()
+        return super()._init_weights(weight_dict)
+
+    def _init_disk_streaming_weights(self):
+        self.transformer_weights = MiniMaxH3StreamingTransformerWeights(self.config)
+        self.pre_weight = self.pre_weight_class(self.config)
+        self.post_weight = self.post_weight_class(self.config)
+
+        checkpoint = self.transformer_weights.checkpoint
+        prepost_tensor_names = {name for weight in self._iter_weight_objects(self.pre_weight, self.post_weight) for name, _, _ in getattr(weight, "base_attrs", ())}
+        prepost_weights = checkpoint.load_tensors(prepost_tensor_names, device="cpu")
+        try:
+            self.pre_weight.load(prepost_weights)
+            self.post_weight.load(prepost_weights)
+        finally:
+            del prepost_weights
+            gc.collect()
+            device_module = getattr(torch, torch.device(self.device).type, None)
+            if device_module is not None and hasattr(device_module, "empty_cache"):
+                if torch.device(self.device).type == "mps":
+                    device_module.synchronize()
+                device_module.empty_cache()
+        return None
+
     def _load_shared_cpu_weights(self, unified_dtype, sensitive_layer):
         from lightx2v.models.networks.minimax_h3.shared_block_weights import load_shared_dit
 
@@ -146,14 +177,22 @@ class MiniMaxH3Model(BaseTransformerModel):
     def release_block_offload_buffers(self):
         if not self.block_offload:
             return
-        torch.cuda.synchronize()
+        if self.config.get("dit_disk_streaming", False):
+            self.release_disk_streaming_buffer()
+            return
+        getattr(torch, AI_DEVICE).synchronize()
         weights = self.transformer_weights
         weights.offload_block_cuda_buffers = None
         weights._modules.pop("offload_block_cuda_buffers", None)
         self.transformer_infer.offload_manager = None
 
     def ensure_block_offload_buffers(self):
-        if not self.block_offload or self.transformer_infer.offload_manager is not None:
+        if not self.block_offload:
+            return
+        if self.config.get("dit_disk_streaming", False):
+            self.transformer_weights._ensure_streaming_buffers()
+            return
+        if self.transformer_infer.offload_manager is not None:
             return
         from lightx2v.common.modules.weight_module import WeightModuleList
         from lightx2v.common.offload.manager import WeightAsyncStreamManager
@@ -535,7 +574,10 @@ class MiniMaxH3Model(BaseTransformerModel):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("MiniMax-H3 feature caching is not implemented")
         self.pre_infer_class = MiniMaxH3PreInfer
-        self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
+        if self.config.get("dit_disk_streaming", False):
+            self.transformer_infer_class = MiniMaxH3MpsOffloadTransformerInfer
+        else:
+            self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
         self.post_infer_class = MiniMaxH3PostInfer
 
     def _init_infer(self):
@@ -630,8 +672,15 @@ class MiniMaxH3Model(BaseTransformerModel):
         return output
 
     def to_cpu(self):
+        if self.config.get("dit_disk_streaming", False):
+            self.release_disk_streaming_buffer()
         super().to_cpu()
         if hasattr(self.transformer_infer, "offload_manager"):
             # Full teardown moves the active aliases away from the persistent
             # device buffers. Force buffer 0 to be populated again next run.
             self.transformer_infer.offload_manager.need_init_first_buffer = True
+
+    def release_disk_streaming_buffer(self):
+        self.transformer_infer.offload_manager.close()
+        self.transformer_infer.compiled_blocks.clear()
+        self.transformer_weights.release_disk_streaming_buffer()

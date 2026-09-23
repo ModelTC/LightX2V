@@ -1,60 +1,22 @@
 #!/bin/bash
+set -euo pipefail
 
-# set path firstly
-lightx2v_path=/data/nvme1/yongyang/dan/LightX2V
-model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3
+lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+: "${MODEL_PATH:?Set MODEL_PATH to the MiniMax-H3 diffusers checkpoint directory}"
+model_path="${MODEL_PATH}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/minimax_h3/minimax_h3.json}"
 
-# Select one platform. NVIDIA is enabled by default.
-
-# NVIDIA
-export PLATFORM=cuda
-export CUDA_VISIBLE_DEVICES=0
-
-# Intel XPU
-# export PLATFORM=intel_xpu
-# export ZE_AFFINITY_MASK=0
-
-# AMD ROCm
-# export PLATFORM=amd_rocm
-# export CUDA_VISIBLE_DEVICES=0
-
-# MetaX
-# export PLATFORM=metax_cuda
-# export CUDA_VISIBLE_DEVICES=0
-
-# Ascend NPU
-# export PLATFORM=ascend_npu
-# export ASCEND_RT_VISIBLE_DEVICES=0
-
-# MThreads MUSA
-# export PLATFORM=musa
-# export MUSA_VISIBLE_DEVICES=0
-
-# Cambricon MLU
-# export PLATFORM=cambricon_mlu
-# export MLU_VISIBLE_DEVICES=0
-
-# Hygon DCU
-# export PLATFORM=hygon_dcu
-# export HIP_VISIBLE_DEVICES=0
-
-# Enflame GCU
-# export PLATFORM=enflame_gcu
-# export ECCL_RAS_DISABLE=2
-
-# Iluvatar CoreX
-# export PLATFORM=iluvatar_cuda
-# export CUDA_VISIBLE_DEVICES=0
-
-# PPU
-# export PLATFORM=ppu_cuda
-# export CUDA_VISIBLE_DEVICES=0
-
-# set environment variables
+export PLATFORM="${PLATFORM:-cuda}"
+if [[ "${PLATFORM}" == cuda ]]; then
+    export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+fi
+export PYTHONPATH="${PYTHONPATH:-}"
 source "${lightx2v_path}/scripts/base/base.sh"
 
-# Supported tasks: fl2av, ref2av
-python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
-  --model_path "${model_path}" \
-  --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3.json" \
-  --model-variant fl2av
+# fl2av also generates the cache used by t2av/i2av/l2av inference.
+# Cache generation and inference must use the same model and JSON config.
+exec "${PYTHON:-python}" "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
+    --model_path "${model_path}" \
+    --config_json "${config_json}" \
+    --model-variant fl2av \
+    "$@"

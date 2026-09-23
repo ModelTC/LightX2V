@@ -206,11 +206,11 @@ def load_persistent_adaln_cache(
     keys = [tuple(_timesteps_from_bits(entry["timestep_bits"]).tolist()) for entry in spec["entries"]]
     cache = {key: [None] * spec["num_layers"] for key in keys}
     norm_out_cache = {}
-    with safe_open(cache_path / "adaln_cache.safetensors", framework="pt", device=str(device)) as source:
+    with safe_open(cache_path / "adaln_cache.safetensors", framework="pt", device="cpu") as source:
         for entry, key in zip(spec["entries"], keys):
-            norm_out_cache[key] = source.get_tensor(_norm_out_key(entry))
+            norm_out_cache[key] = source.get_tensor(_norm_out_key(entry)).to(device)
         for block_index in range(spec["num_layers"]):
             for entry, key in zip(spec["entries"], keys):
-                cache[key][block_index] = source.get_tensor(_block_key(block_index, entry))
+                cache[key][block_index] = source.get_tensor(_block_key(block_index, entry)).to(device)
     logger.success("========== MiniMax-H3 AdaLN cache loaded from {} ==========", cache_path)
     return cache, norm_out_cache
