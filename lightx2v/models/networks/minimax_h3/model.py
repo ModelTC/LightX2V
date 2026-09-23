@@ -48,6 +48,18 @@ H3_CHANNEL_QUANT_SCHEMES = {
 }
 
 
+def _host_mem_available_gib() -> int:
+    """Host MemAvailable in GiB (Linux), or -1 if unreadable."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // (1024 * 1024)
+    except OSError:
+        pass
+    return -1
+
+
 class MiniMaxH3Model(BaseTransformerModel):
     """LightX2V-native MiniMax-H3 joint audio/video transformer."""
 
@@ -440,7 +452,23 @@ class MiniMaxH3Model(BaseTransformerModel):
         return super()._load_weights_from_rank0(weight_dict, is_weight_loader)
 
     def _load_dummy_ckpt(self, unified_dtype, sensitive_layer):
-        weight_dict = super()._load_dummy_ckpt(unified_dtype, sensitive_layer)
+        stage = None
+        if self.config.get("pipefusion_parallel", False):
+            # Each stage keeps only its block subset on the accelerator; load
+            # the dummy weights to CPU and let to_cuda() place them per stage.
+            saved_device = self.device
+            self.device = torch.device("cpu")
+            try:
+                weight_dict = super()._load_dummy_ckpt(unified_dtype, sensitive_layer)
+            finally:
+                self.device = saved_device
+            stage = self._pipeline_stage_info()
+        else:
+            weight_dict = super()._load_dummy_ckpt(unified_dtype, sensitive_layer)
+        if stage is not None:
+            # The dummy loader materialises every layer; keep only this stage's
+            # block subset, matching the real checkpoint filter.
+            weight_dict = {key: tensor for key, tensor in weight_dict.items() if self._pipeline_stage_keeps_key(stage, key)}
         if not self.use_tp:
             return weight_dict
         return {key: self._select_tensor_parallel_shard(key, tensor) for key, tensor in weight_dict.items()}
@@ -518,7 +546,23 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError(f"MiniMax-H3 native loading expects the released safetensors checkpoint; got {file_path}")
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
         preserve_keys = self.preserved_keys if hasattr(self, "preserved_keys") else None
-        load_device = self._checkpoint_load_device()
+        # In PipeFusion mode, load to CPU first to avoid OOM — each stage only
+        # keeps its own block subset on the accelerator (see
+        # MiniMaxH3TransformerWeights).
+        load_device = "cpu" if self.config.get("pipefusion_parallel", False) else self._checkpoint_load_device()
+        # Each PipeFusion stage only reads its own block range from disk,
+        # otherwise every rank would pull the full ~62GB DiT into host memory.
+        stage = self._pipeline_stage_info()
+        if stage is not None and not getattr(self, "_pp_load_logged", False):
+            self._pp_load_logged = True
+            logger.info(
+                "MiniMax-H3 PipeFusion stage {}/{} reads transformer blocks [{}, {}) from disk (host MemAvailable: {} GiB)",
+                stage[2],
+                stage[3],
+                stage[0],
+                stage[1],
+                _host_mem_available_gib(),
+            )
         # Reading a full tensor directly on the accelerator and then slicing it
         # can retain the full safetensors storage behind a small TP view.  Shard
         # on CPU first so accelerator memory contains only this rank's weights.
@@ -526,17 +570,48 @@ class MiniMaxH3Model(BaseTransformerModel):
             weight_dict = {
                 key: self._load_local_tensor(source, key, load_device)
                 for key in source.keys()
-                if not any(remove_key in key for remove_key in remove_keys) and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
+                if self._pipeline_stage_keeps_key(stage, key)
+                and not any(remove_key in key for remove_key in remove_keys)
+                and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
             }
         self._validate_checkpoint_devices(weight_dict, load_device)
         return weight_dict
+
+    @staticmethod
+    def _pipeline_stage_keeps_key(stage, key):
+        """Keep every non-block key plus only this stage's ``transformer_blocks`` keys."""
+        if stage is None or not key.startswith("transformer_blocks."):
+            return True
+        return int(key.split(".")[1]) in range(stage[0], stage[1])
+
+    def _pipeline_stage_info(self):
+        """Return ``(block_start, block_end, pp_rank, pp_world_size)`` for PipeFusion, else None."""
+        if not self.config.get("pipefusion_parallel", False):
+            return None
+        from lightx2v.common.distributed import (
+            get_pipeline_parallel_rank,
+            get_pipeline_parallel_world_size,
+        )
+        from lightx2v.models.networks.minimax_h3.weights.transformer_weights import pipeline_block_range
+
+        pp_rank = get_pipeline_parallel_rank()
+        pp_world_size = get_pipeline_parallel_world_size()
+        block_range = pipeline_block_range(int(self.config.get("num_layers", 50)), pp_rank, pp_world_size)
+        return block_range.start, block_range.stop, pp_rank, pp_world_size
 
     def _init_infer_class(self):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("MiniMax-H3 feature caching is not implemented")
         self.pre_infer_class = MiniMaxH3PreInfer
-        self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
         self.post_infer_class = MiniMaxH3PostInfer
+        if self.config.get("pipefusion_parallel", False):
+            from lightx2v.models.networks.minimax_h3.infer.pipefusion.transformer_infer import (
+                MiniMaxH3PipeFusionTransformerInfer,
+            )
+
+            self.transformer_infer_class = MiniMaxH3PipeFusionTransformerInfer
+        else:
+            self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)

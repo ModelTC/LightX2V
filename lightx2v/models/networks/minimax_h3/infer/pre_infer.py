@@ -95,7 +95,6 @@ class MiniMaxH3PreInfer:
         return freqs.cos(), freqs.sin()
 
     def infer(self, weights, prompt_embeds):
-        layout = self.scheduler.layout
         bulk_dtype = GET_DTYPE()
 
         video_embeds = weights.proj_in.apply(self.scheduler.video_latents.float()).to(bulk_dtype)
@@ -103,21 +102,38 @@ class MiniMaxH3PreInfer:
         text_embeds = weights.context_embedder.apply(prompt_embeds.to(bulk_dtype))
         text_embeds = self._refine_text(weights, text_embeds)
 
-        hidden_states = text_embeds.new_zeros((layout.sequence_length, self.hidden_size))
-        hidden_states.index_copy_(0, layout.text_indices, text_embeds)
-        hidden_states.index_copy_(0, layout.audio_indices, audio_embeds)
-        hidden_states.index_copy_(0, layout.video_indices, video_embeds)
+        hidden_states = text_embeds.new_zeros((self.scheduler.layout.sequence_length, self.hidden_size))
+        hidden_states.index_copy_(0, self.scheduler.layout.text_indices, text_embeds)
+        hidden_states.index_copy_(0, self.scheduler.layout.audio_indices, audio_embeds)
+        hidden_states.index_copy_(0, self.scheduler.layout.video_indices, video_embeds)
 
         temb = None
         if not self.use_adaln_cache:
-            # ADALN CACHE SYNC: Any change to this time-MLP sequence, activation,
-            # or dtype must also be made in the offline AdaLN cache builder and
-            # followed by regenerating the cache when cached values can change.
-            temb = timestep_embedding(self.scheduler.unique_timesteps, self.freq_dim)
-            temb = weights.time_linear_2.apply(F.silu(weights.time_linear_1.apply(temb.float())))
+            # ADALN CACHE SYNC: Any change to the time-MLP sequence, activation,
+            # or dtype in compute_temb() must also be made in the offline AdaLN
+            # cache builder and followed by regenerating the cache when cached
+            # values can change.
+            temb = self.compute_temb(weights)
+        return self._metadata(hidden_states, temb)
+
+    def compute_temb(self, weights):
+        """Recompute temb locally on non-first stages.
+
+        It is a tiny function of unique_timesteps and the time-MLP weights
+        every stage holds, so sending it over P2P would waste a stream.
+        """
+        temb = timestep_embedding(self.scheduler.unique_timesteps, self.freq_dim)
+        return weights.time_linear_2.apply(F.silu(weights.time_linear_1.apply(temb.float())))
+
+    def _metadata(self, hidden_states, temb):
+        """Build packed-sequence metadata that needs no media projections.
+
+        Identical on every rank (derived from the deterministic scheduler
+        state), so pipeline stages rebuild it locally from a received stream.
+        """
+        layout = self.scheduler.layout
         timestep_indices = self.scheduler.timestep_indices
         adaln_indices = timestep_indices * 3 + layout.token_tags.clamp(min=0)
-
         return MiniMaxH3PreInferOutput(
             hidden_states=hidden_states,
             temb=temb,

@@ -14,6 +14,12 @@ Subclasses ``Flux2TransformerInfer`` to:
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.distributed import (
+    get_pipeline_runtime_state,
+    is_pipeline_first_stage,
+    is_pipeline_last_stage,
+)
+
 from ..transformer_infer import Flux2TransformerInfer
 
 
@@ -22,12 +28,6 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
 
     def __init__(self, config):
         super().__init__(config)
-        from .pipeline_state import (
-            get_pipeline_runtime_state,
-            is_pipeline_first_stage,
-            is_pipeline_last_stage,
-        )
-
         self.pipeline_state = get_pipeline_runtime_state()
         self._is_first_stage = is_pipeline_first_stage()
         self._is_last_stage = is_pipeline_last_stage()

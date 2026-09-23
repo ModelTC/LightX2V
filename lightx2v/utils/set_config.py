@@ -316,23 +316,22 @@ def build_cli_inputs(args):
 
 
 def _validate_pipefusion_config(config):
-    """Reject unsupported PipeFusion combinations instead of silently misbehaving.
+    """Reject unsupported PipeFusion combinations at config time.
 
-    PipeFusion is currently a narrow feature: Flux2 Klein, T2I only, CUDA only,
-    no CFG, and no stacking with SP / TP / feature-caching / cpu-offload. The
-    pipeline driver only implements that slice; anything else must fail loudly
-    at config time rather than run incorrectly (e.g. dropping CFG) or crash.
+    The feature is narrow (Flux2 Klein T2I and MiniMax-H3 AV on CUDA, no
+    stacking with SP / TP / CFG / caching / offload / quantization); anything
+    else must fail loudly rather than silently misbehave (e.g. dropping CFG).
     """
     model_cls = config.get("model_cls")
     is_klein = model_cls == "flux2_klein" or (model_cls == "flux2" and config.get("model_variant") == "klein")
-    if not is_klein:
+    is_h3 = model_cls == "minimax_h3"
+    if not (is_klein or is_h3):
         raise ValueError(
             "PipeFusion is only supported for the Flux2 Klein model "
-            "(model_cls='flux2_klein', or model_cls='flux2' with model_variant='klein'); "
+            "(model_cls='flux2_klein', or model_cls='flux2' with model_variant='klein') "
+            "and MiniMax-H3 (model_cls='minimax_h3'); "
             f"got model_cls={model_cls!r}, model_variant={config.get('model_variant')!r}."
         )
-    if config.get("task", "t2i") != "t2i":
-        raise ValueError(f"PipeFusion currently supports only the 't2i' task, got {config.get('task', 't2i')!r}.")
     if AI_DEVICE != "cuda":
         raise ValueError(f"PipeFusion requires CUDA, but AI_DEVICE={AI_DEVICE!r}.")
     if config.get("feature_caching", "NoCaching") not in ("NoCaching", "None"):
@@ -343,12 +342,27 @@ def _validate_pipefusion_config(config):
         raise ValueError("PipeFusion does not support unload_modules / lazy_load.")
     if config.get("fls", {}).get("enable", False):
         raise ValueError("PipeFusion cannot be combined with FLS enhancement (fls.enable).")
-    if config.get("enable_cfg", False) and config.get("sample_guide_scale", 1.0) > 1.0:
-        raise ValueError("PipeFusion does not support CFG; set sample_guide_scale <= 1.0 or enable_cfg=False.")
     if config["parallel"].get("seq_p_size", 1) > 1:
         raise ValueError("PipeFusion cannot be combined with sequence parallel (seq_p_size > 1).")
     if config["parallel"].get("cfg_p_size", 1) > 1:
         raise ValueError("PipeFusion cannot be combined with CFG parallel (cfg_p_size > 1).")
+
+    if is_klein:
+        if config.get("task", "t2i") != "t2i":
+            raise ValueError(f"PipeFusion currently supports only the 't2i' task, got {config.get('task', 't2i')!r}.")
+        if config.get("enable_cfg", False) and config.get("sample_guide_scale", 1.0) > 1.0:
+            raise ValueError("PipeFusion does not support CFG; set sample_guide_scale <= 1.0 or enable_cfg=False.")
+    else:
+        if config.get("model_variant", "fl2av") != "fl2av":
+            raise ValueError(f"PipeFusion for MiniMax-H3 requires model_variant='fl2av' (base transformer); ref2av is not supported, got {config.get('model_variant')!r}.")
+        if config.get("dit_quantized", False):
+            raise ValueError("PipeFusion for MiniMax-H3 does not support dit_quantized.")
+        if config.get("use_compile", False):
+            raise ValueError("PipeFusion for MiniMax-H3 does not support use_compile.")
+        if config.get("shared_cpu_weights", False):
+            raise ValueError("PipeFusion for MiniMax-H3 does not support shared_cpu_weights.")
+        if config.get("vae_decode_parallel", False) or config.get("vae_encode_parallel", False):
+            raise ValueError("PipeFusion for MiniMax-H3 does not support vae_decode_parallel / vae_encode_parallel.")
 
     num_patch = int(config["parallel"].get("num_pipeline_patch", 4))
     if num_patch <= 0:
@@ -393,7 +407,7 @@ def init_parallel(config):
         config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
         config["pipefusion_parallel"] = True
         _validate_pipefusion_config(config)
-        from lightx2v.models.networks.flux2.infer.pipefusion import init_pipeline_parallel_state
+        from lightx2v.common.distributed import init_pipeline_parallel_state
 
         pp_group = config["device_mesh"].get_group(mesh_dim="pp")
         init_pipeline_parallel_state(pp_group)
