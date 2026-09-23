@@ -13,14 +13,16 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
+from safetensors import safe_open
 from safetensors.torch import load_file
 
+from lightx2v.models.video_encoders.hf.qwen_image_21.fp8_conv import FP8_DECODER_PROFILE, FP8_DECODER_PROFILE_KEY, FP8Conv2d, is_fp8_decoder_conv
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import AvgDown3D, DupUp3D
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-class ImageConv(nn.Conv2d):
+class ImageConv(FP8Conv2d):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.image_padding = (self.padding[1], self.padding[1], self.padding[0], self.padding[0])
@@ -89,9 +91,9 @@ class Resample(nn.Module):
     def __init__(self, dim, up, temporal):
         super().__init__()
         if up:
-            self.resample = nn.Sequential(Upsample(), nn.Conv2d(dim, dim, 3, padding=1))
+            self.resample = nn.Sequential(Upsample(), FP8Conv2d(dim, dim, 3, padding=1))
         else:
-            self.resample = nn.Sequential(nn.ZeroPad2d((0, 1, 0, 1)), nn.Conv2d(dim, dim, 3, stride=2))
+            self.resample = nn.Sequential(nn.ZeroPad2d((0, 1, 0, 1)), FP8Conv2d(dim, dim, 3, stride=2))
         if temporal:
             self.time_conv = ImageConv(dim, dim * 2 if up else dim, 1)
 
@@ -217,13 +219,26 @@ class QwenImage21VAE(nn.Module):
             self.decoder = Decoder(cfg)
             self.quant_conv = ImageConv(cfg["z_dim"] * 2, cfg["z_dim"] * 2, 1)
             self.post_quant_conv = ImageConv(cfg["z_dim"], cfg["z_dim"], 1)
-        state = {}
-        for shard in sorted(path.glob("*.safetensors")):
-            state.update(load_file(shard))
+        conv_mode = config.get("vae_decoder_conv_mode", "torch")
+        if conv_mode not in ("torch", "cutlass_fp8_f16_accum"):
+            raise ValueError(f"Unsupported vae_decoder_conv_mode: {conv_mode!r}")
+        quantized_ckpt = config.get("vae_quantized_ckpt")
+        if (conv_mode != "torch") != bool(quantized_ckpt):
+            raise ValueError("FP8 VAE requires both vae_decoder_conv_mode='cutlass_fp8_f16_accum' and vae_quantized_ckpt")
+        if quantized_ckpt:
+            state = self._load_fp8_state(quantized_ckpt)
+        else:
+            state = {}
+            for shard in sorted(path.glob("*.safetensors")):
+                state.update(load_file(shard))
         self.load_state_dict(state, strict=True, assign=True)
-        self.register_buffer("latents_mean", torch.tensor(cfg["latents_mean"]).reshape(1, -1, 1, 1, 1), persistent=False)
-        self.register_buffer("latents_std", torch.tensor(cfg["latents_std"]).reshape(1, -1, 1, 1, 1), persistent=False)
-        self.to(dtype=GET_DTYPE(), device=AI_DEVICE)
+        self.register_buffer("latents_mean", torch.tensor(cfg["latents_mean"]).to(GET_DTYPE()).reshape(1, -1, 1, 1, 1), persistent=False)
+        self.register_buffer("latents_std", torch.tensor(cfg["latents_std"]).to(GET_DTYPE()).reshape(1, -1, 1, 1, 1), persistent=False)
+        # FP8 weights and FP32 scales must retain their checkpoint dtypes.
+        if quantized_ckpt:
+            self.to(device=AI_DEVICE)
+        else:
+            self.to(dtype=GET_DTYPE(), device=AI_DEVICE)
         self.eval().requires_grad_(False)
         if config.get("vae_use_compile", False):
             logger.info("[Compile] Using torch.compile for Qwen-Image-2.1 VAE")
@@ -233,6 +248,33 @@ class QwenImage21VAE(nn.Module):
             self.encoder.forward_mid = torch.compile(self.encoder.forward_mid, dynamic=None)
             self.decoder.forward_mid = torch.compile(self.decoder.forward_mid, dynamic=None)
             self.decoder.forward_up = torch.compile(self.decoder.forward_up, dynamic=None)
+
+    def _load_fp8_state(self, checkpoint_path):
+        with safe_open(checkpoint_path, framework="pt", device="cpu") as checkpoint:
+            if (checkpoint.metadata() or {}).get(FP8_DECODER_PROFILE_KEY) != FP8_DECODER_PROFILE:
+                raise ValueError("VAE checkpoint does not have the mixed FP8-F16 qmax21 decoder profile")
+            state = {key: checkpoint.get_tensor(key) for key in checkpoint.keys()}
+        fp8_weights = set()
+        scales = set()
+        for name, module in self.named_modules():
+            if not isinstance(module, FP8Conv2d) or not is_fp8_decoder_conv(name, module.weight.shape):
+                continue
+            weight_name, scale_name = f"{name}.weight", f"{name}.weight_scale"
+            weight, scale = state[weight_name], state[scale_name]
+            if weight.dtype != torch.float8_e4m3fn or scale.dtype != torch.float32 or scale.ndim != 0 or not torch.isfinite(scale) or scale <= 0:
+                raise ValueError(f"Invalid FP8 VAE weight/scale: {name}")
+            state[weight_name] = weight.contiguous(memory_format=torch.channels_last)
+            module.register_buffer("weight_scale", torch.empty((), device="meta", dtype=torch.float32))
+            fp8_weights.add(weight_name)
+            scales.add(scale_name)
+        if len(fp8_weights) != 32:
+            raise ValueError("The mixed FP8 decoder profile requires the released Qwen-Image-2.1 VAE architecture")
+        for key, tensor in state.items():
+            if key not in fp8_weights | scales:
+                if tensor.dtype not in (torch.float32, torch.bfloat16, torch.float16):
+                    raise ValueError(f"Expected an unquantized VAE tensor: {key}")
+                state[key] = tensor.to(GET_DTYPE())
+        return state
 
     @torch.inference_mode()
     def encode(self, image):

@@ -123,6 +123,8 @@ These measurements use `post_mid` VAE decoding and precede VAE encoder paralleli
 
 The single-GPU QwenVL FP8 and dual-GPU 2K SP2 configs above include `vae_use_compile: true`. The 2K I2I SP2 config also enables `vae_encode_parallel: true`, gathering spatial encoder features before global attention. VAE compilation supports encoder spatial parallelism and both `full` and `post_mid` decoder modes. New input shapes can incur compilation time, and numerical rounding changes can affect generated details.
 
+For memory-constrained workloads, an optional mixed FP8 VAE decoder is available on SM120 / RTX 5090. The [2K T2I](qwen_image_21_t2i_fp8_f16_accum_5090_2k_vae_fp8.sh) and [2K I2I](qwen_image_21_i2i_fp8_f16_accum_5090_2k_vae_fp8.sh) examples combine it with VAE compilation, trading some decode latency for lower memory use. The encoder, attention, and selected high-resolution convolutions retain their original precision. See the [converter docstring](../../tools/convert/qwen_image_21_vae_decoder.py) for the conversion command. Quantization can affect image details; review output quality manually.
+
 ## 4. Service Deployment and API Usage
 
 Set the repository path, model path, and GPU ID in `server/start_server.sh`, then start the server:

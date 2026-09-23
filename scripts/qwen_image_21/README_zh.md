@@ -123,6 +123,8 @@ SP2 配置默认使用 `vae_decode_parallel_mode: full`。将其设为 `post_mid
 
 上述单卡 QwenVL FP8 和双卡 2K SP2 配置已叠加 `vae_use_compile: true`；2K I2I SP2 配置还启用了 `vae_encode_parallel: true`，在全局 attention 前重组各卡编码特征。VAE 编译支持 encoder 空间并行及 decoder 的 `full` / `post_mid` 两种模式。首次遇到新输入形状可能产生编译开销，数值舍入变化也可能影响生成细节。
 
+显存受限时，可选用混合 FP8 VAE decoder（当前后端为 SM120 / RTX 5090）。[2K T2I](qwen_image_21_t2i_fp8_f16_accum_5090_2k_vae_fp8.sh) 和 [2K I2I](qwen_image_21_i2i_fp8_f16_accum_5090_2k_vae_fp8.sh) 示例配合 VAE 编译，以少量解码耗时换取显存节省；encoder、attention 和部分高分辨率卷积保持原精度。模型转换命令见[转换器注释](../../tools/convert/qwen_image_21_vae_decoder.py)。量化会引入细节差异，需人工复核画质。
+
 ## 4. 服务化部署与 API 调用
 
 先修改 `server/start_server.sh` 中的仓库路径、模型路径和 GPU 编号，然后启动：

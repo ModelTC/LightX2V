@@ -289,6 +289,8 @@ class QwenImage21Runner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
+        # Denoising is complete; the VAE no longer needs the condition KV cache.
+        self.model.clear_condition_kv()
         return self.vae.decode(latents, self.input_info.size)
 
     def process_images_after_vae_decoder(self, value):

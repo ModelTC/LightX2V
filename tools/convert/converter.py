@@ -42,6 +42,7 @@ from tools.convert.h3_video_vae_encoder import (  # noqa: E402
     FP8_ENCODER_CONV_MODES,
     convert_h3_video_vae_encoder_fp8,
 )
+from tools.convert.qwen_image_21_vae_decoder import convert_qwen_image_21_vae_decoder_fp8  # noqa: E402
 
 dtype_mapping = {
     "int8": torch.int8,
@@ -741,6 +742,9 @@ def convert_weights(args):
     if args.model_type == "qwen_image_21_text_encoder":
         convert_qwen_image_21_text_encoder_fp8(args)
         return
+    if args.model_type == "qwen_image_21_vae_decoder":
+        convert_qwen_image_21_vae_decoder_fp8(args)
+        return
     if args.model_type == "h3_video_vae_encoder":
         convert_h3_video_vae_encoder_fp8(args)
         return
@@ -1061,6 +1065,7 @@ def main():
             "h3",
             "h3_video_vae_decoder",
             "h3_video_vae_encoder",
+            "qwen_image_21_vae_decoder",
             "h3_text_encoder",
             "qwen_image_21_text_encoder",
             "hunyuan_dit",
@@ -1179,7 +1184,7 @@ def main():
             return None
         return [x.strip() for x in v.split(",") if x.strip()]
 
-    if args.quantized and args.model_type not in {"h3_text_encoder", "qwen_image_21_text_encoder", "h3_video_vae_encoder"}:
+    if args.quantized and args.model_type not in {"h3_text_encoder", "qwen_image_21_text_encoder", "h3_video_vae_encoder", "qwen_image_21_vae_decoder"}:
         args.linear_dtype = dtype_mapping.get(args.linear_type, None)
         args.non_linear_dtype = eval(args.non_linear_dtype)
 
