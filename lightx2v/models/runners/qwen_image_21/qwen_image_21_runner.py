@@ -42,7 +42,6 @@ class QwenImage21Runner(DefaultRunner):
             "vae_cpu_offload",
             "lazy_load",
             "unload_modules",
-            "shared_cpu_weights",
             "cfg_parallel",
             "pipefusion_parallel",
             "disagg_mode",

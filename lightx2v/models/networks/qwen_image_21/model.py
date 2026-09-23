@@ -38,6 +38,20 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         self._init_infer()
         self.kv_cache_manager = None
 
+    def _load_shared_cpu_weights(self, unified_dtype, sensitive_layer):
+        from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
+
+        from .shared_block_weights import QwenImage21SharedBlockAdapter
+
+        error = None
+        try:
+            adapter = QwenImage21SharedBlockAdapter(self, unified_dtype, sensitive_layer)
+            private = adapter.load_private_weights()
+        except Exception as exc:
+            error = exc
+        coordinate_rank_local_error("Qwen-Image-2.1 checkpoint preflight", error)
+        return adapter.materialize(private)
+
     def _validate_tensor_parallel_config(self):
         if not self.use_tp:
             return
