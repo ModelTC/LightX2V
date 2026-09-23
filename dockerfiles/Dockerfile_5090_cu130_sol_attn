@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=registry.cn-sh-01.sensecore.cn/devsft-ccr-2/lightx2v:26062001-cu130-5090
+ARG BASE_IMAGE=lightx2v/lightx2v:26062001-cu130-5090-fix-260921
 FROM ${BASE_IMAGE} AS base
 
 ARG SOL_ATTN_REF=71350faed59a6865173ddfd5a7d4471da4bde328
