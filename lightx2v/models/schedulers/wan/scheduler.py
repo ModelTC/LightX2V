@@ -225,6 +225,7 @@ class WanScheduler(BaseScheduler):
 
         h = lambda_t - lambda_s0
         device = sample.device
+        coefficient_device = "cpu" if AI_DEVICE == "npu" else device
 
         rks = []
         D1s = []
@@ -238,7 +239,7 @@ class WanScheduler(BaseScheduler):
             D1s.append((mi - m0) / rk)
 
         rks.append(1.0)
-        rks = torch.tensor(rks, device=device)
+        rks = torch.tensor(rks, device=coefficient_device)
 
         R = []
         b = []
@@ -258,7 +259,7 @@ class WanScheduler(BaseScheduler):
             h_phi_k = h_phi_k / hh - 1 / factorial_i
 
         R = torch.stack(R)
-        b = torch.tensor(b, device=device)
+        b = torch.tensor(b, device=coefficient_device)
 
         if len(D1s) > 0:
             D1s = torch.stack(D1s, dim=1)  # (B, K)
@@ -324,6 +325,8 @@ class WanScheduler(BaseScheduler):
 
         h = lambda_t - lambda_s0
         device = this_sample.device
+        # Ascend has no linalg.solve kernel. Keep the tiny coefficient system on CPU.
+        coefficient_device = "cpu" if AI_DEVICE == "npu" else device
 
         rks = []
         D1s = []
@@ -337,7 +340,7 @@ class WanScheduler(BaseScheduler):
             D1s.append((mi - m0) / rk)
 
         rks.append(1.0)
-        rks = torch.tensor(rks, device=device)
+        rks = torch.tensor(rks, device=coefficient_device)
 
         R = []
         b = []
@@ -357,7 +360,7 @@ class WanScheduler(BaseScheduler):
             h_phi_k = h_phi_k / hh - 1 / factorial_i
 
         R = torch.stack(R)
-        b = torch.tensor(b, device=device)
+        b = torch.tensor(b, device=coefficient_device)
 
         if len(D1s) > 0:
             D1s = torch.stack(D1s, dim=1)

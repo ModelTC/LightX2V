@@ -4,6 +4,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -96,17 +97,9 @@ def metadata_for_blocks(blocks, contiguous):
 
 
 def profile_copies(callback, output, device):
-    if device.type == "npu":
-        import torch_npu
+    from scripts.wan.layout.diagnostics import device_profiler
 
-        profiler = torch_npu.profiler
-        activities = [profiler.ProfilerActivity.CPU, profiler.ProfilerActivity.NPU]
-        options = {"experimental_config": profiler._ExperimentalConfig(profiler_level=profiler.ProfilerLevel.Level1)}
-    else:
-        profiler = torch.profiler
-        activities = [profiler.ProfilerActivity.CPU, profiler.ProfilerActivity.CUDA]
-        options = {}
-    with profiler.profile(activities=activities, on_trace_ready=profiler.tensorboard_trace_handler(str(output)), **options):
+    with device_profiler(output, device):
         callback()
         getattr(torch, device.type).synchronize()
 
@@ -273,6 +266,8 @@ def run_infer(args, output, device, module):
         validate_npu_checkpoint(config.get("dit_quantized_ckpt") if config.get("dit_quantized") else config.get("dit_original_ckpt") or args.model_path, scheme)
     if not config.get("cpu_offload") or config.get("offload_granularity") != "block" or config.get("lazy_load") or config.get("unload_modules") or config.get("parallel"):
         raise ValueError("Benchmark requires persistent, single-device CPU block offload")
+    if args.mode == "diagnose" and not 3 <= args.steps <= config["infer_steps"]:
+        raise ValueError("diagnose requires 3 <= --steps <= configured infer_steps")
     validate_config_paths(config)
     write_json(output / "config.json", config)
     module.synchronize()
@@ -287,6 +282,15 @@ def run_infer(args, output, device, module):
     host_versions = [(tensor.data_ptr(), tensor._version) for tensor in host_tensors]
     write_json(output / "blocks.json", metadata)
     request = {"task": "i2v", "seed": args.seed, "prompt": args.prompt, "negative_prompt": args.negative_prompt, "image_path": args.image_path}
+    if args.mode == "diagnose":
+        from scripts.wan.layout.diagnostics import run_diagnosis
+
+        result, rows = run_diagnosis(runner, request, metadata, args, output, device, module)
+        result["step_wall_s"] = stats(result["step_wall_s"])
+        result.update(initialization_s=initialization_s, precision=scheme)
+        if host_versions != [(tensor.data_ptr(), tensor._version) for tensor in host_tensors]:
+            raise AssertionError("CPU weights changed during diagnostics")
+        return result, rows
     denoise_times, retained_latents = [], []
     original = runner.run_segment
 
@@ -312,12 +316,15 @@ def run_infer(args, output, device, module):
         return perf_counter() - start, sum(denoise_times)
 
     for _ in range(args.warmup):
+        print(f"[{args.variant}][warmup] request {_ + 1}/{args.warmup}", flush=True)
         request_once()
     requests, denoises = [], []
     for _ in range(args.repeats):
+        print(f"[{args.variant}][measure] request {_ + 1}/{args.repeats}", flush=True)
         request_s, denoise_s = request_once()
         requests.append(request_s)
         denoises.append(denoise_s)
+        write_json(output / "measurements.json", {"request_s": requests, "denoise_s": denoises})
     # Saving and comparing latents is outside all measured intervals.
     latent = retained_latents[0].detach().cpu()
     torch.save(latent, output / "latents.pt")
@@ -325,7 +332,13 @@ def run_infer(args, output, device, module):
     timer = TransferTimer(module, metadata, args.samples)
     manager.transfer_timer = timer
     try:
-        request_once()
+        from scripts.wan.layout.diagnostics import run_prefix
+
+        calls_per_step = len(blocks) * (2 if config["enable_cfg"] else 1)
+        sample_steps = min(runner.model.scheduler.infer_steps, math.ceil(args.samples / calls_per_step))
+        print(f"[{args.variant}][sample] {sample_steps} steps, at most {args.samples} block loads", flush=True)
+        run_prefix(runner, request, sample_steps)
+        module.synchronize()
     finally:
         manager.transfer_timer = None
     rows = timer.collect()
@@ -352,7 +365,7 @@ def run_infer(args, output, device, module):
 def main():
     sys.path.insert(0, str(ROOT))
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("copy", "infer"))
+    parser.add_argument("mode", choices=("copy", "infer", "diagnose"))
     parser.add_argument("--checkpoint", help="Wan block safetensors file/directory, required for copy")
     parser.add_argument("--model-path", help="Full Wan2.1 I2V model directory, required for infer")
     parser.add_argument("--baseline-config", default=str(ROOT / "configs/wan/layout/baseline_npu.json"))
@@ -363,15 +376,18 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--repeats", type=int, default=3)
-    parser.add_argument("--samples", type=int, default=160, help="Maximum block loads sampled in a separate inference request")
+    parser.add_argument("--samples", type=int, default=160, help="Maximum block loads sampled in a separate short inference prefix")
     parser.add_argument("--profile", action="store_true", help="Export a separate device-profiler copy trace")
+    parser.add_argument("--steps", type=int, default=4, help="diagnose only: execute this prefix of the unchanged timestep grid; first step warms up, last step is profiled")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--variant", choices=("baseline", "solution2"), help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.repeats < 1 or args.warmup < 0 or args.samples < 1:
         parser.error("repeats/samples must be positive and warmup must be nonnegative")
+    if args.mode == "diagnose" and args.steps < 3:
+        parser.error("diagnose needs at least 3 steps: warmup, unprofiled sampling, and profiling")
     if not (args.checkpoint if args.mode == "copy" else args.model_path):
-        parser.error("copy requires --checkpoint; infer requires --model-path")
+        parser.error("copy requires --checkpoint; infer/diagnose require --model-path")
     os.environ["PROFILING_DEBUG_LEVEL"] = "0"
     os.environ.setdefault("DTYPE", "BF16")
     os.environ.setdefault("SENSITIVE_LAYER_DTYPE", "None")
@@ -393,8 +409,8 @@ def main():
                 "device_name": module.get_device_name(device),
                 "torch": torch.__version__,
                 "compute_dtype": os.environ["DTYPE"],
-                "warmup": args.warmup,
-                "repeats": args.repeats,
+                "warmup": 1 if args.mode == "diagnose" else args.warmup,
+                "repeats": None if args.mode == "diagnose" else args.repeats,
                 "sampled_load_stream_ms": sum(row["load_stream_ms"] for row in rows),
                 "sampled_blocks": len(rows),
                 "dma_ms": None,
@@ -413,7 +429,7 @@ def main():
         write_csv(output / "transfers.csv", rows)
         return
 
-    if args.mode == "infer":
+    if args.mode != "copy":
         baseline = json.loads(Path(args.baseline_config).read_text())
         solution = json.loads(Path(args.solution2_config).read_text())
         if baseline.pop("cpu_offload_layout", "per_tensor") != "per_tensor" or solution.pop("cpu_offload_layout", None) != "contiguous" or baseline != solution:
@@ -443,9 +459,9 @@ def main():
             raise RuntimeError(f"{variant} failed; see {args.output / (variant + '.log')}")
         results.append(json.loads((args.output / variant / "result.json").read_text()))
     summary = {"results": results, "dma_note": "load_stream_ms includes submission gaps and any D2D; pure DMA durations require the optional profiler trace"}
-    metric = "denoise_s" if args.mode == "infer" else "traversal_s"
+    metric = {"infer": "denoise_s", "copy": "traversal_s", "diagnose": "step_wall_s"}[args.mode]
     summary["speedup"] = results[0][metric]["median"] / results[1][metric]["median"]
-    if args.mode == "infer":
+    if args.mode != "copy":
         a = torch.load(args.output / "baseline/latents.pt", weights_only=True)
         b = torch.load(args.output / "solution2/latents.pt", weights_only=True)
         summary["latents_equal"] = torch.equal(a, b)
@@ -469,7 +485,7 @@ def main():
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     print(f"Results: {args.output}")
-    if args.mode == "infer" and not summary["latents_close"]:
+    if args.mode != "copy" and not summary["latents_close"]:
         raise AssertionError("Baseline and solution2 latents differ beyond rtol=atol=0.01; inspect summary.json")
 
 
