@@ -147,11 +147,30 @@ class Encoder(nn.Module):
         self.norm_out = ImageRMSNorm(dims[-1])
         self.conv_out = ImageConv(dims[-1], config["z_dim"] * 2, 3, padding=1)
 
-    def forward(self, x):
+    def spatial_halo(self):
+        # Conv-in and residual convolutions pad symmetrically; downsamplers
+        # pad only on the right/bottom, so their receptive field is asymmetric.
+        left = right = 1
+        stride = 1
+        for block in self.down_blocks:
+            left += 2 * len(block.resnets) * stride
+            right += 2 * len(block.resnets) * stride
+            if block.downsampler is not None:
+                right += 2 * stride
+                stride *= 2
+        return (max(left, right) + stride - 1) // stride * stride
+
+    def forward_down(self, x):
         x = self.conv_in(x)
         for block in self.down_blocks:
             x = block(x)
+        return x
+
+    def forward_mid(self, x):
         return self.conv_out(F.silu(self.norm_out(self.mid_block(x))))
+
+    def forward(self, x):
+        return self.forward_mid(self.forward_down(x))
 
 
 class Decoder(nn.Module):
@@ -179,6 +198,7 @@ class QwenImage21VAE(nn.Module):
     def __init__(self, config):
         super().__init__()
         path = Path(config["model_path"]) / "vae"
+        self.vae_encode_parallel = config.get("vae_encode_parallel", False)
         self.vae_decode_parallel = config.get("vae_decode_parallel", False)
         self.vae_decode_parallel_mode = config.get("vae_decode_parallel_mode", "full")
         if self.vae_decode_parallel_mode not in ("post_mid", "full"):
@@ -204,8 +224,38 @@ class QwenImage21VAE(nn.Module):
 
     @torch.inference_mode()
     def encode(self, image):
-        mean = self.quant_conv(self.encoder(image.to(device=AI_DEVICE, dtype=GET_DTYPE()))).chunk(2, dim=1)[0]
+        image = image.to(device=AI_DEVICE, dtype=GET_DTYPE())
+        use_parallel = self.vae_encode_parallel and dist.is_initialized() and dist.get_world_size() > 1
+        moments = self._encode_dist(image) if use_parallel else self.encoder(image)
+        mean = self.quant_conv(moments).chunk(2, dim=1)[0]
         return ((mean - self.latents_mean) / self.latents_std).flatten(2).transpose(1, 2)
+
+    def _encode_dist(self, image):
+        """Shard local convolutions, then restore the full global attention input."""
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        ratio = self.scale_factor
+        height, width = image.shape[-2:]
+        if height % ratio or width % ratio:
+            raise ValueError(f"Parallel VAE encode requires image dimensions divisible by {ratio}")
+        grid_h, grid_w = self._get_2d_grid(height // ratio, width // ratio, world_size)
+        row, column = divmod(rank, grid_w)
+        chunk_h, chunk_w = height // grid_h, width // grid_w
+        halo = self.encoder.spatial_halo()
+        top, left = row * chunk_h, column * chunk_w
+        begin_h, begin_w = max(0, top - halo), max(0, left - halo)
+        end_h, end_w = min(height, top + chunk_h + halo), min(width, left + chunk_w + halo)
+        # Preserve the input's NHWC strides and the ordinary convolution path.
+        features = self.encoder.forward_down(image[..., begin_h:end_h, begin_w:end_w])
+        offset_h, offset_w = (top - begin_h) // ratio, (left - begin_w) // ratio
+        piece = features[..., offset_h : offset_h + chunk_h // ratio, offset_w : offset_w + chunk_w // ratio].contiguous()
+        pieces = [torch.empty_like(piece) for _ in range(world_size)]
+        dist.all_gather(pieces, piece)
+        rows = [torch.cat(pieces[i * grid_w : (i + 1) * grid_w], dim=-1) for i in range(grid_h)]
+        full = torch.cat(rows, dim=-2)
+        if features.is_contiguous(memory_format=torch.channels_last_3d):
+            full = full.contiguous(memory_format=torch.channels_last_3d)
+        return self.encoder.forward_mid(full)
 
     @staticmethod
     def _get_2d_grid(total_h, total_w, world_size):
