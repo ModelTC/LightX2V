@@ -100,3 +100,16 @@ python scripts/swiftvr/server/post_image.py
 # Video super-resolution
 python scripts/swiftvr/server/post_video.py
 ```
+
+## 📜 Citation
+
+If you use SwiftVR in your research, please cite the [SwiftVR paper](https://arxiv.org/abs/2606.09516):
+
+```bibtex
+@article{yan2026swiftvr,
+  title={SwiftVR: Real-Time One-Step Generative Video Restoration},
+  author={Yan, Jiaqi and Chen, Xiangyu and Zhong, Xinlin and Huang, Haibin and Zhang, Chi and Liu, Jie and Zhou, Jiantao and Li, Xuelong},
+  journal={arXiv preprint arXiv:2606.09516},
+  year={2026}
+}
+```

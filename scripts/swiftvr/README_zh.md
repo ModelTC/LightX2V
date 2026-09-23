@@ -100,3 +100,16 @@ python scripts/swiftvr/server/post_image.py
 # 视频超分
 python scripts/swiftvr/server/post_video.py
 ```
+
+## 📜 引用
+
+如果你在研究中使用 SwiftVR，请引用 [SwiftVR 论文](https://arxiv.org/abs/2606.09516)：
+
+```bibtex
+@article{yan2026swiftvr,
+  title={SwiftVR: Real-Time One-Step Generative Video Restoration},
+  author={Yan, Jiaqi and Chen, Xiangyu and Zhong, Xinlin and Huang, Haibin and Zhang, Chi and Liu, Jie and Zhou, Jiantao and Li, Xuelong},
+  journal={arXiv preprint arXiv:2606.09516},
+  year={2026}
+}
+```
