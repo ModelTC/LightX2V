@@ -12,7 +12,7 @@ def parse_args():
     )
     parser.add_argument("--model_path", required=True, help="MiniMax-H3 model root")
     parser.add_argument("--config_json", required=True, help="Inference JSON config")
-    parser.add_argument("--model_cls", choices=("minimax_h3", "minimax_h3_causal"), default="minimax_h3")
+    parser.add_argument("--model_cls", choices=("minimax_h3", "minimax_h3_causal", "minimax_h3_world"), default="minimax_h3")
     parser.add_argument(
         "--model-variant",
         choices=("fl2av", "ref2av"),

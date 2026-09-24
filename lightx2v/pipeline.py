@@ -81,7 +81,7 @@ class LightX2VPipeline:
             self.startup_config.update(num_channels_latents=128, audio_mel_bins=16)
         elif model_cls == "cosmos3":
             self.startup_config.update(vae_stride=(4, 16, 16), num_channels_latents=48)
-        elif model_cls in ("minimax_h3", "minimax_h3_causal"):
+        elif model_cls in ("minimax_h3", "minimax_h3_causal", "minimax_h3_world"):
             self.startup_config.update(
                 vae_spatial_scale_factor=16,
                 vae_scale_factor=16,
@@ -219,9 +219,9 @@ class LightX2VPipeline:
             config["num_frames"] = None
         if self.model_cls.startswith("wan"):
             config.update(self_attn_1_type=attn_mode, cross_attn_1_type=attn_mode, cross_attn_2_type=attn_mode)
-        elif self.model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3", "minimax_h3_causal"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3", "minimax_h3_causal", "minimax_h3_world"]:
             config["attn_type"] = attn_mode
-            if self.model_cls in ("minimax_h3", "minimax_h3_causal"):
+            if self.model_cls in ("minimax_h3", "minimax_h3_causal", "minimax_h3_world"):
                 config.update(
                     video_flow_shift=sample_shift,
                     audio_sampling_rate=32000,
@@ -335,7 +335,7 @@ class LightX2VPipeline:
             self.startup_config["gemma_cpu_offload"] = text_encoder_offload
         elif self.model_cls == "z_image":
             self.startup_config["qwen3_cpu_offload"] = text_encoder_offload
-        elif self.model_cls in ("minimax_h3", "minimax_h3_causal"):
+        elif self.model_cls in ("minimax_h3", "minimax_h3_causal", "minimax_h3_world"):
             self.startup_config["text_encoder_cpu_offload"] = text_encoder_offload
 
     def enable_lora(self, lora_configs, lora_dynamic_apply=False):

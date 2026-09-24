@@ -62,13 +62,18 @@ def _timesteps_from_bits(bits: list[int], device="cpu") -> torch.Tensor:
 
 
 def _cache_entries(config, profiles: list[str]) -> list[dict]:
+    make_schedule = _make_schedule
+    if config["model_cls"] == "minimax_h3_world":
+        from lightx2v.models.schedulers.minimax_h3_world.scheduler import _make_world_schedule
+
+        make_schedule = _make_world_schedule
     infer_steps = int(config["infer_steps"])
-    _, video_timesteps = _make_schedule(
+    _, video_timesteps = make_schedule(
         infer_steps,
         float(config.get("video_flow_shift", 12.0)),
         "cpu",
     )
-    _, audio_timesteps = _make_schedule(
+    _, audio_timesteps = make_schedule(
         infer_steps,
         float(config.get("audio_flow_shift", 3.0)),
         "cpu",

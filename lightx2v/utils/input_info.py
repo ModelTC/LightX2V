@@ -293,6 +293,11 @@ class I2AVInputInfo(InputInfo):
 
 
 @dataclass
+class IA2AVInputInfo(I2AVInputInfo):
+    """H3-World request; keyboard actions come from config world_segments."""
+
+
+@dataclass
 class L2AVInputInfo(T2AVInputInfo):
     last_frame_path: str = ""
 
@@ -466,6 +471,7 @@ INPUT_INFO_TYPES = {
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,
+    "ia2av": IA2AVInputInfo,
     "l2av": L2AVInputInfo,
     "fl2av": FL2AVInputInfo,
     "ref2av": Ref2AVInputInfo,
