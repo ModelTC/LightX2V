@@ -95,6 +95,49 @@ The RTX 5090 config retains the applicable general optimizations and uses:
 
 Both tasks were measured on the current code with 40 steps, seed 42, CFG disabled, and the median latency of three consecutive requests. I2I uses one 1024×1024 reference image and produces a 1024×1024 image. End-to-end latency covers input encoding, condition-KV prefill, denoising, VAE decoding, post-processing, and PNG saving; it excludes model loading and one-time runner initialization.
 
+### 3.3 AMD ROCm GPUs (Radeon AI PRO R9700 / Radeon PRO W7900)
+
+The 5090 stack above (FlashAttention3, FlashInfer RoPE, CUTLASS FP8, SageAttention2 CUDA kernels) is CUDA-only. The configs below run Qwen-Image-2.1 on AMD RDNA GPUs with a torch-op inference path (`torch_sdpa`, `torch_real_rope`, torch LayerNorm/modulation) plus ROCm-friendly quantization, `torch.compile`, and SageAttention2. They quantize the **released BF16 weights on load** — no `tools/convert` step and no `dit_quantized_ckpt`.
+
+Validated in the `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0` image (PyTorch 2.10, Triton 3.6) with the `transformers` 4.57.x line (`Qwen3VLProcessor` needs a recent release; pin to a version you have tested rather than only a lower bound). Install the runtime deps not baked into that image:
+
+```bash
+pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf einops \
+    qtorch langdetect tqdm imageio imageio-ffmpeg opencv-python-headless comfy-kitchen \
+    peft gguf prometheus_client fastapi uvicorn pydantic aiohttp pyzmq python-multipart \
+    PyJWT jsonschema sageattention
+```
+
+Run through the platform scripts under `scripts/platforms/amd_rocm/`, which `export PLATFORM=amd_rocm` and source the common env. This activates the AMD ROCm platform backend under `lightx2v_platform/` (registers the ROCm FP8/INT8 GEMM and applies the SageAttention Triton workaround). A single GPU is enough — the text encoder is CPU-offloaded, and no `aiter` build is required.
+
+Set `lightx2v_path` and `model_path` at the top of the script, then run:
+
+```bash
+# R9700 (FP8)
+bash scripts/platforms/amd_rocm/qwen_image_21_r9700_t2i.sh
+# W7900 (INT8)
+bash scripts/platforms/amd_rocm/qwen_image_21_w7900_t2i.sh
+```
+
+Each script selects the fastest config for that GPU; edit `--config_json` in the script to pick another. Per-GPU config (all under `configs/platforms/amd_rocm/`):
+
+| GPU (arch) | Config | Contents |
+| --- | --- | --- |
+| R9700 (gfx1201 / RDNA4) | `qwen_image_21_r9700_fp8.json` | FP8 (`torch._scaled_mm`) + `torch.compile` + SageAttention2 |
+| W7900 (gfx1100 / RDNA3) | `qwen_image_21_w7900_int8.json` | INT8 (`torch._int_mm`) + `torch.compile` + SageAttention2 |
+| either | `qwen_image_21_bf16.json` | BF16 eager baseline |
+
+The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered by the AMD ROCm platform ops in `lightx2v_platform/ops/mm/amd_rocm/`: per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. The VAE runs native convolution — the AMD ROCm platform disables cuDNN/MIOpen, which sidesteps the nondeterministic-NaN convolution path observed on gfx1201. The SageAttention/Inductor Triton `num_stages` workaround (needed on gfx1201 / gfx1100) is installed automatically, and only when a SageAttention2 backend is actually constructed; set `LIGHTX2V_ROCM_TRITON_MAX_STAGES=0` to disable it (e.g. once Triton fixes the pipeliner bug). To trade a little quality for speed, lower `infer_steps` (e.g. 25) in the config or pass `--infer_steps 25`.
+
+| GPU | Quant | Steps | End-to-end |
+| --- | --- | ---: | ---: |
+| R9700 | FP8 | 40 | ~24 s |
+| R9700 | FP8 | 25 | ~17 s |
+| W7900 | INT8 | 40 | ~46 s |
+| W7900 | INT8 | 25 | ~29 s |
+
+Measured at 1024×1024, seed 42, CFG disabled, single GPU, steady state after warmup (median of 3 runs). End-to-end covers text encoding, condition-KV prefill, denoising, VAE decode and PNG save; it excludes model load and one-time initialization. In the tested prompts and seeds, 25 steps showed no obvious visual degradation versus 40 — this is not a systematic quality evaluation. Compilation is a one-time warmup cost (~1.5–3 min); `TORCHINDUCTOR_COMPILE_THREADS=1` is set automatically on the SageAttention path.
+
 ## 4. Service Deployment and API Usage
 
 Set the repository path, model path, and GPU ID in `server/start_server.sh`, then start the server:

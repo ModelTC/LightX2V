@@ -4,7 +4,7 @@ AMD ROCm Device implementation for LightX2V.
 AMD ROCm provides CUDA-compatible APIs through HIP (Heterogeneous-computing Interface for Portability).
 This module handles AMD-specific optimizations including:
 - Disabling cudnn for faster VAE convolution
-- sgl_kernel compatibility layer using aiter library (required on AMD)
+- sgl_kernel compatibility layer using aiter library (optional; only for the aiter-backed GEMM/RMSNorm path)
 """
 
 import sys
@@ -85,10 +85,12 @@ def _get_aiter_sgl_kernel():
 
         return AiterSglKernelCompat(aiter)
     except ImportError:
-        logger.error(
-            f"\n{'=' * 60}\nERROR: AMD ROCm detected but aiter is not installed.\naiter is REQUIRED for LightX2V to work on AMD GPUs.\n\nPlease install aiter:\n{AITER_INSTALL_CMD}\n{'=' * 60}\n"
-        )
-        raise ImportError(f"aiter is required for AMD ROCm support. Please install: pip install git+{AITER_REPO}@{AITER_COMMIT}")
+        # aiter is optional: it only backs the aiter_attn / sgl_kernel GEMM +
+        # RMSNorm path. Torch-native paths (e.g. torch._scaled_mm / torch._int_mm
+        # fp8/int8 GEMM, torch_sdpa / SageAttention) run without it. Warn and let
+        # the caller skip the sgl_kernel injection rather than aborting setup.
+        logger.warning(f"aiter not installed; skipping the aiter sgl_kernel/RMSNorm compatibility layer. This is fine for torch-native paths. To enable the aiter-backed path:\n{AITER_INSTALL_CMD}")
+        return None
 
 
 @PLATFORM_DEVICE_REGISTER("amd_rocm")
@@ -109,7 +111,8 @@ class AmdRocmDevice:
 
         This is called from lightx2v_platform.set_ai_device when platform is amd_rocm.
         1. Disable cudnn for faster VAE convolution
-        2. Inject aiter as sgl_kernel compatibility layer (REQUIRED on AMD)
+        2. Inject aiter as sgl_kernel compatibility layer (optional; only the
+           aiter-backed GEMM/RMSNorm path needs it)
         """
         logger.info("AMD ROCm platform detected, initializing optimizations...")
 
@@ -117,19 +120,30 @@ class AmdRocmDevice:
         torch.backends.cudnn.enabled = False
         logger.info("  - cudnn disabled for faster VAE convolution")
 
-        # Inject aiter as sgl_kernel compatibility layer (REQUIRED)
+        # Inject aiter as sgl_kernel compatibility layer when available. Optional:
+        # torch-native paths (torch._scaled_mm / torch._int_mm fp8/int8 GEMM,
+        # torch_sdpa / SageAttention) run without aiter.
         sgl_kernel = _get_aiter_sgl_kernel()
-        sys.modules["sgl_kernel"] = sgl_kernel
-        # Update any module that already imported sgl_kernel. torch.ops and
-        # torch.classes are ModuleType subclasses living in sys.modules whose
-        # attributes are operator namespaces rather than imported modules, so
-        # overwriting them would replace torch.ops.sgl_kernel itself.
-        for mod_name, mod in list(sys.modules.items()):
-            if mod_name in ("torch.ops", "torch.classes"):
-                continue
-            if mod is not None and hasattr(mod, "sgl_kernel"):
-                setattr(mod, "sgl_kernel", sgl_kernel)
-        logger.info("  - aiter sgl_kernel compatibility layer enabled (RMSNorm, GEMM)")
+        if sgl_kernel is not None:
+            sys.modules["sgl_kernel"] = sgl_kernel
+            # Update any module that already imported sgl_kernel. torch.ops and
+            # torch.classes are ModuleType subclasses living in sys.modules whose
+            # attributes are operator namespaces rather than imported modules, so
+            # overwriting them would replace torch.ops.sgl_kernel itself.
+            for mod_name, mod in list(sys.modules.items()):
+                if mod_name in ("torch.ops", "torch.classes"):
+                    continue
+                if mod is not None and hasattr(mod, "sgl_kernel"):
+                    setattr(mod, "sgl_kernel", sgl_kernel)
+            logger.info("  - aiter sgl_kernel compatibility layer enabled (RMSNorm, GEMM)")
+
+    @staticmethod
+    def on_sage_attn2_init():
+        """Install the ROCm Triton num_stages workaround when a SageAttention2
+        backend is constructed. Arch-gated (no-op off gfx1201 / gfx1100)."""
+        from lightx2v_platform.ops.attn.amd_rocm.sage_attn import apply_rocm_sage_patches
+
+        apply_rocm_sage_patches()
 
     @staticmethod
     def is_available() -> bool:

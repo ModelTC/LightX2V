@@ -51,15 +51,15 @@ class QwenImage21Runner(DefaultRunner):
             "disagg_mode",
             "lora_configs",
             "vae_tiling",
-            "use_compile",
         )
         for key in unsupported:
             if config.get(key):
                 raise ValueError(f"qwen_image_21 does not yet support {key}")
         if config.get("dit_quantized"):
-            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum"):
-                raise ValueError("qwen_image_21 DiT quantization supports only fp8-sgl and fp8-f16-accum")
-            if not config.get("dit_quantized_ckpt"):
+            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum", "fp8-rocm", "int8-rocm"):
+                raise ValueError("qwen_image_21 DiT quantization supports only fp8-sgl, fp8-f16-accum, fp8-rocm and int8-rocm")
+            # fp8-rocm / int8-rocm quantize the released BF16 weights on load, no prequantized checkpoint.
+            if config["dit_quant_scheme"] not in ("fp8-rocm", "int8-rocm") and not config.get("dit_quantized_ckpt"):
                 raise ValueError("qwen_image_21 FP8 requires dit_quantized_ckpt")
             if config["dit_quant_scheme"] == "fp8-f16-accum":
                 validate_fp8_f16_accum_qmax(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))

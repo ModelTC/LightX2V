@@ -95,6 +95,49 @@ RTX 5090 配置保留适用的通用优化，并使用：
 
 两类任务均使用当前代码，测试条件为 40 steps、seed 42、关闭 CFG，连续执行三次请求并取中位数。I2I 使用单张 1024×1024 参考图，输出尺寸为 1024×1024。端到端耗时包含输入编码、condition-KV prefill、去噪、VAE 解码、后处理和 PNG 保存，不包含模型加载及 Runner 的一次性初始化。
 
+### 3.3 AMD ROCm 显卡（Radeon AI PRO R9700 / Radeon PRO W7900）
+
+上面 5090 那套（FlashAttention3、FlashInfer RoPE、CUTLASS FP8、SageAttention2 的 CUDA kernel）都是 CUDA 专用。下面的配置让 Qwen-Image-2.1 跑在 AMD RDNA 显卡上，走 torch 算子推理路径（`torch_sdpa`、`torch_real_rope`、torch LayerNorm/modulation），配合 ROCm 可用的量化、`torch.compile` 和 SageAttention2。它们**在加载时直接量化官方 BF16 权重**——无需 `tools/convert` 转换、无需 `dit_quantized_ckpt`。
+
+验证环境为 `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0` 镜像（PyTorch 2.10、Triton 3.6），transformers 使用 4.57.x（`Qwen3VLProcessor` 需要较新版本；请固定到你实测过的版本，而非只写下限）。安装该镜像未自带的运行时依赖：
+
+```bash
+pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf einops \
+    qtorch langdetect tqdm imageio imageio-ffmpeg opencv-python-headless comfy-kitchen \
+    peft gguf prometheus_client fastapi uvicorn pydantic aiohttp pyzmq python-multipart \
+    PyJWT jsonschema sageattention
+```
+
+通过 `scripts/platforms/amd_rocm/` 下的平台脚本运行——脚本里会 `export PLATFORM=amd_rocm` 并 source 公共环境，从而激活 `lightx2v_platform/` 下的 AMD ROCm 平台后端（注册 ROCm 的 FP8/INT8 GEMM，并自动应用 SageAttention 的 Triton 规避）。单卡即可——条件编码器走 CPU offload，且该路径**无需编译 aiter**。
+
+先在脚本顶部设置 `lightx2v_path` 和 `model_path`，然后运行：
+
+```bash
+# R9700（FP8）
+bash scripts/platforms/amd_rocm/qwen_image_21_r9700_t2i.sh
+# W7900（INT8）
+bash scripts/platforms/amd_rocm/qwen_image_21_w7900_t2i.sh
+```
+
+每个脚本默认选该卡最快的配置；改脚本里的 `--config_json` 可切换到其它配置。各配置（均在 `configs/platforms/amd_rocm/` 下）：
+
+| 显卡（架构） | 配置 | 内容 |
+| --- | --- | --- |
+| R9700（gfx1201 / RDNA4） | `qwen_image_21_r9700_fp8.json` | FP8（`torch._scaled_mm`）+ `torch.compile` + SageAttention2 |
+| W7900（gfx1100 / RDNA3） | `qwen_image_21_w7900_int8.json` | INT8（`torch._int_mm`）+ `torch.compile` + SageAttention2 |
+| 通用 | `qwen_image_21_bf16.json` | BF16 eager 基线 |
+
+`dit_quant_scheme` 为 `fp8-rocm`（R9700）或 `int8-rocm`（W7900），由 `lightx2v_platform/ops/mm/amd_rocm/` 下的 AMD ROCm 平台算子注册：权重 per-channel 对称量化 + 激活 per-token 动态量化，均在加载时从 BF16 量化得到。VAE 走原生卷积——AMD ROCm 平台会关闭 cuDNN/MIOpen，从而绕开 gfx1201 上观察到的非确定性 NaN 卷积路径。SageAttention/Inductor 在 gfx1201 / gfx1100 上所需的 Triton `num_stages` 规避会自动装载，且仅在真正构造 SageAttention2 backend 时才生效；设 `LIGHTX2V_ROCM_TRITON_MAX_STAGES=0` 可禁用（例如 Triton 修复该 pipeliner bug 后）。想拿画质换速度，可把配置里的 `infer_steps` 调小（如 25）或传 `--infer_steps 25`。
+
+| 显卡 | 量化 | 步数 | 端到端 |
+| --- | --- | ---: | ---: |
+| R9700 | FP8 | 40 | ~24 s |
+| R9700 | FP8 | 25 | ~17 s |
+| W7900 | INT8 | 40 | ~46 s |
+| W7900 | INT8 | 25 | ~29 s |
+
+测试条件：1024×1024、seed 42、关闭 CFG、单卡、warmup 后稳态（3 次取中位数）。端到端包含文本编码、condition-KV prefill、去噪、VAE 解码与 PNG 保存，不含模型加载与一次性初始化。在所测试的 prompt/seed 上，25 步相比 40 步未观察到明显画质退化——这不是系统性画质评估。编译为一次性 warmup 开销（约 1.5–3 分钟）；`TORCHINDUCTOR_COMPILE_THREADS=1` 在 SageAttention 路径上会自动设置。
+
 ## 4. 服务化部署与 API 调用
 
 先修改 `server/start_server.sh` 中的仓库路径、模型路径和 GPU 编号，然后启动：
