@@ -28,7 +28,7 @@ docker pull lightx2v/lightx2v:26062001-cu130-5090-fix-260921
 docker run --gpus all -itd --ipc=host --name [容器名] -v [挂载设置] --entrypoint /bin/bash [镜像id]
 ```
 
-在容器内下载并安装 LightX2V 源码，无需安装即可运行：
+在容器内下载 LightX2V 源码：
 
 ```bash
 git clone https://github.com/ModelTC/LightX2V.git
@@ -58,72 +58,58 @@ bash scripts/qwen_image_21/qwen_image_21_i2i.sh
 
 默认配置已经启用通用优化路径：FlashAttention3、FlashInfer RoPE、Triton LayerNorm 与 modulation、融合 QK RMSNorm、融合 Transformer block 算子、关闭 CFG 的推理路径及 OpenCV 结果保存。
 
-### 3.2 RTX 5090 FP8 案例
+### 3.2 RTX 5090 案例
 
-该实测配置使用 FP8 linear 和 FP16 累加，将 FP8 QwenVL 语言栈常驻显存，并从原始 `model_path` 加载 BF16 视觉塔。
+示例采用的优化技术包括：
 
-将所选 JSON 配置中的 `dit_quantized_ckpt` 和 `text_encoder_quantized_ckpt` 分别指向转换得到的 `.safetensors` 文件，然后设置脚本中的 `lightx2v_path` 和 `model_path`。`model_path` 仍须指向原始模型目录。FP16 累加路径要求 lightx2v-kernel 提供 SM120 算子。
+- DiT FP8 linear 与 FP16 累加、QwenVL 语言栈 FP8。
+- SageAttention2、FlashInfer RoPE。
+- Triton LayerNorm/modulation、融合 QK RMSNorm 与 Transformer block 算子。
+- 文本编码器 offload、VAE torch.compile。
+- Ulysses SP、FP8 通信、分组 head parallel、文本 TP 和 VAE 并行。
+
+转换 DiT 权重：
 
 ```bash
-# 文生图
-bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_qwenvl_fp8_5090.sh
-
-# 图生图
-bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_qwenvl_fp8_5090.sh
+python tools/convert/converter.py \
+    --source /path/to/Qwen-Image-2.1/transformer \
+    --output /path/to/Qwen-Image-2.1-fp8-f16-accum \
+    --output_name qwen_image_21_fp8_f16_accum \
+    --model_type qwen_image_21_dit \
+    --quantization_profile qwen-image-21-fp8-f16-accum \
+    --quantized --linear_type fp8 --device cuda:0 --single_file
 ```
 
-RTX 5090 配置保留适用的通用优化，并使用：
+QwenVL FP8 转换命令见 [converter.py](../../tools/convert/converter.py) 中 `convert_qwen_image_21_text_encoder_fp8` 的示例。在对应 JSON 中设置 `dit_quantized_ckpt`、`text_encoder_quantized_ckpt`；在脚本中设置仓库路径、原始模型路径和 GPU 编号。
 
-- QwenVL 语言栈 FP8 权重常驻显存，视觉塔保持 BF16；
-- qmax 14 的 FP8 DiT block linear 权重、qmax 7 的动态 FP8 激活及 FP16 累加；
-- dense SageAttention2；
-- VAE 编译。
+```bash
+# 单卡 1K：文生图 / 图生图
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_1k.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_1k.sh
+
+# 单卡 2K：文生图 / 图生图
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_2k.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_2k.sh
+
+# 双卡 2K：文生图 / 图生图
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_2k_sp2.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_2k_sp2.sh
+```
 
 | GPU | 任务 | 输出分辨率 | 端到端耗时 |
 | --- | --- | ---: | ---: |
-| RTX 5090 ×1 | T2I | 1024×1024 | **5.515 s** |
-| RTX 5090 ×1 | I2I | 1024×1024 | **6.796 s** |
+| RTX 5090 ×1 | T2I | 1024×1024 | **5.586 s** |
+| RTX 5090 ×1 | I2I | 1024×1024 | **6.804 s** |
+| RTX 5090 ×1 | T2I | 2048×2048 | **30.333 s** |
+| RTX 5090 ×1 | I2I | 2048×2048 | **42.787 s** |
+| RTX 5090 ×2 | T2I | 2048×2048 | **16.868 s** |
+| RTX 5090 ×2 | I2I | 2048×2048 | **25.212 s** |
 
-表中数据测于启用 VAE 编译前，测试条件为 40 steps、seed 42、关闭 CFG，连续执行三次请求并取中位数。I2I 使用单张 1024×1024 参考图，输出尺寸为 1024×1024。端到端耗时包含输入编码、condition-KV prefill、去噪、VAE 解码、后处理和 PNG 保存，不包含模型加载及 Runner 的一次性初始化。
+测试使用 PyTorch 2.11.0+cu130，40 步、seed 42、关闭 CFG，提示词与示例脚本一致。I2I 使用 `assets/inputs/imgs/girl.png`，参考图按对应分辨率处理。
 
-### 3.3 双 RTX 5090 序列并行案例
+同一实例中首次请求后，连续三次请求取中位数；双卡每次取较慢 rank 的耗时。端到端耗时包含图片保存，不包含模型加载和一次性初始化。
 
-SP2 配置通过 Ulysses 将目标图像 token 序列分布到两张 GPU，使用 FP8 序列并行通信，并通过带两个 latent halo 的重叠空间分片执行 VAE 解码。默认切分完整 decoder，因此低分辨率 attention 仅在各分片内执行，结果可能与串行解码存在轻微差异；同时沿用单卡 RTX 5090 案例的 FP8-FP16 累加和 SageAttention2 配置。按上文设置 `dit_quantized_ckpt`、`lightx2v_path` 和 `model_path` 后运行：
-
-```bash
-# 文生图
-bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2.sh
-
-# 图生图
-bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2.sh
-```
-
-输出 2048×2048 图像时使用专用的 2K 配置。该配置在每个流水阶段处理 4 个本地 attention head，以降低长序列下的通信启动开销：
-
-```bash
-# 文生图
-bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2_2k.sh
-
-# 图生图
-bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2_2k.sh
-```
-
-SP2 配置默认使用 `vae_decode_parallel_mode: full`。将其设为 `post_mid` 可使低分辨率全局 attention 与串行解码一致，同时继续并行计算量更大的上采样路径。
-
-脚本默认在 GPU 0、1 上启动两个进程。调整卡数时，需保持 `CUDA_VISIBLE_DEVICES`、`torchrun --nproc_per_node` 与 `parallel.seq_p_size` 一致。目标图像 token 数必须能被 `seq_p_size` 整除。
-
-| GPU | 任务 | 输出分辨率 | 端到端耗时 |
-| --- | --- | ---: | ---: |
-| RTX 5090 ×2 | T2I | 1024×1024 | **3.954 s** |
-| RTX 5090 ×2 | I2I | 1024×1024 | **4.802 s** |
-| RTX 5090 ×2 | T2I | 2048×2048 | **17.298 s** |
-| RTX 5090 ×2 | I2I | 2048×2048 | **25.488 s** |
-
-以上结果使用 `post_mid` VAE 解码，测于启用 VAE encoder 并行和 VAE 编译前；请求参数和计时范围与单卡表格相同，均为连续三次请求的中位数。2K I2I 测试还使用 `resolution: 2048` 处理参考图。
-
-上述单卡 QwenVL FP8 和双卡 2K SP2 配置已叠加 `vae_use_compile: true`；2K I2I SP2 配置还启用了 `vae_encode_parallel: true`，在全局 attention 前重组各卡编码特征。VAE 编译支持 encoder 空间并行及 decoder 的 `full` / `post_mid` 两种模式。首次遇到新输入形状可能产生编译开销，数值舍入变化也可能影响生成细节。
-
-显存受限时，可选用混合 FP8 VAE decoder（当前后端为 SM120 / RTX 5090）。[2K T2I](qwen_image_21_t2i_fp8_f16_accum_5090_2k_vae_fp8.sh) 和 [2K I2I](qwen_image_21_i2i_fp8_f16_accum_5090_2k_vae_fp8.sh) 示例配合 VAE 编译，以少量解码耗时换取显存节省；encoder、attention 和部分高分辨率卷积保持原精度。模型转换命令见[转换器注释](../../tools/convert/qwen_image_21_vae_decoder.py)。量化会引入细节差异，需人工复核画质。
+运行时在日志中搜索 **`RUN pipeline cost`**，查看单次 pipeline 耗时，单位为秒。
 
 ## 4. 服务化部署与 API 调用
 
@@ -133,7 +119,7 @@ SP2 配置默认使用 `vae_decode_parallel_mode: full`。将其设为 `post_mid
 bash scripts/qwen_image_21/server/start_server.sh
 ```
 
-默认端口为 `8000`。服务只加载一套权重，启动时无需指定 `task`，同一个服务支持文生图和图生图。
+默认端口为 `8000`，同一个服务支持文生图和图生图。
 
 服务启动完成后，在同一容器新开终端并发送请求：
 
@@ -148,5 +134,3 @@ python scripts/qwen_image_21/server/post_i2i.py
 直接修改代码中的 `url`、`message`、`output_path`；图生图还需设置 `image_path`。两个脚本已分别设置 `task: "t2i"` 和 `task: "i2i"`。
 
 服务请求使用相同的尺寸规则。图生图需自动确定尺寸时，删除 `message` 中的 `size` 字段。
-
-图生图脚本读取客户端本地图片，将其编码为 Base64 后，通过请求的 `image_path` 字段上传。文生图和图生图均等待生成完成后，接收服务端返回的 PNG 二进制数据，并保存到客户端 `output_path`。

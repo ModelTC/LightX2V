@@ -28,7 +28,7 @@ Start a container using the selected image:
 docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings] --entrypoint /bin/bash [image_id]
 ```
 
-Inside the container, clone the LightX2V source. It can run directly without installing the package:
+Clone the LightX2V source inside the container:
 
 ```bash
 git clone https://github.com/ModelTC/LightX2V.git
@@ -58,72 +58,58 @@ For image-to-image, remove the script's `--size` argument to determine the outpu
 
 The default config already enables the general optimization path: FlashAttention3, FlashInfer RoPE, Triton LayerNorm and modulation, fused QK RMSNorm, fused transformer-block operators, CFG-disabled inference, and OpenCV result saving.
 
-### 3.2 RTX 5090 FP8 example
+### 3.2 RTX 5090 examples
 
-This measured preset uses FP8 linear layers with FP16 accumulation, keeps the FP8 QwenVL language stack resident, and loads the BF16 vision tower from the original `model_path`.
+The examples use these optimization techniques:
 
-Set `dit_quantized_ckpt` and `text_encoder_quantized_ckpt` in the selected JSON config to the converted `.safetensors` files, then set `lightx2v_path` and `model_path` in the script. `model_path` must still point to the original model directory. The FP16-accumulation path requires lightx2v-kernel with the SM120 operator.
+- FP8 DiT linears with FP16 accumulation and FP8 QwenVL language weights.
+- SageAttention2 and FlashInfer RoPE.
+- Triton LayerNorm/modulation, fused QK RMSNorm and transformer-block operators.
+- Text encoder offload and VAE torch.compile.
+- Ulysses SP, FP8 communication, grouped head parallelism, language TP and VAE parallelism.
+
+Convert the DiT weights:
 
 ```bash
-# Text-to-image
-bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_qwenvl_fp8_5090.sh
-
-# Image-to-image
-bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_qwenvl_fp8_5090.sh
+python tools/convert/converter.py \
+    --source /path/to/Qwen-Image-2.1/transformer \
+    --output /path/to/Qwen-Image-2.1-fp8-f16-accum \
+    --output_name qwen_image_21_fp8_f16_accum \
+    --model_type qwen_image_21_dit \
+    --quantization_profile qwen-image-21-fp8-f16-accum \
+    --quantized --linear_type fp8 --device cuda:0 --single_file
 ```
 
-The RTX 5090 config retains the applicable general optimizations and uses:
+For QwenVL FP8 conversion, see the example in `convert_qwen_image_21_text_encoder_fp8` in [converter.py](../../tools/convert/converter.py). Set `dit_quantized_ckpt` and `text_encoder_quantized_ckpt` in the corresponding JSON, and set the repository path, original model path and GPU IDs in the scripts.
 
-- resident FP8 QwenVL language weights with a BF16 vision tower;
-- FP8 DiT block-linear weights with qmax 14, dynamic FP8 activations with qmax 7, and FP16 accumulation;
-- dense SageAttention2;
-- VAE compilation.
+```bash
+# Single GPU, 1K: text-to-image / image-to-image
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_1k.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_1k.sh
+
+# Single GPU, 2K: text-to-image / image-to-image
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_2k.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_2k.sh
+
+# Dual GPU, 2K: text-to-image / image-to-image
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_2k_sp2.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_2k_sp2.sh
+```
 
 | GPU | Task | Output resolution | End-to-end latency |
 | --- | --- | ---: | ---: |
-| RTX 5090 ×1 | T2I | 1024×1024 | **5.515 s** |
-| RTX 5090 ×1 | I2I | 1024×1024 | **6.796 s** |
+| RTX 5090 ×1 | T2I | 1024×1024 | **5.586 s** |
+| RTX 5090 ×1 | I2I | 1024×1024 | **6.804 s** |
+| RTX 5090 ×1 | T2I | 2048×2048 | **30.333 s** |
+| RTX 5090 ×1 | I2I | 2048×2048 | **42.787 s** |
+| RTX 5090 ×2 | T2I | 2048×2048 | **16.868 s** |
+| RTX 5090 ×2 | I2I | 2048×2048 | **25.212 s** |
 
-The table was measured before enabling VAE compilation, with 40 steps, seed 42, CFG disabled, and the median latency of three consecutive requests. I2I uses one 1024×1024 reference image and produces a 1024×1024 image. End-to-end latency covers input encoding, condition-KV prefill, denoising, VAE decoding, post-processing, and PNG saving; it excludes model loading and one-time runner initialization.
+Tests use PyTorch 2.11.0+cu130, 40 steps, seed 42, CFG disabled, and the example prompts. I2I uses `assets/inputs/imgs/girl.png`, preprocessed at the corresponding resolution.
 
-### 3.3 Dual RTX 5090 sequence-parallel example
+Latency is the median of three consecutive requests after the first request in the same instance; dual-GPU samples use the slower rank. End-to-end timing includes image saving and excludes model loading and one-time initialization.
 
-The SP2 presets distribute the target image-token sequence across two GPUs with Ulysses, use FP8 sequence-parallel communication, and decode overlapping spatial VAE shards with a two-latent halo. The complete decoder is sharded by default, so its low-resolution attention is local to each shard and the result can differ slightly from serial decode. They retain the FP8-FP16-accumulation and SageAttention2 settings from the single-GPU RTX 5090 example. Set `dit_quantized_ckpt`, `lightx2v_path`, and `model_path` as described above, then run:
-
-```bash
-# Text-to-image
-bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2.sh
-
-# Image-to-image
-bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2.sh
-```
-
-For 2048×2048 output, use the dedicated 2K presets. They process four local attention heads per pipelined stage, which reduces communication-launch overhead at the longer sequence length:
-
-```bash
-# Text-to-image
-bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2_2k.sh
-
-# Image-to-image
-bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2_2k.sh
-```
-
-The SP2 presets use `vae_decode_parallel_mode: full` by default. Set it to `post_mid` to keep the global low-resolution attention identical to serial decode while continuing to parallelize the more expensive upsampling path.
-
-The scripts launch two processes on GPUs 0 and 1. Keep `CUDA_VISIBLE_DEVICES`, `torchrun --nproc_per_node`, and `parallel.seq_p_size` consistent when changing the GPU count. The target-image token count must be divisible by `seq_p_size`.
-
-| GPU | Task | Output resolution | End-to-end latency |
-| --- | --- | ---: | ---: |
-| RTX 5090 ×2 | T2I | 1024×1024 | **3.954 s** |
-| RTX 5090 ×2 | I2I | 1024×1024 | **4.802 s** |
-| RTX 5090 ×2 | T2I | 2048×2048 | **17.298 s** |
-| RTX 5090 ×2 | I2I | 2048×2048 | **25.488 s** |
-
-These measurements use `post_mid` VAE decoding and precede VAE encoder parallelism and compilation. These results use the same request settings and measurement boundary as the single-GPU table above, with the median latency of three consecutive requests. The 2K I2I measurement also uses `resolution: 2048` for reference-image preprocessing.
-
-The single-GPU QwenVL FP8 and dual-GPU 2K SP2 configs above include `vae_use_compile: true`. The 2K I2I SP2 config also enables `vae_encode_parallel: true`, gathering spatial encoder features before global attention. VAE compilation supports encoder spatial parallelism and both `full` and `post_mid` decoder modes. New input shapes can incur compilation time, and numerical rounding changes can affect generated details.
-
-For memory-constrained workloads, an optional mixed FP8 VAE decoder is available on SM120 / RTX 5090. The [2K T2I](qwen_image_21_t2i_fp8_f16_accum_5090_2k_vae_fp8.sh) and [2K I2I](qwen_image_21_i2i_fp8_f16_accum_5090_2k_vae_fp8.sh) examples combine it with VAE compilation, trading some decode latency for lower memory use. The encoder, attention, and selected high-resolution convolutions retain their original precision. See the [converter docstring](../../tools/convert/qwen_image_21_vae_decoder.py) for the conversion command. Quantization can affect image details; review output quality manually.
+Search the runtime log for **`RUN pipeline cost`** to find the pipeline latency in seconds.
 
 ## 4. Service Deployment and API Usage
 
@@ -133,7 +119,7 @@ Set the repository path, model path, and GPU ID in `server/start_server.sh`, the
 bash scripts/qwen_image_21/server/start_server.sh
 ```
 
-The default port is `8000`. One server loads a single set of weights and supports both text-to-image and image-to-image requests. No `task` is needed at startup.
+The default port is `8000`. The server supports both text-to-image and image-to-image requests.
 
 Once the server is ready, open a new terminal in the same container and send requests:
 
@@ -148,5 +134,3 @@ python scripts/qwen_image_21/server/post_i2i.py
 Edit `url`, `message`, and `output_path` directly; for image-to-image, also set `image_path`. The scripts already specify `task: "t2i"` and `task: "i2i"`, respectively.
 
 Service requests follow the same size rules. For automatic image-to-image sizing, remove `size` from `message`.
-
-The image-to-image script reads a local image on the client, encodes it as Base64, and uploads it in the request's `image_path` field. Both scripts wait for generation to finish, receive PNG binary data from the server, and save it to the client's `output_path`.
