@@ -42,11 +42,7 @@ class BagelModel:
         self.model_path = config["model_path"]
         self._validate_config()
         # init llm config
-        llm_config = self.config["llm_config"]
-        with self.config.temporarily_unlocked():
-            llm_config.update(self.config["llm_config_update"])
-        self.llm_config = llm_config
-        self.use_moe = "Mo" in self.llm_config["layer_module"]
+        self.llm_config = self.config["llm_config"]
         self.num_heads = self.llm_config["num_attention_heads"]
         self.hidden_size = self.llm_config["hidden_size"]
         self.think = config.get("think", False)
@@ -71,9 +67,6 @@ class BagelModel:
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
-        self.pre_infer.set_scheduler(scheduler)
-        self.transformer_infer.set_scheduler(scheduler)
-        self.post_infer.set_scheduler(scheduler)
 
     def _init_infer_class(self):
         self.pre_infer_class = BagelPreInfer
@@ -107,9 +100,9 @@ class BagelModel:
         self._apply_weights(weight_dict)
 
     def _init_infer(self):
-        self.transformer_infer = self.transformer_infer_class(self.config, self.llm_config)
+        self.transformer_infer = self.transformer_infer_class(self.llm_config)
         self.pre_infer = self.pre_infer_class(self.config, self.llm_config)
-        self.post_infer = self.post_infer_class(self.config, self.llm_config)
+        self.post_infer = self.post_infer_class()
         self.pre_infer.set_rope(self.transformer_weights.blocks[0].self_attn.rope)
 
     def _init_modules(self):
@@ -120,7 +113,6 @@ class BagelModel:
 
         if self.config.visual_gen:
             self.latent_patch_size = self.config.latent_patch_size
-            self.timestep_shift = self.config.timestep_shift
             self.latent_downsample = self.config.vae_config["downsample"] * self.config.latent_patch_size
 
             self.latent_channel = self.config.vae_config["z_channels"]
@@ -194,16 +186,9 @@ class BagelModel:
     ):
         packed_rope = self.pre_infer.infer(self.pre_weight, packed_query_sequence, packed_query_position_ids)
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs.update(mode=mode)
-            if mode == "gen":
-                assert packed_vae_token_indexes is not None
-                assert packed_text_indexes is not None
-                extra_inputs.update(
-                    packed_vae_token_indexes=packed_vae_token_indexes,
-                    packed_text_indexes=packed_text_indexes,
-                )
+        if mode == "gen":
+            assert packed_vae_token_indexes is not None
+            assert packed_text_indexes is not None
 
         packed_query_sequence, past_key_values = self.transformer_infer.infer(
             self.transformer_weights.blocks,
@@ -216,7 +201,9 @@ class BagelModel:
             packed_key_value_indexes=packed_key_value_indexes,
             update_past_key_values=update_past_key_values,
             is_causal=is_causal,
-            **extra_inputs,
+            mode=mode,
+            packed_vae_token_indexes=packed_vae_token_indexes,
+            packed_text_indexes=packed_text_indexes,
         )
 
         packed_query_sequence = self.post_infer.infer(
@@ -242,10 +229,6 @@ class BagelModel:
     ):
         packed_text_embedding = self.pre_infer.embed_tokens(self.pre_weight, packed_text_ids)
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs = {"mode": "und"}
-
         packed_query_sequence, past_key_values = self.forward_inference(
             packed_query_sequence=packed_text_embedding,
             query_lens=text_token_lens,
@@ -256,7 +239,7 @@ class BagelModel:
             key_values_lens=key_values_lens,
             update_past_key_values=True,
             is_causal=True,
-            **extra_inputs,
+            mode="und",
         )
         return past_key_values
 
@@ -379,10 +362,6 @@ class BagelModel:
             packed_vit_token_embed = packed_vit_token_embed.to(packed_sequence.dtype)
         packed_sequence[packed_vit_token_indexes.to(AI_DEVICE)] = packed_vit_token_embed
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs = {"mode": "und"}
-
         output = self.forward_inference(
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
@@ -393,7 +372,7 @@ class BagelModel:
             key_values_lens=key_values_lens,
             update_past_key_values=True,
             is_causal=False,
-            **extra_inputs,
+            mode="und",
         )
         return output[1]
 
@@ -510,14 +489,6 @@ class BagelModel:
             packed_latent = packed_latent.to(packed_sequence.dtype)
         packed_sequence[packed_vae_token_indexes.to(AI_DEVICE)] = packed_latent
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs = {
-                "mode": "gen",
-                "packed_vae_token_indexes": packed_vae_token_indexes,
-                "packed_text_indexes": packed_text_indexes,
-            }
-
         output = self.forward_inference(
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
@@ -528,7 +499,9 @@ class BagelModel:
             packed_key_value_indexes=packed_key_value_indexes,
             update_past_key_values=True,
             is_causal=False,
-            **extra_inputs,
+            mode="gen",
+            packed_vae_token_indexes=packed_vae_token_indexes,
+            packed_text_indexes=packed_text_indexes,
         )
         return output[1]
 
@@ -895,9 +868,7 @@ class BagelModel:
             x_t = x_t.to(packed_sequence.dtype)
         packed_sequence[inputs.generation_input["packed_vae_token_indexes"]] = x_t
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs = {"mode": "gen", "packed_vae_token_indexes": inputs.generation_input["packed_vae_token_indexes"], "packed_text_indexes": packed_text_indexes}
+        extra_inputs = {"mode": "gen", "packed_vae_token_indexes": inputs.generation_input["packed_vae_token_indexes"], "packed_text_indexes": packed_text_indexes}
 
         if self.enable_taylorseer:
             self.scheduler.cache_dic = inputs.model_pred_cache_dic
