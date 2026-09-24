@@ -28,7 +28,7 @@ docker pull lightx2v/lightx2v:26062001-cu130-5090-fix-260921
 docker run --gpus all -itd --ipc=host --name [容器名] -v [挂载设置] --entrypoint /bin/bash [镜像id]
 ```
 
-在容器内下载并安装 LightX2V 源码，无需安装即可运行：
+在容器内下载 LightX2V 源码：
 
 ```bash
 git clone https://github.com/ModelTC/LightX2V.git
@@ -58,9 +58,17 @@ bash scripts/qwen_image_21/qwen_image_21_i2i.sh
 
 默认配置已经启用通用优化路径：FlashAttention3、FlashInfer RoPE、Triton LayerNorm 与 modulation、融合 QK RMSNorm、融合 Transformer block 算子、关闭 CFG 的推理路径及 OpenCV 结果保存。
 
-### 3.2 RTX 5090 FP8 案例
+### 3.2 RTX 5090 案例
 
-该案例使用 FP8 linear 和 FP16 累加。首先转换 DiT 权重：
+示例采用的优化技术包括：
+
+- DiT FP8 linear 与 FP16 累加、QwenVL 语言栈 FP8。
+- SageAttention2、FlashInfer RoPE。
+- Triton LayerNorm/modulation、融合 QK RMSNorm 与 Transformer block 算子。
+- 文本编码器 offload、VAE torch.compile。
+- Ulysses SP、FP8 通信、分组 head parallel、文本 TP 和 VAE 并行。
+
+转换 DiT 权重：
 
 ```bash
 python tools/convert/converter.py \
@@ -72,28 +80,36 @@ python tools/convert/converter.py \
     --quantized --linear_type fp8 --device cuda:0 --single_file
 ```
 
-将所选 JSON 配置中的 `dit_quantized_ckpt` 指向转换得到的 `.safetensors` 文件，然后设置脚本中的 `lightx2v_path` 和 `model_path`。`model_path` 仍须指向原始模型目录。FP16 累加路径要求 lightx2v-kernel 提供 SM120 算子。
+QwenVL FP8 转换命令见 [converter.py](../../tools/convert/converter.py) 中 `convert_qwen_image_21_text_encoder_fp8` 的示例。在对应 JSON 中设置 `dit_quantized_ckpt`、`text_encoder_quantized_ckpt`；在脚本中设置仓库路径、原始模型路径和 GPU 编号。
 
 ```bash
-# 文生图
-bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090.sh
+# 单卡 1K：文生图 / 图生图
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_1k.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_1k.sh
 
-# 图生图
-bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090.sh
+# 单卡 2K：文生图 / 图生图
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_2k.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_2k.sh
+
+# 双卡 2K：文生图 / 图生图
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_2k_sp2.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_2k_sp2.sh
 ```
-
-RTX 5090 配置保留适用的通用优化，并使用：
-
-- 条件编码器阶段 CPU offload；
-- qmax 14 的 FP8 DiT block linear 权重、qmax 7 的动态 FP8 激活及 FP16 累加；
-- dense SageAttention2。
 
 | GPU | 任务 | 输出分辨率 | 端到端耗时 |
 | --- | --- | ---: | ---: |
-| RTX 5090 | T2I | 1024×1024 | **5.930 s** |
-| RTX 5090 | I2I | 1024×1024 | **7.144 s** |
+| RTX 5090 ×1 | T2I | 1024×1024 | **5.586 s** |
+| RTX 5090 ×1 | I2I | 1024×1024 | **6.804 s** |
+| RTX 5090 ×1 | T2I | 2048×2048 | **30.333 s** |
+| RTX 5090 ×1 | I2I | 2048×2048 | **42.787 s** |
+| RTX 5090 ×2 | T2I | 2048×2048 | **16.868 s** |
+| RTX 5090 ×2 | I2I | 2048×2048 | **25.212 s** |
 
-两类任务均使用当前代码，测试条件为 40 steps、seed 42、关闭 CFG，连续执行三次请求并取中位数。I2I 使用单张 1024×1024 参考图，输出尺寸为 1024×1024。端到端耗时包含输入编码、condition-KV prefill、去噪、VAE 解码、后处理和 PNG 保存，不包含模型加载及 Runner 的一次性初始化。
+测试使用 PyTorch 2.11.0+cu130，40 步、seed 42、关闭 CFG，提示词与示例脚本一致。I2I 使用 `assets/inputs/imgs/girl.png`，参考图按对应分辨率处理。
+
+同一实例中首次请求后，连续三次请求取中位数；双卡每次取较慢 rank 的耗时。端到端耗时包含图片保存，不包含模型加载和一次性初始化。
+
+运行时在日志中搜索 **`RUN pipeline cost`**，查看单次 pipeline 耗时，单位为秒。
 
 ## 4. 服务化部署与 API 调用
 
@@ -103,7 +119,7 @@ RTX 5090 配置保留适用的通用优化，并使用：
 bash scripts/qwen_image_21/server/start_server.sh
 ```
 
-默认端口为 `8000`。服务只加载一套权重，启动时无需指定 `task`，同一个服务支持文生图和图生图。
+默认端口为 `8000`，同一个服务支持文生图和图生图。
 
 服务启动完成后，在同一容器新开终端并发送请求：
 
@@ -118,5 +134,3 @@ python scripts/qwen_image_21/server/post_i2i.py
 直接修改代码中的 `url`、`message`、`output_path`；图生图还需设置 `image_path`。两个脚本已分别设置 `task: "t2i"` 和 `task: "i2i"`。
 
 服务请求使用相同的尺寸规则。图生图需自动确定尺寸时，删除 `message` 中的 `size` 字段。
-
-图生图脚本读取客户端本地图片，将其编码为 Base64 后，通过请求的 `image_path` 字段上传。文生图和图生图均等待生成完成后，接收服务端返回的 PNG 二进制数据，并保存到客户端 `output_path`。

@@ -2,11 +2,7 @@
     "infer_steps": 40,
     "resolution": 1024,
     "vae_scale_factor": 16,
-    "attn_type": "dynamic_sparse_attn",
-    "dynamic_sparse_attn_setting": {
-        "sparsity_ratio": 0.8,
-        "operator": "sage2"
-    },
+    "attn_type": "sage_attn2",
     "rope_type": "flashinfer_rope",
     "rms_norm_type": "fp32_variance",
     "layer_norm_type": "Triton",
@@ -17,9 +13,13 @@
     "enable_cfg": false,
     "sample_guide_scale": 1.0,
     "warmup": true,
-    "text_encoder_cpu_offload": true,
+    "text_encoder_cpu_offload": false,
+    "text_encoder_quantized": true,
+    "text_encoder_quant_scheme": "fp8-sgl",
+    "text_encoder_quantized_ckpt": "/path/to/Qwen-Image-2.1-qwenvl-language-fp8-sgl/qwen_image_21_qwenvl_language_fp8_sgl.safetensors",
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-f16-accum",
     "dit_quantized_ckpt": "/path/to/Qwen-Image-2.1-fp8-f16-accum/qwen_image_21_fp8_f16_accum.safetensors",
-    "dit_fp8_activation_qmax": 7.0
+    "dit_fp8_activation_qmax": 7.0,
+    "vae_use_compile": true
 }

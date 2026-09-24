@@ -28,7 +28,7 @@ Start a container using the selected image:
 docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings] --entrypoint /bin/bash [image_id]
 ```
 
-Inside the container, clone the LightX2V source. It can run directly without installing the package:
+Clone the LightX2V source inside the container:
 
 ```bash
 git clone https://github.com/ModelTC/LightX2V.git
@@ -58,9 +58,17 @@ For image-to-image, remove the script's `--size` argument to determine the outpu
 
 The default config already enables the general optimization path: FlashAttention3, FlashInfer RoPE, Triton LayerNorm and modulation, fused QK RMSNorm, fused transformer-block operators, CFG-disabled inference, and OpenCV result saving.
 
-### 3.2 RTX 5090 FP8 example
+### 3.2 RTX 5090 examples
 
-This example uses FP8 linear layers with FP16 accumulation. Convert the DiT weights first:
+The examples use these optimization techniques:
+
+- FP8 DiT linears with FP16 accumulation and FP8 QwenVL language weights.
+- SageAttention2 and FlashInfer RoPE.
+- Triton LayerNorm/modulation, fused QK RMSNorm and transformer-block operators.
+- Text encoder offload and VAE torch.compile.
+- Ulysses SP, FP8 communication, grouped head parallelism, language TP and VAE parallelism.
+
+Convert the DiT weights:
 
 ```bash
 python tools/convert/converter.py \
@@ -72,28 +80,36 @@ python tools/convert/converter.py \
     --quantized --linear_type fp8 --device cuda:0 --single_file
 ```
 
-Set `dit_quantized_ckpt` in the selected JSON config to the converted `.safetensors` file, then set `lightx2v_path` and `model_path` in the script. `model_path` must still point to the original model directory. The FP16-accumulation path requires lightx2v-kernel with the SM120 operator.
+For QwenVL FP8 conversion, see the example in `convert_qwen_image_21_text_encoder_fp8` in [converter.py](../../tools/convert/converter.py). Set `dit_quantized_ckpt` and `text_encoder_quantized_ckpt` in the corresponding JSON, and set the repository path, original model path and GPU IDs in the scripts.
 
 ```bash
-# Text-to-image
-bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090.sh
+# Single GPU, 1K: text-to-image / image-to-image
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_1k.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_1k.sh
 
-# Image-to-image
-bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090.sh
+# Single GPU, 2K: text-to-image / image-to-image
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_2k.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_2k.sh
+
+# Dual GPU, 2K: text-to-image / image-to-image
+bash scripts/qwen_image_21/qwen_image_21_t2i_5090_2k_sp2.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_5090_2k_sp2.sh
 ```
-
-The RTX 5090 config retains the applicable general optimizations and uses:
-
-- stage-level text-encoder CPU offload;
-- FP8 DiT block-linear weights with qmax 14, dynamic FP8 activations with qmax 7, and FP16 accumulation;
-- dense SageAttention2.
 
 | GPU | Task | Output resolution | End-to-end latency |
 | --- | --- | ---: | ---: |
-| RTX 5090 | T2I | 1024×1024 | **5.930 s** |
-| RTX 5090 | I2I | 1024×1024 | **7.144 s** |
+| RTX 5090 ×1 | T2I | 1024×1024 | **5.586 s** |
+| RTX 5090 ×1 | I2I | 1024×1024 | **6.804 s** |
+| RTX 5090 ×1 | T2I | 2048×2048 | **30.333 s** |
+| RTX 5090 ×1 | I2I | 2048×2048 | **42.787 s** |
+| RTX 5090 ×2 | T2I | 2048×2048 | **16.868 s** |
+| RTX 5090 ×2 | I2I | 2048×2048 | **25.212 s** |
 
-Both tasks were measured on the current code with 40 steps, seed 42, CFG disabled, and the median latency of three consecutive requests. I2I uses one 1024×1024 reference image and produces a 1024×1024 image. End-to-end latency covers input encoding, condition-KV prefill, denoising, VAE decoding, post-processing, and PNG saving; it excludes model loading and one-time runner initialization.
+Tests use PyTorch 2.11.0+cu130, 40 steps, seed 42, CFG disabled, and the example prompts. I2I uses `assets/inputs/imgs/girl.png`, preprocessed at the corresponding resolution.
+
+Latency is the median of three consecutive requests after the first request in the same instance; dual-GPU samples use the slower rank. End-to-end timing includes image saving and excludes model loading and one-time initialization.
+
+Search the runtime log for **`RUN pipeline cost`** to find the pipeline latency in seconds.
 
 ## 4. Service Deployment and API Usage
 
@@ -103,7 +119,7 @@ Set the repository path, model path, and GPU ID in `server/start_server.sh`, the
 bash scripts/qwen_image_21/server/start_server.sh
 ```
 
-The default port is `8000`. One server loads a single set of weights and supports both text-to-image and image-to-image requests. No `task` is needed at startup.
+The default port is `8000`. The server supports both text-to-image and image-to-image requests.
 
 Once the server is ready, open a new terminal in the same container and send requests:
 
@@ -118,5 +134,3 @@ python scripts/qwen_image_21/server/post_i2i.py
 Edit `url`, `message`, and `output_path` directly; for image-to-image, also set `image_path`. The scripts already specify `task: "t2i"` and `task: "i2i"`, respectively.
 
 Service requests follow the same size rules. For automatic image-to-image sizing, remove `size` from `message`.
-
-The image-to-image script reads a local image on the client, encodes it as Base64, and uploads it in the request's `image_path` field. Both scripts wait for generation to finish, receive PNG binary data from the server, and save it to the client's `output_path`.
