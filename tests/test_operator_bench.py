@@ -51,16 +51,6 @@ def shape_suite(*cases: dict) -> dict:
     }
 
 
-def operator_catalog(family: str, *names: str) -> dict:
-    return {
-        "kind": "operator_benchmark_backend_catalog_v1",
-        "catalog_fingerprint": "catalog-1",
-        "unmapped_attention_backends": [],
-        "unmapped_mm_backends": [],
-        "candidates": [{"name": name, "family": family, "status": "eligible"} for name in names],
-    }
-
-
 def sp_case(**overrides: object) -> dict:
     value = {
         "case_id": "sp_attention.1",
@@ -96,6 +86,16 @@ def sp_catalog(case: dict, *candidates: dict) -> dict:
         "catalog_fingerprint": "catalog-1",
         "scope_complete": True,
         "cases": [{"case_id": case["case_id"], "candidates": list(candidates), "exclusions": []}],
+    }
+
+
+def operator_catalog(family: str, *names: str) -> dict:
+    return {
+        "kind": "operator_benchmark_backend_catalog_v1",
+        "catalog_fingerprint": "catalog-1",
+        "unmapped_attention_backends": [],
+        "unmapped_mm_backends": [],
+        "candidates": [{"name": name, "family": family, "status": "eligible"} for name in names],
     }
 
 
@@ -429,6 +429,33 @@ def test_backend_catalog_tracks_architecture_and_registry_evolution() -> None:
     }
     assert incomplete_status["sage_attn3"] == "dependency_missing"
     assert not incomplete_environment["environment_complete"]
+
+    sparse_scope_catalog = {
+        "candidates": [
+            {"name": "dynamic_sparse_sage3_replay", "family": "sparse_attention", "status": "eligible"},
+            {"name": "spas_fa4_replay", "family": "sparse_attention", "status": "eligible"},
+            {"name": "flash_attn4_replay", "family": "sparse_attention", "status": "eligible"},
+            {"name": "future_sparse_replay", "family": "sparse_attention", "status": "eligible"},
+            {"name": "dynamic_sparse_sage2_replay", "family": "sparse_attention", "status": "unsupported_arch"},
+        ]
+    }
+    supported, exclusions, unmapped = sp_bench._sparse_sp_backend_scope(sparse_scope_catalog)
+    assert supported == ["dynamic_sparse_sage3_replay", "spas_fa4_replay"]
+    assert set(exclusions) == {"flash_attn4_replay"}
+    assert unmapped == ["future_sparse_replay"]
+
+    sparse_runtime = {
+        "catalog": {**sparse_scope_catalog, "catalog_fingerprint": "catalog", "unmapped_attention_backends": []},
+        "sparse_backends": supported,
+        "sparse_sp_exclusions": exclusions,
+        "unmapped_sparse_sp_backends": unmapped,
+        "a2a_backends": ["torch"],
+        "fp4_available": True,
+    }
+    sparse = sp_case(replay={"manifest": "replay.json", "sha256": "0" * 64}, sparse={"keep_ratio": 0.15})
+    sparse_catalog = sp_bench.build_candidate_catalog(sp_suite(sparse), sparse_runtime)
+    assert not sparse_catalog["scope_complete"]
+    assert sparse_catalog["backend_scope_blockers"]["unmapped_sparse_sp_backends"] == ["future_sparse_replay"]
 
     mm_production = {item["production_backend"] for item in descriptors if item["family"] == "gemm" and item["production_backend"]}
     mm_production.update(backends.PRODUCTION_MM_EXCLUSIONS)
@@ -895,6 +922,103 @@ def test_sp_suite_contract_and_inspection() -> None:
         sp_bench.validate_suite(sp_suite(invalid))
 
 
+def test_sp_replay_suite_derivation_uses_per_degree_aux_prefix(tmp_path: Path) -> None:
+    manifest = {
+        "schema_version": 1,
+        "kind": "operator_benchmark_qkv_replay_v1",
+        "layout": "BSHD",
+        "provenance": {"model": "minimax_h3"},
+        "tensors": {
+            name: {
+                "dtype": "bf16",
+                "shape": [1, 109151, 56, 128],
+                "shards": [{"path": f"{name}.pt", "sha256": "0" * 64, "tensor_key": name, "sequence_start": 0, "sequence_end": 109151}],
+            }
+            for name in ("q", "k", "v")
+        },
+    }
+    manifest_path = tmp_path / "replay.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    outputs = sp_bench.derive_replay_suites(
+        manifest_path,
+        tmp_path / "suites",
+        suite_id="minimax_h3_sparse",
+        conditioner_tokens=89,
+        sp_sizes=[2, 4, 8],
+        keep_ratio=0.15,
+    )
+    shapes = [sp_bench.load_suite(path)["cases"][0]["shape"] for path in outputs]
+    assert [(shape["sp_size"], shape["sequence"], shape["aux_tokens"]) for shape in shapes] == [
+        (2, 109062, 89),
+        (4, 109064, 87),
+        (8, 109064, 87),
+    ]
+
+
+def test_sparse_sp_candidates_use_replay_leafs_and_exclude_ring() -> None:
+    case = sp_case(
+        shape={**sp_case()["shape"], "sequence": 1020, "aux_tokens": 4, "aux_q": True, "aux_first": True},
+        replay={"manifest": "/tmp/replay.json", "sha256": "0" * 64},
+        sparse={"keep_ratio": 0.15},
+    )
+    sp_bench.validate_suite(sp_suite(case))
+    result = sp_bench.enumerate_sparse_candidates(
+        case,
+        ["dynamic_sparse_triton_replay", "dynamic_sparse_sage2_replay"],
+        fp4_available=False,
+    )
+    assert result["candidates"]
+    assert all(item["algorithm"] == "ulysses" and item["leaf_family"] == "sparse_attention" for item in result["candidates"])
+    assert {item["attention_backend"] for item in result["candidates"]} == {
+        "dynamic_sparse_triton_replay",
+        "dynamic_sparse_sage2_replay",
+    }
+    assert any("Sparse Ring requires" in item["reason"] for item in result["exclusions"])
+
+
+def test_sp_replay_loader_slices_aux_and_rank_main(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    specs = {}
+    for offset, name in enumerate(("q", "k", "v")):
+        tensor = torch.arange(8 * 4 * 2, dtype=torch.float32).reshape(1, 8, 4, 2).to(torch.bfloat16) + offset
+        path = tmp_path / f"{name}.pt"
+        torch.save({name: tensor}, path)
+        specs[name] = {
+            "dtype": "bf16",
+            "shape": [1, 8, 4, 2],
+            "shards": [
+                {
+                    "path": path.name,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "tensor_key": name,
+                    "sequence_start": 0,
+                    "sequence_end": 8,
+                }
+            ],
+        }
+    manifest = {"schema_version": 1, "kind": "operator_benchmark_qkv_replay_v1", "layout": "BSHD", "tensors": specs}
+    manifest_path = tmp_path / "replay.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    case = sp_case(
+        shape={"sequence": 6, "heads": 4, "kv_heads": 4, "head_dim": 2, "sp_size": 2, "aux_tokens": 2, "aux_q": True, "aux_first": True, "causal": False},
+        replay={"manifest": str(manifest_path), "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest()},
+        sparse={"keep_ratio": 0.5},
+    )
+    q, k, v, aux_q, aux_k, aux_v = sp_bench._load_sp_replay_inputs(case, torch.device("cpu"), rank=1)
+    assert [tensor.shape for tensor in (q, k, v)] == [torch.Size([3, 4, 2])] * 3
+    assert [tensor.shape for tensor in (aux_q, aux_k, aux_v)] == [torch.Size([2, 4, 2])] * 3
+    full_q = torch.load(tmp_path / "q.pt", weights_only=True)["q"].squeeze(0)
+    assert torch.equal(aux_q, full_q[:2])
+    assert torch.equal(q, full_q[5:8])
+
+    torch.save({"q": torch.load(tmp_path / "q.pt", weights_only=True)["q"].to(torch.float16)}, tmp_path / "q.pt")
+    specs["q"]["shards"][0]["sha256"] = hashlib.sha256((tmp_path / "q.pt").read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    case["replay"]["sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="tensor mismatch"):
+        sp_bench._load_sp_replay_inputs(case, torch.device("cpu"), rank=1)
+
+
 def test_sp_candidates_encode_production_constraints() -> None:
     case = sp_case()
     result = sp_bench.enumerate_candidates(
@@ -927,6 +1051,105 @@ def test_sp_candidates_reject_gqa_fusion_and_ring() -> None:
     assert all(not item["tensor_fusion"] and not item["head_parallel"] for item in result["candidates"])
 
 
+def test_sp_ring_aux_candidates_are_released_by_validated_matrix() -> None:
+    case = sp_case()
+    case["shape"] = {**case["shape"], "aux_tokens": 16, "aux_q": True}
+    result = sp_bench.enumerate_candidates(case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})
+    ring = [item for item in result["candidates"] if item["algorithm"] == "ring"]
+    assert {(item["quant_scheme"], item["tensor_fusion"]) for item in ring} == {
+        (None, False),
+        (None, True),
+        ("fp8", False),
+        ("fp8", True),
+    }
+    assert any("FP4 communication is not validated" in item["reason"] for item in result["exclusions"])
+
+    fp16_case = {**case, "precision": {"input_dtype": "fp16"}}
+    fp16 = sp_bench.enumerate_candidates(fp16_case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})
+    fp16_ring = [item for item in fp16["candidates"] if item["algorithm"] == "ring"]
+    assert {(item["quant_scheme"], item["tensor_fusion"]) for item in fp16_ring} == {
+        (None, False),
+        (None, True),
+        ("fp8", False),
+        ("fp8", True),
+    }
+    assert sp_bench._result_correctness_tolerance(case, ring[0]) == 0.02
+    assert sp_bench._result_correctness_tolerance(fp16_case, fp16_ring[0]) == 0.01
+    assert sp_bench._result_correctness_tolerance(case, next(item for item in ring if item["quant_scheme"] == "fp8")) == 0.10
+    assert sp_bench._result_correctness_tolerance(case, {**ring[0], "dense_backend": "sage_attn2"}) == 0.10
+    assert sp_bench._result_correctness_policy(case, ring[0])["policy"].startswith("exact_dense")
+    with pytest.raises(ValueError, match="missing SP correctness contract"):
+        sp_bench._result_correctness_policy(case, {**ring[0], "dense_backend": "new_lse_backend"})
+    assert sp_bench._result_correctness_policy(
+        case,
+        {**ring[0], "dense_backend": "new_lse_backend"},
+        allow_missing=True,
+    )["policy"] == "exploratory_unregistered_backend_v1"
+
+    unavailable = sp_bench.enumerate_candidates(
+        case,
+        ["flash_attn3"],
+        ring_lse_backends={"flash_attn3"},
+        fp4_available=False,
+    )
+    assert any("FP4 communication dependency is unavailable" in item["reason"] for item in unavailable["exclusions"])
+
+    new_leaf = sp_bench.enumerate_candidates(case, ["new_lse_backend"], ring_lse_backends={"new_lse_backend"})
+    assert not any(item["algorithm"] == "ring" for item in new_leaf["candidates"])
+    assert any("dense backend new_lse_backend is not validated" in item["reason"] for item in new_leaf["exclusions"])
+
+    validation = sp_bench.enumerate_candidates(
+        case,
+        ["new_lse_backend"],
+        ring_lse_backends={"new_lse_backend"},
+        allow_unvalidated=True,
+    )
+    assert any(item["algorithm"] == "ring" for item in validation["candidates"])
+
+
+def test_sp_reference_validation_cli_contract() -> None:
+    args = sp_bench.build_parser().parse_args(
+        [
+            "validate-reference",
+            "--suite",
+            "suite.json",
+            "--output",
+            "reference.json",
+            "--algorithm",
+            "ulysses",
+            "--dense-backend",
+            "flash_attn3",
+        ]
+    )
+    assert args.command == "validate-reference"
+    assert args.algorithm == ["ulysses"]
+    assert args.dense_backend == ["flash_attn3"]
+
+    run_args = sp_bench.build_parser().parse_args(
+        [
+            "run",
+            "--suite",
+            "suite.json",
+            "--output-dir",
+            "results",
+            "--sparse-backend",
+            "dynamic_sparse_sage2_replay",
+        ]
+    )
+    assert run_args.sparse_backend == ["dynamic_sparse_sage2_replay"]
+
+
+def test_sp_aux_inputs_are_replicated_across_ranks() -> None:
+    torch = pytest.importorskip("torch")
+    case = sp_case()
+    case["shape"] = {**case["shape"], "aux_tokens": 4, "aux_q": True}
+    rank0 = sp_bench._make_inputs(case, torch.device("cpu"), seed=42, rank=0)
+    rank1 = sp_bench._make_inputs(case, torch.device("cpu"), seed=42, rank=1)
+    assert not torch.equal(rank0[0], rank1[0])
+    for left, right in zip(rank0[3:], rank1[3:]):
+        assert torch.equal(left, right)
+
+
 def test_sp_report_requires_repeated_runs() -> None:
     case = sp_case()
     candidate = sp_bench.enumerate_candidates(case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})["candidates"][0]
@@ -947,8 +1170,45 @@ def test_sp_report_requires_repeated_runs() -> None:
     workload = report["workloads"][0]
     assert workload["winner"] == candidate["candidate_id"]
     assert workload["candidates"][candidate["candidate_id"]]["latency_ms"] == pytest.approx(2.0)
+    recommendation = workload["recommendation"]
+    assert recommendation["configuration"] == candidate
+    assert recommendation["workload"] == case
+    assert recommendation["latency_ms"] == pytest.approx(2.0)
+    assert recommendation["logical_attention"]["q_shape"] == [1, 1024, 8, 128]
+    assert recommendation["local_input"]["q_shape"] == [256, 8, 128]
     with pytest.raises(ValueError, match="duplicate raw identity"):
         sp_bench.build_report(sp_suite(case), [*records, records[0]])
+
+
+def test_sp_shape_description_reports_fp8_fused_ulysses_communication() -> None:
+    case = sp_case()
+    case["shape"] = {
+        **case["shape"],
+        "sequence": 109064,
+        "heads": 56,
+        "kv_heads": 56,
+        "head_dim": 128,
+        "aux_tokens": 87,
+        "aux_q": True,
+        "aux_first": True,
+    }
+    candidate = {
+        "algorithm": "ulysses",
+        "quant_scheme": "fp8",
+        "tensor_fusion": True,
+        "head_parallel": False,
+    }
+    value = sp_bench._sp_shape_description(case, candidate)
+    assert value["logical_attention"]["q_shape"] == [1, 109151, 56, 128]
+    assert value["local_input"]["q_shape"] == [27266, 56, 128]
+    assert value["per_rank_attention"]["q_shape"] == [109151, 14, 128]
+    qkv = value["communication"]["qkv_all_to_all"]["packed_tensors"][0]
+    assert qkv["payload_shape"] == [4, 27266, 3, 14, 128]
+    assert qkv["scale_shape"] == [4, 27266, 3, 14, 1]
+    output = value["communication"]["output_all_to_all"]["packed_tensors"][0]
+    assert output["payload_shape"] == [4, 14, 27266, 128]
+    assert output["scale_shape"] == [4, 14, 27266, 1]
+    assert value["communication"]["auxiliary"]["output_all_gather_input_shape"] == [87, 14, 128]
 
 
 def test_sp_candidate_catalog_fingerprint_is_stable() -> None:
@@ -1117,7 +1377,30 @@ def test_sp_diagnostic_report_aggregates_repeats() -> None:
                         "aggregate_network_bytes": 12000,
                         "algorithmic_bandwidth_gbps": 0.008,
                         "bus_bandwidth_gbps": 0.006,
+                        "communication_pattern": "all_to_all_with_aux_all_gather",
+                        "peak_profile_pattern": "all_to_all",
                         "primitive": "torch",
+                        "communication_components": {
+                            "main_qkv_all_to_all": {
+                                "logical_payload_bytes_per_rank": 3000,
+                                "network_bytes_per_rank": 2250,
+                                "aggregate_network_bytes": 9000,
+                                "latency_ms_mean": 0.25,
+                                "algorithmic_bandwidth_gbps": 0.012,
+                                "bus_bandwidth_gbps": 0.009,
+                                "peak_profile_pattern": "all_to_all",
+                            },
+                            "aux_output_all_gather": {
+                                "logical_payload_bytes_per_rank": 1000,
+                                "network_bytes_per_rank": 750,
+                                "aggregate_network_bytes": 3000,
+                                "latency_ms_mean": 0.1,
+                                "algorithmic_bandwidth_gbps": 0.01,
+                                "bus_bandwidth_gbps": 0.0075,
+                                "peak_profile_pattern": "all_gather",
+                            },
+                        },
+                        "aux_qkv_input": "replicated_bypass_qkv_all_to_all",
                     },
                     "overlap": {
                         "full_l1_latency_ms": 1.5,
@@ -1145,8 +1428,26 @@ def test_sp_diagnostic_report_aggregates_repeats() -> None:
     assert result["layer2_latency_ms"] == pytest.approx(1.0)
     assert result["layer2_spread_pct"] == pytest.approx(20.0)
     assert result["layer3"]["bus_bandwidth_gbps"] == pytest.approx(0.006)
+    assert result["layer3"]["peak_profile_pattern"] == "all_to_all"
+    assert result["layer3"]["communication_components"]["aux_output_all_gather"]["logical_payload_bytes_per_rank"] == 1000
+    assert result["layer3"]["communication_components"]["aux_output_all_gather"]["latency_ms"] == pytest.approx(0.1)
+    assert result["layer3"]["communication_components"]["aux_output_all_gather"]["bus_bandwidth_gbps"] == pytest.approx(0.0075)
+    assert result["layer3"]["communication_components"]["aux_output_all_gather"]["status"] == "accepted"
+    assert result["candidate"] == candidate
+    assert result["workload"] == case
     assert result["overlap"]["estimate_status"] == "estimated"
     assert result["overlap"]["estimated_overlap_ratio"] == pytest.approx(0.3)
+    markdown = sp_bench.render_diagnostic_markdown(report)
+    assert "L2 分段" in markdown
+    assert "aux_output_all_gather" in markdown
+    assert "replicated_bypass_qkv_all_to_all" in markdown
+    assert "输入精度：`bf16`" in markdown
+    assert "communication=`none`" in markdown
+    assert "峰值口径：`all_to_all`" in markdown
+
+    wrong_case = sp_case(shape={**case["shape"], "head_dim": 64})
+    with pytest.raises(ValueError, match="raw suite drift"):
+        sp_bench.build_diagnostic_report(sp_suite(wrong_case), records)
 
     environment = [
         {
@@ -1180,6 +1481,12 @@ def test_sp_diagnostic_report_aggregates_repeats() -> None:
                         "unit": "GB/s",
                         "kind": "empirical_envelope",
                         "source": "unit test",
+                    },
+                    "all_gather": {
+                        "bus_bandwidth": 0.01,
+                        "unit": "GB/s",
+                        "kind": "empirical_envelope",
+                        "source": "unit test",
                     }
                 },
             }
@@ -1193,6 +1500,11 @@ def test_sp_diagnostic_report_aggregates_repeats() -> None:
         platform_id="h100_test",
     )
     assert profiled["hardware"]["topology_fingerprint"] == fingerprint
+    components = profiled["results"][0]["layer3"]["communication_components"]
+    assert components["main_qkv_all_to_all"]["bus_peak_efficiency"] == pytest.approx(0.75)
+    assert components["aux_output_all_gather"]["bus_peak_efficiency"] == pytest.approx(0.75)
+    assert components["aux_output_all_gather"]["observed_bus_peak_efficiency"] == pytest.approx(0.75)
+    assert "75.00% (`all_gather`)" in sp_bench.render_diagnostic_markdown(profiled)
     assert profiled["results"][0]["layer3"]["peak_status"] == "available"
     assert profiled["results"][0]["layer3"]["bus_peak_efficiency"] == pytest.approx(0.5)
     no_topology = [{"environment": {"ranks": [{**environment[0], "nvidia_smi_topology": []}, environment[1]]}}]
@@ -1206,3 +1518,35 @@ def test_sp_diagnostic_report_aggregates_repeats() -> None:
             interconnect_profiles=profiles,
             platform_id="h100_test",
         )
+
+
+def test_sp_diagnostics_can_load_formal_winners(tmp_path: Path) -> None:
+    report_path = tmp_path / "report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "kind": "sp_attention_benchmark_report_v1",
+                "suite_id": "diagnostic-suite",
+                "workloads": [
+                    {"case_id": "case-a", "recommendation": {"candidate_id": "winner-a"}},
+                    {"case_id": "case-b", "recommendation": {"candidate_id": "winner-b"}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    suite = {"suite_id": "diagnostic-suite", "cases": [{"case_id": "case-a"}, {"case_id": "case-b"}]}
+    assert sp_bench.diagnostic_candidates_from_report(report_path, suite) == {"case-a": "winner-a", "case-b": "winner-b"}
+    args = sp_bench.build_parser().parse_args(
+        [
+            "diagnose",
+            "--suite",
+            "suite.json",
+            "--output-dir",
+            "results",
+            "--recommendation-report",
+            str(report_path),
+        ]
+    )
+    assert args.candidate == []
+    assert args.recommendation_report == report_path

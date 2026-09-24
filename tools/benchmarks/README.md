@@ -7,7 +7,7 @@
 3. 一个 backend 在理论 shape 网格上的表现，以及与其他 backend 的差距；
 4. 最佳实测结果距离硬件名义峰值还有多大 gap。
 
-`operator_bench.py` 只处理 GEMM、dense/sparse attention 和单卡 MoE。Sequence-parallel dense attention 使用独立的
+`operator_bench.py` 只处理 GEMM、dense/sparse attention 和单卡 MoE。Sequence-parallel dense/sparse attention 使用独立的
 `sp_bench.py` 和 suite；模型级调度、TP/SP 混合并行、多机执行和跨硬件性能外推不属于当前版本。
 
 ## 最小数据流
@@ -94,7 +94,7 @@ Dense attention 和 MoE 使用各自的全部必填 shape 字段；不提交预�
 
 ## Sparse Attention 回放
 
-稀疏性取决于 Q/K 内容，只保存 shape 并随机生成输入会让稀疏率和耗时失真。模型侧或 agent 应在进入 attention backend 前捕获已经完成 RoPE 等变换的 Q/K/V，工具只消费稳定的回放合同。新模型不需要把捕获逻辑加入 benchmark；应在 `wyr_agent` 中保存该模型的一次性 hook、转换命令和来源说明。
+稀疏性取决于 Q/K 内容，只保存 shape 并随机生成输入会让稀疏率和耗时失真。模型侧应在进入 attention backend 前捕获已经完成 RoPE 等变换的 Q/K/V，工具只消费稳定的回放合同。模型专属 hook 留在对应模型侧或本地工作区；与模型无关的可复用捕获能力才进入 benchmark。
 
 Suite case 需要固定 replay manifest 的哈希，并声明目标保留比例：
 
@@ -131,6 +131,16 @@ Sparse attention 同时输出两套口径：
 - `dense_equivalent_tflops`：以完整 dense work `4*B*H*Sq*Sk*D` 为分子，用于观察同 shape 的等效吞吐和加速收益。
 
 提供硬件 peak profile 后，报告分别输出 `actual_peak_efficiency` 和 `dense_equivalent_peak_efficiency`。两者都使用 suite 输入精度的普通 dense peak，不使用 2:4 structured-sparsity peak。前者是实际有效计算效率的近似值；后者是等效效率，可能超过 100%，不能解释为实际 Tensor Core 利用率。若 backend 内部混合了量化 QK 与浮点 PV 等不同算术，该分母只是统一诊断基准；精确的硬件指令效率还需要 backend 声明计算混合比例。
+
+### Agent 协作入口
+
+用户只需说明模型/场景、目标硬件和希望搜索的 SP 范围，例如：
+
+```text
+帮我 dump MiniMax-H3 真实完整 sparse attention 输入，并分别搜索 SP=2/4/8 最优配置。
+```
+
+输入选择、QKV dump、候选探测和降级规则由 Agent 按 [`AGENTS.md`](AGENTS.md) 处理；用户仍可选填 step/block、keep ratio 或 backend。Dump 目标始终是原始 token 顺序下的完整全局 Q/K/V，不与采集用了几张卡或最终 `SP` 度数绑定。
 
 ## 运行
 
@@ -189,11 +199,13 @@ Probe 将 LightX2V 当前 `MM_WEIGHT_REGISTER`、`ATTN_WEIGHT_REGISTER` 与 benc
 
 Production registry 中的新 backend 如果既没有 adapter，也没有带原因的排除项，会进入 `unmapped_mm_backends` 或 `unmapped_attention_backends`，汇总到 `unmapped_production_backends`，并令 `catalog_complete=false`。当前架构适用的候选缺少依赖时，`environment_complete=false`。只有两者均成立时 `coverage_complete=true`。
 
-候选目录随当前 LightX2V registry 演进，但每次 probe 的 fingerprint 固定本次比较集合。发布“最佳 backend”结论前，应对目标 family 的全部 `eligible` 候选运行目标 shape；不能把 `dependency_missing` 当作性能落选。尚未进入 LightX2V、也未安装在环境中的外部 kernel 无法由工具自动发现，需要 agent 在新硬件调研阶段补充。
+候选目录随当前 LightX2V registry 演进，但每次 probe 的 fingerprint 固定本次比较集合。发布“最佳 backend”结论前，应对目标 family 的全部 `eligible` 候选运行目标 shape；不能把 `dependency_missing` 当作性能落选。尚未进入 LightX2V、也未安装在环境中的外部 kernel 无法自动发现，需要先安装并通过 registry 或 `--plugin` 注册 adapter。
 
 单卡 benchmark 实质代码只有两个文件：`operator_bench.py` 负责 shape、执行、报告和 CLI，`operator_backends.py` 负责 backend 合同与实现。分布式 SP attention 的进程组、候选约束和计时集中在独立的 `sp_bench.py`，避免让单卡工具依赖 `torchrun`。
 
 ## Sequence-Parallel Attention
+
+当前 `sp_bench` 支持 Ulysses/Ring dense attention，以及使用真实 QKV replay 的 Ulysses sparse attention；不包含 `kv_all_gather`。Sparse leaf 若不提供 Ring 需要的分块输出和 LSE 合并合同，Ring 会明确记为不支持，不会被当作性能失败。Sparse SP 候选从通用 backend catalog 中筛选；当前已适配 H100 与 Blackwell 的 production sparse leaf，未来出现 eligible 但尚无 SP 合同的 adapter 时会记录为 `unmapped_sparse_sp_backends` 并阻止发布完整候选最优。`sage_attn2` 是低精度 dense attention，不代表稀疏计算。
 
 SP benchmark 使用独立的 `sp_attention_benchmark_shape_suite_v1`。模型侧只需导出全局主序列长度、Q/KV head、head dim、SP degree 和可选 replicated auxiliary token：
 
@@ -220,6 +232,19 @@ SP benchmark 使用独立的 `sp_attention_benchmark_shape_suite_v1`。模型侧
 }
 ```
 
+Sparse SP 的 suite 不直接保存某个 rank 的局部输入，而是引用同一份完整 `operator_benchmark_qkv_replay_v1` manifest。对于“复制最大 conditioner 前缀、剩余 main 序列不 padding 切分”的模型，可以从一份 replay 派生默认 `SP=2/4/8` 或指定卡数的 suite：
+
+```bash
+python3 -m tools.benchmarks.sp_bench derive-replay-suites \
+  --manifest /path/to/full_qkv_replay.json \
+  --output-dir /tmp/model_sparse_sp \
+  --suite-id model_real_sparse_sp \
+  --conditioner-tokens 89 \
+  --keep-ratio 0.15
+```
+
+`--conditioner-tokens` 必须来自模型语义；工具会为每个 SP 度数重新计算 aux/main 边界，并在每个 rank 上只加载 replicated aux 与当前 local main 范围。需要非默认卡数时，可以重复传入 `--sp-size`。
+
 先检查合同，再在目标硬件上探测 production dense leaf backend、平台 A2A backend 和所有合法组合：
 
 ```bash
@@ -231,6 +256,22 @@ python3 -m tools.benchmarks.sp_bench candidates \
 ```
 
 候选包含 Ulysses 的 pre/post、A2A、通信精度、tensor fusion、head pipeline，以及 Ring 的通信精度和 K/V fusion。工具会按当前 production 约束排除无效组合，并记录原因；Ring 只接受原生提供 `apply_with_lse()` 的 dense backend。
+
+Aux Q/K/V 按 replicated 语义在各 rank 使用相同输入；raw 同时检查 main/aux output shape、finite 和 aux output 跨 rank 一致性。H100 上已用 dense reference 验证当前全部 Ulysses/Ring leaf 与合法选项，覆盖 BF16/FP16、无量化/FP8 communication、fusion、aux K/V only/完整 aux Q/K/V，以及 `aux_first` 两种顺序。精确 backend、近似 backend 和量化通信的门限由 `SP_REFERENCE_TOLERANCES` 显式声明，并随验证结果写入 correctness。
+
+`not validated` 的含义是“代码可能支持，但本工具还没有足够证据把它放入候选”，不是性能落选，也不是可以长期忽略的状态。新模型、新硬件或新需求命中这类 exclusion 时，Agent 必须先补验证并更新准入矩阵；只有缺少目标硬件、依赖或真实输入等外部阻塞时才允许延期。
+
+新增 backend、精度或通信路径时，先用 Torch SDPA dense reference 验证 production SP 输出。该命令允许枚举普通推荐路径尚未放行的候选，但不会自动修改准入合同：
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+torchrun --standalone --nproc-per-node=4 \
+  -m tools.benchmarks.sp_bench validate-reference \
+  --suite /tmp/model_sp.json \
+  --output /tmp/model_sp_reference.json
+```
+
+结果逐 case/candidate 记录 main/aux 最大绝对误差、显式 tolerance policy、各 rank shape/finite/allclose 状态和环境身份。尚未登记的新 backend 在探索验证中临时使用 `atol=rtol=0.10`，该值不是正式正确性合同；验证通过后仍需按实测误差更新 `SP_REFERENCE_TOLERANCES` 或对应候选门禁并补单测，才算正式解锁。FP4 communication 当前因依赖缺失未验证；新增 dense leaf 默认以 `not validated` 排除。
 
 运行必须由 `torchrun` 启动，进程数必须等于 suite 的 `sp_size`：
 
@@ -244,11 +285,27 @@ torchrun --standalone --nproc-per-node=4 \
   --algorithm ulysses --algorithm ring
 ```
 
+Sparse replay suite 使用同一 `run` 入口；不指定 `--sparse-backend` 时遍历目标环境中全部 eligible sparse SP adapter：
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+torchrun --standalone --nproc-per-node=4 \
+  -m tools.benchmarks.sp_bench run \
+  --suite /tmp/model_sparse_sp/model_real_sparse_sp_sp4.json \
+  --output-dir /tmp/model_sparse_sp_h100 \
+  --algorithm ulysses \
+  --repeat-runs 3 --warmup 10 --iterations 30
+```
+
+Sparse raw/report 同时输出 `actual_tflops`、`dense_equivalent_tflops` 和实际 block density。两种 TFLOPS 都是参与 GPU 的聚合值；前者以实际选中 block 工作量为分子，后者以完整 dense attention 工作量为分子。
+
 不指定 `--candidate` 时会运行所选算法的全部合法候选；可先从 `candidates` 输出中选择精确 candidate ID，以 `--candidate ID` 缩小实验。每次迭代取所有 rank 的最大 CUDA event 延迟，measured loop 内不插入 barrier 或同步；输出为 `candidate_catalog.json`、`raw.jsonl`、`run_summary.json` 和 `report.json`。
 
-中断后使用完全相同的测量参数增加 repeat，并传入 `--append`。工具按 `(repeat, case, candidate)` 跳过已有记录，同时拒绝 suite、候选 fingerprint、测量参数、LightX2V commit、GPU UUID/PCI 映射、CUDA/PyTorch/NCCL 或 NCCL 环境漂移。每条 raw 在候选完成后立即 flush，已经完成的工作不会因后续候选失败而丢失。
+中断后使用完全相同的测量参数增加 repeat，并传入 `--append`。工具按 `(repeat, case, candidate)` 跳过已有记录，同时拒绝 suite、候选 fingerprint、测量参数、LightX2V commit、GPU UUID/PCI 映射、CUDA/PyTorch/NCCL 或 NCCL 环境漂移。NCCL `ALGO`、`PROTO` 和 channel 数只记录、不自动 sweep；显式更换后应使用独立输出目录。每条 raw 在候选完成后立即 flush，已经完成的工作不会因后续候选失败而丢失。
 
 报告区分 `measured_winner` 和 `winner`：前者只是已测集合中最快的稳定候选；后者要求底层 attention registry 没有适用但缺依赖或未映射的 backend，且候选目录中的每个合法组合都得到稳定结果或明确的不可用/正确性结论。少于三个 repeat、波动超门限、测量错误或候选未覆盖时，`coverage_complete=false` 且不发布 `winner`。
+
+正式 winner 发布时，workload 的 `recommendation` 直接携带完整候选配置、原始 workload case（包含 precision、sparse/replay 与 shape 身份）、延迟、逻辑 Q/K/V shape、每 rank attention shape，以及按通信量化/fusion/head-pipeline 配置展开的 payload 和 scale shape。这是机器可读的完整推荐；aux/main 边界和吞吐指标用于后续解释。
 
 完整 production SP attention 是搜索配置的 L1 指标，也是推荐配置的唯一排序依据。对已选候选可进一步运行诊断层：
 
@@ -258,16 +315,22 @@ torchrun --standalone --nproc-per-node=4 \
   -m tools.benchmarks.sp_bench diagnose \
   --suite /tmp/model_sp.json \
   --output-dir /tmp/model_sp_h100_diagnostic \
-  --candidate 'ulysses__attn=flash_attn3__comm=none__fusion=0__prepost=torch__a2a=torch__head=0'
+  --recommendation-report /tmp/model_sp_h100/report.json
 ```
+
+`--recommendation-report` 会读取 L1 正式报告中的 winner，因此日常诊断不需要手写长 candidate ID；调试单个候选时仍可使用一个或多个 `--candidate`。CLI 摘要会返回 `diagnostic_report.md` 路径，它是默认的人类可读结果页；同目录的 JSON 保留完整机器可读结果。
 
 `diagnose` 输出以下互相独立的测量层：
 
-- L2：跳过 attention 计算后的完整 layout + communication 路径，以及 pack、exchange、unpack 分段；
-- L3：只执行候选真实 payload 的 A2A 或 Ring P2P，报告每 rank 逻辑 payload、跨 GPU link 字节、整组聚合字节、algorithmic bandwidth 和 bus bandwidth；
+- L2：跳过 attention 计算后的完整 layout + communication 路径，以及 main/aux 的 pack、量化、exchange、unpack 分段；
+- L3：只执行候选真实 payload 的 A2A、all-gather 或 Ring P2P，按通信分量报告每 rank 逻辑 payload、跨 GPU link 字节、整组聚合字节、algorithmic bandwidth 和 bus bandwidth；
 - overlap 诊断：另外测量 production L1 和 compute-only 路径。只有三个独立测量在容差内可加时才发布估算比例；存在未解释的组合开销或跨测量倒置时，`estimate_status` 给出原因，比例保持 `null`。
 
-诊断同样要求至少三个 repeat，并对 L2、L3 分别应用 spread 门禁。L2/L3 用于解释 L1，不参与候选排名。当前诊断要求 `aux_tokens=0` 且 `head_parallel=false`；其他候选仍可正常运行 L1。Ulysses 与 Ring 只在共同支持的 attention 语义上参与公平排名，Ring 不支持的 GQA、auxiliary token 等 case 会明确排除。
+诊断同样要求至少三个 repeat，并对 L2、L3 整体及各通信分量分别应用 spread 门禁。L2/L3 用于解释 L1，不参与候选排名。分量不稳定时保留带宽和带 `~` 的 observed efficiency，但正式 `bus_peak_efficiency` 保持 `null`。当前诊断要求 `head_parallel=false`，支持 dense suite 以及真实 replay 驱动的 sparse suite。Sparse 诊断会复用 L1 的真实 Q/K/V，不会重新生成随机输入。
+
+Aux 按 production 语义拆分：Ulysses 的 replicated aux Q/K/V 不进入 main QKV A2A，aux output 使用 all-gather；Ring 的 replicated aux Q/K/V 不进入 main K/V rotation，只在本地 attention layout 中拼接。报告会同时列出 main 与 aux 通信分量各自独立实测的 latency、Bus bandwidth、稳定性和峰值效率。分量使用独立 Event-list 测量，不是按整体耗时比例摊分；因此各分量延迟之和不要求等于整体 L3 路径延迟。
+
+混合 Ulysses 整体路径仍以 `all_to_all` profile 作为主链路峰值分母，并显式计入 aux all-gather 字节；分量报告则分别使用 `all_to_all` 和 `all_gather` peak。缺少某个分量的 peak 时仍报告其延迟和带宽，但不发布该分量效率。
 
 ### SP 互联峰值
 
@@ -291,6 +354,12 @@ torchrun --standalone --nproc-per-node=4 \
           "kind": "theoretical",
           "source": "https://docs.nvidia.com/cuda/hopper-tuning-guide/#fourth-generation-nvlink"
         },
+        "all_gather": {
+          "bus_bandwidth": 450.0,
+          "unit": "GB/s",
+          "kind": "theoretical",
+          "source": "https://docs.nvidia.com/cuda/hopper-tuning-guide/#fourth-generation-nvlink"
+        },
         "ring_p2p": {
           "bus_bandwidth": 450.0,
           "unit": "GB/s",
@@ -303,7 +372,7 @@ torchrun --standalone --nproc-per-node=4 \
 }
 ```
 
-`bus_bandwidth` 必须与报告的 `network_bytes_per_rank / latency` 使用同一口径：只计每 rank 发出的跨 GPU link 字节。上例的 H100 SXM 官方规格为每 GPU 900 GB/s 双向 NVLink 带宽，因此单向分母为 450 GB/s；该数值只适用于 profile 明确匹配的 H100 拓扑，不是其他硬件的默认值。`kind` 可取理论峰值 `theoretical` 或实测饱和包络 `empirical_envelope`，两者都必须保留来源。
+`bus_bandwidth` 必须与报告的 `network_bytes_per_rank / latency` 使用同一口径：只计每 rank 发出的跨 GPU link 字节。上例的 H100 SXM 官方规格为每 GPU 900 GB/s 双向 NVLink 带宽，因此单向分母为 450 GB/s；该数值只适用于 profile 明确匹配的 H100 拓扑，不是其他硬件的默认值。理论物理峰值可以在多个通信模式下相同；实测饱和包络必须按 `all_to_all`、`all_gather`、`ring_p2p` 分别调研。`kind` 可取理论峰值 `theoretical` 或实测饱和包络 `empirical_envelope`，两者都必须保留来源。
 
 补完 profile 后无需重跑 benchmark，可从 raw 离线重建报告：
 
