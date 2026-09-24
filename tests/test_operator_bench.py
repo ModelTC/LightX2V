@@ -10,6 +10,7 @@ import pytest
 
 from tools.benchmarks import operator_backends as backends
 from tools.benchmarks import operator_bench as core
+from tools.benchmarks import sp_bench
 from tools.benchmarks.operator_backends import BackendDescriptor, BackendRegistry, load_registry
 
 H100_PEAKS = {
@@ -57,6 +58,44 @@ def operator_catalog(family: str, *names: str) -> dict:
         "unmapped_attention_backends": [],
         "unmapped_mm_backends": [],
         "candidates": [{"name": name, "family": family, "status": "eligible"} for name in names],
+    }
+
+
+def sp_case(**overrides: object) -> dict:
+    value = {
+        "case_id": "sp_attention.1",
+        "shape": {
+            "sequence": 1024,
+            "heads": 8,
+            "kv_heads": 8,
+            "head_dim": 128,
+            "sp_size": 4,
+            "aux_tokens": 0,
+            "aux_q": False,
+            "aux_first": False,
+            "causal": False,
+        },
+        "precision": {"input_dtype": "bf16"},
+    }
+    value.update(overrides)
+    return value
+
+
+def sp_suite(*cases: dict) -> dict:
+    return {
+        "schema_version": 1,
+        "kind": "sp_attention_benchmark_shape_suite_v1",
+        "suite_id": "sp_test_suite",
+        "cases": list(cases),
+    }
+
+
+def sp_catalog(case: dict, *candidates: dict) -> dict:
+    return {
+        "kind": "sp_attention_benchmark_candidate_catalog_v1",
+        "catalog_fingerprint": "catalog-1",
+        "scope_complete": True,
+        "cases": [{"case_id": case["case_id"], "candidates": list(candidates), "exclusions": []}],
     }
 
 
@@ -840,3 +879,330 @@ def test_cli_failed_run_does_not_overwrite_existing_backend_catalog(
         core.main(["run", "--suite", str(suite_path), "--output-dir", str(output_dir)])
 
     assert json.loads(catalog_path.read_text(encoding="utf-8")) == {"kind": "previous_catalog"}
+
+
+def test_sp_suite_contract_and_inspection() -> None:
+    value = sp_suite(sp_case(call_count=12))
+    sp_bench.validate_suite(value)
+    inspection = sp_bench.inspect_suite(value)
+    assert inspection["case_count"] == 1
+    assert inspection["sp_sizes"] == {4: 1}
+    assert inspection["missing_call_count"] == []
+
+    invalid = sp_case()
+    invalid["shape"] = {**invalid["shape"], "sequence": 1025}
+    with pytest.raises(ValueError, match="divisible"):
+        sp_bench.validate_suite(sp_suite(invalid))
+
+
+def test_sp_candidates_encode_production_constraints() -> None:
+    case = sp_case()
+    result = sp_bench.enumerate_candidates(
+        case,
+        ["flash_attn3", "flash_attn4"],
+        ring_lse_backends={"flash_attn3"},
+        fp4_available=False,
+    )
+    candidates = result["candidates"]
+    exclusions = result["exclusions"]
+    assert any(item["algorithm"] == "ulysses" and item["prepost_backend"] == "triton" for item in candidates)
+    assert any(item["algorithm"] == "ring" and item["dense_backend"] == "flash_attn3" for item in candidates)
+    assert not any(item["algorithm"] == "ring" and item["dense_backend"] == "flash_attn4" for item in candidates)
+    assert not any(item["quant_scheme"] == "fp4" for item in candidates)
+    assert any("native apply_with_lse" in item["reason"] for item in exclusions)
+    assert any("FP4 communication dependency" in item["reason"] for item in exclusions)
+    assert not any(
+        item["prepost_backend"] == "triton" and not item["tensor_fusion"]
+        for item in candidates
+        if item["algorithm"] == "ulysses"
+    )
+
+
+def test_sp_candidates_reject_gqa_fusion_and_ring() -> None:
+    case = sp_case()
+    case["shape"] = {**case["shape"], "heads": 8, "kv_heads": 4}
+    result = sp_bench.enumerate_candidates(case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})
+    assert result["candidates"]
+    assert all(item["algorithm"] == "ulysses" for item in result["candidates"])
+    assert all(not item["tensor_fusion"] and not item["head_parallel"] for item in result["candidates"])
+
+
+def test_sp_report_requires_repeated_runs() -> None:
+    case = sp_case()
+    candidate = sp_bench.enumerate_candidates(case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})["candidates"][0]
+    records = []
+    for repeat, latency in enumerate((2.0, 1.99, 2.01)):
+        records.append(
+            {
+                "run_id": f"repeat-{repeat:03d}",
+                "status": "ok",
+                "case": case,
+                "candidate": candidate,
+                "metrics": {"latency_ms_mean": latency, "aggregate_effective_tflops": 100.0 / latency},
+            }
+        )
+    for record in records:
+        record["catalog_fingerprint"] = "catalog-1"
+    report = sp_bench.build_report(sp_suite(case), records, candidate_catalog=sp_catalog(case, candidate))
+    workload = report["workloads"][0]
+    assert workload["winner"] == candidate["candidate_id"]
+    assert workload["candidates"][candidate["candidate_id"]]["latency_ms"] == pytest.approx(2.0)
+    with pytest.raises(ValueError, match="duplicate raw identity"):
+        sp_bench.build_report(sp_suite(case), [*records, records[0]])
+
+
+def test_sp_candidate_catalog_fingerprint_is_stable() -> None:
+    suite = sp_suite(sp_case())
+    runtime = {
+        "catalog": {
+            "catalog_fingerprint": "backend-catalog",
+            "unmapped_attention_backends": [],
+            "candidates": [{"name": "flash_attn3", "family": "dense_attention", "status": "eligible"}],
+        },
+        "dense_backends": ["flash_attn3"],
+        "ring_lse_backends": {"flash_attn3"},
+        "a2a_backends": ["torch", "round_robin"],
+        "fp4_available": False,
+    }
+    first = sp_bench.build_candidate_catalog(suite, runtime)
+    second = sp_bench.build_candidate_catalog(suite, runtime)
+    assert first == second
+    assert len(first["catalog_fingerprint"]) == 64
+    assert first["scope_complete"] is True
+
+    narrowed = sp_bench.build_candidate_catalog(suite, {**runtime, "dense_backends": ["flash_attn3", "sage_attn2"]}, ["flash_attn3"])
+    assert narrowed["scope_complete"] is False
+    assert narrowed["catalog_fingerprint"] != first["catalog_fingerprint"]
+
+    missing_dependency = {
+        **runtime,
+        "catalog": {
+            **runtime["catalog"],
+            "candidates": [
+                *runtime["catalog"]["candidates"],
+                {"name": "future_attn", "family": "dense_attention", "status": "dependency_missing"},
+            ],
+        },
+    }
+    blocked = sp_bench.build_candidate_catalog(suite, missing_dependency)
+    assert blocked["backend_scope_complete"] is False
+    assert blocked["scope_complete"] is False
+    assert blocked["backend_scope_blockers"]["dependency_missing"] == ["future_attn"]
+
+
+def test_sp_report_does_not_publish_partial_or_unstable_winner() -> None:
+    case = sp_case()
+    candidates = sp_bench.enumerate_candidates(case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})["candidates"][:2]
+    records = []
+    for repeat, latency in enumerate((1.0, 1.2, 1.0)):
+        records.append(
+            {
+                "run_id": f"repeat-{repeat:03d}",
+                "status": "ok",
+                "case": case,
+                "candidate": candidates[0],
+                "metrics": {"latency_ms_mean": latency, "aggregate_effective_tflops": 100.0},
+                "correctness": {"passed": True},
+                "catalog_fingerprint": "catalog-1",
+            }
+        )
+    report = sp_bench.build_report(
+        sp_suite(case),
+        records,
+        candidate_catalog=sp_catalog(case, *candidates),
+    )
+    workload = report["workloads"][0]
+    assert workload["winner"] is None
+    assert workload["measured_winner"] is None
+    assert workload["candidate_coverage_complete"] is False
+    assert workload["candidates"][candidates[0]["candidate_id"]]["status"] == "unstable"
+    assert workload["candidates"][candidates[1]["candidate_id"]]["status"] == "not_measured"
+
+
+def test_sp_report_requires_catalog_for_formal_winner_and_rejects_mixed_environment() -> None:
+    case = sp_case()
+    candidate = sp_bench.enumerate_candidates(case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})["candidates"][0]
+    records = [
+        {
+            "run_id": f"repeat-{repeat:03d}",
+            "status": "ok",
+            "case": case,
+            "candidate": candidate,
+            "metrics": {"latency_ms_mean": 1.0, "aggregate_effective_tflops": 100.0},
+            "environment": {"ranks": [{"rank": 0, "torch": "test"}]},
+            "run": {"iterations": 2},
+        }
+        for repeat in range(3)
+    ]
+    report = sp_bench.build_report(sp_suite(case), records)
+    assert report["workloads"][0]["measured_winner"] == candidate["candidate_id"]
+    assert report["workloads"][0]["winner"] is None
+
+    records[-1]["environment"]["ranks"][0]["torch"] = "different"
+    with pytest.raises(ValueError, match="mixed SP raw hardware or software environments"):
+        sp_bench.build_report(sp_suite(case), records)
+
+
+def test_sp_existing_raw_rejects_contract_drift() -> None:
+    case = sp_case()
+    candidate = sp_bench.enumerate_candidates(case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})["candidates"][0]
+    catalog = sp_catalog(case, candidate)
+    environment = [
+        {
+            "rank": 0,
+            "local_rank": 0,
+            "world_size": 1,
+            "gpu": {"uuid": "gpu-0"},
+            "torch": "test",
+            "cuda_runtime": "test",
+            "cuda_visible_devices": "0",
+            "git_commit": "commit",
+            "nccl_version": [1, 0, 0],
+            "nccl_environment": {},
+        }
+    ]
+    contract = {"warmup": 1, "iterations": 2, "seed": 42, "world_size": 1, "timing_mode": "max_rank_event_list_single_sync"}
+    record = {
+        "kind": "sp_attention_benchmark_raw_v1",
+        "run_id": "repeat-000",
+        "case": case,
+        "candidate": candidate,
+        "catalog_fingerprint": catalog["catalog_fingerprint"],
+        "environment": {"ranks": environment},
+        "run": contract,
+    }
+    keys = sp_bench.validate_existing_records(sp_suite(case), catalog, [record], contract, environment, repeat_runs=3)
+    assert keys == {("repeat-000", case["case_id"], candidate["candidate_id"])}
+    with pytest.raises(ValueError, match="measurement arguments"):
+        sp_bench.validate_existing_records(sp_suite(case), catalog, [record], {**contract, "iterations": 3}, environment, repeat_runs=3)
+
+
+def test_sp_communication_byte_and_bandwidth_metrics() -> None:
+    torch = pytest.importorskip("torch")
+    packed = ((torch.empty((4, 8), dtype=torch.bfloat16), None), (torch.empty((2, 4), dtype=torch.float32), torch.empty((2, 1), dtype=torch.float32)))
+    assert sp_bench._tensor_bytes(packed) == 104
+    rates = sp_bench._communication_rates(logical_bytes=4000, network_bytes=3000, latency_ms=2.0, world_size=4)
+    assert rates["algorithmic_bandwidth_gbps"] == pytest.approx(0.002)
+    assert rates["bus_bandwidth_gbps"] == pytest.approx(0.0015)
+    assert rates["aggregate_network_bytes"] == 12000
+    overlap = sp_bench._overlap_estimate(full_l1_ms=7.0, compute_only_ms=5.0, layer2_ms=4.0)
+    assert overlap["estimate_status"] == "estimated"
+    assert overlap["estimated_exposed_layout_communication_ms"] == pytest.approx(2.0)
+    assert overlap["estimated_overlap_ratio"] == pytest.approx(0.5)
+    unresolved = sp_bench._overlap_estimate(full_l1_ms=1.3, compute_only_ms=0.7, layer2_ms=0.2)
+    assert unresolved["estimate_status"] == "unresolved_positive_residual"
+    assert unresolved["estimated_overlap_ratio"] is None
+
+
+def test_sp_diagnostic_report_aggregates_repeats() -> None:
+    case = sp_case()
+    candidate = sp_bench.enumerate_candidates(case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})["candidates"][0]
+    records = []
+    for repeat, latency in enumerate((1.0, 1.1, 0.9)):
+        records.append(
+            {
+                "run_id": f"repeat-{repeat:03d}",
+                "status": "ok",
+                "case": case,
+                "candidate": candidate,
+                "metrics": {
+                    "layer2": {
+                        "total": {"latency_ms_mean": latency},
+                        "segments": {"pack_qkv": {"latency_ms_mean": 0.1, "calls_per_attention": 1}},
+                    },
+                    "layer3": {
+                        "latency_ms_mean": 0.5,
+                        "logical_payload_bytes_per_rank": 4000,
+                        "network_bytes_per_rank": 3000,
+                        "aggregate_network_bytes": 12000,
+                        "algorithmic_bandwidth_gbps": 0.008,
+                        "bus_bandwidth_gbps": 0.006,
+                        "primitive": "torch",
+                    },
+                    "overlap": {
+                        "full_l1_latency_ms": 1.5,
+                        "compute_only_latency_ms": 0.8,
+                        "layer2_layout_communication_latency_ms": latency,
+                        "serial_reference_latency_ms": 0.8 + latency,
+                        "full_minus_serial_reference_ms": 0.7 - latency,
+                        "estimation_tolerance_ms": 0.05,
+                        "estimate_status": "estimated",
+                        "observed_full_minus_compute_ms": 0.7,
+                        "estimated_exposed_layout_communication_ms": 0.7,
+                        "estimated_hidden_layout_communication_ms": max(0.0, latency - 0.7),
+                        "estimated_overlap_ratio": max(0.0, latency - 0.7) / latency,
+                        "definition": "test",
+                        "interpretation": "test",
+                    },
+                },
+            }
+        )
+    strict_report = sp_bench.build_diagnostic_report(sp_suite(case), records)
+    assert strict_report["results"][0]["status"] == "unstable"
+    report = sp_bench.build_diagnostic_report(sp_suite(case), records, max_spread_pct=30.0)
+    result = report["results"][0]
+    assert result["status"] == "accepted"
+    assert result["layer2_latency_ms"] == pytest.approx(1.0)
+    assert result["layer2_spread_pct"] == pytest.approx(20.0)
+    assert result["layer3"]["bus_bandwidth_gbps"] == pytest.approx(0.006)
+    assert result["overlap"]["estimate_status"] == "estimated"
+    assert result["overlap"]["estimated_overlap_ratio"] == pytest.approx(0.3)
+
+    environment = [
+        {
+            "rank": 0,
+            "local_rank": 0,
+            "gpu": {"name": "NVIDIA H100 80GB HBM3", "major": 9, "minor": 0, "pci_domain_id": 0, "pci_bus_id": 1, "pci_device_id": 0},
+            "nvidia_smi_topology": ["GPU0 GPU1", "GPU0 X NV18", "GPU1 NV18 X"],
+        },
+        {
+            "rank": 1,
+            "local_rank": 1,
+            "gpu": {"name": "NVIDIA H100 80GB HBM3", "major": 9, "minor": 0, "pci_domain_id": 0, "pci_bus_id": 2, "pci_device_id": 0},
+        },
+    ]
+    for record in records:
+        record["environment"] = {"ranks": environment}
+    fingerprint = sp_bench._topology_fingerprint(records)
+    profiles = {
+        "schema_version": 1,
+        "platforms": {
+            "h100_test": {
+                "identification": {
+                    "gpu_name_regex": "^NVIDIA H100 80GB HBM3$",
+                    "cuda_capability": "9.0",
+                    "world_size": 2,
+                    "topology_fingerprint": fingerprint,
+                },
+                "interconnect_peaks": {
+                    "all_to_all": {
+                        "bus_bandwidth": 0.012,
+                        "unit": "GB/s",
+                        "kind": "empirical_envelope",
+                        "source": "unit test",
+                    }
+                },
+            }
+        }
+    }
+    profiled = sp_bench.build_diagnostic_report(
+        sp_suite(case),
+        records,
+        max_spread_pct=30.0,
+        interconnect_profiles=profiles,
+        platform_id="h100_test",
+    )
+    assert profiled["hardware"]["topology_fingerprint"] == fingerprint
+    assert profiled["results"][0]["layer3"]["peak_status"] == "available"
+    assert profiled["results"][0]["layer3"]["bus_peak_efficiency"] == pytest.approx(0.5)
+    no_topology = [{"environment": {"ranks": [{**environment[0], "nvidia_smi_topology": []}, environment[1]]}}]
+    assert sp_bench._topology_fingerprint(no_topology) is None
+    profiles["platforms"]["h100_test"]["identification"]["topology_fingerprint"] = "wrong"
+    with pytest.raises(ValueError, match="topology"):
+        sp_bench.build_diagnostic_report(
+            sp_suite(case),
+            records,
+            max_spread_pct=30.0,
+            interconnect_profiles=profiles,
+            platform_id="h100_test",
+        )

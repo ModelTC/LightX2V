@@ -7,7 +7,8 @@
 3. 一个 backend 在理论 shape 网格上的表现，以及与其他 backend 的差距；
 4. 最佳实测结果距离硬件名义峰值还有多大 gap。
 
-它只处理 GEMM、dense/sparse attention 和单卡 MoE。Distributed、模型级调度和跨硬件性能外推不属于当前版本。
+`operator_bench.py` 只处理 GEMM、dense/sparse attention 和单卡 MoE。Sequence-parallel dense attention 使用独立的
+`sp_bench.py` 和 suite；模型级调度、TP/SP 混合并行、多机执行和跨硬件性能外推不属于当前版本。
 
 ## 最小数据流
 
@@ -190,7 +191,132 @@ Production registry 中的新 backend 如果既没有 adapter，也没有带原�
 
 候选目录随当前 LightX2V registry 演进，但每次 probe 的 fingerprint 固定本次比较集合。发布“最佳 backend”结论前，应对目标 family 的全部 `eligible` 候选运行目标 shape；不能把 `dependency_missing` 当作性能落选。尚未进入 LightX2V、也未安装在环境中的外部 kernel 无法由工具自动发现，需要 agent 在新硬件调研阶段补充。
 
-Benchmark 实质代码只有两个文件：`operator_bench.py` 负责 shape、执行、报告和 CLI，`operator_backends.py` 负责 backend 合同与实现。
+单卡 benchmark 实质代码只有两个文件：`operator_bench.py` 负责 shape、执行、报告和 CLI，`operator_backends.py` 负责 backend 合同与实现。分布式 SP attention 的进程组、候选约束和计时集中在独立的 `sp_bench.py`，避免让单卡工具依赖 `torchrun`。
+
+## Sequence-Parallel Attention
+
+SP benchmark 使用独立的 `sp_attention_benchmark_shape_suite_v1`。模型侧只需导出全局主序列长度、Q/KV head、head dim、SP degree 和可选 replicated auxiliary token：
+
+```json
+{
+  "schema_version": 1,
+  "kind": "sp_attention_benchmark_shape_suite_v1",
+  "suite_id": "my_model_sp",
+  "cases": [{
+    "case_id": "block.self_attn",
+    "shape": {
+      "sequence": 32768,
+      "heads": 32,
+      "kv_heads": 32,
+      "head_dim": 128,
+      "sp_size": 4,
+      "aux_tokens": 0,
+      "aux_q": false,
+      "aux_first": false,
+      "causal": false
+    },
+    "precision": {"input_dtype": "bf16"}
+  }]
+}
+```
+
+先检查合同，再在目标硬件上探测 production dense leaf backend、平台 A2A backend 和所有合法组合：
+
+```bash
+python3 -m tools.benchmarks.sp_bench inspect --suite /tmp/model_sp.json
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+python3 -m tools.benchmarks.sp_bench candidates \
+  --suite /tmp/model_sp.json --device cuda:0
+```
+
+候选包含 Ulysses 的 pre/post、A2A、通信精度、tensor fusion、head pipeline，以及 Ring 的通信精度和 K/V fusion。工具会按当前 production 约束排除无效组合，并记录原因；Ring 只接受原生提供 `apply_with_lse()` 的 dense backend。
+
+运行必须由 `torchrun` 启动，进程数必须等于 suite 的 `sp_size`：
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+torchrun --standalone --nproc-per-node=4 \
+  -m tools.benchmarks.sp_bench run \
+  --suite /tmp/model_sp.json \
+  --output-dir /tmp/model_sp_h100 \
+  --dense-backend flash_attn3 \
+  --algorithm ulysses --algorithm ring
+```
+
+不指定 `--candidate` 时会运行所选算法的全部合法候选；可先从 `candidates` 输出中选择精确 candidate ID，以 `--candidate ID` 缩小实验。每次迭代取所有 rank 的最大 CUDA event 延迟，measured loop 内不插入 barrier 或同步；输出为 `candidate_catalog.json`、`raw.jsonl`、`run_summary.json` 和 `report.json`。
+
+中断后使用完全相同的测量参数增加 repeat，并传入 `--append`。工具按 `(repeat, case, candidate)` 跳过已有记录，同时拒绝 suite、候选 fingerprint、测量参数、LightX2V commit、GPU UUID/PCI 映射、CUDA/PyTorch/NCCL 或 NCCL 环境漂移。每条 raw 在候选完成后立即 flush，已经完成的工作不会因后续候选失败而丢失。
+
+报告区分 `measured_winner` 和 `winner`：前者只是已测集合中最快的稳定候选；后者要求底层 attention registry 没有适用但缺依赖或未映射的 backend，且候选目录中的每个合法组合都得到稳定结果或明确的不可用/正确性结论。少于三个 repeat、波动超门限、测量错误或候选未覆盖时，`coverage_complete=false` 且不发布 `winner`。
+
+完整 production SP attention 是搜索配置的 L1 指标，也是推荐配置的唯一排序依据。对已选候选可进一步运行诊断层：
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+torchrun --standalone --nproc-per-node=4 \
+  -m tools.benchmarks.sp_bench diagnose \
+  --suite /tmp/model_sp.json \
+  --output-dir /tmp/model_sp_h100_diagnostic \
+  --candidate 'ulysses__attn=flash_attn3__comm=none__fusion=0__prepost=torch__a2a=torch__head=0'
+```
+
+`diagnose` 输出以下互相独立的测量层：
+
+- L2：跳过 attention 计算后的完整 layout + communication 路径，以及 pack、exchange、unpack 分段；
+- L3：只执行候选真实 payload 的 A2A 或 Ring P2P，报告每 rank 逻辑 payload、跨 GPU link 字节、整组聚合字节、algorithmic bandwidth 和 bus bandwidth；
+- overlap 诊断：另外测量 production L1 和 compute-only 路径。只有三个独立测量在容差内可加时才发布估算比例；存在未解释的组合开销或跨测量倒置时，`estimate_status` 给出原因，比例保持 `null`。
+
+诊断同样要求至少三个 repeat，并对 L2、L3 分别应用 spread 门禁。L2/L3 用于解释 L1，不参与候选排名。当前诊断要求 `aux_tokens=0` 且 `head_parallel=false`；其他候选仍可正常运行 L1。Ulysses 与 Ring 只在共同支持的 attention 语义上参与公平排名，Ring 不支持的 GQA、auxiliary token 等 case 会明确排除。
+
+### SP 互联峰值
+
+首次到达新硬件时，先不提供 peak 运行 `diagnose`。报告的 `hardware.topology_fingerprint` 由 rank 到 GPU PCI 映射和规范化后的 `nvidia-smi topo -m` 共同生成。调研当前硬件后再建立 profile：
+
+```json
+{
+  "schema_version": 1,
+  "platforms": {
+    "my_4gpu_topology": {
+      "identification": {
+        "gpu_name_regex": "^NVIDIA H100 80GB HBM3$",
+        "cuda_capability": "9.0",
+        "world_size": 4,
+        "topology_fingerprint": "..."
+      },
+      "interconnect_peaks": {
+        "all_to_all": {
+          "bus_bandwidth": 450.0,
+          "unit": "GB/s",
+          "kind": "theoretical",
+          "source": "https://docs.nvidia.com/cuda/hopper-tuning-guide/#fourth-generation-nvlink"
+        },
+        "ring_p2p": {
+          "bus_bandwidth": 450.0,
+          "unit": "GB/s",
+          "kind": "theoretical",
+          "source": "https://docs.nvidia.com/cuda/hopper-tuning-guide/#fourth-generation-nvlink"
+        }
+      }
+    }
+  }
+}
+```
+
+`bus_bandwidth` 必须与报告的 `network_bytes_per_rank / latency` 使用同一口径：只计每 rank 发出的跨 GPU link 字节。上例的 H100 SXM 官方规格为每 GPU 900 GB/s 双向 NVLink 带宽，因此单向分母为 450 GB/s；该数值只适用于 profile 明确匹配的 H100 拓扑，不是其他硬件的默认值。`kind` 可取理论峰值 `theoretical` 或实测饱和包络 `empirical_envelope`，两者都必须保留来源。
+
+补完 profile 后无需重跑 benchmark，可从 raw 离线重建报告：
+
+```bash
+python3 -m tools.benchmarks.sp_bench report-diagnostics \
+  --suite /tmp/model_sp.json \
+  --raw /tmp/model_sp_h100_diagnostic/diagnostic_raw.jsonl \
+  --output-dir /tmp/model_sp_h100_diagnostic \
+  --interconnect-peaks /path/to/interconnect_peaks.json \
+  --platform my_4gpu_topology
+```
+
+GPU 名称、capability、world size 或拓扑指纹任一不匹配时，工具拒绝使用该 profile。缺少 profile 或通信模式 peak 时仍保留延迟和带宽；测量未通过 repeat/spread 门禁时保留 nominal peak，但不计算效率。
 
 ## 接纳与效率
 
