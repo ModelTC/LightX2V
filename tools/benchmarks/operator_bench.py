@@ -18,12 +18,14 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Any, Iterable
 
-from tools.benchmarks.operator_backends import BackendAdapter, load_registry
+from tools.benchmarks.operator_backends import BackendAdapter, load_registry, probe_backend_catalog
 
-FAMILIES = {"gemm", "dense_attention", "moe"}
+FAMILIES = {"gemm", "dense_attention", "sparse_attention", "moe"}
+ATTENTION_SHAPE_FIELDS = {"batch", "seq_q", "seq_kv", "heads", "kv_heads", "head_dim", "causal"}
 SHAPE_FIELDS = {
     "gemm": {"m", "n", "k", "bias"},
-    "dense_attention": {"batch", "seq_q", "seq_kv", "heads", "kv_heads", "head_dim", "causal"},
+    "dense_attention": ATTENTION_SHAPE_FIELDS,
+    "sparse_attention": ATTENTION_SHAPE_FIELDS,
     "moe": {
         "tokens",
         "hidden_size",
@@ -37,12 +39,15 @@ SHAPE_FIELDS = {
 DEFAULT_BACKENDS = {
     "gemm": ["torch_linear"],
     "dense_attention": ["torch_sdpa"],
+    "sparse_attention": ["dynamic_sparse_sage2_replay"],
     "moe": ["torch_expert_loop"],
 }
 TIMING_MODE = "event_list_single_sync"
-RATE_SCHEMA = "precision_units_v1"
+RATE_SCHEMA = "precision_units_v2"
 RATE_UNITS = {
     "tflops": "TFLOPS",
+    "actual_tflops": "TFLOPS",
+    "dense_equivalent_tflops": "TFLOPS",
     "effective_tflops": "TFLOPS",
     "tops": "TOPS",
     "effective_tops": "TOPS",
@@ -67,6 +72,8 @@ CASE_FIELDS = {
     "call_count",
     "observed_backend",
     "routing",
+    "replay",
+    "sparse",
 }
 
 
@@ -111,7 +118,7 @@ def normalize_shape(family: str, raw: dict[str, Any]) -> dict[str, Any]:
             "k": _positive_int(raw.get("k"), "gemm.k"),
             "bias": _boolean(raw.get("bias", False), "gemm.bias"),
         }
-    if family == "dense_attention":
+    if family in {"dense_attention", "sparse_attention"}:
         heads = _positive_int(raw.get("heads"), "attention.heads")
         kv_heads = _positive_int(raw.get("kv_heads", heads), "attention.kv_heads")
         seq_q = _positive_int(raw.get("seq_q"), "attention.seq_q")
@@ -162,6 +169,20 @@ def _validate_routing(case: dict[str, Any], required: bool = False) -> None:
     require(valid, f"invalid observed MoE expert_counts: {case['case_id']}")
 
 
+def _validate_sparse_replay(case: dict[str, Any]) -> None:
+    replay = case.get("replay")
+    require(isinstance(replay, dict), f"sparse replay is required: {case['case_id']}")
+    require(set(replay) == {"manifest", "sha256"}, f"invalid sparse replay fields: {case['case_id']}")
+    require(isinstance(replay["manifest"], str) and replay["manifest"], f"sparse replay manifest is required: {case['case_id']}")
+    require(bool(re.fullmatch(r"[0-9a-f]{64}", str(replay["sha256"]))), f"invalid sparse replay sha256: {case['case_id']}")
+    sparse = case.get("sparse")
+    require(isinstance(sparse, dict) and set(sparse) == {"keep_ratio"}, f"sparse.keep_ratio is required: {case['case_id']}")
+    keep_ratio = sparse["keep_ratio"]
+    require(isinstance(keep_ratio, (int, float)) and not isinstance(keep_ratio, bool), f"invalid sparse keep_ratio: {case['case_id']}")
+    require(0 < float(keep_ratio) <= 1, f"sparse keep_ratio must be in (0, 1]: {case['case_id']}")
+    require(case["shape"]["batch"] == 1, f"sparse replay currently requires batch=1: {case['case_id']}")
+
+
 def validate_suite(value: dict[str, Any]) -> dict[str, Any]:
     require(isinstance(value, dict), "shape suite must be an object")
     require(value.get("schema_version") == 1, "shape suite schema_version must be 1")
@@ -185,6 +206,8 @@ def validate_suite(value: dict[str, Any]) -> dict[str, Any]:
             require(_positive_int(case["call_count"], "call_count") == case["call_count"], "invalid call_count")
         if family == "moe" and case.get("routing") is not None:
             _validate_routing(case)
+        if family == "sparse_attention":
+            _validate_sparse_replay(case)
         ids.append(case["case_id"])
     require(len(ids) == len(set(ids)), "case_id values must be unique")
     return value
@@ -214,6 +237,7 @@ def inspect_suite(value: dict[str, Any]) -> dict[str, Any]:
 
 def generate_sweep(family: str, axes: dict[str, list[Any]], suite_id: str, dtype: str, max_cases: int = 10000) -> dict[str, Any]:
     require(family in FAMILIES, f"unsupported sweep family: {family}")
+    require(family != "sparse_attention", "sparse attention requires a real replay artifact and cannot be swept")
     require(bool(axes), "sweep requires axes")
     unknown = set(axes) - SHAPE_FIELDS[family]
     require(not unknown, f"unknown {family} sweep axes: {sorted(unknown)}")
@@ -285,7 +309,21 @@ def environment(device: str) -> dict[str, Any]:
         }
     smi = _command(["nvidia-smi", "--query-gpu=index,uuid,name,memory.used,utilization.gpu", "--format=csv,noheader,nounits"])
     value["nvidia_smi"] = smi.stdout.splitlines() if smi is not None and smi.returncode == 0 else []
+    commit = _command(["git", "rev-parse", "HEAD"])
+    value["git_commit"] = commit.stdout.strip() if commit is not None and commit.returncode == 0 else None
     return value
+
+
+def _environment_identity(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "python": value.get("python"),
+        "torch": value.get("torch"),
+        "cuda_runtime": value.get("cuda_runtime"),
+        "device": value.get("device"),
+        "cuda_visible_devices": value.get("cuda_visible_devices"),
+        "gpu": value.get("gpu"),
+        "git_commit": value.get("git_commit"),
+    }
 
 
 def _measure(fn: Any, warmup: int, iterations: int, prewarm_seconds: float, device: str) -> tuple[list[float], Any]:
@@ -310,7 +348,7 @@ def _measure(fn: Any, warmup: int, iterations: int, prewarm_seconds: float, devi
 
 
 def _runtime_case(case: dict[str, Any], adapter: BackendAdapter, options: dict[str, Any]) -> dict[str, Any]:
-    return {
+    runtime_case = {
         "case_id": f"{case['case_id']}.{adapter.descriptor.name}",
         "operator_family": case["operator_family"],
         "backend": adapter.descriptor.name,
@@ -324,20 +362,33 @@ def _runtime_case(case: dict[str, Any], adapter: BackendAdapter, options: dict[s
             "prewarm_seconds": options["prewarm_seconds"],
             "device": options["device"],
             "moe_routing": options["moe_routing"],
+            "seed": options["seed"],
             "timing_mode": options["timing_mode"],
             "rate_schema": options["rate_schema"],
+            "catalog_fingerprint": options.get("catalog_fingerprint"),
         },
     }
+    for field in ("replay", "sparse"):
+        if field in case:
+            runtime_case[field] = case[field]
+    return runtime_case
 
 
-def _error_record(run_id: str, case: dict[str, Any], env: dict[str, Any], error_type: str, message: str) -> dict[str, Any]:
+def _error_record(
+    run_id: str,
+    case: dict[str, Any],
+    env: dict[str, Any],
+    error_type: str,
+    message: str,
+    stage: str,
+) -> dict[str, Any]:
     return {
         "run_id": run_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "case": case,
         "environment": env,
         "status": "error",
-        "error": {"type": error_type, "message": message, "traceback": traceback.format_exc(limit=6)},
+        "error": {"type": error_type, "message": message, "stage": stage, "traceback": traceback.format_exc(limit=6)},
     }
 
 
@@ -347,18 +398,20 @@ def run_case(case: dict[str, Any], adapter: BackendAdapter, run_id: str, env: di
     runtime_case = _runtime_case(case, adapter, options)
     support_error = adapter.support_error(case)
     if support_error:
-        return _error_record(run_id, runtime_case, env, "BackendCapabilityError", support_error)
+        return _error_record(run_id, runtime_case, env, "BackendCapabilityError", support_error, "support")
     if not torch.cuda.is_available():
-        return _error_record(run_id, runtime_case, env, "BackendCapabilityError", "CUDA is unavailable")
+        return _error_record(run_id, runtime_case, env, "BackendCapabilityError", "CUDA is unavailable", "support")
+    stage = "prepare"
     try:
-        torch.manual_seed(options["seed"])
-        torch.cuda.manual_seed_all(options["seed"])
+        torch.manual_seed(options["measurement_seed"])
+        torch.cuda.manual_seed_all(options["measurement_seed"])
         target = torch.device(options["device"])
         with torch.cuda.device(target):
             setup_started = time.perf_counter()
             prepared = adapter.prepare(case, options["device"], options)
             torch.cuda.synchronize(target)
             setup_ms = (time.perf_counter() - setup_started) * 1000
+            stage = "measure"
             latencies, result = _measure(
                 prepared.fn,
                 options["warmup"],
@@ -367,6 +420,14 @@ def run_case(case: dict[str, Any], adapter: BackendAdapter, run_id: str, env: di
                 options["device"],
             )
         mean_ms = statistics.mean(latencies)
+        rates = {prepared.rate_metric: prepared.work / (mean_ms / 1000) / 1e12}
+        dense_equivalent = {}
+        if prepared.dense_equivalent_work is not None:
+            rates["dense_equivalent_tflops"] = prepared.dense_equivalent_work / (mean_ms / 1000) / 1e12
+            dense_equivalent = {
+                "dense_equivalent_work": prepared.dense_equivalent_work,
+                "dense_equivalent_work_definition": prepared.dense_equivalent_work_definition,
+            }
         return {
             "run_id": run_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -377,9 +438,10 @@ def run_case(case: dict[str, Any], adapter: BackendAdapter, run_id: str, env: di
                 "latency_ms_mean": mean_ms,
                 "latency_ms_median": statistics.median(latencies),
                 "setup_ms": setup_ms,
-                prepared.rate_metric: prepared.work / (mean_ms / 1000) / 1e12,
+                **rates,
                 "work": prepared.work,
                 "work_definition": prepared.work_definition,
+                **dense_equivalent,
                 "measurement_scope": "kernel_cuda_event_list_single_sync",
                 "output_shape": list(result.shape) if hasattr(result, "shape") else None,
                 **prepared.extra_metrics,
@@ -387,7 +449,7 @@ def run_case(case: dict[str, Any], adapter: BackendAdapter, run_id: str, env: di
             "correctness": prepared.correctness or {"checked": False, "passed": None},
         }
     except Exception as exc:
-        return _error_record(run_id, runtime_case, env, type(exc).__name__, str(exc))
+        return _error_record(run_id, runtime_case, env, type(exc).__name__, str(exc), stage)
 
 
 def _record_key(record: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -425,6 +487,7 @@ def run_suite(
     moe_routing: str = "balanced",
     seed: int = 42,
     append: bool = False,
+    candidate_catalog: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_suite(shape_suite)
     require(repeat_runs > 0 and iterations > 0, "repeat_runs and iterations must be positive")
@@ -449,9 +512,13 @@ def run_suite(
         "prewarm_seconds": prewarm_seconds,
         "device": device,
         "moe_routing": moe_routing,
+        "seed": seed,
         "timing_mode": TIMING_MODE,
         "rate_schema": RATE_SCHEMA,
+        "catalog_fingerprint": (candidate_catalog or {}).get("catalog_fingerprint"),
     }
+    env = environment(device)
+    expected_environment = _environment_identity(env)
     cases = {case["case_id"]: case for case in shape_suite["cases"]}
     for record in existing_records:
         key = _record_key(record)
@@ -460,18 +527,23 @@ def run_suite(
         require(run_id in expected_run_ids and case_id in cases, "existing raw suite/repeat drift")
         raw_case = record["case"]
         require(raw_case.get("shape") == cases[case_id]["shape"], f"existing raw shape drift: {case_id}")
+        require(raw_case.get("replay") == cases[case_id].get("replay"), f"existing raw replay drift: {case_id}")
+        require(raw_case.get("sparse") == cases[case_id].get("sparse"), f"existing raw sparse config drift: {case_id}")
         require(raw_case.get("run") == run_contract, "existing raw measurement arguments differ from this run")
+        require(
+            _environment_identity(record.get("environment") or {}) == expected_environment,
+            "existing raw hardware or software environment differs from this run",
+        )
         require(backend in {item.descriptor.name for item in selections[case_id]}, f"existing raw backend drift: {backend}")
         existing.add(key)
-    env = environment(device)
     output.parent.mkdir(parents=True, exist_ok=True)
     written = 0
     statuses: Counter[str] = Counter()
-    options = {**run_contract, "seed": seed}
+    options = {**run_contract, "measurement_seed": seed}
     with output.open("a", encoding="utf-8") as handle:
         for repeat in range(repeat_runs):
             run_id = f"repeat-{repeat:03d}"
-            options["seed"] = seed + repeat
+            options["measurement_seed"] = seed + repeat
             for case in shape_suite["cases"]:
                 adapters = selections[case["case_id"]]
                 adapters = adapters[repeat % len(adapters) :] + adapters[: repeat % len(adapters)]
@@ -495,6 +567,8 @@ def _matches(record: dict[str, Any], case: dict[str, Any]) -> bool:
         source.get("canonical_case_id") == case["case_id"]
         and raw.get("operator_family") == case["operator_family"]
         and raw.get("shape") == case["shape"]
+        and raw.get("replay") == case.get("replay")
+        and raw.get("sparse") == case.get("sparse")
         and normalize_dtype(precision.get("input_dtype"), "") == case["precision"]["input_dtype"]
     )
 
@@ -580,8 +654,16 @@ def build_recommendation_report(
     max_spread_ms: float = 0.005,
     peaks: dict[str, Any] | None = None,
     platform_id: str | None = None,
+    candidate_catalog: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_suite(shape_suite)
+    if candidate_catalog is not None:
+        require(candidate_catalog.get("kind") == "operator_benchmark_backend_catalog_v1", "unsupported backend catalog kind")
+        fingerprint = candidate_catalog.get("catalog_fingerprint")
+        require(isinstance(fingerprint, str) and fingerprint, "backend catalog fingerprint is required")
+        for record in records:
+            run = (record.get("case") or {}).get("run") or {}
+            require(run.get("catalog_fingerprint") == fingerprint, "raw backend catalog differs from report catalog")
     platform_value = _hardware_platform(peaks, platform_id, records)
     matched: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     unmatched = 0
@@ -591,8 +673,38 @@ def build_recommendation_report(
             matched[cases[0]["case_id"]].append(record)
         else:
             unmatched += 1
+    matched_records = [record for items in matched.values() for record in items]
+    if matched_records:
+        environments = {
+            json.dumps(_environment_identity(record.get("environment") or {}), sort_keys=True)
+            for record in matched_records
+        }
+        contracts = {
+            json.dumps((record.get("case") or {}).get("run") or {}, sort_keys=True)
+            for record in matched_records
+        }
+        require(len(environments) == 1, "mixed raw hardware or software environments")
+        require(len(contracts) == 1, "mixed raw measurement contracts")
     workloads = []
     for case in shape_suite["cases"]:
+        family = case["operator_family"]
+        catalog_candidates = {
+            item["name"]: item
+            for item in (candidate_catalog or {}).get("candidates", [])
+            if item.get("family") == family
+        }
+        expected_backends = {name for name, item in catalog_candidates.items() if item.get("status") == "eligible"}
+        dependency_blockers = sorted(
+            name
+            for name, item in catalog_candidates.items()
+            if item.get("status") in {"cuda_unavailable", "dependency_missing"}
+        )
+        if family == "gemm":
+            unmapped = sorted((candidate_catalog or {}).get("unmapped_mm_backends", []))
+        elif family in {"dense_attention", "sparse_attention"}:
+            unmapped = sorted((candidate_catalog or {}).get("unmapped_attention_backends", []))
+        else:
+            unmapped = []
         grouped: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         for record in matched[case["case_id"]]:
             grouped[str(record["case"]["backend"])].append(record)
@@ -612,7 +724,8 @@ def build_recommendation_report(
             spread_pct = spread_ms / median * 100 if median and spread_ms is not None else None
             correctness_failed = any((item.get("correctness") or {}).get("passed") is False for item in ok)
             if errors and not ok:
-                status = "unavailable"
+                stages = {(item.get("error") or {}).get("stage") for item in errors}
+                status = "unavailable" if stages <= {"support", "prepare"} else "measurement_error"
             elif errors:
                 status = "measurement_error"
             elif correctness_failed:
@@ -633,6 +746,19 @@ def build_recommendation_report(
                         break
             rate = statistics.median(rate_values) if rate_values else None
             rate_unit = RATE_UNITS.get(rate_metric)
+            dense_equivalent_values = [
+                float(item["metrics"]["dense_equivalent_tflops"])
+                for item in ok
+                if item["metrics"].get("dense_equivalent_tflops") is not None
+            ]
+            dense_equivalent_rate = statistics.median(dense_equivalent_values) if dense_equivalent_values else None
+            sparse = case["operator_family"] == "sparse_attention"
+            if sparse and ok:
+                require(rate_metric == "actual_tflops", f"sparse raw lacks actual rate: {case['case_id']}.{backend}")
+                require(
+                    len(dense_equivalent_values) == len(ok),
+                    f"sparse raw lacks dense-equivalent rate: {case['case_id']}.{backend}",
+                )
             family = _peak_family(precision)
             peak_entry, peak_variant, peak_status = _select_peak(platform_value, family, precision)
             peak = peak_entry.get("dense_rate") if peak_entry else None
@@ -641,6 +767,11 @@ def build_recommendation_report(
             elif peak_status == "available" and peak_entry.get("unit") != rate_unit:
                 peak_status = "unit_mismatch"
             efficiency = rate / float(peak) if rate is not None and peak and peak_status == "available" else None
+            dense_equivalent_efficiency = (
+                dense_equivalent_rate / float(peak)
+                if dense_equivalent_rate is not None and peak and peak_status == "available"
+                else None
+            )
             assessments[backend] = {
                 "status": status,
                 "accepted": status == "accepted",
@@ -655,14 +786,43 @@ def build_recommendation_report(
                 "peak_status": peak_status,
                 "nominal_peak_rate": peak,
                 "nominal_efficiency": efficiency,
+                "actual_rate": rate if sparse else None,
+                "actual_rate_metric": rate_metric if sparse else None,
+                "actual_peak_efficiency": efficiency if sparse else None,
+                "dense_equivalent_rate": dense_equivalent_rate,
+                "dense_equivalent_rate_metric": "dense_equivalent_tflops" if dense_equivalent_rate is not None else None,
+                "dense_equivalent_peak_efficiency": dense_equivalent_efficiency,
                 "precision": precision,
-                "errors": [{"type": item.get("error", {}).get("type"), "message": item.get("error", {}).get("message")} for item in errors],
+                "errors": [
+                    {
+                        "type": item.get("error", {}).get("type"),
+                        "message": item.get("error", {}).get("message"),
+                        "stage": item.get("error", {}).get("stage"),
+                    }
+                    for item in errors
+                ],
             }
         ranking = sorted(
             (name for name, item in assessments.items() if item["accepted"]),
             key=lambda name: assessments[name]["latency_ms"],
         )
-        winner = ranking[0] if ranking else None
+        measured_winner = ranking[0] if ranking else None
+        terminal_statuses = {"accepted", "unavailable", "correctness_failed"}
+        non_terminal = {
+            name: item["status"]
+            for name, item in assessments.items()
+            if item["status"] not in terminal_statuses
+        }
+        candidate_coverage_complete = (
+            candidate_catalog is not None
+            and bool(expected_backends)
+            and not dependency_blockers
+            and not unmapped
+            and unmatched == 0
+            and expected_backends == set(assessments)
+            and all(assessments[name]["status"] in terminal_statuses for name in expected_backends)
+        )
+        winner = measured_winner if candidate_coverage_complete else None
         observed_name = case.get("observed_backend")
         observed = None
         if observed_name:
@@ -670,12 +830,12 @@ def build_recommendation_report(
                 observed = {"status": "not_measured", "backend": observed_name}
             elif not assessments[observed_name]["accepted"]:
                 observed = {"status": "not_accepted", "backend": observed_name}
-            elif winner:
+            elif measured_winner:
                 observed = {
                     "status": "comparable",
                     "backend": observed_name,
-                    "winner": winner,
-                    "speedup": assessments[observed_name]["latency_ms"] / assessments[winner]["latency_ms"],
+                    "measured_winner": measured_winner,
+                    "speedup": assessments[observed_name]["latency_ms"] / assessments[measured_winner]["latency_ms"],
                 }
         workloads.append(
             {
@@ -684,25 +844,43 @@ def build_recommendation_report(
                 "shape": case["shape"],
                 "call_count": case.get("call_count"),
                 "winner": winner,
+                "measured_winner": measured_winner,
+                "candidate_coverage_complete": candidate_coverage_complete,
+                "recommendation_scope": "complete_candidate_space" if candidate_coverage_complete else "measured_subset",
+                "coverage_blockers": {
+                    "not_measured": sorted(expected_backends - set(assessments)),
+                    "dependency_missing": dependency_blockers,
+                    "unmapped_production_backends": unmapped,
+                    "catalog_missing": candidate_catalog is None,
+                    "unmatched_raw_records": unmatched,
+                    "non_terminal_candidates": non_terminal,
+                },
                 "ranking": ranking,
                 "observed_backend": observed,
                 "backends": assessments,
             }
         )
-    complete = bool(workloads) and all(item["call_count"] is not None and item["winner"] for item in workloads)
-    weighted = sum(item["call_count"] * item["backends"][item["winner"]]["latency_ms"] for item in workloads) if complete else None
+    complete = bool(workloads) and all(item["call_count"] is not None and item["measured_winner"] for item in workloads)
+    weighted = (
+        sum(item["call_count"] * item["backends"][item["measured_winner"]]["latency_ms"] for item in workloads)
+        if complete
+        else None
+    )
     return {
         "kind": "operator_benchmark_report_v1",
         "suite_id": shape_suite["suite_id"],
+        "catalog_fingerprint": (candidate_catalog or {}).get("catalog_fingerprint"),
         "hardware": {"platform_id": platform_id},
         "policy": {"required_runs": required_runs, "max_spread_pct": max_spread_pct, "max_spread_ms": max_spread_ms},
         "summary": {
             "workload_count": len(workloads),
             "recommended_count": sum(item["winner"] is not None for item in workloads),
+            "measured_winner_count": sum(item["measured_winner"] is not None for item in workloads),
+            "coverage_complete": bool(workloads) and all(item["candidate_coverage_complete"] for item in workloads),
             "matched_record_count": sum(len(items) for items in matched.values()),
             "unmatched_record_count": unmatched,
-            "weighted_complete": complete,
-            "weighted_per_shape_winner_ms": weighted,
+            "weighted_measured_complete": complete,
+            "weighted_per_shape_measured_winner_ms": weighted,
         },
         "workloads": workloads,
     }
@@ -714,25 +892,40 @@ def markdown_report(value: dict[str, Any]) -> str:
         "",
         f"- Suite：`{value['suite_id']}`",
         f"- 已推荐：{value['summary']['recommended_count']} / {value['summary']['workload_count']}",
+        f"- 候选覆盖完整：{'是' if value['summary']['coverage_complete'] else '否'}",
         f"- 指定硬件：`{value['hardware']['platform_id'] or '未提供'}`",
         "",
-        "| Case | Family | Winner | Latency ms | Rate | Efficiency | Observed |",
-        "| --- | --- | --- | ---: | ---: | ---: | --- |",
+        "| Case | Family | Winner | Latency ms | Actual/primary rate | Actual/primary efficiency | Dense-equivalent rate | Dense-equivalent efficiency | Observed |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for workload in value["workloads"]:
         winner = workload["winner"]
-        item = workload["backends"].get(winner) if winner else None
+        measured_winner = workload["measured_winner"]
+        item = workload["backends"].get(measured_winner) if measured_winner else None
         latency = f"{item['latency_ms']:.6f}" if item else "-"
         rate = f"{item['rate']:.3f} {item['rate_unit']}" if item and item["rate"] is not None else "-"
         if item and item["nominal_efficiency"] is not None:
             efficiency = f"{item['nominal_efficiency'] * 100:.2f}%"
         else:
             efficiency = item["peak_status"] if item else "-"
+        dense_rate = (
+            f"{item['dense_equivalent_rate']:.3f} TFLOPS"
+            if item and item["dense_equivalent_rate"] is not None
+            else "-"
+        )
+        dense_efficiency = (
+            f"{item['dense_equivalent_peak_efficiency'] * 100:.2f}%"
+            if item and item["dense_equivalent_peak_efficiency"] is not None
+            else "-"
+        )
         observed = workload["observed_backend"]
         observed_text = "-" if observed is None else observed["status"]
         if observed and observed["status"] == "comparable":
-            observed_text = f"{observed['backend']} -> {winner}: {observed['speedup']:.3f}x"
-        lines.append(f"| `{workload['case_id']}` | `{workload['operator_family']}` | `{winner or '-'}` | {latency} | {rate} | {efficiency} | {observed_text} |")
+            observed_text = f"{observed['backend']} -> {measured_winner}: {observed['speedup']:.3f}x"
+        recommendation = winner or (f"{measured_winner} (measured)" if measured_winner else "-")
+        lines.append(
+            f"| `{workload['case_id']}` | `{workload['operator_family']}` | `{recommendation}` | {latency} | {rate} | {efficiency} | {dense_rate} | {dense_efficiency} | {observed_text} |"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -769,13 +962,15 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_parser = commands.add_parser("inspect", help="Validate and summarize a shape suite.")
     inspect_parser.add_argument("--suite", type=Path, required=True)
     sweep_parser = commands.add_parser("sweep", help="Generate a theoretical shape grid.")
-    sweep_parser.add_argument("--family", choices=sorted(FAMILIES), required=True)
+    sweep_parser.add_argument("--family", choices=sorted(FAMILIES - {"sparse_attention"}), required=True)
     sweep_parser.add_argument("--axis", action="append", required=True)
     sweep_parser.add_argument("--dtype", default="bf16")
     sweep_parser.add_argument("--suite-id", required=True)
     sweep_parser.add_argument("--output", type=Path, required=True)
     backend_parser = commands.add_parser("backends", help="List registered backends.")
     backend_parser.add_argument("--plugin", action="append", default=[])
+    backend_parser.add_argument("--probe", action="store_true")
+    backend_parser.add_argument("--device", default="cuda:0")
     run_parser = commands.add_parser("run", help="Run a suite and write raw plus report files.")
     run_parser.add_argument("--suite", type=Path, required=True)
     run_parser.add_argument("--output-dir", type=Path, required=True)
@@ -794,13 +989,22 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--suite", type=Path, required=True)
     report_parser.add_argument("--raw", nargs="+", type=Path, required=True)
     report_parser.add_argument("--output-dir", type=Path, required=True)
+    report_parser.add_argument("--backend-catalog", type=Path)
     _report_args(report_parser)
     return parser
 
 
-def _make_report(args: argparse.Namespace, shape_suite: dict[str, Any], raw_paths: list[Path]) -> dict[str, Any]:
+def _make_report(
+    args: argparse.Namespace,
+    shape_suite: dict[str, Any],
+    raw_paths: list[Path],
+    candidate_catalog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     require(bool(args.peaks) == bool(args.platform), "--peaks and --platform must be provided together")
     peaks = json.loads(args.peaks.read_text(encoding="utf-8")) if args.peaks else None
+    backend_catalog_path = getattr(args, "backend_catalog", None)
+    if candidate_catalog is None and backend_catalog_path:
+        candidate_catalog = json.loads(backend_catalog_path.read_text(encoding="utf-8"))
     value = build_recommendation_report(
         shape_suite,
         load_records(raw_paths),
@@ -809,6 +1013,7 @@ def _make_report(args: argparse.Namespace, shape_suite: dict[str, Any], raw_path
         max_spread_ms=args.max_spread_ms,
         peaks=peaks,
         platform_id=args.platform,
+        candidate_catalog=candidate_catalog,
     )
     write_json(args.output_dir / "report.json", value)
     (args.output_dir / "report.md").write_text(markdown_report(value), encoding="utf-8")
@@ -828,11 +1033,15 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"case_count": len(value["cases"]), "output": str(args.output)}, sort_keys=True))
             return 0
         if args.command == "backends":
-            print(json.dumps(load_registry(args.plugin).descriptors(), ensure_ascii=False, indent=2))
+            registry = load_registry(args.plugin)
+            value = probe_backend_catalog(registry, args.device) if args.probe else registry.descriptors()
+            print(json.dumps(value, ensure_ascii=False, indent=2))
             return 0
         if args.command == "run":
             shape_suite = load_suite(args.suite)
             raw_path = args.output_dir / "raw.jsonl"
+            registry = load_registry(args.plugin)
+            candidate_catalog = probe_backend_catalog(registry, args.device)
             run_summary = run_suite(
                 shape_suite,
                 raw_path,
@@ -846,9 +1055,11 @@ def main(argv: list[str] | None = None) -> int:
                 moe_routing=args.moe_routing,
                 seed=args.seed,
                 append=args.append,
+                candidate_catalog=candidate_catalog,
             )
+            write_json(args.output_dir / "backend_catalog.json", candidate_catalog)
             write_json(args.output_dir / "run_summary.json", run_summary)
-            value = _make_report(args, shape_suite, [raw_path])
+            value = _make_report(args, shape_suite, [raw_path], candidate_catalog)
             print(json.dumps({**run_summary, **value["summary"]}, ensure_ascii=False, sort_keys=True))
             return 0
         if args.command == "report":
