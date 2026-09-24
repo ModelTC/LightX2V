@@ -70,6 +70,7 @@ Agent 应先把请求归入一种或多种工作流：
 - SP 使用独立 `sp_bench.py`、SP suite 和 `torchrun`；进程数必须等于 `sp_size`。
 - L1 production 端到端延迟是候选排序依据；L2 layout/communication 与 L3 collective 只用于解释 L1，不参与 winner 排名。
 - L2/L3 日常入口应优先读取 L1 `report.json` 的逐 case 正式 winner，不要求用户重新描述长 candidate ID；结果同时保存机器可读 JSON 和面向人的 `diagnostic_report.md`。
+- Ulysses `head_parallel=true` 时默认枚举 `1..local_heads` 的全部 `head_parallel_group_size`，并与 bulk 路径共同参与 L1 排名。group size 不必整除 local head 数；候选身份、推荐配置和 shape 描述必须记录尾组实际 head 数。
 - Aux 诊断必须遵循 production 通信语义：Ulysses 的 replicated aux Q/K/V 绕过 main QKV A2A，aux output 执行 all-gather；Ring 的 replicated aux Q/K/V 绕过 main K/V rotation。L3 必须拆分 main/aux 实际 payload，并把未通信的 aux 明确标为 bypass，不能用全量 dense tensor 估算替代。
 - L3 分量必须独立计时并分别报告 latency、Bus bandwidth、spread 和 peak efficiency，禁止按整体延迟或总字节比例反推。混合路径的整体效率与分量效率同时保留；`all_to_all`、`all_gather`、`ring_p2p` 分别匹配自己的 peak profile。
 - Ulysses 与 Ring 只在共同支持且已验证的 attention 语义上公平比较。Ring 的 GQA 必须排除；H100 当前 Ulysses/Ring aux 合法矩阵已验证 BF16/FP16、无量化/FP8 communication 和 fusion 开关，FP4 与新增 dense leaf 在专项验证完成前记录为 `not validated`，不能据此宣称 production 不支持。

@@ -1040,6 +1040,14 @@ def test_sp_candidates_encode_production_constraints() -> None:
         for item in candidates
         if item["algorithm"] == "ulysses"
     )
+    head_candidates = [item for item in candidates if item["algorithm"] == "ulysses" and item["head_parallel"]]
+    assert {item["head_parallel_group_size"] for item in head_candidates} == {1, 2}
+    assert all(f"head_group={item['head_parallel_group_size']}" in item["candidate_id"] for item in head_candidates)
+    assert all(
+        item["head_parallel_group_size"] == 1
+        for item in candidates
+        if item["algorithm"] == "ulysses" and not item["head_parallel"]
+    )
 
 
 def test_sp_candidates_reject_gqa_fusion_and_ring() -> None:
@@ -1049,6 +1057,7 @@ def test_sp_candidates_reject_gqa_fusion_and_ring() -> None:
     assert result["candidates"]
     assert all(item["algorithm"] == "ulysses" for item in result["candidates"])
     assert all(not item["tensor_fusion"] and not item["head_parallel"] for item in result["candidates"])
+    assert all(item["head_parallel_group_size"] == 1 for item in result["candidates"])
 
 
 def test_sp_ring_aux_candidates_are_released_by_validated_matrix() -> None:
@@ -1125,6 +1134,19 @@ def test_sp_reference_validation_cli_contract() -> None:
     assert args.algorithm == ["ulysses"]
     assert args.dense_backend == ["flash_attn3"]
 
+    sparse_args = sp_bench.build_parser().parse_args(
+        [
+            "validate-reference",
+            "--suite",
+            "suite.json",
+            "--output",
+            "reference.json",
+            "--sparse-backend",
+            "dynamic_sparse_sage2_replay",
+        ]
+    )
+    assert sparse_args.sparse_backend == ["dynamic_sparse_sage2_replay"]
+
     run_args = sp_bench.build_parser().parse_args(
         [
             "run",
@@ -1137,6 +1159,45 @@ def test_sp_reference_validation_cli_contract() -> None:
         ]
     )
     assert run_args.sparse_backend == ["dynamic_sparse_sage2_replay"]
+
+
+def test_sp_sparse_reference_preserves_leaf_and_communication_options() -> None:
+    candidate = {
+        "candidate_id": "grouped",
+        "algorithm": "ulysses",
+        "attention_backend": "dynamic_sparse_sage2_replay",
+        "leaf_family": "sparse_attention",
+        "prepost_backend": "torch",
+        "a2a_backend": "torch",
+        "quant_scheme": "fp8",
+        "tensor_fusion": True,
+        "head_parallel": True,
+        "head_parallel_group_size": 3,
+    }
+    reference = sp_bench._bulk_reference_candidate(candidate)
+    assert reference == {
+        **candidate,
+        "candidate_id": sp_bench._candidate_id(
+            {**candidate, "head_parallel": False, "head_parallel_group_size": 1}
+        ),
+        "head_parallel": False,
+        "head_parallel_group_size": 1,
+    }
+    assert candidate["head_parallel"] is True
+    assert candidate["head_parallel_group_size"] == 3
+
+
+def test_sp_sparse_reference_excludes_bulk_self_comparison() -> None:
+    sparse_case = sp_case(
+        replay={"manifest": "replay.json", "sha256": "0" * 64},
+        sparse={"keep_ratio": 0.15},
+    )
+    grouped = {"algorithm": "ulysses", "head_parallel": True, "head_parallel_group_size": 2}
+    bulk = {"algorithm": "ulysses", "head_parallel": False, "head_parallel_group_size": 1}
+    assert sp_bench._reference_validation_candidates(sparse_case, [bulk, grouped]) == [grouped]
+    with pytest.raises(ValueError, match="grouped Ulysses"):
+        sp_bench._reference_validation_candidates(sparse_case, [bulk])
+    assert sp_bench._reference_validation_candidates(sp_case(), [bulk, grouped]) == [bulk, grouped]
 
 
 def test_sp_aux_inputs_are_replicated_across_ranks() -> None:
@@ -1209,6 +1270,71 @@ def test_sp_shape_description_reports_fp8_fused_ulysses_communication() -> None:
     assert output["payload_shape"] == [4, 14, 27266, 128]
     assert output["scale_shape"] == [4, 14, 27266, 1]
     assert value["communication"]["auxiliary"]["output_all_gather_input_shape"] == [87, 14, 128]
+
+def test_sp_grouped_head_shape_description_keeps_remainder_group() -> None:
+    case = sp_case()
+    case["shape"] = {**case["shape"], "heads": 20, "kv_heads": 20}
+    candidate = {
+        "algorithm": "ulysses",
+        "quant_scheme": "fp8",
+        "tensor_fusion": True,
+        "head_parallel": True,
+        "head_parallel_group_size": 2,
+    }
+    value = sp_bench._sp_shape_description(case, candidate)
+    assert value["per_rank_attention"]["head_group_sizes"] == [2, 2, 1]
+    assert value["per_rank_attention"]["q_shapes_per_call"] == [
+        [1024, 2, 128],
+        [1024, 2, 128],
+        [1024, 1, 128],
+    ]
+    qkv_calls = value["communication"]["qkv_all_to_all"]["packed_tensors_per_call"]
+    assert [call[0]["payload_shape"] for call in qkv_calls] == [
+        [4, 256, 3, 2, 128],
+        [4, 256, 3, 2, 128],
+        [4, 256, 3, 1, 128],
+    ]
+    output_calls = value["communication"]["output_all_to_all"]["packed_tensors_per_call"]
+    assert [call[0]["payload_shape"] for call in output_calls] == [
+        [4, 2, 256, 128],
+        [4, 2, 256, 128],
+        [4, 1, 256, 128],
+    ]
+
+
+def test_sp_prepare_forwards_group_size_only_to_ulysses(monkeypatch: pytest.MonkeyPatch) -> None:
+    torch = pytest.importorskip("torch")
+    from lightx2v.common.ops.attn.ring_attn import RingAttnWeight
+    from lightx2v.common.ops.attn.ulysses_attn import UlyssesAttnWeight
+
+    calls = {}
+
+    def fake_ulysses(self: object, *args: object, **kwargs: object) -> tuple[object, None]:
+        calls["ulysses"] = kwargs
+        return args[0], None
+
+    def fake_ring(self: object, *args: object, **kwargs: object) -> tuple[object, None]:
+        calls["ring"] = kwargs
+        return args[0], None
+
+    monkeypatch.setattr(UlyssesAttnWeight, "apply", fake_ulysses)
+    monkeypatch.setattr(RingAttnWeight, "apply", fake_ring)
+    base = {
+        "dense_backend": "torch_sdpa",
+        "prepost_backend": "torch",
+        "a2a_backend": "torch",
+        "quant_scheme": None,
+        "tensor_fusion": False,
+    }
+    ulysses = {**base, "algorithm": "ulysses", "head_parallel": True, "head_parallel_group_size": 2}
+    ulysses_fn, _, _ = sp_bench._prepare_operation(sp_case(), ulysses, torch.device("cpu"), seed=1, rank=0)
+    ulysses_fn()
+    assert calls["ulysses"]["head_parallel_group_size"] == 2
+
+    ring = {**base, "algorithm": "ring", "head_parallel": False, "head_parallel_group_size": 1}
+    ring_fn, _, _ = sp_bench._prepare_operation(sp_case(), ring, torch.device("cpu"), seed=1, rank=0)
+    ring_fn()
+    assert "head_parallel_group_size" not in calls["ring"]
 
 
 def test_sp_candidate_catalog_fingerprint_is_stable() -> None:

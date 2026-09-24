@@ -276,11 +276,20 @@ def _candidate_id(candidate: dict[str, Any]) -> str:
                 f"head={int(candidate['head_parallel'])}",
             )
         )
+        if candidate["head_parallel"]:
+            fields.append(f"head_group={candidate['head_parallel_group_size']}")
     return "__".join(fields)
 
 
 def _candidate_backend(candidate: dict[str, Any]) -> str:
     return candidate.get("attention_backend") or candidate["dense_backend"]
+
+
+def _head_parallel_options(case: dict[str, Any]) -> tuple[tuple[bool, int], ...]:
+    shape = case["shape"]
+    world_size = shape["sp_size"]
+    local_heads = shape["heads"] // world_size if shape["heads"] % world_size == 0 else 0
+    return ((False, 1), *((True, group_size) for group_size in range(1, local_heads + 1)))
 
 
 def _packed_tensor_description(name: str, shape: list[int], quant_scheme: str | None) -> dict[str, Any]:
@@ -359,40 +368,65 @@ def _sp_shape_description(case: dict[str, Any], candidate: dict[str, Any]) -> di
         }
         return common
 
-    heads_per_call = 1 if candidate["head_parallel"] else q_shard_heads
-    kv_heads_per_call = 1 if candidate["head_parallel"] else kv_shard_heads
-    calls = q_shard_heads if candidate["head_parallel"] else 1
+    if candidate["head_parallel"]:
+        group_size = candidate["head_parallel_group_size"]
+        head_groups = [min(group_size, q_shard_heads - begin) for begin in range(0, q_shard_heads, group_size)]
+
+        def qkv_payloads(heads: int) -> list[dict[str, Any]]:
+            if candidate["tensor_fusion"]:
+                return [_packed_tensor_description("fused_qkv", [world_size, local_main, 3, heads, head_dim], quant)]
+            return [
+                _packed_tensor_description("q", [world_size, local_main, heads, head_dim], quant),
+                _packed_tensor_description("k", [world_size, local_main, heads, head_dim], quant),
+                _packed_tensor_description("v", [world_size, local_main, heads, head_dim], quant),
+            ]
+
+        common["per_rank_attention"] = {
+            "head_group_sizes": head_groups,
+            "q_shapes_per_call": [[q_tokens, heads, head_dim] for heads in head_groups],
+            "k_shapes_per_call": [[kv_tokens, heads, head_dim] for heads in head_groups],
+            "v_shapes_per_call": [[kv_tokens, heads, head_dim] for heads in head_groups],
+            "calls_per_attention": len(head_groups),
+        }
+        common["communication"] = {
+            "algorithm": "ulysses",
+            "head_group_sizes": head_groups,
+            "qkv_all_to_all": {
+                "calls_per_attention": len(head_groups),
+                "packed_tensors_per_call": [qkv_payloads(heads) for heads in head_groups],
+            },
+            "output_all_to_all": {
+                "calls_per_attention": len(head_groups),
+                "packed_tensors_per_call": [
+                    [_packed_tensor_description("attention_output", [world_size, heads, local_main, head_dim], quant)] for heads in head_groups
+                ],
+            },
+            "auxiliary": {
+                "qkv": "replicated; bypasses QKV all-to-all",
+                "output_all_gather_input_shape": [aux_tokens, q_shard_heads, head_dim] if shape["aux_q"] else None,
+            },
+        }
+        return common
+
     if candidate["tensor_fusion"]:
-        qkv_packed = [
-            _packed_tensor_description(
-                "fused_qkv",
-                [world_size, local_main, 3, heads_per_call, head_dim],
-                quant,
-            )
-        ]
+        qkv_packed = [_packed_tensor_description("fused_qkv", [world_size, local_main, 3, q_shard_heads, head_dim], quant)]
     else:
         qkv_packed = [
-            _packed_tensor_description("q", [world_size, local_main, heads_per_call, head_dim], quant),
-            _packed_tensor_description("k", [world_size, local_main, kv_heads_per_call, head_dim], quant),
-            _packed_tensor_description("v", [world_size, local_main, kv_heads_per_call, head_dim], quant),
+            _packed_tensor_description("q", [world_size, local_main, q_shard_heads, head_dim], quant),
+            _packed_tensor_description("k", [world_size, local_main, kv_shard_heads, head_dim], quant),
+            _packed_tensor_description("v", [world_size, local_main, kv_shard_heads, head_dim], quant),
         ]
-    output_packed = [
-        _packed_tensor_description(
-            "attention_output",
-            [world_size, heads_per_call, local_main, head_dim],
-            quant,
-        )
-    ]
+    output_packed = [_packed_tensor_description("attention_output", [world_size, q_shard_heads, local_main, head_dim], quant)]
     common["per_rank_attention"] = {
-        "q_shape": [q_tokens, heads_per_call, head_dim],
-        "k_shape": [kv_tokens, kv_heads_per_call, head_dim],
-        "v_shape": [kv_tokens, kv_heads_per_call, head_dim],
-        "calls_per_attention": calls,
+        "q_shape": [q_tokens, q_shard_heads, head_dim],
+        "k_shape": [kv_tokens, kv_shard_heads, head_dim],
+        "v_shape": [kv_tokens, kv_shard_heads, head_dim],
+        "calls_per_attention": 1,
     }
     common["communication"] = {
         "algorithm": "ulysses",
-        "qkv_all_to_all": {"calls_per_attention": calls, "packed_tensors": qkv_packed},
-        "output_all_to_all": {"calls_per_attention": calls, "packed_tensors": output_packed},
+        "qkv_all_to_all": {"calls_per_attention": 1, "packed_tensors": qkv_packed},
+        "output_all_to_all": {"calls_per_attention": 1, "packed_tensors": output_packed},
         "auxiliary": {
             "qkv": "replicated; bypasses QKV all-to-all",
             "output_all_gather_input_shape": [aux_tokens, q_shard_heads, head_dim] if shape["aux_q"] else None,
@@ -437,6 +471,13 @@ def _support_error(
     world_size = shape["sp_size"]
     if shape["heads"] % world_size or shape["kv_heads"] % world_size:
         return "Ulysses requires Q and KV head counts divisible by sp_size"
+    head_group_size = candidate.get("head_parallel_group_size", 1)
+    if not isinstance(head_group_size, int) or isinstance(head_group_size, bool):
+        return "Ulysses head_parallel_group_size must be an integer"
+    if not candidate["head_parallel"] and head_group_size != 1:
+        return "Ulysses head_parallel_group_size requires head_parallel"
+    if candidate["head_parallel"] and not 1 <= head_group_size <= shape["heads"] // world_size:
+        return "Ulysses head_parallel_group_size must be within the local head count"
     is_gqa = shape["heads"] != shape["kv_heads"]
     if candidate["tensor_fusion"] and is_gqa:
         return "Ulysses tensor_fusion does not support GQA"
@@ -473,14 +514,15 @@ def enumerate_candidates(
     a2a_backends = a2a_backends or ["torch", "round_robin"]
     ring_lse_backends = ring_lse_backends or set()
     raw_candidates = []
-    for dense_backend, prepost, a2a, quant, fusion, head_parallel in itertools.product(
+    for dense_backend, prepost, a2a, quant, fusion, head_option in itertools.product(
         dense_backends,
         ("torch", "triton"),
         a2a_backends,
         QUANT_SCHEMES,
         (False, True),
-        (False, True),
+        _head_parallel_options(case),
     ):
+        head_parallel, head_parallel_group_size = head_option
         raw_candidates.append(
             {
                 "algorithm": "ulysses",
@@ -490,6 +532,7 @@ def enumerate_candidates(
                 "quant_scheme": quant,
                 "tensor_fusion": fusion,
                 "head_parallel": head_parallel,
+                "head_parallel_group_size": head_parallel_group_size,
             }
         )
     for dense_backend, quant, fusion in itertools.product(dense_backends, QUANT_SCHEMES, (False, True)):
@@ -502,6 +545,7 @@ def enumerate_candidates(
                 "quant_scheme": quant,
                 "tensor_fusion": fusion,
                 "head_parallel": False,
+                "head_parallel_group_size": 1,
             }
         )
 
@@ -532,14 +576,15 @@ def enumerate_sparse_candidates(
 ) -> dict[str, Any]:
     a2a_backends = a2a_backends or ["torch", "round_robin"]
     raw_candidates = []
-    for backend, prepost, a2a, quant, fusion, head_parallel in itertools.product(
+    for backend, prepost, a2a, quant, fusion, head_option in itertools.product(
         sparse_backends,
         ("torch", "triton"),
         a2a_backends,
         QUANT_SCHEMES,
         (False, True),
-        (False, True),
+        _head_parallel_options(case),
     ):
+        head_parallel, head_parallel_group_size = head_option
         raw_candidates.append(
             {
                 "algorithm": "ulysses",
@@ -550,6 +595,7 @@ def enumerate_sparse_candidates(
                 "quant_scheme": quant,
                 "tensor_fusion": fusion,
                 "head_parallel": head_parallel,
+                "head_parallel_group_size": head_parallel_group_size,
             }
         )
 
@@ -932,6 +978,7 @@ def _prepare_operation(
             head_parallel=candidate["head_parallel"],
             aux_first=shape["aux_first"],
             attention_kwargs={"causal": shape["causal"]},
+            **({"head_parallel_group_size": candidate.get("head_parallel_group_size", 1)} if candidate["algorithm"] == "ulysses" else {}),
         )
 
     query_tokens = shape["sequence"] + (shape["aux_tokens"] if shape["aux_q"] else 0)
@@ -1107,7 +1154,15 @@ def _dense_reference_outputs(case: dict[str, Any], device: Any, seed: int, rank:
     return local_main.reshape(local_length, -1), None if aux_output is None else aux_output.reshape(aux_length, -1)
 
 
-def _reference_correctness(case: dict[str, Any], candidate: dict[str, Any], actual: Any, expected: tuple[Any, Any], device: Any) -> dict[str, Any]:
+def _reference_correctness(
+    case: dict[str, Any],
+    candidate: dict[str, Any],
+    actual: Any,
+    expected: tuple[Any, Any],
+    device: Any,
+    *,
+    check: str = "production_sp_attention_vs_torch_sdpa_dense_reference_all_ranks",
+) -> dict[str, Any]:
     import torch
     import torch.distributed as dist
 
@@ -1131,7 +1186,7 @@ def _reference_correctness(case: dict[str, Any], candidate: dict[str, Any], actu
     return {
         "checked": True,
         "passed": bool(flags[0].item() and flags[1].item() and flags[2].item()),
-        "check": "production_sp_attention_vs_torch_sdpa_dense_reference_all_ranks",
+        "check": check,
         "shape_passed": bool(flags[0].item()),
         "finite": bool(flags[1].item()),
         "allclose_passed": bool(flags[2].item()),
@@ -1141,6 +1196,24 @@ def _reference_correctness(case: dict[str, Any], candidate: dict[str, Any], actu
     }
 
 
+def _bulk_reference_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    reference = {**candidate, "head_parallel": False, "head_parallel_group_size": 1}
+    reference["candidate_id"] = _candidate_id(reference)
+    return reference
+
+
+def _reference_validation_candidates(case: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_sparse_case(case):
+        return candidates
+    grouped = [
+        candidate
+        for candidate in candidates
+        if candidate["algorithm"] == "ulysses" and candidate["head_parallel"]
+    ]
+    require(grouped, "sparse reference validation requires a grouped Ulysses candidate")
+    return grouped
+
+
 def validate_reference_suite(
     suite: dict[str, Any],
     output: Path,
@@ -1148,13 +1221,13 @@ def validate_reference_suite(
     candidate_ids: set[str],
     algorithms: set[str],
     dense_backends: list[str],
+    sparse_backends: list[str],
     seed: int,
 ) -> dict[str, Any]:
     import torch
     import torch.distributed as dist
 
     validate_suite(suite)
-    require(not any(_is_sparse_case(case) for case in suite["cases"]), "dense reference validation does not apply to sparse replay SP suites")
     require("RANK" in os.environ and "LOCAL_RANK" in os.environ, "SP reference validation must be launched with torchrun")
     require(not output.exists(), f"SP reference validation output already exists: {output}")
     dist.init_process_group(backend="nccl")
@@ -1172,6 +1245,10 @@ def validate_reference_suite(
             require(not unavailable, f"dense backends are not eligible on this device: {unavailable}")
             selected_runtime["dense_backends"] = dense_backends
             selected_runtime["ring_lse_backends"] = runtime["ring_lse_backends"] & set(dense_backends)
+        if sparse_backends:
+            unavailable = sorted(set(sparse_backends) - set(runtime["sparse_backends"]))
+            require(not unavailable, f"sparse backends are not eligible on this device: {unavailable}")
+            selected_runtime["sparse_backends"] = sparse_backends
         catalog = build_candidate_catalog(suite, selected_runtime, allow_unvalidated=True)
         selections = _selected_candidates(
             suite,
@@ -1180,26 +1257,47 @@ def validate_reference_suite(
             algorithms,
             allow_unvalidated=True,
         )
+        selections = {
+            case["case_id"]: _reference_validation_candidates(case, selections[case["case_id"]])
+            for case in suite["cases"]
+        }
         environments = _distributed_environment(device, rank, local_rank)
         records = []
         for case in suite["cases"]:
             try:
-                expected = _dense_reference_outputs(case, device, seed, rank)
+                inputs = _load_sp_replay_inputs(case, device, rank) if _is_sparse_case(case) else None
+                expected = None if inputs is not None else _dense_reference_outputs(case, device, seed, rank)
                 reference_error = None
             except Exception as exc:
                 reference_error = _local_error(exc)
             reference_errors = _gather_rank_errors(reference_error)
             for candidate in selections[case["case_id"]]:
+                reference_candidate = None
                 if any(error is not None for error in reference_errors):
                     errors = reference_errors
                     correctness = None
                 else:
                     correctness = None
                     try:
-                        fn, _, _ = _prepare_operation(case, candidate, device, seed, rank)
+                        if inputs is not None:
+                            reference_candidate = _bulk_reference_candidate(candidate)
+                            reference_fn, _, _ = _prepare_operation(case, reference_candidate, device, seed, rank, inputs=inputs)
+                            expected = reference_fn()
+                        fn, _, _ = _prepare_operation(case, candidate, device, seed, rank, inputs=inputs)
                         actual = fn()
                         torch.cuda.synchronize(device)
-                        correctness = _reference_correctness(case, candidate, actual, expected, device)
+                        correctness = _reference_correctness(
+                            case,
+                            candidate,
+                            actual,
+                            expected,
+                            device,
+                            check=(
+                                "production_grouped_sparse_sp_attention_vs_same_leaf_bulk_reference_all_ranks"
+                                if inputs is not None
+                                else "production_sp_attention_vs_torch_sdpa_dense_reference_all_ranks"
+                            ),
+                        )
                         local_error = None
                     except Exception as exc:
                         local_error = _local_error(exc)
@@ -1209,6 +1307,7 @@ def validate_reference_suite(
                         {
                             "case_id": case["case_id"],
                             "candidate": candidate,
+                            "reference_candidate": reference_candidate,
                             "status": "error" if any(error is not None for error in errors) else "ok",
                             "correctness": correctness,
                             "errors": errors if any(error is not None for error in errors) else None,
@@ -2755,12 +2854,13 @@ def build_parser() -> argparse.ArgumentParser:
     candidate_parser.add_argument("--device", default="cuda:0")
     candidate_parser.add_argument("--dense-backend", action="append", default=[])
     candidate_parser.add_argument("--sparse-backend", action="append", default=[])
-    reference_parser = commands.add_parser("validate-reference", help="Compare production SP candidates with a Torch SDPA dense reference.")
+    reference_parser = commands.add_parser("validate-reference", help="Compare production SP candidates with a dense or sparse bulk reference.")
     reference_parser.add_argument("--suite", type=Path, required=True)
     reference_parser.add_argument("--output", type=Path, required=True)
     reference_parser.add_argument("--candidate", action="append", default=[])
     reference_parser.add_argument("--algorithm", action="append", choices=("ulysses", "ring"), default=[])
     reference_parser.add_argument("--dense-backend", action="append", default=[])
+    reference_parser.add_argument("--sparse-backend", action="append", default=[])
     reference_parser.add_argument("--seed", type=int, default=42)
     run_parser = commands.add_parser("run", help="Run production SP attention under torchrun.")
     run_parser.add_argument("--suite", type=Path, required=True)
@@ -2842,6 +2942,7 @@ def main(argv: list[str] | None = None) -> int:
                 candidate_ids=set(args.candidate),
                 algorithms=set(args.algorithm or ("ulysses", "ring")),
                 dense_backends=args.dense_backend,
+                sparse_backends=args.sparse_backend,
                 seed=args.seed,
             )
             return 0

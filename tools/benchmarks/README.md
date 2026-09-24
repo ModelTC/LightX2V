@@ -255,13 +255,13 @@ python3 -m tools.benchmarks.sp_bench candidates \
   --suite /tmp/model_sp.json --device cuda:0
 ```
 
-候选包含 Ulysses 的 pre/post、A2A、通信精度、tensor fusion、head pipeline，以及 Ring 的通信精度和 K/V fusion。工具会按当前 production 约束排除无效组合，并记录原因；Ring 只接受原生提供 `apply_with_lse()` 的 dense backend。
+候选包含 Ulysses 的 pre/post、A2A、通信精度、tensor fusion、head pipeline，以及 Ring 的通信精度和 K/V fusion。Ulysses 启用 head pipeline 时会自动枚举 `1..local_heads` 的全部 `head_parallel_group_size`；group size 不要求整除 local head 数，尾组按实际剩余 head 计入候选 shape 和通信 payload。工具会按当前 production 约束排除无效组合，并记录原因；Ring 只接受原生提供 `apply_with_lse()` 的 dense backend。
 
 Aux Q/K/V 按 replicated 语义在各 rank 使用相同输入；raw 同时检查 main/aux output shape、finite 和 aux output 跨 rank 一致性。H100 上已用 dense reference 验证当前全部 Ulysses/Ring leaf 与合法选项，覆盖 BF16/FP16、无量化/FP8 communication、fusion、aux K/V only/完整 aux Q/K/V，以及 `aux_first` 两种顺序。精确 backend、近似 backend 和量化通信的门限由 `SP_REFERENCE_TOLERANCES` 显式声明，并随验证结果写入 correctness。
 
 `not validated` 的含义是“代码可能支持，但本工具还没有足够证据把它放入候选”，不是性能落选，也不是可以长期忽略的状态。新模型、新硬件或新需求命中这类 exclusion 时，Agent 必须先补验证并更新准入矩阵；只有缺少目标硬件、依赖或真实输入等外部阻塞时才允许延期。
 
-新增 backend、精度或通信路径时，先用 Torch SDPA dense reference 验证 production SP 输出。该命令允许枚举普通推荐路径尚未放行的候选，但不会自动修改准入合同：
+新增 backend、精度或通信路径时，先运行 reference 验证。Synthetic dense suite 对比 Torch SDPA；真实 sparse replay 的 grouped Ulysses 对比同一输入、同一 sparse leaf 和通信配置的 bulk Ulysses，从而隔离 head grouping 引入的差异。该命令允许枚举普通推荐路径尚未放行的 dense 候选，但不会自动修改准入合同：
 
 ```bash
 CUDA_VISIBLE_DEVICES=4,5,6,7 \
@@ -272,6 +272,8 @@ torchrun --standalone --nproc-per-node=4 \
 ```
 
 结果逐 case/candidate 记录 main/aux 最大绝对误差、显式 tolerance policy、各 rank shape/finite/allclose 状态和环境身份。尚未登记的新 backend 在探索验证中临时使用 `atol=rtol=0.10`，该值不是正式正确性合同；验证通过后仍需按实测误差更新 `SP_REFERENCE_TOLERANCES` 或对应候选门禁并补单测，才算正式解锁。FP4 communication 当前因依赖缺失未验证；新增 dense leaf 默认以 `not validated` 排除。
+
+Sparse replay 可用 `--sparse-backend` 限定 leaf。被测集合只包含 grouped Ulysses，bulk 仅作为 reference，不生成与自身比较的记录。输出中的 `reference_candidate` 明确记录用于对照的 bulk 配置；该验证只证明 grouped 与 bulk 路径在同一 sparse leaf 下的一致性，不把 sparse 近似本身声明为等价于 dense attention。
 
 运行必须由 `torchrun` 启动，进程数必须等于 suite 的 `sp_size`：
 
@@ -305,7 +307,7 @@ Sparse raw/report 同时输出 `actual_tflops`、`dense_equivalent_tflops` 和�
 
 报告区分 `measured_winner` 和 `winner`：前者只是已测集合中最快的稳定候选；后者要求底层 attention registry 没有适用但缺依赖或未映射的 backend，且候选目录中的每个合法组合都得到稳定结果或明确的不可用/正确性结论。少于三个 repeat、波动超门限、测量错误或候选未覆盖时，`coverage_complete=false` 且不发布 `winner`。
 
-正式 winner 发布时，workload 的 `recommendation` 直接携带完整候选配置、原始 workload case（包含 precision、sparse/replay 与 shape 身份）、延迟、逻辑 Q/K/V shape、每 rank attention shape，以及按通信量化/fusion/head-pipeline 配置展开的 payload 和 scale shape。这是机器可读的完整推荐；aux/main 边界和吞吐指标用于后续解释。
+正式 winner 发布时，workload 的 `recommendation` 直接携带完整候选配置、原始 workload case（包含 precision、sparse/replay 与 shape 身份）、延迟、逻辑 Q/K/V shape、每 rank attention shape，以及按通信量化/fusion/head-pipeline group 配置展开的逐调用 payload 和 scale shape。这是机器可读的完整推荐；aux/main 边界和吞吐指标用于后续解释。
 
 完整 production SP attention 是搜索配置的 L1 指标，也是推荐配置的唯一排序依据。对已选候选可进一步运行诊断层：
 
