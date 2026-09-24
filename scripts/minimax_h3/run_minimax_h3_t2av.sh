@@ -10,10 +10,10 @@
 # Cache generation and inference must use the same JSON config and adaln_cache_dir.
 
 # set path firstly
-lightx2v_path=/path/to/LightX2V
-model_path=/path/to/MiniMax-H3
+lightx2v_path=/data/nvme6/gushiqiao/codes/latest/new/LightX2V
+model_path=/data/nvme6/gushiqiao/models/MiniMax-H3
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=5
 
 # set environment variables
 source "${lightx2v_path}/scripts/base/base.sh"
@@ -25,7 +25,7 @@ python -m lightx2v.infer \
   --model-variant fl2av \
   --task t2av \
   --model_path "${model_path}" \
-  --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3.json" \
+  --config_json /data/nvme6/gushiqiao/codes/latest/new/LightX2V/configs/minimax_h3/minimax_h3_lightvae_t2av_sp4.json \
   --prompt 'integrated_multimodal_description: A cinematic fox walks through a snowy pine forest at dawn. overall_soundscape: Soft wind, crunching snow, and distant birds. non_diegetic_music: Quiet warm strings.' \
-  --save_result_path "${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av.mp4" \
+  --save_result_path "${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2a_lightvae.mp4" \
   --seed 42

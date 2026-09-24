@@ -804,9 +804,14 @@ class MiniMaxH3VideoVAE(nn.Module):
         attn_type: str = "torch_sdpa",
         offload_granularity: str = "model",
         shared_cpu_config: dict | None = None,
+        lightvae_encoder_path: str | Path | None = None,
+        lightvae_decoder_path: str | Path | None = None,
     ) -> "MiniMaxH3VideoVAE":
         if offload_granularity not in {"model", "block"}:
             raise ValueError("video_vae_offload_granularity must be model or block")
+        lightvae_enabled = lightvae_encoder_path is not None or lightvae_decoder_path is not None
+        if lightvae_enabled and (quant_scheme is not None or checkpoint_path is not None or shared_cpu_config is not None or encoder_conv_mode not in {"torch", "torch_channels_last"}):
+            raise ValueError("LightVAE currently requires unquantized, non-shared VAE weights and torch encoder convolutions")
         if offload_granularity == "block" or shared_cpu_config is not None:
             if not cpu_offload or quant_scheme is not None or use_compile:
                 raise ValueError("H3 VAE shared/block mode requires CPU offload, original weights and vae_use_compile=false")
@@ -845,6 +850,11 @@ class MiniMaxH3VideoVAE(nn.Module):
                 logger.warning("MiniMax-H3 Video VAE FP8-F16 accumulation requested but {}; falling back to FP8-SGL", fallback_reason)
         with (vae_dir / "config.json").open("r", encoding="utf-8") as handle:
             config = json.load(handle)
+        if lightvae_enabled:
+            from .lightvae import load_components, read_architecture
+
+            encoder_arch = read_architecture(lightvae_encoder_path, "encoder", config)
+            decoder_arch = read_architecture(lightvae_decoder_path, "decoder", config)
 
         # The released decoder is several GiB.  Constructing it on meta avoids
         # allocating and then immediately overwriting random initialized weights.
@@ -861,7 +871,9 @@ class MiniMaxH3VideoVAE(nn.Module):
         model._reset_runtime_buffers()
         if encoder_conv_policy is not None:
             model._enable_encoder_fp8_convs(encoder_conv_checkpoint_info, encoder_conv_policy)
-        if shared_cpu_config is not None:
+        if lightvae_enabled:
+            model.lightvae_load_reports = load_components(model, weight_path, lightvae_encoder_path, lightvae_decoder_path, encoder_arch, decoder_arch)
+        elif shared_cpu_config is not None:
             from lightx2v.models.video_encoders.hf.minimax_h3.weights import load_shared_video_vae
 
             model.load_report = load_shared_video_vae(model, weight_path, shared_cpu_config)

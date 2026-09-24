@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/dan/LightX2V
-model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3
+lightx2v_path=/data/nvme6/gushiqiao/codes/latest/new/LightX2V
+model_path=/data/nvme6/gushiqiao/models/MiniMax-H3
 
 # Select one platform. NVIDIA is enabled by default.
 

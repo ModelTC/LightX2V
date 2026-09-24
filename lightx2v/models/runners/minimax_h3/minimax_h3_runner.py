@@ -1,4 +1,5 @@
 import os
+import tempfile
 from contextlib import suppress
 
 import numpy as np
@@ -281,6 +282,8 @@ class MiniMaxH3Runner(DefaultRunner):
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
             offload_granularity=self.config.get("video_vae_offload_granularity", "model"),
             shared_cpu_config=self.config if self.config.get("video_vae_shared_cpu_weights", False) else None,
+            lightvae_encoder_path=self.config.get("lightvae_encoder_path"),
+            lightvae_decoder_path=self.config.get("lightvae_decoder_path"),
         )
         self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
         self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
@@ -628,6 +631,8 @@ class MiniMaxH3Runner(DefaultRunner):
             patch_size=tuple(self.config.get("patch_size", (1, 2, 2))),
         )
         audio_latents = unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)
+        if self.config.get("save_vae_latents", False):
+            self._save_vae_latents(video_latents, audio_latents)
         if self._vae_decode_tile_shapes:
             resolution = f"{self.request_height}x{self.request_width}"
             default_tile_shape = (
@@ -645,6 +650,54 @@ class MiniMaxH3Runner(DefaultRunner):
             with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
                 audio = self.audio_vae.decode(audio_latents)
         return video, audio
+
+    def _save_vae_latents(self, video_latents, audio_latents):
+        """Persist exact diffusion-space decoder inputs, once per request on rank 0."""
+        distributed = dist.is_initialized()
+        error = [None]
+        if not distributed or dist.get_rank() == 0:
+            temporary = None
+            try:
+                output = self.input_info.save_result_path
+                if not output:
+                    raise ValueError("save_vae_latents requires save_result_path")
+                target = os.path.splitext(os.path.abspath(output))[0] + ".latents.pt"
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                payload = {
+                    "format": "lightx2v_h3_decoder_inputs_v1",
+                    "video_latents": video_latents.detach().cpu().contiguous(),
+                    "audio_latents": audio_latents.detach().cpu().contiguous(),
+                    "video_latent_space": "normalized diffusion space; pass directly to MiniMaxH3VideoVAE.decode",
+                    "latents_mean": self.video_vae.latents_mean.detach().cpu(),
+                    "latents_std": self.video_vae.latents_std.detach().cpu(),
+                    "prompt": self.input_info.prompt,
+                    "seed": self.input_info.seed,
+                    "task": getattr(self.input_info, "task", None),
+                    "num_frames": self.request_num_frames,
+                    "height": self.request_height,
+                    "width": self.request_width,
+                    "fps": int(self.config.get("fps", 24)),
+                    "model_path": str(self.config["model_path"]),
+                    "infer_steps": self.config.get("infer_steps"),
+                    "lightvae_encoder_path": self.config.get("lightvae_encoder_path"),
+                    "lightvae_decoder_path": self.config.get("lightvae_decoder_path"),
+                    "vae_config": self.video_vae.config,
+                }
+                with tempfile.NamedTemporaryFile(dir=os.path.dirname(target), suffix=".tmp", delete=False) as f:
+                    temporary = f.name
+                    torch.save(payload, f)
+                # Atomic publish, refusing to overwrite a previous sample's latents.
+                os.link(temporary, target)
+                logger.info("Saved H3 decoder inputs: {}", target)
+            except Exception as exc:
+                error[0] = f"Failed to save H3 decoder inputs: {exc}"
+            finally:
+                if temporary is not None:
+                    os.unlink(temporary)
+        if distributed:
+            dist.broadcast_object_list(error, src=0)
+        if error[0]:
+            raise RuntimeError(error[0])
 
     @staticmethod
     def _video_to_uint8_frames(video):
