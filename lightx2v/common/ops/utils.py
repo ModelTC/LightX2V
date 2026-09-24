@@ -231,7 +231,14 @@ def move_tensor_to_device(obj, attr_name, target_device, non_blocking=False, use
     if hasattr(obj, pin_attr_name) and getattr(obj, pin_attr_name) is not None:
         pin_tensor = getattr(obj, pin_attr_name)
         if hasattr(obj, attr_name) and getattr(obj, attr_name) is not None and use_copy:
-            setattr(obj, attr_name, pin_tensor.copy_(getattr(obj, attr_name), non_blocking=non_blocking).to(target_device))
+            tensor = getattr(obj, attr_name)
+            if tensor.device.type == "npu":
+                from lightx2v_platform.base.ascend_npu import NpuDevice
+
+                tensor = NpuDevice.copy_to_cpu(pin_tensor, tensor, non_blocking=non_blocking)
+            else:
+                tensor = pin_tensor.copy_(tensor, non_blocking=non_blocking)
+            setattr(obj, attr_name, tensor.to(target_device))
         else:
             setattr(obj, attr_name, pin_tensor.to(target_device, non_blocking=non_blocking))
     elif hasattr(obj, attr_name) and getattr(obj, attr_name) is not None:

@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 lightx2v_path="$(cd "$(dirname "$0")/../../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/models/Wan2.1-I2V-14B-720P}"
@@ -7,8 +6,6 @@ model_path="${MODEL_PATH:-${lightx2v_path}/models/Wan2.1-I2V-14B-720P}"
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 source "${lightx2v_path}/scripts/base/base.sh"
-export PROFILING_DEBUG_LEVEL=0
-cd "${lightx2v_path}"
 
 python -m lightx2v.infer \
   --model_cls wan2.1 \
