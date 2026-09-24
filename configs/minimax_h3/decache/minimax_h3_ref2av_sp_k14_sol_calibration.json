@@ -22,6 +22,7 @@
   "sol_attn_setting": {
     "tau": 1.5,
     "thresh_type": "diag",
+    "compile_mode": "sm120_compile_once",
     "kv_splits": "auto",
     "reorder": "none",
     "dense_steps": 6,
