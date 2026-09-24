@@ -55,13 +55,7 @@ class QwenImage21BlockWeights(WeightModule):
             )
         for name in ("norm1", "norm2"):
             self.add_module(name, LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](eps=config["eps"]))
-        attn_type = config.get("attn_type", "torch_sdpa")
-        attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
-        if attn_type == "dynamic_sparse_attn":
-            attention = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
-        else:
-            attention = attention_cls()
-        self.add_module("attention", attention)
+        self.add_module("attention", ATTN_WEIGHT_REGISTER[config.get("attn_type", "torch_sdpa")]())
         if config.get("seq_parallel", False):
             parallel = config["parallel"]
             self.add_module("calculate_parallel", ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")]())
