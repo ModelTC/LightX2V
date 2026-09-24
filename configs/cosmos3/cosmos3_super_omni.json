@@ -6,8 +6,6 @@
     "num_frames": 189,
     "fps": 24.0,
     "enable_cfg": true,
-    "enable_sound": true,
-    "feature_caching": "NoCaching",
     "rms_norm_type": "one-pass",
     "attn_rms_norm_type": "one-pass",
     "rope_type": "cosmos3_rope",
@@ -16,6 +14,5 @@
     "add_resolution_template": false,
     "add_duration_template": false,
     "vae_cpu_offload": false,
-    "cpu_offload": false,
-    "offload_granularity": "block"
+    "cpu_offload": false
 }

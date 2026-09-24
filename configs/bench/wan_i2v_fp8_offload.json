@@ -10,9 +10,9 @@
     "enable_cfg": true,
     "cpu_offload": true,
     "offload_granularity": "block",
-    "offload_ratio": 0.8,
     "t5_cpu_offload": true,
     "dit_quantized": true,
+    "dit_quantized_ckpt": "/path/to/Wan2.1-I2V-14B-480P-Lightx2v/fp8",
     "dit_quant_scheme": "fp8-sgl",
     "use_tiling_vae": true
 }

@@ -88,14 +88,6 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             action=None if cond.action is None else uncond.action + guide * (cond.action - uncond.action),
         )
 
-    @staticmethod
-    def _detach_cfg_output(output):
-        return Cosmos3PostInferModuleOutput(
-            vision=output.vision,
-            sound=output.sound,
-            action=output.action,
-        )
-
     def _set_scheduler_noise_pred(self, output):
         self.scheduler.noise_pred = output.vision
         self.scheduler.noise_pred_sound = output.sound
@@ -170,7 +162,7 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             self._set_scheduler_noise_pred(self._combine_cfg_output(cond, uncond))
         else:
             cond = self._infer_cond_uncond(text_encoder_output["cond_input_ids"])
-            self._set_scheduler_noise_pred(self._detach_cfg_output(cond))
+            self._set_scheduler_noise_pred(cond)
 
         if self.cpu_offload:
             self.pre_weight.to_cpu()
