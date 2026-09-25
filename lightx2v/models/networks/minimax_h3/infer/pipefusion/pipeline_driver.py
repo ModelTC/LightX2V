@@ -133,7 +133,7 @@ class MiniMaxH3PipelineDriver:
             else:
                 hidden = self.pp_comm.pipeline_recv((self._seq_len, self._hidden_size), self._dtype)
                 temb = self._local_temb()
-                pre = self.model.pre_infer._metadata(hidden, temb)
+                pre = self.model.pre_infer._metadata(hidden, self._rotary, temb)
                 hidden = self.model.transformer_infer.infer(self.model.transformer_weights, pre)
                 if self._is_last:
                     output = self.model.post_infer.infer(self.model.post_weight, hidden, pre)
