@@ -122,8 +122,7 @@ class BagelRunner(DefaultRunner):
         return latents, generator
 
     def _refresh_scheduler_from_config(self):
-        infer_steps = self.config.get("infer_steps", self.config["inference_hyper"].get("num_timesteps", self.scheduler.infer_steps))
-        self.scheduler.infer_steps = int(infer_steps)
+        self.scheduler.infer_steps = self.config["infer_steps"]
         self.scheduler.timestep_shift = self.config["inference_hyper"]["timestep_shift"]
         self.scheduler.set_timesteps()
 

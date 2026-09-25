@@ -58,7 +58,6 @@ def resolve_bagel_t2i_image_shape(input_info, config):
 def validate_bagel_model_assets(config, model_path):
     required_keys = [
         "llm_config",
-        "llm_config_update",
         "inference_hyper",
         "vae_config",
         "latent_patch_size",

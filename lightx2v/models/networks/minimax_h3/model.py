@@ -600,18 +600,26 @@ class MiniMaxH3Model(BaseTransformerModel):
         return block_range.start, block_range.stop, pp_rank, pp_world_size
 
     def _init_infer_class(self):
-        if self.config.get("feature_caching", "NoCaching") != "NoCaching":
+        caching = self.config.get("feature_caching", "NoCaching")
+        if caching not in ("NoCaching", "DPCache"):
             raise NotImplementedError("MiniMax-H3 feature caching is not implemented")
         self.pre_infer_class = MiniMaxH3PreInfer
-        self.post_infer_class = MiniMaxH3PostInfer
         if self.config.get("pipefusion_parallel", False):
             from lightx2v.models.networks.minimax_h3.infer.pipefusion.transformer_infer import (
                 MiniMaxH3PipeFusionTransformerInfer,
             )
 
             self.transformer_infer_class = MiniMaxH3PipeFusionTransformerInfer
+        elif caching == "DPCache":
+            from lightx2v.models.networks.minimax_h3.infer.feature_caching.dpcache.transformer_infer import (
+                MiniMaxH3OffloadTransformerInferDPCaching,
+                MiniMaxH3TransformerInferDPCaching,
+            )
+
+            self.transformer_infer_class = MiniMaxH3OffloadTransformerInferDPCaching if self.cpu_offload else MiniMaxH3TransformerInferDPCaching
         else:
             self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
+        self.post_infer_class = MiniMaxH3PostInfer
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)

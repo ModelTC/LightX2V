@@ -91,7 +91,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             k = weights.to_k.apply(hidden_states)
             v = weights.to_v.apply(hidden_states)
 
-        if self.use_fused_qkv_norm_rope:
+        if self.use_fused_qkv_norm_rope and rotary_emb is not None:
             fused = self.qkv_norm_rope.apply(
                 q,
                 k,
@@ -111,12 +111,13 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         k = weights.norm_k.apply(k.unflatten(-1, (self.num_heads, self.head_dim)))
         v = v.unflatten(-1, (self.num_heads, self.head_dim))
 
-        q, k = weights.rope.apply(
-            q,
-            k,
-            rotary_emb,
-            rotary_dim=rotary_emb[0].shape[-1],
-        )
+        if rotary_emb is not None:
+            q, k = weights.rope.apply(
+                q,
+                k,
+                rotary_emb,
+                rotary_dim=rotary_emb[0].shape[-1],
+            )
         return q, k, v
 
     def _attention(self, weights, hidden_states, pre_infer_out):
