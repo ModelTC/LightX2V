@@ -167,22 +167,38 @@ class MiniMaxH3Scheduler(BaseScheduler):
             raise RuntimeError("MiniMax-H3 transformer did not populate both velocity predictions")
         condition_video_rows = self.layout.num_condition_video_rows
         condition_audio_rows = self.layout.num_condition_audio_rows
-        self.video_latents[condition_video_rows:] = self._step(
-            self.video_latents[condition_video_rows:],
-            self.video_noise_pred[condition_video_rows:].float(),
-            self.video_timesteps[self.step_index],
-            self.video_sigmas,
-            self.step_index,
-            self.step_update,
+        self.step_post_patch(
+            torch.arange(condition_video_rows, self.video_latents.shape[0], device=self.video_latents.device),
+            torch.arange(condition_audio_rows, self.audio_latents.shape[0], device=self.audio_latents.device),
+            self.video_noise_pred[condition_video_rows:],
+            self.audio_noise_pred[condition_audio_rows:],
         )
-        self.audio_latents[condition_audio_rows:] = self._step(
-            self.audio_latents[condition_audio_rows:],
-            self.audio_noise_pred[condition_audio_rows:].float(),
-            self.audio_timesteps[self.step_index],
-            self.audio_sigmas,
-            self.step_index,
-            self.step_update,
-        )
+
+    def step_post_patch(self, video_rows, audio_rows, video_pred, audio_pred):
+        """Update only the given scheduler rows (PipeFusion per-patch step).
+
+        video_rows/audio_rows index target rows of video_latents/audio_latents
+        (conditioning rows excluded); video_pred/audio_pred are the matching
+        velocity outputs.
+        """
+        if video_rows.numel() > 0:
+            self.video_latents[video_rows] = self._step(
+                self.video_latents[video_rows],
+                video_pred.float(),
+                self.video_timesteps[self.step_index],
+                self.video_sigmas,
+                self.step_index,
+                self.step_update,
+            )
+        if audio_rows.numel() > 0:
+            self.audio_latents[audio_rows] = self._step(
+                self.audio_latents[audio_rows],
+                audio_pred.float(),
+                self.audio_timesteps[self.step_index],
+                self.audio_sigmas,
+                self.step_index,
+                self.step_update,
+            )
 
     def clear(self):
         for name in (

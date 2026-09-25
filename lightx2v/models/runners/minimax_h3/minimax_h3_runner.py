@@ -7,10 +7,15 @@ import torch.distributed as dist
 from PIL import Image, ImageOps
 from loguru import logger
 
+from lightx2v.common.distributed import (
+    get_pipeline_runtime_state,
+    is_pipeline_last_stage,
+)
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
 from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.models.networks.minimax_h3.infer.pipefusion import MiniMaxH3PipelineDriver
 from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
-from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
+from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model, _host_mem_available_gib
 from lightx2v.models.networks.minimax_h3.packing import (
     TEXT_TAG,
     align_num_frames,
@@ -114,6 +119,10 @@ class MiniMaxH3Runner(DefaultRunner):
         """Return tasks supported by the loaded transformer weights."""
         if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
+        if self.config.get("pipefusion_parallel", False):
+            # PipeFusion drives the base-transformer tasks only; ref2av's
+            # interleaved reference layout is not supported.
+            return ("t2av", "i2av", "l2av", "fl2av")
         # Allow ref2av requests to use the base transformer for better visual quality.
         return ("t2av", "i2av", "l2av", "fl2av", "ref2av")
 
@@ -128,6 +137,7 @@ class MiniMaxH3Runner(DefaultRunner):
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
         task = self.config["model_variant"]
+        pipefusion = self.config.get("pipefusion_parallel", False)
 
         if task == "ref2av" and self.config.get("vae_use_compile", False):
             height, width, _ = self._WARMUP_SHAPES[0]
@@ -145,18 +155,25 @@ class MiniMaxH3Runner(DefaultRunner):
                 self.inputs = self._run_input_encoder_local_h3()
                 self.init_run()
 
-                for step_index in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
-                    self.scheduler.step_pre(step_index)
-                    self.model.infer(self.inputs)
-                    self.scheduler.step_post()
-                video_rows = self.scheduler.video_latents
-                audio_rows = self.scheduler.audio_latents
+                if pipefusion:
+                    warmup_steps = self.config.get("parallel", {}).get("pipeline_warmup_steps", 1)
+                    num_steps = min(max(self._WARMUP_STEP_COUNT, warmup_steps + 1), self.scheduler.infer_steps)
+                    video_rows, audio_rows = self._run_pipefusion(num_steps=num_steps)
+                    if is_pipeline_last_stage():
+                        self.run_vae_decoder(video_rows, audio_rows)
+                else:
+                    for step_index in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
+                        self.scheduler.step_pre(step_index)
+                        self.model.infer(self.inputs)
+                        self.scheduler.step_post()
+                    video_rows = self.scheduler.video_latents
+                    audio_rows = self.scheduler.audio_latents
 
-                if self.config.get("cpu_offload", False):
-                    self._offload_transformer()
-                    transformer_offloaded = True
+                    if self.config.get("cpu_offload", False):
+                        self._offload_transformer()
+                        transformer_offloaded = True
 
-                self.run_vae_decoder(video_rows, audio_rows)
+                    self.run_vae_decoder(video_rows, audio_rows)
                 torch_device_module.synchronize()
             finally:
                 if self.config.get("cpu_offload", False) and not transformer_offloaded:
@@ -506,6 +523,8 @@ class MiniMaxH3Runner(DefaultRunner):
         task = self.input_info.task
         if self.loaded_transformer_partition == "transformer_ref" and task != "ref2av":
             raise ValueError(f"MiniMax-H3 transformer_ref only supports ref2av requests; received task {task!r}. Use model_variant='fl2av' for base-transformer tasks.")
+        if self.config.get("pipefusion_parallel", False) and task == "ref2av":
+            raise ValueError("PipeFusion for MiniMax-H3 does not support ref2av requests; use one of t2av/i2av/l2av/fl2av.")
         self.clear_conditioning_state()
         if task == "ref2av":
             self._resolve_request_geometry()
@@ -563,6 +582,11 @@ class MiniMaxH3Runner(DefaultRunner):
         )
         if not self.config.get("cpu_offload", False):
             logger.info("MiniMax-H3 transformer is resident on the accelerator")
+            if self.config.get("pipefusion_parallel", False):
+                # PipeFusion loads each stage's weights to CPU first (see
+                # MiniMaxH3Model._load_safetensor_to_dict) to keep per-rank
+                # host memory low; move this stage's subset to the accelerator.
+                self.model.to_cuda()
         elif self.config.get("offload_granularity", "model") == "model":
             logger.info("Moving the native MiniMax-H3 transformer to the accelerator")
             self.model.to_cuda()
@@ -573,6 +597,8 @@ class MiniMaxH3Runner(DefaultRunner):
         torch_device_module.synchronize()
 
     def run_segment(self, segment_idx=0):
+        if self.config.get("pipefusion_parallel", False):
+            return self._run_pipefusion()
         infer_steps = self.scheduler.infer_steps
         for step_index in range(infer_steps):
             with ProfilingContext4DebugL1(
@@ -592,6 +618,46 @@ class MiniMaxH3Runner(DefaultRunner):
                 if self.progress_callback:
                     self.progress_callback(((step_index + 1) / infer_steps) * 100, 100)
         return self.scheduler.video_latents, self.scheduler.audio_latents
+
+    @ProfilingContext4DebugL2("Run DiT PipeFusion")
+    def _run_pipefusion(self, num_steps=None):
+        """PipeFusion denoising loop; num_steps limits it (warmup).
+
+        Final latents live on the last stage only; other stages return None.
+        """
+        pipeline_state = get_pipeline_runtime_state()
+        layout = self.scheduler.layout
+        num_pipeline_patch = self.config.get("parallel", {}).get("num_pipeline_patch", 4)
+        warmup_steps = self.config.get("parallel", {}).get("pipeline_warmup_steps", 1)
+        pipeline_state.set_input_parameters(
+            num_pipeline_patch=num_pipeline_patch,
+            warmup_steps=warmup_steps,
+            total_tokens=layout.sequence_length - int(layout.text_indices.numel()),
+        )
+        logger.info(
+            "MiniMax-H3 PipeFusion starts: steps={} pp_patch={} warmup={} text={} nontext={} (host MemAvailable: {} GiB)",
+            self.scheduler.infer_steps,
+            num_pipeline_patch,
+            warmup_steps,
+            int(layout.text_indices.numel()),
+            int(layout.sequence_length) - int(layout.text_indices.numel()),
+            _host_mem_available_gib(),
+        )
+
+        # Clear stale-KV buffers at request start so a failed prior request
+        # cannot leave stale K/V behind (PipeFusion only).
+        self.model.transformer_infer.clear_kv_cache()
+
+        driver = MiniMaxH3PipelineDriver(self.model, self.config)
+        driver.run_pipeline(
+            prompt_embeds=self.inputs["text_encoder_output"]["prompt_embeds"],
+            scheduler=self.scheduler,
+            num_steps=num_steps,
+        )
+
+        if is_pipeline_last_stage():
+            return self.scheduler.video_latents, self.scheduler.audio_latents
+        return None, None
 
     @ProfilingContext4DebugL2("Offload DiT")
     def _offload_transformer(self):
@@ -659,8 +725,17 @@ class MiniMaxH3Runner(DefaultRunner):
         return frames.contiguous().cpu()
 
     def process_images_after_vae_decoder(self):
-        if self.video_vae.decode_parallel and dist.get_rank() != 0:
-            return {"video": None, "audio": None}
+        if self.config.get("pipefusion_parallel", False):
+            # The result exists only on the last pipeline stage and there is no
+            # cross-rank gather, so the standard tensor-return contract cannot
+            # be satisfied.
+            if self.input_info.return_result_tensor:
+                raise NotImplementedError("PipeFusion does not support return_result_tensor yet; the result exists only on the last pipeline stage.")
+            is_result_rank = is_pipeline_last_stage()
+        else:
+            if self.video_vae.decode_parallel and dist.get_rank() != 0:
+                return {"video": None, "audio": None}
+            is_result_rank = not dist.is_initialized() or dist.get_rank() == 0
         if self.input_info.return_result_tensor:
             return {
                 # Match the public tensor layout of the reference pipeline:
@@ -671,7 +746,7 @@ class MiniMaxH3Runner(DefaultRunner):
             }
 
         output_path = self.input_info.save_result_path
-        if output_path and (not dist.is_initialized() or dist.get_rank() == 0):
+        if output_path and is_result_rank:
             if os.path.splitext(output_path)[1].lower() != ".mp4":
                 raise ValueError(f"MiniMax-H3 AV output uses H.264/AAC; save_result_path must end in .mp4, got {output_path!r}")
             parent = os.path.dirname(os.path.abspath(output_path))
@@ -707,6 +782,12 @@ class MiniMaxH3Runner(DefaultRunner):
                 if should_offload_transformer:
                     self._offload_transformer()
                     transformer_offloaded = True
+
+            if self.config.get("pipefusion_parallel", False):
+                # Only the last stage holds the final latents; skip VAE decode
+                # everywhere else.
+                if not is_pipeline_last_stage():
+                    return {"video": None, "audio": None}
 
             self.gen_video, self.gen_audio = self.run_vae_decoder(video_rows, audio_rows)
             return self.process_images_after_vae_decoder()

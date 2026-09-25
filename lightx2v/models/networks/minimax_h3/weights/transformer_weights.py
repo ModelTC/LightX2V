@@ -166,6 +166,7 @@ class MiniMaxH3FeedForwardWeights(WeightModule):
 class MiniMaxH3TransformerBlockWeights(WeightModule):
     def __init__(self, index, config, create_cuda_buffer=False):
         super().__init__()
+        self.block_index = index
         prefix = f"transformer_blocks.{index}"
         eps = float(config.get("norm_eps", 1e-5))
         self.add_module(
@@ -196,6 +197,18 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
             self.add_module("adaln", _linear(config, f"{prefix}.adaln_proj.linear", bias=True, create_cuda_buffer=create_cuda_buffer, tp_split="col"))
 
 
+def pipeline_block_range(num_layers: int, pp_rank: int, pp_world_size: int) -> range:
+    """Contiguous transformer-block range owned by a pipeline stage."""
+    if pp_world_size <= 1:
+        return range(num_layers)
+    base = num_layers // pp_world_size
+    remainder = num_layers % pp_world_size
+    num_base_ranks = pp_world_size - remainder
+    stage_start = pp_rank * base + max(0, pp_rank - num_base_ranks)
+    stage_end = stage_start + base + (1 if pp_rank >= num_base_ranks else 0)
+    return range(stage_start, stage_end)
+
+
 class MiniMaxH3TransformerWeights(WeightModule):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
@@ -203,7 +216,22 @@ class MiniMaxH3TransformerWeights(WeightModule):
             raise NotImplementedError(
                 "MiniMax-H3 reads the official sharded checkpoint directly; disk lazy_load requires a converted block-sharded checkpoint and is not supported yet. Use lazy_load=false with model or block CPU offload."
             )
-        self.blocks = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config) for i in range(int(config.get("num_layers", 50)))])
+        num_layers = int(config.get("num_layers", 50))
+        if config.get("pipefusion_parallel", False):
+            from lightx2v.common.distributed import (
+                get_pipeline_parallel_rank,
+                get_pipeline_parallel_world_size,
+            )
+
+            block_range = pipeline_block_range(
+                num_layers,
+                get_pipeline_parallel_rank(),
+                get_pipeline_parallel_world_size(),
+            )
+        else:
+            block_range = range(num_layers)
+
+        self.blocks = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config) for i in block_range])
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block":
             self.offload_block_cuda_buffers = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config, create_cuda_buffer=True) for i in range(2)])
             # Register device buffers before source blocks: buffer allocation
