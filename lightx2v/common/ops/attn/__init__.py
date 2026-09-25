@@ -20,4 +20,3 @@ from .svg2_attn import Svg2AttnWeight
 from .svg_attn import SvgAttnWeight
 from .torch_sdpa import TorchSDPAWeight
 from .ulysses_attn import UlyssesAttnWeight
-from .vdn_window_attn import VDNWindowAttention

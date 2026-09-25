@@ -4,7 +4,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.ops.attn.ulysses_a2a import TorchUlyssesA2A
-from lightx2v.common.ops.attn.vdn_window_attn import VDNLayout
+from lightx2v.models.networks.minimax_h3.weights.vdn import VDNLayout
 
 
 def get_layout(scheduler, config):
