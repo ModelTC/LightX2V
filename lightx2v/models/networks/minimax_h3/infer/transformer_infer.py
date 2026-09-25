@@ -60,6 +60,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             self.seq_p_head_parallel = parallel.get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
+        self._vdn_layout_source = None
+        self._vdn_layout = None
         self.infer_func = self.infer_without_offload
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         self._current_adaln_tables = None
@@ -80,8 +82,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         dist.all_gather(gathered, tensor.contiguous(), group=self.tp_group)
         return torch.cat(gathered, dim=-1)
 
-    def _prepare_qkv(self, weights, hidden_states, rotary_emb):
-        """Project QKV and return Q/K with normalization and RoPE applied."""
+    def _project_qkv(self, weights, hidden_states):
         if self.use_fused_qkv and weights.has_fused_qkv:
             q, k, v = weights.to_qkv.apply(hidden_states).chunk(3, dim=-1)
         else:
@@ -90,7 +91,9 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             q = weights.to_q.apply(hidden_states)
             k = weights.to_k.apply(hidden_states)
             v = weights.to_v.apply(hidden_states)
+        return q, k, v
 
+    def _apply_qkv_norm_rope(self, weights, q, k, v, rotary_emb):
         if self.use_fused_qkv_norm_rope and rotary_emb is not None:
             fused = self.qkv_norm_rope.apply(
                 q,
@@ -120,8 +123,10 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
         return q, k, v
 
-    def _attention(self, weights, hidden_states, pre_infer_out):
-        q, k, v = self._prepare_qkv(weights, hidden_states, pre_infer_out.rotary_emb)
+    def _prepare_qkv(self, weights, hidden_states, rotary_emb):
+        return self._apply_qkv_norm_rope(weights, *self._project_qkv(weights, hidden_states), rotary_emb)
+
+    def _calculate_attention(self, weights, q, k, v, pre_infer_out):
         sp_state = pre_infer_out.sequence_parallel_state
         attention_kwargs = {
             "causal": False,
@@ -162,7 +167,64 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
             if aux_out is not None:
                 out = torch.cat((aux_out, out), dim=0)
-        return weights.to_out.apply(out.to(self.infer_dtype))
+        return out
+
+    def _attention(self, weights, hidden_states, pre_infer_out):
+        raw_qkv = self._project_qkv(weights, hidden_states)
+        q, k, v = self._apply_qkv_norm_rope(weights, *raw_qkv, pre_infer_out.rotary_emb)
+        if self.config.get("vdn_checkpoint"):
+            from lightx2v.models.networks.minimax_h3.infer.vdn import get_layout
+
+            if self._vdn_layout_source is not self.scheduler.layout_cpu:
+                self._vdn_layout = get_layout(self.scheduler, self.config["vdn_attention"])
+                self._vdn_layout_source = self.scheduler.layout_cpu
+            layout = self._vdn_layout
+            weights.calculate.prepare(layout, hidden_states.device)
+        else:
+            del raw_qkv
+        out = self._calculate_attention(weights, q, k, v, pre_infer_out)
+        del q, k, v
+        if not self.config.get("vdn_checkpoint"):
+            return weights.to_out.apply(out.to(self.infer_dtype))
+
+        branch = weights.vdn
+        softmax_gate = torch.sigmoid(branch.softmax_gate.apply(hidden_states)).unsqueeze(-1)
+        out = out.reshape(-1, self.num_heads, self.head_dim) * softmax_gate
+        result = weights.to_out.apply(out.flatten(1).to(self.infer_dtype))
+        del out, softmax_gate
+        if not layout.full_cover:
+            self._add_linear_attention(result, branch, hidden_states, raw_qkv, pre_infer_out.sequence_parallel_state, layout)
+        return result
+
+    def _add_linear_attention(self, result, weights, hidden_states, raw_qkv, state, layout):
+        from lightx2v.models.networks.minimax_h3.infer.vdn import frame_mean, heads_to_sequence, sequence_to_heads, video_rows
+
+        q, k, v = (value.reshape(-1, self.num_heads, self.head_dim) for value in raw_qkv)
+        beta = torch.sigmoid(weights.beta_proj.apply(hidden_states))
+        gate = torch.sigmoid(weights.output_gate_up.apply(weights.output_gate_down.apply(hidden_states))).reshape_as(q)
+        means = frame_mean(hidden_states, layout, state, self.seq_p_group)
+        head_start = 0
+        if state is not None:
+            packed = sequence_to_heads(torch.cat((q, k, v, beta.unsqueeze(-1), gate), dim=-1), state.aux_length, self.seq_p_group)
+            q, k, v, beta, gate = packed.split((self.head_dim, self.head_dim, self.head_dim, 1, self.head_dim), dim=-1)
+            beta = beta.squeeze(-1)
+            head_start = dist.get_rank(self.seq_p_group) * q.shape[1]
+        alpha = weights.frame_alpha(means[1:-1], head_start, q.shape[1], self.head_dim)
+        linear = weights.apply(
+            q=q,
+            k=k,
+            v=v,
+            alpha=alpha,
+            beta=beta,
+            gate=gate,
+            layout=layout,
+            head_start=head_start,
+            use_tf32=self.config.get("vdn_linear_use_tf32", True),
+        )
+        if state is not None:
+            linear = heads_to_sequence(linear, state.aux_length, self.seq_p_group)
+        rows = video_rows(hidden_states.shape[0], layout, state, self.seq_p_group, hidden_states.device)
+        result[rows] += weights.to_out_linear.apply(linear[rows].flatten(1))
 
     @staticmethod
     def _ff(weights, hidden_states):
