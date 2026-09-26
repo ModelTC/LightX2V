@@ -9,6 +9,7 @@ from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
 )
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
 from lightx2v.models.networks.minimax_h3.weights.fused_qkv import FusedQKVStorage
+from lightx2v.models.networks.minimax_h3.weights.vdn import MiniMaxH3VDNWeights, VDNWindowAttention
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -89,14 +90,18 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 compute_dtype=torch.float32,
             ),
         )
-        attn_type = config.get("attn_type", "flash_attn3")
-        attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
-        if attn_type == "dynamic_sparse_attn":
-            calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
+        if config.get("vdn_checkpoint"):
+            sol_config = config.get("sol_attn_setting", {}) if config.get("attn_type") == "sol_attn" else None
+            calculate = VDNWindowAttention(sol_config)
         else:
-            calculate = attention_cls()
-        if attn_type == "sol_attn":
-            calculate.set_config(config.get("sol_attn_setting", {}))
+            attn_type = config.get("attn_type", "flash_attn3")
+            attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
+            if attn_type == "dynamic_sparse_attn":
+                calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
+            else:
+                calculate = attention_cls()
+            if attn_type == "sol_attn":
+                calculate.set_config(config.get("sol_attn_setting", {}))
         self.add_module("calculate", calculate)
         if config.get("seq_parallel", False):
             parallel = config.get("parallel", {})
@@ -105,6 +110,8 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")](a2a_backend=parallel.get("seq_p_a2a_backend", "torch")),
             )
         self.add_module("to_out", _linear(config, f"{prefix}.to_out.0", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
+        if config.get("vdn_checkpoint"):
+            self.add_module("vdn", MiniMaxH3VDNWeights(prefix, config, _linear, create_cuda_buffer=create_cuda_buffer))
 
     def load(self, weight_dict):
         super().load(weight_dict)

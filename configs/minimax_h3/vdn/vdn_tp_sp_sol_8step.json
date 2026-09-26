@@ -1,0 +1,50 @@
+{
+  "infer_steps": 8,
+  "num_frames": 362,
+  "size": [
+    768,
+    1344
+  ],
+  "fps": 24,
+  "enable_cfg": false,
+  "cpu_offload": false,
+  "offload_granularity": "model",
+  "use_adaln_cache": false,
+  "text_encoder_cpu_offload": true,
+  "text_encoder_offload_granularity": "block",
+  "vae_cpu_offload": true,
+  "lazy_load": false,
+  "unload_modules": false,
+  "attn_type": "sol_attn",
+  "refiner_attn_type": "flash_attn2",
+  "sol_attn_setting": {
+    "tau": 0.5,
+    "thresh_type": "diag",
+    "kv_splits": 1,
+    "reorder": "none",
+    "dense_steps": 0,
+    "dense_layers": [
+      0
+    ],
+    "dense_backend": "torch_sdpa",
+    "strict": true
+  },
+  "rms_type": "torch_native",
+  "rope_type": "torch_real_rope",
+  "feature_caching": "NoCaching",
+  "use_compile": false,
+  "video_flow_shift": 12.0,
+  "audio_flow_shift": 3.0,
+  "h3_step_update": "reference_blend",
+  "vae_spatial_scale_factor": 16,
+  "audio_sampling_rate": 32000,
+  "vdn_checkpoint": "/path/to/vdn-minimax-h3/stage-dmd-step-250",
+  "h3_visual_reference_only": true,
+  "text_encoder_tensor_parallel": true,
+  "vae_decode_parallel": true,
+  "parallel": {
+    "tensor_p_size": 2,
+    "seq_p_size": 4,
+    "seq_p_attn_type": "ulysses"
+  }
+}

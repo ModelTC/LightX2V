@@ -128,10 +128,15 @@ def _load_sol_attn():
 
 
 @torch.compiler.disable
-def _run_sol_attn(q, k, v, *, scale, tau, thresh_type, kv_splits, sink_tokens, sink_start):
+def _run_sol_attn(q, k, v, *, scale, tau, thresh_type, kv_splits, sink_tokens, sink_start, query_range=None):
     """Keep CuTe DSL and TVM FFI calls outside TorchDynamo graphs."""
 
-    return _load_sol_attn()(
+    sol_attn = _load_sol_attn()
+    if query_range is not None and torch.cuda.get_device_capability(q.device) == (9, 0) and kv_splits == 1 and _cute_runtime_available():
+        from .sol_attn_sm90 import sol_attn_query_range
+
+        return sol_attn_query_range(q, k, v, query_range=query_range, scale=scale, tau=tau, thresh_type=thresh_type, sink_tokens=sink_tokens, sink_start=sink_start)
+    out = sol_attn(
         q,
         k,
         v,
@@ -142,6 +147,7 @@ def _run_sol_attn(q, k, v, *, scale, tau, thresh_type, kv_splits, sink_tokens, s
         sink_tokens=sink_tokens,
         sink_start=sink_start,
     )
+    return out if query_range is None else out[:, query_range[0] : query_range[1]]
 
 
 @torch.compiler.disable
@@ -232,6 +238,10 @@ def _dense_attention(q, k, v, *, drop_rate=0.0, attn_mask=None, causal=False, sc
     ).transpose(1, 2)
     out = out.reshape(out.shape[0], out.shape[1], -1)
     return out.squeeze(0) if input_was_3d else out
+
+
+def _select_query_output(out, query_range):
+    return out if query_range is None else out[..., query_range[0] : query_range[1], :]
 
 
 @ATTN_WEIGHT_REGISTER("sol_attn")
@@ -467,6 +477,12 @@ class SolAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        query_range = kwargs.get("query_range")
+        if query_range is not None:
+            if q.ndim not in (3, 4) or len(query_range) != 2 or not all(isinstance(x, int) for x in query_range):
+                raise ValueError("query_range must contain two integer token offsets for a 3D or 4D query")
+            if not 0 <= query_range[0] < query_range[1] <= q.shape[-3]:
+                raise ValueError(f"query_range {query_range} is outside the query sequence")
         scale = kwargs.get("softmax_scale", kwargs.get("scale"))
         dense_kwargs = {
             "drop_rate": drop_rate,
@@ -477,7 +493,7 @@ class SolAttnWeight(AttnWeightTemplate):
         use_dense, guard_reason = self._dense_guard(kwargs)
         if use_dense:
             self._log_dense_guard(guard_reason)
-            return self._dense_guard_attention(
+            out = self._dense_guard_attention(
                 q,
                 k,
                 v,
@@ -490,6 +506,7 @@ class SolAttnWeight(AttnWeightTemplate):
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_kv=max_seqlen_kv,
             )
+            return _select_query_output(out, query_range)
 
         reason = self._ineligibility_reason(
             q,
@@ -502,7 +519,7 @@ class SolAttnWeight(AttnWeightTemplate):
             cu_seqlens_kv=cu_seqlens_kv,
         )
         if reason is not None:
-            return self._fallback_or_raise(reason, q, k, v, dense_kwargs)
+            return _select_query_output(self._fallback_or_raise(reason, q, k, v, dense_kwargs), query_range)
 
         input_was_3d = q.ndim == 3
         if input_was_3d:
@@ -516,12 +533,14 @@ class SolAttnWeight(AttnWeightTemplate):
             if grid is None or math.prod(int(value) for value in grid) != q.shape[1]:
                 reason = f"morton3d reorder requires grid_sizes whose product equals T={q.shape[1]}, got {grid}"
                 original = (q.squeeze(0), k.squeeze(0), v.squeeze(0)) if input_was_3d else (q, k, v)
-                return self._fallback_or_raise(reason, *original, dense_kwargs)
+                return _select_query_output(self._fallback_or_raise(reason, *original, dense_kwargs), query_range)
             permutation, inverse = _morton3d_indices(grid, q.device)
             q = q.index_select(1, permutation)
             k = k.index_select(1, permutation)
             v = v.index_select(1, permutation)
 
+        kernel_query_range = query_range if self.reorder == "none" and self.compile_mode == "default" else None
+        kernel_options = {"query_range": kernel_query_range} if kernel_query_range is not None else {}
         try:
             run_kernel = _run_sol_attn_sm120_compile_once if self.compile_mode == "sm120_compile_once" else _run_sol_attn
             out = run_kernel(
@@ -534,6 +553,7 @@ class SolAttnWeight(AttnWeightTemplate):
                 kv_splits=self._resolve_kv_splits(q, self.kv_splits),
                 sink_tokens=self.sink_tokens,
                 sink_start=self.sink_start,
+                **kernel_options,
             )
         except Exception as exc:
             original = (q, k, v)
@@ -542,7 +562,7 @@ class SolAttnWeight(AttnWeightTemplate):
             if input_was_3d:
                 original = tuple(tensor.squeeze(0) for tensor in original)
             reason = f"{type(exc).__name__}: {exc}"
-            return self._fallback_or_raise(reason, *original, dense_kwargs, exc=exc)
+            return _select_query_output(self._fallback_or_raise(reason, *original, dense_kwargs, exc=exc), query_range)
 
         if inverse is not None:
             out = out.index_select(1, inverse)
@@ -562,4 +582,6 @@ class SolAttnWeight(AttnWeightTemplate):
             )
             _KERNEL_LOGS.add(kernel_log_key)
         out = out.reshape(out.shape[0], out.shape[1], -1)
+        if kernel_query_range is None:
+            out = _select_query_output(out, query_range)
         return out.squeeze(0) if input_was_3d else out

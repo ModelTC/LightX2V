@@ -1,6 +1,7 @@
 import glob
 import math
 import os
+from contextlib import ExitStack
 
 import torch
 import torch.distributed as dist
@@ -27,6 +28,7 @@ from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3TransformerWeights,
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
+from lightx2v.models.networks.minimax_h3.weights.vdn import configure_vdn, merge_vdn_tensor, open_vdn_adapters, validate_vdn_branch
 from lightx2v.utils.envs import GET_DTYPE
 
 H3_CHANNEL_QUANT_SCHEMES = {
@@ -57,6 +59,13 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        self.vdn_checkpoint = config.get("vdn_checkpoint")
+        self._vdn_adapters = ()
+        if self.vdn_checkpoint:
+            if lora_path:
+                raise ValueError("VDN loads its default/turbo adapters from vdn_checkpoint; external LoRA is unsupported")
+            configure_vdn(config)
+            self.vdn_checkpoint = config["vdn_checkpoint"]
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not self.use_adaln_cache:
             message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{ADALN_CACHE_GUIDE}"
@@ -374,8 +383,21 @@ class MiniMaxH3Model(BaseTransformerModel):
     def _tp_split_type(key):
         if ".attn.to_q." in key or ".attn.to_k." in key or ".attn.to_v." in key:
             return "col"
-        if ".attn.to_out.0." in key:
+        if ".attn.to_out.0." in key or ".attn.to_out_linear." in key:
             return "row"
+        if any(
+            part in key
+            for part in (
+                ".attn.linear_attention.alpha.A_log",
+                ".attn.linear_attention.alpha.dt_bias",
+                ".attn.linear_attention.alpha.up.",
+                ".attn.linear_attention.beta_proj.",
+                ".attn.linear_attention.output_gate.up.",
+                ".attn.linear_attention.short_conv.",
+                ".attn.softmax_gate.up.",
+            )
+        ):
+            return "col"
         if ".ff.net.0.proj." in key:
             return "ff_fused_col"
         if ".ff.net.2." in key:
@@ -446,22 +468,28 @@ class MiniMaxH3Model(BaseTransformerModel):
         return {key: self._select_tensor_parallel_shard(key, tensor) for key, tensor in weight_dict.items()}
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
-        # BaseTransformerModel forces rank-0 TP loading through CPU. H3 shards
-        # locally instead, so retain the runner-selected CPU/GPU target.
-        if not self.use_tp:
-            return super()._load_ckpt(unified_dtype, sensitive_layer)
-        load_device = self._checkpoint_load_device()
-        logger.info(
-            "MiniMax-H3 rank {} (TP rank {}) loading TP checkpoint shards on {}",
-            dist.get_rank() if dist.is_initialized() else 0,
-            self.tp_rank,
-            load_device,
-        )
+        # H3 reads and shards on each TP rank, retaining the selected CPU/GPU target.
+        if self.use_tp:
+            logger.info("MiniMax-H3 TP rank {} loading checkpoint shards on {}", self.tp_rank, self._checkpoint_load_device())
         use_tp = self.use_tp
         self.use_tp = False
         try:
-            return super()._load_ckpt(unified_dtype, sensitive_layer)
+            with ExitStack() as stack:
+                if self.vdn_checkpoint:
+                    self._vdn_adapters = open_vdn_adapters(self.config, stack)
+                weight_dict = super()._load_ckpt(unified_dtype, sensitive_layer)
+                if self.vdn_checkpoint:
+                    path = os.path.join(self.vdn_checkpoint, "linear_branch", "model.safetensors")
+                    source = stack.enter_context(safe_open(path, framework="pt", device="cpu"))
+                    validate_vdn_branch(source, self.config)
+                    load_device = self._checkpoint_load_device()
+                    for key in source.keys():
+                        if key in weight_dict:
+                            raise ValueError(f"VDN branch tensor already exists in the base checkpoint: {key}")
+                        weight_dict[key] = self._load_local_tensor(source, key, load_device)
+                return weight_dict
         finally:
+            self._vdn_adapters = ()
             self.use_tp = use_tp
 
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
@@ -505,8 +533,11 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise RuntimeError(f"MiniMax-H3 checkpoint tensors were not loaded on {expected}: {preview}")
 
     def _load_local_tensor(self, source, key, load_device):
-        """Shard on CPU before copying only this TP rank's tensor to the accelerator."""
-        tensor = self._select_tensor_parallel_shard(key, source.get_tensor(key))
+        """Merge VDN adapters on CPU, then shard before the device transfer."""
+        tensor = source.get_tensor(key)
+        if self._vdn_adapters:
+            tensor = merge_vdn_tensor(tensor, key, self._vdn_adapters)
+        tensor = self._select_tensor_parallel_shard(key, tensor)
         if torch.device(load_device).type != "cpu":
             tensor = tensor.to(load_device)
         return tensor
