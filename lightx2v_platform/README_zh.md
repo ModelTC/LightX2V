@@ -16,6 +16,7 @@
 - Intel AIPC PTL
 - 天数智芯 iluvatar
 - 平头哥 PPU
+- 壁仞 SUPA
 
 相关的docker环境可以参考：https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 

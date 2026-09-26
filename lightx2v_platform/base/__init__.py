@@ -10,6 +10,7 @@ from lightx2v_platform.base.ppu_cuda import PpuDevice
 from lightx2v_platform.base.enflame_gcu import EnflameGcuDevice
 from lightx2v_platform.base.intel_xpu import IntelXpuDevice
 from lightx2v_platform.base.iluvatar_cuda import IluvatarDevice
+from lightx2v_platform.base.biren_supa import BirenSupaDevice
 
 __all__ = [
     "init_ai_device",
@@ -25,4 +26,5 @@ __all__ = [
     "EnflameGcuDevice",
     "IntelXpuDevice",
     "IluvatarDevice",
+    "BirenSupaDevice",
 ]
