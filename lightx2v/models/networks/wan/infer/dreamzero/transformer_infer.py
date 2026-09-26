@@ -3,6 +3,8 @@ import math
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.ops.norm.rms_norm_weight import RMSWeight
+from lightx2v.common.ops.norm.torch_compatible_rms_norm import can_use_torch_rms_norm_5120, torch_rms_norm_5120
 from lightx2v.common.ops.rope import FlashInferRope, RopeTemplate, TorchRealRope
 from lightx2v.models.networks.wan.infer.dreamzero.pre_infer import _category_linear
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
@@ -66,6 +68,7 @@ class DreamZeroRope(RopeTemplate):
 class DreamZeroTransformerInfer(WanTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
+        self.fuse_rms_norm = config.get("dreamzero_fuse_rms_norm", True)
         self.num_action_per_block = int(config.get("num_action_per_block", config.get("action_horizon", 24)))
         self.num_state_per_block = int(config.get("num_state_per_block", 1))
         self.frame_seqlen = int(config["frame_seqlen"])
@@ -232,6 +235,26 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             return self.modulate_func(x, scale=scale_arg, shift=shift_arg).reshape_as(x)
         return (x.float() * (1.0 + scale.float()) + shift.float()).to(x.dtype)
 
+    def _apply_attention_rms_norm(self, norm, x):
+        """Fuse torch RMSNorm before splitting the full hidden dimension into heads.
+
+        Match the supported torch CUDA reduction and BF16 rounding exactly.
+        Other shapes, torch versions, and norm backends keep their original path.
+        """
+        if not (
+            self.fuse_rms_norm
+            and type(norm) is RMSWeight
+            and _can_use_cuda_kernels(x)
+            and norm.sensitive_layer_dtype == norm.infer_dtype
+        ):
+            return norm.apply(x)
+
+        weight = norm.weight
+        weight_diff = getattr(norm, "weight_diff", None)
+        if not can_use_torch_rms_norm_5120(x, weight, weight_diff):
+            return norm.apply(x)
+        return torch_rms_norm_5120(x, weight, weight_diff, norm.eps)
+
     def infer_self_attn_with_cache(self, phase, x, shift_msa, scale_msa, pre_infer_out, kv_cache):
         seq_total = x.shape[0]
         norm1_out = phase.norm1.apply(x)
@@ -241,8 +264,8 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm1_out = norm1_out.to(self.infer_dtype)
 
-        q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
-        k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
+        q = self._apply_attention_rms_norm(phase.self_attn_norm_q, phase.self_attn_q.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
+        k = self._apply_attention_rms_norm(phase.self_attn_norm_k, phase.self_attn_k.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
         v = phase.self_attn_v.apply(norm1_out).view(seq_total, self.num_heads, self.head_dim)
         q, k = phase.dreamzero_rope.apply(
             q,
@@ -285,7 +308,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             raise ValueError("DreamZero cross-attention requires projected context.")
 
         n, d = self.num_heads, self.head_dim
-        q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
+        q = self._apply_attention_rms_norm(phase.cross_attn_norm_q, phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
         cross_attn_kv_cache = self.get_cross_attn_kv_cache(self._cross_attn_cache_key(pre_infer_out.cache_name, context))
         cached_kv = cross_attn_kv_cache[self.block_idx]
         if cached_kv is None:
