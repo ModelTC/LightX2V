@@ -199,18 +199,51 @@ def _compiled_window():
     return torch.compile(flex_attention, dynamic=False, fullgraph=True)
 
 
+@lru_cache(maxsize=2)
+def _shared_sol_windows(layout, device):
+    spatial, frames, start = layout.tokens_per_frame, layout.num_frames, layout.video_start
+    if frames <= 2:
+        return torch.arange(layout.sequence_length, device=device), ()
+    protected = torch.cat((torch.arange(start + spatial, device=device), torch.arange(layout.video_end - spatial, layout.sequence_length, device=device)))
+    windows = {}
+    bounds = layout.bounds
+    for frame in range(1, frames - 1):
+        lo, hi = bounds[frame]
+        windows.setdefault((max(1, lo), min(frames - 1, hi + 1)), []).append(frame)
+    groups = []
+    for (lo, hi), query_frames in windows.items():
+        rows = torch.cat((protected, torch.arange(start + lo * spatial, start + hi * spatial, device=device)))
+        queries = (start + torch.tensor(query_frames, device=device)[:, None] * spatial + torch.arange(spatial, device=device)).flatten()
+        query_start = protected.numel() + (query_frames[0] - lo) * spatial
+        query_range = (query_start, query_start + len(query_frames) * spatial)
+        groups.append((rows, queries, query_range))
+    return protected, tuple(groups)
+
+
 class VDNWindowAttention(AttnWeightTemplate):
-    def __init__(self):
+    def __init__(self, sol_config=None):
         self.config = {}
         self.backend = "flex_triton"
         self.layout = None
         self.mask = None
         self._mask_key = None
         self.block_stats = None
+        self.sol = None
+        if sol_config is not None:
+            from lightx2v.common.ops.attn.sol_attn import SolAttnWeight
+
+            self.sol = SolAttnWeight()
+            self.sol.set_config(sol_config)
+            if self.sol.reorder != "none":
+                raise ValueError("VDN Sol-Attn requires reorder='none'")
 
     def prepare(self, layout, device):
         self.layout = layout
         device = torch.device(device)
+        if self.sol is not None:
+            self._sol_protected, self._sol_groups = _shared_sol_windows(layout, device)
+            self.sol.sink_start = 0
+            self.sol.sink_tokens = self._sol_protected.numel()
         if device.type != "cuda":
             self.backend = "sdpa_reference"
             return
@@ -224,10 +257,24 @@ class VDNWindowAttention(AttnWeightTemplate):
     def apply(self, q, k, v, **kwargs):
         if q.shape[0] != self.layout.sequence_length or k.shape[0] != self.layout.sequence_length:
             raise ValueError("VDN window attention needs the complete packed sequence on each head rank")
+        if self.sol is not None and not self.sol._dense_guard(kwargs)[0]:
+            return self._sol_attention(q, k, v, kwargs)
         if q.is_cuda:
             out = _compiled_window()(q.transpose(0, 1)[None], k.transpose(0, 1)[None], v.transpose(0, 1)[None], block_mask=self.mask, scale=q.shape[-1] ** -0.5, kernel_options={"BACKEND": "TRITON"})
             return out[0].transpose(0, 1)
         return self._reference(q, k, v)
+
+    def _sol_attention(self, q, k, v, kwargs):
+        # Preserve each window's Q/K block boundaries while computing only its
+        # target query range. Window-external KV never enters SOL.
+        output = torch.empty_like(q)
+        protected = self._sol_protected
+        dense = F.scaled_dot_product_attention(q[protected].transpose(0, 1)[None], k.transpose(0, 1)[None], v.transpose(0, 1)[None])
+        output[protected] = dense[0].transpose(0, 1)
+        for rows, queries, query_range in self._sol_groups:
+            out = self.sol.apply(q=q[rows], k=k[rows], v=v[rows], query_range=query_range, scheduler=kwargs.get("scheduler"), block_idx=kwargs.get("block_idx"))
+            output[queries] = out.reshape(-1, *q.shape[1:])
+        return output
 
     def _reference(self, q, k, v):
         layout = self.layout

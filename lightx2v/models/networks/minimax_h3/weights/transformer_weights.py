@@ -91,7 +91,8 @@ class MiniMaxH3AttentionWeights(WeightModule):
             ),
         )
         if config.get("vdn_checkpoint"):
-            calculate = VDNWindowAttention()
+            sol_config = config.get("sol_attn_setting", {}) if config.get("attn_type") == "sol_attn" else None
+            calculate = VDNWindowAttention(sol_config)
         else:
             attn_type = config.get("attn_type", "flash_attn3")
             attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
