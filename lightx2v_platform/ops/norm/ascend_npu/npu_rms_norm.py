@@ -11,6 +11,23 @@ except ImportError:
 
 @PLATFORM_RMS_WEIGHT_REGISTER("npu_rms_norm")
 class NpuRmsNormWeight(RMSWeightTemplate):
+    def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6, lora_prefix="", lora_path=""):
+        super().__init__(weight_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps, lora_prefix, lora_path)
+        self.base_attrs = [(weight_name, "weight", False)] if weight_name is not None else []
+
+    def load(self, weight_dict):
+        from lightx2v.common.offload.block_layout import BlockLoadContext
+
+        if isinstance(weight_dict, BlockLoadContext):
+            weight_dict.bind(self)
+            return
+        super().load(weight_dict)
+
+    def contiguous_dtype(self, attr, dtype):
+        if dtype != self.infer_dtype:
+            raise ValueError(f"Expected {self.infer_dtype} for {self.weight_name}")
+        return dtype
+
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
 

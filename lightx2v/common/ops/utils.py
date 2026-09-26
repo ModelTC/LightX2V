@@ -6,6 +6,7 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.offload.block_layout import BlockLoadContext
 from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -136,6 +137,8 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
     Returns:
         dict: {attr_name: tensor, ...} Dictionary of tensors located on CUDA device
     """
+    if isinstance(weight_dict, BlockLoadContext):
+        return {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs}
     result = {}
     for name, attr_name, transpose in base_attrs:
         tensor = get_source_tensor(name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32)
@@ -183,6 +186,8 @@ def create_default_tensors(base_attrs, weight_dict):
         device_tensors_dict: {attr_name: tensor, ...} Tensors located on the original weight device
         pin_tensors_dict: {attr_name: tensor, ...} Tensors with pinned memory on CPU
     """
+    if isinstance(weight_dict, BlockLoadContext):
+        return {}, {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs}
     device_tensors = {}
     pin_tensors = {}
 
@@ -226,7 +231,14 @@ def move_tensor_to_device(obj, attr_name, target_device, non_blocking=False, use
     if hasattr(obj, pin_attr_name) and getattr(obj, pin_attr_name) is not None:
         pin_tensor = getattr(obj, pin_attr_name)
         if hasattr(obj, attr_name) and getattr(obj, attr_name) is not None and use_copy:
-            setattr(obj, attr_name, pin_tensor.copy_(getattr(obj, attr_name), non_blocking=non_blocking).to(target_device))
+            tensor = getattr(obj, attr_name)
+            if tensor.device.type == "npu":
+                from lightx2v_platform.base.ascend_npu import NpuDevice
+
+                tensor = NpuDevice.copy_to_cpu(pin_tensor, tensor, non_blocking=non_blocking)
+            else:
+                tensor = pin_tensor.copy_(tensor, non_blocking=non_blocking)
+            setattr(obj, attr_name, tensor.to(target_device))
         else:
             setattr(obj, attr_name, pin_tensor.to(target_device, non_blocking=non_blocking))
     elif hasattr(obj, attr_name) and getattr(obj, attr_name) is not None:

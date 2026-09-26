@@ -30,7 +30,6 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     TritonQuantLinearFp8,  # noqa E402
 )
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8  # noqa E402
-from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8  # noqa E402
 from lightx2v_platform.ops.mm.iluvatar_cuda.q_linear import IluvatarQuantLinearInt8  # noqa E402
 
 from lightx2v.models.input_encoders.hf.wan.t5.tokenizer import HuggingfaceTokenizer  # noqa E402
@@ -79,11 +78,11 @@ class T5OffloadSelfAttention(WeightModule):
         self.mm_type = mm_type
         self.add_module(
             "norm1",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](f"{block_prefix}.{self.block_index}.norm1.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
+            RMS_WEIGHT_REGISTER["torch" if AI_DEVICE == "npu" else "sgl-kernel"](f"{block_prefix}.{self.block_index}.norm1.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
         )
         self.add_module(
             "norm2",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](f"{block_prefix}.{self.block_index}.norm2.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
+            RMS_WEIGHT_REGISTER["torch" if AI_DEVICE == "npu" else "sgl-kernel"](f"{block_prefix}.{self.block_index}.norm2.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
         )
         self.add_module(
             "pos_embedding",
@@ -227,6 +226,8 @@ class T5Attention(nn.Module):
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-npu":
+                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
+
                 linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
@@ -312,6 +313,8 @@ class T5FeedForward(nn.Module):
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-npu":
+                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
+
                 linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8

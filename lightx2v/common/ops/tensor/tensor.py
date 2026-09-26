@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
+from lightx2v.common.offload.block_layout import BlockLoadContext
 from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import TENSOR_REGISTER
@@ -24,6 +25,10 @@ class DefaultTensor:
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
     def load(self, weight_dict):
+        if isinstance(weight_dict, BlockLoadContext):
+            attr = "tensor_cuda_buffer" if self.create_cuda_buffer else "pin_tensor"
+            setattr(self, attr, weight_dict.take(self.tensor_name))
+            return
         if self.create_cuda_buffer:
             self._load_cuda_buffer(weight_dict)
         elif self.create_cpu_buffer:
