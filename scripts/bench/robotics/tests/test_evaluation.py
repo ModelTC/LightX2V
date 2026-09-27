@@ -7,18 +7,18 @@ import numpy as np
 import torch
 from omegaconf.errors import ConfigKeyError
 
-from experiments.common.config import ROBOTWIN_ROOT, ROOT, default_libero_root, load_config
-from experiments.common.interfaces import ActionChunk, Observation
-from experiments.common.manager import gpu_slots
-from experiments.common.results import atomic_json, result_path, summarize
 from lightx2v.models.networks.wan.realtimewam_checkpoint import merge_linear_lora
+from scripts.bench.robotics.common.config import ROBOTWIN_ROOT, ROOT, default_libero_root, load_config
+from scripts.bench.robotics.common.interfaces import ActionChunk, Observation
+from scripts.bench.robotics.common.manager import gpu_slots
+from scripts.bench.robotics.common.results import atomic_json, result_path, summarize
 
 
 class EvaluationTests(unittest.TestCase):
     def test_robotwin_planner_assets_relocate(self):
         from pathlib import Path
 
-        from experiments.robotwin.planner_adapter import relocate_asset_paths
+        from scripts.bench.robotics.robotwin.planner_adapter import relocate_asset_paths
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -54,7 +54,7 @@ class EvaluationTests(unittest.TestCase):
         from pathlib import Path
         from types import SimpleNamespace
 
-        from experiments.robotwin.seed_cache import SeedCache, find_validated_seed, load_seeds
+        from scripts.bench.robotics.robotwin.seed_cache import SeedCache, find_validated_seed, load_seeds
 
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
             path = Path(directory) / "clean/adjust_bottle_seed.json"
@@ -87,14 +87,14 @@ class EvaluationTests(unittest.TestCase):
             random_cache.record_validated(12400000)
             self.assertEqual(load_seeds(Path(directory) / "random/adjust_bottle_seed.json"), [12400000])
             self.assertEqual(load_seeds(path), [102, 104, 105, 108])
-            with patch("experiments.robotwin.seed_cache.atomic_json", side_effect=OSError("read only")), self.assertWarns(UserWarning):
+            with patch("scripts.bench.robotics.robotwin.seed_cache.atomic_json", side_effect=OSError("read only")), self.assertWarns(UserWarning):
                 cache.record_validated(110)
             self.assertEqual(load_seeds(path), [102, 104, 105, 108])
 
     def test_seed_cache_disabled_and_invalid_input(self):
         from pathlib import Path
 
-        from experiments.robotwin.seed_cache import SeedCache, load_seeds
+        from scripts.bench.robotics.robotwin.seed_cache import SeedCache, load_seeds
 
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
             path = Path(directory) / "clean/adjust_bottle_seed.json"
@@ -125,10 +125,10 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(load_config("libero", ["EVALUATION.libero_root=/tmp/override"])["EVALUATION"]["libero_root"], "/tmp/override")
 
     def test_missing_benchmark_initialization_hint(self):
-        from experiments.libero.adapter import load_libero
+        from scripts.bench.robotics.libero.adapter import load_libero
 
         with patch.dict(os.environ, {}, clear=True):
-            cfg = load_config("libero_plus", [])
+            cfg = load_config("libero_plus", ["EVALUATION.output_dir=/tmp/unused-missing-libero"])
         with patch("pathlib.Path.is_dir", return_value=False), self.assertRaisesRegex(FileNotFoundError, "git submodule update --init --recursive"):
             load_libero(cfg)
 
@@ -137,7 +137,7 @@ class EvaluationTests(unittest.TestCase):
         from pathlib import Path
         from types import ModuleType
 
-        from experiments.libero.adapter import load_libero
+        from scripts.bench.robotics.libero.adapter import load_libero
 
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {}, clear=True):
             package = Path(root) / "libero/libero"
@@ -243,7 +243,7 @@ class EvaluationTests(unittest.TestCase):
             self.assertFalse(result["complete"])
 
     def test_replan_and_reset(self):
-        from experiments.common.evaluator import run_task
+        from scripts.bench.robotics.common.evaluator import run_task
 
         class Env:
             action_dim, action_space, max_steps = 7, "libero_delta_eef", 5
@@ -275,7 +275,7 @@ class EvaluationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as out, patch.dict(os.environ, {}, clear=True):
             cfg = load_config("libero", [f"EVALUATION.output_dir={out}", "EVALUATION.num_trials=2", "EVALUATION.replan_steps=2"])
             policy = Policy()
-            with patch("experiments.common.evaluator.make_environment", return_value=Env()):
+            with patch("scripts.bench.robotics.common.evaluator.make_environment", return_value=Env()):
                 run_task(cfg, {"key": "test"}, policy)
             self.assertEqual(policy.calls, 6)
             self.assertEqual(policy.resets, 2)
@@ -283,7 +283,7 @@ class EvaluationTests(unittest.TestCase):
     def test_robotwin_step_contract(self):
         from types import SimpleNamespace
 
-        from experiments.robotwin.adapter import RoboTwinAdapter
+        from scripts.bench.robotics.robotwin.adapter import RoboTwinAdapter
 
         adapter = RoboTwinAdapter.__new__(RoboTwinAdapter)
         adapter.step_index, adapter.max_steps = 0, 20
@@ -306,7 +306,7 @@ class EvaluationTests(unittest.TestCase):
     def test_robotwin_chunk_observation_equivalence(self):
         import json
 
-        from experiments.common.evaluator import run_task
+        from scripts.bench.robotics.common.evaluator import run_task
 
         class Env:
             action_dim, action_space, max_steps = 14, "robotwin_joint_position", 19
@@ -356,7 +356,7 @@ class EvaluationTests(unittest.TestCase):
                     else:
                         cfg["EVALUATION"]["skip_get_obs_within_replan"] = mode
                     env, policy = Env(stop, success), Policy(horizon)
-                    with patch("experiments.common.evaluator.make_environment", return_value=env):
+                    with patch("scripts.bench.robotics.common.evaluator.make_environment", return_value=env):
                         run_task(cfg, {"key": "test"}, policy)
                     result = json.loads(result_path(out, {"key": "test"}).read_text())
                     runs.append((env, policy, [(e["steps"], e["success"], e["inference_calls"]) for e in result["episodes"]]))
@@ -378,7 +378,7 @@ class EvaluationTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import Mock
 
-        from experiments.robotwin.adapter import RoboTwinAdapter
+        from scripts.bench.robotics.robotwin.adapter import RoboTwinAdapter
 
         with patch.object(sys, "path", [str(ROOT / "lightx2v_ros/src/common"), str(ROOT / "lightx2v_ros/src/simulator"), *sys.path]):
             from simulator.robotwin_node.env import RoboTwinEnv

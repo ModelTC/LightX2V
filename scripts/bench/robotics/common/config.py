@@ -3,7 +3,7 @@ from pathlib import Path
 
 from omegaconf import OmegaConf
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[4]
 LIBERO_NODE = ROOT / "lightx2v_ros/src/simulator/simulator/libero_node"
 ROBOTWIN_ROOT = ROOT / "lightx2v_ros/src/simulator/simulator/robotwin_node/RoboTwin"
 
@@ -14,7 +14,7 @@ def default_libero_root(benchmark):
 
 
 def load_config(benchmark, argv):
-    cfg = OmegaConf.load(ROOT / "experiments/configs/eval.yaml")
+    cfg = OmegaConf.load(ROOT / "configs/bench/robotics/eval.yaml")
     cfg.benchmark = benchmark
     if benchmark == "libero_plus":
         cfg.EVALUATION.num_trials = 1

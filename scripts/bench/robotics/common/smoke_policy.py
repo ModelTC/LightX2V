@@ -4,15 +4,15 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 
 def main():
     import numpy as np
 
-    from experiments.common.config import load_config
-    from experiments.common.interfaces import Observation
-    from experiments.policies.realtimewam import build_policy
+    from scripts.bench.robotics.common.config import load_config
+    from scripts.bench.robotics.common.interfaces import Observation
+    from scripts.bench.robotics.policies.realtimewam import build_policy
 
     cfg = load_config(sys.argv[1], sys.argv[2:])
     robotwin = cfg["benchmark"] == "robotwin"

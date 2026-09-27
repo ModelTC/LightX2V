@@ -1,4 +1,43 @@
-# RealtimeWAM benchmark inference
+# Robotics benchmark evaluation
+
+LIBERO, LIBERO-plus and RoboTwin share model-independent batch evaluation tools.
+RealtimeWAM is one policy adapter, not a separate evaluation framework.
+
+## Layout and migration
+
+| Responsibility | Canonical location |
+| --- | --- |
+| CLI entrypoints, worker scheduling, trials and success accounting | `scripts/bench/robotics/` |
+| Strict evaluation defaults | `configs/bench/robotics/eval.yaml` |
+| LIBERO/Plus loading, initial states, reset/step and observation conversion | `lightx2v_ros/src/simulator/simulator/libero_node/runtime.py` |
+| Interactive LIBERO defaults and ROS environment contract | `lightx2v_ros/src/simulator/simulator/libero_node/observer.py`, `env.py` |
+| Shared RoboTwin environment | `lightx2v_ros/src/simulator/simulator/robotwin_node/env.py` |
+| Native inference and LoRA loading | `lightx2v/models/` |
+
+Both interactive and batch LIBERO now use the same ROS-free runtime. Interactive
+defaults remain four cameras, 224px and immediate reset; batch evaluation keeps
+its existing cameras, 256px, five settle actions, per-suite horizons and cyclic
+trial initial-state selection. The shared state conversion uses the former batch
+implementation, so ROS now uses that same float32 quaternion conversion. Sharing
+the environment does **not** turn an interactive session into a scored benchmark:
+trial scheduling and aggregation remain the benchmark layer's responsibility.
+
+The old `experiments/` entrypoints, modules and compatibility shims have been
+removed. There is only one evaluator implementation and one active defaults file;
+the former `experiments/configs/eval.yaml` has moved. Use these entrypoints:
+
+```text
+python scripts/bench/robotics/run_libero.py ...
+python scripts/bench/robotics/run_libero_plus.py ...
+python scripts/bench/robotics/run_robotwin.py ...
+```
+
+Overrides and output schema are unchanged. Migration does not restart running
+processes or change existing result/seed-cache files. Use a **new output directory**
+after updating code: source fingerprints changed, so old manifests intentionally
+cannot be resumed by the new manager. Update launchers and imports that still
+reference `experiments/`. Managers using the removed old worker path must finish
+before updating; no such jobs were running when the compatibility layer was removed.
 
 All entrypoints, model inference, LoRA merging and rollout code run from this
 repository. Neither FasterWAM nor MeanFlowWAM is imported. LIBERO, LIBERO-plus and RoboTwin
@@ -69,7 +108,7 @@ separate. Optional acceleration import warnings do not imply SDPA is unavailable
 
 The CLI uses strict OmegaConf `key=value` overrides (Hydra-style syntax), not a
 Hydra launcher. Unknown fields are rejected. `--help` prints the entrypoint
-usage; `experiments/configs/eval.yaml` lists supported fields. `model.model_id`,
+usage; `configs/bench/robotics/eval.yaml` lists supported fields. `model.model_id`,
 `redirect_common_files`, training scheduler options, and arbitrary legacy task
 configs are not silently accepted.
 
@@ -80,7 +119,7 @@ cd /path/to/LightX2V_realtimewam-infer
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
 export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
-python -u experiments/libero_plus/run_libero_plus_manager.py \
+python -u scripts/bench/robotics/run_libero_plus.py \
   model=realtimewam model.backbone=fasterwam \
   base_ckpt=/path/to/original_fasterwam_libero.pt \
   lora_path=/path/to/teacher_distilled_lora \
@@ -96,7 +135,30 @@ python -u experiments/libero_plus/run_libero_plus_manager.py \
 
 ## LIBERO
 
-Use `experiments/libero/run_libero_manager.py` and set `EVALUATION.num_trials=50`.
+```bash
+cd /path/to/LightX2V_realtimewam-infer
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
+python -u scripts/bench/robotics/run_libero.py \
+  model=realtimewam model.backbone=fasterwam \
+  base_ckpt=/path/to/original_fasterwam_libero.pt \
+  lora_path=/path/to/teacher_distilled_lora \
+  model.model_path=/path/to/Wan2.2-TI2V-5B \
+  EVALUATION.dataset_stats_path=/path/to/libero/dataset_stats.json \
+  EVALUATION.num_trials=50 EVALUATION.num_inference_steps=1 \
+  EVALUATION.action_infer_mode=one_pass_future_cache \
+  EVALUATION.sigma_shift=5.0 EVALUATION.replan_steps=10 \
+  MULTIRUN.num_gpus=8 MULTIRUN.max_tasks_per_gpu=2 \
+  MULTIRUN.chunk_size=1 seed=42 \
+  EVALUATION.output_dir=/path/to/new_results
+```
+
+`MULTIRUN.chunk_size` groups **tasks per worker**, not actions per model call.
+Use 1 for ordinary LIBERO to distribute its 40 tasks across GPUs; the Plus
+example uses 20 to amortize model loading across its much larger task catalog.
+Defaults have not changed in this migration; specify the intended task chunk.
+
 The entrypoint automatically selects ordinary LIBERO. LIBERO and Plus run in
 separate processes to prevent their identically named Python packages colliding.
 
@@ -112,7 +174,7 @@ Activate the RoboTwin-compatible environment and its NVIDIA GL/Vulkan setup.
 For the dense FastWAM teacher-distilled checkpoint in the original command:
 
 ```bash
-python -u experiments/robotwin/run_robotwin_manager.py \
+python -u scripts/bench/robotics/run_robotwin.py \
   model=realtimewam model.backbone=fastwam \
   base_ckpt=/path/to/original_robotwin.pt \
   lora_path=/path/to/teacher_distilled_checkpoint_or_lora \
@@ -121,6 +183,8 @@ python -u experiments/robotwin/run_robotwin_manager.py \
   EVALUATION.action_infer_mode=first_frame \
   EVALUATION.num_inference_steps=1 EVALUATION.replan_steps=8 \
   EVALUATION.eval_num_episodes=100 \
+  EVALUATION.reuse_seed_cache=true \
+  EVALUATION.skip_get_obs_within_replan=true \
   MULTIRUN.num_gpus=8 MULTIRUN.max_tasks_per_gpu=2 \
   'MULTIRUN.phases=[clean,random]' seed=42 \
   EVALUATION.output_dir=/path/to/new_results
@@ -132,6 +196,17 @@ For a FasterWAM-backed teacher-distilled RoboTwin model, explicitly change
 checkpoint/statistics. RoboTwin candidate seeds start at `100000 * (1 + seed)`;
 the expert filters infeasible layouts. Accepted seeds and actual instructions
 are recorded per episode. Dry-run experts/fallback instructions are forbidden.
+
+The command above reuses validated scene seeds for comparison with prior runs.
+For a new independent seed experiment, set `EVALUATION.reuse_seed_cache=false`;
+changing `seed` alone does not replace cached scene seeds.
+
+For an original, non-distilled checkpoint, remove `base_ckpt` and `lora_path`,
+pass `ckpt=/path/to/original.pt`, and set `EVALUATION.num_inference_steps` to its
+intended inference schedule. Keep the matching backbone, conditioning mode and
+dataset statistics. The `teacher_flow` velocity sampler can also evaluate the
+original teacher; it does not require a LoRA. Do not use it for a checkpoint
+trained with the separate `consistency_baseline` output parameterization.
 
 The default simulator is the existing repository submodule at
 `lightx2v_ros/src/simulator/simulator/robotwin_node/RoboTwin`, pinned to
@@ -195,7 +270,7 @@ recorded in `tasks/*.json`. Output resume remains controlled independently by
   accuracy**. Omit it to run the normal full episode horizon.
 - `dry_run=true` validates paths and writes a task manifest without loading the
   model or starting rollouts. It still imports the benchmark to enumerate tasks.
-- `python experiments/common/smoke_policy.py libero <model/weight overrides>`
+- `python scripts/bench/robotics/common/smoke_policy.py libero <model/weight overrides>`
   checks synthetic observation -> finite action output, without a simulator.
 - `manifest.json` records effective config, task list and weight file identity
   (path, size, mtime). `jobs/*.log` contains the original worker traceback.
@@ -212,12 +287,12 @@ recorded in `tasks/*.json`. Output resume remains controlled independently by
 
 ## Adding another model
 
-Implement the `Policy` protocol in `experiments/common/interfaces.py`, then use
+Implement the `Policy` protocol in `scripts/bench/robotics/common/interfaces.py`, then use
 `model.factory=your_package:build_policy`. It receives the resolved config and
 must return physical-unit `ActionChunk`s with an explicit action space. Image
 preprocessing, state normalization, gripper conversion and recurrent state belong
 to that adapter. No changes to benchmark rollout/success accounting are needed.
 
-Run unit tests with `python -m unittest discover -s experiments/tests -v`.
+Run unit tests with `python -m unittest discover -s scripts/bench/robotics/tests -v`.
 
 See [SMOKE_TESTS.md](SMOKE_TESTS.md) for the existing-weight integration checks.

@@ -5,15 +5,15 @@ generic fallback instruction when a dependency is missing.
 """
 
 import importlib.util
-import sys
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
-from experiments.common.config import ROBOTWIN_ROOT, ROOT
-from experiments.common.interfaces import Observation
-from experiments.robotwin.seed_cache import SeedCache, find_validated_seed
+from scripts.bench.robotics.common.config import ROBOTWIN_ROOT, ROOT
+from scripts.bench.robotics.common.interfaces import Observation
+from scripts.bench.robotics.common.simulator import bootstrap_simulator
+from scripts.bench.robotics.robotwin.seed_cache import SeedCache, find_validated_seed
 
 
 def discover_tasks(cfg):
@@ -39,8 +39,7 @@ class RoboTwinAdapter:
     action_space = "robotwin_joint_position"
 
     def __init__(self, cfg, task):
-        for relative in ("lightx2v_ros/src/common", "lightx2v_ros/src/simulator"):
-            sys.path.insert(0, str(ROOT / relative))
+        bootstrap_simulator()
         from common.contract import ROBOTWIN_CONTRACT
         from simulator.robotwin_node.env import RoboTwinEnv
 
@@ -51,7 +50,7 @@ class RoboTwinAdapter:
             def _prepare_planner_runtime(self):
                 if importlib.util.find_spec("curobo") is None:
                     raise ImportError("RoboTwin benchmark requires curobo expert checks; no dry-run fallback")
-                from experiments.robotwin.planner_adapter import install_planner_adapter
+                from scripts.bench.robotics.robotwin.planner_adapter import install_planner_adapter
 
                 install_planner_adapter(self.robotwin_root, evaluation["output_dir"])
 

@@ -1,5 +1,9 @@
 # Existing-weight smoke checks (2026-09-26)
 
+This section records historical model + simulator checks before the directory
+migration. Moving this document does not imply that those runs used the new
+entrypoints. See the migration checks below for the current refactor.
+
 Branch: `realtimewam-infer`, based on upstream/main `a4b8ce30`.
 Worktree: `/mnt/miaohua/charles/codes/LightX2V_realtimewam-infer`.
 
@@ -141,3 +145,82 @@ The latter supplies only benchmark assets/code, not external WAM inference.
 - Python compilation, Ruff checks and git whitespace checks pass.
 - These checks do not establish formal benchmark accuracy, dense-backbone
   numerical parity, all perturbation categories, or 8-GPU x 2-worker load behavior.
+
+## Directory migration and shared runtime (2026-09-27)
+
+The active entrypoints are now `scripts/bench/robotics/run_libero.py`,
+`run_libero_plus.py` and `run_robotwin.py`; defaults live in
+`configs/bench/robotics/eval.yaml`. The initial migration provided compatibility
+shims; these were subsequently removed at the user's request. Only the canonical
+entrypoints are supported now.
+
+Twenty-six CPU/unit tests pass after the migration:
+
+- The previous 20 evaluation, LoRA, seed-cache and observation-optimization tests.
+- No Python sources or default configuration remain under `experiments/`.
+- All three canonical manager entrypoints support `--help` from another directory.
+- New entrypoints do not expose the adapter's `libero/` package as a top-level
+  module that would shadow the simulator's namespace package.
+- Interactive and batch observation conversion agree exactly with the former
+  batch implementation on the tested quaternions, state arrays and image flips.
+- A fake simulator checks no extra batch reset, preserved interactive camera
+  defaults, cyclic versus strict initial-state selection, five settling actions,
+  termination, close and protection against initial-state mutation.
+- Initial-state loading delegates to each benchmark suite, including Plus-specific
+  resolution, and restores the scoped trusted-asset loader afterwards.
+
+These checks do not constitute a fresh model-in-the-loop accuracy measurement
+or a full ROS launch test. Running benchmark jobs have not been restarted.
+
+### New-entrypoint model + simulator smoke
+
+All three canonical entrypoints subsequently passed a fresh real-model smoke,
+using the original teacher checkpoint + EMA LoRA inputs listed above. Each ran
+one task for 20 policy steps, with one worker on one GPU and no external simulator
+source override. All managers exited 0; all summaries have `complete=true`,
+empty `errors`, and empty `worker_failures`.
+
+| Benchmark | Result directory under `evaluate_results/` | Steps | Model calls |
+| --- | --- | ---: | ---: |
+| LIBERO | `smoke_migration_libero_Yzuatk` | 20 | 2 |
+| LIBERO-plus | `smoke_migration_libero_plus_DH0WVa` | 20 | 2 |
+| RoboTwin | `smoke_migration_robotwin_dexv2B` | 20 | 3 |
+
+LIBERO/Plus used Spatial task 0 and initial-state index 0. RoboTwin used
+`adjust_bottle`, clean, the default observation-skipping optimization, and an
+empty run-local seed cache. It rejected unstable seed 4300000, validated 4300001
+with the expert, and saved it to the new cache; historical caches were untouched.
+None of the truncated episodes completed the goal, so these are **integration
+checks, not success-rate estimates**. The full ROS interactive launch was not run.
+
+Initial migration attempts `smoke_migration_libero_UFnhyC` and
+`smoke_migration_libero_plus_xJBdWW` exposed adapter-package shadowing of the
+simulator's `libero` namespace. Their logs are retained; entrypoint path handling
+was fixed and a regression test added before the successful reruns above.
+
+Validation also passed repository-wide pre-commit, explicit pre-commit checks
+for the new files (which are not yet Git-tracked), and `git diff --check`.
+
+### Canonical-only rerun after removing compatibility shims
+
+After deleting all tracked `experiments/` sources and updating the tests and
+documentation, the three canonical entrypoints were tested again with the same
+teacher + EMA LoRA inputs. All managers exited 0, and every summary reports
+`complete=true`, `errors=[]`, and `worker_failures=[]`.
+
+| Benchmark | Result directory under `evaluate_results/` | Trials | Steps per trial | Total model calls |
+| --- | --- | ---: | ---: | ---: |
+| LIBERO | `smoke_canonical_libero_w98ipX` | 2 | 20 | 4 |
+| LIBERO-plus | `smoke_canonical_libero_plus_o1wLb0` | 2 | 20 | 4 |
+| RoboTwin | `smoke_canonical_robotwin_ntUfsN` | 1 | 20 | 3 |
+
+LIBERO and Plus both completed consecutive resets with initial-state indices
+0 and 1. RoboTwin expert validation rejected unstable seed 4300000 and accepted
+4300001, saving it to this smoke's own seed cache. Historical caches and result
+directories were not changed. Model loading, finite-action validation, simulator
+steps and result writing completed without relying on any old entrypoint.
+
+The updated 26-test suite, repository-wide pre-commit and explicit checks for
+new files passed. All episodes were deliberately capped at 20 steps and ended
+without task success; these checks establish short-rollout integration, **not
+full-benchmark accuracy or support for every task/asset**.

@@ -6,7 +6,7 @@ import warnings
 from itertools import pairwise
 from pathlib import Path
 
-from experiments.common.results import atomic_json
+from scripts.bench.robotics.common.results import atomic_json
 
 
 def load_seeds(path):
