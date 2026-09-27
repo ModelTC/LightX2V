@@ -22,6 +22,7 @@ def load_config(benchmark, argv):
         cfg.model.backbone = "fastwam"
         cfg.EVALUATION.action_infer_mode = "first_frame"
         cfg.EVALUATION.replan_steps = 8
+        cfg.EVALUATION.skip_get_obs_within_replan = True
         cfg.MULTIRUN.chunk_size = 1
     cfg.base_ckpt = os.environ.get("BASE_CKPT")
     cfg.lora_path = os.environ.get("LORA_PATH")
@@ -65,6 +66,10 @@ def load_config(benchmark, argv):
         raise ValueError("compile_action_infer is not implemented; use false")
     if cfg.EVALUATION.reuse_seed_cache and benchmark != "robotwin":
         raise ValueError("reuse_seed_cache is supported only for RoboTwin")
+    if not isinstance(cfg.EVALUATION.skip_get_obs_within_replan, bool):
+        raise ValueError("skip_get_obs_within_replan must be a boolean")
+    if cfg.EVALUATION.skip_get_obs_within_replan and benchmark != "robotwin":
+        raise ValueError("skip_get_obs_within_replan is supported only for RoboTwin")
     for field in ("num_gpus", "max_tasks_per_gpu", "chunk_size"):
         if cfg.MULTIRUN[field] < 1:
             raise ValueError(f"MULTIRUN.{field} must be positive")

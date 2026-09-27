@@ -107,10 +107,11 @@ class RoboTwinAdapter:
         self.step_index = 0
         return Observation(raw.images, raw.state, self.env.task_description)
 
-    def step(self, action):
-        raw, done, success = self.env.step(action)
+    def step(self, action, *, observe=True):
+        raw, done, success = self.env.step(action) if observe else self.env.step(action, observe=False)
         self.step_index += 1
-        return Observation(raw.images, raw.state, self.env.task_description, self.step_index), success, done or self.step_index >= self.max_steps
+        observation = Observation(raw.images, raw.state, self.env.task_description, self.step_index) if raw is not None else None
+        return observation, success, done or self.step_index >= self.max_steps
 
     def episode_metadata(self):
         return {

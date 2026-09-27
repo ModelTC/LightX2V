@@ -24,6 +24,8 @@ def run_task(cfg, task, policy):
 
     torch.manual_seed(cfg["seed"])
     evaluation = cfg["EVALUATION"]
+    # Older queued jobs have no flag: preserve their original evaluation path.
+    skip_observation = cfg["benchmark"] == "robotwin" and evaluation.get("skip_get_obs_within_replan", False)
     trials = evaluation["eval_num_episodes"] if cfg["benchmark"] == "robotwin" else evaluation["num_trials"]
     result = {"task": task, "status": "running", "episodes": [], "error": None}
     path = result_path(evaluation["output_dir"], task)
@@ -39,12 +41,21 @@ def run_task(cfg, task, policy):
             inference_seconds, calls, success = 0.0, 0, False
             for step in range(environment.max_steps):
                 if not pending:
+                    if obs is None:
+                        raise RuntimeError("Missing fresh observation at action replanning boundary")
                     chunk = policy.predict_action_chunk(obs)
                     actions = chunk.validate(environment.action_space, environment.action_dim)
                     pending.extend(actions[: evaluation["replan_steps"]])
                     inference_seconds += chunk.timing.get("inference_seconds", 0.0)
                     calls += 1
-                obs, success, done = environment.step(pending.popleft())
+                action = pending.popleft()
+                if skip_observation:
+                    # Intermediate actions need success checks, not new images.
+                    # Do not acquire an unused observation at the rollout cap.
+                    observe = not pending and step + 1 < environment.max_steps
+                    obs, success, done = environment.step(action, observe=observe)
+                else:
+                    obs, success, done = environment.step(action)
                 if success or done:
                     break
             result["episodes"].append(

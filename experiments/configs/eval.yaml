@@ -26,6 +26,7 @@ EVALUATION:
   action_infer_mode: one_pass_future_cache
   sigma_shift: 5.0
   replan_steps: 10
+  skip_get_obs_within_replan: false  # RoboTwin entrypoint defaults to true; legacy job configs remain unoptimized
   num_steps_wait: 5
   settle_action: [0, 0, 0, 0, 0, 0, -1]
   max_steps: null

@@ -294,6 +294,118 @@ class EvaluationTests(unittest.TestCase):
         self.assertFalse(success)
         self.assertFalse(done)
 
+    def test_robotwin_observation_flag(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(load_config("robotwin", [])["EVALUATION"]["skip_get_obs_within_replan"])
+            self.assertFalse(load_config("robotwin", ["EVALUATION.skip_get_obs_within_replan=false"])["EVALUATION"]["skip_get_obs_within_replan"])
+            self.assertFalse(load_config("libero", [])["EVALUATION"]["skip_get_obs_within_replan"])
+            for benchmark, value in (("libero", "true"), ("libero_plus", "true"), ("robotwin", "1")):
+                with self.assertRaises(ValueError):
+                    load_config(benchmark, [f"EVALUATION.skip_get_obs_within_replan={value}"])
+
+    def test_robotwin_chunk_observation_equivalence(self):
+        import json
+
+        from experiments.common.evaluator import run_task
+
+        class Env:
+            action_dim, action_space, max_steps = 14, "robotwin_joint_position", 19
+
+            def __init__(self, stop, success):
+                self.stop, self.success = stop, success
+                self.actions, self.observations = [], []
+
+            def reset(self, index):
+                self.count = 0
+                return Observation({}, np.zeros(14), "task", 0)
+
+            def episode_metadata(self):
+                return {"environment_seed": 42}
+
+            def step(self, action, *, observe=True):
+                self.actions.append(action.copy())
+                self.count += 1
+                self.observations.append(observe)
+                obs = Observation({}, np.full(14, self.count), "task", self.count) if observe else None
+                done = self.count == self.stop
+                return obs, done and self.success, done
+
+            def close(self):
+                pass
+
+        class Policy:
+            def __init__(self, horizon):
+                self.horizon, self.inputs = horizon, []
+
+            def reset_episode(self, metadata):
+                pass
+
+            def predict_action_chunk(self, obs):
+                self.inputs.append((obs.step, obs.state.copy()))
+                return ActionChunk(np.stack([obs.state + i + 1 for i in range(self.horizon)]), "robotwin_joint_position")
+
+        # Covers early success, early unsuccessful termination, rollout cap,
+        # a short returned action chunk, replan=1, and multiple episode resets.
+        for replan, horizon, stop, success in ((8, 32, 3, True), (8, 32, 9, False), (8, 32, None, False), (8, 3, None, False), (1, 32, None, False)):
+            runs = []
+            for mode in (False, True, "legacy"):
+                with self.subTest(replan=replan, horizon=horizon, stop=stop, mode=mode), tempfile.TemporaryDirectory() as out, patch.dict(os.environ, {}, clear=True):
+                    cfg = load_config("robotwin", [f"EVALUATION.output_dir={out}", "EVALUATION.eval_num_episodes=2", f"EVALUATION.replan_steps={replan}"])
+                    if mode == "legacy":
+                        cfg["EVALUATION"].pop("skip_get_obs_within_replan")
+                    else:
+                        cfg["EVALUATION"]["skip_get_obs_within_replan"] = mode
+                    env, policy = Env(stop, success), Policy(horizon)
+                    with patch("experiments.common.evaluator.make_environment", return_value=env):
+                        run_task(cfg, {"key": "test"}, policy)
+                    result = json.loads(result_path(out, {"key": "test"}).read_text())
+                    runs.append((env, policy, [(e["steps"], e["success"], e["inference_calls"]) for e in result["episodes"]]))
+            baseline, optimized, legacy = runs
+            for candidate in (optimized, legacy):
+                np.testing.assert_array_equal(baseline[0].actions, candidate[0].actions)
+                self.assertEqual(baseline[2], candidate[2])
+                self.assertEqual([x[0] for x in baseline[1].inputs], [x[0] for x in candidate[1].inputs])
+                np.testing.assert_array_equal([x[1] for x in baseline[1].inputs], [x[1] for x in candidate[1].inputs])
+            self.assertTrue(all(legacy[0].observations))
+            if stop is None:
+                # One reset observation per episode is outside step().
+                self.assertEqual(sum(optimized[0].observations), len(optimized[1].inputs) - 2)
+            if replan > 1:
+                self.assertLess(sum(optimized[0].observations), sum(baseline[0].observations))
+
+    def test_robotwin_native_skip_preserves_execution(self):
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from experiments.robotwin.adapter import RoboTwinAdapter
+
+        with patch.object(sys, "path", [str(ROOT / "lightx2v_ros/src/common"), str(ROOT / "lightx2v_ros/src/simulator"), *sys.path]):
+            from simulator.robotwin_node.env import RoboTwinEnv
+
+        env = RoboTwinEnv.__new__(RoboTwinEnv)
+        env.contract = SimpleNamespace(action_dim=14)
+        env.env = SimpleNamespace(take_action=Mock(), eval_success=False, check_success=Mock(return_value=False))
+        env._observation = Mock(return_value=SimpleNamespace(images={}, state=np.zeros(14)))
+        env._task_description = "test"
+        adapter = RoboTwinAdapter.__new__(RoboTwinAdapter)
+        adapter.env, adapter.step_index, adapter.max_steps = env, 0, 2
+        obs, success, done = adapter.step(np.zeros(14), observe=False)
+        self.assertIsNone(obs)
+        self.assertFalse(success)
+        self.assertFalse(done)
+        env._observation.assert_not_called()
+        env.env.check_success.assert_called_once()
+        env.env.take_action.assert_called_once()
+        obs, success, done = adapter.step(np.zeros(14))
+        self.assertEqual(obs.step, 2)
+        self.assertTrue(done)  # adapter's step limit still enforced
+        self.assertFalse(success)
+        self.assertEqual(env.env.check_success.call_count, 2)
+        env._observation.assert_called_once()
+        env.env.eval_success = True
+        self.assertEqual(env.step(np.zeros(14), observe=False), (None, True, True))
+
     def test_custom_policy_options(self):
         with patch.dict(os.environ, {}, clear=True):
             cfg = load_config("libero", ["model=my_model", "model.factory=my_package:build", "model.options.endpoint=localhost"])

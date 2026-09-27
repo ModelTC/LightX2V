@@ -145,6 +145,23 @@ the selected repository and writes per-worker configs under the output's
 `runtime/robotwin_planner/`. It does not edit upstream code or downloaded YAML,
 and rejects unresolved references to assets outside the selected benchmark.
 
+### RoboTwin observation performance
+
+The RoboTwin entrypoint defaults to `EVALUATION.skip_get_obs_within_replan=true`.
+Every action still executes the original physics and success/termination checks;
+the evaluator requests fresh camera observations only at action-replanning
+boundaries. With `replan_steps=8`, the seven intermediate observation captures
+are avoided. Reset observations remain fresh. The simulator's own internal
+rendering and terminal-success capture are unchanged. Expert checks and seed
+cache validation are not skipped.
+
+Set `EVALUATION.skip_get_obs_within_replan=false` for the previous per-step
+observation path. This flag is RoboTwin-only. Already-written job configs that
+lack the flag retain their old behavior, including newly launched queued jobs;
+use a new result directory for optimized runs. Do not resume old results with
+changed settings/source. No numerical accuracy or wall-clock speedup is implied
+by this optimization without a matched-seed simulator comparison.
+
 ### RoboTwin seed cache
 
 `EVALUATION.reuse_seed_cache=true` preserves the legacy load/save behavior and
