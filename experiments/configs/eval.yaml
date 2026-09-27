@@ -1,0 +1,49 @@
+benchmark: libero
+base_ckpt: null
+lora_path: null
+ckpt: null  # optional merged checkpoint, mutually exclusive with base_ckpt/lora_path
+seed: 42
+model:
+  name: realtimewam
+  backbone: fasterwam
+  model_path: null
+  lora_weights: ema
+  action_horizon: 32
+  num_video_frames: 9  # (33 training action frames - 1) / frequency ratio 4 + 1
+  sampler: teacher_flow
+  t5_cpu_offload: false
+  vae_cpu_offload: false
+  factory: null  # optional module:factory(cfg) implementing Policy
+  options: {}  # custom factory options; interpreted by that adapter only
+EVALUATION:
+  output_dir: null
+  dataset_stats_path: null
+  libero_root: null  # auto: repo-local libero_node/LIBERO or LIBERO-plus; optional override
+  robotwin_root: null  # auto: repo-local robotwin_node/RoboTwin; optional override
+  num_trials: 50
+  eval_num_episodes: 100
+  num_inference_steps: 1
+  action_infer_mode: one_pass_future_cache
+  sigma_shift: 5.0
+  replan_steps: 10
+  num_steps_wait: 5
+  settle_action: [0, 0, 0, 0, 0, 0, -1]
+  max_steps: null
+  render_size: 256
+  compile_action_infer: false
+  instruction_type: unseen
+  embodiment: aloha-agilex
+  max_seed_attempts: 1000
+  reuse_seed_cache: false  # RoboTwin: load/save validated seed lists; expert rechecks still run
+  seed_cache_dir: null  # default ROBOTWIN_SEED_DIR or repo-local RoboTwin/my_seeds
+  resume: false
+MULTIRUN:
+  num_gpus: 8
+  max_tasks_per_gpu: 2
+  chunk_size: 20
+  task_sample_ratio: 1.0
+  task_suite_names: [libero_spatial, libero_object, libero_goal, libero_10]
+  task_ids: null
+  task_names: null
+  phases: [clean, random]
+dry_run: false
