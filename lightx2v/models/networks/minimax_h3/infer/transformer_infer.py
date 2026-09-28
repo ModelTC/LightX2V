@@ -91,6 +91,11 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             k = weights.to_k.apply(hidden_states)
             v = weights.to_v.apply(hidden_states)
 
+        from .radeon_h3 import prepare_qk_rope
+        radeon_prepared = prepare_qk_rope(self, weights, q, k, v, rotary_emb)
+        if radeon_prepared is not None:
+            return radeon_prepared
+
         if self.use_fused_qkv_norm_rope and rotary_emb is not None:
             fused = self.qkv_norm_rope.apply(
                 q,
@@ -120,7 +125,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
         return q, k, v
 
-    def _attention(self, weights, hidden_states, pre_infer_out):
+    def _attention(self, weights, hidden_states, pre_infer_out, project_output=True):
         q, k, v = self._prepare_qkv(weights, hidden_states, pre_infer_out.rotary_emb)
         sp_state = pre_infer_out.sequence_parallel_state
         attention_kwargs = {
@@ -162,6 +167,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
             if aux_out is not None:
                 out = torch.cat((aux_out, out), dim=0)
+        if not project_output:
+            return out.to(self.infer_dtype)
         return weights.to_out.apply(out.to(self.infer_dtype))
 
     @staticmethod
@@ -170,9 +177,14 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return weights.out_proj.apply(value * F.silu(gate))
 
     def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None):
+        from .radeon_h3 import report_status
+        report_status(self)
         # Keep the Python cache lookup outside the compiled block.
         if modulation is None:
             modulation = self._compute_adaln_table(weights, pre_infer_out)
+        if self.config.get("radeon_gfx1201_h3", False):
+            from .radeon_h3 import infer_block
+            return infer_block(self, weights, hidden_states, pre_infer_out, modulation)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = modulation.chunk(6, dim=-1)
         indices = pre_infer_out.adaln_indices
 
