@@ -32,7 +32,7 @@ bash scripts/platforms/mps/run_minimax_h3_t2av.sh
 
 缓存生成与推理必须使用相同模型和配置，尤其是步数与 flow shift。MPS 配置默认将缓存写入 `~/.cache/lightx2v/adaln/diffusers`；更换权重后需重新生成。
 
-MPS 专用入口直接调用 Python 缓存工具，支持上述环境变量。公共脚本 `tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh` 保留上游用法，路径和平台配置在脚本内修改；MPS 请使用上面的专用入口。
+MPS 专用入口直接调用 Python 缓存工具，支持上述环境变量。也可使用公共脚本 `tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh`：修改仓库和模型路径，注释 NVIDIA 配置，取消 Apple Silicon MPS 配置的注释，并将末尾的 `--config_json` 改为与推理相同的 JSON 配置。公共脚本默认仍使用 CUDA。
 
 ## 内存配置与限制
 
