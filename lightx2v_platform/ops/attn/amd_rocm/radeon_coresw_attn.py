@@ -13,7 +13,7 @@ def _report_route(query, key, value, checks, block_idx):
     signature = (block_idx, str(query.device), str(query.dtype), tuple(query.shape), tuple(key.shape), tuple(value.shape), query.stride(), key.stride(), value.stride(), reasons)
     if signature not in _REPORTED_ROUTES:
         _REPORTED_ROUTES.add(signature)
-        logger.info("radeon_coresw_attn route={} rank={} block={} qkv_shapes={} dtype={} qkv_strides={} reasons={}",
+        logger.info("gfx1201_sage_attn route={} rank={} block={} qkv_shapes={} dtype={} qkv_strides={} reasons={}",
                     "fallback_aiter" if reasons else "custom", os.environ.get("RANK", "?"),
                     block_idx, (tuple(query.shape), tuple(key.shape), tuple(value.shape)), query.dtype,
                     (query.stride(), key.stride(), value.stride()), reasons)
@@ -22,29 +22,29 @@ from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
 
-@PLATFORM_ATTN_WEIGHT_REGISTER("radeon_coresw_attn")
+@PLATFORM_ATTN_WEIGHT_REGISTER("gfx1201_sage_attn")
 class RadeonCoreswAttnWeight(AttnWeightTemplate):
     def __init__(self):
         global _REPORTED_INIT
         self.config = {}
         if not _REPORTED_INIT:
             _REPORTED_INIT = True
-            logger.info("radeon_coresw_attn initialized rank={} platform={} adapter={}",
+            logger.info("gfx1201_sage_attn initialized rank={} platform={} adapter={}",
                         os.environ.get("RANK", "?"), os.environ.get("PLATFORM", "auto"), __file__)
 
     def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None,
               max_seqlen_q=None, max_seqlen_kv=None, drop_rate=0,
               attn_mask=None, causal=False, scheduler=None, block_idx=None, **kwargs):
         if drop_rate or causal or attn_mask is not None or kwargs:
-            raise ValueError("radeon_coresw_attn supports only unmasked noncausal inference without extra options")
+            raise ValueError("gfx1201_sage_attn supports only unmasked noncausal inference without extra options")
         if q.ndim not in (3, 4) or k.ndim != q.ndim or v.ndim != q.ndim:
             raise ValueError("Expected SHD or BSHD Q/K/V")
         if any(tensor.requires_grad for tensor in (q, k, v)):
-            raise ValueError("radeon_coresw_attn is inference-only")
+            raise ValueError("gfx1201_sage_attn is inference-only")
         if any(tensor.device != q.device or tensor.dtype != q.dtype for tensor in (k, v)):
             raise ValueError("Q/K/V must share device and dtype")
         if q.device.type != "cuda" or torch.version.hip is None:
-            raise RuntimeError("radeon_coresw_attn requires ROCm")
+            raise RuntimeError("gfx1201_sage_attn requires ROCm")
         if q.ndim == 3:
             query, key, value = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
         else:
@@ -77,9 +77,9 @@ class RadeonCoreswAttnWeight(AttnWeightTemplate):
             supported = checks["regular_cu_seqlens"]
         _report_route(query, key, value, checks, block_idx)
         if supported:
-            import radeon_coresw_ops
+            from aiter.ops.gfx1201.sage_attention import gfx1201_sage_attention
 
-            output = torch.ops.radeon_coresw_ops.attention(query, key, value)
+            output = gfx1201_sage_attention(query, key, value)
         else:
             from aiter import flash_attn_varlen_func
 
