@@ -1,18 +1,12 @@
 #!/bin/bash
-set -euo pipefail
 
-lightx2v_path=/Users/yongyang/Documents/x2v/LightX2V
-model_path=/Users/yongyang/Documents/x2v/models/MiniMaxAI/diffusers/MiniMax-H3
+lightx2v_path=
+model_path=
 
 export PLATFORM=mps
-export DTYPE=BF16
-export SENSITIVE_LAYER_DTYPE=BF16
-export TOKENIZERS_PARALLELISM=false
-export PYTHONPATH="${lightx2v_path}"
+source ${lightx2v_path}/scripts/base/base.sh
 
-mkdir -p "${lightx2v_path}/save_results"
-
-exec /opt/miniconda3/envs/torch/bin/python -m lightx2v.infer \
+python -m lightx2v.infer \
     --model_cls minimax_h3 \
     --model-variant fl2av \
     --task t2av \
