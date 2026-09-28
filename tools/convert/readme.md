@@ -464,10 +464,19 @@ This quantizes the 224 block Q/K/V/out and FFN gate/up/down matrices while prese
 Inference uses the existing `fp8-sgl` backend with per-channel E4M3 weights and dynamic per-token activation quantization.
 Install sgl-kernel with support for your GPU.
 
-Set `dit_quantized_ckpt` in `configs/qwen_image_21/qwen_image_21_fp8_5090.json`.
-Set the project and original model paths in `scripts/qwen_image_21/qwen_image_21_t2i_fp8_5090.sh`, then run the script.
-The script reads that JSON directly without generating or changing configuration.
-Keep `model_path` pointed at the original model for the encoder, VAE, scheduler and model configuration.
+Copy `configs/qwen_image_21/qwen_image_21.json` to a local config and add these fields for ordinary FP8 DiT weights:
+
+```json
+{
+    "attn_type": "flash_attn2",
+    "text_encoder_cpu_offload": true,
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl",
+    "dit_quantized_ckpt": "/path/to/Qwen-Image-2.1-fp8/qwen_image_21_fp8.safetensors"
+}
+```
+
+Set the project and original model paths in `scripts/qwen_image_21/qwen_image_21_t2i_5090_1k.sh`, then select the local config with `CONFIG_JSON=/path/to/local.json`. For I2I, use `qwen_image_21_i2i_5090_1k.sh`. The scripts read JSON directly; keep `model_path` pointed at the original model directory.
 
 ### FP16 accumulation on SM120
 
@@ -483,5 +492,6 @@ python tools/convert/converter.py \
     --quantized --linear_type fp8 --device cuda:0 --single_file
 ```
 
-This profile uses weight qmax=14. The `qwen_image_21_fp8_f16_accum_5090.json` config selects `fp8-f16-accum` and activation qmax=7 through `dit_fp8_activation_qmax`. Set its checkpoint path and the project/model paths in `qwen_image_21_t2i_fp8_f16_accum_5090.sh`.
+This profile uses weight qmax=14. The `qwen_image_21_5090_1k.json` config selects `fp8-f16-accum` and activation qmax=7 through `dit_fp8_activation_qmax`. Set its checkpoint path and the project/model paths in `qwen_image_21_t2i_5090_1k.sh`.
+The recommended config also requires `text_encoder_quantized_ckpt`; see the `convert_qwen_image_21_text_encoder_fp8` docstring in [converter.py](converter.py) for its conversion command.
 Requires the SM120 FP16 accumulation op in lightx2v-kernel. Startup rejects ordinary FP8 checkpoints and unavailable kernels. Raising activation qmax can overflow FP16 accumulation; validate numerical and image quality when changing it.

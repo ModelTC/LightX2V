@@ -622,11 +622,19 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                 torch.testing.assert_close(block.attn.to_qkv.apply(hidden_states), separate, rtol=1e-2, atol=1e-2)
 
     def test_offload_infer_selection(self):
+        from lightx2v.models.networks.minimax_h3.infer.feature_caching.dpcache.transformer_infer import (
+            MiniMaxH3OffloadTransformerInferDPCaching,
+            MiniMaxH3TransformerInferDPCaching,
+        )
+
         cases = (
             ({"cpu_offload": False}, MiniMaxH3TransformerInfer),
             ({"cpu_offload": True, "offload_granularity": "model"}, MiniMaxH3OffloadTransformerInfer),
             ({"cpu_offload": True, "offload_granularity": "block"}, MiniMaxH3OffloadTransformerInfer),
             ({"cpu_offload": True, "dit_disk_streaming": True}, MiniMaxH3MpsOffloadTransformerInfer),
+            ({"cpu_offload": False, "feature_caching": "DPCache"}, MiniMaxH3TransformerInferDPCaching),
+            ({"cpu_offload": True, "offload_granularity": "model", "feature_caching": "DPCache"}, MiniMaxH3OffloadTransformerInferDPCaching),
+            ({"cpu_offload": True, "offload_granularity": "block", "feature_caching": "DPCache"}, MiniMaxH3OffloadTransformerInferDPCaching),
         )
         for config, expected in cases:
             with self.subTest(config=config):
@@ -635,6 +643,14 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                 model.cpu_offload = config["cpu_offload"]
                 model._init_infer_class()
                 self.assertIs(model.transformer_infer_class, expected)
+
+        for caching, streaming in (("DPCache", True), ("unsupported", False), ("unsupported", True)):
+            with self.subTest(caching=caching, streaming=streaming):
+                model = MiniMaxH3Model.__new__(MiniMaxH3Model)
+                model.config = {"feature_caching": caching, "dit_disk_streaming": streaming}
+                model.cpu_offload = True
+                with self.assertRaisesRegex(NotImplementedError, "feature caching is not implemented"):
+                    model._init_infer_class()
 
     def test_streamed_weights_survive_block_changes_and_buffer_recreation(self):
         with tempfile.TemporaryDirectory() as directory:

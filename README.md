@@ -51,6 +51,10 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **September 22, 2026:** 🚀 We support and optimize [SwiftVR](https://huggingface.co/H-oliday/SwiftVR); for usage instructions, please refer to [this guide](https://github.com/ModelTC/LightX2V/tree/main/scripts/swiftvr).
+
+- **September 20, 2026:** 🚀 We provide day-0 support for [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1); for usage instructions, please refer to [this guide](https://github.com/ModelTC/LightX2V/tree/main/scripts/qwen_image_21).
+
 - **August 27, 2026:** 🚀 We release the [MiniMax-H3 Turbo 8-step v1.0 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors) for fast 768p audio-video generation with MiniMax-H3, delivering improved video and audio quality.
 
 - **August 11, 2026:** 🚀 We release and support the [MiniMax-H3 Turbo 4-step v1.0 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors). The released DMD configs under `configs/minimax_h3/dmd` run H3 at 1344x768 with `video_flow_shift=6`, `audio_flow_shift=3`, LoRA alpha 128, and 4-step guidance-free inference.

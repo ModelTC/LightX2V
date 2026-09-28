@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import partial
 
 import torch
@@ -9,6 +10,23 @@ from .template import AttnWeightTemplate
 from .ulysses_a2a import create_ulysses_a2a_backend
 from .ulysses_prepost import create_ulysses_prepost_backend
 from .utils.seq_p import flatten_seq_p_tensor, split_main_aux_output, validate_seq_p_inputs
+
+
+@dataclass
+class _HeadGroupExchange:
+    """Keep group inputs and packed send buffers alive until exchanges finish."""
+
+    size: int
+    q: torch.Tensor
+    k: torch.Tensor
+    v: torch.Tensor
+    aux_q: torch.Tensor | None
+    aux_k: torch.Tensor | None
+    aux_v: torch.Tensor | None
+    head_index: int | None
+    packed: tuple
+    exchanged: tuple
+    works: tuple
 
 
 @ATTN_WEIGHT_REGISTER("ulysses")
@@ -36,6 +54,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         head_parallel=False,
         aux_first=False,
         attention_kwargs=None,
+        head_parallel_group_size=1,
     ):
         """Run Ulysses attention over QKV and optional auxiliary token regions.
 
@@ -51,6 +70,8 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         This interface supports one logical Q sequence and one logical KV
         sequence only. Packed-varlen batches are not supported.
         ``tensor_fusion`` packs Q/K/V into one Ulysses communication payload.
+        ``head_parallel_group_size`` controls how many local attention heads are
+        processed in each pipelined stage when ``head_parallel`` is enabled.
         The return value is ``(output, aux_output)``.
         """
         q = flatten_seq_p_tensor(q, "q")
@@ -98,7 +119,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             attention_kwargs=attention_kwargs,
         )
         if head_parallel:
-            return self._apply_head_pipeline(**common_args)
+            return self._apply_head_pipeline(head_group_size=head_parallel_group_size, **common_args)
         return self._apply_bulk(**common_args)
 
     @staticmethod
@@ -174,67 +195,112 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         world_size,
         rank,
         attention_kwargs,
+        head_group_size,
     ):
         local_len, q_heads, hidden_dims = q.shape
         shard_heads = q_heads // world_size
         global_len = local_len * world_size
         aux_len = 0 if aux_q is None else aux_q.shape[0]
+        if not isinstance(head_group_size, int) or isinstance(head_group_size, bool):
+            raise TypeError(f"head_parallel_group_size must be an integer, got {type(head_group_size).__name__}.")
+        if not 1 <= head_group_size <= shard_heads:
+            raise ValueError(f"head_parallel_group_size must be in [1, {shard_heads}], got {head_group_size}.")
+
+        def select_group(tensor, begin, end):
+            if tensor is None:
+                return None
+            heads_by_rank = tensor.reshape(tensor.shape[0], world_size, shard_heads, hidden_dims)
+            group = heads_by_rank[:, :, begin:end]
+            return group.reshape(tensor.shape[0], world_size * (end - begin), hidden_dims).contiguous()
 
         qkv_records = []
-        for head_index in range(shard_heads):
+        for begin in range(0, shard_heads, head_group_size):
+            end = min(begin + head_group_size, shard_heads)
+            group_size = end - begin
+            if group_size == 1:
+                # Reuse the original tensors for singleton groups. Both pre/post
+                # backends can select one interleaved head without retaining a
+                # full-size contiguous Q/K/V copy for every pipeline stage.
+                group_q, group_k, group_v = q, k, v
+                group_aux_q, group_aux_k, group_aux_v = aux_q, aux_k, aux_v
+                head_index = begin
+            else:
+                group_q = select_group(q, begin, end)
+                group_k = select_group(k, begin, end)
+                group_v = select_group(v, begin, end)
+                group_aux_q = select_group(aux_q, begin, end)
+                group_aux_k = select_group(aux_k, begin, end)
+                group_aux_v = select_group(aux_v, begin, end)
+                head_index = None
             packed = prepost.pack_qkv(
-                q,
-                k,
-                v,
+                group_q,
+                group_k,
+                group_v,
                 world_size,
                 quant_scheme,
                 qkv_fusion,
                 head_index=head_index,
             )
             exchanged, works = UlyssesAttnWeight._exchange_packed_async(packed, a2a, seq_p_group)
-            qkv_records.append((packed, exchanged, works))
+            qkv_records.append(
+                _HeadGroupExchange(
+                    size=group_size,
+                    q=group_q,
+                    k=group_k,
+                    v=group_v,
+                    aux_q=group_aux_q,
+                    aux_k=group_aux_k,
+                    aux_v=group_aux_v,
+                    head_index=head_index,
+                    packed=packed,
+                    exchanged=exchanged,
+                    works=works,
+                )
+            )
 
         attn_records = []
         local_aux_heads = []
-        for head_index, (_, exchanged_qkv, qkv_works) in enumerate(qkv_records):
-            UlyssesAttnWeight._wait_works(qkv_works)
+        for record in qkv_records:
+            group_size = record.size
+            UlyssesAttnWeight._wait_works(record.works)
             attn_q, attn_k, attn_v = prepost.unpack_qkv(
-                exchanged_qkv,
-                q,
-                k,
-                v,
-                aux_q,
-                aux_k,
-                aux_v,
+                record.exchanged,
+                record.q,
+                record.k,
+                record.v,
+                record.aux_q,
+                record.aux_k,
+                record.aux_v,
                 rank,
                 world_size,
                 aux_first,
-                head_index=head_index,
+                head_index=record.head_index,
             )
             dense_attention_kwargs = UlyssesAttnWeight._dense_attention_kwargs(attention_kwargs, attn_q, attn_k)
-            head_attn = attention_module.apply(
+            group_attn = attention_module.apply(
                 q=attn_q,
                 k=attn_k,
                 v=attn_v,
                 **dense_attention_kwargs,
             ).reshape(attn_q.shape[0], -1)
-            if head_attn.shape[1] != hidden_dims:
-                raise ValueError(f"head_parallel attention output must flatten to hidden_dims={hidden_dims}, got shape={tuple(head_attn.shape)}.")
+            expected_width = group_size * hidden_dims
+            if group_attn.shape[1] != expected_width:
+                raise ValueError(f"head_parallel attention output must flatten to {expected_width}, got shape={tuple(group_attn.shape)}.")
 
-            output, local_aux_attn = split_main_aux_output(head_attn, global_len, aux_len, aux_first)
+            output, local_aux_attn = split_main_aux_output(group_attn, global_len, aux_len, aux_first)
             if local_aux_attn is not None:
-                local_aux_heads.append(local_aux_attn.reshape(local_aux_attn.shape[0], 1, hidden_dims))
+                local_aux_heads.append(local_aux_attn.reshape(local_aux_attn.shape[0], group_size, hidden_dims))
 
-            packed_attn = prepost.pack_attn(output, local_len, world_size, 1, hidden_dims, quant_scheme)
+            packed_attn = prepost.pack_attn(output, local_len, world_size, group_size, hidden_dims, quant_scheme)
             exchanged_attn, attn_works = UlyssesAttnWeight._exchange_packed_async(packed_attn, a2a, seq_p_group)
-            attn_records.append((packed_attn, exchanged_attn, attn_works, head_attn.dtype))
+            attn_records.append((group_size, packed_attn, exchanged_attn, attn_works, group_attn.dtype))
 
-        head_outputs = []
-        for _, exchanged_attn, attn_works, output_dtype in attn_records:
+        group_outputs = []
+        for group_size, _, exchanged_attn, attn_works, output_dtype in attn_records:
             UlyssesAttnWeight._wait_works(attn_works)
-            head_output = prepost.unpack_attn(exchanged_attn, output_dtype, hidden_dims)
-            head_outputs.append(head_output.reshape(head_output.shape[0], world_size, hidden_dims))
-        output = torch.stack(head_outputs, dim=2).reshape(head_outputs[0].shape[0], -1)
+            group_output = prepost.unpack_attn(exchanged_attn, output_dtype, hidden_dims)
+            group_outputs.append(group_output.reshape(group_output.shape[0], world_size, group_size, hidden_dims))
+        output = torch.cat(group_outputs, dim=2).reshape(group_outputs[0].shape[0], -1)
 
         if local_aux_heads:
             local_aux = torch.cat(local_aux_heads, dim=1)

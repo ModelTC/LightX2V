@@ -1,10 +1,12 @@
 import math
+from contextlib import suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import cv2
 import numpy as np
 import torch
+import torch.distributed as dist
 from PIL import Image
 from loguru import logger
 
@@ -37,25 +39,47 @@ class QwenImage21Runner(DefaultRunner):
 
     def __init__(self, config):
         unsupported = (
-            "cpu_offload",
             "vae_cpu_offload",
             "lazy_load",
             "unload_modules",
-            "text_encoder_quantized",
-            "shared_cpu_weights",
-            "parallel",
-            "seq_parallel",
             "cfg_parallel",
-            "tensor_parallel",
             "pipefusion_parallel",
             "disagg_mode",
             "lora_configs",
             "vae_tiling",
-            "use_compile",
         )
         for key in unsupported:
             if config.get(key):
                 raise ValueError(f"qwen_image_21 does not yet support {key}")
+        if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
+            raise NotImplementedError("qwen_image_21 supports model and block CPU offload")
+        if config.get("seq_parallel"):
+            parallel = config["parallel"]
+            seq_p_size = int(parallel.get("seq_p_size", 1))
+            seq_p_attn_type = parallel.get("seq_p_attn_type", "ulysses")
+            if seq_p_attn_type != "ulysses":
+                raise ValueError("qwen_image_21 sequence parallel currently supports only seq_p_attn_type='ulysses'")
+            tensor_p_size = int(parallel.get("tensor_p_size", 1))
+            global_heads = int(config["num_attention_heads"])
+            if global_heads % tensor_p_size:
+                raise ValueError(f"qwen_image_21 TP requires num_attention_heads ({global_heads}) to be divisible by tensor_p_size ({tensor_p_size})")
+            local_heads = global_heads // tensor_p_size
+            if local_heads % seq_p_size:
+                raise ValueError(
+                    "qwen_image_21 Ulysses requires TP-local attention heads to be divisible by "
+                    f"seq_p_size: global_heads={config['num_attention_heads']}, "
+                    f"tensor_p_size={tensor_p_size}, local_heads={local_heads}, seq_p_size={seq_p_size}"
+                )
+            head_parallel_group_size = parallel.get("seq_p_head_parallel_group_size", 1)
+            if not isinstance(head_parallel_group_size, int) or isinstance(head_parallel_group_size, bool):
+                raise TypeError("qwen_image_21 seq_p_head_parallel_group_size must be an integer")
+            heads_per_rank = local_heads // seq_p_size
+            if not 1 <= head_parallel_group_size <= heads_per_rank:
+                raise ValueError(f"qwen_image_21 seq_p_head_parallel_group_size must be in [1, {heads_per_rank}], got {head_parallel_group_size}")
+            if head_parallel_group_size != 1 and not parallel.get("seq_p_head_parallel", False):
+                raise ValueError("qwen_image_21 seq_p_head_parallel_group_size requires seq_p_head_parallel=true")
+            if parallel.get("seq_p_quant_scheme") not in (None, "fp8", "fp4"):
+                raise ValueError("qwen_image_21 seq_p_quant_scheme supports only fp8 and fp4")
         if config.get("dit_quantized"):
             if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum"):
                 raise ValueError("qwen_image_21 DiT quantization supports only fp8-sgl and fp8-f16-accum")
@@ -95,6 +119,7 @@ class QwenImage21Runner(DefaultRunner):
             for task in ("t2i", "i2i"):
                 for height, width in self._WARMUP_RESOLUTIONS:
                     logger.info(f"Warmup: {task}, {height}x{width}")
+                    transformer_offloaded = not self.config.get("cpu_offload", False)
                     try:
                         self.scheduler.generator = None
                         request = {"task": task, "prompt": "warmup", "seed": 0, "size": [height, width]}
@@ -105,13 +130,20 @@ class QwenImage21Runner(DefaultRunner):
                         self.input_info = self.create_input_info(request)
                         self.inputs = self.run_input_encoder()
                         self.init_run()
+                        transformer_offloaded = False
                         self.model.prefill_condition_kv(self.inputs)
                         self.scheduler.step_pre(step_index=0)
                         self.model.infer(self.inputs)
                         self.scheduler.step_post()
+                        if self.config.get("cpu_offload", False):
+                            self._offload_transformer()
+                            transformer_offloaded = True
                         self.run_vae_decoder(self.scheduler.latents)
                         torch_device_module.synchronize()
                     finally:
+                        if self.config.get("cpu_offload", False) and not transformer_offloaded:
+                            with suppress(Exception):
+                                self._offload_transformer()
                         self.end_run()
                         self.__dict__.pop("inputs", None)
         logger.info("[Warmup] Warmup completed")
@@ -212,20 +244,59 @@ class QwenImage21Runner(DefaultRunner):
     def init_run(self):
         self.get_video_segment_num()
         self.scheduler.prepare(self.input_info)
+        if not self.config.get("cpu_offload", False):
+            logger.info("Qwen-Image-2.1 transformer is resident on the accelerator")
+        elif self.config.get("offload_granularity", "model") == "model":
+            logger.info("Moving the Qwen-Image-2.1 transformer to the accelerator")
+            self.model.to_cuda()
+        else:
+            logger.info("Qwen-Image-2.1 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
+            self.model.pre_weight.to_cuda()
+            self.model.post_weight.to_cuda()
+        torch_device_module.synchronize()
+
+    @ProfilingContext4DebugL2("Offload DiT")
+    def _offload_transformer(self):
+        if not self.config.get("cpu_offload", False):
+            return
+        self.model.clear_condition_kv()
+        if self.model.block_offload:
+            self.model.pre_weight.to_cpu()
+            self.model.post_weight.to_cpu()
+        else:
+            self.model.to_cpu()
+        torch_device_module.synchronize()
+        self.maybe_empty_cache(force=True, collect_garbage=True)
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
-        self.init_run()
-        with ProfilingContext4DebugL1("Prefill condition KV"):
-            self.model.prefill_condition_kv(self.inputs)
-        return self.run_segment()
+        should_offload_transformer = self.config.get("cpu_offload", False)
+        try:
+            self.init_run()
+            with ProfilingContext4DebugL1("Prefill condition KV"):
+                self.model.prefill_condition_kv(self.inputs)
+            result = self.run_segment()
+        except BaseException:
+            # Preserve an inference or partial-onload exception while making a
+            # best-effort return of the large transformer to host memory.
+            if should_offload_transformer:
+                with suppress(Exception):
+                    self._offload_transformer()
+            raise
+        if should_offload_transformer:
+            self._offload_transformer()
+        return result
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
+        # Denoising is complete; the VAE no longer needs the condition KV cache.
+        self.model.clear_condition_kv()
         return self.vae.decode(latents, self.input_info.size)
 
     def process_images_after_vae_decoder(self, value):
         input_info = self.input_info
+        if input_info.save_result_path and not input_info.return_result_tensor and dist.is_initialized() and dist.get_rank() != 0:
+            return {"images": None}
         pixels = (value / 2 + 0.5).clamp(0, 1).float().permute(0, 2, 3, 1).cpu().numpy()
         # OpenCV expects BGRA; keep alpha as the last channel.
         images = [cv2.cvtColor((p * 255).round().astype(np.uint8), cv2.COLOR_RGBA2BGRA) for p in pixels]
