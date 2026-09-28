@@ -7,6 +7,7 @@ from safetensors import safe_open
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER
+from lightx2v_platform.ops.weight_storage import FloatingWeightStorage
 
 from .triton_ops import norm_infer
 
@@ -18,7 +19,7 @@ except ImportError:
 from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
 
 
-class LNWeightTemplate(metaclass=ABCMeta):
+class LNWeightTemplate(FloatingWeightStorage, metaclass=ABCMeta):
     def __init__(
         self,
         weight_name=None,

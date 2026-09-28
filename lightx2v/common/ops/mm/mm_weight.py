@@ -33,6 +33,7 @@ from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.weight_storage import FloatingWeightStorage, StorageDescription, WeightStorage, require_dtype
 
 try:
     from lightx2v_kernel.gemm import (
@@ -330,7 +331,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
 
 
 @MM_WEIGHT_REGISTER("Default")
-class MMWeight(MMWeightTemplate):
+class MMWeight(FloatingWeightStorage, MMWeightTemplate):
     def __init__(
         self,
         weight_name,
@@ -354,6 +355,10 @@ class MMWeight(MMWeightTemplate):
             lora_prefix,
             lora_path,
         )
+
+    def describe_storage(self, metadata):
+        self.validate_checkpoint(metadata)
+        return StorageDescription(tuple(WeightStorage(name, attr, metadata[name].shape, GET_DTYPE(), transpose) for name, attr, transpose in self.base_attrs))
 
     def load(self, weight_dict):
         if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
@@ -747,6 +752,24 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
         self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
         self.weight_need_transpose = True
         self.scale_force_fp32 = True
+
+    def validate_checkpoint(self, metadata):
+        require_dtype(self.weight_name, metadata[self.weight_name].dtype, (torch.float8_e4m3fn,))
+
+    def describe_storage(self, metadata):
+        self.validate_checkpoint(metadata)
+        tensors = []
+        for name, attr, transpose in self.base_attrs:
+            source = metadata[name]
+            dtype = source.dtype
+            if attr == "weight":
+                transpose = self.weight_need_transpose
+            elif attr == "weight_scale":
+                dtype = torch.float32 if self.scale_force_fp32 else dtype
+            elif attr == "bias":
+                dtype = torch.float32 if self.bias_force_fp32 else self.infer_dtype
+            tensors.append(WeightStorage(name, attr, source.shape, dtype, transpose))
+        return StorageDescription(tuple(tensors))
 
     def apply(self, input_tensor):
         shape = (input_tensor.shape[0], self.weight.shape[1])

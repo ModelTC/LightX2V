@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/path/to/LightX2V
-model_path=/path/to/Wan2.1-I2V-14B-720P-Lightx2v
+lightx2v_path=/data/liuhongda/lightx2v_offload_opt
+model_path=/data/liuhongda/lightx2v_offload_opt/models/Wan2.1-I2V-14B-720P-Lightx2v
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 source "${lightx2v_path}/scripts/base/base.sh"

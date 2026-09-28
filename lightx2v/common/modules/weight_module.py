@@ -5,6 +5,17 @@ class WeightModule:
     def __init__(self):
         self._modules = {}
         self._parameters = {}
+        self._offload_groups = {}
+
+    def register_offload_group(self, name, blocks, device_slots, checkpoint_prefixes):
+        from lightx2v.common.offload.block_loader import OffloadGroup
+
+        if name in self._offload_groups:
+            raise ValueError(f"Duplicate offload group: {name}")
+        self._offload_groups[name] = OffloadGroup(blocks, device_slots, tuple(checkpoint_prefixes))
+
+    def iter_offload_groups(self):
+        return iter(self._offload_groups.values())
 
     def is_empty(self):
         return len(self._modules) == 0 and len(self._parameters) == 0
@@ -18,6 +29,9 @@ class WeightModule:
         setattr(self, name, param)
 
     def load(self, weight_dict):
+        plan = getattr(self, "_block_load_plan", None)
+        if plan is not None:
+            return plan.load(self, weight_dict)
         for _, module in self._modules.items():
             if hasattr(module, "load"):
                 module.load(weight_dict)
@@ -99,6 +113,17 @@ class WeightModule:
         for name, module in self._modules.items():
             if module is not None:
                 yield from module.named_parameters(prefix + name + ".")
+
+    def named_weight_leaves(self, prefix=""):
+        """Visit operator objects registered as either parameters or modules."""
+        for name, child in (*self._parameters.items(), *self._modules.items()):
+            if child is None:
+                continue
+            path = prefix + name
+            if isinstance(child, WeightModule):
+                yield from child.named_weight_leaves(path + ".")
+            else:
+                yield path, child
 
     def to_cpu(self, non_blocking=False):
         for name, param in self._parameters.items():

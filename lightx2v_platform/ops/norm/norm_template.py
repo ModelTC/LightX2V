@@ -8,6 +8,7 @@ import torch
 from safetensors import safe_open
 
 from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.weight_storage import FloatingWeightStorage
 
 DTYPE_MAP = {
     "BF16": torch.bfloat16,
@@ -37,7 +38,7 @@ def GET_SENSITIVE_DTYPE():
     return DTYPE_MAP[RUNNING_FLAG]
 
 
-class RMSWeightTemplate(metaclass=ABCMeta):
+class RMSWeightTemplate(FloatingWeightStorage, metaclass=ABCMeta):
     def __init__(self, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6, lora_prefix="", lora_path=""):
         self.weight_name = weight_name
         self.eps = eps
@@ -51,8 +52,17 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         self.config = {}
         self.lora_prefix = lora_prefix
         self.lora_path = lora_path
+        self.base_attrs = [(weight_name, "weight", False)] if weight_name is not None else []
+        if weight_name is None:
+            self.weight = None
+
+    def bind_storage(self, context):
+        """Bind the norm weight to its planned CPU or device block view."""
+        context.bind(self)
 
     def load(self, weight_dict):
+        if self.weight_name is None:
+            return
         if self.create_cuda_buffer:
             self._load_cuda_buffer(weight_dict)
         elif self.create_cpu_buffer:
@@ -107,9 +117,13 @@ class RMSWeightTemplate(metaclass=ABCMeta):
             self.config = config
 
     def to_cuda(self, non_blocking=False):
+        if self.weight_name is None:
+            return
         self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=False):
+        if self.weight_name is None:
+            return
         if hasattr(self, "pin_weight"):
             self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
         else:
@@ -118,10 +132,13 @@ class RMSWeightTemplate(metaclass=ABCMeta):
     def state_dict(self, destination=None):
         if destination is None:
             destination = {}
-        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
+        if self.weight_name is not None:
+            destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
         return destination
 
     def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        if self.weight_name is None:
+            return
         if self.is_post_adapter:
             assert adapter_block_index is not None
             weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
@@ -134,6 +151,8 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         self.weight = self.weight_cuda_buffer.copy_(destination[weight_name], non_blocking=True)
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        if self.weight_name is None:
+            return
         if self.is_post_adapter:
             self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
         else:
@@ -148,7 +167,7 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         del weight_tensor
 
 
-class LayerNormWeightTemplate(metaclass=ABCMeta):
+class LayerNormWeightTemplate(FloatingWeightStorage, metaclass=ABCMeta):
     def __init__(self, weight_name=None, bias_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
         self.weight_name = weight_name
         self.bias_name = bias_name
@@ -161,6 +180,15 @@ class LayerNormWeightTemplate(metaclass=ABCMeta):
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
         self.config = {}
+        self.base_attrs = [(name, attr, False) for name, attr in ((weight_name, "weight"), (bias_name, "bias")) if name is not None]
+        if weight_name is None:
+            self.weight = None
+        if bias_name is None:
+            self.bias = None
+
+    def bind_storage(self, context):
+        """Bind affine parameters to their planned CPU or device block views."""
+        context.bind(self)
 
     def load(self, weight_dict):
         if self.create_cuda_buffer:

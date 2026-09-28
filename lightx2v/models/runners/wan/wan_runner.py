@@ -350,6 +350,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             tokenizer_path=tokenizer_path,
             shard_fn=None,
             cpu_offload=t5_offload,
+            rms_norm_type=self.config.get("t5_rms_norm_type", "sgl-kernel"),
             t5_quantized=t5_quantized,
             t5_quantized_ckpt=t5_quantized_ckpt,
             quant_scheme=t5_quant_scheme,

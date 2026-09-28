@@ -146,6 +146,8 @@ class WanTransformerWeights(WeightModule):
         )
         self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.add_module("blocks", self.blocks)
+        if config.get("cpu_offload") and config.get("offload_granularity", "block") == "block":
+            self.register_offload_group("blocks", self.blocks, self.offload_block_cuda_buffers, (f"blocks.{i}." for i in range(self.blocks_num)))
 
         # non blocks weights
         self.register_parameter("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
