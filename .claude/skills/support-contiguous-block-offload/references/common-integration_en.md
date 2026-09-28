@@ -63,6 +63,10 @@ This example uses Qwen prefixes; adapt them to the target checkpoint. Register o
 
 Platform RMSNorm/LayerNorm implementations with ordinary floating weights inherit storage descriptions and binding from the [norm templates](../../../../lightx2v_platform/ops/norm/norm_template.py); new chip subclasses only need to implement computation. The common loader prefers `bind_storage()`, so subclasses that add transformations or auxiliary-state initialization in `load()` must also adapt continuous binding explicitly; those steps do not run automatically.
 
+Standard per-channel prequantized MM uses [MMWeightPerChannelQuantTemplate](../../../../lightx2v_platform/ops/mm/template.py). Subclasses declare `checkpoint_dtype`, `weight_need_transpose`, and compute kernels, inheriting checkpoint validation, FP32 scales, optional bias, and contiguous binding. NPU INT8, MLU INT8, and MUSA FP8 share this template. Packed formats or formats requiring extra transformations retain their own storage contracts.
+
+Platforms exposing standard PyTorch pinned allocation, typed views, asynchronous copies, and stream/event APIs can declare `block_offload_backend = TorchBlockOffload`, as MLU/MUSA do, without duplicating the backend. Device classes supply special D2H/H2D behavior through `copy_to_cpu` / `copy_transposed_weight_to_device`; common helpers select these through the platform registry and otherwise retain native copies. Declaring support still requires target-hardware validation. Existing model kernels and the runtime must also work; configuration cannot supply missing kernels.
+
 Implementation references: [MM](../../../../lightx2v/common/ops/mm/mm_weight.py), [RMSNorm](../../../../lightx2v/common/ops/norm/rms_norm_weight.py), [LayerNorm](../../../../lightx2v/common/ops/norm/layer_norm_weight.py), and [DefaultTensor](../../../../lightx2v/common/ops/tensor/tensor.py). Avoid identical forwarding functions for every operator.
 
 ## Loading and memory

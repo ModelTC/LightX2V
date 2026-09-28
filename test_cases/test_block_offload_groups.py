@@ -15,11 +15,12 @@ from lightx2v.common.ops.tensor.tensor import DefaultTensor
 from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3TransformerWeights
 from lightx2v.models.networks.qwen_image.weights.transformer_weights import QwenImageTransformerWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerWeights
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 from lightx2v_platform.ops.weight_storage import TensorMetadata
+from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 device_module = getattr(torch, AI_DEVICE)
-pytestmark = pytest.mark.skipif(not device_module.is_available(), reason="requires an accelerator")
+pytestmark = pytest.mark.skipif(not PLATFORM_DEVICE_REGISTER[PLATFORM].is_available(), reason="requires an accelerator")
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +65,7 @@ def weights_for(owner):
             if attr == "weight" and (transpose or hasattr(leaf, "act_quant_func")):
                 dtype = torch.bfloat16
                 if hasattr(leaf, "act_quant_func"):
-                    dtype = torch.int8 if "Npu" in type(leaf).__name__ else torch.float8_e4m3fn
+                    dtype = getattr(leaf, "checkpoint_dtype", torch.float8_e4m3fn)
                 value = (torch.arange(32 * 32).reshape(32, 32) % 7 + index).to(dtype)
             elif attr == "weight_scale":
                 value = torch.full((32, 1), 0.125 + index / 32, dtype=torch.bfloat16)
@@ -94,7 +95,7 @@ def assert_same(actual, expected):
     [(factory, scheme) for factory in (WanTransformerWeights, QwenImageTransformerWeights) for scheme in ("Default", "fp8-vllm")] + [(MiniMaxH3TransformerWeights, "Default")],
 )
 def test_groups_match_baseline_and_reuse_device_views(factory, scheme):
-    if AI_DEVICE != "cuda" and scheme == "fp8-vllm":
+    if PLATFORM != "cuda" and scheme == "fp8-vllm":
         pytest.skip("FP8-vLLM requires CUDA")
     options = config(scheme, factory)
     baseline = factory(options)
@@ -343,12 +344,12 @@ def test_minimax_native_offload_loop_across_steps_and_requests(monkeypatch):
     contiguous_infer.offload_manager.contiguous_transfer.close()
 
 
-def test_cuda_and_npu_select_their_own_offload_backend(monkeypatch):
+def test_platforms_select_declared_offload_backends(monkeypatch):
     from lightx2v_platform.base import global_var
     from lightx2v_platform.base.ascend_npu import NpuBlockOffload
     from lightx2v_platform.base.offload import TorchBlockOffload, get_block_offload_backend
 
-    for platform_name, expected in (("cuda", TorchBlockOffload), ("ascend_npu", NpuBlockOffload)):
+    for platform_name, expected in (("cuda", TorchBlockOffload), ("ascend_npu", NpuBlockOffload), ("cambricon_mlu", TorchBlockOffload), ("musa", TorchBlockOffload)):
         monkeypatch.setattr(global_var, "PLATFORM", platform_name)
         assert get_block_offload_backend() is expected
         assert get_block_offload_backend(required=False) is expected
@@ -367,7 +368,7 @@ def test_explicit_offload_backend_overrides_cuda_default(monkeypatch):
     assert get_block_offload_backend() is CustomBlockOffload
 
 
-@pytest.mark.parametrize("platform_name", ["metax_cuda", "ppu_cuda", "musa", "hygon_dcu"])
+@pytest.mark.parametrize("platform_name", ["metax_cuda", "ppu_cuda", "enflame_gcu", "hygon_dcu"])
 def test_other_platforms_do_not_inherit_cuda_offload_support(monkeypatch, platform_name):
     from lightx2v_platform.base import global_var
     from lightx2v_platform.base.offload import get_block_offload_backend
@@ -463,17 +464,17 @@ torch.testing.assert_close(gate, expected_gate)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_cuda_import_does_not_load_ascend_operators():
-    if AI_DEVICE != "cuda":
+def test_cuda_import_does_not_load_vendor_operators():
+    if PLATFORM != "cuda":
         pytest.skip("CUDA import isolation")
     code = """
 import importlib.abc
 import sys
-class RejectAscend(importlib.abc.MetaPathFinder):
+class RejectVendorOperators(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.startswith("lightx2v_platform.ops.") and ".ascend_npu" in fullname:
+        if fullname.startswith("lightx2v_platform.ops.") and any(f".{vendor}" in fullname for vendor in ("ascend_npu", "cambricon_mlu", "mthreads_musa")):
             raise RuntimeError(f"CUDA imported {fullname}")
-sys.meta_path.insert(0, RejectAscend())
+sys.meta_path.insert(0, RejectVendorOperators())
 from lightx2v.common.offload.block_loader import prepare_contiguous_groups
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerWeights
 from lightx2v.models.networks.qwen_image.weights.transformer_weights import QwenImageTransformerWeights

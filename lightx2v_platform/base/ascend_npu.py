@@ -48,6 +48,10 @@ class NpuDevice:
         return destination.copy_(source, non_blocking=non_blocking)
 
     @staticmethod
+    def copy_transposed_weight_to_device(tensor, device, non_blocking=False):
+        return tensor.t().to(device, non_blocking=non_blocking).t()
+
+    @staticmethod
     def init_parallel_env():
         dist.init_process_group(backend="hccl")
         torch.npu.set_device(dist.get_rank())

@@ -6,9 +6,10 @@ import torch
 from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.common.offload.block_loader import OffloadGroup, prepare_contiguous_groups
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 from lightx2v_platform.ops.norm import norm_template
 from lightx2v_platform.ops.weight_storage import TensorMetadata
+from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
 class TemplateRMS(norm_template.RMSWeightTemplate):
@@ -96,7 +97,7 @@ def test_parameter_free_norms_remain_stateless(norm_classes, mode):
 
 def test_baseline_and_contiguous_norms_match_across_slot_reuse(norm_classes, norm_dtype):
     module = getattr(torch, AI_DEVICE)
-    if not module.is_available():
+    if not PLATFORM_DEVICE_REGISTER[PLATFORM].is_available():
         pytest.skip("requires one accelerator for pinned memory and device copies")
     from lightx2v_platform.base.offload import get_block_offload_backend
 

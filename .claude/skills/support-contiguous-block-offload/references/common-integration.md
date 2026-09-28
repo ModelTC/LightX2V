@@ -63,6 +63,10 @@ self.register_offload_group(
 
 平台的普通浮点 RMSNorm/LayerNorm 默认继承 [norm 模板](../../../../lightx2v_platform/ops/norm/norm_template.py) 的存储描述和绑定；新芯片子类只需实现计算。公共加载器优先调用 `bind_storage()`，因此子类若在 `load()` 中增加转换或辅助状态初始化，也必须明确适配连续绑定，不能假定这些步骤会自动执行。
 
+标准逐通道预量化 MM 使用 [MMWeightPerChannelQuantTemplate](../../../../lightx2v_platform/ops/mm/template.py)：子类声明 `checkpoint_dtype`、`weight_need_transpose` 和计算内核，即可继承权重校验、FP32 scale、可选 bias 和连续绑定。NPU INT8、MLU INT8、MUSA FP8 已共用此模板。打包或需额外转换的格式保留自身存储契约，不直接套用该模板。
+
+平台若提供标准 PyTorch pinned allocation、typed view、异步 copy、stream/event 接口，可像 MLU/MUSA 一样声明 `block_offload_backend = TorchBlockOffload`，不另建同构 backend。平台的特殊 D2H/H2D 规则通过设备类的 `copy_to_cpu` / `copy_transposed_weight_to_device` 提供，公共工具按注册平台选取，缺省保持原生复制。声明支持仍需目标芯片实测；已有模型算子和运行环境也必须可用，配置不能补齐缺失的内核。
+
 适配参考：[MM](../../../../lightx2v/common/ops/mm/mm_weight.py)、[RMSNorm](../../../../lightx2v/common/ops/norm/rms_norm_weight.py)、[LayerNorm](../../../../lightx2v/common/ops/norm/layer_norm_weight.py)、[DefaultTensor](../../../../lightx2v/common/ops/tensor/tensor.py)。不要为每个算子创建内容相同的转发函数。
 
 ## 加载与内存

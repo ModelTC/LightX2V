@@ -30,7 +30,9 @@ Prefer existing NPU implementations or PyTorch implementations available on the 
 
 `NpuDevice.copy_to_cpu()` handles noncontiguous CPU destinations by first completing D2H into a contiguous CPU source, then copying on CPU according to the destination strides. Do not simplify this to a direct asynchronous write into a transposed host view; that previously corrupted offloaded weights during round trips. This fix belongs in the platform copy layer. CUDA should not be forced to perform the same extra copy.
 
-Related implementations: [common weight helpers](../../../../lightx2v/common/ops/utils.py), [MM template](../../../../lightx2v_platform/ops/mm/template.py), and [norm template](../../../../lightx2v_platform/ops/norm/norm_template.py). The platform norm templates provide storage descriptions, attribute mappings, and binding for ordinary floating weights; NPU RMSNorm/LayerNorm inherit these without duplicating them. Specialized storage rules such as quantization remain in the corresponding [MM operator](../../../../lightx2v_platform/ops/mm/ascend_npu/mm_weight.py).
+Common D2H helpers dispatch through [offload.py](../../../../lightx2v_platform/base/offload.py) to `NpuDevice.copy_to_cpu()`. Transposed-weight H2D handling likewise belongs to `NpuDevice.copy_transposed_weight_to_device()`. Common code does not add branches by chip name.
+
+Related implementations: [common weight helpers](../../../../lightx2v/common/ops/utils.py), [MM template](../../../../lightx2v_platform/ops/mm/template.py), and [norm template](../../../../lightx2v_platform/ops/norm/norm_template.py). The platform norm templates provide storage descriptions, attribute mappings, and binding for ordinary floating weights; NPU RMSNorm/LayerNorm inherit these. Standard NPU INT8 per-channel storage inherits `MMWeightPerChannelQuantTemplate`, while device-specific quantization and compute kernels remain in the [NPU MM operator](../../../../lightx2v_platform/ops/mm/ascend_npu/mm_weight.py).
 
 ## Two existing configuration choices
 

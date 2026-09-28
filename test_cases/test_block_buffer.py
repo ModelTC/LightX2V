@@ -149,14 +149,20 @@ def test_allocate_only_adds_alignment_slack_when_required(monkeypatch, layout):
 
 @pytest.fixture
 def accelerator():
-    device = "npu" if os.environ.get("PLATFORM") == "ascend_npu" else "cuda"
-    if device == "npu":
-        pytest.importorskip("torch_npu")
-        torch.npu.config.allow_internal_format = False
-    module = getattr(torch, device)
-    if not module.is_available():
-        pytest.skip(f"requires one {device} device")
-    return device, module
+    from lightx2v_platform.base import init_ai_device
+    from lightx2v_platform.base.offload import get_block_offload_backend
+    from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
+
+    platform_name = os.environ.get("PLATFORM", "cuda")
+    platform = PLATFORM_DEVICE_REGISTER[platform_name]
+    if not platform.is_available():
+        pytest.skip(f"requires one {platform_name} device")
+    device_name = init_ai_device(platform_name)
+    backend = get_block_offload_backend()
+    backend.prepare()
+    # CUDA-compatible runtimes may allocate on a differently named device.
+    device = torch.empty(0, device=device_name).device
+    return device, backend.device_module(device)
 
 
 def test_real_allocation_is_pinned_and_exactly_block_sized(layout, accelerator):
