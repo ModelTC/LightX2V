@@ -4,7 +4,8 @@ import sys
 import torch
 from torch.profiler import record_function
 from lightx2v.common.ops.mm.mm_weight import MMWeight, MMWeightTP, unwrap_tp_weight
-from radeon_coresw_ops.h3 import H3TP2Workspace, modulate
+from aiter.ops.gfx1201.h3 import H3TP2Workspace
+from aiter.ops.gfx1201.modulation import modulate
 
 
 def enabled(name):
@@ -22,7 +23,7 @@ def project_attention(owner, module, inputs, residual, gate, indices, workspace)
         weight = local_weight(module, owner.tp_group, "row", (3584, 5376))
         if enabled("LOSSLESS"):
             return workspace.attention_output(inputs, weight, residual, gate, indices)
-        from radeon_coresw_ops._out_projection import project_out
+        from aiter.ops.gfx1201.out_projection import project_out
         output = torch.empty_like(residual)
         project_out(inputs, weight, output)
         torch.distributed.all_reduce(output, group=owner.tp_group)
@@ -40,13 +41,13 @@ def feed_forward(owner, weights, inputs, residual, gate, indices, workspace):
     if custom_up and custom_down and enabled("LOSSLESS"):
         return workspace.feed_forward(inputs, up_weight.t(), down_weight, residual, gate, indices)
     if custom_up:
-        from radeon_coresw_ops._ffn_up import fused_up
+        from aiter.ops.gfx1201.ffn_up import fused_up
         activation = fused_up(inputs, up_weight.t())
     else:
         value, activation_gate = weights.in_proj.apply(inputs).chunk(2, dim=-1)
         activation = value * torch.nn.functional.silu(activation_gate)
     if custom_down:
-        from radeon_coresw_ops._ffn_down import down_out
+        from aiter.ops.gfx1201.ffn_down import down_out
         output = torch.empty_like(residual)
         down_out(activation, down_weight, output)
         torch.distributed.all_reduce(output, group=owner.tp_group)
@@ -56,14 +57,14 @@ def feed_forward(owner, weights, inputs, residual, gate, indices, workspace):
 
 
 def report_status(owner):
-    enabled = bool(owner.config.get("radeon_coresw_h3", False))
+    enabled = bool(owner.config.get("radeon_gfx1201_h3", False))
     if getattr(owner, "_radeon_reported_status", None) == enabled:
         return
     rank = os.environ.get("RANK", "0")
     status = "ENABLED" if enabled else "DISABLED"
     detail = ("awaiting first fused block submission" if enabled else
               "block fusion OFF; library FFN/projection + RCCL remain active; "
-              "set radeon_coresw_h3=true to enable; attention dispatch is independent")
+              "set radeon_gfx1201_h3=true to enable; attention dispatch is independent")
     print(f"========== [RADEON OP][rank={rank}][{status}] {detail} ==========",
           file=sys.stderr, flush=True)
     owner._radeon_reported_status = enabled
@@ -177,9 +178,9 @@ def _qk_rope_inputs(owner, weights, query, key, value, rotary_emb):
 
 
 def prepare_qk_rope(owner, weights, query, key, value, rotary_emb):
-    if not enabled("LOSSLESS") or not owner.config.get("radeon_coresw_qk_norm_rope", owner.config.get("radeon_coresw_h3", False)):
+    if not enabled("LOSSLESS") or not owner.config.get("radeon_gfx1201_qk_norm_rope", owner.config.get("radeon_gfx1201_h3", False)):
         return None
-    from radeon_coresw_ops import qk_norm, rope
+    from aiter.ops.gfx1201 import qk_norm, rope
 
     inputs = _qk_rope_inputs(owner, weights, query, key, value, rotary_emb)
     if inputs is None:
@@ -201,7 +202,7 @@ def prepare_qk_rope(owner, weights, query, key, value, rotary_emb):
 
 def norm_rope_attention(owner, weights, hidden_states, pre_infer_out):
     """Projected QKV -> fused QK norm/RoPE/Sage quant -> attention core; None selects the unfused path."""
-    if not enabled("LOSSLESS") or not owner.config.get("radeon_coresw_qk_norm_rope", owner.config.get("radeon_coresw_h3", False)):
+    if not enabled("LOSSLESS") or not owner.config.get("radeon_gfx1201_qk_norm_rope", owner.config.get("radeon_gfx1201_h3", False)):
         return None
     if not enabled("ATTENTION"):
         return None
@@ -210,7 +211,7 @@ def norm_rope_attention(owner, weights, hidden_states, pre_infer_out):
             or (owner.use_fused_qkv and weights.has_fused_qkv)):
         if not getattr(owner, "_radeon_fused_qk_fallback", False):
             print(f"[RADEON OP][rank={rank}][FALLBACK] fused QK norm/RoPE attention: "
-                  "requires radeon_coresw_attn, no SP and separate Q/K/V projections", file=sys.stderr, flush=True)
+                  "requires gfx1201_sage_attn, no SP and separate Q/K/V projections", file=sys.stderr, flush=True)
             owner._radeon_fused_qk_fallback = True
         return None
     query = weights.to_q.apply(hidden_states)
@@ -221,7 +222,9 @@ def norm_rope_attention(owner, weights, hidden_states, pre_infer_out):
         return None
     query, key, value, query_weight, key_weight, cosine, sine = inputs
     with record_function("radeon_h3.norm_rope_attention"):
-        output = torch.ops.radeon_coresw_ops.norm_rope_attention(query, key, value, query_weight, key_weight, cosine, sine)
+        from aiter.ops.gfx1201.sage_attention import gfx1201_norm_rope_attention
+
+        output = gfx1201_norm_rope_attention(query, key, value, query_weight, key_weight, cosine, sine)
     if not getattr(owner, "_radeon_fused_qk_active", False):
         print(f"[RADEON OP][rank={rank}][ACTIVE] QK_NORM + ROPE + SAGE_QUANT fused HIP prepare -> attention core; "
               "bitwise equal to separate kernels; asynchronous submission only", file=sys.stderr, flush=True)

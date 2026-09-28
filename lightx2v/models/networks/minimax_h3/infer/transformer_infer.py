@@ -182,7 +182,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         # Keep the Python cache lookup outside the compiled block.
         if modulation is None:
             modulation = self._compute_adaln_table(weights, pre_infer_out)
-        if self.config.get("radeon_coresw_h3", False):
+        if self.config.get("radeon_gfx1201_h3", False):
             from .radeon_h3 import infer_block
             return infer_block(self, weights, hidden_states, pre_infer_out, modulation)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = modulation.chunk(6, dim=-1)
