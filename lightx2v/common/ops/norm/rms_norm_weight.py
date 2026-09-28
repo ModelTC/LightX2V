@@ -15,6 +15,7 @@ from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.weight_storage import FloatingWeightStorage, StorageDescription
 
 try:
     import sgl_kernel
@@ -60,7 +61,7 @@ def rmsnorm_flashinfer_fake(
     return torch.empty_like(input_tensor)
 
 
-class RMSWeightTemplate(metaclass=ABCMeta):
+class RMSWeightTemplate(FloatingWeightStorage, metaclass=ABCMeta):
     def __init__(
         self,
         weight_name,
@@ -96,6 +97,11 @@ class RMSWeightTemplate(metaclass=ABCMeta):
             self.base_attrs.append((self.weight_name, "weight", False))
         else:
             self.weight = None
+
+    def describe_storage(self, metadata):
+        description = super().describe_storage(metadata)
+        auxiliary = (("weight_diff", self.weight_diff_name),) if self.weight_name is not None else ()
+        return StorageDescription(description.tensors, auxiliary)
 
     def _get_lora_attr_mapping(self):
         if self.weight_name is not None:

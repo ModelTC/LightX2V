@@ -224,6 +224,7 @@ class FastWAMPolicy:
             checkpoint_path=t5_path,
             tokenizer_path=str(tokenizer_path),
             cpu_offload=self.t5_cpu_offload,
+            rms_norm_type=self.config.get("t5_rms_norm_type", "sgl-kernel"),
         )
 
     def _load_vae(self):

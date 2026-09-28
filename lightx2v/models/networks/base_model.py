@@ -39,6 +39,8 @@ SAFETENSORS_DTYPE_MAP = {
     "I8": torch.int8,
     "U8": torch.uint8,
     "BOOL": torch.bool,
+    "F8_E4M3": torch.float8_e4m3fn,
+    "F8_E5M2": torch.float8_e5m2,
 }
 
 
@@ -93,6 +95,17 @@ class BaseTransformerModel(ABC):
         if self.dit_quantized:
             self._check_dit_quantized()
         self._init_tensor_parallel()
+        from lightx2v.common.offload.block_loader import validate_contiguous_config
+        from lightx2v_platform.base.offload import get_block_offload_backend
+
+        validate_contiguous_config(self.config, lora_path)
+        self._checkpoint_metadata = None
+        if self.cpu_offload and self.offload_granularity == "block":
+            backend = get_block_offload_backend(required=False)
+            if backend is not None:
+                backend.prepare()
+            if self.config.get("cpu_offload_layout") == "contiguous" or (backend is not None and backend.validate_checkpoint):
+                self._checkpoint_metadata = {}
 
     def _init_tensor_parallel(self):
         if self.config.get("tensor_parallel", False):
@@ -281,6 +294,10 @@ class BaseTransformerModel(ABC):
                         weight_dict = self._load_quant_ckpt(unified_dtype, sensitive_layer)
 
                 if (self.config.get("device_mesh") is not None and self.config.get("load_from_rank0", False)) or (hasattr(self, "use_tp") and self.use_tp):
+                    if self._checkpoint_metadata is not None:
+                        checkpoint_metadata = [self._checkpoint_metadata if is_weight_loader else None]
+                        dist.broadcast_object_list(checkpoint_metadata, src=0)
+                        self._checkpoint_metadata = checkpoint_metadata[0]
                     weight_dict = self._load_weights_from_rank0(weight_dict, is_weight_loader)
 
                 if hasattr(self, "_load_adapter_ckpt"):
@@ -289,6 +306,8 @@ class BaseTransformerModel(ABC):
             self.original_weight_dict = weight_dict
         else:
             self.original_weight_dict = weight_dict
+            if self._checkpoint_metadata is not None:
+                self._record_checkpoint_metadata(weight_dict)
 
         self.pre_weight = self.pre_weight_class(self.config)
         if self.lazy_load:
@@ -334,6 +353,8 @@ class BaseTransformerModel(ABC):
         self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
         if self.lazy_load:
             self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
+        if self.config.get("cpu_offload_layout") == "contiguous":
+            self.transformer_infer.offload_manager.init_contiguous_groups(self.transformer_weights.iter_offload_groups())
 
     def _should_init_empty_model(self):
         """Determine if model should be initialized empty (for LoRA).
@@ -369,8 +390,20 @@ class BaseTransformerModel(ABC):
         """
         if weight_dict is not None:
             self.original_weight_dict = weight_dict
+            if self._checkpoint_metadata is not None:
+                self._checkpoint_metadata.clear()
+                self._record_checkpoint_metadata(weight_dict)
             del weight_dict
             gc.collect()
+
+        if self._checkpoint_metadata is not None:
+            from lightx2v.common.offload.block_loader import prepare_contiguous_groups, validate_group_checkpoints
+
+            groups = tuple(self.transformer_weights.iter_offload_groups())
+            if self.config.get("cpu_offload_layout") == "contiguous":
+                prepare_contiguous_groups(groups, self.original_weight_dict, self._checkpoint_metadata)
+            elif not self.lazy_load and not self.config.get("dummy_model"):
+                validate_group_checkpoints(groups, self._checkpoint_metadata)
 
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
@@ -385,6 +418,8 @@ class BaseTransformerModel(ABC):
                 self._register_lora(self.lora_path, self.lora_strength)
 
         del self.original_weight_dict
+        if self._checkpoint_metadata is not None:
+            self._checkpoint_metadata.clear()
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -438,6 +473,24 @@ class BaseTransformerModel(ABC):
         if hasattr(self, "post_weight"):
             self.post_weight.remove_lora()
 
+    def _record_checkpoint_metadata(self, tensors):
+        if getattr(self, "_checkpoint_metadata", None) is None:
+            return
+        from lightx2v_platform.ops.weight_storage import TensorMetadata
+
+        for name in tensors.keys():
+            if name in self._checkpoint_metadata:
+                raise ValueError(f"Duplicate checkpoint weight: {name}")
+            if hasattr(tensors, "get_slice"):
+                view = tensors.get_slice(name)
+                dtype = SAFETENSORS_DTYPE_MAP.get(view.get_dtype())
+                if dtype is None:
+                    dtype = tensors.get_tensor(name).dtype
+                self._checkpoint_metadata[name] = TensorMetadata(tuple(view.get_shape()), dtype)
+            elif isinstance(tensors[name], torch.Tensor):
+                tensor = tensors[name]
+                self._checkpoint_metadata[name] = TensorMetadata(tuple(tensor.shape), tensor.dtype)
+
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         """Load a safetensors file into a dictionary.
 
@@ -466,6 +519,7 @@ class BaseTransformerModel(ABC):
             state_dict = torch.load(file_path, map_location="cpu", weights_only=True)
             if isinstance(state_dict, dict) and "state_dict" in state_dict:
                 state_dict = state_dict["state_dict"]
+            self._record_checkpoint_metadata(state_dict)
             return {
                 key: (tensor.to(device=device, dtype=GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else tensor.to(device=device, dtype=GET_SENSITIVE_DTYPE()))
                 for key, tensor in state_dict.items()
@@ -475,6 +529,7 @@ class BaseTransformerModel(ABC):
             }
 
         with safe_open(file_path, framework="pt", device=device) as f:
+            self._record_checkpoint_metadata(f)
             return {
                 key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE()))
                 for key in f.keys()
@@ -579,6 +634,7 @@ class BaseTransformerModel(ABC):
         weight_dict = {}
         for safetensor_path in safetensors_files:
             with safe_open(safetensor_path, framework="pt") as f:
+                self._record_checkpoint_metadata(f)
                 logger.info(f"Loading weights from {safetensor_path}")
                 for k in f.keys():
                     if any(remove_key in k for remove_key in remove_keys):

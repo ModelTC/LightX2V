@@ -38,6 +38,8 @@ class QwenImageTransformerWeights(WeightModule):
         )
         self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.add_module("blocks", blocks)
+        if config.get("cpu_offload") and config.get("offload_granularity", "block") == "block":
+            self.register_offload_group("blocks", self.blocks, self.offload_block_cuda_buffers, (f"transformer_blocks.{i}." for i in range(self.blocks_num)))
 
     def register_offload_buffers(self, config, lazy_load_path, lora_path):
         if config["cpu_offload"]:

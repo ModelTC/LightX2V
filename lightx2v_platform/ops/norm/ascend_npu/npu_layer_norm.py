@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v_platform.ops.norm.norm_template import LayerNormWeightTemplate
+from lightx2v_platform.ops.weight_storage import FloatingWeightStorage
 from lightx2v_platform.registry_factory import PLATFORM_LAYERNORM_WEIGHT_REGISTER
 
 try:
@@ -10,9 +11,17 @@ except ImportError:
 
 
 @PLATFORM_LAYERNORM_WEIGHT_REGISTER("npu_layer_norm")
-class NpuLayerNormWeight(LayerNormWeightTemplate):
+class NpuLayerNormWeight(FloatingWeightStorage, LayerNormWeightTemplate):
     def __init__(self, weight_name=None, bias_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6, **kwargs):
         super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+        self.base_attrs = [(name, attr, False) for name, attr in ((weight_name, "weight"), (bias_name, "bias")) if name is not None]
+
+    def bind_storage(self, context):
+        context.bind(self)
+        if self.weight_name is None:
+            self.weight = None
+        if self.bias_name is None:
+            self.bias = None
 
     def apply(self, input_tensor):
         if torch_npu is not None and hasattr(torch_npu, "npu_layer_norm") and self.weight is not None and self.bias is not None:
