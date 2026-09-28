@@ -1,18 +1,14 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/dan/LightX2V
-model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3
 
 # Select one platform. NVIDIA is enabled by default.
 
 # NVIDIA
 export PLATFORM=cuda
 export CUDA_VISIBLE_DEVICES=0
-
-# Apple Silicon MPS
-# export PLATFORM=mps
-# Set --config_json below to the same JSON config used for MPS inference.
 
 # Intel XPU
 # export PLATFORM=intel_xpu
@@ -21,6 +17,9 @@ export CUDA_VISIBLE_DEVICES=0
 # AMD ROCm
 # export PLATFORM=amd_rocm
 # export CUDA_VISIBLE_DEVICES=0
+
+# Apple Silicon MPS
+# export PLATFORM=mps
 
 # MetaX
 # export PLATFORM=metax_cuda
