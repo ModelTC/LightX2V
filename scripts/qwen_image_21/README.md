@@ -110,3 +110,27 @@ Tests use PyTorch 2.11.0+cu130, 40 steps, seed 42, CFG disabled, and the example
 Latency is the median of three consecutive requests after the first request in the same instance; dual-GPU samples use the slower rank. End-to-end timing includes image saving and excludes model loading and one-time initialization.
 
 Search the runtime log for **`RUN pipeline cost`** to find the pipeline latency in seconds.
+
+## 4. Service Deployment and API Usage
+
+Set the repository path, model path, and GPU ID in `server/start_server.sh`, then start the server:
+
+```bash
+bash scripts/qwen_image_21/server/start_server.sh
+```
+
+The default port is `8000`. The server supports both text-to-image and image-to-image requests.
+
+Once the server is ready, open a new terminal in the same container and send requests:
+
+```bash
+# Text-to-image
+python scripts/qwen_image_21/server/post_t2i.py
+
+# Image-to-image
+python scripts/qwen_image_21/server/post_i2i.py
+```
+
+Edit `url`, `message`, and `output_path` directly; for image-to-image, also set `image_path`. The scripts already specify `task: "t2i"` and `task: "i2i"`, respectively.
+
+Service requests follow the same size rules. For automatic image-to-image sizing, remove `size` from `message`.

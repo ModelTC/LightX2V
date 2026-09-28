@@ -110,3 +110,27 @@ bash scripts/qwen_image_21/qwen_image_21_i2i_5090_2k_sp2.sh
 同一实例中首次请求后，连续三次请求取中位数；双卡每次取较慢 rank 的耗时。端到端耗时包含图片保存，不包含模型加载和一次性初始化。
 
 运行时在日志中搜索 **`RUN pipeline cost`**，查看单次 pipeline 耗时，单位为秒。
+
+## 4. 服务化部署与 API 调用
+
+先修改 `server/start_server.sh` 中的仓库路径、模型路径和 GPU 编号，然后启动：
+
+```bash
+bash scripts/qwen_image_21/server/start_server.sh
+```
+
+默认端口为 `8000`，同一个服务支持文生图和图生图。
+
+服务启动完成后，在同一容器新开终端并发送请求：
+
+```bash
+# 文生图
+python scripts/qwen_image_21/server/post_t2i.py
+
+# 图生图
+python scripts/qwen_image_21/server/post_i2i.py
+```
+
+直接修改代码中的 `url`、`message`、`output_path`；图生图还需设置 `image_path`。两个脚本已分别设置 `task: "t2i"` 和 `task: "i2i"`。
+
+服务请求使用相同的尺寸规则。图生图需自动确定尺寸时，删除 `message` 中的 `size` 字段。
