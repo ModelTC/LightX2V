@@ -189,6 +189,7 @@ class TorchLinearAdapter:
 
             def fn() -> Any:
                 return torch.mm(a, b)
+
         return PreparedOperation(fn=fn, work=2 * m * n * k, rate_metric="tflops", work_definition="2*m*n*k")
 
 
@@ -225,6 +226,7 @@ class TorchSDPAAdapter:
 
         def fn() -> Any:
             return functional.scaled_dot_product_attention(q, k, v, is_causal=bool(shape["causal"]), **kwargs)
+
         return PreparedOperation(
             fn=fn,
             work=4 * batch * heads * seq_q * seq_kv * head_dim,
@@ -324,9 +326,7 @@ class TorchExpertLoopAdapter:
             fc2_bias = torch.randn((experts, hidden), device=device, dtype=dtype) * 0.02
         else:
             fc1_bias = fc2_bias = None
-        selected, scales, routing_metrics = _routing(
-            case, device, str(options.get("moe_routing") or "balanced"), torch
-        )
+        selected, scales, routing_metrics = _routing(case, device, str(options.get("moe_routing") or "balanced"), torch)
         output = torch.empty_like(inputs)
 
         def fn() -> Any:
@@ -336,9 +336,7 @@ class TorchExpertLoopAdapter:
                 if not positions.numel():
                     continue
                 token_indexes, route_indexes = positions[:, 0], positions[:, 1]
-                value = functional.linear(
-                    inputs[token_indexes], fc1[expert], None if fc1_bias is None else fc1_bias[expert]
-                )
+                value = functional.linear(inputs[token_indexes], fc1[expert], None if fc1_bias is None else fc1_bias[expert])
                 if shape["activation"] == "gelu":
                     value = functional.gelu(value)
                 else:
@@ -1021,21 +1019,9 @@ def build_backend_catalog_report(
 ) -> dict[str, Any]:
     production = sorted(set(production_backends))
     production_mm = sorted(set(production_mm_backends))
-    descriptors = [
-        item
-        for item in registry.descriptors()
-        if item["family"] in {"gemm", "dense_attention", "sparse_attention", "moe"}
-    ]
-    mapped_attention = {
-        item["production_backend"]
-        for item in descriptors
-        if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]
-    }
-    mapped_mm = {
-        item["production_backend"]
-        for item in descriptors
-        if item["family"] == "gemm" and item["production_backend"]
-    }
+    descriptors = [item for item in registry.descriptors() if item["family"] in {"gemm", "dense_attention", "sparse_attention", "moe"}]
+    mapped_attention = {item["production_backend"] for item in descriptors if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]}
+    mapped_mm = {item["production_backend"] for item in descriptors if item["family"] == "gemm" and item["production_backend"]}
     attention_exclusions = {name: reason for name, reason in PRODUCTION_ATTN_EXCLUSIONS.items() if name in production}
     mm_exclusions = {name: reason for name, reason in PRODUCTION_MM_EXCLUSIONS.items() if name in production_mm}
     unmapped_attention = sorted(set(production) - mapped_attention - set(attention_exclusions))
@@ -1045,12 +1031,7 @@ def build_backend_catalog_report(
     candidates = []
     for descriptor in descriptors:
         capabilities = descriptor["cuda_capabilities"]
-        capability_supported = cuda_capability in capabilities or any(
-            value.endswith(".x")
-            and cuda_capability is not None
-            and cuda_capability.split(".", 1)[0] == value[:-2]
-            for value in capabilities
-        )
+        capability_supported = cuda_capability in capabilities or any(value.endswith(".x") and cuda_capability is not None and cuda_capability.split(".", 1)[0] == value[:-2] for value in capabilities)
         if cuda_capability is None:
             status, reasons = "cuda_unavailable", ["CUDA capability is unavailable"]
         elif capabilities and not capability_supported:

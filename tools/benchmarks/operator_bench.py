@@ -675,30 +675,16 @@ def build_recommendation_report(
             unmatched += 1
     matched_records = [record for items in matched.values() for record in items]
     if matched_records:
-        environments = {
-            json.dumps(_environment_identity(record.get("environment") or {}), sort_keys=True)
-            for record in matched_records
-        }
-        contracts = {
-            json.dumps((record.get("case") or {}).get("run") or {}, sort_keys=True)
-            for record in matched_records
-        }
+        environments = {json.dumps(_environment_identity(record.get("environment") or {}), sort_keys=True) for record in matched_records}
+        contracts = {json.dumps((record.get("case") or {}).get("run") or {}, sort_keys=True) for record in matched_records}
         require(len(environments) == 1, "mixed raw hardware or software environments")
         require(len(contracts) == 1, "mixed raw measurement contracts")
     workloads = []
     for case in shape_suite["cases"]:
         family = case["operator_family"]
-        catalog_candidates = {
-            item["name"]: item
-            for item in (candidate_catalog or {}).get("candidates", [])
-            if item.get("family") == family
-        }
+        catalog_candidates = {item["name"]: item for item in (candidate_catalog or {}).get("candidates", []) if item.get("family") == family}
         expected_backends = {name for name, item in catalog_candidates.items() if item.get("status") == "eligible"}
-        dependency_blockers = sorted(
-            name
-            for name, item in catalog_candidates.items()
-            if item.get("status") in {"cuda_unavailable", "dependency_missing"}
-        )
+        dependency_blockers = sorted(name for name, item in catalog_candidates.items() if item.get("status") in {"cuda_unavailable", "dependency_missing"})
         if family == "gemm":
             unmapped = sorted((candidate_catalog or {}).get("unmapped_mm_backends", []))
         elif family in {"dense_attention", "sparse_attention"}:
@@ -746,11 +732,7 @@ def build_recommendation_report(
                         break
             rate = statistics.median(rate_values) if rate_values else None
             rate_unit = RATE_UNITS.get(rate_metric)
-            dense_equivalent_values = [
-                float(item["metrics"]["dense_equivalent_tflops"])
-                for item in ok
-                if item["metrics"].get("dense_equivalent_tflops") is not None
-            ]
+            dense_equivalent_values = [float(item["metrics"]["dense_equivalent_tflops"]) for item in ok if item["metrics"].get("dense_equivalent_tflops") is not None]
             dense_equivalent_rate = statistics.median(dense_equivalent_values) if dense_equivalent_values else None
             sparse = case["operator_family"] == "sparse_attention"
             if sparse and ok:
@@ -767,11 +749,7 @@ def build_recommendation_report(
             elif peak_status == "available" and peak_entry.get("unit") != rate_unit:
                 peak_status = "unit_mismatch"
             efficiency = rate / float(peak) if rate is not None and peak and peak_status == "available" else None
-            dense_equivalent_efficiency = (
-                dense_equivalent_rate / float(peak)
-                if dense_equivalent_rate is not None and peak and peak_status == "available"
-                else None
-            )
+            dense_equivalent_efficiency = dense_equivalent_rate / float(peak) if dense_equivalent_rate is not None and peak and peak_status == "available" else None
             assessments[backend] = {
                 "status": status,
                 "accepted": status == "accepted",
@@ -808,11 +786,7 @@ def build_recommendation_report(
         )
         measured_winner = ranking[0] if ranking else None
         terminal_statuses = {"accepted", "unavailable", "correctness_failed"}
-        non_terminal = {
-            name: item["status"]
-            for name, item in assessments.items()
-            if item["status"] not in terminal_statuses
-        }
+        non_terminal = {name: item["status"] for name, item in assessments.items() if item["status"] not in terminal_statuses}
         candidate_coverage_complete = (
             candidate_catalog is not None
             and bool(expected_backends)
@@ -861,11 +835,7 @@ def build_recommendation_report(
             }
         )
     complete = bool(workloads) and all(item["call_count"] is not None and item["measured_winner"] for item in workloads)
-    weighted = (
-        sum(item["call_count"] * item["backends"][item["measured_winner"]]["latency_ms"] for item in workloads)
-        if complete
-        else None
-    )
+    weighted = sum(item["call_count"] * item["backends"][item["measured_winner"]]["latency_ms"] for item in workloads) if complete else None
     return {
         "kind": "operator_benchmark_report_v1",
         "suite_id": shape_suite["suite_id"],
@@ -908,24 +878,14 @@ def markdown_report(value: dict[str, Any]) -> str:
             efficiency = f"{item['nominal_efficiency'] * 100:.2f}%"
         else:
             efficiency = item["peak_status"] if item else "-"
-        dense_rate = (
-            f"{item['dense_equivalent_rate']:.3f} TFLOPS"
-            if item and item["dense_equivalent_rate"] is not None
-            else "-"
-        )
-        dense_efficiency = (
-            f"{item['dense_equivalent_peak_efficiency'] * 100:.2f}%"
-            if item and item["dense_equivalent_peak_efficiency"] is not None
-            else "-"
-        )
+        dense_rate = f"{item['dense_equivalent_rate']:.3f} TFLOPS" if item and item["dense_equivalent_rate"] is not None else "-"
+        dense_efficiency = f"{item['dense_equivalent_peak_efficiency'] * 100:.2f}%" if item and item["dense_equivalent_peak_efficiency"] is not None else "-"
         observed = workload["observed_backend"]
         observed_text = "-" if observed is None else observed["status"]
         if observed and observed["status"] == "comparable":
             observed_text = f"{observed['backend']} -> {measured_winner}: {observed['speedup']:.3f}x"
         recommendation = winner or (f"{measured_winner} (measured)" if measured_winner else "-")
-        lines.append(
-            f"| `{workload['case_id']}` | `{workload['operator_family']}` | `{recommendation}` | {latency} | {rate} | {efficiency} | {dense_rate} | {dense_efficiency} | {observed_text} |"
-        )
+        lines.append(f"| `{workload['case_id']}` | `{workload['operator_family']}` | `{recommendation}` | {latency} | {rate} | {efficiency} | {dense_rate} | {dense_efficiency} | {observed_text} |")
     return "\n".join(lines) + "\n"
 
 

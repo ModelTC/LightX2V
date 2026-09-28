@@ -147,7 +147,8 @@ def raw_record(
         "operator_family": case["operator_family"],
         "backend": backend,
         "shape": case["shape"],
-        "precision": precision or {
+        "precision": precision
+        or {
             "input_dtype": case["precision"]["input_dtype"],
             "weight_dtype": case["precision"]["input_dtype"],
             "accum_dtype": "backend_default",
@@ -170,9 +171,7 @@ def raw_record(
     return {
         "run_id": f"repeat-{run:03d}",
         "case": runtime_case,
-        "environment": {
-            "gpu": {"name": gpu, "major": 9, "minor": 0, "total_memory_bytes": 80 * 1024**3}
-        },
+        "environment": {"gpu": {"name": gpu, "major": 9, "minor": 0, "total_memory_bytes": 80 * 1024**3}},
         "status": "ok",
         "metrics": {
             "latency_ms_mean": latency_ms,
@@ -297,10 +296,7 @@ def test_sparse_attention_requires_real_replay() -> None:
 
 def test_sparse_replay_manifest_rebuilds_qkv(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
-    tensors = {
-        name: torch.arange(64, dtype=torch.float32).reshape(1, 4, 2, 8).to(torch.bfloat16) + offset
-        for offset, name in enumerate(("q", "k", "v"))
-    }
+    tensors = {name: torch.arange(64, dtype=torch.float32).reshape(1, 4, 2, 8).to(torch.bfloat16) + offset for offset, name in enumerate(("q", "k", "v"))}
     specs = {}
     for name, tensor in tensors.items():
         path = tmp_path / f"{name}.pt"
@@ -327,9 +323,7 @@ def test_sparse_replay_manifest_rebuilds_qkv(tmp_path: Path) -> None:
     }
     manifest_path = tmp_path / "replay.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    case = sparse_attention_case(
-        replay={"manifest": str(manifest_path), "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest()}
-    )
+    case = sparse_attention_case(replay={"manifest": str(manifest_path), "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest()})
     q, k, v, metadata = backends._load_qkv_replay(case, "cpu", torch)
     assert torch.equal(q, tensors["q"].squeeze(0))
     assert torch.equal(k, tensors["k"].squeeze(0))
@@ -363,11 +357,9 @@ def test_builtin_and_optional_plugins_register_without_runtime_dependencies() ->
 def test_backend_catalog_tracks_architecture_and_registry_evolution() -> None:
     registry = load_registry()
     descriptors = registry.descriptors()
-    production = {
-        item["production_backend"]
-        for item in descriptors
-        if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]
-    } | set(backends.PRODUCTION_ATTN_EXCLUSIONS)
+    production = {item["production_backend"] for item in descriptors if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]} | set(
+        backends.PRODUCTION_ATTN_EXCLUSIONS
+    )
     h100 = backends.build_backend_catalog_report(
         registry,
         cuda_capability="9.0",
@@ -424,9 +416,7 @@ def test_backend_catalog_tracks_architecture_and_registry_evolution() -> None:
         symbol_probe=lambda value: None,
         dependency_probe=lambda value: "missing" if value == "sageattn3" else None,
     )
-    incomplete_status = {
-        item["name"]: item["status"] for item in incomplete_environment["candidates"]
-    }
+    incomplete_status = {item["name"]: item["status"] for item in incomplete_environment["candidates"]}
     assert incomplete_status["sage_attn3"] == "dependency_missing"
     assert not incomplete_environment["environment_complete"]
 
@@ -703,10 +693,7 @@ def test_report_uses_precision_specific_peak(
 ) -> None:
     case = gemm_case()
     raw = tmp_path / "raw.jsonl"
-    records = [
-        raw_record(case, "quantized", repeat, 1.0, 989.5, precision=precision, rate_metric=rate_metric)
-        for repeat in range(3)
-    ]
+    records = [raw_record(case, "quantized", repeat, 1.0, 989.5, precision=precision, rate_metric=rate_metric) for repeat in range(3)]
     write_raw(raw, records)
     value = core.build_recommendation_report(
         shape_suite(case),
@@ -727,10 +714,7 @@ def test_report_exposes_missing_peak(tmp_path: Path) -> None:
     precision = {"input_dtype": "bf16", "weight_dtype": "fp8_e4m3_per_channel", "quant": "fp8_e4m3"}
     write_raw(
         raw,
-        [
-            raw_record(case, "fp8", repeat, 1.0, 1000.0, precision=precision, rate_metric="effective_tflops")
-            for repeat in range(3)
-        ],
+        [raw_record(case, "fp8", repeat, 1.0, 1000.0, precision=precision, rate_metric="effective_tflops") for repeat in range(3)],
     )
     bf16_only = {
         "platforms": {
@@ -887,9 +871,7 @@ def test_cli_inspect_and_sweep(tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert len(core.load_suite(output)["cases"]) == 2
 
 
-def test_cli_failed_run_does_not_overwrite_existing_backend_catalog(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cli_failed_run_does_not_overwrite_existing_backend_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     suite_path = tmp_path / "suite.json"
     suite_path.write_text(json.dumps(shape_suite(gemm_case())), encoding="utf-8")
     output_dir = tmp_path / "results"
@@ -1035,19 +1017,11 @@ def test_sp_candidates_encode_production_constraints() -> None:
     assert not any(item["quant_scheme"] == "fp4" for item in candidates)
     assert any("native apply_with_lse" in item["reason"] for item in exclusions)
     assert any("FP4 communication dependency" in item["reason"] for item in exclusions)
-    assert not any(
-        item["prepost_backend"] == "triton" and not item["tensor_fusion"]
-        for item in candidates
-        if item["algorithm"] == "ulysses"
-    )
+    assert not any(item["prepost_backend"] == "triton" and not item["tensor_fusion"] for item in candidates if item["algorithm"] == "ulysses")
     head_candidates = [item for item in candidates if item["algorithm"] == "ulysses" and item["head_parallel"]]
     assert {item["head_parallel_group_size"] for item in head_candidates} == {1, 2}
     assert all(f"head_group={item['head_parallel_group_size']}" in item["candidate_id"] for item in head_candidates)
-    assert all(
-        item["head_parallel_group_size"] == 1
-        for item in candidates
-        if item["algorithm"] == "ulysses" and not item["head_parallel"]
-    )
+    assert all(item["head_parallel_group_size"] == 1 for item in candidates if item["algorithm"] == "ulysses" and not item["head_parallel"])
 
 
 def test_sp_candidates_reject_gqa_fusion_and_ring() -> None:
@@ -1089,11 +1063,14 @@ def test_sp_ring_aux_candidates_are_released_by_validated_matrix() -> None:
     assert sp_bench._result_correctness_policy(case, ring[0])["policy"].startswith("exact_dense")
     with pytest.raises(ValueError, match="missing SP correctness contract"):
         sp_bench._result_correctness_policy(case, {**ring[0], "dense_backend": "new_lse_backend"})
-    assert sp_bench._result_correctness_policy(
-        case,
-        {**ring[0], "dense_backend": "new_lse_backend"},
-        allow_missing=True,
-    )["policy"] == "exploratory_unregistered_backend_v1"
+    assert (
+        sp_bench._result_correctness_policy(
+            case,
+            {**ring[0], "dense_backend": "new_lse_backend"},
+            allow_missing=True,
+        )["policy"]
+        == "exploratory_unregistered_backend_v1"
+    )
 
     unavailable = sp_bench.enumerate_candidates(
         case,
@@ -1177,9 +1154,7 @@ def test_sp_sparse_reference_preserves_leaf_and_communication_options() -> None:
     reference = sp_bench._bulk_reference_candidate(candidate)
     assert reference == {
         **candidate,
-        "candidate_id": sp_bench._candidate_id(
-            {**candidate, "head_parallel": False, "head_parallel_group_size": 1}
-        ),
+        "candidate_id": sp_bench._candidate_id({**candidate, "head_parallel": False, "head_parallel_group_size": 1}),
         "head_parallel": False,
         "head_parallel_group_size": 1,
     }
@@ -1270,6 +1245,7 @@ def test_sp_shape_description_reports_fp8_fused_ulysses_communication() -> None:
     assert output["payload_shape"] == [4, 14, 27266, 128]
     assert output["scale_shape"] == [4, 14, 27266, 1]
     assert value["communication"]["auxiliary"]["output_all_gather_input_shape"] == [87, 14, 128]
+
 
 def test_sp_grouped_head_shape_description_keeps_remainder_group() -> None:
     case = sp_case()
@@ -1613,10 +1589,10 @@ def test_sp_diagnostic_report_aggregates_repeats() -> None:
                         "unit": "GB/s",
                         "kind": "empirical_envelope",
                         "source": "unit test",
-                    }
+                    },
                 },
             }
-        }
+        },
     }
     profiled = sp_bench.build_diagnostic_report(
         sp_suite(case),

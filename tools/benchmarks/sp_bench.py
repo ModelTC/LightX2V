@@ -206,13 +206,7 @@ def derive_replay_suites(
     k_shape = tensors["k"].get("shape")
     v_shape = tensors["v"].get("shape")
     require(
-        isinstance(q_shape, list)
-        and len(q_shape) == 4
-        and isinstance(k_shape, list)
-        and len(k_shape) == 4
-        and v_shape == k_shape
-        and q_shape[:2] == k_shape[:2]
-        and q_shape[3] == k_shape[3],
+        isinstance(q_shape, list) and len(q_shape) == 4 and isinstance(k_shape, list) and len(k_shape) == 4 and v_shape == k_shape and q_shape[:2] == k_shape[:2] and q_shape[3] == k_shape[3],
         "SP replay Q/K/V shapes are incompatible",
     )
     dtype = tensors["q"].get("dtype")
@@ -397,9 +391,7 @@ def _sp_shape_description(case: dict[str, Any], candidate: dict[str, Any]) -> di
             },
             "output_all_to_all": {
                 "calls_per_attention": len(head_groups),
-                "packed_tensors_per_call": [
-                    [_packed_tensor_description("attention_output", [world_size, heads, local_main, head_dim], quant)] for heads in head_groups
-                ],
+                "packed_tensors_per_call": [[_packed_tensor_description("attention_output", [world_size, heads, local_main, head_dim], quant)] for heads in head_groups],
             },
             "auxiliary": {
                 "qkv": "replicated; bypasses QKV all-to-all",
@@ -619,17 +611,9 @@ def enumerate_sparse_candidates(
 
 
 def _sparse_sp_backend_scope(backend_catalog: dict[str, Any]) -> tuple[list[str], dict[str, str], list[str]]:
-    eligible = {
-        item["name"]
-        for item in backend_catalog.get("candidates", [])
-        if item.get("family") == "sparse_attention" and item.get("status") == "eligible"
-    }
+    eligible = {item["name"] for item in backend_catalog.get("candidates", []) if item.get("family") == "sparse_attention" and item.get("status") == "eligible"}
     supported = sorted(eligible & set(SPARSE_SP_BACKENDS))
-    exclusions = {
-        name: reason
-        for name, reason in SPARSE_SP_EXCLUSIONS.items()
-        if name in eligible
-    }
+    exclusions = {name: reason for name, reason in SPARSE_SP_EXCLUSIONS.items() if name in eligible}
     unmapped = sorted(eligible - set(SPARSE_SP_BACKENDS) - set(exclusions))
     return supported, exclusions, unmapped
 
@@ -648,9 +632,7 @@ def build_candidate_catalog(
     leaf_family = "sparse_attention" if sparse_mode else "dense_attention"
     backend_catalog = runtime["catalog"]
     dependency_blockers = sorted(
-        item["name"]
-        for item in backend_catalog.get("candidates", [])
-        if item.get("family") == leaf_family and item.get("status") in {"cuda_unavailable", "dependency_missing"}
+        item["name"] for item in backend_catalog.get("candidates", []) if item.get("family") == leaf_family and item.get("status") in {"cuda_unavailable", "dependency_missing"}
     )
     unmapped_backends = sorted(backend_catalog.get("unmapped_attention_backends", []))
     sparse_sp_unmapped = sorted(runtime.get("unmapped_sparse_sp_backends", [])) if sparse_mode else []
@@ -730,13 +712,7 @@ def build_candidate_catalog(
 
 def _discover_runtime(device: str) -> dict[str, Any]:
     catalog = probe_backend_catalog(load_registry([]), device)
-    dense_backends = sorted(
-        {
-            item["production_backend"]
-            for item in catalog["candidates"]
-            if item["family"] == "dense_attention" and item["status"] == "eligible" and item["production_backend"]
-        }
-    )
+    dense_backends = sorted({item["production_backend"] for item in catalog["candidates"] if item["family"] == "dense_attention" and item["status"] == "eligible" and item["production_backend"]})
     sparse_backends, sparse_sp_exclusions, unmapped_sparse_sp_backends = _sparse_sp_backend_scope(catalog)
     import lightx2v.common.ops.attn  # noqa: F401
     from lightx2v.common.ops.attn.utils import seq_p
@@ -787,11 +763,7 @@ def _selected_candidates(
                 allow_unvalidated=allow_unvalidated,
             )
         known_ids.update(item["candidate_id"] for item in result["candidates"])
-        selected = [
-            item
-            for item in result["candidates"]
-            if item["algorithm"] in algorithms and (not candidate_ids or item["candidate_id"] in candidate_ids)
-        ]
+        selected = [item for item in result["candidates"] if item["algorithm"] in algorithms and (not candidate_ids or item["candidate_id"] in candidate_ids)]
         require(selected, f"no eligible SP candidates selected for case {case['case_id']}")
         selections[case["case_id"]] = selected
     missing = sorted(candidate_ids - known_ids)
@@ -847,11 +819,7 @@ def _load_replay_range(manifest_path: Path, spec: dict[str, Any], start: int, en
         payload = torch.load(shard_path, map_location="cpu", weights_only=True)
         tensor = payload.get(shard.get("tensor_key")) if isinstance(payload, dict) else None
         expected_shape = [spec["shape"][0], shard_end - shard_start, *spec["shape"][2:]]
-        tensor_matches = (
-            isinstance(tensor, torch.Tensor)
-            and list(tensor.shape) == expected_shape
-            and normalize_dtype(getattr(tensor, "dtype", None), "") == spec.get("dtype")
-        )
+        tensor_matches = isinstance(tensor, torch.Tensor) and list(tensor.shape) == expected_shape and normalize_dtype(getattr(tensor, "dtype", None), "") == spec.get("dtype")
         require(tensor_matches, f"SP replay shard tensor mismatch at {index}")
         chunks.append(tensor[:, overlap_start - shard_start : overlap_end - shard_start])
         cursor = overlap_end
@@ -1037,9 +1005,7 @@ def _output_tensor(result: Any) -> Any:
     return result
 
 
-def _result_correctness_policy(
-    case: dict[str, Any], candidate: dict[str, Any], *, allow_missing: bool = False
-) -> dict[str, Any]:
+def _result_correctness_policy(case: dict[str, Any], candidate: dict[str, Any], *, allow_missing: bool = False) -> dict[str, Any]:
     if candidate.get("leaf_family") == "sparse_attention":
         return {"policy": "sparse_replay_replication_v1", "atol": 0.10, "rtol": 0.10}
     backend = _candidate_backend(candidate)
@@ -1060,9 +1026,7 @@ def _result_correctness_tolerance(case: dict[str, Any], candidate: dict[str, Any
     return _result_correctness_policy(case, candidate)["atol"]
 
 
-def _result_correctness(
-    case: dict[str, Any], candidate: dict[str, Any], result: Any, device: Any, finite: bool
-) -> dict[str, Any]:
+def _result_correctness(case: dict[str, Any], candidate: dict[str, Any], result: Any, device: Any, finite: bool) -> dict[str, Any]:
     import torch
     import torch.distributed as dist
 
@@ -1135,13 +1099,17 @@ def _dense_reference_outputs(case: dict[str, Any], device: Any, seed: int, rank:
     if aux_k is not None and not shape["aux_first"]:
         full_k = torch.cat((global_k, aux_k), dim=0)
         full_v = torch.cat((global_v, aux_v), dim=0)
-    output = F.scaled_dot_product_attention(
-        full_q.transpose(0, 1).unsqueeze(0),
-        full_k.transpose(0, 1).unsqueeze(0),
-        full_v.transpose(0, 1).unsqueeze(0),
-        is_causal=shape["causal"],
-        enable_gqa=shape["heads"] != shape["kv_heads"],
-    ).squeeze(0).transpose(0, 1)
+    output = (
+        F.scaled_dot_product_attention(
+            full_q.transpose(0, 1).unsqueeze(0),
+            full_k.transpose(0, 1).unsqueeze(0),
+            full_v.transpose(0, 1).unsqueeze(0),
+            is_causal=shape["causal"],
+            enable_gqa=shape["heads"] != shape["kv_heads"],
+        )
+        .squeeze(0)
+        .transpose(0, 1)
+    )
     aux_length = 0 if aux_q is None else aux_q.shape[0]
     if aux_length and shape["aux_first"]:
         global_main, aux_output = output[aux_length:], output[:aux_length]
@@ -1205,11 +1173,7 @@ def _bulk_reference_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 def _reference_validation_candidates(case: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not _is_sparse_case(case):
         return candidates
-    grouped = [
-        candidate
-        for candidate in candidates
-        if candidate["algorithm"] == "ulysses" and candidate["head_parallel"]
-    ]
+    grouped = [candidate for candidate in candidates if candidate["algorithm"] == "ulysses" and candidate["head_parallel"]]
     require(grouped, "sparse reference validation requires a grouped Ulysses candidate")
     return grouped
 
@@ -1257,10 +1221,7 @@ def validate_reference_suite(
             algorithms,
             allow_unvalidated=True,
         )
-        selections = {
-            case["case_id"]: _reference_validation_candidates(case, selections[case["case_id"]])
-            for case in suite["cases"]
-        }
+        selections = {case["case_id"]: _reference_validation_candidates(case, selections[case["case_id"]]) for case in suite["cases"]}
         environments = _distributed_environment(device, rank, local_rank)
         records = []
         for case in suite["cases"]:
@@ -1897,11 +1858,7 @@ def _validate_report_record_identities(
     candidate_catalog: dict[str, Any] | None = None,
 ) -> None:
     cases = {case["case_id"]: case for case in suite["cases"]}
-    catalog_candidates = {
-        (case["case_id"], candidate["candidate_id"]): candidate
-        for case in (candidate_catalog or {}).get("cases", [])
-        for candidate in case["candidates"]
-    }
+    catalog_candidates = {(case["case_id"], candidate["candidate_id"]): candidate for case in (candidate_catalog or {}).get("cases", []) for candidate in case["candidates"]}
     expected_fingerprint = (candidate_catalog or {}).get("catalog_fingerprint")
     keys = set()
     seen_candidates = {}
@@ -1961,11 +1918,7 @@ def validate_existing_records(
     repeat_runs: int,
 ) -> set[tuple[str, str, str]]:
     cases = {case["case_id"]: case for case in suite["cases"]}
-    candidates = {
-        (case["case_id"], candidate["candidate_id"]): candidate
-        for case in candidate_catalog["cases"]
-        for candidate in case["candidates"]
-    }
+    candidates = {(case["case_id"], candidate["candidate_id"]): candidate for case in candidate_catalog["cases"] for candidate in case["candidates"]}
     expected_environment = _environment_identity(environments)
     keys = set()
     for record in records:
@@ -2006,26 +1959,15 @@ def build_report(
     catalog_cases = {case["case_id"]: case for case in (candidate_catalog or {}).get("cases", [])}
     workloads = []
     for case in suite["cases"]:
-        expected = {
-            candidate["candidate_id"]: candidate
-            for candidate in catalog_cases.get(case["case_id"], {}).get("candidates", [])
-        }
+        expected = {candidate["candidate_id"]: candidate for candidate in catalog_cases.get(case["case_id"], {}).get("candidates", [])}
         if not expected:
-            expected = {
-                candidate_id: items[0]["candidate"]
-                for (case_id, candidate_id), items in grouped.items()
-                if case_id == case["case_id"]
-            }
+            expected = {candidate_id: items[0]["candidate"] for (case_id, candidate_id), items in grouped.items() if case_id == case["case_id"]}
         candidates = {}
         for candidate_id, candidate in sorted(expected.items()):
             items = grouped.get((case["case_id"], candidate_id), [])
             errors = [item for item in items if item.get("status") != "ok"]
             correctness_failed = any((item.get("correctness") or {}).get("passed") is False for item in items)
-            accepted_items = [
-                item
-                for item in items
-                if item.get("status") == "ok" and (item.get("correctness") or {}).get("passed") is not False
-            ]
+            accepted_items = [item for item in items if item.get("status") == "ok" and (item.get("correctness") or {}).get("passed") is not False]
             latencies = [float(item["metrics"]["latency_ms_mean"]) for item in accepted_items]
             median = statistics.median(latencies) if latencies else None
             spread_ms = max(latencies) - min(latencies) if len(latencies) > 1 else None
@@ -2063,10 +2005,7 @@ def build_report(
         ranking = sorted((name for name, item in candidates.items() if item["status"] == "accepted"), key=lambda name: candidates[name]["latency_ms"])
         terminal_statuses = {"accepted", "unavailable", "correctness_failed"}
         coverage_complete = (
-            candidate_catalog is not None
-            and candidate_catalog.get("scope_complete") is True
-            and bool(candidates)
-            and all(item["status"] in terminal_statuses for item in candidates.values())
+            candidate_catalog is not None and candidate_catalog.get("scope_complete") is True and bool(candidates) and all(item["status"] in terminal_statuses for item in candidates.values())
         )
         measured_winner = ranking[0] if ranking else None
         winner = measured_winner if coverage_complete else None
@@ -2322,11 +2261,7 @@ def _topology_fingerprint(records: list[dict[str, Any]]) -> str | None:
             return None
         topology = [re.sub(r"\x1b\[[0-9;]*m", "", line).strip() for line in raw_topology]
         topology = [" ".join(line.split()) for line in topology if line.strip()]
-        if any(
-            item.get("gpu", {}).get(field) is None
-            for item in ranks
-            for field in ("name", "major", "minor", "pci_domain_id", "pci_bus_id", "pci_device_id")
-        ):
+        if any(item.get("gpu", {}).get(field) is None for item in ranks for field in ("name", "major", "minor", "pci_domain_id", "pci_bus_id", "pci_device_id")):
             return None
         rank_map = [
             {
@@ -2465,11 +2400,7 @@ def build_diagnostic_report(
                 component_spread_ms = max(component_latencies) - min(component_latencies) if len(component_latencies) > 1 else None
                 component_median = statistics.median(component_latencies) if component_latencies else None
                 component_spread_pct = component_spread_ms / component_median * 100 if component_spread_ms is not None and component_median else None
-                component_unstable = (
-                    component_spread_pct is not None
-                    and component_spread_pct > max_spread_pct
-                    and component_spread_ms > max_spread_ms
-                )
+                component_unstable = component_spread_pct is not None and component_spread_pct > max_spread_pct and component_spread_ms > max_spread_ms
                 if len(component_latencies) != len(ok):
                     component_status = "not_measured"
                 elif errors:
@@ -2480,17 +2411,9 @@ def build_diagnostic_report(
                     component_status = "unstable"
                 else:
                     component_status = "accepted"
-                component_bus_bandwidth = (
-                    statistics.median(float(value["bus_bandwidth_gbps"]) for value in component_values)
-                    if component_latencies
-                    else None
-                )
+                component_bus_bandwidth = statistics.median(float(value["bus_bandwidth_gbps"]) for value in component_values) if component_latencies else None
                 component_nominal_peak = float(component_peak["bus_bandwidth"]) if component_peak else None
-                observed_component_efficiency = (
-                    component_bus_bandwidth / component_nominal_peak
-                    if component_bus_bandwidth is not None and component_nominal_peak
-                    else None
-                )
+                observed_component_efficiency = component_bus_bandwidth / component_nominal_peak if component_bus_bandwidth is not None and component_nominal_peak else None
                 communication_components[name] = {
                     "logical_payload_bytes_per_rank": first_component["logical_payload_bytes_per_rank"],
                     "network_bytes_per_rank": first_component["network_bytes_per_rank"],
@@ -2498,11 +2421,7 @@ def build_diagnostic_report(
                     "latency_ms": component_median,
                     "spread_pct": component_spread_pct,
                     "spread_ms": component_spread_ms,
-                    "algorithmic_bandwidth_gbps": (
-                        statistics.median(float(value["algorithmic_bandwidth_gbps"]) for value in component_values)
-                        if component_latencies
-                        else None
-                    ),
+                    "algorithmic_bandwidth_gbps": (statistics.median(float(value["algorithmic_bandwidth_gbps"]) for value in component_values) if component_latencies else None),
                     "bus_bandwidth_gbps": component_bus_bandwidth,
                     "peak_profile_pattern": component_pattern,
                     "peak_status": component_peak_status,
@@ -2510,13 +2429,9 @@ def build_diagnostic_report(
                     "peak_kind": component_peak.get("kind") if component_peak else None,
                     "peak_source": component_peak.get("source") if component_peak else None,
                     "observed_bus_peak_efficiency": observed_component_efficiency,
-                    "bus_peak_efficiency": (
-                        observed_component_efficiency if component_status == "accepted" else None
-                    ),
+                    "bus_peak_efficiency": (observed_component_efficiency if component_status == "accepted" else None),
                     "efficiency_status": (
-                        "available"
-                        if component_status == "accepted" and component_nominal_peak
-                        else ("measurement_not_accepted" if component_status != "accepted" else component_peak_status)
+                        "available" if component_status == "accepted" and component_nominal_peak else ("measurement_not_accepted" if component_status != "accepted" else component_peak_status)
                     ),
                     "status": component_status,
                 }
@@ -2688,9 +2603,7 @@ def diagnostic_candidates_from_report(path: Path, suite: dict[str, Any]) -> dict
     require(report.get("kind") == "sp_attention_benchmark_report_v1", "unsupported SP recommendation report")
     require(report.get("suite_id") == suite["suite_id"], "SP recommendation report suite_id differs from diagnostic suite")
     candidates = {
-        item["case_id"]: item["recommendation"]["candidate_id"]
-        for item in report.get("workloads", [])
-        if isinstance(item.get("recommendation"), dict) and item["recommendation"].get("candidate_id")
+        item["case_id"]: item["recommendation"]["candidate_id"] for item in report.get("workloads", []) if isinstance(item.get("recommendation"), dict) and item["recommendation"].get("candidate_id")
     }
     missing = sorted({case["case_id"] for case in suite["cases"]} - set(candidates))
     require(not missing, f"SP recommendation report does not contain a formal winner for cases: {missing}")
