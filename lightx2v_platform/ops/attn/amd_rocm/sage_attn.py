@@ -1,12 +1,12 @@
-"""ROCm-only SageAttention / Triton num_stages workaround.
+"""AMD ROCm SageAttention2 backend and Triton num_stages workaround.
 
 On gfx1201 / gfx1100, Triton's AMD software-pipeliner miscompiles kernels at
 num_stages>=3 ("operation destroyed but still has uses"). We clamp num_stages<=2
 on SageAttention's Triton kernels and on any torch.compile / Inductor Triton
 kernels, and force Inductor to compile in-process so the clamp reaches them.
 
-Applied via the amd_rocm platform's ``on_sage_attn2_init`` hook: only when a
-SageAttention2 backend is built, and only on the validated archs.
+Select with ``attn_type=sage_attn2_amd_rocm``. The workaround is installed only
+when this backend is constructed, and only on the validated archs.
 
 Toggle with the ``LIGHTX2V_ROCM_TRITON_MAX_STAGES`` env var (default 2): it is
 the clamp ceiling, and setting it to 0 (or a negative value) disables the whole
@@ -19,8 +19,67 @@ import os
 import torch
 from loguru import logger
 
+from lightx2v_platform.ops.attn.template import AttnWeightTemplate
+from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
+
 _MAX_STAGES = int(os.getenv("LIGHTX2V_ROCM_TRITON_MAX_STAGES", "2"))
 _VALIDATED_ARCHS = ("gfx1201", "gfx1100")
+
+
+@PLATFORM_ATTN_WEIGHT_REGISTER("sage_attn2_amd_rocm")
+class AmdSageAttn2Weight(AttnWeightTemplate):
+    """Dense SageAttention2 with opt-in ROCm compiler workarounds."""
+
+    def __init__(self):
+        self.config = {}
+        if getattr(torch.version, "hip", None) is None:
+            raise RuntimeError("sage_attn2_amd_rocm requires AMD ROCm (torch.version.hip is not set).")
+
+        # Keep SageAttention optional during platform operator registration.
+        from sageattention import sageattn
+
+        self.sageattn = sageattn
+        apply_rocm_sage_patches()
+
+    def apply(
+        self,
+        q,
+        k,
+        v,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        q, k, v = self._prepare_qkv(q, k, v)
+        output = self.sageattn(q, k, v, tensor_layout="NHD")
+        return output.reshape(q.shape[0] * q.shape[1], -1)
+
+    def apply_with_lse(self, q, k, v, softmax_scale=None):
+        """Return dense attention and LSE as [tokens, heads]."""
+        q, k, v = self._prepare_qkv(q, k, v)
+        output, lse = self.sageattn(
+            q,
+            k,
+            v,
+            tensor_layout="NHD",
+            is_causal=False,
+            sm_scale=softmax_scale,
+            return_lse=True,
+        )
+        output = output.reshape(q.shape[0] * q.shape[1], -1)
+        lse = lse.transpose(1, 2).reshape(q.shape[0] * q.shape[1], q.shape[2])
+        return output, lse
+
+    @staticmethod
+    def _prepare_qkv(q, k, v):
+        q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        if q.ndim == 3:
+            return q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+        if q.ndim != 4:
+            raise ValueError(f"AMD SageAttention2 expects 3D or 4D Q/K/V, got q.ndim={q.ndim}.")
+        return q, k, v
 
 
 def _is_validated_rocm_arch():

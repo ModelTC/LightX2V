@@ -61,9 +61,12 @@ def _check(scheme, tol):
 
 
 def test_schemes_registered():
+    from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
     register = _mm_register()
     assert "fp8-rocm" in register
     assert "int8-rocm" in register
+    assert "sage_attn2_amd_rocm" in ATTN_WEIGHT_REGISTER
 
 
 def test_int8_rocm():

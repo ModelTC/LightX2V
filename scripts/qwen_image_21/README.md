@@ -124,7 +124,7 @@ pip install "transformers>=4.57" diffusers ftfy accelerate loguru omegaconf eino
     PyJWT jsonschema sageattention
 ```
 
-Run through the platform scripts under `scripts/platforms/amd_rocm/`, which `export PLATFORM=amd_rocm` and source the common env. This activates the AMD ROCm platform backend under `lightx2v_platform/` (registers the ROCm FP8/INT8 GEMM and applies the SageAttention Triton workaround). A single GPU is enough — the text encoder is CPU-offloaded, and no `aiter` build is required.
+Run through the platform scripts under `scripts/platforms/amd_rocm/`, which `export PLATFORM=amd_rocm` and source the common env. This activates the AMD ROCm platform backend under `lightx2v_platform/` (registers the ROCm FP8/INT8 GEMM and the dedicated `sage_attn2_amd_rocm` attention backend). A single GPU is enough — the text encoder is CPU-offloaded, and no `aiter` build is required.
 
 Set `lightx2v_path` and `model_path` at the top of the script, then run:
 
@@ -143,7 +143,7 @@ Each script selects the fastest config for that GPU; edit `--config_json` in the
 | W7900 (gfx1100 / RDNA3) | `qwen_image_21_w7900_int8.json` | INT8 (`torch._int_mm`) + `torch.compile` + SageAttention2 |
 | either | `qwen_image_21_bf16.json` | BF16 eager baseline |
 
-The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered by the AMD ROCm platform ops in `lightx2v_platform/ops/mm/amd_rocm/`: per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. The VAE runs native convolution — the AMD ROCm platform disables cuDNN/MIOpen, which sidesteps the nondeterministic-NaN convolution path observed on gfx1201. The SageAttention/Inductor Triton `num_stages` workaround (needed on gfx1201 / gfx1100) is installed automatically, and only when a SageAttention2 backend is actually constructed; set `LIGHTX2V_ROCM_TRITON_MAX_STAGES=0` to disable it (e.g. once Triton fixes the pipeliner bug). To trade a little quality for speed, lower `infer_steps` (e.g. 25) in the config or pass `--infer_steps 25`.
+The `dit_quant_scheme` is `fp8-rocm` (R9700) or `int8-rocm` (W7900), registered by the AMD ROCm platform ops in `lightx2v_platform/ops/mm/amd_rocm/`: per-channel symmetric weight + per-token dynamic activation, quantized from BF16 on load. The VAE runs native convolution — the AMD ROCm platform disables cuDNN/MIOpen, which sidesteps the nondeterministic-NaN convolution path observed on gfx1201. Set `attn_type` to `sage_attn2_amd_rocm` to select the AMD-specific SageAttention2 class. Its constructor installs the SageAttention/Inductor Triton `num_stages` workaround on gfx1201 / gfx1100; the shared `sage_attn2` backend does not install ROCm patches. The workaround affects subsequent Triton/Inductor compilation in the process; set `LIGHTX2V_ROCM_TRITON_MAX_STAGES=0` to disable it (e.g. once Triton fixes the pipeliner bug). To trade a little quality for speed, lower `infer_steps` (e.g. 25) in the config or pass `--infer_steps 25`.
 
 | GPU | Quant | Steps | End-to-end |
 | --- | --- | ---: | ---: |
