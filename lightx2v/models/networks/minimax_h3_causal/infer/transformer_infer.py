@@ -18,7 +18,10 @@ class MiniMaxH3CausalTransformerInfer(MiniMaxH3TransformerInfer):
         start = self.scheduler.cache_start
         end = start + k.shape[0]
         cache.store_kv(k, v, start, end, self.block_idx)
-        cache.set_ends(self.block_idx, end, end)
+        # A prompt refresh attends only to the condition prefix. Its write
+        # must leave the history length and ring metadata intact for the next chunk.
+        if not self.scheduler.overwrite_condition:
+            cache.set_ends(self.block_idx, end, end)
         return cache.k_cache(self.block_idx, 0, end), cache.v_cache(self.block_idx, 0, end)
 
     def _attention(self, weights, hidden_states, pre_infer_out):

@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 
 import torch
@@ -87,6 +88,7 @@ def main():
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--prompt", type=str, default=None, help="The input prompt for text-to-video generation")
+    parser.add_argument("--action_prompts", type=json.loads, default=None, help="MiniMax-H3 causal timed actions as a JSON object or list")
     parser.add_argument("--ref_video_prompt", type=str, default=None, help="Reference/driving-video prompt for Wan-Animate-2.")
     parser.add_argument("--negative_prompt", type=str, default=None)
     parser.add_argument("--bot_task", type=str, default=None, help="HunyuanImage3 text generation mode.")

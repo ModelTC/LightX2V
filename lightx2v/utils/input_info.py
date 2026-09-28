@@ -316,6 +316,7 @@ class Ref2AVInputInfo(T2AVInputInfo):
 class RefA2VInputInfo(T2AVInputInfo):
     image_path: Any = ""
     audio_path: str = ""
+    action_prompts: dict[str, Any] | list[Any] | None = None
 
 
 @dataclass

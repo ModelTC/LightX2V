@@ -11,10 +11,12 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.common.kvcache.manager import KVCacheManager
-from lightx2v.models.networks.minimax_h3.packing import align_num_frames, audio_latent_num_frames, unpack_audio_tokens, unpatchify_video_tokens
+from lightx2v.models.input_encoders.hf.minimax_h3_causal import MiniMaxH3CausalQwen3VLTextEncoder
+from lightx2v.models.networks.minimax_h3.packing import FPS, FRAMES_PER_CHUNK, align_num_frames, audio_latent_num_frames, unpack_audio_tokens, unpatchify_video_tokens
 from lightx2v.models.networks.minimax_h3.packing_ref2av import MAX_REFERENCE_IMAGES, MiniMaxH3PreparedReference, resolve_reference_image_size
 from lightx2v.models.networks.minimax_h3_causal.model import MiniMaxH3CausalModel
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
+from lightx2v.models.runners.minimax_h3_causal.action_prompt_travel import ActionPromptTravel, ActionPromptTravelConfig, coerce_action_prompts
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3_causal.scheduler import MiniMaxH3CausalScheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
@@ -29,7 +31,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 @RUNNER_REGISTER("minimax_h3_causal")
 class MiniMaxH3CausalRunner(MiniMaxH3Runner):
     supported_request_fields_by_task = {
-        "refa2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "audio_path", "prompt"},
+        "refa2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "audio_path", "prompt", "action_prompts"},
     }
 
     def __init__(self, config):
@@ -44,6 +46,7 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
             raise ValueError("Causal H3 requires DTYPE=BF16 to match the training checkpoint")
         if config.get("lora_configs"):
             raise ValueError("Causal H3 loads the distilled checkpoint directly; released H3 LoRA adapters are not supported")
+        self.action_prompt_travel_config = ActionPromptTravelConfig.model_validate(config.get("action_prompt_travel") or {})
         super().__init__(config)
         self.kv_cache_manager = None
         # Called on rank 0 with (RGB [1,3,F,H,W], start_frame, is_final).
@@ -52,11 +55,44 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
     def get_supported_tasks(self):
         return ("refa2v",)
 
+    def create_input_info(self, request_data):
+        input_info = super().create_input_info(request_data)
+        input_info.action_prompts = coerce_action_prompts(input_info.action_prompts)
+        return input_info
+
+    def clear_conditioning_state(self):
+        super().clear_conditioning_state()
+        self.action_travel = None
+
+    def run_text_encoder(self, input_info, keyframes=None, references=None):
+        if not self.action_prompt_travel_config.enabled or not input_info.action_prompts:
+            return super().run_text_encoder(input_info, keyframes=keyframes, references=references)
+        encoder = self.text_encoders[0]
+        self.text_reference_context = encoder.prepare_reference_context(references)
+        reference_length = len(self.text_reference_context["token_ids"])
+        self.action_travel = ActionPromptTravel(input_info.prompt, input_info.action_prompts, self.action_prompt_travel_config, encoder.tokenizer, reference_length)
+        return self.encode_action_prompt()
+
+    def encode_action_prompt(self):
+        travel = self.action_travel
+        text = self.text_encoders[0].infer(
+            travel.prompt,
+            reference_context=self.text_reference_context,
+            pad_to_len=travel.text_length if travel.config.naive_travel else None,
+            pad_mode=travel.config.naive_pad,
+        )
+        if text["text_token_tags"].numel() != travel.text_length:
+            raise RuntimeError("H3 action prompt length changed while rolling")
+        return text
+
     def init_scheduler(self):
         self.scheduler = MiniMaxH3CausalScheduler(self.config)
 
     def load_transformer(self):
         return MiniMaxH3CausalModel(self.config["model_path"], self.config, self.init_device)
+
+    def load_text_encoder(self):
+        return [MiniMaxH3CausalQwen3VLTextEncoder(self.config)]
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
@@ -119,6 +155,8 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
         waveform, sample_rate = torchaudio.load(self.input_info.audio_path)
         if waveform.shape[-1] == 0:
             raise ValueError("RefA2V driving audio must contain samples")
+        if self.config.get("audio_mono", False):
+            waveform = waveform.mean(dim=0, keepdim=True)
         if waveform.shape[0] == 1:
             waveform = waveform.expand(2, -1)
         else:
@@ -126,6 +164,9 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
         if sample_rate != self.audio_vae.sampling_rate:
             waveform = torchaudio.functional.resample(waveform, sample_rate, self.audio_vae.sampling_rate)
         samples = audio_latent_num_frames(self.request_num_frames) * self.audio_vae.hop_length
+        if self.config.get("loop_audio", False) and waveform.shape[-1] < samples:
+            repeats = (samples + waveform.shape[-1] - 1) // waveform.shape[-1]
+            waveform = waveform.repeat(1, repeats)
         self.waveform = F.pad(waveform[..., :samples], (0, max(0, samples - waveform.shape[-1]))).contiguous()
         return {"text_encoder_output": text}
 
@@ -170,10 +211,15 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
         )
         self.scheduler.cache._init_kv_buffer()
 
-    def run_segment(self, segment_idx=0):
+    def fill_condition_cache(self, *, overwrite=False):
+        self.scheduler.prepare_condition(overwrite=overwrite)
         for step in range(self.scheduler.infer_steps):
+            self.check_stop()
             self.scheduler.step_pre(step)
             self.model.infer(self.inputs)
+
+    def run_segment(self, segment_idx=0):
+        self.fill_condition_cache()
         self.set_vae_decode_tile_shape()
         # Callbacks and tensor returns retain their float RGB contract.
         decoder = MiniMaxH3StreamingVideoDecoder(
@@ -184,12 +230,17 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
         videos, left, right = [], [], []
         emitted = 0
         chunks = self.scheduler.plan.chunks
+        # Mono preprocessing creates identical channels; encode one and reuse
+        # its latents while retaining the downstream left/right token layout.
+        waveform = self.waveform[:1] if self.config.get("audio_mono", False) else self.waveform
         for index, chunk in enumerate(chunks):
             self.check_stop()
             logger.info(f"MiniMax-H3 causal chunk {index + 1}/{len(chunks)}")
             # Re-encode only the available waveform prefix, and commit only new
             # latents. Full-waveform encoding would leak future audio context.
-            latents = self.audio_vae.encode(self.waveform[..., : chunk.audio_frames.stop * self.audio_vae.hop_length], return_cpu=False)
+            latents = self.audio_vae.encode(waveform[..., : chunk.audio_frames.stop * self.audio_vae.hop_length], return_cpu=False)
+            if waveform.shape[0] == 1:
+                latents = latents.expand(2, -1, -1)
             clean = latents[..., chunk.audio_frames].transpose(1, 2).reshape(-1, latents.shape[1]).contiguous()
             self.scheduler.prepare_chunk(index, clean)
             for step in range(self.scheduler.infer_steps):
@@ -205,6 +256,15 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
                 if self.stream_callback is not None and (not dist.is_initialized() or dist.get_rank() == 0):
                     self.stream_callback(frames, emitted, False)
                 emitted += frames.shape[2]
+            travel = self.action_travel
+            if travel is not None and travel.config.min_slice_rolling and (index + 1) % travel.config.unit_transition == 0 and index + 1 < len(chunks):
+                # Nonzero ranks do not receive decoded RGB in parallel VAE
+                # mode, but the decoder advances this counter on every rank.
+                seconds = (decoder.emitted_frames or (index + 1) * FRAMES_PER_CHUNK) / FPS
+                if travel.update(seconds):
+                    self.inputs["text_encoder_output"] = self.encode_action_prompt()
+                    self.fill_condition_cache(overwrite=True)
+                    logger.info(f"H3 action prompt updated after chunk {index + 1} at {seconds:.3f}s")
             left.append(clean[: chunk.num_audio_frames].cpu())
             right.append(clean[chunk.num_audio_frames :].cpu())
         tail = decoder.finish()
