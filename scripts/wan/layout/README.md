@@ -35,7 +35,9 @@ The defaults are one device (`ASCEND_RT_VISIBLE_DEVICES=0`), BF16, and the origi
 
 Both scripts call `python -m lightx2v.infer` directly and perform one complete inference run, producing `baseline_npu.mp4` and `solution2_npu.mp4`. Set `ASCEND_RT_VISIBLE_DEVICES` to select a device or `CONFIG_PATH` to select a configuration.
 
-Wan NPU block offload disables private formats during model initialization, before creating weight buffers, and uses ND storage. Floating-point and INT8 checkpoints are checked for matrix precision before dtype conversion. NPU UniPC solves its small coefficient systems on the CPU while preserving the original sampling schedule.
+Wan NPU block offload disables private formats during model initialization, before creating weight buffers, and uses ND storage. Floating-point and INT8 checkpoints are checked for matrix precision before dtype conversion.
+
+`scheduler_coefficient_device` selects where Wan UniPC builds and solves its small coefficient systems. Both NPU configurations set it to `"cpu"`; custom NPU configurations should add this field to retain CPU solving. When omitted, coefficients follow the sample's device, preserving the CUDA default. Results return to the sample's device and dtype; latent placement and the sampling schedule are unchanged.
 
 When writing NPU weights back to a non-contiguous CPU pinned view, `copy_to_cpu` in `lightx2v_platform/base/ascend_npu.py` first completes a synchronous transfer into a contiguous CPU tensor, then copies into the destination according to its strides. This prevents transposed weights from being reordered incorrectly. The path preserves the original pinned storage and adds one CPU copy; CUDA keeps its existing direct-copy path.
 

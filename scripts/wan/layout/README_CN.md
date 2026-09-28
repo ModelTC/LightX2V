@@ -35,7 +35,9 @@ bash scripts/wan/layout/run_contiguous_npu.sh
 
 两个脚本直接调用 `python -m lightx2v.infer`，各执行一次完整推理，输出为 `baseline_npu.mp4`、`solution2_npu.mp4`。可用 `ASCEND_RT_VISIBLE_DEVICES` 选择卡，`CONFIG_PATH` 指定配置。
 
-Wan NPU block offload 在模型初始化、权重创建前关闭 private format，使用 ND 存储。普通浮点和 INT8 checkpoint 在 dtype 转换前检查矩阵精度。NPU UniPC 小型系数系统在 CPU 求解，保留原来的采样时间表。
+Wan NPU block offload 在模型初始化、权重创建前关闭 private format，使用 ND 存储。普通浮点和 INT8 checkpoint 在 dtype 转换前检查矩阵精度。
+
+`scheduler_coefficient_device` 选择 Wan UniPC 小型系数系统的构造和求解设备。两份 NPU 配置均设置为 `"cpu"`；自定义 NPU 配置需要补上该字段，才能保留 CPU 求解。省略时跟随 sample 所在设备，保持 CUDA 默认行为。求解结果会转回 sample 的设备和 dtype，不改变 latent 的设备位置及采样时间表。
 
 NPU 权重回写到非连续 CPU pinned 视图时，由 `lightx2v_platform/base/ascend_npu.py` 的 `copy_to_cpu` 先同步传回连续 CPU tensor，再按目标 stride 写入，避免转置权重错位。该分支保留原 pinned 存储，增加一次 CPU 拷贝；CUDA 仍使用原来的直接复制路径。
 

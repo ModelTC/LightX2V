@@ -225,7 +225,7 @@ class WanScheduler(BaseScheduler):
 
         h = lambda_t - lambda_s0
         device = sample.device
-        coefficient_device = "cpu" if AI_DEVICE == "npu" else device
+        coefficient_device = self.config.get("scheduler_coefficient_device", device)
 
         rks = []
         D1s = []
@@ -325,8 +325,7 @@ class WanScheduler(BaseScheduler):
 
         h = lambda_t - lambda_s0
         device = this_sample.device
-        # Ascend has no linalg.solve kernel. Keep the tiny coefficient system on CPU.
-        coefficient_device = "cpu" if AI_DEVICE == "npu" else device
+        coefficient_device = self.config.get("scheduler_coefficient_device", device)
 
         rks = []
         D1s = []
