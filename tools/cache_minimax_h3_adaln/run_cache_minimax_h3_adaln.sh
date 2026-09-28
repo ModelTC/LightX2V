@@ -12,8 +12,6 @@ export CUDA_VISIBLE_DEVICES=0
 
 # Apple Silicon MPS
 # export PLATFORM=mps
-# export DTYPE=BF16
-# export SENSITIVE_LAYER_DTYPE=BF16
 # Set --config_json below to the same JSON config used for MPS inference.
 
 # Intel XPU
