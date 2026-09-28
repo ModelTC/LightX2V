@@ -61,6 +61,8 @@ self.register_offload_group(
 4. 优先让现有 `load()` 通过公共工具消费 `BlockLoadContext`。需要特殊绑定的算子实现 `bind_storage()`，保持 buffer 属性及计算属性对应。
 5. 无状态算子可以给出空状态，但仍保留其初始化 `load()`；未知有状态算子明确报错。
 
+平台的普通浮点 RMSNorm/LayerNorm 默认继承 [norm 模板](../../../../lightx2v_platform/ops/norm/norm_template.py) 的存储描述和绑定；新芯片子类只需实现计算。公共加载器优先调用 `bind_storage()`，因此子类若在 `load()` 中增加转换或辅助状态初始化，也必须明确适配连续绑定，不能假定这些步骤会自动执行。
+
 适配参考：[MM](../../../../lightx2v/common/ops/mm/mm_weight.py)、[RMSNorm](../../../../lightx2v/common/ops/norm/rms_norm_weight.py)、[LayerNorm](../../../../lightx2v/common/ops/norm/layer_norm_weight.py)、[DefaultTensor](../../../../lightx2v/common/ops/tensor/tensor.py)。不要为每个算子创建内容相同的转发函数。
 
 ## 加载与内存

@@ -30,7 +30,7 @@
 
 `NpuDevice.copy_to_cpu()` 已处理非连续 CPU 目标：先得到完成 D2H 的连续 CPU 源，再由 CPU 按目标 stride 写入。不可简化成直接异步写转置 host view；此前该问题会造成 offload 权重往返后损坏。这个修复属于平台复制层，CUDA 路径不应被迫采用相同额外复制。
 
-相关实现：[公共权重工具](../../../../lightx2v/common/ops/utils.py)、[MM 模板](../../../../lightx2v_platform/ops/mm/template.py)、[norm 模板](../../../../lightx2v_platform/ops/norm/norm_template.py)。NPU 算子的特殊绑定留在其 [MM](../../../../lightx2v_platform/ops/mm/ascend_npu/mm_weight.py)、[RMSNorm](../../../../lightx2v_platform/ops/norm/ascend_npu/npu_rms_norm.py)、[LayerNorm](../../../../lightx2v_platform/ops/norm/ascend_npu/npu_layer_norm.py) 实现中。
+相关实现：[公共权重工具](../../../../lightx2v/common/ops/utils.py)、[MM 模板](../../../../lightx2v_platform/ops/mm/template.py)、[norm 模板](../../../../lightx2v_platform/ops/norm/norm_template.py)。普通浮点 Norm 的存储描述、属性映射和绑定由平台 norm 模板提供；NPU RMSNorm/LayerNorm 直接继承，不重复实现。量化等特殊存储规则仍由对应 [MM 算子](../../../../lightx2v_platform/ops/mm/ascend_npu/mm_weight.py) 提供。
 
 ## 两种现有配置选择
 
