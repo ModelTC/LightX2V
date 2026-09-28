@@ -18,7 +18,7 @@ python -c "import torch; print(torch.__version__, '| XPU:', torch.xpu.is_availab
 若 import 报错：PyTorch XPU 版本未安装，按顺序执行：
 ```powershell
 pip install --no-cache-dir -r requirements_win.txt
-pip install --no-cache-dir torch==2.9.1+xpu torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+pip install --no-cache-dir torch==2.13.0+xpu torchvision==0.28.0+xpu --index-url https://download.pytorch.org/whl/xpu
 pip install --no-cache-dir -e .
 ```
 
@@ -208,6 +208,15 @@ pipe.generate(seed=42, prompt="a cat", save_result_path="output.mp4")
 }
 ```
 
+**可选性能优化字段**（MiniMax-H3 已验证，config 里没有这些字段就是关闭，不影响能否跑通）：
+
+| 字段 | 作用 | 备注 |
+|------|------|------|
+| `use_compile` | DiT torch.compile | 首次调用有 JIT 编译耗时（正常，见下方"推理卡住 2–5 分钟"） |
+| `use_fused_qkv` + `use_fused_qkv_norm_rope` + `qkv_norm_rope_type` | 融合 QKV 投影 + Q/K RMSNorm + RoPE | `qkv_norm_rope_type: "intel_xpu"`（XPU 专用）或 `"triton"`（通用 fallback） |
+| `attn_type: "dynamic_sparse_attn"` + `dynamic_sparse_attn_setting` | 长序列稀疏注意力（Turbo-SLA） | 通常配合 Turbo-SLA LoRA、少数几步推理使用，`refiner_attn_type` 单独控制 refiner 用稠密 CUTE attention |
+| `vae_attn_type: "minimax_h3_xpu_cute"` + `vae_use_compile` | VAE 用 XPU 专用 CUTE attention + compile | 需要 `vae_cpu_offload: false`（VAE 常驻 XPU）；与 VAE 的 shared/block offload 模式互斥 |
+
 ---
 
 ## 多卡分布式推理（Linux 仅）
@@ -348,6 +357,8 @@ python -c "import torch; print(torch.xpu.is_available())"
 | 推理卡住 2–5 分钟无输出 | XPU JIT 编译 oneDNN/CUTE kernel | 正常，等待即可 |
 | `ImportError: No module named cute_attn` | CUTE attention 内核未安装 | 参考项目安装文档，或降级到 `attn_type: intel_xpu_flash_attn` |
 | `RuntimeError: tensor_p_size × seq_p_size × cfg_p_size != nproc` | 进程数与并行大小不匹配 | 调整 `--nproc_per_node` 或 config 中的 `parallel` 大小 |
+| `RuntimeError: mismatched dimensions` / TP 场景 `torch.addmm` 报错 | 列并行 layer 的 1-D bias/scale 未跟着权重一起切分 | → `/xpu` Case 7 |
+| `RuntimeError: sycl_kernels.sla_block_map/sparse_block_attention/sla_sparse_attention is unavailable` | `sycl_kernels` 编译时未打开 SLA/CUTE sparse attention 支持 | 重新编译 `lightx2v_kernel_xpu`（见"步骤 1"前置条件），或改用非 `dynamic_sparse_attn` 的普通 attn_type |
 | 多卡初始化卡住 | 进程数、设备数或并行大小不匹配，或 oneCCL 不兼容 | 确认设备数、检查 `ZE_AFFINITY_MASK`、验证进程数公式 |
 | All-to-all/all-reduce 卡住（SP/SP+TP） | oneCCL 设置不正确或驱动不兼容 | 从 2 卡验证，检查 oneCCL 环境变量是否设置，先验证纯 TP 和纯 SP |
 | 某个 rank 提前退出 | 不同进程状态不同步或配置不一致 | 设置 `PYTHONFAULTHANDLER=1` 查看所有 rank 的日志，确保配置和模型路径一致 |

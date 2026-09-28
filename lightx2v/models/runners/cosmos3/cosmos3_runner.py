@@ -216,7 +216,7 @@ class Cosmos3Runner(DefaultRunner):
             assert self.config.get("cpu_offload", False)
         if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)
-        if (self.config.get("enable_sound", False) or self.config["task"] in ("t2av", "i2av")) and not self.config.get("sound_gen", False):
+        if self.config["task"] in ("t2av", "i2av") and not self.config.get("sound_gen", False):
             raise ValueError("Cosmos3 sound generation requires a checkpoint with sound_gen=True.")
         if (self.config.get("action_mode", "") or self.config["task"] in ("i2va", "v2av")) and not self.config.get("action_gen", False):
             raise ValueError("Cosmos3 action generation requires a checkpoint with action_gen=True.")
@@ -282,7 +282,7 @@ class Cosmos3Runner(DefaultRunner):
         spec = self._load_action_spec()
         if not getattr(self.input_info, "prompt", "") and spec.get("prompt"):
             self.input_info.prompt = spec["prompt"]
-        chunk_size = int(self._get_action_value("action_chunk_size", self.config.get("action_chunk_size", 16)))
+        chunk_size = self._get_action_value("action_chunk_size", 16)
         self.input_info.action_chunk_size = chunk_size
         self.input_info.num_frames = chunk_size + 1
 
@@ -654,7 +654,7 @@ class Cosmos3Runner(DefaultRunner):
             return
         if self.input_info.action_latents is not None or self.input_info.action_latent_shape is not None:
             return
-        chunk_size = int(getattr(self.input_info, "action_chunk_size", 0) or self._get_action_value("action_chunk_size", 16))
+        chunk_size = self.input_info.action_chunk_size
         action_dim = int(self.config.get("action_dim", self.config.get("max_action_dim", 64)))
         domain_name = self._get_action_value("domain_name", None)
         if not domain_name:
@@ -666,7 +666,7 @@ class Cosmos3Runner(DefaultRunner):
             raise ValueError(f"Cosmos3 raw_action_dim={raw_action_dim} exceeds model action_dim={action_dim}")
 
         height, width = self.input_info.size
-        num_frames = chunk_size + 1
+        num_frames = self.input_info.num_frames
         image_path = getattr(self.input_info, "image_path", None) or self.config.get("image_path", "")
         video_path = self.input_info.video_path or self.config.get("video_path", "")
         policy_image = getattr(self.input_info, "policy_image", None)
@@ -933,7 +933,7 @@ class Cosmos3Runner(DefaultRunner):
         save_dir = os.path.dirname(save_path)
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
-        if self._is_video_output():
+        if self._is_video_output(input_info):
             video = self._images_to_video_tensor(images)
             save_to_video(
                 video.clamp(0, 1),
@@ -963,15 +963,8 @@ class Cosmos3Runner(DefaultRunner):
             del generator
         torch_device_module.empty_cache()
         gc.collect()
-        output_key = "video" if self._is_video_output() else "images"
-        if input_info.return_result_tensor:
-            outputs = {output_key: images}
-            if sound is not None:
-                outputs["sound"] = sound
-            if action is not None:
-                outputs["action"] = action
-            return outputs
-        if input_info.save_result_path is not None:
+        output_key = "video" if self._is_video_output(input_info) else "images"
+        if not input_info.return_result_tensor and input_info.save_result_path is not None:
             outputs = {output_key: None}
             if action is not None:
                 outputs["action"] = None
@@ -983,8 +976,8 @@ class Cosmos3Runner(DefaultRunner):
             outputs["action"] = action
         return outputs
 
-    def _is_video_output(self):
-        return self.get_num_frames() > 1
+    def _is_video_output(self, input_info):
+        return input_info.num_frames > 1
 
     def end_run(self):
         if hasattr(self, "model") and self.model is not None:

@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.ops.norm.rms_norm_weight import apply_qk_rms_norm
@@ -9,7 +10,12 @@ from lightx2v.utils.registry_factory import ROPE_REGISTER
 class QwenImage21TransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
-        self.heads = config["num_attention_heads"]
+        if config.get("tensor_parallel", False):
+            tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+            tp_size = dist.get_world_size(tp_group)
+        else:
+            tp_size = 1
+        self.heads = config["num_attention_heads"] // tp_size
         self.head_dim = config["attention_head_dim"]
         self.use_fused_qk_rms_norm = config.get("fused_qk_rms_norm", True)
         self.use_fused_block_ops = config.get("fused_block_ops", True) and config.get("modulate_type", "triton") == "triton"
@@ -20,10 +26,19 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
             self.block_ops = triton_ops
         self.rope = ROPE_REGISTER[config.get("rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float32)
         self.rope.set_config(config)
+        self.seq_parallel = config.get("seq_parallel", False)
+        if self.seq_parallel:
+            self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
+            parallel = config["parallel"]
+            self.seq_p_prepost_backend = parallel.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel.get("seq_p_quant_scheme")
+            self.seq_p_tensor_fusion = parallel.get("seq_p_tensor_fusion", False)
+            self.seq_p_head_parallel = parallel.get("seq_p_head_parallel", False)
+            self.seq_p_head_parallel_group_size = int(parallel.get("seq_p_head_parallel_group_size", 1))
+        else:
+            self.seq_p_group = None
         self.init_compile(config)
-
-    def set_scheduler(self, scheduler):
-        self.scheduler = scheduler
 
     def _modulation(self, state):
         # One timestep per stream; the same modulation is shared by all blocks.
@@ -39,17 +54,10 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
         q, k = self.rope.apply(q, k, rotary, positions=rotary_positions)
         return q, k, v
 
-    def infer_block(self, block, x, modulation, rotary, rotary_positions, k_cache, v_cache):
-        q, k, v = self._qkv(block, x, modulation[0], rotary, rotary_positions)
-        k = torch.cat((k_cache, k))
-        v = torch.cat((v_cache, v))
-        attention = block.attention.apply(q, k, v)
-        return self._finish_block(block, x, attention, modulation)
-
     def _finish_block(self, block, x, attention, modulation):
         _, gate1, scale2, gate2 = modulation
         # Short sequences are launch-bound; eager Torch is faster there.
-        if self.use_fused_block_ops and x.shape[0] >= self.fused_block_min_tokens and not torch.compiler.is_compiling():
+        if self.use_fused_block_ops and x.shape[0] >= self.fused_block_min_tokens:
             x, h = self.block_ops.fused_residual_norm_scale(x, block.out.apply(attention), gate1, scale2, block.norm2.eps)
             hidden = self.block_ops.fused_silu_mul(block.gate.apply(h), block.up.apply(h))
             return self.block_ops.fused_residual_add(x, block.down.apply(hidden), gate2)
@@ -59,29 +67,74 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
         x = x + gate2 * block.down.apply(F.silu(block.gate.apply(h)) * block.up.apply(h))
         return x.clamp(-65504, 65504) if x.dtype == torch.float16 else x
 
+    def prefill_block(self, index, block, x, modulation, state, cache):
+        """Run one condition-prefix block and store its K/V."""
+        q, k, v = self._qkv(block, x, modulation[0], state.rotary, state.rotary_positions)
+        cache.store_kv(k, v, index)
+        attention = x.new_empty((x.shape[0], self.heads * self.head_dim))
+        for begin, end, is_text in state.layout.segments:
+            mask = None
+            if is_text:
+                mask = torch.arange(end, device=x.device)[None] <= torch.arange(begin, end, device=x.device)[:, None]
+            op = block.prefix_attention if is_text else block.attention
+            attention[begin:end] = op.apply(q[begin:end], k[:end], v[:end], attn_mask=mask)
+        return self._finish_block(block, x, attention, modulation)
+
+    def _prefill_blocks(self, blocks, x, modulation, state, cache):
+        for index, block in enumerate(blocks):
+            x = self.prefill_block(index, block, x, modulation, state, cache)
+        return x
+
     def prefill(self, weights, state, cache):
         """Run the condition prefix once and store every layer's K/V."""
-        x = state.hidden_states
         modulation = self._modulation(state)
-        for index, block in enumerate(weights.blocks):
-            q, k, v = self._qkv(block, x, modulation[0], state.rotary, state.rotary_positions)
-            cache.store_kv(k, v, index)
-            attention = torch.empty_like(x)
-            for begin, end, is_text in state.layout.segments:
-                mask = None
-                if is_text:
-                    mask = torch.arange(end, device=x.device)[None] <= torch.arange(begin, end, device=x.device)[:, None]
-                op = block.prefix_attention if is_text else block.attention
-                attention[begin:end] = op.apply(q[begin:end], k[:end], v[:end], attn_mask=mask)
-            x = self._finish_block(block, x, attention, modulation)
+        self._prefill_blocks(weights.blocks, state.hidden_states, modulation, state, cache)
+
+    def infer_block(self, block, x, modulation, rotary, rotary_positions, cached_k, cached_v):
+        q, k, v = self._qkv(block, x, modulation[0], rotary, rotary_positions)
+        if self.seq_parallel:
+            attention, _ = block.calculate_parallel.apply(
+                q=q,
+                k=k,
+                v=v,
+                aux_q=None,
+                aux_k=cached_k,
+                aux_v=cached_v,
+                attention_module=block.attention,
+                seq_p_group=self.seq_p_group,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.seq_p_head_parallel,
+                head_parallel_group_size=self.seq_p_head_parallel_group_size,
+                aux_first=True,
+                attention_kwargs={},
+            )
+        else:
+            k = torch.cat((cached_k, k))
+            v = torch.cat((cached_v, v))
+            attention = block.attention.apply(q, k, v)
+        return self._finish_block(block, x, attention, modulation)
+
+    def _infer_blocks(self, blocks, x, modulation, state, cache):
+        for index, block in enumerate(blocks):
+            x = self.run_block(
+                index,
+                block,
+                x,
+                modulation,
+                state.rotary,
+                state.rotary_positions,
+                cache.k_cache(index),
+                cache.v_cache(index),
+            )
+        return x
 
     def infer(self, weights, state, cache):
         """Denoise only target tokens, attending to the prefilled condition K/V."""
         if not cache.is_ready():
             raise RuntimeError("Condition KV must be prefilled before denoising")
-        x = state.hidden_states
         # Shared across every block; kept outside the compiled block graph.
         modulation = self._modulation(state)
-        for index, block in enumerate(weights.blocks):
-            x = self.run_block(index, block, x, modulation, state.rotary, state.rotary_positions, cache.k_cache(index), cache.v_cache(index))
-        return x
+        return self._infer_blocks(weights.blocks, state.hidden_states, modulation, state, cache)

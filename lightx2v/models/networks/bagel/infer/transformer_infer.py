@@ -16,19 +16,13 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class BagelTransformerInfer(BaseTransformerInfer):
-    def __init__(self, config, llm_config):
+    def __init__(self, llm_config):
         if flash_attn_varlen_func is None:
             raise ImportError("BAGEL T2I requires flash-attn (`flash_attn`). Install a flash-attn build compatible with your CUDA/PyTorch environment before running BAGEL.")
-        self.config = config
-        self.llm_config = llm_config
-        self.use_moe = "Mo" in llm_config["layer_module"]
         self.hidden_size = llm_config["hidden_size"]
         self.num_heads = llm_config["num_attention_heads"]
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = llm_config["num_key_value_heads"]
-
-    def set_scheduler(self, scheduler):
-        self.scheduler = scheduler
 
     def self_attn(
         self,

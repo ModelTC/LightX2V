@@ -42,6 +42,7 @@ from tools.convert.h3_video_vae_encoder import (  # noqa: E402
     FP8_ENCODER_CONV_MODES,
     convert_h3_video_vae_encoder_fp8,
 )
+from tools.convert.qwen_image_21_vae_decoder import convert_qwen_image_21_vae_decoder_fp8  # noqa: E402
 
 dtype_mapping = {
     "int8": torch.int8,
@@ -578,8 +579,8 @@ def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None, strength=1
 
 
 H3_TEXT_ENCODER_LAYER_COUNT = 50
-H3_TEXT_ENCODER_PREFIX = "model.language_model"
-H3_TEXT_ENCODER_LINEAR_SUFFIXES = (
+QWEN3VL_TEXT_ENCODER_PREFIX = "model.language_model"
+QWEN3VL_TEXT_ENCODER_LINEAR_SUFFIXES = (
     "self_attn.q_proj.weight",
     "self_attn.k_proj.weight",
     "self_attn.v_proj.weight",
@@ -588,7 +589,7 @@ H3_TEXT_ENCODER_LINEAR_SUFFIXES = (
     "mlp.up_proj.weight",
     "mlp.down_proj.weight",
 )
-H3_TEXT_ENCODER_NORM_SUFFIXES = (
+QWEN3VL_TEXT_ENCODER_NORM_SUFFIXES = (
     "input_layernorm.weight",
     "post_attention_layernorm.weight",
     "self_attn.q_norm.weight",
@@ -596,23 +597,25 @@ H3_TEXT_ENCODER_NORM_SUFFIXES = (
 )
 
 
-def h3_text_encoder_weight_names(layer_count=H3_TEXT_ENCODER_LAYER_COUNT):
-    layer_prefixes = [f"{H3_TEXT_ENCODER_PREFIX}.layers.{index}" for index in range(layer_count)]
-    quantized_names = {f"{prefix}.{suffix}" for prefix in layer_prefixes for suffix in H3_TEXT_ENCODER_LINEAR_SUFFIXES}
-    required_names = quantized_names | {f"{prefix}.{suffix}" for prefix in layer_prefixes for suffix in H3_TEXT_ENCODER_NORM_SUFFIXES}
-    required_names.add(f"{H3_TEXT_ENCODER_PREFIX}.embed_tokens.weight")
+def qwen3vl_text_encoder_weight_names(layer_count):
+    layer_prefixes = [f"{QWEN3VL_TEXT_ENCODER_PREFIX}.layers.{index}" for index in range(layer_count)]
+    quantized_names = {f"{prefix}.{suffix}" for prefix in layer_prefixes for suffix in QWEN3VL_TEXT_ENCODER_LINEAR_SUFFIXES}
+    required_names = quantized_names | {f"{prefix}.{suffix}" for prefix in layer_prefixes for suffix in QWEN3VL_TEXT_ENCODER_NORM_SUFFIXES}
+    required_names.add(f"{QWEN3VL_TEXT_ENCODER_PREFIX}.embed_tokens.weight")
     return required_names, quantized_names
 
 
-def convert_minimax_h3_text_encoder_fp8(args):
-    """Build the LightX2V MiniMax-H3 50-layer text-prefix FP8 checkpoint."""
-    if not args.quantized or args.linear_type != "fp8":
-        raise ValueError("h3_text_encoder conversion requires --quantized --linear_type fp8")
-    if args.output_ext != ".safetensors" or not args.single_file:
-        raise ValueError("h3_text_encoder conversion requires --output_ext .safetensors --single_file")
-    if args.direction is not None or args.lora_path is not None:
-        raise ValueError("h3_text_encoder FP8 conversion does not support key conversion or LoRA merging")
+def h3_text_encoder_weight_names(layer_count=H3_TEXT_ENCODER_LAYER_COUNT):
+    return qwen3vl_text_encoder_weight_names(layer_count)
 
+
+def qwen_image_21_text_encoder_weight_names(source_root):
+    with (source_root / "config.json").open("r", encoding="utf-8") as handle:
+        model_config = json.load(handle)
+    return qwen3vl_text_encoder_weight_names(model_config["text_config"]["num_hidden_layers"])
+
+
+def _convert_qwen3vl_text_encoder_fp8(args, required_names, quantized_names, model_label, metadata_model):
     output_root = Path(args.output)
     output_path = output_root / f"{args.output_name}{args.output_ext}"
     if output_path.exists():
@@ -621,23 +624,22 @@ def convert_minimax_h3_text_encoder_fp8(args):
     source_root = Path(args.source)
     index_path = source_root / "model.safetensors.index.json"
     if not index_path.is_file():
-        raise FileNotFoundError(f"MiniMax-H3 text encoder index was not found: {index_path}")
+        raise FileNotFoundError(f"{model_label} index was not found: {index_path}")
     with index_path.open("r", encoding="utf-8") as handle:
         weight_map = json.load(handle).get("weight_map")
     if not isinstance(weight_map, dict):
         raise ValueError(f"Invalid safetensors index without a weight_map: {index_path}")
 
-    required_names, quantized_names = h3_text_encoder_weight_names()
     missing = sorted(required_names - weight_map.keys())
     if missing:
-        raise KeyError(f"MiniMax-H3 text encoder is missing {len(missing)} required tensors: {missing[:8]}")
+        raise KeyError(f"{model_label} is missing {len(missing)} required tensors: {missing[:8]}")
 
     names_by_shard = defaultdict(list)
     for name in sorted(required_names):
         names_by_shard[weight_map[name]].append(name)
     missing_shards = [name for name in names_by_shard if not (source_root / name).is_file()]
     if missing_shards:
-        raise FileNotFoundError(f"MiniMax-H3 text encoder is missing checkpoint shards: {missing_shards}")
+        raise FileNotFoundError(f"{model_label} is missing checkpoint shards: {missing_shards}")
     output_root.mkdir(parents=True, exist_ok=True)
 
     converted_weights = {}
@@ -645,7 +647,7 @@ def convert_minimax_h3_text_encoder_fp8(args):
     quantizer_type = CONVERT_WEIGHT_REGISTER["fp8"]
     for shard_index, shard_name in enumerate(sorted(names_by_shard), start=1):
         shard_path = source_root / shard_name
-        logger.info("Processing MiniMax-H3 text shard {}/{}: {}", shard_index, len(names_by_shard), shard_path.name)
+        logger.info("Processing {} shard {}/{}: {}", model_label, shard_index, len(names_by_shard), shard_path.name)
         with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
             for name in tqdm(names_by_shard[shard_name], desc=shard_path.name, leave=False):
                 tensor = checkpoint.get_tensor(name)
@@ -661,14 +663,14 @@ def convert_minimax_h3_text_encoder_fp8(args):
                     converted_weights[f"{name}_scale"] = weight_scale.float().cpu().contiguous()
                     del weight, quantizer, weight_fp8, weight_scale
                 del tensor
-
         gc.collect()
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
     total_size = sum(tensor.numel() * tensor.element_size() for tensor in converted_weights.values())
     logger.info(
-        "Saving MiniMax-H3 text FP8 checkpoint: {} tensors, {:.2f} GiB -> {}",
+        "Saving {} FP8 checkpoint: {} tensors, {:.2f} GiB -> {}",
+        model_label,
         len(converted_weights),
         total_size / (1024**3),
         output_path,
@@ -680,17 +682,68 @@ def convert_minimax_h3_text_encoder_fp8(args):
             temporary_path,
             metadata={
                 "format": "pt",
-                "model": "MiniMax-H3 text encoder prefix (layers 0-49)",
+                "model": metadata_model,
                 "quantization": "fp8-sgl",
             },
         )
         os.replace(temporary_path, output_path)
-    logger.info("MiniMax-H3 text FP8 checkpoint saved successfully: {}", output_path)
+    logger.info("{} FP8 checkpoint saved successfully: {}", model_label, output_path)
+
+
+def convert_minimax_h3_text_encoder_fp8(args):
+    """Build the LightX2V MiniMax-H3 50-layer text-prefix FP8 checkpoint."""
+    if not args.quantized or args.linear_type != "fp8":
+        raise ValueError("h3_text_encoder conversion requires --quantized --linear_type fp8")
+    if args.output_ext != ".safetensors" or not args.single_file:
+        raise ValueError("h3_text_encoder conversion requires --output_ext .safetensors --single_file")
+    if args.direction is not None or args.lora_path is not None:
+        raise ValueError("h3_text_encoder FP8 conversion does not support key conversion or LoRA merging")
+    required_names, quantized_names = h3_text_encoder_weight_names()
+    _convert_qwen3vl_text_encoder_fp8(
+        args,
+        required_names,
+        quantized_names,
+        "MiniMax-H3 text encoder",
+        "MiniMax-H3 text encoder prefix (layers 0-49)",
+    )
+
+
+def convert_qwen_image_21_text_encoder_fp8(args):
+    """Build the Qwen-Image-2.1 QwenVL language-stack FP8 checkpoint.
+
+    Example:
+        python tools/convert/converter.py \
+            --source /path/to/Qwen-Image-2.1/text_encoder \
+            --output /path/to/Qwen-Image-2.1-qwenvl-language-fp8-sgl \
+            --output_name qwen_image_21_qwenvl_language_fp8_sgl \
+            --model_type qwen_image_21_text_encoder \
+            --quantized --linear_type fp8 --device cuda:0 --single_file
+    """
+    if not args.quantized or args.linear_type != "fp8":
+        raise ValueError("qwen_image_21_text_encoder conversion requires --quantized --linear_type fp8")
+    if args.output_ext != ".safetensors" or not args.single_file:
+        raise ValueError("qwen_image_21_text_encoder conversion requires --output_ext .safetensors --single_file")
+    if args.direction is not None or args.lora_path is not None:
+        raise ValueError("Qwen-Image-2.1 QwenVL FP8 conversion does not support key conversion or LoRA merging")
+    required_names, quantized_names = qwen_image_21_text_encoder_weight_names(Path(args.source))
+    _convert_qwen3vl_text_encoder_fp8(
+        args,
+        required_names,
+        quantized_names,
+        "Qwen-Image-2.1 QwenVL language stack",
+        "Qwen-Image-2.1 QwenVL language stack",
+    )
 
 
 def convert_weights(args):
     if args.model_type == "h3_text_encoder":
         convert_minimax_h3_text_encoder_fp8(args)
+        return
+    if args.model_type == "qwen_image_21_text_encoder":
+        convert_qwen_image_21_text_encoder_fp8(args)
+        return
+    if args.model_type == "qwen_image_21_vae_decoder":
+        convert_qwen_image_21_vae_decoder_fp8(args)
         return
     if args.model_type == "h3_video_vae_encoder":
         convert_h3_video_vae_encoder_fp8(args)
@@ -1012,7 +1065,9 @@ def main():
             "h3",
             "h3_video_vae_decoder",
             "h3_video_vae_encoder",
+            "qwen_image_21_vae_decoder",
             "h3_text_encoder",
+            "qwen_image_21_text_encoder",
             "hunyuan_dit",
             "wan_t5",
             "wan_clip",
@@ -1129,7 +1184,7 @@ def main():
             return None
         return [x.strip() for x in v.split(",") if x.strip()]
 
-    if args.quantized and args.model_type not in {"h3_text_encoder", "h3_video_vae_encoder"}:
+    if args.quantized and args.model_type not in {"h3_text_encoder", "qwen_image_21_text_encoder", "h3_video_vae_encoder", "qwen_image_21_vae_decoder"}:
         args.linear_dtype = dtype_mapping.get(args.linear_type, None)
         args.non_linear_dtype = eval(args.non_linear_dtype)
 
