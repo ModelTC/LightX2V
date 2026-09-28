@@ -18,7 +18,7 @@ export CUDA_VISIBLE_DEVICES=0
 # export PLATFORM=amd_rocm
 # export CUDA_VISIBLE_DEVICES=0
 
-# Apple Silicon MPS
+# Apple MPS
 # export PLATFORM=mps
 
 # MetaX
