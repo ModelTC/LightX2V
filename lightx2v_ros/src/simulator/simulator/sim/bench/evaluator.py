@@ -4,16 +4,16 @@ from collections import deque
 
 import numpy as np
 
-from scripts.bench.robotics.common.results import atomic_json, result_path
+from simulator.sim.bench.results import atomic_json, result_path
 
 
 def make_environment(cfg, task):
     if cfg["benchmark"] == "robotwin":
-        from scripts.bench.robotics.robotwin.adapter import RoboTwinAdapter as Adapter
+        from simulator.robotwin_node.bench.adapter import RoboTwinAdapter as Adapter
     elif cfg["benchmark"] == "libero_plus":
-        from scripts.bench.robotics.libero_plus.adapter import LiberoPlusAdapter as Adapter
+        from simulator.libero_node.bench.plus import LiberoPlusAdapter as Adapter
     else:
-        from scripts.bench.robotics.libero.adapter import LiberoAdapter as Adapter
+        from simulator.libero_node.bench.adapter import LiberoAdapter as Adapter
     return Adapter(cfg, task)
 
 

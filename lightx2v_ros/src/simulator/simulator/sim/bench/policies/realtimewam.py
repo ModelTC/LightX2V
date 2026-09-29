@@ -1,7 +1,7 @@
 import importlib
 import time
 
-from scripts.bench.robotics.common.interfaces import ActionChunk
+from simulator.sim.bench.interfaces import ActionChunk
 
 
 class NativeWAMAdapter:

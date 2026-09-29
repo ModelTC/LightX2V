@@ -9,8 +9,8 @@ import time
 from collections import deque
 from pathlib import Path
 
-from scripts.bench.robotics.common.config import ROOT, load_config
-from scripts.bench.robotics.common.results import atomic_json, result_path, summarize
+from simulator.sim.bench.config import ROOT, load_config
+from simulator.sim.bench.results import atomic_json, result_path, summarize
 
 
 def gpu_slots(cfg):
@@ -38,9 +38,9 @@ def validate_paths(cfg):
 
 def discover(cfg):
     if cfg["benchmark"] == "robotwin":
-        from scripts.bench.robotics.robotwin.adapter import discover_tasks
+        from simulator.robotwin_node.bench.adapter import discover_tasks
     else:
-        from scripts.bench.robotics.libero.adapter import discover_tasks
+        from simulator.libero_node.bench.adapter import discover_tasks
     tasks = discover_tasks(cfg)
     ratio = cfg["MULTIRUN"]["task_sample_ratio"]
     if ratio < 1:
@@ -89,6 +89,8 @@ def _run_locked(cfg, slots, output):
     simulator = ROOT / "lightx2v_ros/src/simulator/simulator"
     for directory in ("libero_node", "robotwin_node", "sim"):
         source_files += sorted((simulator / directory).glob("*.py"))
+    for directory in ("sim/bench", "libero_node/bench", "robotwin_node/bench"):
+        source_files += sorted((simulator / directory).rglob("*.py"))
     source_files += sorted((ROOT / "lightx2v_ros/src/common/common").glob("*.py"))
     source_digest = hashlib.sha256()
     for file in source_files:
@@ -143,9 +145,10 @@ def _run_locked(cfg, slots, output):
                     # Let robosuite select from CUDA_VISIBLE_DEVICES. Forcing
                     # EGL=0 breaks its physical-device assertion on GPUs 1+.
                     env.pop("MUJOCO_EGL_DEVICE_ID", None)
-                proc = subprocess.Popen(
-                    [sys.executable, "-u", str(ROOT / "scripts/bench/robotics/common/worker.py"), str(job)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
-                )
+                # Workers import the same repository-local simulator and policy code.
+                python_paths = [str(ROOT), str(ROOT / "lightx2v_ros/src/simulator"), str(ROOT / "lightx2v_ros/src/common")]
+                env["PYTHONPATH"] = os.pathsep.join(python_paths + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+                proc = subprocess.Popen([sys.executable, "-u", "-m", "simulator.sim.bench.worker", str(job)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 active.append((proc, gpu, log, log_path))
                 print(f"launch pid={proc.pid} gpu={gpu} tasks={[t['key'] for t in group]} log={log_path}", flush=True)
                 job_index += 1
@@ -189,7 +192,7 @@ def _run_locked(cfg, slots, output):
 def main(benchmark):
     if "--help" in sys.argv[1:]:
         print(
-            "Usage: python scripts/bench/robotics/run_<benchmark>.py model=realtimewam base_ckpt=/base.pt lora_path=/lora model.model_path=/Wan EVALUATION.dataset_stats_path=/stats.json EVALUATION.output_dir=/results [key=value ...]\nSee scripts/bench/robotics/README.md and configs/bench/robotics/eval.yaml. dry_run=true lists tasks without model inference."
+            "Usage: python scripts/bench/robotics/run_<benchmark>.py model=realtimewam base_ckpt=/base.pt lora_path=/lora model.model_path=/Wan EVALUATION.dataset_stats_path=/stats.json EVALUATION.output_dir=/results [key=value ...]\nDefaults: configs/bench/robotics/eval.yaml. dry_run=true lists tasks without model inference."
         )
         return
     run(load_config(benchmark, sys.argv[1:]))

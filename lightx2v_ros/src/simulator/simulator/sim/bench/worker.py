@@ -4,12 +4,10 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-
 
 def main():
-    from scripts.bench.robotics.common.evaluator import run_task
-    from scripts.bench.robotics.policies.realtimewam import build_policy
+    from simulator.sim.bench.evaluator import run_task
+    from simulator.sim.bench.policies.realtimewam import build_policy
 
     payload = json.loads(Path(sys.argv[1]).read_text())
     policy = build_policy(payload["config"])

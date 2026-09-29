@@ -1,4 +1,4 @@
-from scripts.bench.robotics.libero.adapter import LiberoAdapter
+from simulator.libero_node.bench.adapter import LiberoAdapter
 
 
 class LiberoPlusAdapter(LiberoAdapter):

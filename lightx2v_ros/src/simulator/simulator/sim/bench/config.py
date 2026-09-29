@@ -3,7 +3,7 @@ from pathlib import Path
 
 from omegaconf import OmegaConf
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = Path(__file__).resolve().parents[6]
 LIBERO_NODE = ROOT / "lightx2v_ros/src/simulator/simulator/libero_node"
 ROBOTWIN_ROOT = ROOT / "lightx2v_ros/src/simulator/simulator/robotwin_node/RoboTwin"
 

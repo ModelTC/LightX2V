@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from scripts.bench.robotics.common.results import atomic_json
+from simulator.sim.bench.results import atomic_json
 
 
 def relocate_asset_paths(value, root, config_dir, key=None):

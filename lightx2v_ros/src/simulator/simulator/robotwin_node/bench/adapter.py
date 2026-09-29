@@ -10,10 +10,9 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.bench.robotics.common.config import ROBOTWIN_ROOT, ROOT
-from scripts.bench.robotics.common.interfaces import Observation
-from scripts.bench.robotics.common.simulator import bootstrap_simulator
-from scripts.bench.robotics.robotwin.seed_cache import SeedCache, find_validated_seed
+from simulator.robotwin_node.bench.seed_cache import SeedCache, find_validated_seed
+from simulator.sim.bench.config import ROBOTWIN_ROOT, ROOT
+from simulator.sim.bench.interfaces import Observation
 
 
 def discover_tasks(cfg):
@@ -39,8 +38,8 @@ class RoboTwinAdapter:
     action_space = "robotwin_joint_position"
 
     def __init__(self, cfg, task):
-        bootstrap_simulator()
         from common.contract import ROBOTWIN_CONTRACT
+
         from simulator.robotwin_node.env import RoboTwinEnv
 
         evaluation = cfg["EVALUATION"]
@@ -50,7 +49,7 @@ class RoboTwinAdapter:
             def _prepare_planner_runtime(self):
                 if importlib.util.find_spec("curobo") is None:
                     raise ImportError("RoboTwin benchmark requires curobo expert checks; no dry-run fallback")
-                from scripts.bench.robotics.robotwin.planner_adapter import install_planner_adapter
+                from simulator.robotwin_node.bench.planner_adapter import install_planner_adapter
 
                 install_planner_adapter(self.robotwin_root, evaluation["output_dir"])
 

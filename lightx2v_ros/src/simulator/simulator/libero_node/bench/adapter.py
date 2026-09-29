@@ -4,13 +4,9 @@ import json
 import os
 from pathlib import Path
 
-from scripts.bench.robotics.common.interfaces import Observation
-from scripts.bench.robotics.common.simulator import bootstrap_simulator
-
-bootstrap_simulator()
-# The repository's ROS-free simulator package is now on sys.path.
-from simulator.libero_node.runtime import LiberoRuntime, observation_components, suite_instance  # noqa: E402
-from simulator.libero_node.runtime import load_libero as load_runtime  # noqa: E402
+from simulator.libero_node.runtime import LiberoRuntime, observation_components, suite_instance
+from simulator.libero_node.runtime import load_libero as load_runtime
+from simulator.sim.bench.interfaces import Observation
 
 
 def runtime_directory(cfg):

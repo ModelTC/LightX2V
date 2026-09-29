@@ -27,13 +27,6 @@
 
 > 👋 **Join our WeChat group! LightX2V Robot WeChat ID: random42seed**
 
-## Robotics policy evaluation
-
-Robotics policy evaluation (LIBERO, LIBERO-plus and RoboTwin): see the
-[benchmark guide](scripts/bench/robotics/README.md) for RealtimeWAM and custom
-policy adapters. Entrypoints live under `scripts/bench/robotics/`, with defaults
-in `configs/bench/robotics/` and simulators shared with `lightx2v_ros`.
-
 ## 🧾 Community Code Contribution Guidelines
 
 Before submitting, please ensure that the code format conforms to the project standard. You can use the following execution command to ensure the consistency of project code format.
