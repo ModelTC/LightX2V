@@ -7,7 +7,7 @@ from simulator.sim.bench.interfaces import ActionChunk
 class NativeWAMAdapter:
     def __init__(self, cfg):
         from lightx2v.models.runners.wan.fastwam_runner import FastWAMPolicy
-        from lightx2v.models.runners.wan.realtimewam_policy import RealtimeWAMPolicy
+        from lightx2v.models.runners.wan.realtimewam_runner import RealtimeWAMPolicy
         from lightx2v.utils.set_config import get_default_config
 
         model = cfg["model"]

@@ -83,6 +83,7 @@ def _run_locked(cfg, slots, output):
                 assets.append([str(file), info.st_size, info.st_mtime_ns])
     source_files = sorted((ROOT / "scripts/bench/robotics").rglob("*.py"))
     source_files += sorted((ROOT / "lightx2v/models").rglob("*wam*.py"))
+    source_files += sorted((ROOT / "lightx2v/models/networks/wan/weights/realtimewam").glob("*.py"))
     # Include shared adapters but not vendored simulator submodules/assets.
     simulator = ROOT / "lightx2v_ros/src/simulator/simulator"
     for directory in ("libero_node", "robotwin_node", "sim"):
