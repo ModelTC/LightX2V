@@ -10,18 +10,19 @@ class ZImagePreWeights(WeightModule):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.mm_type = config.get("dit_quant_scheme", "Default")
         self.add_module(
             "img_in",
-            MM_WEIGHT_REGISTER["Default"]("all_x_embedder.2-1.weight", "all_x_embedder.2-1.bias"),
+            MM_WEIGHT_REGISTER[self.mm_type]("all_x_embedder.2-1.weight", "all_x_embedder.2-1.bias"),
         )
         self.add_module(
             "txt_in",
-            MM_WEIGHT_REGISTER["Default"]("cap_embedder.1.weight", "cap_embedder.1.bias"),
+            MM_WEIGHT_REGISTER[self.mm_type]("cap_embedder.1.weight", "cap_embedder.1.bias"),
         )
 
         self.add_module("txt_norm", RMS_WEIGHT_REGISTER["torch"]("cap_embedder.0.weight"))
-        self.add_module("time_text_embed_timestep_embedder_linear_1", MM_WEIGHT_REGISTER["Default"]("t_embedder.mlp.0.weight", "t_embedder.mlp.0.bias"))
-        self.add_module("time_text_embed_timestep_embedder_linear_2", MM_WEIGHT_REGISTER["Default"]("t_embedder.mlp.2.weight", "t_embedder.mlp.2.bias"))
+        self.add_module("time_text_embed_timestep_embedder_linear_1", MM_WEIGHT_REGISTER[self.mm_type]("t_embedder.mlp.0.weight", "t_embedder.mlp.0.bias"))
+        self.add_module("time_text_embed_timestep_embedder_linear_2", MM_WEIGHT_REGISTER[self.mm_type]("t_embedder.mlp.2.weight", "t_embedder.mlp.2.bias"))
         self.add_module("x_pad_token", TENSOR_REGISTER["Default"]("x_pad_token"))
         self.add_module("cap_pad_token", TENSOR_REGISTER["Default"]("cap_pad_token"))
 
