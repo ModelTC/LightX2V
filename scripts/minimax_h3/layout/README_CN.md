@@ -61,16 +61,6 @@ CUDA 保留 SageAttention2、SGL RMSNorm 和 H3 Triton RoPE。Ascend 使用 `npu
 
 `MiniMaxH3TransformerWeights` 注册 `transformer_blocks.{i}.` 及原有两个 slot；模型 checkpoint reader 记录原始元数据并保留混合精度。`BaseTransformerModel`、`BlockLoadPlan`、`BlockBuffer`、`ContiguousBlockTransfer` 完成公共加载和传输。`MiniMaxH3OffloadTransformerInfer` 保持原有 block 循环与同步。平台内存处理留在 `lightx2v_platform`，NVIDIA 设备类保持不变。
 
-在实际设备环境执行存储和调度检查：
-
-```bash
-PLATFORM=cuda CUDA_VISIBLE_DEVICES=0 DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None PROFILING_DEBUG_LEVEL=0 \
-python -m pytest -q test_cases/test_block_buffer.py test_cases/test_block_offload_groups.py
-
-PLATFORM=ascend_npu ASCEND_RT_VISIBLE_DEVICES=0 DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None PROFILING_DEBUG_LEVEL=0 \
-python -m pytest -q test_cases/test_block_buffer.py test_cases/test_block_offload_groups.py
-```
-
-测试覆盖 H3 元数据与过滤、CPU 存储归属、slot 地址稳定、多轮复制、跨 step/request 的原生 block 计算和不支持组合。小尺寸合成 block 测试不等于完整生成验证；还需在各平台固定输入与配置，对比 baseline/contiguous 的视频和音频 latents，并检查解码结果。CUDA 验证不能替代 910B 实机验证，NPU 入口需要在目标机器确认。
+开发期的专用存储和调度测试脚本不随仓库发布。验证时，在各目标平台固定输入与配置，运行上面的 baseline 与 contiguous 入口，对比视频和音频 latents，并检查解码结果。CUDA 验证不能替代 910B 实机验证，NPU 入口需要在目标机器确认。
 
 这里的连续指每个 block 内虚拟地址连续。它减少独立分配和 H2D 提交次数，不减少主体权重字节量或 attention 计算。性能收益需要在正确性通过后单独测量。

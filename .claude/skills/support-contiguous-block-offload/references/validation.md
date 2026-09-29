@@ -2,7 +2,7 @@
 
 简体中文 | [English](validation_en.md)
 
-根据本次改动选择检查，不为文档或简单脚本修改无条件启动完整模型。更改存储、复制或调度时，先验证数据与生命周期，再做生成对照。下述命令从仓库根目录执行，使用匹配目标设备的 Python 环境。
+根据本次改动选择检查，不为文档或简单脚本修改无条件启动完整模型。更改存储、复制或调度时，先验证数据与生命周期，再做生成对照。使用匹配目标设备的 Python 环境。
 
 ## 入口与有效配置
 
@@ -14,30 +14,9 @@
 
 ## 存储与传输
 
-复用现有测试，并补充本次改动涉及的行为：
+开发期的专用验证脚本不随仓库发布。先检查工作区实际可用的测试，再针对本次修改验证存储、复制与调度；不要假定目标机器包含本地测试文件。
 
-| 文件 | 已有关注点 |
-|---|---|
-| [test_block_buffer.py](../../../../test_cases/test_block_buffer.py) | 外部 storage 边界、地址对齐、转置 views、pin、owner 存活、异步双缓冲与辅助状态 |
-| [test_block_offload_groups.py](../../../../test_cases/test_block_offload_groups.py) | Wan/Qwen 加载与 baseline 对照、普通调度、多 group、checkpoint 原始 dtype、未描述状态、清理及平台导入隔离 |
-| [test_platform_norm_storage.py](../../../../test_cases/test_platform_norm_storage.py) | 浮点 Norm 模板继承、无参数状态、精度及 slot 复用 |
-| [test_platform_quant_storage.py](../../../../test_cases/test_platform_quant_storage.py) | 逐通道量化模板、scale/bias 精度、转置方向、checkpoint 消费、双缓冲与平台原生 MM 对照 |
-| [test_platform_weight_copy.py](../../../../test_cases/test_platform_weight_copy.py) | 平台复制接口、转置 host view、多轮往返及相邻内存保护 |
-
-CUDA 上的现有测试入口：
-
-```bash
-PLATFORM=cuda CUDA_VISIBLE_DEVICES=0 \
-DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None PROFILING_DEBUG_LEVEL=0 \
-python -m pytest -q \
-  test_cases/test_block_buffer.py test_cases/test_block_offload_groups.py \
-  test_cases/test_platform_norm_storage.py test_cases/test_platform_quant_storage.py \
-  test_cases/test_platform_weight_copy.py
-```
-
-NPU 上先核对测试 fixture 的平台算子和 skip 条件，再用 `PLATFORM=ascend_npu`、`ASCEND_RT_VISIBLE_DEVICES=0` 运行适用用例。算子 storage contract 在 CUDA 上的验证要标为替代设备测试；只测 projection 或复制的用例不代表执行过完整 NPU block。
-
-MLU 上将命令首行替换为 `PLATFORM=cambricon_mlu MLU_VISIBLE_DEVICES=0 \`；MUSA 上替换为 `PLATFORM=musa MUSA_VISIBLE_DEVICES=0 \`，各自在已配置好厂商运行时的环境中执行。测试按平台注册项选择设备；MUSA 沿用现有 torchada 兼容路径。量化用例只在算子所属平台执行其原生内核；CUDA 可替代验证这些算子的存储和复制，其余平台跳过非本平台算子的设备用例，避免要求无关量化精度支持。不能把替代设备的通过结果当成 MLU/MUSA 原生计算已经通过。
+平台通过 `PLATFORM` 选择：CUDA 为 `cuda`，NPU 为 `ascend_npu`，MLU 为 `cambricon_mlu`，MUSA 为 `musa`；MUSA 沿用 torchada 兼容路径。使用对应设备的可见性环境变量选择单卡。厂商算子的原生内核需要在所属平台验证；在 CUDA 上检查其存储和复制，只能作为替代设备验证，不能等同于目标芯片计算或完整生成通过。
 
 关键不变量：
 

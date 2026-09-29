@@ -61,16 +61,6 @@ CUDA uses SageAttention2, SGL RMSNorm, and H3 Triton RoPE. Ascend uses `npu_flas
 
 `MiniMaxH3TransformerWeights` registers `transformer_blocks.{i}.` and the existing two slots. The model's checkpoint reader records original metadata while preserving its native mixed precision. `BaseTransformerModel`, `BlockLoadPlan`, `BlockBuffer`, and `ContiguousBlockTransfer` perform the common loading and transfer work. `MiniMaxH3OffloadTransformerInfer` keeps the original block loop and synchronization. Platform memory operations stay in `lightx2v_platform`; NVIDIA's device class is unchanged.
 
-Run the storage and scheduler checks with the actual device backend:
-
-```bash
-PLATFORM=cuda CUDA_VISIBLE_DEVICES=0 DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None PROFILING_DEBUG_LEVEL=0 \
-python -m pytest -q test_cases/test_block_buffer.py test_cases/test_block_offload_groups.py
-
-PLATFORM=ascend_npu ASCEND_RT_VISIBLE_DEVICES=0 DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None PROFILING_DEBUG_LEVEL=0 \
-python -m pytest -q test_cases/test_block_buffer.py test_cases/test_block_offload_groups.py
-```
-
-Tests cover H3 metadata/filtering, CPU ownership, stable slots, repeated copies, native block execution across steps/requests, and unsupported combinations. Small synthetic block tests do not establish full model generation support. Compare native baseline/contiguous video and audio latents on each target platform with identical inputs and settings, then inspect decoded outputs. CUDA validation does not establish Ascend 910B correctness; the NPU launchers require validation on that machine.
+Development-only storage and scheduling test scripts are not included in this repository. For validation, run the baseline and contiguous launchers above on each target platform with identical inputs and settings. Compare video and audio latents, then inspect decoded outputs. CUDA validation does not establish Ascend 910B correctness; the NPU launchers require validation on that machine.
 
 Contiguity refers to virtual addresses within each block. It reduces separate allocations and H2D submissions, not the amount of model data or attention computation. Performance must be measured separately after correctness is established.

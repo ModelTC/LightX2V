@@ -2,7 +2,7 @@
 
 English | [简体中文](validation.md)
 
-Select checks according to the change. Documentation or simple script edits do not automatically require full model execution. When storage, copying, or scheduling changes, validate data and lifetimes before generation comparisons. Run the commands below from the repository root in a Python environment matching the target device.
+Select checks according to the change. Documentation or simple script edits do not automatically require full model execution. When storage, copying, or scheduling changes, validate data and lifetimes before generation comparisons. Use a Python environment matching the target device.
 
 ## Entry points and effective configuration
 
@@ -14,30 +14,9 @@ Within a platform, the two configurations should differ only where needed to sel
 
 ## Storage and transfers
 
-Reuse existing tests and add coverage for behavior affected by the change:
+Development-only validation scripts are not distributed with the repository. Inspect the tests actually available in the workspace, then validate storage, copies, and scheduling affected by the change. Do not assume the target machine contains local test files.
 
-| File | Existing coverage |
-|---|---|
-| [test_block_buffer.py](../../../../test_cases/test_block_buffer.py) | External storage boundaries, address alignment, transposed views, pinning, owner lifetimes, asynchronous double buffering, and auxiliary state |
-| [test_block_offload_groups.py](../../../../test_cases/test_block_offload_groups.py) | Wan/Qwen loading versus baseline, ordinary scheduling, multiple groups, original checkpoint dtype, undescribed state, cleanup, and platform import isolation |
-| [test_platform_norm_storage.py](../../../../test_cases/test_platform_norm_storage.py) | Floating Norm template inheritance, parameter-free state, precision, and slot reuse |
-| [test_platform_quant_storage.py](../../../../test_cases/test_platform_quant_storage.py) | Per-channel quantization templates, scale/bias precision, transpose orientation, checkpoint consumption, double buffering, and native-platform MM comparisons |
-| [test_platform_weight_copy.py](../../../../test_cases/test_platform_weight_copy.py) | Platform copy hooks, transposed host views, repeated round trips, and surrounding-memory guards |
-
-Existing CUDA test command:
-
-```bash
-PLATFORM=cuda CUDA_VISIBLE_DEVICES=0 \
-DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None PROFILING_DEBUG_LEVEL=0 \
-python -m pytest -q \
-  test_cases/test_block_buffer.py test_cases/test_block_offload_groups.py \
-  test_cases/test_platform_norm_storage.py test_cases/test_platform_quant_storage.py \
-  test_cases/test_platform_weight_copy.py
-```
-
-For NPU, first inspect platform operators in the fixtures and test skip conditions, then run applicable cases with `PLATFORM=ascend_npu` and `ASCEND_RT_VISIBLE_DEVICES=0`. Label NPU operator storage-contract checks performed on CUDA as substitute-device tests. Tests limited to projection or copying do not establish execution of a complete NPU block.
-
-For MLU, replace the first command line with `PLATFORM=cambricon_mlu MLU_VISIBLE_DEVICES=0 \`; for MUSA, use `PLATFORM=musa MUSA_VISIBLE_DEVICES=0 \`. Run in environments with the corresponding vendor runtime installed. Tests select devices through the platform registry; MUSA retains the existing torchada compatibility path. Quantization tests execute a vendor's native kernel only on its own platform. CUDA can substitute for storage and copy checks; other platforms skip foreign-vendor device cases to avoid requiring unrelated quantization dtypes. Passing substitute-device tests does not validate native MLU/MUSA computation.
+Select the platform through `PLATFORM`: `cuda`, `ascend_npu`, `cambricon_mlu`, or `musa`. MUSA retains the torchada compatibility path. Select a single device with the corresponding visibility environment variable. Vendor kernels require validation on their own platforms; CUDA checks of their storage and copies are substitute-device validation, not proof of target-device computation or complete generation.
 
 Key invariants:
 

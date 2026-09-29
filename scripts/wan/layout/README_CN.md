@@ -77,13 +77,6 @@ BaseTransformerModel._init_offload_manager
 
 当前存储契约覆盖普通浮点 MM/Norm/Tensor、FP8-vLLM、INT8-NPU，以及这些算子的矩阵转置。接口通用不代表任意打包量化格式、权重别名、动态布局或所有模型算子均已适配。连续布局仍不支持共享权重、lazy load、并行、LoRA、CUDA Graph；现有启动脚本保持单卡、eager 和 NoCaching。
 
-可在已配置依赖的 CUDA 机器执行存储与接入检查：
-
-```bash
-PLATFORM=cuda DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None \
-python -m pytest -q test_cases/test_block_buffer.py test_cases/test_block_offload_groups.py
-```
-
-Ascend 上将平台改为 `PLATFORM=ascend_npu`，执行同一命令；CUDA 专属用例会跳过。Ascend 算子的存储测试也可在 CUDA 上检查加载规则，但不能替代 Ascend 实机验证。
+验证时，在目标设备上使用相同权重、输入、seed 和推理参数，运行上面的 baseline 与 contiguous 入口，对比 latents 和解码结果。CUDA 验证不能替代 Ascend 实机验证。开发期的专用存储测试脚本不随仓库发布。
 
 baseline 的 tensor 独立分配，不保证同一 block 内的地址连续。CUDA FP8 路径中部分 scale 的后续 dtype 转换可能使其不再 pinned；实际 pinned 状态由加载结果决定。

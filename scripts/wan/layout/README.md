@@ -77,13 +77,6 @@ Operators that accept `BlockLoadContext` reuse their existing `load` method. Onl
 
 The current contracts cover ordinary floating MM/Norm/Tensor storage, FP8-vLLM, and INT8-NPU operators with floating or quantized matrix transposes. They do not imply support for arbitrary packed quantization formats, tied storage, dynamic layouts, or every operator in every model. Shared weights, lazy loading, parallel execution, LoRA, and CUDA Graph combinations remain unsupported for contiguous layout. These launchers retain single-device eager inference and NoCaching.
 
-Storage and integration checks can be run on a configured CUDA machine:
-
-```bash
-PLATFORM=cuda DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None \
-python -m pytest -q test_cases/test_block_buffer.py test_cases/test_block_offload_groups.py
-```
-
-On Ascend, use `PLATFORM=ascend_npu` with the same command. CUDA-only cases are skipped. The Ascend operator storage tests also run on CUDA for coverage of loading rules; that does not replace Ascend device validation.
+For validation, run the baseline and contiguous launchers above on the target device with identical weights, inputs, seed, and inference settings, then compare latents and decoded outputs. CUDA validation does not replace Ascend device validation. Development-only storage test scripts are not included in this repository.
 
 The baseline allocates tensors independently, so adjacent addresses within a block are not guaranteed. In the CUDA FP8 path, subsequent dtype conversion may leave some scale tensors unpinned; the actual pinned state depends on the loading result.
