@@ -10,7 +10,7 @@ from lightx2v.common.offload.block_layout import BlockLoadContext
 from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.base.offload import copy_to_cpu, get_transposed_weight_copy
+from lightx2v_platform.ops.offload import copy_to_cpu, get_transposed_weight_copy
 
 
 def resolve_block_name(name, block_index, adapter_block_index=None, is_post_adapter=False):

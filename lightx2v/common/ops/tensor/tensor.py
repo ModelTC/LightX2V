@@ -10,7 +10,7 @@ from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import TENSOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.ops.weight_storage import StorageDescription, WeightStorage
+from lightx2v_platform.ops.offload.weight_storage import StorageDescription, WeightStorage
 
 
 @TENSOR_REGISTER("Default")

@@ -96,7 +96,7 @@ class BaseTransformerModel(ABC):
             self._check_dit_quantized()
         self._init_tensor_parallel()
         from lightx2v.common.offload.block_loader import validate_contiguous_config
-        from lightx2v_platform.base.offload import get_block_offload_backend
+        from lightx2v_platform.ops.offload import get_block_offload_backend
 
         validate_contiguous_config(self.config, lora_path)
         self._checkpoint_metadata = None
@@ -354,7 +354,7 @@ class BaseTransformerModel(ABC):
         if self.lazy_load:
             self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
         if self.config.get("cpu_offload_layout") == "contiguous":
-            self.transformer_infer.offload_manager.init_contiguous_groups(self.transformer_weights.iter_offload_groups())
+            self.transformer_infer.offload_manager.init_contiguous_group(self.transformer_weights.offload_group)
 
     def _should_init_empty_model(self):
         """Determine if model should be initialized empty (for LoRA).
@@ -397,13 +397,13 @@ class BaseTransformerModel(ABC):
             gc.collect()
 
         if self._checkpoint_metadata is not None:
-            from lightx2v.common.offload.block_loader import prepare_contiguous_groups, validate_group_checkpoints
+            from lightx2v.common.offload.block_loader import prepare_contiguous_group, validate_group_checkpoints
 
-            groups = tuple(self.transformer_weights.iter_offload_groups())
+            group = self.transformer_weights.offload_group
             if self.config.get("cpu_offload_layout") == "contiguous":
-                prepare_contiguous_groups(groups, self.original_weight_dict, self._checkpoint_metadata)
-            elif not self.lazy_load and not self.config.get("dummy_model"):
-                validate_group_checkpoints(groups, self._checkpoint_metadata)
+                prepare_contiguous_group(group, self.original_weight_dict, self._checkpoint_metadata)
+            elif group is not None and not self.lazy_load and not self.config.get("dummy_model"):
+                validate_group_checkpoints(group, self._checkpoint_metadata)
 
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
@@ -476,7 +476,7 @@ class BaseTransformerModel(ABC):
     def _record_checkpoint_metadata(self, tensors):
         if getattr(self, "_checkpoint_metadata", None) is None:
             return
-        from lightx2v_platform.ops.weight_storage import TensorMetadata
+        from lightx2v_platform.ops.offload.weight_storage import TensorMetadata
 
         for name in tensors.keys():
             if name in self._checkpoint_metadata:

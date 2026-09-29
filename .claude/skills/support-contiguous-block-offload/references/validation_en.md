@@ -23,9 +23,9 @@ Key invariants:
 - Every planned CPU tensor belongs to the target block's storage, has the planned address/offset, dtype, shape, and stride, and is pinned. Reject out-of-bounds access and unconsumed entries explicitly.
 - Baseline tensors can happen to be adjacent because of allocator behavior. Establish contiguous layout from shared storage and the complete layout, not just neighboring pointers. A single tensor's `is_contiguous()` does not establish whole-block contiguity.
 - Both device slots retain correct values and stable addresses after repeated H2D transfers. Auxiliary state follows its block, and the main CPU sources remain unchanged during inference.
-- Cover the first and last blocks, wraparound, the next step, CFG branches, and, where applicable, successive requests and switching between heterogeneous groups.
+- Cover the first and last blocks, wraparound, the next step, CFG branches, and, where applicable, successive requests and isolation between independent managers.
 - Reject incorrect checkpoint precision/shapes, missing or out-of-scope prefixes, duplicate ownership, and unsupported operators before consuming weights. Binding must not escape the planned storage.
-- Close transfers for all groups, not just the currently selected group.
+- Each manager closes its transfer, waiting for unfinished computation and copies before storage is released.
 
 For copies to CPU on NPU, separately check contiguous and transposed/noncontiguous host destinations against original weights after multiple round trips. Data movement is expected to preserve values bit for bit; do not hide copy corruption by relaxing numerical tolerances.
 

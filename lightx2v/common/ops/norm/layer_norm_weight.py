@@ -7,7 +7,7 @@ from safetensors import safe_open
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER
-from lightx2v_platform.ops.weight_storage import FloatingWeightStorage
+from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage
 
 from .triton_ops import norm_infer
 

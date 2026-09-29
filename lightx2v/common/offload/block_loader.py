@@ -1,4 +1,4 @@
-"""Model-independent planning and loading for immutable offload groups."""
+"""Model-independent planning and loading for an immutable offload group."""
 
 from dataclasses import dataclass, replace
 
@@ -7,8 +7,8 @@ import torch
 from lightx2v.common.offload.block_layout import BlockBuffer, BlockLayout, BlockLoadContext
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.base.offload import get_block_offload_backend
-from lightx2v_platform.ops.weight_storage import StorageDescription, TensorMetadata
+from lightx2v_platform.ops.offload import get_block_offload_backend
+from lightx2v_platform.ops.offload.weight_storage import StorageDescription, TensorMetadata
 
 
 @dataclass
@@ -130,32 +130,28 @@ class BlockLoadPlan:
         block.block_auxiliary = {(path, attr): getattr(self.operators[path], attr) for path, attr in self.auxiliary}
 
 
-def prepare_contiguous_groups(groups, sources, metadata=None):
+def prepare_contiguous_group(group, sources, metadata=None):
     """Plan every member before loaders can consume any checkpoint tensors."""
     get_block_offload_backend().prepare()
-    groups = tuple(groups)
-    if not groups:
-        raise ValueError("The model has not declared any block offload groups")
+    if group is None:
+        raise ValueError("The model has not declared a block offload group")
     if metadata is None:
         metadata = {name: TensorMetadata(tuple(tensor.shape), tensor.dtype) for name, tensor in sources.items()}
     else:
         metadata = {name: replace(metadata[name], loaded_dtype=tensor.dtype) for name, tensor in sources.items()}
     plans, owned = [], set()
-    for group in groups:
-        group_plans = []
-        for block, prefix in zip(group.blocks, group.checkpoint_prefixes):
-            plan = BlockLoadPlan(block, metadata, sources.keys(), prefix)
-            names = {spec.name for spec in plan.layout.tensors}
-            if names & owned:
-                raise ValueError(f"Overlapping offload block ownership: {sorted(names & owned)}")
-            owned.update(names)
-            group_plans.append((block, plan))
-        for slot in group.device_slots:
-            group_plans.append((slot, BlockLoadPlan(slot, metadata, sources.keys(), device_buffer=True)))
-        layout = group_plans[0][1].layout
-        if any(plan.layout != layout for _, plan in group_plans):
-            raise ValueError("Block layouts differ within an offload group; declare separate groups")
-        plans.extend(group_plans)
+    for block, prefix in zip(group.blocks, group.checkpoint_prefixes):
+        plan = BlockLoadPlan(block, metadata, sources.keys(), prefix)
+        names = {spec.name for spec in plan.layout.tensors}
+        if names & owned:
+            raise ValueError(f"Overlapping offload block ownership: {sorted(names & owned)}")
+        owned.update(names)
+        plans.append((block, plan))
+    for slot in group.device_slots:
+        plans.append((slot, BlockLoadPlan(slot, metadata, sources.keys(), device_buffer=True)))
+    layout = plans[0][1].layout
+    if any(plan.layout != layout for _, plan in plans):
+        raise ValueError("CPU blocks and device slots must have matching layouts within an offload group")
     for name in owned:
         if sources[name].device.type != "cpu":
             raise ValueError(f"Expected a CPU checkpoint tensor: {name}")
@@ -165,11 +161,10 @@ def prepare_contiguous_groups(groups, sources, metadata=None):
         block._block_load_plan = plan
 
 
-def validate_group_checkpoints(groups, metadata):
+def validate_group_checkpoints(group, metadata):
     """Validate original dtypes even when the ordinary loader already cast them."""
-    for group in groups:
-        for block in group.blocks:
-            for _, leaf in block.named_weight_leaves():
-                validate = getattr(leaf, "validate_checkpoint", None)
-                if validate is not None:
-                    validate(metadata)
+    for block in group.blocks:
+        for _, leaf in block.named_weight_leaves():
+            validate = getattr(leaf, "validate_checkpoint", None)
+            if validate is not None:
+                validate(metadata)

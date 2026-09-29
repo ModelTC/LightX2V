@@ -4,7 +4,7 @@
 
 ## 默认行为与平台隔离
 
-CUDA 路径由 [offload.py](../../../../lightx2v_platform/base/offload.py) 的 `_DEFAULT_BLOCK_OFFLOAD_BACKENDS` 按平台注册名 `cuda` 选择 `TorchBlockOffload`，无需修改 [CudaDevice](../../../../lightx2v_platform/base/nvidia.py)。平台类显式声明的 `block_offload_backend` 优先于默认映射。该 backend 在 CPU 分配 pinned storage，在设备分配字节 buffer，并在当前 stream 提交复制。沿用公共布局和 manager，不另建 CUDA 模型 loader。
+CUDA 路径由 [offload/__init__.py](../../../../lightx2v_platform/ops/offload/__init__.py) 的 `_DEFAULT_BLOCK_OFFLOAD_BACKENDS` 按平台注册名 `cuda` 选择 `TorchBlockOffload`，无需修改 [CudaDevice](../../../../lightx2v_platform/base/nvidia.py)。平台类显式声明的 `block_offload_backend` 优先于默认映射。该 backend 在 CPU 分配 pinned storage，在设备分配字节 buffer，并在当前 stream 提交复制。沿用公共布局和 manager，不另建 CUDA 模型 loader。
 
 修改前记录目标模型未开启连续布局时的配置和关键输出。保留 CUDA 默认算子、checkpoint 转换、精度、shape 和调度；改动公共代码后验证 per-tensor baseline 与 contiguous 两条路径。
 
@@ -29,7 +29,7 @@ baseline 与 contiguous 使用同一平台算子。记录实际传输的是哪�
 
 1. CUDA import isolation：禁止 Ascend 算子模块导入，仍能初始化公共加载和模型权重类。
 2. 两个 slot 的地址稳定、CPU 源保持 pinned；异步复制后按必要同步检查值和 stride。
-3. 注册多个 group 后可正确切换，关闭时所有 transfer 都完成。
+3. 各模型的 manager 独立使用自己的 group，拒绝重复注册或错误 blocks，清理时关闭各自 transfer。
 4. 同配置的 baseline/contiguous 生成对照，以及改动前后 CUDA 默认计算的回归。
 
 仅用小矩阵检查权重复制，不能证明完整 attention、RoPE、文本编码器和 VAE 正确；缩短步数或分辨率的 smoke test 要注明范围。NPU 改动若触及共用函数，CUDA 的上述检查仍需按影响范围覆盖。

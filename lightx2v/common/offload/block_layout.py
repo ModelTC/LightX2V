@@ -73,7 +73,7 @@ class BlockBuffer:
     def allocate(cls, layout, device, backend=None):
         """Allocate independent storage, pinned on CPU, with initialized padding."""
         device = torch.device(device)
-        from lightx2v_platform.base.offload import TorchBlockOffload
+        from lightx2v_platform.ops.offload import TorchBlockOffload
 
         allocator = backend or TorchBlockOffload
         storage = allocator.allocate(layout.nbytes, device)
@@ -135,7 +135,7 @@ class ContiguousBlockTransfer:
     """Copy immutable CPU blocks to two persistent device slots, without packing."""
 
     def __init__(self, blocks, slots, backend=None):
-        from lightx2v_platform.base.offload import get_block_offload_backend
+        from lightx2v_platform.ops.offload import get_block_offload_backend
 
         if not blocks or len(slots) != 2:
             raise ValueError("Contiguous transfer requires CPU blocks and two GPU slots")

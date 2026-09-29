@@ -5,8 +5,8 @@ import torch
 
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.base.offload import copy_to_cpu
-from lightx2v_platform.ops.weight_storage import StorageDescription, WeightStorage, require_dtype
+from lightx2v_platform.ops.offload import copy_to_cpu
+from lightx2v_platform.ops.offload.weight_storage import StorageDescription, WeightStorage, require_dtype
 
 try:
     from lightx2v_kernel.gemm import (

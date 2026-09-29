@@ -1,23 +1,13 @@
 import torch
 import torch.distributed as dist
 
-from lightx2v_platform.base.offload import TorchBlockOffload
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
-
-
-class NpuBlockOffload(TorchBlockOffload):
-    validate_checkpoint = True
-
-    @staticmethod
-    def prepare():
-        # Byte views require ND storage, before any block buffers are created.
-        torch.npu.config.allow_internal_format = False
 
 
 @PLATFORM_DEVICE_REGISTER("ascend_npu")
 class NpuDevice:
     name = "ascend_npu"
-    block_offload_backend = NpuBlockOffload
+    block_offload_backend = "lightx2v_platform.ops.offload.ascend_npu.NpuBlockOffload"
 
     @staticmethod
     def init_device_env():

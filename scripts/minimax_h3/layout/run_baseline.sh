@@ -6,9 +6,6 @@ model_path="${MODEL_PATH:-${lightx2v_path}/models/MiniMax-H3}"
 export PLATFORM=cuda
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 source "${lightx2v_path}/scripts/base/base.sh"
-export DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None PROFILING_DEBUG_LEVEL=0
-
-mkdir -p "${lightx2v_path}/save_results/minimax_h3_layout"
 
 # Generate the matching AdaLN cache before inference; see README.md.
 python -m lightx2v.infer \

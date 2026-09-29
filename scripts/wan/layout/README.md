@@ -54,26 +54,28 @@ Both device block buffers use the same layout. Prefetching transfers the entire 
 ```text
 Model weight container: register_offload_group(blocks, device_slots, prefixes)
   → BaseTransformerModel records original checkpoint metadata before casting
-  → prepare_contiguous_groups
+  → prepare_contiguous_group
     → operator.describe_storage → BlockLayout.build
   → WeightModule.load → BlockLoadPlan.load
     → BlockBuffer.allocate → operator.load / operator.bind_storage
     → Validate views, checkpoint coverage, and pinned storage
 
 BaseTransformerModel._init_offload_manager
-  → init_contiguous_groups
-  → init_first_buffer(blocks): select the group and fill its first slot
+  → init_contiguous_group
+  → init_first_buffer(blocks): fill the first slot
   → prefetch_weights → ContiguousBlockTransfer.copy
   → run_block → swap_blocks
 ```
 
-The loader is model-independent: `lightx2v/common/offload/block_loader.py` plans and binds weights, while `block_layout.py` owns storage and transfer logic. Wan and Qwen Image register their block boundaries and existing device slots through `WeightModule.register_offload_group`. There is no Wan-specific layout loader or model/task whitelist. Each group requires matching tensor layouts and two device slots; different block structures use separate groups. Call `init_first_buffer` at a group boundary before prefetching. The existing model inference code remains responsible for execution order.
+The loader is model-independent: `lightx2v/common/offload/block_loader.py` plans and binds weights, while `block_layout.py` owns storage and transfer logic. Wan and Qwen Image register their block boundaries and existing device slots through `WeightModule.register_offload_group`. There is no Wan-specific layout loader or model/task whitelist. Each weight container and manager owns one `offload_group`, passed directly to `prepare_contiguous_group` and `init_contiguous_group`. Its tensor layouts must match, and it uses two device slots; components with different structures or lifetimes need independent management. Call `init_first_buffer` before prefetching. The existing model inference code remains responsible for execution order.
 
-Operators describe checkpoint names, accepted source dtypes, final shapes/dtypes, transposed views, and auxiliary device state through the storage contract in `lightx2v_platform/ops/weight_storage.py`. Original checkpoint dtypes are retained before the normal loader casts tensors, so incorrect quantized weights cannot pass validation merely because they were cast to BF16. The common loader does not import concrete operator classes or choose operators by device type. Unsupported operators and undeclared state fail during loading; storage that escapes the planned views is rejected.
+Operators describe checkpoint names, accepted source dtypes, final shapes/dtypes, transposed views, and auxiliary device state through the storage contract in `lightx2v_platform/ops/offload/weight_storage.py`. Original checkpoint dtypes are retained before the normal loader casts tensors, so incorrect quantized weights cannot pass validation merely because they were cast to BF16. The common loader does not import concrete operator classes or choose operators by device type. Unsupported operators and undeclared state fail during loading; storage that escapes the planned views is rejected.
 
-Operators that accept `BlockLoadContext` reuse their existing `load` method. Only operators that need different binding behavior implement `bind_storage`. Auxiliary device tensors are recorded once per block or slot and paired when copied; the manager closes every registered transfer group during cleanup.
+Operators that accept `BlockLoadContext` reuse their existing `load` method. Only operators that need different binding behavior implement `bind_storage`. Auxiliary device tensors are recorded once per block or slot and paired when copied; the manager closes its own transfer during cleanup, waiting for computation and copies to finish.
 
-`lightx2v_platform/base/offload.py` selects the memory backend through the existing platform device registry. NVIDIA uses standard PyTorch allocation and asynchronous copies. Ascend reuses those operations and prepares ND storage in its own backend. A new platform must explicitly declare and validate its block-offload backend; a common device type such as `cuda` does not automatically enable an untested platform. CUDA imports do not load Ascend operators. The Ascend strided D2H fix remains in `base/ascend_npu.py`.
+`lightx2v_platform/ops/offload/__init__.py` selects the memory backend through the existing platform device registry. NVIDIA uses standard PyTorch allocation and asynchronous copies. Ascend reuses those operations and prepares ND storage in its own backend. A new platform must explicitly declare and validate its block-offload backend; a common device type such as `cuda` does not automatically enable an untested platform. CUDA imports do not load Ascend operators. The Ascend strided D2H fix remains in `base/ascend_npu.py`.
+
+`ops/offload/` contains the public interface, memory operations in `template.py`, storage descriptions in `weight_storage.py`, and the NPU backend in `ascend_npu.py`. Device classes declare backend module paths, resolved by `get_block_offload_backend()` when used. This avoids importing `ops` during device registration and preserves the existing initialization and operator registration flow in `ops/__init__.py` and `set_ai_device.py`.
 
 The current contracts cover ordinary floating MM/Norm/Tensor storage, FP8-vLLM, and INT8-NPU operators with floating or quantized matrix transposes. They do not imply support for arbitrary packed quantization formats, tied storage, dynamic layouts, or every operator in every model. Shared weights, lazy loading, parallel execution, LoRA, and CUDA Graph combinations remain unsupported for contiguous layout. These launchers retain single-device eager inference and NoCaching.
 

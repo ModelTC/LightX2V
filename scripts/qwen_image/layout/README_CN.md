@@ -15,7 +15,7 @@ bash scripts/qwen_image/layout/run_contiguous.sh
 
 脚本顶部设置项目路径、模型路径和 GPU 编号。模型目录需要包含原始 BF16 的 `transformer/`、`text_encoder/`、`tokenizer/`、`vae/` 等文件；不能使用 FP8 checkpoint 替代 BF16 权重。环境需安装项目 CUDA 依赖，包括 FlashAttention 3、FlashInfer 和 Triton，并使用支持这些算子的 GPU。
 
-默认 T2I、50 步、16:9、CFG 4.0、seed 42，沿用 Qwen 原有 prompt 和计算算子。脚本显式设置 BF16、敏感层跟随主 dtype，并在加载 `base.sh` 后关闭调试计时，避免计时同步影响 offload 调度。
+默认 T2I、50 步、16:9、CFG 4.0、seed 42，沿用 Qwen 原有 prompt 和计算算子。四个脚本的精度和调试计时统一沿用 `base.sh`：精度默认 `DTYPE=BF16`、`SENSITIVE_LAYER_DTYPE=None`，也可通过环境变量覆盖；`PROFILING_DEBUG_LEVEL` 设置为 `2`。Qwen 的图片保存逻辑不会自动创建目录，因此脚本保留推理前创建输出目录的操作。
 
 配置为 `configs/qwen_image/layout/baseline.json` 和 `continuous.json`，仅后者增加 `"cpu_offload_layout": "contiguous"`。Qwen2.5-VL 文本编码器和 VAE 均开启原有整体 CPU offload；连续 block 布局只作用于 DiT。
 
@@ -45,7 +45,7 @@ NPU 脚本自动定位仓库，设置 `PLATFORM=ascend_npu`，默认使用第 0 
 ```text
 register_offload_group
   → BaseTransformerModel._apply_weights
-  → prepare_contiguous_groups → 算子存储描述 → BlockLoadPlan.load
+  → prepare_contiguous_group → 算子存储描述 → BlockLoadPlan.load
   → CPU pinned block 与设备 slot 的 tensor 视图
 
 QwenImageOffloadTransformerInfer

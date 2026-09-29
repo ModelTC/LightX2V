@@ -21,7 +21,7 @@ A contiguous DiT layout does not mean T5, CLIP, and VAE share that layout. The c
 
 [QwenImageTransformerWeights](../../../../lightx2v/models/networks/qwen_image/weights/transformer_weights.py) registers `transformer_blocks.{i}.`. Each block contains four phases: image attention, text attention, joint attention, and FFN. They share one layout; do not treat each phase as a complete block.
 
-Inference uses the existing [QwenImageOffloadTransformerInfer](../../../../lightx2v/models/networks/qwen_image/infer/offload/transformer_infer.py) with the same common groups, storage contracts, and transfer logic. There is no Qwen-specific layout loader.
+Inference uses the existing [QwenImageOffloadTransformerInfer](../../../../lightx2v/models/networks/qwen_image/infer/offload/transformer_infer.py) with the same common group declaration, storage contracts, and transfer logic. There is no Qwen-specific layout loader.
 
 - [CUDA continuous configuration](../../../../configs/qwen_image/layout/continuous.json): the current example uses original Qwen-Image-2512 BF16 weights and `flash_attn3`. Read weights/inference code for other defaults.
 - [NPU continuous configuration](../../../../configs/qwen_image/layout/continuous_npu.json): BF16, `npu_flash_attn`, and PyTorch real RoPE, norm, and modulation.
@@ -35,8 +35,8 @@ The weight directory should contain the original model's `transformer/`, `text_e
 
 | Finding | Where to make the change |
 |---|---|
-| Native block offload and operator contracts already exist | Register model groups, add entry points, and validate |
-| Multiple block structures | Declare groups with compatible blocks/slots and connect group switching |
+| Native block offload and operator contracts already exist | Register the model group, add entry points, and validate |
+| Multiple block structures | Keep compatible blocks/slots in one group; heterogeneous components need independent weight containers, managers, and corresponding scheduling |
 | Operators have extra scales, biases, or device scalars | Operator storage descriptions and any required binding |
 | The target platform lacks the required memory capabilities | Platform backend, with CUDA isolation checks |
 | The text encoder or VAE still has CUDA-only dependencies | That component's configuration or platform operators; DiT layout cannot fix it |

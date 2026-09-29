@@ -53,7 +53,7 @@ python tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py \
 | NVIDIA | `bash scripts/minimax_h3/layout/run_baseline.sh` | `bash scripts/minimax_h3/layout/run_contiguous.sh` |
 | Ascend | `bash scripts/minimax_h3/layout/run_baseline_npu.sh` | `bash scripts/minimax_h3/layout/run_contiguous_npu.sh` |
 
-脚本自动定位仓库，支持 `MODEL_PATH`。设备默认选择第 0 张卡，也可通过对应的可见设备环境变量指定。结果保存在仓库下的 `save_results/minimax_h3_layout/{baseline,contiguous,baseline_npu,contiguous_npu}.mp4`。额外 CLI 参数会转交给推理入口，例如 `--save_result_path /workspace/code/results/h3.mp4`；请先创建输出父目录。
+脚本自动定位仓库，支持 `MODEL_PATH`。设备默认选择第 0 张卡，也可通过对应的可见设备环境变量指定。精度沿用 `scripts/base/base.sh` 的默认值 `DTYPE=BF16`、`SENSITIVE_LAYER_DTYPE=None`，也可通过环境变量覆盖。结果保存在仓库下的 `save_results/minimax_h3_layout/{baseline,contiguous,baseline_npu,contiguous_npu}.mp4`。额外 CLI 参数会转交给推理入口，例如 `--save_result_path /workspace/code/results/h3.mp4`；推理程序会自动创建输出父目录。
 
 CUDA 保留 SageAttention2、SGL RMSNorm 和 H3 Triton RoPE。Ascend 使用 `npu_flash_attn`、`npu_rms_norm`、`minimax_h3_npu_rope`；后者在可用时调用 MindIE-SD，否则使用已有的 torch real-RoPE 实现。NPU 两个变体均保持 `qwen3vl_attn_type=torch_sdpa`，以保留文本编码器的 causal/GQA 语义，VAE 使用 `vae_attn_type=torch_sdpa`。DiT attention 配置不控制文本编码器；当前 NPU flash-attention 包装尚不能直接替代需要因果掩码的文本 attention。
 

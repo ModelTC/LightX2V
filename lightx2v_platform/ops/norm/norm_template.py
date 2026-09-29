@@ -8,7 +8,7 @@ import torch
 from safetensors import safe_open
 
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.ops.weight_storage import FloatingWeightStorage
+from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage
 
 DTYPE_MAP = {
     "BF16": torch.bfloat16,

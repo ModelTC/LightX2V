@@ -38,11 +38,11 @@ description: 为 LightX2V 模型接入、审查和调试 cpu_offload_layout=cont
 ## 架构约束
 
 - 使用 [WeightModule.register_offload_group](../../../lightx2v/common/modules/weight_module.py)、公共 [block_loader.py](../../../lightx2v/common/offload/block_loader.py) 和 [block_layout.py](../../../lightx2v/common/offload/block_layout.py)。不复制 Wan 专用 layout loader 为新模型建立第二套加载系统。
-- CPU 和设备 slots 的布局必须兼容；不同结构分别声明 group。权重所有权不能重叠，未描述的权重或有状态算子不能静默跳过。
+- 每个权重容器和 manager 只持有一个 group，CPU blocks 和设备 slots 的布局必须兼容。权重所有权不能重叠，未描述的权重或有状态算子不能静默跳过。
 - 优先复用算子 `load(BlockLoadContext)`；仅在需要特殊绑定时增加 `bind_storage()`，不新增纯转发包装。
 - 算子选择由配置决定。设备能力通过现有平台注册机制声明；不在模型或公共 loader 中增加逐芯片分支，也不为 Wan/Qwen 新建平台适配模块。
 - NVIDIA 默认算子、精度和未开启连续布局时的行为应保持不变。平台特殊处理放到 `lightx2v_platform`，验证 CUDA 导入隔离和数值回归。
-- 保持源存储存活、slot 覆盖依赖和所有 group 的关闭语义；不能只检查单次 H2D。
+- 保持源存储存活、slot 覆盖依赖和当前 transfer 的关闭语义；不能只检查单次 H2D。
 
 ## 双平台交付
 

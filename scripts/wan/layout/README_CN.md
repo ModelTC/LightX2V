@@ -54,26 +54,28 @@ layout 脚本沿用 `scripts/base/base.sh` 的计时设置，当前为 `PROFILIN
 ```text
 模型权重容器：register_offload_group(blocks, device_slots, prefixes)
   → BaseTransformerModel 在 dtype 转换前记录原始 checkpoint 元数据
-  → prepare_contiguous_groups
+  → prepare_contiguous_group
     → 算子 describe_storage → BlockLayout.build
   → WeightModule.load → BlockLoadPlan.load
     → BlockBuffer.allocate → 算子 load / bind_storage
     → 校验视图、权重覆盖范围和 pinned 状态
 
 BaseTransformerModel._init_offload_manager
-  → init_contiguous_groups
-  → init_first_buffer(blocks)：选择分组并填充首个 slot
+  → init_contiguous_group
+  → init_first_buffer(blocks)：填充首个 slot
   → prefetch_weights → ContiguousBlockTransfer.copy
   → run_block → swap_blocks
 ```
 
-`lightx2v/common/offload/block_loader.py` 统一规划和绑定权重，`block_layout.py` 管理存储和传输。Wan、Qwen Image 通过 `WeightModule.register_offload_group` 声明 block 边界和已有设备 slot，不再有 Wan 专用布局加载器或模型、任务白名单。每组要求 tensor 布局一致，并使用两个设备 slot；不同结构的 block 分组管理。切换分组时，先调用 `init_first_buffer`，再进行预取。执行顺序仍由模型原有推理代码负责。
+`lightx2v/common/offload/block_loader.py` 统一规划和绑定权重，`block_layout.py` 管理存储和传输。Wan、Qwen Image 通过 `WeightModule.register_offload_group` 声明 block 边界和已有设备 slot，不再有 Wan 专用布局加载器或模型、任务白名单。每个权重容器和 manager 只持有一个 `offload_group`，直接传给 `prepare_contiguous_group` 和 `init_contiguous_group`。group 内要求 tensor 布局一致，并使用两个设备 slot；不同结构或生命周期的组件需要独立管理。先调用 `init_first_buffer`，再进行预取。执行顺序仍由模型原有推理代码负责。
 
-算子通过 `lightx2v_platform/ops/weight_storage.py` 中的存储契约描述 checkpoint 名称、允许的原始 dtype、最终 shape/dtype、转置视图和设备辅助状态。普通加载器进行 dtype 转换前会保存原始元数据，避免错误的量化权重转换为 BF16 后通过校验。通用加载器不导入具体算子类，也不根据设备类型选择算子。未适配的算子、未声明的状态会在加载时拒绝；加载后脱离规划存储的 tensor 也会报错。
+算子通过 `lightx2v_platform/ops/offload/weight_storage.py` 中的存储契约描述 checkpoint 名称、允许的原始 dtype、最终 shape/dtype、转置视图和设备辅助状态。普通加载器进行 dtype 转换前会保存原始元数据，避免错误的量化权重转换为 BF16 后通过校验。通用加载器不导入具体算子类，也不根据设备类型选择算子。未适配的算子、未声明的状态会在加载时拒绝；加载后脱离规划存储的 tensor 也会报错。
 
-能接收 `BlockLoadContext` 的算子直接复用原有 `load`，只有需要不同绑定行为的算子实现 `bind_storage`。辅助设备 tensor 按 block 或 slot 各记录一次，复制时配对；管理器清理时关闭所有已注册的传输分组。
+能接收 `BlockLoadContext` 的算子直接复用原有 `load`，只有需要不同绑定行为的算子实现 `bind_storage`。辅助设备 tensor 按 block 或 slot 各记录一次，复制时配对；管理器清理时关闭自己的 transfer，并等待计算与传输完成。
 
-`lightx2v_platform/base/offload.py` 通过现有平台注册表选择内存后端。NVIDIA 使用 PyTorch 分配和异步复制；Ascend 复用这些操作，并在自己的后端准备 ND 存储。新平台需要显式声明并验证 block offload 能力，不能因为设备类型同为 `cuda` 就自动视为已支持。CUDA 导入路径不加载 Ascend 算子；Ascend 的非连续 CPU 目标 D2H 修复仍保留在 `base/ascend_npu.py`。
+`lightx2v_platform/ops/offload/__init__.py` 通过现有平台注册表选择内存后端。NVIDIA 使用 PyTorch 分配和异步复制；Ascend 复用这些操作，并在自己的后端准备 ND 存储。新平台需要显式声明并验证 block offload 能力，不能因为设备类型同为 `cuda` 就自动视为已支持。CUDA 导入路径不加载 Ascend 算子；Ascend 的非连续 CPU 目标 D2H 修复仍保留在 `base/ascend_npu.py`。
+
+`ops/offload/` 集中放置公共入口、`template.py` 内存操作、`weight_storage.py` 存储描述及 `ascend_npu.py` 的 NPU 后端。设备类只声明后端模块路径，使用时由 `get_block_offload_backend()` 解析；避免设备注册阶段提前导入 `ops`，保留 `ops/__init__.py` 和 `set_ai_device.py` 原有的初始化及算子注册流程。
 
 当前存储契约覆盖普通浮点 MM/Norm/Tensor、FP8-vLLM、INT8-NPU，以及这些算子的矩阵转置。接口通用不代表任意打包量化格式、权重别名、动态布局或所有模型算子均已适配。连续布局仍不支持共享权重、lazy load、并行、LoRA、CUDA Graph；现有启动脚本保持单卡、eager 和 NoCaching。
 

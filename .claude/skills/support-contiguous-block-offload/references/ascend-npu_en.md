@@ -21,7 +21,7 @@ Prefer existing NPU implementations or PyTorch implementations available on the 
 
 ## Platform storage interface
 
-[NpuDevice / NpuBlockOffload](../../../../lightx2v_platform/base/ascend_npu.py) provides memory operations through the same [backend interface](../../../../lightx2v_platform/base/offload.py) as CUDA.
+[NpuDevice](../../../../lightx2v_platform/base/ascend_npu.py) declares [NpuBlockOffload](../../../../lightx2v_platform/ops/offload/ascend_npu.py) by its module path. The same [backend interface](../../../../lightx2v_platform/ops/offload/__init__.py) as CUDA resolves it at runtime to provide memory operations.
 
 - The current contiguous layout creates typed views over byte buffers. Call the backend's `prepare()` to request ND storage before constructing the relevant device buffers. Use the common loading flow rather than repeating device settings inside models.
 - Some versions expose only a setter for `torch.npu.config.allow_internal_format`. Record the requested setting and actual tensor format where useful, without relying on a nonexistent getter. Check available interfaces in the target environment.
@@ -30,7 +30,7 @@ Prefer existing NPU implementations or PyTorch implementations available on the 
 
 `NpuDevice.copy_to_cpu()` handles noncontiguous CPU destinations by first completing D2H into a contiguous CPU source, then copying on CPU according to the destination strides. Do not simplify this to a direct asynchronous write into a transposed host view; that previously corrupted offloaded weights during round trips. This fix belongs in the platform copy layer. CUDA should not be forced to perform the same extra copy.
 
-Common D2H helpers dispatch through [offload.py](../../../../lightx2v_platform/base/offload.py) to `NpuDevice.copy_to_cpu()`. Transposed-weight H2D handling likewise belongs to `NpuDevice.copy_transposed_weight_to_device()`. Common code does not add branches by chip name.
+Common D2H helpers dispatch through [offload/__init__.py](../../../../lightx2v_platform/ops/offload/__init__.py) to `NpuDevice.copy_to_cpu()`. Transposed-weight H2D handling likewise belongs to `NpuDevice.copy_transposed_weight_to_device()`. Common code does not add branches by chip name.
 
 Related implementations: [common weight helpers](../../../../lightx2v/common/ops/utils.py), [MM template](../../../../lightx2v_platform/ops/mm/template.py), and [norm template](../../../../lightx2v_platform/ops/norm/norm_template.py). The platform norm templates provide storage descriptions, attribute mappings, and binding for ordinary floating weights; NPU RMSNorm/LayerNorm inherit these. Standard NPU INT8 per-channel storage inherits `MMWeightPerChannelQuantTemplate`, while device-specific quantization and compute kernels remain in the [NPU MM operator](../../../../lightx2v_platform/ops/mm/ascend_npu/mm_weight.py).
 

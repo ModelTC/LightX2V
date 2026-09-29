@@ -3,14 +3,13 @@ import os
 import torch
 import torch.distributed as dist
 
-from lightx2v_platform.base.offload import TorchBlockOffload
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
 @PLATFORM_DEVICE_REGISTER("cambricon_mlu")
 class MluDevice:
     name = "mlu"
-    block_offload_backend = TorchBlockOffload
+    block_offload_backend = "lightx2v_platform.ops.offload.template.TorchBlockOffload"
 
     @staticmethod
     def init_device_env():

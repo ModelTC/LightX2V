@@ -4,7 +4,7 @@ English | [简体中文](cuda.md)
 
 ## Default behavior and platform isolation
 
-The CUDA path selects `TorchBlockOffload` through `_DEFAULT_BLOCK_OFFLOAD_BACKENDS` in [offload.py](../../../../lightx2v_platform/base/offload.py), using the registered platform name `cuda`. It requires no changes to [CudaDevice](../../../../lightx2v_platform/base/nvidia.py). A platform class's explicit `block_offload_backend` takes precedence over the default mapping. This backend allocates pinned CPU storage and device byte buffers and submits copies on the current stream. Reuse the common layout and manager rather than creating a separate CUDA model loader.
+The CUDA path selects `TorchBlockOffload` through `_DEFAULT_BLOCK_OFFLOAD_BACKENDS` in [offload/__init__.py](../../../../lightx2v_platform/ops/offload/__init__.py), using the registered platform name `cuda`. It requires no changes to [CudaDevice](../../../../lightx2v_platform/base/nvidia.py). A platform class's explicit `block_offload_backend` takes precedence over the default mapping. This backend allocates pinned CPU storage and device byte buffers and submits copies on the current stream. Reuse the common layout and manager rather than creating a separate CUDA model loader.
 
 Before changing code, record the target model's configuration and key outputs with contiguous layout disabled. Preserve CUDA's default operators, checkpoint conversions, precision, shapes, and scheduling. After common code changes, validate both the per-tensor baseline and contiguous paths.
 
@@ -29,7 +29,7 @@ Select relevant checks from [Validation](validation_en.md), paying particular at
 
 1. CUDA import isolation: common loading and model weight classes must initialize even when imports of Ascend operator modules are blocked.
 2. Stable addresses for both slots and pinned CPU sources. Synchronize as needed before checking values and strides after asynchronous copies.
-3. Correct switching between multiple registered groups and completion of every transfer during cleanup.
+3. Each model manager uses its own group, rejects duplicate registration or incorrect blocks, and closes its transfer during cleanup.
 4. Baseline/contiguous generation comparisons with matching configurations, plus regression checks for CUDA's default computation before and after the change.
 
 Copying small matrices does not validate complete attention, RoPE, text encoding, or VAE behavior. State the scope of smoke tests with reduced steps or resolution. NPU changes that touch shared functions still require the applicable CUDA checks above.

@@ -6,7 +6,6 @@ model_path="${MODEL_PATH:-${lightx2v_path}/models/Qwen-Image-2512}"
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-0}"
 source "${lightx2v_path}/scripts/base/base.sh"
-export DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None PROFILING_DEBUG_LEVEL=0
 
 mkdir -p "${lightx2v_path}/save_results/qwen_layout"
 

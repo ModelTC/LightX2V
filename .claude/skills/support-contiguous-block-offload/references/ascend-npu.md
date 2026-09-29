@@ -21,7 +21,7 @@
 
 ## 平台存储接口
 
-入口为 [NpuDevice / NpuBlockOffload](../../../../lightx2v_platform/base/ascend_npu.py)，通过与 CUDA 相同的 [backend 接口](../../../../lightx2v_platform/base/offload.py) 提供内存操作。
+设备入口 [NpuDevice](../../../../lightx2v_platform/base/ascend_npu.py) 用模块路径声明 [NpuBlockOffload](../../../../lightx2v_platform/ops/offload/ascend_npu.py)，运行时通过与 CUDA 相同的 [backend 接口](../../../../lightx2v_platform/ops/offload/__init__.py) 加载并提供内存操作。
 
 - 当前连续布局以字节 buffer 建立 typed views，需要在相关设备 buffer 创建前调用 backend 的 `prepare()`，请求 ND 存储。沿用公共加载流程，不在模型中重复设置设备选项。
 - `torch.npu.config.allow_internal_format` 在部分版本只有 setter。可以记录请求设置和实际 tensor 格式，不依赖不存在的 getter；可用接口以目标环境为准。
@@ -30,7 +30,7 @@
 
 `NpuDevice.copy_to_cpu()` 已处理非连续 CPU 目标：先得到完成 D2H 的连续 CPU 源，再由 CPU 按目标 stride 写入。不可简化成直接异步写转置 host view；此前该问题会造成 offload 权重往返后损坏。这个修复属于平台复制层，CUDA 路径不应被迫采用相同额外复制。
 
-公共 D2H 工具通过 [offload.py](../../../../lightx2v_platform/base/offload.py) 分派到 `NpuDevice.copy_to_cpu()`；转置权重 H2D 的处理同样收口到 `NpuDevice.copy_transposed_weight_to_device()`。公共代码不按芯片名称增加分支。
+公共 D2H 工具通过 [offload/__init__.py](../../../../lightx2v_platform/ops/offload/__init__.py) 分派到 `NpuDevice.copy_to_cpu()`；转置权重 H2D 的处理同样收口到 `NpuDevice.copy_transposed_weight_to_device()`。公共代码不按芯片名称增加分支。
 
 相关实现：[公共权重工具](../../../../lightx2v/common/ops/utils.py)、[MM 模板](../../../../lightx2v_platform/ops/mm/template.py)、[norm 模板](../../../../lightx2v_platform/ops/norm/norm_template.py)。普通浮点 Norm 的存储描述、属性映射和绑定由平台 norm 模板提供；NPU RMSNorm/LayerNorm 直接继承。NPU INT8 的标准逐通道存储继承 `MMWeightPerChannelQuantTemplate`，芯片特有的量化与计算内核留在 [NPU MM 算子](../../../../lightx2v_platform/ops/mm/ascend_npu/mm_weight.py)。
 

@@ -17,9 +17,8 @@ class WeightAsyncStreamManager(object):
         self.init_stream = torch_device_module.Stream(priority=0)
         self.need_init_first_buffer = True
         self.lazy_load = False
-        self.contiguous_groups = {}
+        self.contiguous_group = None
         self.contiguous_transfer = None
-        self.active_contiguous_group = None
         torch_version = parse(torch.__version__.split("+")[0])
         # Legacy name: this is the active device backend's weight-loading stream, not a CUDA-only stream.
         if PLATFORM == "cuda" and torch_version >= parse("2.7"):
@@ -51,27 +50,19 @@ class WeightAsyncStreamManager(object):
         else:
             raise NotImplementedError
 
-    def init_contiguous_groups(self, groups):
+    def init_contiguous_group(self, group):
         from lightx2v.common.offload.block_layout import ContiguousBlockTransfer
 
-        self.contiguous_groups = {}
-        for group in groups:
-            slots = list(group.device_slots)
-            self.contiguous_groups[id(group.blocks)] = (slots, ContiguousBlockTransfer(group.blocks, slots))
-            logger.info(f"contiguous block offload: {len(group.blocks)} CPU buffers, {group.blocks[0].block_buffer.layout.nbytes} bytes/block, two device slots")
-        if not self.contiguous_groups:
-            raise ValueError("No contiguous offload groups were registered")
-        self.active_contiguous_group = None
+        if group is None:
+            raise ValueError("No contiguous offload group was registered")
+        if self.contiguous_transfer is not None:
+            raise ValueError("An offload manager can initialize only one contiguous group")
+        slots = list(group.device_slots)
+        self.contiguous_transfer = ContiguousBlockTransfer(group.blocks, slots)
+        self.contiguous_group = group
+        self.cuda_buffers = slots
+        logger.info(f"contiguous block offload: {len(group.blocks)} CPU buffers, {group.blocks[0].block_buffer.layout.nbytes} bytes/block, two device slots")
         self.need_init_first_buffer = True
-
-    def _select_contiguous_group(self, blocks):
-        key = id(blocks)
-        if key != self.active_contiguous_group:
-            if self.active_contiguous_group is not None:
-                self.cuda_load_stream.synchronize()
-                self.compute_stream.synchronize()
-            self.cuda_buffers, self.contiguous_transfer = self.contiguous_groups[key]
-            self.active_contiguous_group = key
 
     def _sync(self):
         """Synchronize to ensure memory visibility across streams.
@@ -86,8 +77,8 @@ class WeightAsyncStreamManager(object):
             self.init_stream.synchronize()
 
     def init_first_buffer(self, blocks, adapter_block_idx=None):
-        if self.contiguous_groups:
-            self._select_contiguous_group(blocks)
+        if self.contiguous_group is not None and blocks is not self.contiguous_group.blocks:
+            raise ValueError("Expected the blocks registered with this offload manager")
         with torch_device_module.stream(self.init_stream):
             if self.contiguous_transfer is not None:
                 self.contiguous_transfer.copy(0, self.cuda_buffers[0])
@@ -105,8 +96,8 @@ class WeightAsyncStreamManager(object):
         self.need_init_first_buffer = False
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
-        if self.contiguous_groups and id(blocks) != self.active_contiguous_group:
-            raise ValueError("Call init_first_buffer at each offload group boundary before prefetching")
+        if self.contiguous_group is not None and blocks is not self.contiguous_group.blocks:
+            raise ValueError("Expected the blocks registered with this offload manager")
         with torch_device_module.stream(self.cuda_load_stream):
             if self.contiguous_transfer is not None:
                 self.contiguous_transfer.copy(block_idx, self.cuda_buffers[1])
@@ -183,12 +174,11 @@ class WeightAsyncStreamManager(object):
         self.cpu_buffers = [self.cpu_buffers[1], self.cpu_buffers[0]]
 
     def __del__(self):
-        groups = getattr(self, "contiguous_groups", {})
-        if groups:
+        transfer = getattr(self, "contiguous_transfer", None)
+        if transfer is not None:
             try:
                 self.compute_stream.synchronize()
-                for _, transfer in groups.values():
-                    transfer.close()
+                transfer.close()
             except RuntimeError as error:
                 logger.warning("Failed to synchronize contiguous block offload during cleanup: {}", error)
         if hasattr(self, "executor") and self.executor is not None:

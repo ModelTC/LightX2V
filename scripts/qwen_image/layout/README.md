@@ -15,7 +15,7 @@ bash scripts/qwen_image/layout/run_contiguous.sh
 
 Set the repository path, model path, and GPU index at the top of each script. The model directory must contain the original BF16 `transformer/`, `text_encoder/`, `tokenizer/`, `vae/`, and related files. An FP8 checkpoint cannot replace the BF16 weights. Install the project's CUDA dependencies, including FlashAttention 3, FlashInfer, and Triton, and use a GPU supported by those operators.
 
-Defaults are T2I, 50 steps, 16:9, CFG 4.0, and seed 42, with the existing Qwen prompt and compute operators. Both scripts explicitly select BF16 with matching sensitive-layer precision and disable debug timing after sourcing `base.sh`, avoiding timing synchronizations in the offload schedule.
+Defaults are T2I, 50 steps, 16:9, CFG 4.0, and seed 42, with the existing Qwen prompt and compute operators. All four scripts inherit precision and debug timing settings from `base.sh`: precision defaults to `DTYPE=BF16` and `SENSITIVE_LAYER_DTYPE=None` unless set in the environment; `PROFILING_DEBUG_LEVEL` is set to `2`. The scripts create the output directory before inference because the Qwen image-saving code does not create it.
 
 The configs are `configs/qwen_image/layout/baseline.json` and `continuous.json`. Their only difference is `"cpu_offload_layout": "contiguous"` in the latter. Both enable the existing whole-model CPU offload for the Qwen2.5-VL text encoder and VAE; contiguous block storage applies only to the DiT.
 
@@ -45,7 +45,7 @@ Outputs are `save_results/qwen_layout/baseline_npu.png` and `continuous_npu.png`
 ```text
 register_offload_group
   → BaseTransformerModel._apply_weights
-  → prepare_contiguous_groups → operator storage descriptions → BlockLoadPlan.load
+  → prepare_contiguous_group → operator storage descriptions → BlockLoadPlan.load
   → tensor views in pinned CPU blocks and device slots
 
 QwenImageOffloadTransformerInfer

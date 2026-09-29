@@ -38,11 +38,11 @@ Use current source files and function names instead of historical line numbers. 
 ## Architecture constraints
 
 - Use [WeightModule.register_offload_group](../../../lightx2v/common/modules/weight_module.py), the common [block_loader.py](../../../lightx2v/common/offload/block_loader.py), and [block_layout.py](../../../lightx2v/common/offload/block_layout.py). Do not copy the former Wan-specific layout loader into a second loading system for another model.
-- CPU blocks and device slots must have compatible layouts. Declare separate groups for different structures. Weight ownership must not overlap, and undescribed weights or stateful operators must not be silently skipped.
+- Each weight container and manager owns one group. CPU blocks and device slots must have compatible layouts. Weight ownership must not overlap, and undescribed weights or stateful operators must not be silently skipped.
 - Prefer reusing an operator's `load(BlockLoadContext)`. Add `bind_storage()` only when special binding is needed; avoid wrappers that merely forward calls.
 - Operator selection belongs in configuration. Declare device capabilities through the existing platform registration mechanism. Do not add per-chip branches to models or the common loader, or create platform adapter modules specifically for Wan/Qwen.
 - Preserve NVIDIA's default operators, precision, and behavior when contiguous layout is disabled. Keep platform-specific handling in `lightx2v_platform` and check CUDA import isolation and numerical regressions.
-- Preserve source storage lifetimes, dependencies before overwriting slots, and cleanup of every group. A single successful H2D copy is insufficient validation.
+- Preserve source storage lifetimes, dependencies before overwriting slots, and cleanup of the current transfer. A single successful H2D copy is insufficient validation.
 
 ## Delivering both platform paths
 

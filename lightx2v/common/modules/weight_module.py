@@ -5,17 +5,14 @@ class WeightModule:
     def __init__(self):
         self._modules = {}
         self._parameters = {}
-        self._offload_groups = {}
+        self.offload_group = None
 
-    def register_offload_group(self, name, blocks, device_slots, checkpoint_prefixes):
+    def register_offload_group(self, blocks, device_slots, checkpoint_prefixes):
         from lightx2v.common.offload.block_loader import OffloadGroup
 
-        if name in self._offload_groups:
-            raise ValueError(f"Duplicate offload group: {name}")
-        self._offload_groups[name] = OffloadGroup(blocks, device_slots, tuple(checkpoint_prefixes))
-
-    def iter_offload_groups(self):
-        return iter(self._offload_groups.values())
+        if self.offload_group is not None:
+            raise ValueError("A weight container can register only one offload group")
+        self.offload_group = OffloadGroup(blocks, device_slots, tuple(checkpoint_prefixes))
 
     def is_empty(self):
         return len(self._modules) == 0 and len(self._parameters) == 0

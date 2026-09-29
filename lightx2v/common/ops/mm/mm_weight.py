@@ -33,7 +33,7 @@ from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.ops.weight_storage import FloatingWeightStorage, StorageDescription, WeightStorage, require_dtype
+from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage, StorageDescription, WeightStorage, require_dtype
 
 try:
     from lightx2v_kernel.gemm import (

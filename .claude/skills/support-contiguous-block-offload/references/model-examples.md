@@ -21,7 +21,7 @@ DiT 连续布局不表示 T5、CLIP、VAE 都使用相同布局。当前 GPU 和
 
 [QwenImageTransformerWeights](../../../../lightx2v/models/networks/qwen_image/weights/transformer_weights.py) 注册 `transformer_blocks.{i}.`。一个 block 包含 image attention、text attention、joint attention 和 FFN 四个 phase，它们共同进入一个 layout；不能将四个 phase 各自当成一个完整 block。
 
-推理沿用 [QwenImageOffloadTransformerInfer](../../../../lightx2v/models/networks/qwen_image/infer/offload/transformer_infer.py)，使用同一套公共 group、storage contract 和传输逻辑，没有 Qwen 专用布局加载器。
+推理沿用 [QwenImageOffloadTransformerInfer](../../../../lightx2v/models/networks/qwen_image/infer/offload/transformer_infer.py)，使用同一套公共 group 声明、storage contract 和传输逻辑，没有 Qwen 专用布局加载器。
 
 - [CUDA continuous 配置](../../../../configs/qwen_image/layout/continuous.json)：当前 Qwen-Image-2512 原始 BF16 示例，attention 为 `flash_attn3`，其他默认值从 weights/infer 读取。
 - [NPU continuous 配置](../../../../configs/qwen_image/layout/continuous_npu.json)：BF16、`npu_flash_attn`、PyTorch real RoPE/norm/调制。
@@ -36,7 +36,7 @@ DiT 连续布局不表示 T5、CLIP、VAE 都使用相同布局。当前 GPU 和
 | 发现的情况 | 接入位置 |
 |---|---|
 | 原生 block offload 和算子契约都齐全 | 模型注册 group，补入口及验证 |
-| 多种 block 结构 | 分组声明布局兼容的 blocks/slots，并接通 group 切换 |
+| 多种 block 结构 | 同一 group 只容纳布局兼容的 blocks/slots；异构组件需要独立的权重容器、manager 及对应调度 |
 | 算子有额外 scale、bias 或设备标量 | 算子存储描述及必要绑定 |
 | 目标平台缺少内存能力 | 平台 backend；同时验证 CUDA 隔离 |
 | 文本编码器或 VAE 仍有 CUDA 专用依赖 | 对应组件的配置或平台算子，不能靠 DiT layout 修复 |

@@ -23,9 +23,9 @@
 - 每个计划中的 CPU tensor 属于目标 block 的 storage，地址与 offset、dtype、shape、stride 一致且已 pin；越界或未消费项明确失败。
 - baseline tensor 可能因分配器碰巧相邻。判断连续布局看共同 storage 与完整布局，不能只看相邻指针，也不能把单个 tensor 的 `is_contiguous()` 当成整个 block 连续。
 - 两个设备 slots 重复 H2D 后值正确、地址稳定，辅助状态跟随对应 block；主 CPU 源在推理期间不改变。
-- 覆盖首块、末块、回绕、下一 step、CFG 分支，以及适用的连续请求和异构 group 切换。
+- 覆盖首块、末块、回绕、下一 step、CFG 分支，以及适用的连续请求和独立 manager 之间的隔离。
 - 错误 checkpoint 精度、shape、前缀遗漏/越界、重复所有权及不支持算子在消费权重前失败；计划完成后的绑定不能逃离预分配 storage。
-- 所有 group 的 transfer 均正确关闭，不能只清理当前选中的 group。
+- manager 关闭自己的 transfer，释放存储前等待未完成的计算与传输。
 
 涉及 NPU CPU 目标拷贝时单独检查连续和转置/非连续 host 目标，多轮往返后与原始权重比较。数据移动预期保持逐位一致；不要用放宽数值容差掩盖复制损坏。
 

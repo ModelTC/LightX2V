@@ -210,5 +210,5 @@ class MiniMaxH3TransformerWeights(WeightModule):
             # needs checkpoint metadata that normal CPU loading consumes.
             self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
             self.offload_phase_cuda_buffers = None
-            self.register_offload_group("blocks", self.blocks, self.offload_block_cuda_buffers, (f"transformer_blocks.{i}." for i in range(len(self.blocks))))
+            self.register_offload_group(self.blocks, self.offload_block_cuda_buffers, (f"transformer_blocks.{i}." for i in range(len(self.blocks))))
         self.add_module("blocks", self.blocks)
