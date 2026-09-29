@@ -4,17 +4,12 @@ from collections import deque
 
 import numpy as np
 
+from simulator.sim.bench.backends import get_benchmark_backend
 from simulator.sim.bench.results import atomic_json, result_path
 
 
 def make_environment(cfg, task):
-    if cfg["benchmark"] == "robotwin":
-        from simulator.robotwin_node.bench.adapter import RoboTwinAdapter as Adapter
-    elif cfg["benchmark"] == "libero_plus":
-        from simulator.libero_node.bench.plus import LiberoPlusAdapter as Adapter
-    else:
-        from simulator.libero_node.bench.adapter import LiberoAdapter as Adapter
-    return Adapter(cfg, task)
+    return get_benchmark_backend(cfg["benchmark"]).create_adapter(cfg, task)
 
 
 def run_task(cfg, task, policy):
@@ -25,8 +20,8 @@ def run_task(cfg, task, policy):
     torch.manual_seed(cfg["seed"])
     evaluation = cfg["EVALUATION"]
     # Older queued jobs have no flag: preserve their original evaluation path.
-    skip_observation = cfg["benchmark"] == "robotwin" and evaluation.get("skip_get_obs_within_replan", False)
-    trials = evaluation["eval_num_episodes"] if cfg["benchmark"] == "robotwin" else evaluation["num_trials"]
+    skip_observation = evaluation.get("skip_get_obs_within_replan", False)
+    trials = get_benchmark_backend(cfg["benchmark"]).num_trials(cfg)
     result = {"task": task, "status": "running", "episodes": [], "error": None}
     path = result_path(evaluation["output_dir"], task)
     environment = None

@@ -9,6 +9,7 @@ base_ckpt="${BASE_CKPT:-/path/to/libero/base_checkpoint.pt}"
 lora_path="${LORA_PATH:-/path/to/libero/checkpoint-000030000}"
 dataset_stats_path="${DATASET_STATS_PATH:-/path/to/libero/dataset_stats.json}"
 python_bin="${PYTHON_BIN:-python}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/realtimewam/libero_fasterwam_teacher.json}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=2
@@ -24,25 +25,20 @@ cd "${lightx2v_path}"
 
 output_dir="${OUT:-}"
 if [[ -z "${output_dir}" ]]; then
+    config_name="${config_json##*/}"
     mkdir -p "${lightx2v_path}/evaluate_results/libero_plus"
-    output_dir=$(mktemp -d "${lightx2v_path}/evaluate_results/libero_plus/realtimewam_teacher_ema30000_1step_XXXXXX")
+    output_dir=$(mktemp -d "${lightx2v_path}/evaluate_results/libero_plus/${config_name%.json}_XXXXXX")
 fi
 mkdir -p "${output_dir}"
 
 "${python_bin}" -u scripts/bench/robotics/run_libero_plus.py \
-    model=realtimewam \
-    model.backbone=fasterwam \
-    model.sampler=teacher_flow \
+    config_json="${config_json}" \
     model.lora_weights=ema \
     base_ckpt="${base_ckpt}" \
     lora_path="${lora_path}" \
     ckpt=null \
     model.model_path="${model_path}" \
     EVALUATION.dataset_stats_path="${dataset_stats_path}" \
-    EVALUATION.num_inference_steps=1 \
-    EVALUATION.action_infer_mode=one_pass_future_cache \
-    EVALUATION.sigma_shift=5.0 \
-    EVALUATION.replan_steps=10 \
     EVALUATION.num_trials=1 \
     MULTIRUN.num_gpus=8 \
     MULTIRUN.max_tasks_per_gpu=2 \

@@ -9,6 +9,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+from simulator.sim.bench.backends import get_benchmark_backend
 from simulator.sim.bench.config import ROOT, load_config
 from simulator.sim.bench.results import atomic_json, result_path, summarize
 
@@ -26,7 +27,7 @@ def gpu_slots(cfg):
 def validate_paths(cfg):
     if not cfg["EVALUATION"]["output_dir"]:
         raise ValueError("Set OUT or EVALUATION.output_dir")
-    required = [cfg["EVALUATION"]["robotwin_root" if cfg["benchmark"] == "robotwin" else "libero_root"]]
+    required = get_benchmark_backend(cfg["benchmark"]).required_paths(cfg)
     if not cfg["model"]["factory"]:
         required += [cfg["base_ckpt"] or cfg["ckpt"], cfg["model"]["model_path"], cfg["EVALUATION"]["dataset_stats_path"]]
     if cfg["lora_path"]:
@@ -37,11 +38,7 @@ def validate_paths(cfg):
 
 
 def discover(cfg):
-    if cfg["benchmark"] == "robotwin":
-        from simulator.robotwin_node.bench.adapter import discover_tasks
-    else:
-        from simulator.libero_node.bench.adapter import discover_tasks
-    tasks = discover_tasks(cfg)
+    tasks = get_benchmark_backend(cfg["benchmark"]).discover_tasks(cfg)
     ratio = cfg["MULTIRUN"]["task_sample_ratio"]
     if ratio < 1:
         tasks = random.Random(cfg["seed"]).sample(tasks, max(1, int(len(tasks) * ratio)))
@@ -70,6 +67,7 @@ def run(cfg):
 
 
 def _run_locked(cfg, slots, output):
+    backend = get_benchmark_backend(cfg["benchmark"])
     tasks = discover(cfg)
     effective = json.loads(json.dumps(cfg))
     effective["EVALUATION"].pop("resume")
@@ -118,7 +116,7 @@ def _run_locked(cfg, slots, output):
     queue = deque(remaining[i : i + size] for i in range(0, len(remaining), size))
     free_slots = deque(slots)
     active, failures = [], []
-    trials = cfg["EVALUATION"]["eval_num_episodes"] if cfg["benchmark"] == "robotwin" else cfg["EVALUATION"]["num_trials"]
+    trials = backend.num_trials(cfg)
     job_index = 0
     old_term = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     try:
@@ -131,20 +129,7 @@ def _run_locked(cfg, slots, output):
                 log = log_path.open("a")
                 env = os.environ.copy()
                 env.update(CUDA_VISIBLE_DEVICES=gpu, PYTHONUNBUFFERED="1", OMP_NUM_THREADS=env.get("OMP_NUM_THREADS", "2"), OPENBLAS_NUM_THREADS="1")
-                if cfg["benchmark"] == "robotwin" and env.get("ROBOTWIN_NVIDIA_GL_ROOT"):
-                    gl_root = Path(env["ROBOTWIN_NVIDIA_GL_ROOT"])
-                    libgl = next((p for p in (gl_root / "libGL.so.1", gl_root / "libGL.so.1.7.0") if p.is_file()), None)
-                    if libgl:
-                        env["LD_PRELOAD"] = ":".join(filter(None, (str(libgl), env.get("LD_PRELOAD"))))
-                    icd = gl_root / "nvidia_icd_abs.json"
-                    if icd.is_file():
-                        env["VK_ICD_FILENAMES"] = str(icd)
-                if cfg["benchmark"] != "robotwin":
-                    env.setdefault("MUJOCO_GL", "egl")
-                    env.setdefault("PYOPENGL_PLATFORM", env["MUJOCO_GL"])
-                    # Let robosuite select from CUDA_VISIBLE_DEVICES. Forcing
-                    # EGL=0 breaks its physical-device assertion on GPUs 1+.
-                    env.pop("MUJOCO_EGL_DEVICE_ID", None)
+                backend.worker_environment(env)
                 # Workers import the same repository-local simulator and policy code.
                 python_paths = [str(ROOT), str(ROOT / "lightx2v_ros/src/simulator"), str(ROOT / "lightx2v_ros/src/common")]
                 env["PYTHONPATH"] = os.pathsep.join(python_paths + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
@@ -192,7 +177,7 @@ def _run_locked(cfg, slots, output):
 def main(benchmark):
     if "--help" in sys.argv[1:]:
         print(
-            "Usage: python scripts/bench/robotics/run_<benchmark>.py model=realtimewam base_ckpt=/base.pt lora_path=/lora model.model_path=/Wan EVALUATION.dataset_stats_path=/stats.json EVALUATION.output_dir=/results [key=value ...]\nDefaults: configs/bench/robotics/eval.yaml. dry_run=true lists tasks without model inference."
+            "Usage: python scripts/bench/robotics/run_<benchmark>.py config_json=/path/to/model_profile.json base_ckpt=/base.pt lora_path=/lora model.model_path=/Wan EVALUATION.dataset_stats_path=/stats.json EVALUATION.output_dir=/results [key=value ...]\nDefaults: configs/bench/robotics/eval.yaml and the benchmark's bench/config.py. Model profiles: configs/fastwam and configs/realtimewam. dry_run=true lists tasks without model inference."
         )
         return
     run(load_config(benchmark, sys.argv[1:]))

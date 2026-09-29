@@ -10,8 +10,9 @@ from pathlib import Path
 
 import numpy as np
 
+from simulator.robotwin_node.bench.config import ROBOTWIN_ROOT
 from simulator.robotwin_node.bench.seed_cache import SeedCache, find_validated_seed
-from simulator.sim.bench.config import ROBOTWIN_ROOT, ROOT
+from simulator.sim.bench.config import ROOT
 from simulator.sim.bench.interfaces import Observation
 
 
@@ -28,8 +29,6 @@ def discover_tasks(cfg):
     if not names:
         raise ValueError("No RoboTwin tasks; set MULTIRUN.task_names=[task,...]")
     phases = cfg["MULTIRUN"]["phases"]
-    if set(phases) - {"clean", "random"}:
-        raise ValueError("RoboTwin phases must be clean/random")
     return [{"key": f"{phase}/{name}", "task_name": name, "phase": phase, "category": None, "suite": None} for phase in phases for name in names]
 
 
