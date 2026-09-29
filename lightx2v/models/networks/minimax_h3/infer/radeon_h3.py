@@ -18,6 +18,14 @@ def apply_modulation(inputs, scale, shift, indices):
     return inputs * (1.0 + scale.index_select(0, indices)) + shift.index_select(0, indices)
 
 
+def norm_modulation(norm, hidden_states, scale, shift, indices):
+    if enabled("LOSSLESS") and enabled("RMS_MOD") and type(norm).__name__ == "RMSWeightNative":
+        from aiter.ops.gfx1201.h3_ops import rms_modulate
+
+        return rms_modulate(hidden_states, norm._get_actual_weight(), scale, shift, indices, norm.eps)
+    return apply_modulation(norm.apply(hidden_states), scale, shift, indices)
+
+
 def project_attention(owner, module, inputs, residual, gate, indices, workspace):
     if enabled("OUT_PROJECTION"):
         weight = local_weight(module, owner.tp_group, "row", (3584, 5376))
@@ -89,6 +97,10 @@ def local_weight(module, group, split, shape):
 
 
 def infer_block(owner, weights, hidden_states, pre_infer_out, modulation):
+    if pre_infer_out.sequence_parallel_state is not None:
+        from .radeon_sp import infer_block as sequence_parallel_block
+
+        return sequence_parallel_block(owner, weights, hidden_states, pre_infer_out, modulation)
     if owner.tp_size != 2 or owner.seq_p_group is not None or pre_infer_out.sequence_parallel_state is not None:
         raise ValueError("Radeon H3 block fusion requires TP2 without sequence parallelism")
     if hidden_states.dtype != torch.bfloat16 or owner.hidden_size != 5376 or owner.num_heads != 28 or owner.head_dim != 128:
@@ -104,7 +116,7 @@ def infer_block(owner, weights, hidden_states, pre_infer_out, modulation):
     shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = modulation.chunk(6, dim=-1)
     indices = pre_infer_out.adaln_indices
     with record_function("radeon_h3.norm_modulation.attn"):
-        normed = apply_modulation(weights.norm1.apply(hidden_states), scale_msa, shift_msa, indices)
+        normed = norm_modulation(weights.norm1, hidden_states, scale_msa, shift_msa, indices)
     with record_function("radeon_h3.attention"):
         attention = norm_rope_attention(owner, weights.attn, normed, pre_infer_out)
         if attention is None:
@@ -113,7 +125,7 @@ def infer_block(owner, weights, hidden_states, pre_infer_out, modulation):
         hidden_states = project_attention(owner, weights.attn.to_out, attention, hidden_states, gate_msa, indices, workspace)
     del attention, normed
     with record_function("radeon_h3.norm_modulation.ffn"):
-        normed = apply_modulation(weights.norm2.apply(hidden_states), scale_mlp, shift_mlp, indices)
+        normed = norm_modulation(weights.norm2, hidden_states, scale_mlp, shift_mlp, indices)
     with record_function("radeon_h3.ffn_reduce_residual"):
         output = feed_forward(owner, weights.ff, normed, hidden_states, gate_mlp, indices, workspace)
     if not getattr(owner, "_radeon_active_reported", False):

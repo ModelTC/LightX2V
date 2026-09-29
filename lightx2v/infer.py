@@ -222,6 +222,10 @@ def main():
         platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
         platform_device.init_parallel_env()
         init_parallel(startup_config)
+    if startup_config.get("radeon_gfx1201_h3", False) and startup_config.get("model_cls") == "minimax_h3":
+        from lightx2v.models.runners.minimax_h3.radeon_runtime import install
+
+        install(startup_config)
 
     print_config(startup_config, title="Startup config")
 

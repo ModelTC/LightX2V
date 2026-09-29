@@ -573,6 +573,10 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
+        if self.config.get("radeon_gfx1201_h3", False):
+            from .infer.radeon_sp import pre_process
+
+            return pre_process(self, pre_infer_out)
         world_size = dist.get_world_size(self.seq_p_group)
         rank = dist.get_rank(self.seq_p_group)
         total_length = pre_infer_out.hidden_states.shape[0]
@@ -613,6 +617,10 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     @torch.no_grad()
     def _seq_parallel_post_process(self, output, pre_infer_out):
+        if self.config.get("radeon_gfx1201_h3", False):
+            from .infer.radeon_sp import post_process
+
+            return post_process(self, output, pre_infer_out)
         state = pre_infer_out.sequence_parallel_state
         if state is None:
             raise RuntimeError("MiniMax-H3 sequence-parallel metadata is missing")
