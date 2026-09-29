@@ -5,7 +5,7 @@
   "action_chunk_size": 32,
   "actions_per_plan": 10,
   "num_steps_wait": 30,
-  "action_infer_steps": 10,
+  "action_infer_steps": 20,
   "action_sample_shift": 5,
   "action_dim_hidden": 1024,
   "action_dim": 7,
