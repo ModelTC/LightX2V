@@ -12,12 +12,11 @@ def parse_args():
     )
     parser.add_argument("--model_path", required=True, help="MiniMax-H3 model root")
     parser.add_argument("--config_json", required=True, help="Inference JSON config")
-    parser.set_defaults(model_cls="minimax_h3")
+    parser.add_argument("--model_cls", choices=("minimax_h3", "minimax_h3_causal"), default="minimax_h3")
     parser.add_argument(
         "--model-variant",
-        required=True,
         choices=("fl2av", "ref2av"),
-        help="Select the base (fl2av) or reference (ref2av) transformer cache profiles",
+        help="Select the base (fl2av) or reference (ref2av) transformer cache profiles for minimax_h3",
     )
     return parser.parse_args()
 
@@ -27,6 +26,7 @@ def main() -> None:
     config = build_startup_config(
         {
             "model_cls": args.model_cls,
+            "task": "refa2v" if args.model_cls == "minimax_h3_causal" else None,
             "model_variant": args.model_variant,
             "model_path": args.model_path,
             "config_json": args.config_json,

@@ -1357,3 +1357,69 @@ def batch_kmeans_rapidai(x, n_clusters, max_iters=100, tol=1e-4, init_centroids=
     cluster_sizes.scatter_add_(1, cluster_ids, ones)
 
     return cluster_ids, centroids, cluster_sizes, n_iters_list
+
+
+@triton.jit
+def _permute_kernel(
+    X_ptr,
+    IDX_ptr,
+    Y_ptr,
+    S: tl.constexpr,
+    D: tl.constexpr,
+    BLOCK_S: tl.constexpr,
+):
+    """Each program permutes BLOCK_S tokens *all* hidden features (D). No inner python loop."""
+
+    pid_bh = tl.program_id(0)
+    tile_s = tl.program_id(1)
+
+    # Offsets along sequence
+    s_offsets = tile_s * BLOCK_S + tl.arange(0, BLOCK_S)
+    token_mask = s_offsets < S
+
+    # Gather source indices for these tokens
+    idx_ptrs = IDX_ptr + pid_bh * S + s_offsets
+    src_row_idx = tl.load(idx_ptrs, mask=token_mask, other=0).to(tl.int32)
+
+    # Broadcast to create 2-D pointer matrix (BLOCK_S, D)
+    d_offsets = tl.arange(0, D)
+
+    src_ptrs = X_ptr + (pid_bh * S + src_row_idx[:, None]) * D + d_offsets[None, :]
+    dst_ptrs = Y_ptr + (pid_bh * S + s_offsets[:, None]) * D + d_offsets[None, :]
+
+    full_mask = token_mask[:, None]
+
+    values = tl.load(src_ptrs, mask=full_mask, other=0.0)
+    tl.store(dst_ptrs, values, mask=full_mask)
+
+
+@triton.jit
+def _inverse_permute_kernel(
+    X_ptr,
+    IDX_ptr,
+    Y_ptr,
+    S: tl.constexpr,
+    D: tl.constexpr,
+    BLOCK_S: tl.constexpr,
+):
+    """Inverse permutation: scatter BLOCK_S tokens back in one shot."""
+
+    pid_bh = tl.program_id(0)
+    tile_s = tl.program_id(1)
+
+    s_offsets = tile_s * BLOCK_S + tl.arange(0, BLOCK_S)
+    token_mask = s_offsets < S
+
+    idx_ptrs = IDX_ptr + pid_bh * S + s_offsets
+    src_pos_idx = s_offsets.to(tl.int32)
+    dst_pos_idx = tl.load(idx_ptrs, mask=token_mask, other=0).to(tl.int32)
+
+    d_offsets = tl.arange(0, D)
+
+    src_ptrs = X_ptr + (pid_bh * S + src_pos_idx[:, None]) * D + d_offsets[None, :]
+    dst_ptrs = Y_ptr + (pid_bh * S + dst_pos_idx[:, None]) * D + d_offsets[None, :]
+
+    full_mask = token_mask[:, None]
+
+    values = tl.load(src_ptrs, mask=full_mask, other=0.0)
+    tl.store(dst_ptrs, values, mask=full_mask)

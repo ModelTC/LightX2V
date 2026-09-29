@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 
 @dataclass
 class TokenLayout:
@@ -13,11 +15,11 @@ class TokenLayout:
     segments: list
     prefix_len: int
     target_len: int
+    rotary_positions: torch.Tensor | None = None
 
 
-def build_token_layout(prompt_image_mask, image_shapes, axes_dims):
+def build_token_layout(prompt_image_mask, image_shapes, axes_dims, rope=None):
     """Expand VLM image slots and assign block-causal and three-axis positions."""
-    device = prompt_image_mask.device
     target_len = math.prod(image_shapes[-1])
     mask = torch.cat((prompt_image_mask, prompt_image_mask.new_ones(target_len // 4)))
     repeats = torch.where(mask, 4, 1)
@@ -50,7 +52,16 @@ def build_token_layout(prompt_image_mask, image_shapes, axes_dims):
         inv = 1.0 / torch.pow(10000, torch.arange(0, dim, 2, dtype=torch.float32) / dim)
         phase = torch.outer(indices[:, axis], inv)
         frequencies.append(torch.polar(torch.ones_like(phase), phase))
-    return TokenLayout(image_mask, repeats, torch.cat(frequencies, -1).to(device), segments, len(flags) - target_len, target_len)
+    rotary = torch.cat(frequencies, -1)
+    rotary_positions = None
+    if rope is not None:
+        # Keep cos/sin in one tensor so both streams can slice the token dimension directly.
+        rotary = torch.cat((rotary.real, rotary.imag), dim=-1).to(AI_DEVICE)
+        rotary = rope.prepare_freqs(rotary, rotary_dim=sum(axes_dims))
+        rotary_positions = rope.prepare_positions(rotary)
+    else:
+        rotary = rotary.to(AI_DEVICE)
+    return TokenLayout(image_mask, repeats, rotary, segments, len(flags) - target_len, target_len, rotary_positions)
 
 
 @dataclass
@@ -60,8 +71,7 @@ class QwenImage21PreOutput:
     modulation: torch.Tensor
     layout: TokenLayout
     rotary: torch.Tensor
-    cached: bool
-    rows: torch.Tensor | slice
+    rotary_positions: torch.Tensor | None = None
 
 
 class QwenImage21PreInfer:
@@ -71,28 +81,29 @@ class QwenImage21PreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def infer(self, weights, latents, prompt, image_latents, layout, cached):
-        if cached:
-            hidden = weights.img_in.apply(latents)
-            rotary = layout.rotary[layout.prefix_len :]
-        else:
-            text = weights.txt_out.apply(F.gelu(weights.txt_in.apply(weights.txt_norm.apply(prompt)), approximate="tanh"))
-            hidden = torch.cat((text, text.new_zeros(layout.target_len // 4, text.shape[-1])))
-            hidden = hidden.repeat_interleave(layout.repeats, dim=0)
-            image = latents if image_latents is None else torch.cat((image_latents, latents))
-            hidden[layout.image_mask] = weights.img_in.apply(image)
-            rotary = layout.rotary
+    def infer_condition(self, weights, prompt, image_latents, layout):
+        """Prepare only the immutable condition prefix, with timestep zero."""
+        text = weights.txt_out.apply(F.gelu(weights.txt_in.apply(weights.txt_norm.apply(prompt)), approximate="tanh"))
+        hidden = text.repeat_interleave(layout.repeats[: len(prompt)], dim=0)
+        if image_latents is not None:
+            hidden[layout.image_mask[: layout.prefix_len]] = weights.img_in.apply(image_latents)
+        return self._prepare_output(weights, hidden, hidden.new_zeros(1), layout, layout.rotary[: layout.prefix_len])
+
+    def infer_target(self, weights, latents, layout):
+        """Prepare only the target image at the current denoising timestep."""
+        hidden = weights.img_in.apply(latents)
+        timestep = self.scheduler.timesteps[self.scheduler.step_index].reshape(1)
+        return self._prepare_output(weights, hidden, timestep, layout, layout.rotary[layout.prefix_len :])
+
+    def _prepare_output(self, weights, hidden, timestep, layout, rotary):
         # Match the upstream BF16 timestep round-trip before the FP32 sinusoid.
-        t = self.scheduler.timesteps[self.scheduler.step_index].reshape(1).to(hidden.dtype) / 1000
-        t = torch.cat((t, t.new_zeros(1)))
-        frequencies = self.time_frequencies.to(t.device)
-        angles = (1000 * t.float())[:, None] * frequencies[None]
+        t = timestep.to(hidden.dtype) / 1000
+        if self.time_frequencies.device != t.device:
+            self.time_frequencies = self.time_frequencies.to(t.device)
+        angles = (1000 * t.float())[:, None] * self.time_frequencies[None]
         time = torch.cat((angles.cos(), angles.sin()), -1).to(hidden.dtype)
         temb = weights.time_out.apply(F.silu(weights.time_in.apply(time)))
         modulation = weights.modulation.apply(F.silu(temb))
-        if cached:
-            # All remaining tokens use the target timestep; broadcast one row.
-            rows = slice(0, 1)
-        else:
-            rows = (torch.arange(len(hidden), device=hidden.device) < layout.prefix_len).long()
-        return QwenImage21PreOutput(hidden, temb, modulation, layout, rotary, cached, rows)
+        # Both streams use a sliced RoPE table, so lookup indices start at zero.
+        positions = layout.rotary_positions[: len(hidden)] if layout.rotary_positions is not None else None
+        return QwenImage21PreOutput(hidden, temb, modulation, layout, rotary, positions)

@@ -6,5 +6,5 @@ class QwenImage21PostInfer:
         self.scheduler = scheduler
 
     def infer(self, weights, hidden, state):
-        scale = weights.modulation.apply(F.silu(state.temb))[state.rows]
+        scale = weights.modulation.apply(F.silu(state.temb))
         return weights.proj.apply(weights.norm.apply(hidden) * (1 + scale))

@@ -65,13 +65,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self._current_adaln_tables = None
         self._adaln_cache_hit = False
         if self.use_adaln_cache:
-            self._adaln_cache, self._norm_out_cache = load_persistent_adaln_cache(config, self._cache_device())
+            self._adaln_cache, self._norm_out_cache = load_persistent_adaln_cache(config, AI_DEVICE)
         self.init_compile(config)
-
-    @staticmethod
-    def _cache_device():
-        device_module = getattr(torch, AI_DEVICE)
-        return torch.device(AI_DEVICE, device_module.current_device())
 
     def _gather_tp_last_dim(self, tensor):
         if self.tp_size == 1:
@@ -91,7 +86,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             k = weights.to_k.apply(hidden_states)
             v = weights.to_v.apply(hidden_states)
 
-        if self.use_fused_qkv_norm_rope:
+        if self.use_fused_qkv_norm_rope and rotary_emb is not None:
             fused = self.qkv_norm_rope.apply(
                 q,
                 k,
@@ -111,12 +106,13 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         k = weights.norm_k.apply(k.unflatten(-1, (self.num_heads, self.head_dim)))
         v = v.unflatten(-1, (self.num_heads, self.head_dim))
 
-        q, k = weights.rope.apply(
-            q,
-            k,
-            rotary_emb,
-            rotary_dim=rotary_emb[0].shape[-1],
-        )
+        if rotary_emb is not None:
+            q, k = weights.rope.apply(
+                q,
+                k,
+                rotary_emb,
+                rotary_dim=rotary_emb[0].shape[-1],
+            )
         return q, k, v
 
     def _attention(self, weights, hidden_states, pre_infer_out):

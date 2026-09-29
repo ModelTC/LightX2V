@@ -6,7 +6,6 @@
     "num_frames": 189,
     "fps": 24.0,
     "enable_cfg": true,
-    "feature_caching": "NoCaching",
     "rms_norm_type": "one-pass",
     "attn_rms_norm_type": "one-pass",
     "rope_type": "cosmos3_rope",
