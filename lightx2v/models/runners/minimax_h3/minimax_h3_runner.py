@@ -105,6 +105,10 @@ class MiniMaxH3Runner(DefaultRunner):
     }
 
     def __init__(self, config):
+        if config.get("vdn_checkpoint") and config.get("model_variant") != "fl2av":
+            raise ValueError("VDN requires the base FL2AV transformer; use model_variant='fl2av'")
+        if config.get("h3_visual_reference_only", False) and config.get("model_variant") != "fl2av":
+            raise ValueError("h3_visual_reference_only requires the base FL2AV transformer")
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
@@ -114,6 +118,8 @@ class MiniMaxH3Runner(DefaultRunner):
         """Return tasks supported by the loaded transformer weights."""
         if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
+        if self.config.get("vdn_checkpoint") and not self.config.get("h3_visual_reference_only", False):
+            return ("t2av", "i2av", "l2av", "fl2av")
         # Allow ref2av requests to use the base transformer for better visual quality.
         return ("t2av", "i2av", "l2av", "fl2av", "ref2av")
 
@@ -403,6 +409,8 @@ class MiniMaxH3Runner(DefaultRunner):
         if len(entries) > MAX_REFERENCES:
             raise ValueError(f"MiniMax-H3 ref2av accepts at most {MAX_REFERENCES} references")
         kinds = ["image" if "image" in entry else "video" if "video" in entry else "audio" for entry in entries]
+        if self.config.get("h3_visual_reference_only", False) and any(kind != "image" for kind in kinds):
+            raise ValueError("h3_visual_reference_only accepts image references only")
         if kinds.count("image") > MAX_REFERENCE_IMAGES or kinds.count("video") > MAX_REFERENCE_VIDEOS:
             raise ValueError("MiniMax-H3 ref2av reference image/video count exceeds 9/3")
         if all(kind == "audio" for kind in kinds):
@@ -418,13 +426,18 @@ class MiniMaxH3Runner(DefaultRunner):
         for entry, kind in zip(entries, kinds):
             if kind == "image":
                 image = self._load_rgb_image(entry["image"])
-                height, width = resolve_reference_image_size(
-                    *image.size,
-                    target_width=self.request_width,
-                    target_height=self.request_height,
-                    mode=resize_mode,
-                )
-                logger.info(f"MiniMax-H3 reference image resized with {resize_mode!r}: {image.width}x{image.height} -> {width}x{height}")
+                if self.config.get("h3_visual_reference_only", False):
+                    height, width = self.request_height, self.request_width
+                    resize_description = "output canvas"
+                else:
+                    height, width = resolve_reference_image_size(
+                        *image.size,
+                        target_width=self.request_width,
+                        target_height=self.request_height,
+                        mode=resize_mode,
+                    )
+                    resize_description = repr(resize_mode)
+                logger.info(f"MiniMax-H3 reference image resized with {resize_description}: {image.width}x{image.height} -> {width}x{height}")
                 references.append(MiniMaxH3PreparedReference("image", image=prepare_reference_image(image, height, width)))
                 continue
             if kind == "video":
@@ -508,16 +521,23 @@ class MiniMaxH3Runner(DefaultRunner):
             raise ValueError(f"MiniMax-H3 transformer_ref only supports ref2av requests; received task {task!r}. Use model_variant='fl2av' for base-transformer tasks.")
         self.clear_conditioning_state()
         if task == "ref2av":
+            visual_only = self.config.get("h3_visual_reference_only", False)
+            if self.config.get("vdn_checkpoint") and not visual_only:
+                raise ValueError("VDN has no native Ref2VA path; set h3_visual_reference_only=true for Qwen image references")
             self._resolve_request_geometry()
             self.prepared_references = self._prepare_references()
             text_encoder_output = self.run_text_encoder(self.input_info, references=self.prepared_references)
-            with ProfilingContext4DebugL1(
-                "Run VAE Encoder",
-                recorder_mode=GET_RECORDER_MODE(),
-                metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
-                metrics_labels=["MiniMaxH3Runner"],
-            ):
-                self.condition_video_latents, self.condition_audio_latents = self._encode_references(self.prepared_references)
+            if visual_only:
+                logger.info("H3 Qwen image references: no VAE reference latents or first/last-frame anchors")
+                self.prepared_references = None
+            else:
+                with ProfilingContext4DebugL1(
+                    "Run VAE Encoder",
+                    recorder_mode=GET_RECORDER_MODE(),
+                    metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
+                    metrics_labels=["MiniMaxH3Runner"],
+                ):
+                    self.condition_video_latents, self.condition_audio_latents = self._encode_references(self.prepared_references)
         else:
             keyframes, self.keyframe_anchors = self._prepare_keyframes()
             if task == "t2av":

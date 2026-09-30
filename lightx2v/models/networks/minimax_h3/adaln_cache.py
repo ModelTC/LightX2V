@@ -4,7 +4,9 @@ Offline generation lives in ``tools/cache_minimax_h3_adaln/builder.py`` so the
 inference path does not carry checkpoint-building concerns.
 """
 
+import hashlib
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import torch
@@ -98,6 +100,69 @@ def _cache_entries(config, profiles: list[str]) -> list[dict]:
     return entries
 
 
+def _file_signature(path):
+    path = Path(path).expanduser().resolve()
+    stat = path.stat()
+    return str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+@lru_cache(maxsize=32)
+def _file_sha256(signature):
+    digest = hashlib.sha256()
+    with open(signature[0], "rb") as handle:
+        for data in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(data)
+    return digest.hexdigest()
+
+
+@lru_cache(maxsize=8)
+def _base_modulation_sha256(signatures, num_layers):
+    """Hash actual cached-weight bytes, streaming without loading the DiT."""
+    expected = {f"time_embedder.linear_{index}.{kind}" for index in (1, 2) for kind in ("weight", "bias")}
+    expected.update(f"norm_out.linear.{kind}" for kind in ("weight", "bias"))
+    expected.update(f"transformer_blocks.{index}.adaln_proj.linear.{kind}" for index in range(num_layers) for kind in ("weight", "bias"))
+    found = set()
+    digest = hashlib.sha256()
+    for signature in signatures:
+        with open(signature[0], "rb") as handle:
+            header_size = int.from_bytes(handle.read(8), "little")
+            header = json.loads(handle.read(header_size))
+            for name in sorted(expected.intersection(header)):
+                if name in found:
+                    raise ValueError(f"Duplicate MiniMax-H3 modulation tensor: {name}")
+                found.add(name)
+                entry = header[name]
+                digest.update(json.dumps([name, entry["dtype"], entry["shape"]], separators=(",", ":")).encode())
+                start, end = entry["data_offsets"]
+                handle.seek(8 + header_size + start)
+                remaining = end - start
+                while remaining:
+                    data = handle.read(min(remaining, 8 * 1024 * 1024))
+                    if not data:
+                        raise ValueError(f"Truncated MiniMax-H3 tensor: {name}")
+                    digest.update(data)
+                    remaining -= len(data)
+    if found != expected:
+        raise ValueError(f"Missing MiniMax-H3 modulation tensors: {sorted(expected - found)[:4]}")
+    return digest.hexdigest()
+
+
+def _vdn_weight_identity(config):
+    from lightx2v.models.networks.minimax_h3.weights.vdn import vdn_adapter_paths
+
+    base = Path(config["dit_original_ckpt"]).expanduser().resolve()
+    files = sorted(base.glob("*.safetensors")) if base.is_dir() else [base]
+    checkpoint = Path(config["vdn_checkpoint"]).expanduser().resolve()
+    return {
+        "base_checkpoint": str(base),
+        "base_modulation_sha256": _base_modulation_sha256(tuple(_file_signature(path) for path in files), int(config.get("num_layers", 50))),
+        "checkpoint": str(checkpoint),
+        "spec_sha256": _file_sha256(_file_signature(checkpoint / "model_spec.json")),
+        "adapters": [{"name": name, "sha256": _file_sha256(_file_signature(path))} for name, path in vdn_adapter_paths(config)],
+        "merge": "default_then_turbo_fp32_delta_cast_then_add_v1",
+    }
+
+
 def _build_spec(config) -> dict:
     if not config.get("use_adaln_cache", False):
         raise ValueError("Building or loading an AdaLN cache requires use_adaln_cache=true")
@@ -112,6 +177,8 @@ def _build_spec(config) -> dict:
         "freq_dim": int(config.get("freq_dim", 256)),
         "entries": _cache_entries(config, profiles),
     }
+    if config.get("vdn_checkpoint"):
+        spec["vdn"] = _vdn_weight_identity(config)
     if config["model_cls"] == "minimax_h3_causal":
         # Track the time-MLP precision so caches from the old all-BF16 policy
         # cannot be reused. Checkpoint replacement also invalidates the cache.
@@ -125,6 +192,8 @@ def _build_spec(config) -> dict:
 def _cache_path(config) -> Path:
     model = config["model_cls"]
     cache_name = "refa2v" if model == "minimax_h3_causal" else config["model_variant"]
+    if config.get("vdn_checkpoint"):
+        cache_name = f"vdn_{cache_name}"
     infer_steps = int(config["infer_steps"])
     video_flow_shift = float(config.get("video_flow_shift", 12.0))
     audio_flow_shift = float(config.get("audio_flow_shift", 3.0))
