@@ -206,13 +206,16 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
                 return_tensors="pt",
             ).to(AI_DEVICE)
 
-            encoder_hidden_states = self.text_encoder(
-                input_ids=model_inputs.input_ids,
-                attention_mask=model_inputs.attention_mask,
-                pixel_values=model_inputs.pixel_values,
-                image_grid_thw=model_inputs.image_grid_thw,
-                output_hidden_states=True,
-            )
+            text_encoder_inputs = {
+                "input_ids": model_inputs.input_ids,
+                "attention_mask": model_inputs.attention_mask,
+                "pixel_values": model_inputs.pixel_values,
+                "image_grid_thw": model_inputs.image_grid_thw,
+                "output_hidden_states": True,
+            }
+            if "mm_token_type_ids" in model_inputs:
+                text_encoder_inputs["mm_token_type_ids"] = model_inputs.mm_token_type_ids
+            encoder_hidden_states = self.text_encoder(**text_encoder_inputs)
         else:
             template = self.prompt_template_encode
             drop_idx = self.prompt_template_encode_start_idx
