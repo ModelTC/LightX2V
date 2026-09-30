@@ -30,6 +30,7 @@ RUNNER_MODULES = {
     "neopp": "lightx2v.models.runners.neopp.neopp_runner",
     "qwen_image": "lightx2v.models.runners.qwen_image.qwen_image_runner",
     "qwen_image_21": "lightx2v.models.runners.qwen_image_21.qwen_image_21_runner",
+    "realtimewam": "lightx2v.models.runners.wan.realtimewam_runner",
     "seedvr2": "lightx2v.models.runners.seedvr.seedvr_runner",
     "seko_talk": "lightx2v.models.runners.wan.wan_audio_runner",
     "seko_talk_ar": "lightx2v.models.runners.wan.wan_audio_runner",

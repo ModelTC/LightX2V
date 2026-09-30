@@ -1,12 +1,12 @@
 #!/bin/bash
 
-lightx2v_path=/data/nvme7/yongyang/LightX2V
+lightx2v_path=
 config_json=${lightx2v_path}/configs/fastwam/libero_i2va.json
-model_path=/data/nvme7/yongyang/models/Wan-AI/Wan2.2-TI2V-5B
+model_path=
 
-image_path=/data/nvme7/yongyang/lightx2v_examples/i2va/libero_spatial/task0_init0
-state_path=/data/nvme7/yongyang/lightx2v_examples/i2va/libero_spatial/task0_init0/state.npy
-prompt="pick up the black bowl between the plate and the ramekin and place it on the plate"
+image_path=
+state_path=path to state.npy
+prompt=
 
 export CUDA_VISIBLE_DEVICES=6
 

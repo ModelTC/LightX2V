@@ -5,11 +5,11 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGI
 
 
 class FastWAMSelfAttentionWeights(WeightModule):
-    def __init__(self, prefix, block_index, config):
+    def __init__(self, prefix, block_index, config, *, rope_config_key="fastwam_rope_type"):
         super().__init__()
         self.add_module(
             "rope",
-            ROPE_REGISTER[config.get("fastwam_rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float64),
+            ROPE_REGISTER[config.get(rope_config_key, "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float64),
         )
         block = f"{prefix}.blocks.{block_index}"
         rms_type = config.get("rms_norm_type", "torch")
@@ -55,27 +55,29 @@ class FastWAMFFNWeights(WeightModule):
 
 
 class FastWAMBlockWeights(WeightModule):
-    def __init__(self, prefix, block_index, config):
+    def __init__(self, prefix, block_index, config, *, rope_config_key="fastwam_rope_type"):
         super().__init__()
-        self.add_module("self_attn", FastWAMSelfAttentionWeights(prefix, block_index, config))
+        self.add_module("self_attn", FastWAMSelfAttentionWeights(prefix, block_index, config, rope_config_key=rope_config_key))
         self.add_module("cross_attn", FastWAMCrossAttentionWeights(prefix, block_index, config))
         self.add_module("ffn", FastWAMFFNWeights(prefix, block_index, config))
 
 
 class FastWAMExpertTransformerWeights(WeightModule):
-    def __init__(self, prefix, config):
+    def __init__(self, prefix, config, *, rope_config_key="fastwam_rope_type"):
         super().__init__()
-        self.blocks = WeightModuleList([FastWAMBlockWeights(prefix, i, config) for i in range(int(config["num_layers"]))])
+        self.blocks = WeightModuleList([FastWAMBlockWeights(prefix, i, config, rope_config_key=rope_config_key) for i in range(int(config["num_layers"]))])
         self.add_module("blocks", self.blocks)
 
 
 class FastWAMTransformerWeights(WeightModule):
+    rope_config_key = "fastwam_rope_type"
+
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         del lazy_load_path, lora_path
         super().__init__()
         self.config = config
-        self.add_module("video", FastWAMExpertTransformerWeights("mixtures.video", config))
-        self.add_module("action", FastWAMExpertTransformerWeights("mixtures.action", config))
+        self.add_module("video", FastWAMExpertTransformerWeights("mixtures.video", config, rope_config_key=self.rope_config_key))
+        self.add_module("action", FastWAMExpertTransformerWeights("mixtures.action", config, rope_config_key=self.rope_config_key))
         self.add_module("video_head", MM_WEIGHT_REGISTER["Default"]("mixtures.video.head.head.weight", "mixtures.video.head.head.bias"))
         self.add_module("video_head_modulation", TENSOR_REGISTER["Default"]("mixtures.video.head.modulation"))
         self.add_module("action_head", MM_WEIGHT_REGISTER["Default"]("mixtures.action.head.weight", "mixtures.action.head.bias"))
