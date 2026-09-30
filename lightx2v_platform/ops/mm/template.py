@@ -5,6 +5,8 @@ import torch
 
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.offload import copy_to_cpu
+from lightx2v_platform.ops.offload.weight_storage import StorageDescription, WeightStorage, require_dtype
 
 try:
     from lightx2v_kernel.gemm import (
@@ -90,11 +92,11 @@ class MMWeightTemplate(metaclass=ABCMeta):
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):
-            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
+            self.weight = copy_to_cpu(self.pin_weight, self.weight, non_blocking=non_blocking)
             if hasattr(self, "weight_scale_name"):
-                self.weight_scale = self.pin_weight_scale.copy_(self.weight_scale, non_blocking=non_blocking).cpu()
+                self.weight_scale = copy_to_cpu(self.pin_weight_scale, self.weight_scale, non_blocking=non_blocking)
             if self.bias is not None:
-                self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
+                self.bias = copy_to_cpu(self.pin_bias, self.bias, non_blocking=non_blocking)
         else:
             self.weight = self.weight.to("cpu", non_blocking=non_blocking)
             if hasattr(self, "weight_scale"):
@@ -520,3 +522,52 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             bias_tensor = self.lazy_load_file.get_tensor(self.bias_name)
             self.pin_bias.copy_(bias_tensor)
             del bias_tensor
+
+
+class MMWeightPerChannelQuantTemplate(MMWeightQuantTemplate):
+    """Storage for prequantized weight + FP32 channel scales + optional bias.
+
+    Subclasses declare checkpoint_dtype and their compute kernel. Packed or
+    transformed formats keep their own loader and storage contract.
+    """
+
+    checkpoint_dtype: torch.dtype
+
+    @property
+    def base_attrs(self):
+        # Read the final kernel layout, including subclass transpose overrides.
+        attrs = [(self.weight_name, "weight", self.weight_need_transpose), (self.weight_scale_name, "weight_scale", False)]
+        if self.bias_name is not None:
+            attrs.append((self.bias_name, "bias", False))
+        return attrs
+
+    def validate_checkpoint(self, metadata):
+        weight = metadata[self.weight_name]
+        require_dtype(self.weight_name, weight.dtype, (self.checkpoint_dtype,))
+        if weight.loaded_dtype is not None:
+            require_dtype(self.weight_name, weight.loaded_dtype, (self.checkpoint_dtype,))
+
+    def describe_storage(self, metadata):
+        self.validate_checkpoint(metadata)
+        tensors = []
+        for name, attr, transpose in self.base_attrs:
+            source = metadata[name]
+            dtype = source.loaded_dtype or source.dtype
+            if attr == "weight_scale" or (attr == "bias" and self.bias_force_fp32):
+                dtype = torch.float32
+            tensors.append(WeightStorage(name, attr, source.shape, dtype, transpose))
+        return StorageDescription(tuple(tensors))
+
+    def bind_storage(self, context):
+        context.bind(self)
+        if self.bias_name is None:
+            self.bias = None
+
+    def load(self, weight_dict):
+        if not self.lazy_load:
+            require_dtype(self.weight_name, weight_dict[self.weight_name].dtype, (self.checkpoint_dtype,))
+        super().load(weight_dict)
+        # Slots must leave checkpoint entries available for the owning CPU block.
+        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
+            for name, _, _ in self.base_attrs:
+                weight_dict.pop(name)
