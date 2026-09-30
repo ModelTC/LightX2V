@@ -1,0 +1,35 @@
+benchmark: libero
+config_json: null  # optional configs/<model>/*.json; CLI overrides take precedence
+base_ckpt: null
+lora_path: null
+ckpt: null  # optional merged checkpoint, mutually exclusive with base_ckpt/lora_path
+seed: 42
+model:
+  name: null  # resolved from the selected profile; defaults to realtimewam
+  backbone: null
+  model_path: null
+  lora_weights: ema
+  action_horizon: null
+  num_video_frames: null
+  sampler: null
+  native_config: null  # resolved profile snapshot stored in manifest/jobs
+  t5_cpu_offload: false
+  vae_cpu_offload: false
+  factory: null  # optional module:factory(cfg) implementing Policy
+  options: {}  # custom factory options; interpreted by that adapter only
+EVALUATION:
+  output_dir: null
+  dataset_stats_path: null
+  num_inference_steps: null
+  action_infer_mode: null
+  sigma_shift: null
+  replan_steps: null
+  max_steps: null
+  compile_action_infer: false
+  resume: false
+MULTIRUN:
+  num_gpus: 8
+  max_tasks_per_gpu: 2
+  chunk_size: 20
+  task_sample_ratio: 1.0
+dry_run: false

@@ -1,11 +1,8 @@
 {
-  "adapter_model_path": "/path/to/robotwin_uncond_3cam_384.pt",
-  "dataset_stats_path": "/path/to/robotwin_uncond_3cam_384_dataset_stats.json",
   "camera_size": 384,
   "action_chunk_size": 32,
   "actions_per_plan": 8,
-  "num_steps_wait": 0,
-  "action_infer_steps": 20,
+  "action_infer_steps": 1,
   "action_sample_shift": 5,
   "action_dim_hidden": 1024,
   "action_dim": 14,
@@ -20,10 +17,19 @@
   "num_layers": 30,
   "freq_dim": 256,
   "eps": 0.000001,
-  "backbone": "fastwam",
-  "sampler": "flow_matching",
-  "action_infer_mode": "first_frame",
+  "backbone": "fasterwam",
+  "sampler": "teacher_flow",
+  "action_infer_mode": "one_pass_future_cache",
   "num_video_frames": 9,
-  "condition_layers": null,
-  "video_kv_fusion": null
+  "condition_layers": [
+    0,
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    28
+  ],
+  "video_kv_fusion": "interval_weighted_sum"
 }

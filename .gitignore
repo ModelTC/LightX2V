@@ -34,4 +34,6 @@ lightx2v_ros/build
 lightx2v_ros/install
 lightx2v_ros/log
 .gitnexus
+.eval_envs/
+evaluate_results/
 lightx2v_kernel_xpu/_cmake_build

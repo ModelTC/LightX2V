@@ -580,7 +580,12 @@ class RoboTwinEnv(BaseSimEnv):
         return images
 
     # ------------------------------------------------------------------- step
-    def step(self, action):
+    def step(self, action, *, observe=True):
+        """Execute and check every action; optionally skip unused observation capture.
+
+        The default preserves the ROS/environment API. Offline chunked evaluation
+        may opt out between replans, but physics and success checks still run.
+        """
         action = np.asarray(action, dtype=np.float32).reshape(-1)
         if action.size == self.contract.action_dim:
             # FastWAM outputs absolute joint targets.
@@ -592,7 +597,7 @@ class RoboTwinEnv(BaseSimEnv):
             self.env.take_action(ee_action, action_type="ee")
         else:
             raise ValueError(f"RoboTwin expects a 14-D qpos or 16-D relative EE action, got {action.size}.")
-        obs = self._observation()
+        obs = self._observation() if observe else None
         success = bool(getattr(self.env, "eval_success", False)) or bool(self.env.check_success())
         return obs, success, success
 
