@@ -13,7 +13,7 @@
 - [CUDA continuous 配置](../../../../configs/wan/layout/continuous.json)：当前示例用 LightX2V FP8-vLLM 权重及 CUDA attention，T5/CLIP 也有各自量化配置。
 - [NPU continuous 配置](../../../../configs/wan/layout/continuous_npu.json)：原始浮点权重路径，显式 NPU 算子和组件 offload。
 - [T5 权重实现](../../../../lightx2v/models/input_encoders/hf/wan/t5/model.py) 接收 `rms_norm_type`；其选择从 runner 的 `t5_rms_norm_type` 传入，默认保持 CUDA 原行为。参见 [WanRunner](../../../../lightx2v/models/runners/wan/wan_runner.py)，其他调用者也需保持参数一致。
-- [CUDA 入口](../../../../scripts/wan/layout/run_contiguous.sh) 与 [NPU 入口](../../../../scripts/wan/layout/run_contiguous_npu.sh) 各有 baseline 对应脚本，使用前核对路径、环境和实际输出名。
+- [CUDA 入口](../../../../scripts/wan/offload_layout/run_contiguous.sh) 与 [NPU 入口](../../../../scripts/wan/offload_layout/run_contiguous_npu.sh) 各有 baseline 对应脚本，使用前核对路径、环境和实际输出名。
 
 DiT 连续布局不表示 T5、CLIP、VAE 都使用相同布局。当前 GPU 和 NPU 示例的量化及组件驻留策略不同，不能直接用于跨平台的布局收益比较。
 
@@ -27,7 +27,7 @@ DiT 连续布局不表示 T5、CLIP、VAE 都使用相同布局。当前 GPU 和
 - [NPU continuous 配置](../../../../configs/qwen_image/layout/continuous_npu.json)：BF16、`npu_flash_attn`、PyTorch real RoPE/norm/调制。
 - [TransformerInfer](../../../../lightx2v/models/networks/qwen_image/infer/transformer_infer.py) 按 `modulate_type` 决定是否加载 Qwen Triton 内核，CUDA 默认内核保持原样。
 - [文本编码器](../../../../lightx2v/models/input_encoders/hf/qwen25/qwen25_vlforconditionalgeneration.py) 与 [VAE](../../../../lightx2v/models/video_encoders/hf/qwen_image/vae.py) 各自整体 offload；连续 block 仅作用于 DiT。
-- [CUDA 入口](../../../../scripts/qwen_image/layout/run_contiguous.sh)、[NPU 入口](../../../../scripts/qwen_image/layout/run_contiguous_npu.sh) 及对应 baseline 均存在。NPU 入口支持 `MODEL_PATH`，自动定位仓库并输出到仓库下；不要假定所有旧脚本都支持相同环境覆盖。
+- [CUDA 入口](../../../../scripts/qwen_image/offload_layout/run_contiguous.sh)、[NPU 入口](../../../../scripts/qwen_image/offload_layout/run_contiguous_npu.sh) 及对应 baseline 均存在。NPU 入口支持 `MODEL_PATH`，自动定位仓库并输出到仓库下；不要假定所有旧脚本都支持相同环境覆盖。
 
 权重目录应包含原始模型的 `transformer/`、`text_encoder/`、`tokenizer/`、`vae/` 等文件。单个量化 DiT 文件不能替代整个 pipeline。现有 `fp8-sgl` 蒸馏入口不代表其算子已具备这里所需的存储契约。
 
@@ -42,4 +42,4 @@ DiT 连续布局不表示 T5、CLIP、VAE 都使用相同布局。当前 GPU 和
 | 文本编码器或 VAE 仍有 CUDA 专用依赖 | 对应组件的配置或平台算子，不能靠 DiT layout 修复 |
 | 没有原生 block offload，或使用不兼容的原生 nn.Module 表示 | 先分析 block 权重/slot/调度接口缺口，再确定改动范围 |
 
-已有两个模型的代码用作机制参考，不复制其层号、参数量、精度、shape 或路径为通用常量。参考 [Wan 中文说明](../../../../scripts/wan/layout/README_CN.md) 与 [Qwen 中文说明](../../../../scripts/qwen_image/layout/README_CN.md) 获取现有命令；运行前根据目标机器调整。
+已有两个模型的代码用作机制参考，不复制其层号、参数量、精度、shape 或路径为通用常量。参考 [Wan 中文说明](../../../../scripts/wan/offload_layout/README_CN.md) 与 [Qwen 中文说明](../../../../scripts/qwen_image/offload_layout/README_CN.md) 获取现有命令；运行前根据目标机器调整。

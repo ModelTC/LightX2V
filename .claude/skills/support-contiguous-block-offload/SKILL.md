@@ -49,7 +49,7 @@ description: 为 LightX2V 模型接入、审查和调试 cpu_offload_layout=cont
 完整双平台接入沿用以下目录约定；已有文件保留用户设置，仅修改任务需要的部分：
 
 ```text
-scripts/<model>/layout/
+scripts/<model>/offload_layout/
   run_baseline.sh
   run_contiguous.sh
   run_baseline_npu.sh

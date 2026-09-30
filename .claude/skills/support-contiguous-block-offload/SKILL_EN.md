@@ -49,7 +49,7 @@ Use current source files and function names instead of historical line numbers. 
 For a complete integration on both platforms, use the following directory convention. Preserve user settings in existing files and change only what the task requires:
 
 ```text
-scripts/<model>/layout/
+scripts/<model>/offload_layout/
   run_baseline.sh
   run_contiguous.sh
   run_baseline_npu.sh
