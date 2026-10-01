@@ -46,9 +46,11 @@ def _selected_profiles(config) -> list[str]:
         # separate from every base-transformer task.
         return ["ref2av_video", "ref2av_video_audio"]
     if model_variant == "fl2av":
-        # All base-transformer tasks share this pair, so one FL2AV cache also
-        # serves T2AV, I2AV, and L2AV without support_tasks-dependent paths.
-        return ["t2av", "conditioned"]
+        # All base-transformer tasks share one FL2AV cache, so it also serves
+        # T2AV, I2AV, L2AV, and Ref2AV requests routed to the base transformer
+        # without support_tasks-dependent paths. Video-only references match
+        # "conditioned"; audio-bearing references add the clean audio timestep.
+        return ["t2av", "conditioned", "ref2av_video_audio"]
     raise ValueError(f"No persistent AdaLN cache profile is available for model_variant: {model_variant!r}")
 
 
