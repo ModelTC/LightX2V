@@ -10,41 +10,8 @@ import numpy as np
 
 from simulator.libero_node.env import LiberoEnv, quat_to_axis_angle
 from simulator.libero_node.observer import load_libero as load_runtime
+from simulator.sim.benchmark import Benchmark
 from simulator.sim.evaluator import Observation
-
-POLICY_PROFILE = "libero"
-ACTION_SPACE = "libero_delta_eef"
-
-
-TRIALS_FIELD = "num_trials"
-
-
-PATH_FIELDS = ("EVALUATION.libero_root",)
-
-
-def defaults(benchmark):
-    plus = benchmark == "libero_plus"
-    root = Path(__file__).resolve().parent / ("LIBERO-plus" if plus else "LIBERO")
-    return {
-        "EVALUATION": {
-            "libero_root": os.environ.get("LIBERO_PLUS_SOURCE_DIR" if plus else "LIBERO_SOURCE_DIR") or str(root),
-            "num_trials": 1 if plus else 50,
-            "num_steps_wait": 5,
-            "settle_action": [0, 0, 0, 0, 0, 0, -1],
-            "render_size": 256,
-        },
-        "MULTIRUN": {
-            "task_suite_names": ["libero_spatial", "libero_object", "libero_goal", "libero_10"],
-            "task_ids": None,
-        },
-    }
-
-
-def worker_environment(env):
-    env.setdefault("MUJOCO_GL", "egl")
-    env.setdefault("PYOPENGL_PLATFORM", env["MUJOCO_GL"])
-    # robosuite selects the physical device from CUDA_VISIBLE_DEVICES.
-    env.pop("MUJOCO_EGL_DEVICE_ID", None)
 
 
 def load_libero(cfg):
@@ -76,25 +43,6 @@ def load_init_states(suite, task_id):
     return states
 
 
-def discover_tasks(cfg):
-    benchmark, _, _ = load_libero(cfg)
-    factories = benchmark.get_benchmark_dict()
-    root = Path(cfg["EVALUATION"]["libero_root"])
-    classification = root / "libero/libero/benchmark/task_classification.json"
-    categories = json.loads(classification.read_text()) if classification.is_file() else {}
-    tasks = []
-    selected = cfg["MULTIRUN"]["task_ids"]
-    for suite in cfg["MULTIRUN"]["task_suite_names"]:
-        instance = suite_instance(factories[suite])
-        ids = list(range(instance.get_num_tasks())) if selected is None else selected
-        for task_id in ids:
-            task = instance.get_task(task_id)
-            meta = categories.get(suite, [])
-            entry = meta[task_id] if meta else {}
-            tasks.append({"key": f"{suite}/{task_id}", "suite": suite, "task_id": task_id, "task_name": task.name, "category": entry.get("category"), "phase": None, "prompt": task.language})
-    return tasks
-
-
 def observation(raw, prompt, step):
     images = {cam: np.ascontiguousarray(raw[LiberoEnv.CAMERA_OBS_KEYS[cam]][::-1, ::-1]) for cam in ("agentview", "wrist")}
     state = np.concatenate([raw["robot0_eef_pos"], quat_to_axis_angle(raw["robot0_eef_quat"]), raw["robot0_gripper_qpos"]]).astype(np.float32)
@@ -103,7 +51,7 @@ def observation(raw, prompt, step):
 
 class LiberoAdapter:
     action_dim = 7
-    action_space = ACTION_SPACE
+    action_space = "libero_delta_eef"
 
     def __init__(self, cfg, task):
         self.cfg, self.task = cfg, task
@@ -142,5 +90,67 @@ class LiberoAdapter:
         self.env.close()
 
 
-def create_adapter(cfg, task):
-    return LiberoAdapter(cfg, task)
+class LiberoBenchmark(Benchmark):
+    name = "libero"
+    policy_profile = "libero"
+    trials_field = "num_trials"
+    path_fields = ("EVALUATION.libero_root",)
+    adapter_cls = LiberoAdapter
+    source_directory = "LIBERO"
+    source_env = "LIBERO_SOURCE_DIR"
+    default_trials = 50
+
+    @classmethod
+    def defaults(cls):
+        root = Path(__file__).resolve().parent / cls.source_directory
+        return {
+            "EVALUATION": {
+                "libero_root": os.environ.get(cls.source_env) or str(root),
+                "num_trials": cls.default_trials,
+                "num_steps_wait": 5,
+                "settle_action": [0, 0, 0, 0, 0, 0, -1],
+                "render_size": 256,
+            },
+            "MULTIRUN": {
+                "task_suite_names": ["libero_spatial", "libero_object", "libero_goal", "libero_10"],
+                "task_ids": None,
+            },
+        }
+
+    @classmethod
+    def worker_environment(cls, env):
+        super().worker_environment(env)
+        env.setdefault("MUJOCO_GL", "egl")
+        env.setdefault("PYOPENGL_PLATFORM", env["MUJOCO_GL"])
+        # robosuite selects the physical device from CUDA_VISIBLE_DEVICES.
+        env.pop("MUJOCO_EGL_DEVICE_ID", None)
+
+    @classmethod
+    def discover_tasks(cls, cfg):
+        benchmark, _, _ = load_libero(cfg)
+        factories = benchmark.get_benchmark_dict()
+        tasks = []
+        selected = cfg["MULTIRUN"]["task_ids"]
+        for suite in cfg["MULTIRUN"]["task_suite_names"]:
+            instance = suite_instance(factories[suite])
+            ids = list(range(instance.get_num_tasks())) if selected is None else selected
+            for task_id in ids:
+                task = instance.get_task(task_id)
+                tasks.append({"key": f"{suite}/{task_id}", "suite": suite, "task_id": task_id, "task_name": task.name, "category": None, "phase": None, "prompt": task.language})
+        return tasks
+
+
+class LiberoPlusBenchmark(LiberoBenchmark):
+    name = "libero_plus"
+    source_directory = "LIBERO-plus"
+    source_env = "LIBERO_PLUS_SOURCE_DIR"
+    default_trials = 1
+
+    @classmethod
+    def discover_tasks(cls, cfg):
+        tasks = super().discover_tasks(cfg)
+        root = Path(cfg["EVALUATION"]["libero_root"])
+        categories = json.loads((root / "libero/libero/benchmark/task_classification.json").read_text())
+        for task in tasks:
+            task["category"] = categories[task["suite"]][task["task_id"]]["category"]
+        return tasks

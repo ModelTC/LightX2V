@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from simulator.sim.benchmark import atomic_json, result_path
+from simulator.sim.benchmark import atomic_json, load_object, result_path
 
 
 @dataclass
@@ -41,7 +41,7 @@ class NativeWAMAdapter:
         cls = RUNNER_REGISTER[model["name"]].policy_class
         self.policy = cls.from_config(native)
         self.seed = cfg["seed"]
-        self.action_space = importlib.import_module(cfg["backend"]).ACTION_SPACE
+        self.action_space = load_object(cfg["backend"]).adapter_cls.action_space
 
     def reset_episode(self, metadata):
         self.policy.reset()
@@ -61,8 +61,7 @@ class NativeWAMAdapter:
 
 def build_policy(cfg):
     if cfg["model"]["factory"]:
-        module, name = cfg["model"]["factory"].split(":", 1)
-        return getattr(importlib.import_module(module), name)(cfg)
+        return load_object(cfg["model"]["factory"])(cfg)
     return NativeWAMAdapter(cfg)
 
 
@@ -74,13 +73,13 @@ def run_task(cfg, task, policy):
     torch.manual_seed(cfg["seed"])
     evaluation = cfg["EVALUATION"]
     skip_observation = evaluation.get("skip_get_obs_within_replan", False)
-    backend = importlib.import_module(cfg["backend"])
-    trials = evaluation[backend.TRIALS_FIELD]
+    backend = load_object(cfg["backend"])
+    trials = evaluation[backend.trials_field]
     result = {"task": task, "status": "running", "episodes": [], "error": None}
     path = result_path(evaluation["output_dir"], task)
     environment = None
     try:
-        environment = backend.create_adapter(cfg, task)
+        environment = backend.adapter_cls(cfg, task)
         for index in range(trials):
             obs = environment.reset(index)
             metadata = environment.episode_metadata()

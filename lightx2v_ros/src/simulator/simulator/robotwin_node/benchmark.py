@@ -9,49 +9,10 @@ from pathlib import Path
 
 import numpy as np
 
-from simulator.sim.benchmark import atomic_json
+from simulator.sim.benchmark import Benchmark, atomic_json
 from simulator.sim.evaluator import Observation
 
-POLICY_PROFILE = "robotwin"
-ACTION_SPACE = "robotwin_joint_position"
-
-
-TRIALS_FIELD = "eval_num_episodes"
-
-
 ROBOTWIN_ROOT = Path(__file__).resolve().parent / "RoboTwin"
-
-
-PATH_FIELDS = ("EVALUATION.robotwin_root", "EVALUATION.seed_cache_dir")
-
-
-def defaults(benchmark):
-    return {
-        "EVALUATION": {
-            "robotwin_root": os.environ.get("ROBOTWIN_ROOT") or str(ROBOTWIN_ROOT),
-            "eval_num_episodes": 100,
-            "replan_steps": 24,
-            "skip_get_obs_within_replan": True,
-            "instruction_type": "unseen",
-            "embodiment": "aloha-agilex",
-            "max_seed_attempts": 1000,
-            "reuse_seed_cache": False,
-            "seed_cache_dir": None,
-        },
-        "MULTIRUN": {"chunk_size": 1, "task_names": None, "phases": ["clean", "random"]},
-    }
-
-
-def worker_environment(env):
-    if not env.get("ROBOTWIN_NVIDIA_GL_ROOT"):
-        return
-    root = Path(env["ROBOTWIN_NVIDIA_GL_ROOT"])
-    libgl = next((p for p in (root / "libGL.so.1", root / "libGL.so.1.7.0") if p.is_file()), None)
-    if libgl:
-        env["LD_PRELOAD"] = ":".join(filter(None, (str(libgl), env.get("LD_PRELOAD"))))
-    icd = root / "nvidia_icd_abs.json"
-    if icd.is_file():
-        env["VK_ICD_FILENAMES"] = str(icd)
 
 
 def load_seeds(path):
@@ -173,18 +134,9 @@ def install_planner_adapter(root, output):
         robot.CuroboPlanner = RepositoryCuroboPlanner
 
 
-def discover_tasks(cfg):
-    root = Path(cfg["EVALUATION"]["robotwin_root"])
-    names = cfg["MULTIRUN"]["task_names"]
-    if names is None:
-        names = sorted(p.stem for p in (root / "description/task_instruction").glob("*.json"))
-    phases = cfg["MULTIRUN"]["phases"]
-    return [{"key": f"{phase}/{name}", "task_name": name, "phase": phase, "category": None, "suite": None} for phase in phases for name in names]
-
-
 class RoboTwinAdapter:
     action_dim = 14
-    action_space = ACTION_SPACE
+    action_space = "robotwin_joint_position"
 
     def __init__(self, cfg, task):
         from common.contract import ROBOTWIN_CONTRACT
@@ -287,5 +239,48 @@ class RoboTwinAdapter:
             self.env.close()
 
 
-def create_adapter(cfg, task):
-    return RoboTwinAdapter(cfg, task)
+class RoboTwinBenchmark(Benchmark):
+    name = "robotwin"
+    policy_profile = "robotwin"
+    trials_field = "eval_num_episodes"
+    path_fields = ("EVALUATION.robotwin_root", "EVALUATION.seed_cache_dir")
+    adapter_cls = RoboTwinAdapter
+
+    @classmethod
+    def defaults(cls):
+        return {
+            "EVALUATION": {
+                "robotwin_root": os.environ.get("ROBOTWIN_ROOT") or str(ROBOTWIN_ROOT),
+                "eval_num_episodes": 100,
+                "replan_steps": 24,
+                "skip_get_obs_within_replan": True,
+                "instruction_type": "unseen",
+                "embodiment": "aloha-agilex",
+                "max_seed_attempts": 1000,
+                "reuse_seed_cache": False,
+                "seed_cache_dir": None,
+            },
+            "MULTIRUN": {"chunk_size": 1, "task_names": None, "phases": ["clean", "random"]},
+        }
+
+    @classmethod
+    def worker_environment(cls, env):
+        super().worker_environment(env)
+        if not env.get("ROBOTWIN_NVIDIA_GL_ROOT"):
+            return
+        root = Path(env["ROBOTWIN_NVIDIA_GL_ROOT"])
+        libgl = next((p for p in (root / "libGL.so.1", root / "libGL.so.1.7.0") if p.is_file()), None)
+        if libgl:
+            env["LD_PRELOAD"] = ":".join(filter(None, (str(libgl), env.get("LD_PRELOAD"))))
+        icd = root / "nvidia_icd_abs.json"
+        if icd.is_file():
+            env["VK_ICD_FILENAMES"] = str(icd)
+
+    @classmethod
+    def discover_tasks(cls, cfg):
+        root = Path(cfg["EVALUATION"]["robotwin_root"])
+        names = cfg["MULTIRUN"]["task_names"]
+        if names is None:
+            names = sorted(p.stem for p in (root / "description/task_instruction").glob("*.json"))
+        phases = cfg["MULTIRUN"]["phases"]
+        return [{"key": f"{phase}/{name}", "task_name": name, "phase": phase, "category": None, "suite": None} for phase in phases for name in names]
