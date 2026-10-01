@@ -13,6 +13,24 @@ except ImportError:
 class NpuLayerNormWeight(LayerNormWeightTemplate):
     def __init__(self, weight_name=None, bias_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6, **kwargs):
         super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
+        self.base_attrs = [(name, attr, False) for name, attr in ((weight_name, "weight"), (bias_name, "bias")) if name is not None]
+
+    def load(self, weight_dict):
+        from lightx2v.common.offload.block_layout import BlockLoadContext
+
+        if isinstance(weight_dict, BlockLoadContext):
+            weight_dict.bind(self)
+            if self.weight_name is None:
+                self.weight = None
+            if self.bias_name is None:
+                self.bias = None
+            return
+        super().load(weight_dict)
+
+    def contiguous_dtype(self, attr, dtype):
+        if dtype != self.infer_dtype:
+            raise ValueError(f"Expected {self.infer_dtype} for {getattr(self, attr + '_name')}")
+        return dtype
 
     def apply(self, input_tensor):
         if torch_npu is not None and hasattr(torch_npu, "npu_layer_norm") and self.weight is not None and self.bias is not None:

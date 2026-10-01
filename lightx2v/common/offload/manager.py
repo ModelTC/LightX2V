@@ -48,6 +48,13 @@ class WeightAsyncStreamManager(object):
         else:
             raise NotImplementedError
 
+    def init_contiguous_blocks(self, blocks):
+        from lightx2v.common.offload.block_layout import ContiguousBlockTransfer
+
+        self.contiguous_transfer = ContiguousBlockTransfer(blocks, self.cuda_buffers)
+        self.need_init_first_buffer = True
+        logger.info(f"contiguous block offload: {len(blocks)} CPU buffers, {blocks[0].block_buffer.layout.nbytes} bytes/block, two GPU buffers")
+
     def _sync(self):
         """Synchronize to ensure memory visibility across streams.
 
@@ -62,7 +69,9 @@ class WeightAsyncStreamManager(object):
 
     def init_first_buffer(self, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.init_stream):
-            if hasattr(self, "cpu_buffers"):
+            if hasattr(self, "contiguous_transfer"):
+                self.contiguous_transfer.copy(0, self.cuda_buffers[0])
+            elif hasattr(self, "cpu_buffers"):
                 if self.offload_granularity == "block":
                     self.cuda_buffers[0].load_state_dict(self.cpu_buffers[0].state_dict(), 0, adapter_block_idx)
                 else:
@@ -77,7 +86,9 @@ class WeightAsyncStreamManager(object):
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.cuda_load_stream):
-            if hasattr(self, "cpu_buffers"):
+            if hasattr(self, "contiguous_transfer"):
+                self.contiguous_transfer.copy(block_idx, self.cuda_buffers[1])
+            elif hasattr(self, "cpu_buffers"):
                 self.cuda_buffers[1].load_state_dict(self.cpu_buffers[0].state_dict(), block_idx, adapter_block_idx)
             else:
                 self.cuda_buffers[1].load_state_dict(blocks[block_idx].state_dict(), block_idx, adapter_block_idx)
@@ -150,6 +161,12 @@ class WeightAsyncStreamManager(object):
         self.cpu_buffers = [self.cpu_buffers[1], self.cpu_buffers[0]]
 
     def __del__(self):
+        if hasattr(self, "contiguous_transfer"):
+            try:
+                self.compute_stream.synchronize()
+                self.contiguous_transfer.close()
+            except RuntimeError as error:
+                logger.warning("Failed to synchronize contiguous block offload during cleanup: {}", error)
         if hasattr(self, "executor") and self.executor is not None:
             for f in self.prefetch_futures:
                 if not f.done():

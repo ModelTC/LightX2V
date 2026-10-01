@@ -28,6 +28,15 @@ class NpuDevice:
         return "npu"
 
     @staticmethod
+    def copy_to_cpu(destination, source, non_blocking=False):
+        """Copy to CPU without losing the strides of an existing host tensor."""
+        if not destination.is_contiguous():
+            # NPU D2H copy_ can ignore a strided host destination's layout.
+            # Complete D2H before the CPU copy, even for a non-blocking request.
+            return destination.copy_(source.contiguous().to("cpu", non_blocking=False))
+        return destination.copy_(source, non_blocking=non_blocking)
+
+    @staticmethod
     def init_parallel_env():
         dist.init_process_group(backend="hccl")
         torch.npu.set_device(dist.get_rank())

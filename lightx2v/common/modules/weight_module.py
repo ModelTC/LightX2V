@@ -100,6 +100,17 @@ class WeightModule:
             if module is not None:
                 yield from module.named_parameters(prefix + name + ".")
 
+    def named_weight_leaves(self, prefix=""):
+        """Visit operator objects registered as either parameters or modules."""
+        for name, child in (*self._parameters.items(), *self._modules.items()):
+            if child is None:
+                continue
+            path = prefix + name
+            if isinstance(child, WeightModule):
+                yield from child.named_weight_leaves(path + ".")
+            else:
+                yield path, child
+
     def to_cpu(self, non_blocking=False):
         for name, param in self._parameters.items():
             if param is not None:
