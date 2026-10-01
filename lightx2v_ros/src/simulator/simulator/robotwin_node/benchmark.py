@@ -1,25 +1,22 @@
 """RoboTwin evaluation, validated seeds and planner asset relocation."""
 
-import fcntl
 import importlib
-import importlib.util
 import json
 import os
 import sys
-import warnings
 from dataclasses import replace
-from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
 
-from simulator.sim.benchmark import ROOT, atomic_json
+from simulator.sim.benchmark import atomic_json
 from simulator.sim.evaluator import Observation
 
 POLICY_PROFILE = "robotwin"
+ACTION_SPACE = "robotwin_joint_position"
 
 
-LEGACY_TASK = "robotwin_uncond_3cam_384_distilled_1step"
+TRIALS_FIELD = "eval_num_episodes"
 
 
 ROBOTWIN_ROOT = Path(__file__).resolve().parent / "RoboTwin"
@@ -45,26 +42,6 @@ def defaults(benchmark):
     }
 
 
-def validate(cfg):
-    evaluation = cfg.EVALUATION
-    if evaluation.eval_num_episodes < 1 or evaluation.max_seed_attempts < 1:
-        raise ValueError("RoboTwin eval_num_episodes and max_seed_attempts must be positive")
-    if not isinstance(evaluation.skip_get_obs_within_replan, bool):
-        raise TypeError("skip_get_obs_within_replan must be a boolean")
-    if set(cfg.MULTIRUN.phases) - {"clean", "random"}:
-        raise ValueError("RoboTwin phases must be clean/random")
-    if evaluation.reuse_seed_cache and not evaluation.seed_cache_dir:
-        evaluation.seed_cache_dir = os.environ.get("ROBOTWIN_SEED_DIR") or str(Path(evaluation.robotwin_root) / "my_seeds")
-
-
-def required_paths(cfg):
-    return [cfg["EVALUATION"]["robotwin_root"]]
-
-
-def num_trials(cfg):
-    return cfg["EVALUATION"]["eval_num_episodes"]
-
-
 def worker_environment(env):
     if not env.get("ROBOTWIN_NVIDIA_GL_ROOT"):
         return
@@ -79,18 +56,7 @@ def worker_environment(env):
 
 def load_seeds(path):
     path = Path(path)
-    if not path.is_file():
-        return []
-    try:
-        seeds = json.loads(path.read_text())
-        if not isinstance(seeds, list) or any(type(seed) is not int or seed < 0 for seed in seeds):
-            raise ValueError("expected a list of nonnegative integer seeds")
-        if any(right <= left for left, right in pairwise(seeds)):
-            raise ValueError("seeds must be strictly increasing")
-        return seeds
-    except (OSError, ValueError) as exc:
-        warnings.warn(f"Ignoring unreadable or invalid seed cache {path}: {exc}", stacklevel=2)
-        return []
+    return json.loads(path.read_text()) if path.is_file() else []
 
 
 class SeedCache:
@@ -99,7 +65,8 @@ class SeedCache:
         self.path = None
         self.replay = []
         if evaluation["reuse_seed_cache"]:
-            self.path = Path(evaluation["seed_cache_dir"]) / task["phase"] / f"{task['task_name']}_seed.json"
+            directory = evaluation["seed_cache_dir"] or os.environ.get("ROBOTWIN_SEED_DIR") or Path(evaluation["robotwin_root"]) / "my_seeds"
+            self.path = Path(directory).expanduser().resolve() / task["phase"] / f"{task['task_name']}_seed.json"
             self.replay = load_seeds(self.path)
             print(f"Seed cache: {self.path} ({len(self.replay)} seeds); cached seeds override the initial seed but are expert-revalidated", flush=True)
         self.position = 0
@@ -130,17 +97,8 @@ class SeedCache:
             return
         self.accepted.add(seed)
         self.rejected.discard(seed)
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            # Merge under a lock so separate managers sharing a cache don't lose seeds.
-            with self.path.with_suffix(".lock").open("a") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                seeds = sorted((set(load_seeds(self.path)) - self.rejected) | self.accepted)
-                atomic_json(self.path, seeds)
-        except OSError as exc:
-            # Legacy evaluation treats optional cache persistence as best-effort.
-            warnings.warn(f"Failed to write seed cache {self.path}: {exc}", stacklevel=2)
-            return
+        seeds = sorted((set(self.replay) - self.rejected) | self.accepted)
+        atomic_json(self.path, seeds)
         print(f"Saved {len(seeds)} validated seeds to {self.path}", flush=True)
 
 
@@ -185,20 +143,13 @@ def relocate_asset_paths(value, root, config_dir, key=None):
             target = config_dir / target
     else:
         return value
-    target = target.resolve()
-    if not target.is_relative_to(root):
-        raise ValueError(f"Planner asset must be inside the selected RoboTwin repository: {value}")
-    if not target.exists():
-        raise FileNotFoundError(f"Missing repository-local planner asset: {target}")
-    return str(target)
+    return str(target.resolve())
 
 
 def install_planner_adapter(root, output):
     """Patch only the benchmark's planner constructor in this isolated worker."""
     planner = importlib.import_module("envs.robot.planner")
-    original = getattr(planner, "CuroboPlanner", None)
-    if original is None:
-        raise ImportError("RoboTwin failed to import its real CuroboPlanner")
+    original = planner.CuroboPlanner
     if getattr(original, "_lightx2v_relocated", False):
         return
 
@@ -224,23 +175,16 @@ def install_planner_adapter(root, output):
 
 def discover_tasks(cfg):
     root = Path(cfg["EVALUATION"]["robotwin_root"])
-    if not (root / "envs").is_dir() or not (root / "description/task_instruction").is_dir():
-        hint = "Check EVALUATION.robotwin_root."
-        if root.resolve() == ROBOTWIN_ROOT.resolve():
-            hint = f"Run git submodule update --init --recursive {ROBOTWIN_ROOT.relative_to(ROOT)} from the repository root."
-        raise FileNotFoundError(f"Incomplete RoboTwin source: {root}. {hint}")
     names = cfg["MULTIRUN"]["task_names"]
     if names is None:
         names = sorted(p.stem for p in (root / "description/task_instruction").glob("*.json"))
-    if not names:
-        raise ValueError("No RoboTwin tasks; set MULTIRUN.task_names=[task,...]")
     phases = cfg["MULTIRUN"]["phases"]
     return [{"key": f"{phase}/{name}", "task_name": name, "phase": phase, "category": None, "suite": None} for phase in phases for name in names]
 
 
 class RoboTwinAdapter:
     action_dim = 14
-    action_space = "robotwin_joint_position"
+    action_space = ACTION_SPACE
 
     def __init__(self, cfg, task):
         from common.contract import ROBOTWIN_CONTRACT
@@ -252,9 +196,6 @@ class RoboTwinAdapter:
 
         class StrictEnvironment(RoboTwinEnv):
             def _prepare_planner_runtime(self):
-                if importlib.util.find_spec("curobo") is None:
-                    raise ImportError("RoboTwin benchmark requires curobo expert checks; no dry-run fallback")
-
                 install_planner_adapter(self.robotwin_root, evaluation["output_dir"])
 
             @property
@@ -293,8 +234,6 @@ class RoboTwinAdapter:
 
                 descriptions = generate_episode_descriptions(self.task_name, [episode_info["info"]], evaluation["eval_num_episodes"])
                 choices = descriptions[0][self.instruction_type]
-                if not choices:
-                    raise ValueError("No instructions for selected instruction_type")
                 return str(np.random.choice(choices))
 
         self.cls = StrictEnvironment
@@ -320,8 +259,6 @@ class RoboTwinAdapter:
         else:
             raw = self.env.new_episode()
         self.max_steps = self.cfg["EVALUATION"]["max_steps"] or self.env.max_steps
-        if not self.max_steps:
-            raise ValueError("RoboTwin did not provide a step limit")
         self.step_index = 0
         return Observation(raw.images, raw.state, self.env.task_description)
 

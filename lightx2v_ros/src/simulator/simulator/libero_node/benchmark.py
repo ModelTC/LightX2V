@@ -1,17 +1,22 @@
 """LIBERO and LIBERO-plus evaluation over the shared ROS-free runtime."""
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
 
-from simulator.libero_node.observer import LiberoActionObserver, observation_components, suite_instance
+import numpy as np
+
+from simulator.libero_node.env import LiberoEnv, quat_to_axis_angle
 from simulator.libero_node.observer import load_libero as load_runtime
 from simulator.sim.evaluator import Observation
 
 POLICY_PROFILE = "libero"
+ACTION_SPACE = "libero_delta_eef"
 
 
-LEGACY_TASK = "libero_uncond_2cam224_1e-4"
+TRIALS_FIELD = "num_trials"
 
 
 PATH_FIELDS = ("EVALUATION.libero_root",)
@@ -35,19 +40,6 @@ def defaults(benchmark):
     }
 
 
-def validate(cfg):
-    if cfg.EVALUATION.num_trials < 1 or cfg.EVALUATION.num_steps_wait < 0:
-        raise ValueError("LIBERO num_trials must be positive and num_steps_wait nonnegative")
-
-
-def required_paths(cfg):
-    return [cfg["EVALUATION"]["libero_root"]]
-
-
-def num_trials(cfg):
-    return cfg["EVALUATION"]["num_trials"]
-
-
 def worker_environment(env):
     env.setdefault("MUJOCO_GL", "egl")
     env.setdefault("PYOPENGL_PLATFORM", env["MUJOCO_GL"])
@@ -55,12 +47,33 @@ def worker_environment(env):
     env.pop("MUJOCO_EGL_DEVICE_ID", None)
 
 
-def runtime_directory(cfg):
-    return Path(cfg["EVALUATION"]["output_dir"]) / "runtime" / f"libero-{os.getpid()}"
-
-
 def load_libero(cfg):
-    return load_runtime(cfg["EVALUATION"]["libero_root"], runtime_directory(cfg))
+    root = Path(cfg["EVALUATION"]["libero_root"])
+    config_dir = Path(cfg["EVALUATION"]["output_dir"]) / "runtime" / f"libero-{os.getpid()}"
+    return load_runtime(root, config_dir)
+
+
+def suite_instance(factory):
+    with contextlib.redirect_stdout(io.StringIO()):
+        return factory()
+
+
+def load_init_states(suite, task_id):
+    from unittest.mock import patch
+
+    import torch
+
+    # Let the suite resolve Plus perturbation filenames. Assets are trusted local files.
+    original_load = torch.load
+
+    def trusted_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        kwargs.setdefault("map_location", "cpu")
+        return original_load(*args, **kwargs)
+
+    with patch("torch.load", trusted_load):
+        states = suite.get_task_init_states(task_id)
+    return states
 
 
 def discover_tasks(cfg):
@@ -69,8 +82,6 @@ def discover_tasks(cfg):
     root = Path(cfg["EVALUATION"]["libero_root"])
     classification = root / "libero/libero/benchmark/task_classification.json"
     categories = json.loads(classification.read_text()) if classification.is_file() else {}
-    if cfg["benchmark"] == "libero_plus" and not categories:
-        raise FileNotFoundError("LIBERO-plus requires task_classification.json for category accounting")
     tasks = []
     selected = cfg["MULTIRUN"]["task_ids"]
     for suite in cfg["MULTIRUN"]["task_suite_names"]:
@@ -80,47 +91,47 @@ def discover_tasks(cfg):
             task = instance.get_task(task_id)
             meta = categories.get(suite, [])
             entry = meta[task_id] if meta else {}
-            if entry and (int(entry["id"]) != task_id + 1 or entry["name"] != task.name):
-                raise ValueError(f"Classification/task mismatch at {suite}/{task_id}")
             tasks.append({"key": f"{suite}/{task_id}", "suite": suite, "task_id": task_id, "task_name": task.name, "category": entry.get("category"), "phase": None, "prompt": task.language})
     return tasks
 
 
 def observation(raw, prompt, step):
-    images, state = observation_components(raw)
+    images = {cam: np.ascontiguousarray(raw[LiberoEnv.CAMERA_OBS_KEYS[cam]][::-1, ::-1]) for cam in ("agentview", "wrist")}
+    state = np.concatenate([raw["robot0_eef_pos"], quat_to_axis_angle(raw["robot0_eef_quat"]), raw["robot0_gripper_qpos"]]).astype(np.float32)
     return Observation(images, state, prompt, step)
 
 
 class LiberoAdapter:
     action_dim = 7
-    action_space = "libero_delta_eef"
+    action_space = ACTION_SPACE
 
     def __init__(self, cfg, task):
-        if cfg["benchmark"] == "libero_plus" and not task.get("category"):
-            raise ValueError("Every LIBERO-plus task must have a perturbation category")
         self.cfg, self.task = cfg, task
         evaluation = cfg["EVALUATION"]
-        self.runtime = LiberoActionObserver(
-            benchmark_name=task["suite"],
-            task_id=task["task_id"],
-            image_size=evaluation["render_size"],
-            seed=cfg["seed"],
-            libero_root=evaluation["libero_root"],
-            config_dir=runtime_directory(cfg),
-            camera_names=None,
-            eager_reset=False,
+        benchmark, get_path, env_cls = load_libero(cfg)
+        suite = suite_instance(benchmark.get_benchmark_dict()[task["suite"]])
+        self.initial_states = load_init_states(suite, task["task_id"])
+        task_info = suite.get_task(task["task_id"])
+        self.env = env_cls(
+            bddl_file_name=str(Path(get_path("bddl_files")) / task_info.problem_folder / task_info.bddl_file),
+            camera_heights=evaluation["render_size"],
+            camera_widths=evaluation["render_size"],
         )
-        self.env, self.initial_states = self.runtime.env, self.runtime.initial_states
+        self.env.seed(cfg["seed"])
         self.max_steps = evaluation["max_steps"] or (700 if task["suite"] in ("libero_10", "libero_90") else 400)
 
     def reset(self, episode_index):
         self.step_index = 0
         self.init_index = episode_index % len(self.initial_states)
-        raw = self.runtime.reset(self.init_index, settle_steps=self.cfg["EVALUATION"]["num_steps_wait"], settle_action=self.cfg["EVALUATION"]["settle_action"])
+        self.env.reset()
+        state = self.initial_states[self.init_index]
+        raw = self.env.set_init_state(np.asarray(state).copy())
+        for _ in range(self.cfg["EVALUATION"]["num_steps_wait"]):
+            raw, _, _, _ = self.env.step(self.cfg["EVALUATION"]["settle_action"])
         return observation(raw, self.task["prompt"], 0)
 
     def step(self, action):
-        raw, _, success, _ = self.runtime.step(action.tolist())
+        raw, _, success, _ = self.env.step(np.asarray(action, dtype=np.float32))
         self.step_index += 1
         return observation(raw, self.task["prompt"], self.step_index), bool(success), bool(success) or self.step_index >= self.max_steps
 
@@ -128,7 +139,7 @@ class LiberoAdapter:
         return {"environment_seed": self.cfg["seed"], "init_state_index": self.init_index}
 
     def close(self):
-        self.runtime.close()
+        self.env.close()
 
 
 def create_adapter(cfg, task):

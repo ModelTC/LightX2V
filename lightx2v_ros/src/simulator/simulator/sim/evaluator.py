@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from simulator.sim.benchmark import atomic_json, get_benchmark_backend, result_path
+from simulator.sim.benchmark import atomic_json, result_path
 
 
 @dataclass
@@ -28,27 +28,20 @@ class ActionChunk:
     action_space: str  # libero_delta_eef or robotwin_joint_position
     timing: dict[str, float] = field(default_factory=dict)
 
-    def validate(self, action_space, action_dim):
-        array = np.asarray(self.actions, dtype=np.float32)
-        if self.action_space != action_space:
-            raise ValueError(f"Action space mismatch: {self.action_space} != {action_space}")
-        if array.ndim != 2 or array.shape[1] != action_dim or len(array) < 1 or not np.isfinite(array).all():
-            raise ValueError(f"Invalid action chunk: shape={array.shape}, expected [N,{action_dim}] finite values")
-        return array
-
 
 class NativeWAMAdapter:
     def __init__(self, cfg):
-        from lightx2v.models.runners.wan.fastwam_runner import FastWAMPolicy
-        from lightx2v.models.runners.wan.realtimewam_runner import RealtimeWAMPolicy
+        from lightx2v.models.runners.runner_factory import RUNNER_MODULES
+        from lightx2v.utils.registry_factory import RUNNER_REGISTER
         from lightx2v.utils.set_config import build_startup_config
 
         model = cfg["model"]
         native = build_startup_config(model["native_config"])
-        cls = RealtimeWAMPolicy if model["name"] == "realtimewam" else FastWAMPolicy
+        importlib.import_module(RUNNER_MODULES[model["name"]])
+        cls = RUNNER_REGISTER[model["name"]].policy_class
         self.policy = cls.from_config(native)
         self.seed = cfg["seed"]
-        self.action_space = {"robotwin": "robotwin_joint_position", "libero": "libero_delta_eef"}[native["policy_profile"]]
+        self.action_space = importlib.import_module(cfg["backend"]).ACTION_SPACE
 
     def reset_episode(self, metadata):
         self.policy.reset()
@@ -62,9 +55,7 @@ class NativeWAMAdapter:
         return ActionChunk(actions, self.action_space, {"inference_seconds": time.perf_counter() - started})
 
     def close(self):
-        close = getattr(self.policy, "close", None)
-        if close:
-            close()
+        self.policy.close()
         del self.policy
 
 
@@ -72,13 +63,7 @@ def build_policy(cfg):
     if cfg["model"]["factory"]:
         module, name = cfg["model"]["factory"].split(":", 1)
         return getattr(importlib.import_module(module), name)(cfg)
-    if cfg["model"]["name"] not in ("realtimewam", "fastwam"):
-        raise ValueError("Unknown model; register a Policy via model.factory=module:factory")
     return NativeWAMAdapter(cfg)
-
-
-def make_environment(cfg, task):
-    return get_benchmark_backend(cfg["benchmark"]).create_adapter(cfg, task)
 
 
 def run_task(cfg, task, policy):
@@ -89,12 +74,13 @@ def run_task(cfg, task, policy):
     torch.manual_seed(cfg["seed"])
     evaluation = cfg["EVALUATION"]
     skip_observation = evaluation.get("skip_get_obs_within_replan", False)
-    trials = get_benchmark_backend(cfg["benchmark"]).num_trials(cfg)
+    backend = importlib.import_module(cfg["backend"])
+    trials = evaluation[backend.TRIALS_FIELD]
     result = {"task": task, "status": "running", "episodes": [], "error": None}
     path = result_path(evaluation["output_dir"], task)
     environment = None
     try:
-        environment = make_environment(cfg, task)
+        environment = backend.create_adapter(cfg, task)
         for index in range(trials):
             obs = environment.reset(index)
             metadata = environment.episode_metadata()
@@ -104,10 +90,8 @@ def run_task(cfg, task, policy):
             inference_seconds, calls, success = 0.0, 0, False
             for step in range(environment.max_steps):
                 if not pending:
-                    if obs is None:
-                        raise RuntimeError("Missing fresh observation at action replanning boundary")
                     chunk = policy.predict_action_chunk(obs)
-                    actions = chunk.validate(environment.action_space, environment.action_dim)
+                    actions = np.asarray(chunk.actions, dtype=np.float32)
                     pending.extend(actions[: evaluation["replan_steps"]])
                     inference_seconds += chunk.timing.get("inference_seconds", 0.0)
                     calls += 1
