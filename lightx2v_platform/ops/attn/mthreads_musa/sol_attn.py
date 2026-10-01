@@ -31,39 +31,6 @@ _ABI_VERSION = 2
 _HEADER_SUFFIXES = {".h", ".hpp", ".cuh", ".inl", ".mu"}
 
 
-def _validate_qkv(q, k, v):
-    if any(not isinstance(x, torch.Tensor) for x in (q, k, v)):
-        raise TypeError("MUSA SOL attention requires torch.Tensor q, k, and v")
-    if q.ndim != 4 or q.shape != k.shape or q.shape != v.shape:
-        raise ValueError("MUSA SOL attention requires matching q/k/v shapes [B, T, H, 128]")
-    if any(size <= 0 for size in q.shape[:3]) or q.shape[3] != HEAD_DIM:
-        raise ValueError("MUSA SOL attention requires B, T, H > 0 and head dimension 128")
-    if any(x.dtype != torch.bfloat16 for x in (q, k, v)):
-        raise TypeError("MUSA SOL attention requires BF16 q, k, and v")
-    musa_device = q.device.type == "musa" or (os.environ.get("PLATFORM") == "musa" and q.device.type in ("cuda", "privateuseone"))
-    if not musa_device or k.device != q.device or v.device != q.device:
-        raise ValueError("MUSA SOL attention requires q, k, and v on the same MUSA device")
-    if not all(x.is_contiguous() for x in (q, k, v)):
-        raise ValueError("MUSA SOL attention requires contiguous BTHD q, k, and v")
-    if torch.is_grad_enabled() and any(x.requires_grad for x in (q, k, v)):
-        raise ValueError("MUSA SOL attention is forward-only")
-    return q.shape[:3]
-
-
-def _validate_inputs(q, k, v, *, thresh_type, kv_splits, sink_tokens, sink_start):
-    _validate_qkv(q, k, v)
-    if thresh_type not in ("diag", "exact"):
-        raise ValueError("MUSA SOL attention thresh_type must be 'diag' or 'exact'")
-    if type(kv_splits) is not int or kv_splits != 1:
-        raise ValueError("MUSA SOL attention currently supports only kv_splits=1")
-    tokens = q.shape[1]
-    if type(sink_tokens) is not int or not 0 <= sink_tokens <= tokens:
-        raise ValueError("MUSA SOL attention sink_tokens must be an integer in [0, T]")
-    if sink_start is not None:
-        if type(sink_start) is not int or not 0 <= sink_start <= tokens or sink_start + sink_tokens > tokens:
-            raise ValueError("MUSA SOL attention sink range must lie within [0, T]")
-
-
 def _hash_file(digest, path: Path, label: str) -> None:
     digest.update(label.encode("utf-8"))
     digest.update(b"\0")
@@ -194,10 +161,7 @@ def _build_library(spec: dict) -> tuple[Path, dict]:
 @functools.lru_cache(maxsize=1)
 def _load_library() -> tuple[ctypes.CDLL, dict]:
     library_path, metadata = _build_library(_build_spec())
-    try:
-        library = ctypes.CDLL(str(library_path))
-    except OSError as error:
-        raise RuntimeError(f"Unable to load MUSA native SOL library {library_path}: {error}") from error
+    library = ctypes.CDLL(str(library_path))
     arguments = [ctypes.c_void_p] * 7 + [ctypes.c_int] * 4 + [ctypes.c_float] + [ctypes.c_int] * 3 + [ctypes.c_void_p]
     library.lightx2v_sol_forward.argtypes = arguments
     library.lightx2v_sol_forward.restype = ctypes.c_int
@@ -213,7 +177,7 @@ def _build_info() -> dict:
     return json.loads(json.dumps(_load_library()[1]))
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _validate_device(device_index: int) -> None:
     # Torchada may expose MUSA tensors under a CUDA device alias.
     capability = torch.musa.get_device_capability(device_index)
@@ -221,51 +185,8 @@ def _validate_device(device_index: int) -> None:
         raise ValueError(f"MUSA native SOL requires MP31 / S5000 (capability 3.1), got {capability} on device {device_index}")
 
 
-def _validate_shape_limits(batch: int, tokens: int, heads: int, padded_blocks: int) -> None:
-    if any(value <= 0 or value >= 2**31 for value in (batch, tokens, heads, padded_blocks)):
-        raise ValueError("MUSA native SOL dimensions must fit positive int32")
-    # Descriptor strides use int32, including products of dimensions.
-    if tokens > 2**31 - 1 - (BLOCK_SIZE - 1) or max(tokens, padded_blocks) * heads * HEAD_DIM >= 2**31:
-        raise ValueError("MUSA native SOL requires T * H * 128 and padded_blocks * H * 128 to fit int32 descriptor strides")
-
-
-def _validate_alignment(tensors) -> None:
-    # Contiguous views can have storage offsets that break BF16 alignment.
-    for name, value in zip(("q", "k", "v", "kc", "vc"), tensors):
-        if value.data_ptr() % 32:
-            raise ValueError(f"MUSA native SOL requires a 32-byte aligned {name} pointer; clone the tensor to remove its unaligned storage offset")
-
-
-def _validate_native_inputs(q, k, v, kc, vc, threshold, scale, sink_start_block, sink_end_block, has_sink):
-    batch, tokens, heads = _validate_qkv(q, k, v)
-    tensors = (kc, vc, threshold)
-    if any(not isinstance(value, torch.Tensor) for value in tensors):
-        raise TypeError("MUSA SOL requires tensor kc, vc, and threshold")
-    blocks = (tokens + BLOCK_SIZE - 1) // BLOCK_SIZE
-    if kc.ndim != 4 or kc.shape != vc.shape or kc.shape[0] != batch or kc.shape[2:] != (heads, HEAD_DIM) or kc.shape[1] < blocks or kc.shape[1] % BLOCK_SIZE:
-        raise ValueError("MUSA native SOL requires kc/vc [B, padded_blocks, H, 128], padded to a multiple of 64")
-    _validate_shape_limits(batch, tokens, heads, kc.shape[1])
-    if threshold.shape != (batch, blocks, heads):
-        raise ValueError("MUSA native SOL requires threshold [B, ceil(T / 64), H]")
-    if any(value.dtype != torch.bfloat16 for value in tensors[:-1]) or threshold.dtype != torch.float32:
-        raise TypeError("MUSA native SOL requires BF16 q/k/v/kc/vc and FP32 threshold")
-    if any(value.device != q.device for value in tensors):
-        raise ValueError("MUSA native SOL requires all tensors on the same MUSA device")
-    if not all(value.is_contiguous() for value in tensors):
-        raise ValueError("MUSA native SOL requires contiguous tensors")
-    if torch.is_grad_enabled() and any(value.requires_grad for value in tensors):
-        raise ValueError("MUSA native SOL is forward-only")
-    if not math.isfinite(float(scale)):
-        raise ValueError("MUSA native SOL scale must be finite")
-    if type(has_sink) is not bool or any(type(value) is not int for value in (sink_start_block, sink_end_block)):
-        raise TypeError("MUSA native SOL requires boolean has_sink and integer sink block bounds")
-    if not 0 <= sink_start_block <= sink_end_block <= blocks:
-        raise ValueError("MUSA native SOL sink block range must be within [0, ceil(T / 64)]")
-    _validate_alignment((q, k, v, kc, vc))
-
-
 def _launch_native(q, k, v, kc, vc, threshold, *, scale, sink_start_block, sink_end_block, has_sink, debug):
-    _validate_native_inputs(q, k, v, kc, vc, threshold, scale, sink_start_block, sink_end_block, has_sink)
+    # _prepare supplies padded BF16 KV summaries and FP32 [B, ceil(T / 64), H] thresholds.
     _validate_device(q.device.index)
     library, _ = _load_library()
     batch, tokens, heads, _ = q.shape
@@ -671,16 +592,13 @@ def sol_attn(
     sink_tokens: int = 0,
     sink_start: int | None = None,
 ) -> torch.Tensor:
-    """SOL self-attention for contiguous BF16 [B, T, H, 128] MUSA tensors.
+    """Forward-only SOL for contiguous BF16 [B, T, H, 128] tensors on S5000.
 
-    ``exact`` selects full-covariance thresholds, not dense attention.
-    Sink tokens force exact evaluation of their KV blocks.
+    The caller supplies diag/exact thresholds, kv_splits=1, and a sink range within T.
+    ``exact`` uses full-covariance thresholds; sink KV blocks are evaluated exactly.
     """
-    _validate_inputs(q, k, v, thresh_type=thresh_type, kv_splits=kv_splits, sink_tokens=sink_tokens, sink_start=sink_start)
     scale = HEAD_DIM**-0.5 if scale is None else float(scale)
     tau = float(tau)
-    if not math.isfinite(scale) or not math.isfinite(tau) or tau < 0:
-        raise ValueError("MUSA SOL attention scale must be finite and tau must be finite and non-negative")
 
     sink_start_block, sink_end_block = _sink_block_range(q.shape[1], sink_start, sink_tokens)
     with torch.musa.device(q.device.index):

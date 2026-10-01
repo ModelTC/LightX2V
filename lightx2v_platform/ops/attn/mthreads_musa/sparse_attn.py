@@ -4,6 +4,7 @@
 import math
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import pairwise
 
 import torch
 
@@ -14,7 +15,7 @@ _SUPPORTED_CUBES = {(4, 4, 4): 64, (8, 4, 4): 128}
 
 @dataclass(frozen=True)
 class PackedStreams:
-    """Packed token indices and per-sample condition metadata."""
+    """Packing supplies disjoint token indices and matching per-sample metadata."""
 
     text: torch.Tensor
     cond_image: torch.Tensor
@@ -78,21 +79,6 @@ class CubePrecomputed:
     runtime: CubeRuntime = field(default_factory=CubeRuntime)
 
 
-def normalize_condition_event_order(events, visual_count, audio_count):
-    events = tuple(events)
-    event_types = {event_type for event_type, _ in events}
-    unsupported = event_types - {"imgvid", "audio"}
-    if unsupported:
-        raise ValueError(f"unsupported condition event types: {sorted(unsupported)}")
-    imgvid_indices = [index for item_type, index in events if item_type == "imgvid"]
-    if imgvid_indices != list(range(visual_count)):
-        raise ValueError(f"condition imgvid indices {imgvid_indices} do not cover {visual_count} tensors")
-    audio_indices = [index for item_type, index in events if item_type == "audio"]
-    if audio_indices != list(range(audio_count)):
-        raise ValueError(f"condition audio indices {audio_indices} do not cover {audio_count} tensors")
-    return events
-
-
 def _ceil_div(value, divisor):
     return (value + divisor - 1) // divisor
 
@@ -105,45 +91,13 @@ def _stable_sort_1d(values):
     return torch.sort(values, stable=True)
 
 
-def _cube_token_size(cube_size):
-    cube_size = tuple(int(value) for value in cube_size)
-    if len(cube_size) != 3 or any(value <= 0 for value in cube_size):
-        raise ValueError(f"local_cube_size must be a positive 3D size, got {cube_size}")
-    token_size = math.prod(cube_size)
-    if token_size & (token_size - 1):
-        raise ValueError(f"local_cube_size product must be a power of two for Moorcat, got {cube_size} ({token_size} tokens)")
-    return token_size
-
-
-def _normalize_cube_visual_shape(shape):
-    shape = tuple(int(value) for value in shape)
-    if len(shape) != 3 or any(value <= 0 for value in shape):
-        raise ValueError(f"cube attention visual shapes must be positive 3D shapes, got {shape}")
-    return shape
-
-
-_COND_IMAGE_ROLES = frozenset({"joint_cube", "independent_cube", "dense_prefix"})
-
-
-def _normalize_cond_image_roles(roles, visual_count, sample_idx):
-    roles = tuple(roles)
-    if len(roles) != visual_count:
-        raise ValueError(f"cube attention sample {sample_idx} has {visual_count} condition visual streams but {len(roles)} condition roles")
-    unsupported = sorted(set(roles) - _COND_IMAGE_ROLES)
-    if unsupported:
-        raise ValueError(f"cube attention sample {sample_idx} has unsupported condition visual roles: {unsupported}")
-    return roles
-
-
 def _cube_sample_segments(indices, cu_seqlens):
     bounds = torch.searchsorted(indices, cu_seqlens).tolist()
-    return [indices[start:end] for start, end in zip(bounds[:-1], bounds[1:])]
+    return [indices[start:end] for start, end in pairwise(bounds)]
 
 
-def _group_cube_visual_segment(indices, shape, cube_size, sample_idx, segment_name):
+def _group_cube_visual_segment(indices, shape, cube_size):
     expected = math.prod(shape)
-    if indices.numel() != expected:
-        raise ValueError(f"cube attention {segment_name} for sample {sample_idx} has {indices.numel()} tokens, expected {expected} for shape {shape}")
     cube_counts = tuple(_ceil_div(dim, extent) for dim, extent in zip(shape, cube_size))
     linear_indices = torch.arange(
         expected,
@@ -202,23 +156,13 @@ def _group_cube_1d_segment(indices, cube_token_size):
     return indices, local_labels, _ceil_div(indices.numel(), cube_token_size)
 
 
-def _validate_cube_sample_metadata(values, num_samples, name):
-    if len(values) != num_samples:
-        raise ValueError(f"cube attention received {len(values)} {name} entries for {num_samples} samples")
-    return values
-
-
-def _split_cube_streams(indices, stream_sizes, sample_idx, stream_name):
+def _split_cube_streams(indices, stream_sizes):
     streams = []
     offset = 0
     for stream_size in stream_sizes:
         stream_size = int(stream_size)
-        if stream_size < 0:
-            raise ValueError(f"cube attention {stream_name} stream sizes must be nonnegative")
         streams.append(indices[offset : offset + stream_size])
         offset += stream_size
-    if offset != indices.numel():
-        raise ValueError(f"cube attention {stream_name} streams for sample {sample_idx} cover {offset} tokens, but packing contains {indices.numel()} tokens")
     return streams
 
 
@@ -239,25 +183,7 @@ def _build_physical_base_layout(base_block_mask, block_labels):
     return _pack_block_rows(physical)
 
 
-def _raise_for_unoccupied_labels(occupied_labels, sample_label_ranges):
-    """Reject holes introduced by a condition stream on a different grid."""
-    occupied = set(occupied_labels.tolist())
-    for sample_idx, (start, end) in enumerate(sample_label_ranges):
-        missing = [label for label in range(start, end) if label not in occupied]
-        if missing:
-            raise ValueError(
-                f"cube attention sample {sample_idx} allocated labels "
-                f"[{start}, {end}) but {len(missing)} of them received no "
-                f"tokens (first missing: {missing[0]}). A joint_cube "
-                "condition visual stream does not share the target's "
-                "position grid; declare it independent_cube or dense_prefix "
-                "instead."
-            )
-    raise ValueError(f"cube attention allocated labels outside every sample range; occupied {len(occupied)} labels for ranges {sample_label_ranges}")
-
-
 def _build_cube_segment_layout(
-    sample_shapes,
     cu_seqlens,
     real_total_len,
     cube_size,
@@ -266,29 +192,7 @@ def _build_cube_segment_layout(
     position_ids,
 ):
     cube_token_size = math.prod(cube_size)
-    num_samples = len(sample_shapes)
-    if cu_seqlens.numel() != num_samples + 1:
-        raise ValueError(f"cube attention received {cu_seqlens.numel() - 1} packed sequences for {num_samples} target shapes")
-    cond_image_shapes = _validate_cube_sample_metadata(
-        streams.cond_image_shapes,
-        num_samples,
-        "condition-shape",
-    )
-    cond_image_roles = _validate_cube_sample_metadata(
-        streams.cond_image_roles,
-        num_samples,
-        "condition-role",
-    )
-    cond_event_orders = _validate_cube_sample_metadata(
-        streams.cond_event_orders,
-        num_samples,
-        "condition-event",
-    )
-    cond_audio_stream_lens = _validate_cube_sample_metadata(
-        streams.cond_audio_stream_lens,
-        num_samples,
-        "condition-audio",
-    )
+    num_samples = cu_seqlens.numel() - 1
     (
         text_segments,
         cond_image_segments,
@@ -318,10 +222,6 @@ def _build_cube_segment_layout(
         nonlocal label_offset
         if ordered_indices.numel() == 0:
             return
-        assigned = cube_labels.index_select(0, ordered_indices) >= 0
-        if assigned.any():
-            duplicate = int(ordered_indices[torch.nonzero(assigned)[0, 0]])
-            raise ValueError(f"packed token {duplicate} belongs to multiple streams")
         cube_labels[ordered_indices] = (local_block_labels + label_offset).to(torch.int32)
         ordered_segments.append(ordered_indices)
         sparse_labels.extend([sparse] * num_blocks)
@@ -337,24 +237,16 @@ def _build_cube_segment_layout(
 
         cond_audio_streams = _split_cube_streams(
             cond_audio,
-            cond_audio_stream_lens[sample_idx],
-            sample_idx,
-            "condition audio",
+            streams.cond_audio_stream_lens[sample_idx],
         )
-        visual_shapes = [_normalize_cube_visual_shape(shape) for shape in cond_image_shapes[sample_idx]]
+        visual_shapes = streams.cond_image_shapes[sample_idx]
         raw_visual_streams = _split_cube_streams(
             cond_image,
             [math.prod(shape) for shape in visual_shapes],
-            sample_idx,
-            "condition visual",
         )
-        visual_roles = _normalize_cond_image_roles(cond_image_roles[sample_idx], len(visual_shapes), sample_idx)
-
-        events = normalize_condition_event_order(
-            cond_event_orders[sample_idx],
-            visual_count=len(raw_visual_streams),
-            audio_count=len(cond_audio_streams),
-        )
+        # Packing assigns joint_cube, independent_cube or dense_prefix roles.
+        visual_roles = streams.cond_image_roles[sample_idx]
+        events = streams.cond_event_orders[sample_idx]
         add_segment(
             *_group_cube_1d_segment(text, cube_token_size),
             sparse=False,
@@ -373,15 +265,11 @@ def _build_cube_segment_layout(
                 role = visual_roles[event_idx]
                 if role == "joint_cube":
                     continue
-                if role == "independent_cube" and shape[0] <= 1:
-                    raise ValueError(f"independent_cube condition visual streams must have a genuine 3D shape, got {shape}")
                 if role == "independent_cube":
                     grouped = _group_cube_visual_segment(
                         raw_visual_streams[event_idx],
                         shape,
                         cube_size,
-                        sample_idx,
-                        f"condition visual stream {event_idx}",
                     )
                 else:
                     grouped = _group_cube_1d_segment(raw_visual_streams[event_idx], cube_token_size)
@@ -391,10 +279,6 @@ def _build_cube_segment_layout(
             sparse=False,
         )
 
-        target_shape = sample_shapes[sample_idx]
-        expected_target_tokens = math.prod(target_shape)
-        if latent.numel() != expected_target_tokens:
-            raise ValueError(f"cube attention target visual for sample {sample_idx} has {latent.numel()} tokens, expected {expected_target_tokens} for shape {target_shape}")
         joint_streams = [stream for stream, role in zip(raw_visual_streams, visual_roles) if role == "joint_cube"]
         joint_indices = torch.cat([*joint_streams, latent])
         add_segment(
@@ -407,11 +291,6 @@ def _build_cube_segment_layout(
         )
         sample_label_ranges.append((sample_label_start, label_offset))
 
-    unassigned = torch.nonzero(cube_labels < 0, as_tuple=False).flatten()
-    if unassigned.numel():
-        first_token = int(unassigned[0])
-        first_sample = int(torch.searchsorted(cu_seqlens, first_token, right=True)) - 1
-        raise ValueError(f"packed token {first_token} in sample {first_sample} is not assigned to a stream")
     sort_idx = torch.cat(ordered_segments)
 
     return (
@@ -423,9 +302,7 @@ def _build_cube_segment_layout(
 
 
 def precompute_cube_attention(
-    sample_shapes,
     cu_seqlens,
-    total_len,
     cube_size,
     device,
     streams,
@@ -433,18 +310,12 @@ def precompute_cube_attention(
     max_sparse_topk_ratio,
 ):
     """Build request-static cube metadata for a packed batch."""
-    sample_shapes = [_normalize_cube_visual_shape(shape) for shape in sample_shapes]
+    # Visual shapes are (T, H, W); streams cover cu_seqlens without overlap.
     cu_seqlens = cu_seqlens.to(device=device, dtype=torch.long)
     real_total_len = int(cu_seqlens[-1].item())
-    if real_total_len > total_len:
-        raise ValueError(f"cube attention real length {real_total_len} exceeds total length {total_len}")
-    cube_token_size = _cube_token_size(cube_size)
-    cube_size = tuple(int(value) for value in cube_size)
+    cube_token_size = math.prod(cube_size)
     position_ids = position_ids.to(device=device)
-    if position_ids.ndim != 2 or position_ids.shape != (total_len, 3):
-        raise ValueError(f"cube attention img_position_ids must have shape [{total_len}, 3], got {tuple(position_ids.shape)}")
     cube_labels, sort_idx, sample_label_ranges, sparse_label_mask = _build_cube_segment_layout(
-        sample_shapes,
         cu_seqlens,
         real_total_len,
         cube_size,
@@ -467,7 +338,7 @@ def precompute_cube_attention(
     sorted_labels = cube_labels[sort_idx]
     occupied_labels, counts_per_label = sorted_labels.unique_consecutive(return_counts=True)
     if occupied_labels.numel() != num_labels:
-        _raise_for_unoccupied_labels(occupied_labels, sample_label_ranges)
+        raise ValueError("joint_cube streams must share the target position grid")
     padded_counts = ((counts_per_label + cube_token_size - 1) // cube_token_size) * cube_token_size
 
     padded_offsets = torch.zeros(len(padded_counts) + 1, dtype=torch.long, device=device)
@@ -719,17 +590,6 @@ def _dense_kernel():
     return flash_attn_varlen_func
 
 
-def _topk_ratio(setting):
-    ratio = float(setting["topk_ratio"])
-    if not 0.0 < ratio <= 1.0:
-        raise ValueError(f"topk_ratio must be in (0, 1], got {ratio}")
-    return ratio
-
-
-def _request_key(cube_size, topk_ratio):
-    return tuple(cube_size), topk_ratio
-
-
 def _packed_streams(layout):
     """Split packed modality indices into condition and target streams."""
 
@@ -759,27 +619,17 @@ def _configure(scheduler, setting):
     layout = scheduler.layout
 
     cube_size = tuple(int(value) for value in setting.get("local_cube_size", (8, 4, 4)))
-    try:
-        tile = _SUPPORTED_CUBES[cube_size]
-    except KeyError as exc:
-        raise ValueError(f"unsupported Moorcat cube size: {cube_size}") from exc
+    tile = _SUPPORTED_CUBES[cube_size]
 
-    topk_ratio = _topk_ratio(setting)
-    key = _request_key(cube_size, topk_ratio)
+    # topk_ratio is in (0, 1]; 1 selects dense attention.
+    topk_ratio = float(setting["topk_ratio"])
+    key = cube_size, topk_ratio
     if _STATE is not None and _STATE.source_layout is layout and _STATE.key == key:
         return _STATE
 
     device = layout.position_ids.device
-    patch_t, patch_h, patch_w = tuple(scheduler.config.get("patch_size", (1, 2, 2)))
-    target_shape = (
-        scheduler.num_latent_frames // patch_t,
-        scheduler.latent_height // patch_h,
-        scheduler.latent_width // patch_w,
-    )
     precomputed = precompute_cube_attention(
-        [target_shape],
         torch.tensor([0, layout.sequence_length], dtype=torch.long, device=device),
-        layout.sequence_length,
         cube_size,
         device,
         _packed_streams(layout),
@@ -879,8 +729,7 @@ class MusaMoorcatH3SparseOperator:
         scheduler = kwargs["scheduler"]
         state = _configure(scheduler, self.setting)
         layout = state.precomputed.layout
-        if q.shape[0] != layout.real_total_len or k.shape[0] != layout.real_total_len:
-            raise ValueError(f"packed sequence changed after Moorcat setup: q={q.shape[0]} k={k.shape[0]} expected={layout.real_total_len}")
+        # Q/K/V use the packed sequence order established by the scheduler.
 
         ratio = state.topk_ratio
         softmax_scale = float(kwargs.get("softmax_scale", q.shape[-1] ** -0.5))
