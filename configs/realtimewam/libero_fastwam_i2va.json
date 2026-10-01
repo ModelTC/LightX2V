@@ -18,5 +18,6 @@
   "triton_ops": true,
   "layer_norm_type": "Triton",
   "cuda_graph": true,
-  "warmup": true
+  "warmup": true,
+  "kv_fusion": false
 }

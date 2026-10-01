@@ -77,10 +77,13 @@ class FastWAMTransformerWeights(WeightModule):
         super().__init__()
         self.config = config
         self.add_module("video", FastWAMExpertTransformerWeights("mixtures.video", config, rope_config_key=self.rope_config_key))
-        self.add_module("action", FastWAMExpertTransformerWeights("mixtures.action", config, rope_config_key=self.rope_config_key))
+        self.add_module("action", self._build_action_weights(config))
         self.add_module("video_head", MM_WEIGHT_REGISTER["Default"]("mixtures.video.head.head.weight", "mixtures.video.head.head.bias"))
         self.add_module("video_head_modulation", TENSOR_REGISTER["Default"]("mixtures.video.head.modulation"))
         self.add_module("action_head", MM_WEIGHT_REGISTER["Default"]("mixtures.action.head.weight", "mixtures.action.head.bias"))
+
+    def _build_action_weights(self, config):
+        return FastWAMExpertTransformerWeights("mixtures.action", config, rope_config_key=self.rope_config_key)
 
     def non_block_weights_to_cuda(self):
         self.video_head.to_cuda()

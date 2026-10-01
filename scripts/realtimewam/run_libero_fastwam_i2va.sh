@@ -2,7 +2,7 @@
 set -e
 
 lightx2v_path=""
-config_json="${lightx2v_path}/configs/realtimewam/libero_i2va.json"
+config_json="${lightx2v_path}/configs/realtimewam/libero_fastwam_i2va.json"
 model_path=""
 
 image_path=""
