@@ -1,6 +1,6 @@
 # Run conda env create from the LightX2V repository root.
 # Simulator versions match the WAM evaluation setup; CUDA extensions are built separately.
-name: lightx2v-robotics
+name: lightx2v-robotwin
 channels:
   - conda-forge
 dependencies:
@@ -23,20 +23,6 @@ dependencies:
       - wheel
       # Conda runs pip from the directory containing this file.
       - -e ../../..
-      # LIBERO and LIBERO-Plus share a runtime; workers select their source tree.
-      - mujoco==3.3.2
-      - robosuite==1.4.0
-      - robomimic==0.2.0
-      - bddl==1.0.1
-      - gym==0.25.2
-      - cloudpickle==2.1.0
-      - easydict==1.9
-      - hydra-core==1.3.2
-      - future
-      - thop
-      - wand
-      - scikit-image
-      # RoboTwin 2.0 and the cuRobo build/runtime dependencies.
       - sapien==3.0.0b1
       - mplib==0.2.1
       - gymnasium==0.29.1
