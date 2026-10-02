@@ -6,6 +6,7 @@ This document introduces how to use LightX2V for video generation, including bas
 
 - [Environment Setup](#environment-setup)
 - [Basic Usage Examples](#basic-usage-examples)
+- [Robotics Evaluation (LIBERO, LIBERO-Plus, RoboTwin)](robotics/README.md)
 - [Model Path Configuration](#model-path-configuration)
 - [Creating Generator](#creating-generator)
 - [Advanced Configurations](#advanced-configurations)
