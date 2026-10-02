@@ -60,6 +60,8 @@ dependencies = [
     "fastapi",
     "python-multipart>=0.0.18",
     "uvicorn",
+    "protobuf",
+    "websockets",
     "PyJWT",
     "requests",
     "aio-pika",
