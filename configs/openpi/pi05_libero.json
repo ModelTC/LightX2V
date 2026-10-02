@@ -1,0 +1,15 @@
+{
+  "pi05": true,
+  "discrete_state_input": false,
+  "paligemma_variant": "gemma_2b",
+  "action_expert_variant": "gemma_300m",
+  "action_dim": 32,
+  "output_action_dim": 7,
+  "state_dim": 8,
+  "action_horizon": 10,
+  "max_token_len": 200,
+  "num_inference_steps": 10,
+  "device": "cuda",
+  "dtype": "bfloat16",
+  "pytorch_compile_mode": null
+}

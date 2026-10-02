@@ -12,6 +12,19 @@ from dataclasses import dataclass, field
 from typing import Dict, Tuple
 
 
+def parse_multiarray_label(label: str, *field_names: str) -> Tuple[int, ...] | None:
+    """Read integer fields from a ROS MultiArrayDimension label."""
+    fields = {}
+    for item in str(label).split(";"):
+        name, separator, value = item.partition("=")
+        if separator:
+            fields[name] = value
+    try:
+        return tuple(int(fields[name]) for name in field_names)
+    except (KeyError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class EnvContract:
     # Logical environment id, e.g. "libero" or "robotwin".
@@ -52,6 +65,10 @@ class EnvContract:
     @property
     def observation_ready_topic(self) -> str:
         return f"{self.namespace}/observation_ready"
+
+    @property
+    def observation_context_topic(self) -> str:
+        return f"{self.namespace}/observation_context"
 
     @property
     def task_topic(self) -> str:

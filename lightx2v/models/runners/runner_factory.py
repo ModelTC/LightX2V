@@ -28,6 +28,7 @@ RUNNER_MODULES = {
     "minimax_h3_causal": "lightx2v.models.runners.minimax_h3_causal.minimax_h3_causal_runner",
     "motus": "lightx2v.models.runners.motus.motus_runner",
     "neopp": "lightx2v.models.runners.neopp.neopp_runner",
+    "openpi": "lightx2v.models.runners.openpi.openpi_runner",
     "qwen_image": "lightx2v.models.runners.qwen_image.qwen_image_runner",
     "qwen_image_21": "lightx2v.models.runners.qwen_image_21.qwen_image_21_runner",
     "seedvr2": "lightx2v.models.runners.seedvr.seedvr_runner",
