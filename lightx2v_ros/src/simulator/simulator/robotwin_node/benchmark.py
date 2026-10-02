@@ -252,7 +252,6 @@ class RoboTwinBenchmark(Benchmark):
             "EVALUATION": {
                 "robotwin_root": os.environ.get("ROBOTWIN_ROOT") or str(ROBOTWIN_ROOT),
                 "eval_num_episodes": 100,
-                "replan_steps": 24,
                 "skip_get_obs_within_replan": True,
                 "instruction_type": "unseen",
                 "embodiment": "aloha-agilex",
