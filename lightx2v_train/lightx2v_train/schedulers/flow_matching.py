@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from lightx2v_train.runtime.distributed import get_device
+from lightx2v_train.runtime.backend import get_device
 from lightx2v_train.schedulers.time_shift import build_time_shift_mu
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -10,7 +10,7 @@ from lightx2v_train.utils.utils import get_running_dtype
 class RectifiedFlowMatchingScheduler:
     def __init__(self, config):
         self.config = config
-        self.device = get_device()
+        self.device = get_device(config)
 
         scheduler_config = config["scheduler"]
         self.num_train_timesteps = scheduler_config.get("num_train_timesteps", 1000)
