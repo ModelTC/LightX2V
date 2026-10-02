@@ -15,6 +15,9 @@ ImageMagick (`sudo apt-get install libmagickwand-dev`). In containers, expose
 The installer creates independent Python 3.10 environments with LightX2V and
 PyTorch 2.7.1, and initializes the corresponding benchmark submodules:
 
+Python itself is stored in `.venvs/python/`. When sharing the repository between
+machines, mount it at the same absolute path; GPU drivers remain machine-specific.
+
 ```bash
 # LIBERO and LIBERO-Plus share this environment
 bash scripts/bench/robotics/install_env.sh libero

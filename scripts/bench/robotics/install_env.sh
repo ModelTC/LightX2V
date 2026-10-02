@@ -12,6 +12,8 @@ cd "$script_dir/../../.."
 env_dir="$PWD/.venvs/$benchmark"
 simulator="$PWD/lightx2v_ros/src/simulator/simulator"
 
+# Keep the base interpreter on the same filesystem as the environments.
+export UV_PYTHON_INSTALL_DIR="$PWD/.venvs/python"
 uv venv --python 3.10 --managed-python --allow-existing "$env_dir"
 export PATH="$env_dir/bin:$PATH"
 # egl-probe's build invokes cmake before the simulator packages are installed.
