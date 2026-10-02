@@ -1,5 +1,5 @@
-FROM lightx2v/lightx2v:26062001-cu130 AS base
-# ubuntu 24.04 python 3.12 torch 2.11 cuda 13.0
+FROM lightx2v/lightx2v:26070401-cu130 AS base
+# ubuntu 24.04 python 3.11 torch 2.11 cuda 13.0
 
 RUN apt update && apt install locales
 RUN locale-gen en_US en_US.UTF-8
@@ -22,7 +22,7 @@ RUN apt update --fix-missing && apt install -y ros-dev-tools
 
 RUN pip uninstall setuptools-scm
 RUN pip install catkin_pkg empy pyqt5-sip PyQt5 sip==6.15.3 setuptools==79.0.1
-RUN pip install hydra-core==1.2.0 robosuite==1.4.0 bddl==1.0.1 coverage==7.6.1 gym==0.25.2 mujoco==3.9.0 future easydict termcolor
+RUN pip install hydra-core==1.2.0 robosuite==1.4.0 bddl==1.0.1 coverage==7.6.1 gym==0.25.2 mujoco==3.9.0
 
 
 # Install ROS2 Jazzy (Install from apt on Ubuntu 24.04)
