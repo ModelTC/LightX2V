@@ -3,6 +3,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 
+from lightx2v_train.runtime.accelerator import get_runtime
 from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_distributed
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
@@ -52,13 +53,16 @@ class ImageInferencer(BaseInferencer):
 
         cpu_offload = self.infer_config.get("vae_cpu_offload", False)
         if cpu_offload:
+            runtime = get_runtime()
+            runtime.synchronize()
+            runtime.empty_cache()
             vae.to(self.model.device)
         try:
             return self.model.decode_latent(latent)
         finally:
             if cpu_offload:
                 vae.to("cpu")
-                torch.cuda.empty_cache()
+                get_runtime().empty_cache()
 
     @torch.no_grad()
     def infer(self):

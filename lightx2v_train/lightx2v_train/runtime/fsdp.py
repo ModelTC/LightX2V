@@ -1,9 +1,17 @@
 import torch
 from loguru import logger
-from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 
+from lightx2v_train.runtime.accelerator import get_runtime
 from lightx2v_train.runtime.distributed import get_data_parallel_world_size, get_device_mesh, is_distributed
 from lightx2v_train.utils.utils import get_running_dtype
+
+
+def _fsdp_api():
+    # Import after the runtime has loaded the device extension. torch-npu patches
+    # PyTorch's upstream FSDP2 implementation during import.
+    from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
+
+    return FSDPModule, MixedPrecisionPolicy, fully_shard
 
 
 def fsdp2_enabled(config):
@@ -12,6 +20,7 @@ def fsdp2_enabled(config):
 
 
 def is_fsdp2_module(module):
+    FSDPModule, _, _ = _fsdp_api()
     return isinstance(module, FSDPModule)
 
 
@@ -24,6 +33,7 @@ def _dtype(name):
 
 
 def _build_mp_policy(mp_config):
+    _, MixedPrecisionPolicy, _ = _fsdp_api()
     return MixedPrecisionPolicy(
         param_dtype=_dtype(mp_config.get("param_dtype")),
         reduce_dtype=_dtype(mp_config.get("reduce_dtype")),
@@ -33,18 +43,13 @@ def _build_mp_policy(mp_config):
 
 
 def _fully_shard_module(module, mesh, mp_policy, reshard_after_forward):
+    _, _, fully_shard = _fsdp_api()
     return fully_shard(
         module,
         mesh=mesh,
         mp_policy=mp_policy,
         reshard_after_forward=reshard_after_forward,
     )
-
-
-def _cuda_memory_gb():
-    if not torch.cuda.is_available():
-        return None
-    return torch.cuda.memory_allocated() / 1024**3, torch.cuda.memory_reserved() / 1024**3
 
 
 def _iter_shard_plan(plan):
@@ -62,7 +67,7 @@ def apply_fsdp2(model, config):
         return model
 
     fsdp_config = config.get("distributed", {}).get("fsdp2", {})
-    before = _cuda_memory_gb()
+    before = get_runtime().memory_gb()
     mp_config = fsdp_config.get("mixed_precision", {})
     mp_policy = _build_mp_policy(mp_config)
     mesh = get_device_mesh()
@@ -70,10 +75,10 @@ def apply_fsdp2(model, config):
     for module, reshard_after_forward in _iter_shard_plan(model.fsdp2_shard_plan(fsdp_config)):
         _fully_shard_module(module, mesh, mp_policy, reshard_after_forward)
 
-    torch.cuda.empty_cache()
+    get_runtime().empty_cache()
 
     if fsdp_config.get("log_memory", True):
-        after = _cuda_memory_gb()
+        after = get_runtime().memory_gb()
         if before is not None and after is not None:
             logger.info(
                 "FSDP2 transformer sharded: allocated {:.2f} -> {:.2f} GiB, reserved {:.2f} -> {:.2f} GiB",
