@@ -3,7 +3,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 
-from lightx2v_train.runtime.accelerator import get_runtime
+from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_distributed
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
@@ -52,17 +52,17 @@ class ImageInferencer(BaseInferencer):
             raise RuntimeError("image_infer requires a loaded VAE for decoding.")
 
         cpu_offload = self.infer_config.get("vae_cpu_offload", False)
-        if cpu_offload:
-            runtime = get_runtime()
-            runtime.synchronize()
-            runtime.empty_cache()
+        backend = get_backend() if cpu_offload else None
+        if backend is not None:
+            backend.synchronize()
+            backend.empty_cache()
             vae.to(self.model.device)
         try:
             return self.model.decode_latent(latent)
         finally:
-            if cpu_offload:
-                vae.to("cpu")
-                get_runtime().empty_cache()
+            if backend is not None:
+                vae.to(backend.host_device)
+                backend.empty_cache()
 
     @torch.no_grad()
     def infer(self):

@@ -5,7 +5,7 @@ import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
 
-from lightx2v_train.runtime.accelerator import get_runtime, init_runtime
+from lightx2v_train.runtime.backend import get_backend, get_device, init_backend
 
 _DEVICE_MESH = None
 _FSDP_DEVICE_MESH = None
@@ -107,17 +107,17 @@ def _resolve_parallel_sizes(config, world_size):
 
 
 def init_distributed(config=None):
-    runtime = init_runtime(config)
+    device_backend = init_backend(config)
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         return
 
     dist_config = (config or {}).get("distributed", {})
-    backend = dist_config.get("backend", "auto")
-    if backend == "auto":
-        backend = runtime.distributed_backend
+    process_group_backend = dist_config.get("backend", "auto")
+    if process_group_backend == "auto":
+        process_group_backend = device_backend.process_group_backend
     if not dist.is_initialized():
         timeout_minutes = dist_config.get("timeout_minutes", 10)
-        dist.init_process_group(backend=backend, timeout=timedelta(minutes=timeout_minutes))
+        dist.init_process_group(backend=process_group_backend, timeout=timedelta(minutes=timeout_minutes))
 
     global _DEVICE_MESH, _FSDP_DEVICE_MESH
     global _DP_GROUP, _SP_GROUP, _DP_RANK, _DP_WORLD_SIZE, _SP_RANK, _SP_WORLD_SIZE
@@ -134,7 +134,7 @@ def init_distributed(config=None):
 
         if sp_size > 1:
             _DEVICE_MESH = init_device_mesh(
-                runtime.device_type,
+                device_backend.device_type,
                 (dp_size, sp_size),
                 mesh_dim_names=("dp", "sp"),
             )
@@ -142,7 +142,7 @@ def init_distributed(config=None):
             _DP_GROUP = _DEVICE_MESH["dp"].get_group()
             _SP_GROUP = _DEVICE_MESH["sp"].get_group()
         else:
-            _DEVICE_MESH = init_device_mesh(runtime.device_type, (world_size,))
+            _DEVICE_MESH = init_device_mesh(device_backend.device_type, (world_size,))
             _FSDP_DEVICE_MESH = _DEVICE_MESH
             _DP_GROUP = _DEVICE_MESH.get_group()
             _SP_GROUP = None
@@ -203,11 +203,6 @@ def is_main_process():
     return get_rank() == 0
 
 
-def get_device(config=None):
-    runtime = get_runtime() if config is None else init_runtime(config)
-    return runtime.device
-
-
 def get_device_mesh():
     return _FSDP_DEVICE_MESH
 
@@ -218,7 +213,7 @@ def get_parallel_device_mesh():
 
 def barrier():
     if dist.is_available() and dist.is_initialized():
-        dist.barrier(**get_runtime().barrier_kwargs(dist.get_backend()))
+        dist.barrier(**get_backend().barrier_kwargs(dist.get_backend()))
 
 
 def reduce_mean(value):

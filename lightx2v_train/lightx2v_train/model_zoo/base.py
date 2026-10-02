@@ -22,7 +22,8 @@ from lightx2v_train.model_zoo.capability_adapters.common import (
     CommonParallelCapability,
     CommonTrainableCapability,
 )
-from lightx2v_train.runtime.distributed import get_device, is_main_process
+from lightx2v_train.runtime.backend import get_device
+from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import is_fsdp2_module
 from lightx2v_train.utils.utils import get_running_dtype
 

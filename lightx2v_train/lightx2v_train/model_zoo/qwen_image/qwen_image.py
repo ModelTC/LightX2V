@@ -83,13 +83,7 @@ class QwenImageModel(BaseModel):
         self.text_pipeline.text_encoder.eval()
 
     def _load_vae(self, model_path):
-        data_config = self.config.get("data", {})
-        raw_training_uses_vae = "train" in data_config and not is_train_cache_dataset(self.config)
-        use_cpu = (
-            not is_cache_build(self.config)
-            and not raw_training_uses_vae
-            and self.config.get("inference", {}).get("vae_cpu_offload", False)
-        )
+        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config.get("inference", {}).get("vae_cpu_offload", False)
         device = torch.device("cpu") if use_cpu else self.device
         self.vae = AutoencoderKLQwenImage.from_pretrained(
             model_path,

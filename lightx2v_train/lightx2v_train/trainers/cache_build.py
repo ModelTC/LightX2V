@@ -13,7 +13,7 @@ from lightx2v_train.model_capabilities import (
     FlowMatchingSFTCapability,
     TeacherForcingCapability,
 )
-from lightx2v_train.runtime.accelerator import get_runtime
+from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.distributed import get_rank, get_sequence_parallel_rank, is_distributed, is_main_process
 from lightx2v_train.utils.generation_shapes import generation_shape_key, parse_generation_shapes
 from lightx2v_train.utils.registry import TRAINER_REGISTER
@@ -167,7 +167,7 @@ class CacheBuildTrainer:
                 cache_path = cache_dir / cache_name
                 if self.cache_config["overwrite"] or not cache_path.exists():
                     torch.manual_seed(self.cache_config["seed"] + index)
-                    get_runtime().manual_seed_all(self.cache_config["seed"] + index)
+                    get_backend().manual_seed_all(self.cache_config["seed"] + index)
                     _atomic_save(self._encode(sample, dtype), cache_path)
                 else:
                     existing = torch.load(cache_path, map_location="cpu", weights_only=True)

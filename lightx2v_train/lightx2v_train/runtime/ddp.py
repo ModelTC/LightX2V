@@ -1,7 +1,7 @@
 from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
 
-from lightx2v_train.runtime.accelerator import get_runtime
+from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.distributed import is_distributed
 
 
@@ -84,7 +84,7 @@ def _ddp_kwargs(config):
         "static_graph": config.get("static_graph", False),
         "gradient_as_bucket_view": config.get("gradient_as_bucket_view", False),
     }
-    kwargs.update(get_runtime().ddp_kwargs())
+    kwargs.update(get_backend().ddp_kwargs())
     return kwargs
 
 
