@@ -22,7 +22,8 @@ def resolve_policy_config(cfg, root, backend):
     """Adapt benchmark inputs to LV's existing FastWAM/RealtimeWAM policy."""
     name = cfg.model.name
     if not cfg.config_json:
-        path = root / "configs" / name / f"{backend.policy_profile}_i2va.json"
+        profile_name = f"{backend.policy_profile}_fastwam" if name == "realtimewam" else backend.policy_profile
+        path = root / "configs" / name / f"{profile_name}_i2va.json"
         if not path.exists():
             path = root / "configs/fastwam" / f"{backend.policy_profile}_i2va.json"
         cfg.config_json = str(path)

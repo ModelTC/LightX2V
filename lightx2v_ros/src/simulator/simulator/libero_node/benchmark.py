@@ -112,6 +112,8 @@ class LiberoBenchmark(Benchmark):
                 "render_size": 256,
             },
             "MULTIRUN": {
+                "max_tasks_per_gpu": 1,
+                "chunk_size": 2,
                 "task_suite_names": ["libero_spatial", "libero_object", "libero_goal", "libero_10"],
                 "task_ids": None,
             },
