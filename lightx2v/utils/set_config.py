@@ -41,6 +41,27 @@ def get_default_config():
     )
 
 
+# Keys that decide which code LightX2V imports or which runner executes.  A
+# model directory is untrusted input, so these must only ever be set by the
+# caller (startup config / CLI) and never taken from a file inside the bundle.
+MODEL_BUNDLE_PROTECTED_KEYS = frozenset({"model_cls", "trust_remote_code"})
+
+
+def update_from_model_bundle_config(config, bundle_config):
+    """Merge settings read from a model bundle without letting it choose code.
+
+    ``bundle_config`` originates from files inside the model directory such as
+    ``config.json`` sidecars or safetensors ``__metadata__``, which are
+    attacker-controlled in a model-supply-chain scenario.  Runner selection
+    (``model_cls``) and the remote-code trust decision
+    (``trust_remote_code``) remain caller-controlled: a bundle must not be able
+    to re-point the caller at a different runner (for example LTX-2.5 metadata
+    forcing ``cosmos3``) or re-enable remote code execution that the caller
+    disabled.
+    """
+    config.update({key: value for key, value in bundle_config.items() if key not in MODEL_BUNDLE_PROTECTED_KEYS})
+
+
 def build_startup_config(config_data):
     """Assemble startup settings from deployment and model configs."""
     config = get_default_config()
@@ -90,7 +111,7 @@ def load_model_config(config):
                 checkpoint_config = json.loads(metadata.get("config", "{}"))
                 transformer_config = dict(checkpoint_config.get("transformer", {}))
                 transformer_config.pop("rope_type", None)
-                config.update(transformer_config)
+                update_from_model_bundle_config(config, transformer_config)
                 config["ltx_model_version"] = metadata.get("model_version", "")
             except (OSError, ValueError, TypeError) as exc:
                 raise ValueError(f"Failed to read LTX-2.5 transformer metadata from {transformer_path}: {exc}") from exc
@@ -102,7 +123,7 @@ def load_model_config(config):
         if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
-            config.update(model_config)
+            update_from_model_bundle_config(config, model_config)
     elif config["model_cls"] in {"hunyuan3d", "hidream_o1_image"}:
         # These runners load their own model configuration.
         pass
@@ -136,7 +157,7 @@ def load_model_config(config):
         if os.path.exists(config_path):
             with open(config_path, "r") as f:
                 model_config = json.load(f)
-            config.update(model_config)
+            update_from_model_bundle_config(config, model_config)
         config.setdefault("text_dim", 4096)
         config.setdefault("patch_size", (1, 2, 2))
         config.setdefault("window_size", (-1, -1))
@@ -157,11 +178,11 @@ def load_model_config(config):
         if os.path.exists(config_path):
             with open(config_path, "r") as f:
                 model_config = json.load(f)
-            config.update(model_config)
+            update_from_model_bundle_config(config, model_config)
             action_head_config = model_config.get("action_head_cfg", {}).get("config", {})
             diffusion_model_config = action_head_config.get("diffusion_model_cfg", {})
-            config.update(action_head_config)
-            config.update(diffusion_model_config)
+            update_from_model_bundle_config(config, action_head_config)
+            update_from_model_bundle_config(config, diffusion_model_config)
             if "out_dim" in config:
                 config["num_channels_latents"] = config["out_dim"]
     elif config["model_cls"] == "longcat_image":
@@ -169,13 +190,13 @@ def load_model_config(config):
             config_path = os.path.join(config["model_path"], subfolder, "config.json")
             if os.path.exists(config_path):
                 with open(config_path, "r") as f:
-                    config.update(json.load(f))
+                    update_from_model_bundle_config(config, json.load(f))
     elif config["model_cls"] in {"cosmos3", "lingbot_video"}:
         transformer_config_path = os.path.join(config["model_path"], "transformer", "config.json")
         if os.path.exists(transformer_config_path):
             with open(transformer_config_path, "r") as f:
                 model_config = json.load(f)
-            config.update(model_config)
+            update_from_model_bundle_config(config, model_config)
         config.setdefault("num_frames", 1)
         config.setdefault("fps", config.get("base_fps", 24) if config["model_cls"] == "cosmos3" else 24)
         if config["model_cls"] == "lingbot_video":
@@ -202,7 +223,7 @@ def load_model_config(config):
             raise FileNotFoundError(f"MiniMax-H3 transformer config not found: {transformer_config_path}")
         with open(transformer_config_path, "r") as f:
             model_config = json.load(f)
-        config.update(model_config)
+        update_from_model_bundle_config(config, model_config)
         if not causal:
             config["model_variant"] = model_variant
             config.pop("task", None)
@@ -244,7 +265,7 @@ def load_model_config(config):
                 model_config["patch_size"] = z_image_patch_size[0]
                 model_config["f_patch_size"] = z_image_f_patch_size[0]
 
-            config.update(model_config)
+            update_from_model_bundle_config(config, model_config)
             break
         # load quantized config
         if config.get("dit_quantized_ckpt") is not None:
@@ -252,7 +273,7 @@ def load_model_config(config):
             if os.path.exists(config_path):
                 with open(config_path, "r") as f:
                     model_config = json.load(f)
-                config.update(model_config)
+                update_from_model_bundle_config(config, model_config)
 
     vae_config_path = os.path.join(config["model_path"], "vae", "config.json")
     if os.path.exists(vae_config_path):
