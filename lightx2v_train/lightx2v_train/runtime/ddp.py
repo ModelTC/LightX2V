@@ -1,7 +1,7 @@
-import torch
 from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
 
+from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.distributed import is_distributed
 
 
@@ -84,9 +84,7 @@ def _ddp_kwargs(config):
         "static_graph": config.get("static_graph", False),
         "gradient_as_bucket_view": config.get("gradient_as_bucket_view", False),
     }
-    if torch.cuda.is_available():
-        kwargs["device_ids"] = [torch.cuda.current_device()]
-        kwargs["output_device"] = torch.cuda.current_device()
+    kwargs.update(get_backend().ddp_kwargs())
     return kwargs
 
 
