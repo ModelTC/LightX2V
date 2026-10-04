@@ -1,0 +1,46 @@
+model:
+    name: qwen_image_2_1
+    pretrained_model_name_or_path: ${oc.env:QWEN_IMAGE_21_MODEL_PATH,/data/wushuo1/models/Qwen-Image-2.1}
+    running_dtype: bf16
+
+data:
+    processor:
+        name: qwen_image_2_1
+        size_multiple: 32
+        reference_image_area: 1048576
+    val:
+        name: image_dataset
+        num_workers: 2
+        shuffle: false
+        data_path:
+            - ${oc.env:QWEN_IMAGE_21_VAL_DATA,/data/wushuo1/data/LightX2V_train_data_examples/dataset_v1/val.jsonl}
+            - ${oc.env:QWEN_IMAGE_21_EDIT_VAL_DATA,/data/wushuo1/data/LightX2V_train_data_examples/dataset_edit/val.jsonl}
+
+scheduler:
+    num_train_timesteps: 1000
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: exponential
+        time_shift_power: 1.0
+        dynamic_shift: true
+        shift_mu_strategy: linear
+        patch_size: [1, 1]
+        shift_x1: 256
+        shift_x2: 8192
+        shift_y1: 0.5
+        shift_y2: 0.9
+
+inference:
+    method: image_infer
+    default_width: 1024
+    default_height: 1024
+    num_inference_steps: 40
+    enable_cfg: false
+    seed: 42
+    output_dir: ${oc.env:QWEN_IMAGE_21_INFER_OUTPUT_DIR,./output_infer/qwen_image_2_1_lora}
+    lora_config:
+        path: ${oc.env:QWEN_IMAGE_21_LORA_PATH,./output_train/qwen_image_2_1_lora/checkpoint-000000100/pytorch_lora_weights.safetensors}
+
+logging:
+    rank_zero_only: true
+    infer_log_every_steps: 10

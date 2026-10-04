@@ -458,10 +458,13 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
         *,
         latent_geometry: LatentGeometry | None = None,
         guidance_in_denoiser_space: bool = False,
+        uses_sample_context: bool = False,
     ) -> None:
         super().__init__(model)
         self._latent_geometry = latent_geometry
         self._guidance_in_denoiser_space = bool(guidance_in_denoiser_space)
+        # Preserve the opt-in used by existing edit adapters.
+        self._uses_sample_context = uses_sample_context or self.cache_uses_sample_context
 
     @property
     def device(self):
@@ -500,7 +503,7 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
             batch,
             inputs=_target_cache_inputs(self.model, batch, required=False),
             prompts=prompts,
-            contextual_roles=prompts if self.cache_uses_sample_context else (),
+            contextual_roles=prompts if self._uses_sample_context else (),
             conditioning_meta=conditioning_meta,
         )
 
@@ -542,18 +545,16 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
         if cached is not None:
             positive, negative = cached
             return broadcast(positive), broadcast(negative) if negative is not None else None
+        prompts = [prompt]
+        if guidance_scale > 1:
+            prompts.append(_negative_prompt(conditioning, negative_prompt, scalar=scalar))
         with torch.no_grad():
-            positive = self.model.encode_prompt_condition(prompt)
-            if guidance_scale > 1:
-                negative = self.model.encode_prompt_condition(
-                    _negative_prompt(
-                        conditioning,
-                        negative_prompt,
-                        scalar=scalar,
-                    )
-                )
+            if self._uses_sample_context:
+                conditions = self.model.encode_conditions_with_context(batch, prompts)
             else:
-                negative = None
+                conditions = [self.model.encode_prompt_condition(value) for value in prompts]
+        positive = conditions[0]
+        negative = conditions[1] if guidance_scale > 1 else None
         return (
             broadcast(positive),
             broadcast(negative) if negative is not None else None,
