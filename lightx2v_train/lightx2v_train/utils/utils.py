@@ -2,7 +2,7 @@ import torch
 
 
 def is_train_cache_dataset(config):
-    return config.get("data", {}).get("train", {}).get("name") == "cache_dataset"
+    return config.get("data", {}).get("train", {}).get("name") in {"cache_dataset", "minimax_h3_cache_dataset", "minimax_h3_ref_cache_dataset"}
 
 
 def is_cache_build(config):

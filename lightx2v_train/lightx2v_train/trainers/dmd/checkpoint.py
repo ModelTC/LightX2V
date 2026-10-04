@@ -1,5 +1,6 @@
 import os
 import shutil
+from collections.abc import Mapping
 
 import torch
 import torch.distributed.checkpoint as dcp
@@ -59,6 +60,24 @@ class DmdCheckpointManager:
             trick = getattr(self, name, None)
             if trick is not None:
                 metadata.update(trick.checkpoint_metadata())
+        metadata.update(self._extra_checkpoint_metadata())
+        return metadata
+
+    def _extra_checkpoint_metadata(self):
+        metadata = dict(self.student.extra_checkpoint_metadata())
+        metadata["student_ema_config"] = getattr(self, "student_ema_config", {"enabled": False})
+        residual_head = getattr(self, "residual_head", None)
+        metadata["residual_head_enabled"] = residual_head is not None
+        if getattr(self, "trainer_name", None) == "dmd":
+            metadata["dmd_update_order"] = getattr(self, "dmd_update_order", "student_first")
+        if residual_head is not None:
+            metadata["residual_head_config"] = residual_head.checkpoint_metadata()
+        sampler = getattr(self.dataloader_train, "sampler", None)
+        if getattr(sampler, "is_minimax_h3_ref_cost_sampler", False) or getattr(sampler, "is_minimax_h3_task_cycle_sampler", False):
+            metadata["minimax_h3_route_sampling"] = sampler.checkpoint_metadata(
+                gradient_accumulation_iters=self.gradient_accumulation_iters,
+                fake_update_ratio=self.fake_update_ratio,
+            )
         return metadata
 
     @staticmethod
@@ -91,14 +110,122 @@ class DmdCheckpointManager:
 
     def _validate_checkpoint_state(self, state, state_path, resume_ckpt_path):
         self._validate_checkpoint_metadata(state, state_path, resume_ckpt_path)
+        self._validate_residual_head_state(state, state_path)
+        self._validate_student_ema_state(state, state_path)
         expected = {self.checkpoint_version_key: self.checkpoint_version}
         for role, runtime in self._active_role_runtimes():
             expected[f"{role}_train_type"] = runtime.train_type
         expected.update(self._trick_checkpoint_metadata())
-        self._require_checkpoint_keys(state, expected, state_path)
+        extra_metadata = self._extra_checkpoint_metadata()
+        legacy_metadata = self.student.legacy_extra_checkpoint_metadata()
+        if getattr(self, "trainer_name", None) == "dmd":
+            legacy_metadata = {**legacy_metadata, "dmd_update_order": "student_first"}
+        missing = set(expected) - state.keys() - legacy_metadata.keys() - extra_metadata.keys()
+        self._require_checkpoint_keys(state, missing, state_path)
+        allow_transition = bool(self.config.get("resume", {}).get("allow_distribution_matching_transition", False))
+        self._validate_h3_checkpoint_metadata(state, extra_metadata, state_path, allow_transition)
         for key, value in expected.items():
-            if state[key] != value:
-                raise RuntimeError(f"Checkpoint {key}={state[key]!r} does not match the current value {value!r}: {state_path}")
+            if key in state:
+                saved = state[key]
+            elif key in legacy_metadata:
+                saved = legacy_metadata[key]
+                logger.warning("[checkpoint][resume] legacy checkpoint assumes {}={}: {}", key, saved, state_path)
+            else:
+                logger.warning("[checkpoint][resume] legacy checkpoint has no {} metadata; current setting={} will be saved in the next checkpoint: {}", key, value, state_path)
+                continue
+            if key == "residual_head_config":
+                saved = self._normalized_residual_head_config(saved)
+                value = self._normalized_residual_head_config(value)
+            if saved != value:
+                if key in extra_metadata and allow_transition and key != "residual_head_config":
+                    logger.warning("[checkpoint][resume] explicitly changing {} from {} to {}: {}", key, saved, value, state_path)
+                    continue
+                message = f"Checkpoint {key}={saved!r} does not match the current value {value!r}: {state_path}"
+                if key == "residual_head_config":
+                    message += "; use a fresh output directory when changing the residual-head recipe."
+                elif key in extra_metadata:
+                    message += "; use a fresh output directory or set resume.allow_distribution_matching_transition=true for an intentional change."
+                raise RuntimeError(message)
+
+    @staticmethod
+    def _normalized_residual_head_config(metadata):
+        """Recognize only the two defaults absent from pre-calibration runs.
+
+        This is not a general configuration migration: all other missing,
+        extra, or mismatching fields remain strict. In particular, a legacy
+        full/accumulation=1 checkpoint must not resume as calibrated/accum=4,
+        even with the distribution-matching transition escape hatch enabled.
+        Never modify the supplied checkpoint or runtime metadata mapping.
+        """
+        if not isinstance(metadata, Mapping):
+            return metadata
+        return {"fit_grad_accum_steps": 1, "gate_mode": "full", **metadata}
+
+    def _validate_residual_head_state(self, state, state_path):
+        residual_head = getattr(self, "residual_head", None)
+        enabled = residual_head is not None
+        saved_enabled = state.get("residual_head_enabled", False)
+        if saved_enabled != enabled:
+            raise RuntimeError(f"Checkpoint residual_head_enabled={saved_enabled!r} does not match current {enabled!r}: {state_path}; head/non-head experiments require separate output directories.")
+        if enabled:
+            self._require_checkpoint_keys(state, ["residual_head_config", "residual_head_state"], state_path)
+            current = residual_head.checkpoint_metadata()
+            if self._normalized_residual_head_config(state["residual_head_config"]) != self._normalized_residual_head_config(current):
+                raise RuntimeError(f"Checkpoint residual_head_config={state['residual_head_config']!r} does not match current {current!r}: {state_path}")
+
+    def _validate_student_ema_state(self, state, state_path):
+        current = getattr(self, "student_ema_config", {"enabled": False})
+        saved = state.get("student_ema_config", {"enabled": False})
+        if saved != current:
+            raise RuntimeError(f"Checkpoint student_ema_config={saved!r} does not match current {current!r}: {state_path}; use a fresh output directory when changing the EMA recipe.")
+        if current["enabled"]:
+            self._require_checkpoint_keys(state, ["student_ema"], state_path)
+
+    def _extra_residual_head_training_state(self):
+        residual_head = getattr(self, "residual_head", None)
+        return {} if residual_head is None else {"residual_head_state": residual_head.state_dict()}
+
+    def _load_residual_head_training_state(self, state):
+        residual_head = getattr(self, "residual_head", None)
+        if residual_head is not None:
+            residual_head.load_state_dict(state["residual_head_state"])
+
+    @staticmethod
+    def _validate_h3_checkpoint_metadata(state, current, state_path, allow_transition):
+        """Keep H3 topology strict and objective transitions explicit."""
+        topology = current.get("minimax_h3_parallel_topology")
+        if topology is None:
+            return
+        saved_topology = state.get("minimax_h3_parallel_topology")
+        if saved_topology is None:
+            if topology["sequence_parallel_size"] > 1:
+                raise RuntimeError(f"Cannot resume a checkpoint without MiniMax-H3 parallel-topology metadata using sequence parallelism: {state_path}")
+        elif saved_topology != topology:
+            raise RuntimeError(f"Checkpoint minimax_h3_parallel_topology={saved_topology!r} does not match the current value {topology!r}: {state_path}")
+
+        geometry = current["minimax_h3_target_geometry"]
+        requires_transition = []
+        if "minimax_h3_target_geometry" not in state and geometry["fixed_num_frames"] is not None:
+            requires_transition.append("minimax_h3_target_geometry")
+        sampler = current.get("minimax_h3_route_sampling")
+        if sampler is not None and "minimax_h3_route_sampling" not in state and sampler["route_mode"] != "homogeneous":
+            requires_transition.append("minimax_h3_route_sampling")
+        if sampler is None and "minimax_h3_route_sampling" in state:
+            requires_transition.append("minimax_h3_route_sampling")
+        saved_sla = state.get("student_sparse_attention")
+        current_sla = current.get("student_sparse_attention")
+        if saved_sla is None and current_sla is not None and current_sla.get("enabled", False):
+            requires_transition.append("student_sparse_attention")
+        if saved_sla is not None and saved_sla.get("enabled", False) and "student_sparse_attention" not in current:
+            requires_transition.append("student_sparse_attention")
+        for key in requires_transition:
+            saved, value = state.get(key), current.get(key)
+            if not allow_transition:
+                raise RuntimeError(
+                    f"Checkpoint {key}={saved!r} cannot silently transition to {value!r}: {state_path}; "
+                    "use a fresh output directory or set resume.allow_distribution_matching_transition=true for an intentional change."
+                )
+            logger.warning("[checkpoint][resume] explicitly changing {} from {} to {}: {}", key, saved, value, state_path)
 
     def _load_single_process_state(self, resume_ckpt_path):
         state_path = os.path.join(resume_ckpt_path, "training_state.pt")
@@ -115,6 +242,10 @@ class DmdCheckpointManager:
             runtime.optimizer.load_state_dict(state[runtime.spec.optimizer_attribute])
             runtime.scheduler.load_state_dict(state[runtime.spec.scheduler_attribute])
             logger.info("[checkpoint][resume][role] role={} model=restored optimizer=restored scheduler=restored", role)
+        self.student.load_extra_training_state(state)
+        self._load_residual_head_training_state(state)
+        if getattr(self, "student_ema", None) is not None:
+            self.student_ema.load_state_dict(state["student_ema"])
         logger.info("Restored training state from {} at iteration {}", state_path, state["iteration"])
 
     def _load_distributed_state(self, resume_ckpt_path):
@@ -138,6 +269,8 @@ class DmdCheckpointManager:
             model_state, optimizer_state = get_state_dict(self._parallel(runtime.model).state_module(), runtime.optimizer, options=options)
             state[f"{role}_model"] = model_state
             state[f"{role}_optimizer"] = optimizer_state
+        if getattr(self, "student_ema", None) is not None:
+            state["student_ema"] = self.student_ema.shadow
         dcp.load(state, checkpoint_id=dist_state_path)
         for role in ("student", "fake"):
             runtime = roles[role]
@@ -151,6 +284,15 @@ class DmdCheckpointManager:
             set_state_dict(module, runtime.optimizer, model_state_dict=role_state["model"], optim_state_dict=role_state["optimizer"], options=options)
         for _, runtime in roles.items():
             runtime.scheduler.load_state_dict(trainer_state[runtime.spec.scheduler_attribute])
+        self.student.load_extra_training_state(trainer_state)
+        self._load_residual_head_training_state(trainer_state)
+        if getattr(self, "student_ema", None) is not None:
+            self.student_ema.load_state_dict(
+                {
+                    **trainer_state["student_ema"],
+                    "shadow": state["student_ema"],
+                }
+            )
         logger.info("Restored distributed DMD training state from {}", resume_ckpt_path)
 
     def save_checkpoint(self, iteration, save_total_limit):
@@ -174,6 +316,11 @@ class DmdCheckpointManager:
         save_student_weights = self.student_train_type == "lora" or not self.parallel.is_fsdp()
         if save_student_weights:
             self._save_model_weights(self.model, save_dir, role="student")
+            if getattr(self, "student_ema", None) is not None:
+                ema_dir = os.path.join(save_dir, "student_ema")
+                with self.student_ema.average_parameters():
+                    self._save_model_weights(self.model, ema_dir, role="student")
+                logger.info("[checkpoint][save] student EMA weights path={}", ema_dir)
         barrier()
 
         fake_save_dir = self._fake_weights_dir(save_dir)
@@ -243,6 +390,10 @@ class DmdCheckpointManager:
             training_state["fake_real_optimizer"] = self.fake_real_optimizer.state_dict()
             training_state["fake_real_lr_scheduler"] = self.fake_real_lr_scheduler.state_dict()
         training_state.update(self._trick_checkpoint_metadata())
+        training_state.update(self.student.extra_training_state())
+        training_state.update(self._extra_residual_head_training_state())
+        if getattr(self, "student_ema", None) is not None:
+            training_state["student_ema"] = self.student_ema.state_dict()
         if is_main_process():
             torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
         barrier()
@@ -284,6 +435,13 @@ class DmdCheckpointManager:
             trainer_state["fake_real_train_type"] = self.fake_real_train_type
             trainer_state["fake_real_lr_scheduler"] = self.fake_real_lr_scheduler.state_dict()
         trainer_state.update(self._trick_checkpoint_metadata())
+        trainer_state.update(self.student.extra_training_state())
+        trainer_state.update(self._extra_residual_head_training_state())
+        if getattr(self, "student_ema", None) is not None:
+            trainer_state["student_ema"] = {
+                "decay": self.student_ema.decay,
+                "num_updates": self.student_ema.num_updates,
+            }
         if is_main_process():
             os.makedirs(dist_state_path, exist_ok=True)
             torch.save(
@@ -309,6 +467,8 @@ class DmdCheckpointManager:
             "fake_model": fake_model_state,
             "fake_optimizer": fake_optim_state,
         }
+        if getattr(self, "student_ema", None) is not None:
+            state["student_ema"] = self.student_ema.shadow
         dcp.save(state, checkpoint_id=dist_state_path)
         if getattr(self, "fake_real_model", None) is not None:
             role_path = os.path.join(dist_state_path, "fake_real")

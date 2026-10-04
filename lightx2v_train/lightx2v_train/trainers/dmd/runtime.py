@@ -133,6 +133,7 @@ class _DmdRuntime(BaseTrainer):
         return self.training_config["student"]["optimizer"]
 
     def _setup_trainable_model(self, model, role="student"):
+        model.ensure_capabilities().require(DistributionMatchingCapability).prepare_role(role)
         if role == "student":
             train_type = self.student_train_type
             lora_config = self.student_lora_config
@@ -214,10 +215,12 @@ class _DmdRuntime(BaseTrainer):
         )
         self.teacher_model.reuse_frozen_components_from(self.model)
         self.teacher = self.teacher_model.capabilities.require(DistributionMatchingCapability)
+        self.teacher.prepare_role("teacher")
         self.teacher.denoiser().requires_grad_(False)
         self.teacher.set_training(False)
         self.teacher_model.capabilities.require(ParallelCapability).apply(self.config)
         self.teacher.set_training(False)
+        self.student.validate_training_roles(self.model, self.fake_model, self.teacher_model)
 
         self.fake_trainable_params = list(self.fake_model.capabilities.require(TrainableModelCapability).parameters())
         self.fake_optimizer = self._build_optimizer(
@@ -250,6 +253,9 @@ class _DmdRuntime(BaseTrainer):
         logger.info("[train] dmd train_types student={} fake={}", self.student_train_type, self.fake_train_type)
         logger.info("[train] dmd student trainable params={}", self._count_trainable(self.student.denoiser()))
         logger.info("[train] dmd fake trainable params={}", self._count_trainable(self.fake.denoiser()))
+        for name, role in (("student", self.student), ("fake", self.fake), ("teacher", self.teacher)):
+            parameter_dtypes = sorted({str(parameter.dtype) for parameter in role.denoiser().parameters()})
+            logger.info("[train] dmd {} transformer parameter dtypes={}", name, parameter_dtypes)
         if self.random_schedule_enabled:
             logger.info(
                 "[train] dmd random sigma schedule enabled: steps=[{}, {}], sigma=[{}, {}], sampling_method={}",
@@ -283,6 +289,7 @@ class _DmdRuntime(BaseTrainer):
 
     def _after_student_optimizer_step(self, role):
         self.ida_trick.after_student_step(IdaStepContext(role=role))
+        self.student.after_optimizer_step(role)
 
     @staticmethod
     def _do_cfg(cond_pred, uncond_pred, cfg_scale, cfg_norm):

@@ -76,8 +76,8 @@ training:
     save_every_iters: 100
     save_total_limit: 5
     dmd:
-        # Four student model evaluations; the terminal zero sigma is added internally.
-        num_inference_steps: 4
+        # Eight student model evaluations; the terminal zero sigma is added internally.
+        num_inference_steps: 8
         fake_update_ratio: 5
         # 124 = 17*7+5, about 5.17 seconds at H3's fixed 24 fps.
         generation_shapes:

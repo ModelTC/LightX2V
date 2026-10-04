@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from contextlib import contextmanager, nullcontext
+from math import prod
 from pathlib import Path
 
 import torch
@@ -15,7 +16,14 @@ from lightx2v_train.model_zoo.minimax_h3.capability_adapters import (
     MiniMaxH3DistributionMatchingCapability,
     MiniMaxH3FlowMatchingCapability,
 )
-from lightx2v_train.model_zoo.native.minimax_h3 import load_minimax_h3_transformer
+from lightx2v_train.model_zoo.native.minimax_h3 import (
+    init_empty_minimax_h3_transformer,
+    load_minimax_h3_transformer,
+    resolve_transformer_dir,
+    stream_load_minimax_h3_transformer,
+)
+from lightx2v_train.runtime.fsdp import fsdp2_enabled
+from lightx2v_train.runtime.sequence_parallel import sync_sequence_parallel_parameters
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -28,6 +36,7 @@ class MiniMaxH3T2AVModel(BaseModel):
     """A standard trainable wrapper around Diffusers' MiniMax-H3 module."""
 
     pipeline_cls = None
+    transformer_component = "transformer"
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -79,6 +88,9 @@ class MiniMaxH3T2AVModel(BaseModel):
         if self.video_latent_channels <= 0 or self.audio_latent_channels <= 0 or self.vae_spatial_scale_factor <= 0 or self.audio_sampling_rate <= 0:
             raise ValueError("MiniMax-H3 latent channels, VAE spatial scale, and audio rate must be positive.")
         self.use_autocast = bool(config.get("use_autocast", False))
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        self._stream_load_pending = bool(fsdp_config.get("stream_load_pretrained", False))
+        self._stream_load_lora_seed = int(config.get("lora_init_seed", 0))
         self.cache_encoder_cpu_offload = bool(config.get("cache_encoder_cpu_offload", False))
         self.transformer = None
         self.video_vae = None
@@ -110,13 +122,33 @@ class MiniMaxH3T2AVModel(BaseModel):
                 text_tag=int(config.get("text_tag", 1)),
             )
         if load_transformer:
-            self.transformer = load_minimax_h3_transformer(
-                self.pretrained_model_path,
-                torch_dtype=self.transformer_param_dtype,
-                local_files_only=bool(config.get("local_files_only", True)),
-                attention_backend=config.get("attention_backend"),
-            )
-            self.transformer.to(self.device)
+            loader_kwargs = {
+                "component_name": self.transformer_component,
+                "torch_dtype": self.transformer_param_dtype,
+                "local_files_only": bool(config.get("local_files_only", True)),
+                "attention_backend": config.get("attention_backend"),
+            }
+            if self._stream_load_pending:
+                if not fsdp2_enabled(self.config):
+                    raise RuntimeError("H3 streamed checkpoint loading requires active FSDP2 with at least two data-parallel ranks.")
+                self._stream_load_transformer_dir = resolve_transformer_dir(self.pretrained_model_path, component_name=self.transformer_component)
+                self.transformer = init_empty_minimax_h3_transformer(self.pretrained_model_path, **loader_kwargs)
+            else:
+                self.transformer = load_minimax_h3_transformer(self.pretrained_model_path, **loader_kwargs)
+                self.transformer.to(self.device)
+
+    def after_fsdp2_shard(self, config):
+        """Load checkpoint tensors only after FSDP owns rank-local shards."""
+        del config
+        if not self._stream_load_pending:
+            return
+        stream_load_minimax_h3_transformer(
+            self.transformer,
+            self._stream_load_transformer_dir,
+            device=self.device,
+            lora_seed=self._stream_load_lora_seed,
+        )
+        self._stream_load_pending = False
 
     def _load_vaes(self, config):
         try:
@@ -235,6 +267,7 @@ class MiniMaxH3T2AVModel(BaseModel):
         self.audio_vae = source.audio_vae
         self.condition_encoder = source.condition_encoder
         self._managed_cache_encoders = set(source._managed_cache_encoders)
+        self._stream_load_lora_seed += 1
 
     def denoiser_module(self):
         return self.transformer
@@ -261,19 +294,15 @@ class MiniMaxH3T2AVModel(BaseModel):
             )
         except TypeError:
             self.transformer = inject_adapter_in_model(lora_config, self.transformer)
+        sync_sequence_parallel_parameters(param for name, param in self.transformer.named_parameters() if "lora" in name and not param.is_meta)
 
     def prepare_text_condition(self, condition):
         if not isinstance(condition, dict):
             raise TypeError(f"MiniMax-H3 cached condition must be a dict, got {type(condition)!r}.")
-        missing = {"prompt_embeds", "text_token_tags"} - condition.keys()
-        if missing:
-            names = ", ".join(sorted(missing))
-            raise KeyError(f"MiniMax-H3 cached condition is missing: {names}.")
-
+        if "prompt_embeds" not in condition or "text_token_tags" not in condition:
+            raise KeyError("MiniMax-H3 condition requires prompt_embeds and text_token_tags.")
         prompt_embeds = condition["prompt_embeds"]
         text_token_tags = condition["text_token_tags"]
-        if not torch.is_tensor(prompt_embeds) or not torch.is_tensor(text_token_tags):
-            raise TypeError("MiniMax-H3 prompt_embeds and text_token_tags must be tensors.")
         if prompt_embeds.ndim == 2:
             prompt_embeds = prompt_embeds.unsqueeze(0)
         if prompt_embeds.ndim != 3 or prompt_embeds.shape[0] != 1:
@@ -284,9 +313,102 @@ class MiniMaxH3T2AVModel(BaseModel):
             text_token_tags = text_token_tags[0]
         if text_token_tags.ndim != 1 or text_token_tags.shape[0] != prompt_embeds.shape[1]:
             raise ValueError(f"MiniMax-H3 text_token_tags must contain one tag per prompt embedding row; got {tuple(text_token_tags.shape)} for {prompt_embeds.shape[1]} rows.")
+        if not bool(torch.isin(text_token_tags, torch.tensor([0, 1], device=text_token_tags.device)).all()):
+            raise ValueError("MiniMax-H3 base-task conditioner tags must be video=0 or text=1.")
+
+        task = condition.get("task", "t2av")
+        if isinstance(task, (list, tuple)):
+            if len(task) != 1:
+                raise ValueError(f"MiniMax-H3 cached task must contain one value, got {task!r}.")
+            task = task[0]
+        task = str(task)
+        expected_anchors = {
+            "t2av": (),
+            "i2av": ("first",),
+            "l2av": ("last",),
+            "fl2av": ("first", "last"),
+        }
+        if task not in expected_anchors:
+            raise ValueError(f"Unsupported MiniMax-H3 cached task {task!r}.")
+
+        anchor_values = condition.get("keyframe_anchors")
+        if anchor_values is None:
+            anchors = ()
+        elif torch.is_tensor(anchor_values):
+            if anchor_values.ndim == 2:
+                if anchor_values.shape[0] != 1:
+                    raise ValueError("MiniMax-H3 currently requires data.train.batch_size=1.")
+                anchor_values = anchor_values[0]
+            if anchor_values.ndim != 1:
+                raise ValueError(f"keyframe_anchors must be one-dimensional, got {tuple(anchor_values.shape)}.")
+            names = {0: "first", 1: "last"}
+            try:
+                anchors = tuple(names[int(value)] for value in anchor_values.tolist())
+            except KeyError as error:
+                raise ValueError(f"Unknown MiniMax-H3 keyframe anchor code {error.args[0]}.") from error
+        else:
+
+            def normalize_anchor(value):
+                # default_collate turns ("first", "last") into
+                # [("first",), ("last",)] for batch_size=1.
+                if isinstance(value, (list, tuple)) and len(value) == 1:
+                    value = value[0]
+                return str(value)
+
+            anchors = tuple(normalize_anchor(value) for value in anchor_values)
+        if anchors != expected_anchors[task]:
+            raise ValueError(f"MiniMax-H3 task={task} requires anchors={expected_anchors[task]}, got {anchors}.")
+
+        def scalar_int(name):
+            value = condition.get(name)
+            if value is None:
+                return None
+            if torch.is_tensor(value):
+                if value.numel() != 1:
+                    raise ValueError(f"MiniMax-H3 cached {name} must contain one value, got {tuple(value.shape)}.")
+                return int(value.item())
+            if isinstance(value, (list, tuple)):
+                if len(value) != 1:
+                    raise ValueError(f"MiniMax-H3 cached {name} must contain one value, got {value!r}.")
+                value = value[0]
+            return int(value)
+
+        target_height = scalar_int("target_height")
+        target_width = scalar_int("target_width")
+        target_num_frames = scalar_int("target_num_frames")
+        if (target_height is None) != (target_width is None):
+            raise ValueError("MiniMax-H3 cached target_height and target_width must be provided together.")
+
+        condition_video_latents = condition.get("condition_video_latents")
+        if anchors:
+            if not torch.is_tensor(condition_video_latents):
+                raise KeyError(f"MiniMax-H3 task={task} requires cached condition_video_latents.")
+            if condition_video_latents.ndim == 3:
+                if condition_video_latents.shape[0] != 1:
+                    raise ValueError("MiniMax-H3 currently requires data.train.batch_size=1.")
+                condition_video_latents = condition_video_latents[0]
+            expected_dim = self.video_latent_channels * prod(self.patch_size)
+            if condition_video_latents.ndim != 2 or condition_video_latents.shape[1] != expected_dim:
+                raise ValueError(f"MiniMax-H3 condition_video_latents must have shape [rows, {expected_dim}], got {tuple(condition_video_latents.shape)}.")
+            if target_height is not None and target_width is not None:
+                rows_per_keyframe = (target_height // self.vae_spatial_scale_factor // self.patch_size[1]) * (target_width // self.vae_spatial_scale_factor // self.patch_size[2])
+                expected_rows = len(anchors) * rows_per_keyframe
+                if condition_video_latents.shape[0] != expected_rows:
+                    raise ValueError(f"MiniMax-H3 task={task} expects {expected_rows} condition rows for {target_height}x{target_width}, got {condition_video_latents.shape[0]}.")
+            condition_video_latents = condition_video_latents.to(self.device, dtype=torch.float32)
+        elif condition_video_latents is not None and torch.is_tensor(condition_video_latents) and condition_video_latents.numel():
+            raise ValueError("MiniMax-H3 t2av cache must not contain non-empty condition_video_latents.")
+        else:
+            condition_video_latents = None
         return {
             "prompt_embeds": prompt_embeds.to(self.device, dtype=self.running_dtype),
             "text_token_tags": text_token_tags.to(self.device, dtype=torch.long),
+            "task": task,
+            "keyframe_anchors": anchors,
+            "condition_video_latents": condition_video_latents,
+            "target_height": target_height,
+            "target_width": target_width,
+            "target_num_frames": target_num_frames,
         }
 
     def encode_prompt_condition(self, prompt):

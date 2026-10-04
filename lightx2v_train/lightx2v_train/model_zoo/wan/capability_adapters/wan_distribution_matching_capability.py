@@ -9,6 +9,7 @@ from lightx2v_train.model_zoo.capability_adapters.common import (
     _require_single_prompt,
     _require_singleton_tensor,
 )
+from lightx2v_train.trainers.dmd.math import dmd_loss_with_stats
 from lightx2v_train.utils.constants import (
     LINGBOT_VIDEO_NEGATIVE_PROMPT,
     WAN_NEGATIVE_PROMPT,
@@ -18,6 +19,34 @@ from lightx2v_train.utils.generation_shapes import resolve_generation_shape
 
 class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
     """Distribution-matching operations for Wan-family video models."""
+
+    def __init__(self, model):
+        super().__init__(model)
+        options = model.config["model"].get("capabilities", {}).get("distribution_matching", {})
+        self.projected_dmd = bool(options.get("projected_dmd", False))
+        self._last_dmd_metrics = {}
+
+    def dmd_loss(self, latents, fake_x0, teacher_x0):
+        loss, normalizer, direction_rms = dmd_loss_with_stats(
+            latents,
+            fake_x0,
+            teacher_x0,
+            projected=self.projected_dmd,
+        )
+        self._last_dmd_metrics = {
+            "dmd_normalizer": normalizer,
+            "dmd_direction_rms": direction_rms,
+        }
+        return loss
+
+    def dmd_metrics(self):
+        return self._last_dmd_metrics
+
+    def extra_checkpoint_metadata(self):
+        return {"wan_distribution_matching": {"projected_dmd": self.projected_dmd}}
+
+    def legacy_extra_checkpoint_metadata(self):
+        return {"wan_distribution_matching": {"projected_dmd": False}}
 
     def encode_training_cache(self, batch):
         cache = super().encode_training_cache(batch)

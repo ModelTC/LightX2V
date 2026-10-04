@@ -83,6 +83,7 @@ _MODEL_MODULES = {
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.longcat_image",
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.longcat_image_edit",
     "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_t2av",
+    "minimax_h3_ref2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_ref2av",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.qwen_image",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.qwen_image_edit",
     "wan_t2v": "lightx2v_train.model_zoo.wan.wan_t2v",
@@ -140,6 +141,8 @@ def _ensure_data_registered(data_name):
         import lightx2v_train.data.image_dataset  # noqa: F401
     elif data_name == "cache_dataset":
         import lightx2v_train.data.cache_dataset  # noqa: F401
+    elif data_name in {"minimax_h3_cache_dataset", "minimax_h3_ref_cache_dataset"}:
+        import lightx2v_train.data.minimax_h3_cache_dataset  # noqa: F401
     elif data_name in {"prompt_dataset", "video_dataset"}:
         import lightx2v_train.data.video_dataset  # noqa: F401
 

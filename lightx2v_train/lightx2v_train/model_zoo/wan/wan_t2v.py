@@ -326,6 +326,25 @@ class WanT2VModel(BaseModel):
     def prepare_denoiser_input(self, noisy_latent, condition=None):
         return WanT2VDenoiserInput(hidden_states=noisy_latent)
 
+    @torch.no_grad()
+    def predict_velocity_with_features(self, latents, sigma, condition):
+        """Return the usual velocity and detached, time-modulated fake tokens."""
+        if self.use_causal_transformer or self.sp_size != 1:
+            raise ValueError("Wan residual features require a non-causal transformer with sequence_parallel.size=1.")
+        features = []
+
+        def capture_tokens(module, inputs):
+            features.append(inputs[0].detach())
+
+        handle = self.transformer.head.head.register_forward_pre_hook(capture_tokens)
+        try:
+            velocity = self.predict_denoiser_output(latents, sigma, condition)
+        finally:
+            handle.remove()
+        if len(features) != 1:
+            raise RuntimeError(f"Expected one Wan output-head feature tensor, received {len(features)}.")
+        return velocity, features[0]
+
     def denoise(self, denoiser_input, timestep_or_sigma, condition):
         timestep = timestep_or_sigma.float() * self.num_train_timesteps
         if timestep.ndim == 0:

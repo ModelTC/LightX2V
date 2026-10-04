@@ -37,8 +37,11 @@ from lightx2v_train.tricks import (
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from .config import DmdScheduleConfig
+from .residual_head import ResidualHeadConfig
+from .residual_head_training import ResidualHeadTraining
 from .runtime import _DmdRuntime
 from .score_sampling import ScoreSigmaContext, build_score_sigma_sampler
+from .student_ema import StudentWeightEMA
 
 
 @TRAINER_REGISTER("dmd")
@@ -97,12 +100,39 @@ class DmdTrainer(_DmdRuntime):
         self.fake_real_train_type = self.fake_train_type
         self.fake_real_lora_config = copy.deepcopy(self.fake_lora_config)
         self.fake_real_optimizer_config = copy.deepcopy(self.fake_optimizer_config)
+        self.residual_head_config = ResidualHeadConfig.from_mapping(self.dmd_config.get("residual_head", {}))
+        self.residual_head = None
+        ema_options = self.student_config.get("ema", {})
+        self.student_ema = None
+        self.student_ema_config = {"enabled": bool(ema_options.get("enabled", False))}
+        if self.student_ema_config["enabled"]:
+            self.student_ema_config.update(
+                decay=float(ema_options.get("decay", 0.99)),
+                use_for_inference=bool(ema_options.get("use_for_inference", True)),
+            )
+        self.dmd_update_order = self.dmd_config.get("update_order", "student_first")
+        if self.dmd_update_order not in {"student_first", "fake_first"}:
+            raise ValueError("training.dmd.update_order must be student_first or fake_first.")
+        if self.residual_head_config.enabled:
+            self.dmd_update_order = "fake_first"
 
     def setup(self, resume_ckpt_path=None):
         if resume_ckpt_path is None and self.student_checkpoint_path:
             self._load_student_checkpoint(self.student_checkpoint_path, strict=self.student_checkpoint_strict)
         super().setup(resume_ckpt_path=None)
         self._setup_fake_real_resources()
+        if self.residual_head_config.enabled:
+            self.residual_head = ResidualHeadTraining(self, self.residual_head_config)
+            logger.info(
+                "[train] residual head enabled config={} schedule=fake_fit->head_fit->independent_heldout->student; additional compute is not matched to baseline",
+                self.residual_head.checkpoint_metadata(),
+            )
+        if self.student_ema_config["enabled"]:
+            self.student_ema = StudentWeightEMA(
+                self.parallel.state_module(),
+                decay=self.student_ema_config["decay"],
+            )
+            logger.info("[train] student weight EMA {}", self.student_ema_config)
         if resume_ckpt_path is not None:
             self._load_resume_state(resume_ckpt_path)
         if resume_ckpt_path is None:
@@ -125,6 +155,18 @@ class DmdTrainer(_DmdRuntime):
         if not self._dynamic_denoising_shift:
             self._prepare_timestep_lookup()
         self.real_data_fake_trick.setup(self._real_data_fake_setup_context())
+
+    def _after_student_optimizer_step(self, role):
+        super()._after_student_optimizer_step(role)
+        if self.student_ema is not None:
+            self.student_ema.update()
+
+    def run_inference(self, current_iter):
+        if self.student_ema is None or not self.student_ema_config["use_for_inference"]:
+            return super().run_inference(current_iter)
+        logger.info("[train] inference weights=student_ema updates={}", self.student_ema.num_updates)
+        with self.student_ema.average_parameters():
+            return super().run_inference(current_iter)
 
     def _setup_fake_real_resources(self):
         self.fake_real_model = None
@@ -249,6 +291,12 @@ class DmdTrainer(_DmdRuntime):
             self.fake_update_ratio,
         )
         logger.info(
+            "[train] rollout_steps={} dmd_update_order={} residual_head_enabled={}",
+            getattr(self, "num_inference_steps", None),
+            getattr(self, "dmd_update_order", "student_first"),
+            getattr(self, "residual_head", None) is not None,
+        )
+        logger.info(
             "[train] {} diversity enabled={} weight={} teacher_steps={} anchor_step={}",
             self.trainer_name,
             self.diversity_trick.enabled,
@@ -269,30 +317,23 @@ class DmdTrainer(_DmdRuntime):
             if current_iter == 0:
                 self.run_inference(current_iter)
 
+        sampler = self.dataloader_train.sampler
+        if getattr(sampler, "is_minimax_h3_ref_cost_sampler", False) or getattr(sampler, "is_minimax_h3_task_cycle_sampler", False):
+            sampler.configure(
+                start_iteration=current_iter,
+                gradient_accumulation_iters=grad_accum_iters,
+                fake_update_ratio=self.fake_update_ratio,
+            )
         samples = self._iter_train_samples()
         while current_iter < max_train_iters:
-            student_result = self._train_one_stage(
-                samples,
-                stage="student",
-                grad_accum_iters=grad_accum_iters,
-            )
+            self.student.on_iteration_start(current_iter)
+            student_result, loss_fake_value, loss_fake_real_value = self._train_iteration(samples, grad_accum_iters, current_iter)
             loss_dmd_value = student_result["dmd"]
             loss_div_value = student_result["div_loss"]
             loss_real_dmd_value = student_result["real_dmd"]
-            loss_fake_value = 0.0
-            loss_fake_real_value = 0.0
-            for _ in range(self.fake_update_ratio):
-                fake_result = self._train_one_stage(
-                    samples,
-                    stage="fake",
-                    grad_accum_iters=grad_accum_iters,
-                )
-                loss_fake_value += fake_result["loss"]
-                loss_fake_real_value += fake_result["fake_real"]
-            loss_fake_value /= self.fake_update_ratio
-            loss_fake_real_value /= self.fake_update_ratio
 
             current_iter += 1
+            self.student.on_iteration_end(current_iter)
             display_fake = reduce_mean(loss_fake_value)
             display_dmd = reduce_mean(loss_dmd_value) if loss_dmd_value is not None else None
             display_div = reduce_mean(loss_div_value)
@@ -321,6 +362,10 @@ class DmdTrainer(_DmdRuntime):
                 }
                 if display_dmd is not None:
                     metrics["train/dmd"] = display_dmd
+                diagnostics = {name: reduce_mean(value) for name, value in student_result.items() if name not in {"loss", "dmd", "div_loss", "real_dmd"}}
+                metrics.update({f"train/{name}": value for name, value in diagnostics.items()})
+                if diagnostics:
+                    logger.info("[train] dmd diagnostics {}", diagnostics)
                 self.log_metrics(metrics, step=current_iter)
 
             if save_every_iters and current_iter % save_every_iters == 0:
@@ -331,11 +376,47 @@ class DmdTrainer(_DmdRuntime):
 
         logger.info("[train] finished iter={}/{}", current_iter, max_train_iters)
 
+    def _train_iteration(self, samples, grad_accum_iters, outer_iteration):
+        residual_head = getattr(self, "residual_head", None)
+        if residual_head is not None:
+            return residual_head.train_iteration(samples, grad_accum_iters, outer_iteration)
+        # Default order preserves legacy baseline/PDMD behavior. A comparison
+        # can explicitly choose fake_first to match the residual-head schedule.
+        fake_first = getattr(self, "dmd_update_order", "student_first") == "fake_first"
+        if not fake_first:
+            student_result = self._train_one_stage(
+                samples,
+                stage="student",
+                grad_accum_iters=grad_accum_iters,
+                outer_iteration=outer_iteration,
+            )
+        fake_loss, fake_real_loss = 0.0, 0.0
+        for index in range(self.fake_update_ratio):
+            result = self._train_one_stage(
+                samples,
+                stage="fake",
+                grad_accum_iters=grad_accum_iters,
+                outer_iteration=outer_iteration,
+                fake_update_index=index,
+            )
+            fake_loss += result["loss"]
+            fake_real_loss += result["fake_real"]
+        if fake_first:
+            student_result = self._train_one_stage(
+                samples,
+                stage="student",
+                grad_accum_iters=grad_accum_iters,
+                outer_iteration=outer_iteration,
+            )
+        return student_result, fake_loss / self.fake_update_ratio, fake_real_loss / self.fake_update_ratio
+
     def _train_one_stage(
         self,
         samples,
         stage,
         grad_accum_iters,
+        outer_iteration=0,
+        fake_update_index=0,
     ):
         if stage == "student":
             optimizer = self.optimizer
@@ -373,6 +454,7 @@ class DmdTrainer(_DmdRuntime):
                 conditions,
                 stage=stage,
                 initial_noise=initial_noise,
+                sample=sample,
             )
             if isinstance(result, dict):
                 loss = result["loss"]
@@ -384,7 +466,16 @@ class DmdTrainer(_DmdRuntime):
                 del result
             else:
                 loss = result
-            (loss / grad_accum_iters).backward()
+            sampler = self.dataloader_train.sampler
+            route_scale = 1.0
+            if getattr(sampler, "is_minimax_h3_task_cycle_sampler", False):
+                route_scale = sampler.microbatch_loss_scale(
+                    outer_iteration=outer_iteration,
+                    stage=stage,
+                    micro_step=micro_idx,
+                    fake_update_index=fake_update_index,
+                )
+            (loss * route_scale / grad_accum_iters).backward()
             loss_value += loss.item() / grad_accum_iters
             del loss
             if stage == "student" and self.diversity_trick.enabled:
@@ -568,8 +659,14 @@ class DmdTrainer(_DmdRuntime):
         conditions,
         stage,
         initial_noise=None,
+        sample=None,
     ):
         condition, negative_condition = conditions
+        rollout_options = {}
+        residual_head = getattr(self, "residual_head", None)
+        if residual_head is not None:
+            residual_head.clear_student_query()
+            rollout_options["student_query"] = True
         (
             generated,
             denoised_timestep_from,
@@ -579,6 +676,7 @@ class DmdTrainer(_DmdRuntime):
             latent_shape,
             grad_enabled=(stage != "fake"),
             xt=initial_noise,
+            **rollout_options,
         )
 
         sigma = self._sample_score_sigma(
@@ -603,6 +701,9 @@ class DmdTrainer(_DmdRuntime):
             )
 
         if stage == "fake":
+            residual_head = getattr(self, "residual_head", None)
+            if residual_head is not None:
+                residual_head.remember_fit(generated, renoised_xt, sigma, condition)
             self.fake.set_training(False)
             velocity_fake = self._predict_velocity(
                 self.fake,
@@ -619,12 +720,16 @@ class DmdTrainer(_DmdRuntime):
         with torch.no_grad():
             self.fake.set_training(False)
             self.teacher.set_training(False)
-            velocity_fake = self._predict_velocity(
-                self.fake,
-                renoised_xt,
-                sigma,
-                condition,
-            )
+            residual_head = getattr(self, "residual_head", None)
+            if residual_head is None:
+                velocity_fake = self._predict_velocity(
+                    self.fake,
+                    renoised_xt,
+                    sigma,
+                    condition,
+                )
+            else:
+                x_pred_fake = residual_head.predict_corrected_fake(renoised_xt, sigma, condition)
             velocity_teacher = self.teacher.predict_guided_velocity(
                 renoised_xt,
                 sigma,
@@ -634,25 +739,38 @@ class DmdTrainer(_DmdRuntime):
                 self.cfg_norm,
             )
 
-            x_pred_fake = self.student.x0_from_velocity(
-                renoised_xt,
-                velocity_fake,
-                sigma,
-            )
+            if residual_head is None:
+                x_pred_fake = self.student.x0_from_velocity(
+                    renoised_xt,
+                    velocity_fake,
+                    sigma,
+                )
             x_pred_teacher = self.student.x0_from_velocity(
                 renoised_xt,
                 velocity_teacher,
                 sigma,
             )
+            head_metrics = {} if residual_head is None else residual_head.log_student_query(generated, x_pred_teacher)
 
         loss_dmd = self.student.dmd_loss(
             generated,
             x_pred_fake,
             x_pred_teacher,
         )
+        regularization = self.student.student_regularization(
+            generated,
+            sample,
+            condition,
+            self.scheduler,
+            broadcast_sequence_parallel_value,
+        )
+        loss = loss_dmd if regularization is None else loss_dmd + regularization.loss
         return {
-            "loss": loss_dmd,
+            "loss": loss,
             "dmd": loss_dmd.detach(),
+            **self.student.dmd_metrics(),
+            **head_metrics,
+            **({} if regularization is None else regularization.metrics),
         }
 
     def sample_end_step(self):
@@ -661,7 +779,7 @@ class DmdTrainer(_DmdRuntime):
             self.scheduler.num_inference_steps,
         )
 
-    def run_back_simulation(self, condition, latent_shape, grad_enabled, xt=None):
+    def run_back_simulation(self, condition, latent_shape, grad_enabled, xt=None, *, student_query=False):
         latent_hw = self.student.latent_hw(latent_shape)
         self._prepare_sampling_schedule(latent_shape)
         self._prepare_timestep_lookup(latent_hw, num_steps=self.scheduler.num_inference_steps)
@@ -670,7 +788,7 @@ class DmdTrainer(_DmdRuntime):
 
         end_step_idx = (
             self.sample_end_step()
-            if grad_enabled
+            if grad_enabled or student_query
             else self._sample_synced_int(
                 0,
                 self.scheduler.num_inference_steps,

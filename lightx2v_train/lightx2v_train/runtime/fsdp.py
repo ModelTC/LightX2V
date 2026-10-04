@@ -70,6 +70,7 @@ def apply_fsdp2(model, config):
     for module, reshard_after_forward in _iter_shard_plan(model.fsdp2_shard_plan(fsdp_config)):
         _fully_shard_module(module, mesh, mp_policy, reshard_after_forward)
 
+    model.after_fsdp2_shard(config)
     torch.cuda.empty_cache()
 
     if fsdp_config.get("log_memory", True):

@@ -239,6 +239,43 @@ class DistributionMatchingCapability(ModelCapability):
     def dmd_loss(self, latents, fake_x0, teacher_x0):
         pass
 
+    def dmd_metrics(self) -> Mapping[str, Tensor | float]:
+        """Detached, model-specific diagnostics from the last student loss."""
+        return {}
+
+    def extra_checkpoint_metadata(self) -> Mapping[str, Any]:
+        """Model-specific objective settings needed to validate a resume."""
+        return {}
+
+    def legacy_extra_checkpoint_metadata(self) -> Mapping[str, Any]:
+        """Defaults to assume when an older checkpoint predates this metadata."""
+        return {}
+
+    def extra_training_state(self) -> Mapping[str, Any]:
+        return {}
+
+    def load_extra_training_state(self, state: Mapping[str, Any]) -> None:
+        pass
+
+    def prepare_role(self, role: str) -> None:
+        """Install role-specific model structure before LoRA and sharding."""
+        pass
+
+    def validate_training_roles(self, student_model, fake_model, teacher_model) -> None:
+        pass
+
+    def student_regularization(self, generated, sample, condition, scheduler, broadcast) -> LossResult | None:
+        return None
+
+    def after_optimizer_step(self, role: str) -> None:
+        pass
+
+    def on_iteration_start(self, iteration: int) -> None:
+        pass
+
+    def on_iteration_end(self, iteration: int) -> None:
+        pass
+
     @abstractmethod
     def detach(self, value):
         pass

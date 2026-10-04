@@ -114,6 +114,10 @@ class BaseModel(CapabilityProvider):
     def fsdp2_state_module(self):
         return self.denoiser_module()
 
+    def after_fsdp2_shard(self, config):
+        """Materialize model-specific weights after the shard plan is applied."""
+        pass
+
     def set_fsdp2_gradient_sync(self, enabled):
         denoiser = self.denoiser_module()
         if hasattr(denoiser, "set_requires_gradient_sync"):

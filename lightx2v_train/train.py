@@ -1,5 +1,7 @@
 import argparse
+import random
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -11,6 +13,7 @@ from lightx2v_train.runtime import (
     load_config,
     setup_logger,
 )
+from lightx2v_train.runtime.distributed import get_rank
 from lightx2v_train.trainers import build_trainer
 from lightx2v_train.utils.utils import check_val_is_enabled, is_train_cache_dataset
 
@@ -27,6 +30,12 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     init_distributed(config)
+    if "seed" in config:
+        seed = int(config["seed"]) + get_rank()
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
     setup_logger(config)
 
     try:

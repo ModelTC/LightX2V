@@ -1,0 +1,145 @@
+seed: 42
+
+model:
+    name: wan_t2v
+    pretrained_model_name_or_path: ${oc.env:WAN_DMD_MODEL}
+    max_sequence_length: 512
+    running_dtype: bf16
+    transformer_param_dtype: fp32
+    vae_dtype: fp32
+    t5_dtype: bf16
+    t5_cpu: false
+    local_files_only: true
+    fake:
+        transformer_param_dtype: fp32
+    teacher:
+        transformer_param_dtype: fp32
+    capabilities:
+        distribution_matching:
+            projected_dmd: ${oc.decode:${oc.env:WAN_DMD_PROJECTED,false}}
+
+distributed:
+    backend: nccl
+    timeout_minutes: 180
+    sequence_parallel: {enabled: false, size: 1}
+    fsdp2:
+        enabled: true
+        size: 2
+        reshard_after_forward: {root_reshard: false, block_reshard: true}
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: prompt_dataset
+        data_path: ["${oc.env:WAN_DMD_PROMPTS}"]
+        num_workers: 0
+        pin_memory: false
+        shuffle: true
+        drop_last: true
+    val:
+        name: prompt_dataset
+        data_path: ["${oc.env:WAN_DMD_PROMPTS}"]
+        max_samples: 8
+        num_workers: 0
+        pin_memory: false
+        shuffle: false
+
+scheduler:
+    min_sigma: 0.02
+    max_sigma: 1.0
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: linear
+        time_shift_mu: 6.0
+        time_shift_power: 1.0
+        sigma_min: 0.0
+        extra_one_step: true
+
+training:
+    method: dmd
+    max_train_iters: 1000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 0
+    save_every_iters: 100
+    save_total_limit: 1
+    dmd:
+        num_inference_steps: 4
+        update_order: fake_first
+        fake_update_ratio: 5
+        latent_dtype: fp32
+        generation_shapes:
+            - {value: [81, 480, 832]}
+        score_sampling:
+            type: continuous_uniform
+            discrete_samples: 1000
+        ida: {enabled: false}
+        div_loss: {enabled: false}
+        fake_real: {enabled: false}
+        residual_head:
+            enabled: ${oc.decode:${oc.env:WAN_DMD_RESIDUAL_HEAD,false}}
+            hidden_dim: 64
+            learning_rate: 0.001
+            fit_steps: 5
+            noise_bins: 5
+            ema_decay: 0.9
+            min_checks: 3
+            gate_ramp: 0.25
+            max_grad_norm: 1.0
+            weight_decay: 0.0
+            min_relative_improvement: 0.0
+    student:
+        train_type: lora
+        ema:
+            enabled: true
+            decay: 0.99
+            use_for_inference: true
+        lora:
+            rank: 128
+            alpha: 8
+            target_modules: [q, k, v, o, ffn.0, ffn.2]
+        optimizer:
+            learning_rate: 0.00005
+            adam_beta1: 0.0
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    fake:
+        train_type: full
+        optimizer:
+            learning_rate: 0.0000004
+            adam_beta1: 0.0
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    teacher: {guidance_scale: 4.0, cfg_norm: none}
+    output_dir: ${oc.env:WAN_DMD_OUTPUT}/training
+
+inference:
+    method: wan_t2v_infer
+    default_width: 832
+    default_height: 480
+    num_frames: 81
+    num_inference_steps: ${training.dmd.num_inference_steps}
+    fps: 16
+    enable_cfg: false
+    cfg_guidance_scale: 1.0
+    seed: 42
+    output_dir: ${oc.env:WAN_DMD_OUTPUT}/inference
+    infer_every_iters: 100
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 1
+    infer_log_every_steps: 4
+
+resume:
+    auto_resume: true

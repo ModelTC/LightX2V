@@ -54,10 +54,35 @@ class DiscreteTimestepScoreSigmaSampler(ScoreSigmaSampler):
 class ContinuousUniformScoreSigmaSampler(ScoreSigmaSampler):
     """Sample continuous uniform noise, apply scheduler shift, then clamp."""
 
+    discrete_samples: int = 0
+
     def sample(self, context: ScoreSigmaContext) -> torch.Tensor:
         sigma = torch.rand((1,), device=context.device, dtype=torch.float32)
+        if self.discrete_samples:
+            sigma = torch.ceil(sigma * self.discrete_samples) / self.discrete_samples
         sigma = context.scheduler.time_shift(sigma, latent_hw=context.latent_hw, num_steps=context.num_steps)
         return context.scheduler.clamp_training_sigma(sigma)
+
+
+@dataclass(frozen=True)
+class H3ShiftedUniformScoreSigmaSampler(ScoreSigmaSampler):
+    """Return a shared base sigma after clamping in H3's video domain."""
+
+    video_flow_shift: float = 6.0
+    discrete_samples: int = 1000
+    min_sigma: float = 0.02
+    max_sigma: float = 1.0
+
+    def sample(self, context: ScoreSigmaContext) -> torch.Tensor:
+        base = torch.rand((1,), device=context.device, dtype=torch.float32)
+        if self.discrete_samples:
+            base = torch.ceil(base * self.discrete_samples) / self.discrete_samples
+        shift = self.video_flow_shift
+        video_sigma = (shift * base / (1.0 + (shift - 1.0) * base)).clamp(
+            self.min_sigma,
+            self.max_sigma,
+        )
+        return video_sigma / (shift - (shift - 1.0) * video_sigma)
 
 
 def build_score_sigma_sampler(
@@ -66,7 +91,7 @@ def build_score_sigma_sampler(
     use_rollout_min: bool,
     use_rollout_max: bool,
 ) -> ScoreSigmaSampler:
-    """Build the sampling policy; the scheduler owns time shifting and bounds."""
+    """Build the configured score-noise sampling policy."""
 
     if config is None:
         config = {}
@@ -80,5 +105,20 @@ def build_score_sigma_sampler(
             use_rollout_max=bool(config.get("use_rollout_max", use_rollout_max)),
         )
     if kind == "continuous_uniform":
-        return ContinuousUniformScoreSigmaSampler()
-    raise ValueError(f"Unsupported training.dmd.score_sampling.type={kind!r}; expected 'discrete_timestep' or 'continuous_uniform'.")
+        discrete_samples = int(config.get("discrete_samples", 0))
+        if discrete_samples < 0:
+            raise ValueError("score_sampling.discrete_samples must be non-negative.")
+        return ContinuousUniformScoreSigmaSampler(discrete_samples=discrete_samples)
+    if kind == "h3_shifted_uniform":
+        sampler = H3ShiftedUniformScoreSigmaSampler(
+            video_flow_shift=float(config.get("video_flow_shift", 6.0)),
+            discrete_samples=int(config.get("discrete_samples", 1000)),
+            min_sigma=float(config.get("min_sigma", 0.02)),
+            max_sigma=float(config.get("max_sigma", 1.0)),
+        )
+        if sampler.video_flow_shift <= 0 or sampler.discrete_samples < 0:
+            raise ValueError("H3 score sampling requires a positive video_flow_shift and non-negative discrete_samples.")
+        if not 0 <= sampler.min_sigma < sampler.max_sigma <= 1:
+            raise ValueError("H3 score sampling requires 0 <= min_sigma < max_sigma <= 1.")
+        return sampler
+    raise ValueError(f"Unsupported training.dmd.score_sampling.type={kind!r}; expected 'discrete_timestep', 'continuous_uniform', or 'h3_shifted_uniform'.")
