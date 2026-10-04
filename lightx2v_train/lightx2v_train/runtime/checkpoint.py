@@ -3,14 +3,11 @@ import shutil
 
 
 def _is_complete_checkpoint(checkpoint_dir):
-    return any(
-        os.path.isfile(os.path.join(checkpoint_dir, marker))
-        for marker in (
-            "_SUCCESS",
-            "trainer_state.pt",
-            "training_state.pt",
-        )
-    )
+    if os.path.isfile(os.path.join(checkpoint_dir, "_SUCCESS")):
+        return True
+    if os.path.isfile(os.path.join(checkpoint_dir, "training_state.pt")):
+        return True
+    return os.path.isfile(os.path.join(checkpoint_dir, "trainer_state.pt")) and os.path.isfile(os.path.join(checkpoint_dir, "dist_state", ".metadata"))
 
 
 def _completed_checkpoint_names(output_dir):

@@ -1,7 +1,6 @@
 import json
 import os
 
-import torch
 from diffusers.models.modeling_utils import SAFETENSORS_WEIGHTS_NAME, SAFE_WEIGHTS_INDEX_NAME
 from diffusers.utils import convert_state_dict_to_diffusers
 from diffusers.utils.peft_utils import get_adapter_name
@@ -23,6 +22,7 @@ from lightx2v_train.model_zoo.capability_adapters.common import (
     CommonParallelCapability,
     CommonTrainableCapability,
 )
+from lightx2v_train.runtime.backend import get_device
 from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import is_fsdp2_module
 from lightx2v_train.utils.utils import get_running_dtype
@@ -36,7 +36,7 @@ class BaseModel(CapabilityProvider):
         super().__init__()
         self.config = config
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
-        self.device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
+        self.device = get_device(config)
         self.vae = None
         self.vae_config = None
         self.text_pipeline = None
@@ -279,7 +279,7 @@ class BaseModel(CapabilityProvider):
             options = StateDictOptions(
                 full_state_dict=True,
                 cpu_offload=True,
-                ignore_frozen_params=False,
+                ignore_frozen_params=True,
                 strict=False,
             )
             state_dict, _ = get_state_dict(denoiser, (), options=options)
@@ -287,6 +287,8 @@ class BaseModel(CapabilityProvider):
                 return {}, {}
 
         peft_state_dict = get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
+        if not peft_state_dict:
+            raise RuntimeError("LoRA state dict is empty; refusing to write an unusable checkpoint.")
         auxiliary_names = set(auxiliary_parameter_names)
         missing = auxiliary_names - state_dict.keys()
         if missing:
