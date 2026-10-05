@@ -63,9 +63,17 @@ def flash_attention(
     """
     if q.device.type != "cuda" or not (FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE):
         return training_attention(
-            q, k, v, q_lens=q_lens, k_lens=k_lens,
-            dropout_p=dropout_p, softmax_scale=softmax_scale, q_scale=q_scale,
-            causal=causal, window_size=window_size, dtype=dtype,
+            q,
+            k,
+            v,
+            q_lens=q_lens,
+            k_lens=k_lens,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            q_scale=q_scale,
+            causal=causal,
+            window_size=window_size,
+            dtype=dtype,
         )
     half_dtypes = (torch.float16, torch.bfloat16)
     assert dtype in half_dtypes
@@ -174,7 +182,15 @@ def attention(
         )
     else:
         return training_attention(
-            q, k, v, q_lens=q_lens, k_lens=k_lens,
-            dropout_p=dropout_p, softmax_scale=softmax_scale, q_scale=q_scale,
-            causal=causal, window_size=window_size, dtype=dtype,
+            q,
+            k,
+            v,
+            q_lens=q_lens,
+            k_lens=k_lens,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            q_scale=q_scale,
+            causal=causal,
+            window_size=window_size,
+            dtype=dtype,
         )
