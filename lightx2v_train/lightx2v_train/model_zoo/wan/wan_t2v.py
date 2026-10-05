@@ -87,6 +87,10 @@ class WanT2VModel(BaseModel):
     ):
         model_config = self.config["model"]
         model_path = model_config["pretrained_model_name_or_path"]
+        # Wan2.2 stores high/low denoisers below a shared VAE/T5 root.
+        # Keep these independently configurable while preserving Wan2.1 paths.
+        self.components_root = model_config.get("components_root", model_path)
+        self.transformer_path = model_config.get("transformer_path", model_path)
 
         should_load_vae = load_vae and model_config.get("load_vae", True)
         should_load_text_encoder = load_condition_encoder and model_config.get("load_text_encoder", True)
@@ -118,19 +122,19 @@ class WanT2VModel(BaseModel):
         self.text_pipeline = None
 
         if should_load_transformer:
-            self.transformer = self._load_transformer(model_path)
+            self.transformer = self._load_transformer(self.transformer_path)
             self._configure_transformer()
         else:
             self.transformer = None
 
         if should_load_vae:
-            vae_checkpoint = os.path.join(model_path, "Wan2.1_VAE.pth")
+            vae_checkpoint = os.path.join(self.components_root, "Wan2.1_VAE.pth")
             self.vae = WanVAE(vae_pth=vae_checkpoint, dtype=self.vae_dtype, device=self.device)
             self.vae.model.requires_grad_(False)
 
         if should_load_text_encoder:
-            t5_checkpoint = os.path.join(model_path, "models_t5_umt5-xxl-enc-bf16.pth")
-            t5_tokenizer = os.path.join(model_path, "google/umt5-xxl")
+            t5_checkpoint = os.path.join(self.components_root, "models_t5_umt5-xxl-enc-bf16.pth")
+            t5_tokenizer = os.path.join(self.components_root, "google/umt5-xxl")
             self.text_encoder = T5EncoderModel(
                 text_len=self.max_sequence_length,
                 dtype=self.t5_dtype,
@@ -284,7 +288,7 @@ class WanT2VModel(BaseModel):
         elif hasattr(denoiser, "delete_adapters"):
             denoiser.delete_adapters(adapter_name)
         else:
-            self.transformer = self._load_transformer(self.config["model"]["pretrained_model_name_or_path"])
+            self.transformer = self._load_transformer(self.transformer_path)
         self._infer_lora_adapter_name = None
 
     def fsdp2_shard_plan(self, fsdp_config):
