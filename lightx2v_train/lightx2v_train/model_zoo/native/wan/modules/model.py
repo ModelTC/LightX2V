@@ -8,6 +8,7 @@ from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat
 
 from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, all_to_all_4d, is_sequence_parallel_enabled, shrink_sequence
+from lightx2v_train.runtime.ops.rope import apply_rotary_pairs, positional_compute_dtype, prepare_rotary_frequencies
 
 from .attention import flash_attention
 
@@ -18,7 +19,7 @@ def sinusoidal_embedding_1d(dim, position):
     # preprocess
     assert dim % 2 == 0
     half = dim // 2
-    position = position.type(torch.float64)
+    position = position.to(positional_compute_dtype(position.device))
 
     # calculation
     sinusoid = torch.outer(position, torch.pow(10000, -torch.arange(half).to(position).div(half)))
@@ -47,13 +48,17 @@ def rope_apply(x, grid_sizes, freqs):
         seq_len = f * h * w
 
         # precompute multipliers
-        x_i = torch.view_as_complex(x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2))
-        freqs_i = torch.cat(
-            [freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1), freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1), freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)], dim=-1
-        ).reshape(seq_len, 1, -1)
-
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
+        if freqs[0].is_complex():
+            x_i = torch.view_as_complex(x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2))
+            freqs_i = torch.cat(
+                [freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1), freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1), freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)], dim=-1
+            ).reshape(seq_len, 1, -1)
+            x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
+        else:
+            freqs_i = torch.cat(
+                [freqs[0][:f].view(f, 1, 1, -1, 2).expand(f, h, w, -1, 2), freqs[1][:h].view(1, h, 1, -1, 2).expand(f, h, w, -1, 2), freqs[2][:w].view(1, 1, w, -1, 2).expand(f, h, w, -1, 2)], dim=-2
+            ).reshape(seq_len, 1, -1, 2)
+            x_i = apply_rotary_pairs(x[i, :seq_len], freqs_i)
         x_i = torch.cat([x_i, x[i, seq_len:]])
 
         # append to collection
@@ -602,7 +607,7 @@ class WanModel(ModelMixin, ConfigMixin):
         # params
         device = self.patch_embedding.weight.device
         if self.freqs.device != device:
-            self.freqs = self.freqs.to(device)
+            self.freqs = prepare_rotary_frequencies(self.freqs, device)
 
         if y is not None:
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
@@ -725,7 +730,7 @@ class WanModel(ModelMixin, ConfigMixin):
         # params
         device = self.patch_embedding.weight.device
         if self.freqs.device != device:
-            self.freqs = self.freqs.to(device)
+            self.freqs = prepare_rotary_frequencies(self.freqs, device)
 
         if y is not None:
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]

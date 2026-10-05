@@ -1,6 +1,8 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import torch
 
+from lightx2v_train.runtime.ops.attention import training_attention
+
 try:
     import flash_attn_interface
 
@@ -59,6 +61,12 @@ def flash_attention(
     deterministic:  bool. If True, slightly slower and uses more memory.
     dtype:          torch.dtype. Apply when dtype of q/k/v is not float16/bfloat16.
     """
+    if q.device.type != "cuda" or not (FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE):
+        return training_attention(
+            q, k, v, q_lens=q_lens, k_lens=k_lens,
+            dropout_p=dropout_p, softmax_scale=softmax_scale, q_scale=q_scale,
+            causal=causal, window_size=window_size, dtype=dtype,
+        )
     half_dtypes = (torch.float16, torch.bfloat16)
     assert dtype in half_dtypes
     assert q.device.type == "cuda" and q.size(-1) <= 256
@@ -148,7 +156,7 @@ def attention(
     dtype=torch.bfloat16,
     fa_version=None,
 ):
-    if FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE:
+    if q.device.type == "cuda" and (FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE):
         return flash_attention(
             q=q,
             k=k,
@@ -165,15 +173,8 @@ def attention(
             version=fa_version,
         )
     else:
-        if q_lens is not None or k_lens is not None:
-            warnings.warn("Padding mask is disabled when using scaled_dot_product_attention. It can have a significant impact on performance.")
-        attn_mask = None
-
-        q = q.transpose(1, 2).to(dtype)
-        k = k.transpose(1, 2).to(dtype)
-        v = v.transpose(1, 2).to(dtype)
-
-        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, is_causal=causal, dropout_p=dropout_p)
-
-        out = out.transpose(1, 2).contiguous()
-        return out
+        return training_attention(
+            q, k, v, q_lens=q_lens, k_lens=k_lens,
+            dropout_p=dropout_p, softmax_scale=softmax_scale, q_scale=q_scale,
+            causal=causal, window_size=window_size, dtype=dtype,
+        )
