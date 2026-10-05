@@ -1,5 +1,6 @@
 # Conditions-only Omni R2V image caches: no target-video encoding is required.
-# BF16 caches and FSDP compute; FP32 student/fake/teacher master parameters.
+# BF16 caches, student parameters and FSDP compute; FP32 fake/teacher parameters.
+# H3's designated FP32 modules retain their loader-defined precision.
 # PDMD H3 optimization recipe: arXiv:2609.35768v1, Table C1 and Section C.2.
 # H3-paper AdamW (0, 0.9), no WD, learning rates 5e-5 / 1e-5,
 # and student -> critic x5 (not the 1:1 ablation).
@@ -14,7 +15,7 @@ model:
     name: minimax_h3_ref2av
     pretrained_model_name_or_path: ${oc.env:H3_MODEL_PATH}
     running_dtype: bf16
-    transformer_param_dtype: fp32
+    transformer_param_dtype: bf16
     local_files_only: true
     patch_size: [1, 2, 2]
     video_latent_channels: 24
@@ -24,6 +25,9 @@ model:
     use_autocast: false
     attention_backend: _flash_3_hub
     fake:
+        transformer_param_dtype: fp32
+    teacher:
+        # Only the student changes precision; keep the teacher at FP32.
         transformer_param_dtype: fp32
     capabilities:
         distribution_matching:

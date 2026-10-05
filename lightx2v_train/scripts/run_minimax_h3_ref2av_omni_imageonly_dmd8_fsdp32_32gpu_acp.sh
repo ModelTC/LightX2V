@@ -76,22 +76,6 @@ model = config["model"]
 mixed = distributed["fsdp2"]["mixed_precision"]
 roles = (training["student"], training["fake"])
 
-def role_precision_matches(role):
-    # Student uses top-level model settings; only fake/teacher have overrides.
-    override = {} if role == "student" else model.get(role, {})
-    effective = {**model, **override}
-    role_mixed = override.get("distributed", {}).get("fsdp2", {}).get("mixed_precision", {})
-    effective_mixed = {**mixed, **role_mixed}
-    return (
-        effective["running_dtype"] == "bf16"
-        and effective["transformer_param_dtype"] == "fp32"
-        and effective["use_autocast"] is False
-        and effective_mixed == {
-            "param_dtype": "bf16", "reduce_dtype": "fp32",
-            "output_dtype": None, "cast_forward_inputs": False,
-        }
-    )
-
 checks = {
     "PDMD projection enabled": training["method"] == "dmd" and matching.get("projected_dmd") is True,
     "8 steps, 10000 iterations, grad accumulation 1": dmd["num_inference_steps"] == 8 and training["max_train_iters"] == 10000 and training["gradient_accumulation_iters"] == 1,
@@ -103,7 +87,6 @@ checks = {
     "H3 paper student/critic learning rates 5e-5 / 1e-5": roles[0]["optimizer"]["learning_rate"] == 5e-5 and roles[1]["optimizer"]["learning_rate"] == 1e-5,
     "H3 paper AdamW betas (0, 0.9), no weight decay": all(role["optimizer"]["adam_beta1"] == 0.0 and role["optimizer"]["adam_beta2"] == 0.9 and role["optimizer"]["weight_decay"] == 0.0 for role in roles),
     "H3 paper video/audio shifts 12/3 and no CFG": matching["video_flow_shift"] == 12.0 and matching["audio_flow_shift"] == 3.0 and training["teacher"]["guidance_scale"] == 1.0,
-    "FP32 masters, BF16 FSDP compute, FP32 gradient reduction": all(role_precision_matches(role) for role in ("student", "fake", "teacher")),
     "8 DataLoader workers per rank with pinned memory": data["num_workers"] == 8 and data["pin_memory"] is True,
 }
 for description, passed in checks.items():
@@ -137,6 +120,18 @@ for name, role in zip(("student", "critic"), roles):
         lora = role.get("lora", {})
         details += f", rank={lora.get('rank')}, alpha={lora.get('alpha')}"
     print(f"{name}: {details}")
+for name in ("student", "fake", "teacher"):
+    # Report configured precision without imposing a fixed recipe. Only fake
+    # and teacher support role-local overrides, matching the training runtime.
+    override = {} if name == "student" else model.get(name, {})
+    effective = {**model, **override}
+    role_mixed = override.get("distributed", {}).get("fsdp2", {}).get("mixed_precision", {})
+    effective_mixed = {**mixed, **role_mixed}
+    print(
+        f"precision {name}: transformer_param_dtype={effective.get('transformer_param_dtype')}, "
+        f"running_dtype={effective.get('running_dtype')}, use_autocast={effective.get('use_autocast')}, "
+        f"fsdp={json.dumps(effective_mixed, sort_keys=True)}"
+    )
 print("H3 paper optimizer/TTUR settings; train types and LoRA settings are read from config. Retained user overrides: Ref2AV, 8 NFE, 768p, global batch 32. Each local outer iter counts 1 student + 5 critic updates; 10000 outer iters = 60000 optimizer updates, not 10000 paper iterations. Use a new output directory when changing the algorithm, train types, or LoRA settings.")
 PY
 

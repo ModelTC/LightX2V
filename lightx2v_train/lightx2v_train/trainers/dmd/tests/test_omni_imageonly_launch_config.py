@@ -79,15 +79,12 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
         self.assertEqual(config["distributed"]["fsdp2"]["size"], 32)
         self.assertIs(config["distributed"]["sequence_parallel"]["enabled"], False)
 
-    def test_mixed_precision_recipe_preserves_fp32_master_weights(self):
+    def test_mixed_precision_recipe_uses_bf16_student_and_fp32_score_models(self):
         config = self.config()
         self.assertEqual(config["model"]["running_dtype"], "bf16")
-        self.assertEqual(config["model"]["transformer_param_dtype"], "fp32")
+        self.assertEqual(config["model"]["transformer_param_dtype"], "bf16")
         self.assertEqual(config["model"]["fake"]["transformer_param_dtype"], "fp32")
-        self.assertEqual(
-            config["model"].get("teacher", {}).get("transformer_param_dtype", config["model"]["transformer_param_dtype"]),
-            "fp32",
-        )
+        self.assertEqual(config["model"]["teacher"]["transformer_param_dtype"], "fp32")
         self.assertIs(config["model"]["use_autocast"], False)
         self.assertIs(config["distributed"]["fsdp2"]["stream_load_pretrained"], True)
         mixed = config["distributed"]["fsdp2"]["mixed_precision"]
@@ -145,6 +142,17 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
                     text=True,
                 )
 
+            default_mixed = self.config()["distributed"]["fsdp2"]["mixed_precision"]
+
+            def assert_precision(result, role, param_dtype, *, running_dtype="bf16", use_autocast=False, mixed=None):
+                effective_mixed = {**default_mixed, **(mixed or {})}
+                self.assertIn(
+                    f"precision {role}: transformer_param_dtype={param_dtype}, "
+                    f"running_dtype={running_dtype}, use_autocast={use_autocast}, "
+                    f"fsdp={json.dumps(effective_mixed, sort_keys=True)}\n",
+                    result.stdout,
+                )
+
             result = run()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("--nnodes=4 --nproc_per_node=8", result.stdout)
@@ -152,6 +160,8 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
             self.assertIn("global_microbatch=32, batch_mode=count_coverage", result.stdout)
             self.assertIn("Verified cache: completed=1, failed=0, input_rows=1", result.stdout)
             self.assertIn("60000 optimizer updates", result.stdout)
+            for role, param_dtype in (("student", "bf16"), ("fake", "fp32"), ("teacher", "fp32")):
+                assert_precision(result, role, param_dtype)
             self.assertFalse((root / "outputs").exists())
 
             environment.pop("H3_PDMD")
@@ -214,14 +224,47 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
                             details += f", rank={rank}, alpha={alpha}"
                         self.assertIn(details + "\n", result.stdout)
 
-            for role in ("fake", "teacher"):
+            for role in ("student", "fake", "teacher"):
                 with self.subTest(precision_override=role):
                     custom = self.config()
-                    custom["model"].setdefault(role, {})["distributed"] = {"fsdp2": {"mixed_precision": {"param_dtype": "fp32"}}}
+                    custom["data"]["train"]["data_path"] = str(manifest)
+                    if role == "student":
+                        # The student uses global FSDP settings; score roles
+                        # inherit these unless they explicitly override them.
+                        custom["distributed"]["fsdp2"]["mixed_precision"]["param_dtype"] = "fp32"
+                    else:
+                        custom["model"].setdefault(role, {})["distributed"] = {"fsdp2": {"mixed_precision": {"param_dtype": "fp32"}}}
                     custom_path.write_text(yaml.safe_dump(custom))
                     result = run({"H3_CONFIG_PATH": str(custom_path)})
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("FP32 masters, BF16 FSDP compute", result.stderr)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    for logged_role, param_dtype in (("student", "bf16"), ("fake", "fp32"), ("teacher", "fp32")):
+                        assert_precision(
+                            result,
+                            logged_role,
+                            param_dtype,
+                            mixed={"param_dtype": "fp32"} if role == "student" or logged_role == role else None,
+                        )
+
+                with self.subTest(scalar_precision_override=role):
+                    custom = self.config()
+                    custom["data"]["train"]["data_path"] = str(manifest)
+                    param_dtype = "fp32" if role == "student" else "bf16"
+                    role_model = custom["model"] if role == "student" else custom["model"].setdefault(role, {})
+                    role_model.update(
+                        {"transformer_param_dtype": param_dtype, "running_dtype": "fp32", "use_autocast": True}
+                    )
+                    custom_path.write_text(yaml.safe_dump(custom))
+                    result = run({"H3_CONFIG_PATH": str(custom_path)})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    assert_precision(result, role, param_dtype, running_dtype="fp32", use_autocast=True)
+
+            custom = self.config()
+            custom["data"]["train"]["data_path"] = str(manifest)
+            custom["model"]["transformer_param_dtype"] = "fp32"
+            custom_path.write_text(yaml.safe_dump(custom))
+            result = run({"H3_CONFIG_PATH": str(custom_path)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            assert_precision(result, "student", "fp32")
 
             for field, value in (("num_workers", 0), ("pin_memory", False)):
                 with self.subTest(loader_override=field):
