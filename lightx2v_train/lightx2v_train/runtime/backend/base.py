@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from typing import Any, ClassVar
 
 import torch
@@ -99,6 +100,19 @@ class BaseBackend(ABC):
 
     def configure_math(self) -> None:
         pass
+
+    def resolve_attention_backend(self, requested: str | None = None) -> str | None:
+        """Resolve an operator policy without knowing the consuming model."""
+        if requested is None or str(requested).lower() == "auto":
+            return None
+        aliases = {"sdpa": "native", "torch_sdpa": "native", "npu": "_native_npu"}
+        name = str(requested).lower()
+        return aliases.get(name, name)
+
+    def autocast(self, dtype: torch.dtype | None = None, enabled: bool = True):
+        if not enabled or dtype not in (None, torch.float16, torch.bfloat16):
+            return nullcontext()
+        return torch.autocast(device_type=self.device_type, dtype=dtype, enabled=enabled)
 
 
 class CpuBackend(BaseBackend):
