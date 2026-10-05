@@ -10,7 +10,9 @@ from lightx2v_train.model_capabilities import ConsistencyModelCapability, Distri
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.longcat_image.capability_adapters import LongCatImageConsistencyModelCapability
+from lightx2v_train.runtime.attention import prepare_diffusers_attention
 from lightx2v_train.utils.registry import MODEL_REGISTER
+from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
 from ..base import BaseModel
 
@@ -73,7 +75,6 @@ class LongCatImageModel(BaseModel):
             self._load_vae_config(model_path)
         if load_transformer:
             self.transformer = self.load_transformer()
-            self._maybe_set_attention_backend()
 
     def _load_condition_encoder(self, model_path):
         self.text_pipeline = self.pipeline_cls.from_pretrained(
@@ -86,11 +87,13 @@ class LongCatImageModel(BaseModel):
         self.text_pipeline.text_encoder.eval()
 
     def _load_vae(self, model_path):
+        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config.get("inference", {}).get("vae_cpu_offload", False)
+        device = torch.device("cpu") if use_cpu else self.device
         self.vae = AutoencoderKL.from_pretrained(
             model_path,
             subfolder="vae",
             torch_dtype=self.running_dtype,
-        ).to(self.device)
+        ).to(device)
         self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
         self.vae.eval()
@@ -105,16 +108,15 @@ class LongCatImageModel(BaseModel):
 
     def load_transformer(self, model_path=None):
         model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
-        return LongCatImageTransformer2DModel.from_pretrained(
+        transformer = LongCatImageTransformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
             torch_dtype=self.running_dtype,
         ).to(self.device)
+        return prepare_diffusers_attention(transformer, self.config)
 
-    def _maybe_set_attention_backend(self):
-        attention_backend = self.config["model"].get("attention_backend")
-        if attention_backend is not None:
-            self.transformer.set_attention_backend(attention_backend)
+    def load_full_weights_for_resume(self, resume_ckpt_path):
+        self.transformer = self.load_transformer(resume_ckpt_path)
 
     def denoiser_module(self):
         return self.transformer
