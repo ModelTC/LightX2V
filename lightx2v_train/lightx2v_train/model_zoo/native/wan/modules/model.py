@@ -7,8 +7,8 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat
 
-from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, all_to_all_4d, is_sequence_parallel_enabled, shrink_sequence
 from lightx2v_train.runtime.ops.rope import apply_rotary_pairs, positional_compute_dtype, prepare_rotary_frequencies
+from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, all_to_all_4d, is_sequence_parallel_enabled, shrink_sequence
 
 from .attention import flash_attention
 

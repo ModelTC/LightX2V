@@ -333,7 +333,12 @@ class BaseModel(CapabilityProvider):
         nonzero_up = sum(bool(value.count_nonzero().item()) for value in up_tensors)
         logger.info(
             "Loaded inference LoRA from {} adapter={} prefix={} tensors={} nonzero_lora_B_tensors={}/{}",
-            lora_path, adapter_name, load_kwargs.get("prefix", "transformer"), len(loaded_state), nonzero_up, len(up_tensors),
+            lora_path,
+            adapter_name,
+            load_kwargs.get("prefix", "transformer"),
+            len(loaded_state),
+            nonzero_up,
+            len(up_tensors),
         )
 
     def unload_lora_for_infer(self):
