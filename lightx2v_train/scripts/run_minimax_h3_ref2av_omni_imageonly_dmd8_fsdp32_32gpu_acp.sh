@@ -100,7 +100,6 @@ checks = {
     "per-rank microbatch 1, image-count coverage": data["batch_size"] == 1 and sampler.get("batch_mode") == "count_coverage" and sampler.get("require_image_only") is True,
     "no category/orientation undersampling": sampler.get("balance_image_counts") is False and sampler.get("balance_orientation") is False,
     "metadata-controlled 124-frame generation": matching.get("geometry_from_metadata") is True and dmd["generation_shapes"] == [{"value": [124, 768, 1344]}],
-    "H3 paper LoRA rank/alpha 128 for student and critic": all(role["train_type"] == "lora" and role["lora"]["rank"] == 128 and role["lora"]["alpha"] == 128 for role in roles),
     "H3 paper student/critic learning rates 5e-5 / 1e-5": roles[0]["optimizer"]["learning_rate"] == 5e-5 and roles[1]["optimizer"]["learning_rate"] == 1e-5,
     "H3 paper AdamW betas (0, 0.9), no weight decay": all(role["optimizer"]["adam_beta1"] == 0.0 and role["optimizer"]["adam_beta2"] == 0.9 and role["optimizer"]["weight_decay"] == 0.0 for role in roles),
     "H3 paper video/audio shifts 12/3 and no CFG": matching["video_flow_shift"] == 12.0 and matching["audio_flow_shift"] == 3.0 and training["teacher"]["guidance_scale"] == 1.0,
@@ -132,7 +131,13 @@ if digest.hexdigest() != receipt.get("manifest_sha256") or rows != counts[0]:
     raise SystemExit("Cache manifest no longer matches its complete receipt; re-run the checked shard merge.")
 print(f"Verified cache: completed={counts[0]}, failed={counts[1]}, input_rows={counts[2]}, ref_image_counts={receipt.get('reference_image_counts', {})}")
 print(f"H3 Omni Ref2AV: 4 x 8 GPUs, PDMD, steps=8, iters=10000, grad_accum=1, student_first, fake_update_ratio=5, global_microbatch=32, batch_mode=count_coverage, output={training['output_dir']}")
-print("H3 paper optimizer/LoRA/TTUR settings; retained user overrides: Ref2AV, 8 NFE, 768p, global batch 32. Each local outer iter counts 1 student + 5 critic updates; 10000 outer iters = 60000 optimizer updates, not 10000 paper iterations. Use a new output directory, not an old DMD/full-critic checkpoint.")
+for name, role in zip(("student", "critic"), roles):
+    details = f"train_type={role['train_type']}"
+    if role["train_type"] == "lora":
+        lora = role.get("lora", {})
+        details += f", rank={lora.get('rank')}, alpha={lora.get('alpha')}"
+    print(f"{name}: {details}")
+print("H3 paper optimizer/TTUR settings; train types and LoRA settings are read from config. Retained user overrides: Ref2AV, 8 NFE, 768p, global batch 32. Each local outer iter counts 1 student + 5 critic updates; 10000 outer iters = 60000 optimizer updates, not 10000 paper iterations. Use a new output directory when changing the algorithm, train types, or LoRA settings.")
 PY
 
 cd "$H3_CODE_ROOT/lightx2v_train"

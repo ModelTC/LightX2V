@@ -43,9 +43,6 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
         self.assertEqual(training["dmd"]["update_order"], "student_first")
         self.assertEqual(training["dmd"]["fake_update_ratio"], 5)
         self.assertEqual(training["dmd"]["latent_dtype"], "fp32")
-        self.assertEqual(training["student"]["train_type"], "lora")
-        self.assertEqual(training["student"]["lora"]["rank"], 128)
-        self.assertEqual(training["fake"]["train_type"], "lora")
         self.assertEqual(training["teacher"]["guidance_scale"], 1.0)
         matching = config["model"]["capabilities"]["distribution_matching"]
         self.assertIs(matching["projected_dmd"], True)
@@ -53,15 +50,12 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
         self.assertEqual(matching["allowed_resolutions"], [[768, 1344], [1344, 768]])
         self.assertEqual(training["dmd"]["generation_shapes"], [{"value": [124, 768, 1344]}])
 
-    def test_h3_paper_optimizer_lora_and_modality_shifts(self):
+    def test_h3_paper_optimizer_and_modality_shifts(self):
         config = self.config()
         for name, lr in (("student", 5e-5), ("fake", 1e-5)):
             with self.subTest(role=name):
                 role = config["training"][name]
-                self.assertEqual(role["train_type"], "lora")
-                self.assertEqual(role["lora"]["rank"], 128)
-                self.assertEqual(role["lora"]["alpha"], 128)
-                self.assertEqual(role["lora"]["target_modules"], ["to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2"])
+                self.assertIn(role["train_type"], {"lora", "full"})
                 self.assertEqual(role["optimizer"]["learning_rate"], lr)
                 self.assertEqual(role["optimizer"]["adam_beta1"], 0.0)
                 self.assertEqual(role["optimizer"]["adam_beta2"], 0.9)
@@ -200,12 +194,25 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("PDMD projection enabled", result.stderr)
 
-            custom = self.config()
-            custom["training"]["fake"]["train_type"] = "full"
-            custom_path.write_text(yaml.safe_dump(custom))
-            result = run({"H3_CONFIG_PATH": str(custom_path)})
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("H3 paper LoRA rank/alpha 128", result.stderr)
+            for student_type, critic_type in (("lora", "lora"), ("lora", "full"), ("full", "lora"), ("full", "full")):
+                with self.subTest(student_type=student_type, critic_type=critic_type):
+                    custom = self.config()
+                    custom["data"]["train"]["data_path"] = str(manifest)
+                    for name, train_type, rank, alpha in (("student", student_type, 64, 8), ("fake", critic_type, 32, 16)):
+                        role = custom["training"][name]
+                        role["train_type"] = train_type
+                        if train_type == "lora":
+                            role["lora"] = {"rank": rank, "alpha": alpha, "target_modules": ["to_q"]}
+                        else:
+                            role.pop("lora", None)
+                    custom_path.write_text(yaml.safe_dump(custom))
+                    result = run({"H3_CONFIG_PATH": str(custom_path)})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    for name, train_type, rank, alpha in (("student", student_type, 64, 8), ("critic", critic_type, 32, 16)):
+                        details = f"{name}: train_type={train_type}"
+                        if train_type == "lora":
+                            details += f", rank={rank}, alpha={alpha}"
+                        self.assertIn(details + "\n", result.stdout)
 
             for role in ("fake", "teacher"):
                 with self.subTest(precision_override=role):

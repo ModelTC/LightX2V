@@ -1,8 +1,10 @@
 # Conditions-only Omni R2V image caches: no target-video encoding is required.
 # BF16 caches and FSDP compute; FP32 student/fake/teacher master parameters.
 # PDMD H3 optimization recipe: arXiv:2609.35768v1, Table C1 and Section C.2.
-# Both student and critic use LoRA rank/alpha 128, AdamW (0, 0.9), no WD,
-# learning rates 5e-5 / 1e-5, and student -> critic x5 (not the 1:1 ablation).
+# H3-paper AdamW (0, 0.9), no WD, learning rates 5e-5 / 1e-5,
+# and student -> critic x5 (not the 1:1 ablation).
+# Train types and LoRA settings remain configurable; the current critic is
+# full-parameter (unlike the paper's LoRA rank/alpha 128 critic).
 # User overrides retained: Ref2AV image conditions, 8 NFE, 768p, global batch
 # 32, and 10000 outer iterations (paper: T2AV, 4 NFE, 544p, global batch 16).
 # Each outer iteration here is 1 student + 5 critic optimizer updates; the
