@@ -1,18 +1,19 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+import warnings
+
 import torch
 
+FLASH_ATTN_3_IMPORT_ERROR = None
 try:
     import flash_attn_interface
 
-    def is_hopper_gpu():
-        if not torch.cuda.is_available():
-            return False
-        device_name = torch.cuda.get_device_name(0).lower()
-        return "h100" in device_name or "hopper" in device_name
-
-    FLASH_ATTN_3_AVAILABLE = is_hopper_gpu()
-except ModuleNotFoundError:
+    # Availability describes the extension, not whichever GPU happens to be
+    # current during import. Eligibility is checked on the actual query device.
+    FLASH_ATTN_3_AVAILABLE = True
+except (ImportError, OSError) as error:
+    flash_attn_interface = None
     FLASH_ATTN_3_AVAILABLE = False
+    FLASH_ATTN_3_IMPORT_ERROR = str(error)
 
 try:
     import flash_attn
@@ -21,14 +22,136 @@ try:
 except ModuleNotFoundError:
     FLASH_ATTN_2_AVAILABLE = False
 
-# FLASH_ATTN_3_AVAILABLE = False
-
-import warnings
-
 __all__ = [
     "flash_attention",
     "attention",
+    "sdpa_attention",
+    "require_flash_attention_3",
 ]
+
+
+def is_hopper_gpu(device=None):
+    """Identify Hopper by compute capability, including both H100 and H200."""
+    if device is not None and torch.device(device).type != "cuda":
+        return False
+    return torch.cuda.is_available() and torch.cuda.get_device_capability(device)[0] == 9
+
+
+def require_flash_attention_3(device, *, dropout_p=0.0, window_size=(-1, -1)):
+    """Fail closed for explicit FA3 requests; do not silently execute FA2."""
+    if dropout_p != 0.0 or tuple(window_size) != (-1, -1):
+        raise ValueError("flash_attention_3 currently requires dropout_p=0 and global window_size=(-1, -1)")
+    if not FLASH_ATTN_3_AVAILABLE:
+        raise RuntimeError(f"flash_attention_3 was explicitly requested, but flash_attn_interface is unavailable: {FLASH_ATTN_3_IMPORT_ERROR}")
+    device = torch.device(device)
+    if device.type != "cuda" or not torch.cuda.is_available():
+        raise RuntimeError("flash_attention_3 was explicitly requested, but requires a CUDA Hopper GPU (compute capability 9.x)")
+    capability = torch.cuda.get_device_capability(device)
+    if capability[0] != 9:
+        raise RuntimeError(f"flash_attention_3 requires a Hopper GPU (compute capability 9.x), got {capability} on {device}")
+    return {"device": str(device), "gpu": torch.cuda.get_device_name(device), "compute_capability": capability}
+
+
+def resolve_flash_attention_version(backend, version, device, *, dropout_p=0.0, window_size=(-1, -1)):
+    if backend == "flash_attention_3":
+        if version not in (None, 3):
+            raise ValueError("flash_attention_3 cannot be combined with a different attention version")
+        require_flash_attention_3(device, dropout_p=dropout_p, window_size=window_size)
+        return 3
+    if backend != "flash_attention":
+        raise ValueError(f"Unsupported Wan attention backend: {backend!r}")
+    fa3_eligible = FLASH_ATTN_3_AVAILABLE and is_hopper_gpu(device) and dropout_p == 0.0 and tuple(window_size) == (-1, -1)
+    if version == 3 and not fa3_eligible:
+        warnings.warn("Flash attention 3 is not available for this device/options, use flash attention 2 instead.")
+    return 3 if version in (None, 3) and fa3_eligible else 2
+
+
+def sdpa_attention(
+    q,
+    k,
+    v,
+    q_lens=None,
+    k_lens=None,
+    dropout_p=0.0,
+    softmax_scale=None,
+    q_scale=None,
+    causal=False,
+    window_size=(-1, -1),
+):
+    """SDPA in the value activation dtype, with no implicit FP32-to-half cast.
+
+    Inputs/outputs use Wan's [batch, sequence, heads, channels] layout. Like
+    FlashAttention, causal/local masks are bottom-right aligned when query and
+    key lengths differ. Slice padding per sample rather than allocating a large
+    dense padding mask. Query padding is returned as zeros.
+
+    Q/K normalization may promote half activations to FP32; align those to V's
+    activation dtype. When Q/K/V are FP32 (running_dtype=fp32), they stay FP32,
+    even inside an outer autocast context.
+    """
+    if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
+        raise ValueError("Wan attention expects four-dimensional Q/K/V")
+    if q.shape[0] != k.shape[0] or k.shape[:3] != v.shape[:3] or q.shape[-1] != k.shape[-1]:
+        raise ValueError("Incompatible Wan attention Q/K/V shapes")
+    if q.shape[2] % k.shape[2] != 0:
+        raise ValueError("Query heads must be divisible by key/value heads")
+    if len(window_size) != 2 or any(int(value) != value or value < -1 for value in window_size):
+        raise ValueError("window_size must contain two integers >= -1")
+
+    def lengths(value, maximum):
+        if value is None:
+            return [maximum] * q.shape[0]
+        result = torch.as_tensor(value).tolist()
+        if not isinstance(result, list) or len(result) != q.shape[0] or any(int(n) != n or not 0 <= n <= maximum for n in result):
+            raise ValueError("Attention lengths must have one valid integer per batch sample")
+        return [int(n) for n in result]
+
+    query_lengths = lengths(q_lens, q.shape[1])
+    key_lengths = lengths(k_lens, k.shape[1])
+    out_dtype = q.dtype
+
+    def attend(query, key, value):
+        lq, lk = query.shape[1], key.shape[1]
+        if lq == 0 or lk == 0:
+            # Retain zero gradients for all three inputs in empty sequences.
+            return query.new_zeros((*query.shape[:3], value.shape[-1])) + (query.sum() + key.sum() + value.sum()) * 0
+        query = query.transpose(1, 2).to(value.dtype)
+        key = key.transpose(1, 2).to(value.dtype)
+        value = value.transpose(1, 2)
+        if q_scale is not None:
+            query = query * q_scale
+        mask = None
+        use_causal = causal and lq == lk and tuple(window_size) == (-1, -1)
+        if tuple(window_size) != (-1, -1) or (causal and not use_causal):
+            query_positions = torch.arange(lq, device=query.device)[:, None] + lk - lq
+            key_positions = torch.arange(lk, device=query.device)[None, :]
+            mask = torch.ones((lq, lk), device=query.device, dtype=torch.bool)
+            if causal:
+                mask &= key_positions <= query_positions
+            if window_size[0] >= 0:
+                mask &= key_positions >= query_positions - window_size[0]
+            if window_size[1] >= 0:
+                mask &= key_positions <= query_positions + window_size[1]
+        with torch.autocast(device_type=query.device.type, enabled=False):
+            output = torch.nn.functional.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=mask,
+                dropout_p=dropout_p,
+                is_causal=use_causal,
+                scale=softmax_scale,
+                enable_gqa=query.shape[1] != key.shape[1],
+            )
+        return output.transpose(1, 2).to(out_dtype)
+
+    if all(n == q.shape[1] for n in query_lengths) and all(n == k.shape[1] for n in key_lengths):
+        return attend(q, k, v).contiguous()
+    outputs = []
+    for index, (lq, lk) in enumerate(zip(query_lengths, key_lengths)):
+        output = attend(q[index : index + 1, :lq], k[index : index + 1, :lk], v[index : index + 1, :lk])
+        outputs.append(torch.nn.functional.pad(output, (0, 0, 0, 0, 0, q.shape[1] - lq)))
+    return torch.cat(outputs, dim=0).contiguous()
 
 
 def flash_attention(
@@ -45,6 +168,7 @@ def flash_attention(
     deterministic=False,
     dtype=torch.bfloat16,
     version=None,
+    backend="flash_attention",
 ):
     """
     q:              [B, Lq, Nq, C1].
@@ -58,7 +182,23 @@ def flash_attention(
     window_size:    (left right). If not (-1, -1), apply sliding window local attention.
     deterministic:  bool. If True, slightly slower and uses more memory.
     dtype:          torch.dtype. Apply when dtype of q/k/v is not float16/bfloat16.
+    backend:        'flash_attention' (legacy auto), strict 'flash_attention_3',
+                    or dtype-preserving 'sdpa'.
     """
+    if backend == "sdpa":
+        return sdpa_attention(
+            q,
+            k,
+            v,
+            q_lens,
+            k_lens,
+            dropout_p,
+            softmax_scale,
+            q_scale,
+            causal,
+            window_size,
+        )
+    resolved_version = resolve_flash_attention_version(backend, version, q.device, dropout_p=dropout_p, window_size=window_size)
     half_dtypes = (torch.float16, torch.bfloat16)
     assert dtype in half_dtypes
     assert q.device.type == "cuda" and q.size(-1) <= 256
@@ -91,11 +231,8 @@ def flash_attention(
     if q_scale is not None:
         q = q * q_scale
 
-    if version is not None and version == 3 and not FLASH_ATTN_3_AVAILABLE:
-        warnings.warn("Flash attention 3 is not available, use flash attention 2 instead.")
-
     # apply attention
-    if (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
+    if resolved_version == 3:
         # Note: dropout_p, window_size are not supported in FA3 now.
         x = flash_attn_interface.flash_attn_varlen_func(
             q=q,
@@ -148,7 +285,7 @@ def attention(
     dtype=torch.bfloat16,
     fa_version=None,
 ):
-    if FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE:
+    if FLASH_ATTN_2_AVAILABLE or (FLASH_ATTN_3_AVAILABLE and is_hopper_gpu(q.device)):
         return flash_attention(
             q=q,
             k=k,

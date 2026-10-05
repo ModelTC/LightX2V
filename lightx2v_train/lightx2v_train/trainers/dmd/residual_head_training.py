@@ -277,6 +277,12 @@ class ResidualHeadTraining:
         if self.collecting_fit:
             if not torch.is_tensor(generated) or generated.ndim != 5:
                 raise ValueError("Residual-head DMD requires [B,C,T,H,W] tensor latents.")
+            # fit() only consumes the first fit_steps queries when enough are
+            # available. Do not retain or rescore the unused tail when critic
+            # gradient accumulation produces many more queries (e.g. 16*5).
+            # With fewer queries, fit() keeps its existing replay behavior.
+            if len(self.fit_batches) >= self.config.fit_steps:
+                return
             self.fit_batches.append(
                 _FitBatch(
                     generated.detach(),

@@ -92,7 +92,7 @@ class WanLayerNorm(nn.LayerNorm):
 
 
 class WanSelfAttention(nn.Module):
-    def __init__(self, dim, num_heads, window_size=(-1, -1), qk_norm=True, eps=1e-6):
+    def __init__(self, dim, num_heads, window_size=(-1, -1), qk_norm=True, eps=1e-6, attention_backend="flash_attention"):
         assert dim % num_heads == 0
         super().__init__()
         self.dim = dim
@@ -101,6 +101,11 @@ class WanSelfAttention(nn.Module):
         self.window_size = window_size
         self.qk_norm = qk_norm
         self.eps = eps
+        if attention_backend not in {"flash_attention", "flash_attention_3", "sdpa"}:
+            raise ValueError(f"Unsupported Wan attention backend: {attention_backend!r}")
+        if attention_backend == "flash_attention_3" and tuple(window_size) != (-1, -1):
+            raise ValueError("flash_attention_3 currently requires global window_size=(-1, -1)")
+        self.attention_backend = attention_backend
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -134,7 +139,7 @@ class WanSelfAttention(nn.Module):
             k = all_to_all_4d(k, scatter_dim=2, gather_dim=1)
             v = all_to_all_4d(v, scatter_dim=2, gather_dim=1)
 
-        x = flash_attention(q=rope_apply(q, grid_sizes, freqs), k=rope_apply(k, grid_sizes, freqs), v=v, k_lens=seq_lens, window_size=self.window_size)
+        x = flash_attention(q=rope_apply(q, grid_sizes, freqs), k=rope_apply(k, grid_sizes, freqs), v=v, k_lens=seq_lens, window_size=self.window_size, backend=self.attention_backend)
 
         if is_sequence_parallel_enabled():
             x = all_to_all_4d(x, scatter_dim=1, gather_dim=2)
@@ -174,7 +179,7 @@ class WanT2VCrossAttention(WanSelfAttention):
             v = self.v(context).view(b, -1, n, d)
 
         # compute attention
-        x = flash_attention(q, k, v, k_lens=context_lens)
+        x = flash_attention(q, k, v, k_lens=context_lens, backend=self.attention_backend)
 
         # output
         x = x.flatten(2)
@@ -200,7 +205,7 @@ class WanGanCrossAttention(WanSelfAttention):
         vv = self.v(x).view(b, -1, n, d)
 
         # compute attention
-        x = flash_attention(qq, kk, vv)
+        x = flash_attention(qq, kk, vv, backend=self.attention_backend)
 
         # output
         x = x.flatten(2)
@@ -209,8 +214,8 @@ class WanGanCrossAttention(WanSelfAttention):
 
 
 class WanI2VCrossAttention(WanSelfAttention):
-    def __init__(self, dim, num_heads, window_size=(-1, -1), qk_norm=True, eps=1e-6):
-        super().__init__(dim, num_heads, window_size, qk_norm, eps)
+    def __init__(self, dim, num_heads, window_size=(-1, -1), qk_norm=True, eps=1e-6, attention_backend="flash_attention"):
+        super().__init__(dim, num_heads, window_size, qk_norm, eps, attention_backend)
 
         self.k_img = nn.Linear(dim, dim)
         self.v_img = nn.Linear(dim, dim)
@@ -234,9 +239,9 @@ class WanI2VCrossAttention(WanSelfAttention):
         v = self.v(context).view(b, -1, n, d)
         k_img = self.norm_k_img(self.k_img(context_img)).view(b, -1, n, d)
         v_img = self.v_img(context_img).view(b, -1, n, d)
-        img_x = flash_attention(q, k_img, v_img, k_lens=None)
+        img_x = flash_attention(q, k_img, v_img, k_lens=None, backend=self.attention_backend)
         # compute attention
-        x = flash_attention(q, k, v, k_lens=context_lens)
+        x = flash_attention(q, k, v, k_lens=context_lens, backend=self.attention_backend)
 
         # output
         x = x.flatten(2)
@@ -253,7 +258,7 @@ WAN_CROSSATTENTION_CLASSES = {
 
 
 class WanAttentionBlock(nn.Module):
-    def __init__(self, cross_attn_type, dim, ffn_dim, num_heads, window_size=(-1, -1), qk_norm=True, cross_attn_norm=False, eps=1e-6):
+    def __init__(self, cross_attn_type, dim, ffn_dim, num_heads, window_size=(-1, -1), qk_norm=True, cross_attn_norm=False, eps=1e-6, attention_backend="flash_attention"):
         super().__init__()
         self.dim = dim
         self.ffn_dim = ffn_dim
@@ -265,9 +270,9 @@ class WanAttentionBlock(nn.Module):
 
         # layers
         self.norm1 = WanLayerNorm(dim, eps)
-        self.self_attn = WanSelfAttention(dim, num_heads, window_size, qk_norm, eps)
+        self.self_attn = WanSelfAttention(dim, num_heads, window_size, qk_norm, eps, attention_backend)
         self.norm3 = WanLayerNorm(dim, eps, elementwise_affine=True) if cross_attn_norm else nn.Identity()
-        self.cross_attn = WAN_CROSSATTENTION_CLASSES[cross_attn_type](dim, num_heads, (-1, -1), qk_norm, eps)
+        self.cross_attn = WAN_CROSSATTENTION_CLASSES[cross_attn_type](dim, num_heads, (-1, -1), qk_norm, eps, attention_backend)
         self.norm2 = WanLayerNorm(dim, eps)
         self.ffn = nn.Sequential(nn.Linear(dim, ffn_dim), nn.GELU(approximate="tanh"), nn.Linear(ffn_dim, dim))
 
@@ -461,6 +466,7 @@ class WanModel(ModelMixin, ConfigMixin):
         qk_norm=True,
         cross_attn_norm=True,
         eps=1e-6,
+        attention_backend="flash_attention",
     ):
         r"""
         Initialize the diffusion model backbone.
@@ -496,6 +502,9 @@ class WanModel(ModelMixin, ConfigMixin):
                 Enable cross-attention normalization
             eps (`float`, *optional*, defaults to 1e-6):
                 Epsilon value for normalization layers
+            attention_backend (`str`, *optional*, defaults to 'flash_attention'):
+                'sdpa' preserves FP32 attention activations for FP32 training.
+                'flash_attention_3' requires Hopper and never falls back to FA2.
         """
 
         super().__init__()
@@ -517,6 +526,7 @@ class WanModel(ModelMixin, ConfigMixin):
         self.qk_norm = qk_norm
         self.cross_attn_norm = cross_attn_norm
         self.eps = eps
+        self.attention_backend = attention_backend
         self.local_attn_size = 21
 
         # embeddings
@@ -528,7 +538,7 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # blocks
         cross_attn_type = "t2v_cross_attn" if model_type == "t2v" else "i2v_cross_attn"
-        self.blocks = nn.ModuleList([WanAttentionBlock(cross_attn_type, dim, ffn_dim, num_heads, window_size, qk_norm, cross_attn_norm, eps) for _ in range(num_layers)])
+        self.blocks = nn.ModuleList([WanAttentionBlock(cross_attn_type, dim, ffn_dim, num_heads, window_size, qk_norm, cross_attn_norm, eps, attention_backend) for _ in range(num_layers)])
 
         # head
         self.head = Head(dim, out_dim, patch_size, eps)

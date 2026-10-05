@@ -26,8 +26,9 @@ export H3_KERNEL_SNAPSHOT=/path/to/flash-attn3/snapshot
 bash lightx2v_train/scripts/run_minimax_h3_ref2av_fsdp32_32gpu_acp.sh
 ```
 
-Append `--dry-run` to validate paths and print the launch command without
-starting training. For the unchanged DMD objective, use `H3_PDMD=false` and a
+Append `--dry-run` to validate paths, resolve and print the effective update
+cadence, and print the launch command without starting training. For the
+unchanged DMD recipe, use `H3_PDMD=false` and a
 separate output directory/rendezvous ID. If needed, validate the cache row
 count with `H3_REF2AV_EXPECTED_ROWS=13553`.
 
@@ -43,7 +44,8 @@ The recipe uses:
 | Student | LoRA rank 128, alpha 8; learning rate 5e-5 |
 | Critic (`fake`) | Full model; FP32 master parameters; learning rate 4e-7 |
 | Denoising | 8 evaluations; video/audio flow shifts 12/3 |
-| Updates | 5 critic updates per student update; physical batch 1 per rank |
+| PDMD updates (`H3_PDMD=true`) | 1 student update, then 1 critic update; physical batch 1 per rank |
+| DMD updates (`H3_PDMD=false`, default) | 1 student update, then 5 critic updates; physical batch 1 per rank |
 | Precision | FP32 generated latents, BF16 compute, FP32 gradient reduction |
 | DMD normalization | Separate video/audio normalizers; epsilon 0; half-MSE mean |
 | Saving | Every 50 outer iterations; keep 5 checkpoints; automatic resume |
@@ -65,20 +67,35 @@ explicit command-line arguments; use each tool's `--help` for its cache schema.
 component of the detached DMD direction parallel to the critic–student
 residual. Video and audio are projected separately in FP32, across all
 non-batch axes, before their existing normalizers. A zero residual leaves the
-direction unchanged. The critic regression objective and model forward count
-do not change.
+direction unchanged. The critic regression objective is unchanged. The new
+PDMD cadence reduces critic optimizer updates from five to one per outer
+iteration; the eight-evaluation student denoising schedule is unchanged.
 
 The option is
 `model.capabilities.distribution_matching.projected_dmd`; the provided config
 reads it from `H3_PDMD` and defaults to `false`. This is an application of the
 paper's projection to Ref2AV, not a reproduction of a published Ref2AV recipe.
-The PDMD toggle leaves all other recipe settings unchanged.
+`H3_PDMD=true` also explicitly selects `training.dmd.update_order=student_first`
+and `training.dmd.fake_update_ratio=1`. The default `false` keeps the previous
+student-first, five-critic-update recipe. Learning rates, precision, modality
+shifts and the H3 teacher are unchanged; a Wan teacher is not compatible with
+H3. Use the literal environment values `true` or `false`.
+
+Both H3 YAML files resolve this cadence themselves: direct
+`train.py --config ...` launches with `H3_PDMD=true` also get the 1:1 recipe,
+without depending on shell-only overrides. The T2AV config and
+`scripts/run_minimax_h3_t2av_dmd.sh` support the same selector and `--dry-run`.
+Custom `H3_CONFIG_PATH` files are checked by both launchers: a PDMD config must
+explicitly resolve to student-first and one critic update, or launch fails.
 
 New checkpoints record the objective, modality normalization, geometry,
 parallel topology and sampler recipe. Incompatible resume settings fail
 explicitly. Start a fresh output directory when comparing DMD and PDMD;
 `resume.allow_distribution_matching_transition` is reserved for intentional
 objective changes rather than a controlled comparison.
+Do not reuse an older PDMD output directory for the new 1:1 cadence: changing
+the update ratio also requires a fresh run, even though the projected
+objective remains the same.
 
 Student-only sparse attention, adaptive video regularization, and memory
 guards are also available under `model.capabilities.distribution_matching`.

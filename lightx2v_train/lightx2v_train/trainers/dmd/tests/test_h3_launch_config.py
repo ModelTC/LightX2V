@@ -9,6 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import torch
+import yaml
+from omegaconf.errors import InterpolationKeyError
 
 from lightx2v_train.runtime.config import load_config
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
@@ -22,33 +24,58 @@ TRAIN_ROOT = Path(__file__).resolve().parents[4]
 CONFIG = TRAIN_ROOT / "configs/train/dmd/minimax_h3_ref2av_dmd_lora_match124_image_audio_1to5_uniform_fsdp32_32gpu_full_fake.yaml"
 T2AV_CONFIG = TRAIN_ROOT / "configs/train/dmd/minimax_h3_t2av_dmd_lora.yaml"
 LAUNCHER = TRAIN_ROOT / "scripts/run_minimax_h3_ref2av_fsdp32_32gpu_acp.sh"
+T2AV_LAUNCHER = TRAIN_ROOT / "scripts/run_minimax_h3_t2av_dmd.sh"
 
 
 class H3LaunchConfigTests(unittest.TestCase):
-    def config(self, projected="false"):
+    def config(self, projected="false", path=CONFIG):
         with patch.dict(
             os.environ,
             {
                 "H3_MODEL_PATH": "/path/to/model",
                 "H3_REF2AV_CACHE": "/path/to/cache/metadata.jsonl",
                 "H3_REF2AV_DMD_OUTPUT": "/path/to/output",
-                "H3_PDMD": projected,
+                "H3_PDMD": "false" if projected is None else projected,
             },
         ):
-            return load_config(str(CONFIG))
+            if projected is None:
+                os.environ.pop("H3_PDMD", None)
+            return load_config(str(path))
 
-    def test_projection_is_a_boolean_and_only_objective_toggle(self):
-        baseline, projected = self.config(), self.config("true")
-        options = baseline["model"]["capabilities"]["distribution_matching"]
-        self.assertIs(options["projected_dmd"], False)
-        self.assertIs(projected["model"]["capabilities"]["distribution_matching"].pop("projected_dmd"), True)
-        options.pop("projected_dmd")
-        self.assertEqual(baseline, projected)
+    def test_projection_selects_student_then_one_critic_in_both_configs(self):
+        # Direct load_config, not a launcher override: train.py sees this cadence.
+        for path in (CONFIG, T2AV_CONFIG):
+            with self.subTest(path=path):
+                baseline, projected = self.config(path=path), self.config("true", path)
+                self.assertIs(baseline["model"]["capabilities"]["distribution_matching"].pop("projected_dmd"), False)
+                self.assertIs(projected["model"]["capabilities"]["distribution_matching"].pop("projected_dmd"), True)
+                self.assertEqual(baseline["training"]["dmd"]["update_order"], "student_first")
+                self.assertEqual(projected["training"]["dmd"]["update_order"], "student_first")
+                self.assertEqual(DmdConfig.from_mapping(baseline).fake_update_ratio, 5)
+                self.assertEqual(DmdConfig.from_mapping(projected).fake_update_ratio, 1)
+                baseline["training"]["dmd"].pop("fake_update_ratio")
+                projected["training"]["dmd"].pop("fake_update_ratio")
+                self.assertEqual(baseline, projected)
+
+    def test_unset_projection_preserves_baseline_and_invalid_values_fail(self):
+        for path in (CONFIG, T2AV_CONFIG):
+            with self.subTest(path=path):
+                self.assertEqual(self.config(None, path), self.config("false", path))
+                with self.assertRaises(InterpolationKeyError):
+                    self.config("not-a-boolean", path)
+
+    def test_other_ref2av_recipe_settings_are_retained(self):
+        baseline = self.config()
         parsed = DmdConfig.from_mapping(baseline)
         self.assertEqual(parsed.num_inference_steps, 8)
         self.assertEqual(parsed.fake_update_ratio, 5)
         self.assertEqual(parsed.student_lora["alpha"], 8)
         self.assertEqual(parsed.latent_dtype, torch.float32)
+        self.assertEqual(parsed.guidance_scale, 1.0)
+        self.assertEqual(parsed.student["optimizer"]["learning_rate"], 5e-5)
+        self.assertEqual(parsed.fake["optimizer"]["learning_rate"], 4e-7)
+        self.assertEqual(baseline["model"]["name"], "minimax_h3_ref2av")
+        self.assertEqual(baseline["model"]["transformer_param_dtype"], "bf16")
         self.assertEqual(baseline["model"]["fake"]["transformer_param_dtype"], "fp32")
 
     def test_score_distribution_matches_shift_then_clamp(self):
@@ -80,7 +107,7 @@ class H3LaunchConfigTests(unittest.TestCase):
         torch.testing.assert_close(scheduler.sigmas, torch.linspace(1, 0, 9))
 
     def test_t2av_uses_eight_steps_and_retains_modality_shifts(self):
-        config = load_config(str(T2AV_CONFIG))
+        config = self.config(path=T2AV_CONFIG)
         parsed = DmdConfig.from_mapping(config)
         self.assertEqual(parsed.num_inference_steps, 8)
         options = config["model"]["capabilities"]["distribution_matching"]
@@ -94,7 +121,7 @@ class H3LaunchConfigTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 build_score_sigma_sampler({"type": "h3_shifted_uniform", **change}, use_rollout_min=False, use_rollout_max=False)
 
-    def test_launcher_dry_run_without_starting_distributed_training(self):
+    def test_launchers_dry_run_and_validate_actual_config_cadence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             partition = root / "model/transformer_ref"
@@ -114,12 +141,48 @@ class H3LaunchConfigTests(unittest.TestCase):
                 "H3_REF2AV_EXPECTED_ROWS": "1",
                 "H3_PDMD": "true",
             }
+            environment.pop("H3_CONFIG_PATH", None)
             environment.pop("KERNELS_CACHE", None)
             environment.pop("H3_KERNEL_SNAPSHOT", None)
-            result = subprocess.run(["bash", str(LAUNCHER), "--dry-run"], env=environment, capture_output=True, text=True, check=True)
-            self.assertIn("--nnodes=4 --nproc_per_node=8", result.stdout)
-            self.assertIn("PDMD=true", result.stdout)
-            self.assertNotIn("Traceback", result.stderr)
+            for launcher, config_path in ((LAUNCHER, CONFIG), (T2AV_LAUNCHER, T2AV_CONFIG)):
+                for projected, ratio in (("false", 5), ("true", 1)):
+                    with self.subTest(launcher=launcher, projected=projected):
+                        environment["H3_PDMD"] = projected
+                        result = subprocess.run(["bash", str(launcher), "--dry-run"], env=environment, capture_output=True, text=True, check=True)
+                        if launcher == LAUNCHER:
+                            self.assertIn("--nnodes=4 --nproc_per_node=8", result.stdout)
+                        self.assertIn(f"PDMD={projected}", result.stdout)
+                        self.assertIn("update_order=student_first", result.stdout)
+                        self.assertIn(f"fake_update_ratio={ratio}", result.stdout)
+                        self.assertNotIn("Traceback", result.stderr)
+
+                # H3_CONFIG_PATH must not silently retain the former 1:5 recipe.
+                custom = self.config("true", config_path)
+                custom["training"]["dmd"]["fake_update_ratio"] = 5
+                custom_path = root / "custom.yaml"
+                custom_path.write_text(yaml.safe_dump(custom))
+                override_environment = {**environment, "H3_CONFIG_PATH": str(custom_path), "H3_PDMD": "true"}
+                result = subprocess.run(["bash", str(launcher), "--dry-run"], env=override_environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("requires update_order=student_first and fake_update_ratio=1", result.stderr)
+
+                custom["training"]["dmd"]["fake_update_ratio"] = 1
+                custom["training"]["dmd"]["update_order"] = "fake_first"
+                custom_path.write_text(yaml.safe_dump(custom))
+                result = subprocess.run(["bash", str(launcher), "--dry-run"], env=override_environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("requires update_order=student_first and fake_update_ratio=1", result.stderr)
+
+                custom["model"]["capabilities"]["distribution_matching"]["projected_dmd"] = False
+                custom_path.write_text(yaml.safe_dump(custom))
+                result = subprocess.run(["bash", str(launcher), "--dry-run"], env=override_environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("disagrees with the selected config", result.stderr)
+
+                result = subprocess.run(["bash", str(launcher), "--dry-run"], env={**environment, "H3_PDMD": "yes"}, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("H3_PDMD must be true or false", result.stderr)
+            self.assertFalse((root / "outputs").exists())
 
 
 if __name__ == "__main__":

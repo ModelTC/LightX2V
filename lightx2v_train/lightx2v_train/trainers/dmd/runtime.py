@@ -161,6 +161,45 @@ class _DmdRuntime(BaseTrainer):
         train_type = self.student_train_type if role == "student" else self.fake_train_type
         model.ensure_capabilities().require(CheckpointCapability).load_weights(save_dir, train_type)
 
+    def _build_dmd_role_config(self, role, base_model_config):
+        """Resolve fake/teacher model overrides and role-local FSDP precision.
+
+        ``model.teacher.distributed.fsdp2.mixed_precision`` (or ``model.fake``)
+        partially overrides the global mixed-precision mapping. For example,
+        teacher-only BF16 requires teacher ``running_dtype`` and
+        ``transformer_param_dtype`` plus ``param_dtype: bf16`` in that mapping.
+        Student precision and shared frozen components are not changed. Mesh,
+        strategy and sharding topology remain global: role overrides may only
+        contain FSDP2 mixed-precision options, not distributed topology settings.
+        """
+        if role not in {"fake", "teacher"}:
+            raise ValueError(f"Unsupported DMD precision role: {role}")
+        override = self.model_config.get(role, {})
+        if not isinstance(override, dict):
+            raise ValueError(f"model.{role} must be a mapping.")
+        override = copy.deepcopy(override)
+        role_config = copy.deepcopy(self.config)
+        role_config["model"] = copy.deepcopy(base_model_config)
+        if "distributed" in override:
+            distributed = override.pop("distributed")
+            prefix = f"model.{role}.distributed"
+            if not isinstance(distributed, dict) or set(distributed) - {"fsdp2"}:
+                raise ValueError(f"{prefix} may only override fsdp2.mixed_precision; distributed topology must remain global.")
+            fsdp = distributed.get("fsdp2", {})
+            if not isinstance(fsdp, dict) or set(fsdp) - {"mixed_precision"}:
+                raise ValueError(f"{prefix}.fsdp2 may only override mixed_precision; sharding topology must remain global.")
+            precision = fsdp.get("mixed_precision", {})
+            allowed = {"param_dtype", "reduce_dtype", "output_dtype", "cast_forward_inputs"}
+            if not isinstance(precision, dict) or set(precision) - allowed:
+                raise ValueError(f"{prefix}.fsdp2.mixed_precision must be a mapping containing only {sorted(allowed)}.")
+            # Every nested object belongs to the role's deep copy. Inheriting
+            # reduce/output dtypes and casting behavior must not mutate another
+            # model role or replace the global mesh configuration.
+            inherited = role_config.setdefault("distributed", {}).setdefault("fsdp2", {}).setdefault("mixed_precision", {})
+            inherited.update(precision)
+        role_config["model"].update(override)
+        return role_config
+
     def setup(self, resume_ckpt_path=None):
         super().setup(resume_ckpt_path=None)
         base_model_config = {
@@ -181,12 +220,7 @@ class _DmdRuntime(BaseTrainer):
             }
         }
 
-        fake_model_config = copy.deepcopy(self.config)
-        fake_model_config["model"] = copy.deepcopy(base_model_config)
-        if "fake" in self.model_config:
-            if not isinstance(self.model_config["fake"], dict):
-                raise ValueError("model.fake must be a mapping.")
-            fake_model_config["model"].update(copy.deepcopy(self.model_config["fake"]))
+        fake_model_config = self._build_dmd_role_config("fake", base_model_config)
         self.fake_model_config = copy.deepcopy(fake_model_config)
         self.fake_model = build_loaded_model(
             fake_model_config,
@@ -197,16 +231,11 @@ class _DmdRuntime(BaseTrainer):
         self.fake_model.reuse_frozen_components_from(self.model)
         self.fake = self.fake_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(self.fake_model, role="fake")
-        self.fake_model.capabilities.require(ParallelCapability).apply(self.config)
+        self.fake_model.capabilities.require(ParallelCapability).apply(fake_model_config)
         if self.gradient_checkpointing:
             self.fake_model.capabilities.require(TrainableModelCapability).enable_gradient_checkpointing()
 
-        teacher_model_config = copy.deepcopy(self.config)
-        teacher_model_config["model"] = copy.deepcopy(base_model_config)
-        if "teacher" in self.model_config:
-            if not isinstance(self.model_config["teacher"], dict):
-                raise ValueError("model.teacher must be a mapping.")
-            teacher_model_config["model"].update(copy.deepcopy(self.model_config["teacher"]))
+        teacher_model_config = self._build_dmd_role_config("teacher", base_model_config)
         self.teacher_model = build_loaded_model(
             teacher_model_config,
             load_transformer=True,
@@ -218,7 +247,7 @@ class _DmdRuntime(BaseTrainer):
         self.teacher.prepare_role("teacher")
         self.teacher.denoiser().requires_grad_(False)
         self.teacher.set_training(False)
-        self.teacher_model.capabilities.require(ParallelCapability).apply(self.config)
+        self.teacher_model.capabilities.require(ParallelCapability).apply(teacher_model_config)
         self.teacher.set_training(False)
         self.student.validate_training_roles(self.model, self.fake_model, self.teacher_model)
 
@@ -256,6 +285,14 @@ class _DmdRuntime(BaseTrainer):
         for name, role in (("student", self.student), ("fake", self.fake), ("teacher", self.teacher)):
             parameter_dtypes = sorted({str(parameter.dtype) for parameter in role.denoiser().parameters()})
             logger.info("[train] dmd {} transformer parameter dtypes={}", name, parameter_dtypes)
+        for name, role_config in (("student", self.config), ("fake", fake_model_config), ("teacher", teacher_model_config)):
+            logger.info(
+                "[train] dmd {} precision running_dtype={} transformer_param_dtype={} fsdp2_mixed_precision={}",
+                name,
+                role_config["model"].get("running_dtype"),
+                role_config["model"].get("transformer_param_dtype"),
+                role_config.get("distributed", {}).get("fsdp2", {}).get("mixed_precision", {}),
+            )
         if self.random_schedule_enabled:
             logger.info(
                 "[train] dmd random sigma schedule enabled: steps=[{}, {}], sigma=[{}, {}], sampling_method={}",

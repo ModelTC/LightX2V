@@ -12,6 +12,14 @@ H3_CONFIG_PATH="${H3_CONFIG_PATH:-$H3_CODE_ROOT/lightx2v_train/configs/train/dmd
 : "${H3_REF2AV_DMD_OUTPUT:?Set a shared output directory}"
 export H3_MODEL_PATH H3_REF2AV_CACHE H3_REF2AV_DMD_OUTPUT
 export H3_PDMD="${H3_PDMD:-false}"
+case "$H3_PDMD" in
+    true|false) ;;
+    *) echo "H3_PDMD must be true or false." >&2; exit 1 ;;
+esac
+if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --dry-run ) ]]; then
+    echo "Usage: bash $0 [--dry-run]" >&2
+    exit 1
+fi
 
 if [[ ! -f "$H3_MODEL_PATH/transformer_ref/config.json" ]]; then
     echo "Missing Ref2AV transformer config: $H3_MODEL_PATH/transformer_ref/config.json" >&2
@@ -21,6 +29,7 @@ if [[ ! -f "$H3_CONFIG_PATH" || ! -f "$H3_REF2AV_CACHE" ]]; then
     echo "The training config and Ref2AV cache manifest must exist." >&2
     exit 1
 fi
+H3_CONFIG_PATH="$(cd "$(dirname "$H3_CONFIG_PATH")" && pwd)/$(basename "$H3_CONFIG_PATH")"
 command -v "$H3_PYTHON" >/dev/null
 if [[ -n "${H3_REF2AV_EXPECTED_ROWS:-}" ]]; then
     actual_rows=$(wc -l < "$H3_REF2AV_CACHE")
@@ -48,6 +57,25 @@ export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 export HF_HOME="${HF_HOME:-/tmp/h3_hf_cache}"
 export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/h3_pycache}"
 
+# Resolve the actual config, including overrides, without importing torch/CUDA.
+"$H3_PYTHON" - "$H3_CONFIG_PATH" <<'PY'
+import os
+import sys
+from lightx2v_train.runtime.config import load_config
+
+config = load_config(sys.argv[1])
+projected = config["model"].get("capabilities", {}).get("distribution_matching", {}).get("projected_dmd", False)
+expected = os.environ["H3_PDMD"] == "true"
+dmd = config["training"]["dmd"]
+order = dmd.get("update_order", "student_first")
+ratio = int(dmd["fake_update_ratio"])
+if projected is not expected:
+    raise SystemExit("H3_PDMD disagrees with the selected config's projected_dmd.")
+if expected and (order != "student_first" or ratio != 1):
+    raise SystemExit("H3 PDMD requires update_order=student_first and fake_update_ratio=1.")
+print(f"H3 Ref2AV: 4 x 8 GPUs, PDMD={str(projected).lower()}, update_order={order}, fake_update_ratio={ratio}, output={config['training']['output_dir']}")
+PY
+
 cd "$H3_CODE_ROOT/lightx2v_train"
 command=(
     "$H3_PYTHON" -u -m torch.distributed.run
@@ -56,14 +84,9 @@ command=(
     --rdzv_backend=c10d "--rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT"
     --max_restarts=0 train.py --config "$H3_CONFIG_PATH"
 )
-printf 'H3 Ref2AV: 4 x 8 GPUs, PDMD=%s, output=%s\n' "$H3_PDMD" "$H3_REF2AV_DMD_OUTPUT"
 if [[ "${1:-}" == --dry-run ]]; then
     printf '%q ' "${command[@]}"
     printf '\n'
     exit 0
-fi
-if [[ $# -ne 0 ]]; then
-    echo "Usage: bash $0 [--dry-run]" >&2
-    exit 1
 fi
 exec "${command[@]}"

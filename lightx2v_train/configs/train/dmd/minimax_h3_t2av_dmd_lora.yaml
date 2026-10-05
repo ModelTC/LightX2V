@@ -1,3 +1,8 @@
+# The selector is resolved by YAML even without the shell launcher.
+h3_update_recipes:
+    "false": {update_order: student_first, fake_update_ratio: 5}
+    "true": {update_order: student_first, fake_update_ratio: 1}
+
 model:
     name: minimax_h3_t2av
     # This must be the converted Diffusers model root containing
@@ -26,6 +31,7 @@ model:
             audio_flow_shift: 3.0
             video_loss_weight: 1.0
             audio_loss_weight: 1.0
+            projected_dmd: ${oc.decode:${oc.env:H3_PDMD,false}}
 
 distributed:
     backend: nccl
@@ -78,7 +84,8 @@ training:
     dmd:
         # Eight student model evaluations; the terminal zero sigma is added internally.
         num_inference_steps: 8
-        fake_update_ratio: 5
+        update_order: ${h3_update_recipes.${oc.env:H3_PDMD,'false'}.update_order}
+        fake_update_ratio: ${h3_update_recipes.${oc.env:H3_PDMD,'false'}.fake_update_ratio}
         # 124 = 17*7+5, about 5.17 seconds at H3's fixed 24 fps.
         generation_shapes:
             - {value: [124, 768, 1344]}

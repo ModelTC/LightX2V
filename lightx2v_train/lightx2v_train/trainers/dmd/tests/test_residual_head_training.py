@@ -187,16 +187,130 @@ class ResidualHeadTrainingTest(unittest.TestCase):
         self.assertEqual(report["cross_outer_iteration_lag"], 0)
 
     def test_fit_does_not_present_cached_replay_as_independent_accumulation(self):
-        _, runtime, _, _ = self.fixture(fit_grad_accum_steps=4)
-        runtime.collecting_fit = True
-        runtime.remember_fit(torch.zeros(1, 2, 1, 2, 2), torch.ones(1, 2, 1, 2, 2), torch.tensor([0.25]), {})
-        runtime.collecting_fit = False
+        for count, groups in ((1, [1] * 5), (2, [2, 2, 1]), (4, [4, 1])):
+            with self.subTest(cached_queries=count):
+                trainer, runtime, _, _ = self.fixture(fit_grad_accum_steps=4)
+                runtime.collecting_fit = True
+                for index in range(count):
+                    runtime.remember_fit(torch.zeros(1, 2, 1, 2, 2), torch.ones(1, 2, 1, 2, 2), torch.tensor([0.25]), {"index": index})
+                runtime.collecting_fit = False
+                with patch("lightx2v_train.trainers.dmd.residual_head_training.logger") as logged:
+                    runtime.fit()
+                report = json.loads(logged.info.call_args.args[1])
+                self.assertEqual(report["group_microbatches"], groups)
+                self.assertEqual(report["unique_fit_samples_global"], count)
+                self.assertEqual(report["replayed_microbatch_passes_per_rank"], 5 - count)
+                self.assertEqual(trainer.fake_model.predict_velocity_with_features.call_count, count)
+                self.assertEqual(runtime._head_fit_microbatches, 5)
+                self.assertEqual(runtime._head_optimizer_updates, len(groups))
+
+    def test_many_fake_microbatches_only_cache_and_rescore_first_fit_steps(self):
+        trainer, runtime, student_parameter, fake_parameter = self.fixture(fit_grad_accum_steps=4)
+        _, reference, reference_student, reference_fake = self.fixture(fit_grad_accum_steps=4)
+        runtime.collecting_fit = reference.collecting_fit = True
+        for fake_update in range(5):
+            for microbatch in range(16):
+                index = fake_update * 16 + microbatch
+                generated = student_parameter.expand(1, 2, 1, 2, 2)
+                renoised = torch.full_like(generated, 1 + index / 100)
+                runtime.remember_fit(generated, renoised, torch.tensor([0.25]), {"index": index})
+                self.assertEqual(len(runtime.fit_batches), min(index + 1, 5))
+                if index < 5:
+                    reference.remember_fit(reference_student.expand_as(generated), renoised, torch.tensor([0.25]), {"index": index})
+        self.assertEqual([batch.condition["index"] for batch in runtime.fit_batches], list(range(5)))
+        runtime.collecting_fit = reference.collecting_fit = False
+        # Both rescoring and fitting still use the final frozen fake snapshot.
+        with torch.no_grad():
+            fake_parameter.fill_(2.0)
+            reference_fake.fill_(2.0)
         with patch("lightx2v_train.trainers.dmd.residual_head_training.logger") as logged:
-            runtime.fit()
+            actual_loss = runtime.fit()
+            report = json.loads(logged.info.call_args.args[1])
+            expected_loss = reference.fit()
+        self.assertEqual(actual_loss, expected_loss)
+        for name, value in runtime.module.state_dict().items():
+            torch.testing.assert_close(value, reference.module.state_dict()[name], rtol=0, atol=0)
+        self.assertEqual(trainer.fake_model.predict_velocity_with_features.call_count, 5)
+        self.assertEqual([entry.args[2]["index"] for entry in trainer.fake_model.predict_velocity_with_features.call_args_list], list(range(5)))
+        self.assertEqual(runtime.fit_batches, [])
+        self.assertEqual(report["group_microbatches"], [4, 1])
+        self.assertEqual(report["unique_cached_microbatches_per_rank"], 5)
+        self.assertEqual(report["replayed_microbatch_passes_per_rank"], 0)
+        self.assertEqual(runtime._head_optimizer_updates, 2)
+        self.assertIsNone(student_parameter.grad)
+        self.assertIsNone(fake_parameter.grad)
+
+    def test_sixteen_unique_fit_batches_match_one_manual_mean_gradient_step(self):
+        trainer, runtime, student_parameter, fake_parameter = self.fixture(fit_steps=16, fit_grad_accum_steps=16, max_grad_norm=1000)
+
+        class ScalarHead(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.value = torch.nn.Parameter(torch.tensor(0.1))
+                self.forward_count = 0
+
+            def forward(self, features, sigma, shape):
+                self.forward_count += 1
+                return self.value.expand(shape)
+
+        runtime.module = runtime.head = ScalarHead()
+        runtime.optimizer = torch.optim.SGD(runtime.module.parameters(), lr=0.1)
+        retained_queries = []
+        runtime.collecting_fit = True
+        for fake_update in range(5):
+            for microbatch in range(16):
+                index = fake_update * 16 + microbatch
+                generated = student_parameter.expand(1, 2, 1, 2, 2)
+                renoised = torch.full_like(generated, 1 + index / 16)
+                sigma = torch.tensor([0.25])
+                runtime.remember_fit(generated, renoised, sigma, {"index": index})
+                self.assertEqual(len(runtime.fit_batches), min(index + 1, 16))
+                if index < 16:
+                    retained_queries.append((generated.detach(), renoised.detach(), sigma))
+        runtime.collecting_fit = False
+        self.assertEqual([batch.condition["index"] for batch in runtime.fit_batches], list(range(16)))
+
+        # Rescore against the final fake snapshot, then average 16 distinct
+        # batch losses by hand, independently of fit()'s accumulation loop.
+        with torch.no_grad():
+            fake_parameter.fill_(2.0)
+        targets = [renoised - expand_sigma(sigma, renoised.ndim) * fake_parameter.detach() - generated for generated, renoised, sigma in retained_queries]
+        reference = torch.nn.Parameter(torch.tensor(0.1))
+        reference_optimizer = torch.optim.SGD([reference], lr=0.1)
+        expected_loss = torch.stack([(reference.expand_as(target) - target).square().mean() for target in targets]).mean()
+        expected_loss.backward()
+        expected_gradient = reference.grad.detach().clone()
+        reference_optimizer.step()
+
+        observed_gradients = []
+        original_step = runtime.optimizer.step
+
+        def step():
+            observed_gradients.append(runtime.module.value.grad.detach().clone())
+            return original_step()
+
+        with patch.object(runtime.optimizer, "step", side_effect=step) as optimizer_step, patch("lightx2v_train.trainers.dmd.residual_head_training.logger") as logged:
+            actual_loss = runtime.fit()
+        optimizer_step.assert_called_once()
+        torch.testing.assert_close(observed_gradients[0], expected_gradient)
+        torch.testing.assert_close(runtime.module.value, reference)
+        self.assertAlmostEqual(actual_loss, expected_loss.item(), places=6)
+        self.assertEqual(runtime.module.forward_count, 16)
+        self.assertEqual(trainer.fake_model.predict_velocity_with_features.call_count, 16)
+        self.assertEqual([entry.args[2]["index"] for entry in trainer.fake_model.predict_velocity_with_features.call_args_list], list(range(16)))
+        self.assertEqual(runtime.fit_batches, [])
+        self.assertEqual(runtime._head_fit_microbatches, 16)
+        self.assertEqual(runtime._head_optimizer_updates, 1)
         report = json.loads(logged.info.call_args.args[1])
-        self.assertEqual(report["group_microbatches"], [1] * 5)
-        self.assertEqual(report["unique_fit_samples_global"], 1)
-        self.assertEqual(report["replayed_microbatch_passes_per_rank"], 4)
+        self.assertEqual(report["group_microbatches"], [16])
+        self.assertEqual(report["effective_batch_samples_global"], [16])
+        self.assertEqual(report["unique_fit_samples_global"], 16)
+        self.assertEqual(report["unique_cached_microbatches_per_rank"], 16)
+        self.assertEqual(report["replayed_microbatch_passes_per_rank"], 0)
+        self.assertEqual(report["optimizer_updates"], 1)
+        self.assertIsNone(student_parameter.grad)
+        self.assertIsNone(fake_parameter.grad)
+        self.assertIsNone(runtime.module.value.grad)
 
     def test_calibrated_check_uses_two_new_rng_streams_and_freezes_models(self):
         trainer, runtime, student_parameter, fake_parameter = self.fixture(gate_mode="calibrated", min_checks=1)

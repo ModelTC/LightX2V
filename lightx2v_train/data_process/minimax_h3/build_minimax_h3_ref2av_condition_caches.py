@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build condition-only MiniMax-H3 Ref2AV DMD caches.
 
-The input is the completed Context-IR JSONL: every row must be ``ref2av``,
-contain ``enhanced_prompt``, target geometry, and an ordered local-media
-``references`` list.  The output intentionally contains no target video/audio
+The default input is completed Context-IR JSONL with ``enhanced_prompt``,
+target geometry, and ordered local-media ``references``.  Optional prompt
+fallback and fixed-768p target policies also accept raw image-only Ref2V rows.
+The output intentionally contains no target video/audio
 latents. It is consumed by the ``minimax_h3_ref_cache_dataset`` and
 ``minimax_h3_ref2av`` model with adaptive video regularization disabled.
 
@@ -21,6 +22,8 @@ import importlib
 import json
 import math
 import os
+import re
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,7 +40,7 @@ AUDIO_LATENT_CHANNELS = 32
 TEXT_HIDDEN_SIZE = 5120
 PATCH_SIZE = (1, 2, 2)
 VIDEO_ROW_WIDTH = VIDEO_LATENT_CHANNELS * math.prod(PATCH_SIZE)
-TASK_ALIASES = {"ref2av": "ref2av", "ref2va": "ref2av"}
+TASK_ALIASES = {"ref2av": "ref2av", "ref2va": "ref2av", "ref2v": "ref2av"}
 REFERENCE_LIMITS = {"image": 9, "video": 3, "audio": 3}
 REFERENCE_RESIZE_MODES = ("match", "max", "diffusers")
 REFERENCE_IMAGE_SHORT_EDGE = 2048
@@ -58,6 +61,11 @@ MANIFEST_COST_KEYS = {
     "reference_audio_rows",
     "reference_compute_cost",
     "packed_sequence_tokens_124",
+    "ref_image_count",
+    "source_index",
+    "source_id",
+    "prompt_source",
+    "cache_fingerprint",
 }
 # Runtime image-only DMD fixes the generated target to 124 frames.  At 768p
 # this contributes 37,296 video rows and 414 audio rows to the packed sequence.
@@ -114,7 +122,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "metadata",
         nargs="?",
         type=Path,
-        help="Completed Ref2AV Context-IR JSONL containing enhanced_prompt.",
+        help="Ref2AV/Ref2V JSONL with local references; raw prompts require --prompt-policy enhanced-or-original.",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
@@ -135,6 +143,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--dtype", choices=("bf16", "fp16", "fp32"), default="bf16")
     parser.add_argument(
+        "--reference-latent-dtype",
+        choices=("bf16", "fp16", "fp32"),
+        default="fp32",
+        help="Reference cache storage precision; legacy caches use fp32. Text uses --dtype.",
+    )
+    parser.add_argument(
+        "--prompt-policy",
+        choices=("enhanced-only", "enhanced-or-original"),
+        default="enhanced-only",
+        help="Optional fallback: enhanced_prompt, prompt_en/prompt_en_original, prompt_cn/prompt_cn_original.",
+    )
+    parser.add_argument(
+        "--target-policy",
+        choices=("source", "fixed-768p"),
+        default="source",
+        help="fixed-768p uses source orientation, 768x1344 or 1344x768, and 124 frames unless overridden; no target video is read.",
+    )
+    parser.add_argument("--image-only", action="store_true", help="Reject rows containing video/audio references.")
+    parser.add_argument("--skip-invalid", action="store_true", help="Record invalid/failed rows in the shard failure JSONL and continue; namespace/resume conflicts remain fatal.")
+    parser.add_argument(
         "--reference-resize-mode",
         choices=REFERENCE_RESIZE_MODES,
         default="diffusers",
@@ -147,7 +175,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--target-num-frames",
         type=int,
-        help=("Override every cached target frame count. The source duration/frame assignment is still validated and retained in provenance; 124 gives fixed 5-second DMD geometry."),
+        help=("Override cached target frame count. Under --target-policy source, validate the original timing; fixed-768p ignores it and defaults to 124 frames."),
     )
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--max-samples", type=int)
@@ -523,6 +551,45 @@ def resolve_reference_image_size(
     )
 
 
+def select_prompt(row: dict, source_index: int, policy: str) -> tuple[str, str]:
+    fields = ("enhanced_prompt",)
+    if policy == "enhanced-or-original":
+        fields += ("prompt_en", "prompt_en_original", "prompt_cn", "prompt_cn_original")
+    elif policy != "enhanced-only":
+        raise ValueError(f"Unsupported prompt policy {policy!r}")
+    for field in fields:
+        value = row.get(field)
+        if isinstance(value, str) and value.strip():
+            prompt = value.strip()
+            if field != "enhanced_prompt":
+                # Keep identities intact; normalize only explicit image reference
+                # markers. Never rewrite ordinary prose or Subject indices.
+                pattern = r"<\s*(?:Figure|Image|Picture|图片|图)\s*(\d+)\s*>|@(?:Figure|Image|Picture|图片|图)\s*(\d+)"
+                prompt = re.sub(pattern, lambda match: f"<Picture {int(match[1] or match[2])}>", prompt, flags=re.I)
+            return prompt, field
+    raise ValueError(f"row {source_index} requires a non-empty {' or '.join(fields)}")
+
+
+def resolve_target_geometry(row: dict, source_index: int, policy: str) -> tuple[int, int]:
+    info = row.get("target_video_info") or {}
+    try:
+        height = int(row.get("target_height", info.get("height")))
+        width = int(row.get("target_width", info.get("width")))
+    except (TypeError, ValueError) as error:
+        if policy == "fixed-768p" and row.get("target_orientation") in {"landscape", "portrait"}:
+            return (1344, 768) if row["target_orientation"] == "portrait" else (768, 1344)
+        raise ValueError(f"row {source_index} requires integer target_height and target_width or a known target_orientation") from error
+    if min(height, width) <= 0:
+        raise ValueError(f"row {source_index} target geometry must be positive, got {height}x{width}")
+    if policy == "fixed-768p":
+        return (1344, 768) if height > width else (768, 1344)
+    if policy != "source":
+        raise ValueError(f"Unsupported target policy {policy!r}")
+    if height % 32 or width % 32:
+        raise ValueError(f"row {source_index} target geometry must be positive multiples of 32, got {height}x{width}")
+    return height, width
+
+
 def normalize_sample(
     row: dict,
     source_index: int,
@@ -532,41 +599,43 @@ def normalize_sample(
     hash_cache: dict[Path, str] | None = None,
     reference_resize_mode: str = "diffusers",
     target_num_frames_override: int | None = None,
+    prompt_policy: str = "enhanced-only",
+    target_policy: str = "source",
+    reference_latent_dtype: str = "fp32",
+    image_only: bool = False,
 ) -> SampleSpec:
     task = str(row.get("task", "")).strip().lower()
     if task not in TASK_ALIASES:
-        raise ValueError(f"row {source_index} requires task=ref2av/ref2va, got {task!r}")
-    prompt = row.get("enhanced_prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
-        raise ValueError(f"row {source_index} requires a non-empty enhanced_prompt")
-    prompt = prompt.strip()
-
-    try:
-        target_height = int(row["target_height"])
-        target_width = int(row["target_width"])
-    except (KeyError, TypeError, ValueError) as error:
-        raise ValueError(f"row {source_index} requires integer target_height and target_width") from error
-    if min(target_height, target_width) <= 0 or target_height % 32 or target_width % 32:
-        raise ValueError(f"row {source_index} target geometry must be positive multiples of 32, got {target_height}x{target_width}")
+        raise ValueError(f"row {source_index} requires task=ref2av/ref2va/ref2v, got {task!r}")
+    prompt, prompt_source = select_prompt(row, source_index, prompt_policy)
+    target_height, target_width = resolve_target_geometry(row, source_index, target_policy)
     declared_num_frames = row.get("target_num_frames", row.get("num_frames"))
-    if declared_num_frames is None:
-        declared_num_frames = _duration_to_num_frames(row.get("duration"))
-    source_target_num_frames = _validate_target_num_frames(declared_num_frames, source_index)
-    if row.get("duration") is not None:
-        expected = _duration_to_num_frames(row["duration"])
-        if expected != source_target_num_frames:
-            raise ValueError(f"row {source_index} duration={row['duration']} maps to {expected} frames, but target_num_frames={source_target_num_frames}")
-    target_num_frames = source_target_num_frames if target_num_frames_override is None else _validate_target_num_frames(target_num_frames_override, source_index)
+    if target_policy == "fixed-768p":
+        source_target_num_frames = declared_num_frames
+        target_num_frames = _validate_target_num_frames(target_num_frames_override if target_num_frames_override is not None else FIXED_DMD_NUM_FRAMES, source_index)
+    else:
+        if declared_num_frames is None:
+            declared_num_frames = _duration_to_num_frames(row.get("duration"))
+        source_target_num_frames = _validate_target_num_frames(declared_num_frames, source_index)
+        if row.get("duration") is not None:
+            expected = _duration_to_num_frames(row["duration"])
+            if expected != source_target_num_frames:
+                raise ValueError(f"row {source_index} duration={row['duration']} maps to {expected} frames, but target_num_frames={source_target_num_frames}")
+        target_num_frames = source_target_num_frames if target_num_frames_override is None else _validate_target_num_frames(target_num_frames_override, source_index)
+    if reference_latent_dtype not in {"bf16", "fp16", "fp32"}:
+        raise ValueError(f"Unsupported reference latent dtype {reference_latent_dtype!r}")
     if reference_resize_mode not in REFERENCE_RESIZE_MODES:
         raise ValueError(f"row {source_index} has unsupported reference_resize_mode={reference_resize_mode!r}")
 
     hash_cache = hash_cache if hash_cache is not None else {}
     references = []
     for reference_index, entry in enumerate(_ordered_reference_entries(row, source_index), start=1):
-        kind_value = entry.get("kind", entry.get("type", entry.get("role")))
+        kind_value = entry.get("kind", entry.get("modality", entry.get("type", entry.get("role"))))
         kind = _normalize_kind(kind_value, source_index, reference_index)
+        if image_only and kind != "image":
+            raise ValueError(f"row {source_index} is not image-only: found {kind} reference")
         media_value = next(
-            (entry[key] for key in ("local_path", "path", "media_path", "url") if entry.get(key) not in (None, "")),
+            (entry[key] for key in ("local_path", "path", "media_path", "url", "rel_path") if entry.get(key) not in (None, "")),
             None,
         )
         path = _resolve_media_path(
@@ -627,6 +696,18 @@ def normalize_sample(
         "references": [reference.fingerprint_record() for reference in references],
         "model": model_descriptor,
     }
+    # Leave fingerprints unchanged for the historical strict/fp32 policy.
+    if prompt_policy != "enhanced-only" or target_policy != "source" or reference_latent_dtype != "fp32" or image_only:
+        descriptor.update(
+            prompt_policy=prompt_policy,
+            prompt_source=prompt_source,
+            prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            target_policy=target_policy,
+            reference_latent_dtype=reference_latent_dtype,
+            image_only=image_only,
+            ref_image_count=counts["image"],
+            source_target_geometry={key: row.get(key) for key in ("target_height", "target_width", "target_orientation", "target_video_info", "duration")},
+        )
     return SampleSpec(
         source_index=source_index,
         source_id=source_id,
@@ -675,6 +756,11 @@ def manifest_row(sample: SampleSpec, relative_path: Path, payload: dict | None =
             "task": "ref2av",
             "target_orientation": ("landscape" if sample.target_width > sample.target_height else "portrait"),
             "reference_image_count": counts["image"],
+            "ref_image_count": counts["image"],
+            "source_index": sample.source_index,
+            "source_id": sample.source_id,
+            "prompt_source": sample.descriptor.get("prompt_source", "enhanced_prompt"),
+            "cache_fingerprint": sample.fingerprint,
             "reference_video_count": counts["video"],
             "reference_audio_count": counts["audio"],
             "prompt_token_count": prompt_token_count,
@@ -739,6 +825,7 @@ def validate_cache_payload(
         return stage
 
     encoded = positive.get("references")
+    reference_dtype = _dtype(sample.descriptor.get("reference_latent_dtype", "fp32"))
     if not isinstance(encoded, list) or len(encoded) != len(sample.references):
         raise ValueError(f"Complete cache reference count/order mismatch: {path}")
     for index, (entry, spec) in enumerate(zip(encoded, sample.references)):
@@ -747,7 +834,7 @@ def validate_cache_payload(
         video_rows = entry.get("video_latents")
         audio_rows = entry.get("audio_latents")
         if spec.kind != "audio":
-            video_rows = _expect_tensor(video_rows, f"references[{index}].video_latents", 2, torch.float32)
+            video_rows = _expect_tensor(video_rows, f"references[{index}].video_latents", 2, reference_dtype)
             if video_rows.shape[1] != VIDEO_ROW_WIDTH:
                 raise ValueError(f"references[{index}] visual row width must be {VIDEO_ROW_WIDTH}: {path}")
             frames = int(entry.get("num_latent_frames", 0))
@@ -766,7 +853,7 @@ def validate_cache_payload(
         should_have_audio = spec.kind == "audio" or (spec.kind == "video" and spec.include_embedded_audio is True)
         should_not_have_audio = spec.kind == "image" or (spec.kind == "video" and spec.include_embedded_audio is False)
         if audio_rows is not None:
-            audio_rows = _expect_tensor(audio_rows, f"references[{index}].audio_latents", 2, torch.float32)
+            audio_rows = _expect_tensor(audio_rows, f"references[{index}].audio_latents", 2, reference_dtype)
             num_audio = int(entry.get("num_audio_latents", 0))
             if num_audio <= 0 or tuple(audio_rows.shape) != (2 * num_audio, AUDIO_LATENT_CHANNELS):
                 raise ValueError(f"references[{index}] audio row geometry mismatch: {path}")
@@ -925,7 +1012,7 @@ def encode_text_stage(
     )
     positive = {
         "task": "ref2av",
-        "prompt_embeds": prompt_embeds.detach().cpu().contiguous(),
+        "prompt_embeds": prompt_embeds.detach().to(device="cpu", dtype=output_dtype).contiguous(),
         "text_token_tags": text_token_tags.detach().cpu().to(torch.long).contiguous(),
         "target_height": sample.target_height,
         "target_width": sample.target_width,
@@ -947,6 +1034,7 @@ def encode_text_stage(
 
 @torch.inference_mode()
 def encode_reference_stage(sample: SampleSpec, payload: dict, runtime: dict, components, dtype: torch.dtype) -> dict:
+    reference_dtype = _dtype(sample.descriptor.get("reference_latent_dtype", "fp32"))
     prepared = prepare_official_references(
         sample,
         runtime,
@@ -965,7 +1053,7 @@ def encode_reference_stage(sample: SampleSpec, payload: dict, runtime: dict, com
                 raise RuntimeError(f"Official encoder returned no visual rows for {spec.kind} reference")
             entry.update(
                 {
-                    "video_latents": video_rows.to(torch.float32).cpu().contiguous(),
+                    "video_latents": video_rows.to(device="cpu", dtype=reference_dtype).contiguous(),
                     "num_latent_frames": int(reference.num_latent_frames),
                     "latent_height": int(reference.latent_height),
                     "latent_width": int(reference.latent_width),
@@ -974,7 +1062,7 @@ def encode_reference_stage(sample: SampleSpec, payload: dict, runtime: dict, com
         if audio_rows is not None:
             entry.update(
                 {
-                    "audio_latents": audio_rows.to(torch.float32).cpu().contiguous(),
+                    "audio_latents": audio_rows.to(device="cpu", dtype=reference_dtype).contiguous(),
                     "num_audio_latents": int(reference.num_audio_latents),
                 }
             )
@@ -990,6 +1078,31 @@ def _selected_rows(rows: list[dict], args: argparse.Namespace) -> list[tuple[int
     if args.max_samples is not None:
         indexed = indexed[: args.max_samples]
     return [(source_index, row) for relative_index, (source_index, row) in enumerate(indexed) if relative_index % args.num_shards == args.shard_index]
+
+
+def read_selected_rows(path: Path, args: argparse.Namespace) -> tuple[list[tuple[int, dict]], int]:
+    """Hold only this worker's assigned rows, not 100k full prompts per GPU."""
+    selected = []
+    total = 0
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            source_index = total
+            total += 1
+            relative_index = source_index - args.start_index
+            if relative_index < 0 or (args.max_samples is not None and relative_index >= args.max_samples):
+                continue
+            if relative_index % args.num_shards != args.shard_index:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"Invalid JSON at {path}:{line_number}: {error}") from error
+            if not isinstance(row, dict):
+                raise TypeError(f"Expected JSON object at {path}:{line_number}")
+            selected.append((source_index, row))
+    return selected, total
 
 
 def _manifest_path(args: argparse.Namespace, output_dir: Path) -> Path:
@@ -1036,6 +1149,18 @@ def initialize_namespace(
         },
         "model": model_descriptor,
     }
+    if (
+        getattr(args, "prompt_policy", "enhanced-only") != "enhanced-only"
+        or getattr(args, "target_policy", "source") != "source"
+        or getattr(args, "reference_latent_dtype", "fp32") != "fp32"
+        or getattr(args, "image_only", False)
+    ):
+        descriptor.update(
+            prompt_policy=args.prompt_policy,
+            target_policy=args.target_policy,
+            reference_latent_dtype=args.reference_latent_dtype,
+            image_only=args.image_only,
+        )
     fingerprint = digest_object(descriptor)
     path = output_dir / "preprocess_config.json"
     expected = {
@@ -1109,25 +1234,60 @@ def main(argv: list[str] | None = None) -> int:
     args.source_model_path = args.source_model_path.expanduser().resolve()
     dtype = _dtype(args.dtype)
     model_descriptor = model_identity(args.source_model_path, args.model_path)
-    raw_rows = read_jsonl(args.metadata)
-    selected = _selected_rows(raw_rows, args)
-    if not selected:
-        raise RuntimeError("This start/max/shard selection contains no rows")
+    selected, input_total_rows = read_selected_rows(args.metadata, args)
+    if input_total_rows == 0:
+        raise RuntimeError("Input metadata contains no rows")
 
     hash_cache: dict[Path, str] = {}
-    samples = [
-        normalize_sample(
-            row,
-            source_index,
-            args.media_root,
-            args.dtype,
-            model_descriptor,
-            hash_cache,
-            reference_resize_mode=args.reference_resize_mode,
-            target_num_frames_override=args.target_num_frames,
-        )
-        for source_index, row in selected
-    ]
+    samples = []
+    failures = []
+    failed_indices = set()
+    manifest = _manifest_path(args, args.output_dir)
+    failure_path = manifest.with_suffix(".failed.jsonl")
+    receipt_path = manifest.with_suffix(".complete.json")
+
+    def record_failure(source_index, source_id, stage, error, *, persist=False):
+        if not args.skip_invalid:
+            raise error
+        failure = {
+            "source_index": source_index,
+            "source_id": str(source_id),
+            "stage": stage,
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+        failures.append(failure)
+        failed_indices.add(source_index)
+        print(f"[skip] {json.dumps(failure, ensure_ascii=False)}", file=sys.stderr, flush=True)
+        if persist:
+            with failure_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(failure, ensure_ascii=False) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+
+    for source_index, row in selected:
+        try:
+            sample = normalize_sample(
+                row,
+                source_index,
+                args.media_root,
+                args.dtype,
+                model_descriptor,
+                hash_cache,
+                reference_resize_mode=args.reference_resize_mode,
+                target_num_frames_override=args.target_num_frames,
+                prompt_policy=args.prompt_policy,
+                target_policy=args.target_policy,
+                reference_latent_dtype=args.reference_latent_dtype,
+                image_only=args.image_only,
+            )
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            record_failure(source_index, row.get("sample_id", row.get("id", source_index)), "normalize", error)
+        else:
+            samples.append(sample)
+    # Raw prompts can be large; retain only normalized sample descriptors.
+    selected_count = len(selected)
+    del selected
     counts = Counter(tuple(reference.kind for reference in sample.references) for sample in samples)
     geometry = Counter((sample.target_height, sample.target_width, sample.target_num_frames) for sample in samples)
     print(
@@ -1143,6 +1303,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     initialize_namespace(args, args.metadata, args.output_dir, model_descriptor)
+    # A failed/incomplete retry must never leave a previous completion receipt
+    # looking current. The caller's per-node/shard lock excludes duplicate jobs.
+    receipt_path.unlink(missing_ok=True)
+    atomic_write_jsonl(failure_path, failures)
     conditions_dir = args.output_dir / "conditions"
     conditions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1172,12 +1336,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         conditioner = load_conditioner(runtime, args.source_model_path, args.device, dtype)
         for index, (sample, output_path) in enumerate(text_jobs, start=1):
-            payload = encode_text_stage(sample, runtime, conditioner, dtype)
+            try:
+                payload = encode_text_stage(sample, runtime, conditioner, dtype)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                record_failure(sample.source_index, sample.source_id, "text", error, persist=True)
+                continue
             atomic_torch_save(payload, output_path)
             print(f"[text {index}/{len(text_jobs)}] {output_path}", flush=True)
         del conditioner
         release_models()
 
+    reference_jobs = [(sample, path) for sample, path in reference_jobs if sample.source_index not in failed_indices]
     if reference_jobs:
         runtime = runtime or import_official_runtime()
         print(
@@ -1189,7 +1358,11 @@ def main(argv: list[str] | None = None) -> int:
             payload, stage = load_cache(output_path, sample, dtype)
             if stage == "complete" and not args.overwrite:
                 continue
-            payload = encode_reference_stage(sample, payload, runtime, vaes, dtype)
+            try:
+                payload = encode_reference_stage(sample, payload, runtime, vaes, dtype)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                record_failure(sample.source_index, sample.source_id, "references", error, persist=True)
+                continue
             atomic_torch_save(payload, output_path)
             print(f"[refs {index}/{len(reference_jobs)}] {output_path}", flush=True)
         del vaes
@@ -1198,12 +1371,13 @@ def main(argv: list[str] | None = None) -> int:
     completed_rows = []
     incomplete = 0
     for sample, relative_path, output_path in entries:
+        if sample.source_index in failed_indices:
+            continue
         payload, stage = load_cache(output_path, sample, dtype)
         if stage == "complete":
             completed_rows.append(manifest_row(sample, relative_path, payload))
         else:
             incomplete += 1
-    manifest = _manifest_path(args, args.output_dir)
     # A text-only stage is a valid resumable result but must never be exposed
     # to LatentDataset as a training row.
     if args.stage == "text":
@@ -1216,6 +1390,23 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(f"Refusing to write training manifest with {incomplete} incomplete caches")
         merged = _merge_current_manifest(manifest, completed_rows, args.replace_manifest or args.num_shards > 1)
         atomic_write_jsonl(manifest, merged)
+        namespace = json.loads((args.output_dir / "preprocess_config.json").read_text(encoding="utf-8"))
+        receipt = {
+            "cache_schema_version": CACHE_SCHEMA_VERSION,
+            "preprocess_fingerprint": namespace["preprocess_fingerprint"],
+            "stage": args.stage,
+            "manifest": manifest.name,
+            "manifest_sha256": sha256_file(manifest),
+            "failures": failure_path.name,
+            "failures_sha256": sha256_file(failure_path),
+            "input_total_rows": input_total_rows,
+            "selected_count": selected_count,
+            "completed_count": len(completed_rows),
+            "failed_count": len(failed_indices),
+            "num_shards": args.num_shards,
+            "shard_index": args.shard_index,
+        }
+        atomic_write_json(receipt_path, receipt)
         print(f"Wrote complete rows={len(merged)} current={len(completed_rows)} to {manifest}", flush=True)
     return 0
 

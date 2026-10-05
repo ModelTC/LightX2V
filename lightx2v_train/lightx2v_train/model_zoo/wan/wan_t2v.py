@@ -34,6 +34,7 @@ from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
 from ..base import BaseModel
+from ..native.wan.modules.attention import require_flash_attention_3
 from ..native.wan.modules.causal_model import CausalWanModel
 from ..native.wan.modules.model import WanModel
 from ..native.wan.modules.t5 import T5EncoderModel
@@ -92,6 +93,14 @@ class WanT2VModel(BaseModel):
         model_name = model_config.get("name")
         causal_model_names = {"wan_t2v_ar", "wan_t2v_14b_ar"}
         self.use_causal_transformer = model_name in causal_model_names or bool(model_config.get("causal", False))
+        self.attention_backend = model_config.get("attention_backend", "flash_attention")
+        if self.attention_backend not in {"flash_attention", "flash_attention_3", "sdpa"}:
+            raise ValueError(f"Unsupported Wan attention backend: {self.attention_backend!r}")
+        if self.use_causal_transformer and self.attention_backend != "flash_attention":
+            raise ValueError(f"model.attention_backend={self.attention_backend} currently supports non-causal WanModel only")
+        if should_load_transformer and self.attention_backend == "flash_attention_3":
+            hardware = require_flash_attention_3(self.device)
+            logger.info("[wan][attention] backend=flash_attention_3 strict=True hardware={} model={}", hardware, model_path)
         self.sample_posterior = model_config.get("sample_posterior", True)
         scheduler_config = self.config.get("scheduler", {})
         self.num_train_timesteps = scheduler_config.get("num_train_timesteps", 1000)
@@ -163,7 +172,7 @@ class WanT2VModel(BaseModel):
                 detach_kv_cache_updates=self.detach_kv_cache_updates,
             )
         else:
-            transformer = WanModel.from_pretrained(model_path, torch_dtype=self.transformer_param_dtype)
+            transformer = WanModel.from_pretrained(model_path, torch_dtype=self.transformer_param_dtype, attention_backend=self.attention_backend)
         return transformer.to(self.device, dtype=self.transformer_param_dtype)
 
     def _configure_transformer(self):

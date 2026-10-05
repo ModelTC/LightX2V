@@ -229,7 +229,21 @@ class LatentDataset(torch.utils.data.Dataset):
         if height not in (None, "") and width not in (None, ""):
             meta["target_height"] = int(height)
             meta["target_width"] = int(width)
-        for key in ("id", "width", "height", "fps", "frames", "duration", "num_frames"):
+        for key in (
+            "id",
+            "sample_id",
+            "width",
+            "height",
+            "fps",
+            "frames",
+            "duration",
+            "num_frames",
+            "ref_image_count",
+            "reference_image_count",
+            "reference_video_count",
+            "reference_audio_count",
+            "prompt_source",
+        ):
             if isinstance(row, dict) and key in row:
                 meta[key] = row[key]
         target_num_frames = record_value(row, "target_num_frames", "num_frames")
@@ -350,11 +364,20 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
     when a dataloader epoch ended mid-outer.  ``balance_image_counts`` selects
     an equal rotating subset from every image-count/orientation cell; audio
     references may coexist when ``require_image_only`` is disabled.
+
+    Opt-in ``batch_mode=count_coverage`` instead mixes available image counts
+    across each global microbatch, with no orientation/count downsampling.
+    Natural count frequencies are retained: a scarce count cannot occur in
+    every batch without oversampling. Only the less-than-one-global-batch
+    remainder is omitted cyclically by ``rotating_drop``. Local batch size
+    remains one; coverage is across logical data-parallel ranks, not SP peers.
     """
 
     is_minimax_h3_ref_cost_sampler = True
     SCHEMA_VERSION = 1
     ROTATING_DROP_SCHEMA_VERSION = 2
+    COUNT_COVERAGE_SCHEMA_VERSION = 3
+    BATCH_MODES = ("cost_local", "count_coverage")
     ORIENTATIONS = ("landscape", "portrait")
     REMAINDER_POLICIES = ("strict", "rotating_drop")
 
@@ -374,6 +397,7 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
         balance_orientation=True,
         strict_full_epoch=True,
         remainder_policy=None,
+        batch_mode="cost_local",
     ):
         self.dataset = dataset
         self.num_replicas = get_data_parallel_world_size() if num_replicas is None else int(num_replicas)
@@ -388,6 +412,9 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
             raise ValueError("Reference cost_key must be non-empty.")
         self.require_compute_cost = bool(require_compute_cost)
         self.require_image_only = bool(require_image_only)
+        self.batch_mode = str(batch_mode).strip().lower()
+        if self.batch_mode not in self.BATCH_MODES:
+            raise ValueError(f"Unsupported Ref batch_mode={self.batch_mode!r}; expected one of {self.BATCH_MODES}.")
         self.balance_orientation = bool(balance_orientation)
         self.strict_full_epoch = bool(strict_full_epoch)
         if remainder_policy is None:
@@ -401,9 +428,11 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
             raise ValueError("remainder_policy=strict requires strict_full_epoch=true.")
         if self.remainder_policy == "rotating_drop" and self.strict_full_epoch:
             raise ValueError("remainder_policy=rotating_drop requires strict_full_epoch=false.")
-        if not self.balance_orientation:
+        if self.batch_mode == "count_coverage" and (self.balance_orientation or balance_image_counts):
+            raise ValueError("batch_mode=count_coverage requires balance_orientation=false and balance_image_counts=false; natural dataset frequencies are preserved.")
+        if self.batch_mode == "cost_local" and not self.balance_orientation:
             raise ValueError("MiniMax-H3 ReferenceCostSampler currently requires balance_orientation=true.")
-        if self.num_replicas % 2:
+        if self.batch_mode == "cost_local" and self.num_replicas % 2:
             raise ValueError(f"Balanced Ref cost sampling requires an even data-parallel world size, got {self.num_replicas}.")
         self.half_world_size = self.num_replicas // 2
 
@@ -427,12 +456,20 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
             self.image_counts = tuple(value for value in self.configured_image_counts if value in observed_counts)
 
         orientation_counts = Counter(record["orientation"] for record in self.records)
-        if set(orientation_counts) != set(self.ORIENTATIONS):
+        if self.batch_mode == "cost_local" and set(orientation_counts) != set(self.ORIENTATIONS):
             raise ValueError(f"Balanced Ref cost sampling requires landscape and portrait rows; got {dict(orientation_counts)}.")
         cell_counts = Counter((record["image_count"], record["orientation"]) for record in self.records)
         self.rows_per_image_orientation_cell = None
         self.dropped_per_image_orientation_cell = {}
-        if self.balance_image_counts:
+        if self.batch_mode == "count_coverage":
+            if self.remainder_policy == "strict" and len(self.records) % self.num_replicas:
+                raise ValueError("Strict count-coverage sampling requires dataset rows divisible by DP world size; use strict_full_epoch=false and remainder_policy=rotating_drop.")
+            self.epoch_rows = len(self.records) // self.num_replicas * self.num_replicas
+            if not self.epoch_rows:
+                raise ValueError(f"Count-coverage sampling requires at least one global microbatch: rows={len(self.records)}, dp_world_size={self.num_replicas}.")
+            self.rows_per_orientation = None
+            self.dropped_per_orientation = {}
+        elif self.balance_image_counts:
             if self.remainder_policy != "rotating_drop":
                 raise ValueError("balance_image_counts=true requires strict_full_epoch=false and remainder_policy=rotating_drop.")
             self.rows_per_image_orientation_cell = (
@@ -472,8 +509,9 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
                 )
 
         self.orientation_counts = {orientation: orientation_counts[orientation] for orientation in self.ORIENTATIONS}
-        self.dropped_per_orientation = {orientation: orientation_counts[orientation] - self.rows_per_orientation for orientation in self.ORIENTATIONS}
-        self.epoch_rows = self.rows_per_orientation * len(self.ORIENTATIONS)
+        if self.batch_mode == "cost_local":
+            self.dropped_per_orientation = {orientation: orientation_counts[orientation] - self.rows_per_orientation for orientation in self.ORIENTATIONS}
+            self.epoch_rows = self.rows_per_orientation * len(self.ORIENTATIONS)
         self.num_global_batches = self.epoch_rows // self.num_replicas
         self.start_iteration = 0
         self.gradient_accumulation_iters = None
@@ -483,12 +521,13 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
         self._epoch_batches = OrderedDict()
         self.dataset_fingerprint = self._dataset_fingerprint()
         logger.info(
-            "[data] Ref cost sampler rows={} dp_world_size={} global_batches={} "
+            "[data] Ref cost sampler batch_mode={} rows={} dp_world_size={} global_batches={} "
             "orientation_counts={} epoch_rows={} rows_per_orientation={} "
             "dropped_per_orientation={} remainder_policy={} image_counts={} "
             "balance_image_counts={} rows_per_image_orientation_cell={} "
             "cost_key={} cost_range=[{}, {}] "
             "dataset_fingerprint={}",
+            self.batch_mode,
             len(self.records),
             self.num_replicas,
             self.num_global_batches,
@@ -538,7 +577,13 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
             if sample.get("type") != "metadata" or not isinstance(sample.get("row"), dict):
                 raise TypeError("MiniMaxH3ReferenceCostSampler supports metadata-backed condition caches only.")
             row = sample["row"]
+            # New image-only manifests expose the user-facing ref_image_count
+            # alias as well as the established reference_image_count field.
+            if "reference_image_count" not in row and "ref_image_count" in row:
+                row = {**row, "reference_image_count": row["ref_image_count"]}
             image_count = self._required_int(row, "reference_image_count", dataset_index)
+            if self.batch_mode == "count_coverage" and not 1 <= image_count <= 9:
+                raise ValueError(f"Ref count-coverage row {dataset_index} requires 1..9 reference images, got {image_count}.")
             video_count = self._required_int(row, "reference_video_count", dataset_index)
             audio_count = self._required_int(row, "reference_audio_count", dataset_index)
             if self.require_image_only and (video_count or audio_count):
@@ -619,6 +664,15 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
         if self.remainder_policy == "strict":
             return self.records
 
+        if self.batch_mode == "count_coverage":
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + 65_537)
+            order = torch.randperm(len(self.records), generator=generator).tolist()
+            drop_count = len(self.records) - self.epoch_rows
+            start = (int(data_epoch) * drop_count) % len(order)
+            omitted = {(start + offset) % len(order) for offset in range(drop_count)}
+            return [self.records[index] for position, index in enumerate(order) if position not in omitted]
+
         if self.balance_image_counts:
             selected = []
             rows_per_cell = self.rows_per_image_orientation_cell
@@ -661,6 +715,8 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
     def _build_epoch_batches(self, data_epoch):
         data_epoch = int(data_epoch)
         selected_records = self._records_for_epoch(data_epoch)
+        if self.batch_mode == "count_coverage":
+            return self._build_count_coverage_batches(selected_records, data_epoch)
         by_cell = {(image_count, orientation): [] for image_count in self.image_counts for orientation in self.ORIENTATIONS}
         for record in selected_records:
             key = (record["image_count"], record["orientation"])
@@ -716,6 +772,69 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
         expected = {record["dataset_index"] for record in selected_records}
         if len(flattened) != len(expected) or set(flattened) != expected:
             raise RuntimeError("Ref cost sampler epoch is not an exact one-pass permutation of its selected physical rows.")
+        return tuple(batches)
+
+    def _build_count_coverage_batches(self, selected_records, data_epoch):
+        """Reserve one row per available count before filling spare DP slots.
+
+        Fill only from the count with most surplus above one-per-future-batch.
+        For DP world size >= number of counts this gives every count its
+        maximum possible number of distinct batches, min(rows, batches),
+        without repeating or downsampling it. Shuffle whole batches afterward
+        so scarce-count batches are not confined to the start of the epoch.
+        Pools are cost-sorted within each count; equal-surplus ties prefer the
+        cost nearest the current batch, but count coverage takes priority.
+        """
+        pools = {
+            count: self._ordered_pool(
+                [record for record in selected_records if record["image_count"] == count],
+                data_epoch,
+                10_007 * (index + 1),
+            )
+            for index, count in enumerate(self.image_counts)
+        }
+        positions = {count: 0 for count in self.image_counts}
+        remaining = {count: len(pool) for count, pool in pools.items()}
+        built = []
+        for batch_index in range(self.num_global_batches):
+            batch = []
+
+            def take(count):
+                batch.append(pools[count][positions[count]])
+                positions[count] += 1
+                remaining[count] -= 1
+
+            # Rotate priority when there are more counts than DP slots. In
+            # the intended 32-rank, 1..9-count setup every active count fits.
+            offset = batch_index % len(self.image_counts)
+            count_order = self.image_counts[offset:] + self.image_counts[:offset]
+            for count in count_order:
+                if remaining[count] and len(batch) < self.num_replicas:
+                    take(count)
+            future_batches = self.num_global_batches - batch_index - 1
+            while len(batch) < self.num_replicas:
+                mean_cost = sum(record["cost"] for record in batch) / max(1, len(batch))
+                count = max(
+                    (count for count in self.image_counts if remaining[count]),
+                    key=lambda count: (
+                        remaining[count] - future_batches,
+                        -abs(pools[count][positions[count]]["cost"] - mean_cost),
+                    ),
+                )
+                take(count)
+            built.append(batch)
+
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + data_epoch * 1_000_003 + 97_409)
+        batches = []
+        for batch_index in torch.randperm(len(built), generator=generator).tolist():
+            batch = built[batch_index]
+            rank_order = torch.randperm(self.num_replicas, generator=generator).tolist()
+            batches.append(tuple(batch[index]["dataset_index"] for index in rank_order))
+        flattened = [index for batch in batches for index in batch]
+        expected = {record["dataset_index"] for record in selected_records}
+        if len(flattened) != len(expected) or set(flattened) != expected:
+            raise RuntimeError("Ref count-coverage epoch is not an exact one-pass permutation of selected physical rows.")
         return tuple(batches)
 
     def _batches_for_epoch(self, data_epoch):
@@ -790,6 +909,17 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
                         "dropped_per_image_orientation_cell": dict(self.dropped_per_image_orientation_cell),
                     }
                 )
+        if self.batch_mode == "count_coverage":
+            metadata.update(
+                {
+                    "schema_version": self.COUNT_COVERAGE_SCHEMA_VERSION,
+                    "batch_mode": self.batch_mode,
+                    "remainder_policy": self.remainder_policy,
+                    "epoch_rows": self.epoch_rows,
+                    "dropped_rows": len(self.records) - self.epoch_rows,
+                    "coverage_unit": "global_data_parallel_microbatch",
+                }
+            )
         return metadata
 
     def __iter__(self):
@@ -1586,6 +1716,7 @@ def build_minimax_h3_ref_cache_dataset(data_config, train_or_val="train", uncond
         balance_orientation=sampler_config.get("balance_orientation", True),
         strict_full_epoch=sampler_config.get("strict_full_epoch", True),
         remainder_policy=sampler_config.get("remainder_policy"),
+        batch_mode=sampler_config.get("batch_mode", "cost_local"),
     )
     return DataLoader(
         dataset,

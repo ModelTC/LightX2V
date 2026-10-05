@@ -27,8 +27,12 @@ def parse_args():
 def main():
     args = parse_args()
     config = load_config(args.config)
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    # Preserve historical TF32 unless a precision-controlled experiment opts out.
+    allow_tf32 = config.get("training", {}).get("allow_tf32", True)
+    if not isinstance(allow_tf32, bool):
+        raise ValueError("training.allow_tf32 must be a boolean")
+    torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    torch.backends.cudnn.allow_tf32 = allow_tf32
     init_distributed(config)
     if "seed" in config:
         seed = int(config["seed"]) + get_rank()

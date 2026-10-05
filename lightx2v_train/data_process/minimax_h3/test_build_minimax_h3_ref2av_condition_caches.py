@@ -2,11 +2,13 @@
 
 import hashlib
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
@@ -131,6 +133,222 @@ class Ref2AVConditionCacheSchemaTest(unittest.TestCase):
             ),
             (352, 640),
         )
+
+    def _omni_row(self):
+        row = self._row()
+        row.update(task="ref2v", target_height=1066, target_width=1906, sample_id="omni-image-7")
+        row.pop("enhanced_prompt")
+        row.pop("duration")
+        row.pop("target_num_frames")
+        row["prompt_en"] = " <Figure 1> shows a person. <Subject 2> walks away. "
+        row["references"] = [{"modality": "image", "rel_path": self.media[0].name}]
+        row["ref_image_count"] = 99  # Recomputed, never trust stale annotations.
+        return row
+
+    def _omni_sample(self, row=None):
+        return MODULE.normalize_sample(
+            self._omni_row() if row is None else row,
+            7,
+            self.root,
+            "bf16",
+            {"identity": "mock"},
+            prompt_policy="enhanced-or-original",
+            target_policy="fixed-768p",
+            reference_resize_mode="match",
+            reference_latent_dtype="bf16",
+            image_only=True,
+        )
+
+    def test_omni_prompt_fallback_and_fixed_geometry_need_no_target_video(self):
+        sample = self._omni_sample()
+        self.assertEqual(sample.prompt, "<Picture 1> shows a person. <Subject 2> walks away.")
+        self.assertEqual(sample.descriptor["prompt_source"], "prompt_en")
+        self.assertEqual(sample.descriptor["ref_image_count"], 1)
+        self.assertEqual(sample.descriptor["reference_latent_dtype"], "bf16")
+        self.assertEqual((sample.target_height, sample.target_width, sample.target_num_frames), (768, 1344, 124))
+        self.assertIsNone(sample.descriptor["source_target_num_frames"])
+        row = self._omni_row()
+        row.update(target_height=3840, target_width=2160, duration=999, target_num_frames=1000)
+        portrait = self._omni_sample(row)
+        self.assertEqual((portrait.target_height, portrait.target_width), (1344, 768))
+        self.assertEqual(portrait.target_num_frames, 124)
+        self.assertEqual(portrait.descriptor["source_target_num_frames"], 1000)
+        self.assertEqual(portrait.descriptor["source_target_geometry"]["duration"], 999)
+
+    def test_prompt_priority_original_aliases_and_empty_rejection(self):
+        row = self._omni_row()
+        row.update(enhanced_prompt=" Keep <Figure 1> unchanged in enhanced. ", prompt_cn="中文")
+        self.assertEqual(self._omni_sample(row).prompt, "Keep <Figure 1> unchanged in enhanced.")
+        row["enhanced_prompt"] = " "
+        row["prompt_en"] = None
+        row["prompt_en_original"] = "@Image1 English"
+        self.assertEqual(self._omni_sample(row).descriptor["prompt_source"], "prompt_en_original")
+        row["prompt_en_original"] = ""
+        row["prompt_cn"] = "@图片1人物"
+        self.assertEqual(self._omni_sample(row).prompt, "<Picture 1>人物")
+        row["prompt_cn"] = ""
+        row["prompt_cn_original"] = "@图1中文"
+        self.assertEqual(self._omni_sample(row).prompt, "<Picture 1>中文")
+        row["prompt_cn_original"] = ""
+        with self.assertRaisesRegex(ValueError, "non-empty"):
+            self._omni_sample(row)
+        with self.assertRaisesRegex(ValueError, "enhanced_prompt"):
+            MODULE.normalize_sample(self._omni_row(), 7, self.root, "bf16", {})
+
+    def test_fixed_geometry_orientation_fallback_and_image_only_rejection(self):
+        row = self._omni_row()
+        row.pop("target_width")
+        row.pop("target_height")
+        row["target_orientation"] = "portrait"
+        self.assertEqual(self._omni_sample(row).target_height, 1344)
+        row.pop("target_orientation")
+        with self.assertRaisesRegex(ValueError, "target_orientation"):
+            self._omni_sample(row)
+        row = self._omni_row()
+        row["references"].append({"kind": "video", "path": str(self.media[1])})
+        with self.assertRaisesRegex(ValueError, "not image-only"):
+            self._omni_sample(row)
+
+    def _text_payload(self, sample):
+        return {
+            "cache_schema_version": 1,
+            "cache_fingerprint": sample.fingerprint,
+            "cache_metadata": sample.descriptor,
+            "cache_stage": "text",
+            "conditioning": {
+                "positive": {
+                    "task": "ref2av",
+                    "target_height": sample.target_height,
+                    "target_width": sample.target_width,
+                    "target_num_frames": sample.target_num_frames,
+                    "prompt_embeds": torch.zeros(1, 2, 5120, dtype=torch.bfloat16),
+                    "text_token_tags": torch.tensor([0, 1], dtype=torch.long),
+                }
+            },
+        }
+
+    def test_bf16_storage_keeps_integer_tags_and_all_float_tensors_bf16(self):
+        sample = self._omni_sample()
+        prepared = [SimpleNamespace(num_latent_frames=1, latent_height=4, latent_width=4)]
+        components = SimpleNamespace(audio_vae=SimpleNamespace(config=SimpleNamespace(sampling_rate=32000)), _execution_device="cpu")
+        runtime = {
+            "MiniMaxH3Ref2VAReferenceEncoderStep": SimpleNamespace(
+                encode_references=lambda *args, **kwargs: (torch.ones(4, 96, dtype=torch.float32), None),
+            ),
+            "MiniMaxH3Ref2VATextEncoderStep": SimpleNamespace(
+                encode_prompt=lambda *args, **kwargs: (torch.ones(1, 2, 5120, dtype=torch.float32), torch.tensor([0, 1])),
+            ),
+        }
+        with patch.object(MODULE, "prepare_official_references", return_value=prepared):
+            text_payload = MODULE.encode_text_stage(sample, runtime, components, torch.bfloat16)
+            payload = MODULE.encode_reference_stage(sample, text_payload, runtime, components, torch.bfloat16)
+        positive = payload["conditioning"]["positive"]
+        self.assertEqual(positive["prompt_embeds"].dtype, torch.bfloat16)
+        self.assertEqual(positive["references"][0]["video_latents"].dtype, torch.bfloat16)
+        self.assertEqual(positive["text_token_tags"].dtype, torch.long)
+        manifest = MODULE.manifest_row(sample, Path("conditions/a.pt"), payload)
+        self.assertEqual(manifest["ref_image_count"], 1)
+        self.assertEqual(manifest["source_index"], 7)
+        self.assertEqual(manifest["source_id"], "omni-image-7")
+        self.assertEqual(manifest["prompt_source"], "prompt_en")
+        self.assertEqual(manifest["cache_fingerprint"], sample.fingerprint)
+        fp32_sample = MODULE.normalize_sample(
+            self._omni_row(),
+            7,
+            self.root,
+            "bf16",
+            {"identity": "mock"},
+            prompt_policy="enhanced-or-original",
+            target_policy="fixed-768p",
+            image_only=True,
+            reference_resize_mode="match",
+        )
+        self.assertNotEqual(sample.fingerprint, fp32_sample.fingerprint)
+
+    def test_streamed_sharding_matches_old_selection_without_full_parse(self):
+        rows = [{"id": index} for index in range(11)]
+        path = self.root / "input.jsonl"
+        path.write_text("\n".join(json.dumps(row) + "\n" for row in rows))
+        for shard in range(4):
+            args = SimpleNamespace(start_index=2, max_samples=7, num_shards=4, shard_index=shard)
+            actual, total = MODULE.read_selected_rows(path, args)
+            self.assertEqual(actual, MODULE._selected_rows(rows, args))
+            self.assertEqual(total, 11)
+
+    def test_skip_invalid_receipt_coverage_and_resume(self):
+        source = self.root / "input.jsonl"
+        valid = self._omni_row()
+        invalid = {**valid, "sample_id": "missing", "references": [{"kind": "image", "path": "missing.jpg"}]}
+        MODULE.atomic_write_jsonl(source, [valid, invalid])
+        output = self.root / "output"
+        argv = [
+            str(source),
+            "--output-dir",
+            str(output),
+            "--model-path",
+            str(self.root),
+            "--source-model-path",
+            str(self.root),
+            "--prompt-policy",
+            "enhanced-or-original",
+            "--target-policy",
+            "fixed-768p",
+            "--reference-resize-mode",
+            "match",
+            "--reference-latent-dtype",
+            "bf16",
+            "--image-only",
+            "--skip-invalid",
+            "--num-shards",
+            "2",
+        ]
+
+        # Shard zero contains the valid record, shard one the missing record.
+        def complete(sample, payload, *args):
+            payload["cache_stage"] = "complete"
+            payload["conditioning"]["positive"]["references"] = [
+                {
+                    "kind": "image",
+                    "normalized": True,
+                    "video_latents": torch.ones(4, 96, dtype=torch.bfloat16),
+                    "num_latent_frames": 1,
+                    "latent_height": 4,
+                    "latent_width": 4,
+                }
+            ]
+            return payload
+
+        with (
+            patch.object(MODULE, "model_identity", return_value={"model": "mock"}),
+            patch.object(MODULE, "import_official_runtime", return_value={}),
+            patch.object(MODULE, "load_conditioner", return_value=object()),
+            patch.object(MODULE, "load_vaes", return_value=object()),
+            patch.object(MODULE, "encode_text_stage", side_effect=lambda sample, *args: self._text_payload(sample)) as text_encoder,
+            patch.object(MODULE, "encode_reference_stage", side_effect=complete),
+        ):
+            self.assertEqual(MODULE.main(argv), 0)
+            self.assertEqual(MODULE.main(argv), 0)
+            self.assertEqual(text_encoder.call_count, 1)  # Valid existing caches are reused.
+            self.assertEqual(MODULE.main(argv + ["--shard-index", "1"]), 0)
+            receipt_zero = output / "metadata.shard-000-of-002.complete.json"
+            with patch.object(MODULE, "encode_text_stage", side_effect=RuntimeError("CUDA out of memory")):
+                with self.assertRaisesRegex(RuntimeError, "CUDA out of memory"):
+                    MODULE.main(argv + ["--overwrite"])
+            self.assertFalse(receipt_zero.exists())  # --skip-invalid must not hide GPU failures.
+            self.assertEqual(MODULE.main(argv), 0)
+            with self.assertRaisesRegex(RuntimeError, "different input/model"):
+                MODULE.main(argv + ["--reference-latent-dtype", "fp32"])
+            self.assertTrue(receipt_zero.exists())  # Wrong namespace must not damage a completed run.
+        for shard, completed, failed in [(0, 1, 0), (1, 0, 1)]:
+            receipt = json.loads((output / f"metadata.shard-{shard:03d}-of-002.complete.json").read_text())
+            self.assertEqual(receipt["input_total_rows"], 2)
+            self.assertEqual(receipt["selected_count"], 1)
+            self.assertEqual(receipt["completed_count"], completed)
+            self.assertEqual(receipt["failed_count"], failed)
+            self.assertEqual(receipt["manifest_sha256"], MODULE.sha256_file(output / receipt["manifest"]))
+            self.assertEqual(receipt["failures_sha256"], MODULE.sha256_file(output / receipt["failures"]))
+        failures = MODULE.read_jsonl(output / "metadata.shard-001-of-002.failed.jsonl")
+        self.assertEqual(failures[0]["source_index"], 1)
 
     def test_refuses_silent_reorder_or_stale_declared_hash(self):
         row = self._row()
