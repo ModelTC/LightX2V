@@ -405,7 +405,7 @@ def build_video_dataset(data_config, train_or_val="train", sample_processor=None
         decode_retries=data_config.get("decode_retries", 3),
         preserve_records=data_config.get("preserve_records", False),
         sample_processor=sample_processor,
-        unconditional_prompt=getattr(sample_processor, "unconditional_prompt", unconditional_prompt),
+        unconditional_prompt=unconditional_prompt,
         validate_on_init=data_config.get("validate_on_init", True),
     )
     return _build_dataloader(dataset, data_config, train_or_val)
