@@ -64,7 +64,7 @@ class SeedCache:
 
 
 def find_validated_seed(environment, cache, max_attempts):
-    """Replay candidates using the same real expert checks as fresh seeds."""
+    """Validate the expert rollout and the fresh scene used by the policy."""
     last_error = None
     for _ in range(max(1, max_attempts)):
         environment.seed = cache.next_candidate(environment.seed)
@@ -74,12 +74,13 @@ def find_validated_seed(environment, cache, max_attempts):
             solvable = bool(environment.env.plan_success) and bool(environment.env.check_success())
             environment._close_task_env()
             if solvable:
+                environment._setup_demo()
                 return info
             environment._log(f"seed {environment.seed}: expert cannot solve this layout; trying next seed")
         except Exception as exc:  # noqa: BLE001 - legacy expert retries; bounded and logged
             last_error = exc
             environment._close_task_env()
-            environment._log(f"seed {environment.seed}: expert check raised {exc!r}; trying next seed")
+            environment._log(f"seed {environment.seed}: seed validation/setup raised {exc!r}; trying next seed")
         cache.reject(environment.seed)
         environment.seed += 1
     raise RuntimeError(f"no expert-solvable seed found after {max_attempts} attempts; last error: {last_error}")
@@ -157,7 +158,6 @@ class RoboTwinAdapter:
             def _setup_episode(self, max_seed_attempts=None):
                 try:
                     episode_info = self._find_solvable_seed(evaluation["max_seed_attempts"])
-                    self._setup_demo()
                     self._task_description = self._resolve_instruction(episode_info)
                     self.env.set_instruction(instruction=self._task_description)
                 except Exception:
