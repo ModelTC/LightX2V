@@ -1,31 +1,17 @@
 """LIBERO implementation of the generic `BaseSimEnv` contract."""
 
-import math
-
 import numpy as np
 from common.contract import EnvContract
 
 from ..sim.base_env import BaseSimEnv, Observation
 from .observer import LiberoActionObserver, build_task_catalog, default_libero_root
-
-
-def quat_to_axis_angle(quat):
-    quat = np.asarray(quat, dtype=np.float32).copy()
-    quat[3] = np.clip(quat[3], -1.0, 1.0)
-    den = np.sqrt(1.0 - quat[3] * quat[3])
-    if math.isclose(float(den), 0.0):
-        return np.zeros(3, dtype=np.float32)
-    return ((quat[:3] * 2.0 * math.acos(float(quat[3]))) / den).astype(np.float32)
+from .runtime import CAMERA_OBS_KEYS, observation_components, observation_state
+from .runtime import quat_to_axis_angle as quat_to_axis_angle
 
 
 class LiberoEnv(BaseSimEnv):
     # logical camera name -> LIBERO observation key
-    CAMERA_OBS_KEYS = {
-        "agentview": "agentview_image",
-        "wrist": "robot0_eye_in_hand_image",
-        "frontview": "frontview_image",
-        "galleryview": "galleryview_image",
-    }
+    CAMERA_OBS_KEYS = CAMERA_OBS_KEYS
 
     def __init__(
         self,
@@ -74,16 +60,11 @@ class LiberoEnv(BaseSimEnv):
         return self._observation(), success, success
 
     def _observation(self) -> Observation:
-        obs = self.observer.obs
-        # LIBERO renders upside-down/mirrored relative to the policy expectation.
-        images = {cam: np.ascontiguousarray(obs[key][::-1, ::-1]) for cam, key in self.CAMERA_OBS_KEYS.items() if cam in self.contract.cameras}
-        return Observation(images=images, state=self._state(obs))
+        images, state = observation_components(self.observer.obs, self.contract.cameras)
+        return Observation(images=images, state=state)
 
     def _state(self, obs) -> np.ndarray:
-        pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
-        axis_angle = quat_to_axis_angle(np.asarray(obs["robot0_eef_quat"], dtype=np.float32))
-        gripper = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
-        return np.concatenate([pos, axis_angle, gripper]).astype(np.float32)
+        return observation_state(obs)
 
     @property
     def supports_task_switch(self) -> bool:

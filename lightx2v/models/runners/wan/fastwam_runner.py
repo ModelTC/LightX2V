@@ -98,6 +98,8 @@ class MinMaxNormalizer(LinearNormalizer):
 
 
 class FastWAMPolicy:
+    model_class = FastWAMNativeModel
+
     def __init__(
         self,
         adapter_model_path=None,
@@ -169,7 +171,7 @@ class FastWAMPolicy:
         self.state_normalizer, self.action_normalizer = self._load_normalizers()
         self.text_encoder = self._load_text_encoder()
         self.vae = self._load_vae()
-        self.model = FastWAMNativeModel(
+        self.model = self.model_class(
             model_path=str(self.model_path),
             config=self.config,
             device=self.device,
