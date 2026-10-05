@@ -163,12 +163,37 @@ def install_embedding(module):
             cls._create_cpu_pin_tensor = lambda self, tensor: _keep(tensor)
 
 
+def _alloc_guard_begin():
+    """RADEON_CORESW_ALLOC_HEADROOM_GB (default 1, 0 = off). When device memory runs out, the driver evicts
+    process buffers (KFD queue eviction) while the peer GPU exchanges data with them, and the SP2 pass returns
+    corrupted results (seen as NaN). Cap the caching allocator below the memory used by everything else (HIP runtime,
+    IPC exchange buffers, libraries) minus this headroom: it then frees cached blocks and retries before the device
+    is full, which is safe."""
+    headroom = float(os.environ.get("RADEON_CORESW_ALLOC_HEADROOM_GB", "1"))
+    if headroom > 0:
+        free, total = torch.cuda.mem_get_info()
+        outside = total - free - torch.cuda.memory_reserved()
+        torch.cuda.set_per_process_memory_fraction(max(total - outside - headroom * 2**30, 0) / total)
+    return torch.cuda.memory_stats().get("num_alloc_retries", 0)
+
+
+def _alloc_guard_end(retries):
+    now = torch.cuda.memory_stats().get("num_alloc_retries", 0)
+    if now > retries:
+        capped = float(os.environ.get("RADEON_CORESW_ALLOC_HEADROOM_GB", "1")) > 0
+        message = f"[radeon_weight_load][rank={os.environ.get('RANK', '0')}] {now - retries} allocator out-of-memory retries " + (
+            "under the device memory cap (correct, but slower)" if capped else "without the device memory cap: SP2 results are unreliable under device memory exhaustion"
+        )
+        print(message, file=sys.stderr, flush=True)
+
+
 def install_offload_infer(module):
     cls = module.MiniMaxH3OffloadTransformerInfer
 
     def infer_with_blocks_offload(self, blocks, hidden_states, pre_infer_out):
         dev = module.torch_device_module
         manager = self.offload_manager
+        retries = _alloc_guard_begin()
         if hasattr(manager, "cpu_buffers"):
             raise RuntimeError("radeon_weight_load expects block offload straight from the CPU weight modules")
         ring = manager.__dict__.setdefault("_wl_ring", _Ring())
@@ -189,6 +214,7 @@ def install_offload_infer(module):
                 manager.cuda_load_stream.wait_event(gate)
             ring.load(manager.cuda_buffers[1], blocks[nxt].state_dict(), manager.cuda_load_stream, nxt, None)
             manager.swap_blocks()
+        _alloc_guard_end(retries)
         return hidden_states
 
     cls.infer_with_blocks_offload = infer_with_blocks_offload
