@@ -1,5 +1,5 @@
-FROM pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel AS base
-# ubuntu 24.04 python 3.12 torch 2.11 cuda 13.0
+FROM nvidia/cuda:13.0.3-cudnn-devel-ubuntu24.04 AS base
+# ubuntu 24.04 conda python 3.11 torch 2.11 cuda 13.0
 
 WORKDIR /app
 
@@ -16,11 +16,19 @@ RUN apt-get update && apt-get install -y vim tmux zip unzip bzip2 wget git git-l
 
 RUN add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg8 && apt-get update && apt-get install -y ffmpeg
 
-RUN printf '[global]\nbreak-system-packages = true\n' > /etc/pip.conf
+RUN curl -fsSL -v -o /app/miniconda.sh -O  "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
+RUN chmod +x /app/miniconda.sh && \
+    bash /app/miniconda.sh -b -p /app/miniconda && \
+    rm /app/miniconda.sh && \
+    /app/miniconda/bin/conda install python=3.11 -y && \
+    /app/miniconda/bin/conda clean -ya
+ENV PATH="/app/miniconda/bin:$PATH"
 
 RUN pip install --no-cache-dir packaging ninja cmake scikit-build-core uv meson ruff pre-commit fastapi uvicorn requests -U
 
-RUN apt-get remove -y python3-jwt && pip install vllm==0.23.0
+RUN pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
+
+RUN pip install vllm==0.24.0
 
 RUN pip install sglang-kernel==0.4.4
 
@@ -41,7 +49,7 @@ RUN pip install --no-cache-dir -U setuptools wheel
 RUN pip list
 
 # FA2 Whl: https://github.com/alkemiik-coder/FlashAttention-2.8.3-Custom-Linux-Wheels
-RUN pip install --no-cache-dir https://github.com/alkemiik-coder/FlashAttention-2.8.3-Custom-Linux-Wheels/releases/download/FA.2.8.3-custom-linux-wheels-x86_64/flash_attn-2.8.3+cu130torch2.11cxx11abiTRUEfullsm80sm90sm100sm120nvcc130-cp312-cp312-linux_x86_64.whl
+RUN pip install --no-cache-dir https://github.com/alkemiik-coder/FlashAttention-2.8.3-Custom-Linux-Wheels/releases/download/FA.2.8.3-custom-linux-wheels-x86_64/flash_attn-2.8.3+cu130torch2.11cxx11abiTRUEfullsm80sm90sm100sm120nvcc130-cp311-cp311-linux_x86_64.whl
 
 # FA3 Whl: https://github.com/windreamer/flash-attention3-wheels
 RUN pip install --no-cache-dir https://github.com/windreamer/flash-attention3-wheels/releases/download/2026.05.11-5e0e3b1/flash_attn_3-3.0.0%2B20260511.cu130torch2110cxx11abitrue.ab6632-cp39-abi3-linux_x86_64.whl
