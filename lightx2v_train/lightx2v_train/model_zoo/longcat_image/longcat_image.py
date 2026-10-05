@@ -168,8 +168,9 @@ class LongCatImageModel(BaseModel):
         if image.ndim != 4:
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
         image = image.to(device=self.device, dtype=self.vae_dtype)
-        latent = getattr(self.vae.encode(image).latent_dist, mode)()
-        return self._normalize_latents(latent)
+        with self._active_vae() as vae:
+            latent = getattr(vae.encode(image).latent_dist, mode)()
+            return self._normalize_latents(latent)
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
