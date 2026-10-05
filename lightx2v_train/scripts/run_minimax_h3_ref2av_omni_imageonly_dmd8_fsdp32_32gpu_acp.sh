@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 # ACP: run this identical command on each of four workers, eight GPUs each.
 # MASTER_ADDR / MASTER_PORT must refer to the same reachable rendezvous host.
+# Keep the existing filename/entry point; the selected recipe is now PDMD.
 H3_CODE_ROOT="${H3_CODE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 H3_PYTHON="${H3_PYTHON:-python}"
 H3_CONFIG_PATH="${H3_CONFIG_PATH:-$H3_CODE_ROOT/lightx2v_train/configs/train/dmd/minimax_h3_ref2av_omni_imageonly_dmd8_match124_bf16_fsdp32.yaml}"
@@ -10,13 +11,14 @@ H3_CONFIG_PATH="${H3_CONFIG_PATH:-$H3_CODE_ROOT/lightx2v_train/configs/train/dmd
 : "${MASTER_PORT:?ACP must set a common MASTER_PORT on all four workers}"
 export H3_MODEL_PATH="${H3_MODEL_PATH:-/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3}"
 export H3_REF2AV_CACHE="${H3_REF2AV_CACHE:-/mnt/lm_data_afs/gushiqiao/datasets/omni_r2v_image_only_100k_20261004/latent_match124_bf16/metadata.jsonl}"
-export H3_REF2AV_DMD_OUTPUT="${H3_REF2AV_DMD_OUTPUT:-$H3_CODE_ROOT/outputs/minimax_h3_ref2av_omni_imageonly_dmd8_10k}"
+export H3_REF2AV_DMD_OUTPUT="${H3_REF2AV_DMD_OUTPUT:-$H3_CODE_ROOT/outputs/minimax_h3_ref2av_omni_imageonly_pdmd8_paper_10k}"
+export H3_PDMD="${H3_PDMD:-true}"
 if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --dry-run ) ]]; then
     echo "Usage: bash $0 [--dry-run]" >&2
     exit 1
 fi
-if [[ "${H3_PDMD:-false}" != false ]]; then
-    echo "This is the standard DMD recipe; unset H3_PDMD or set it to false." >&2
+if [[ "$H3_PDMD" != true ]]; then
+    echo "This is the H3 paper-hyperparameter PDMD recipe; unset H3_PDMD or set it to true." >&2
     exit 1
 fi
 if [[ ! -f "$H3_MODEL_PATH/transformer_ref/config.json" ]]; then
@@ -70,14 +72,40 @@ distributed = config["distributed"]
 data = config["data"]["train"]
 sampler = data["reference_cost_sampler"]
 matching = config["model"]["capabilities"]["distribution_matching"]
+model = config["model"]
+mixed = distributed["fsdp2"]["mixed_precision"]
+roles = (training["student"], training["fake"])
+
+def role_precision_matches(role):
+    # Student uses top-level model settings; only fake/teacher have overrides.
+    override = {} if role == "student" else model.get(role, {})
+    effective = {**model, **override}
+    role_mixed = override.get("distributed", {}).get("fsdp2", {}).get("mixed_precision", {})
+    effective_mixed = {**mixed, **role_mixed}
+    return (
+        effective["running_dtype"] == "bf16"
+        and effective["transformer_param_dtype"] == "fp32"
+        and effective["use_autocast"] is False
+        and effective_mixed == {
+            "param_dtype": "bf16", "reduce_dtype": "fp32",
+            "output_dtype": None, "cast_forward_inputs": False,
+        }
+    )
+
 checks = {
-    "standard DMD (not PDMD)": training["method"] == "dmd" and matching.get("projected_dmd", False) is False,
+    "PDMD projection enabled": training["method"] == "dmd" and matching.get("projected_dmd") is True,
     "8 steps, 10000 iterations, grad accumulation 1": dmd["num_inference_steps"] == 8 and training["max_train_iters"] == 10000 and training["gradient_accumulation_iters"] == 1,
     "student-first, 5 critic updates": dmd["update_order"] == "student_first" and dmd["fake_update_ratio"] == 5,
     "FSDP32, no sequence parallel": distributed["fsdp2"]["enabled"] and distributed["fsdp2"]["size"] == 32 and not distributed["sequence_parallel"]["enabled"],
     "per-rank microbatch 1, image-count coverage": data["batch_size"] == 1 and sampler.get("batch_mode") == "count_coverage" and sampler.get("require_image_only") is True,
     "no category/orientation undersampling": sampler.get("balance_image_counts") is False and sampler.get("balance_orientation") is False,
     "metadata-controlled 124-frame generation": matching.get("geometry_from_metadata") is True and dmd["generation_shapes"] == [{"value": [124, 768, 1344]}],
+    "H3 paper LoRA rank/alpha 128 for student and critic": all(role["train_type"] == "lora" and role["lora"]["rank"] == 128 and role["lora"]["alpha"] == 128 for role in roles),
+    "H3 paper student/critic learning rates 5e-5 / 1e-5": roles[0]["optimizer"]["learning_rate"] == 5e-5 and roles[1]["optimizer"]["learning_rate"] == 1e-5,
+    "H3 paper AdamW betas (0, 0.9), no weight decay": all(role["optimizer"]["adam_beta1"] == 0.0 and role["optimizer"]["adam_beta2"] == 0.9 and role["optimizer"]["weight_decay"] == 0.0 for role in roles),
+    "H3 paper video/audio shifts 12/3 and no CFG": matching["video_flow_shift"] == 12.0 and matching["audio_flow_shift"] == 3.0 and training["teacher"]["guidance_scale"] == 1.0,
+    "FP32 masters, BF16 FSDP compute, FP32 gradient reduction": all(role_precision_matches(role) for role in ("student", "fake", "teacher")),
+    "8 DataLoader workers per rank with pinned memory": data["num_workers"] == 8 and data["pin_memory"] is True,
 }
 for description, passed in checks.items():
     if not passed:
@@ -103,14 +131,15 @@ with manifest.open("rb") as handle:
 if digest.hexdigest() != receipt.get("manifest_sha256") or rows != counts[0]:
     raise SystemExit("Cache manifest no longer matches its complete receipt; re-run the checked shard merge.")
 print(f"Verified cache: completed={counts[0]}, failed={counts[1]}, input_rows={counts[2]}, ref_image_counts={receipt.get('reference_image_counts', {})}")
-print(f"H3 Omni Ref2AV: 4 x 8 GPUs, standard DMD, steps=8, iters=10000, grad_accum=1, student_first, fake_update_ratio=5, global_microbatch=32, batch_mode=count_coverage, output={training['output_dir']}")
+print(f"H3 Omni Ref2AV: 4 x 8 GPUs, PDMD, steps=8, iters=10000, grad_accum=1, student_first, fake_update_ratio=5, global_microbatch=32, batch_mode=count_coverage, output={training['output_dir']}")
+print("H3 paper optimizer/LoRA/TTUR settings; retained user overrides: Ref2AV, 8 NFE, 768p, global batch 32. Each local outer iter counts 1 student + 5 critic updates; 10000 outer iters = 60000 optimizer updates, not 10000 paper iterations. Use a new output directory, not an old DMD/full-critic checkpoint.")
 PY
 
 cd "$H3_CODE_ROOT/lightx2v_train"
 command=(
     "$H3_PYTHON" -u -m torch.distributed.run
     --nnodes=4 --nproc_per_node=8
-    "--rdzv_id=${H3_RDZV_ID:-h3_ref2av_omni_imageonly_dmd8_10k}"
+    "--rdzv_id=${H3_RDZV_ID:-h3_ref2av_omni_imageonly_pdmd8_paper_10k}"
     --rdzv_backend=c10d "--rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT"
     --max_restarts=0 train.py --config "$H3_CONFIG_PATH"
 )

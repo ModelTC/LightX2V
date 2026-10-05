@@ -1,10 +1,18 @@
 # Conditions-only Omni R2V image caches: no target-video encoding is required.
-# BF16 caches do not imply BF16 optimizer master weights or DMD latents.
+# BF16 caches and FSDP compute; FP32 student/fake/teacher master parameters.
+# PDMD H3 optimization recipe: arXiv:2609.35768v1, Table C1 and Section C.2.
+# Both student and critic use LoRA rank/alpha 128, AdamW (0, 0.9), no WD,
+# learning rates 5e-5 / 1e-5, and student -> critic x5 (not the 1:1 ablation).
+# User overrides retained: Ref2AV image conditions, 8 NFE, 768p, global batch
+# 32, and 10000 outer iterations (paper: T2AV, 4 NFE, 544p, global batch 16).
+# Each outer iteration here is 1 student + 5 critic optimizer updates; the
+# paper counts each optimizer update separately. This is not a full reproduction.
+# Unspecified paper settings (epsilon, clipping, query grid) retain local values.
 model:
     name: minimax_h3_ref2av
     pretrained_model_name_or_path: ${oc.env:H3_MODEL_PATH}
     running_dtype: bf16
-    transformer_param_dtype: bf16
+    transformer_param_dtype: fp32
     local_files_only: true
     patch_size: [1, 2, 2]
     video_latent_channels: 24
@@ -27,7 +35,7 @@ model:
             dmd_normalization: true
             dmd_normalization_epsilon: 0.0
             dmd_reduction: mean
-            projected_dmd: false
+            projected_dmd: true
 
 distributed:
     backend: nccl
@@ -51,8 +59,9 @@ data:
         defer_latent_loading: true
         # Per-rank microbatch = 1; count coverage spans the global 32 samples.
         batch_size: 1
-        num_workers: 0
-        pin_memory: false
+        # Per rank: 8 workers; 32 ranks use 256 workers across four machines.
+        num_workers: 8
+        pin_memory: true
         shuffle: false
         drop_last: true
         reference_cost_sampler:
@@ -76,6 +85,7 @@ scheduler:
     time_shift_settings: {do_time_shift: false}
 
 training:
+    # PDMD uses the DMD trainer with projected_dmd enabled above.
     method: dmd
     max_train_iters: 10000
     gradient_accumulation_iters: 1
@@ -103,21 +113,21 @@ training:
         train_type: lora
         lora:
             rank: 128
-            alpha: 8
+            alpha: 128
             target_modules: [to_q, to_k, to_v, to_out.0, ff.net.0.proj, ff.net.2]
         optimizer:
             learning_rate: 0.00005
             adam_beta1: 0.0
-            adam_beta2: 0.999
-            weight_decay: 0.01
+            adam_beta2: 0.9
+            weight_decay: 0.0
             adam_epsilon: 0.00000001
     fake:
         train_type: full
         optimizer:
-            learning_rate: 0.0000004
+            learning_rate: 0.00001
             adam_beta1: 0.0
-            adam_beta2: 0.999
-            weight_decay: 0.01
+            adam_beta2: 0.9
+            weight_decay: 0.0
             adam_epsilon: 0.00000001
     teacher: {guidance_scale: 1.0, cfg_norm: none}
     output_dir: ${oc.env:H3_REF2AV_DMD_OUTPUT}

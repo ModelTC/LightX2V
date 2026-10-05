@@ -1,4 +1,4 @@
-"""CPU-only schema / ACP dry-run checks for Omni image-only Ref2AV DMD."""
+"""CPU-only schema / ACP dry-run checks for Omni Ref2AV with H3-paper PDMD."""
 
 import hashlib
 import json
@@ -27,13 +27,13 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
                 "H3_MODEL_PATH": "/model",
                 "H3_REF2AV_CACHE": "/cache/metadata.jsonl",
                 "H3_REF2AV_DMD_OUTPUT": "/outputs",
-                # Direct config loading cannot silently switch to PDMD.
-                "H3_PDMD": "true",
+                # Direct config loading cannot silently disable PDMD.
+                "H3_PDMD": "false",
             },
         ):
             return load_config(str(CONFIG))
 
-    def test_training_is_standard_dmd8_10k(self):
+    def test_training_is_pdmd8_10k_with_h3_paper_ttur(self):
         config = self.config()
         training = config["training"]
         self.assertEqual(training["method"], "dmd")
@@ -45,13 +45,30 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
         self.assertEqual(training["dmd"]["latent_dtype"], "fp32")
         self.assertEqual(training["student"]["train_type"], "lora")
         self.assertEqual(training["student"]["lora"]["rank"], 128)
-        self.assertEqual(training["fake"]["train_type"], "full")
+        self.assertEqual(training["fake"]["train_type"], "lora")
         self.assertEqual(training["teacher"]["guidance_scale"], 1.0)
         matching = config["model"]["capabilities"]["distribution_matching"]
-        self.assertIs(matching["projected_dmd"], False)
+        self.assertIs(matching["projected_dmd"], True)
         self.assertIs(matching["geometry_from_metadata"], True)
         self.assertEqual(matching["allowed_resolutions"], [[768, 1344], [1344, 768]])
         self.assertEqual(training["dmd"]["generation_shapes"], [{"value": [124, 768, 1344]}])
+
+    def test_h3_paper_optimizer_lora_and_modality_shifts(self):
+        config = self.config()
+        for name, lr in (("student", 5e-5), ("fake", 1e-5)):
+            with self.subTest(role=name):
+                role = config["training"][name]
+                self.assertEqual(role["train_type"], "lora")
+                self.assertEqual(role["lora"]["rank"], 128)
+                self.assertEqual(role["lora"]["alpha"], 128)
+                self.assertEqual(role["lora"]["target_modules"], ["to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2"])
+                self.assertEqual(role["optimizer"]["learning_rate"], lr)
+                self.assertEqual(role["optimizer"]["adam_beta1"], 0.0)
+                self.assertEqual(role["optimizer"]["adam_beta2"], 0.9)
+                self.assertEqual(role["optimizer"]["weight_decay"], 0.0)
+        matching = config["model"]["capabilities"]["distribution_matching"]
+        self.assertEqual(matching["video_flow_shift"], 12.0)
+        self.assertEqual(matching["audio_flow_shift"], 3.0)
 
     def test_global_count_diversity_without_category_downsampling(self):
         config = self.config()
@@ -68,14 +85,27 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
         self.assertEqual(config["distributed"]["fsdp2"]["size"], 32)
         self.assertIs(config["distributed"]["sequence_parallel"]["enabled"], False)
 
-    def test_mixed_precision_recipe_preserves_full_fake_master_weights(self):
+    def test_mixed_precision_recipe_preserves_fp32_master_weights(self):
         config = self.config()
         self.assertEqual(config["model"]["running_dtype"], "bf16")
-        self.assertEqual(config["model"]["transformer_param_dtype"], "bf16")
+        self.assertEqual(config["model"]["transformer_param_dtype"], "fp32")
         self.assertEqual(config["model"]["fake"]["transformer_param_dtype"], "fp32")
+        self.assertEqual(
+            config["model"].get("teacher", {}).get("transformer_param_dtype", config["model"]["transformer_param_dtype"]),
+            "fp32",
+        )
+        self.assertIs(config["model"]["use_autocast"], False)
+        self.assertIs(config["distributed"]["fsdp2"]["stream_load_pretrained"], True)
         mixed = config["distributed"]["fsdp2"]["mixed_precision"]
         self.assertEqual(mixed["param_dtype"], "bf16")
         self.assertEqual(mixed["reduce_dtype"], "fp32")
+        self.assertIsNone(mixed["output_dtype"])
+        self.assertIs(mixed["cast_forward_inputs"], False)
+
+    def test_loader_uses_eight_workers_and_pinned_memory_per_rank(self):
+        data = self.config()["data"]["train"]
+        self.assertEqual(data["num_workers"], 8)
+        self.assertIs(data["pin_memory"], True)
 
     def test_launcher_dry_run_and_rejects_incompatible_override(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -108,7 +138,7 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
                 "H3_REF2AV_CACHE": str(manifest),
                 "H3_REF2AV_DMD_OUTPUT": str(root / "outputs"),
                 "H3_REF2AV_EXPECTED_ROWS": "1",
-                "H3_PDMD": "false",
+                "H3_PDMD": "true",
             }
             for key in ("H3_CONFIG_PATH", "H3_KERNEL_SNAPSHOT", "KERNELS_CACHE"):
                 environment.pop(key, None)
@@ -124,14 +154,22 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
             result = run()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("--nnodes=4 --nproc_per_node=8", result.stdout)
-            self.assertIn("standard DMD, steps=8, iters=10000", result.stdout)
+            self.assertIn("PDMD, steps=8, iters=10000", result.stdout)
             self.assertIn("global_microbatch=32, batch_mode=count_coverage", result.stdout)
             self.assertIn("Verified cache: completed=1, failed=0, input_rows=1", result.stdout)
+            self.assertIn("60000 optimizer updates", result.stdout)
             self.assertFalse((root / "outputs").exists())
 
-            result = run({"H3_PDMD": "true"})
+            environment.pop("H3_PDMD")
+            result = run({"H3_REF2AV_DMD_OUTPUT": ""})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("outputs/minimax_h3_ref2av_omni_imageonly_pdmd8_paper_10k", result.stdout)
+            self.assertIn("--rdzv_id=h3_ref2av_omni_imageonly_pdmd8_paper_10k", result.stdout)
+            environment["H3_PDMD"] = "true"
+
+            result = run({"H3_PDMD": "false"})
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("standard DMD recipe", result.stderr)
+            self.assertIn("PDMD recipe", result.stderr)
             result = run({"H3_REF2AV_EXPECTED_ROWS": "100000"})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("expected 100000, found 1", result.stderr)
@@ -154,6 +192,38 @@ class OmniImageOnlyLaunchConfigTests(unittest.TestCase):
             result = run({"H3_CONFIG_PATH": str(custom_path)})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("student-first, 5 critic updates", result.stderr)
+
+            custom = self.config()
+            custom["model"]["capabilities"]["distribution_matching"]["projected_dmd"] = False
+            custom_path.write_text(yaml.safe_dump(custom))
+            result = run({"H3_CONFIG_PATH": str(custom_path)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("PDMD projection enabled", result.stderr)
+
+            custom = self.config()
+            custom["training"]["fake"]["train_type"] = "full"
+            custom_path.write_text(yaml.safe_dump(custom))
+            result = run({"H3_CONFIG_PATH": str(custom_path)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("H3 paper LoRA rank/alpha 128", result.stderr)
+
+            for role in ("fake", "teacher"):
+                with self.subTest(precision_override=role):
+                    custom = self.config()
+                    custom["model"].setdefault(role, {})["distributed"] = {"fsdp2": {"mixed_precision": {"param_dtype": "fp32"}}}
+                    custom_path.write_text(yaml.safe_dump(custom))
+                    result = run({"H3_CONFIG_PATH": str(custom_path)})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("FP32 masters, BF16 FSDP compute", result.stderr)
+
+            for field, value in (("num_workers", 0), ("pin_memory", False)):
+                with self.subTest(loader_override=field):
+                    custom = self.config()
+                    custom["data"]["train"][field] = value
+                    custom_path.write_text(yaml.safe_dump(custom))
+                    result = run({"H3_CONFIG_PATH": str(custom_path)})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("8 DataLoader workers per rank with pinned memory", result.stderr)
 
 
 if __name__ == "__main__":
