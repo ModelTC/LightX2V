@@ -4,6 +4,10 @@ import torch
 from diffusers import AutoencoderKLFlux2, Flux2Transformer2DModel
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
+from lightx2v_train.runtime.attention import prepare_diffusers_attention
+from lightx2v_train.runtime.fsdp import fsdp2_enabled
+from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
+
 from ..base import BaseModel
 
 
@@ -56,11 +60,13 @@ class Flux2ModelBase(BaseModel):
         self.text_pipeline.text_encoder.eval()
 
     def _load_vae(self, model_path):
+        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config.get("inference", {}).get("vae_cpu_offload", False)
+        device = torch.device("cpu") if use_cpu else self.device
         self.vae = AutoencoderKLFlux2.from_pretrained(
             model_path,
             subfolder="vae",
             torch_dtype=self.running_dtype,
-        ).to(self.device)
+        ).to(device)
         self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
         self.vae.eval()
@@ -84,11 +90,18 @@ class Flux2ModelBase(BaseModel):
 
     def load_transformer(self, model_path=None):
         model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
-        return Flux2Transformer2DModel.from_pretrained(
+        # Let FSDP2 move and shard one block at a time. Loading the complete
+        # transformer on the accelerator first defeats its memory savings.
+        device = torch.device("cpu") if fsdp2_enabled(self.config) else self.device
+        transformer = Flux2Transformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
             torch_dtype=self.running_dtype,
-        ).to(self.device)
+        ).to(device)
+        return prepare_diffusers_attention(transformer, self.config)
+
+    def load_full_weights_for_resume(self, resume_ckpt_path):
+        self.transformer = self.load_transformer(resume_ckpt_path)
 
     def denoiser_module(self):
         return self.transformer
