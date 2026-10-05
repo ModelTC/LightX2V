@@ -31,6 +31,29 @@ def split_sizes(total, world):
     return tuple(base + (rank < extra) for rank in range(world))
 
 
+# hipBLASLt solutions for the SP2 (seq_p=2) BF16 GEMMs (per-destination Q/K/V, FFN in-projection), keyed by (N, K) of
+# torch.mm(x[M, K], w[K, N]) with M >= 16384: same FP32-accumulation error as the heuristic choice, 1.5-4% faster in
+# the block (tooling/benchmark/sp2_extreme_v1)
+_SP2_GEMM = {(3584, 5376): 106882, (28672, 5376): 107517}
+_hipb = []
+
+
+def _mm(inputs, weight, out=None, world=1):
+    """torch.mm(inputs, weight, out=out), with the tuned hipBLASLt solution for SP2 shapes (RADEON_CORESW_SP_TUNED_GEMM)."""
+    index = _SP2_GEMM.get((weight.shape[1], weight.shape[0])) if world == 2 and inputs.shape[0] >= 16384 else None
+    if index is None or os.environ.get("RADEON_CORESW_SP_TUNED_GEMM", "1") != "1" or inputs.dtype != torch.bfloat16:
+        return torch.mm(inputs, weight, out=out)
+    if not _hipb:
+        from aiter.ops.gradlib import _hipb_mm, hipb_create_extension
+
+        hipb_create_extension()
+        _hipb.append(_hipb_mm)
+    if out is None:
+        out = torch.empty((inputs.shape[0], weight.shape[1]), device=inputs.device, dtype=inputs.dtype)
+    _hipb[0](inputs, weight, index, out, None, None, None, None, None, None)
+    return out
+
+
 class PairwiseExchange:
     """Ulysses all-to-all as W-1 rounds of pairwise send/recv; XOR partners when W is a power of two.
 
@@ -266,7 +289,7 @@ class SdmaEngine:
                 if full_gemm:
                     out.copy_(projected[index][:, dest * sh : (dest + 1) * sh])
                 else:
-                    torch.mm(inputs, weight[:, dest * sh : (dest + 1) * sh], out=out)
+                    _mm(inputs, weight[:, dest * sh : (dest + 1) * sh], out, w)
             if dest != me:
                 hip.write_value(stream.cuda_stream, self._theirs(dest, QKV_READY), epoch)
         del projected
@@ -320,7 +343,7 @@ class SdmaEngine:
                 stream.wait_event(self._pulled(src, index))
                 blocks[first:last, src].copy_(self.stage[src, first:last])
             if project is not None:
-                torch.mm(output[first:last], project, out=projected[first:last])
+                _mm(output[first:last], project, projected[first:last], w)
         self.unpacked.record(stream)
         return output if project is None else projected
 
@@ -359,7 +382,7 @@ def _down_projection(linear, inputs):
     step = (-(-columns // parts) + 127) // 128 * 128
     output = torch.empty((inputs.shape[0], columns), device=inputs.device, dtype=inputs.dtype)
     for first in range(0, columns, step):
-        torch.mm(inputs, weight[:, first : first + step], out=output[:, first : first + step])
+        _mm(inputs, weight[:, first : first + step], output[:, first : first + step])
     return output
 
 
@@ -401,7 +424,12 @@ def infer_block(owner, weights, hidden_states, pre_infer_out, modulation):
         if os.environ.get("RADEON_CORESW_SWIGLU", "1") == "1":
             from aiter.ops.gfx1201.h3_ops import swiglu
 
-            ffn = _down_projection(weights.ff.out_proj, swiglu(weights.ff.in_proj.apply(normed)))
+            up = weights.ff.in_proj
+            if type(up).__name__ == "MMWeight" and not up.has_lora_branch and getattr(up, "bias", None) is None:
+                up = _mm(normed, up._get_actual_weight(), world=exchange.world)
+            else:
+                up = up.apply(normed)
+            ffn = _down_projection(weights.ff.out_proj, swiglu(up))
         else:
             ffn = owner._ff(weights.ff, normed)
         return gated_residual(hidden_states, ffn, gate_mlp, indices)
