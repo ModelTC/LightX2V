@@ -156,9 +156,10 @@ class Flux2ModelBase(BaseModel):
         if image.ndim != 4:
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
         image = image.to(device=self.device, dtype=self.running_dtype)
-        distribution = self.vae.encode(image).latent_dist
-        latent = getattr(distribution, mode)()
-        return self._normalize_patch_latents(latent)
+        with self._active_vae() as vae:
+            distribution = vae.encode(image).latent_dist
+            latent = getattr(distribution, mode)()
+            return self._normalize_patch_latents(latent)
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
@@ -197,14 +198,15 @@ class Flux2ModelBase(BaseModel):
 
     def _encode_reference_images(self, images):
         latents = []
-        for image in images:
-            if image.ndim == 3:
-                image = image.unsqueeze(0)
-            if image.ndim != 4:
-                raise ValueError(f"Expected source image with shape [B, C, H, W], got {tuple(image.shape)}")
-            image = image.to(device=self.device, dtype=self.running_dtype)
-            latent = self.vae.encode(image).latent_dist.mode()
-            latents.append(self._normalize_patch_latents(latent))
+        with self._active_vae() as vae:
+            for image in images:
+                if image.ndim == 3:
+                    image = image.unsqueeze(0)
+                if image.ndim != 4:
+                    raise ValueError(f"Expected source image with shape [B, C, H, W], got {tuple(image.shape)}")
+                image = image.to(device=self.device, dtype=self.running_dtype)
+                latent = vae.encode(image).latent_dist.mode()
+                latents.append(self._normalize_patch_latents(latent))
 
         batch_size = latents[0].shape[0]
         if any(latent.shape[0] != batch_size for latent in latents):

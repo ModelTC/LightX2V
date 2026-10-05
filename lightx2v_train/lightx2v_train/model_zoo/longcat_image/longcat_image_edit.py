@@ -66,7 +66,8 @@ class LongCatImageEditModel(LongCatImageModel):
             raise ValueError(f"Expected one source image with shape [1, C, H, W], got {tuple(source_pixels.shape)}")
 
         source_pixels = source_pixels.to(device=self.device, dtype=self.running_dtype)
-        latents = self._normalize_latents(self.vae.encode(source_pixels).latent_dist.mode())
+        with self._active_vae() as vae:
+            latents = self._normalize_latents(vae.encode(source_pixels).latent_dist.mode())
         batch_size, channels, height, width = latents.shape
         tokens = self.pipeline_cls._pack_latents(latents, batch_size, channels, height, width)
         return tokens, height, width

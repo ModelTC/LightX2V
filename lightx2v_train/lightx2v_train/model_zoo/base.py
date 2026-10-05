@@ -1,5 +1,6 @@
 import json
 import os
+from contextlib import contextmanager
 
 import torch
 from diffusers.models.modeling_utils import SAFETENSORS_WEIGHTS_NAME, SAFE_WEIGHTS_INDEX_NAME
@@ -24,7 +25,7 @@ from lightx2v_train.model_zoo.capability_adapters.common import (
     CommonParallelCapability,
     CommonTrainableCapability,
 )
-from lightx2v_train.runtime.backend import get_device
+from lightx2v_train.runtime.backend import get_backend, get_device
 from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import is_fsdp2_module
 from lightx2v_train.utils.utils import get_running_dtype
@@ -134,6 +135,25 @@ class BaseModel(CapabilityProvider):
         if self.vae is not None:
             logger.info("[model] vae structure:\n{}", self.vae)
         logger.info("[model] denoiser structure:\n{}", self.denoiser_module())
+
+    @contextmanager
+    def _active_vae(self):
+        """Run VAE encoding on the model device without changing its residency."""
+        vae = self.vae
+        original_device = vae.device
+        should_move = original_device != self.device
+        backend = get_backend() if should_move else None
+        if backend is not None:
+            backend.synchronize()
+            backend.empty_cache()
+        try:
+            if should_move:
+                vae.to(self.device)
+            yield vae
+        finally:
+            if should_move:
+                vae.to(original_device)
+                backend.empty_cache()
 
     def encode_to_latent(self, sample):
         raise NotImplementedError
