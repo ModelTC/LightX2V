@@ -30,6 +30,11 @@ class AscendBackend(BaseBackend):
         self._load_extension()
         return getattr(torch, self.device_type, None)
 
+    def resolve_attention_backend(self, requested: str | None = None) -> str | None:
+        if requested is None or str(requested).lower() == "auto":
+            return "_native_npu"
+        return super().resolve_attention_backend(requested)
+
     def barrier_kwargs(self, process_group_backend: str) -> dict:
         backend = str(process_group_backend).lower()
         if backend == self.process_group_backend or backend.endswith(f":{self.process_group_backend}"):

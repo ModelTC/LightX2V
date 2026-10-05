@@ -1,6 +1,7 @@
 import json
 import os
 
+import torch
 from diffusers.models.modeling_utils import SAFETENSORS_WEIGHTS_NAME, SAFE_WEIGHTS_INDEX_NAME
 from diffusers.utils import convert_state_dict_to_diffusers
 from diffusers.utils.peft_utils import get_adapter_name
@@ -8,6 +9,7 @@ from huggingface_hub import split_torch_state_dict_into_shards
 from loguru import logger
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
+from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 
@@ -223,8 +225,96 @@ class BaseModel(CapabilityProvider):
         denoiser = self.denoiser_module()
         if adapter_name is None:
             adapter_name = get_adapter_name(denoiser)
-        denoiser.load_lora_adapter(lora_path, adapter_name=adapter_name)
+        load_kwargs = {"adapter_name": adapter_name}
+        local_weights = None
+        if isinstance(lora_path, (str, os.PathLike)) and os.path.isfile(lora_path):
+            path = os.path.abspath(lora_path)
+            load_kwargs["weight_name"] = os.path.basename(path)
+            local_weights = path
+            lora_path = os.path.dirname(path)
+        elif isinstance(lora_path, (str, os.PathLike)) and os.path.isdir(lora_path):
+            path = os.path.join(lora_path, "pytorch_lora_weights.safetensors")
+            if os.path.isfile(path):
+                local_weights = path
+                load_kwargs["weight_name"] = os.path.basename(path)
+        local_state = None
+        if isinstance(lora_path, dict):
+            local_state = lora_path
+        elif local_weights and local_weights.endswith(".safetensors"):
+            load_kwargs["use_safetensors"] = True
+            local_state = load_file(local_weights, device="cpu")
+        expected_state = None
+        if local_state is not None:
+            if not local_state:
+                raise RuntimeError("Cannot load an empty LoRA checkpoint.")
+            for key, value in local_state.items():
+                if isinstance(value, torch.Tensor) and not torch.isfinite(value).all().item():
+                    raise RuntimeError(f"LoRA checkpoint contains a non-finite tensor: {key}")
+            # Pipeline checkpoints namespace their transformer weights; the
+            # direct-model fallback saves parameter names without that prefix.
+            prefixed = any(key.startswith("transformer.") for key in local_state)
+            if not prefixed:
+                load_kwargs["prefix"] = None
+            normalized = {}
+            for key, value in local_state.items():
+                if prefixed and not key.startswith("transformer."):
+                    continue
+                key = key.removeprefix("transformer.")
+                key = key.replace(".lora.down.weight", ".lora_A.weight").replace(".lora.up.weight", ".lora_B.weight")
+                if key in normalized:
+                    raise RuntimeError(f"Duplicate normalized LoRA key: {key}")
+                normalized[key] = value
+            # Verify the standard formats emitted by the shared trainer.
+            # Diffusers retains ownership of other external-format conversions.
+            if normalized and all(key.endswith((".lora_A.weight", ".lora_B.weight")) for key in normalized):
+                expected_state = normalized
+                for key in expected_state:
+                    if key.endswith(".lora_A.weight"):
+                        paired_key = key.replace(".lora_A.weight", ".lora_B.weight")
+                    else:
+                        paired_key = key.replace(".lora_B.weight", ".lora_A.weight")
+                    if paired_key not in expected_state:
+                        raise RuntimeError(f"LoRA checkpoint is missing a paired tensor: {paired_key}")
+        if expected_state is not None:
+            # A shared checkpoint can mix PEFT keys with Diffusers up/down
+            # names. Normalize every tensor before Diffusers' first-key format
+            # detection, which otherwise skips part of a mixed checkpoint.
+            metadata = None
+            if local_weights:
+                with safe_open(local_weights, framework="pt", device="cpu") as weights:
+                    raw_metadata = (weights.metadata() or {}).get("lora_adapter_metadata")
+                if raw_metadata:
+                    metadata = json.loads(raw_metadata)
+                    if prefixed:
+                        metadata = {key.removeprefix("transformer."): value for key, value in metadata.items() if key.startswith("transformer.")}
+            load_kwargs["prefix"] = None
+            denoiser.load_lora_adapter(expected_state, adapter_name=adapter_name, prefix=None, metadata=metadata)
+        else:
+            denoiser.load_lora_adapter(lora_path, **load_kwargs)
+        if adapter_name not in getattr(denoiser, "peft_config", {}):
+            raise RuntimeError(f"LoRA adapter {adapter_name!r} was not loaded from {lora_path}.")
+        loaded_state = get_peft_model_state_dict(denoiser, adapter_name=adapter_name)
+        if not loaded_state:
+            raise RuntimeError(f"LoRA adapter {adapter_name!r} has no parameters after loading {lora_path}.")
+        if expected_state is not None and set(loaded_state) != set(expected_state):
+            missing = sorted(set(expected_state) - set(loaded_state))
+            unexpected = sorted(set(loaded_state) - set(expected_state))
+            raise RuntimeError(f"Incomplete LoRA load: missing={missing}, unexpected={unexpected}")
+        for key, value in loaded_state.items():
+            actual = value.detach().cpu()
+            if not torch.isfinite(actual).all().item():
+                raise RuntimeError(f"Loaded LoRA adapter contains a non-finite tensor: {key}")
+            if expected_state is not None:
+                expected = expected_state[key].to(dtype=actual.dtype, device="cpu")
+                if actual.shape != expected.shape or not torch.equal(actual, expected):
+                    raise RuntimeError(f"LoRA tensor was not loaded correctly: {key}")
         self._infer_lora_adapter_name = adapter_name
+        up_tensors = [value for key, value in loaded_state.items() if ".lora_B." in key]
+        nonzero_up = sum(bool(value.count_nonzero().item()) for value in up_tensors)
+        logger.info(
+            "Loaded inference LoRA from {} adapter={} prefix={} tensors={} nonzero_lora_B_tensors={}/{}",
+            lora_path, adapter_name, load_kwargs.get("prefix", "transformer"), len(loaded_state), nonzero_up, len(up_tensors),
+        )
 
     def unload_lora_for_infer(self):
         adapter_name = getattr(self, "_infer_lora_adapter_name", None)

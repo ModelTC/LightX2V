@@ -108,6 +108,10 @@ def _resolve_parallel_sizes(config, world_size):
 
 def init_distributed(config=None):
     device_backend = init_backend(config)
+    seed = (config or {}).get("runtime", {}).get("seed")
+    if seed is not None:
+        torch.manual_seed(int(seed))
+        device_backend.manual_seed_all(int(seed))
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         return
 

@@ -97,10 +97,11 @@ def main():
     try:
         sample_processor = build_sample_processor(config)
         model = build_model(config)
+        uses_cache_dataset = config.get("data", {}).get("val", {}).get("name") == "cache_dataset"
         model.load_components(
             load_transformer=True,
             load_vae=True,
-            load_condition_encoder=True,
+            load_condition_encoder=not uses_cache_dataset,
         )
         _load_full_checkpoint_for_infer(
             model,
