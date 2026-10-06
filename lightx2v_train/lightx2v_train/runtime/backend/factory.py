@@ -18,9 +18,8 @@ _AUTO_BACKENDS = ("nvidia",)
 _BACKEND: BaseBackend | None = None
 
 
-def _resolve_backend_name(config=None) -> str:
-    runtime_config = (config or {}).get("runtime", {})
-    value = runtime_config.get("platform") or os.getenv("PLATFORM")
+def _resolve_backend_name() -> str:
+    value = os.getenv("PLATFORM")
     if value is None or str(value).lower() == "auto":
         for name in _AUTO_BACKENDS:
             if _load_backend_class(name).is_available():
@@ -46,34 +45,30 @@ def _create_backend(name: str) -> BaseBackend:
     return _load_backend_class(name)()
 
 
-def init_backend(config=None) -> BaseBackend:
+def init_backend() -> BaseBackend:
     global _BACKEND
-    if _BACKEND is not None and config is None:
+    if _BACKEND is not None:
         return _BACKEND
 
-    name = _resolve_backend_name(config)
-    if _BACKEND is None:
-        backend = _create_backend(name)
-        local_rank = os.getenv("LOCAL_RANK")
-        backend.initialize(None if local_rank is None else int(local_rank))
-        _BACKEND = backend
-        logger.info(
-            "Backend initialized: name={} device={} process_group_backend={}",
-            backend.name,
-            backend.device,
-            backend.process_group_backend,
-        )
-    elif _BACKEND.name != name:
-        raise RuntimeError(f"Backend is already initialized as {_BACKEND.name!r}, not {name!r}.")
+    name = _resolve_backend_name()
+    backend = _create_backend(name)
+    local_rank = os.getenv("LOCAL_RANK")
+    backend.initialize(None if local_rank is None else int(local_rank))
+    _BACKEND = backend
+    logger.info(
+        "Backend initialized: name={} device={} process_group_backend={}",
+        backend.name,
+        backend.device,
+        backend.process_group_backend,
+    )
     return _BACKEND
 
 
 def get_backend() -> BaseBackend:
     if _BACKEND is None:
-        raise RuntimeError("Backend is not initialized; call init_backend(config) first.")
+        raise RuntimeError("Backend is not initialized; call init_backend() first.")
     return _BACKEND
 
 
-def get_device(config=None) -> torch.device:
-    backend = get_backend() if config is None else init_backend(config)
-    return backend.device
+def get_device() -> torch.device:
+    return init_backend().device

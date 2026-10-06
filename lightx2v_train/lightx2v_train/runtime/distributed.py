@@ -107,7 +107,7 @@ def _resolve_parallel_sizes(config, world_size):
 
 
 def init_distributed(config=None):
-    device_backend = init_backend(config)
+    device_backend = init_backend()
     seed = (config or {}).get("runtime", {}).get("seed")
     if seed is not None:
         torch.manual_seed(int(seed))

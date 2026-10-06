@@ -45,7 +45,7 @@ class BaseModel(CapabilityProvider):
         self.latent_dtype = get_running_dtype(model_config.get("latent_dtype", "fp32"))
         self.text_encoder_dtype = get_running_dtype(model_config.get("text_encoder_dtype", model_config["running_dtype"]))
         self.vae_dtype = get_running_dtype(model_config.get("vae_dtype", model_config["running_dtype"]))
-        self.device = get_device(config)
+        self.device = get_device()
         self.vae = None
         self.vae_config = None
         self.text_pipeline = None

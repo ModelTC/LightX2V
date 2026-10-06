@@ -1,6 +1,3 @@
-runtime:
-    platform: ascend_npu
-
 model:
     name: qwen_image
     pretrained_model_name_or_path: /data/wushuo1/models/Qwen-Image-2512
