@@ -144,6 +144,33 @@ class TokenResidualHead(nn.Module):
             return self.unpatchify(tokens, latent_shape)
 
 
+class PackedTokenResidualHead(TokenResidualHead):
+    """The same FP32 residual MLP on native ``[B, N, C]`` latent tokens.
+
+    H3 has different video/audio token widths and already patchified video;
+    neither modality may use Wan's patch-to-pixel permutation.
+    """
+
+    def __init__(self, feature_dim, latent_channels, patch_size=(1, 1, 1), hidden_dim=64):
+        if tuple(patch_size) != (1, 1, 1):
+            raise ValueError("Packed residual heads operate on already patchified tokens.")
+        super().__init__(feature_dim, latent_channels, patch_size, hidden_dim)
+
+    def _latent_grid(self, latent_shape, batch_size):
+        shape = tuple(latent_shape)
+        if len(shape) != 3 or any(isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in shape):
+            raise ValueError("Packed latent_shape must have positive [B, N, C] dimensions.")
+        if shape[0] != batch_size or shape[2] != self.latent_channels:
+            raise ValueError("Packed latent batch/channel dimensions do not match the residual head.")
+        return shape, (shape[1], 1, 1)
+
+    def unpatchify(self, tokens, latent_shape):
+        shape, _ = self._latent_grid(latent_shape, tokens.shape[0])
+        if tuple(tokens.shape) != shape:
+            raise ValueError("Packed residual features must contain exactly the generated modality rows.")
+        return tokens
+
+
 class NoiseBinGate(nn.Module):
     """Conservative EMA gate using independent held-out rounds per noise bin.
 

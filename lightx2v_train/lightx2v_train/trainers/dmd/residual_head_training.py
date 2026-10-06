@@ -157,20 +157,15 @@ class ResidualHeadTraining:
             raise ValueError("Residual-head DMD uses F-lambda*C-T directly; disable projected_dmd.")
         if get_sequence_parallel_world_size() != 1:
             raise ValueError("Residual-head DMD currently requires sequence_parallel.size=1.")
-        if not callable(getattr(trainer.fake_model, "predict_velocity_with_features", None)):
-            raise ValueError("Residual-head DMD requires a native Wan predict_velocity_with_features model.")
-        transformer = trainer.fake_model.transformer
         self.trainer = trainer
         self.config = config
         self.device = torch.device(trainer.student.device)
-        self.feature_dim = int(transformer.dim)
-        self.latent_channels = int(trainer.fake_model._latent_channels())
-        self.patch_size = tuple(trainer.fake_model.patch_size)
+        self.feature_dim, self.latent_channels, self.patch_size, head_type = self._head_spec(trainer)
         # CPU-only initialization restores the training RNG and gives every
         # rank exactly the same initial weights without seeding other GPUs.
         with torch.random.fork_rng(devices=[]):
             torch.random.default_generator.manual_seed(42)
-            self.module = TokenResidualHead(
+            self.module = head_type(
                 self.feature_dim,
                 self.latent_channels,
                 self.patch_size,
@@ -202,6 +197,18 @@ class ResidualHeadTraining:
         self._head_fit_microbatches = 0
         self._fit_history_complete = True
         self._last_fit_metrics = {}
+
+    def _head_spec(self, trainer):
+        if not callable(getattr(trainer.fake_model, "predict_velocity_with_features", None)):
+            raise ValueError("Residual-head DMD requires a native Wan predict_velocity_with_features model.")
+        return int(trainer.fake_model.transformer.dim), int(trainer.fake_model._latent_channels()), tuple(trainer.fake_model.patch_size), TokenResidualHead
+
+    def _report(self, event, report):
+        if _distributed_rank() == 0:
+            modality = getattr(self, "modality", None)
+            if modality is not None:
+                report = {"modality": modality, **report}
+            logger.info(f"[head][{event}] {{}}", json.dumps(report, separators=(",", ":"), allow_nan=False))
 
     def checkpoint_metadata(self):
         return {
@@ -415,8 +422,7 @@ class ResidualHeadTraining:
             "cumulative_any_rank_nonzero_correction_updates": self._nonzero_correction_updates,
             "usage_history_complete": self._usage_history_complete,
         }
-        if _distributed_rank() == 0:
-            logger.info("[head][student] {}", json.dumps(summary, separators=(",", ":"), allow_nan=False))
+        self._report("student", summary)
         self._student_records.clear()
         sample_count = summary["sample_count"]
         return {
@@ -494,8 +500,7 @@ class ResidualHeadTraining:
             "cumulative_microbatch_passes": self._head_fit_microbatches,
             "history_complete": self._fit_history_complete,
         }
-        if _distributed_rank() == 0:
-            logger.info("[head][fit] {}", json.dumps(report, separators=(",", ":"), allow_nan=False))
+        self._report("fit", report)
         self._last_fit_metrics = {
             "head_fit_optimizer_updates": len(groups),
             "head_fit_optimizer_updates_cumulative": self._head_optimizer_updates,
@@ -687,7 +692,7 @@ class ResidualHeadTraining:
                     "check_round_counts_after_update": self.gate.counts.cpu().tolist(),
                     "fresh_student_query_is_separate": True,
                 }
-                logger.info(f"[head][{name}] {{}}", json.dumps(report, separators=(",", ":"), allow_nan=False))
+                self._report(name, report)
         return {
             "head_heldout_fake_mse": validation["fake_mse"].mean().item(),
             "head_heldout_corrected_mse": validation["selected_lambda_mse"].mean().item(),

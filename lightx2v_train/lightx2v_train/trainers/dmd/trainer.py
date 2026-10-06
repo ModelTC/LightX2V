@@ -122,7 +122,12 @@ class DmdTrainer(_DmdRuntime):
         super().setup(resume_ckpt_path=None)
         self._setup_fake_real_resources()
         if self.residual_head_config.enabled:
-            self.residual_head = ResidualHeadTraining(self, self.residual_head_config)
+            if hasattr(self.fake_model, "residual_head_feature_dims"):
+                from .h3_residual_head_training import H3ResidualHeadTraining
+
+                self.residual_head = H3ResidualHeadTraining(self, self.residual_head_config)
+            else:
+                self.residual_head = ResidualHeadTraining(self, self.residual_head_config)
             logger.info(
                 "[train] residual head enabled config={} schedule=fake_fit->head_fit->independent_heldout->student; additional compute is not matched to baseline",
                 self.residual_head.checkpoint_metadata(),

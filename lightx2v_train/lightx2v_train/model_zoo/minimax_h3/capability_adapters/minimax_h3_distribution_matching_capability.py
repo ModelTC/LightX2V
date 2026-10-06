@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -262,6 +263,26 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         return broadcast(condition), None
 
     def predict_velocity(self, latents, sigma, condition):
+        return self._predict_velocity(latents, sigma, condition, capture_features=False)
+
+    @torch.no_grad()
+    def predict_velocity_with_features(self, latents, sigma, condition):
+        """Capture target-only final projection inputs in the same fake forward.
+
+        H3 projects the *whole* packed sequence, then selects modality rows.
+        Selection here also removes reference rows; text/reference features
+        must never become residual-head training targets. Hooks are temporary
+        and operate on ordinary forward calls, so FSDP pre/post hooks still run.
+        """
+        if get_sequence_parallel_world_size() != 1:
+            raise ValueError("H3 residual-head features currently require sequence_parallel.size=1.")
+        return self._predict_velocity(latents, sigma, condition, capture_features=True)
+
+    def residual_head_sigmas(self, sigma):
+        video, audio = self._modality_sigmas(sigma)
+        return {"video": video, "audio": audio}
+
+    def _predict_velocity(self, latents, sigma, condition, *, capture_features):
         self._validate_latents(latents)
         video_sigma, audio_sigma = self._modality_sigmas(sigma)
         layout = self._layout(condition, latents.shape)
@@ -282,7 +303,30 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
             if rows.shape[0] != layout.num_condition_audio_rows:
                 raise ValueError("H3 cached audio rows do not match the packed sequence.")
             transformer_audio = torch.cat((rows.to(latents.audio).unsqueeze(0), latents.audio), dim=1)
-        with self.model.transformer_forward_context():
+        features = {}
+        with ExitStack() as stack:
+            if capture_features:
+                transformer = self.model.transformer
+
+                def capture(name, indices):
+                    def hook(module, inputs):
+                        del module
+                        value = inputs[0]
+                        if value.ndim != 3 or value.shape[1] != layout.token_tags.numel():
+                            raise ValueError("H3 HEAD expects full packed projection inputs [B, sequence, hidden].")
+                        # index_select makes a target-only allocation; do not
+                        # retain the much larger combined reference/text buffer.
+                        features[name] = value.detach().index_select(1, indices.to(value.device))
+
+                    return hook
+
+                for name, projection, indices in (
+                    ("video", transformer.proj_out, layout.video_indices[layout.num_condition_video_rows :]),
+                    ("audio", transformer.audio_proj_out, layout.audio_indices[layout.num_condition_audio_rows :]),
+                ):
+                    handle = projection.register_forward_pre_hook(capture(name, indices))
+                    stack.callback(handle.remove)
+            stack.enter_context(self.model.transformer_forward_context())
             prediction = self.model.denoiser_module()(
                 hidden_states=transformer_video,
                 audio_hidden_states=transformer_audio,
@@ -298,11 +342,17 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
             )
         if not isinstance(prediction, (tuple, list)) or len(prediction) < 2:
             raise TypeError("MiniMax-H3 transformer must return (video_velocity, audio_velocity) when return_dict=False.")
-        return MiniMaxH3JointLatents(
+        velocity = MiniMaxH3JointLatents(
             video=prediction[0][:, layout.num_condition_video_rows :],
             audio=prediction[1][:, layout.num_condition_audio_rows :],
             shape=latents.shape,
         )
+        if capture_features:
+            for name in ("video", "audio"):
+                if name not in features or features[name].shape[:2] != getattr(velocity, name).shape[:2]:
+                    raise ValueError(f"H3 residual-head {name} features do not match target velocity rows.")
+            return velocity, features
+        return velocity
 
     def predict_guided_velocity(
         self,

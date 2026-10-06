@@ -4,6 +4,8 @@
 Run the accompanying shell script. Environment: WAN_DMD_PYTHON, WAN_DMD_MODEL,
 WAN_DMD_TEACHER, WAN_DMD_PROMPTS, WAN_DMD_RUN_ROOT; DMD_GPUS/PDMD_GPUS/HEAD_GPUS.
 WAN_DMD_GRAD_ACCUM defaults to 16 and controls student/fake and head fitting.
+WAN_DMD_STUDENT_TRAIN_TYPE defaults to full; lora uses rank 128, alpha 8 on
+q/k/v/o/ffn.0/ffn.2 while leaving the fake model fully trainable.
 WAN_DMD_PRECISION_PROFILE defaults to fp32_sdpa; bf16_fa3 uses FP32 master
 weights and BF16 mixed-precision compute for all DiTs, requiring FA3. Only the
 FP32 profile retries all groups with a BF16 teacher after actual CUDA OOM.
@@ -47,6 +49,13 @@ def precision_profile(paths=None):
     return value
 
 
+def student_train_type(paths=None):
+    value = (paths or {}).get("WAN_DMD_STUDENT_TRAIN_TYPE", os.getenv("WAN_DMD_STUDENT_TRAIN_TYPE", "full"))
+    if value not in {"full", "lora"}:
+        raise ValueError("WAN_DMD_STUDENT_TRAIN_TYPE must be full or lora")
+    return value
+
+
 def attempt_name(dtype, paths):
     return "mixed_bf16_fa3" if precision_profile(paths) == "bf16_fa3" else f"teacher_{dtype}"
 
@@ -72,7 +81,15 @@ def resolved_config(group, dtype, output, paths):
         accumulation = gradient_accumulation()
         result = load_config(str(CONFIG))
     profile = precision_profile(paths)
+    student_mode = student_train_type(paths)
     training, model = result["training"], result["model"]
+    if student_mode == "lora":
+        training["student"]["train_type"] = "lora"
+        training["student"]["lora"] = {
+            "rank": 128,
+            "alpha": 8,
+            "target_modules": ["q", "k", "v", "o", "ffn.0", "ffn.2"],
+        }
     if profile == "bf16_fa3":
         if dtype != "bf16":
             raise ValueError("bf16_fa3 requires BF16 compute; it has no FP32 attempt or precision fallback")
@@ -87,7 +104,8 @@ def resolved_config(group, dtype, output, paths):
     assert training["gradient_accumulation_iters"] == accumulation
     assert training["dmd"]["residual_head"]["fit_steps"] == accumulation
     assert training["dmd"]["residual_head"]["fit_grad_accum_steps"] == accumulation
-    assert training["student"]["train_type"] == training["fake"]["train_type"] == "full"
+    assert training["student"]["train_type"] == student_mode
+    assert training["fake"]["train_type"] == "full"
     assert training["teacher"]["guidance_scale"] == 5
     if profile == "fp32_sdpa":
         assert model["running_dtype"] == model["transformer_param_dtype"] == "fp32"
@@ -259,7 +277,10 @@ def run_attempt(root, dtype, gpu_groups, paths):
                 )
             jobs[group] = {"process": process, "log": log_path}
             (output / "launcher.pid").write_text(f"{process.pid}\n")
-            print(f"START group={group} profile={precision_profile(paths)} teacher_compute={dtype} pid={process.pid} GPUs={gpu_groups[group]} log={log_path}", flush=True)
+            print(
+                f"START group={group} student={student_train_type(paths)} fake=full profile={precision_profile(paths)} teacher_compute={dtype} pid={process.pid} GPUs={gpu_groups[group]} log={log_path}",
+                flush=True,
+            )
         reported = set()
         while True:
             if STOP_REQUESTED:
@@ -290,6 +311,7 @@ def main():
     try:
         accumulation = gradient_accumulation()
         profile = precision_profile()
+        student_mode = student_train_type()
     except ValueError as error:
         parser.error(str(error))
     paths = {
@@ -298,11 +320,12 @@ def main():
         "WAN_DMD_PROMPTS": os.getenv("WAN_DMD_PROMPTS", "/data/nvme4/gushiqiao/new/Causal-Forcing/prompts/vidprom_filtered_extended.txt"),
         "WAN_DMD_GRAD_ACCUM": str(accumulation),
         "WAN_DMD_PRECISION_PROFILE": profile,
+        "WAN_DMD_STUDENT_TRAIN_TYPE": student_mode,
     }
     dtype = "bf16" if profile == "bf16_fa3" else "fp32"
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     suffix = "_bf16_fa3" if profile == "bf16_fa3" else ""
-    root = Path(os.getenv("WAN_DMD_RUN_ROOT", str(TRAIN_ROOT.parent / "outputs" / f"wan21_14b_full_acc{accumulation}{suffix}_{stamp}_{os.getpid()}"))).resolve()
+    root = Path(os.getenv("WAN_DMD_RUN_ROOT", str(TRAIN_ROOT.parent / "outputs" / f"wan21_14b_{student_mode}_acc{accumulation}{suffix}_{stamp}_{os.getpid()}"))).resolve()
     gpu_groups = dict(zip(GROUPS, (os.getenv("DMD_GPUS", "0,1"), os.getenv("PDMD_GPUS", "2,3"), os.getenv("HEAD_GPUS", "5,6"))))
     selected = []
     for value in gpu_groups.values():
@@ -313,7 +336,7 @@ def main():
         parser.error("GPU groups must be disjoint")
     if root.exists():
         parser.error(f"Fresh output required, refusing existing run root: {root}")
-    print(f"Run root: {root}\n10000 iterations; full student/fake; accumulation {accumulation}; teacher CFG5.", flush=True)
+    print(f"Run root: {root}\n10000 iterations; {student_mode} student/full fake; accumulation {accumulation}; teacher CFG5.", flush=True)
     print("Precision: " + json.dumps(precision_description(dtype, paths)), flush=True)
     print(f"GPU groups: {gpu_groups}; PDMD student→critic 1:1; DMD/head critic→student 5:1", flush=True)
     if args.dry_run:

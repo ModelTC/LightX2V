@@ -32,15 +32,62 @@ GPU_GROUPS = {"dmd": "0,1", "pdmd": "2,3", "head": "5,6"}
 
 
 class Wan14bConfigTest(unittest.TestCase):
-    def config(self, group="dmd", dtype="fp32", accumulation=16, profile="fp32_sdpa"):
-        paths = {**PATHS, "WAN_DMD_GRAD_ACCUM": str(accumulation), "WAN_DMD_PRECISION_PROFILE": profile}
+    def config(self, group="dmd", dtype="fp32", accumulation=16, profile="fp32_sdpa", student_train_type="full"):
+        paths = {
+            **PATHS,
+            "WAN_DMD_GRAD_ACCUM": str(accumulation),
+            "WAN_DMD_PRECISION_PROFILE": profile,
+            "WAN_DMD_STUDENT_TRAIN_TYPE": student_train_type,
+        }
         return launcher.resolved_config(group, dtype, Path("/fixture/output"), paths)
 
     def test_default_accumulation_remains_sixteen(self):
         with patch.dict(os.environ, PATHS):
             os.environ.pop("WAN_DMD_GRAD_ACCUM", None)
+            os.environ.pop("WAN_DMD_STUDENT_TRAIN_TYPE", None)
             config = launcher.resolved_config("head", "fp32", Path("/fixture/output"), PATHS)
         self.assertEqual(config, self.config("head"))
+
+    def test_default_student_mode_keeps_legacy_full_config(self):
+        for group in launcher.GROUPS:
+            with self.subTest(group=group), patch.dict(os.environ, PATHS):
+                os.environ.pop("WAN_DMD_STUDENT_TRAIN_TYPE", None)
+                os.environ.pop("WAN_DMD_GRAD_ACCUM", None)
+                os.environ.pop("WAN_DMD_PRECISION_PROFILE", None)
+                default = launcher.resolved_config(group, "fp32", Path("/fixture/output"), PATHS)
+                self.assertEqual(default, self.config(group))
+                self.assertEqual(default["training"]["student"]["train_type"], "full")
+                self.assertNotIn("lora", default["training"]["student"])
+
+    def test_lora_changes_only_student_training_mode_and_adapter(self):
+        expected_lora = {
+            "rank": 128,
+            "alpha": 8,
+            "target_modules": ["q", "k", "v", "o", "ffn.0", "ffn.2"],
+        }
+        for group in launcher.GROUPS:
+            for dtype, profile in (("fp32", "fp32_sdpa"), ("bf16", "fp32_sdpa"), ("bf16", "bf16_fa3")):
+                with self.subTest(group=group, dtype=dtype, profile=profile):
+                    original = self.config(group, dtype, accumulation=1, profile=profile)
+                    lora = self.config(group, dtype, accumulation=1, profile=profile, student_train_type="lora")
+                    training = lora["training"]
+                    self.assertEqual(training["student"]["train_type"], "lora")
+                    self.assertEqual(training["student"].pop("lora"), expected_lora)
+                    self.assertEqual(training["fake"]["train_type"], "full")
+                    self.assertNotIn("lora", training["fake"])
+                    self.assertEqual(training["student"]["optimizer"]["learning_rate"], 5e-5)
+                    self.assertEqual(training["student"]["ema"], {"enabled": True, "decay": 0.99, "use_for_inference": True})
+                    self.assertEqual(training["dmd"]["update_order"], "student_first" if group == "pdmd" else "fake_first")
+                    self.assertEqual(training["dmd"]["fake_update_ratio"], 1 if group == "pdmd" else 5)
+                    training["student"]["train_type"] = "full"
+                    # Exact equality protects precision, teacher CFG/path,
+                    # fake optimizer, head fitting, sampling and EMA behavior.
+                    self.assertEqual(original, lora)
+
+    def test_invalid_student_mode_rejected(self):
+        for value in ("", "FULL", "LoRA", "peft", "true"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "WAN_DMD_STUDENT_TRAIN_TYPE must be full or lora"):
+                self.config(student_train_type=value)
 
     def test_acc1_changes_only_three_accumulation_and_head_fit_fields(self):
         for group in launcher.GROUPS:
@@ -197,7 +244,9 @@ class Wan14bLauncherTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "new_run"
-        self.env = dict(PATHS, WAN_DMD_GRAD_ACCUM="16", WAN_DMD_PRECISION_PROFILE="fp32_sdpa", WAN_DMD_RUN_ROOT=str(self.root), DMD_GPUS="0,1", PDMD_GPUS="2,3", HEAD_GPUS="5,6")
+        self.env = dict(
+            PATHS, WAN_DMD_GRAD_ACCUM="16", WAN_DMD_PRECISION_PROFILE="fp32_sdpa", WAN_DMD_STUDENT_TRAIN_TYPE="full", WAN_DMD_RUN_ROOT=str(self.root), DMD_GPUS="0,1", PDMD_GPUS="2,3", HEAD_GPUS="5,6"
+        )
 
     def main_context(self, flags=()):
         stack = ExitStack()
@@ -243,6 +292,25 @@ class Wan14bLauncherTest(unittest.TestCase):
     def test_invalid_precision_profile_rejected_before_preflight(self):
         self.env["WAN_DMD_PRECISION_PROFILE"] = "auto"
         with self.main_context(["--dry-run"]), self.assertRaises(SystemExit) as raised:
+            launcher.main()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertFalse(self.root.exists())
+
+    def test_lora_wrapper_forces_lora_acc1_mixed_precision_without_launching(self):
+        wrapper = TRAIN_ROOT / "scripts/run_wan21_dmd_pdmd_head_14b_lora_acc1_bf16_fa3_fsdp2.sh"
+        environment = {**os.environ, **self.env, "WAN_DMD_PYTHON": sys.executable}
+        result = subprocess.run(["bash", str(wrapper), "--dry-run"], env=environment, capture_output=True, text=True, check=True)
+        self.assertIn("lora student", result.stdout)
+        self.assertIn("full fake", result.stdout)
+        self.assertIn("accumulation 1", result.stdout)
+        self.assertIn('"precision_profile": "bf16_fa3"', result.stdout)
+        self.assertIn('"attention_backend": "flash_attention_3"', result.stdout)
+        self.assertIn("Dry run: config checked, no GPU checks/writes/training.", result.stdout)
+        self.assertFalse(self.root.exists())
+
+    def test_invalid_student_mode_rejected_before_preflight(self):
+        self.env["WAN_DMD_STUDENT_TRAIN_TYPE"] = "peft"
+        with self.main_context(["--dry-run"]), patch.object(launcher, "preflight", side_effect=AssertionError("GPU operation")), self.assertRaises(SystemExit) as raised:
             launcher.main()
         self.assertEqual(raised.exception.code, 2)
         self.assertFalse(self.root.exists())

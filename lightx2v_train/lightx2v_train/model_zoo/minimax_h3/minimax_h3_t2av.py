@@ -272,6 +272,28 @@ class MiniMaxH3T2AVModel(BaseModel):
     def denoiser_module(self):
         return self.transformer
 
+    @property
+    def residual_head_feature_dims(self):
+        return {
+            "video": int(self.transformer.proj_out.in_features),
+            "audio": int(self.transformer.audio_proj_out.in_features),
+        }
+
+    @property
+    def residual_head_output_dims(self):
+        return {
+            "video": int(self.transformer.proj_out.out_features),
+            "audio": int(self.transformer.audio_proj_out.out_features),
+        }
+
+    def residual_head_sigmas(self, sigma):
+        capability = self.ensure_capabilities().require(DistributionMatchingCapability)
+        return capability.residual_head_sigmas(sigma)
+
+    def predict_velocity_with_features(self, latents, sigma, condition):
+        capability = self.ensure_capabilities().require(DistributionMatchingCapability)
+        return capability.predict_velocity_with_features(latents, sigma, condition)
+
     def transformer_forward_context(self):
         if self.use_autocast and self.device.type == "cuda" and self.running_dtype in {torch.float16, torch.bfloat16}:
             return torch.autocast("cuda", dtype=self.running_dtype)
