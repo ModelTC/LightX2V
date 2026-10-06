@@ -14,6 +14,12 @@ Each feature is on by default and disabled with RADEON_CORESW_<NAME>=0:
 - FP32_CONV_ROCBLAS: FP32 convolutions (VAE im2col GEMMs) on rocBLAS; hipBLASLt picks a per-process FP32 kernel,
   which makes outputs differ from run to run.
 - WARMUP: initialize the BLAS libraries and the Triton cache key on a side thread.
+
+Opt-in and lossy (off unless set):
+- RADEON_CORESW_STEP_CACHE=skip:<i,j,...> reuses the transformer-stack residual (output - input hidden rows of the last
+  computed step) on the listed scheduler steps instead of running the blocks (20 steps: skip:8,10,12,14,16).
+  RADEON_CORESW_STEP_CACHE_AUDIO=taylor: on those steps the generated-audio rows get a first-order forecast in the audio
+  sigma from the last two computed residuals instead (plain reuse lowers the audio level by 2-4 %).
 """
 
 import os
@@ -387,6 +393,59 @@ def _patch_stream_save(module):
     cls.process_images_after_vae_decoder = process_images_after_vae_decoder
 
 
+def _patch_step_cache(module):
+    import torch
+
+    kind, _, steps = os.environ["RADEON_CORESW_STEP_CACHE"].partition(":")
+    skip = {int(step) for step in steps.split(",") if step}
+    if kind != "skip" or not skip:
+        raise ValueError("RADEON_CORESW_STEP_CACHE expects skip:<i,j,...>, e.g. skip:8,10,12,14,16 for 20 steps")
+    audio_forecast = os.environ.get("RADEON_CORESW_STEP_CACHE_AUDIO") == "taylor"
+
+    @torch.no_grad()
+    def _infer_cond_uncond(self, inputs, infer_condition=True):
+        if not infer_condition:
+            raise ValueError("MiniMax-H3 does not execute an unconditional pass")
+        prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
+        pre = self.pre_infer.infer(self.pre_weight, prompt_embeds)
+        if self.config.get("seq_parallel", False):
+            pre = self._seq_parallel_pre_process(pre)
+        state = self.__dict__.setdefault("_radeon_step_cache", {})
+        step, x = self.scheduler.step_index, pre.hidden_states
+        if step in skip and "residual" in state:
+            if getattr(self.transformer_infer, "use_adaln_cache", False):
+                self.transformer_infer._prepare_adaln_cache(pre)  # post_infer reads this step's final-norm modulation
+            residual = state["residual"]
+            hidden_states = x + residual
+            if audio_forecast and "older_audio" in state:
+                rows, (s2, r2), s1 = state["audio_rows"], state["older_audio"], state["audio_sigma"]
+                r1 = residual.index_select(0, rows)
+                slope = (float(self.scheduler.audio_sigmas[step]) - s1) / (s1 - s2)
+                hidden_states.index_copy_(0, rows, x.index_select(0, rows) + r1 + (r1 - r2) * slope)
+        else:
+            hidden_states = self.transformer_infer.infer(self.transformer_weights, pre)
+            compute = getattr(getattr(self.transformer_infer, "offload_manager", None), "compute_stream", None)
+            if compute is not None:  # the residual is taken on this stream
+                torch.cuda.current_stream().wait_stream(compute)
+            if audio_forecast:
+                if "audio_rows" not in state:  # generated-audio rows of this rank's contiguous SP shard
+                    layout, sp = self.scheduler.layout, pre.sequence_parallel_state
+                    rows = layout.audio_indices[layout.num_condition_audio_rows :].to(x.device)
+                    if sp is not None:
+                        start = sp.exchange.offsets[sp.exchange.rank]
+                        rows = rows[(rows >= start) & (rows < start + x.shape[0])] - start
+                    state["audio_rows"] = rows
+                if "residual" in state:
+                    state["older_audio"] = (state["audio_sigma"], state["residual"].index_select(0, state["audio_rows"]))
+                state["audio_sigma"] = float(self.scheduler.audio_sigmas[step])
+            state["residual"] = hidden_states - x
+        if self.config.get("seq_parallel", False):
+            hidden_states = self._seq_parallel_post_process(hidden_states, pre)
+        return self.post_infer.infer(self.post_weight, hidden_states, pre)
+
+    module.MiniMaxH3Model._infer_cond_uncond = _infer_cond_uncond
+
+
 def _warm_libraries():
     import threading
 
@@ -467,3 +526,5 @@ def install(config):
         _patch_fp32_conv_rocblas(runner)
     if _enabled("WARMUP"):
         _warm_libraries()
+    if os.environ.get("RADEON_CORESW_STEP_CACHE"):
+        _patch_step_cache(importlib.import_module("lightx2v.models.networks.minimax_h3.model"))
