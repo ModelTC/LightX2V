@@ -21,4 +21,4 @@ torchrun \
     --standalone \
     --nproc_per_node=8 \
     train.py \
-    --config configs/train/flow/qwen_image_lora_ascend_fsdp2_cache.yaml
+    --config configs/train/flow/qwen_image_lora_fsdp2_cache.yaml

@@ -21,4 +21,4 @@ torchrun \
     --standalone \
     --nproc_per_node=8 \
     infer.py \
-    --config configs/infer/qwen_image_lora_ascend_fsdp2.yaml
+    --config configs/infer/qwen_image_lora_fsdp2.yaml
