@@ -1,6 +1,3 @@
-runtime:
-    platform: ascend_npu
-
 distributed:
     backend: auto
     timeout_minutes: 60

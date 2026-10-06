@@ -39,7 +39,7 @@ class BaseModel(CapabilityProvider):
         super().__init__()
         self.config = config
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
-        self.device = get_device(config)
+        self.device = get_device()
         self.vae = None
         self.vae_config = None
         self.text_pipeline = None

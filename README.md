@@ -174,6 +174,16 @@ uv pip install -v . # pip install -v .
 ### (Optional) Install Attention/Quantize Operators
 For attention operators installation, please refer to our documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html#step-4-install-attention-operators) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id9)**
 
+### Training Platform
+
+For cache building, training, and inference in `lightx2v_train`, select the platform with the `PLATFORM` environment variable. Before launching on Ascend, run:
+
+```bash
+export PLATFORM=ascend_npu
+```
+
+`runtime.platform` in YAML is not used for platform selection. If `PLATFORM` is unset or `auto`, the runtime uses CUDA when available and otherwise CPU.
+
 ### Usage Example
 
 See the [MiniMax-H3 guide](scripts/minimax_h3/README.md) for checkpoint layout, local LoRA paths, CLI presets, and server/POST examples.
