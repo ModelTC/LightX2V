@@ -16,6 +16,7 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
         else:
             tp_size = 1
         self.heads = config["num_attention_heads"] // tp_size
+        self.head_dim = config["attention_head_dim"]
         self.use_fused_qk_rms_norm = config.get("fused_qk_rms_norm", True)
         self.use_fused_block_ops = config.get("fused_block_ops", True) and config.get("modulate_type", "triton") == "triton"
         self.fused_block_min_tokens = config.get("fused_block_min_tokens", 1024)
@@ -46,7 +47,7 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
 
     def _qkv(self, block, x, scale, rotary, rotary_positions):
         h = block.norm1.apply(x) * scale
-        q = block.q.apply(h).reshape(-1, self.heads, self.config["attention_head_dim"])
+        q = block.q.apply(h).reshape(-1, self.heads, self.head_dim)
         k = block.k.apply(h).reshape_as(q)
         v = block.v.apply(h).reshape_as(q)
         q, k = apply_qk_rms_norm(q, k, block.norm_q, block.norm_k, use_triton=self.use_fused_qk_rms_norm)
@@ -70,7 +71,7 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
         """Run one condition-prefix block and store its K/V."""
         q, k, v = self._qkv(block, x, modulation[0], state.rotary, state.rotary_positions)
         cache.store_kv(k, v, index)
-        attention = x.new_empty((x.shape[0], self.heads * self.config["attention_head_dim"]))
+        attention = x.new_empty((x.shape[0], self.heads * self.head_dim))
         for begin, end, is_text in state.layout.segments:
             mask = None
             if is_text:
@@ -134,5 +135,6 @@ class QwenImage21TransformerInfer(BaseTransformerInfer):
         """Denoise only target tokens, attending to the prefilled condition K/V."""
         if not cache.is_ready():
             raise RuntimeError("Condition KV must be prefilled before denoising")
+        # Shared across every block; kept outside the compiled block graph.
         modulation = self._modulation(state)
         return self._infer_blocks(weights.blocks, state.hidden_states, modulation, state, cache)

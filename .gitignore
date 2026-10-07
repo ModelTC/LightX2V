@@ -18,6 +18,7 @@
 **.swp
 .vscode/
 .env
+.venvs/
 .log
 *.pid
 *.ipynb*

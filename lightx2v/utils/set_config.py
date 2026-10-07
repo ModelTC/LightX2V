@@ -190,9 +190,7 @@ def load_model_config(config):
             if not config.get("dit_original_ckpt"):
                 raise ValueError("MiniMax-H3 causal inference requires dit_original_ckpt pointing to the causal checkpoint")
             config.pop("model_variant", None)
-            # Read only the shared H3 architecture config here; causal weights
-            # are loaded from dit_original_ckpt.
-            transformer_subfolder = "transformer"
+            transformer_subfolder = "transformer_ref"
         else:
             model_variant = config.get("model_variant")
             if model_variant not in ("fl2av", "ref2av"):

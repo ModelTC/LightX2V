@@ -53,6 +53,7 @@ class BaseTaskRequest(BaseModel):
 
 
 class VideoTaskRequest(BaseTaskRequest):
+    action_prompts: dict[str, Any] | list[Any] | None = Field(None, description="MiniMax-H3 causal action cues: seconds -> actions, or a list of timed actions")
     num_frames: Optional[int] = Field(
         None,
         description="Number of output frames; defaults to the startup config",

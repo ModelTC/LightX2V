@@ -1,4 +1,3 @@
-import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
@@ -9,6 +8,7 @@ from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
 )
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
 from lightx2v.models.networks.minimax_h3.weights.fused_qkv import FusedQKVStorage
+from lightx2v.utils.envs import DTYPE_MAP
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -86,13 +86,15 @@ class MiniMaxH3AttentionWeights(WeightModule):
             "rope",
             ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](
                 layout="split_half",
-                compute_dtype=torch.float32,
+                compute_dtype=DTYPE_MAP[config.get("rope_compute_dtype", "fp32")],
             ),
         )
         attn_type = config.get("attn_type", "flash_attn3")
         attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
         if attn_type == "dynamic_sparse_attn":
             calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
+        elif attn_type == "torch_sdpa_mps":
+            calculate = attention_cls(query_chunk_size=config.get("mps_sdpa_query_chunk_size", 0))
         else:
             calculate = attention_cls()
         if attn_type == "sol_attn":

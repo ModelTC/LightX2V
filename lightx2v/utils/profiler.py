@@ -54,12 +54,15 @@ def no_sync_profiling(enabled: bool = True):
 
 
 class _ProfilingContext:
-    def __init__(self, name, recorder_mode=0, metrics_func=None, metrics_labels=None, profile_memory=False):
+    def __init__(self, name, recorder_mode=0, metrics_func=None, metrics_labels=None, profile_memory=False, time_unit="seconds"):
         """
         recorder_mode = 0: disable recorder
         recorder_mode = 1: enable recorder
         recorder_mode = 2: enable recorder and force disable logger
         """
+        if time_unit not in ("seconds", "ms"):
+            raise ValueError(f"Unsupported time_unit: {time_unit!r}; expected 'seconds' or 'ms'.")
+        self.time_unit = time_unit
         self.name = name
         self.rank_info = "Single GPU"
         self.enable_recorder = recorder_mode > 0
@@ -162,7 +165,8 @@ class _ProfilingContext:
                 self.metrics_func.observe(elapsed)
         if self.enable_logger:
             suffix = " (non-sync)" if self._skip_sync else ""
-            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds{memory_suffix}{suffix}")
+            display_elapsed = elapsed * 1000 if self.time_unit == "ms" else elapsed
+            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {display_elapsed:.6f} {self.time_unit}{memory_suffix}{suffix}")
         return False
 
     async def __aenter__(self):
@@ -189,7 +193,8 @@ class _ProfilingContext:
                 self.metrics_func.observe(elapsed)
         if self.enable_logger:
             suffix = " (non-sync)" if self._skip_sync else ""
-            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds{memory_suffix}{suffix}")
+            display_elapsed = elapsed * 1000 if self.time_unit == "ms" else elapsed
+            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {display_elapsed:.6f} {self.time_unit}{memory_suffix}{suffix}")
         return False
 
     def __call__(self, func):
@@ -301,15 +306,15 @@ class _ExcludedProfilingContext:
 class _ProfilingContextL1(_ProfilingContext):
     """Level 1 profiling context with Level1_Log prefix."""
 
-    def __init__(self, name, recorder_mode=0, metrics_func=None, metrics_labels=None, profile_memory=False):
-        super().__init__(f"Level1_Log {name}", recorder_mode, metrics_func, metrics_labels, profile_memory)
+    def __init__(self, name, recorder_mode=0, metrics_func=None, metrics_labels=None, profile_memory=False, time_unit="seconds"):
+        super().__init__(f"Level1_Log {name}", recorder_mode, metrics_func, metrics_labels, profile_memory, time_unit=time_unit)
 
 
 class _ProfilingContextL2(_ProfilingContext):
     """Level 2 profiling context with Level2_Log prefix."""
 
-    def __init__(self, name, recorder_mode=0, metrics_func=None, metrics_labels=None, profile_memory=False):
-        super().__init__(f"Level2_Log {name}", recorder_mode, metrics_func, metrics_labels, profile_memory)
+    def __init__(self, name, recorder_mode=0, metrics_func=None, metrics_labels=None, profile_memory=False, time_unit="seconds"):
+        super().__init__(f"Level2_Log {name}", recorder_mode, metrics_func, metrics_labels, profile_memory, time_unit=time_unit)
 
 
 """

@@ -98,6 +98,8 @@ class MinMaxNormalizer(LinearNormalizer):
 
 
 class FastWAMPolicy:
+    model_class = FastWAMNativeModel
+
     def __init__(
         self,
         adapter_model_path=None,
@@ -169,7 +171,7 @@ class FastWAMPolicy:
         self.state_normalizer, self.action_normalizer = self._load_normalizers()
         self.text_encoder = self._load_text_encoder()
         self.vae = self._load_vae()
-        self.model = FastWAMNativeModel(
+        self.model = self.model_class(
             model_path=str(self.model_path),
             config=self.config,
             device=self.device,
@@ -279,6 +281,9 @@ class FastWAMPolicy:
             action_infer_steps=self.action_infer_steps,
             seed=self.seed if seed is None else seed,
         )
+        return self._postprocess_actions(action)
+
+    def _postprocess_actions(self, action):
         action = self.action_normalizer.backward(action).numpy()
         if self.gripper_postprocess:
             # LIBERO single-gripper channel: map [0,1] -> [-1,1], flip sign, optional binarize.
@@ -378,15 +383,17 @@ class FastWAMPolicy:
 
 @RUNNER_REGISTER("fastwam")
 class FastWAMRunner(BaseRunner):
+    policy_class = FastWAMPolicy
+
     supported_request_fields_by_task = {
         "i2va": COMMON_REQUEST_FIELDS | {"image_path", "prompt", "save_action_path", "state_path"},
     }
 
     def init_modules(self):
-        logger.info("Loading FastWAM policy...")
-        self.policy = FastWAMPolicy.from_config(self.config)
+        logger.info("Loading {}...", self.policy_class.__name__)
+        self.policy = self.policy_class.from_config(self.config)
         self.config.lock()
-        logger.info("FastWAM policy loaded.")
+        logger.info("{} loaded.", self.policy_class.__name__)
 
     def _resolve_action_output_path(self):
         if getattr(self.input_info, "save_action_path", ""):

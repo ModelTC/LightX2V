@@ -838,8 +838,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
             storage.post_process()
 
     @classmethod
-    def _load_native_weights(cls, backbone, text_encoder_path, text_config):
-        text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
+    def _preflight_native_checkpoint(cls, backbone, text_encoder_path, text_config):
         modules = dict(backbone.named_weight_modules())
         expected_shapes = cls._expected_weight_shapes(text_config)
         if modules.keys() != expected_shapes.keys():
@@ -877,6 +876,18 @@ class MiniMaxH3Qwen3VLTextEncoder:
                     checkpoint_dtypes.add(tensor_slice.get_dtype())
         if len(checkpoint_dtypes) != 1:
             raise ValueError(f"MiniMax-H3 Qwen3-VL weights must use one floating dtype, got {sorted(checkpoint_dtypes)}")
+
+        return weight_map, checkpoint_dtypes.pop()
+
+    @classmethod
+    def _load_native_weights(cls, backbone, text_encoder_path, text_config):
+        text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
+        modules = dict(backbone.named_weight_modules())
+        root = Path(text_encoder_path)
+        weight_map, checkpoint_dtype = cls._preflight_native_checkpoint(backbone, root, text_config)
+        by_shard = defaultdict(list)
+        for name in modules:
+            by_shard[weight_map[name]].append(name)
 
         logger.info(
             "Loading {} native Qwen3-VL tensors (embedding + layers 0..{}) from {} shards with {} host weights",
@@ -916,7 +927,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
         # CPU-loaded common weights keep their canonical copy in pin_weight.
         # Activate those copies so the object is usable before/after offload.
         backbone.to_cpu()
-        return checkpoint_dtypes.pop()
+        return checkpoint_dtype
 
     @staticmethod
     def _load_quantized_weights(backbone, checkpoint_path):

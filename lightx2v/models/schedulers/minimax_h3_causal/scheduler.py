@@ -45,8 +45,9 @@ class MiniMaxH3CausalScheduler(MiniMaxH3Scheduler):
         self.num_condition_audio_rows = 0
         self.prepare_condition()
 
-    def prepare_condition(self):
+    def prepare_condition(self, *, overwrite=False):
         self.prepared_inputs = None
+        self.overwrite_condition = overwrite
         self.condition_phase = True
         self.layout_cpu = self.plan.condition_layout
         self.layout = _layout_to_device(self.layout_cpu, AI_DEVICE)
@@ -57,6 +58,7 @@ class MiniMaxH3CausalScheduler(MiniMaxH3Scheduler):
 
     def prepare_chunk(self, index, clean_audio):
         self.prepared_inputs = None
+        self.overwrite_condition = False
         self.condition_phase = False
         self.chunk_index = index
         self.layout_cpu = self.plan.chunk_layout(index)

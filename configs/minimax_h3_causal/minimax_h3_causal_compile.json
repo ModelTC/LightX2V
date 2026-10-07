@@ -18,6 +18,7 @@
   "feature_caching": "NoCaching",
   "warmup": true,
   "use_compile": true,
+  "vae_use_compile": true,
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "h3_step_update": "training_euler",

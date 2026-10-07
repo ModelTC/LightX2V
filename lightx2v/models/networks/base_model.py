@@ -113,6 +113,8 @@ class BaseTransformerModel(ABC):
             bool: True if the model is quantized
         """
         assert self.config.get("dit_quant_scheme", "Default") in [
+            "fp8-rocm",
+            "int8-rocm",
             "fp8-pertensor",
             "fp8-musa",
             "fp8-triton",
@@ -385,7 +387,9 @@ class BaseTransformerModel(ABC):
                 self._register_lora(self.lora_path, self.lora_strength)
 
         del self.original_weight_dict
-        torch.cuda.empty_cache()
+        device_module = getattr(torch, AI_DEVICE, None)
+        if device_module is not None and hasattr(device_module, "empty_cache"):
+            device_module.empty_cache()
         gc.collect()
 
     def _load_lora_file(self, file_path):
