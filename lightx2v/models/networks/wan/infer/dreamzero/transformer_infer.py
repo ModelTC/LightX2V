@@ -355,8 +355,13 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         norm2_out = self._modulate(norm2_out.contiguous(), c_scale_msa, c_shift_msa)
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm2_out = norm2_out.to(self.infer_dtype)
-        y = phase.ffn_0.apply(norm2_out)
-        y = F.gelu(y, approximate="tanh")
+        if self.config.get("thor", False):
+            from lightx2v.common.ops.mm.thor_ffn.backend import up_gelu
+
+            y = up_gelu(phase.ffn_0, norm2_out)
+        else:
+            y = phase.ffn_0.apply(norm2_out)
+            y = F.gelu(y, approximate="tanh")
         return phase.ffn_2.apply(y)
 
     def infer_block(self, block, x, pre_infer_out, kv_cache):

@@ -81,6 +81,9 @@ Repository = "https://github.com/ModelTC/LightX2V"
 [tool.setuptools]
 include-package-data = true
 
+[tool.setuptools.package-data]
+"lightx2v.common.ops.mm.thor_ffn" = ["*.cu", "*.cuh"]
+
 [tool.setuptools.packages.find]
 include = ["lightx2v*"]
 exclude = ["lightx2v_kernel*"]
