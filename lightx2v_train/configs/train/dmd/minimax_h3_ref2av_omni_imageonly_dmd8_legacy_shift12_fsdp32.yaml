@@ -1,0 +1,137 @@
+# Port of the old match124/image_audio_1to5/uniform/shift12 DMD recipe.
+# Deliberate data change: NEW Omni image-only match124 BF16 condition cache.
+# Keep legacy cost-local, count/orientation-balanced sampling, extending the
+# count set to all observed 1..9 counts (including Omni's six-image records).
+# This is plain DMD, NOT PDMD or HEAD, regardless of H3_PDMD in the environment.
+model:
+    name: minimax_h3_ref2av
+    pretrained_model_name_or_path: ${oc.env:H3_MODEL_PATH}
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    local_files_only: true
+    patch_size: [1, 2, 2]
+    video_latent_channels: 24
+    audio_latent_channels: 32
+    text_dim: 5120
+    vae_spatial_scale_factor: 16
+    use_autocast: false
+    attention_backend: _flash_3_hub
+    fake:
+        transformer_param_dtype: fp32
+    teacher:
+        transformer_param_dtype: bf16
+    capabilities:
+        distribution_matching:
+            video_flow_shift: 12.0
+            audio_flow_shift: 3.0
+            video_loss_weight: 1.0
+            audio_loss_weight: 1.0
+            audio_dmd_loss_weight: 1.0
+            geometry_from_metadata: true
+            allowed_resolutions: [[768, 1344], [1344, 768]]
+            dmd_normalization: true
+            dmd_normalization_epsilon: 0.0
+            dmd_reduction: mean
+            projected_dmd: false
+
+distributed:
+    backend: nccl
+    timeout_minutes: 180
+    sequence_parallel: {enabled: false, size: 1}
+    fsdp2:
+        enabled: true
+        size: 32
+        stream_load_pretrained: true
+        reshard_after_forward: {root_reshard: false, block_reshard: true}
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: minimax_h3_ref_cache_dataset
+        data_path: ${oc.env:H3_REF2AV_CACHE}
+        defer_latent_loading: true
+        batch_size: 1
+        num_workers: 0
+        pin_memory: false
+        shuffle: false
+        drop_last: true
+        reference_cost_sampler:
+            seed: 42
+            batch_mode: cost_local
+            require_image_only: true
+            image_counts: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            require_all_image_counts: false
+            balance_image_counts: true
+            cost_key: packed_sequence_tokens_124
+            require_compute_cost: true
+            balance_orientation: true
+            strict_full_epoch: false
+            remainder_policy: rotating_drop
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_sigma: 0.02
+    max_sigma: 1.0
+    time_shift_settings: {do_time_shift: false}
+
+training:
+    method: dmd
+    # The OLD shift12 variant is 100000 iterations (not the 1000-step shift6
+    # default, nor the newer 10000-step PDMD/HEAD experiments).
+    max_train_iters: 100000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 0
+    save_every_iters: 50
+    save_total_limit: 5
+    dmd:
+        num_inference_steps: 8
+        update_order: student_first
+        fake_update_ratio: 5
+        # Preserve the old H3 .train() state for student rollouts / fake fits;
+        # fake and teacher scoring remain .eval(). Gradients are separate.
+        model_mode: legacy_train
+        latent_dtype: fp32
+        generation_shapes:
+            - {value: [124, 768, 1344]}
+        score_sampling:
+            type: h3_shifted_uniform
+            video_flow_shift: ${model.capabilities.distribution_matching.video_flow_shift}
+            discrete_samples: 1000
+            min_sigma: 0.02
+            max_sigma: 1.0
+        residual_head: {enabled: false}
+    student:
+        train_type: lora
+        ema: {enabled: false}
+        lora:
+            rank: 128
+            alpha: 8
+            target_modules: [to_q, to_k, to_v, to_out.0, ff.net.0.proj, ff.net.2]
+        optimizer:
+            learning_rate: 0.00005
+            adam_beta1: 0.0
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    fake:
+        train_type: full
+        optimizer:
+            learning_rate: 0.0000004
+            adam_beta1: 0.0
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    teacher: {guidance_scale: 1.0, cfg_norm: none}
+    output_dir: ${oc.env:H3_REF2AV_DMD_OUTPUT}
+
+inference: {method: none, infer_every_iters: null}
+logging: {rank_zero_only: true, train_log_every_iters: 1}
+resume: {auto_resume: true}

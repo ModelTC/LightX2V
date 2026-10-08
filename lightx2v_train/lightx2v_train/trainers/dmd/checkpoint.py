@@ -70,6 +70,7 @@ class DmdCheckpointManager:
         metadata["residual_head_enabled"] = residual_head is not None
         if getattr(self, "trainer_name", None) == "dmd":
             metadata["dmd_update_order"] = getattr(self, "dmd_update_order", "student_first")
+            metadata["dmd_model_mode"] = getattr(self, "dmd_model_mode", "eval")
         if residual_head is not None:
             metadata["residual_head_config"] = residual_head.checkpoint_metadata()
         sampler = getattr(self.dataloader_train, "sampler", None)
@@ -119,7 +120,7 @@ class DmdCheckpointManager:
         extra_metadata = self._extra_checkpoint_metadata()
         legacy_metadata = self.student.legacy_extra_checkpoint_metadata()
         if getattr(self, "trainer_name", None) == "dmd":
-            legacy_metadata = {**legacy_metadata, "dmd_update_order": "student_first"}
+            legacy_metadata = {**legacy_metadata, "dmd_update_order": "student_first", "dmd_model_mode": "eval"}
         missing = set(expected) - state.keys() - legacy_metadata.keys() - extra_metadata.keys()
         self._require_checkpoint_keys(state, missing, state_path)
         allow_transition = bool(self.config.get("resume", {}).get("allow_distribution_matching_transition", False))

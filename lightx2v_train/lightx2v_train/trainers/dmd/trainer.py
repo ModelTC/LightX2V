@@ -67,6 +67,7 @@ class DmdTrainer(_DmdRuntime):
         self.ts_schedule_max = parsed.ts_schedule_max
         self.student_checkpoint_path = parsed.student_checkpoint_path
         self.student_checkpoint_strict = parsed.student_checkpoint_strict
+        self.dmd_model_mode = parsed.model_mode
         self.score_sigma_sampler = build_score_sigma_sampler(
             self.dmd_config.get("score_sampling"),
             use_rollout_min=self.ts_schedule,
@@ -296,9 +297,10 @@ class DmdTrainer(_DmdRuntime):
             self.fake_update_ratio,
         )
         logger.info(
-            "[train] rollout_steps={} dmd_update_order={} residual_head_enabled={}",
+            "[train] rollout_steps={} dmd_update_order={} dmd_model_mode={} residual_head_enabled={}",
             getattr(self, "num_inference_steps", None),
             getattr(self, "dmd_update_order", "student_first"),
+            getattr(self, "dmd_model_mode", "eval"),
             getattr(self, "residual_head", None) is not None,
         )
         logger.info(
@@ -709,7 +711,9 @@ class DmdTrainer(_DmdRuntime):
             residual_head = getattr(self, "residual_head", None)
             if residual_head is not None:
                 residual_head.remember_fit(generated, renoised_xt, sigma, condition)
-            self.fake.set_training(False)
+            # Legacy H3 fits its critic in train mode; eval remains the
+            # default for all existing recipes. Scoring below stays eval.
+            self.fake.set_training(getattr(self, "dmd_model_mode", "eval") == "legacy_train")
             velocity_fake = self._predict_velocity(
                 self.fake,
                 renoised_xt,
@@ -800,10 +804,11 @@ class DmdTrainer(_DmdRuntime):
             )
         )
         x0 = None
-        # Zoe runs every DMD role in eval mode. Gradients are controlled by
-        # autograd contexts, not by module.train(), which keeps rollout
-        # dropout and other training-only behavior deterministic.
-        self.student.set_training(False)
+        # Default recipes use eval for deterministic rollout. The original
+        # H3 trainer used train mode even for no-grad fake-data rollout;
+        # expose that behavior explicitly for legacy comparisons. Autograd
+        # remains controlled independently and only the exit step trains.
+        self.student.set_training(getattr(self, "dmd_model_mode", "eval") == "legacy_train")
         for idx in range(end_step_idx + 1):
             sigma = self.scheduler.sigma_at(
                 idx,

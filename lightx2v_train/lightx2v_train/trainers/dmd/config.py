@@ -127,6 +127,7 @@ class DmdScheduleConfig:
     ts_schedule_max: bool
     student_checkpoint_path: Optional[str]
     student_checkpoint_strict: bool
+    model_mode: str
 
     @classmethod
     def from_mapping(
@@ -139,6 +140,9 @@ class DmdScheduleConfig:
     ):
         scheduler_config = config["scheduler"]
         num_train_timestep = int(scheduler_config.get("num_train_timesteps", 1000))
+        model_mode = dmd_config.get("model_mode", "eval")
+        if model_mode not in {"eval", "legacy_train"}:
+            raise ValueError("training.dmd.model_mode must be eval or legacy_train.")
         return cls(
             num_train_timestep=num_train_timestep,
             num_inference_steps=num_inference_steps,
@@ -146,4 +150,5 @@ class DmdScheduleConfig:
             ts_schedule_max=bool(dmd_config.get("ts_schedule_max", False)),
             student_checkpoint_path=student_config.get("checkpoint_path"),
             student_checkpoint_strict=bool(student_config.get("checkpoint_strict", True)),
+            model_mode=model_mode,
         )
