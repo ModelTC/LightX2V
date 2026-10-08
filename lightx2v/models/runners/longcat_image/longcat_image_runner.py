@@ -1,5 +1,6 @@
 import gc
 import math
+import os
 
 import torch
 from PIL import Image
@@ -297,8 +298,7 @@ class LongCatImageRunner(DefaultRunner):
             "3:2": [1216, 832],
             "2:3": [832, 1216],
         }
-        as_maps = self.config.get("aspect_ratios", {})
-        as_maps.update(default_aspect_ratios)
+        as_maps = {**default_aspect_ratios, **self.config.get("aspect_ratios", {})}
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
@@ -368,6 +368,7 @@ class LongCatImageRunner(DefaultRunner):
 
         if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
             image = images[0]
+            os.makedirs(os.path.dirname(os.path.abspath(input_info.save_result_path)), exist_ok=True)
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")
 

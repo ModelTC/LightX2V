@@ -1,7 +1,6 @@
 {
   "adapter_model_path": "/path/to/robotwin_uncond_3cam_384.pt",
   "dataset_stats_path": "/path/to/robotwin_uncond_3cam_384_dataset_stats.json",
-  "camera_size": 384,
   "action_chunk_size": 32,
   "actions_per_plan": 8,
   "num_steps_wait": 0,

@@ -14,7 +14,6 @@
     "vae_cpu_offload": false,
     "byt5_cpu_offload": false,
     "qwen25vl_cpu_offload": true,
-    "siglip_cpu_offload": false,
     "parallel": {
         "seq_p_attn_type": "ulysses",
         "seq_p_size": 8

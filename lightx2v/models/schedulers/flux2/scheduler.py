@@ -1,4 +1,3 @@
-import json
 import math
 import os
 
@@ -70,9 +69,6 @@ class Flux2Scheduler(BaseScheduler):
         self.config = config
         scheduler_path = config.get("scheduler_path", os.path.join(config["model_path"], "scheduler"))
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(scheduler_path)
-
-        with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
-            self.scheduler_config = json.load(f)
 
         self.dtype = GET_DTYPE()
         self.sample_guide_scale = config.get("sample_guide_scale", 4.0)

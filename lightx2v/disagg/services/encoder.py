@@ -527,7 +527,7 @@ class EncoderService(BaseService):
             raise ValueError("prompt is required in config.")
 
         # 1. Text Encoding
-        text_len = config.get("text_len", 512)
+        text_len = config["text_len"]
 
         context = self.text_encoder.infer([prompt])
         context = torch.stack([torch.cat([u, u.new_zeros(text_len - u.size(0), u.size(1))]) for u in context])

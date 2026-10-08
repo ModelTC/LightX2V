@@ -49,7 +49,6 @@ class Flux2Runner(DefaultRunner):
         else:
             raise ValueError(f"Unsupported Flux2 model_variant: {self.model_variant}")
 
-        config["vae_scale_factor"] = config.get("vae_scale_factor", 16)
         super().__init__(config)
 
     def load_transformer(self):
@@ -162,7 +161,7 @@ class Flux2Runner(DefaultRunner):
         else:
             input_image = image_path
 
-        vae_scale_factor = self.config.get("vae_scale_factor", 8)
+        vae_scale_factor = self.config["vae_scale_factor"]
         from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
         image_processor = Flux2ImageProcessor(vae_scale_factor=vae_scale_factor)
@@ -235,7 +234,7 @@ class Flux2Runner(DefaultRunner):
         from PIL import Image
 
         height, width = self.input_info.size
-        multiple_of = self.config.get("vae_scale_factor", 8) * 2
+        multiple_of = self.config["vae_scale_factor"] * 2
         packed_h = height // multiple_of
         packed_w = width // multiple_of
 
@@ -423,7 +422,7 @@ class Flux2Runner(DefaultRunner):
             width, height = self.get_custom_shape()
         self.input_info.size = [height, width]
 
-        multiple_of = self.config.get("vae_scale_factor", 8) * 2
+        multiple_of = self.config["vae_scale_factor"] * 2
 
         packed_batch = 1
         packed_h = height // multiple_of

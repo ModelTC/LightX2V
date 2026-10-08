@@ -125,7 +125,6 @@ class HunyuanImage3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, "hunyuan_image3", lora_path, lora_strength)
-        self._init_tensor_parallel()
         self.block_offload = self.cpu_offload and self.offload_granularity == "block"
         self._validate_offload_config()
         execution_device = f"cuda:{torch.cuda.current_device()}" if self.block_offload else device

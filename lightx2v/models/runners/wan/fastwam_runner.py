@@ -109,8 +109,6 @@ class FastWAMPolicy:
         action_chunk_size: Optional[int] = None,
         actions_per_plan=10,
         action_infer_steps=20,
-        action_sample_shift=5.0,
-        action_dim_hidden=1024,
         action_dim=7,
         robot_state_dim=8,
         seed: Optional[int] = 0,
@@ -151,8 +149,6 @@ class FastWAMPolicy:
         self.action_chunk_size = int(action_chunk_size) if action_chunk_size and int(action_chunk_size) > 0 else 32
         self.actions_per_plan = int(max(1, min(int(actions_per_plan), self.action_chunk_size)))
         self.action_infer_steps = int(action_infer_steps)
-        self.action_sample_shift = float(action_sample_shift)
-        self.action_dim_hidden = int(action_dim_hidden)
         self.action_dim = int(action_dim)
         self.robot_state_dim = int(robot_state_dim)
         self.seed = None if seed is None or int(seed) < 0 else int(seed)
@@ -188,8 +184,6 @@ class FastWAMPolicy:
             action_chunk_size=None if action_chunk_size <= 0 else action_chunk_size,
             actions_per_plan=config.get("actions_per_plan", 10),
             action_infer_steps=config.get("action_infer_steps", 20),
-            action_sample_shift=config.get("action_sample_shift", 5.0),
-            action_dim_hidden=config.get("action_dim_hidden", 1024),
             action_dim=config.get("action_dim", 7),
             robot_state_dim=config.get("robot_state_dim", 8),
             seed=config.get("seed", 0),

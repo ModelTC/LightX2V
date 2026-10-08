@@ -70,8 +70,8 @@ class MooncakeTransferEngineConfig:
 
     @staticmethod
     def load_from_env() -> "MooncakeTransferEngineConfig":
-        config_file_path = os.getenv("MOONCAKE_CONFIG_PATH", "/root/zht/LightX2V/configs/mooncake_config.json")
-        if config_file_path is None:
+        config_file_path = os.getenv("MOONCAKE_CONFIG_PATH")
+        if not config_file_path:
             raise ValueError("The environment variable 'MOONCAKE_CONFIG_PATH' is not set.")
         cfg = MooncakeTransferEngineConfig.from_file(config_file_path)
         local_ipv4s = _collect_local_ipv4_addresses()

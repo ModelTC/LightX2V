@@ -58,6 +58,8 @@ bash scripts/disagg/run_dynamic.sh
 
 ### RDMA / Mooncake
 
+Mooncake 读取 `MOONCAKE_CONFIG_PATH` 指定的文件（脚本使用 `configs/mooncake_config.json`），对应的 `MOONCAKE_*` 环境变量优先。服务监听地址由 `disagg_config.local_hostname` 指定。
+
 | 变量 | 含义 | 默认值 |
 | --- | --- | --- |
 | `RDMA_IFACE` | 本机 RDMA / eRDMA 网卡名。 | `erdma_0` |
@@ -77,6 +79,8 @@ bash scripts/disagg/run_dynamic.sh
 | `CONTROLLER_POLL_INTERVAL_S` | controller 状态轮询间隔。 | `5` |
 
 ### 请求数量、调试与通信方式
+
+[默认 workload](../../configs/disagg/wan22_i2v_workload_stages.json) 沿用模型配置的采样参数。按阶段覆盖时，用 `DISAGG_WORKLOAD_STAGES_JSON` 指定阶段文件，并设置 `config_variants`。
 
 | 变量 | 含义 | 默认值 |
 | --- | --- | --- |
