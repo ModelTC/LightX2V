@@ -228,6 +228,8 @@ class MMWeightTemplate(metaclass=ABCMeta):
     def _get_lora_target_device(self):
         if hasattr(self, "weight") and self.weight is not None:
             return self.weight.device
+        if getattr(self, "pin_weight", None) is not None:
+            return self.pin_weight.device
         return AI_DEVICE
 
     def set_config(self, config={}):

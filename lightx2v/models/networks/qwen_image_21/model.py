@@ -1,4 +1,5 @@
 import glob
+import math
 import os
 
 import torch
@@ -14,6 +15,7 @@ from .infer.offload import QwenImage21OffloadTransformerInfer
 from .infer.post_infer import QwenImage21PostInfer
 from .infer.pre_infer import QwenImage21PreInfer
 from .infer.transformer_infer import QwenImage21TransformerInfer
+from .lora import prepare_lora_weights
 from .weights.post_weights import QwenImage21PostWeights
 from .weights.pre_weights import QwenImage21PreWeights
 from .weights.transformer_weights import QwenImage21TransformerWeights
@@ -24,19 +26,52 @@ class QwenImage21TransformerModel(BaseTransformerModel):
     transformer_weight_class = QwenImage21TransformerWeights
     post_weight_class = QwenImage21PostWeights
 
-    def __init__(self, model_path, config, device):
+    def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {
             "model",
             "block",
         }:
             raise NotImplementedError("Qwen-Image-2.1 supports model and block CPU offload")
         self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block"
-        super().__init__(model_path, config, device)
+        super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
+        self.kv_cache_manager = None
         self._validate_tensor_parallel_config()
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
-        self.kv_cache_manager = None
+
+    def _apply_weights(self, weight_dict=None):
+        if self.config.get("lora_dynamic_apply", False):
+            source = weight_dict if weight_dict is not None else self.original_weight_dict
+            self._lora_weight_shapes = {key: tuple(tensor.shape) for key, tensor in source.items() if tensor.ndim == 2}
+        return super()._apply_weights(weight_dict)
+
+    def _load_lora_file(self, file_path, dtype=None):
+        return prepare_lora_weights(self, file_path, super()._load_lora_file(file_path, dtype=dtype))
+
+    def _register_lora(self, lora_path, strength):
+        self._update_lora(lora_path, strength)
+
+    def _update_lora(self, lora_path, strength):
+        if not self.config.get("lora_dynamic_apply", False) or isinstance(lora_path, dict):
+            raise ValueError("Qwen-Image-2.1 dynamic LoRA requires lora_dynamic_apply=true and one checkpoint path")
+        strength = float(strength)
+        if not math.isfinite(strength):
+            raise ValueError("Qwen-Image-2.1 LoRA strength must be finite")
+        weights = self._load_lora_file(lora_path)
+        self._remove_lora()
+        # The shared update path registers all three weight groups, including post.
+        super()._update_lora(weights, strength)
+        self.lora_path, self.lora_strength = lora_path, strength
+        logger.info("Applied Qwen-Image-2.1 dynamic LoRA (strength={}): {}", strength, lora_path)
+
+    def _remove_lora(self):
+        super()._remove_lora()
+        self.lora_path = None
+        self.clear_condition_kv()
+        offload_manager = getattr(getattr(self, "transformer_infer", None), "offload_manager", None)
+        if offload_manager is not None:
+            offload_manager.need_init_first_buffer = True
 
     def _init_weights(self, weight_dict=None):
         if not self.config.get("dit_disk_streaming", False):

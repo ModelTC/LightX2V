@@ -392,7 +392,8 @@ class BaseTransformerModel(ABC):
             device_module.empty_cache()
         gc.collect()
 
-    def _load_lora_file(self, file_path):
+    def _load_lora_file(self, file_path, dtype=None):
+        dtype = GET_DTYPE() if dtype is None else dtype
         if self.device.type != "cpu" and dist.is_initialized():
             device = f"{AI_DEVICE}:{dist.get_rank()}"
         else:
@@ -413,10 +414,10 @@ class BaseTransformerModel(ABC):
 
         if device == "cpu":
             with safe_open(file_path, framework="pt", device=device) as f:
-                tensor_dict = {remove_prefix(key): f.get_tensor(key).to(GET_DTYPE()).pin_memory() for key in f.keys()}
+                tensor_dict = {remove_prefix(key): f.get_tensor(key).to(dtype).pin_memory() for key in f.keys()}
         else:
             with safe_open(file_path, framework="pt", device=device) as f:
-                tensor_dict = {remove_prefix(key): f.get_tensor(key).to(GET_DTYPE()) for key in f.keys()}
+                tensor_dict = {remove_prefix(key): f.get_tensor(key).to(dtype) for key in f.keys()}
         return tensor_dict
 
     def _register_lora(self, lora_path, strength):

@@ -30,6 +30,7 @@ Specify LoRA path in configuration file:
 
 - `lora_path`: LoRA weight file path list, supports loading multiple LoRAs simultaneously
 - `strength_model`: LoRA strength coefficient (alpha), controls LoRA's influence on the original model
+- `lora_merge_force_fp32`: Defaults to `false`, preserving the existing merge precision. When `true`, load LoRA weights, compute deltas, and add them to base weights in FP32, then cast back to each layer's original dtype. This only affects static merging; dynamic LoRA (`lora_dynamic_apply=true`) is unchanged. Merging uses additional temporary memory per layer. Multiple LoRAs are merged and cast back individually in configuration order.
 
 ### Command Line Method
 

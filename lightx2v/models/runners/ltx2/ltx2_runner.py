@@ -334,7 +334,7 @@ class LTX2Runner(DefaultRunner):
         # Apply LoRA to text encoder if configured
         lora_configs = self.config.get("lora_configs")
         if lora_configs:
-            text_encoder.apply_lora(lora_configs)
+            text_encoder.apply_lora(lora_configs, force_fp32=self.config.get("lora_merge_force_fp32", False))
 
         text_encoders = [text_encoder]
         return text_encoders

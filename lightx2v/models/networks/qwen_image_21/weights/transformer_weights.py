@@ -1,7 +1,9 @@
+import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.mm.mm_weight import unwrap_tp_weight
+from lightx2v.common.ops.mm.mm_weight import MMWeightTemplate, unwrap_tp_weight
+from lightx2v.common.ops.utils import resolve_block_name
 from lightx2v.models.networks.qwen_image_21.fp8_f16_accum_policy import ACTIVATION_QMAX
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
@@ -34,12 +36,14 @@ class QwenImage21BlockWeights(WeightModule):
                     tp_size=tp_size,
                     split_dim=tp_split,
                     create_cuda_buffer=create_cuda_buffer,
+                    lora_prefix=None,
                 )
             else:
                 linear = MM_WEIGHT_REGISTER[mm_type](
                     f"{prefix}.{key}.weight",
                     bias_name=None,
                     create_cuda_buffer=create_cuda_buffer,
+                    lora_prefix=None,
                 )
             if mm_type == "fp8-f16-accum":
                 unwrap_tp_weight(linear).enable_fp8_f16_accum(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
@@ -63,6 +67,38 @@ class QwenImage21BlockWeights(WeightModule):
             self.add_module("calculate_parallel", ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")]())
         # Arbitrary triangular prefix masks use the common SDPA backend.
         self.add_module("prefix_attention", ATTN_WEIGHT_REGISTER["torch_sdpa"]())
+
+    def register_lora(self, weight_dict, strength):
+        self.lora_strength = strength
+        super().register_lora(weight_dict, strength)
+
+    update_lora = register_lora
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        # Offload buffers can visit blocks with different LoRA targets/ranks.
+        # Allocate matching factor buffers and clear branches absent in this block.
+        active = []
+        for module in self._modules.values():
+            weight = unwrap_tp_weight(module)
+            if not isinstance(weight, MMWeightTemplate):
+                continue
+            down_name = resolve_block_name(weight.lora_down_name, block_index)
+            if down_name not in destination:
+                if weight.has_lora_branch:
+                    weight.remove_lora()
+                continue
+            for attr in ("lora_down", "lora_up", "lora_alpha"):
+                source = destination[resolve_block_name(getattr(weight, attr + "_name"), block_index)]
+                current = getattr(weight, attr, None)
+                device = weight.weight_cuda_buffer.device
+                if current is None or current.shape != source.shape or current.dtype != source.dtype or current.device != device:
+                    setattr(weight, attr, torch.empty_like(source, device=device))
+            weight.has_lora_branch = True
+            weight.lora_strength = self.lora_strength
+            active.append(weight)
+        super().load_state_dict(destination, block_index, adapter_block_index)
+        for weight in active:
+            weight.lora_scale = weight.lora_alpha / weight.lora_down.shape[0]
 
 
 class QwenImage21TransformerWeights(WeightModule):
