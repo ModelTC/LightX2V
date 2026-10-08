@@ -25,6 +25,17 @@ class QwenImage21Scheduler(BaseScheduler):
         ):
             raise ValueError("Qwen-Image-2.1 expects its released exponential FlowMatchEuler schedule")
         self.sample_guide_scale = config["sample_guide_scale"]
+        self.raw_sigmas = None
+        if config.get("sigmas") is not None:
+            sigmas = np.asarray(config["sigmas"], dtype=np.float32)
+            if (
+                sigmas.shape != (self.infer_steps,)
+                or not np.all(np.isfinite(sigmas))
+                or not np.all((sigmas > 0) & (sigmas <= 1))
+                or not np.all(np.diff(sigmas) < 0)
+            ):
+                raise ValueError("Qwen-Image-2.1 sigmas must contain infer_steps finite, strictly decreasing values in (0, 1]")
+            self.raw_sigmas = sigmas
 
     def prepare(self, input_info):
         self.generator = torch.Generator(device="cpu").manual_seed(input_info.seed)
@@ -34,7 +45,8 @@ class QwenImage21Scheduler(BaseScheduler):
         slope = (sc["max_shift"] - sc["base_shift"]) / (sc["max_image_seq_len"] - sc["base_image_seq_len"])
         h, w = input_info.latent_shape[-2:]
         mu = slope * h * w + sc["base_shift"] - slope * sc["base_image_seq_len"]
-        sigmas = np.linspace(1.0, 1 / self.infer_steps, self.infer_steps).astype(np.float32)
+        # Custom nodes are raw noise levels; apply the same resolution shift.
+        sigmas = self.raw_sigmas if self.raw_sigmas is not None else np.linspace(1.0, 1 / self.infer_steps, self.infer_steps).astype(np.float32)
         sigmas = math.exp(mu) / (math.exp(mu) + (1 / sigmas - 1))
         if sc.get("shift_terminal") and self.infer_steps > 1:
             one_minus = 1 - sigmas

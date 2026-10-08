@@ -38,6 +38,25 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         self._init_infer()
         self.kv_cache_manager = None
 
+    def _init_weights(self, weight_dict=None):
+        if not self.config.get("dit_disk_streaming", False):
+            return super()._init_weights(weight_dict)
+        from lightx2v.common.offload.mps_weights import MpsStreamingBlockWeights, iter_weight_modules
+        from lightx2v.common.offload.safetensors_checkpoint import SafetensorsCheckpoint
+
+        from .weights.transformer_weights import QwenImage21BlockWeights
+
+        checkpoint = SafetensorsCheckpoint(self.model_path)
+        if checkpoint.block_indices != tuple(range(self.config["num_layers"])):
+            raise ValueError("Qwen-Image-2.1 disk-streaming checkpoint has unexpected block indices")
+        self.transformer_weights = MpsStreamingBlockWeights(checkpoint, lambda: QwenImage21BlockWeights(0, self.config), self.config["num_layers"])
+        self.pre_weight = self.pre_weight_class(self.config)
+        self.post_weight = self.post_weight_class(self.config)
+        names = {name for root in (self.pre_weight, self.post_weight) for module in iter_weight_modules(root) for name, _, _ in module.base_attrs}
+        weights = {name: tensor.to(device="mps", dtype=GET_DTYPE()) for name, tensor in checkpoint.load_tensors(names).items()}
+        self.pre_weight.load(weights)
+        self.post_weight.load(weights)
+
     def _load_shared_cpu_weights(self, unified_dtype, sensitive_layer):
         from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
 
@@ -203,6 +222,10 @@ class QwenImage21TransformerModel(BaseTransformerModel):
     def _init_infer_class(self):
         self.pre_infer_class = QwenImage21PreInfer
         self.transformer_infer_class = QwenImage21OffloadTransformerInfer if self.cpu_offload else QwenImage21TransformerInfer
+        if self.config.get("dit_disk_streaming", False):
+            from .infer.offload.mps_transformer_infer import QwenImage21MpsTransformerInfer
+
+            self.transformer_infer_class = QwenImage21MpsTransformerInfer
         self.post_infer_class = QwenImage21PostInfer
 
     def _init_infer(self):
