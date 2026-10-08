@@ -144,7 +144,7 @@ python setup.py install
 > 💡 **Note**:
 > - You can skip this step if you don't need quantization functionality
 > - Quantized models can be downloaded from [LightX2V HuggingFace](https://huggingface.co/lightx2v)
-> - For more quantization information, please refer to the [Quantization Documentation](method_tutorials/quantization.html)
+> - For more quantization information, please refer to the [Quantization Documentation](../method_tutorials/quantization.md)
 
 #### Step 5: Verify Installation
 
@@ -290,7 +290,7 @@ For other GPUs, it is recommended to install `q8_kernel==0.5.0`. Please refer to
 > 💡 **Note**:
 > - It is recommended to use the default Triton kernel for inference
 > - Quantized models can be downloaded from [LightX2V HuggingFace](https://huggingface.co/lightx2v)
-> - For more quantization information, please refer to the [Quantization Documentation](method_tutorials/quantization.html)
+> - For more quantization information, please refer to the [Quantization Documentation](../method_tutorials/quantization.md)
 
 ## 🎯 Inference Usage
 
