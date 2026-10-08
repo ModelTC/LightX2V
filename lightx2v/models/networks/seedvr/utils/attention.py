@@ -5,8 +5,12 @@ from torch import nn
 try:
     from flash_attn import flash_attn_varlen_func
 except ImportError:
-    print("flash_attn_varlen_func not found, please install flash_attn first")
     flash_attn_varlen_func = None
+
+try:
+    from flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func_v3
+except ImportError:
+    flash_attn_varlen_func_v3 = None
 
 
 class TorchAttention(nn.Module):
@@ -33,4 +37,11 @@ class FlashAttentionVarlen(nn.Module):
 
     def forward(self, *args, **kwargs):
         kwargs["deterministic"] = torch.are_deterministic_algorithms_enabled()
-        return flash_attn_varlen_func(*args, **kwargs)
+        if flash_attn_varlen_func is not None:
+            return flash_attn_varlen_func(*args, **kwargs)
+        if flash_attn_varlen_func_v3 is not None:
+            # FlashAttention-3 (Hopper) has no dropout and may also return the softmax LSE.
+            kwargs.pop("dropout_p", None)
+            out = flash_attn_varlen_func_v3(*args, **kwargs)
+            return out[0] if isinstance(out, tuple) else out
+        raise ImportError("SeedVR attention requires flash_attn (FlashAttention-2) or flash_attn_interface (FlashAttention-3).")
