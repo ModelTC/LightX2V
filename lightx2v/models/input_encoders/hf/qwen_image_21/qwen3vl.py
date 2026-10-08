@@ -268,6 +268,10 @@ class QwenImage21TextEncoder(WeightModule):
         # tower replicated on every rank so I2I uses the validated path.
         self.add_module("vision", Qwen3VLVision(self.model_config["vision_config"]))
 
+        self._load_weights(path, config)
+
+    def _load_weights(self, path, config):
+        quantized = bool(config.get("text_encoder_quantized", False))
         required = set()
 
         def collect(module):

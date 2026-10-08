@@ -8,8 +8,8 @@ from loguru import logger
 
 from lightx2v.common.modules.weight_module import WeightModuleList
 from lightx2v.common.offload.mps_manager import MpsSharedWeightAsyncStreamManager, host_view
+from lightx2v.common.offload.safetensors_checkpoint import SafetensorsCheckpoint
 from lightx2v.common.ops.utils import resolve_block_name
-from lightx2v.models.networks.minimax_h3.checkpoint import MiniMaxH3ShardCheckpoint
 from lightx2v.utils.envs import GET_DTYPE
 
 from . import qwen3vl
@@ -30,7 +30,7 @@ class _Qwen3VLMpsTextBackboneWeights(qwen3vl._Qwen3VLTextBackboneWeights):
 
     def init_disk_streaming(self, text_encoder_path=None, weight_map=None):
         if self.streaming_checkpoint is None:
-            self.streaming_checkpoint = MiniMaxH3ShardCheckpoint(text_encoder_path, weight_map)
+            self.streaming_checkpoint = SafetensorsCheckpoint(text_encoder_path, weight_map)
         if self.offload_cuda_buffers is not None:
             return
 

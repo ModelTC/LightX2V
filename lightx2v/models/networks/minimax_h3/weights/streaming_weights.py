@@ -6,8 +6,8 @@ import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.offload.mps_manager import host_view
+from lightx2v.common.offload.safetensors_checkpoint import SafetensorsCheckpoint
 from lightx2v.common.ops.utils import resolve_block_name
-from lightx2v.models.networks.minimax_h3.checkpoint import MiniMaxH3ShardCheckpoint
 
 from .transformer_weights import MiniMaxH3TransformerBlockWeights
 
@@ -35,7 +35,7 @@ class MiniMaxH3StreamingTransformerWeights(WeightModule):
         checkpoint_dir = config.get("dit_original_ckpt")
         if checkpoint_dir is None:
             raise ValueError("MiniMax-H3 dit_disk_streaming requires config['dit_original_ckpt'] to point to the diffusers transformer checkpoint directory.")
-        self.checkpoint = MiniMaxH3ShardCheckpoint(checkpoint_dir)
+        self.checkpoint = SafetensorsCheckpoint(checkpoint_dir)
         expected_block_indices = tuple(range(self.num_layers))
         if self.checkpoint.block_indices != expected_block_indices:
             raise ValueError(f"MiniMax-H3 dit_disk_streaming checkpoint block indices mismatch: expected {expected_block_indices}, found {self.checkpoint.block_indices}")

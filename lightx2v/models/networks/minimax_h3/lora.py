@@ -1,6 +1,7 @@
 """LoRA merging for the native MiniMax-H3 inference implementation."""
 
 import gc
+from contextlib import nullcontext
 
 import torch
 from loguru import logger
@@ -146,20 +147,25 @@ class MiniMaxH3LoraAdapter(LoraAdapter):
                 lora_down = source.get_tensor(pair["down_key"])
                 lora_up, lora_down = self._shard_factors(model_key, lora_up, lora_down)
                 merge_device = self._merge_device(parameter)
-                lora_up = lora_up.to(device=merge_device, dtype=parameter.dtype)
-                lora_down = lora_down.to(device=merge_device, dtype=parameter.dtype)
+                merge_dtype = torch.float32 if self.merge_force_fp32 else parameter.dtype
+                lora_up = lora_up.to(device=merge_device, dtype=merge_dtype)
+                lora_down = lora_down.to(device=merge_device, dtype=merge_dtype)
 
                 pair_alpha = source.get_tensor(pair["alpha_key"]).item() if pair["alpha_key"] is not None else None
                 effective_alpha = pair_alpha if pair_alpha is not None else alpha
                 scale = float(effective_alpha) / lora_down.shape[0] if effective_alpha is not None else 1.0
-                delta = torch.mm(lora_up, lora_down)
+                with torch.autocast(device_type=merge_device.type, enabled=False) if self.merge_force_fp32 else nullcontext():
+                    delta = torch.mm(lora_up, lora_down)
                 if delta.shape != parameter.shape:
                     raise ValueError(f"LoRA delta shape mismatch for {model_key}: delta={tuple(delta.shape)}, weight={tuple(parameter.shape)}")
-                parameter.add_(
+                merged = parameter.float() if self.merge_force_fp32 else parameter
+                merged.add_(
                     delta.to(parameter.device),
                     alpha=scale * float(strength),
                 )
-                del lora_up, lora_down, delta
+                if self.merge_force_fp32:
+                    parameter.copy_(merged)
+                del lora_up, lora_down, delta, merged
 
                 if index % 24 == 0 or index == len(pairs):
                     logger.info(

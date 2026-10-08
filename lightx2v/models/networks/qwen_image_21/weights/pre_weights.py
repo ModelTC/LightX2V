@@ -25,5 +25,5 @@ class QwenImage21PreWeights(WeightModule):
             "time_out": "time_text_embed.timestep_embedder.linear_2.weight",
             "modulation": "modulation.1.weight",
         }.items():
-            self.add_module(name, MM_WEIGHT_REGISTER["Default"](key, bias_name=None))
+            self.add_module(name, MM_WEIGHT_REGISTER["Default"](key, bias_name=None, lora_prefix=None))
         self.add_module("txt_norm", ZeroCenteredRMSWeight("txt_in.text_norm.weight", eps=config["eps"]))

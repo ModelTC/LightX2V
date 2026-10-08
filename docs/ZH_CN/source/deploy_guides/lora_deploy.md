@@ -29,6 +29,7 @@ LoRA (Low-Rank Adaptation) 是一种高效的模型微调技术，通过低秩�
 
 - `lora_path`: LoRA 权重文件路径列表，支持多个 LoRA 同时加载
 - `strength_model`: LoRA 强度系数 (alpha)，控制 LoRA 对原模型的影响程度
+- `lora_merge_force_fp32`: 默认为 `false`，保持原有合并精度。设为 `true` 时，以 FP32 加载 LoRA 权重、计算增量并与基础权重相加，随后转回各层原来的 dtype。仅影响静态合并；使用动态 LoRA（`lora_dynamic_apply=true`）时不生效。逐层合并需要额外的临时内存，多份 LoRA 按配置顺序分别合并并转回原 dtype。
 
 ### 命令行方式
 

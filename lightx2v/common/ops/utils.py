@@ -272,7 +272,7 @@ def build_lora_and_diff_names(weight_name, lora_prefix):
 
     Args:
         weight_name: Original weight tensor name
-        lora_prefix: Prefix string for LoRA tensor names
+        lora_prefix: Prefix string for LoRA tensor names; None preserves the full weight name
 
     Returns:
         tuple: (lora_down_name, lora_up_name, lora_alpha_name, weight_diff_name, bias_diff_name)
@@ -281,7 +281,7 @@ def build_lora_and_diff_names(weight_name, lora_prefix):
     base_name = weight_name[:-7]
     parts = base_name.split(".")
     relative_path = ".".join(parts[1:])
-    lora_base = f"{lora_prefix}.{relative_path}"
+    lora_base = base_name if lora_prefix is None else f"{lora_prefix}.{relative_path}"
     lora_down_name = f"{lora_base}.lora_down.weight"
     lora_up_name = f"{lora_base}.lora_up.weight"
     lora_alpha_name = f"{lora_base}.alpha"

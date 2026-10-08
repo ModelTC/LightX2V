@@ -1,0 +1,23 @@
+{
+    "infer_steps": 6,
+    "sigmas": [1.0, 0.9375, 0.875, 0.75, 0.5, 0.25],
+    "do_time_shift": false,
+    "resolution": 1024,
+    "vae_scale_factor": 16,
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "dit_disk_streaming": true,
+    "text_encoder_disk_streaming": true,
+    "text_encoder_cpu_offload": true,
+    "attn_type": "torch_sdpa_mps",
+    "mps_sdpa_query_chunk_size": 512,
+    "rope_type": "torch_real_rope",
+    "rms_norm_type": "fp32_variance",
+    "layer_norm_type": "torch",
+    "modulate_type": "torch",
+    "fused_qk_rms_norm": false,
+    "fused_block_ops": false,
+    "enable_cfg": false,
+    "sample_guide_scale": 1.0,
+    "warmup": false
+}

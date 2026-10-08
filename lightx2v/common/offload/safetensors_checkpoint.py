@@ -1,4 +1,4 @@
-"""Load MiniMax-H3 diffusers checkpoints by requested tensor or block."""
+"""Load safetensors checkpoints by requested tensor or block."""
 
 import json
 import math
@@ -14,10 +14,10 @@ if sys.platform == "darwin":
 import torch
 from safetensors import safe_open
 
-_H3_BLOCK_KEY_RE = re.compile(r"^transformer_blocks\.(\d+)\.")
+_BLOCK_KEY_RE = re.compile(r"^transformer_blocks\.(\d+)\.")
 
 
-class MiniMaxH3ShardCheckpoint:
+class SafetensorsCheckpoint:
     """Index safetensors headers for selective loading, using upstream file discovery."""
 
     def __init__(self, checkpoint_dir, weight_map=None):
@@ -29,7 +29,7 @@ class MiniMaxH3ShardCheckpoint:
             return
         files = sorted(checkpoint.glob("*.safetensors")) if checkpoint.is_dir() else [checkpoint]
         if not files or any(not path.is_file() for path in files):
-            raise FileNotFoundError(f"MiniMax-H3 safetensors checkpoint not found: {checkpoint}")
+            raise FileNotFoundError(f"Safetensors checkpoint not found: {checkpoint}")
         # Match the upstream model loader's directory/single-file discovery.
         # Read only headers here; tensor data is loaded when a block requests it.
         for path in files:
@@ -48,7 +48,7 @@ class MiniMaxH3ShardCheckpoint:
         entry = header[name]
         dtypes = {"BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32}
         if entry["dtype"] not in dtypes:
-            raise ValueError(f"Shared H3 weight loading does not support dtype {entry['dtype']}: {name}")
+            raise ValueError(f"Shared weight loading does not support dtype {entry['dtype']}: {name}")
         dtype, shape = dtypes[entry["dtype"]], tuple(entry["shape"])
         begin, end = entry["data_offsets"]
         nbytes = math.prod(shape) * dtype.itemsize
@@ -86,19 +86,19 @@ class MiniMaxH3ShardCheckpoint:
 
     @property
     def block_indices(self):
-        pattern = _H3_BLOCK_KEY_RE
+        pattern = _BLOCK_KEY_RE
         return tuple(sorted({int(match.group(1)) for name in self.weight_map if (match := pattern.match(name)) is not None}))
 
     def shard_for_tensor(self, name):
         try:
             return self.weight_map[name]
         except KeyError as error:
-            raise KeyError(f"MiniMax-H3 checkpoint is missing requested tensor: {name}") from error
+            raise KeyError(f"Safetensors checkpoint is missing requested tensor: {name}") from error
 
     def load_tensors(self, names, device="cpu"):
         missing = sorted(name for name in names if name not in self.weight_map)
         if missing:
-            raise KeyError(f"MiniMax-H3 checkpoint is missing requested tensors: {missing}")
+            raise KeyError(f"Safetensors checkpoint is missing requested tensors: {missing}")
 
         by_shard = defaultdict(list)
         for name in names:
@@ -113,4 +113,4 @@ class MiniMaxH3ShardCheckpoint:
         return tensors
 
 
-__all__ = ["MiniMaxH3ShardCheckpoint"]
+__all__ = ["SafetensorsCheckpoint"]

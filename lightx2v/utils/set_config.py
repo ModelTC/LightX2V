@@ -30,6 +30,7 @@ def get_default_config():
             "use_ret_steps": False,
             "use_bfloat16": True,
             "lora_configs": None,  # List of dicts with 'path' and 'strength' keys
+            "lora_merge_force_fp32": False,
             "parallel": False,
             "seq_parallel": False,
             "cfg_parallel": False,
@@ -57,6 +58,11 @@ def build_startup_config(config_data):
         config["fps"] = config_data["fps"]
 
     load_model_config(config)
+    if AI_DEVICE == "mps":
+        assert not any(config.get(key) for key in ("lora_configs", "lora_path", "lora_dynamic_apply", "lora_merge_force_fp32")), (
+            "MPS inference does not support LoRA configs, dynamic LoRA, or load-time LoRA merging. "
+            "Merge LoRA into the model weights offline before inference, remove the LoRA settings, and load the merged model checkpoint."
+        )
     return config
 
 

@@ -14,6 +14,7 @@ from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_re
 from lightx2v.models.input_encoders.hf.qwen_image_21.qwen3vl import QwenImage21TextEncoder
 from lightx2v.models.networks.qwen_image_21.fp8_f16_accum_policy import ACTIVATION_QMAX, validate_checkpoint
 from lightx2v.models.networks.qwen_image_21.infer.pre_infer import build_token_layout
+from lightx2v.models.networks.qwen_image_21.lora import QwenImage21LoraAdapter, validate_lora_config
 from lightx2v.models.networks.qwen_image_21.model import QwenImage21TransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
@@ -45,12 +46,12 @@ class QwenImage21Runner(DefaultRunner):
             "cfg_parallel",
             "pipefusion_parallel",
             "disagg_mode",
-            "lora_configs",
             "vae_tiling",
         )
         for key in unsupported:
             if config.get(key):
                 raise ValueError(f"qwen_image_21 does not yet support {key}")
+        validate_lora_config(config)
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("qwen_image_21 supports model and block CPU offload")
         if config.get("seq_parallel"):
@@ -98,7 +99,21 @@ class QwenImage21Runner(DefaultRunner):
             assert config["sample_guide_scale"] > 1, "enable_cfg=true requires sample_guide_scale > 1"
         if config["infer_steps"] < 1:
             raise ValueError("infer_steps must be positive")
+        if config.get("dit_disk_streaming") or config.get("text_encoder_disk_streaming"):
+            self._validate_mps_streaming_config(config)
         super().__init__(config)
+
+    @staticmethod
+    def _validate_mps_streaming_config(config):
+        if AI_DEVICE != "mps" or config.get("task") != "t2i":
+            raise ValueError("Qwen-Image-2.1 disk streaming currently requires PLATFORM=mps and task=t2i")
+        if not config.get("cpu_offload") or config.get("offload_granularity") != "block":
+            raise ValueError("Qwen-Image-2.1 MPS streaming requires cpu_offload=true and offload_granularity=block")
+        if not config.get("dit_disk_streaming") or not config.get("text_encoder_disk_streaming") or not config.get("text_encoder_cpu_offload"):
+            raise ValueError("Qwen-Image-2.1 MPS streaming requires both DiT/text encoder disk streaming and text_encoder_cpu_offload=true")
+        for key in ("warmup", "dit_quantized", "text_encoder_quantized", "tensor_parallel", "text_encoder_tensor_parallel", "seq_parallel", "shared_cpu_weights"):
+            if config.get(key):
+                raise ValueError(f"Qwen-Image-2.1 MPS streaming does not support {key}")
 
     def get_supported_tasks(self):
         if self.config.get("task") is not None:
@@ -158,9 +173,20 @@ class QwenImage21Runner(DefaultRunner):
             if reason is not None:
                 raise RuntimeError(f"qwen_image_21 fp8-f16-accum is unavailable: {reason}")
             validate_checkpoint(self.config["dit_quantized_ckpt"])
-        return QwenImage21TransformerModel(str(Path(self.config["model_path"]) / "transformer"), self.config, self.init_device)
+        lora_kwargs = {}
+        if self.config.get("lora_dynamic_apply", False):
+            lora = self.config["lora_configs"][0]
+            lora_kwargs = {"lora_path": lora["path"], "lora_strength": lora.get("strength", 1.0)}
+        model = QwenImage21TransformerModel(str(Path(self.config["model_path"]) / "transformer"), self.config, self.init_device, **lora_kwargs)
+        if self.config.get("lora_configs") and not self.config.get("lora_dynamic_apply", False):
+            QwenImage21LoraAdapter(model).apply_lora(self.config["lora_configs"])
+        return model
 
     def load_text_encoder(self):
+        if self.config.get("text_encoder_disk_streaming", False):
+            from lightx2v.models.input_encoders.hf.qwen_image_21.qwen3vl_mps import QwenImage21MpsTextEncoder
+
+            return [QwenImage21MpsTextEncoder(self.config)]
         return [QwenImage21TextEncoder(self.config)]
 
     def load_vae(self):
@@ -250,6 +276,8 @@ class QwenImage21Runner(DefaultRunner):
         elif self.config.get("offload_granularity", "model") == "model":
             logger.info("Moving the Qwen-Image-2.1 transformer to the accelerator")
             self.model.to_cuda()
+        elif self.config.get("dit_disk_streaming", False):
+            logger.info("Qwen-Image-2.1 disk streaming enabled; prefetching into two shared MPS block buffers")
         else:
             logger.info("Qwen-Image-2.1 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
             self.model.pre_weight.to_cuda()
@@ -261,7 +289,10 @@ class QwenImage21Runner(DefaultRunner):
         if not self.config.get("cpu_offload", False):
             return
         self.model.clear_condition_kv()
-        if self.model.block_offload:
+        if self.config.get("dit_disk_streaming", False):
+            self.model.transformer_infer.compiled_blocks.clear()
+            self.model.transformer_weights.release()
+        elif self.model.block_offload:
             self.model.pre_weight.to_cpu()
             self.model.post_weight.to_cpu()
         else:
