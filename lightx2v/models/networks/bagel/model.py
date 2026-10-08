@@ -24,9 +24,6 @@ from lightx2v.models.runners.bagel.t2i_utils import validate_bagel_model_assets
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 
-VLM_THINK_SYSTEM_PROMPT = """You should first think about the reasoning process in the mind and then provide the user with the answer.
-The reasoning process is enclosed within <think> </think> tags, i.e. <think> reasoning process here </think> answer here"""
-
 GEN_THINK_SYSTEM_PROMPT = """You should first think about the planning process in the mind and then generate the image.
 The planning process is enclosed within <think> </think> tags, i.e. <think> planning process here </think> image here"""
 
@@ -264,7 +261,7 @@ class BagelModel:
 
         return gen_context
 
-    def prepare_vit_images(self, curr_kvlens, curr_rope, images, new_token_ids, transforms=None):
+    def prepare_vit_images(self, curr_kvlens, curr_rope, images, new_token_ids):
         packed_vit_token_indexes = list()
         vit_token_seqlens, packed_vit_tokens, packed_vit_position_ids = list(), list(), list()
         packed_text_ids, packed_text_indexes = list(), list()
@@ -283,7 +280,7 @@ class BagelModel:
             curr += 1
             query_curr += 1
 
-            image_tensor = transforms(image) if transforms is not None else pil_to_bagel_tensor(resize_pil_for_vit(image))
+            image_tensor = pil_to_bagel_tensor(resize_pil_for_vit(image))
             vit_position_ids = self.scheduler.get_flattened_position_ids(
                 image_tensor.size(1),
                 image_tensor.size(2),
@@ -376,7 +373,7 @@ class BagelModel:
         )
         return output[1]
 
-    def prepare_vae_images(self, curr_kvlens, curr_rope, images, new_token_ids, timestep=0, transforms=None):
+    def prepare_vae_images(self, curr_kvlens, curr_rope, images, new_token_ids, timestep=0):
         patchified_vae_latent_shapes, packed_vae_position_ids = list(), list()
         packed_vae_token_indexes = list()
         packed_text_ids, packed_text_indexes = list(), list()
@@ -396,7 +393,7 @@ class BagelModel:
             curr += 1
             query_curr += 1
 
-            image_tensor = transforms(image) if transforms is not None else pil_to_bagel_tensor(image)
+            image_tensor = pil_to_bagel_tensor(image)
             vae_image_tensors.append(image_tensor)
             vae_position_ids = self.scheduler.get_flattened_position_ids(
                 image_tensor.size(1),
@@ -506,16 +503,7 @@ class BagelModel:
         return output[1]
 
     @torch.no_grad()
-    def update_context_image(
-        self,
-        image,
-        gen_context,
-        vae_model,
-        vae=True,
-        vit=True,
-        vae_transform=None,
-        vit_transform=None,
-    ):
+    def update_context_image(self, image, gen_context, vae_model, vae=True, vit=True):
         if not (vae or vit):
             raise ValueError("BAGEL image context update requires at least one of VAE or ViT.")
 
@@ -531,7 +519,6 @@ class BagelModel:
                 curr_rope=ropes,
                 images=[image],
                 new_token_ids=self.new_token_ids,
-                transforms=vae_transform,
             )
             past_key_values = self.forward_cache_update_vae(vae_model, past_key_values, **generation_input)
 
@@ -543,7 +530,6 @@ class BagelModel:
                 curr_rope=ropes,
                 images=[image],
                 new_token_ids=self.new_token_ids,
-                transforms=vit_transform,
             )
             past_key_values = self.forward_cache_update_vit(past_key_values, **generation_input)
 
@@ -672,6 +658,9 @@ class BagelModel:
 
     @torch.no_grad()
     def prepare_inputs(self, input_info, scheduler, vae_model=None):
+        if self.understanding_output:
+            raise NotImplementedError("BAGEL visual understanding output is not implemented in LightX2V.")
+
         self.set_scheduler(scheduler)
         gen_context = self.init_gen_context()
         cfg_text_context = deepcopy(gen_context) if self.enable_cfg else None
@@ -693,10 +682,7 @@ class BagelModel:
         output_list = []
         with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
             if self.think:
-                if self.understanding_output:
-                    system_prompt = VLM_THINK_SYSTEM_PROMPT
-                else:
-                    system_prompt = GEN_THINK_SYSTEM_PROMPT
+                system_prompt = GEN_THINK_SYSTEM_PROMPT
                 gen_context = self.update_context_text(system_prompt, gen_context)
                 if cfg_img_context is not None:
                     cfg_img_context = self.update_context_text(system_prompt, cfg_img_context)
@@ -708,27 +694,22 @@ class BagelModel:
                     if cfg_img_context is not None:
                         cfg_img_context = self.update_context_text(input_term, cfg_img_context)
                 elif isinstance(input_term, Image.Image):
-                    gen_context = self.update_context_image(input_term, gen_context, vae_model=vae_model, vae=not self.understanding_output, vit=True)
+                    gen_context = self.update_context_image(input_term, gen_context, vae_model=vae_model, vae=True, vit=True)
                     image_shape = input_term.size[::-1]
                     if cfg_text_context is not None:
                         cfg_text_context = deepcopy(gen_context)
                 else:
                     raise ValueError(f"Unsupported input type: {type(input_term)}")
 
-            if self.understanding_output:
-                raise NotImplementedError("BAGEL visual understanding output is not implemented in LightX2V.")
-            else:
-                if self.think:
-                    gen_text = self.gen_text(
-                        gen_context,
-                        do_sample=self.do_sample,
-                        temperature=self.text_temperature,
-                        max_length=self.max_think_token_n,
-                    )
-                    gen_context = self.update_context_text(gen_text, gen_context)
-                    output_list.append(gen_text)
-                else:
-                    gen_text = None
+            if self.think:
+                gen_text = self.gen_text(
+                    gen_context,
+                    do_sample=self.do_sample,
+                    temperature=self.text_temperature,
+                    max_length=self.max_think_token_n,
+                )
+                gen_context = self.update_context_text(gen_text, gen_context)
+                output_list.append(gen_text)
 
         kv_lens = gen_context["kv_lens"]
         ropes = gen_context["ropes"]

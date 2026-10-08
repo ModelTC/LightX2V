@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from loguru import logger
 
@@ -14,7 +14,7 @@ class ImageGenerationService(BaseGenerationService):
     def get_task_type(self) -> str:
         return "t2i,i2i"
 
-    async def generate_with_stop_event(self, message: ImageTaskRequest, stop_event) -> Optional[Any]:
+    async def generate_with_stop_event(self, message: ImageTaskRequest, stop_event) -> Optional[TaskResponse]:
         try:
             task_data = self.prepare_task_data(message)
 
