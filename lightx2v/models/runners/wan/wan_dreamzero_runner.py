@@ -46,6 +46,8 @@ class WanDreamZeroRunner(WanRunner):
         self.cache_name = "pos"
 
     def init_scheduler(self):
+        if self.config["infer_steps"] != self.config["action_infer_steps"]:
+            raise ValueError("DreamZero requires infer_steps to equal action_infer_steps")
         self.scheduler = DreamZeroFlowUniPCScheduler(self.config, shift_key="sample_shift", infer_steps_key="infer_steps")
         self.action_scheduler = DreamZeroFlowUniPCScheduler(self.config, shift_key="action_sample_shift", infer_steps_key="action_infer_steps")
 

@@ -103,33 +103,20 @@ class HidreamO1ImageRunner(DefaultRunner):
 
     def _resolve_generation_config(self):
         model_type = self.config.get("hidream_model_type", "full")
-        if model_type == "full":
-            guidance_scale = float(self.config.get("guidance_scale", 5.0))
-            return {
-                "num_inference_steps": int(self.config.get("infer_steps", self.config.get("num_inference_steps", 50))),
-                "guidance_scale": guidance_scale,
-                "enable_cfg": self.config["enable_cfg"],
-                "shift": float(self.config.get("shift", 3.0)),
-                "timesteps_list": None,
-                "scheduler_name": self.config.get("scheduler_name", "default"),
-                "noise_scale_start": float(self.config.get("noise_scale_start", 8.0)),
-                "noise_scale_end": float(self.config.get("noise_scale_end", 8.0)),
-                "noise_clip_std": float(self.config.get("noise_clip_std", 0.0)),
-            }
-        if model_type == "dev":
-            guidance_scale = float(self.config.get("guidance_scale", 0.0))
-            return {
-                "num_inference_steps": int(self.config.get("infer_steps", self.config.get("num_inference_steps", 28))),
-                "guidance_scale": guidance_scale,
-                "enable_cfg": self.config["enable_cfg"],
-                "shift": float(self.config.get("shift", 1.0)),
-                "timesteps_list": self.config.get("timesteps_list", self.default_timesteps),
-                "scheduler_name": self.config.get("scheduler_name", "flash"),
-                "noise_scale_start": float(self.config.get("noise_scale_start", 8.0)),
-                "noise_scale_end": float(self.config.get("noise_scale_end", 8.0)),
-                "noise_clip_std": float(self.config.get("noise_clip_std", 8.0)),
-            }
-        raise ValueError(f"Unsupported HiDream hidream_model_type: {model_type}")
+        if model_type not in ("full", "dev"):
+            raise ValueError(f"Unsupported HiDream hidream_model_type: {model_type}")
+        is_dev = model_type == "dev"
+        return {
+            "num_inference_steps": self.config["infer_steps"],
+            "guidance_scale": float(self.config.get("guidance_scale", 0.0 if is_dev else 5.0)),
+            "enable_cfg": self.config["enable_cfg"],
+            "shift": float(self.config.get("shift", 1.0 if is_dev else 3.0)),
+            "timesteps_list": self.config.get("timesteps_list", self.default_timesteps) if is_dev else None,
+            "scheduler_name": self.config.get("scheduler_name", "flash" if is_dev else "default"),
+            "noise_scale_start": float(self.config.get("noise_scale_start", 8.0)),
+            "noise_scale_end": float(self.config.get("noise_scale_end", 8.0)),
+            "noise_clip_std": float(self.config.get("noise_clip_std", 8.0 if is_dev else 0.0)),
+        }
 
     @ProfilingContext4DebugL2("Run HiDream input encoder")
     def _run_input_encoder_local_t2i(self):

@@ -20,10 +20,6 @@
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 1,
         "sender_engine_rank": 0,
-        "receiver_engine_rank": 1,
-        "protocol": "rdma",
-        "local_hostname": "localhost",
-        "metadata_server": "P2PHANDSHAKE",
-        "device_name": ""
+        "receiver_engine_rank": 1
     }
 }

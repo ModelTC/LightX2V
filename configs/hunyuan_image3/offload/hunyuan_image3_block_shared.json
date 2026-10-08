@@ -6,7 +6,6 @@
     1024,
     1024
   ],
-  "feature_caching": "NoCaching",
   "moe_backend": "flashinfer",
   "attn_impl": "torch_sdpa",
   "flashinfer_autotune_mode": "auto",

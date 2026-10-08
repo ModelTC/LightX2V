@@ -1,11 +1,9 @@
 {
     "infer_steps": 50,
     "num_frames": 81,
-    "text_len": 512,
     "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
-    "cross_attn_2_type": "sage_attn2",
     "sample_guide_scale": 5,
     "sample_shift": 5,
     "enable_cfg": true,
@@ -18,8 +16,6 @@
         "encoder_engine_rank": 0,
         "transformer_engine_rank": 1,
         "decoder_engine_rank": 2,
-        "protocol": "rdma",
-        "local_hostname": "localhost",
-        "metadata_server": "P2PHANDSHAKE"
+        "local_hostname": "localhost"
     }
 }

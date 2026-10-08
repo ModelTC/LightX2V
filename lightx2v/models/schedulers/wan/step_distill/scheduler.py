@@ -17,6 +17,11 @@ class WanStepDistillScheduler(WanScheduler):
         self.sigma_max = 1.0
         self.sigma_min = 0.0
 
+    def refresh_from_config(self, config):
+        super().refresh_from_config(config)
+        self.denoising_step_list = config["denoising_step_list"]
+        self.infer_steps = len(self.denoising_step_list)
+
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
         self.set_denoising_timesteps(device=AI_DEVICE)

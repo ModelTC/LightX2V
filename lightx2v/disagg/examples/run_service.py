@@ -52,9 +52,7 @@ def _normalize_disagg_config(config: dict) -> dict:
             "encoder_engine_rank": "encoder_engine_rank",
             "transformer_engine_rank": "transformer_engine_rank",
             "decoder_engine_rank": "decoder_engine_rank",
-            "protocol": "protocol",
             "local_hostname": "local_hostname",
-            "metadata_server": "metadata_server",
         }
         for src_key, dst_key in mapping.items():
             if src_key in disagg_cfg:
@@ -82,7 +80,6 @@ def _build_runtime_config(args: argparse.Namespace) -> tuple[dict, dict]:
     config = build_startup_config({"model_path": args.model_path, "task": args.task, "model_cls": args.model_cls, "config_json": args.config_json})
 
     config = _normalize_disagg_config(config)
-    raw_cfg = _normalize_disagg_config(raw_cfg)
 
     return config, raw_cfg
 
@@ -94,7 +91,7 @@ def main():
 
     if args.engine_rank is not None and service_mode in {"encoder", "transformer", "decoder"}:
         rank_key = f"{service_mode}_engine_rank"
-        config[rank_key] = int(args.engine_rank)
+        config[rank_key] = args.engine_rank
 
     seed_all(args.seed)
     logger.info("Starting disagg service mode={}", service_mode)

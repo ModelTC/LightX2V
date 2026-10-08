@@ -1239,13 +1239,13 @@ class InfiniteTalkRunner(WanRunner):
                 os.remove(tmp_path)
 
     def end_run(self):
-        if self.va_controller is not None:
-            self.va_controller.clear()
-            self.va_controller = None
-        if self.stream_saved_video_needs_audio_remux:
-            out_path = self.input_info.save_result_path
-            mux_audio = self._resolve_mux_audio_path()
-            try:
+        try:
+            if self.va_controller is not None:
+                self.va_controller.clear()
+                self.va_controller = None
+            if self.stream_saved_video_needs_audio_remux:
+                out_path = self.input_info.save_result_path
+                mux_audio = self._resolve_mux_audio_path()
                 if not mux_audio or not os.path.isfile(mux_audio):
                     audio_input = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
                     raise FileNotFoundError(f"InfiniteTalk mux audio is unavailable for audio input: {audio_input}")
@@ -1253,17 +1253,24 @@ class InfiniteTalkRunner(WanRunner):
                     raise FileNotFoundError(f"InfiniteTalk stream video is unavailable for audio mux: {out_path}")
                 logger.info(f"Muxing InfiniteTalk stream audio {mux_audio} into {out_path}")
                 self._mux_audio(out_path, mux_audio)
-            finally:
-                self.stream_saved_video_needs_audio_remux = False
-        self._remove_video_audio_path()
-        self._clear_cond_frame_source()
-        self._remove_cond_video_temp_path()
-        self.video_audio_array = None
-        self.stream_save_video = False
-        if hasattr(self, "inputs"):
-            del self.inputs
-        torch.cuda.empty_cache()
-        gc.collect()
+        finally:
+            self.stream_saved_video_needs_audio_remux = False
+            self._remove_video_audio_path()
+            self._clear_cond_frame_source()
+            self._remove_cond_video_temp_path()
+            self.video_audio_array = None
+            self.stream_save_video = False
+            self.inputs = None
+            self.dit_inputs = None
+            self.cond_image = None
+            self.cond_frame = None
+            self.full_audio_embs = None
+            self.gen_video_list = None
+            self.gen_video = None
+            self.gen_video_final = None
+            self.scheduler.clear()
+            torch.cuda.empty_cache()
+            gc.collect()
 
     @ProfilingContext4DebugL1(
         "RUN pipeline",

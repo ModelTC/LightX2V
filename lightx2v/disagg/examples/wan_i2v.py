@@ -143,7 +143,7 @@ def main():
 
     # 4.1 Text Encoding
     logger.info("Running text encoding...")
-    text_len = config.get("text_len", 512)
+    text_len = config["text_len"]
 
     context = text_encoder.infer([prompt])
     context = torch.stack([torch.cat([u, u.new_zeros(text_len - u.size(0), u.size(1))]) for u in context])

@@ -566,7 +566,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             target_width = self.target_width
             target_height = self.target_height
 
-        scale_factor = max(target_width / original_width, self.target_height / original_height)
+        scale_factor = max(target_width / original_width, target_height / original_height)
         resize_width = int(round(original_width * scale_factor))
         resize_height = int(round(original_height * scale_factor))
 

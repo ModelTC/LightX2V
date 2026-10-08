@@ -1,14 +1,11 @@
 #!/bin/bash
 
-export lightx2v_path=/workspace
-export model_path=/data/nvme1/models/meituan-longcat/LongCat-Image
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/LongCat-Image
 
 export CUDA_VISIBLE_DEVICES=2,3
 
-# Source base configuration if exists
-if [ -f "${lightx2v_path}/scripts/base/base.sh" ]; then
-    source ${lightx2v_path}/scripts/base/base.sh
-fi
+source ${lightx2v_path}/scripts/base/base.sh
 torchrun --nproc_per_node=2 -m lightx2v.infer \
 --model_cls longcat_image \
 --task t2i \
