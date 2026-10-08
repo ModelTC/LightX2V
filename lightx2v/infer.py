@@ -6,7 +6,6 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from lightx2v.models.networks.bagel.sensenova_tasks import OMNI_VISION_SUBTASK_CHOICES
 from lightx2v.models.runners.runner_factory import RUNNER_MODULES, build_runner
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
@@ -74,16 +73,8 @@ def main():
             "sr",
             "recon",
             "i23d",
-            "omni_vision_task",
         ],
         default=None,
-    )
-    parser.add_argument(
-        "--omni_vision_subtask",
-        type=str,
-        choices=OMNI_VISION_SUBTASK_CHOICES,
-        default=None,
-        help="Subtask used with --task omni_vision_task.",
     )
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
@@ -192,9 +183,6 @@ def main():
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", default=None, help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
-    parser.add_argument("--raw_output_path", type=str, default=None, help="Raw prediction output path for SenseNova-Vision.")
-    parser.add_argument("--glb_output_path", type=str, default=None, help="GLB scene output path for SenseNova-Vision.")
-    parser.add_argument("--postprocess_predictions", action=argparse.BooleanOptionalAction, default=None, help="Postprocess SenseNova-Vision predictions.")
     parser.add_argument("--size", type=int, nargs="+", default=None, help="Output size in pixels: HEIGHT WIDTH")
     parser.add_argument("--aspect_ratio", type=str, default=None)
     parser.add_argument("--align_image_size", action=argparse.BooleanOptionalAction, default=None, help="Align HunyuanImage3 reference image sizes during inference.")

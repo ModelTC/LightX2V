@@ -106,31 +106,6 @@ def load_model_config(config):
     elif config["model_cls"] in {"hunyuan3d", "hidream_o1_image"}:
         # These runners load their own model configuration.
         pass
-    elif config["model_cls"] == "sensenova_vision":
-        llm_config_path = os.path.join(config["model_path"], "llm_config.json")
-        vit_config_path = os.path.join(config["model_path"], "vit_config.json")
-        missing = [path for path in (llm_config_path, vit_config_path) if not os.path.isfile(path)]
-        if missing:
-            raise FileNotFoundError(f"SenseNova-Vision model_path must contain llm_config.json and vit_config.json; missing: {missing}")
-        with open(llm_config_path, "r") as f:
-            config["llm_config"] = json.load(f)
-        with open(vit_config_path, "r") as f:
-            config["vit_config"] = json.load(f)
-
-        # SenseNova's root config.json is project metadata, not a Bagel model
-        # config. Assemble the shared Bagel structure explicitly instead.
-        config["vae_config"] = {"z_channels": 16, "downsample": 8}
-        config["visual_gen"] = True
-        config["visual_und"] = True
-        config["latent_patch_size"] = 2
-        config["max_latent_size_update"] = 64
-        config["vit_max_num_patch_per_side"] = 70
-        config["connector_act"] = "gelu_pytorch_tanh"
-        config["interpolate_pos"] = False
-        config["enable_vision_context"] = True
-        sensenova_source_path = os.getenv("SENSENOVA_SOURCE_PATH", "").strip()
-        if sensenova_source_path:
-            config["sensenova_source_path"] = sensenova_source_path
     elif config["model_cls"] == "wan2.2_s2v":
         config_path = os.path.join(config["model_path"], "config.json")
         if os.path.exists(config_path):

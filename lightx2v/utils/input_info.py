@@ -441,16 +441,6 @@ class WorldPlayT2VInputInfo(T2VInputInfo):
     action: Optional[torch.Tensor] = None
 
 
-@dataclass
-class SenseNovaVisionInputInfo(InputInfo):
-    prompt: str = ""
-    image_path: str = ""
-    omni_vision_subtask: str | None = None
-    raw_output_path: str = ""
-    glb_output_path: str = ""
-    postprocess_predictions: Optional[bool] = None
-
-
 INPUT_INFO_TYPES = {
     "t2v": T2VInputInfo,
     "i2v": I2VInputInfo,
@@ -476,7 +466,6 @@ INPUT_INFO_TYPES = {
     "ltx2_s2v": LTX2S2VInputInfo,
     "recon": WorldMirrorReconInputInfo,
     "i23d": Hunyuan3DShapeInputInfo,
-    "omni_vision_task": SenseNovaVisionInputInfo,
 }
 
 

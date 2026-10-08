@@ -34,7 +34,6 @@ RUNNER_MODULES = {
     "seedvr2": "lightx2v.models.runners.seedvr.seedvr_runner",
     "seko_talk": "lightx2v.models.runners.wan.wan_audio_runner",
     "seko_talk_ar": "lightx2v.models.runners.wan.wan_audio_runner",
-    "sensenova_vision": "lightx2v.models.runners.bagel.sensenova_vision_runner",
     "swiftvr": "lightx2v.models.runners.swiftvr.swiftvr_runner",
     "wan2.1": "lightx2v.models.runners.wan.wan_runner",
     "wan2.1_sf": "lightx2v.models.runners.wan.wan_sf_runner",

@@ -106,60 +106,6 @@ class ImageTaskRequest(BaseTaskRequest):
     align_image_size: Optional[bool] = Field(None, description="Align HunyuanImage3 reference image sizes during inference")
 
 
-class SenseNovaVisionTaskRequest(BaseModel):
-    """One request for the multi-task SenseNova-Vision service."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
-    task: str = Field(..., description="Public SenseNova-Vision task name")
-    prompt: str = Field("", description="Task prompt or question")
-    images: list[str] = Field(
-        default_factory=list,
-        description="Input images as base64/data URLs, HTTP(S) URLs, or server-local paths",
-    )
-    seed: Optional[int] = Field(None, description="Non-negative seed; omitted or null defaults to 42")
-    visualize: bool = Field(True, description="Generate an official-style visualization when supported")
-    postprocess_3d: bool = Field(False, description="Generate a GLB scene for recon3d")
-
-    def get(self, key, default=None):
-        return getattr(self, key, default)
-
-
-class SenseNovaArtifact(BaseModel):
-    kind: str
-    media_type: str
-    filename: str
-    url: str
-    size_bytes: int
-
-
-class SenseNovaVisionTaskSubmission(BaseModel):
-    task_id: str
-    task_status: str
-    task: str
-
-
-class SenseNovaVisionTaskResult(BaseModel):
-    task_id: str
-    status: str
-    task: str
-    runner_task: str
-    mode: str
-    text: Optional[str] = None
-    artifacts: list[SenseNovaArtifact] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
-class SenseNovaVisionGenerationResponse(BaseModel):
-    """Internal response passed from the generation service to TaskManager."""
-
-    task_id: str
-    task_status: str
-    save_result_path: str = ""
-    result_data: dict[str, Any]
-
-
 class TaskStatusMessage(BaseModel):
     task_id: str = Field(..., description="Task ID")
 
