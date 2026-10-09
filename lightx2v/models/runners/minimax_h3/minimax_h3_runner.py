@@ -424,6 +424,8 @@ class MiniMaxH3Runner(DefaultRunner):
         kinds = ["image" if "image" in entry else "video" if "video" in entry else "audio" for entry in entries]
         if kinds.count("image") > MAX_REFERENCE_IMAGES or kinds.count("video") > MAX_REFERENCE_VIDEOS:
             raise ValueError("MiniMax-H3 ref2av reference image/video count exceeds 9/3")
+        if kinds.count("audio") > MAX_REFERENCE_AUDIOS:
+            raise ValueError(f"MiniMax-H3 ref2av accepts at most {MAX_REFERENCE_AUDIOS} audio references")
         if all(kind == "audio" for kind in kinds):
             raise ValueError("MiniMax-H3 ref2av does not allow audio-only references")
 
@@ -432,7 +434,6 @@ class MiniMaxH3Runner(DefaultRunner):
             raise ValueError(f"reference_image_resize_mode must be one of {REFERENCE_IMAGE_RESIZE_MODES}, got {resize_mode!r}")
 
         references = []
-        audio_count = 0
         max_duration = self.request_num_frames / 24.0
         for entry, kind in zip(entries, kinds):
             if kind == "image":
@@ -463,12 +464,10 @@ class MiniMaxH3Runner(DefaultRunner):
                 frames = prepare_reference_frames(resample_reference_frames(frames, float(entry.get("fps", fps))), self.request_num_frames)
                 reference = MiniMaxH3PreparedReference("video", has_audio=soundtrack is not None, frames=frames)
                 if soundtrack is not None:
-                    audio_count += 1
                     waveform = soundtrack.waveform.squeeze(0) if soundtrack.waveform.ndim == 3 else soundtrack.waveform
                     reference.waveform = prepare_reference_waveform(waveform, soundtrack.sampling_rate, self.audio_vae.sampling_rate, max_duration)
                 references.append(reference)
                 continue
-            audio_count += 1
             value = entry["audio"]
             if isinstance(value, (str, os.PathLike)):
                 waveform, sample_rate = decode_reference_audio(value)
@@ -489,8 +488,6 @@ class MiniMaxH3Runner(DefaultRunner):
                     waveform=prepare_reference_waveform(waveform, decoded.sampling_rate, self.audio_vae.sampling_rate, max_duration),
                 )
             )
-        if audio_count > MAX_REFERENCE_AUDIOS:
-            raise ValueError(f"MiniMax-H3 ref2av accepts at most {MAX_REFERENCE_AUDIOS} audio-bearing references")
         return references
 
     def _ensure_vae_loaded(self):
