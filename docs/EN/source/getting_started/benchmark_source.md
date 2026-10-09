@@ -21,6 +21,7 @@
 ### 🎬 480P 5s Video Test
 
 **Test Configuration:**
+
 - **Model**: [Wan2.1-I2V-14B-480P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-Lightx2v)
 - **Parameters**: `infer_steps=40`, `seed=42`, `enable_cfg=True`
 
@@ -41,6 +42,7 @@
 ### 🎬 720P 5s Video Test
 
 **Test Configuration:**
+
 - **Model**: [Wan2.1-I2V-14B-720P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-Lightx2v)
 - **Parameters**: `infer_steps=40`, `seed=1234`, `enable_cfg=True`
 
@@ -76,6 +78,7 @@
 ### 🎬 480P 5s Video Test
 
 **Test Configuration:**
+
 - **Model**: [Wan2.1-I2V-14B-480P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-Lightx2v)
 - **Parameters**: `infer_steps=40`, `seed=42`, `enable_cfg=True`
 
@@ -87,13 +90,14 @@
 | **LightX2V_5** | 738 | 16 | **1.05x** | <video src="https://github.com/user-attachments/assets/ce72ab7d-50a7-4467-ac8c-a6ed1b3827a7" width="200px"></video> |
 | **LightX2V_5-Distill** | 68 | 16 | **11.45x** | <video src="https://github.com/user-attachments/assets/5df4b8a7-3162-47f8-a359-e22fbb4d1836" width="200px"></video> |
 | **LightX2V_6** | 630 | 12 | **1.24x** | <video src="https://github.com/user-attachments/assets/d13cd939-363b-4f8b-80d9-d3a145c46676" width="200px"></video> |
-| **LightX2V_6-Distill** | 63 | 12 | **🏆 12.36x** | <video src="https://github.com/user-attachments/assets/f372bce4-3c2f-411d-aa6b-c4daeb467d90" width="200px"></video>
+| **LightX2V_6-Distill** | 63 | 12 | **🏆 12.36x** | <video src="https://github.com/user-attachments/assets/f372bce4-3c2f-411d-aa6b-c4daeb467d90" width="200px"></video> |
 
 ---
 
 ### 🎬 720P 5s Video Test
 
 **Test Configuration:**
+
 - **Model**: [Wan2.1-I2V-14B-720P-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-Lightx2v)
 - **Parameters**: `infer_steps=40`, `seed=1234`, `enable_cfg=True`
 
@@ -109,41 +113,66 @@
 
 ---
 
-## 📖 Configuration Descriptions
+## 📖 LightX2V Configurations
 
-### 🖥️ H200 Environment Configuration Descriptions
+All LightX2V configurations use Wan2.1 I2V, SageAttention2, and 81 output frames. The JSON files in [configs/bench](https://github.com/ModelTC/LightX2V/tree/main/configs/bench) specify inference steps, quantization, caching, and offload. Set computation precision through environment variables: use `DTYPE=BF16` and set `SENSITIVE_LAYER_DTYPE` according to the table below.
 
-| Configuration | Technical Features |
-|:--------------|:------------------|
-| **Wan2.1 Official** | Based on [Wan2.1 official repository](https://github.com/Wan-Video/Wan2.1) original implementation |
-| **FastVideo** | Based on [FastVideo official repository](https://github.com/hao-ai-lab/FastVideo), using SageAttention2 backend optimization |
-| **LightX2V_1** | Uses SageAttention2 to replace native attention mechanism, adopts DIT BF16+FP32 (partial sensitive layers) mixed precision computation, improving computational efficiency while maintaining precision |
-| **LightX2V_2** | Unified BF16 precision computation, further reducing memory usage and computational overhead while maintaining generation quality |
-| **LightX2V_3** | Introduces FP8 quantization technology to significantly reduce computational precision requirements, combined with Tiling VAE technology to optimize memory usage |
-| **LightX2V_3-Distill** | Based on LightX2V_3 using 4-step distillation model(`infer_steps=4`, `enable_cfg=False`), further reducing inference steps while maintaining generation quality |
-| **LightX2V_4** | Based on LightX2V_3 with TeaCache(teacache_thresh=0.2) caching reuse technology, achieving acceleration through intelligent redundant computation skipping |
+| Benchmark | Configuration File | Sensitive Layer Precision |
+|:----------|:-------------------|:--------------------------|
+| **LightX2V_1** | [wan_i2v.json](https://github.com/ModelTC/LightX2V/blob/main/configs/bench/wan_i2v.json) | `FP32` |
+| **LightX2V_2** | [wan_i2v.json](https://github.com/ModelTC/LightX2V/blob/main/configs/bench/wan_i2v.json) | `BF16` |
+| **LightX2V_3** | [wan_i2v_fp8.json](https://github.com/ModelTC/LightX2V/blob/main/configs/bench/wan_i2v_fp8.json) | `BF16` |
+| **LightX2V_3-Distill** | [wan_i2v_fp8_distill.json](https://github.com/ModelTC/LightX2V/blob/main/configs/bench/wan_i2v_fp8_distill.json) | `BF16` |
+| **LightX2V_4** | [wan_i2v_fp8_teacache.json](https://github.com/ModelTC/LightX2V/blob/main/configs/bench/wan_i2v_fp8_teacache.json) | `BF16` |
+| **LightX2V_5** | [wan_i2v_fp8_offload.json](https://github.com/ModelTC/LightX2V/blob/main/configs/bench/wan_i2v_fp8_offload.json) | `FP32` |
+| **LightX2V_5-Distill** | [wan_i2v_fp8_offload_distill.json](https://github.com/ModelTC/LightX2V/blob/main/configs/bench/wan_i2v_fp8_offload_distill.json) | `FP32` |
+| **LightX2V_6** | [wan_i2v_fp8_offload.json](https://github.com/ModelTC/LightX2V/blob/main/configs/bench/wan_i2v_fp8_offload.json) | `BF16` |
+| **LightX2V_6-Distill** | [wan_i2v_fp8_offload_distill.json](https://github.com/ModelTC/LightX2V/blob/main/configs/bench/wan_i2v_fp8_offload_distill.json) | `BF16` |
 
-### 🖥️ RTX 4090 Environment Configuration Descriptions
+- Distill: 4-step DMD2 distillation with CFG disabled.
+- FP8: uses Tiling VAE.
+- Offload: block-level DiT CPU offload and T5 CPU offload.
+- TeaCache: threshold of `0.2`.
 
-| Configuration | Technical Features |
-|:--------------|:------------------|
-| **Wan2GP(profile=3)** | Implementation based on [Wan2GP repository](https://github.com/deepbeepmeep/Wan2GP), using MMGP optimization technology. Profile=3 configuration is suitable for RTX 3090/4090 environments with at least 32GB RAM and 24GB VRAM, adapting to limited memory resources by sacrificing VRAM. Uses quantized models: [480P model](https://huggingface.co/DeepBeepMeep/Wan2.1/blob/main/wan2.1_image2video_480p_14B_quanto_mbf16_int8.safetensors) and [720P model](https://huggingface.co/DeepBeepMeep/Wan2.1/blob/main/wan2.1_image2video_720p_14B_quanto_mbf16_int8.safetensors) |
-| **LightX2V_5** | Uses SageAttention2 to replace native attention mechanism, adopts DIT FP8+FP32 (partial sensitive layers) mixed precision computation, enables CPU offload technology, executes partial sensitive layers with FP32 precision, asynchronously offloads DIT inference process data to CPU, saves VRAM, with block-level offload granularity |
-| **LightX2V_5-Distill** | Based on LightX2V_5 using 4-step distillation model(`infer_steps=4`, `enable_cfg=False`), further reducing inference steps while maintaining generation quality |
-| **LightX2V_6** | Based on LightX2V_3 with CPU offload technology enabled, executes partial sensitive layers with FP32 precision, asynchronously offloads DIT inference process data to CPU, saves VRAM, with block-level offload granularity |
-| **LightX2V_6-Distill** | Based on LightX2V_6 using 4-step distillation model(`infer_steps=4`, `enable_cfg=False`), further reducing inference steps while maintaining generation quality |
+## ▶️ Running a Benchmark
 
----
+Select the configuration file and sensitive layer precision for the benchmark. Set `model_path` to the base model directory for the chosen resolution. For FP8 configurations, replace `dit_quantized_ckpt` in the JSON with the DiT quantized weight file or directory compatible with `fp8-sgl`. Distilled configurations require the corresponding StepDistill-CfgDistill weights.
 
-## 📁 Configuration Files Reference
+| Resolution | Size Arguments | Seed |
+|:-----------|:---------------|:-----|
+| 480P | `--size 480 832` | `--seed 42` |
+| 720P | `--size 720 1280` | `--seed 1234` |
 
-Benchmark-related configuration files and execution scripts are available at:
+This example runs **LightX2V_1 / 480P** on H200:
 
-| Type | Link | Description |
-|:-----|:-----|:------------|
-| **Configuration Files** | [configs/bench](https://github.com/ModelTC/LightX2V/tree/main/configs/bench) | Contains JSON files with various optimization configurations |
-| **Execution Scripts** | [scripts/bench](https://github.com/ModelTC/LightX2V/tree/main/scripts/bench) | Contains benchmark execution scripts |
+```bash
+lightx2v_path=path/to/LightX2V
+model_path=path/to/Wan2.1-I2V-14B-480P-Lightx2v
 
----
+export CUDA_VISIBLE_DEVICES=0
+export DTYPE=BF16
+export SENSITIVE_LAYER_DTYPE=FP32
+source "${lightx2v_path}/scripts/base/base.sh"
 
-> 💡 **Tip**: It is recommended to choose the appropriate optimization solution based on your hardware configuration to achieve the best performance.
+python -m lightx2v.infer \
+  --model_cls wan2.1 \
+  --task i2v \
+  --model_path "${model_path}" \
+  --config_json "${lightx2v_path}/configs/bench/wan_i2v.json" \
+  --image_path "${lightx2v_path}/assets/inputs/imgs/img_2.jpg" \
+  --prompt "A close-up cinematic view of a person cooking in a warm,sunlit kitchen, using a wooden spatula to stir-fry a colorful mix of freshvegetables—carrots, broccoli, and bell peppers—in a black frying pan on amodern induction stove. The scene captures the glistening texture of thevegetables, steam gently rising, and subtle reflections on the stove surface.In the background, soft-focus jars, fruits, and a window with natural daylightcreate a cozy atmosphere. The hand motions are smooth and rhythmic, with a realisticsense of motion blur and lighting." \
+  --negative_prompt "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" \
+  --size 480 832 \
+  --seed 42 \
+  --save_result_path "${lightx2v_path}/save_results/lightx2v_1.mp4"
+```
+
+For another benchmark, set `--config_json` and `SENSITIVE_LAYER_DTYPE` according to the table, and select the corresponding weights, resolution, seed, and output path. All configurations use `--model_cls wan2.1 --task i2v`.
+
+## 🔎 Comparison Implementations
+
+| Implementation | Description |
+|:---------------|:------------|
+| **Wan2.1 Official** | Original implementation from the [Wan2.1 official repository](https://github.com/Wan-Video/Wan2.1) |
+| **FastVideo** | Based on the [FastVideo official repository](https://github.com/hao-ai-lab/FastVideo), using the SageAttention2 backend |
+| **Wan2GP(profile=3)** | Based on the [Wan2GP repository](https://github.com/deepbeepmeep/Wan2GP), using MMGP optimization. Profile 3 targets RTX 3090/4090 systems with at least 32GB RAM and 24GB VRAM, trading higher VRAM usage for lower system memory requirements. Uses quantized models: [480P model](https://huggingface.co/DeepBeepMeep/Wan2.1/blob/main/wan2.1_image2video_480p_14B_quanto_mbf16_int8.safetensors) and [720P model](https://huggingface.co/DeepBeepMeep/Wan2.1/blob/main/wan2.1_image2video_720p_14B_quanto_mbf16_int8.safetensors) |

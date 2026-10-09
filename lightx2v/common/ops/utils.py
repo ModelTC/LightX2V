@@ -6,6 +6,7 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -194,9 +195,11 @@ def create_default_tensors(base_attrs, weight_dict):
     if device.type == "cpu":
         for name, attr_name, transpose in base_attrs:
             if name in weight_dict:
-                tensor = weight_dict[name]
-                pin_tensors[attr_name] = create_pin_tensor(tensor, transpose=transpose)
-                del weight_dict[name]
+                tensor, is_shared = consume_weight(weight_dict, name)
+                if is_shared:
+                    pin_tensors[attr_name] = tensor.t() if transpose else tensor
+                else:
+                    pin_tensors[attr_name] = create_pin_tensor(tensor, transpose=transpose)
     else:
         for name, attr_name, transpose in base_attrs:
             if name in weight_dict:
@@ -269,7 +272,7 @@ def build_lora_and_diff_names(weight_name, lora_prefix):
 
     Args:
         weight_name: Original weight tensor name
-        lora_prefix: Prefix string for LoRA tensor names
+        lora_prefix: Prefix string for LoRA tensor names; None preserves the full weight name
 
     Returns:
         tuple: (lora_down_name, lora_up_name, lora_alpha_name, weight_diff_name, bias_diff_name)
@@ -278,7 +281,7 @@ def build_lora_and_diff_names(weight_name, lora_prefix):
     base_name = weight_name[:-7]
     parts = base_name.split(".")
     relative_path = ".".join(parts[1:])
-    lora_base = f"{lora_prefix}.{relative_path}"
+    lora_base = base_name if lora_prefix is None else f"{lora_prefix}.{relative_path}"
     lora_down_name = f"{lora_base}.lora_down.weight"
     lora_up_name = f"{lora_base}.lora_up.weight"
     lora_alpha_name = f"{lora_base}.alpha"

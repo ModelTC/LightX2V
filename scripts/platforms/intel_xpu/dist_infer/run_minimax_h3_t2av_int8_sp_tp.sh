@@ -36,7 +36,6 @@ export CCL_SYCL_ALLGATHERV_SIMPLE_THRESHOLD=${CCL_SYCL_ALLGATHERV_SIMPLE_THRESHO
 [[ -f "${config_json}" ]] || { echo "Config file not found: ${config_json}"; exit 1; }
 
 source "${lightx2v_path}/scripts/base/base.sh"
-export PYTHONPATH="${lightx2v_path}/lightx2v_kernel_xpu/python:${PYTHONPATH}"
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 mkdir -p "$(dirname -- "${output_path}")"

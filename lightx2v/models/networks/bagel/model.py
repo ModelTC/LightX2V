@@ -24,9 +24,6 @@ from lightx2v.models.runners.bagel.t2i_utils import validate_bagel_model_assets
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 
-VLM_THINK_SYSTEM_PROMPT = """You should first think about the reasoning process in the mind and then provide the user with the answer.
-The reasoning process is enclosed within <think> </think> tags, i.e. <think> reasoning process here </think> answer here"""
-
 GEN_THINK_SYSTEM_PROMPT = """You should first think about the planning process in the mind and then generate the image.
 The planning process is enclosed within <think> </think> tags, i.e. <think> planning process here </think> image here"""
 
@@ -38,14 +35,11 @@ class BagelModel:
 
     def __init__(self, config):
         self.config = config
+        self.enable_cfg = config["enable_cfg"]
         self.model_path = config["model_path"]
         self._validate_config()
         # init llm config
-        llm_config = self.config["llm_config"]
-        with self.config.temporarily_unlocked():
-            llm_config.update(self.config["llm_config_update"])
-        self.llm_config = llm_config
-        self.use_moe = "Mo" in self.llm_config["layer_module"]
+        self.llm_config = self.config["llm_config"]
         self.num_heads = self.llm_config["num_attention_heads"]
         self.hidden_size = self.llm_config["hidden_size"]
         self.think = config.get("think", False)
@@ -70,9 +64,6 @@ class BagelModel:
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
-        self.pre_infer.set_scheduler(scheduler)
-        self.transformer_infer.set_scheduler(scheduler)
-        self.post_infer.set_scheduler(scheduler)
 
     def _init_infer_class(self):
         self.pre_infer_class = BagelPreInfer
@@ -106,9 +97,9 @@ class BagelModel:
         self._apply_weights(weight_dict)
 
     def _init_infer(self):
-        self.transformer_infer = self.transformer_infer_class(self.config, self.llm_config)
+        self.transformer_infer = self.transformer_infer_class(self.llm_config)
         self.pre_infer = self.pre_infer_class(self.config, self.llm_config)
-        self.post_infer = self.post_infer_class(self.config, self.llm_config)
+        self.post_infer = self.post_infer_class()
         self.pre_infer.set_rope(self.transformer_weights.blocks[0].self_attn.rope)
 
     def _init_modules(self):
@@ -119,7 +110,6 @@ class BagelModel:
 
         if self.config.visual_gen:
             self.latent_patch_size = self.config.latent_patch_size
-            self.timestep_shift = self.config.timestep_shift
             self.latent_downsample = self.config.vae_config["downsample"] * self.config.latent_patch_size
 
             self.latent_channel = self.config.vae_config["z_channels"]
@@ -193,16 +183,9 @@ class BagelModel:
     ):
         packed_rope = self.pre_infer.infer(self.pre_weight, packed_query_sequence, packed_query_position_ids)
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs.update(mode=mode)
-            if mode == "gen":
-                assert packed_vae_token_indexes is not None
-                assert packed_text_indexes is not None
-                extra_inputs.update(
-                    packed_vae_token_indexes=packed_vae_token_indexes,
-                    packed_text_indexes=packed_text_indexes,
-                )
+        if mode == "gen":
+            assert packed_vae_token_indexes is not None
+            assert packed_text_indexes is not None
 
         packed_query_sequence, past_key_values = self.transformer_infer.infer(
             self.transformer_weights.blocks,
@@ -215,7 +198,9 @@ class BagelModel:
             packed_key_value_indexes=packed_key_value_indexes,
             update_past_key_values=update_past_key_values,
             is_causal=is_causal,
-            **extra_inputs,
+            mode=mode,
+            packed_vae_token_indexes=packed_vae_token_indexes,
+            packed_text_indexes=packed_text_indexes,
         )
 
         packed_query_sequence = self.post_infer.infer(
@@ -241,10 +226,6 @@ class BagelModel:
     ):
         packed_text_embedding = self.pre_infer.embed_tokens(self.pre_weight, packed_text_ids)
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs = {"mode": "und"}
-
         packed_query_sequence, past_key_values = self.forward_inference(
             packed_query_sequence=packed_text_embedding,
             query_lens=text_token_lens,
@@ -255,7 +236,7 @@ class BagelModel:
             key_values_lens=key_values_lens,
             update_past_key_values=True,
             is_causal=True,
-            **extra_inputs,
+            mode="und",
         )
         return past_key_values
 
@@ -280,7 +261,7 @@ class BagelModel:
 
         return gen_context
 
-    def prepare_vit_images(self, curr_kvlens, curr_rope, images, new_token_ids, transforms=None):
+    def prepare_vit_images(self, curr_kvlens, curr_rope, images, new_token_ids):
         packed_vit_token_indexes = list()
         vit_token_seqlens, packed_vit_tokens, packed_vit_position_ids = list(), list(), list()
         packed_text_ids, packed_text_indexes = list(), list()
@@ -299,7 +280,7 @@ class BagelModel:
             curr += 1
             query_curr += 1
 
-            image_tensor = transforms(image) if transforms is not None else pil_to_bagel_tensor(resize_pil_for_vit(image))
+            image_tensor = pil_to_bagel_tensor(resize_pil_for_vit(image))
             vit_position_ids = self.scheduler.get_flattened_position_ids(
                 image_tensor.size(1),
                 image_tensor.size(2),
@@ -378,10 +359,6 @@ class BagelModel:
             packed_vit_token_embed = packed_vit_token_embed.to(packed_sequence.dtype)
         packed_sequence[packed_vit_token_indexes.to(AI_DEVICE)] = packed_vit_token_embed
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs = {"mode": "und"}
-
         output = self.forward_inference(
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
@@ -392,11 +369,11 @@ class BagelModel:
             key_values_lens=key_values_lens,
             update_past_key_values=True,
             is_causal=False,
-            **extra_inputs,
+            mode="und",
         )
         return output[1]
 
-    def prepare_vae_images(self, curr_kvlens, curr_rope, images, new_token_ids, timestep=0, transforms=None):
+    def prepare_vae_images(self, curr_kvlens, curr_rope, images, new_token_ids, timestep=0):
         patchified_vae_latent_shapes, packed_vae_position_ids = list(), list()
         packed_vae_token_indexes = list()
         packed_text_ids, packed_text_indexes = list(), list()
@@ -416,7 +393,7 @@ class BagelModel:
             curr += 1
             query_curr += 1
 
-            image_tensor = transforms(image) if transforms is not None else pil_to_bagel_tensor(image)
+            image_tensor = pil_to_bagel_tensor(image)
             vae_image_tensors.append(image_tensor)
             vae_position_ids = self.scheduler.get_flattened_position_ids(
                 image_tensor.size(1),
@@ -509,14 +486,6 @@ class BagelModel:
             packed_latent = packed_latent.to(packed_sequence.dtype)
         packed_sequence[packed_vae_token_indexes.to(AI_DEVICE)] = packed_latent
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs = {
-                "mode": "gen",
-                "packed_vae_token_indexes": packed_vae_token_indexes,
-                "packed_text_indexes": packed_text_indexes,
-            }
-
         output = self.forward_inference(
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
@@ -527,21 +496,14 @@ class BagelModel:
             packed_key_value_indexes=packed_key_value_indexes,
             update_past_key_values=True,
             is_causal=False,
-            **extra_inputs,
+            mode="gen",
+            packed_vae_token_indexes=packed_vae_token_indexes,
+            packed_text_indexes=packed_text_indexes,
         )
         return output[1]
 
     @torch.no_grad()
-    def update_context_image(
-        self,
-        image,
-        gen_context,
-        vae_model,
-        vae=True,
-        vit=True,
-        vae_transform=None,
-        vit_transform=None,
-    ):
+    def update_context_image(self, image, gen_context, vae_model, vae=True, vit=True):
         if not (vae or vit):
             raise ValueError("BAGEL image context update requires at least one of VAE or ViT.")
 
@@ -557,7 +519,6 @@ class BagelModel:
                 curr_rope=ropes,
                 images=[image],
                 new_token_ids=self.new_token_ids,
-                transforms=vae_transform,
             )
             past_key_values = self.forward_cache_update_vae(vae_model, past_key_values, **generation_input)
 
@@ -569,7 +530,6 @@ class BagelModel:
                 curr_rope=ropes,
                 images=[image],
                 new_token_ids=self.new_token_ids,
-                transforms=vit_transform,
             )
             past_key_values = self.forward_cache_update_vit(past_key_values, **generation_input)
 
@@ -698,13 +658,13 @@ class BagelModel:
 
     @torch.no_grad()
     def prepare_inputs(self, input_info, scheduler, vae_model=None):
+        if self.understanding_output:
+            raise NotImplementedError("BAGEL visual understanding output is not implemented in LightX2V.")
+
         self.set_scheduler(scheduler)
         gen_context = self.init_gen_context()
-        cfg_text_context = deepcopy(gen_context)
-        cfg_img_context = deepcopy(gen_context)
-        self.transformer_infer.gen_context = gen_context
-        self.transformer_infer.cfg_text_context = cfg_text_context
-        self.transformer_infer.cfg_img_context = cfg_img_context
+        cfg_text_context = deepcopy(gen_context) if self.enable_cfg else None
+        cfg_img_context = deepcopy(gen_context) if self.enable_cfg and self.inference_hyper["cfg_img_scale"] > 1.0 else None
 
         image_shape = tuple(input_info.image_shapes) if input_info.image_shapes else (1024, 1024)
         if len(image_shape) != 2:
@@ -722,38 +682,34 @@ class BagelModel:
         output_list = []
         with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
             if self.think:
-                if self.understanding_output:
-                    system_prompt = VLM_THINK_SYSTEM_PROMPT
-                else:
-                    system_prompt = GEN_THINK_SYSTEM_PROMPT
+                system_prompt = GEN_THINK_SYSTEM_PROMPT
                 gen_context = self.update_context_text(system_prompt, gen_context)
-                cfg_img_context = self.update_context_text(system_prompt, cfg_img_context)
+                if cfg_img_context is not None:
+                    cfg_img_context = self.update_context_text(system_prompt, cfg_img_context)
             for input_term in input_lists:
                 if isinstance(input_term, str):
-                    cfg_text_context = deepcopy(gen_context)
+                    if cfg_text_context is not None:
+                        cfg_text_context = deepcopy(gen_context)
                     gen_context = self.update_context_text(input_term, gen_context)
-                    cfg_img_context = self.update_context_text(input_term, cfg_img_context)
+                    if cfg_img_context is not None:
+                        cfg_img_context = self.update_context_text(input_term, cfg_img_context)
                 elif isinstance(input_term, Image.Image):
-                    gen_context = self.update_context_image(input_term, gen_context, vae_model=vae_model, vae=not self.understanding_output, vit=True)
+                    gen_context = self.update_context_image(input_term, gen_context, vae_model=vae_model, vae=True, vit=True)
                     image_shape = input_term.size[::-1]
-                    cfg_text_context = deepcopy(gen_context)
+                    if cfg_text_context is not None:
+                        cfg_text_context = deepcopy(gen_context)
                 else:
                     raise ValueError(f"Unsupported input type: {type(input_term)}")
 
-            if self.understanding_output:
-                raise NotImplementedError("BAGEL visual understanding output is not implemented in LightX2V.")
-            else:
-                if self.think:
-                    gen_text = self.gen_text(
-                        gen_context,
-                        do_sample=self.do_sample,
-                        temperature=self.text_temperature,
-                        max_length=self.max_think_token_n,
-                    )
-                    gen_context = self.update_context_text(gen_text, gen_context)
-                    output_list.append(gen_text)
-                else:
-                    gen_text = None
+            if self.think:
+                gen_text = self.gen_text(
+                    gen_context,
+                    do_sample=self.do_sample,
+                    temperature=self.text_temperature,
+                    max_length=self.max_think_token_n,
+                )
+                gen_context = self.update_context_text(gen_text, gen_context)
+                output_list.append(gen_text)
 
         kv_lens = gen_context["kv_lens"]
         ropes = gen_context["ropes"]
@@ -767,24 +723,26 @@ class BagelModel:
         )
 
         # text cfg
-        cfg_text_past_key_values = cfg_text_context["past_key_values"]
-        kv_lens_cfg = cfg_text_context["kv_lens"]
-        ropes_cfg = cfg_text_context["ropes"]
-        generation_input_cfg_text = scheduler.prepare_vae_latent_cfg(
-            curr_kvlens=kv_lens_cfg,
-            curr_rope=ropes_cfg,
-            image_sizes=[image_shape],
-        )
+        cfg_text_past_key_values = None
+        generation_input_cfg_text = None
+        if cfg_text_context is not None:
+            cfg_text_past_key_values = cfg_text_context["past_key_values"]
+            generation_input_cfg_text = scheduler.prepare_vae_latent_cfg(
+                curr_kvlens=cfg_text_context["kv_lens"],
+                curr_rope=cfg_text_context["ropes"],
+                image_sizes=[image_shape],
+            )
 
         # img cfg
-        cfg_img_past_key_values = cfg_img_context["past_key_values"]
-        kv_lens_cfg = cfg_img_context["kv_lens"]
-        ropes_cfg = cfg_img_context["ropes"]
-        generation_input_cfg_img = scheduler.prepare_vae_latent_cfg(
-            curr_kvlens=kv_lens_cfg,
-            curr_rope=ropes_cfg,
-            image_sizes=[image_shape],
-        )
+        cfg_img_past_key_values = None
+        generation_input_cfg_img = None
+        if cfg_img_context is not None:
+            cfg_img_past_key_values = cfg_img_context["past_key_values"]
+            generation_input_cfg_img = scheduler.prepare_vae_latent_cfg(
+                curr_kvlens=cfg_img_context["kv_lens"],
+                curr_rope=cfg_img_context["ropes"],
+                image_sizes=[image_shape],
+            )
 
         scheduler.generation_input = generation_input
         scheduler.generation_input_cfg_text = generation_input_cfg_text
@@ -792,14 +750,9 @@ class BagelModel:
         scheduler.latents = generation_input["packed_init_noises"]
 
         num_timesteps = scheduler.infer_steps
-        if self.enable_taylorseer:
-            model_pred_cache_dic, model_pred_current = cache_init(self, num_timesteps)
-            model_pred_text_cache_dic, model_pred_text_current = cache_init(self, num_timesteps)
-            model_pred_img_cache_dic, model_pred_img_current = cache_init(self, num_timesteps)
-        else:
-            model_pred_cache_dic, model_pred_current = None, None
-            model_pred_text_cache_dic, model_pred_text_current = None, None
-            model_pred_img_cache_dic, model_pred_img_current = None, None
+        model_pred_cache_dic, model_pred_current = cache_init(self, num_timesteps) if self.enable_taylorseer else (None, None)
+        model_pred_text_cache_dic, model_pred_text_current = cache_init(self, num_timesteps) if self.enable_taylorseer and cfg_text_context is not None else (None, None)
+        model_pred_img_cache_dic, model_pred_img_current = cache_init(self, num_timesteps) if self.enable_taylorseer and cfg_img_context is not None else (None, None)
 
         bagel_inputs = BagelInputs(
             image_shapes=input_info.image_shapes,
@@ -862,11 +815,16 @@ class BagelModel:
 
     @torch.no_grad
     def infer(self, inputs):
+        if self.enable_cfg:
+            assert self.inference_hyper["cfg_text_scale"] is not None and self.inference_hyper["cfg_text_scale"] > 1.0, (
+                f"CFG requires cfg_text_scale > 1, got {self.inference_hyper['cfg_text_scale']!r}"
+            )
+
         t = self.scheduler.timesteps[self.scheduler.step_index]
         x_t = self.scheduler.latents.to(torch.bfloat16).to(AI_DEVICE)
         timestep = torch.tensor([t] * x_t.shape[0])
 
-        if t > self.inference_hyper["cfg_interval"][0] and t <= self.inference_hyper["cfg_interval"][1]:
+        if self.enable_cfg and t > self.inference_hyper["cfg_interval"][0] and t <= self.inference_hyper["cfg_interval"][1]:
             cfg_text_scale = self.inference_hyper["cfg_text_scale"]
             cfg_img_scale = self.inference_hyper["cfg_img_scale"]
         else:
@@ -891,9 +849,7 @@ class BagelModel:
             x_t = x_t.to(packed_sequence.dtype)
         packed_sequence[inputs.generation_input["packed_vae_token_indexes"]] = x_t
 
-        extra_inputs = {}
-        if self.use_moe:
-            extra_inputs = {"mode": "gen", "packed_vae_token_indexes": inputs.generation_input["packed_vae_token_indexes"], "packed_text_indexes": packed_text_indexes}
+        extra_inputs = {"mode": "gen", "packed_vae_token_indexes": inputs.generation_input["packed_vae_token_indexes"], "packed_text_indexes": packed_text_indexes}
 
         if self.enable_taylorseer:
             self.scheduler.cache_dic = inputs.model_pred_cache_dic

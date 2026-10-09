@@ -30,85 +30,8 @@ class HunyuanImage3TransformerWeights(WeightModule):
                 for i in range(self.blocks_num)
             ]
         )
-        self.register_offload_buffers(config, lazy_load_path, lora_path)
+        # Execution slots need the loaded CPU shapes and are created by the model.
         self.add_module("blocks", self.blocks)
-
-    def register_offload_buffers(self, config, lazy_load_path, lora_path):
-        self.offload_block_cuda_buffers = None
-        self.offload_phase_cuda_buffers = None
-        self.offload_block_cpu_buffers = None
-        self.offload_phase_cpu_buffers = None
-        if not config.get("cpu_offload", False):
-            return
-
-        if config.get("offload_granularity", "block") == "block":
-            self.offload_blocks_num = 2
-            self.offload_block_cuda_buffers = WeightModuleList(
-                [
-                    HunyuanImage3TransformerBlock(
-                        i,
-                        config,
-                        self.mm_type,
-                        True,
-                        False,
-                        "model.layers",
-                        self.lazy_load,
-                        lazy_load_path,
-                        lora_path,
-                    )
-                    for i in range(self.offload_blocks_num)
-                ]
-            )
-            self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
-            if self.lazy_load:
-                self.offload_block_cpu_buffers = WeightModuleList(
-                    [
-                        HunyuanImage3TransformerBlock(
-                            i,
-                            config,
-                            self.mm_type,
-                            False,
-                            True,
-                            "model.layers",
-                            self.lazy_load,
-                            lazy_load_path,
-                            lora_path,
-                        )
-                        for i in range(self.offload_blocks_num)
-                    ]
-                )
-                self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
-        elif config.get("offload_granularity") == "phase":
-            self.offload_phase_cuda_buffers = HunyuanImage3TransformerBlock(
-                0,
-                config,
-                self.mm_type,
-                True,
-                False,
-                "model.layers",
-                self.lazy_load,
-                lazy_load_path,
-                lora_path,
-            ).compute_phases
-            self.add_module("offload_phase_cuda_buffers", self.offload_phase_cuda_buffers)
-            if self.lazy_load:
-                self.offload_phase_cpu_buffers = WeightModuleList(
-                    [
-                        HunyuanImage3TransformerBlock(
-                            i,
-                            config,
-                            self.mm_type,
-                            False,
-                            True,
-                            "model.layers",
-                            self.lazy_load,
-                            lazy_load_path,
-                            lora_path,
-                        ).compute_phases
-                        for i in range(2)
-                    ]
-                )
-                self.add_module("offload_phase_cpu_buffers", self.offload_phase_cpu_buffers)
 
     def non_block_weights_to_cuda(self):
         pass

@@ -1,11 +1,11 @@
 import argparse
+import json
 import os
 
 import torch
 import torch.distributed as dist
 from loguru import logger
 
-from lightx2v.models.networks.bagel.sensenova_tasks import OMNI_VISION_SUBTASK_CHOICES
 from lightx2v.models.runners.runner_factory import RUNNER_MODULES, build_runner
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
@@ -66,26 +66,20 @@ def main():
             "l2av",
             "fl2av",
             "ref2av",
+            "refa2v",
             "i2va",
             "v2av",
             "ltx2_s2v",
             "sr",
             "recon",
             "i23d",
-            "omni_vision_task",
         ],
         default=None,
-    )
-    parser.add_argument(
-        "--omni_vision_subtask",
-        type=str,
-        choices=OMNI_VISION_SUBTASK_CHOICES,
-        default=None,
-        help="Subtask used with --task omni_vision_task.",
     )
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--prompt", type=str, default=None, help="The input prompt for text-to-video generation")
+    parser.add_argument("--action_prompts", type=json.loads, default=None, help="MiniMax-H3 causal timed actions as a JSON object or list")
     parser.add_argument("--ref_video_prompt", type=str, default=None, help="Reference/driving-video prompt for Wan-Animate-2.")
     parser.add_argument("--negative_prompt", type=str, default=None)
     parser.add_argument("--bot_task", type=str, default=None, help="HunyuanImage3 text generation mode.")
@@ -107,7 +101,7 @@ def main():
         "--audio_path",
         type=str,
         default=None,
-        help="Input audio path: Wan s2v / rs2v, LTX-2 ltx2_s2v, or MiniMax-H3 ref2av reference audio. H3 accepts comma-separated paths.",
+        help="Input audio path: driving audio for s2v / rs2v / ltx2_s2v / refa2v, or reference audio for MiniMax-H3 ref2av.",
     )
     parser.add_argument(
         "--video_path",
@@ -116,6 +110,8 @@ def main():
         help="Input source video path. Its role is determined by the selected task.",
     )
     parser.add_argument("--video_duration", type=float, default=None, help="Requested output duration in seconds for audio-driven video generation.")
+    parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config.")
+    parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
     parser.add_argument("--image_strength", type=str, default=None, help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
     parser.add_argument(
         "--num_frames",
@@ -187,9 +183,6 @@ def main():
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", default=None, help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
-    parser.add_argument("--raw_output_path", type=str, default=None, help="Raw prediction output path for SenseNova-Vision.")
-    parser.add_argument("--glb_output_path", type=str, default=None, help="GLB scene output path for SenseNova-Vision.")
-    parser.add_argument("--postprocess_predictions", action=argparse.BooleanOptionalAction, default=None, help="Postprocess SenseNova-Vision predictions.")
     parser.add_argument("--size", type=int, nargs="+", default=None, help="Output size in pixels: HEIGHT WIDTH")
     parser.add_argument("--aspect_ratio", type=str, default=None)
     parser.add_argument("--align_image_size", action=argparse.BooleanOptionalAction, default=None, help="Align HunyuanImage3 reference image sizes during inference.")
@@ -206,6 +199,7 @@ def main():
         help="(i2i) Layout boxes as a JSON string or JSON file path for HiDream layout-conditioned editing.",
     )
     parser.add_argument("--sr_ratio", type=float, default=None, help="super resolution ratio for sr task")
+    parser.add_argument("--match_target_size", action=argparse.BooleanOptionalAction, default=None, help="(SeedVR sr) Crop or resize decoded output to size; defaults to the startup config.")
     parser.add_argument(
         "--reference_video_strength", type=float, default=None, help="(v2av) IC-LoRA reference-video conditioning strength in [0.0, 1.0]. 1.0 = full adherence to the control signal, 0.0 = ignore it."
     )

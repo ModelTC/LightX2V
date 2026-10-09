@@ -22,7 +22,6 @@ from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkSc
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
-from lightx2v.utils.input_info import UNSET
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, save_to_video, wan_vae_to_comfy
@@ -184,7 +183,7 @@ class InfiniteTalkRunner(WanRunner):
 
         context = self.text_encoders[0].infer([prompt])
         context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
-        if self.config.get("enable_cfg", False):
+        if self.config.get("enable_cfg", False) and self.config.get("enable_text_cfg", True):
             context_null = self.text_encoders[0].infer([input_info.negative_prompt])
             context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
         else:
@@ -874,16 +873,16 @@ class InfiniteTalkRunner(WanRunner):
                 self.scheduler.step_post()
 
     def _resolve_video_duration(self):
-        video_duration = getattr(self.input_info, "video_duration", UNSET)
-        if video_duration is UNSET or video_duration is None:
+        video_duration = self.input_info.video_duration
+        if video_duration is None:
             video_duration = self.config.get("video_duration", None)
         if video_duration is None:
             return None
         return float(video_duration)
 
     def resolve_frame_num(self):
-        frame_num = getattr(self.input_info, "num_frames", UNSET)
-        if frame_num is UNSET or frame_num is None or frame_num <= 0:
+        frame_num = self.input_info.num_frames
+        if frame_num is None or frame_num <= 0:
             frame_num = self.config["num_frames"]
         return int(frame_num)
 
@@ -1168,8 +1167,8 @@ class InfiniteTalkRunner(WanRunner):
         input_data = getattr(self, "input_data", {})
         cond_audio = input_data.get("cond_audio", {}) if isinstance(input_data, dict) else {}
         person_count = len(cond_audio) if isinstance(cond_audio, dict) else 0
-        audio_input = getattr(self.input_info, "audio_path", None)
-        if audio_input is UNSET or audio_input is None:
+        audio_input = self.input_info.audio_path
+        if audio_input is None:
             audio_input = self.config.get("audio_path", "")
         if person_count <= 1 and audio_input:
             audio_input = str(audio_input)
@@ -1240,13 +1239,13 @@ class InfiniteTalkRunner(WanRunner):
                 os.remove(tmp_path)
 
     def end_run(self):
-        if self.va_controller is not None:
-            self.va_controller.clear()
-            self.va_controller = None
-        if self.stream_saved_video_needs_audio_remux:
-            out_path = self.input_info.save_result_path
-            mux_audio = self._resolve_mux_audio_path()
-            try:
+        try:
+            if self.va_controller is not None:
+                self.va_controller.clear()
+                self.va_controller = None
+            if self.stream_saved_video_needs_audio_remux:
+                out_path = self.input_info.save_result_path
+                mux_audio = self._resolve_mux_audio_path()
                 if not mux_audio or not os.path.isfile(mux_audio):
                     audio_input = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
                     raise FileNotFoundError(f"InfiniteTalk mux audio is unavailable for audio input: {audio_input}")
@@ -1254,17 +1253,24 @@ class InfiniteTalkRunner(WanRunner):
                     raise FileNotFoundError(f"InfiniteTalk stream video is unavailable for audio mux: {out_path}")
                 logger.info(f"Muxing InfiniteTalk stream audio {mux_audio} into {out_path}")
                 self._mux_audio(out_path, mux_audio)
-            finally:
-                self.stream_saved_video_needs_audio_remux = False
-        self._remove_video_audio_path()
-        self._clear_cond_frame_source()
-        self._remove_cond_video_temp_path()
-        self.video_audio_array = None
-        self.stream_save_video = False
-        if hasattr(self, "inputs"):
-            del self.inputs
-        torch.cuda.empty_cache()
-        gc.collect()
+        finally:
+            self.stream_saved_video_needs_audio_remux = False
+            self._remove_video_audio_path()
+            self._clear_cond_frame_source()
+            self._remove_cond_video_temp_path()
+            self.video_audio_array = None
+            self.stream_save_video = False
+            self.inputs = None
+            self.dit_inputs = None
+            self.cond_image = None
+            self.cond_frame = None
+            self.full_audio_embs = None
+            self.gen_video_list = None
+            self.gen_video = None
+            self.gen_video_final = None
+            self.scheduler.clear()
+            torch.cuda.empty_cache()
+            gc.collect()
 
     @ProfilingContext4DebugL1(
         "RUN pipeline",

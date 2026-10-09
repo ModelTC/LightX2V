@@ -18,6 +18,7 @@
 **.swp
 .vscode/
 .env
+.venvs/
 .log
 *.pid
 *.ipynb*
@@ -25,7 +26,6 @@ build/
 dist/
 .cache/
 server_cache/
-app/.gradio/
 *.pkl
 save_results/*
 *.egg-info/

@@ -32,7 +32,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import weight_norm
+from torch.nn.utils.parametrizations import weight_norm
 
 from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     SafetensorsSubsetReport,
@@ -58,7 +58,6 @@ def _component_dir(model_path: str | Path, component: str) -> Path:
 
 
 def _wn_conv1d(*args, **kwargs) -> nn.Module:
-    # The original checkpoint uses the legacy weight_g/weight_v spelling.
     return weight_norm(nn.Conv1d(*args, **kwargs))
 
 
@@ -446,7 +445,14 @@ class MiniMaxH3AudioVAE(nn.Module):
         with torch.device("meta"):
             model = cls(config, device=device, cpu_offload=cpu_offload)
         model._reset_runtime_buffers()
-        model.load_report = load_safetensors_subset(model, vae_dir)
+        # The released checkpoint uses the legacy weight_g/weight_v names.
+        key_mapping = {}
+        for name in model.state_dict():
+            if name.endswith(".parametrizations.weight.original0"):
+                key_mapping[name.removesuffix("parametrizations.weight.original0") + "weight_g"] = name
+            elif name.endswith(".parametrizations.weight.original1"):
+                key_mapping[name.removesuffix("parametrizations.weight.original1") + "weight_v"] = name
+        model.load_report = load_safetensors_subset(model, vae_dir, key_mapping=key_mapping)
         model.eval().requires_grad_(False)
         if not cpu_offload:
             model.to(model.execution_device)

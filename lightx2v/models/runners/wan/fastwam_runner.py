@@ -98,6 +98,8 @@ class MinMaxNormalizer(LinearNormalizer):
 
 
 class FastWAMPolicy:
+    model_class = FastWAMNativeModel
+
     def __init__(
         self,
         adapter_model_path=None,
@@ -107,8 +109,6 @@ class FastWAMPolicy:
         action_chunk_size: Optional[int] = None,
         actions_per_plan=10,
         action_infer_steps=20,
-        action_sample_shift=5.0,
-        action_dim_hidden=1024,
         action_dim=7,
         robot_state_dim=8,
         seed: Optional[int] = 0,
@@ -149,8 +149,6 @@ class FastWAMPolicy:
         self.action_chunk_size = int(action_chunk_size) if action_chunk_size and int(action_chunk_size) > 0 else 32
         self.actions_per_plan = int(max(1, min(int(actions_per_plan), self.action_chunk_size)))
         self.action_infer_steps = int(action_infer_steps)
-        self.action_sample_shift = float(action_sample_shift)
-        self.action_dim_hidden = int(action_dim_hidden)
         self.action_dim = int(action_dim)
         self.robot_state_dim = int(robot_state_dim)
         self.seed = None if seed is None or int(seed) < 0 else int(seed)
@@ -169,7 +167,7 @@ class FastWAMPolicy:
         self.state_normalizer, self.action_normalizer = self._load_normalizers()
         self.text_encoder = self._load_text_encoder()
         self.vae = self._load_vae()
-        self.model = FastWAMNativeModel(
+        self.model = self.model_class(
             model_path=str(self.model_path),
             config=self.config,
             device=self.device,
@@ -186,8 +184,6 @@ class FastWAMPolicy:
             action_chunk_size=None if action_chunk_size <= 0 else action_chunk_size,
             actions_per_plan=config.get("actions_per_plan", 10),
             action_infer_steps=config.get("action_infer_steps", 20),
-            action_sample_shift=config.get("action_sample_shift", 5.0),
-            action_dim_hidden=config.get("action_dim_hidden", 1024),
             action_dim=config.get("action_dim", 7),
             robot_state_dim=config.get("robot_state_dim", 8),
             seed=config.get("seed", 0),
@@ -279,6 +275,9 @@ class FastWAMPolicy:
             action_infer_steps=self.action_infer_steps,
             seed=self.seed if seed is None else seed,
         )
+        return self._postprocess_actions(action)
+
+    def _postprocess_actions(self, action):
         action = self.action_normalizer.backward(action).numpy()
         if self.gripper_postprocess:
             # LIBERO single-gripper channel: map [0,1] -> [-1,1], flip sign, optional binarize.
@@ -378,15 +377,17 @@ class FastWAMPolicy:
 
 @RUNNER_REGISTER("fastwam")
 class FastWAMRunner(BaseRunner):
+    policy_class = FastWAMPolicy
+
     supported_request_fields_by_task = {
         "i2va": COMMON_REQUEST_FIELDS | {"image_path", "prompt", "save_action_path", "state_path"},
     }
 
     def init_modules(self):
-        logger.info("Loading FastWAM policy...")
-        self.policy = FastWAMPolicy.from_config(self.config)
+        logger.info("Loading {}...", self.policy_class.__name__)
+        self.policy = self.policy_class.from_config(self.config)
         self.config.lock()
-        logger.info("FastWAM policy loaded.")
+        logger.info("{} loaded.", self.policy_class.__name__)
 
     def _resolve_action_output_path(self):
         if getattr(self.input_info, "save_action_path", ""):

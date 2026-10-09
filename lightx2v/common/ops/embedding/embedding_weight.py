@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from safetensors import safe_open
 
+from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import EMBEDDING_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -34,9 +35,8 @@ class EmbeddingWeightTemplate(metaclass=ABCMeta):
         if not self.lazy_load:
             device = weight_dict[self.weight_name].device
             if device.type == "cpu":
-                weight_tensor = weight_dict[self.weight_name]
-                self.pin_weight = self._create_cpu_pin_weight(weight_tensor)
-                del weight_dict[self.weight_name]
+                weight_tensor, is_shared = consume_weight(weight_dict, self.weight_name)
+                self.pin_weight = weight_tensor if is_shared else self._create_cpu_pin_weight(weight_tensor)
             else:
                 self.weight = weight_dict[self.weight_name]
 

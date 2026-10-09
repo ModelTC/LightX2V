@@ -198,7 +198,7 @@ class DreamZeroModel(WanModel):
         cache_name = inputs.get("cache_name", "pos")
 
         if enable_cfg:
-            assert guide_scale != 1.0, "enable_cfg=true requires guide_scale != 1"
+            assert guide_scale > 1.0, f"CFG requires guide_scale > 1, got {guide_scale!r}"
             if self.config.get("cfg_parallel", False):
                 cond_video, cond_action, uncond_video = self._infer_cfg_parallel(
                     inputs,

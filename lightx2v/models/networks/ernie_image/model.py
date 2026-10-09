@@ -74,7 +74,7 @@ class ErnieImageTransformerModel(BaseTransformerModel):
         text_output = inputs["text_encoder_output"]
 
         if self.config.get("enable_cfg", False):
-            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
+            assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
             noise_pred_cond = self._infer_cond_uncond(
                 latents,
                 text_output["prompt_embeds"],

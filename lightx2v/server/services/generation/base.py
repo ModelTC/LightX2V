@@ -131,7 +131,7 @@ class BaseGenerationService(ABC):
             task_data["save_result_path"] = None
         return task_data
 
-    async def generate_with_stop_event(self, message: Any, stop_event) -> Optional[Any]:
+    async def generate_with_stop_event(self, message: Any, stop_event) -> Optional[TaskResponse]:
         try:
             task_data = self.prepare_task_data(message)
 

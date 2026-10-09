@@ -1,7 +1,6 @@
 {
-  "adapter_model_path": "REPLACE_WITH_ABSOLUTE_PATH_TO_ROBODOJO_STEP_020000_PT",
-  "dataset_stats_path": "REPLACE_WITH_ABSOLUTE_PATH_TO_ROBODOJO_DATASET_STATS_JSON",
-  "camera_size": 384,
+  "adapter_model_path": "/path/to/robodojo/step_020000.pt",
+  "dataset_stats_path": "/path/to/robodojo/dataset_stats.json",
   "action_chunk_size": 32,
   "actions_per_plan": 24,
   "num_steps_wait": 0,

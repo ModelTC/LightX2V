@@ -45,6 +45,16 @@ class HunyuanVideo15PreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    def get_byt5_inputs(self, inputs):
+        text_output = inputs["text_encoder_output"]
+        features, mask = text_output["byt5_features"], text_output["byt5_masks"]
+        if self.config["enable_cfg"]:
+            # The encoder packs unconditional features before conditional features.
+            branch = 1 if self.scheduler.infer_condition else 0
+            features = features.chunk(2, dim=0)[branch]
+            mask = mask.chunk(2, dim=0)[branch]
+        return features, mask
+
     def set_rope(self, rope):
         self.rope = rope
         self.cos_sin = None
@@ -86,7 +96,7 @@ class HunyuanVideo15PreInfer:
         else:
             txt, text_mask = inputs["text_encoder_output"]["context_null"][0], inputs["text_encoder_output"]["context_null"][1]
 
-        byt5_txt, byt5_text_mask = inputs["text_encoder_output"]["byt5_features"], inputs["text_encoder_output"]["byt5_masks"]
+        byt5_txt, byt5_text_mask = self.get_byt5_inputs(inputs)
         siglip_output, siglip_mask = inputs["image_encoder_output"]["siglip_output"], inputs["image_encoder_output"]["siglip_mask"]
         txt = txt.to(torch.bfloat16)
 

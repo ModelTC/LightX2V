@@ -13,7 +13,7 @@
     "vae_sp_color_chunk_size": 4,
     "stream_save_video": true,
     "cpu_offload": true,
-    "resize_mode": "adaptive",
+    "match_target_size": false,
     "color_fix": "gpu",
     "load_from_rank0": true,
     "dit_quantized_ckpt": "/path/to/seedvr2_ema_7b_fp8.safetensors",

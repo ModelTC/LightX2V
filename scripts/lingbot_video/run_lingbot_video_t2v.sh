@@ -7,13 +7,11 @@ model_path=/path/to/lingbot-video-moe-30b-a3b
 export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
-source ${lightx2v_path}/scripts/base/base.sh
-
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=FP32
+source ${lightx2v_path}/scripts/base/base.sh
+
 export LINGBOT_QWEN_ATTN_IMPLEMENTATION=sdpa
-export LINGBOT_MOE_PAD_BACKEND=vectorized
-export LINGBOT_MOE_EXPERT_BACKEND=grouped_mm
 
 prompt=$(cat <<'EOF'
 {
@@ -171,11 +169,6 @@ prompt=$(cat <<'EOF'
   },
   "duration": 5
 }
-EOF
-)
-
-negative_prompt=$(cat <<'EOF'
-{"universal_negative": {"visual_quality": ["low quality", "worst quality", "blurry", "pixelated", "jpeg artifacts", "low resolution", "unstable color", "color flicker", "underexposed", "overexposed", "invisible subject", "subject hidden in darkness"], "artistic_style": ["painting", "illustration", "drawing", "cartoon", "3d render", "cgi", "sketch", "digital art"], "composition_and_content": ["text", "watermark", "signature", "logo", "subtitles", "pillarboxed", "side bars", "portrait image in landscape frame"], "temporal_and_motion_stability": ["flickering", "jittery", "motion blur", "temporal inconsistency", "warping", "morphing", "incoherent motion", "unnatural movement", "static object with sudden jump", "frame-to-frame inconsistency"], "material_and_structure": ["plastic-like glass", "unrealistic texture", "deformed bottle", "liquid freezing improperly", "distorted reflections"]}}
 EOF
 )
 

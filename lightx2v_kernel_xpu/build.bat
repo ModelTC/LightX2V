@@ -165,6 +165,10 @@ for /f "tokens=*" %%f in ('dir /b "_cmake_build\_ext*.pyd" 2^>nul') do (
     copy /y "_cmake_build\%%f" "python\sycl_kernels\" >> "%LOGFILE%" 2>> "%ERRFILE%"
     echo Copied %%f >> "%LOGFILE%"
 )
+for /f "tokens=*" %%f in ('dir /b "_cmake_build\minimax_h3_qkv_norm_torch*.pyd" 2^>nul') do (
+    copy /y "_cmake_build\%%f" "python\sycl_kernels\" >> "%LOGFILE%" 2>> "%ERRFILE%"
+    echo Copied %%f >> "%LOGFILE%"
+)
 copy /y "lgrf_uni\esimd.unify.lgrf.dll" "python\sycl_kernels\" >> "%LOGFILE%" 2>> "%ERRFILE%"
 if errorlevel 1 (echo COPY FAILED >> "%LOGFILE%" & goto :dump_and_fail)
 echo Artifacts copied >> "%LOGFILE%"

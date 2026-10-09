@@ -5,7 +5,6 @@
     "shift": 1.0,
     "scheduler_name": "flash",
     "size": [2048, 2048],
-    "keep_aspect_ratio": false,
     "torch_dtype": "bfloat16",
     "enable_cfg": false,
     "rms_norm_type": "fp32_variance_qwen",

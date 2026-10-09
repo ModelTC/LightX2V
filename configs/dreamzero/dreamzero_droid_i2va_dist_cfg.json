@@ -21,11 +21,6 @@
     "video.exterior_image_2_left",
     "video.wrist_image_left"
   ],
-  "obs_cam_aliases": {
-    "video.exterior_image_1_left": "exterior_image_1_left",
-    "video.exterior_image_2_left": "exterior_image_2_left",
-    "video.wrist_image_left": "wrist_image_left"
-  },
   "state_norm_stat": {
     "q01": [-0.8875624465942383, -0.8370916676521302, -0.8531151509284973, -2.7690773010253906, -1.7587936305999756, 1.2168634271621703, -1.9968851804733276, 0.0],
     "q99": [0.9182539391517639, 1.4385825252532958, 0.7427385020256034, -0.4551836943626404, 1.6720541000366205, 3.4903993225097656, 2.202882013320923, 0.9911894202232361]

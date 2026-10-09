@@ -59,5 +59,6 @@ pipe.generate(
     seed=seed,
     prompt=prompt,
     negative_prompt=negative_prompt,
+    image_path="/path/to/assets/inputs/imgs/img_0.jpg",
     save_result_path=save_result_path,
 )

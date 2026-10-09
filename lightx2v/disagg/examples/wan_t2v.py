@@ -74,7 +74,7 @@ def main():
 
     # 4.1 Text Encoding
     logger.info("Running text encoding...")
-    text_len = config.get("text_len", 512)
+    text_len = config["text_len"]
 
     # Context (Prompt)
     context = text_encoder.infer([prompt])

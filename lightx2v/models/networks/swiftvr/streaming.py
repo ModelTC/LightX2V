@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 
 import torch
+import torch.distributed as dist
 
+from .parallel import exchange_chunk_boundary
 from .reae import StreamingAutoencoder
 
 
@@ -34,6 +37,11 @@ class VideoChunk:
     @property
     def latent_count(self) -> int:
         return (self.frame_count - 1) // 4 + 1
+
+    def output_range(self, raw_frame_count: int, frames_to_trim: int) -> range:
+        start = max(0, self.start - frames_to_trim)
+        stop = min(raw_frame_count, self.start + self.frame_count - (0 if self.is_last else frames_to_trim))
+        return range(start, stop)
 
 
 def padded_frame_count(frame_count: int) -> int:
@@ -67,52 +75,43 @@ class StreamingTransformer:
         self.reset()
 
     def reset(self):
-        self.temporal_offset = 0
-        self.previous_input = None
         self.previous_latents = None
 
     @torch.inference_mode()
-    def restore(self, latents: torch.Tensor, clip_latents: int) -> torch.Tensor:
+    def prepare_input(self, latents: torch.Tensor, chunk: VideoChunk, clip_latents: int, chunk_p_group=None) -> tuple[torch.Tensor, int]:
+        """Advance input history before prediction so consecutive chunks can run concurrently."""
         low_quality = latents.permute(0, 2, 1, 3, 4).contiguous()
-        overlap = self.previous_input.shape[2] if self.previous_input is not None and self.overlap else 0
-        model_input = torch.cat([self.previous_input.to(low_quality.device), low_quality], dim=2) if overlap else low_quality
+        rank = dist.get_rank(chunk_p_group) if chunk_p_group is not None else 0
+        history = low_quality
+        if chunk_p_group is not None:
+            # The first chunk has one extra latent; pad other boundaries to the same shape.
+            boundary = low_quality.new_empty((*low_quality.shape[:2], clip_latents + 1, *low_quality.shape[3:]))
+            boundary[:, :, : low_quality.shape[2]].copy_(low_quality)
+            boundary[:, :, low_quality.shape[2] :].zero_()
+            boundary = exchange_chunk_boundary(boundary, chunk_p_group)
+            if rank != 0:
+                previous_count = clip_latents + (chunk.index == 1)
+                self.previous_latents = boundary[:, :, :previous_count]
+            history = boundary[:, :, :clip_latents]
+        temporal_offset = chunk.start // 4
+        if chunk.is_last:
+            padding = clip_latents + 1 - chunk.latent_count
+            if padding:
+                if self.previous_latents is None:
+                    prefix = low_quality.new_zeros((*low_quality.shape[:2], padding, *low_quality.shape[3:]))
+                else:
+                    prefix = self.previous_latents[:, :, -padding:]
+                low_quality = torch.cat([prefix, low_quality], dim=2)
+            return low_quality, max(0, temporal_offset - padding)
 
-        restored = model_input - self.model.predict(model_input, self.condition, self.temporal_offset - overlap)
-        if overlap:
-            restored = restored[:, :, overlap:]
-
-        keep = min(self.overlap, low_quality.shape[2])
-        self.previous_input = low_quality[:, :, -keep:].detach().cpu().clone() if keep else None
-        self.previous_latents = low_quality[:, :, -clip_latents:].detach().cpu().clone()
-        self.temporal_offset += low_quality.shape[2]
-        return restored.permute(0, 2, 1, 3, 4).contiguous()
-
-    @torch.inference_mode()
-    def restore_last(self, latents: torch.Tensor, latent_count: int, clip_latents: int) -> torch.Tensor:
-        low_quality = latents.permute(0, 2, 1, 3, 4).contiguous()
-        padding = clip_latents + 1 - latent_count
-        if padding:
-            if self.previous_latents is None:
-                prefix = torch.zeros(
-                    low_quality.shape[0],
-                    low_quality.shape[1],
-                    padding,
-                    low_quality.shape[3],
-                    low_quality.shape[4],
-                    dtype=low_quality.dtype,
-                    device=low_quality.device,
-                )
-            else:
-                prefix = self.previous_latents[:, :, -padding:].to(low_quality.device)
-            low_quality = torch.cat([prefix, low_quality], dim=2)
-
-        restored = low_quality - self.model.predict(
-            low_quality,
-            self.condition,
-            max(0, self.temporal_offset - padding),
-        )
-        self.temporal_offset += latent_count
-        return restored[:, :, -latent_count:].permute(0, 2, 1, 3, 4).contiguous()
+        previous_input = self.previous_latents[:, :, -self.overlap :] if self.previous_latents is not None and self.overlap else None
+        overlap = previous_input.shape[2] if previous_input is not None else 0
+        model_input = torch.cat([previous_input, low_quality], dim=2) if overlap else low_quality
+        if rank == 0:
+            # Only rank 0 carries history across batches; other ranks receive it from their predecessor.
+            history = history if self.overlap else history[:, :, -clip_latents:]
+            self.previous_latents = history.detach().clone()
+        return model_input, temporal_offset - overlap
 
 
 class SwiftVRRestorer:
@@ -132,10 +131,17 @@ class SwiftVRRestorer:
         self.transformer.reset()
 
     @torch.inference_mode()
-    def restore_chunk(self, video: torch.Tensor, chunk: VideoChunk, clip_latents: int) -> torch.Tensor:
+    def encode_chunk(self, video: torch.Tensor, chunk: VideoChunk, clip_latents: int) -> tuple[torch.Tensor, int]:
         latents = self.autoencoder.encode(video, chunk.is_last)
-        if chunk.is_last:
-            latents = self.transformer.restore_last(latents, chunk.latent_count, clip_latents)
-        else:
-            latents = self.transformer.restore(latents, clip_latents)
-        return self.autoencoder.decode(latents, chunk.is_first)
+        return self.transformer.prepare_input(latents, chunk, clip_latents, self.autoencoder.chunk_p_group)
+
+    @torch.inference_mode()
+    def decode_chunk(self, latents: torch.Tensor, chunk: VideoChunk, output_batch_size: int = 0) -> Iterator[torch.Tensor]:
+        latents = latents[:, :, -chunk.latent_count :].permute(0, 2, 1, 3, 4).contiguous()
+        return self.autoencoder.decode(latents, chunk.is_first, output_batch_size)
+
+    @torch.inference_mode()
+    def restore_chunk(self, video: torch.Tensor, chunk: VideoChunk, clip_latents: int) -> torch.Tensor:
+        model_input, temporal_offset = self.encode_chunk(video, chunk, clip_latents)
+        prediction = self.transformer.model.predict(model_input, self.transformer.condition, temporal_offset)
+        return next(self.decode_chunk(model_input - prediction, chunk))

@@ -25,7 +25,9 @@
 
 参考[快速开始文档](../getting_started/quickstart.md)安装环境，参考[Gradio部署指南](./deploy_gradio.md)
 
-#### 一键启动Gradio（推荐）
+#### 旧版整合包：一键启动 Gradio
+
+以下保留旧版整合包的下载和使用说明。新独立应用的安装与启动见 [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v)；当前尚未提供对应的新整合包，不能将以下环境直接视为新应用的部署方案。
 
 **📦 下载软件包**
 - [夸克网盘](https://pan.quark.cn/s/f44023dcf8c8)
@@ -82,4 +84,4 @@ model_path=models/
 ![Gradio中文界面](../../../../assets/figs/portabl_windows/pic_gradio_zh.png)
 
 **⚠️ 重要提示**:
-- **页面显示问题**: 如果网页打开空白或显示异常，请运行 `pip install --upgrade gradio` 升级Gradio版本。
+- **页面显示问题**: 旧版整合包请按随包说明排查。新独立应用使用 Gradio 5.50.0，安装方式见新仓库。

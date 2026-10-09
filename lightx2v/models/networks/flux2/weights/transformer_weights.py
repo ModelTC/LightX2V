@@ -139,6 +139,7 @@ class Flux2DoubleBlockWeights(WeightModule):
         super().__init__()
         self.config = config
         self.block_idx = block_idx
+        self.block_type = "double"
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
         self.layer_norm_type = config.get("layer_norm_type", "torch")
@@ -206,6 +207,7 @@ class Flux2SingleBlockWeights(WeightModule):
         super().__init__()
         self.config = config
         self.block_idx = block_idx
+        self.block_type = "single"
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
         self.layer_norm_type = config.get("layer_norm_type", "torch")
@@ -258,8 +260,45 @@ class Flux2TransformerWeights(WeightModule):
         self.mm_type = config.get("dit_quant_scheme", "Default")
         self._configure_resident_blocks(config)
 
-        self.double_blocks = WeightModuleList([Flux2DoubleBlockWeights(config, i) for i in range(self.num_layers)])
-        self.single_blocks = WeightModuleList([Flux2SingleBlockWeights(config, i) for i in range(self.num_single_layers)])
+        # -- Pipeline-parallel block splitting --------------------------------
+        pp_size = config.get("pipefusion_parallel", False)
+        if pp_size:
+            from lightx2v.models.networks.flux2.infer.pipefusion import (
+                get_pipeline_parallel_rank,
+                get_pipeline_parallel_world_size,
+            )
+
+            pp_rank = get_pipeline_parallel_rank()
+            pp_world_size = get_pipeline_parallel_world_size()
+        else:
+            pp_rank = 0
+            pp_world_size = 1
+
+        if pp_world_size > 1:
+            # Split double_blocks + single_blocks across pipeline stages.
+            # Blocks are assigned contiguously: stage 0 gets the first chunk,
+            # stage 1 the next, etc.  A stage may span the double→single
+            # boundary (it will then have both types).
+            total_blocks = self.num_layers + self.num_single_layers
+            base = total_blocks // pp_world_size
+            remainder = total_blocks % pp_world_size
+            # Leftover blocks go to the LAST ranks: they hold the cheaper
+            # single blocks, keeping the heavier front (double) ranks lighter.
+            num_base_ranks = pp_world_size - remainder
+            stage_start = pp_rank * base + max(0, pp_rank - num_base_ranks)
+            stage_end = stage_start + base + (1 if pp_rank >= num_base_ranks else 0)
+
+            double_start = min(stage_start, self.num_layers)
+            double_end = min(stage_end, self.num_layers)
+            single_start = max(0, stage_start - self.num_layers)
+            single_end = max(0, stage_end - self.num_layers)
+
+            self.double_blocks = WeightModuleList([Flux2DoubleBlockWeights(config, i) for i in range(double_start, double_end)])
+            self.single_blocks = WeightModuleList([Flux2SingleBlockWeights(config, i) for i in range(single_start, single_end)])
+        else:
+            self.double_blocks = WeightModuleList([Flux2DoubleBlockWeights(config, i) for i in range(self.num_layers)])
+            self.single_blocks = WeightModuleList([Flux2SingleBlockWeights(config, i) for i in range(self.num_single_layers)])
+
         self.register_offload_buffers(config)
 
         self.add_module("double_blocks", self.double_blocks)

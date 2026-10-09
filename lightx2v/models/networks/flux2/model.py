@@ -37,6 +37,10 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         self._init_tensor_parallel()
         self._init_infer_class()
         self._init_weights()
+        # In PipeFusion mode, weights were loaded to CPU to avoid OOM;
+        # move only this stage's subset to GPU.
+        if self.config.get("pipefusion_parallel", False):
+            self.to_cuda()
         self._init_infer()
 
     def _init_tensor_parallel(self):
@@ -280,7 +284,8 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
-        self.pre_infer.set_rope(self.transformer_weights.double_blocks[0].rope)
+        blocks = self.transformer_weights.double_blocks or self.transformer_weights.single_blocks
+        self.pre_infer.set_rope(blocks[0].rope)
         if hasattr(self.transformer_infer, "offload_manager_double") and hasattr(self.transformer_infer, "offload_manager_single"):
             self._init_offload_manager()
 
@@ -420,7 +425,13 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
 
     def _init_infer_class(self):
         feature_caching = self.config.get("feature_caching", "NoCaching")
-        if feature_caching in ("NoCaching", "None"):
+        if self.config.get("pipefusion_parallel", False):
+            from lightx2v.models.networks.flux2.infer.pipefusion.transformer_infer import (
+                Flux2PipeFusionTransformerInfer,
+            )
+
+            self.transformer_infer_class = Flux2PipeFusionTransformerInfer
+        elif feature_caching in ("NoCaching", "None"):
             if self.cpu_offload and self.offload_granularity == "block":
                 self.transformer_infer_class = Flux2OffloadTransformerInfer
             else:
@@ -440,7 +451,7 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
         do_cfg = self.config.get("enable_cfg", True)
 
         if do_cfg:
-            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
+            assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
             use_cfg_parallel = self.config.get("cfg_parallel", False)
             if use_cfg_parallel and hasattr(self.scheduler, "input_image_latents") and self.scheduler.input_image_latents is not None:
                 if hasattr(self.scheduler, "image_rotary_emb") and hasattr(self.scheduler, "negative_image_rotary_emb"):

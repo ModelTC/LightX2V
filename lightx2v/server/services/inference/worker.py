@@ -75,7 +75,6 @@ class TorchrunInferenceWorker:
         error_msg = ""
         error_type = ""
         pipeline_return = None
-        return_pipeline_result = False
         task_id = task_data.get("task_id", "unknown")
 
         try:
@@ -83,7 +82,6 @@ class TorchrunInferenceWorker:
                 task_data = self.dist_manager.broadcast_task_data(task_data)
 
             task_id = task_data.pop("task_id", "unknown")
-            return_pipeline_result = bool(task_data.pop("_return_pipeline_result", False))
 
             # Handle dynamic LoRA loading
             lora_name = task_data.pop("lora_name", None)
@@ -139,8 +137,6 @@ class TorchrunInferenceWorker:
                     )
                     if usage:
                         out["usage"] = usage
-                if return_pipeline_result:
-                    out["pipeline_return"] = pipeline_return
                 return out
         else:
             return None

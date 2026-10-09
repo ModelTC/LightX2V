@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
+from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import TENSOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -34,9 +35,11 @@ class DefaultTensor:
         if not self.lazy_load:
             device = weight_dict[self.tensor_name].device
             if device.type == "cpu":
-                tensor = weight_dict[self.tensor_name]
-                self.pin_tensor = self._create_cpu_pin_tensor(tensor)
-                del weight_dict[self.tensor_name]
+                tensor, is_shared = consume_weight(weight_dict, self.tensor_name)
+                if is_shared:
+                    self.pin_tensor = tensor
+                else:
+                    self.pin_tensor = self._create_cpu_pin_tensor(tensor)
             else:
                 self.tensor = weight_dict[self.tensor_name]
 

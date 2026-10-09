@@ -7,7 +7,7 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from lightx2v.utils.input_info import INPUT_INFO_TYPES, UNSET, InputInfo
+from lightx2v.utils.input_info import INPUT_INFO_TYPES, InputInfo
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -24,7 +24,7 @@ class BaseRunner(ABC):
     def __init__(self, config):
         self.config = config
         task = config.get("task")
-        if task and task not in self.supported_request_fields_by_task:
+        if task is not None and task not in self.supported_request_fields_by_task:
             raise ValueError(f"{type(self).__name__} does not support task {task!r}")
         self.supported_tasks = self.get_supported_tasks()
         self.vae_encoder_need_img_original = False
@@ -80,7 +80,7 @@ class BaseRunner(ABC):
     def get_supported_tasks(self):
         """Return tasks accepted by this initialized runner."""
         task = self.config.get("task")
-        if not task:
+        if task is None:
             raise ValueError("task must be set when the runner is created")
         return (task,)
 
@@ -99,8 +99,7 @@ class BaseRunner(ABC):
         return input_info
 
     def resolve_request_seed(self, request_data):
-        seed = request_data.get("seed")
-        return 42 if seed is None else seed
+        return request_data.get("seed", 42)
 
     def get_supported_request_fields(self, task):
         """Return supported request fields for the given task."""
@@ -111,7 +110,7 @@ class BaseRunner(ABC):
 
     def prepare_request(self, request_data):
         """Build and validate the runtime context for one request."""
-        request_data = {key: value for key, value in request_data.items() if value is not UNSET and value is not None}
+        request_data = {key: value for key, value in request_data.items() if value is not None}
         task = request_data.get("task")
         if task is None:
             if len(self.supported_tasks) > 1:

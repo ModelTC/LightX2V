@@ -27,7 +27,6 @@ class HidreamO1ImagePreInfer:
         self._idx_ar_cache = {}
         self._idx_gen_cache = {}
         self._seq_p_rope_cache = {}
-        self._seq_p_cu_seqlens_cache = {}
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
@@ -45,7 +44,6 @@ class HidreamO1ImagePreInfer:
         self._idx_ar_cache.clear()
         self._idx_gen_cache.clear()
         self._seq_p_rope_cache.clear()
-        self._seq_p_cu_seqlens_cache.clear()
 
     def infer(self, weights, sample, z_in, t_pixeldit, precomputed_image_embeds=None, precomputed_deepstack_image_embeds=None):
         input_ids = sample["input_ids"]
@@ -128,11 +126,9 @@ class HidreamO1ImagePreInfer:
         rope_positions_ar = None
         rope_cos_sin_gen = None
         rope_positions_gen = None
-        seq_p_cu_seqlens_qkv = None
         seq_p_padding_size = 0
         if self.seq_p_group is not None:
             rope_cos_sin_ar, rope_positions_ar, rope_cos_sin_gen, rope_positions_gen, seq_p_padding_size = self._prepare_seq_parallel_rope(raw_rope, idx_ar, idx_gen)
-            seq_p_cu_seqlens_qkv = self._prepare_seq_parallel_cu_seqlens(idx_ar, idx_gen, seq_p_padding_size)
 
         return HidreamPreInferOutput(
             inputs_embeds=inputs_embeds,
@@ -150,7 +146,6 @@ class HidreamO1ImagePreInfer:
             rope_positions_ar=rope_positions_ar,
             rope_cos_sin_gen=rope_cos_sin_gen,
             rope_positions_gen=rope_positions_gen,
-            seq_p_cu_seqlens_qkv=seq_p_cu_seqlens_qkv,
             seq_p_padding_size=seq_p_padding_size,
         )
 
@@ -218,16 +213,6 @@ class HidreamO1ImagePreInfer:
         rope_cos_sin_ar = self._slice_rope(rope_cos_sin, idx_ar)
         rope_cos_sin_gen = self._slice_rope(rope_cos_sin, idx_gen, padding_size, world_size, cur_rank)
         return rope_cos_sin_ar[0], rope_cos_sin_ar[1], rope_cos_sin_gen[0], rope_cos_sin_gen[1], padding_size
-
-    def _prepare_seq_parallel_cu_seqlens(self, idx_ar, idx_gen, padding_size):
-        world_size = dist.get_world_size(self.seq_p_group)
-        cache_key = (self._cfg_pass_key(), idx_ar.shape[0], idx_gen.shape[0], padding_size, world_size)
-        cu_seqlens = self._seq_p_cu_seqlens_cache.get(cache_key)
-        if cu_seqlens is None:
-            local_gen_len = (idx_gen.shape[0] + padding_size) // world_size
-            cu_seqlens = torch.tensor([0, local_gen_len + idx_ar.shape[0]], dtype=torch.int32, device="cpu")
-            self._seq_p_cu_seqlens_cache[cache_key] = cu_seqlens
-        return cu_seqlens
 
     def _slice_rope(self, rope_cos_sin, idx, padding_size=0, world_size=None, cur_rank=None):
         cos, sin = rope_cos_sin[:2]

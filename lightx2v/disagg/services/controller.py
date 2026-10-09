@@ -1707,7 +1707,7 @@ class ControllerService(BaseService):
             raise ValueError("config cannot be None")
         dc = config.get("disagg_config", {})
         bootstrap_addr = config.get("data_bootstrap_addr", dc.get("bootstrap_addr", "127.0.0.1"))
-        self._init_request_rdma_buffer(bootstrap_addr, config)
+        self._init_request_rdma_buffer(bootstrap_addr, dc)
         self.logger.info("RDMA dispatch rings ready on %s (Ctrl+C to exit).", bootstrap_addr)
         try:
             while True:

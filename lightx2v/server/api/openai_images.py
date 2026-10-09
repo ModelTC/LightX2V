@@ -50,7 +50,7 @@ def _shape_from_size(size: str) -> tuple[int, int]:
     return width, height
 
 
-async def _wait_task_result_png(task_id: str, timeout_seconds: int, poll_interval_seconds: float) -> tuple[bytes, Optional[dict]]:
+async def _wait_task_result_png(task_id: str, timeout_seconds: int, poll_interval_seconds: float) -> tuple[bytes, Usage | dict | None]:
     start_time = time.monotonic()
     status_checks = 0
     while True:
@@ -99,7 +99,7 @@ async def _watch_client_disconnect(request: Request, task_id: str, poll_interval
         await asyncio.sleep(poll_interval_seconds)
 
 
-async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> tuple[bytes, Optional[dict]]:
+async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> tuple[bytes, Usage | dict | None]:
     task_id = None
     timeout_seconds = 600
     poll_interval_seconds = OPENAI_IMAGE_RESULT_POLL_INTERVAL_SECONDS
@@ -153,7 +153,7 @@ def _build_url_response(request: Request, task_id: str, image_bytes: bytes) -> s
     return f"{base}/v1/files/download/{file_name}"
 
 
-def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, response_format: Literal["url", "b64_json"], usage: Optional[dict] = None, size: Optional[str] = None):
+def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, response_format: Literal["url", "b64_json"], usage: Usage | dict | None = None, size: Optional[str] = None):
     total_start = time.perf_counter()
     usage_obj = Usage(**usage) if isinstance(usage, dict) else usage
     if response_format == "b64_json":

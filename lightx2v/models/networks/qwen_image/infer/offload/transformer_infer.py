@@ -145,6 +145,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
         image_rotary_positions,
         modulate_index,
     ):
+        self.offload_manager.compute_stream.wait_stream(torch_device_module.current_stream())
         for block_idx in range(self.num_blocks):
             if self.lazy_load:
                 next_prefetch = (block_idx + 1) % self.num_blocks

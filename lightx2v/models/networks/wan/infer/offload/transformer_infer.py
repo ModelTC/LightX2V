@@ -38,6 +38,8 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 4))
 
     def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
+        current_stream = torch_device_module.current_stream()
+        self.offload_manager.compute_stream.wait_stream(current_stream)
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
             if self.lazy_load:

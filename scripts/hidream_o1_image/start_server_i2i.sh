@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/root/yongyang3/LightX2V
-model_path=/root/wushuo/models/HiDream-O1-Image
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/models/HiDream-O1-Image
 
 host=0.0.0.0
 port=8000

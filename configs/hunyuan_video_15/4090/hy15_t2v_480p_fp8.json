@@ -14,7 +14,6 @@
     "vae_cpu_offload": false,
     "byt5_cpu_offload": false,
     "qwen25vl_cpu_offload": true,
-    "siglip_cpu_offload": false,
     "dit_quantized_ckpt": "/path/to/480p_t2v_fp8.safetensors",
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-q8f",

@@ -85,19 +85,20 @@ Self-Forcing 针对 1.3B 的自回归模型进行步数蒸馏、CFG蒸馏。Ligh
 | 配置文件 | 用途 | 模型地址 |
 |----------|------|------------|
 | [wan_t2v_distill_model_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_model_4step_cfg.json) | 加载 T2V 4步蒸馏完整模型 | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/distill_models/distill_model.safetensors) |
-| [wan_i2v_distill_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan_i2v_distill_4step_cfg.json) | 加载 I2V 4步蒸馏完整模型 | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/blob/main/distill_models/distill_model.safetensors) |
+| [wan_i2v_distill_model_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_i2v_distill_model_4step_cfg.json) | 加载 I2V 4步蒸馏完整模型 | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/blob/main/distill_models/distill_model.safetensors) |
 | [wan_t2v_distill_lora_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json) | 加载 Wan-T2V 模型和步数蒸馏 LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
 | [wan_i2v_distill_lora_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_i2v_distill_lora_4step_cfg.json) | 加载 Wan-I2V 模型和步数蒸馏 LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
 
 ### 关键配置参数
 
-- 由于 DMD 蒸馏仅训练几个固定的时间步，因此我们推荐使用 `LCM Scheduler` 进行推理。[WanStepDistillScheduler](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/models/schedulers/wan/step_distill/scheduler.py) 中，已经固定使用 `LCM Scheduler`，无需用户进行配置。
+- 设置 `distill_method: "dmd2"`，使用 [WanStepDistillScheduler](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/models/schedulers/wan/step_distill/scheduler.py)。
 - `infer_steps`, `denoising_step_list` 和 `sample_shift` 设置为与训练时相匹配的参数，一般不建议用户修改。
-- `enable_cfg` 一定设置为 `false`（等价于设置 `sample_guide_scale = 1`），否则可能出现视频完全模糊的现象。
-- `lora_configs` 支持融合不同强度的多个 lora。当 `lora_configs` 不为空时，默认加载原始的 `Wan2.1` 模型。因此使用 `lora_config` 并且想要使用步数蒸馏时，请设置步数蒸馏lora的路径与强度。
+- `enable_cfg` 沿用所选模型配置；本文 Wan2.1 示例使用 `false`。
+- 在 `lora_configs` 中设置蒸馏 LoRA 的路径和强度，同时保留 `distill_method: "dmd2"`。
 
 ```json
 {
+  "distill_method": "dmd2",
   "infer_steps": 4,                              // 推理步数
   "denoising_step_list": [1000, 750, 500, 250],  // 去噪时间步列表
   "sample_shift": 5,                             // 调度器 timestep shift
@@ -116,10 +117,7 @@ Self-Forcing 针对 1.3B 的自回归模型进行步数蒸馏、CFG蒸馏。Ligh
 ### 模型准备
 
 **完整模型：**
-将下载好的模型（`distill_model.pt` 或者 `distill_model.safetensors`）放到 Wan 模型根目录的 `distill_models/` 文件夹下即可
-
-- 对于 T2V：`Wan2.1-T2V-14B/distill_models/`
-- 对于 I2V-480P：`Wan2.1-I2V-14B-480P/distill_models/`
+`--model_path` 指向包含 `config.json` 和编码器、VAE 权重的原始 Wan 模型目录。`dit_original_ckpt` 指向蒸馏 safetensors 文件；量化权重使用 `dit_quantized_ckpt`，并设置 `dit_quantized=true` 和对应的 `dit_quant_scheme`。使用 `distill_model.pt` 时，移除配置中的 `dit_original_ckpt`，并将文件放在 `--model_path` 根目录。
 
 **LoRA：**
 
@@ -137,7 +135,7 @@ bash scripts/wan/distill/run_wan_t2v_distill_model_4step_cfg.sh
 **I2V 完整模型：**
 
 ```bash
-bash scripts/wan/distill/run_wan_i2v_distill_4step_cfg.sh
+bash scripts/wan/distill/run_wan_i2v_distill_model_4step_cfg.sh
 ```
 
 ### 步数蒸馏 LoRA 推理脚本
@@ -180,4 +178,4 @@ scripts/server/start_server.sh
 
 ### 在 Gradio 界面中使用
 
-见 [Gradio 文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_gradio.html)
+安装与使用方法见独立仓库 [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v)。

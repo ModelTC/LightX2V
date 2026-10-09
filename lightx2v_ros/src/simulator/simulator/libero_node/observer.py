@@ -23,12 +23,13 @@ def add_python_path(path):
         sys.path.insert(0, path)
 
 
-def setup_libero_config(libero_root):
+def setup_libero_config(libero_root, config_dir=None):
     benchmark_root = libero_root / "libero" / "libero"
     if not (benchmark_root / "bddl_files").exists():
         raise FileNotFoundError(f"LIBERO submodule is incomplete: {libero_root}")
 
-    config_dir = Path.home() / ".cache" / "lightx2v_ros" / "libero_config"
+    # Offline workers use separate directories to avoid LIBERO/Plus config races.
+    config_dir = Path(config_dir) if config_dir is not None else Path.home() / ".cache" / "lightx2v_ros" / "libero_config"
     config_file = config_dir / "config.yaml"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_file.write_text(
@@ -47,9 +48,9 @@ def setup_libero_config(libero_root):
     os.environ["LIBERO_CONFIG_PATH"] = str(config_dir)
 
 
-def load_libero(libero_root):
+def load_libero(libero_root, config_dir=None):
     add_python_path(libero_root)
-    setup_libero_config(libero_root)
+    setup_libero_config(libero_root, config_dir)
 
     try:
         from libero.libero import benchmark, get_libero_path

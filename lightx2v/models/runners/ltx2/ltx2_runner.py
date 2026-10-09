@@ -334,7 +334,7 @@ class LTX2Runner(DefaultRunner):
         # Apply LoRA to text encoder if configured
         lora_configs = self.config.get("lora_configs")
         if lora_configs:
-            text_encoder.apply_lora(lora_configs)
+            text_encoder.apply_lora(lora_configs, force_fp32=self.config.get("lora_merge_force_fp32", False))
 
         text_encoders = [text_encoder]
         return text_encoders
@@ -888,7 +888,7 @@ class LTX2Runner(DefaultRunner):
             self.text_encoders = self.load_text_encoder()
 
         prompt = input_info.prompt
-        neg_prompt = input_info.negative_prompt
+        neg_prompt = input_info.negative_prompt if self.scheduler.needs_negative_prompt else None
 
         v_context_p, a_context_p, v_context_n, a_context_n = self.text_encoders[0].infer(
             prompt=prompt,

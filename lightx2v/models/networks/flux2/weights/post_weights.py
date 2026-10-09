@@ -11,7 +11,6 @@ class Flux2PostWeights(WeightModule):
         self.config = config
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
         self.out_channels = config.get("transformer_in_channels", config.get("in_channels", 64))
-        self.patch_size = config.get("patch_size", 1)
         self.mm_type = config.get("dit_quant_scheme", "Default")
         self.layer_norm_type = config.get("layer_norm_type", "torch")
 

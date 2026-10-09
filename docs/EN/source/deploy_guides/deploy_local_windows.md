@@ -26,7 +26,9 @@ Refer to [Quick Start Guide](../getting_started/quickstart.md) to install enviro
 
 Refer to [Quick Start Guide](../getting_started/quickstart.md) to install environment, refer to [Gradio Deployment Guide](./deploy_gradio.md)
 
-#### One-Click Gradio Startup (Recommended)
+#### Legacy Bundle: One-Click Gradio Startup
+
+The download and usage instructions below apply to the legacy bundle. See [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) for the separate application. A corresponding new bundle has not been provided; the environment below is not a verified deployment of the new application.
 
 **📦 Download Software Package**
 - [Quark Cloud](https://pan.quark.cn/s/f44023dcf8c8)
@@ -82,4 +84,4 @@ Double-click to run the `start_lightx2v.bat` file, the script will:
 ![Gradio English Interface](../../../../assets/figs/portabl_windows/pic_gradio_en.png)
 
 **⚠️ Important Notes**:
-- **Display Issues**: If the webpage opens blank or displays abnormally, please run `pip install --upgrade gradio` to upgrade the Gradio version.
+- **Display Issues**: Follow the bundled instructions for the legacy environment. The separate application uses Gradio 5.50.0; see its repository for installation.

@@ -14,14 +14,19 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         self.n_heads = config.get("n_heads", config.get("num_attention_heads", 24))
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
-            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
-            self.seq_p_tensor_fusion = self.config["parallel"].get("seq_p_tensor_fusion", False)
+            parallel_config = self.config["parallel"]
+            self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel_config.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel_config.get("seq_p_quant_scheme")
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+            self.enable_head_parallel = parallel_config.get("seq_p_head_parallel", False)
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
         else:
             self.seq_p_group = None
-            self.seq_p_fp8_comm = False
-            self.seq_p_fp4_comm = False
+            self.seq_p_prepost_backend = "torch"
+            self.seq_p_a2a_backend = "torch"
+            self.seq_p_quant_scheme = None
             self.enable_head_parallel = False
             self.seq_p_tensor_fusion = False
 
@@ -50,7 +55,6 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         rope_positions,
         scale_msa=None,
         image_tokens_len=None,
-        q_only_img=False,
     ):
         norm1_out = attn_phase.attention_norm1.apply(hidden_states)
         if scale_msa is not None:
@@ -77,8 +81,6 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             query, key = attn_phase.rope.apply(query, key, freqs_cis, positions=rope_positions)
 
         total_seq_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu")
-
         if self.config["seq_parallel"] and image_tokens_len is not None:
             world_size = torch.distributed.get_world_size(self.seq_p_group)
             num_heads = query.shape[1]
@@ -89,23 +91,43 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                     "that divides the head count, such as 2, 3, 5, 6, 10, 15, or 30 for this Z-Image model."
                 )
 
-            hidden_states_out = attn_phase.calculate_parallel.apply(
-                q=query,
-                k=key,
-                v=value,
-                slice_qkv_len=image_tokens_len,
-                cu_seqlens_qkv=cu_seqlens,
+            if isinstance(image_tokens_len, torch.Tensor):
+                if image_tokens_len.numel() != 1:
+                    raise ValueError("Z-Image image_tokens_len must be a scalar.")
+                main_seq_len = int(image_tokens_len.item())
+            else:
+                main_seq_len = int(image_tokens_len)
+
+            if main_seq_len <= 0 or main_seq_len > total_seq_len:
+                raise ValueError(f"Z-Image sequence parallel expects image_tokens_len to identify a non-empty main prefix: got image_tokens_len={main_seq_len}, total sequence length={total_seq_len}.")
+
+            has_aux = main_seq_len < total_seq_len
+            hidden_states_out, aux_hidden_states_out = attn_phase.calculate_parallel.apply(
+                q=query[:main_seq_len],
+                k=key[:main_seq_len],
+                v=value[:main_seq_len],
+                aux_q=query[main_seq_len:] if has_aux else None,
+                aux_k=key[main_seq_len:] if has_aux else None,
+                aux_v=value[main_seq_len:] if has_aux else None,
                 attention_module=attn_phase.calculate,
                 seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                use_tensor_fusion=self.seq_p_tensor_fusion,
-                enable_head_parallel=self.enable_head_parallel,
-                img_first=True,
-                q_only_img=q_only_img,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.enable_head_parallel,
+                aux_first=False,
+                attention_kwargs={},
             )
+            if has_aux:
+                if aux_hidden_states_out is None:
+                    raise RuntimeError("Z-Image main-block joint attention expected a text auxiliary output.")
+                hidden_states_out = torch.cat([hidden_states_out, aux_hidden_states_out], dim=0)
+            elif aux_hidden_states_out is not None:
+                raise RuntimeError("Z-Image main-only attention received an unexpected auxiliary output.")
         else:
             # todo
+            cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu")
             hidden_states_out = attn_phase.calculate.apply(
                 q=query,
                 k=key,
@@ -144,7 +166,6 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         rope_positions,
         adaln_input=None,
         image_tokens_len=None,
-        q_only_img=False,
     ):
         mod_phase = block_weight.compute_phases[0] if block_weight.has_modulation else None
         attn_phase = block_weight.compute_phases[1]
@@ -158,7 +179,6 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             rope_positions,
             scale_msa,
             image_tokens_len=image_tokens_len,
-            q_only_img=q_only_img,
         )
 
         if gate_msa is not None:
@@ -197,7 +217,6 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                 rope_positions=x_positions,
                 adaln_input=adaln_input,
                 image_tokens_len=x_hidden.shape[0],
-                q_only_img=True,
             )
 
         return x_hidden

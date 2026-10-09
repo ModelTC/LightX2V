@@ -11,7 +11,6 @@
     "torch_dtype": "bfloat16",
     "enable_cfg": true,
     "ln_type": "torch",
-    "layer_norm_type": "torch",
     "rms_norm_type": "mlu_rms_norm",
     "parallel": {
         "seq_p_size": 4,

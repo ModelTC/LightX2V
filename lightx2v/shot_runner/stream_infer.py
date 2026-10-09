@@ -15,9 +15,6 @@ from lightx2v.utils.utils import seed_all
 
 
 class ShotStreamPipeline(ShotPipeline):  # type:ignore
-    def __init__(self, config):
-        super().__init__(config)
-
     @torch.no_grad()
     def generate(self, args):
         s2v = self.clip_generators["s2v_clip"]  # s2v一致性强，动态相应差
@@ -27,10 +24,9 @@ class ShotStreamPipeline(ShotPipeline):  # type:ignore
         model_fps = s2v.config.get("fps", 16)
         model_sr = s2v.config.get("audio_sr", 16000)
 
-        s2v_input_info = self.prepare_input_info(args, s2v.config)
-        f2v_input_info = self.prepare_input_info(args, f2v.config)
-        s2v_input_info.seed = s2v.resolve_request_seed({"seed": s2v_input_info.seed})
-        f2v_input_info.seed = s2v_input_info.seed
+        s2v_input_info = s2v.prepare_request(self.prepare_request_data(args, s2v))
+        f2v_input_info = f2v.prepare_request(self.prepare_request_data(args, f2v))
+        requested_sizes = {s2v: s2v_input_info.size, f2v: f2v_input_info.size}
         seed_all(s2v_input_info.seed)
 
         assert s2v_input_info.audio_path == f2v_input_info.audio_path, "s2v and f2v must use the same audio input"
@@ -40,11 +36,11 @@ class ShotStreamPipeline(ShotPipeline):  # type:ignore
         gen_video_list = []
         cut_audio_list = []
 
-        audio_array, ori_sr = load_audio_file(args.audio_path)
+        audio_array, ori_sr = load_audio_file(s2v_input_info.audio_path)
         audio_array = audio_array.mean(0)
         if ori_sr != model_sr:
             audio_array = ta.functional.resample(audio_array, ori_sr, model_sr)
-        audio_reader = SlidingWindowReader(audio_array, frame_len=33)
+        audio_reader = SlidingWindowReader(audio_array, frame_len=33, sr=model_sr, fps=model_fps)
 
         # Demo 交替生成 clip
         i = 0
@@ -63,7 +59,9 @@ class ShotStreamPipeline(ShotPipeline):  # type:ignore
                 inputs.prompt = "A man speaks to the camera with a slightly furrowed brow and focused gaze. He raises both hands upward in powerful, emphatic gestures. "  # 添加动作提示
 
             inputs.seed = inputs.seed + i  # 不同 clip 使用不同随机种子
-            inputs.audio_clip = audio_clip
+            # Each clip re-encodes the reference image; reuse the requested geometry.
+            inputs.size = requested_sizes[pipe]
+            inputs.audio_clip = audio_clip.unsqueeze(0)
             i = i + 1
 
             if self.global_tail_video is not None:  # 根据当前 pipe 需要多少 overlap_len 来裁剪 tail
@@ -71,7 +69,7 @@ class ShotStreamPipeline(ShotPipeline):  # type:ignore
             gen_clip_video, audio_clip, _ = pipe.run_clip_pipeline(inputs)
             aligned_len = gen_clip_video.shape[2] - overlap
             gen_video_list.append(gen_clip_video[:, :, :aligned_len])
-            cut_audio_list.append(audio_clip[: aligned_len * audio_reader.audio_per_frame])
+            cut_audio_list.append(audio_clip[0, : aligned_len * audio_reader.audio_per_frame])
 
             overlap = pipe.prev_frame_length
             self.global_tail_video = gen_clip_video[:, :, -self.max_tail_len :]
@@ -94,21 +92,24 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="The seed for random generator")
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
-    parser.add_argument("--negative_prompt", type=str, default="")
+    parser.add_argument("--negative_prompt", type=str, default=None)
     parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
-    parser.add_argument("--size", type=int, nargs="+", default=None, help="Output size in pixels: HEIGHT WIDTH")
+    parser.add_argument("--size", type=int, nargs=2, default=None, help="Output size in pixels: HEIGHT WIDTH (requires resize_mode=fixed_shape)")
+    parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk image and mask resize mode; defaults to the startup config.")
+    parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
     args = parser.parse_args()
 
-    clip_configs = load_clip_configs(args.config_json)
+    request_data = vars(args)
+    clip_configs = load_clip_configs(request_data.pop("config_json"))
 
     with ProfilingContext4DebugL1("Init Pipeline Cost Time"):
         shot_stream_pipe = ShotStreamPipeline(clip_configs)
 
     with ProfilingContext4DebugL1("Generate Cost Time"):
-        shot_stream_pipe.generate(args)
+        shot_stream_pipe.run_pipeline(request_data)
 
     # Clean up distributed process group
     if dist.is_initialized():

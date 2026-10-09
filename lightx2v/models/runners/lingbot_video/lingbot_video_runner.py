@@ -191,8 +191,7 @@ class LingBotVideoRunner(DefaultRunner):
         prompt_output = self.text_encoders[0].infer(prompt, images=images)
         text_encoder_output["prompt_embeds"] = prompt_output["prompt_embeds"]
         text_encoder_output["prompt_mask"] = prompt_output["prompt_mask"]
-        if self.config.get("enable_cfg", True):
-            neg_prompt = "" if neg_prompt is None else neg_prompt
+        if self.config.get("enable_cfg", False):
             negative_output = self.text_encoders[0].infer(neg_prompt, images=images)
             text_encoder_output["negative_prompt_embeds"] = negative_output["prompt_embeds"]
             text_encoder_output["negative_prompt_mask"] = negative_output["prompt_mask"]
@@ -200,8 +199,7 @@ class LingBotVideoRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
-        negative_prompt = self.input_info.negative_prompt or ""
-        text_encoder_output = self.run_text_encoder(self.input_info.prompt, neg_prompt=negative_prompt)
+        text_encoder_output = self.run_text_encoder(self.input_info.prompt, neg_prompt=self.input_info.negative_prompt)
         self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
@@ -256,8 +254,7 @@ class LingBotVideoRunner(DefaultRunner):
         vlm_image = self._vlm_image(pixel)
         generator = self._ensure_scheduler_generator()
         cond_latent = self.vae.encode_image_latent(pixel, generator=generator)
-        negative_prompt = self.input_info.negative_prompt or ""
-        text_encoder_output = self.run_text_encoder(self.input_info.prompt, neg_prompt=negative_prompt, images=[vlm_image])
+        text_encoder_output = self.run_text_encoder(self.input_info.prompt, neg_prompt=self.input_info.negative_prompt, images=[vlm_image])
         self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
