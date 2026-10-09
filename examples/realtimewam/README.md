@@ -1,7 +1,8 @@
 <div align="center" style="font-family: charter;">
 <h1>RealtimeWAM:<br>One-Step Asynchronous World Action Models</h1>
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](../../LICENSE)&nbsp;
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/ModelTC/LightX2V/blob/main/LICENSE)&nbsp;
+[![arXiv](https://img.shields.io/badge/arXiv-2610.06617-b31b1b)](https://arxiv.org/abs/2610.06617)&nbsp;
 [![GitHub Stars](https://img.shields.io/github/stars/ModelTC/LightX2V.svg?style=social&label=Star&maxAge=60)](https://github.com/ModelTC/LightX2V)&nbsp;
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-RealtimeWAM-yellow)](https://huggingface.co/lightx2v/RealtimeWAM)&nbsp;
 
@@ -30,7 +31,7 @@
 
 #### Inference
 
-RealtimeWAM uses the LightX2V environment. You can follow the environment setup instructions in the [LightX2V README](../../README.md). For comprehensive usage instructions, please refer to the LightX2V documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**. **We highly recommend using the Docker environment, as it is the simplest and fastest way to set up the environment. For details, please refer to the Quick Start section in the documentation.** If you prefer to build from source, please refer to [**Building from Source**](../../README.md#building-from-source) in the LightX2V README.
+RealtimeWAM uses the LightX2V environment. You can follow the environment setup instructions in the [LightX2V README](https://github.com/ModelTC/LightX2V/blob/main/README.md). For comprehensive usage instructions, please refer to the LightX2V documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/)**. **We highly recommend using the Docker environment, as it is the simplest and fastest way to set up the environment. For details, please refer to the Quick Start section in the documentation.** If you prefer to build from source, please refer to [**Building from Source**](https://github.com/ModelTC/LightX2V/blob/main/README.md#building-from-source) in the LightX2V README.
 
 #### Evaluation
 
@@ -88,7 +89,7 @@ bash scripts/realtimewam/run_libero_fastwam_i2va.sh
 bash scripts/realtimewam/run_libero_fasterwam_i2va.sh
 ```
 
-We provide example inference inputs in [`examples/realtimewam/assets/`](assets/).
+We provide example inference inputs in [`examples/realtimewam/assets/`](https://github.com/ModelTC/LightX2V/tree/main/examples/realtimewam/assets/).
 
 The measured latency is reported in the logs under **`RealtimeWAM End-to-End Latency (Excluding Text Encoding)`**, in milliseconds. It includes VAE encoding and video/action inference, while excluding text encoding.
 
@@ -175,3 +176,24 @@ The evaluation scripts above can also be used to reproduce the success rates rep
 | **RealtimeWAM<sup>*</sup>** | 1 | 1 | 91.96 | 89.72 | 90.84 | 97.0 |
 | Faster-WAM | 1 | 10 | 93.20 | 92.66 | 92.93 | 98.9 |
 | **RealtimeWAM<sup>†</sup>** | 1 | 1 | 92.98 | 92.30 | 92.64 | 99.0 |
+
+### ✏️ Citation
+
+If you find our toolkit or research paper useful or relevant to your research, please kindly cite our work.
+
+```bibtex
+@article{lv2026realtimewam,
+  title={RealtimeWAM: One-Step Asynchronous World Action Models},
+  author={Lv, Chengtao and Du, Jinyang and Feng, Shuyi and Yong, Yang and Gu, Shiqiao and Yang, Shunzi and Gong, Ruihao and Ren, Shen and Zhang, Tianwei and Wang, Wenya},
+  journal={arXiv preprint arXiv:2610.06617},
+  year={2026}
+}
+```
+
+### 🙌 Acknowledgements
+
+Our implementation is based on [FastWAM](https://github.com/yuantianyuan01/FastWAM) and [FasterWAM](https://github.com/hustvl/FasterWAM). We thank the authors for sharing their code.
+
+### ⚖️ License
+
+The code is licensed under the [Apache License 2.0](https://github.com/ModelTC/LightX2V/blob/main/LICENSE). Pretrained models and third-party assets are governed by their respective licenses and terms.
