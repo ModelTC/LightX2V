@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 import yaml
@@ -79,6 +80,7 @@ class LegacyShift12RecipeTests(unittest.TestCase):
 
     def test_shifted_noise_geometry_and_normalization(self):
         matching = self.config["model"]["capabilities"]["distribution_matching"]
+        self.assertIs(matching["legacy_numerics"], True)
         self.assertEqual(matching["video_flow_shift"], 12.0)
         self.assertEqual(matching["audio_flow_shift"], 3.0)
         for key in ("video_loss_weight", "audio_loss_weight", "audio_dmd_loss_weight"):
@@ -95,7 +97,9 @@ class LegacyShift12RecipeTests(unittest.TestCase):
             dmd["score_sampling"],
             {
                 "type": "h3_shifted_uniform",
+                "legacy_numerics": "${model.capabilities.distribution_matching.legacy_numerics}",
                 "video_flow_shift": "${model.capabilities.distribution_matching.video_flow_shift}",
+                "audio_flow_shift": "${model.capabilities.distribution_matching.audio_flow_shift}",
                 "discrete_samples": 1000,
                 "min_sigma": 0.02,
                 "max_sigma": 1.0,
@@ -138,7 +142,7 @@ class LegacyShift12RecipeTests(unittest.TestCase):
         sampler = data["reference_cost_sampler"]
         self.assertEqual(sampler["batch_mode"], "cost_local")
         self.assertIs(sampler["require_image_only"], True)
-        self.assertEqual(sampler["image_counts"], list(range(1, 10)))
+        self.assertEqual(sampler["image_counts"], list(range(1, 7)))
         self.assertIs(sampler["require_all_image_counts"], False)
         self.assertIs(sampler["balance_image_counts"], True)
         self.assertIs(sampler["balance_orientation"], True)
@@ -207,6 +211,8 @@ class LegacyShift12LauncherTests(unittest.TestCase):
             str(CONFIG),
             "Verified cache: completed=1",
             "plain DMD, steps=8, iters=100000",
+            "legacy_numerics=True",
+            "x0 reconstruction remains FP32",
             "model_mode=legacy_train, update_order=student_first, fake_update_ratio=5",
             "PDMD=false",
             "--nnodes=4 --nproc_per_node=8",
@@ -215,6 +221,7 @@ class LegacyShift12LauncherTests(unittest.TestCase):
             "precision fake: transformer_param_dtype=fp32",
             "precision teacher: transformer_param_dtype=bf16",
             '"batch_mode": "cost_local"',
+            "one of the observed 1..6 image counts per 32-row global microbatch",
         ):
             self.assertIn(value, result.stdout)
         self.assertFalse((self.root / "output").exists())
@@ -230,6 +237,77 @@ class LegacyShift12LauncherTests(unittest.TestCase):
         result = self.run_launcher()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("outputs/minimax_h3_ref2av_omni_imageonly_dmd8_legacy_shift12_100k", result.stdout)
+
+
+@unittest.skipUnless(HAS_RUNTIME, "Sampler integration test needs the training runtime (no GPU needed)")
+class LegacyShift12SamplingTests(unittest.TestCase):
+    def test_32_ranks_use_single_count_16_plus_16_and_resume_exactly(self):
+        from lightx2v_train.data.minimax_h3_cache_dataset import MiniMaxH3ReferenceCostSampler
+
+        config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+        sampler_options = config["data"]["train"]["reference_cost_sampler"]
+        rows = []
+        # Non-divisible, unequal cells catch both accidental count mixing in
+        # tail batches and loss of rotating-drop behavior across data epochs.
+        for image_count in range(1, 7):
+            for orientation_index, orientation in enumerate(("landscape", "portrait")):
+                for offset in range((7 - image_count) * 17 + 19 + 3 * orientation_index):
+                    rows.append(
+                        {
+                            "condition_path": f"/unused/condition_{len(rows):04d}.pt",
+                            "target_orientation": orientation,
+                            "reference_image_count": image_count,
+                            "reference_video_count": 0,
+                            "reference_audio_count": 0,
+                            "packed_sequence_tokens_124": image_count * 10000 + offset,
+                        }
+                    )
+
+        class Dataset:
+            samples = [{"type": "metadata", "row": row} for row in rows]
+
+        def build(rank, start_iteration=0):
+            sampler = MiniMaxH3ReferenceCostSampler(Dataset(), num_replicas=32, rank=rank, **sampler_options)
+            sampler.configure(
+                start_iteration=start_iteration,
+                gradient_accumulation_iters=config["training"]["gradient_accumulation_iters"],
+                fake_update_ratio=config["training"]["dmd"]["fake_update_ratio"],
+            )
+            return sampler
+
+        samplers = [build(rank) for rank in range(32)]
+        first = samplers[0]
+        self.assertEqual(first.rows_per_image_orientation_cell, 32)
+        self.assertEqual(first.num_global_batches, 12)
+        self.assertEqual(first.samples_per_outer_iteration, 6)  # student + 5 fake
+        covered = set()
+        for epoch in range(4):
+            selected = []
+            counts = Counter()
+            for step in range(first.num_global_batches):
+                ordinal = epoch * first.num_global_batches + step
+                batch = [sampler.sample_index(ordinal) for sampler in samplers]
+                batch_rows = [rows[index] for index in batch]
+                self.assertEqual(len(set(batch)), 32)
+                batch_counts = {row["reference_image_count"] for row in batch_rows}
+                self.assertEqual(len(batch_counts), 1)
+                self.assertEqual(
+                    Counter(row["target_orientation"] for row in batch_rows),
+                    {"landscape": 16, "portrait": 16},
+                )
+                counts.update(batch_counts)
+                selected.extend(batch)
+            self.assertEqual(counts, {image_count: 2 for image_count in range(1, 7)})
+            self.assertEqual(len(selected), len(set(selected)))
+            covered.update(selected)
+        self.assertEqual(covered, set(range(len(rows))))
+
+        # Resume partway through a data epoch: the next student/fake draws
+        # must be identical on every rank, not restart the count schedule.
+        offset = 3 * first.samples_per_outer_iteration
+        for rank, sampler in enumerate(samplers):
+            expected = [sampler.sample_index(i) for i in range(offset, offset + len(sampler))]
+            self.assertEqual(list(build(rank, start_iteration=3)), expected)
 
 
 if __name__ == "__main__":

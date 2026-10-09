@@ -68,13 +68,16 @@ print(f"Verified cache: completed={counts[0]}, failed={counts[1]}, input_rows={c
 print(
     f"H3 Omni legacy-shift12: plain DMD, steps={dmd['num_inference_steps']}, "
     f"iters={training['max_train_iters']}, grad_accum={training['gradient_accumulation_iters']}, "
+    f"legacy_numerics={matching.get('legacy_numerics', False)}, "
     f"model_mode={dmd.get('model_mode', 'eval')}, update_order={dmd.get('update_order', 'student_first')}, "
     f"fake_update_ratio={dmd['fake_update_ratio']}, CFG={training['teacher']['guidance_scale']}"
 )
 print(f"config={sys.argv[1]}\ndata={manifest}\noutput={training['output_dir']}")
+print("legacy_numerics aligns condition noise and sigma arithmetic; x0 reconstruction remains FP32.")
 print(f"sampler={json.dumps(sampler, sort_keys=True)}; workers={data['num_workers']}, pin_memory={data['pin_memory']}")
 print(
-    "Default sampling: one image count per global microbatch; 16 landscape + 16 portrait. "
+    "Default sampling: one of the observed 1..6 image counts per 32-row global microbatch; "
+    "16 landscape + 16 portrait. "
     "Balance observed image counts over the data epoch, rotating the omitted majority rows; "
     "NOT a full-data pass and NOT mixed-count coverage per batch. "
     "Each observed count/orientation cell needs at least 16 rows."

@@ -1,7 +1,8 @@
 # Port of the old match124/image_audio_1to5/uniform/shift12 DMD recipe.
 # Deliberate data change: NEW Omni image-only match124 BF16 condition cache.
 # Keep legacy cost-local, count/orientation-balanced sampling, extending the
-# count set to all observed 1..9 counts (including Omni's six-image records).
+# count set to Omni's 1..6 counts. Each 32-row microbatch has ONE image count,
+# with 16 landscape + 16 portrait rows; counts are balanced across the epoch.
 # This is plain DMD, NOT PDMD or HEAD, regardless of H3_PDMD in the environment.
 model:
     name: minimax_h3_ref2av
@@ -22,6 +23,8 @@ model:
         transformer_param_dtype: bf16
     capabilities:
         distribution_matching:
+            # Keep old condition-noise/sigma arithmetic; x0 stays FP32.
+            legacy_numerics: true
             video_flow_shift: 12.0
             audio_flow_shift: 3.0
             video_loss_weight: 1.0
@@ -63,7 +66,7 @@ data:
             seed: 42
             batch_mode: cost_local
             require_image_only: true
-            image_counts: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            image_counts: [1, 2, 3, 4, 5, 6]
             require_all_image_counts: false
             balance_image_counts: true
             cost_key: packed_sequence_tokens_124
@@ -103,7 +106,9 @@ training:
             - {value: [124, 768, 1344]}
         score_sampling:
             type: h3_shifted_uniform
+            legacy_numerics: ${model.capabilities.distribution_matching.legacy_numerics}
             video_flow_shift: ${model.capabilities.distribution_matching.video_flow_shift}
+            audio_flow_shift: ${model.capabilities.distribution_matching.audio_flow_shift}
             discrete_samples: 1000
             min_sigma: 0.02
             max_sigma: 1.0

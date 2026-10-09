@@ -25,7 +25,10 @@ class ScoreSigmaContext:
 class ScoreSigmaSampler(ABC):
     @abstractmethod
     def sample(self, context: ScoreSigmaContext) -> torch.Tensor:
-        """Sample one base sigma in noise-ward coordinates."""
+        """Sample noise levels understood by the model's capability.
+
+        Normally this is one base sigma; legacy H3 uses a physical AV pair.
+        """
 
 
 @dataclass(frozen=True)
@@ -66,15 +69,21 @@ class ContinuousUniformScoreSigmaSampler(ScoreSigmaSampler):
 
 @dataclass(frozen=True)
 class H3ShiftedUniformScoreSigmaSampler(ScoreSigmaSampler):
-    """Return a shared base sigma after clamping in H3's video domain."""
+    """Return base sigma, or the old trainer's exact physical pair in legacy mode.
+
+    The pair is consumed only by H3's legacy-numerics capability. Keeping it
+    intact avoids inverse-shift/forward-shift roundoff in both modalities.
+    """
 
     video_flow_shift: float = 6.0
     discrete_samples: int = 1000
     min_sigma: float = 0.02
     max_sigma: float = 1.0
+    legacy_numerics: bool = False
+    audio_flow_shift: float = 3.0
 
     def sample(self, context: ScoreSigmaContext) -> torch.Tensor:
-        base = torch.rand((1,), device=context.device, dtype=torch.float32)
+        base = torch.rand(() if self.legacy_numerics else (1,), device=context.device, dtype=torch.float32)
         if self.discrete_samples:
             base = torch.ceil(base * self.discrete_samples) / self.discrete_samples
         shift = self.video_flow_shift
@@ -82,6 +91,9 @@ class H3ShiftedUniformScoreSigmaSampler(ScoreSigmaSampler):
             self.min_sigma,
             self.max_sigma,
         )
+        if self.legacy_numerics:
+            audio_sigma = self.audio_flow_shift * video_sigma / (shift + (self.audio_flow_shift - shift) * video_sigma)
+            return torch.stack((video_sigma, audio_sigma))
         return video_sigma / (shift - (shift - 1.0) * video_sigma)
 
 
@@ -115,9 +127,11 @@ def build_score_sigma_sampler(
             discrete_samples=int(config.get("discrete_samples", 1000)),
             min_sigma=float(config.get("min_sigma", 0.02)),
             max_sigma=float(config.get("max_sigma", 1.0)),
+            legacy_numerics=bool(config.get("legacy_numerics", False)),
+            audio_flow_shift=float(config.get("audio_flow_shift", 3.0)),
         )
-        if sampler.video_flow_shift <= 0 or sampler.discrete_samples < 0:
-            raise ValueError("H3 score sampling requires a positive video_flow_shift and non-negative discrete_samples.")
+        if sampler.video_flow_shift <= 0 or sampler.audio_flow_shift <= 0 or sampler.discrete_samples < 0:
+            raise ValueError("H3 score sampling requires positive video/audio flow shifts and non-negative discrete_samples.")
         if not 0 <= sampler.min_sigma < sampler.max_sigma <= 1:
             raise ValueError("H3 score sampling requires 0 <= min_sigma < max_sigma <= 1.")
         return sampler

@@ -59,6 +59,9 @@ class MiniMaxH3DistributionMatchingOptions:
     dmd_normalization: bool = True
     dmd_normalization_epsilon: float = 0.0
     dmd_reduction: str = "mean"
+    # Preserve the original H3 reference-noise and score-sigma arithmetic.
+    # x0 deliberately retains the newer FP32 multiply/add in both modes.
+    legacy_numerics: bool = False
     student_sparse_attention: Mapping | None = None
     adaptive_video_regularization: Mapping | None = None
     memory_guard: Mapping | None = None
@@ -83,6 +86,7 @@ class MiniMaxH3DistributionMatchingOptions:
             dmd_normalization=bool(config.get("dmd_normalization", True)),
             dmd_normalization_epsilon=float(config.get("dmd_normalization_epsilon", 0.0)),
             dmd_reduction=str(config.get("dmd_reduction", "mean")),
+            legacy_numerics=bool(config.get("legacy_numerics", False)),
             student_sparse_attention=config.get("student_sparse_attention"),
             adaptive_video_regularization=config.get("adaptive_video_regularization"),
             memory_guard=config.get("memory_guard"),
@@ -511,6 +515,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
 
     def extra_checkpoint_metadata(self):
         metadata = {
+            "minimax_h3_legacy_numerics": self.options.legacy_numerics,
             "minimax_h3_distribution_matching": {
                 "transformer_component": self.model.transformer_component,
                 "video_flow_shift": self.video_shift,
@@ -629,6 +634,9 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
 
     def legacy_extra_checkpoint_metadata(self):
         metadata = self.extra_checkpoint_metadata()
+        # Checkpoints written before this option used Python-float condition
+        # noise coefficients and inverse/forward-shifted score sigmas.
+        metadata["minimax_h3_legacy_numerics"] = False
         metadata.pop("minimax_h3_parallel_topology")
         metadata.pop("minimax_h3_target_geometry")
         if "student_sparse_attention" in metadata:
@@ -701,10 +709,13 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
 
     def _modality_sigmas(self, sigma):
         sigma = torch.as_tensor(sigma, device=self.device, dtype=torch.float32)
-        if sigma.ndim == 0:
-            sigma = sigma.reshape(1)
+        if self.options.legacy_numerics and sigma.shape == (2,):
+            # The legacy score sampler supplies the physical (video, audio)
+            # pair; a singleton still denotes a base sigma during rollout.
+            return sigma[0], sigma[1]
         if sigma.numel() != 1:
             raise ValueError(f"MiniMax-H3 currently requires one shared base sigma, got shape {tuple(sigma.shape)}.")
+        sigma = sigma.reshape(()) if self.options.legacy_numerics else sigma.reshape(1)
         return _shift_sigma(sigma, self.video_shift), _shift_sigma(sigma, self.audio_shift)
 
     def _prepare_condition_for_rollout(self, condition, broadcast):
@@ -735,7 +746,15 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         )
         if noise.shape != clean.shape:
             raise ValueError(f"H3 cached visual rows {tuple(clean.shape)} do not match noise geometry {tuple(noise.shape)}.")
-        condition["noised_condition_video_latents"] = broadcast(KEYFRAME_NOISE_AUG * clean.float() + (1.0 - KEYFRAME_NOISE_AUG) * noise)
+        if self.options.legacy_numerics:
+            clean = clean.float()
+            condition_t = torch.tensor(KEYFRAME_NOISE_AUG, device=clean.device, dtype=clean.dtype)
+            # Do not fold 1-condition_t into a Python float: its FP32 rounding
+            # differs and may cross a BF16 boundary at transformer input.
+            noisy = condition_t * clean + (1.0 - condition_t) * noise
+        else:
+            noisy = KEYFRAME_NOISE_AUG * clean.float() + (1.0 - KEYFRAME_NOISE_AUG) * noise
+        condition["noised_condition_video_latents"] = broadcast(noisy)
         return condition
 
     def _layout(self, condition, shape):
