@@ -3,6 +3,10 @@ model:
     pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
     max_sequence_length: 1024
     running_dtype: bf16
+    latent_dtype: fp32
+    text_encoder_dtype: bf16
+    vae_dtype: bf16
+    transformer_param_dtype: fp32
 
 data:
     train:
@@ -70,9 +74,11 @@ training:
         weight_decay: 0.0
         adam_epsilon: 0.00000001
     output_dir: ./output_train/qwen_image_scm_ct_lora
+    allow_tf32: false
 
 inference:
     method: none
+    allow_tf32: false
 
 logging:
     rank_zero_only: true

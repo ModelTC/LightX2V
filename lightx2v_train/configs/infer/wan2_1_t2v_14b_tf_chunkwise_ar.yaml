@@ -12,6 +12,9 @@ model:
     load_text_encoder: true
     load_transformer: true
     num_frame_per_chunk: 3
+    latent_dtype: fp32
+    text_encoder_dtype: bf16
+    t5_dtype: bf16
 
 distributed:
     backend: nccl
@@ -63,6 +66,7 @@ inference:
     cfg_guidance_scale: 3.0
     seed: 42
     output_dir: ./output_infer/wan2_1_t2v_14b_tf_chunkwise_ar
+    allow_tf32: false
 
 logging:
     rank_zero_only: true

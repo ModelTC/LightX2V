@@ -3,6 +3,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat
@@ -73,7 +74,10 @@ class WanRMSNorm(nn.Module):
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        return self._norm(x.float()).type_as(x) * self.weight
+        normalized = self._norm(x.float())
+        if self.weight.dtype in (torch.float16, torch.bfloat16):
+            normalized = normalized.to(self.weight.dtype)
+        return normalized * self.weight
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
@@ -88,7 +92,13 @@ class WanLayerNorm(nn.LayerNorm):
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        return super().forward(x).type_as(x)
+        return F.layer_norm(
+            x.float(),
+            self.normalized_shape,
+            self.weight.float() if self.weight is not None else None,
+            self.bias.float() if self.bias is not None else None,
+            self.eps,
+        ).type_as(x)
 
 
 class WanSelfAttention(nn.Module):
@@ -292,22 +302,18 @@ class WanAttentionBlock(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
-        # assert e.dtype == torch.float32
-        # with amp.autocast(dtype=torch.float32):
-        e = (self.modulation + e).chunk(6, dim=1)
-        # assert e[0].dtype == torch.float32
+        # Match ViGen-DiT: modulation and gated residuals accumulate in FP32.
+        e = (self.modulation + e.float()).chunk(6, dim=1)
 
         # self-attention
-        y = self.self_attn(self.norm1(x) * (1 + e[1]) + e[0], seq_lens, grid_sizes, freqs)
-        # with amp.autocast(dtype=torch.float32):
-        x = x + y * e[2]
+        y = self.self_attn((self.norm1(x.float()) * (1 + e[1]) + e[0]).type_as(x), seq_lens, grid_sizes, freqs)
+        x = (x.float() + y * e[2]).type_as(x)
 
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e):
-            x = x + self.cross_attn(self.norm3(x), context, context_lens)
-            y = self.ffn(self.norm2(x) * (1 + e[4]) + e[3])
-            # with amp.autocast(dtype=torch.float32):
-            x = x + y * e[5]
+            x = x + self.cross_attn(self.norm3(x.float()).type_as(x), context, context_lens)
+            y = self.ffn((self.norm2(x.float()) * (1 + e[4]) + e[3]).type_as(x))
+            x = (x.float() + y.float() * e[5]).type_as(x)
             return x
 
         x = cross_attn_ffn(x, context, context_lens, e)
@@ -403,10 +409,8 @@ class Head(nn.Module):
             x(Tensor): Shape [B, L1, C]
             e(Tensor): Shape [B, C]
         """
-        # assert e.dtype == torch.float32
-        # with amp.autocast(dtype=torch.float32):
         e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
-        x = self.head(self.norm(x) * (1 + e[1]) + e[0])
+        x = self.head((self.norm(x.float()) * (1 + e[1]) + e[0]).type_as(x))
         return x
 
 

@@ -3,6 +3,10 @@ model:
     pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image-Edit-2511
     max_sequence_length: 1024
     running_dtype: bf16
+    latent_dtype: fp32
+    text_encoder_dtype: bf16
+    vae_dtype: bf16
+    transformer_param_dtype: bf16
 
 data:
     val:
@@ -43,6 +47,7 @@ inference:
     output_dir: ./output_infer/qwen_image_edit_2511_lora_test
     lora_config:
         path: /path/to/pytorch_lora_weights.safetensors
+    allow_tf32: false
 
 logging:
     rank_zero_only: true

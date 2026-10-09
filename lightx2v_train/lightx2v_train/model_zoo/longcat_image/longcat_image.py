@@ -80,7 +80,7 @@ class LongCatImageModel(BaseModel):
             model_path,
             transformer=None,
             vae=None,
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.text_encoder_dtype,
         ).to(self.device)
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.text_pipeline.text_encoder.eval()
@@ -89,7 +89,7 @@ class LongCatImageModel(BaseModel):
         self.vae = AutoencoderKL.from_pretrained(
             model_path,
             subfolder="vae",
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.vae_dtype,
         ).to(self.device)
         self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
@@ -108,7 +108,7 @@ class LongCatImageModel(BaseModel):
         return LongCatImageTransformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.transformer_param_dtype,
         ).to(self.device)
 
     def _maybe_set_attention_backend(self):
@@ -143,6 +143,7 @@ class LongCatImageModel(BaseModel):
         return 2 ** (len(block_out_channels) - 1)
 
     def _normalize_latents(self, latents):
+        latents = latents.to(dtype=self.latent_dtype)
         shift = getattr(self.vae.config, "shift_factor", 0.0)
         scale = getattr(self.vae.config, "scaling_factor", 1.0)
         return (latents - shift) * scale
@@ -164,7 +165,7 @@ class LongCatImageModel(BaseModel):
             image = image.unsqueeze(0)
         if image.ndim != 4:
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
-        image = image.to(device=self.device, dtype=self.running_dtype)
+        image = image.to(device=self.device, dtype=self.vae_dtype)
         latent = getattr(self.vae.encode(image).latent_dist, mode)()
         return self._normalize_latents(latent)
 
@@ -176,7 +177,7 @@ class LongCatImageModel(BaseModel):
 
     def encode_inference_condition(self, sample, *, is_negative=False):
         prompt = sample["conditioning"]["prompt"]
-        rewrite = self.config.get("inference", {}).get("enable_prompt_rewrite", True)
+        rewrite = self.config.get("inference", {}).get("enable_prompt_rewrite", False)
         if self.supports_prompt_rewrite and rewrite and not is_negative:
             prompt = self.text_pipeline.rewire_prompt(prompt, self.device)
         return self.encode_prompt_condition(prompt)
@@ -227,15 +228,16 @@ class LongCatImageModel(BaseModel):
         )
 
     def denoise(self, denoiser_input, timestep_or_sigma, condition):
-        prediction = self.transformer(
-            hidden_states=denoiser_input.hidden_states,
-            timestep=timestep_or_sigma,
-            guidance=None,
-            encoder_hidden_states=condition["prompt_embed"],
-            txt_ids=condition["text_ids"],
-            img_ids=denoiser_input.img_ids,
-            return_dict=False,
-        )[0]
+        with self.transformer_forward_context():
+            prediction = self.transformer(
+                hidden_states=denoiser_input.hidden_states.to(dtype=self.running_dtype),
+                timestep=timestep_or_sigma,
+                guidance=None,
+                encoder_hidden_states=condition["prompt_embed"],
+                txt_ids=condition["text_ids"],
+                img_ids=denoiser_input.img_ids,
+                return_dict=False,
+            )[0]
         return prediction[:, : denoiser_input.target_token_length]
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
@@ -249,7 +251,7 @@ class LongCatImageModel(BaseModel):
     def apply_cfg(self, positive, negative, guidance_scale):
         prediction = super().apply_cfg(positive, negative, guidance_scale)
         infer_config = self.config.get("inference", {})
-        if not self.supports_cfg_renorm or not infer_config.get("enable_cfg_renorm", True):
+        if not self.supports_cfg_renorm or not infer_config.get("enable_cfg_renorm", False):
             return prediction
 
         positive_norm = torch.norm(positive, dim=-1, keepdim=True)
@@ -262,8 +264,8 @@ class LongCatImageModel(BaseModel):
         latent_height = 2 * (int(height) // (self.vae_scale_factor * 2))
         latent_width = 2 * (int(width) // (self.vae_scale_factor * 2))
         shape = (1, self.latent_channels, latent_height, latent_width)
-        return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
+        return torch.randn(shape, generator=generator, device=self.device, dtype=self.latent_dtype)
 
     def decode_latent(self, latent):
-        image = self.vae.decode(self._denormalize_latents(latent)).sample
+        image = self.vae.decode(self._denormalize_latents(latent).to(dtype=self.vae_dtype)).sample
         return self.image_processor.postprocess(image, output_type="pil")

@@ -4,6 +4,10 @@ model:
     max_sequence_length: 512
     text_encoder_out_layers: [9, 18, 27]
     running_dtype: bf16
+    latent_dtype: fp32
+    text_encoder_dtype: bf16
+    vae_dtype: bf16
+    transformer_param_dtype: fp32
 
 data:
     processor:
@@ -71,6 +75,7 @@ training:
         weight_decay: 0.01
         adam_epsilon: 0.00000001
     output_dir: ./output_train/flux2_klein_lora
+    allow_tf32: false
 
 inference:
     method: image_infer
@@ -83,6 +88,7 @@ inference:
     seed: 42
     output_dir: ./output_infer/flux2_klein_lora
     infer_every_iters: ${training.save_every_iters}
+    allow_tf32: false
 
 logging:
     rank_zero_only: true

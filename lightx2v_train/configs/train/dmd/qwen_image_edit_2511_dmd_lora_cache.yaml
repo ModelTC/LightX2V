@@ -7,8 +7,13 @@ model:
     teacher:
         name: qwen_image_edit
         pretrained_model_name_or_path: ${model.pretrained_model_name_or_path}
+        transformer_param_dtype: bf16
     max_sequence_length: 1024
     running_dtype: bf16
+    latent_dtype: fp32
+    text_encoder_dtype: bf16
+    vae_dtype: bf16
+    transformer_param_dtype: fp32
 
 distributed:
     backend: nccl
@@ -77,6 +82,15 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 2
+        latent_dtype: fp32
+        ida:
+            enabled: false
+        div_loss:
+            enabled: false
+        fake_real:
+            enabled: false
+        random_schedule:
+            enabled: false
     student:
         train_type: lora
         lora:
@@ -112,8 +126,9 @@ training:
     teacher:
         guidance_scale: 4.0
         negative_prompt: " "
-        cfg_norm: layer_norm
+        cfg_norm: none
     output_dir: ./output_train/qwen_image_edit_2511_dmd_lora
+    allow_tf32: false
 
 inference:
     method: image_infer
@@ -130,6 +145,7 @@ inference:
     vae_tiling: true
     output_dir: ./output_infer/qwen_image_edit_2511_dmd_lora
     infer_every_iters: ${training.save_every_iters}
+    allow_tf32: false
 
 logging:
     rank_zero_only: true

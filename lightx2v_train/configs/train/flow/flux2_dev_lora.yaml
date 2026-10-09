@@ -5,6 +5,10 @@ model:
     text_encoder_out_layers: [10, 20, 30]
     guidance_scale: 4.0
     running_dtype: bf16
+    latent_dtype: fp32
+    text_encoder_dtype: bf16
+    vae_dtype: bf16
+    transformer_param_dtype: fp32
 
 distributed:
     backend: nccl
@@ -85,6 +89,7 @@ training:
         weight_decay: 0.01
         adam_epsilon: 0.00000001
     output_dir: ./output_train/flux2_dev_lora
+    allow_tf32: false
 
 inference:
     method: image_infer
@@ -97,6 +102,7 @@ inference:
     seed: 42
     output_dir: ./output_infer/flux2_dev_lora
     infer_every_iters:
+    allow_tf32: false
 
 logging:
     rank_zero_only: true

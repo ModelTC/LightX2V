@@ -10,6 +10,9 @@ model:
     load_vae: true
     load_text_encoder: true
     load_transformer: true
+    latent_dtype: fp32
+    text_encoder_dtype: bf16
+    t5_dtype: bf16
 
 distributed:
     backend: nccl
@@ -88,6 +91,7 @@ training:
         weight_decay: 0.01
         adam_epsilon: 0.00000001
     output_dir: ./output_train/wan2_1_t2v_14b_tf_chunkwise_full
+    allow_tf32: false
 
 inference:
     method: wan_t2v_14b_ar_infer
@@ -102,6 +106,7 @@ inference:
     seed: 42
     output_dir: ./output_infer/wan2_1_t2v_14b_tf_chunkwise_full
     infer_every_iters: ${training.save_every_iters}
+    allow_tf32: false
 
 logging:
     rank_zero_only: true

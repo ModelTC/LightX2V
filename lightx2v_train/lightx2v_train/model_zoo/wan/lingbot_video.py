@@ -73,7 +73,6 @@ class LingBotVideoModel(BaseModel):
     ):
         model_config = self.config["model"]
         self.model_path = os.path.abspath(os.path.expanduser(str(model_config["pretrained_model_name_or_path"])))
-        self.transformer_param_dtype = get_running_dtype(model_config.get("transformer_param_dtype", "bf16"))
         self.text_encoder_dtype = get_running_dtype(model_config.get("text_encoder_dtype", "bf16"))
         self.vae_dtype = get_running_dtype(model_config.get("vae_dtype", "fp32"))
         should_load_transformer = load_transformer and bool(model_config.get("load_transformer", True))
@@ -425,7 +424,7 @@ class LingBotVideoModel(BaseModel):
         if latent is not None:
             if latent.ndim == 4:
                 latent = latent.unsqueeze(0)
-            return latent.to(device=self.device, dtype=self.running_dtype)
+            return latent.to(device=self.device, dtype=self.latent_dtype)
         if self.vae is None:
             raise RuntimeError("LingBot-Video VAE is not loaded. Use cached latents or set model.load_vae=true.")
         video = sample["inputs"].get("video")
@@ -434,7 +433,7 @@ class LingBotVideoModel(BaseModel):
         video = video.to(device=self.device, dtype=torch.float32)
         encoded = self.vae.encode(video)
         latents = encoded.latent_dist.sample() if hasattr(encoded, "latent_dist") else encoded[0]
-        return self._vae_latent_to_dit(latents).to(dtype=self.running_dtype)
+        return self._vae_latent_to_dit(latents).to(dtype=self.latent_dtype)
 
     @torch.no_grad()
     def decode_latent(self, latent):

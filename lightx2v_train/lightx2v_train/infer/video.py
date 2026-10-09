@@ -364,9 +364,6 @@ class LingBotVideoT2VInferencer(BaseInferencer):
         self.guidance_scale = float(self.infer_config.get("cfg_guidance_scale", 3.0))
         self.enable_cfg = bool(self.infer_config.get("enable_cfg", self.guidance_scale > 1.0))
         self.batch_cfg = bool(self.infer_config.get("batch_cfg", False))
-        if self.infer_config.get("allow_tf32", True) and torch.cuda.is_available():
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.set_float32_matmul_precision("high")
         saved_paths = []
         self.model.set_denoiser_eval()
         num_slots = (len(prompts) + world_size - 1) // world_size

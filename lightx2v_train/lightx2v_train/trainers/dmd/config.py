@@ -75,7 +75,7 @@ class DmdConfig:
         negative_prompt = default_negative_prompt if default_negative_prompt is not None else configured_negative_prompt
 
         random_schedule = dmd.get("random_schedule", {})
-        latent_dtype = dmd.get("latent_dtype")
+        latent_dtype = dmd.get("latent_dtype", config["model"].get("latent_dtype", "fp32"))
         if latent_dtype is not None:
             latent_dtype = get_running_dtype(str(latent_dtype).lower())
         generation_shapes = dmd.get("generation_shapes")
@@ -97,7 +97,7 @@ class DmdConfig:
             ),
             guidance_scale=float(teacher.get("guidance_scale", 3.0)),
             negative_prompt=negative_prompt,
-            cfg_norm=teacher.get("cfg_norm", "layer_norm"),
+            cfg_norm=teacher.get("cfg_norm", "none"),
             generation_shapes=generation_shapes,
             random_schedule_enabled=bool(random_schedule.get("enabled", False)),
             random_schedule_num_steps_min=int(random_schedule.get("num_steps_min", 1)),

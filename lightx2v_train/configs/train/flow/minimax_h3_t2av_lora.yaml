@@ -3,7 +3,7 @@ model:
     # Converted Diffusers model root containing transformer/config.json.
     pretrained_model_name_or_path: /path/to/models/MiniMax-H3
     running_dtype: bf16
-    transformer_param_dtype: bf16
+    transformer_param_dtype: fp32
     # H3 diffusion states are kept in fp32; text embeddings remain bf16.
     latent_dtype: fp32
     local_files_only: true
@@ -16,7 +16,7 @@ model:
     audio_latents_per_second: 40
     # Cache construction activates the large frozen encoders one at a time.
     cache_encoder_cpu_offload: true
-    use_autocast: false
+    use_autocast: true
     attention_backend: _flash_3_hub
     capabilities:
         flow_matching:
@@ -24,6 +24,8 @@ model:
             audio_flow_shift: 3.0
             video_loss_weight: 1.0
             audio_loss_weight: 1.0
+    text_encoder_dtype: bf16
+    vae_dtype: fp32
 
 distributed:
     backend: nccl
@@ -37,7 +39,7 @@ distributed:
         reshard_after_forward:
             root_reshard: false
             block_reshard: true
-        # Preserve the transformer's intentional fp32/bf16 parameter mix.
+        # Keep explicit FP32 operations in the native model; use BF16 autocast for matmuls.
         mixed_precision:
             param_dtype: null
             reduce_dtype: fp32
@@ -103,10 +105,12 @@ training:
         weight_decay: 0.01
         adam_epsilon: 0.00000001
     output_dir: ./output_train/minimax_h3_t2av_lora
+    allow_tf32: false
 
 inference:
     method: none
     infer_every_iters: null
+    allow_tf32: false
 
 logging:
     rank_zero_only: true
