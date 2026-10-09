@@ -12,6 +12,7 @@ _LAZY_EXPORTS = {
         "ConsistencyTrainer",
     ),
     "DmdTrainer": (".dmd.trainer", "DmdTrainer"),
+    "DmadTrainer": (".dmd.dmad", "DmadTrainer"),
     "FlowMatchingTrainer": (
         ".flow_matching",
         "FlowMatchingTrainer",

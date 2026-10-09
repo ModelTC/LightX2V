@@ -147,6 +147,7 @@ class MiniMaxH3T2AVModel(BaseModel):
             self._stream_load_transformer_dir,
             device=self.device,
             lora_seed=self._stream_load_lora_seed,
+            init_lora_weights=self._lora_init_weights(),
         )
         self._stream_load_pending = False
 
@@ -299,13 +300,19 @@ class MiniMaxH3T2AVModel(BaseModel):
             return torch.autocast("cuda", dtype=self.running_dtype)
         return nullcontext()
 
+    def _lora_init_weights(self):
+        # PEFT's True means Kaiming-uniform A (a=sqrt(5)) and zero B,
+        # matching official PDMD. Keep every legacy run on Gaussian A.
+        official = self.config.get("training", {}).get("dmd", {}).get("official_pdmd", False)
+        return True if official else "gaussian"
+
     def add_lora(self, rank, alpha, target_modules):
         if not target_modules:
             target_modules = MiniMaxH3DistributionMatchingCapability._DEFAULT_LORA_TARGETS
         lora_config = LoraConfig(
             r=rank,
             lora_alpha=alpha,
-            init_lora_weights="gaussian",
+            init_lora_weights=self._lora_init_weights(),
             target_modules=target_modules,
         )
         try:

@@ -96,6 +96,7 @@ _TRAINER_MODULES = {
     "autoregressive_dmd": "lightx2v_train.trainers.dmd.autoregressive_dmd",
     "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",
+    "dmad": "lightx2v_train.trainers.dmd.dmad",
     "flow_matching": "lightx2v_train.trainers.flow_matching",
     "phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
     "sgmd": "lightx2v_train.trainers.sgmd",
@@ -143,6 +144,8 @@ def _ensure_data_registered(data_name):
         import lightx2v_train.data.cache_dataset  # noqa: F401
     elif data_name in {"minimax_h3_cache_dataset", "minimax_h3_ref_cache_dataset"}:
         import lightx2v_train.data.minimax_h3_cache_dataset  # noqa: F401
+    elif data_name == "minimax_h3_dmad_dataset":
+        import lightx2v_train.data.minimax_h3_dmad_dataset  # noqa: F401
     elif data_name in {"prompt_dataset", "video_dataset"}:
         import lightx2v_train.data.video_dataset  # noqa: F401
 

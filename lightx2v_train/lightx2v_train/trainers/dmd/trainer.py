@@ -53,6 +53,10 @@ class DmdTrainer(_DmdRuntime):
     supports_real_data_fake = True
 
     def __init__(self, config):
+        if config.get("training", {}).get("dmd", {}).get("official_pdmd", False):
+            from .official_pdmd_training import validate_official_pdmd_config
+
+            validate_official_pdmd_config(config)
         super().__init__(config)
         parsed = DmdScheduleConfig.from_mapping(
             config,
@@ -273,6 +277,10 @@ class DmdTrainer(_DmdRuntime):
         logger.info("[train] loaded {} student checkpoint path={}", self.trainer_name, model_state_path)
 
     def train(self):
+        if getattr(self, "dmd_config", {}).get("official_pdmd", False):
+            from .official_pdmd_training import OfficialH3PdmdTraining
+
+            return OfficialH3PdmdTraining(self).run()
         resume_ckpt_path, current_iter = self._resolve_resume()
         self.setup(resume_ckpt_path=resume_ckpt_path)
         if is_main_process():

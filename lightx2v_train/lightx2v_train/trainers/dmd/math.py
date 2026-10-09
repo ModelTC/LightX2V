@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn.functional as F
 
@@ -105,6 +107,74 @@ def dmd_loss_with_stats(
         squared_error = F.mse_loss(latents, target, reduction="none")
         loss = squared_error.flatten(1).sum(dim=1).mean()
     return loss, normalizer_mean, direction_rms
+
+
+def official_pdmd_loss_with_stats(
+    latents,
+    x_pred_fake_flow,
+    x_pred_teacher,
+    *,
+    projected=True,
+    normalizer_floor=1e-5,
+    projection_epsilon=1e-8,
+    clamp_max=5.0,
+):
+    """Released PDMD endpoint surrogate, without changing the legacy objective.
+
+    Inputs must have an explicit sample axis; H3's packed stereo audio already
+    has shape [1, stereo_tokens, channels]. Projection and normalization reduce
+    all non-sample axes independently for each modality. The final MSE (without
+    the legacy 0.5 factor) is clamped before the caller applies modality weights.
+    Returns loss, mean normalizer, update RMS, and a detached non-finite count.
+    """
+    if latents.ndim < 2 or not (latents.shape == x_pred_fake_flow.shape == x_pred_teacher.shape):
+        raise ValueError("Official PDMD expects equal endpoint shapes [batch, ...].")
+    normalizer_floor = float(normalizer_floor)
+    projection_epsilon = float(projection_epsilon)
+    if not math.isfinite(normalizer_floor) or normalizer_floor <= 0:
+        raise ValueError("Official PDMD normalizer floor must be finite and positive.")
+    if not math.isfinite(projection_epsilon) or projection_epsilon < 0:
+        raise ValueError("Official PDMD projection epsilon must be finite and non-negative.")
+
+    with torch.no_grad():
+        student = latents.float()
+        real_residual = student - x_pred_teacher.float()
+        fake_residual = student - x_pred_fake_flow.float()
+        # Keep the released subtraction order, including FP32 cancellation.
+        direction = real_residual - fake_residual
+        dims = tuple(range(1, student.ndim))
+        if projected:
+            rr = fake_residual.square().sum(dim=dims, keepdim=True)
+            dr = (direction * fake_residual).sum(dim=dims, keepdim=True)
+            direction = direction - dr / (rr + projection_epsilon) * fake_residual
+        normalizer = real_residual.abs().mean(dim=dims, keepdim=True).clamp_min(normalizer_floor)
+        update = direction / normalizer
+        nonfinite_count = (~torch.isfinite(update)).sum()
+        update = torch.nan_to_num(update, nan=0.0, posinf=0.0, neginf=0.0)
+        normalizer_mean = normalizer.mean()
+        direction_rms = update.square().mean().sqrt()
+
+    target = (latents.float() - update).detach()
+    loss = official_pdmd_critic_loss(latents, target, clamp_max=clamp_max)
+    return loss, normalizer_mean, direction_rms, nonfinite_count
+
+
+def official_pdmd_critic_loss(prediction, target, *, clamp_max=5.0):
+    """Released unhalved FP32 MSE, capped before modality weighting.
+
+    The caller supplies its backend's velocity convention. H3's native
+    clean-ward target is the negative of the released noise-ward target, so
+    negating both prediction and target yields the same scalar objective.
+    Zero or None disables the cap, as in the released implementation.
+    """
+    if prediction.shape != target.shape:
+        raise ValueError("Official PDMD prediction and target shapes differ.")
+    if clamp_max is not None:
+        clamp_max = float(clamp_max)
+        if not math.isfinite(clamp_max) or clamp_max < 0:
+            raise ValueError("Official PDMD loss clamp must be finite and non-negative.")
+    loss = F.mse_loss(prediction.float(), target.detach().float())
+    return loss.clamp(0.0, clamp_max) if clamp_max else loss
 
 
 def dmd_loss(

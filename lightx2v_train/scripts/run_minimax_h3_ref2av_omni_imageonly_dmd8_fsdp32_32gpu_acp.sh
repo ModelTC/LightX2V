@@ -75,14 +75,26 @@ matching = config["model"]["capabilities"]["distribution_matching"]
 model = config["model"]
 mixed = distributed["fsdp2"]["mixed_precision"]
 roles = (training["student"], training["fake"])
+batch_mode = sampler.get("batch_mode")
+if batch_mode == "count_coverage":
+    sampling_checks = {
+        "no category/orientation undersampling": sampler.get("balance_image_counts") is False and sampler.get("balance_orientation") is False,
+    }
+elif batch_mode == "count_random":
+    sampling_checks = {
+        "balanced image counts 1..6 with random orientations": sampler.get("image_counts") == list(range(1, 7)) and sampler.get("balance_image_counts") is True and sampler.get("balance_orientation") is False,
+        "rotating subsets for random single-count batches": sampler.get("strict_full_epoch") is False and sampler.get("remainder_policy") == "rotating_drop",
+    }
+else:
+    raise SystemExit("Omni image-only PDMD recipe requires batch_mode=count_coverage or count_random.")
 
 checks = {
     "PDMD projection enabled": training["method"] == "dmd" and matching.get("projected_dmd") is True,
     "8 steps, 10000 iterations, grad accumulation 1": dmd["num_inference_steps"] == 8 and training["max_train_iters"] == 10000 and training["gradient_accumulation_iters"] == 1,
     "student-first, 5 critic updates": dmd["update_order"] == "student_first" and dmd["fake_update_ratio"] == 5,
     "FSDP32, no sequence parallel": distributed["fsdp2"]["enabled"] and distributed["fsdp2"]["size"] == 32 and not distributed["sequence_parallel"]["enabled"],
-    "per-rank microbatch 1, image-count coverage": data["batch_size"] == 1 and sampler.get("batch_mode") == "count_coverage" and sampler.get("require_image_only") is True,
-    "no category/orientation undersampling": sampler.get("balance_image_counts") is False and sampler.get("balance_orientation") is False,
+    "per-rank microbatch 1 with image-only references": data["batch_size"] == 1 and sampler.get("require_image_only") is True,
+    **sampling_checks,
     "metadata-controlled 124-frame generation": matching.get("geometry_from_metadata") is True and dmd["generation_shapes"] == [{"value": [124, 768, 1344]}],
     "H3 paper student/critic learning rates 5e-5 / 1e-5": roles[0]["optimizer"]["learning_rate"] == 5e-5 and roles[1]["optimizer"]["learning_rate"] == 1e-5,
     "H3 paper AdamW betas (0, 0.9), no weight decay": all(role["optimizer"]["adam_beta1"] == 0.0 and role["optimizer"]["adam_beta2"] == 0.9 and role["optimizer"]["weight_decay"] == 0.0 for role in roles),
@@ -113,7 +125,10 @@ with manifest.open("rb") as handle:
 if digest.hexdigest() != receipt.get("manifest_sha256") or rows != counts[0]:
     raise SystemExit("Cache manifest no longer matches its complete receipt; re-run the checked shard merge.")
 print(f"Verified cache: completed={counts[0]}, failed={counts[1]}, input_rows={counts[2]}, ref_image_counts={receipt.get('reference_image_counts', {})}")
-print(f"H3 Omni Ref2AV: 4 x 8 GPUs, PDMD, steps=8, iters=10000, grad_accum=1, student_first, fake_update_ratio=5, global_microbatch=32, batch_mode=count_coverage, output={training['output_dir']}")
+print(f"H3 Omni Ref2AV: 4 x 8 GPUs, PDMD, steps=8, iters=10000, grad_accum=1, student_first, fake_update_ratio=5, global_microbatch=32, batch_mode={batch_mode}, output={training['output_dir']}")
+print(f"config={sys.argv[1]}")
+if batch_mode == "count_random":
+    print("Sampling: one image count per global batch; observed counts 1..6 balanced across each sampler epoch; random orientations with no fixed quota. Majority-count subsets rotate across epochs, NOT a full-data pass per epoch. Each observed image count needs at least 32 rows total, not 16 rows per orientation.")
 for name, role in zip(("student", "critic"), roles):
     details = f"train_type={role['train_type']}"
     if role["train_type"] == "lora":

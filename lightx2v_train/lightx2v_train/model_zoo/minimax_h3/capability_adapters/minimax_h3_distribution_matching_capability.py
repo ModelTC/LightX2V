@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import OrderedDict
 from collections.abc import Mapping
 from contextlib import ExitStack
@@ -36,7 +37,11 @@ from lightx2v_train.runtime.distributed import (
     get_world_size,
     reduce_mean,
 )
-from lightx2v_train.trainers.dmd.math import dmd_loss_with_stats
+from lightx2v_train.trainers.dmd.math import (
+    dmd_loss_with_stats,
+    official_pdmd_critic_loss,
+    official_pdmd_loss_with_stats,
+)
 from lightx2v_train.utils.generation_shapes import resolve_generation_shape
 
 from ..adaptive_video_regularization import AdaptiveVideoRegularizer
@@ -59,6 +64,10 @@ class MiniMaxH3DistributionMatchingOptions:
     dmd_normalization: bool = True
     dmd_normalization_epsilon: float = 0.0
     dmd_reduction: str = "mean"
+    official_pdmd: bool = False
+    official_pdmd_normalizer_floor: float = 1e-5
+    official_pdmd_projection_epsilon: float = 1e-8
+    official_pdmd_loss_clamp: float = 5.0
     # Preserve the original H3 reference-noise and score-sigma arithmetic.
     # x0 deliberately retains the newer FP32 multiply/add in both modes.
     legacy_numerics: bool = False
@@ -82,10 +91,14 @@ class MiniMaxH3DistributionMatchingOptions:
             fixed_num_frames=None if config.get("fixed_num_frames") is None else int(config["fixed_num_frames"]),
             allowed_resolutions=tuple(tuple(map(int, value)) for value in config.get("allowed_resolutions", ())),
             layout_cache_size=int(config.get("layout_cache_size", 16)),
-            projected_dmd=bool(config.get("projected_dmd", False)),
+            projected_dmd=bool(config.get("projected_dmd", config.get("official_pdmd", False))),
             dmd_normalization=bool(config.get("dmd_normalization", True)),
             dmd_normalization_epsilon=float(config.get("dmd_normalization_epsilon", 0.0)),
             dmd_reduction=str(config.get("dmd_reduction", "mean")),
+            official_pdmd=bool(config.get("official_pdmd", False)),
+            official_pdmd_normalizer_floor=float(config.get("official_pdmd_normalizer_floor", 1e-5)),
+            official_pdmd_projection_epsilon=float(config.get("official_pdmd_projection_epsilon", 1e-8)),
+            official_pdmd_loss_clamp=float(config.get("official_pdmd_loss_clamp", 5.0)),
             legacy_numerics=bool(config.get("legacy_numerics", False)),
             student_sparse_attention=config.get("student_sparse_attention"),
             adaptive_video_regularization=config.get("adaptive_video_regularization"),
@@ -101,6 +114,15 @@ class MiniMaxH3DistributionMatchingOptions:
             raise ValueError("H3 DMD audio weight and normalization epsilon must be non-negative.")
         if options.layout_cache_size < 1 or options.dmd_reduction not in {"mean", "sum"}:
             raise ValueError("H3 layout_cache_size must be positive and dmd_reduction must be mean or sum.")
+        if options.official_pdmd:
+            if options.legacy_numerics:
+                raise ValueError("Official PDMD and legacy_numerics cannot both be enabled.")
+            if not options.dmd_normalization or options.dmd_reduction != "mean" or options.dmd_normalization_epsilon != 0.0:
+                raise ValueError("Official PDMD requires dmd_normalization=true, dmd_reduction=mean, and dmd_normalization_epsilon=0 (it uses a normalizer floor instead).")
+            if not math.isfinite(options.official_pdmd_normalizer_floor) or options.official_pdmd_normalizer_floor <= 0:
+                raise ValueError("Official PDMD normalizer floor must be finite and positive.")
+            if any(not math.isfinite(value) or value < 0 for value in (options.official_pdmd_projection_epsilon, options.official_pdmd_loss_clamp)):
+                raise ValueError("Official PDMD projection epsilon and loss clamp must be finite and non-negative.")
         if options.fixed_num_frames is not None:
             video_latent_num_frames(options.fixed_num_frames)
         if any(len(value) != 2 or min(value) <= 0 or any(side % 32 for side in value) for value in options.allowed_resolutions):
@@ -138,7 +160,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         "ff.net.2",
     )
     _PROFILE = DistributionMatchingProfile(
-        supported_training_methods=frozenset({"dmd"}),
+        supported_training_methods=frozenset({"dmd", "dmad"}),
         supports_guidance=False,
         supports_ida=False,
         supports_diversity=False,
@@ -269,6 +291,17 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
     def predict_velocity(self, latents, sigma, condition):
         return self._predict_velocity(latents, sigma, condition, capture_features=False)
 
+    def predict_dmad_features(self, latents, sigma, condition, feature_block=49):
+        """Differentiable, target-only residual features for the DMAD critic.
+
+        Unlike residual-head fitting, generator adversarial updates must retain
+        the graph back to the noised input even while critic weights are frozen.
+        Reference and text rows condition attention but are never pooled as targets.
+        """
+        if get_sequence_parallel_world_size() != 1:
+            raise ValueError("H3 DMAD critic features require sequence_parallel.size=1.")
+        return self._predict_velocity(latents, sigma, condition, capture_features=False, dmad_feature_block=feature_block)
+
     @torch.no_grad()
     def predict_velocity_with_features(self, latents, sigma, condition):
         """Capture target-only final projection inputs in the same fake forward.
@@ -286,7 +319,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         video, audio = self._modality_sigmas(sigma)
         return {"video": video, "audio": audio}
 
-    def _predict_velocity(self, latents, sigma, condition, *, capture_features):
+    def _predict_velocity(self, latents, sigma, condition, *, capture_features, dmad_feature_block=None):
         self._validate_latents(latents)
         video_sigma, audio_sigma = self._modality_sigmas(sigma)
         layout = self._layout(condition, latents.shape)
@@ -331,6 +364,13 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
                     handle = projection.register_forward_pre_hook(capture(name, indices))
                     stack.callback(handle.remove)
             stack.enter_context(self.model.transformer_forward_context())
+            feature_kwargs = {}
+            if dmad_feature_block is not None:
+                feature_kwargs = {
+                    "return_features_block": dmad_feature_block,
+                    "feature_video_indices": layout.video_indices[layout.num_condition_video_rows :],
+                    "feature_audio_indices": layout.audio_indices[layout.num_condition_audio_rows :],
+                }
             prediction = self.model.denoiser_module()(
                 hidden_states=transformer_video,
                 audio_hidden_states=transformer_audio,
@@ -343,7 +383,16 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
                 audio_indices=layout.audio_indices,
                 text_indices=layout.text_indices,
                 return_dict=False,
+                **feature_kwargs,
             )
+        if dmad_feature_block is not None:
+            if not isinstance(prediction, (tuple, list)) or len(prediction) != 2:
+                raise TypeError("MiniMax-H3 DMAD forward must return (video_features, audio_features).")
+            features = dict(zip(("video", "audio"), prediction))
+            for name, value in features.items():
+                if value.ndim != 3 or value.shape[:2] != getattr(latents, name).shape[:2]:
+                    raise ValueError(f"H3 DMAD {name} features do not match target rows.")
+            return features
         if not isinstance(prediction, (tuple, list)) or len(prediction) < 2:
             raise TypeError("MiniMax-H3 transformer must return (video_velocity, audio_velocity) when return_dict=False.")
         velocity = MiniMaxH3JointLatents(
@@ -437,11 +486,17 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         )
 
     def regression_loss(self, prediction, target):
+        if self.options.official_pdmd:
+            video_loss = official_pdmd_critic_loss(prediction.video, target.video, clamp_max=self.options.official_pdmd_loss_clamp)
+            audio_loss = official_pdmd_critic_loss(prediction.audio, target.audio, clamp_max=self.options.official_pdmd_loss_clamp)
+            return self.video_weight * video_loss + self.audio_weight * audio_loss
         video_loss = F.mse_loss(prediction.video.float(), target.video.float())
         audio_loss = F.mse_loss(prediction.audio.float(), target.audio.float())
         return self.video_weight * video_loss + self.audio_weight * audio_loss
 
     def dmd_loss(self, latents, fake_x0, teacher_x0):
+        if self.options.official_pdmd:
+            return self._official_pdmd_loss(latents, fake_x0, teacher_x0)
         kwargs = dict(
             normalize=self.options.dmd_normalization,
             normalization_epsilon=self.options.dmd_normalization_epsilon,
@@ -467,6 +522,26 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
             "dmd_audio_normalizer": audio_normalizer,
             "dmd_video_direction_rms": video_rms,
             "dmd_audio_direction_rms": audio_rms,
+        }
+        return self.video_weight * video_loss + self.audio_dmd_weight * audio_loss
+
+    def _official_pdmd_loss(self, latents, fake_x0, teacher_x0):
+        kwargs = dict(
+            projected=self.options.projected_dmd,
+            normalizer_floor=self.options.official_pdmd_normalizer_floor,
+            projection_epsilon=self.options.official_pdmd_projection_epsilon,
+            clamp_max=self.options.official_pdmd_loss_clamp,
+        )
+        video_loss, video_normalizer, video_rms, video_nonfinite = official_pdmd_loss_with_stats(latents.video, fake_x0.video, teacher_x0.video, **kwargs)
+        audio_loss, audio_normalizer, audio_rms, audio_nonfinite = official_pdmd_loss_with_stats(latents.audio, fake_x0.audio, teacher_x0.audio, **kwargs)
+        self._last_dmd_metrics = {
+            "dmd_video": (self.video_weight * video_loss).detach(),
+            "dmd_audio": (self.audio_dmd_weight * audio_loss).detach(),
+            "dmd_video_normalizer": video_normalizer,
+            "dmd_audio_normalizer": audio_normalizer,
+            "dmd_video_direction_rms": video_rms,
+            "dmd_audio_direction_rms": audio_rms,
+            "dmd_nonfinite_update": video_nonfinite + audio_nonfinite,
         }
         return self.video_weight * video_loss + self.audio_dmd_weight * audio_loss
 
@@ -546,6 +621,16 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         }
         if self.student_sla.enabled:
             metadata["student_sparse_attention"] = self.student_sla.checkpoint_metadata()
+        if self.options.official_pdmd:
+            metadata["minimax_h3_official_pdmd_loss"] = {
+                "schema_version": 1,
+                "normalizer_floor": self.options.official_pdmd_normalizer_floor,
+                "projection_epsilon": self.options.official_pdmd_projection_epsilon,
+                "loss_clamp": self.options.official_pdmd_loss_clamp,
+                "mse_scale": 1.0,
+                "nonfinite_update": "zero",
+                "clamp_before_modality_weight": True,
+            }
         return metadata
 
     @staticmethod
@@ -709,6 +794,10 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
 
     def _modality_sigmas(self, sigma):
         sigma = torch.as_tensor(sigma, device=self.device, dtype=torch.float32)
+        if self.options.official_pdmd and sigma.shape == (2,):
+            # The official loop owns both physical schedules, including its
+            # unshifted rollout and independently sampled critic noise levels.
+            return sigma[0:1], sigma[1:2]
         if self.options.legacy_numerics and sigma.shape == (2,):
             # The legacy score sampler supplies the physical (video, audio)
             # pair; a singleton still denotes a base sigma during rollout.

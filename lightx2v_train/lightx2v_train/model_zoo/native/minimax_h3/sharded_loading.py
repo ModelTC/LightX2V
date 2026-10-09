@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import gc
 import json
+import math
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -106,8 +107,15 @@ def _lora_init_state(
     *,
     seed: int,
     rank_zero: bool,
+    init_lora_weights: bool | str = "gaussian",
 ) -> dict[str, torch.Tensor]:
-    """Build PEFT's Gaussian-A/zero-B initialization on global rank zero."""
+    """Build Gaussian-A (legacy) or Kaiming-A (official PDMD), with zero B.
+
+    Use the existing rank-zero CPU generator and parameter dtypes for both
+    modes; in particular, opting in does not promote LoRA master precision.
+    """
+    if init_lora_weights is not True and init_lora_weights != "gaussian":
+        raise ValueError(f"Unsupported MiniMax-H3 streamed LoRA initialization: {init_lora_weights!r}.")
     if not rank_zero:
         return {}
     generator = torch.Generator(device="cpu")
@@ -119,7 +127,10 @@ def _lora_init_state(
             if len(shape) != 2 or shape[0] <= 0:
                 raise ValueError(f"Unexpected MiniMax-H3 LoRA-A shape for {name}: {shape}.")
             value = torch.empty(shape, dtype=parameter.dtype, device="cpu")
-            value.normal_(mean=0.0, std=1.0 / shape[0], generator=generator)
+            if init_lora_weights is True:
+                torch.nn.init.kaiming_uniform_(value, a=math.sqrt(5), generator=generator)
+            else:
+                value.normal_(mean=0.0, std=1.0 / shape[0], generator=generator)
             state[name] = value
         elif ".lora_B." in name:
             state[name] = torch.zeros(shape, dtype=parameter.dtype, device="cpu")
@@ -148,6 +159,7 @@ def stream_load_minimax_h3_transformer(
     *,
     device: torch.device,
     lora_seed: int = 0,
+    init_lora_weights: bool | str = "gaussian",
 ) -> None:
     """Materialize and populate an FSDP2-sharded, meta-built H3 transformer."""
     if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() <= 1:
@@ -188,7 +200,12 @@ def stream_load_minimax_h3_transformer(
                 shard_name,
             )
 
-    lora_state = _lora_init_state(transformer, seed=lora_seed, rank_zero=rank_zero)
+    lora_state = _lora_init_state(
+        transformer,
+        seed=lora_seed,
+        rank_zero=rank_zero,
+        init_lora_weights=init_lora_weights,
+    )
     if lora_state or any(".lora_" in key for key in target_keys):
         _load_partial_full_state(transformer, lora_state)
     del lora_state
