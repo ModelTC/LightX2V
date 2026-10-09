@@ -6,12 +6,6 @@ model:
     # FLUX.2-dev uses embedded guidance in the transformer, not negative-prompt CFG.
     guidance_scale: 4.0
     running_dtype: bf16
-    latent_dtype: fp32
-    text_encoder_dtype: bf16
-    vae_dtype: bf16
-    transformer_param_dtype: fp32
-    teacher:
-        transformer_param_dtype: bf16
 
 distributed:
     backend: nccl
@@ -76,15 +70,6 @@ training:
         # Start at 512px for memory; raise to 1024px only after validating available GPUs.
         generation_shapes:
             - {value: [512, 512]}
-        latent_dtype: fp32
-        ida:
-            enabled: false
-        div_loss:
-            enabled: false
-        fake_real:
-            enabled: false
-        random_schedule:
-            enabled: false
     student:
         train_type: lora
         lora:
@@ -120,7 +105,6 @@ training:
         negative_prompt: ""
         cfg_norm: none
     output_dir: ./output_train/flux2_dev_dmd_lora
-    allow_tf32: false
 
 inference:
     method: image_infer
@@ -133,7 +117,6 @@ inference:
     seed: 42
     output_dir: ./output_infer/flux2_dev_dmd_lora
     infer_every_iters:
-    allow_tf32: false
 
 logging:
     rank_zero_only: true

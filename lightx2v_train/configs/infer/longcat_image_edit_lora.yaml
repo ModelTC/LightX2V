@@ -3,10 +3,6 @@ model:
     pretrained_model_name_or_path: /path/to/LongCat-Image-Edit
     attention_backend: _native_flash
     running_dtype: bf16
-    latent_dtype: fp32
-    text_encoder_dtype: bf16
-    vae_dtype: bf16
-    transformer_param_dtype: bf16
 
 data:
     processor:
@@ -46,9 +42,6 @@ inference:
     output_dir: ./output_infer/longcat_image_edit_lora
     lora_config:
         path: /path/to/pytorch_lora_weights.safetensors
-    allow_tf32: false
-    enable_prompt_rewrite: false
-    enable_cfg_renorm: false
 
 logging:
     rank_zero_only: true

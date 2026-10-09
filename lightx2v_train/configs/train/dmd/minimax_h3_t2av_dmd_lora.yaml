@@ -4,7 +4,6 @@ model:
     # transformer/config.json (MiniMaxH3Transformer3DModel).
     pretrained_model_name_or_path: /data/nvme6/gushiqiao/models/MiniMax-H3
     running_dtype: bf16
-    transformer_param_dtype: fp32
     local_files_only: true
     patch_size: [1, 2, 2]
     video_latent_channels: 24
@@ -16,7 +15,6 @@ model:
     # Keep frozen cache encoders off GPU outside their forward passes.
     cache_encoder_cpu_offload: true
     # H3 keeps its diffusion latents in fp32; prompt embeddings remain bf16.
-    use_autocast: true
     # Full SDPA is impractical at H3 sequence lengths; this matches run_h3.py.
     attention_backend: _flash_3_hub
     capabilities:
@@ -26,11 +24,6 @@ model:
             audio_flow_shift: 3.0
             video_loss_weight: 1.0
             audio_loss_weight: 1.0
-    latent_dtype: fp32
-    text_encoder_dtype: bf16
-    vae_dtype: fp32
-    teacher:
-        transformer_param_dtype: bf16
 
 distributed:
     backend: nccl
@@ -90,15 +83,6 @@ training:
         score_sampling:
             type: continuous_uniform
         # Do not apply the generic scheduler shift before H3's modality shifts.
-        latent_dtype: fp32
-        ida:
-            enabled: false
-        div_loss:
-            enabled: false
-        fake_real:
-            enabled: false
-        random_schedule:
-            enabled: false
     student:
         train_type: lora
         lora:
@@ -129,12 +113,10 @@ training:
         guidance_scale: 1.0
         cfg_norm: none
     output_dir: ./output_train/minimax_h3_t2av_dmd_zoe_fake_full
-    allow_tf32: false
 
 inference:
     method: none
     infer_every_iters: null
-    allow_tf32: false
 
 logging:
     rank_zero_only: true

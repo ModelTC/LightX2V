@@ -2,7 +2,6 @@ model:
     name: lingbot_video
     pretrained_model_name_or_path: /data/nvme5/gushiqiao/models/lingbot-video-moe-30b-a3b
     running_dtype: bf16
-    transformer_param_dtype: fp32
     text_encoder_dtype: bf16
     vae_dtype: fp32
     text_encoder_cpu: false
@@ -16,8 +15,6 @@ model:
     teacher:
         name: lingbot_video
         pretrained_model_name_or_path: ${model.pretrained_model_name_or_path}
-        transformer_param_dtype: bf16
-    latent_dtype: fp32
 
 distributed:
     backend: nccl
@@ -84,15 +81,6 @@ training:
             - {value: [121, 480, 832]}
         ts_schedule: false
         ts_schedule_max: false
-        latent_dtype: fp32
-        ida:
-            enabled: false
-        div_loss:
-            enabled: false
-        fake_real:
-            enabled: false
-        random_schedule:
-            enabled: false
     student:
         train_type: lora
         lora:
@@ -117,7 +105,6 @@ training:
         guidance_scale: 3.0
         cfg_norm: none
     output_dir: /data/nvme6/gushiqiao/x2v_train_save/lingbot_video_t2v_dmd_attn_ffn_lora_121f
-    allow_tf32: false
 
 inference:
     method: lingbot_video_t2v_infer
@@ -132,7 +119,6 @@ inference:
     seed: 42
     output_dir: ${training.output_dir}/inference
     infer_every_iters: ${training.save_every_iters}
-    allow_tf32: false
 
 logging:
     rank_zero_only: true

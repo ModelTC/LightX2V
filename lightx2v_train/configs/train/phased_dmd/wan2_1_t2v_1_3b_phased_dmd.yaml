@@ -26,9 +26,6 @@ model:
         pretrained_model_name_or_path: models/Wan2.1-T2V-14B
         transformer_param_dtype: bf16
         share_with_teacher: true
-    latent_dtype: fp32
-    text_encoder_dtype: bf16
-    t5_dtype: bf16
 
 distributed:
     backend: nccl
@@ -96,12 +93,10 @@ training:
     save_total_limit: 10
     dmd:
         ida:
-            enabled: false
             decay: 0.97
         num_inference_steps: 4
         fake_update_ratio: 5
         div_loss:
-            enabled: false
             weight: 5.0e-2
             teacher_inference_steps: 24
             anchor_step: 6
@@ -114,20 +109,13 @@ training:
             score_timestep_margin: 20
             guidance_distill: 5.0
             fake_real_high:
-                enabled: false
                 weight: 2.0e-1
                 timestep_list:
                     - 750
             fake_real_low:
-                enabled: false
                 weight: 2.0e-1
                 timestep_list:
                     - 500
-        latent_dtype: fp32
-        fake_real:
-            enabled: false
-        random_schedule:
-            enabled: false
     student:
         train_type: full
         optimizer:
@@ -164,7 +152,6 @@ training:
         guidance_scale: 5.0
         cfg_norm: none
     output_dir: ./output_train/wan2_1_t2v_1_3b_phased_dmd_div_fakereal
-    allow_tf32: false
 
 inference:
     method: wan_t2v_dual_infer
@@ -178,7 +165,6 @@ inference:
     seed: 42
     output_dir: ./output_infer/wan2_1_t2v_1_3b_phased_dmd_div_fakereal
     infer_every_iters: 10
-    allow_tf32: false
 
 logging:
     rank_zero_only: true

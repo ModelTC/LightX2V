@@ -6,12 +6,6 @@ model:
     #     pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
     max_sequence_length: 1024
     running_dtype: bf16
-    latent_dtype: fp32
-    text_encoder_dtype: bf16
-    vae_dtype: bf16
-    transformer_param_dtype: fp32
-    teacher:
-        transformer_param_dtype: bf16
 
 data:
     train:
@@ -85,7 +79,6 @@ training:
         weight_decay: 0.001
         adam_epsilon: 0.00000001
     output_dir: ./output_train/qwen_image_pcm_cd_lora
-    allow_tf32: false
 
 inference:
     method: image_infer
@@ -100,7 +93,6 @@ inference:
     seed: 42
     output_dir: ./output_infer/qwen_image_pcm_cd_lora
     infer_every_iters: ${training.save_every_iters}
-    allow_tf32: false
 
 logging:
     rank_zero_only: true

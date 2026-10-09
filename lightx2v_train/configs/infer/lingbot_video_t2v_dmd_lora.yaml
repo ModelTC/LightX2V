@@ -10,7 +10,6 @@ model:
     load_transformer: true
     load_text_encoder: true
     load_vae: true
-    latent_dtype: fp32
 
 distributed:
     backend: nccl
@@ -61,7 +60,6 @@ inference:
     enable_cfg: true
     batch_cfg: true
     cfg_guidance_scale: 3.0
-    allow_tf32: false
     seed: 42
     fps: 24
     video_quality: 6.0
