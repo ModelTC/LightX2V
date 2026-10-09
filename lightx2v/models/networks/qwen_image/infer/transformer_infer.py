@@ -7,11 +7,6 @@ from loguru import logger
 from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile, set_magi_custom_op_mode
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .triton_ops import (
-    fuse_scale_shift_gate_select01_kernel,
-    fuse_scale_shift_kernel,
-)
-
 try:
     from magi_compiler import magi_compile
 except ImportError:
@@ -57,7 +52,10 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             self.enable_head_parallel = False
         self.use_triton_modulate = config.get("modulate_type", "triton") == "triton"
         if self.use_triton_modulate:
+            from .triton_ops import fuse_scale_shift_gate_select01_kernel, fuse_scale_shift_kernel
+
             self.modulate_func = fuse_scale_shift_kernel
+            self.modulate_select_func = fuse_scale_shift_gate_select01_kernel
         else:
             self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
         self.img_qkv_len1 = None
@@ -85,7 +83,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             gate_0, gate_1 = gate[:actual_batch], gate[actual_batch:]
 
             if self.use_triton_modulate:
-                x, gate_result = fuse_scale_shift_gate_select01_kernel(
+                x, gate_result = self.modulate_select_func(
                     x,
                     scale0=scale_0,
                     shift0=shift_0,

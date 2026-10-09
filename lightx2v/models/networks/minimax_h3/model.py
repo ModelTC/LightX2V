@@ -60,6 +60,10 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        if config.get("cpu_offload_layout") == "contiguous":
+            for option in ("use_fused_qkv", "dit_release_block_offload_buffers", "dit_quantized"):
+                if config.get(option, False):
+                    raise ValueError(f"MiniMax-H3 contiguous block offload does not support {option}")
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not self.use_adaln_cache:
             message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{ADALN_CACHE_GUIDE}"
@@ -562,6 +566,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         # can retain the full safetensors storage behind a small TP view.  Shard
         # on CPU first so accelerator memory contains only this rank's weights.
         with safe_open(file_path, framework="pt", device="cpu") as source:
+            self._record_checkpoint_metadata(source)
             weight_dict = {
                 key: self._load_local_tensor(source, key, load_device)
                 for key in source.keys()

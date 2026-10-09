@@ -6,7 +6,7 @@ from packaging.version import parse
 from tqdm import tqdm
 
 from lightx2v.utils.profiler import ExcludedProfilingContext
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
@@ -17,9 +17,11 @@ class WeightAsyncStreamManager(object):
         self.init_stream = torch_device_module.Stream(priority=0)
         self.need_init_first_buffer = True
         self.lazy_load = False
+        self.contiguous_group = None
+        self.contiguous_transfer = None
         torch_version = parse(torch.__version__.split("+")[0])
         # Legacy name: this is the active device backend's weight-loading stream, not a CUDA-only stream.
-        if AI_DEVICE == "cuda" and torch_version >= parse("2.7"):
+        if PLATFORM == "cuda" and torch_version >= parse("2.7"):
             self.cuda_load_stream = torch_device_module.Stream(priority=1)
             self.compute_stream = torch_device_module.Stream(priority=1)
         else:
@@ -48,6 +50,20 @@ class WeightAsyncStreamManager(object):
         else:
             raise NotImplementedError
 
+    def init_contiguous_group(self, group):
+        from lightx2v.common.offload.block_layout import ContiguousBlockTransfer
+
+        if group is None:
+            raise ValueError("No contiguous offload group was registered")
+        if self.contiguous_transfer is not None:
+            raise ValueError("An offload manager can initialize only one contiguous group")
+        slots = list(group.device_slots)
+        self.contiguous_transfer = ContiguousBlockTransfer(group.blocks, slots)
+        self.contiguous_group = group
+        self.cuda_buffers = slots
+        logger.info(f"contiguous block offload: {len(group.blocks)} CPU buffers, {group.blocks[0].block_buffer.layout.nbytes} bytes/block, two device slots")
+        self.need_init_first_buffer = True
+
     def _sync(self):
         """Synchronize to ensure memory visibility across streams.
 
@@ -61,8 +77,12 @@ class WeightAsyncStreamManager(object):
             self.init_stream.synchronize()
 
     def init_first_buffer(self, blocks, adapter_block_idx=None):
+        if self.contiguous_group is not None and blocks is not self.contiguous_group.blocks:
+            raise ValueError("Expected the blocks registered with this offload manager")
         with torch_device_module.stream(self.init_stream):
-            if hasattr(self, "cpu_buffers"):
+            if self.contiguous_transfer is not None:
+                self.contiguous_transfer.copy(0, self.cuda_buffers[0])
+            elif hasattr(self, "cpu_buffers"):
                 if self.offload_granularity == "block":
                     self.cuda_buffers[0].load_state_dict(self.cpu_buffers[0].state_dict(), 0, adapter_block_idx)
                 else:
@@ -76,8 +96,12 @@ class WeightAsyncStreamManager(object):
         self.need_init_first_buffer = False
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
+        if self.contiguous_group is not None and blocks is not self.contiguous_group.blocks:
+            raise ValueError("Expected the blocks registered with this offload manager")
         with torch_device_module.stream(self.cuda_load_stream):
-            if hasattr(self, "cpu_buffers"):
+            if self.contiguous_transfer is not None:
+                self.contiguous_transfer.copy(block_idx, self.cuda_buffers[1])
+            elif hasattr(self, "cpu_buffers"):
                 self.cuda_buffers[1].load_state_dict(self.cpu_buffers[0].state_dict(), block_idx, adapter_block_idx)
             else:
                 self.cuda_buffers[1].load_state_dict(blocks[block_idx].state_dict(), block_idx, adapter_block_idx)
@@ -150,6 +174,13 @@ class WeightAsyncStreamManager(object):
         self.cpu_buffers = [self.cpu_buffers[1], self.cpu_buffers[0]]
 
     def __del__(self):
+        transfer = getattr(self, "contiguous_transfer", None)
+        if transfer is not None:
+            try:
+                self.compute_stream.synchronize()
+                transfer.close()
+            except RuntimeError as error:
+                logger.warning("Failed to synchronize contiguous block offload during cleanup: {}", error)
         if hasattr(self, "executor") and self.executor is not None:
             for f in self.prefetch_futures:
                 if not f.done():
