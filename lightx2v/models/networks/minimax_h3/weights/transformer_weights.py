@@ -99,6 +99,9 @@ class MiniMaxH3AttentionWeights(WeightModule):
             calculate = attention_cls()
         if attn_type == "sol_attn":
             calculate.set_config(config.get("sol_attn_setting", {}))
+        elif attn_type == "hip_sage_amd_rocm":
+            # INT4/INT8 per-block split, opt-in via hip_sage_setting.mixed_precision (validated for MiniMax-H3 only)
+            calculate.set_config({**config.get("hip_sage_setting", {}), "model": "minimax_h3"})
         self.add_module("calculate", calculate)
         if config.get("seq_parallel", False):
             parallel = config.get("parallel", {})
