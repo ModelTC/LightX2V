@@ -41,6 +41,8 @@ def _metadata_path(path):
 
 
 class VideoDataset(torch.utils.data.Dataset):
+    """With validate_on_init=False, resolve media and prompt files on access."""
+
     def __init__(
         self,
         metadata_paths,
@@ -66,6 +68,7 @@ class VideoDataset(torch.utils.data.Dataset):
         preserve_records=False,
         sample_processor=None,
         unconditional_prompt=" ",
+        validate_on_init=True,
     ):
         self.metadata_paths = [_metadata_path(path) for path in to_list(metadata_paths)]
         self.height = int(height)
@@ -82,6 +85,7 @@ class VideoDataset(torch.utils.data.Dataset):
         self.audio_roots = [Path(path) for path in to_list(audio_root)] + [Path(path) for path in to_list(media_root)]
         self.image_roots = [Path(path) for path in to_list(image_root)] + [Path(path) for path in to_list(media_root)]
         self.skip_missing = bool(skip_missing)
+        self.validate_on_init = bool(validate_on_init)
         self.max_samples = max_samples
         self.decode_retries = max(1, int(decode_retries))
         self.preserve_records = bool(preserve_records)
@@ -98,13 +102,21 @@ class VideoDataset(torch.utils.data.Dataset):
             raise RuntimeError(f"No usable video samples found from data_path={metadata_paths}")
         logger.info("[data] video_dataset samples={} repeat={}", len(self.samples), self.dataset_repeat)
 
+    def _index_path(self, value, base_dir, roots=(), subdirs=()):
+        if self.validate_on_init:
+            return resolve_data_path(value, base_dir, roots, subdirs)
+        # Preserve relative paths without probing the shared filesystem.
+        if value is None or not str(value).strip():
+            return None
+        return Path(str(value).strip())
+
     def _load_samples(self):
         samples = []
         for metadata_path in self.metadata_paths:
             for row in read_records(metadata_path, prompt_column=self.prompt_column):
                 video_value = record_value(row, self.video_column, "video_path", "video")
-                video_path = resolve_data_path(video_value, metadata_path.parent, self.video_roots, subdirs=("video", "videos"))
-                if self.skip_missing and (video_path is None or not video_path.is_file()):
+                video_path = self._index_path(video_value, metadata_path.parent, self.video_roots, subdirs=("video", "videos"))
+                if self.validate_on_init and self.skip_missing and (video_path is None or not video_path.is_file()):
                     continue
 
                 meta = {
@@ -120,8 +132,8 @@ class VideoDataset(torch.utils.data.Dataset):
                         meta[key] = row[key]
 
                 audio_value = record_value(row, self.audio_column, "audio_path", "audio")
-                audio_path = resolve_data_path(audio_value, metadata_path.parent, self.audio_roots, subdirs=("audio", "audios"))
-                if getattr(self.sample_processor, "requires_audio", False) and (audio_path is None or not audio_path.is_file()):
+                audio_path = self._index_path(audio_value, metadata_path.parent, self.audio_roots, subdirs=("audio", "audios"))
+                if self.validate_on_init and getattr(self.sample_processor, "requires_audio", False) and (audio_path is None or not audio_path.is_file()):
                     if self.skip_missing:
                         continue
                     raise FileNotFoundError(f"Audio path points to a missing file: {audio_path or audio_value}")
@@ -129,7 +141,7 @@ class VideoDataset(torch.utils.data.Dataset):
                     meta["audio_path"] = str(audio_path)
 
                 image_value = record_value(row, self.image_column, "image_path", "image")
-                image_path = resolve_data_path(image_value, metadata_path.parent, self.image_roots, subdirs=("image", "images"))
+                image_path = self._index_path(image_value, metadata_path.parent, self.image_roots, subdirs=("image", "images"))
                 if image_path is not None:
                     meta["image_path"] = str(image_path)
 
@@ -140,25 +152,46 @@ class VideoDataset(torch.utils.data.Dataset):
                     "text_path",
                 )
                 if prompt_path_value is not None:
-                    prompt_path = resolve_data_path(
+                    prompt_path = self._index_path(
                         prompt_path_value,
                         metadata_path.parent,
                         subdirs=("prompt", "prompts", "text", "texts"),
                     )
-                    if prompt_path is None or not prompt_path.is_file():
-                        if self.skip_missing:
-                            continue
-                        raise FileNotFoundError(f"prompt_path points to a missing file: {prompt_path}")
-                    prompt = " ".join(prompt_path.read_text(encoding="utf-8").split())
+                    if self.validate_on_init:
+                        if prompt_path is None or not prompt_path.is_file():
+                            if self.skip_missing:
+                                continue
+                            raise FileNotFoundError(f"prompt_path points to a missing file: {prompt_path}")
+                        prompt = " ".join(prompt_path.read_text(encoding="utf-8").split())
                     meta["prompt_path"] = str(prompt_path)
 
                 sample = {"prompt": prompt, "meta": meta}
+                if not self.validate_on_init:
+                    sample["path_base_dir"] = metadata_path.parent
                 if self.preserve_records:
                     sample["_original_record"] = dict(row)
                 samples.append(sample)
                 if self.max_samples is not None and len(samples) >= int(self.max_samples):
                     return samples
         return samples
+
+    def _resolve_sample(self, record):
+        meta = dict(record["meta"])
+        prompt = record["prompt"]
+        if not self.validate_on_init:
+            for key, roots, subdirs in (
+                ("video_path", self.video_roots, ("video", "videos")),
+                ("audio_path", self.audio_roots, ("audio", "audios")),
+                ("image_path", self.image_roots, ("image", "images")),
+                ("prompt_path", (), ("prompt", "prompts", "text", "texts")),
+            ):
+                if key in meta:
+                    meta[key] = str(resolve_data_path(meta[key], record["path_base_dir"], roots, subdirs))
+            if "prompt_path" in meta:
+                prompt = " ".join(Path(meta["prompt_path"]).read_text(encoding="utf-8").split())
+            if getattr(self.sample_processor, "requires_audio", False) and not Path(meta.get("audio_path", "")).is_file():
+                raise FileNotFoundError(f"Audio path points to a missing file: {meta.get('audio_path')}")
+        return prompt, meta
 
     def _load_video(self, video_path):
         return load_video_tensor(
@@ -175,9 +208,9 @@ class VideoDataset(torch.utils.data.Dataset):
         for retry_id in range(self.decode_retries):
             sample_index = (base_index + retry_id) % len(self.samples)
             record = self.samples[sample_index]
-            meta = dict(record["meta"])
+            meta = record["meta"]
             try:
-                prompt = record["prompt"]
+                prompt, meta = self._resolve_sample(record)
                 if random.random() < self.prompt_dropout_rate:
                     prompt = self.unconditional_prompt
                 video, video_start_time = self._load_video(meta["video_path"])
@@ -205,7 +238,8 @@ class VideoDataset(torch.utils.data.Dataset):
         return dict(record["_original_record"])
 
     def cache_source_prompt(self, index):
-        return self.samples[index]["prompt"]
+        prompt, _ = self._resolve_sample(self.samples[index])
+        return prompt
 
 
 class PromptDataset(torch.utils.data.Dataset):
@@ -372,6 +406,7 @@ def build_video_dataset(data_config, train_or_val="train", sample_processor=None
         preserve_records=data_config.get("preserve_records", False),
         sample_processor=sample_processor,
         unconditional_prompt=getattr(sample_processor, "unconditional_prompt", unconditional_prompt),
+        validate_on_init=data_config.get("validate_on_init", True),
     )
     return _build_dataloader(dataset, data_config, train_or_val)
 
