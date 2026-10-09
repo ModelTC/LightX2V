@@ -7,6 +7,8 @@ MEMCPY_D2D = 3
 IPC_LAZY_PEER = 1
 FINEGRAINED = 0x1
 WAIT_GTE = 0
+EVENT_DISABLE_TIMING = 0x2
+EVENT_RELEASE_TO_SYSTEM = 0x40000000
 
 
 class IpcHandle(ctypes.Structure):
@@ -30,6 +32,8 @@ def lib():
             "hipMemset": [vp, ctypes.c_int, sz],
             "hipStreamWriteValue32": [vp, vp, u32, ctypes.c_uint],
             "hipStreamWaitValue32": [vp, vp, u32, ctypes.c_uint, u32],
+            "hipEventCreateWithFlags": [ctypes.POINTER(vp), ctypes.c_uint],
+            "hipEventRecord": [vp, vp],
         }
         for name, args in sig.items():
             fn = getattr(h, name)
@@ -77,6 +81,17 @@ def write_value(stream, ptr, value):
 
 def wait_value(stream, ptr, value):
     check(lib().hipStreamWaitValue32(ctypes.c_void_p(stream), ctypes.c_void_p(ptr), value, WAIT_GTE, 0xFFFFFFFF), "hipStreamWaitValue32")
+
+
+def release_event():
+    """Event whose record performs a system-scope release (writes back L2 so peer SDMA reads see prior stores)."""
+    event = ctypes.c_void_p()
+    check(lib().hipEventCreateWithFlags(ctypes.byref(event), EVENT_DISABLE_TIMING | EVENT_RELEASE_TO_SYSTEM), "hipEventCreateWithFlags")
+    return event.value
+
+
+def record(event, stream):
+    check(lib().hipEventRecord(ctypes.c_void_p(event), ctypes.c_void_p(stream)), "hipEventRecord")
 
 
 class _Cai:

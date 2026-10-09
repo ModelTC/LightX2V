@@ -20,8 +20,16 @@ Opt-in and lossy (off unless set):
   computed step) on the listed scheduler steps instead of running the blocks (20 steps: skip:8,10,12,14,16).
   RADEON_CORESW_STEP_CACHE_AUDIO=taylor: on those steps the generated-audio rows get a first-order forecast in the audio
   sigma from the last two computed residuals instead (plain reuse lowers the audio level by 2-4 %).
+- RADEON_CORESW_SOL=1 (SP2/SP4/SP8): Sol sparse attention core (aiter.ops.gfx1201.sol_attention) instead of the dense
+  core. RADEON_CORESW_SOL_D: first D scheduler steps stay dense (9); RADEON_CORESW_SOL_L: first L blocks of every step
+  stay dense (0); RADEON_CORESW_SOL_T: Sol-Attn threshold tau in standard deviations, higher is sparser and faster
+  (2.0). The defaults are the best quality found within ~1000 s end to end for 20 steps on SP2 (1.35x DiT);
+  D=0 T=2.5 is ~2.1x, D=0 T=1.0 is the Sol-H3 setting.
+  As in Sol-H3, the condition tokens (text, references, target audio) and the +-1 neighbouring 64-token blocks
+  are always exact.
 """
 
+import math
 import os
 import sys
 
@@ -446,6 +454,32 @@ def _patch_step_cache(module):
     module.MiniMaxH3Model._infer_cond_uncond = _infer_cond_uncond
 
 
+def _patch_sol(module, sp):
+    import torch
+
+    def number(name, default, kind):
+        value = os.environ.get("RADEON_CORESW_SOL_" + name, "")
+        return kind(value) if value else default
+
+    schedule = sp.SolSchedule(number("D", 9, int), number("L", 0, int), number("T", 2.0, float))
+    if schedule.dense_steps < 0 or schedule.dense_layers < 0 or not math.isfinite(schedule.tau):
+        raise ValueError("RADEON_CORESW_SOL_D/L must be >= 0 and RADEON_CORESW_SOL_T finite")
+    sp.SOL = schedule
+    native = module.MiniMaxH3Model._infer_cond_uncond
+
+    @torch.no_grad()
+    def _infer_cond_uncond(self, inputs, infer_condition=True):
+        layout = self.scheduler.layout_cpu
+        target_video_rows = len(layout.video_indices) - layout.num_condition_video_rows
+        schedule.begin_step(self.scheduler.step_index, layout.sequence_length - target_video_rows)
+        if self.scheduler.step_index == 0 and os.environ.get("RANK", "0") == "0":
+            print(f"[radeon_runtime] Sol attention: D={schedule.dense_steps} L={schedule.dense_layers} "
+                  f"T={schedule.tau} exact prefix {schedule.prefix} tokens", flush=True)
+        return native(self, inputs, infer_condition)
+
+    module.MiniMaxH3Model._infer_cond_uncond = _infer_cond_uncond
+
+
 def _warm_libraries():
     import threading
 
@@ -528,3 +562,8 @@ def install(config):
         _warm_libraries()
     if os.environ.get("RADEON_CORESW_STEP_CACHE"):
         _patch_step_cache(importlib.import_module("lightx2v.models.networks.minimax_h3.model"))
+    if os.environ.get("RADEON_CORESW_SOL") == "1":
+        if not config.get("seq_parallel", False):
+            raise ValueError("RADEON_CORESW_SOL=1 needs the sequence-parallel (SP2/SP4/SP8) layout")
+        _patch_sol(importlib.import_module("lightx2v.models.networks.minimax_h3.model"),
+                   importlib.import_module("lightx2v.models.networks.minimax_h3.infer.radeon_sp"))

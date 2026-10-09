@@ -8,6 +8,7 @@ The rest of the block uses aiter gfx1201 HIP ops (rms_modulate, gated_residual, 
 Knobs (environment): RADEON_CORESW_SP_O_CHUNKS (3), RADEON_CORESW_SP_PULL_ORDER (1),
 RADEON_CORESW_SP_DOWN_SPLIT (2), RADEON_CORESW_SP_PREFETCH_GATE (core|post|none),
 RADEON_CORESW_SP_FULLGEMM (0, validation only), RADEON_CORESW_RMS_MOD / RADEON_CORESW_SWIGLU (1).
+Opt-in lossy Sol sparse attention core (``SOL``, installed by radeon_runtime with RADEON_CORESW_SOL=1).
 """
 
 import os
@@ -24,6 +25,36 @@ _engines = {}
 # flag page: one uint32 slot per peer rank in each region; a slot is written only by that peer
 QKV_READY, QKV_PULLED, O_READY, O_PULLED = 0, 256, 512, 768
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+class SolSchedule:
+    """Which attention calls use the Sol sparse core (aiter.ops.gfx1201.sol_attention).
+
+    Scheduler steps < dense_steps and blocks < dense_layers keep the dense core (Sol-H3 ``dense_steps`` /
+    ``dense_layers``). ``begin_step`` is called once per denoising step with the scheduler step and the number of
+    leading condition tokens (text, references, target audio): the Sol-H3 exact sink, computed exactly both as keys
+    and as queries. ``tau`` is the Sol-Attn threshold in standard deviations (higher is sparser).
+    """
+
+    def __init__(self, dense_steps, dense_layers, tau):
+        self.dense_steps, self.dense_layers, self.tau = dense_steps, dense_layers, tau
+        self.step, self.layer, self.prefix = 0, 0, 0
+
+    def begin_step(self, step, prefix):
+        self.step, self.layer, self.prefix = step, 0, prefix
+
+    def attention(self, prepared, out, total):
+        """Run the Sol core into ``out`` and return True, or return False for the dense core."""
+        layer, self.layer = self.layer, self.layer + 1
+        if self.step < self.dense_steps or layer < self.dense_layers:
+            return False
+        from aiter.ops.gfx1201.sol_attention import sol_attention
+
+        sol_attention(prepared, out, total, self.tau, self.prefix)
+        return True
+
+
+SOL = None
 
 
 def split_sizes(total, world):
@@ -238,6 +269,7 @@ class SdmaEngine:
         self.out_pulled = {}  # (src, chunk) -> event
         self.prepared, self.unpacked = torch.cuda.Event(), torch.cuda.Event()
         self.core_started = torch.cuda.Event(enable_timing=True)
+        self.core_released = hip.release_event()
         self.o_ready = {p: torch.cuda.Event(enable_timing=True) for p in self.order}  # when each peer's O was readable
         self.pull_order = list(self.order)
         self.epoch = 0
@@ -312,8 +344,12 @@ class SdmaEngine:
             hip.wait_value(stream.cuda_stream, self._mine(O_PULLED, dest), epoch - 1)
         query_int8, query_scale, key_int8, key_scale, value_fp8, value_scale = prepared
         self.core_started.record(stream)
-        launch_hip_sage_core(query_int8, key_int8, value_fp8, query_scale, key_scale, value_scale, self.out, 1, self.padded, self.total, self.heads)
+        if SOL is None or not SOL.attention(prepared, self.out, self.total):
+            launch_hip_sage_core(query_int8, key_int8, value_fp8, query_scale, key_scale, value_scale, self.out, 1, self.padded, self.total, self.heads)
         del prepared
+        # peers pull ``self.out`` over SDMA once O_READY lands; without a system-scope release the core's stores can
+        # still sit in L2 (observed with the Sol core: nondeterministic stale rows)
+        hip.record(self.core_released, stream.cuda_stream)
         for dest in self.order:
             hip.write_value(stream.cuda_stream, self._theirs(dest, O_READY), epoch)
         chunks = self._chunks(rows)
