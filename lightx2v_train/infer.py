@@ -69,6 +69,7 @@ def _build_low_model_for_dual_infer(config, reference_model):
         "teacher_2",
         "checkpoint_path",
         "checkpoint_strict",
+        "lora_path",
     }
     low_config = copy.deepcopy(config)
     low_config["model"] = {key: copy.deepcopy(value) for key, value in model_config.items() if key not in role_names}
@@ -84,6 +85,9 @@ def _build_low_model_for_dual_infer(config, reference_model):
         low_model,
         low_config["model"],
     )
+    low_lora_path = low_config["model"].get("lora_path")
+    if low_lora_path:
+        low_model.load_lora_for_infer(low_lora_path)
     apply_fsdp2(low_model, config)
     return low_model
 
@@ -97,10 +101,11 @@ def main():
     try:
         sample_processor = build_sample_processor(config)
         model = build_model(config)
+        uses_cache_dataset = config.get("data", {}).get("val", {}).get("name") == "cache_dataset"
         model.load_components(
             load_transformer=True,
             load_vae=True,
-            load_condition_encoder=True,
+            load_condition_encoder=not uses_cache_dataset,
         )
         _load_full_checkpoint_for_infer(
             model,

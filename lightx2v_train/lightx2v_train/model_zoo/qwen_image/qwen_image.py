@@ -110,10 +110,18 @@ class QwenImageModel(BaseModel):
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
-        return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        return QwenImageTransformer2DModel.from_pretrained(
+            model_path,
+            subfolder="transformer",
+            torch_dtype=self.running_dtype,
+        ).to(self.device)
 
     def load_full_weights_for_resume(self, resume_ckpt_path):
-        self.transformer = QwenImageTransformer2DModel.from_pretrained(resume_ckpt_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        self.transformer = QwenImageTransformer2DModel.from_pretrained(
+            resume_ckpt_path,
+            subfolder="transformer",
+            torch_dtype=self.running_dtype,
+        ).to(self.device)
 
     def denoiser_module(self):
         return self.transformer

@@ -5,6 +5,8 @@ import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
 
+from lightx2v_train.runtime.backend import get_backend, get_device, init_backend
+
 _DEVICE_MESH = None
 _FSDP_DEVICE_MESH = None
 _DP_GROUP = None
@@ -105,17 +107,21 @@ def _resolve_parallel_sizes(config, world_size):
 
 
 def init_distributed(config=None):
+    device_backend = init_backend()
+    seed = (config or {}).get("runtime", {}).get("seed")
+    if seed is not None:
+        torch.manual_seed(int(seed))
+        device_backend.manual_seed_all(int(seed))
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         return
 
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    torch.cuda.set_device(local_rank)
-
     dist_config = (config or {}).get("distributed", {})
-    backend = dist_config.get("backend", "nccl")
+    process_group_backend = dist_config.get("backend", "auto")
+    if process_group_backend == "auto":
+        process_group_backend = device_backend.process_group_backend
     if not dist.is_initialized():
         timeout_minutes = dist_config.get("timeout_minutes", 10)
-        dist.init_process_group(backend=backend, timeout=timedelta(minutes=timeout_minutes))
+        dist.init_process_group(backend=process_group_backend, timeout=timedelta(minutes=timeout_minutes))
 
     global _DEVICE_MESH, _FSDP_DEVICE_MESH
     global _DP_GROUP, _SP_GROUP, _DP_RANK, _DP_WORLD_SIZE, _SP_RANK, _SP_WORLD_SIZE
@@ -132,7 +138,7 @@ def init_distributed(config=None):
 
         if sp_size > 1:
             _DEVICE_MESH = init_device_mesh(
-                "cuda",
+                device_backend.device_type,
                 (dp_size, sp_size),
                 mesh_dim_names=("dp", "sp"),
             )
@@ -140,7 +146,7 @@ def init_distributed(config=None):
             _DP_GROUP = _DEVICE_MESH["dp"].get_group()
             _SP_GROUP = _DEVICE_MESH["sp"].get_group()
         else:
-            _DEVICE_MESH = init_device_mesh("cuda", (world_size,))
+            _DEVICE_MESH = init_device_mesh(device_backend.device_type, (world_size,))
             _FSDP_DEVICE_MESH = _DEVICE_MESH
             _DP_GROUP = _DEVICE_MESH.get_group()
             _SP_GROUP = None
@@ -201,12 +207,6 @@ def is_main_process():
     return get_rank() == 0
 
 
-def get_device():
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    return torch.device("cuda", torch.cuda.current_device())
-
-
 def get_device_mesh():
     return _FSDP_DEVICE_MESH
 
@@ -217,10 +217,7 @@ def get_parallel_device_mesh():
 
 def barrier():
     if dist.is_available() and dist.is_initialized():
-        if dist.get_backend() == "nccl" and torch.cuda.is_available():
-            dist.barrier(device_ids=[torch.cuda.current_device()])
-        else:
-            dist.barrier()
+        dist.barrier(**get_backend().barrier_kwargs(dist.get_backend()))
 
 
 def reduce_mean(value):

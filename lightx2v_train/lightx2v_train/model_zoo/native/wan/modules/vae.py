@@ -1,8 +1,8 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import logging
+from contextlib import nullcontext
 
 import torch
-import torch.cuda.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
@@ -521,7 +521,11 @@ def _video_vae(pretrained_path=None, z_dim=None, device="cpu", **kwargs):
 
 
 class WanVAE:
-    def __init__(self, z_dim=16, vae_pth="cache/vae_step_411000.pth", dtype=torch.float, device="cuda"):
+    def __init__(self, z_dim=16, vae_pth="cache/vae_step_411000.pth", dtype=torch.float, device=None):
+        if device is None:
+            from lightx2v_train.runtime.backend import get_device
+
+            device = get_device()
         self.dtype = dtype
         self.device = device
 
@@ -542,13 +546,18 @@ class WanVAE:
             .to(device)
         )
 
+    def _autocast_context(self):
+        if self.dtype not in (torch.float16, torch.bfloat16):
+            return nullcontext()
+        return torch.autocast(device_type=torch.device(self.device).type, dtype=self.dtype)
+
     def encode(self, videos):
         """
         videos: A list of videos each with shape [C, T, H, W].
         """
-        with amp.autocast(dtype=self.dtype):
+        with self._autocast_context():
             return [self.model.encode(u.unsqueeze(0), self.scale).float().squeeze(0) for u in videos]
 
     def decode(self, zs):
-        with amp.autocast(dtype=self.dtype):
+        with self._autocast_context():
             return [self.model.decode(u.unsqueeze(0), self.scale).float().clamp_(-1, 1).squeeze(0) for u in zs]

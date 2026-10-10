@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from lightx2v_train.runtime.distributed import get_device
+from lightx2v_train.runtime.backend import get_device
 from lightx2v_train.schedulers.time_shift import build_time_shift_mu
 from lightx2v_train.utils.utils import get_running_dtype
 

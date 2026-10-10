@@ -347,7 +347,9 @@ def _build_dataloader(dataset, data_config, train_or_val):
 
 
 @DATA_REGISTER("video_dataset")
-def build_video_dataset(data_config, train_or_val="train", sample_processor=None):
+def build_video_dataset(data_config, train_or_val="train", sample_processor=None, unconditional_prompt=None):
+    if unconditional_prompt is None:
+        unconditional_prompt = getattr(sample_processor, "unconditional_prompt", " ")
     dataset = VideoDataset(
         metadata_paths=data_config["data_path"],
         height=data_config.get("height", 480),
@@ -371,7 +373,7 @@ def build_video_dataset(data_config, train_or_val="train", sample_processor=None
         decode_retries=data_config.get("decode_retries", 3),
         preserve_records=data_config.get("preserve_records", False),
         sample_processor=sample_processor,
-        unconditional_prompt=getattr(sample_processor, "unconditional_prompt", " "),
+        unconditional_prompt=unconditional_prompt,
     )
     return _build_dataloader(dataset, data_config, train_or_val)
 

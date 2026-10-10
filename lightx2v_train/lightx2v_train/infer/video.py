@@ -203,6 +203,11 @@ class WanT2VDualInferencer(WanT2VInferencer):
         super().__init__(config)
         self.low_model = None
         self.boundary_step_index = int(self.infer_config.get("boundary_step_index", 2))
+        self.boundary_sigma = self.infer_config.get("boundary_sigma")
+        if self.boundary_sigma is not None:
+            self.boundary_sigma = float(self.boundary_sigma)
+            if not 0 < self.boundary_sigma < 1:
+                raise ValueError("inference.boundary_sigma must be between 0 and 1.")
 
     def set_low_model(self, model):
         self.low_model = model
@@ -210,6 +215,9 @@ class WanT2VDualInferencer(WanT2VInferencer):
     def _denoise_model_for_step(self, step_index, total_steps):
         if self.low_model is None:
             raise RuntimeError("wan_t2v_dual_infer requires a Low Student model.")
+        if self.boundary_sigma is not None:
+            sigma = float(self.scheduler.infer_sigmas[step_index])
+            return self.model if sigma >= self.boundary_sigma else self.low_model
         if not 0 < self.boundary_step_index < total_steps:
             raise ValueError("inference.boundary_step_index must split the denoising steps into non-empty High and Low regions.")
         if step_index < self.boundary_step_index:

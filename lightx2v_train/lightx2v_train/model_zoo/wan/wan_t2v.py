@@ -1,6 +1,5 @@
 import math
 import os
-from contextlib import nullcontext
 from dataclasses import dataclass
 
 import numpy as np
@@ -8,7 +7,8 @@ import torch
 from PIL import Image
 from loguru import logger
 from peft import LoraConfig, inject_adapter_in_model
-from peft.utils import set_peft_model_state_dict
+from peft.tuners.tuners_utils import BaseTunerLayer
+from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
 from safetensors.torch import load_file
 
 from lightx2v_train.model_capabilities import (
@@ -29,7 +29,9 @@ from lightx2v_train.model_zoo.wan.capability_adapters.wan_distribution_matching_
 from lightx2v_train.model_zoo.wan.capability_adapters.wan_teacher_forcing_capability import (
     WanTeacherForcingCapability,
 )
+from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.distributed import get_sequence_parallel_world_size
+from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -85,6 +87,10 @@ class WanT2VModel(BaseModel):
     ):
         model_config = self.config["model"]
         model_path = model_config["pretrained_model_name_or_path"]
+        # Wan2.2 stores high/low denoisers below a shared VAE/T5 root.
+        # Keep these independently configurable while preserving Wan2.1 paths.
+        self.components_root = model_config.get("components_root", model_path)
+        self.transformer_path = model_config.get("transformer_path", model_path)
 
         should_load_vae = load_vae and model_config.get("load_vae", True)
         should_load_text_encoder = load_condition_encoder and model_config.get("load_text_encoder", True)
@@ -116,19 +122,19 @@ class WanT2VModel(BaseModel):
         self.text_pipeline = None
 
         if should_load_transformer:
-            self.transformer = self._load_transformer(model_path)
+            self.transformer = self._load_transformer(self.transformer_path)
             self._configure_transformer()
         else:
             self.transformer = None
 
         if should_load_vae:
-            vae_checkpoint = os.path.join(model_path, "Wan2.1_VAE.pth")
+            vae_checkpoint = os.path.join(self.components_root, "Wan2.1_VAE.pth")
             self.vae = WanVAE(vae_pth=vae_checkpoint, dtype=self.vae_dtype, device=self.device)
             self.vae.model.requires_grad_(False)
 
         if should_load_text_encoder:
-            t5_checkpoint = os.path.join(model_path, "models_t5_umt5-xxl-enc-bf16.pth")
-            t5_tokenizer = os.path.join(model_path, "google/umt5-xxl")
+            t5_checkpoint = os.path.join(self.components_root, "models_t5_umt5-xxl-enc-bf16.pth")
+            t5_tokenizer = os.path.join(self.components_root, "google/umt5-xxl")
             self.text_encoder = T5EncoderModel(
                 text_len=self.max_sequence_length,
                 dtype=self.t5_dtype,
@@ -164,7 +170,10 @@ class WanT2VModel(BaseModel):
             )
         else:
             transformer = WanModel.from_pretrained(model_path, torch_dtype=self.transformer_param_dtype)
-        return transformer.to(self.device, dtype=self.transformer_param_dtype)
+        # FSDP2 moves and shards one block at a time; loading the complete
+        # denoiser on the accelerator first needlessly raises peak memory.
+        device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
+        return transformer.to(device, dtype=self.transformer_param_dtype)
 
     def _configure_transformer(self):
         self.patch_size = tuple(self.transformer.patch_size)
@@ -179,9 +188,7 @@ class WanT2VModel(BaseModel):
         return self.transformer
 
     def transformer_forward_context(self):
-        if self.device.type == "cuda" and self.running_dtype in {torch.float16, torch.bfloat16}:
-            return torch.autocast(device_type="cuda", dtype=self.running_dtype)
-        return nullcontext()
+        return get_backend().autocast(dtype=self.running_dtype, enabled=self.running_dtype in {torch.float16, torch.bfloat16})
 
     def add_lora(self, rank, alpha, target_modules):
         lora_config = LoraConfig(
@@ -216,24 +223,59 @@ class WanT2VModel(BaseModel):
     def load_lora_for_infer(self, lora_path, adapter_name=None):
         if adapter_name is None:
             adapter_name = "default"
-        if not hasattr(self.denoiser_module(), "peft_config"):
-            self._inject_lora(self._lora_config_for_infer(), adapter_name=adapter_name)
-
         weight_path = lora_path
         if os.path.isdir(weight_path):
             weight_path = os.path.join(weight_path, "pytorch_lora_weights.safetensors")
         raw = load_file(weight_path)
+        if not raw:
+            raise RuntimeError(f"Wan LoRA checkpoint contains no tensors: {weight_path}")
         peft_state_dict = {}
         for key, value in raw.items():
             new_key = key.removeprefix("transformer.")
             new_key = new_key.replace(".lora.down.weight", ".lora_A.weight")
             new_key = new_key.replace(".lora.up.weight", ".lora_B.weight")
+            if new_key in peft_state_dict:
+                raise RuntimeError(f"Duplicate normalized Wan LoRA key: {new_key}")
+            if not torch.isfinite(value).all().item():
+                raise RuntimeError(f"Wan LoRA checkpoint contains non-finite tensor: {key}")
             peft_state_dict[new_key] = value
 
-        incompatible = set_peft_model_state_dict(self.denoiser_module(), peft_state_dict)
-        if incompatible and incompatible.unexpected_keys:
-            logger.warning("Unexpected keys when loading Wan LoRA: {}", incompatible.unexpected_keys)
+        if adapter_name not in getattr(self.denoiser_module(), "peft_config", {}):
+            self._inject_lora(self._lora_config_for_infer(), adapter_name=adapter_name)
+        denoiser = self.denoiser_module()
+        expected = get_peft_model_state_dict(denoiser, adapter_name=adapter_name)
+        if not expected or set(expected) != set(peft_state_dict):
+            missing = sorted(set(expected) - set(peft_state_dict))
+            unexpected = sorted(set(peft_state_dict) - set(expected))
+            raise RuntimeError(f"Wan LoRA keys do not match adapter {adapter_name}: missing={missing}, unexpected={unexpected}")
+        incompatible = set_peft_model_state_dict(denoiser, peft_state_dict, adapter_name=adapter_name)
+        if incompatible:
+            missing_lora = [key for key in incompatible.missing_keys if "lora_" in key and adapter_name in key.split(".")]
+            if incompatible.unexpected_keys or missing_lora:
+                raise RuntimeError(f"Incomplete Wan LoRA load: missing={missing_lora}, unexpected={incompatible.unexpected_keys}")
+        loaded = get_peft_model_state_dict(denoiser, adapter_name=adapter_name)
+        if not loaded or set(loaded) != set(peft_state_dict):
+            raise RuntimeError(f"Wan LoRA adapter state was not loaded: {adapter_name}")
+        for key, value in loaded.items():
+            actual = value.detach().cpu()
+            expected_value = peft_state_dict[key].to(dtype=actual.dtype, device="cpu")
+            if actual.shape != expected_value.shape or not torch.equal(actual, expected_value):
+                raise RuntimeError(f"Wan LoRA tensor was not loaded correctly: {key}")
+        # Native Wan has no Diffusers PEFT mixin to select an existing adapter.
+        for module in denoiser.modules():
+            if isinstance(module, BaseTunerLayer):
+                module.set_adapter(adapter_name)
         self._infer_lora_adapter_name = adapter_name
+        up_tensors = [value for key, value in loaded.items() if ".lora_B." in key]
+        nonzero_up_tensors = sum(bool(torch.count_nonzero(value).item()) for value in up_tensors)
+        logger.info(
+            "Loaded Wan inference LoRA from {} adapter={} tensors={} nonzero_lora_B_tensors={}/{}",
+            weight_path,
+            adapter_name,
+            len(loaded),
+            nonzero_up_tensors,
+            len(up_tensors),
+        )
 
     def unload_lora_for_infer(self):
         adapter_name = getattr(self, "_infer_lora_adapter_name", None)
@@ -246,7 +288,7 @@ class WanT2VModel(BaseModel):
         elif hasattr(denoiser, "delete_adapters"):
             denoiser.delete_adapters(adapter_name)
         else:
-            self.transformer = self._load_transformer(self.config["model"]["pretrained_model_name_or_path"])
+            self.transformer = self._load_transformer(self.transformer_path)
         self._infer_lora_adapter_name = None
 
     def fsdp2_shard_plan(self, fsdp_config):

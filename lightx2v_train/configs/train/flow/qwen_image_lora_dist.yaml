@@ -5,7 +5,7 @@ model:
     running_dtype: bf16
 
 distributed:
-    backend: nccl
+    backend: auto
     timeout_minutes: 60
     sequence_parallel:
         enabled: false
