@@ -1,8 +1,10 @@
 # Port of the old match124/image_audio_1to5/uniform/shift12 DMD recipe.
 # Deliberate data change: NEW Omni image-only match124 BF16 condition cache.
-# Use the PDMD count-random sampler with Omni's 1..6 image counts. Each
-# 32-row microbatch has ONE image count and naturally sampled orientations;
-# observed image counts are balanced across the epoch, without orientation quotas.
+# Use PDMD-style count-random sampling over Omni's 1..6 counts. Each 64-row
+# microbatch has ONE image count; counts are balanced across the epoch.
+# Orientation is sampled naturally, without a landscape/portrait quota.
+# Independent 8-node x 8-GPU recipe: only FSDP size and student LoRA master
+# precision differ from legacy_shift12_fsdp32. Base/compute precision is unchanged.
 # This is plain DMD, NOT PDMD or HEAD, regardless of H3_PDMD in the environment.
 model:
     name: minimax_h3_ref2av
@@ -43,7 +45,7 @@ distributed:
     sequence_parallel: {enabled: false, size: 1}
     fsdp2:
         enabled: true
-        size: 32
+        size: 64
         stream_load_pretrained: true
         reshard_after_forward: {root_reshard: false, block_reshard: true}
         mixed_precision:
@@ -117,6 +119,9 @@ training:
         train_type: lora
         ema: {enabled: false}
         lora:
+            # Optional LoRA master dtype only; null/omit preserves legacy BF16
+            # for these targets, and bf16 is also accepted. FSDP compute is independent.
+            param_dtype: fp32
             rank: 128
             alpha: 8
             target_modules: [to_q, to_k, to_v, to_out.0, ff.net.0.proj, ff.net.2]

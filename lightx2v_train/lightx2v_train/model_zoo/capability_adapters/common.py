@@ -223,6 +223,8 @@ class CommonTrainableCapability(BoundCapability, TrainableModelCapability):
                 int(lora_config.get("alpha", rank)),
                 lora_config.get("target_modules"),
             )
+            if lora_config.get("param_dtype") is not None:
+                self.model.set_lora_param_dtype(lora_config["param_dtype"])
             self.model.set_lora_trainable()
             return
         if train_type != "full":

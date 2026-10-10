@@ -131,7 +131,7 @@ class LegacyShift12RecipeTests(unittest.TestCase):
             },
         )
 
-    def test_old_sampling_strategy_uses_new_dataset_including_six_images(self):
+    def test_count_random_sampling_uses_new_dataset_including_six_images(self):
         data = self.config["data"]["train"]
         self.assertEqual(data["name"], "minimax_h3_ref_cache_dataset")
         self.assertEqual(data["batch_size"], 1)
@@ -140,12 +140,12 @@ class LegacyShift12RecipeTests(unittest.TestCase):
         self.assertIs(data["shuffle"], False)
         self.assertIs(data["drop_last"], True)
         sampler = data["reference_cost_sampler"]
-        self.assertEqual(sampler["batch_mode"], "cost_local")
+        self.assertEqual(sampler["batch_mode"], "count_random")
         self.assertIs(sampler["require_image_only"], True)
         self.assertEqual(sampler["image_counts"], list(range(1, 7)))
         self.assertIs(sampler["require_all_image_counts"], False)
         self.assertIs(sampler["balance_image_counts"], True)
-        self.assertIs(sampler["balance_orientation"], True)
+        self.assertIs(sampler["balance_orientation"], False)
         self.assertIs(sampler["strict_full_epoch"], False)
         self.assertEqual(sampler["remainder_policy"], "rotating_drop")
         self.assertEqual(sampler["cost_key"], "packed_sequence_tokens_124")
@@ -220,10 +220,13 @@ class LegacyShift12LauncherTests(unittest.TestCase):
             "precision student: transformer_param_dtype=bf16",
             "precision fake: transformer_param_dtype=fp32",
             "precision teacher: transformer_param_dtype=bf16",
-            '"batch_mode": "cost_local"',
+            '"batch_mode": "count_random"',
             "one of the observed 1..6 image counts per 32-row global microbatch",
+            "orientations sampled naturally within that count",
         ):
             self.assertIn(value, result.stdout)
+        self.assertNotIn("16 landscape + 16 portrait", result.stdout)
+        self.assertNotIn("count/orientation cell", result.stdout)
         self.assertFalse((self.root / "output").exists())
 
     def test_rejects_changed_cache_receipt(self):
@@ -241,27 +244,27 @@ class LegacyShift12LauncherTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_RUNTIME, "Sampler integration test needs the training runtime (no GPU needed)")
 class LegacyShift12SamplingTests(unittest.TestCase):
-    def test_32_ranks_use_single_count_16_plus_16_and_resume_exactly(self):
+    def test_32_ranks_use_single_count_natural_orientations_and_resume_exactly(self):
         from lightx2v_train.data.minimax_h3_cache_dataset import MiniMaxH3ReferenceCostSampler
 
         config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
         sampler_options = config["data"]["train"]["reference_cost_sampler"]
         rows = []
-        # Non-divisible, unequal cells catch both accidental count mixing in
-        # tail batches and loss of rotating-drop behavior across data epochs.
+        # Unequal, non-divisible count buckets exercise rotating-drop. Count
+        # one is all landscape; others have fewer than 16 portrait rows, so
+        # successful sampling must not require fixed orientation quotas.
         for image_count in range(1, 7):
-            for orientation_index, orientation in enumerate(("landscape", "portrait")):
-                for offset in range((7 - image_count) * 17 + 19 + 3 * orientation_index):
-                    rows.append(
-                        {
-                            "condition_path": f"/unused/condition_{len(rows):04d}.pt",
-                            "target_orientation": orientation,
-                            "reference_image_count": image_count,
-                            "reference_video_count": 0,
-                            "reference_audio_count": 0,
-                            "packed_sequence_tokens_124": image_count * 10000 + offset,
-                        }
-                    )
+            for offset in range(65 + 32 * (image_count - 1)):
+                rows.append(
+                    {
+                        "condition_path": f"/unused/condition_{len(rows):04d}.pt",
+                        "target_orientation": "portrait" if image_count > 1 and offset < image_count else "landscape",
+                        "reference_image_count": image_count,
+                        "reference_video_count": 0,
+                        "reference_audio_count": 0,
+                        "packed_sequence_tokens_124": image_count * 10000 + offset,
+                    }
+                )
 
         class Dataset:
             samples = [{"type": "metadata", "row": row} for row in rows]
@@ -277,7 +280,10 @@ class LegacyShift12SamplingTests(unittest.TestCase):
 
         samplers = [build(rank) for rank in range(32)]
         first = samplers[0]
-        self.assertEqual(first.rows_per_image_orientation_cell, 32)
+        self.assertIsNone(first.rows_per_image_orientation_cell)
+        self.assertIsNone(first.rows_per_orientation)
+        self.assertEqual(first.rows_per_image_count, dict.fromkeys(range(1, 7), 64))
+        self.assertEqual(first.checkpoint_metadata()["orientation_sampling"], "natural_within_count")
         self.assertEqual(first.num_global_batches, 12)
         self.assertEqual(first.samples_per_outer_iteration, 6)  # student + 5 fake
         covered = set()
@@ -291,10 +297,7 @@ class LegacyShift12SamplingTests(unittest.TestCase):
                 self.assertEqual(len(set(batch)), 32)
                 batch_counts = {row["reference_image_count"] for row in batch_rows}
                 self.assertEqual(len(batch_counts), 1)
-                self.assertEqual(
-                    Counter(row["target_orientation"] for row in batch_rows),
-                    {"landscape": 16, "portrait": 16},
-                )
+                self.assertLessEqual(sum(row["target_orientation"] == "portrait" for row in batch_rows), 6)
                 counts.update(batch_counts)
                 selected.extend(batch)
             self.assertEqual(counts, {image_count: 2 for image_count in range(1, 7)})

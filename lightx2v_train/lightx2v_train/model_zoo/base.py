@@ -92,6 +92,39 @@ class BaseModel(CapabilityProvider):
         for name, param in denoiser.named_parameters():
             param.requires_grad = "lora" in name
 
+    def set_lora_param_dtype(self, dtype):
+        """Optionally cast only adapter masters before FSDP/optimizer setup.
+
+        None preserves adapter injection's original dtype. FSDP's compute
+        policy remains independent; BF16 compute can use FP32 LoRA masters.
+        Do not call this to change dtype after parameters have been sharded.
+        """
+        if dtype is None:
+            return
+        supported = {
+            "fp32": torch.float32,
+            "float32": torch.float32,
+            "bf16": torch.bfloat16,
+            "bfloat16": torch.bfloat16,
+            "fp16": torch.float16,
+            "float16": torch.float16,
+        }
+        target_dtype = supported.get(str(dtype).lower())
+        if target_dtype is None:
+            raise ValueError(f"Unsupported LoRA param_dtype={dtype!r}; use fp32, bf16, fp16, or null to preserve the default.")
+        denoiser = self.denoiser_module()
+        parameters = [param for name, param in denoiser.named_parameters() if "lora" in name]
+        to_cast = [param for param in parameters if param.dtype != target_dtype]
+        if to_cast and any(is_fsdp2_module(module) for module in denoiser.modules()):
+            raise RuntimeError("LoRA param_dtype must be configured before FSDP wrapping; changing sharded parameter dtype is unsupported.")
+        for param in to_cast:
+            # Retain Parameter identity, device and meta placement. Never cast
+            # the denoiser itself: frozen base weights must remain unchanged.
+            param.data = param.data.to(dtype=target_dtype)
+            if param.grad is not None:
+                param.grad = param.grad.to(dtype=target_dtype)
+        logger.info("[train] LoRA param_dtype={} tensors={} converted={}; base and compute precision unchanged", target_dtype, len(parameters), len(to_cast))
+
     def set_full_trainable(self):
         denoiser = self.denoiser_module()
         denoiser.requires_grad_(True)

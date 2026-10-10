@@ -45,6 +45,7 @@ class BaseTrainer:
         self.lora_rank = lora_config.get("rank", 16)
         self.lora_alpha = lora_config.get("alpha", self.lora_rank)
         self.lora_target_modules = lora_config.get("target_modules")
+        self.lora_param_dtype = lora_config.get("param_dtype")
 
         self.gradient_checkpointing = self.training_config.get("gradient_checkpointing", True)
 
@@ -127,6 +128,7 @@ class BaseTrainer:
                 "rank": self.lora_rank,
                 "alpha": self.lora_alpha,
                 "target_modules": self.lora_target_modules,
+                "param_dtype": self.lora_param_dtype,
             },
         )
 

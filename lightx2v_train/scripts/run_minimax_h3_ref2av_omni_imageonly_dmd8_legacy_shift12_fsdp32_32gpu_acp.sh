@@ -77,10 +77,10 @@ print("legacy_numerics aligns condition noise and sigma arithmetic; x0 reconstru
 print(f"sampler={json.dumps(sampler, sort_keys=True)}; workers={data['num_workers']}, pin_memory={data['pin_memory']}")
 print(
     "Default sampling: one of the observed 1..6 image counts per 32-row global microbatch; "
-    "16 landscape + 16 portrait. "
+    "orientations sampled naturally within that count, without fixed landscape/portrait quotas. "
     "Balance observed image counts over the data epoch, rotating the omitted majority rows; "
     "NOT a full-data pass and NOT mixed-count coverage per batch. "
-    "Each observed count/orientation cell needs at least 16 rows."
+    "Each observed image-count bucket needs at least 32 rows; no cost-local grouping."
 )
 for name in ("student", "fake", "teacher"):
     effective = model if name == "student" else {**model, **model.get(name, {})}
