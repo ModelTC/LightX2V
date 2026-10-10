@@ -11,6 +11,7 @@ from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
 from safetensors.torch import load_file, save_file
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
+from torch.distributed.tensor import DTensor
 
 from lightx2v_train.model_capabilities import (
     CapabilityProvider,
@@ -310,26 +311,62 @@ class BaseModel(CapabilityProvider):
     ):
         denoiser = self.denoiser_module()
         peft_kwargs = {} if adapter_name is None else {"adapter_name": adapter_name}
-        if not is_fsdp2_module(denoiser):
+        sharded = is_fsdp2_module(denoiser)
+        if not sharded:
             state_dict = denoiser.state_dict()
         else:
+            # Obtain shard references only. Filtering AFTER full_state_dict=True
+            # unnecessarily gathers the entire frozen base before discarding it.
+            # Do not filter on requires_grad: adapters can be temporarily frozen
+            # for inference/EMA, and PEFT may require bias/modules_to_save tensors.
             options = StateDictOptions(
-                full_state_dict=True,
-                cpu_offload=True,
+                full_state_dict=False,
+                cpu_offload=False,
                 ignore_frozen_params=False,
                 strict=False,
             )
             state_dict, _ = get_state_dict(denoiser, (), options=options)
-            if not is_main_process():
-                return {}, {}
 
+        # Let PEFT select the requested adapter and its required extra tensors
+        # while all FSDP parameters are still sharded. Preserve PEFT key naming.
         peft_state_dict = get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
         auxiliary_names = set(auxiliary_parameter_names)
         missing = auxiliary_names - state_dict.keys()
         if missing:
             raise RuntimeError(f"Auxiliary parameters are missing from the model state: {sorted(missing)}")
+        if sharded:
+            auxiliary_state_dict = {name: state_dict[name] for name in sorted(auxiliary_names)}
+            logger.info(
+                "[checkpoint] gathering selected adapter tensors={} auxiliary tensors={}; frozen base excluded unless required by PEFT",
+                len(peft_state_dict),
+                len(auxiliary_state_dict),
+            )
+            return (
+                self._gather_selected_state_dict_for_save(peft_state_dict),
+                self._gather_selected_state_dict_for_save(auxiliary_state_dict),
+            )
         auxiliary_state_dict = {name: state_dict[name].detach().cpu().contiguous() for name in auxiliary_names}
         return peft_state_dict, auxiliary_state_dict
+
+    @staticmethod
+    @torch.no_grad()
+    def _gather_selected_state_dict_for_save(state_dict):
+        """Gather selected FSDP2 tensors one at a time; retain CPU data on rank 0.
+
+        All ranks must participate, even though only rank 0 writes the adapter.
+        The per-tensor collective still needs temporary device memory, but no
+        unrelated frozen weights are gathered or accumulated on CPU.
+        """
+        output = {}
+        keep = is_main_process()
+        for name in sorted(state_dict):
+            tensor = state_dict[name].detach()
+            if isinstance(tensor, DTensor):
+                tensor = tensor.full_tensor()
+            if keep:
+                output[name] = tensor.cpu().contiguous()
+            del tensor
+        return output
 
     def load_lora_weights_for_resume(self, lora_path, adapter_name=None, weights_subdir=None):
         weights_dir = os.path.join(lora_path, weights_subdir) if weights_subdir else lora_path

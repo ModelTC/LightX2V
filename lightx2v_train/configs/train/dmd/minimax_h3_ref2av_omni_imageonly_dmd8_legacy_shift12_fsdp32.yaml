@@ -23,7 +23,7 @@ model:
         transformer_param_dtype: bf16
     capabilities:
         distribution_matching:
-            # Keep old condition-noise/sigma arithmetic; x0 stays FP32.
+            # Keep old condition-noise/scalar-sigma arithmetic, including raw x0 = xt + sigma * v.
             legacy_numerics: true
             video_flow_shift: 12.0
             audio_flow_shift: 3.0

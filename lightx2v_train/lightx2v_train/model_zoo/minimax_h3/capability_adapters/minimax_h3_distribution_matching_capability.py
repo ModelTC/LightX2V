@@ -68,8 +68,8 @@ class MiniMaxH3DistributionMatchingOptions:
     official_pdmd_normalizer_floor: float = 1e-5
     official_pdmd_projection_epsilon: float = 1e-8
     official_pdmd_loss_clamp: float = 5.0
-    # Preserve the original H3 reference-noise and score-sigma arithmetic.
-    # x0 deliberately retains the newer FP32 multiply/add in both modes.
+    # Preserve the original H3 reference-noise and scalar score-sigma arithmetic,
+    # including scalar promotion in the raw x0 = xt + sigma * velocity formula.
     legacy_numerics: bool = False
     student_sparse_attention: Mapping | None = None
     adaptive_video_regularization: Mapping | None = None
@@ -904,8 +904,12 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
 
     @staticmethod
     def _cleanward_x0(sample, velocity, sigma):
-        expanded = _expand_sigma(sigma, sample.ndim)
-        return (sample.float() + expanded * velocity.float()).to(sample.dtype)
+        # Keep a scalar scalar: reshaping FP32 sigma to [1, ...] would promote
+        # a BF16 velocity product to FP32 and change the original H3 arithmetic.
+        # Non-scalar sigmas still need batch-wise broadcasting. Let PyTorch
+        # determine the result dtype instead of forcing FP32 or sample.dtype.
+        scale = sigma if sigma.ndim == 0 else _expand_sigma(sigma, sample.ndim)
+        return sample + scale * velocity
 
     @staticmethod
     def _validate_latents(latents):

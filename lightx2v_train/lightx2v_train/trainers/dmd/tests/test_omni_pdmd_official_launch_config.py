@@ -35,7 +35,7 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
         ):
             return _config.load_config(str(path))
 
-    def test_preserves_dataset_sampler_and_all_role_precision(self):
+    def test_preserves_dataset_base_compute_precision_and_uses_fp32_lora(self):
         old, new = self.config(OLD_CONFIG), self.config()
         self.assertEqual(new["data"], old["data"])
         self.assertEqual(new["distributed"], old["distributed"])
@@ -48,6 +48,8 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
         self.assertEqual(student["train_type"], "lora")
         self.assertEqual(student["lora"]["rank"], 128)
         self.assertEqual(student["lora"]["alpha"], 8)
+        self.assertEqual(student["lora"]["param_dtype"], "fp32")
+        self.assertEqual(new["distributed"]["fsdp2"]["mixed_precision"]["param_dtype"], "bf16")
         self.assertEqual(student["lora"]["target_modules"], old["training"]["student"]["lora"]["target_modules"])
         self.assertEqual(fake["train_type"], "full")
 
@@ -59,7 +61,7 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
         self.assertTrue(matching["official_pdmd"])
         self.assertTrue(matching["projected_dmd"])
         self.assertEqual(training["method"], "dmd")
-        self.assertEqual(training["max_train_iters"], 2500)
+        self.assertEqual(training["max_train_iters"], 250000)
         self.assertEqual(dmd["num_inference_steps"], 4)
         self.assertEqual(dmd["update_order"], "fake_first")
         self.assertEqual(dmd["fake_update_ratio"], 5)
@@ -76,7 +78,7 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
         self.assertEqual(dmd["score_sampling"]["type"], "continuous_uniform")
         self.assertEqual(config["seed"], 42)
 
-    def test_source_loss_and_optimizer_defaults(self):
+    def test_source_loss_optimizer_and_user_checkpoint_settings(self):
         config = self.config()
         matching = config["model"]["capabilities"]["distribution_matching"]
         for weight in ("video_loss_weight", "audio_loss_weight", "audio_dmd_loss_weight"):
@@ -103,7 +105,7 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
         self.assertEqual(training["max_grad_norm"], 1.0)
         self.assertEqual(training["lr_scheduler"], "constant")
         self.assertEqual(training["lr_warmup_iters"], 0)
-        self.assertEqual(training["save_every_iters"], 100)
+        self.assertEqual(training["save_every_iters"], 50)
         self.assertEqual(training["save_total_limit"], 5)
 
     def test_existing_eight_step_recipe_does_not_enable_official_flow(self):
@@ -176,9 +178,11 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
             for expected in (
                 "--nnodes=4 --nproc_per_node=8",
                 CONFIG.name,
-                "optimizer_updates=2500, student_updates=416, critic_updates=2084",
+                "optimizer_updates=250000, student_updates=41666, critic_updates=208334",
+                "Checkpoint: save_every_iters=50, save_total_limit=5",
                 "global_microbatch=32, batch_mode=count_random",
                 "rank=128, alpha=8",
+                "lora_param_dtype=fp32",
                 "fake: train_type=full",
                 "Verified cache: completed=64, failed=0, input_rows=64",
             ):
@@ -197,8 +201,8 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
             environment.pop("H3_REF2AV_DMD_OUTPUT")
             result = self.dry_run(environment)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("pdmd4_official_2500updates", result.stdout)
-            self.assertIn("--rdzv_id=h3_ref2av_omni_imageonly_pdmd4_official_2500updates", result.stdout)
+            self.assertIn("pdmd4_official_lorafp32_250000updates", result.stdout)
+            self.assertIn("--rdzv_id=h3_ref2av_omni_imageonly_pdmd4_official_lorafp32_250000updates", result.stdout)
             environment["H3_REF2AV_DMD_OUTPUT"] = str(root / "custom-output")
             environment["H3_RDZV_ID"] = "custom-official-run"
             result = self.dry_run(environment)
@@ -207,17 +211,21 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
             self.assertIn("--rdzv_id=custom-official-run", result.stdout)
             self.assertFalse((root / "custom-output").exists())
 
-    def test_dedicated_override_allows_different_training_length(self):
+    def test_dedicated_override_allows_length_save_interval_and_lora_precision(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _, _, environment = self.fixture(root)
             config = self.config(environment=environment)
             config["training"]["max_train_iters"] = 6000
+            config["training"]["save_every_iters"] = 75
+            config["training"]["student"]["lora"]["param_dtype"] = "bf16"
             custom = root / "custom-official.yaml"
             custom.write_text(yaml.safe_dump(config))
             result = self.dry_run({**environment, "H3_PDMD_OFFICIAL_CONFIG": str(custom)})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("optimizer_updates=6000, student_updates=1000, critic_updates=5000", result.stdout)
+            self.assertIn("Checkpoint: save_every_iters=75, save_total_limit=5", result.stdout)
+            self.assertIn("lora_param_dtype=bf16", result.stdout)
             self.assertIn(str(custom), result.stdout)
 
     def test_old_recipe_override_cannot_launch_as_official(self):

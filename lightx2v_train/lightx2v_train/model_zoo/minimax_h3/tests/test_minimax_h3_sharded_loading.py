@@ -4,15 +4,19 @@ import tempfile
 import unittest
 from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from diffusers.utils import convert_state_dict_to_diffusers
 from peft import LoraConfig, inject_adapter_in_model
+from peft.utils import get_peft_model_state_dict
 from safetensors.torch import load_file
-from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, get_state_dict
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+from torch.distributed.tensor import DTensor
 
 from lightx2v_train.model_zoo.base import BaseModel
 from lightx2v_train.model_zoo.capability_adapters.common import CommonTrainableCapability
@@ -190,13 +194,77 @@ def _distributed_lora_training_worker(rank, world_size, init_file, transformer_d
                 assert state[key].dtype == torch.float32
                 assert bool(torch.isfinite(state[key].to_local()).all())
 
-        # Public adapter save/resume: configure the same explicit FP32 option
-        # on an eager BF16 base, load the adapter, then shard and compare locally.
+        # Build the old full-state export reference only in this tiny test.
+        # Production export must select adapters before any all-gather.
+        reference_state = get_model_state_dict(transformer, options=StateDictOptions(full_state_dict=True, cpu_offload=True, strict=False))
+        if rank == 0:
+            expected_lora = convert_state_dict_to_diffusers(get_peft_model_state_dict(transformer, state_dict=reference_state))
+
+        # Temporary evaluation/teacher-style freezing must not hide adapters
+        # from checkpointing. Spy on real collectives without replacing them.
+        transformer.requires_grad_(False)
+        state_by_name = transformer.state_dict()
+        tensor_names = {value.to_local().data_ptr(): name for name, value in state_by_name.items() if isinstance(value, DTensor)}
+        lora_names = {name for name in state_by_name if ".lora_" in name}
+        original_full_tensor = DTensor.full_tensor
+        original_export = owner._get_lora_and_auxiliary_state_dict_for_save
+        gathered_names = []
+
+        def gather_and_record(value, *args, **kwargs):
+            gathered_names.append(tensor_names[value.to_local().data_ptr()])
+            return original_full_tensor(value, *args, **kwargs)
+
+        def export_and_check(*args, **kwargs):
+            result = original_export(*args, **kwargs)
+            if rank == 0:
+                assert all(value.device.type == "cpu" and not isinstance(value, DTensor) for state in result for value in state.values())
+            else:
+                assert result == ({}, {})
+            return result
+
+        def save_selected(save_dir, auxiliary_names=()):
+            gathered_names.clear()
+            with (
+                mock.patch.object(DTensor, "full_tensor", new=gather_and_record),
+                mock.patch.object(owner, "_get_lora_and_auxiliary_state_dict_for_save", new=export_and_check),
+                mock.patch("lightx2v_train.model_zoo.base.get_state_dict", wraps=get_state_dict) as state_spy,
+            ):
+                owner.save_lora_weights(
+                    save_dir,
+                    auxiliary_parameter_names=auxiliary_names,
+                    auxiliary_weights_name="auxiliary.safetensors" if auxiliary_names else None,
+                )
+            state_spy.assert_called_once()
+            options = state_spy.call_args.kwargs["options"]
+            assert not options.full_state_dict and not options.cpu_offload
+            assert not options.ignore_frozen_params
+            expected_names = lora_names | set(auxiliary_names)
+            assert set(gathered_names) == expected_names
+            assert len(gathered_names) == len(expected_names)
+            assert not any(parameter.requires_grad for parameter in transformer.parameters())
+            dist.barrier()
+            saved = load_file(str(Path(save_dir) / "pytorch_lora_weights.safetensors"))
+            if rank == 0:
+                assert saved.keys() == expected_lora.keys()
+                for name, expected in expected_lora.items():
+                    torch.testing.assert_close(saved[name], expected, rtol=0, atol=0)
+            return saved
+
         save_dir = str(Path(transformer_dir).parent / "lora_checkpoint")
-        owner.save_lora_weights(save_dir)
-        dist.barrier()
-        saved_state = load_file(str(Path(save_dir) / "pytorch_lora_weights.safetensors"))
+        saved_state = save_selected(save_dir)
         assert saved_state and all(value.dtype == torch.float32 for value in saved_state.values())
+        auxiliary_dir = str(Path(save_dir) / "with_auxiliary")
+        auxiliary_names = ("context_embedder.weight", "proj_in.weight")
+        save_selected(auxiliary_dir, auxiliary_names)
+        saved_auxiliary = load_file(str(Path(auxiliary_dir) / "auxiliary.safetensors"))
+        assert set(saved_auxiliary) == set(auxiliary_names)
+        if rank == 0:
+            for name in auxiliary_names:
+                torch.testing.assert_close(saved_auxiliary[name], reference_state[name], rtol=0, atol=0)
+        trainable_capability.restore("lora")
+
+        # Public adapter resume: configure the same explicit FP32 option on an
+        # eager BF16 base, load the adapter, then shard and compare locally.
         restored = _transformer_class().from_pretrained(transformer_dir, torch_dtype=torch.bfloat16, local_files_only=True)
         restored_owner = _H3TrainingModel(restored)
         restored_capability = CommonTrainableCapability(restored_owner)

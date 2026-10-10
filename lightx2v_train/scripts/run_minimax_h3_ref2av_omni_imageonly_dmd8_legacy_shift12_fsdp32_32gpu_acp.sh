@@ -73,7 +73,7 @@ print(
     f"fake_update_ratio={dmd['fake_update_ratio']}, CFG={training['teacher']['guidance_scale']}"
 )
 print(f"config={sys.argv[1]}\ndata={manifest}\noutput={training['output_dir']}")
-print("legacy_numerics aligns condition noise and sigma arithmetic; x0 reconstruction remains FP32.")
+print("legacy_numerics aligns condition noise and scalar sigma arithmetic; raw x0 = xt + sigma * velocity, without explicit dtype casts.")
 print(f"sampler={json.dumps(sampler, sort_keys=True)}; workers={data['num_workers']}, pin_memory={data['pin_memory']}")
 print(
     "Default sampling: one of the observed 1..6 image counts per 32-row global microbatch; "

@@ -29,17 +29,19 @@ source-aligned update loop and losses are selected together.
 | Optimizers | AdamW; student LR `5e-5`, critic LR `1e-5`; betas `(0, .9)`, epsilon `1e-8`, no weight decay; gradient norm clip 1 |
 | LoRA initialization | Kaiming-uniform A, zero B in the new opt-in path; old recipes keep Gaussian A |
 | Inference shifts | Video/audio 12/3; these are **not** applied to the explicit physical sigmas of this training loop |
-| Duration | 2500 single-role optimizer updates; checkpoint every 100 |
+| Duration | 250000 single-role optimizer updates; checkpoint every 50 (user overrides) |
 
 The following are intentional user/task overrides, not upstream defaults:
 
 - Student LoRA rank **128**, alpha **8**; critic remains **full-parameter**.
+- Student LoRA parameters use **FP32** via
+  `training.student.lora.param_dtype: fp32`; BF16 FSDP compute is unchanged.
 - Existing Omni image-only reference cache and 124-frame 768p geometry.
   Image-only refers to the conditioning; H3 still generates joint video/audio.
 - FSDP2 over **32 ranks**, SP disabled, batch 1/rank and accumulation 1.
   Upstream uses global batch 16 and a shared frozen base with two LoRA roles;
   this port retains separate student, critic and teacher models.
-- Existing precision settings: student transformer parameter setting BF16,
+- Existing base precision settings: student transformer parameter setting BF16,
   critic FP32, teacher BF16; running dtype and FSDP compute BF16, gradient
   reduction FP32, autocast disabled. Existing loader-specific FP32 modules
   remain unchanged; these settings do not assert that every tensor is BF16.
@@ -51,16 +53,16 @@ The following are intentional user/task overrides, not upstream defaults:
 ## Iteration and data accounting
 
 An iteration means **one optimizer update of one role**, not an outer round
-containing six updates. The default 2500 iterations comprise **2084 critic
-updates and 416 student updates**. Increasing the duration to 10000 in this
-config would mean 8334 critic and 1666 student updates, not 60000 updates.
+containing six updates. The configured 250000 iterations comprise **208334
+critic updates and 41666 student updates**. This duration is a user override,
+not the upstream 2500-update default.
 
 Only critic updates consume new dataloader batches. Student updates reuse the
 preceding critic conditions, noise and rollout states. With 32 ranks and
-accumulation 1, the default run therefore consumes 2084 × 32 = **66688 new
-row occurrences**; 416 × 32 = **13312 reused conditions** enter student updates.
+accumulation 1, the configured run therefore consumes 208334 × 32 = **6666688
+new row occurrences**; 41666 × 32 = **1333312 reused conditions** enter student updates.
 These are not unique-row counts. Count balancing rotates majority-count
-subsets across epochs, so neither a sampler epoch nor 2500 updates guarantees
+subsets across epochs, so neither a sampler epoch nor a fixed update count guarantees
 coverage of every row in the dataset.
 
 ## ACP launch: four workers, eight GPUs each
@@ -78,8 +80,8 @@ H3_CODE_ROOT="$PWD" \
 H3_PYTHON="$VIRTUAL_ENV/bin/python" \
 H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3 \
 H3_REF2AV_CACHE=/mnt/lm_data_afs/gushiqiao/datasets/omni_r2v_image_only_100k_20261004/latent_match124_bf16/metadata.jsonl \
-H3_REF2AV_DMD_OUTPUT=/mnt/lm_data_afs/gushiqiao/outputs/h3_omni_pdmd4_official_32gpu_run01 \
-H3_RDZV_ID=h3_omni_pdmd4_official_32gpu_run01 \
+H3_REF2AV_DMD_OUTPUT=/mnt/lm_data_afs/gushiqiao/outputs/h3_omni_pdmd4_official_lorafp32_32gpu_250k_run01 \
+H3_RDZV_ID=h3_omni_pdmd4_official_lorafp32_32gpu_250k_run01 \
 KERNELS_CACHE=/mnt/lm_data_afs/gushiqiao/cache/kernels \
 bash lightx2v_train/scripts/run_minimax_h3_ref2av_omni_imageonly_pdmd4_official_fsdp32_32gpu_acp.sh
 ```

@@ -1,4 +1,4 @@
-"""CPU regressions for the legacy recipe, retaining FP32 x0 arithmetic.
+"""CPU regressions for the legacy recipe and raw H3 x0 arithmetic.
 
 Expected expressions below are independent transcriptions of the original
 H3 trainer's condition noise and physical sigma formulas. No model weights,
@@ -74,7 +74,7 @@ class LegacyH3NumericsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "one shared base sigma"):
             legacy._modality_sigmas(torch.ones(3))
 
-    def test_x0_retains_fp32_values_and_gradients_in_both_modes(self):
+    def test_raw_x0_matches_scalar_or_batched_values_and_gradients(self):
         generator = torch.Generator().manual_seed(73)
         base_samples = [torch.randn(1, 8, 16, generator=generator) for _ in range(2)]
         base_velocities = [torch.randn(1, 8, 16, generator=generator).bfloat16() for _ in range(2)]
@@ -87,7 +87,7 @@ class LegacyH3NumericsTest(unittest.TestCase):
                     velocities = [value.clone().requires_grad_() for value in base_velocities]
                     expected_samples = [value.detach().clone().requires_grad_() for value in samples]
                     expected_velocities = [value.detach().clone().requires_grad_() for value in velocities]
-                    expected = [(sample.float() + sigma * velocity.float()).to(dtype) for sample, velocity, sigma in zip(expected_samples, expected_velocities, sigmas)]
+                    expected = [sample + (sigma if legacy else sigma.reshape(1, 1, 1)) * velocity for sample, velocity, sigma in zip(expected_samples, expected_velocities, sigmas)]
                     actual = capability(legacy).x0_from_velocity(
                         MiniMaxH3JointLatents(*samples, None),
                         MiniMaxH3JointLatents(*velocities, None),
@@ -99,10 +99,42 @@ class LegacyH3NumericsTest(unittest.TestCase):
                     sum(value.float().square().mean() for value in expected).backward()
                     for value, reference in zip(samples + velocities, expected_samples + expected_velocities):
                         self.assert_exact(value.grad, reference.grad)
-                    # These BF16 velocities really expose the old product's
-                    # rounding; an accidentally restored BF16 x0 path fails.
+                    # FP32 xt does not undo the BF16 rounding of sigma*v when
+                    # sigma is scalar. The legacy branch must retain it.
                     old_x0 = samples[0].detach() + sigmas[0] * velocities[0].detach()
-                    self.assertFalse(torch.equal(actual.video.detach(), old_x0))
+                    if legacy:
+                        self.assert_exact(actual.video.detach(), old_x0)
+                        fp32_x0 = samples[0].detach().float() + sigmas[0] * velocities[0].detach().float()
+                        self.assertFalse(torch.equal(actual.video.detach().float(), fp32_x0))
+                    else:
+                        self.assertEqual(actual.video.dtype, torch.float32)
+                        self.assertFalse(torch.equal(actual.video.detach(), old_x0))
+
+    def test_raw_x0_broadcasts_batch_sigmas_without_forcing_output_dtype(self):
+        sample = torch.tensor([[[0.25, -0.5]], [[1.25, -2.5]]], dtype=torch.bfloat16, requires_grad=True)
+        velocity = torch.tensor([[[0.703125, 1.1015625]], [[-0.90234375, 0.30078125]]], dtype=torch.bfloat16, requires_grad=True)
+        sigma = torch.tensor([0.371, 0.619], requires_grad=True)
+        expected_sample = sample.detach().clone().requires_grad_()
+        expected_velocity = velocity.detach().clone().requires_grad_()
+        expected_sigma = sigma.detach().clone().requires_grad_()
+        expected = expected_sample + expected_sigma[:, None, None] * expected_velocity
+        actual = capability()._cleanward_x0(sample, velocity, sigma)
+        self.assertEqual(actual.dtype, torch.float32)
+        self.assert_exact(actual, expected)
+        actual.square().sum().backward()
+        expected.square().sum().backward()
+        for value, reference in zip((sample, velocity, sigma), (expected_sample, expected_velocity, expected_sigma)):
+            self.assert_exact(value.grad, reference.grad)
+
+    def test_legacy_physical_sigmas_retain_raw_scalar_x0(self):
+        generator = torch.Generator().manual_seed(801)
+        samples = [torch.randn(1, 8, 16, generator=generator, requires_grad=True) for _ in range(2)]
+        velocities = [torch.randn(1, 8, 16, generator=generator).bfloat16().requires_grad_() for _ in range(2)]
+        sigmas = torch.tensor([0.731, 0.281])
+        actual = capability().x0_from_velocity(MiniMaxH3JointLatents(*samples, None), MiniMaxH3JointLatents(*velocities, None), sigmas)
+        for result, sample, velocity, sigma in zip((actual.video, actual.audio), samples, velocities, sigmas):
+            self.assert_exact(result, sample + sigma * velocity)
+            self.assertFalse(torch.equal(result, sample + sigma * velocity.float()))
 
     def test_euler_step_keeps_original_fp32_arithmetic(self):
         generator = torch.Generator().manual_seed(17)

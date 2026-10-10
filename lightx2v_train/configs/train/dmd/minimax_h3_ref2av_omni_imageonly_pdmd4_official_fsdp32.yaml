@@ -1,11 +1,11 @@
 # PDMD official-source training flow, adapted to the existing H3 Ref cache.
 # Reference: ZeamoxWang/pdmd @ 6b6e10635495a2d9b989fee393235d406d3840c4,
 # training/configs/pdmd_4nfe_544p.json and src/pdmd/{engine,schedule,objectives}.py.
-# Deliberate user overrides: student LoRA rank128/alpha8, full-parameter fake,
-# existing role parameter/compute precision, Ref2AV Omni image-only cache,
+# Deliberate user overrides: student LoRA rank128/alpha8 with FP32 parameters,
+# full-parameter fake, existing base/compute precision, Ref2AV Omni image-only cache,
 # 768p metadata geometry and count_random global batch32 sampling.
-# IMPORTANT: 2500 iterations count SINGLE optimizer updates (2084 fake + 416
-# student), not 2500 outer rounds. Use a NEW output/checkpoint directory.
+# IMPORTANT: 250000 iterations count SINGLE optimizer updates (208334 fake +
+# 41666 student), not outer rounds. Save every 50; use a NEW output directory.
 seed: 42
 model:
     name: minimax_h3_ref2av
@@ -124,6 +124,8 @@ training:
         lora:
             rank: 128
             alpha: 8
+            # Adapter-only master dtype; frozen base and FSDP compute stay BF16.
+            param_dtype: fp32
             target_modules: [to_q, to_k, to_v, to_out.0, ff.net.0.proj, ff.net.2]
         optimizer:
             learning_rate: 0.00005

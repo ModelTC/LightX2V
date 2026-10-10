@@ -104,6 +104,7 @@ class LegacyShift12Launcher64Tests(unittest.TestCase):
             "fake_update_ratio=5",
             "model_mode=legacy_train",
             "legacy_numerics=True",
+            "raw x0 = xt + sigma * velocity, without explicit dtype casts",
             "64-row global microbatch",
             "Random orientation with no landscape/portrait quota",
             "precision student: transformer_param_dtype=bf16",

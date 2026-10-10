@@ -231,6 +231,24 @@ class OfficialPDMDH3CapabilityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "shared base sigma"):
             legacy._modality_sigmas(physical)
 
+    def test_official_x0_keeps_paired_sigma_broadcast_and_raw_promotion(self):
+        capability = self.capability(official_pdmd=True, video_flow_shift=12, audio_flow_shift=3)
+        physical = torch.tensor([0.371, 0.619])
+        sample = self.pair(torch.ones(1, 2, 3, dtype=torch.bfloat16), torch.ones(1, 4, 2, dtype=torch.bfloat16))
+        velocity = self.pair(torch.full_like(sample.video, 0.703125), torch.full_like(sample.audio, -0.90234375))
+        clean = capability.x0_from_velocity(sample, velocity, physical)
+        for actual, xt, pred, sigma in zip((clean.video, clean.audio), (sample.video, sample.audio), (velocity.video, velocity.audio), (physical[:1], physical[1:])):
+            expected = xt + sigma.reshape(1, 1, 1) * pred
+            self.assertEqual(actual.dtype, torch.float32)
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        # A two-element physical pair must never be re-shifted or scalarized
+        # by the legacy path when official scheduling owns the noise levels.
+        video_sigma, audio_sigma = capability._modality_sigmas(physical)
+        self.assertEqual(video_sigma.shape, (1,))
+        self.assertEqual(audio_sigma.shape, (1,))
+        torch.testing.assert_close(video_sigma, physical[:1], rtol=0, atol=0)
+        torch.testing.assert_close(audio_sigma, physical[1:], rtol=0, atol=0)
+
     def test_official_options_reject_legacy_or_incompatible_loss_settings(self):
         for extra in (
             {"legacy_numerics": True},

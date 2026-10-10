@@ -212,7 +212,7 @@ class LegacyShift12LauncherTests(unittest.TestCase):
             "Verified cache: completed=1",
             "plain DMD, steps=8, iters=100000",
             "legacy_numerics=True",
-            "x0 reconstruction remains FP32",
+            "raw x0 = xt + sigma * velocity, without explicit dtype casts",
             "model_mode=legacy_train, update_order=student_first, fake_update_ratio=5",
             "PDMD=false",
             "--nnodes=4 --nproc_per_node=8",

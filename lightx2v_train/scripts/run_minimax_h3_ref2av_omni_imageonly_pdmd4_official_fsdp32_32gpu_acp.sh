@@ -11,7 +11,7 @@ H3_PDMD_OFFICIAL_CONFIG="${H3_PDMD_OFFICIAL_CONFIG:-$H3_CODE_ROOT/lightx2v_train
 : "${MASTER_PORT:?ACP must set a common MASTER_PORT on all four workers}"
 export H3_MODEL_PATH="${H3_MODEL_PATH:-/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3}"
 export H3_REF2AV_CACHE="${H3_REF2AV_CACHE:-/mnt/lm_data_afs/gushiqiao/datasets/omni_r2v_image_only_100k_20261004/latent_match124_bf16/metadata.jsonl}"
-export H3_REF2AV_DMD_OUTPUT="${H3_REF2AV_DMD_OUTPUT:-$H3_CODE_ROOT/outputs/minimax_h3_ref2av_omni_imageonly_pdmd4_official_2500updates}"
+export H3_REF2AV_DMD_OUTPUT="${H3_REF2AV_DMD_OUTPUT:-$H3_CODE_ROOT/outputs/minimax_h3_ref2av_omni_imageonly_pdmd4_official_lorafp32_250000updates}"
 if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --dry-run ) ]]; then
     echo "Usage: bash $0 [--dry-run]" >&2
     exit 1
@@ -100,6 +100,7 @@ student_updates = training["max_train_iters"] // (dmd["fake_update_ratio"] + 1)
 critic_updates = training["max_train_iters"] - student_updates
 print(f"Verified cache: completed={counts[0]}, failed={counts[1]}, input_rows={counts[2]}, ref_image_counts={receipt.get('reference_image_counts', {})}")
 print(f"Official PDMD Ref2AV: 4 x 8 GPUs, steps=4, optimizer_updates={training['max_train_iters']}, student_updates={student_updates}, critic_updates={critic_updates}, fake_first, global_microbatch=32, batch_mode=count_random")
+print(f"Checkpoint: save_every_iters={training['save_every_iters']}, save_total_limit={training['save_total_limit']}")
 print("Each iteration is ONE role's optimizer update, not a student+critic outer round. Critic uses a full rollout; student reuses the last critic rollout.")
 print("Sampling: one image count per global batch; balanced counts 1..6; natural random orientations, no fixed 16+16 quota. Rotating subsets are NOT a full-data pass per epoch.")
 print(f"config={sys.argv[1]}\ndata={manifest}\noutput={training['output_dir']}")
@@ -108,20 +109,21 @@ for role in ("student", "fake"):
     details = f"train_type={settings['train_type']}, lr={settings['optimizer']['learning_rate']}"
     if settings["train_type"] == "lora":
         details += f", rank={settings['lora']['rank']}, alpha={settings['lora']['alpha']}"
+        details += f", lora_param_dtype={settings['lora'].get('param_dtype', 'inherit_base')}"
     print(f"{role}: {details}")
 for role in ("student", "fake", "teacher"):
     override = {} if role == "student" else model.get(role, {})
     effective = {**model, **override}
     mixed = {**distributed["fsdp2"]["mixed_precision"], **override.get("distributed", {}).get("fsdp2", {}).get("mixed_precision", {})}
     print(f"precision {role}: transformer_param_dtype={effective.get('transformer_param_dtype')}, running_dtype={effective.get('running_dtype')}, use_autocast={effective.get('use_autocast')}, fsdp={json.dumps(mixed, sort_keys=True)}")
-print("Retained task overrides: Ref2AV image-only cache, 768p, batch 32, student LoRA rank128/alpha8, full fake, existing role precision/FSDP2. Use a NEW output directory; old outer-iteration checkpoints are not compatible.")
+print("Retained task overrides: Ref2AV image-only cache, 768p, batch 32, student LoRA rank128/alpha8 with configurable adapter parameter dtype, full fake, existing base precision/FSDP2. Use a NEW output directory; old outer-iteration checkpoints are not compatible.")
 PY
 
 cd "$H3_CODE_ROOT/lightx2v_train"
 command=(
     "$H3_PYTHON" -u -m torch.distributed.run
     --nnodes=4 --nproc_per_node=8
-    "--rdzv_id=${H3_RDZV_ID:-h3_ref2av_omni_imageonly_pdmd4_official_2500updates}"
+    "--rdzv_id=${H3_RDZV_ID:-h3_ref2av_omni_imageonly_pdmd4_official_lorafp32_250000updates}"
     --rdzv_backend=c10d "--rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT"
     --max_restarts=0 train.py --config "$H3_PDMD_OFFICIAL_CONFIG"
 )
