@@ -2,6 +2,8 @@
     "infer_steps": 40,
     "resolution": 1024,
     "vae_scale_factor": 16,
+    "use_tiling_vae": true,
+    "vae_tile_size": 1024,
     "cpu_offload": true,
     "offload_granularity": "block",
     "dit_disk_streaming": true,
