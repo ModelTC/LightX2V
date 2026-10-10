@@ -25,8 +25,8 @@ def _dtype(name):
 
 def _build_mp_policy(mp_config):
     return MixedPrecisionPolicy(
-        param_dtype=_dtype(mp_config.get("param_dtype")),
-        reduce_dtype=_dtype(mp_config.get("reduce_dtype")),
+        param_dtype=_dtype(mp_config.get("param_dtype", "bf16")),
+        reduce_dtype=_dtype(mp_config.get("reduce_dtype", "fp32")),
         output_dtype=_dtype(mp_config.get("output_dtype")),
         cast_forward_inputs=mp_config.get("cast_forward_inputs", False),
     )

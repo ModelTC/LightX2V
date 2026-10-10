@@ -2,7 +2,6 @@ model:
     name: lingbot_video
     pretrained_model_name_or_path: /data/nvme5/gushiqiao/models/lingbot-video-moe-30b-a3b
     running_dtype: bf16
-    transformer_param_dtype: bf16
     text_encoder_dtype: bf16
     vae_dtype: fp32
     text_encoder_cpu: false

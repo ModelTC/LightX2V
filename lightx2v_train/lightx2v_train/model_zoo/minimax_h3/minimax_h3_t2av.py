@@ -67,7 +67,6 @@ class MiniMaxH3T2AVModel(BaseModel):
     ):
         config = self.config["model"]
         self.pretrained_model_path = config["pretrained_model_name_or_path"]
-        self.transformer_param_dtype = get_running_dtype(config.get("transformer_param_dtype", "bf16"))
         self.latent_dtype = get_running_dtype(config.get("latent_dtype", "fp32"))
         self.patch_size = tuple(int(value) for value in config.get("patch_size", (1, 2, 2)))
         if len(self.patch_size) != 3:
@@ -78,7 +77,7 @@ class MiniMaxH3T2AVModel(BaseModel):
         self.audio_sampling_rate = int(config.get("audio_sampling_rate", 32000))
         if self.video_latent_channels <= 0 or self.audio_latent_channels <= 0 or self.vae_spatial_scale_factor <= 0 or self.audio_sampling_rate <= 0:
             raise ValueError("MiniMax-H3 latent channels, VAE spatial scale, and audio rate must be positive.")
-        self.use_autocast = bool(config.get("use_autocast", False))
+        self.use_autocast = bool(config.get("use_autocast", self.transformer_param_dtype != self.running_dtype))
         self.cache_encoder_cpu_offload = bool(config.get("cache_encoder_cpu_offload", False))
         self.transformer = None
         self.video_vae = None
@@ -91,7 +90,7 @@ class MiniMaxH3T2AVModel(BaseModel):
             self.condition_encoder = MiniMaxH3ConditionEncoder(
                 self.pretrained_model_path,
                 device=self.device,
-                dtype=self.running_dtype,
+                dtype=self.text_encoder_dtype,
                 local_files_only=bool(config.get("local_files_only", True)),
                 cpu_offload=bool(
                     config.get(

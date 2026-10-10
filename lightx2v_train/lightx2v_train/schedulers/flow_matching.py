@@ -58,7 +58,7 @@ class RectifiedFlowMatchingScheduler:
         else:
             raise ValueError(f"Unsupported timestep distribution: {self.timestep_distribution}")
         timestep_or_sigma = self.time_shift(timestep_or_sigma, latent_hw=latent_hw)
-        return self.clamp_training_sigma(timestep_or_sigma).to(self.running_dtype)
+        return self.clamp_training_sigma(timestep_or_sigma)
 
     def clamp_training_sigma(self, sigma):
         """Clamp training noise after time shifting; generation schedules are unaffected."""
@@ -93,11 +93,11 @@ class RectifiedFlowMatchingScheduler:
         return mu / (mu + (1 / t - 1) ** self.time_shift_power)
 
     def add_noise(self, latent, noise, sigmas):
-        sigmas = self._expand_to_ndim(sigmas, latent.ndim)
-        return (1.0 - sigmas) * latent + sigmas * noise
+        sigmas = self._expand_to_ndim(sigmas.float(), latent.ndim)
+        return ((1.0 - sigmas) * latent.float() + sigmas * noise.float()).to(latent.dtype)
 
     def build_train_gt(self, latent, noise):
-        return noise - latent
+        return noise.float() - latent.float()
 
     def _expand_to_ndim(self, values, ndim):
         if values.ndim == 0:
@@ -146,7 +146,8 @@ class RectifiedFlowMatchingScheduler:
         """
         sigma = self.infer_sigmas[step_index]
         sigma_next = self.infer_sigmas[step_index + 1]
-        prev_sample = latent + (sigma_next - sigma) * model_output  # --------------------- (*) from above
+        prev_sample = latent.float() + (sigma_next - sigma) * model_output.float()  # --------------------- (*) from above
+        prev_sample = prev_sample.to(latent.dtype)
         return prev_sample
 
 
@@ -210,5 +211,5 @@ class CausalForcingFlowMatchScheduler(RectifiedFlowMatchingScheduler):
         return self.clamp_training_sigma(self.sigmas.to(device=device)[index]).to(dtype=dtype)
 
     def add_noise(self, latent, noise, sigmas):
-        sigmas = sigmas.reshape(sigmas.shape[0], 1, sigmas.shape[1], 1, 1)
-        return (1.0 - sigmas) * latent + sigmas * noise
+        sigmas = sigmas.float().reshape(sigmas.shape[0], 1, sigmas.shape[1], 1, 1)
+        return ((1.0 - sigmas) * latent.float() + sigmas * noise.float()).to(latent.dtype)

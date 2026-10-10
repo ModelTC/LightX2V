@@ -112,7 +112,6 @@ training:
     teacher:
         guidance_scale: 4.0
         negative_prompt: " "
-        cfg_norm: layer_norm
     output_dir: ./output_train/qwen_image_dmd_lora
 
 inference:

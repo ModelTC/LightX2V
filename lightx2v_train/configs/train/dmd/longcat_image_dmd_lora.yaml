@@ -82,7 +82,6 @@ training:
     teacher:
         guidance_scale: 4.5
         negative_prompt: " "
-        cfg_norm: layer_norm
     output_dir: ./output_train/longcat_image_dmd_lora
 
 inference:

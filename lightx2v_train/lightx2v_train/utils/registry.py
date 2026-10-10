@@ -92,6 +92,7 @@ _MODEL_MODULES = {
 }
 
 _TRAINER_MODULES = {
+    "video_cfg_distill": "lightx2v_train.trainers.cfg_distill.trainer",
     "autoregressive_dmd": "lightx2v_train.trainers.dmd.autoregressive_dmd",
     "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",

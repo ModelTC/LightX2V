@@ -131,6 +131,7 @@ class ConsistencyTrainer(FlowMatchingTrainer):
 
         teacher_config = copy.deepcopy(self.config)
         teacher_config["model"] = base_model_config
+        teacher_config["model"]["transformer_param_dtype"] = self.model_config["running_dtype"]
         teacher_config["model"].update(copy.deepcopy(teacher_override))
         teacher_model = build_loaded_model(
             teacher_config,

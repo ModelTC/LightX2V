@@ -50,7 +50,7 @@ class Flux2ModelBase(BaseModel):
             model_path,
             transformer=None,
             vae=None,
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.text_encoder_dtype,
         ).to(self.device)
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.text_pipeline.text_encoder.eval()
@@ -59,7 +59,7 @@ class Flux2ModelBase(BaseModel):
         self.vae = AutoencoderKLFlux2.from_pretrained(
             model_path,
             subfolder="vae",
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.vae_dtype,
         ).to(self.device)
         self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
@@ -87,7 +87,7 @@ class Flux2ModelBase(BaseModel):
         return Flux2Transformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.transformer_param_dtype,
         ).to(self.device)
 
     def denoiser_module(self):
@@ -117,6 +117,7 @@ class Flux2ModelBase(BaseModel):
         return 2 ** (len(block_out_channels) - 1)
 
     def _normalize_patch_latents(self, latents):
+        latents = latents.to(dtype=self.latent_dtype)
         latents = self.pipeline_cls._patchify_latents(latents)
         mean, std = self._latent_statistics(latents)
         return (latents - mean) / std
@@ -142,7 +143,7 @@ class Flux2ModelBase(BaseModel):
             image = image.unsqueeze(0)
         if image.ndim != 4:
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
-        image = image.to(device=self.device, dtype=self.running_dtype)
+        image = image.to(device=self.device, dtype=self.vae_dtype)
         distribution = self.vae.encode(image).latent_dist
         latent = getattr(distribution, mode)()
         return self._normalize_patch_latents(latent)
@@ -189,7 +190,7 @@ class Flux2ModelBase(BaseModel):
                 image = image.unsqueeze(0)
             if image.ndim != 4:
                 raise ValueError(f"Expected source image with shape [B, C, H, W], got {tuple(image.shape)}")
-            image = image.to(device=self.device, dtype=self.running_dtype)
+            image = image.to(device=self.device, dtype=self.vae_dtype)
             latent = self.vae.encode(image).latent_dist.mode()
             latents.append(self._normalize_patch_latents(latent))
 
@@ -231,16 +232,17 @@ class Flux2ModelBase(BaseModel):
         )
 
     def _denoise(self, denoiser_input, timestep_or_sigma, condition, guidance):
-        prediction = self.transformer(
-            hidden_states=denoiser_input.hidden_states,
-            timestep=timestep_or_sigma,
-            guidance=guidance,
-            encoder_hidden_states=condition["prompt_embed"],
-            txt_ids=condition["text_ids"],
-            img_ids=denoiser_input.image_ids,
-            joint_attention_kwargs={},
-            return_dict=False,
-        )[0]
+        with self.transformer_forward_context():
+            prediction = self.transformer(
+                hidden_states=denoiser_input.hidden_states.to(dtype=self.running_dtype),
+                timestep=timestep_or_sigma,
+                guidance=guidance,
+                encoder_hidden_states=condition["prompt_embed"],
+                txt_ids=condition["text_ids"],
+                img_ids=denoiser_input.image_ids,
+                joint_attention_kwargs={},
+                return_dict=False,
+            )[0]
         return prediction[:, : denoiser_input.target_token_length]
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
@@ -250,8 +252,8 @@ class Flux2ModelBase(BaseModel):
         latent_height = 2 * (int(height) // (self.vae_scale_factor * 2))
         latent_width = 2 * (int(width) // (self.vae_scale_factor * 2))
         shape = (1, self.transformer.config.in_channels, latent_height // 2, latent_width // 2)
-        return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
+        return torch.randn(shape, generator=generator, device=self.device, dtype=self.latent_dtype)
 
     def decode_latent(self, latent):
-        image = self.vae.decode(self._denormalize_patch_latents(latent)).sample
+        image = self.vae.decode(self._denormalize_patch_latents(latent).to(dtype=self.vae_dtype)).sample
         return self.image_processor.postprocess(image, output_type="pil")

@@ -1,6 +1,6 @@
 model:
-    name: wan_t2v
-    pretrained_model_name_or_path: models/Wan2.1-T2V-1.3B
+    name: wan_t2v_14b
+    pretrained_model_name_or_path: models/Wan2.1-T2V-14B/
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -8,12 +8,9 @@ model:
     load_vae: true
     load_text_encoder: true
     load_transformer: true
-    fake:
-        name: wan_t2v
-        pretrained_model_name_or_path: models/Wan2.1-T2V-1.3B/
     teacher:
-        name: wan_t2v
-        pretrained_model_name_or_path: models/Wan2.1-T2V-1.3B/
+        name: wan_t2v_14b
+        pretrained_model_name_or_path: models/Wan2.1-T2V-14B/
         transformer_param_dtype: bf16
 
 distributed:
@@ -26,7 +23,7 @@ distributed:
         enabled: true
         size: ${oc.env:WORLD_SIZE,1}
         reshard_after_forward:
-            root_reshard: false
+            root_reshard: true
             block_reshard: true
         mixed_precision:
             param_dtype: bf16
@@ -36,9 +33,18 @@ distributed:
 
 data:
     train:
-        name: prompt_dataset
+        name: video_dataset
+        # Index metadata only; resolve files and read prompts when sampled.
+        validate_on_init: false
         data_path:
-            - data/prompts/wan22_train_prompts.txt
+            - data/wan22/metadata.jsonl
+        height: 480
+        width: 832
+        num_frames: 81
+        frame_rate: 16
+        fix_frame_rate: true
+        random_start: true
+        batch_size: 1
         num_workers: 8
         pin_memory: true
         shuffle: true
@@ -47,15 +53,16 @@ data:
         name: prompt_dataset
         data_path:
             - data/prompts/wan22_val_prompts.txt
-        max_samples: 2
+        max_samples: 32
+        batch_size: 1
         num_workers: 0
         shuffle: false
 
 scheduler:
-    min_sigma: 0.02
-    max_sigma: 0.98
     num_train_timesteps: 1000
     timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
     time_shift_settings:
         do_time_shift: true
         shift_type: linear
@@ -65,65 +72,48 @@ scheduler:
         extra_one_step: true
 
 training:
-    method: sgmd
-    max_train_iters: 1000
-    gradient_accumulation_iters: 2
+    method: video_cfg_distill
+    max_train_iters: 5000
+    gradient_accumulation_iters: 1
     gradient_checkpointing: true
     max_grad_norm: 10.0
-    lr_scheduler: constant
-    lr_warmup_iters: 0
+    lr_scheduler: cosine
+    lr_warmup_iters: 200
+    lr_min: 0.0000005
     save_every_iters: 100
-    save_total_limit: 10
-    dmd:
-        num_inference_steps: 4
-        fake_update_ratio: 1
-        div_loss:
-            weight: 5.0e-2
-            teacher_inference_steps: 30
-            anchor_step: 5
-        generation_shapes:
-            - {value: [81, 480, 832]}
-        ts_schedule: false
-        ts_schedule_max: false
-        same_step_across_blocks: true
-        context_noise: 0
+    save_total_limit: 4
+    cfg_distill: {}
     student:
         train_type: full
         optimizer:
-            learning_rate: 2.0e-6
-            adam_beta1: 0.0
+            learning_rate: 0.000002
+            adam_beta1: 0.9
             adam_beta2: 0.999
-            weight_decay: 1.0e-2
-            adam_epsilon: 1.0e-8
-    fake:
-        train_type: full
-        optimizer:
-            learning_rate: 4.0e-7
-            adam_beta1: 0.0
-            adam_beta2: 0.999
-            weight_decay: 1.0e-2
-            adam_epsilon: 1.0e-8
+            weight_decay: 0.001
+            adam_epsilon: 0.00000001
     teacher:
-        guidance_scale: 3.0
+        guidance_scale: 5.0
         cfg_norm: none
-    output_dir: ./output_train/wan2_1_t2v_1_3b_sgmd
+    output_dir: ./output_train/wan2_1_t2v_14b_cfg_distill_real_data
 
 inference:
-    method: wan_t2v_infer
+    method: wan_t2v_14b_infer
     default_width: 832
     default_height: 480
     num_frames: 81
-    num_inference_steps: ${training.dmd.num_inference_steps}
+    num_inference_steps: 50
+    scheduler_type: unipc
+    unipc_shift: 5.0
     fps: 16
     enable_cfg: false
     cfg_guidance_scale: 1.0
     seed: 42
-    output_dir: ./output_infer/wan2_1_t2v_1_3b_sgmd
-    infer_every_iters: 10
+    output_dir: ./output_infer/wan2_1_t2v_14b_cfg_distill_real_data
+    infer_every_iters: 50
 
 logging:
     rank_zero_only: true
-    train_log_every_iters: 10
+    train_log_every_iters: 1
     infer_log_every_steps: 10
 
 resume:

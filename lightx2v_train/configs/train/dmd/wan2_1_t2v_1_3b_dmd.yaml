@@ -76,10 +76,8 @@ training:
     save_total_limit: 10
     dmd:
         ida:
-            enabled: true
             decay: 0.97
         div_loss:
-            enabled: true
             weight: 5.0e-2
             teacher_inference_steps: 40
             anchor_step: 10

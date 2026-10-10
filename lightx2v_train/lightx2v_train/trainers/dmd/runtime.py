@@ -202,6 +202,7 @@ class _DmdRuntime(BaseTrainer):
 
         teacher_model_config = copy.deepcopy(self.config)
         teacher_model_config["model"] = copy.deepcopy(base_model_config)
+        teacher_model_config["model"]["transformer_param_dtype"] = self.model_config["running_dtype"]
         if "teacher" in self.model_config:
             if not isinstance(self.model_config["teacher"], dict):
                 raise ValueError("model.teacher must be a mapping.")

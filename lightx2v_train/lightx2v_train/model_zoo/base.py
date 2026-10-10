@@ -1,5 +1,6 @@
 import json
 import os
+from contextlib import nullcontext
 
 import torch
 from diffusers.models.modeling_utils import SAFETENSORS_WEIGHTS_NAME, SAFE_WEIGHTS_INDEX_NAME
@@ -36,11 +37,23 @@ class BaseModel(CapabilityProvider):
         super().__init__()
         self.config = config
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
+        model_config = config["model"]
+        default_param_dtype = "fp32" if "training" in config else model_config["running_dtype"]
+        self.transformer_param_dtype = get_running_dtype(model_config.get("transformer_param_dtype", default_param_dtype))
+        self.latent_dtype = get_running_dtype(model_config.get("latent_dtype", "fp32"))
+        self.text_encoder_dtype = get_running_dtype(model_config.get("text_encoder_dtype", model_config["running_dtype"]))
+        self.vae_dtype = get_running_dtype(model_config.get("vae_dtype", model_config["running_dtype"]))
         self.device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
         self.vae = None
         self.vae_config = None
         self.text_pipeline = None
         self.image_processor = None
+
+    def transformer_forward_context(self):
+        # Autocast changes forward computation, not the optimizer's FP32 parameters.
+        if self.device.type in {"cpu", "cuda"} and self.running_dtype in {torch.float16, torch.bfloat16}:
+            return torch.autocast(device_type=self.device.type, dtype=self.running_dtype)
+        return nullcontext()
 
     def register_capabilities(self):
         self.capabilities.register(
@@ -183,6 +196,7 @@ class BaseModel(CapabilityProvider):
         raise NotImplementedError
 
     def apply_cfg(self, positive, negative, guidance_scale):
+        positive, negative = positive.float(), negative.float()
         return negative + guidance_scale * (positive - negative)
 
     def denoiser_prediction_type(self):
@@ -211,7 +225,7 @@ class BaseModel(CapabilityProvider):
             condition,
             **denoiser_kwargs,
         )
-        return self.postprocess_denoiser_output(prediction, denoiser_input)
+        return self.postprocess_denoiser_output(prediction, denoiser_input).float()
 
     def prepare_infer_latents(self, height, width, generator=None):
         raise NotImplementedError
