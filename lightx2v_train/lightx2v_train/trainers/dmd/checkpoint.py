@@ -2,6 +2,7 @@ import os
 import shutil
 
 import torch
+import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import (
@@ -89,6 +90,13 @@ class DmdCheckpointManager:
 
         self._load_single_process_state(resume_ckpt_path)
 
+    def _get_checkpoint_process_group(self):
+        # DCP exchanges plans and metadata with object collectives. Keep their
+        # serialization buffers on CPU instead of using the training NCCL group.
+        if self._checkpoint_process_group is None:
+            self._checkpoint_process_group = dist.new_group(backend="gloo")
+        return self._checkpoint_process_group
+
     def _validate_checkpoint_state(self, state, state_path, resume_ckpt_path):
         self._validate_checkpoint_metadata(state, state_path, resume_ckpt_path)
         expected = {self.checkpoint_version_key: self.checkpoint_version}
@@ -132,13 +140,14 @@ class DmdCheckpointManager:
                 raise RuntimeError(f"Checkpoint is missing {role} distributed state: {role_path}")
 
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
+        checkpoint_group = self._get_checkpoint_process_group()
         state = {}
         for role in ("student", "fake"):
             runtime = roles[role]
             model_state, optimizer_state = get_state_dict(self._parallel(runtime.model).state_module(), runtime.optimizer, options=options)
             state[f"{role}_model"] = model_state
             state[f"{role}_optimizer"] = optimizer_state
-        dcp.load(state, checkpoint_id=dist_state_path)
+        dcp.load(state, checkpoint_id=dist_state_path, process_group=checkpoint_group)
         for role in ("student", "fake"):
             runtime = roles[role]
             set_state_dict(self._parallel(runtime.model).state_module(), runtime.optimizer, model_state_dict=state[f"{role}_model"], optim_state_dict=state[f"{role}_optimizer"], options=options)
@@ -147,7 +156,7 @@ class DmdCheckpointManager:
             module = self._parallel(runtime.model).state_module()
             model_state, optimizer_state = get_state_dict(module, runtime.optimizer, options=options)
             role_state = {"model": model_state, "optimizer": optimizer_state}
-            dcp.load(role_state, checkpoint_id=os.path.join(dist_state_path, role))
+            dcp.load(role_state, checkpoint_id=os.path.join(dist_state_path, role), process_group=checkpoint_group)
             set_state_dict(module, runtime.optimizer, model_state_dict=role_state["model"], optim_state_dict=role_state["optimizer"], options=options)
         for _, runtime in roles.items():
             runtime.scheduler.load_state_dict(trainer_state[runtime.spec.scheduler_attribute])
@@ -293,6 +302,7 @@ class DmdCheckpointManager:
         barrier()
 
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
+        checkpoint_group = self._get_checkpoint_process_group()
         student_model_state, student_optim_state = get_state_dict(
             self.parallel.state_module(),
             self.optimizer,
@@ -309,7 +319,7 @@ class DmdCheckpointManager:
             "fake_model": fake_model_state,
             "fake_optimizer": fake_optim_state,
         }
-        dcp.save(state, checkpoint_id=dist_state_path)
+        dcp.save(state, checkpoint_id=dist_state_path, process_group=checkpoint_group)
         if getattr(self, "fake_real_model", None) is not None:
             role_path = os.path.join(dist_state_path, "fake_real")
             model_state, optimizer_state = get_state_dict(
@@ -327,6 +337,7 @@ class DmdCheckpointManager:
                     "optimizer": optimizer_state,
                 },
                 checkpoint_id=role_path,
+                process_group=checkpoint_group,
             )
             logger.info(
                 "[checkpoint][save][role] role=fake_real path={} status=restorable",

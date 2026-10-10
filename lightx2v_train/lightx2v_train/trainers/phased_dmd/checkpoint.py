@@ -2,7 +2,6 @@ import os
 import shutil
 
 import torch
-import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import (
@@ -58,13 +57,6 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             self._load_distributed_state(resume_ckpt_path)
             return
         self._load_single_process_state(resume_ckpt_path)
-
-    def _get_checkpoint_process_group(self):
-        if self._checkpoint_process_group is None:
-            self._checkpoint_process_group = dist.new_group(
-                backend="gloo",
-            )
-        return self._checkpoint_process_group
 
     def _load_distributed_state(self, resume_ckpt_path):
         dist_state_path = os.path.join(resume_ckpt_path, "dist_state")
