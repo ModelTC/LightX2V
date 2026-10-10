@@ -11,16 +11,15 @@ Orchestrates the denoising loop across pipeline stages:
 import torch
 import torch.distributed as dist
 
-from lightx2v.utils.envs import GET_DTYPE
-
-from .pipeline_comm import PipelineComm
-from .pipeline_state import (
+from lightx2v.common.distributed import (
+    PipelineComm,
     get_pipeline_parallel_world_size,
     get_pipeline_runtime_state,
     get_pp_group,
     is_pipeline_first_stage,
     is_pipeline_last_stage,
 )
+from lightx2v.utils.envs import GET_DTYPE
 
 
 class Flux2PipelineDriver:
