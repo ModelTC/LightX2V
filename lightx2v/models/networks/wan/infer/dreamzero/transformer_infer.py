@@ -68,6 +68,9 @@ class DreamZeroRope(RopeTemplate):
 class DreamZeroTransformerInfer(WanTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
+        self.device = AI_DEVICE
+        if AI_DEVICE == "cuda" and torch.cuda.is_available():
+            self.device = torch.cuda.get_device_name(torch.cuda.current_device()).lower()
         self.fuse_rms_norm = config.get("dreamzero_fuse_rms_norm", True)
         self.num_action_per_block = int(config.get("num_action_per_block", config.get("action_horizon", 24)))
         self.num_state_per_block = int(config.get("num_state_per_block", 1))
@@ -264,7 +267,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm1_out = norm1_out.to(self.infer_dtype)
 
-        if not self.config.get("thor", False):
+        if "thor" not in self.device.split():
             q = self._apply_attention_rms_norm(phase.self_attn_norm_q, phase.self_attn_q.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
             k = self._apply_attention_rms_norm(phase.self_attn_norm_k, phase.self_attn_k.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
             v = phase.self_attn_v.apply(norm1_out).view(seq_total, self.num_heads, self.head_dim)
@@ -365,14 +368,14 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         norm2_out = self._modulate(norm2_out.contiguous(), c_scale_msa, c_shift_msa)
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm2_out = norm2_out.to(self.infer_dtype)
-        if self.config.get("thor", False):
+        if "thor" in self.device.split():
             from lightx2v.common.ops.mm.thor_ffn.backend import up_gelu
 
             y = up_gelu(phase.ffn_0, norm2_out)
         else:
             y = phase.ffn_0.apply(norm2_out)
             y = F.gelu(y, approximate="tanh")
-        if self.config.get("thor", False):
+        if "thor" in self.device.split():
             from lightx2v.common.ops.mm.thor_ffn.backend import down_bias
 
             return down_bias(phase.ffn_2, y)
