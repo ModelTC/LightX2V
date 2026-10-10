@@ -4,6 +4,7 @@ from lightx2v_train.utils.registry import build_trainer
 
 _LAZY_EXPORTS = {
     "VideoCfgDistillTrainer": (".cfg_distill.trainer", "VideoCfgDistillTrainer"),
+    "VideoCfgTrajectoryDistillTrainer": (".cfg_trajectory_distill.trainer", "VideoCfgTrajectoryDistillTrainer"),
     "AutoregressiveDmdTrainer": (
         ".dmd.autoregressive_dmd",
         "AutoregressiveDmdTrainer",
