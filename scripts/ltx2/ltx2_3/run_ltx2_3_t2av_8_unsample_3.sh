@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/data/nvme1/zhangbilang/LightX2V
-model_path=/data/nvme0/models/LTX-2
+lightx2v_path=/path/to/LightX2V
+model_path=Lightricks/LTX-2
 
 
 export CUDA_VISIBLE_DEVICES=1

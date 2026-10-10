@@ -10,7 +10,7 @@ class WorldPlayARPreInfer(HunyuanVideo15PreInfer):
     """
     Pre-inference module for WorldPlay AR (Autoregressive) model.
 
-    Key differences from WorldPlayPreInfer (Distill):
+    Key differences from WorldPlayPreInfer:
     - No guidance embedding (AR model doesn't use guidance)
     - Supports chunk-based processing for autoregressive generation
     - Handles memory window selection for long video generation

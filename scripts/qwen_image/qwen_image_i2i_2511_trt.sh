@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-export lightx2v_path=
-export model_path=
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Qwen-Image-Edit-2511
 
 export CUDA_VISIBLE_DEVICES=0
 
@@ -16,6 +16,6 @@ python -m lightx2v.infer \
     --config_json ${lightx2v_path}/configs/qwen_image/qwen_image_i2i_2511_trt.json \
     --prompt "Change the person to a standing position, bending over to hold the dog's front paws." \
     --negative_prompt " " \
-    --image_path "test.png" \
+    --image_path /path/to/test.png \
     --save_result_path ${lightx2v_path}/save_results/qwen_image_i2i_2511_trt.png \
     --seed 0

@@ -15,7 +15,10 @@ class FastWAMActionScheduler(BaseScheduler):
         return shift * u / (1.0 + (shift - 1.0) * u)
 
     def prepare_loop(self, action_shape, *, seed, device, dtype, infer_steps=None):
-        self.infer_steps = int(infer_steps or self.infer_steps)
+        infer_steps = self.infer_steps if infer_steps is None else int(infer_steps)
+        if infer_steps <= 0:
+            raise ValueError("action_infer_steps must be positive")
+        self.infer_steps = infer_steps
         generator = None if seed is None else torch.Generator(device="cpu").manual_seed(int(seed))
         self.latents = torch.randn(
             action_shape,

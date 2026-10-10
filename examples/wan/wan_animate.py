@@ -3,21 +3,21 @@ Wan2.2 animate video generation example.
 This example demonstrates how to use LightX2V with Wan2.2 model for animate video generation.
 
 First, run preprocessing:
-1. Set up environment: pip install -r ../requirements_animate.txt
+1. Set up environment: pip install -r /path/to/LightX2V/requirements_animate.txt
 2. For animate mode:
-   python ../tools/preprocess/preprocess_data.py \
-       --ckpt_path /path/to/Wan2.1-FLF2V-14B-720P/process_checkpoint \
+   python /path/to/LightX2V/tools/preprocess/preprocess_data.py \
+       --ckpt_path /path/to/Wan2.2-Animate-14B/process_checkpoint \
        --video_path /path/to/video \
        --refer_path /path/to/ref_img \
-       --save_path ../save_results/animate/process_results \
+       --save_path /path/to/LightX2V/save_results/animate/process_results \
        --resolution_area 1280 720 \
        --retarget_flag
 3. For replace mode:
-   python ../tools/preprocess/preprocess_data.py \
-       --ckpt_path /path/to/Wan2.1-FLF2V-14B-720P/process_checkpoint \
+   python /path/to/LightX2V/tools/preprocess/preprocess_data.py \
+       --ckpt_path /path/to/Wan2.2-Animate-14B/process_checkpoint \
        --video_path /path/to/video \
        --refer_path /path/to/ref_img \
-       --save_path ../save_results/replace/process_results \
+       --save_path /path/to/LightX2V/save_results/replace/process_results \
        --resolution_area 1280 720 \
        --iterations 3 \
        --k 7 \
@@ -30,15 +30,16 @@ from lightx2v import LightX2VPipeline
 
 # Initialize pipeline for animate task
 pipe = LightX2VPipeline(
-    model_path="/path/to/Wan2.1-FLF2V-14B-720P",
+    model_path="/path/to/Wan2.2-Animate-14B",
     model_cls="wan2.2_animate",
     task="animate",
 )
-pipe.startup_config["replace_flag"] = True  # Set to True for replace mode, False for animate mode
+# Replace mode also requires background_video_path and mask_path.
+pipe.startup_config.update(refert_num=1, replace_flag=False)
 
 # Alternative: create generator from config JSON file
 # pipe.create_generator(
-#     config_json="../configs/wan/wan_animate_replace.json"
+#     config_json="/path/to/LightX2V/configs/wan22/wan_animate.json"
 # )
 
 # Create generator with specified parameters
@@ -54,9 +55,9 @@ pipe.create_generator(
 
 seed = 42
 prompt = "视频中的人在做动作"
-pose_video_path = "../save_results/animate/process_results/src_pose.mp4"
-face_video_path = "../save_results/animate/process_results/src_face.mp4"
-ref_image_paths = "../save_results/animate/process_results/src_ref.png"
+pose_video_path = "/path/to/LightX2V/save_results/animate/process_results/src_pose.mp4"
+face_video_path = "/path/to/LightX2V/save_results/animate/process_results/src_face.mp4"
+ref_image_paths = "/path/to/LightX2V/save_results/animate/process_results/src_ref.png"
 save_result_path = "/path/to/save_results/output.mp4"
 
 pipe.generate(

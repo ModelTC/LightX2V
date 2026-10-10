@@ -8,8 +8,6 @@
   "sample_guide_scale": 4.0,
   "cpu_offload": true,
   "offload_granularity": "block",
-  "lazy_load": false,
-  "unload_modules": false,
   "dit_quantized": false,
   "dit_quant_scheme": "Default",
   "qwen25vl_cpu_offload": false,

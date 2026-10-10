@@ -163,13 +163,16 @@ class WorldPlayPreInfer(HunyuanVideo15PreInfer):
         if not self.scheduler.vec_is_per_token:
             vec = torch.nn.functional.silu(vec)
 
-        return HunyuanVideo15InferModuleOutput(
+        output = HunyuanVideo15InferModuleOutput(
             img=img.contiguous(),
             txt=txt.contiguous(),
             vec=vec.contiguous(),
             cos_sin=self.scheduler.cos_sin,
             grid_sizes=(grid_sizes_t, grid_sizes_h, grid_sizes_w),
         )
+        if inputs.get("context_inputs") is not None:
+            output.context_inputs = inputs["context_inputs"]
+        return output
 
     def _compute_action_embedding(self, action_weights, action):
         """

@@ -4,7 +4,7 @@
 # The model_pathpoints to LTX-2, while the config includes the weights for LTX-2.3
 lightx2v_path=/path/to/LightX2V
 model_path=Lightricks/LTX-2
-AUDIO_PATH=
+AUDIO_PATH=/path/to/audio.wav
 
 export CUDA_VISIBLE_DEVICES=0
 

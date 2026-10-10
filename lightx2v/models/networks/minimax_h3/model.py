@@ -403,11 +403,11 @@ class MiniMaxH3Model(BaseTransformerModel):
         if not self.use_tp:
             return
         checks = {
-            "num_attention_heads": int(self.config.get("num_attention_heads", 56)),
-            "ffn_hidden_size": int(self.config.get("ffn_hidden_size", 14336)),
+            "num_attention_heads": self.config["num_attention_heads"],
+            "ffn_dim": self.config["ffn_dim"],
         }
         if not self.use_adaln_cache:
-            checks["adaln_output_size"] = 18 * int(self.config.get("hidden_size", 5376))
+            checks["adaln_output_size"] = 18 * self.config["hidden_size"]
         invalid = {name: value for name, value in checks.items() if value % self.tp_size}
         if invalid:
             details = ", ".join(f"{name}={value}" for name, value in invalid.items())

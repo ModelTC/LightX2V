@@ -77,16 +77,6 @@ class LTX2Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, None, lora_path, lora_strength)
-        if self.config.get("tensor_parallel", False):
-            self.use_tp = True
-            self.tp_group = self.config.get("device_mesh").get_group(mesh_dim="tensor_p")
-            self.tp_rank = dist.get_rank(self.tp_group)
-            self.tp_size = dist.get_world_size(self.tp_group)
-        else:
-            self.tp_group = None
-            self.use_tp = False
-            self.tp_rank = 0
-            self.tp_size = 1
 
         # Track original video sequence length before padding (for sequence parallel)
         self.original_video_seq_len = None

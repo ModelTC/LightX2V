@@ -53,7 +53,7 @@ python scripts/server/check_status.py
 python scripts/server/stop_running_task.py
 ```
 
-服务端点：`/v1/tasks/running`
+脚本通过 `GET /v1/service/status` 获取 `current_task`，再调用 `DELETE /v1/tasks/{task_id}` 停止当前任务，保留排队任务。
 
 终止任务后，服务器不会退出，而是返回等待新请求的状态。
 
@@ -84,6 +84,6 @@ python scripts/server/post_multi_servers.py
 | `/v1/tasks/` | GET | 获取所有任务列表 |
 | `/v1/tasks/{task_id}/status` | GET | 获取指定任务状态 |
 | `/v1/tasks/{task_id}/result` | GET | 获取指定任务的结果视频文件 |
-| `/v1/tasks/running` | DELETE | 停止当前运行的任务 |
+| `/v1/tasks/{task_id}` | DELETE | 停止指定任务 |
 | `/v1/files/download/{file_path}` | GET | 下载文件 |
 | `/v1/service/status` | GET | 获取服务状态 |

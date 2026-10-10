@@ -27,12 +27,12 @@ prompt='integrated_multimodal_description: [Shot 1] Cinematic low-angle tracking
 overall_soundscape: Rich city atmosphere on wet streets: a constant damp hiss of car tires rolling through water in the distance, the resonant electrical hum and faint crackle of neon transformers overhead, a muffled J-pop bassline leaking from a nearby record store, layers of pedestrian chatter and soft laughter in Japanese, and in the foreground, the crisp, wet footsteps of her heeled boots striking the mirrored asphalt, with occasional tiny splashes. When she removes her sunglasses, a delicate, intimate "click" of the frame folding is audible, momentarily cutting through the noise.
 non_diegetic_music: A lo-fi electronic city-pop track with a relaxed breakbeat and dreamy analog synth pads, setting a confident, seductive mood. As she takes off her sunglasses in slow motion, a warm, soulful saxophone phrase sweeps in with reverb, then gently settles back into the groove as she walks on, gradually fading out with the ambient hum.'
 
-torchrun --standalone --nproc_per_node=4 -m lightx2v.infer \
+torchrun --standalone --nproc_per_node=8 -m lightx2v.infer \
     --model_cls minimax_h3 \
     --model-variant fl2av \
     --task t2av \
     --model_path $model_path \
-    --config_json ${lightx2v_path}/configs/platforms/mthreads_musa/minimax_h3_t2av_tp_sp.json \
+    --config_json ${lightx2v_path}/configs/platforms/mthreads_musa/minimax_h3_t2av_tp4_sp2.json \
     --prompt "$prompt" \
     --save_result_path ${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av10.mp4 \
     --seed 0

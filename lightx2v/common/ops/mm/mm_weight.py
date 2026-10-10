@@ -2234,7 +2234,6 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
         self.act_quant_func = self.act_quant_int8_perchannel_sym_torchao
 
     def apply(self, input_tensor):
-        input_tensor = input_tensor
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
         output_tensor = torchao_int8_gemm(
             input_tensor_quant,

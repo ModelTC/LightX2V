@@ -15,8 +15,6 @@
   "vae_cpu_offload": false,
   "vae_decode_parallel": true,
   "vae_sensitive_layer_dtype": "fp32",
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "sol_attn",
   "refiner_attn_type": "sage_attn2",
   "sol_attn_setting": {

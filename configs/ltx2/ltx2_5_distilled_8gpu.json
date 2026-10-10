@@ -23,7 +23,6 @@
         "seq_p_attn_type": "ulysses"
     },
     "vae_scale_factors": [8, 32, 32],
-    "vae_stride": [8, 32, 32],
     "audio_sampling_rate": 16000,
     "audio_hop_length": 160,
     "audio_scale_factor": 4,

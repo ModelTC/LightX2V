@@ -263,7 +263,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         - "baseline" (default): HuggingFace baseline implementation
         """
         vae_type = self.config.get("vae_type", "baseline")
-        trt_vae_config = self.config.get("trt_vae_config", {})
 
         if vae_type == "tensorrt":
             try:
@@ -380,6 +379,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
         elif self.config["task"] == "i2i":
+            if self.is_layered and (text is None or not text.strip()):
+                text = self.text_encoders[0].get_image_caption(image_list[0])
             prompt_embeds, _, image_info = self.text_encoders[0].infer([text], image_list)
             self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
@@ -448,8 +449,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             "3:2": (1584, 1056),
             "2:3": (1056, 1584),
         }
-        as_maps = self.config.get("aspect_ratios", {})
-        as_maps.update(default_aspect_ratios)
+        as_maps = {**default_aspect_ratios, **self.config.get("aspect_ratios", {})}
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 

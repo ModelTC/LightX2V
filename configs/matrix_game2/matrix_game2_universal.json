@@ -1,12 +1,9 @@
 {
     "infer_steps": 3,
-    "num_frames": 360,
-    "num_output_frames": 360,
-    "text_len": 512,
+    "num_latent_frames": 360,
     "size": [352, 640],
     "self_attn_1_type": "flash_attn2",
     "cross_attn_1_type": "flash_attn2",
-    "cross_attn_2_type": "flash_attn2",
     "sample_guide_scale": 1,
     "sample_shift": 5,
     "enable_cfg": false,
@@ -22,43 +19,8 @@
     "mode": "universal",
     "streaming": false,
     "action_config": {
-        "action_attn_type": "flash_attn2",
-        "blocks": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-        "enable_keyboard": true,
-        "enable_mouse": true,
-        "heads_num": 16,
-        "hidden_size": 128,
-        "keyboard_hidden_dim": 1024,
-        "mouse_dim_in": 2,
-        "mouse_hidden_dim": 1024,
-        "mouse_qk_dim_list": [
-        8,
-        28,
-        28
-        ],
-        "patch_size": [
-        1,
-        2,
-        2
-        ],
-        "rope_dim_list": [
-        8,
-        28,
-        28
-        ],
-        "rope_theta": 256,
-        "vae_time_compression_ratio": 4,
-        "windows_size": 3
+        "action_attn_type": "flash_attn2"
     },
-    "dim": 1536,
-    "eps": 1e-06,
-    "ffn_dim": 8960,
-    "freq_dim": 256,
-    "in_dim": 36,
-    "model_type": "i2v",
-    "num_heads": 12,
-    "num_layers": 30,
-    "out_dim": 16,
     "use_image_encoder": false,
     "causal_rope_type": "wan_causal_rope"
 }

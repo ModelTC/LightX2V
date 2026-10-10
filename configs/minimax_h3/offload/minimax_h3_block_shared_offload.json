@@ -17,8 +17,6 @@
   "dit_release_block_offload_buffers": true,
   "vae_cpu_offload": true,
   "video_vae_offload_granularity": "block",
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "sage_attn2",
   "rms_type": "sgl-kernel",
   "rope_type": "minimax_h3_triton_rope",

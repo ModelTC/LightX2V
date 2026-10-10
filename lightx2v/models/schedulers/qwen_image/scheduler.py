@@ -629,7 +629,7 @@ class QwenImageScheduler(BaseScheduler):
             image_seq_len = self.latents.shape[1]
             if self.is_layered:
                 base_seqlen = 256 * 256 / 16 / 16
-                image_seq_len = self.latents.shape[1] // 5
+                image_seq_len = self.latents.shape[1] // (self.layers + 1)
                 mu = (image_seq_len / base_seqlen) ** 0.5
             else:
                 mu = calculate_shift(

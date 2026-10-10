@@ -15,8 +15,6 @@
   "text_encoder_offload_granularity": "block",
   "vae_cpu_offload": false,
   "vae_decode_parallel": true,
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "sol_attn",
   "refiner_attn_type": "torch_sdpa",
   "sol_attn_setting": {
@@ -40,7 +38,7 @@
   "audio_sampling_rate": 32000,
   "video_vae_quantized": true,
   "video_vae_quant_scheme": "fp8-sgl",
-  "video_vae_quantized_ckpt": "/data/wangshankun/models/h3/h3_quantized/fp8/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors",
+  "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors",
   "parallel": {
     "seq_p_size": 8,
     "seq_p_attn_type": "ulysses",

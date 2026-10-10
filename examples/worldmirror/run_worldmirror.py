@@ -56,13 +56,13 @@ def build_parser():
 
     # --- Model loading ---
     p.add_argument("--pretrained_model_name_or_path", type=str, default="/path/to/HY-World-2.0", help="Local directory containing HY-WorldMirror-2.0 weights.")
-    p.add_argument("--subfolder", type=str, default="HY-WorldMirror-2.0", help="Subfolder inside the model directory.")
+    p.add_argument("--subfolder", type=str, default=None, help="Subfolder inside the model directory.")
     p.add_argument("--config_path", type=str, default=None, help="Optional training YAML; used with --ckpt_path.")
     p.add_argument("--ckpt_path", type=str, default=None, help="Optional .ckpt/.safetensors; used with --config_path.")
     p.add_argument("--lightx2v_config", type=str, default=DEFAULT_CONFIG_PATH, help="LightX2V JSON config (saving/mask/render defaults).")
 
     # --- Execution mode ---
-    p.add_argument("--enable_bf16", action="store_true", default=False)
+    p.add_argument("--enable_bf16", action="store_true", default=None)
     p.add_argument("--disable_heads", type=str, nargs="*", default=None, help="Heads to disable: camera depth normal points gs")
 
     # --- Inference params ---
@@ -107,9 +107,9 @@ def build_parser():
     p.add_argument("--prior_depth_path", type=str, default=None)
 
     # --- Rendering ---
-    p.add_argument("--save_rendered", action="store_true", default=False)
+    p.add_argument("--save_rendered", action="store_true", default=None)
     p.add_argument("--render_interp_per_pair", type=int, default=None)
-    p.add_argument("--render_depth", action="store_true", default=False)
+    p.add_argument("--render_depth", action="store_true", default=None)
 
     # --- Misc ---
     p.add_argument("--log_time", action="store_true", default=None)
@@ -124,13 +124,6 @@ def build_config(args):
         config_dict = json.load(f)
 
     config_dict["model_path"] = args.pretrained_model_name_or_path
-    config_dict["subfolder"] = args.subfolder
-    config_dict["config_path"] = args.config_path
-    config_dict["ckpt_path"] = args.ckpt_path
-    config_dict["enable_bf16"] = args.enable_bf16
-    config_dict["disable_heads"] = args.disable_heads
-    config_dict["save_rendered"] = args.save_rendered
-    config_dict["render_depth"] = args.render_depth
 
     # Save toggles (negative flags — only override when user passed them).
     if args.no_save_depth:
@@ -150,8 +143,13 @@ def build_config(args):
     if args.save_sky_mask:
         config_dict["save_sky_mask"] = True
 
-    # Positive overrides (only if explicitly set).
+    # Override only explicitly supplied options.
     for key in (
+        "subfolder",
+        "config_path",
+        "ckpt_path",
+        "enable_bf16",
+        "disable_heads",
         "target_size",
         "fps",
         "video_strategy",
@@ -170,6 +168,8 @@ def build_config(args):
         "compress_pts_voxel_size",
         "max_resolution",
         "compress_gs_max_points",
+        "save_rendered",
+        "render_depth",
         "render_interp_per_pair",
         "log_time",
     ):

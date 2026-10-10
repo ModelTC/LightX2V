@@ -40,16 +40,12 @@ class ShotStreamPipeline(ShotPipeline):  # type:ignore
         audio_array = audio_array.mean(0)
         if ori_sr != model_sr:
             audio_array = ta.functional.resample(audio_array, ori_sr, model_sr)
-        audio_reader = SlidingWindowReader(audio_array, frame_len=33, sr=model_sr, fps=model_fps)
+        audio_reader = SlidingWindowReader(audio_array, frame_len=s2v_input_info.num_frames, sr=model_sr, fps=model_fps)
 
         # Demo 交替生成 clip
         i = 0
         overlap = 0
         while True:
-            audio_clip = audio_reader.next_frame(overlap=overlap)
-            if audio_clip is None:
-                break
-
             if i % 2 == 0:
                 pipe = s2v
                 inputs = s2v_input_info
@@ -57,6 +53,11 @@ class ShotStreamPipeline(ShotPipeline):  # type:ignore
                 pipe = f2v
                 inputs = f2v_input_info
                 inputs.prompt = "A man speaks to the camera with a slightly furrowed brow and focused gaze. He raises both hands upward in powerful, emphatic gestures. "  # 添加动作提示
+
+            audio_reader.frame_len = inputs.num_frames
+            audio_clip = audio_reader.next_frame(overlap=overlap)
+            if audio_clip is None:
+                break
 
             inputs.seed = inputs.seed + i  # 不同 clip 使用不同随机种子
             # Each clip re-encodes the reference image; reuse the requested geometry.

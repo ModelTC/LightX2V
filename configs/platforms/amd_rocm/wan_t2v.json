@@ -5,7 +5,6 @@
     "size": [480, 832],
     "self_attn_1_type": "aiter_attn",
     "cross_attn_1_type": "aiter_attn",
-    "cross_attn_2_type": "aiter_attn",
     "sample_guide_scale": 6,
     "sample_shift": 8,
     "enable_cfg": true,

@@ -16,14 +16,6 @@ class WanVaceModel(WanModel):
     pre_weight_class = WanPreWeights
     transformer_weight_class = WanVaceTransformerWeights
 
-    def __init__(self, model_path, config, device, model_type="wan2.1"):
-        super().__init__(model_path, config, device, model_type)
-
-    def _init_infer(self):
-        super()._init_infer()
-        if hasattr(self.transformer_infer, "offload_manager"):
-            self._init_offload_manager()
-
     def _init_offload_manager(self):
         self.transformer_infer.offload_block_cuda_buffers = self.transformer_weights.offload_block_cuda_buffers
         self.transformer_infer.offload_phase_cuda_buffers = self.transformer_weights.offload_phase_cuda_buffers

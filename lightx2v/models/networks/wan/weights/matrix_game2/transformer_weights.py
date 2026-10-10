@@ -137,8 +137,6 @@ class WanActionModule(WeightModule):
             ),
         )
 
-        self.add_module("cross_attn_2", ATTN_WEIGHT_REGISTER[self.config["cross_attn_2_type"]]())
-
         _ac = self.config.get("action_config") or {}
         _action_attn_type = _ac.get("action_attn_type", self.config.get("self_attn_1_type", "flash_attn2"))
         self.add_module("action_attn_1", ATTN_WEIGHT_REGISTER[_action_attn_type]())

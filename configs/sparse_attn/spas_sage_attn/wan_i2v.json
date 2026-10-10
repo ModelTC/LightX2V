@@ -2,9 +2,12 @@
     "infer_steps": 40,
     "num_frames": 81,
     "size": [480, 832],
-    "self_attn_1_type": "sage_attn",
-    "cross_attn_1_type": "sage_attn",
-    "cross_attn_2_type": "sage_attn",
+    "self_attn_1_type": "sparge_attn",
+    "sparge_attn_setting": {
+        "sparsity_ratio": 0.8
+    },
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
     "sample_guide_scale": 5,
     "sample_shift": 3,
     "enable_cfg": true,

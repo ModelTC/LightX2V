@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=
-model_path=
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Wan2.2-I2V-A14B
 
 export CUDA_VISIBLE_DEVICES=0
 
@@ -16,6 +16,6 @@ python -m lightx2v.infer \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/wan22/wan_distill_moe_flf2v.json \
 --prompt "A bearded man with red facial hair wearing a yellow straw hat and dark coat in Van Gogh's self-portrait style, slowly and continuously transforms into a space astronaut. The transformation flows like liquid paint - his beard fades away strand by strand, the yellow hat melts and reforms smoothly into a silver space helmet, dark coat gradually lightens and restructures into a white spacesuit. The background swirling brushstrokes slowly organize and clarify into realistic stars and space, with Earth appearing gradually in the distance. Every change happens in seamless waves, maintaining visual continuity throughout the metamorphosis.\n\nConsistent soft lighting throughout, medium close-up maintaining same framing, central composition stays fixed, gentle color temperature shift from warm to cool, gradual contrast increase, smooth style transition from painterly to photorealistic. Static camera with subtle slow zoom, emphasizing the flowing transformation process without abrupt changes." \
---image_path /mtc/gushiqiao/llmc_workspace/wan22_14B_flf2v_start_image.png \
---last_frame_path /mtc/gushiqiao/llmc_workspace/wan22_14B_flf2v_end_image.png \
+--image_path /path/to/wan22_14B_flf2v_start_image.png \
+--last_frame_path /path/to/wan22_14B_flf2v_end_image.png \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_wan_flf2v.mp4

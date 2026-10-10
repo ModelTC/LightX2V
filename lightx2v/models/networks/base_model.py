@@ -608,10 +608,13 @@ class BaseTransformerModel(ABC):
 
         # Handle GGUF format
         if "gguf" in self.config.get("dit_quant_scheme", ""):
-            gguf_path = ""
             if os.path.isdir(safetensors_path):
                 gguf_type = self.config.get("dit_quant_scheme").replace("gguf-", "")
-                gguf_files = list(filter(lambda x: gguf_type in x, glob.glob(os.path.join(safetensors_path, "*.gguf"))))
+                gguf_files = [path for path in glob.glob(os.path.join(safetensors_path, "*.gguf")) if gguf_type in os.path.basename(path)]
+                if not gguf_files:
+                    raise FileNotFoundError(f"No GGUF file matching {gguf_type} in {safetensors_path}. Set dit_quantized_ckpt to the checkpoint file.")
+                if len(gguf_files) > 1:
+                    raise ValueError(f"Multiple GGUF files matching {gguf_type} in {safetensors_path}. Set dit_quantized_ckpt to the checkpoint file.")
                 gguf_path = gguf_files[0]
             else:
                 gguf_path = safetensors_path

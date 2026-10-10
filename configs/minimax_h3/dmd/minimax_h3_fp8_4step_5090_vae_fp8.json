@@ -15,8 +15,6 @@
     "544x960": [288, 304]
   },
   "vae_sensitive_layer_dtype": "fp32",
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "sage_attn2",
   "rms_type": "sgl-kernel",
   "rope_type": "torch_real_rope",
