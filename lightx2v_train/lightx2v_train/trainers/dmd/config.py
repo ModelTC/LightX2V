@@ -1,4 +1,5 @@
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -50,6 +51,7 @@ class DmdConfig:
     random_schedule_sigma_max: float
     random_schedule_sampling_method: str
     latent_dtype: torch.dtype | None
+    rollout_use_ste: bool = False
 
     @classmethod
     def from_mapping(
@@ -75,6 +77,12 @@ class DmdConfig:
         negative_prompt = default_negative_prompt if default_negative_prompt is not None else configured_negative_prompt
 
         random_schedule = dmd.get("random_schedule", {})
+        rollout = dmd.get("rollout", {})
+        if not isinstance(rollout, Mapping):
+            raise ValueError("training.dmd.rollout must be a mapping.")
+        rollout_use_ste = rollout.get("use_ste", False)
+        if not isinstance(rollout_use_ste, bool):
+            raise ValueError("training.dmd.rollout.use_ste must be a boolean.")
         latent_dtype = dmd.get("latent_dtype", config["model"].get("latent_dtype", "fp32"))
         if latent_dtype is not None:
             latent_dtype = get_running_dtype(str(latent_dtype).lower())
@@ -114,6 +122,7 @@ class DmdConfig:
                 "stratified",
             ),
             latent_dtype=latent_dtype,
+            rollout_use_ste=rollout_use_ste,
         )
 
 
