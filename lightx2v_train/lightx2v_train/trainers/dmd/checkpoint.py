@@ -1,8 +1,10 @@
 import os
 import shutil
 from collections.abc import Mapping
+from datetime import timedelta
 
 import torch
+import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import (
@@ -37,6 +39,26 @@ class DmdCheckpointManager:
 
     def __setattr__(self, name, value):
         setattr(self.owner, name, value)
+
+    def _get_checkpoint_process_group(self):
+        """Use CPU collectives for DCP plans, without changing tensor shards.
+
+        All ranks must enter this method in the same order on first save/load.
+        Keep the group on the trainer and reuse it, as phased DMD does; global
+        distributed cleanup also destroys this subgroup. Training/FSDP still
+        uses its original NCCL groups.
+        """
+        if not dist.is_available() or not dist.is_initialized():
+            return None
+        group = getattr(self, "_checkpoint_process_group", None)
+        if group is None:
+            if not dist.is_gloo_available():
+                raise RuntimeError("DMD distributed checkpoints require a PyTorch build with Gloo support.")
+            timeout_minutes = self.config.get("distributed", {}).get("timeout_minutes", 10)
+            group = dist.new_group(backend="gloo", timeout=timedelta(minutes=timeout_minutes))
+            self._checkpoint_process_group = group
+            logger.info("[checkpoint] DCP save/load communication uses Gloo (timeout={} minutes); training groups unchanged", timeout_minutes)
+        return group
 
     def _fake_weights_dir(self, root_dir):
         directory_name = self.role_registry.weight_directory_name("fake")
@@ -263,6 +285,7 @@ class DmdCheckpointManager:
             if not os.path.isdir(role_path):
                 raise RuntimeError(f"Checkpoint is missing {role} distributed state: {role_path}")
 
+        checkpoint_group = self._get_checkpoint_process_group()
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
         state = {}
         for role in ("student", "fake"):
@@ -272,7 +295,7 @@ class DmdCheckpointManager:
             state[f"{role}_optimizer"] = optimizer_state
         if getattr(self, "student_ema", None) is not None:
             state["student_ema"] = self.student_ema.shadow
-        dcp.load(state, checkpoint_id=dist_state_path)
+        dcp.load(state, checkpoint_id=dist_state_path, process_group=checkpoint_group)
         for role in ("student", "fake"):
             runtime = roles[role]
             set_state_dict(self._parallel(runtime.model).state_module(), runtime.optimizer, model_state_dict=state[f"{role}_model"], optim_state_dict=state[f"{role}_optimizer"], options=options)
@@ -281,7 +304,7 @@ class DmdCheckpointManager:
             module = self._parallel(runtime.model).state_module()
             model_state, optimizer_state = get_state_dict(module, runtime.optimizer, options=options)
             role_state = {"model": model_state, "optimizer": optimizer_state}
-            dcp.load(role_state, checkpoint_id=os.path.join(dist_state_path, role))
+            dcp.load(role_state, checkpoint_id=os.path.join(dist_state_path, role), process_group=checkpoint_group)
             set_state_dict(module, runtime.optimizer, model_state_dict=role_state["model"], optim_state_dict=role_state["optimizer"], options=options)
         for _, runtime in roles.items():
             runtime.scheduler.load_state_dict(trainer_state[runtime.spec.scheduler_attribute])
@@ -451,6 +474,7 @@ class DmdCheckpointManager:
             )
         barrier()
 
+        checkpoint_group = self._get_checkpoint_process_group()
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
         student_model_state, student_optim_state = get_state_dict(
             self.parallel.state_module(),
@@ -470,7 +494,7 @@ class DmdCheckpointManager:
         }
         if getattr(self, "student_ema", None) is not None:
             state["student_ema"] = self.student_ema.shadow
-        dcp.save(state, checkpoint_id=dist_state_path)
+        dcp.save(state, checkpoint_id=dist_state_path, process_group=checkpoint_group)
         if getattr(self, "fake_real_model", None) is not None:
             role_path = os.path.join(dist_state_path, "fake_real")
             model_state, optimizer_state = get_state_dict(
@@ -488,6 +512,7 @@ class DmdCheckpointManager:
                     "optimizer": optimizer_state,
                 },
                 checkpoint_id=role_path,
+                process_group=checkpoint_group,
             )
             logger.info(
                 "[checkpoint][save][role] role=fake_real path={} status=restorable",
