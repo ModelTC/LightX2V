@@ -1,0 +1,141 @@
+# Two-node/eight-GPU-per-node DMD8 checkpoint memory smoke test.
+# Same model/data/optimizer precision as the FP32-LoRA 32-GPU recipe.
+# Sequence: iter1 -> save1 -> iter2 -> save2 -> exit; no auto-resume.
+# FSDP16 holds larger local shards than FSDP32; this is not a 32-GPU memory estimate.
+model:
+    name: minimax_h3_ref2av
+    pretrained_model_name_or_path: ${oc.env:H3_MODEL_PATH}
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    local_files_only: true
+    patch_size: [1, 2, 2]
+    video_latent_channels: 24
+    audio_latent_channels: 32
+    text_dim: 5120
+    vae_spatial_scale_factor: 16
+    use_autocast: false
+    attention_backend: _flash_3_hub
+    fake:
+        transformer_param_dtype: fp32
+    teacher:
+        transformer_param_dtype: bf16
+    capabilities:
+        distribution_matching:
+            # Keep old condition-noise/scalar-sigma arithmetic, including raw x0 = xt + sigma * v.
+            legacy_numerics: true
+            video_flow_shift: 12.0
+            audio_flow_shift: 3.0
+            video_loss_weight: 1.0
+            audio_loss_weight: 1.0
+            audio_dmd_loss_weight: 1.0
+            geometry_from_metadata: true
+            allowed_resolutions: [[768, 1344], [1344, 768]]
+            dmd_normalization: true
+            dmd_normalization_epsilon: 0.0
+            dmd_reduction: mean
+            projected_dmd: false
+
+distributed:
+    backend: nccl
+    timeout_minutes: 180
+    sequence_parallel: {enabled: false, size: 1}
+    fsdp2:
+        enabled: true
+        size: 16
+        stream_load_pretrained: true
+        reshard_after_forward: {root_reshard: false, block_reshard: true}
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: minimax_h3_ref_cache_dataset
+        data_path: ${oc.env:H3_REF2AV_CACHE}
+        defer_latent_loading: true
+        batch_size: 1
+        num_workers: 0
+        pin_memory: false
+        shuffle: false
+        drop_last: true
+        reference_cost_sampler:
+            seed: 42
+            batch_mode: count_random
+            require_image_only: true
+            image_counts: [1, 2, 3, 4, 5, 6]
+            require_all_image_counts: false
+            balance_image_counts: true
+            cost_key: packed_sequence_tokens_124
+            require_compute_cost: true
+            balance_orientation: false
+            strict_full_epoch: false
+            remainder_policy: rotating_drop
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_sigma: 0.02
+    max_sigma: 1.0
+    time_shift_settings: {do_time_shift: false}
+
+training:
+    method: dmd
+    # Two complete outer rounds; each is one student plus five fake updates.
+    max_train_iters: 2
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 0
+    save_every_iters: 1
+    save_total_limit: 2
+    dmd:
+        num_inference_steps: 8
+        update_order: student_first
+        fake_update_ratio: 5
+        # Preserve the old H3 .train() state for student rollouts / fake fits;
+        # fake and teacher scoring remain .eval(). Gradients are separate.
+        model_mode: legacy_train
+        latent_dtype: fp32
+        generation_shapes:
+            - {value: [124, 768, 1344]}
+        score_sampling:
+            type: h3_shifted_uniform
+            legacy_numerics: ${model.capabilities.distribution_matching.legacy_numerics}
+            video_flow_shift: ${model.capabilities.distribution_matching.video_flow_shift}
+            audio_flow_shift: ${model.capabilities.distribution_matching.audio_flow_shift}
+            discrete_samples: 1000
+            min_sigma: 0.02
+            max_sigma: 1.0
+        residual_head: {enabled: false}
+    student:
+        train_type: lora
+        ema: {enabled: false}
+        lora:
+            rank: 128
+            alpha: 8
+            # Optional adapter-only master dtype; omit to inherit base dtype.
+            param_dtype: fp32
+            target_modules: [to_q, to_k, to_v, to_out.0, ff.net.0.proj, ff.net.2]
+        optimizer:
+            learning_rate: 0.00005
+            adam_beta1: 0.0
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    fake:
+        train_type: full
+        optimizer:
+            learning_rate: 0.0000004
+            adam_beta1: 0.0
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    teacher: {guidance_scale: 1.0, cfg_norm: none}
+    output_dir: ${oc.env:H3_REF2AV_DMD_OUTPUT}
+
+inference: {method: none, infer_every_iters: null}
+logging: {rank_zero_only: true, train_log_every_iters: 1}
+resume: {auto_resume: false}
