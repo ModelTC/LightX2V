@@ -26,6 +26,7 @@ class OpenAIImageGenerationRequest(BaseModel):
     model: Optional[str] = Field(default=None, description="Ignored for compatibility")
     n: int = Field(default=1, description="Number of images, currently only supports 1")
     size: Optional[str] = Field(default=None, description="Image size, e.g. 1024x1024")
+    resolution: Optional[int] = Field(None, gt=0, description="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config")
     response_format: Literal["b64_json"] = Field(default="b64_json")
     user: Optional[str] = Field(default=None, description="Ignored for compatibility")
     seed: Optional[int] = Field(default=None, description="Optional random seed")
@@ -183,6 +184,7 @@ def _build_image_task_request(
     negative_prompt: Optional[str] = None,
     seed: Optional[int] = None,
     size: Optional[list[int]] = None,
+    resolution: Optional[int] = None,
     image_path: str = "",
     image_mask_path: str = "",
     i2i_denoise_strength: Optional[float] = None,
@@ -197,6 +199,8 @@ def _build_image_task_request(
         payload["negative_prompt"] = negative_prompt
     if size:
         payload["size"] = size
+    if resolution is not None:
+        payload["resolution"] = resolution
     if seed is not None:
         payload["seed"] = seed
     if i2i_denoise_strength is not None:
@@ -224,6 +228,7 @@ async def create_openai_image_generation(request: Request, body: OpenAIImageGene
         prompt=body.prompt,
         seed=body.seed,
         size=image_size,
+        resolution=body.resolution,
     )
 
     result_png, usage = await _run_sync_image_task(request, message)
@@ -252,6 +257,7 @@ async def create_openai_image_edit(
     model: str | None = Form(default=None),
     n: int = Form(default=1),
     size: str | None = Form(default=None),
+    resolution: int | None = Form(default=None, gt=0),
     response_format: Literal["url", "b64_json"] = Form(default="url"),
     user: str | None = Form(default=None),
     negative_prompt: str = Form(default=""),
@@ -301,6 +307,7 @@ async def create_openai_image_edit(
         seed=seed,
         size=image_size,
         image_path=image_path,
+        resolution=resolution,
         image_mask_path=image_mask_path,
         i2i_denoise_strength=i2i_denoise_strength,
     )

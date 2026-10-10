@@ -184,6 +184,7 @@ def main():
     parser.add_argument("--return_result_tensor", action="store_true", default=None, help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
     parser.add_argument("--size", type=int, nargs="+", default=None, help="Output size in pixels: HEIGHT WIDTH")
+    parser.add_argument("--resolution", type=int, default=None, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config")
     parser.add_argument("--aspect_ratio", type=str, default=None)
     parser.add_argument("--align_image_size", action=argparse.BooleanOptionalAction, default=None, help="Align HunyuanImage3 reference image sizes during inference.")
     parser.add_argument(

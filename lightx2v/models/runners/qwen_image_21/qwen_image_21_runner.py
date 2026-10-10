@@ -36,7 +36,7 @@ def image_dimensions(resolution, ratio):
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
     _WARMUP_RESOLUTIONS = ((1024, 1024), (768, 960))
-    supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS, "i2i": IMAGE_REQUEST_FIELDS | {"image_path"}}
+    supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS | {"resolution"}, "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "resolution"}}
 
     def __init__(self, config):
         unsupported = (
@@ -201,7 +201,9 @@ class QwenImage21Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def run_input_encoder(self):
         info = self.input_info
-        resolution = self.config["resolution"]
+        resolution = info.resolution
+        if not isinstance(resolution, int) or isinstance(resolution, bool) or resolution <= 0:
+            raise ValueError("resolution must be a positive integer")
         images = []
         if info.task == "i2i":
             if not info.image_path:
@@ -219,7 +221,7 @@ class QwenImage21Runner(DefaultRunner):
         elif images:
             width, height = images[-1].size
         else:
-            height = width = resolution
+            height = width = max(32, resolution)
         if height < 32 or width < 32:
             raise ValueError("Output height and width must be at least 32")
         if height % 32 or width % 32:

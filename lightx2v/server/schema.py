@@ -96,6 +96,7 @@ class ImageTaskRequest(BaseTaskRequest):
     _prefer_memory_result: bool = PrivateAttr(default=False)
 
     aspect_ratio: str = Field("16:9", description="Output aspect ratio")
+    resolution: Optional[int] = Field(None, gt=0, description="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config")
     i2i_denoise_strength: Optional[float] = Field(None, description="Single-image I2I edit denoising strength in [0.0, 1.0]; omit to keep existing behavior")
     inpaint_blur_sigma: Optional[float] = Field(None, description="Flux2 inpainting mask blur sigma")
     inpaint_blur_size: Optional[int] = Field(None, description="Flux2 inpainting mask blur kernel size")
