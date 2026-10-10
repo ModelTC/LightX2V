@@ -264,9 +264,19 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm1_out = norm1_out.to(self.infer_dtype)
 
-        q = self._apply_attention_rms_norm(phase.self_attn_norm_q, phase.self_attn_q.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
-        k = self._apply_attention_rms_norm(phase.self_attn_norm_k, phase.self_attn_k.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
-        v = phase.self_attn_v.apply(norm1_out).view(seq_total, self.num_heads, self.head_dim)
+        if not self.config.get("thor", False):
+            q = self._apply_attention_rms_norm(phase.self_attn_norm_q, phase.self_attn_q.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
+            k = self._apply_attention_rms_norm(phase.self_attn_norm_k, phase.self_attn_k.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
+            v = phase.self_attn_v.apply(norm1_out).view(seq_total, self.num_heads, self.head_dim)
+        else:
+            from lightx2v.common.ops.mm.thor_qkv import project_qkv
+
+            q, k, v = project_qkv(
+                (phase.self_attn_q, phase.self_attn_k, phase.self_attn_v), norm1_out,
+            )
+            q = self._apply_attention_rms_norm(phase.self_attn_norm_q, q).view(seq_total, self.num_heads, self.head_dim)
+            k = self._apply_attention_rms_norm(phase.self_attn_norm_k, k).view(seq_total, self.num_heads, self.head_dim)
+            v = v.view(seq_total, self.num_heads, self.head_dim)
         q, k = phase.dreamzero_rope.apply(
             q,
             k,
