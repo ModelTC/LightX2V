@@ -22,6 +22,9 @@ class VideoCfgDistillTrainer(FlowMatchingTrainer):
     trainer_name = "video_cfg_distill"
     required_capabilities = (*BaseTrainer.required_capabilities, DistributionMatchingCapability)
 
+    def _valid_train_data_names(self):
+        return {"video_dataset"}
+
     def _resolve_train_type(self):
         if "train_type" in self.training_config:
             raise ValueError("CFG distillation uses training.student.train_type; remove training.train_type.")
@@ -57,8 +60,8 @@ class VideoCfgDistillTrainer(FlowMatchingTrainer):
             raise ValueError("CFG distillation requires training.teacher.guidance_scale > 1.")
         if self.cfg_norm not in {"none", "scalar", "layer_norm"}:
             raise ValueError("training.teacher.cfg_norm must be one of 'none', 'scalar', or 'layer_norm'.")
-        if config.get("data", {}).get("train", {}).get("name") != "video_dataset":
-            raise ValueError("Real-data CFG distillation requires data.train.name=video_dataset.")
+        if config.get("data", {}).get("train", {}).get("name") not in self._valid_train_data_names():
+            raise ValueError(f"{self.trainer_name} requires data.train.name in {sorted(self._valid_train_data_names())}.")
 
         # The reference samples this interval BEFORE time shifting, unlike
         # the shared scheduler's min_sigma/max_sigma post-shift clamping.
