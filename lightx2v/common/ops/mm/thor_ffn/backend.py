@@ -11,6 +11,32 @@ _plan_cache = local()
 
 
 @lru_cache(None)
+def down_extension():
+    return load(
+        name="thor_ffn_cublaslt_down_v1",
+        sources=[str(Path(__file__).with_name("cublaslt_down.cu"))],
+        extra_cflags=["-O3"],
+        extra_cuda_cflags=["-O3", "-std=c++17", "-arch=sm_110a"],
+        extra_ldflags=["-lcublasLt"],
+        verbose=False,
+    )
+
+
+def down_bias(mm_weight, x):
+    """DreamZero BF16 down projection with current weights and fused bias."""
+    from lightx2v.common.ops.mm.mm_weight import MMWeight
+
+    if type(mm_weight) is not MMWeight or mm_weight._get_actual_bias() is None:
+        return mm_weight.apply(x)
+    weight = mm_weight._get_actual_weight().t().contiguous()
+    bias = mm_weight._get_actual_bias().contiguous()
+    y = down_extension().run(x.contiguous(), weight, bias)
+    if mm_weight.has_lora_branch:
+        y = y + mm_weight.apply_lora(x)
+    return y
+
+
+@lru_cache(None)
 def extension():
     root = Path(__file__).resolve().parent
     return load(

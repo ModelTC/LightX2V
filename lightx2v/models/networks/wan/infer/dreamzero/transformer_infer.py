@@ -362,6 +362,10 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         else:
             y = phase.ffn_0.apply(norm2_out)
             y = F.gelu(y, approximate="tanh")
+        if self.config.get("thor", False):
+            from lightx2v.common.ops.mm.thor_ffn.backend import down_bias
+
+            return down_bias(phase.ffn_2, y)
         return phase.ffn_2.apply(y)
 
     def infer_block(self, block, x, pre_infer_out, kv_cache):

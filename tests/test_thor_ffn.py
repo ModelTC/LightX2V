@@ -24,6 +24,30 @@ class TestThorFFN(unittest.TestCase):
         if hasattr(backend._plan_cache, "entry"):
             del backend._plan_cache.entry
 
+    def test_down_uses_current_weight_bias_and_preserves_lora(self):
+        from lightx2v.common.ops.mm.mm_weight import MMWeight
+
+        mm = object.__new__(MMWeight)
+        mm.weight = torch.tensor([[1., 2.], [3., 4.]])
+        mm.bias = torch.tensor([0.1, 0.2])
+        mm.weight_diff = torch.ones_like(mm.weight)
+        mm.bias_diff = torch.ones_like(mm.bias)
+        mm.has_lora_branch = True
+        mm.apply_lora = lambda x: torch.full((x.shape[0], 2), 0.5)
+        x = torch.tensor([[1., 2.]])
+        native = SimpleNamespace(run=lambda x, w, b: x @ w.t() + b)
+        with patch.object(backend, "down_extension", return_value=native):
+            expected = x @ (mm.weight + mm.weight_diff) + mm.bias + mm.bias_diff + 0.5
+            torch.testing.assert_close(backend.down_bias(mm, x), expected)
+            mm.weight_diff.mul_(2)
+            expected = x @ (mm.weight + mm.weight_diff) + mm.bias + mm.bias_diff + 0.5
+            torch.testing.assert_close(backend.down_bias(mm, x), expected)
+
+    def test_down_preserves_other_backend_dispatch(self):
+        mm = SimpleNamespace(apply=lambda x: x + 2)
+        with patch.object(backend, "down_extension", side_effect=AssertionError("unexpected native call")):
+            torch.testing.assert_close(backend.down_bias(mm, torch.ones(1)), torch.full((1,), 3.))
+
     def test_lora_is_added_before_gelu_without_loading_extension(self):
         x = torch.tensor([[1.0, -2.0]])
         weight = torch.tensor([[0.5, -1.0], [0.25, 0.5]])
