@@ -56,6 +56,8 @@ bash scripts/qwen_image_21/qwen_image_21_i2i.sh
 
 图生图可删除脚本中的 `--size` 参数，按参考图比例自动确定输出尺寸。总像素数约为配置中的 `resolution²`（`resolution` 默认为 `1024`），宽高就近对齐到 32 的倍数。
 
+传入 `--resolution 2048` 可仅为本次请求覆盖配置值，不传则使用配置。该值须为正整数，控制参考图缩放和自动输出尺寸；显式传入 `--size` 时，输出尺寸仍由 `--size` 决定。
+
 默认配置已经启用通用优化路径：FlashAttention3、FlashInfer RoPE、Triton LayerNorm 与 modulation、融合 QK RMSNorm、融合 Transformer block 算子、关闭 CFG 的推理路径及 OpenCV 结果保存。
 
 ### 3.2 RTX 5090 案例
@@ -134,3 +136,5 @@ python scripts/qwen_image_21/server/post_i2i.py
 直接修改代码中的 `url`、`message`、`output_path`；图生图还需设置 `image_path`。两个脚本已分别设置 `task: "t2i"` 和 `task: "i2i"`。
 
 服务请求使用相同的尺寸规则。图生图需自动确定尺寸时，删除 `message` 中的 `size` 字段。
+
+在 `message` 中设置 `"resolution": 2048` 可仅为本次请求覆盖启动配置；省略或传 `null` 则使用配置。图片表单接口以及 `/v1/images/generations`、`/v1/images/edits` 也支持 `resolution`。

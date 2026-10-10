@@ -190,6 +190,7 @@ class T2IInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str | None = ""
     # shape related
+    resolution: Optional[int] = None
     size: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
@@ -233,6 +234,7 @@ class I2IInputInfo(InputInfo):
     image_path: str = ""
     i2i_denoise_strength: Optional[float] = None
     # shape related
+    resolution: Optional[int] = None
     size: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)

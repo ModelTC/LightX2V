@@ -56,6 +56,8 @@ Use `--size HEIGHT WIDTH`. Both dimensions must be at least 32; non-multiples of
 
 For image-to-image, remove the script's `--size` argument to determine the output size from the reference image's aspect ratio. The pixel count is approximately `resolution²` (`resolution` defaults to `1024` in the config), with each dimension rounded to the nearest multiple of 32.
 
+Pass `--resolution 2048` to override the config for one request; omit it to use the config. The value must be a positive integer. It controls reference-image resizing and automatic output sizing; an explicit `--size` still determines the output dimensions.
+
 The default config already enables the general optimization path: FlashAttention3, FlashInfer RoPE, Triton LayerNorm and modulation, fused QK RMSNorm, fused transformer-block operators, CFG-disabled inference, and OpenCV result saving.
 
 ### 3.2 RTX 5090 examples
@@ -134,3 +136,5 @@ python scripts/qwen_image_21/server/post_i2i.py
 Edit `url`, `message`, and `output_path` directly; for image-to-image, also set `image_path`. The scripts already specify `task: "t2i"` and `task: "i2i"`, respectively.
 
 Service requests follow the same size rules. For automatic image-to-image sizing, remove `size` from `message`.
+
+Set `"resolution": 2048` in `message` to override the startup config for that request; omit it or use `null` to keep the config. The image form endpoint and `/v1/images/generations` and `/v1/images/edits` also accept `resolution`.
