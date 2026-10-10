@@ -9,11 +9,6 @@ class WorldPlayARScheduler(HunyuanVideo15Scheduler):
     """
     Flow-match scheduler for WorldPlay AR (Autoregressive) model.
 
-    Key differences from WorldPlayDistillScheduler:
-    - Supports autoregressive chunk-based generation
-    - Manages memory window for long video generation
-    - No distill-specific timestep schedule
-
     Extends HunyuanVideo15Scheduler with:
     - Support for chunk-based AR generation
     - Action and camera pose conditioning support
@@ -29,7 +24,6 @@ class WorldPlayARScheduler(HunyuanVideo15Scheduler):
 
         # AR generation parameters
         self.chunk_latent_frames = config.get("chunk_latent_frames", 4)
-        self.model_type = config.get("model_type", "ar")
 
         # Memory window for AR generation
         self.memory_window_size = config.get("memory_window_size", 8)

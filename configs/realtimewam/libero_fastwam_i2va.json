@@ -1,6 +1,6 @@
 {
-  "adapter_model_path": "",
-  "dataset_stats_path": "",
+  "adapter_model_path": "/path/to/RealtimeWAM/realtimewam_libero_fast.pt",
+  "dataset_stats_path": "/path/to/RealtimeWAM/libero_dataset_stats.json",
   "camera_size": 224,
   "action_chunk_size": 32,
   "actions_per_plan": 10,

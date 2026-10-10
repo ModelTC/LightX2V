@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/data/liuhongda/lightx2v_offload_opt
-model_path="${lightx2v_path}/models/Qwen-Image-2512"
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Qwen-Image-2512
 
 export CUDA_VISIBLE_DEVICES=0
 source "${lightx2v_path}/scripts/base/base.sh"

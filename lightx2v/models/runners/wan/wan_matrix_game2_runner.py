@@ -170,9 +170,7 @@ class WanSFMtxg2Runner(WanSFRunner):
         self.weight_dtype = torch.bfloat16
 
     def load_text_encoder(self):
-        from lightx2v.models.input_encoders.hf.wan.matrix_game2.conditions import MatrixGame2_Bench
-
-        return MatrixGame2_Bench()
+        return None
 
     def load_image_encoder(self):
         wrapper = get_wanx_vae_wrapper(self.config["model_path"], torch.float16)
@@ -201,7 +199,7 @@ class WanSFMtxg2Runner(WanSFRunner):
         image = load_image(self.input_info.image_path)
         image = self._resizecrop(image, 352, 640)
         image = self.frame_process(image)[None, :, None, :, :].to(dtype=self.weight_dtype, device=self.device)
-        padding_video = torch.zeros_like(image).repeat(1, 1, 4 * (self.config["num_output_frames"] - 1), 1, 1)
+        padding_video = torch.zeros_like(image).repeat(1, 1, 4 * (self.config["num_latent_frames"] - 1), 1, 1)
         img_cond = torch.concat([image, padding_video], dim=2)
         tiler_kwargs = {"tiled": True, "tile_size": [44, 80], "tile_stride": [23, 38]}
         img_cond = self.image_encoder.encode(img_cond, device=self.device, **tiler_kwargs).to(self.device)
@@ -213,7 +211,7 @@ class WanSFMtxg2Runner(WanSFRunner):
 
         # text
         text_encoder_output = {}
-        num_frames = (self.config["num_output_frames"] - 1) * 4 + 1
+        num_frames = (self.config["num_latent_frames"] - 1) * 4 + 1
         if self.config["mode"] == "universal":
             cond_data = Bench_actions_universal(num_frames)
             mouse_condition = cond_data["mouse_condition"].unsqueeze(0).to(device=self.device, dtype=self.weight_dtype)
@@ -228,7 +226,7 @@ class WanSFMtxg2Runner(WanSFRunner):
         text_encoder_output["keyboard_cond"] = keyboard_condition
 
         # set shape
-        self.input_info.latent_shape = [16, self.config["num_output_frames"], 44, 80]
+        self.input_info.latent_shape = [16, self.config["num_latent_frames"], 44, 80]
 
         return {"text_encoder_output": text_encoder_output, "image_encoder_output": image_encoder_output}
 

@@ -25,10 +25,8 @@ For environment setup, we recommend using our Docker image. Please refer to the 
 git clone https://github.com/ModelTC/LightX2V.git
 cd LightX2V/scripts/worldmirror
 
-# Before running the scripts below, override MODEL_PATH / INPUT_PATH / SAVE_RESULT_PATH via
-# environment variables, or edit the defaults at the top of the script.
-# For example: export MODEL_PATH=/home/user/models/HY-World-2.0
-# For example: export INPUT_PATH=/home/user/inputs/Workspace
+# Set lightx2v_path and model_path at the top of the script.
+# Edit --input_path and --save_result_path in the command as needed.
 ```
 
 3D Reconstruction Models
@@ -42,9 +40,11 @@ bash run_worldmirror_recon.sh
 bash run_worldmirror_recon_fp8.sh
 ```
 
-Both scripts default to `RENDER_VIDEO=1`, which also renders a Gaussian-splat flythrough video into
-`<SAVE_RESULT_PATH>/<case>/<timestamp>/rendered/rendered_rgb.mp4`. Set `RENDER_VIDEO=0` to skip it, or
-`RENDER_DEPTH=1` to additionally render a depth flythrough.
+Both scripts include `--save_rendered --render_interp_per_pair 15` to render a Gaussian-splat flythrough
+video into `<save_result_path>/<case>/<timestamp>/rendered/rendered_rgb.mp4`. Remove `--save_rendered`
+to skip it, or add `--render_depth` to also render a depth flythrough. The SP script uses two GPUs.
+
+Relative `input_scale_file` paths are resolved from the LightX2V repository root; absolute paths are used directly.
 
 ## Usage Method 2: Install and Use Python Scripts
 

@@ -39,16 +39,12 @@ Lightx2v是一个强大的视频生成模型，但在资源受限的环境下需
 # CUDA内存分配优化
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# 启用CUDA Graph模式，提升推理性能
-export ENABLE_GRAPH_MODE=true
-
-# 使用BF16精度推理，减少显存占用（默认FP32精度）
+# 使用BF16精度推理，减少显存占用
 export DTYPE=BF16
 ```
 
 **优化说明**:
 - `expandable_segments:True`: 允许CUDA内存段动态扩展，减少内存碎片
-- `ENABLE_GRAPH_MODE=true`: 启用CUDA Graph，减少内核启动开销
 - `DTYPE=BF16`: 使用BF16精度，在保持质量的同时减少显存占用
 
 ### 2. 量化策略
@@ -108,7 +104,6 @@ clip_quant_scheme = "int8"    # 视觉编码器量化
 cpu_offload=True             # 启用CPU卸载
 t5_cpu_offload=True          # 启用T5编码器CPU卸载
 offload_granularity=phase    # DIT模型细粒度卸载
-t5_offload_granularity=block # T5编码器细粒度卸载
 lazy_load = True             # 启用延迟加载机制
 num_disk_workers = 2         # 磁盘I/O工作线程数
 ```
@@ -198,7 +193,7 @@ taew2_1.pth 权重可以从[这里](https://github.com/madebyollin/taehv/raw/ref
 
 - **[14B模型720p视频生成配置](https://github.com/ModelTC/lightx2v/tree/main/configs/offload/disk/wan_i2v_phase_lazy_load_720p.json)**
 
-- **[1.3B模型720p视频生成配置](https://github.com/ModelTC/LightX2V/tree/main/configs/offload/block/wan_t2v_1_3b.json)**
+- **[1.3B模型480p视频生成配置](https://github.com/ModelTC/LightX2V/tree/main/configs/offload/block/wan_t2v_1_3b.json)**
   - 1.3B模型推理瓶颈是T5 encoder，配置文件专门针对T5进行优化
 
 **[启动脚本](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_lazy_load.sh)**

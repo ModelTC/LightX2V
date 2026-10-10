@@ -29,8 +29,8 @@
     ],
     "dit_quantized": true,
     "dit_quant_scheme": "nvfp4",
-    "high_noise_quantized_ckpt": "path to high_nvfp4.safetensors",
-    "low_noise_quantized_ckpt": "path to low_nvfp4.safetensors",
+    "high_noise_quantized_ckpt": "/path/to/Wan2.2-T2V-A14B/high_nvfp4.safetensors",
+    "low_noise_quantized_ckpt": "/path/to/Wan2.2-T2V-A14B/low_nvfp4.safetensors",
     "high_noise_original_ckpt": null,
     "low_noise_original_ckpt": null,
     "parallel": {

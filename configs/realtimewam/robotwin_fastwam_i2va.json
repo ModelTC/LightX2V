@@ -1,7 +1,6 @@
 {
-  "adapter_model_path": "",
-  "dataset_stats_path": "",
-  "camera_size": 384,
+  "adapter_model_path": "/path/to/RealtimeWAM/realtimewam_robotwin_fast.pt",
+  "dataset_stats_path": "/path/to/RealtimeWAM/robotwin_dataset_stats.json",
   "action_chunk_size": 32,
   "actions_per_plan": 24,
   "num_steps_wait": 0,

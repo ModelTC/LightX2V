@@ -17,7 +17,7 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2Upsampler, LTX2VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import I2AVInputInfo, T2AVInputInfo
+from lightx2v.utils.input_info import I2AVInputInfo, T2AVInputInfo, align_num_frames
 from lightx2v.utils.ltx2_media_io import decode_audio_from_file, load_image_conditioning, load_video_conditioning
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
 from lightx2v.utils.profiler import *
@@ -119,6 +119,14 @@ class LTX2Runner(DefaultRunner):
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
+        if self.config["model_cls"] != "ltx2_5" and request_data.get("num_frames") is not None:
+            num_frames = input_info.num_frames
+            if num_frames < 1:
+                raise ValueError(f"LTX-2 num_frames must be positive, got {num_frames}")
+            temporal_stride = self.config["vae_scale_factors"][0]
+            if (num_frames - 1) % temporal_stride != 0:
+                input_info.num_frames = align_num_frames(num_frames, temporal_stride)
+                logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {input_info.num_frames} instead of {num_frames}.")
         if input_info.task == "v2av" and "size" not in request_data:
             # Resolve the reference-video size before using the configured fallback.
             input_info.size = []

@@ -47,9 +47,6 @@
 
     "cpu_offload": false,
     "lazy_load": false,
-    "feature_caching": "NoCaching",
-    "use_image_encoder": false,
-    "seq_parallel": false,
     "parallel": {},
 
     "wm_extended_scope": true

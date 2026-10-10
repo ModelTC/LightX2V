@@ -214,7 +214,7 @@ class AudioProjection(nn.Module):
             dtype = audio_feature.dtype
             audio_feature = audio_feature.type(torch.float16)
             audio_feature = F.pad(audio_feature, pad=(0, 0, self.left, self.right), mode="replicate")
-            audio_feature.type(dtype)
+            audio_feature = audio_feature.type(dtype)
         else:
             audio_feature = F.pad(audio_feature, pad=(0, 0, self.left, self.right), mode="replicate")
         audio_feature = audio_feature.unfold(dimension=1, size=self.audio_frames, step=1)

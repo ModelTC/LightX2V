@@ -1,5 +1,5 @@
 {
-  "num_frames": 81,
+  "sr_segment_length": 81,
   "size": [1080, 1920],
   "infer_steps": 1,
   "fps": 16,

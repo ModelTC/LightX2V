@@ -5,7 +5,6 @@
     "size": [480, 832],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
-    "cross_attn_2_type": "flash_attn3",
     "sample_guide_scale": 6,
     "sample_shift": 8,
     "enable_cfg": true,
@@ -13,11 +12,8 @@
     "dit_quant_scheme": "fp8-q8f",
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-q8f",
-    "clip_quantized": true,
-    "clip_quant_scheme": "fp8-q8f",
     "cpu_offload": true,
     "offload_granularity": "block",
     "t5_cpu_offload": false,
-    "vae_cpu_offload": false,
-    "clip_cpu_offload": false
+    "vae_cpu_offload": false
 }

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/Path/To/LightX2V
-model_path=/Path/To/Model
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Qwen-Image-2.1
 
 export CUDA_VISIBLE_DEVICES=0
 

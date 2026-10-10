@@ -25,6 +25,8 @@ class SeedVRScheduler(BaseScheduler):
     """
 
     def __init__(self, config):
+        if config["infer_steps"] != 1:
+            raise ValueError("SeedVR2 requires infer_steps=1")
         super().__init__(config)
 
         self.num_train_timesteps = 1000.0

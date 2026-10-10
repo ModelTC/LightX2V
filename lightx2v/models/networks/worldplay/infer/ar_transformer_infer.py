@@ -117,7 +117,7 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
     """
     Transformer inference for WorldPlay AR (Autoregressive) model.
 
-    Key differences from WorldPlayTransformerInfer (Distill):
+    Key differences from WorldPlayTransformerInfer:
     - Uses KV cache for efficient autoregressive generation
     - Supports separate text and vision inference phases
     - Text KV is cached once, vision KV is accumulated for context frames

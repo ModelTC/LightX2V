@@ -1,8 +1,8 @@
 #!/bin/bash
 
-lightx2v_path=/data/nvme1/yongyang/dan/LightX2V
-wan_dancer_github_path=/data/nvme1/yongyang/dan/Wan-Dancer
-model_path=/data/nvme1/yongyang/dan/Wan-Dancer/models/Wan-AI/Wan-Dancer-14B
+lightx2v_path=/path/to/LightX2V
+wan_dancer_github_path=/path/to/Wan-Dancer
+model_path=/path/to/Wan-Dancer-14B
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 

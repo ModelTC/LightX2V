@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/nb/LightX2V
-model_path=/data/nvme1/models/Qwen-Image-Edit-2511
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Qwen-Image-Edit-2511
 
 export CUDA_VISIBLE_DEVICES=0
 

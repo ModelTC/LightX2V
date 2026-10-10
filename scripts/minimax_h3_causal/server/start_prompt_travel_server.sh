@@ -2,8 +2,8 @@
 set -eo pipefail
 
 # Set repository/model paths and dit_original_ckpt in the selected JSON config.
-lightx2v_path=/data/nvme1/zhangbilang/LightX2V
-model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 source "${lightx2v_path}/scripts/base/base.sh"

@@ -76,9 +76,10 @@ def load_model_config(config):
             "text_encoder_original_ckpt": "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
             "video_vae_original_ckpt": "vae/ltx-2.5-video-vae-bf16.safetensors",
             "audio_vae_original_ckpt": "vae/ltx-2.5-audio-vae-bf16.safetensors",
-            "duration_head_original_ckpt": "model_patches/ltx-2.5-duration-head-bf16.safetensors",
             "upsampler_original_ckpt": "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
         }
+        if config.get("auto_duration", True):
+            component_files["duration_head_original_ckpt"] = "model_patches/ltx-2.5-duration-head-bf16.safetensors"
         for key, filename in component_files.items():
             config[key] = find_torch_model_path(config, key, filename, subdir=[])
 
@@ -103,7 +104,15 @@ def load_model_config(config):
 
     assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
 
-    if config["model_cls"] in {"hunyuan_video_1.5", "worldplay_distill", "worldplay_ar", "worldplay_bi"}:
+    if config["model_cls"] == "wan2.1_sf_mtxg2":
+        config_path = os.path.join(config["model_path"], config["sub_model_folder"], "config.json")
+        with open(config_path, "r") as f:
+            model_config = json.load(f)
+        action_attn_type = config.get("action_config", {}).get("action_attn_type")
+        config.update(model_config)
+        if action_attn_type is not None:
+            config["action_config"]["action_attn_type"] = action_attn_type
+    elif config["model_cls"] in {"hunyuan_video_1.5", "worldplay_distill", "worldplay_ar", "worldplay_bi"}:
         config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])
         if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
@@ -287,6 +296,9 @@ def load_model_config(config):
             raise ValueError(f"LingBot-VA requires positive latent frame count and VAE temporal stride, got latent_frames={latent_frames}, temporal_stride={temporal_stride}.")
         config["num_frames"] = (latent_frames - 1) * temporal_stride + 1
         logger.info(f"Auto-set LingBot-VA num_frames={config['num_frames']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
+
+    if config["model_cls"] in ("ltx2", "ltx2_ar", "ltx2_5"):
+        config["vae_stride"] = config["vae_scale_factors"]
 
     if (
         config["model_cls"] not in ("minimax_h3", "minimax_h3_causal")

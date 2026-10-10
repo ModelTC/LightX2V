@@ -178,7 +178,7 @@ class AudioProcessor:
     def __init__(self, audio_sr: int = 16000, target_fps: int = 16):
         self.audio_sr = audio_sr
         self.target_fps = target_fps
-        self.audio_frame_rate = audio_sr // target_fps
+        self.audio_frame_rate = audio_sr / target_fps
 
     def load_audio(self, audio_path: str):
         audio_array, ori_sr = load_audio_file(audio_path)
@@ -228,8 +228,7 @@ class AudioProcessor:
                 if audio_array.shape[1] < audio_end - audio_start:
                     padding_len = audio_end - audio_start - audio_array.shape[1]
                     audio_array = F.pad(audio_array, (0, padding_len))
-                    # Adjust end_idx to account for the frames added by padding
-                    end_idx = end_idx - padding_len // self.audio_frame_rate
+                    end_idx = min(end_idx, expected_frames)
 
             segments.append(AudioSegment(audio_array, start_idx, end_idx))
         del audio_array, audio_array_ori
@@ -237,6 +236,8 @@ class AudioProcessor:
 
     def init_segments_idx(self, total_frame: int, clip_frame: int = 81, overlap_frame: int = 5) -> list[tuple[int, int, int]]:
         """Initialize segment indices with overlap"""
+        if not 0 <= overlap_frame < clip_frame:
+            raise ValueError("overlap_frame must satisfy 0 <= overlap_frame < clip_frame")
         start_end_list = []
         min_frame = clip_frame
         for start in range(0, total_frame, clip_frame - overlap_frame):
@@ -596,7 +597,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.prev_video = None
         if self.input_info.return_result_tensor:
             self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.size[0], self.input_info.size[1], 3), dtype=torch.float32, device="cpu")
-            self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
+            _, audio_end = self._audio_processor.get_audio_range(0, self.inputs["expected_frames"])
+            self.cut_audio_final = torch.zeros(audio_end, dtype=torch.float32, device="cpu")
         else:
             self.gen_video_final = None
             self.cut_audio_final = None
@@ -610,7 +612,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def init_run_segment(self, segment_idx, audio_array=None):
         self.segment_idx = segment_idx
         if audio_array is not None:
-            end_idx = audio_array.shape[0] // self._audio_processor.audio_frame_rate - self.prev_frame_length
+            end_idx = round(audio_array.shape[0] / self._audio_processor.audio_frame_rate) - self.prev_frame_length
             audio_tensor = torch.Tensor(audio_array).float().unsqueeze(0)
             self.segment = AudioSegment(audio_tensor, 0, end_idx)
         else:
@@ -640,7 +642,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.gen_video = torch.clamp(self.gen_video, -1, 1).to(torch.float)
         useful_length = self.segment.end_frame - self.segment.start_frame
         video_seg = self.gen_video[:, :, :useful_length].cpu()
-        audio_seg = self.segment.audio_array[:, : useful_length * self._audio_processor.audio_frame_rate]
+        audio_start, audio_end = self._audio_processor.get_audio_range(self.segment.start_frame, self.segment.end_frame)
+        audio_seg = self.segment.audio_array[:, : audio_end - audio_start]
         audio_seg = audio_seg.sum(dim=0)  # Multiple audio tracks, mixed into one track
         video_seg = wan_vae_to_comfy(video_seg)
 
@@ -660,7 +663,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.va_controller.pub_livestream(video_seg, audio_seg, gen_video, valid_duration=valid_duration)
         elif self.input_info.return_result_tensor:
             self.gen_video_final[self.segment.start_frame : self.segment.end_frame].copy_(video_seg)
-            self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
+            self.cut_audio_final[audio_start:audio_end].copy_(audio_seg)
 
         # Update prev_video for next iteration
         self.prev_video = self.gen_video
@@ -678,6 +681,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         valid_length = self.segment.end_frame - self.segment.start_frame
         frame_segments = []
         frame_idx = 0
+        segment_audio_start, _ = self._audio_processor.get_audio_range(self.segment.start_frame, self.segment.end_frame)
 
         # frame_segment: 1*C*1*H*W, 1*C*4*H*W, 1*C*4*H*W, ...
         for origin_seg in self.run_vae_decoder_stream(latents):
@@ -685,9 +689,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             valid_T = min(valid_length - frame_idx, origin_seg.shape[2])
 
             video_seg = wan_vae_to_comfy(origin_seg[:, :, :valid_T].cpu())
-            audio_start = frame_idx * self._audio_processor.audio_frame_rate
-            audio_end = (frame_idx + valid_T) * self._audio_processor.audio_frame_rate
-            audio_seg = self.segment.audio_array[:, audio_start:audio_end].sum(dim=0)
+            audio_start, audio_end = self._audio_processor.get_audio_range(self.segment.start_frame + frame_idx, self.segment.start_frame + frame_idx + valid_T)
+            audio_seg = self.segment.audio_array[:, audio_start - segment_audio_start : audio_end - segment_audio_start].sum(dim=0)
 
             if self.va_controller.recorder is not None:
                 self.va_controller.pub_livestream(video_seg, audio_seg, origin_seg[:, :, :valid_T], valid_duration=valid_duration)
@@ -1215,7 +1218,8 @@ class WanAudioARRunner(WanAudioRunner):
         self.va_controller = VAController(self)
         if self.input_info.return_result_tensor:
             self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.size[0], self.input_info.size[1], 3), dtype=torch.float32, device="cpu")
-            self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
+            _, audio_end = self._audio_processor.get_audio_range(0, self.inputs["expected_frames"])
+            self.cut_audio_final = torch.zeros(audio_end, dtype=torch.float32, device="cpu")
         else:
             self.cut_audio_final = None
 
@@ -1403,13 +1407,14 @@ class WanAudioARRunner(WanAudioRunner):
         torch.manual_seed(self._ar_chunk_seed(segment_idx))
 
         # used for remux output video
-        end_idx = origin_audio.shape[0] // self._audio_processor.audio_frame_rate
+        end_idx = round(origin_audio.shape[0] / self._audio_processor.audio_frame_rate)
         # The first cached VAE decode has no previous temporal cache, so it emits
         # vae_stride_t - 1 fewer video frames than later chunks.
         if segment_idx == 0:
             vae_stride_t = int(self.config.get("vae_stride", [4])[0])
             end_idx = max(end_idx - max(vae_stride_t - 1, 0), 0)
-            origin_audio = origin_audio[-end_idx * self._audio_processor.audio_frame_rate :]
+            _, audio_end = self._audio_processor.get_audio_range(0, end_idx)
+            origin_audio = origin_audio[origin_audio.shape[0] - audio_end :]
         origin_audio_tensor = torch.Tensor(origin_audio).float().unsqueeze(0)
         self.segment = AudioSegment(origin_audio_tensor, 0, end_idx)
 

@@ -197,7 +197,7 @@ def main() -> None:
         output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"Saved response JSON to: {output}")
 
-    download_url = args.download_url or resolved_download_url or result.get("presigned_url")
+    download_url = args.download_url or resolved_download_url
     if download_url:
         downloaded_image = download_uploaded_image(
             download_url=download_url,

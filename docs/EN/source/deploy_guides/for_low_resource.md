@@ -39,16 +39,12 @@ Before running Lightx2v, it's recommended to set the following environment varia
 # CUDA memory allocation optimization
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Enable CUDA Graph mode to improve inference performance
-export ENABLE_GRAPH_MODE=true
-
-# Use BF16 precision for inference to reduce VRAM usage (default FP32 precision)
+# Use BF16 precision for inference to reduce VRAM usage
 export DTYPE=BF16
 ```
 
 **Optimization Details**:
 - `expandable_segments:True`: Allows dynamic expansion of CUDA memory segments, reducing memory fragmentation
-- `ENABLE_GRAPH_MODE=true`: Enables CUDA Graph to reduce kernel launch overhead
 - `DTYPE=BF16`: Uses BF16 precision to reduce VRAM usage while maintaining quality
 
 ### 2. Quantization Strategy
@@ -108,7 +104,6 @@ Parameter offloading technology allows models to dynamically schedule parameters
 cpu_offload=True             # Enable CPU offloading
 t5_cpu_offload=True          # Enable T5 encoder CPU offloading
 offload_granularity=phase    # DIT model fine-grained offloading
-t5_offload_granularity=block # T5 encoder fine-grained offloading
 lazy_load = True             # Enable lazy loading mechanism
 num_disk_workers = 2         # Disk I/O worker threads
 ```
@@ -196,7 +191,7 @@ When using the above distilled models, you can further optimize performance:
 
 - **[14B Model 720p Video Generation Configuration](https://github.com/ModelTC/lightx2v/tree/main/configs/offload/disk/wan_i2v_phase_lazy_load_720p.json)**
 
-- **[1.3B Model 720p Video Generation Configuration](https://github.com/ModelTC/LightX2V/tree/main/configs/offload/block/wan_t2v_1_3b.json)**
+- **[1.3B Model 480p Video Generation Configuration](https://github.com/ModelTC/LightX2V/tree/main/configs/offload/block/wan_t2v_1_3b.json)**
   - The inference bottleneck for 1.3B models is the T5 encoder, so the configuration file specifically optimizes for T5
 
 **[Launch Script](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_lazy_load.sh)**

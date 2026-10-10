@@ -4,7 +4,6 @@
     "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
-    "cross_attn_2_type": "sage_attn2",
     "sample_guide_scale": [
         3.5,
         3.5
@@ -15,6 +14,5 @@
     "offload_granularity": "model",
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
-    "boundary": 0.900,
-    "use_image_encoder": false
+    "boundary": 0.900
 }

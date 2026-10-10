@@ -150,15 +150,15 @@ class MiniMaxH3Scheduler(BaseScheduler):
 
     @staticmethod
     def _step(sample, model_output, timestep, sigmas, step_index, step_update):
-        # H3 predicts a data-ward velocity.  Keep the round trip through
-        # timestep separate from the stored sigma grid to match the reference.
-        sigma_from_timestep = 1.0 - timestep.to(device=sample.device, dtype=sample.dtype)
-        denoised = sample + sigma_from_timestep * model_output
         sigma = sigmas[step_index].to(device=sample.device, dtype=torch.float32)
         sigma_next = sigmas[step_index + 1].to(device=sample.device, dtype=torch.float32)
         if step_update == "training_euler":
             # Match MiniMaxH3T2AVDmdTrainer.run_back_simulation exactly.
             return sample.float() + (sigma - sigma_next) * model_output.float()
+        # H3 predicts a data-ward velocity.  Keep the round trip through
+        # timestep separate from the stored sigma grid to match the reference.
+        sigma_from_timestep = 1.0 - timestep.to(device=sample.device, dtype=sample.dtype)
+        denoised = sample + sigma_from_timestep * model_output
         ratio = sigma_next / sigma
         return ratio * sample.float() + (1.0 - ratio) * denoised.float()
 

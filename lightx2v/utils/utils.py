@@ -735,10 +735,9 @@ def validate_config_paths(config: dict) -> None:
             "video_vae_original_ckpt",
             "audio_vae_original_ckpt",
         )
-        optional_components = (
-            "duration_head_original_ckpt",
-            "upsampler_original_ckpt",
-        )
+        optional_components = ("upsampler_original_ckpt",)
+        if config.get("auto_duration", True):
+            optional_components += ("duration_head_original_ckpt",)
         for key in required_components:
             value = config.get(key)
             if not value:

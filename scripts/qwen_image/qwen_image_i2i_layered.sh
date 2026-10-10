@@ -2,7 +2,7 @@
 
 # set path firstly
 lightx2v_path=/path/to/LightX2V
-model_path=/path/to/Qwen/Qwen-Image-Layered
+model_path=/path/to/Qwen-Image-Layered
 # add the latest diffusers to PYTHONPATH
 export PYTHONPATH=$PYTHONPATH:/path/to/diffusers/src/
 
@@ -18,6 +18,6 @@ python -m lightx2v.infer \
     --config_json ${lightx2v_path}/configs/qwen_image/qwen_image_i2i_layered.json \
     --prompt "" \
     --negative_prompt " " \
-    --image_path 1.jpeg \
+    --image_path /path/to/1.jpeg \
     --save_result_path ${lightx2v_path}/save_results/qwen_image_layered.png \
     --seed 777

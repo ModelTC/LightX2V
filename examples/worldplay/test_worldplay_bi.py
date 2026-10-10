@@ -28,7 +28,6 @@ def main():
     # Add runtime paths
     config_dict["model_path"] = MODEL_PATH
     config_dict["action_ckpt"] = ACTION_CKPT
-    config_dict["transformer_model_path"] = os.path.join(MODEL_PATH, "transformer/480p_i2v")
 
     runner = build_runner(build_startup_config(config_dict))
 

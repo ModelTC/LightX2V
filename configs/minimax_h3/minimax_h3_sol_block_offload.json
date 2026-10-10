@@ -11,8 +11,6 @@
   "text_encoder_cpu_offload": true,
   "text_encoder_offload_granularity": "block",
   "vae_cpu_offload": true,
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "sol_attn",
   "refiner_attn_type": "torch_sdpa",
   "sol_attn_setting": {

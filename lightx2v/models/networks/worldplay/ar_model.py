@@ -27,7 +27,7 @@ class WorldPlayARModel(HunyuanVideo15Model):
     - Causal attention mechanism
     - Support for loading separate action model checkpoint
 
-    Key differences from WorldPlayModel (Distill):
+    Key differences from WorldPlayModel:
     - Uses causal attention instead of bidirectional
     - Implements KV cache for frame-by-frame generation
     - No guidance embedding required

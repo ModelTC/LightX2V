@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=
-model_path=/data/temp/SekoTalk-v2.5-bf16-step4-dummy
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/SekoTalk-v2.5-bf16-step4-dummy
 
 export CUDA_VISIBLE_DEVICES=7
 

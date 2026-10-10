@@ -4,7 +4,7 @@
 lightx2v_path=/path/to/LightX2V
 model_path=/path/to/ByteDance-Seed/SeedVR2-3B
 
-image_path=${lightx2v_path}/assets/inputs/imgs/frame_1.png
+image_path=${lightx2v_path}/assets/inputs/imgs/img_0.jpg
 
 export CUDA_VISIBLE_DEVICES=0
 

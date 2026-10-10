@@ -69,7 +69,7 @@ class LightX2VPipeline:
             "wan2.2_s2v",
         ]:
             self.startup_config["vae_stride"] = (4, 8, 8)
-            if model_cls.startswith("wan2.2") and model_cls != "wan2.2_animate2_distilled":
+            if model_cls in {"wan2.2_moe", "wan2.2_s2v"}:
                 self.startup_config["use_image_encoder"] = False
         elif model_cls in ["wan2.2", "wan2.2_matrix_game3"]:
             self.startup_config.update(vae_stride=(4, 16, 16), num_channels_latents=48)
@@ -315,6 +315,7 @@ class LightX2VPipeline:
             "seko_talk",
             "seko_talk_ar",
             "wan2.2_moe",
+            "wan2.2_moe_vace",
             "wan2.2",
             "wan2.2_matrix_game3",
             "wan2.2_animate",

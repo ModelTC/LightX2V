@@ -3,7 +3,8 @@
 # set path firstly
 lightx2v_path=/path/to/LightX2V
 model_path=/path/to/Wan2.2-VACE-Fun-A14B
-# model_path=/data/nvme0/gushiqiao/models/official_models/Wan2.2-VACE-Fun-A14B-INT8
+# model_path=/path/to/Wan2.2-VACE-Fun-A14B-INT8
+# For INT8, also change --config_json to ${lightx2v_path}/configs/wan22_vace/a800/int8/wan22_moe_vace_cfg_parallel.json.
 
 export CUDA_VISIBLE_DEVICES=0,1
 

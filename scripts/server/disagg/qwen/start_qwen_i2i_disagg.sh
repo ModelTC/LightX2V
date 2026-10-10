@@ -14,7 +14,7 @@
 set -e
 
 lightx2v_path=${LIGHTX2V_PATH:-/path/to/LightX2V}
-model_path=${QWEN_IMAGE_MODEL_PATH:-/data/nvme1/models/qwen-image-edit-release-251130}
+model_path=${QWEN_IMAGE_MODEL_PATH:-/path/to/qwen-image-edit-release-251130}
 
 GPU_ENCODER=${GPU_ENCODER:-4}
 GPU_TRANSFORMER=${GPU_TRANSFORMER:-5}
@@ -38,7 +38,8 @@ CUDA_VISIBLE_DEVICES=${GPU_DECODER} python -m lightx2v.server \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/disagg/qwen/qwen_image_i2i_disagg_decode.json" \
     --host 0.0.0.0 \
-    --port 8014 &
+    --port 8014 \
+    --metric_port 18014 &
 PID_DECODER=$!
 
 # 2. Start Transformer
@@ -49,7 +50,8 @@ CUDA_VISIBLE_DEVICES=${GPU_TRANSFORMER} python -m lightx2v.server \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/disagg/qwen/qwen_image_i2i_disagg_transformer.json" \
     --host 0.0.0.0 \
-    --port 8013 &
+    --port 8013 \
+    --metric_port 18013 &
 PID_TRANSFORMER=$!
 
 # 3. Start Encoder last
@@ -60,7 +62,8 @@ CUDA_VISIBLE_DEVICES=${GPU_ENCODER} python -m lightx2v.server \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/disagg/qwen/qwen_image_i2i_disagg_encoder.json" \
     --host 0.0.0.0 \
-    --port 8012 &
+    --port 8012 \
+    --metric_port 18012 &
 PID_ENCODER=$!
 
 echo ""

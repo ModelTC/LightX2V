@@ -1,6 +1,6 @@
 #!/bin/bash
 
-lightx2v_path=/data/nvme1/yongyang/nb/LightX2V
+lightx2v_path=/path/to/LightX2V
 
 export PYTHONPATH="${lightx2v_path}"
 

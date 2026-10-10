@@ -1,4 +1,3 @@
-import json
 import os
 
 from safetensors import safe_open
@@ -34,16 +33,6 @@ class WanMtxg3Model(WanModel):
         super().__init__(model_path, config, device, model_type, lora_path, lora_strength)
 
     def _init_infer_class(self):
-        # Merge the official MG3 model config so that all dimension / action fields
-        # are available for weight and infer construction.
-        sub_model_folder = self.config.get("sub_model_folder", "base_distilled_model")
-        config_path = os.path.join(self.config["model_path"], sub_model_folder, "config.json")
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                model_config = json.load(f)
-            for k in model_config.keys():
-                self.config[k] = model_config[k]
-
         self.pre_infer_class = WanMtxg3PreInfer
         self.post_infer_class = WanMtxg3PostInfer
         self.transformer_infer_class = WanMtxg3TransformerInfer
