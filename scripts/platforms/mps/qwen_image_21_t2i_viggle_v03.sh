@@ -14,4 +14,4 @@ python -m lightx2v.infer \
     --prompt "A capybara wearing a wizard hat, oil painting" \
     --size 1024 1024 \
     --seed 42 \
-    --save_result_path "${lightx2v_path}/save_results/qwen_image_21_viggle_v03.png"
+    --save_result_path "${lightx2v_path}/save_results/qwen_image_21_t2i_viggle_v03.png"
