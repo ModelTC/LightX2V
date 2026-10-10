@@ -57,7 +57,6 @@ class PhasedDmdTrainer(DmdTrainer):
             default_lora_target_modules=None,
         )
         self.parsed_phased_dmd_config = parsed
-        self._checkpoint_process_group = None
         self.phased_config = parsed.phased
         self.match_timestep = parsed.match_timestep
         self.match_step_index = parsed.match_step_index
