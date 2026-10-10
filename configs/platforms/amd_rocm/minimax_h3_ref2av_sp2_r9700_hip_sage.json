@@ -1,0 +1,32 @@
+{
+  "infer_steps": 20,
+  "num_frames": 362,
+  "size": [768, 1344],
+  "fps": 24,
+  "enable_cfg": false,
+  "cpu_offload": true,
+  "offload_granularity": "block",
+  "use_adaln_cache": false,
+  "text_encoder_cpu_offload": true,
+  "vae_cpu_offload": true,
+  "vae_decode_parallel": true,
+  "lazy_load": true,
+  "unload_modules": false,
+  "attn_type": "hip_sage_amd_rocm",
+  "hip_sage_setting": {
+    "mixed_precision": true,
+    "int8_first_block": 45
+  },
+  "rms_type": "torch_native",
+  "rope_type": "torch_real_rope",
+  "feature_caching": "NoCaching",
+  "use_compile": false,
+  "video_flow_shift": 12.0,
+  "audio_flow_shift": 3.0,
+  "vae_spatial_scale_factor": 16,
+  "audio_sampling_rate": 32000,
+  "parallel": {
+    "seq_p_size": 2,
+    "seq_p_attn_type": "ulysses"
+  }
+}
