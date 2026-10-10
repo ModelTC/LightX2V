@@ -105,8 +105,6 @@ class QwenImage21Runner(DefaultRunner):
 
     @staticmethod
     def _validate_mps_streaming_config(config):
-        if AI_DEVICE != "mps" or config.get("task") != "t2i":
-            raise ValueError("Qwen-Image-2.1 disk streaming currently requires PLATFORM=mps and task=t2i")
         if not config.get("cpu_offload") or config.get("offload_granularity") != "block":
             raise ValueError("Qwen-Image-2.1 MPS streaming requires cpu_offload=true and offload_granularity=block")
         if not config.get("dit_disk_streaming") or not config.get("text_encoder_disk_streaming") or not config.get("text_encoder_cpu_offload"):
