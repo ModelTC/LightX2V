@@ -244,12 +244,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         Match the supported torch CUDA reduction and BF16 rounding exactly.
         Other shapes, torch versions, and norm backends keep their original path.
         """
-        if not (
-            self.fuse_rms_norm
-            and type(norm) is RMSWeight
-            and _can_use_cuda_kernels(x)
-            and norm.sensitive_layer_dtype == norm.infer_dtype
-        ):
+        if not (self.fuse_rms_norm and type(norm) is RMSWeight and _can_use_cuda_kernels(x) and norm.sensitive_layer_dtype == norm.infer_dtype):
             return norm.apply(x)
 
         weight = norm.weight
@@ -275,7 +270,8 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             from lightx2v.common.ops.mm.thor_qkv import project_qkv
 
             q, k, v = project_qkv(
-                (phase.self_attn_q, phase.self_attn_k, phase.self_attn_v), norm1_out,
+                (phase.self_attn_q, phase.self_attn_k, phase.self_attn_v),
+                norm1_out,
             )
             q = self._apply_attention_rms_norm(phase.self_attn_norm_q, q).view(seq_total, self.num_heads, self.head_dim)
             k = self._apply_attention_rms_norm(phase.self_attn_norm_k, k).view(seq_total, self.num_heads, self.head_dim)

@@ -1,12 +1,11 @@
-from functools import lru_cache
 import os
+from functools import lru_cache
 from pathlib import Path
 from threading import local
 
 import torch
 import torch.nn.functional as F
 from torch.utils.cpp_extension import load
-
 
 _plan_cache = local()
 

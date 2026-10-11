@@ -13,29 +13,11 @@ def can_use_torch_rms_norm_5120(x, weight, weight_diff):
     # Reduce.cuh changed its warp reduction order between PyTorch releases.
     if torch.__version__.split(".")[:2] != ["2", "10"] or torch.version.hip is not None:
         return False
-    if not (
-        x.is_cuda
-        and x.dtype == torch.bfloat16
-        and x.ndim == 2
-        and x.shape[1] == 5120
-        and 16 <= x.shape[0]
-        and x.numel() < 2**31
-        and x.is_contiguous()
-    ):
+    if not (x.is_cuda and x.dtype == torch.bfloat16 and x.ndim == 2 and x.shape[1] == 5120 and 16 <= x.shape[0] and x.numel() < 2**31 and x.is_contiguous()):
         return False
-    if weight is None or not (
-        weight.device == x.device
-        and weight.dtype == x.dtype
-        and weight.shape == (5120,)
-        and weight.is_contiguous()
-    ):
+    if weight is None or not (weight.device == x.device and weight.dtype == x.dtype and weight.shape == (5120,) and weight.is_contiguous()):
         return False
-    return weight_diff is None or (
-        weight_diff.device == x.device
-        and weight_diff.dtype == x.dtype
-        and weight_diff.shape in ((), (1,), (5120,))
-        and weight_diff.is_contiguous()
-    )
+    return weight_diff is None or (weight_diff.device == x.device and weight_diff.dtype == x.dtype and weight_diff.shape in ((), (1,), (5120,)) and weight_diff.is_contiguous())
 
 
 @triton.jit

@@ -1,4 +1,5 @@
 """DreamZero Thor QKV projection using the thor-gemm-bench kernel."""
+
 import ctypes
 import os
 from functools import lru_cache
@@ -16,10 +17,14 @@ def extension():
     root = Path(__file__).parent
     # CUTLASS_PATH points to the checkout root, not its include directory.
     cutlass_root = Path(os.environ.get("CUTLASS_PATH") or "/opt/cutlass").expanduser().resolve()
-    path = load(name="dreamzero_qkv_cutlass_v1", sources=[str(root / "adapter.cu")],
-                extra_include_paths=[str(cutlass_root / "include")],
-                extra_cuda_cflags=["-O3", "-std=c++17", "-arch=sm_110a", "--expt-relaxed-constexpr"],
-                is_python_module=False, verbose=False)
+    path = load(
+        name="dreamzero_qkv_cutlass_v1",
+        sources=[str(root / "adapter.cu")],
+        extra_include_paths=[str(cutlass_root / "include")],
+        extra_cuda_cflags=["-O3", "-std=c++17", "-arch=sm_110a", "--expt-relaxed-constexpr"],
+        is_python_module=False,
+        verbose=False,
+    )
     lib = ctypes.CDLL(path)
     lib.create.argtypes = [ctypes.c_void_p] * 5
     lib.create.restype = ctypes.c_void_p
@@ -33,8 +38,7 @@ class CutlassPlan:
     def __init__(self, lib, x, weight, bias, output):
         self.lib = lib
         self.device = x.device
-        self.handle = lib.create(x.data_ptr(), weight.data_ptr(), bias.data_ptr(), output.data_ptr(),
-                                 torch.cuda.current_stream(x.device).cuda_stream)
+        self.handle = lib.create(x.data_ptr(), weight.data_ptr(), bias.data_ptr(), output.data_ptr(), torch.cuda.current_stream(x.device).cuda_stream)
         if not self.handle:
             raise RuntimeError("QKV CUTLASS initialization failed")
 
@@ -50,12 +54,24 @@ class CutlassPlan:
 
 def supports(modules, x):
     from lightx2v.common.ops.mm.mm_weight import MMWeight
-    return (x.is_cuda and x.dtype == torch.bfloat16 and x.shape == (1785, 5120)
-            and x.is_contiguous() and torch.cuda.get_device_capability(x.device) == (11, 0)
-            and all(type(m) is MMWeight and m._get_actual_bias() is not None
-                    and m.weight.shape == (5120, 5120) and m.weight.stride() == (1, 5120)
-                    and m.weight.dtype == x.dtype and m.weight.device == x.device
-                    and not m.has_lora_branch for m in modules))
+
+    return (
+        x.is_cuda
+        and x.dtype == torch.bfloat16
+        and x.shape == (1785, 5120)
+        and x.is_contiguous()
+        and torch.cuda.get_device_capability(x.device) == (11, 0)
+        and all(
+            type(m) is MMWeight
+            and m._get_actual_bias() is not None
+            and m.weight.shape == (5120, 5120)
+            and m.weight.stride() == (1, 5120)
+            and m.weight.dtype == x.dtype
+            and m.weight.device == x.device
+            and not m.has_lora_branch
+            for m in modules
+        )
+    )
 
 
 @torch.no_grad()
@@ -74,8 +90,7 @@ def project_qkv(modules, x):
         if key not in cache:
             cache[key] = CutlassPlan(lib, x, weights[0], biases[0], outputs[0])
         for weight, bias, output in zip(weights, biases, outputs):
-            status = lib.launch_with(cache[key].handle, x.data_ptr(), weight.data_ptr(), bias.data_ptr(),
-                                     output.data_ptr(), key[1])
+            status = lib.launch_with(cache[key].handle, x.data_ptr(), weight.data_ptr(), bias.data_ptr(), output.data_ptr(), key[1])
             if status:
                 raise RuntimeError(f"QKV CUTLASS launch failed: {status}")
     return outputs

@@ -28,13 +28,13 @@ class TestThorFFN(unittest.TestCase):
         from lightx2v.common.ops.mm.mm_weight import MMWeight
 
         mm = object.__new__(MMWeight)
-        mm.weight = torch.tensor([[1., 2.], [3., 4.]])
+        mm.weight = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
         mm.bias = torch.tensor([0.1, 0.2])
         mm.weight_diff = torch.ones_like(mm.weight)
         mm.bias_diff = torch.ones_like(mm.bias)
         mm.has_lora_branch = True
         mm.apply_lora = lambda x: torch.full((x.shape[0], 2), 0.5)
-        x = torch.tensor([[1., 2.]])
+        x = torch.tensor([[1.0, 2.0]])
         native = SimpleNamespace(run=lambda x, w, b: x @ w.t() + b)
         with patch.object(backend, "down_extension", return_value=native):
             expected = x @ (mm.weight + mm.weight_diff) + mm.bias + mm.bias_diff + 0.5
@@ -46,7 +46,7 @@ class TestThorFFN(unittest.TestCase):
     def test_down_preserves_other_backend_dispatch(self):
         mm = SimpleNamespace(apply=lambda x: x + 2)
         with patch.object(backend, "down_extension", side_effect=AssertionError("unexpected native call")):
-            torch.testing.assert_close(backend.down_bias(mm, torch.ones(1)), torch.full((1,), 3.))
+            torch.testing.assert_close(backend.down_bias(mm, torch.ones(1)), torch.full((1,), 3.0))
 
     def test_lora_is_added_before_gelu_without_loading_extension(self):
         x = torch.tensor([[1.0, -2.0]])
@@ -76,9 +76,7 @@ class TestThorFFN(unittest.TestCase):
         mm.bias = torch.randn(4)
         mm._get_actual_weight = lambda: mm.weight
         mm._get_actual_bias = lambda: mm.bias
-        with patch.object(backend, "extension", return_value=SimpleNamespace(prepare=Plan)), patch.object(
-            torch.cuda, "current_stream", return_value=SimpleNamespace(cuda_stream=0)
-        ):
+        with patch.object(backend, "extension", return_value=SimpleNamespace(prepare=Plan)), patch.object(torch.cuda, "current_stream", return_value=SimpleNamespace(cuda_stream=0)):
             for rows in (2, 5, 2):
                 x = torch.randn(rows, 3)
                 y = backend.up_gelu(mm, x)
@@ -107,9 +105,7 @@ class TestThorFFN(unittest.TestCase):
             )
 
         stream = SimpleNamespace(cuda_stream=0)
-        with patch.object(backend, "extension", return_value=SimpleNamespace(prepare=Plan)), patch.object(
-            torch.cuda, "current_stream", return_value=stream
-        ):
+        with patch.object(backend, "extension", return_value=SimpleNamespace(prepare=Plan)), patch.object(torch.cuda, "current_stream", return_value=stream):
             first = backend.up_gelu(layer(1.0), torch.ones(2, 3))
             saved = first.clone()
             second = backend.up_gelu(layer(2.0), torch.ones(2, 3))
