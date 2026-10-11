@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Set paths first.
-lightx2v_path=/data/nvme0/lhd_codes/LightX2V
-model_path=/data/nvme0/lhd_codes/HunyuanImage-3.0-instruct/HunyuanImage-3-Instruct
-hunyuan_image3_path=/data/nvme0/lhd_codes/HunyuanImage-3.0
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/HunyuanImage-3-Instruct
+hunyuan_image3_path=/path/to/HunyuanImage-3.0
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
-export PYTHONPATH="${hunyuan_image3_path}:${PYTHONPATH:-}"
+export HUNYUAN_IMAGE3_REPO_PATH=${hunyuan_image3_path}
 
 source "${lightx2v_path}/scripts/base/base.sh"
 

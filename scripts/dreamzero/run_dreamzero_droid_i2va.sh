@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/nb/LightX2V
-model_path=/data/nvme1/yongyang/nb/models/GEAR-Dreams/DreamZero-DROID
-input_path=/data/nvme1/yongyang/nb/dreamzero/debug_image
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/DreamZero-DROID
+input_path=/path/to/camera_inputs
 
 export CUDA_VISIBLE_DEVICES=5
 

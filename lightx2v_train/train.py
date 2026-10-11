@@ -1,6 +1,5 @@
 import argparse
 
-import torch
 from loguru import logger
 
 from lightx2v_train.data import build_data, build_sample_processor
@@ -11,6 +10,7 @@ from lightx2v_train.runtime import (
     load_config,
     setup_logger,
 )
+from lightx2v_train.runtime.precision import configure_precision
 from lightx2v_train.trainers import build_trainer
 from lightx2v_train.utils.utils import check_val_is_enabled, is_train_cache_dataset
 
@@ -24,8 +24,7 @@ def parse_args():
 def main():
     args = parse_args()
     config = load_config(args.config)
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    configure_precision(config)
     init_distributed(config)
     setup_logger(config)
 

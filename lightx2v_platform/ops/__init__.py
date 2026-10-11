@@ -12,7 +12,12 @@ elif PLATFORM == "hygon_dcu":
     from .attn.hygon_dcu import *
     from .mm.hygon_dcu import *
 elif PLATFORM == "amd_rocm":
+    # Register MM before attention so the fp8/int8 GEMM keys are present before
+    # any framework registry snapshot the attention import may trigger.
+    # isort: off
+    from .mm.amd_rocm import *
     from .attn.amd_rocm import *
+    # isort: on
 elif PLATFORM == "ascend_npu":
     # Register A2A first because Ascend attention may import the common
     # Ulysses backend factory. Keep MoE before MM: MM imports common utilities
@@ -52,3 +57,11 @@ elif PLATFORM == "iluvatar_cuda":
     from .rope.iluvatar_cuda import *
 elif PLATFORM == "musa":
     from .mm.mthreads_musa import *
+elif PLATFORM == "biren_supa":
+    # Biren's shallow platform operators live in the core platform package,
+    # at the same layer as Ascend and MetaX. Model-specific patches are
+    # supplied by the optional lightx2v-patch-biren package.
+    from .attn.biren_supa import *
+    from .mm.biren_supa import *
+    from .norm.biren_supa import *
+    from .rope.biren_supa import *

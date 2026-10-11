@@ -70,6 +70,9 @@ class FlashFlowMatchEulerDiscreteScheduler:
 
 
 def build_scheduler(num_inference_steps, timesteps_list, shift, device, scheduler_name="default"):
+    if timesteps_list is not None and len(timesteps_list) != num_inference_steps:
+        raise ValueError("infer_steps must match the length of timesteps_list")
+
     if scheduler_name == "flash":
         sched = FlashFlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=shift, use_dynamic_shifting=False)
     elif scheduler_name == "flow_match":

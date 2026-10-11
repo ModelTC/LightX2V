@@ -9,13 +9,6 @@ except ImportError:
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
-from .utils.sla_util import get_block_map, get_cuda_arch
-from .utils.sparge_util import (
-    block_map_incremental_lut_triton,
-    block_map_ordinal_lut_triton,
-    get_block_map_meansim,
-    sage2_block_sparse_attn,
-)
 
 try:
     from sageattn3_sparse import sage3_block_sparse_attn
@@ -164,6 +157,13 @@ class SparseSageAttn2Weight(AttnWeightTemplate):
     sparse_mode = "sla_mode"
 
     def __init__(self):
+        from .utils.sla_util import get_block_map, get_cuda_arch
+        from .utils.sparge_util import block_map_incremental_lut_triton, get_block_map_meansim, sage2_block_sparse_attn
+
+        self._block_map_incremental_lut_triton = block_map_incremental_lut_triton
+        self._get_block_map = get_block_map
+        self._get_block_map_meansim = get_block_map_meansim
+        self._sage2_block_sparse_attn = sage2_block_sparse_attn
         self.config = {}
         self.topk = 1 - self.sparsity_ratio
 
@@ -191,10 +191,10 @@ class SparseSageAttn2Weight(AttnWeightTemplate):
         bs = q.shape[0]
 
         if self.sparse_mode == "sla_mode":
-            sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
+            sparse_map, lut, real_topk = self._get_block_map(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
         elif self.sparse_mode == "sparge_mode":
             smooth_k = k - k.mean(dim=-2, keepdim=True)
-            sparse_map = get_block_map_meansim(
+            sparse_map = self._get_block_map_meansim(
                 q,
                 smooth_k,
                 cdfthreshd=None,
@@ -206,8 +206,8 @@ class SparseSageAttn2Weight(AttnWeightTemplate):
         else:
             logger.info(f"spas_sage_attn2 sparse_mode only support sla_mode and sparge_mode now.")
 
-        lut, valid_block_num = block_map_incremental_lut_triton(sparse_map)
-        x = sage2_block_sparse_attn(q, k, v, lut, valid_block_num, self.BLKQ, self.BLKK, self.arch)
+        lut, valid_block_num = self._block_map_incremental_lut_triton(sparse_map)
+        x = self._sage2_block_sparse_attn(q, k, v, lut, valid_block_num, self.BLKQ, self.BLKK, self.arch)
         x = x.transpose(1, 2).reshape(bs * max_seqlen_q, -1)
         return x
 
@@ -219,6 +219,12 @@ class SparseSageAttn3Weight(AttnWeightTemplate):
     per_block_mean = False
 
     def __init__(self):
+        from .utils.sla_util import get_block_map
+        from .utils.sparge_util import block_map_ordinal_lut_triton, get_block_map_meansim
+
+        self._block_map_ordinal_lut_triton = block_map_ordinal_lut_triton
+        self._get_block_map = get_block_map
+        self._get_block_map_meansim = get_block_map_meansim
         self.config = {}
         self.topk = 1 - self.sparsity_ratio
         self.BLKQ, self.BLKK = 128, 128
@@ -241,10 +247,10 @@ class SparseSageAttn3Weight(AttnWeightTemplate):
         bs = q.shape[0]
 
         if self.sparse_mode == "sla_mode":
-            sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
+            sparse_map, lut, real_topk = self._get_block_map(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
         elif self.sparse_mode == "sparge_mode":
             smooth_k = k - k.mean(dim=-2, keepdim=True)
-            sparse_map = get_block_map_meansim(
+            sparse_map = self._get_block_map_meansim(
                 q,
                 smooth_k,
                 cdfthreshd=None,
@@ -256,7 +262,7 @@ class SparseSageAttn3Weight(AttnWeightTemplate):
         else:
             logger.info(f"spas_sage_attn3 sparse_mode only support sla_mode and sparge_mode now.")
 
-        lut, valid_block_num = block_map_ordinal_lut_triton(sparse_map)
+        lut, valid_block_num = self._block_map_ordinal_lut_triton(sparse_map)
         x = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
         x = x.transpose(1, 2).reshape(bs * max_seqlen_q, -1)
         return x

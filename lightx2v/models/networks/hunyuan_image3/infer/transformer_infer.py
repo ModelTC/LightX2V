@@ -27,6 +27,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
     }
 
     def __init__(self, config):
+        self.offload_manager = None
         self.config = config
         self.parallel_context = config.get("parallel_context")
         self.num_layers = int(config.get("num_layers") or config["num_hidden_layers"])
@@ -470,6 +471,8 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         self._pre_infer_device_cache = {}
         pre_infer_out.attention_segment_specs = self._prepare_attention_segment_specs(pre_infer_out)
         hidden_states = pre_infer_out.hidden_states
+        if self.offload_manager is not None:
+            return self.offload_manager.infer(self.infer_block, hidden_states, pre_infer_out)
         for block_idx, block in enumerate(weights.blocks):
             hidden_states = self.infer_block(block_idx, block, hidden_states, pre_infer_out)
         return hidden_states

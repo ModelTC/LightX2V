@@ -186,6 +186,7 @@ async def create_image_task_form(
     negative_prompt: str = Form(default=""),
     seed: int | None = Form(default=None),
     aspect_ratio: str | None = Form(default=None),
+    resolution: int | None = Form(default=None, gt=0),
 ):
     services = get_services()
     assert services.file_service is not None, "File service is not initialized"

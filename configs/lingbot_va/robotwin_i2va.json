@@ -15,13 +15,11 @@
     "observation.images.cam_right_wrist"
   ],
   "used_action_channel_ids": [0, 1, 2, 3, 4, 5, 6, 28, 7, 8, 9, 10, 11, 12, 13, 29],
-  "inverse_used_action_channel_ids": [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 7, 15],
   "action_norm_method": "quantiles",
   "norm_stat": {
     "q01": [-0.06172713458538055, -3.6716461181640625e-05, -0.08783501386642456, -1, -1, -1, -1, -0.3547105032205582, -1.3113021850585938e-06, -0.11975435614585876, -1, -1, -1, -1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     "q99": [0.3462600058317184, 0.39966784834861746, 0.14745532035827624, 1, 1, 1, 1, 0.034201726913452024, 0.39142737388610793, 0.1792279863357542, 1, 1, 1, 1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0]
   },
-  "use_image_encoder": false,
   "video_exec_step": -1,
   "action_dim": 30,
   "size": [256, 320],
@@ -34,13 +32,12 @@
   "action_sample_guide_scale": 1.0,
   "enable_cfg": true,
   "enable_action_cfg": false,
-  "cfg_parallel": false,
   "infer_steps": 25,
   "action_infer_steps": 50,
   "sample_shift": 5.0,
   "action_sample_shift": 1.0,
   "t5_original_ckpt": "/path/to/models_t5_umt5-xxl-enc-bf16.pth",
-  "dit_original_ckpt": "/path/to/linbot-va-posttrain-robotwin.safetensors",
+  "dit_original_ckpt": "/path/to/lingbot-va-posttrain-robotwin.safetensors",
   "ar_config": {
     "num_frame_per_chunk": 2,
     "num_action_per_frame": 16,

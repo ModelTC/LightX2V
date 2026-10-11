@@ -1,5 +1,6 @@
 import gc
 import math
+import os
 
 import torch
 from PIL import Image
@@ -213,8 +214,7 @@ class LongCatImageRunner(DefaultRunner):
         text_encoder_output["prompt_embeds"] = prompt_embeds
 
         # Encode negative prompt with image
-        if self.config.get("enable_cfg", True) and neg_prompt is not None:
-            neg_prompt = neg_prompt if neg_prompt else ""
+        if self.config["enable_cfg"]:
             neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer_with_image([neg_prompt], prompt_image)
             self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
             text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -245,7 +245,7 @@ class LongCatImageRunner(DefaultRunner):
         self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
         text_encoder_output["prompt_embeds"] = prompt_embeds
 
-        if self.config["enable_cfg"] and neg_prompt is not None:
+        if self.config["enable_cfg"]:
             neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer([neg_prompt])
             self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
             text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -298,8 +298,7 @@ class LongCatImageRunner(DefaultRunner):
             "3:2": [1216, 832],
             "2:3": [832, 1216],
         }
-        as_maps = self.config.get("aspect_ratios", {})
-        as_maps.update(default_aspect_ratios)
+        as_maps = {**default_aspect_ratios, **self.config.get("aspect_ratios", {})}
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
@@ -369,6 +368,7 @@ class LongCatImageRunner(DefaultRunner):
 
         if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
             image = images[0]
+            os.makedirs(os.path.dirname(os.path.abspath(input_info.save_result_path)), exist_ok=True)
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")
 

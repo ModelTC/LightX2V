@@ -29,7 +29,6 @@ mkdir -p "$(dirname -- "${output_path}")"
 [[ -d "${model_path}" ]] || { echo "Model directory not found: ${model_path}"; exit 1; }
 [[ -f "${config_json}" ]] || { echo "Config file not found: ${config_json}"; exit 1; }
 source "${lightx2v_path}/scripts/base/base.sh"
-export PYTHONPATH="${lightx2v_path}/lightx2v_kernel_xpu/python:${PYTHONPATH}"
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 echo "Effective dtype overrides: DTYPE=${DTYPE}, SENSITIVE_LAYER_DTYPE=${SENSITIVE_LAYER_DTYPE}"

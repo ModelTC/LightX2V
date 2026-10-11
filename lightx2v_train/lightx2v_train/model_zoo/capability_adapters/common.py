@@ -81,7 +81,7 @@ def _move_cached_value(value, model, key=None):
 def _cached_latent(batch, model):
     latent = batch.get("inputs", {}).get("latents")
     if latent is not None:
-        return _move_cached_value(latent, model)
+        return latent.to(device=model.device, dtype=model.latent_dtype)
     cache_path = batch.get("meta", {}).get("training_cache_path")
     if cache_path is not None:
         raise KeyError(f"Training cache {cache_path} has no inputs.latents entry.")
@@ -339,10 +339,10 @@ class GenericFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
             if latent is None:
                 latent = self.model.encode_to_latent(batch)
             latent = _require_singleton_tensor(
-                broadcast(latent),
+                broadcast(latent.to(dtype=self.model.latent_dtype)),
                 "Flow-matching latent",
             )
-            noise = broadcast(torch.randn_like(latent, dtype=context.running_dtype))
+            noise = broadcast(torch.randn_like(latent))
             latent_hw = latent.shape[-2:]
             timestep_or_sigma = broadcast(
                 scheduler.sample_timestep_or_sigma(
@@ -407,7 +407,7 @@ class GenericConsistencyModelCapability(BoundCapability, ConsistencyModelCapabil
         if latent is None:
             latent = self.model.encode_to_latent(batch)
         return _require_singleton_tensor(
-            latent,
+            latent.to(dtype=self.model.latent_dtype),
             "Consistency latent",
         )
 

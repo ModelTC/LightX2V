@@ -1,4 +1,6 @@
-from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate
+import torch
+
+from lightx2v_platform.ops.mm.template import MMWeightPerChannelQuantTemplate
 from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
 
 try:
@@ -8,7 +10,7 @@ except ImportError:
 
 
 @PLATFORM_MM_WEIGHT_REGISTER("int8-npu")
-class MMWeightWint8channelAint8channeldynamicNpu(MMWeightQuantTemplate):
+class MMWeightWint8channelAint8channeldynamicNpu(MMWeightPerChannelQuantTemplate):
     """
     Name: W-int8-channel-sym-A-int8-channel-sym-dynamic-Npu
 
@@ -17,6 +19,8 @@ class MMWeightWint8channelAint8channeldynamicNpu(MMWeightQuantTemplate):
         Act: int8 perchannel dynamic sym
         Kernel: npu
     """
+
+    checkpoint_dtype = torch.int8
 
     def __init__(
         self,

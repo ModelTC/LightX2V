@@ -49,6 +49,10 @@ class NeoppRunner(DefaultRunner):
         # LightLLM encodes both text and image conditioning into the injected KV.
         return ("t2i", "i2i")
 
+    def resolve_request_seed(self, request_data):
+        # Preserve LightLLM's session RNG unless a seed is supplied.
+        return request_data.get("seed")
+
     def prepare_request(self, request_data):
         if "target_shape" in request_data:
             # LightLLM's existing adapter still sends target_shape.
@@ -59,11 +63,7 @@ class NeoppRunner(DefaultRunner):
         # LightLLM omits task; t2i and i2i share the same generation path.
         if request_data.get("task") is None:
             request_data = dict(request_data, task="t2i")
-        input_info = super().prepare_request(request_data)
-        # LightLLM restores the session RNG before explicitly passing seed=None.
-        if "seed" in request_data and request_data["seed"] is None:
-            input_info.seed = None
-        return input_info
+        return super().prepare_request(request_data)
 
     def __init__(self, config):
         super().__init__(config)
@@ -298,8 +298,9 @@ class NeoppRunner(DefaultRunner):
         image = self._denorm(self.scheduler.image_prediction.float())
         image = (image.clamp(0, 1).permute(0, 2, 3, 1).cpu().numpy() * 255.0).round().astype(np.uint8)
         grid_image = Image.fromarray(image[0])
-        grid_image.save(self.input_info.save_result_path)
-        logger.info(f"✅ Image saved successfully to: {self.input_info.save_result_path} ✅")
+        if is_main_process():
+            grid_image.save(self.input_info.save_result_path)
+            logger.info(f"✅ Image saved successfully to: {self.input_info.save_result_path} ✅")
         return grid_image
 
     def _denorm(self, x: torch.Tensor, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]):

@@ -57,6 +57,7 @@ class Hunyuan3DShapeRunner(DefaultRunner):
         self.model = self.load_transformer()
         self.image_encoder = self.load_image_encoder()
         _, self.vae_decoder = self.load_vae()
+        self._ckpt = None
 
     def _apply_torchvision_fix(self) -> None:
         try:

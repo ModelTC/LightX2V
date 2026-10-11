@@ -14,6 +14,9 @@ ADALN_CACHE_GUIDE = """1. Configure the cache in the inference JSON config:
 
    Set lightx2v_path, model_path, and --config_json.
    Set --model-variant fl2av for t2av/i2av/l2av/fl2av, or --model-variant ref2av for ref2av.
+   For causal RefA2V, edit the same script: replace --model-variant fl2av with
+   --model_cls minimax_h3_causal, and set --config_json to
+   ${lightx2v_path}/configs/minimax_h3_causal/minimax_h3_causal.json.
 
 3. Generate the cache if no matching cache exists.
    If the target cache directory exists but is invalid, move it aside first.

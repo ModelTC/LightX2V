@@ -1,9 +1,6 @@
 import torch
 from loguru import logger
 
-from .utils.sla_util import get_block_map
-from .utils.sparge_util import block_map_ordinal_lut_triton, get_block_map_meansim
-
 try:
     from flash_attn import flash_attn_func as flash_attn_func_v2
     from flash_attn.flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func_v2
@@ -54,9 +51,10 @@ class FlashAttn2Weight(AttnWeightTemplate):
         softmax_scale = kwargs.get("softmax_scale", None)
         if len(q.shape) == 3:
             bs = 1
+            total_seqlen = q.shape[0]
         elif len(q.shape) == 4:
             bs = q.shape[0]
-        total_seqlen = bs * max_seqlen_q
+            total_seqlen = bs * q.shape[1]
 
         if bs == 1:
             if len(q.shape) == 3:
@@ -129,9 +127,10 @@ class FlashAttn3Weight(AttnWeightTemplate):
         softmax_scale = kwargs.get("softmax_scale", None)
         if len(q.shape) == 3:
             bs = 1
+            total_seqlen = q.shape[0]
         elif len(q.shape) == 4:
             bs = q.shape[0]
-        total_seqlen = bs * max_seqlen_q
+            total_seqlen = bs * q.shape[1]
 
         if bs == 1:
             if len(q.shape) == 3:
@@ -211,7 +210,7 @@ class FlashAttn4Weight(AttnWeightTemplate):
             k,
             v,
         )
-        x = x.reshape(bs * max_seqlen_q, -1)
+        x = x.reshape(q.shape[1], -1)
         return x
 
 
@@ -221,6 +220,12 @@ class SparseFlashAttn4Weight(AttnWeightTemplate):
     sparse_mode = "sla_mode"
 
     def __init__(self):
+        from .utils.sla_util import get_block_map
+        from .utils.sparge_util import block_map_ordinal_lut_triton, get_block_map_meansim
+
+        self._block_map_ordinal_lut_triton = block_map_ordinal_lut_triton
+        self._get_block_map = get_block_map
+        self._get_block_map_meansim = get_block_map_meansim
         self.config = {}
         self.topk = 1 - self.sparsity_ratio
         self.BLKQ, self.BLKK = 128, 128
@@ -247,15 +252,15 @@ class SparseFlashAttn4Weight(AttnWeightTemplate):
         qt = q.transpose(1, 2).contiguous()
         kt = k.transpose(1, 2).contiguous()
         if self.sparse_mode == "sla_mode":
-            sparse_map, lut, real_topk = get_block_map(qt, kt, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
+            sparse_map, lut, real_topk = self._get_block_map(qt, kt, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
         elif self.sparse_mode == "sparge_mode":
             smooth_k = kt - kt.mean(dim=-2, keepdim=True)
-            sparse_map = get_block_map_meansim(qt, smooth_k, cdfthreshd=None, topk=self.topk, return_lut=False, BLKQ=self.BLKQ, BLKK=self.BLKK)
+            sparse_map = self._get_block_map_meansim(qt, smooth_k, cdfthreshd=None, topk=self.topk, return_lut=False, BLKQ=self.BLKQ, BLKK=self.BLKK)
         else:
             logger.info(f"spas_flash_attn4 sparse_mode only support sla_mode and sparge_mode now.")
 
         # (B, H, Q_block_num, K_block_num)
-        full_block_idx, full_block_cnt = block_map_ordinal_lut_triton(sparse_map)
+        full_block_idx, full_block_cnt = self._block_map_ordinal_lut_triton(sparse_map)
         mask_block_cnt = torch.zeros_like(full_block_cnt)
         mask_block_idx = torch.zeros_like(full_block_idx)
         block_sparse_tensors = BlockSparseTensorsTorch(

@@ -1,21 +1,9 @@
 {
-    "model_path": "/path/to/Wan2.2-I2V-A14B",
     "infer_steps": 50,
-    "in_dim": 36,
-    "dim": 5120,
-    "ffn_dim": 13824,
-    "freq_dim": 256,
-    "num_heads": 40,
-    "num_layers": 40,
-    "out_dim": 16,
-    "eps": 1e-06,
-    "model_type": "i2v",
     "num_frames": 81,
-    "text_len": 512,
     "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
-    "cross_attn_2_type": "sage_attn2",
     "sample_guide_scale": [
         3.5,
         3.5

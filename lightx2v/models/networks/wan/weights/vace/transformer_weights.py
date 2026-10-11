@@ -13,7 +13,6 @@ class WanVaceTransformerWeights(WanTransformerWeights):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__(config, lazy_load_path, lora_path)
         self.patch_size = (1, 2, 2)
-        self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.vace_blocks = WeightModuleList(
             [WanVaceTransformerAttentionBlock(self.config["vace_layers"][i], i, self.task, self.mm_type, self.config, False, False, "vace_blocks") for i in range(len(self.config["vace_layers"]))]
         )

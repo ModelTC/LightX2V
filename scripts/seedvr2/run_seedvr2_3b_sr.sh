@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=
-model_path=path/to/seedvr2-3b/
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/ByteDance-Seed/SeedVR2-3B
 
-video_path=path/to/test.mp4
+video_path=/path/to/input.mp4
 
 export CUDA_VISIBLE_DEVICES=0
 

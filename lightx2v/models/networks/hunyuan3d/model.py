@@ -45,15 +45,12 @@ class Hunyuan3DDiTModel(BaseTransformerModel):
 
     @staticmethod
     def _merge_dit_config(model_path, config):
-        if config.get("hidden_size") and config.get("depth"):
-            return
         config_path = os.path.join(model_path, "config.yaml")
         if not os.path.isfile(config_path):
             model_dir = resolve_model_dir(config["model_path"], config.get("subfolder", "hunyuan3d-dit-v2-1"))
             config_path = os.path.join(model_dir, "config.yaml")
         pipeline_cfg = load_pipeline_config(config_path)
-        for key, value in pipeline_cfg["model"]["params"].items():
-            config.setdefault(key, value)
+        config.update(pipeline_cfg["model"]["params"])
         config.setdefault("dit_quant_scheme", "Default")
         config.setdefault("ln_norm_type", "torch")
         config.setdefault("rms_norm_type", "torch")

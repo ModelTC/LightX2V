@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from .metrics import monitor_cli
+from .schema import Usage
 
 
 def _env_positive_int(name: str, default: int) -> int:
@@ -46,8 +47,7 @@ class TaskInfo:
     error_type: Optional[str] = None
     save_result_path: Optional[str] = None
     result_png: Optional[bytes] = None
-    usage: Optional[dict] = None
-    result_data: Optional[dict] = None
+    usage: Usage | dict | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     thread: Optional[threading.Thread] = None
 
@@ -111,8 +111,7 @@ class TaskManager:
         task_id: str,
         save_result_path: Optional[str] = None,
         result_png: Optional[bytes] = None,
-        usage: Optional[dict] = None,
-        result_data: Optional[dict] = None,
+        usage: Usage | dict | None = None,
     ):
         with self._lock:
             if task_id not in self._tasks:
@@ -125,7 +124,6 @@ class TaskManager:
             task.save_result_path = save_result_path
             task.result_png = result_png
             task.usage = usage
-            task.result_data = result_data
 
             if result_png is not None:
                 self._evict_old_result_png_unlocked()
@@ -186,19 +184,12 @@ class TaskManager:
                 return None
             return task.result_png
 
-    def get_task_result_usage(self, task_id: str) -> Optional[dict]:
+    def get_task_result_usage(self, task_id: str) -> Usage | dict | None:
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
                 return None
             return task.usage
-
-    def get_task_result_data(self, task_id: str) -> Optional[dict]:
-        with self._lock:
-            task = self._tasks.get(task_id)
-            if not task:
-                return None
-            return task.result_data
 
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         task = self.get_task(task_id)

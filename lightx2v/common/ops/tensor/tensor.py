@@ -5,9 +5,12 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
+from lightx2v.common.offload.block_layout import BlockLoadContext
+from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import TENSOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.offload.weight_storage import StorageDescription, WeightStorage
 
 
 @TENSOR_REGISTER("Default")
@@ -22,7 +25,15 @@ class DefaultTensor:
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
+    def describe_storage(self, metadata):
+        source = metadata[self.tensor_name]
+        return StorageDescription((WeightStorage(self.tensor_name, "tensor", source.shape, source.loaded_dtype or source.dtype),))
+
     def load(self, weight_dict):
+        if isinstance(weight_dict, BlockLoadContext):
+            attr = "tensor_cuda_buffer" if self.create_cuda_buffer else "pin_tensor"
+            setattr(self, attr, weight_dict.take(self.tensor_name))
+            return
         if self.create_cuda_buffer:
             self._load_cuda_buffer(weight_dict)
         elif self.create_cpu_buffer:
@@ -34,9 +45,11 @@ class DefaultTensor:
         if not self.lazy_load:
             device = weight_dict[self.tensor_name].device
             if device.type == "cpu":
-                tensor = weight_dict[self.tensor_name]
-                self.pin_tensor = self._create_cpu_pin_tensor(tensor)
-                del weight_dict[self.tensor_name]
+                tensor, is_shared = consume_weight(weight_dict, self.tensor_name)
+                if is_shared:
+                    self.pin_tensor = tensor
+                else:
+                    self.pin_tensor = self._create_cpu_pin_tensor(tensor)
             else:
                 self.tensor = weight_dict[self.tensor_name]
 

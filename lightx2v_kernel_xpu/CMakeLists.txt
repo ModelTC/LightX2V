@@ -207,6 +207,25 @@ add_sycl_to_target(TARGET minimax_h3_rope_torch SOURCES csrc/minimax_h3_rope.cpp
 target_link_libraries(minimax_h3_rope_torch PRIVATE
     ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
 
+# MiniMax-H3 packed QKV split + Q/K RMSNorm sidecar.
+add_library(minimax_h3_qkv_norm_torch SHARED csrc/minimax_h3_qkv_norm.cpp)
+set_target_properties(minimax_h3_qkv_norm_torch PROPERTIES
+    PREFIX ""
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    INSTALL_RPATH "\$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+target_compile_features(minimax_h3_qkv_norm_torch PRIVATE cxx_std_17)
+if(NOT WIN32)
+    target_compile_options(minimax_h3_qkv_norm_torch PRIVATE -ffp-contract=off)
+else()
+    target_compile_options(minimax_h3_qkv_norm_torch PRIVATE /clang:-ffp-contract=off)
+endif()
+target_include_directories(minimax_h3_qkv_norm_torch PRIVATE
+    ${Python_INCLUDE_DIRS} ${TORCH_INCLUDE_DIRS})
+add_sycl_to_target(TARGET minimax_h3_qkv_norm_torch
+    SOURCES csrc/minimax_h3_qkv_norm.cpp)
+target_link_libraries(minimax_h3_qkv_norm_torch PRIVATE
+    ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
+
 if(ENABLE_CUTE_FMHA)
     if(WIN32)
         message(FATAL_ERROR
@@ -237,6 +256,32 @@ if(ENABLE_CUTE_FMHA)
         endif()
     endforeach()
 
+    # The upstream dense tail mask uses a row fragment for a column broadcast.
+    # In particular, VAE D64's Q=256/SG=16, KV=64 policy needs four column
+    # values per lane, while the row fragment only has one. Mask score elements
+    # by their logical key coordinates instead (as the sparse overlay does).
+    set(VAE_OVERLAY_ROOT "${CMAKE_BINARY_DIR}/vae_cute_overlay")
+    set(VAE_OVERLAY_DIR "${VAE_OVERLAY_ROOT}/flash_attention_v2/collective")
+    set(VAE_TAIL_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/cute/patches/vae_dense_tail.patch")
+    file(MAKE_DIRECTORY "${VAE_OVERLAY_DIR}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VAE_TAIL_PATCH}")
+    execute_process(
+        COMMAND patch --batch --forward --fuzz=0
+            --output=${VAE_OVERLAY_DIR}/xe_fmha_fwd_mainloop.hpp.new
+            ${CUTLASS_SYCL_ROOT}/applications/flash_attention_v2/collective/xe_fmha_fwd_mainloop.hpp
+            ${VAE_TAIL_PATCH}
+        RESULT_VARIABLE VAE_TAIL_RESULT
+        OUTPUT_VARIABLE VAE_TAIL_STDOUT
+        ERROR_VARIABLE VAE_TAIL_STDERR)
+    if(NOT VAE_TAIL_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to apply dense VAE tail patch:\n${VAE_TAIL_STDOUT}${VAE_TAIL_STDERR}")
+    endif()
+    configure_file("${VAE_OVERLAY_DIR}/xe_fmha_fwd_mainloop.hpp.new"
+        "${VAE_OVERLAY_DIR}/xe_fmha_fwd_mainloop.hpp" COPYONLY)
+    file(REMOVE "${VAE_OVERLAY_DIR}/xe_fmha_fwd_mainloop.hpp.new")
+    file(COPY "${CUTLASS_SYCL_ROOT}/applications/flash_attention_v2/collective/fmha_fusion.hpp"
+        DESTINATION "${VAE_OVERLAY_DIR}")
+
     add_library(cute_fmha_torch SHARED cute/cute_fmha_torch.cpp)
     set_target_properties(cute_fmha_torch PROPERTIES
         PREFIX ""
@@ -251,6 +296,7 @@ if(ENABLE_CUTE_FMHA)
         "${CUTLASS_SYCL_ROOT}/include"
         "${CUTLASS_SYCL_ROOT}/tools/util/include"
         "${CUTLASS_SYCL_ROOT}/examples/common"
+        "${VAE_OVERLAY_ROOT}"
         "${CUTLASS_SYCL_ROOT}/applications"
         "${CMAKE_CURRENT_SOURCE_DIR}/cute"
         ${TORCH_INCLUDE_DIRS})
@@ -444,6 +490,7 @@ endif()
 install(TARGETS ${MODULE_NAME} LIBRARY DESTINATION sycl_kernels)
 install(TARGETS rms_norm_torch LIBRARY DESTINATION sycl_kernels)
 install(TARGETS minimax_h3_rope_torch LIBRARY DESTINATION sycl_kernels)
+install(TARGETS minimax_h3_qkv_norm_torch LIBRARY DESTINATION sycl_kernels)
 install(FILES "${ESIMD_RUNTIME}" DESTINATION sycl_kernels)
 if(ENABLE_CUTE_FMHA)
     install(TARGETS cute_fmha_torch LIBRARY DESTINATION sycl_kernels)

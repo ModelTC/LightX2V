@@ -1,6 +1,5 @@
 {
     "infer_steps": 50,
-    "aspect_ratio": "1:1",
     "attn_type": "flash_attn3",
     "enable_cfg": true,
     "sample_guide_scale": 4.5,

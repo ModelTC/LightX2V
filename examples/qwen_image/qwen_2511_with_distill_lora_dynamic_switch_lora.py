@@ -45,7 +45,6 @@ pipe.enable_lora(
 # Create generator manually with specified parameters
 pipe.create_generator(
     attn_mode="flash_attn3",
-    resize_mode="adaptive",
     infer_steps=8,
     guidance_scale=1,
 )

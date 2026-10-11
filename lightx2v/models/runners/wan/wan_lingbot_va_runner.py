@@ -219,15 +219,19 @@ class LingbotVARunner(Wan22DenseRunner):
                 dtype=GET_DTYPE(),
             )
 
+        used_channels = self.config["used_action_channel_ids"]
         self.action_mask = torch.zeros([self.config["action_dim"]], dtype=torch.bool, device=AI_DEVICE)
-        self.action_mask[self.config["used_action_channel_ids"]] = True
+        self.action_mask[used_channels] = True
+        self.inverse_used_action_channel_ids = [len(used_channels)] * self.config["action_dim"]
+        for index, channel in enumerate(used_channels):
+            self.inverse_used_action_channel_ids[channel] = index
         self.actions_q01 = torch.tensor(self.config["norm_stat"]["q01"], dtype=torch.float32, device=AI_DEVICE).reshape(-1, 1, 1)
         self.actions_q99 = torch.tensor(self.config["norm_stat"]["q99"], dtype=torch.float32, device=AI_DEVICE).reshape(-1, 1, 1)
         text_encoder_output = self.inputs["text_encoder_output"]
-        self.prompt_embeds = text_encoder_output["context"].to(AI_DEVICE)
+        self.prompt_embeds = text_encoder_output["context"].to(device=AI_DEVICE, dtype=GET_DTYPE())
         self.negative_prompt_embeds = text_encoder_output.get("context_null")
         if self.negative_prompt_embeds is not None:
-            self.negative_prompt_embeds = self.negative_prompt_embeds.to(AI_DEVICE)
+            self.negative_prompt_embeds = self.negative_prompt_embeds.to(device=AI_DEVICE, dtype=GET_DTYPE())
         elif self.use_cache_cfg:
             raise ValueError("LingBot-VA CFG is enabled but text_encoder_output does not include context_null.")
 
@@ -259,10 +263,10 @@ class LingbotVARunner(Wan22DenseRunner):
                     1,
                     frame_st_id,
                 )[None].to(AI_DEVICE),
-                "text_emb": self.prompt_embeds.to(GET_DTYPE()).clone(),
+                "text_emb": self.prompt_embeds,
             }
             if self.use_cache_cfg:
-                latent_res["negative_text_emb"] = self.negative_prompt_embeds.to(GET_DTYPE()).clone()
+                latent_res["negative_text_emb"] = self.negative_prompt_embeds
             if latent_cond is not None:
                 latent_res["noisy_latents"][:, :, 0:1] = latent_cond[:, :, 0:1]
                 latent_res["timesteps"][:, 0:1] *= 0
@@ -281,10 +285,10 @@ class LingbotVARunner(Wan22DenseRunner):
                     frame_st_id,
                     action=True,
                 )[None].to(AI_DEVICE),
-                "text_emb": self.prompt_embeds.to(GET_DTYPE()).clone(),
+                "text_emb": self.prompt_embeds,
             }
             if self.use_cache_cfg:
-                action_res["negative_text_emb"] = self.negative_prompt_embeds.to(GET_DTYPE()).clone()
+                action_res["negative_text_emb"] = self.negative_prompt_embeds
             if action_cond is not None:
                 action_res["noisy_latents"][:, :, 0:1] = action_cond[:, :, 0:1]
                 action_res["timesteps"][:, 0:1] *= 0
@@ -507,14 +511,7 @@ class LingbotVARunner(Wan22DenseRunner):
         return {"video": None}
 
     def end_run(self):
-        self.model.clear_cache(self.cache_name)
-        if self.scheduler is not None:
-            self.scheduler.clear()
-        if self.action_scheduler is not None:
-            self.action_scheduler.clear()
-        if hasattr(self, "inputs"):
-            del self.inputs
-        self.input_info = None
+        self.clear_run_state()
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             if hasattr(self.model.transformer_infer, "offload_manager"):
                 del self.model.transformer_infer.offload_manager
@@ -533,7 +530,7 @@ class LingbotVARunner(Wan22DenseRunner):
 
         # The inverse map uses one sentinel channel for every unused model channel.
         action = F.pad(action, (0, 0, 0, 0, 0, 1), mode="constant", value=0)
-        action = action[self.config["inverse_used_action_channel_ids"]]
+        action = action[self.inverse_used_action_channel_ids]
         action = (action - self.actions_q01) / (self.actions_q99 - self.actions_q01 + 1e-6) * 2.0 - 1.0
         return action.to(GET_DTYPE()).unsqueeze(0).unsqueeze(-1)
 
@@ -582,12 +579,29 @@ class LingbotVARunner(Wan22DenseRunner):
             self.frame_st_id,
         )
 
-    def reset_online_state(self):
+    def clear_run_state(self):
         self.model.clear_cache(self.cache_name)
         if hasattr(self, "_streaming_vae_encoder"):
             self._streaming_vae_encoder.reset()
         self.scheduler.clear()
         self.action_scheduler.clear()
+        self.pred_latent_lst = []
+        self.pred_action_lst = []
+        for name in (
+            "init_obs",
+            "init_latent",
+            "prompt_embeds",
+            "negative_prompt_embeds",
+            "action_mask",
+            "actions_q01",
+            "actions_q99",
+            "pred_action",
+            "gen_video",
+            "gen_video_final",
+            "inputs",
+            "input_info",
+        ):
+            setattr(self, name, None)
 
     def _run_pipeline_local(self):
         self.inputs = self.run_input_encoder()
@@ -642,7 +656,7 @@ class LingbotVAPolicy:
 
     def reset(self):
         if getattr(self, "_episode_started", False):
-            self.runner.reset_online_state()
+            self.runner.clear_run_state()
         self.pending_actions = deque()
         self._episode_started = False
         self._task_description = None

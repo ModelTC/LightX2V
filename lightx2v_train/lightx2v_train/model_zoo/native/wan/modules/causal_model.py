@@ -374,14 +374,11 @@ class CausalWanAttentionBlock(nn.Module):
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
         num_frames, frame_seqlen = e.shape[1], x.shape[1] // e.shape[1]
-        # assert e.dtype == torch.float32
-        # with amp.autocast(dtype=torch.float32):
-        e = (self.modulation.unsqueeze(1) + e).chunk(6, dim=2)
-        # assert e[0].dtype == torch.float32
+        e = (self.modulation.unsqueeze(1) + e.float()).chunk(6, dim=2)
 
         # self-attention
         self_attn_result = self.self_attn(
-            (self.norm1(x).unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * (1 + e[1]) + e[0]).flatten(1, 2),
+            (self.norm1(x.float()).unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * (1 + e[1]) + e[0]).flatten(1, 2).type_as(x),
             seq_lens,
             grid_sizes,
             freqs,
@@ -400,15 +397,13 @@ class CausalWanAttentionBlock(nn.Module):
             y = self_attn_result
             cache_update_info = None
 
-        # with amp.autocast(dtype=torch.float32):
-        x = x + (y.unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * e[2]).flatten(1, 2)
+        x = (x.float() + (y.unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * e[2]).flatten(1, 2)).type_as(x)
 
         # cross-attention & ffn function
         def cross_attn_ffn(x, context, context_lens, e, crossattn_cache=None):
-            x = x + self.cross_attn(self.norm3(x), context, context_lens, crossattn_cache=crossattn_cache)
-            y = self.ffn((self.norm2(x).unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * (1 + e[4]) + e[3]).flatten(1, 2))
-            # with amp.autocast(dtype=torch.float32):
-            x = x + (y.unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * e[5]).flatten(1, 2)
+            x = x + self.cross_attn(self.norm3(x.float()).type_as(x), context, context_lens, crossattn_cache=crossattn_cache)
+            y = self.ffn((self.norm2(x.float()).unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * (1 + e[4]) + e[3]).flatten(1, 2).type_as(x))
+            x = (x.float() + (y.float().unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * e[5]).flatten(1, 2)).type_as(x)
             return x
 
         x = cross_attn_ffn(x, context, context_lens, e, crossattn_cache)
@@ -439,11 +434,9 @@ class CausalHead(nn.Module):
             x(Tensor): Shape [B, L1, C]
             e(Tensor): Shape [B, F, 1, C]
         """
-        # assert e.dtype == torch.float32
-        # with amp.autocast(dtype=torch.float32):
         num_frames, frame_seqlen = e.shape[1], x.shape[1] // e.shape[1]
         e = (self.modulation.unsqueeze(1) + e).chunk(2, dim=2)
-        x = self.head(self.norm(x).unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * (1 + e[1]) + e[0])
+        x = self.head((self.norm(x.float()).unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * (1 + e[1]) + e[0]).type_as(x))
         return x
 
 

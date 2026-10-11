@@ -78,7 +78,6 @@ training:
         num_inference_steps: 4
         fake_update_ratio: 1
         div_loss:
-            enabled: true
             weight: 5.0e-2
             teacher_inference_steps: 30
             anchor_step: 5

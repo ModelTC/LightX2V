@@ -38,7 +38,7 @@
     "clip_quantized": false,
     "parallel": {
         "seq_p_size": 8,
-        "seq_p_fp8_comm": true,
+        "seq_p_quant_scheme": "fp8",
         "seq_p_attn_type": "ulysses"
     },
     "ar_config": {

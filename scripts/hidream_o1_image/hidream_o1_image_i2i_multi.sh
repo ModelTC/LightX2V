@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/wushuo/LightX2V
-hidream_o1_image_path=/data/nvme1/wushuo/HiDream-O1-Image
-model_path=/data/nvme1/wushuo/hf_models/HiDream-O1-Image
+lightx2v_path=/path/to/LightX2V
+hidream_o1_image_path=/path/to/HiDream-O1-Image
+model_path=/path/to/models/HiDream-O1-Image
 
 export CUDA_VISIBLE_DEVICES=0
 

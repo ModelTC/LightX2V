@@ -13,8 +13,6 @@
   "text_encoder_quant_scheme": "fp8-sgl",
   "text_encoder_quantized_ckpt": "/path/to/minimax_h3_text_encoder_fp8_sgl.safetensors",
   "vae_cpu_offload": true,
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "sage_attn2",
   "rms_type": "sgl-kernel",
   "rope_type": "minimax_h3_triton_rope",

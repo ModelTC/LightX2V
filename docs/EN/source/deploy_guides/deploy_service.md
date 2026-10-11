@@ -53,7 +53,7 @@ The service endpoints include:
 python scripts/server/stop_running_task.py
 ```
 
-The service endpoint is: `/v1/tasks/running`
+The script reads `current_task` from `GET /v1/service/status` and stops it with `DELETE /v1/tasks/{task_id}`. Queued tasks remain pending.
 
 After terminating the task, the server will not exit but will return to waiting for new requests.
 
@@ -84,6 +84,6 @@ python scripts/server/post_multi_servers.py
 | `/v1/tasks/` | GET | Get all task list |
 | `/v1/tasks/{task_id}/status` | GET | Get status of specified task |
 | `/v1/tasks/{task_id}/result` | GET | Get result video file of specified task |
-| `/v1/tasks/running` | DELETE | Stop currently running task |
+| `/v1/tasks/{task_id}` | DELETE | Stop the specified task |
 | `/v1/files/download/{file_path}` | GET | Download file |
 | `/v1/service/status` | GET | Get service status |

@@ -24,15 +24,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default="Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
     )
-    parser.add_argument(
-        "--negative_prompt",
-        type=str,
-        default=(
-            "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，"
-            "最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，"
-            "畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
-        ),
-    )
+    parser.add_argument("--negative_prompt", type=str, default=None)
     parser.add_argument("--save_result_path", type=str, default=None)
 
     parser.add_argument(
@@ -60,9 +52,7 @@ def _normalize_disagg_config(config: dict) -> dict:
             "encoder_engine_rank": "encoder_engine_rank",
             "transformer_engine_rank": "transformer_engine_rank",
             "decoder_engine_rank": "decoder_engine_rank",
-            "protocol": "protocol",
             "local_hostname": "local_hostname",
-            "metadata_server": "metadata_server",
         }
         for src_key, dst_key in mapping.items():
             if src_key in disagg_cfg:
@@ -90,7 +80,6 @@ def _build_runtime_config(args: argparse.Namespace) -> tuple[dict, dict]:
     config = build_startup_config({"model_path": args.model_path, "task": args.task, "model_cls": args.model_cls, "config_json": args.config_json})
 
     config = _normalize_disagg_config(config)
-    raw_cfg = _normalize_disagg_config(raw_cfg)
 
     return config, raw_cfg
 
@@ -102,7 +91,7 @@ def main():
 
     if args.engine_rank is not None and service_mode in {"encoder", "transformer", "decoder"}:
         rank_key = f"{service_mode}_engine_rank"
-        config[rank_key] = int(args.engine_rank)
+        config[rank_key] = args.engine_rank
 
     seed_all(args.seed)
     logger.info("Starting disagg service mode={}", service_mode)

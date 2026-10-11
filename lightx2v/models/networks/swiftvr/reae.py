@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from collections.abc import Iterator
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from safetensors import safe_open
+
+from .parallel import exchange_chunk_boundary
 
 
 def convolution(input_channels: int, output_channels: int, **kwargs):
@@ -16,7 +21,7 @@ def convolution(input_channels: int, output_channels: int, **kwargs):
 
 class Clamp(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return torch.tanh(hidden_states / 3) * 3
+        return (hidden_states / 3).tanh_() * 3
 
 
 class MemoryBlock(nn.Module):
@@ -32,8 +37,13 @@ class MemoryBlock(nn.Module):
         self.skip = nn.Conv2d(input_channels, output_channels, 1, bias=False) if input_channels != output_channels else nn.Identity()
         self.activation = nn.ReLU(inplace=True)
 
-    def forward(self, hidden_states: torch.Tensor, previous: torch.Tensor) -> torch.Tensor:
-        return self.activation(self.conv(torch.cat([hidden_states, previous], dim=1)) + self.skip(hidden_states))
+    def forward(self, sequence: torch.Tensor, previous_frame: torch.Tensor | None) -> torch.Tensor:
+        if previous_frame is None:
+            previous_frame = torch.zeros_like(sequence[:, :1])
+        previous = torch.cat([previous_frame, sequence[:, :-1]], dim=1)
+        inputs = torch.cat([sequence, previous], dim=2).flatten(0, 1)
+        del previous
+        return self.activation(self.conv(inputs).add_(self.skip(sequence.flatten(0, 1))))
 
 
 def run_frame_batches(function, hidden_states: torch.Tensor, frame_batch_size: int | None) -> torch.Tensor:
@@ -72,23 +82,9 @@ class TemporalPool(nn.Module):
         self.conv = nn.Conv2d(channels * stride, channels, 1, bias=False)
 
     def forward(self, hidden_states: torch.Tensor, frame_batch_size: int | None = None) -> torch.Tensor:
-        frame_groups, channels, height, width = hidden_states.shape
-
-        def pool_frames(frames):
-            return self.conv(frames.reshape(-1, self.stride * channels, height, width))
-
-        output_frame_count = frame_groups // self.stride
-        if not frame_batch_size or output_frame_count <= frame_batch_size:
-            return pool_frames(hidden_states)
-
-        output = None
-        for start in range(0, output_frame_count, frame_batch_size):
-            end = min(start + frame_batch_size, output_frame_count)
-            batch = pool_frames(hidden_states[start * self.stride : end * self.stride])
-            if output is None:
-                output = batch.new_empty((output_frame_count, *batch.shape[1:]))
-            output[start:end].copy_(batch)
-        return output
+        _, channels, height, width = hidden_states.shape
+        frame_groups = hidden_states.reshape(-1, self.stride * channels, height, width)
+        return run_frame_batches(self.conv, frame_groups, frame_batch_size)
 
 
 class TemporalGrow(nn.Module):
@@ -102,17 +98,14 @@ class TemporalGrow(nn.Module):
             self.conv3d = nn.Conv3d(channels, channels, (3, 1, 1), padding=(1, 0, 0), bias=False)
             self.proj = None
 
-    def forward(self, hidden_states: torch.Tensor, frame_batch_size: int | None = None) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if self.stride == 1:
-            return run_frame_batches(self.proj, hidden_states, frame_batch_size)
+            return self.proj(hidden_states)
 
-        def grow_frames(frames):
-            frame_groups, channels, height, width = frames.shape
-            frames = F.interpolate(frames.unsqueeze(2), size=(self.stride, height, width), mode="nearest")
-            frames = self.conv3d(frames)
-            return frames.permute(0, 2, 1, 3, 4).reshape(frame_groups * self.stride, channels, height, width)
-
-        return run_frame_batches(grow_frames, hidden_states, frame_batch_size)
+        frames, channels, height, width = hidden_states.shape
+        hidden_states = F.interpolate(hidden_states.unsqueeze(2), size=(self.stride, height, width), mode="nearest")
+        hidden_states = self.conv3d(hidden_states)
+        return hidden_states.permute(0, 2, 1, 3, 4).reshape(frames * self.stride, channels, height, width)
 
 
 class RestorationAutoencoder(nn.Module):
@@ -144,30 +137,36 @@ class RestorationAutoencoder(nn.Module):
         )
 
         widths = (512, 256, 128, 64)
+        # TemporalGrow is spatially pointwise, so run it before nearest upsampling.
+        # List layers in execution order; numeric names preserve checkpoint keys.
         self.decoder = nn.Sequential(
-            Clamp(),
-            convolution(48, widths[0]),
-            nn.ReLU(inplace=True),
-            MemoryBlock(widths[0], widths[0]),
-            MemoryBlock(widths[0], widths[0]),
-            MemoryBlock(widths[0], widths[0]),
-            nn.Upsample(scale_factor=2),
-            TemporalGrow(widths[0], 1),
-            convolution(widths[0], widths[1], bias=False),
-            MemoryBlock(widths[1], widths[1]),
-            MemoryBlock(widths[1], widths[1]),
-            MemoryBlock(widths[1], widths[1]),
-            nn.Upsample(scale_factor=2),
-            TemporalGrow(widths[1], 2),
-            convolution(widths[1], widths[2], bias=False),
-            MemoryBlock(widths[2], widths[2]),
-            MemoryBlock(widths[2], widths[2]),
-            MemoryBlock(widths[2], widths[2]),
-            nn.Upsample(scale_factor=2),
-            TemporalGrow(widths[2], 2),
-            convolution(widths[2], widths[3], bias=False),
-            nn.ReLU(inplace=True),
-            convolution(widths[3], 12),
+            OrderedDict(
+                [
+                    ("0", Clamp()),
+                    ("1", convolution(48, widths[0])),
+                    ("2", nn.ReLU(inplace=True)),
+                    ("3", MemoryBlock(widths[0], widths[0])),
+                    ("4", MemoryBlock(widths[0], widths[0])),
+                    ("5", MemoryBlock(widths[0], widths[0])),
+                    ("7", TemporalGrow(widths[0], 1)),
+                    ("6", nn.Upsample(scale_factor=2)),
+                    ("8", convolution(widths[0], widths[1], bias=False)),
+                    ("9", MemoryBlock(widths[1], widths[1])),
+                    ("10", MemoryBlock(widths[1], widths[1])),
+                    ("11", MemoryBlock(widths[1], widths[1])),
+                    ("13", TemporalGrow(widths[1], 2)),
+                    ("12", nn.Upsample(scale_factor=2)),
+                    ("14", convolution(widths[1], widths[2], bias=False)),
+                    ("15", MemoryBlock(widths[2], widths[2])),
+                    ("16", MemoryBlock(widths[2], widths[2])),
+                    ("17", MemoryBlock(widths[2], widths[2])),
+                    ("19", TemporalGrow(widths[2], 2)),
+                    ("18", nn.Upsample(scale_factor=2)),
+                    ("20", convolution(widths[2], widths[3], bias=False)),
+                    ("21", nn.ReLU(inplace=True)),
+                    ("22", convolution(widths[3], 12)),
+                ]
+            )
         )
 
     @classmethod
@@ -186,6 +185,7 @@ def run_causal_layers(
     video: torch.Tensor,
     state: dict | None,
     frame_batch_size: int | None = None,
+    chunk_p_group=None,
 ):
     state = state or {}
     next_state = {}
@@ -215,12 +215,17 @@ def run_causal_layers(
         layer_frames = hidden_states.shape[0] // batch
         sequence = hidden_states.reshape(batch, layer_frames, channels, height, width)
         state_key = f"memory_{index}"
-        if state_key in state:
-            previous = torch.cat([state[state_key], sequence[:, :-1]], dim=1)
+        previous_frame = state.get(state_key)
+        if chunk_p_group is not None:
+            boundary = exchange_chunk_boundary(sequence[:, -1:].contiguous(), chunk_p_group)
+            # Rank 0 carries the last rank's boundary into the next batch.
+            if dist.get_rank(chunk_p_group) != 0:
+                previous_frame = boundary
+            else:
+                next_state[state_key] = boundary
         else:
-            previous = F.pad(sequence, (0, 0, 0, 0, 0, 0, 1, 0))[:, :layer_frames]
-        next_state[state_key] = sequence[:, -1:].detach().clone()
-        hidden_states = layer(hidden_states, previous.reshape_as(hidden_states))
+            next_state[state_key] = sequence[:, -1:].detach().clone()
+        hidden_states = layer(sequence, previous_frame)
         index += 1
 
     _, channels, height, width = hidden_states.shape
@@ -231,6 +236,11 @@ class StreamingAutoencoder:
     def __init__(self, autoencoder: RestorationAutoencoder, frame_batch_size: int = 1):
         self.autoencoder = autoencoder
         self.frame_batch_size = frame_batch_size
+        self.chunk_p_group = None
+        # The final temporal expansion precedes the frame-independent output layers.
+        output_start = max(index for index, layer in enumerate(autoencoder.decoder) if isinstance(layer, TemporalGrow)) + 1
+        self.decoder_layers = autoencoder.decoder[:output_start]
+        self.output_layers = autoencoder.decoder[output_start:]
         self.reset()
 
     def reset(self):
@@ -249,19 +259,30 @@ class StreamingAutoencoder:
             video,
             self.encoder_state,
             self.frame_batch_size,
+            self.chunk_p_group,
         )
         return latents
 
     @torch.inference_mode()
-    def decode(self, latents: torch.Tensor, is_first: bool) -> torch.Tensor:
+    def decode(self, latents: torch.Tensor, is_first: bool, output_batch_size: int = 0) -> Iterator[torch.Tensor]:
         video, self.decoder_state = run_causal_layers(
-            self.autoencoder.decoder,
+            self.decoder_layers,
             latents,
             self.decoder_state,
             self.frame_batch_size,
+            self.chunk_p_group,
         )
-        video = video.clamp_(0, 1)
-        batch, frames, channels, height, width = video.shape
-        video = F.pixel_shuffle(video.reshape(batch * frames, channels, height, width), self.autoencoder.patch_size)
-        video = video.reshape(batch, frames, *video.shape[1:])
-        return video[:, self.autoencoder.frames_to_trim :] if is_first else video
+        # Causal state is complete; omit discarded frames from the high-resolution layers.
+        if is_first:
+            video = video[:, self.autoencoder.frames_to_trim :]
+
+        @torch.inference_mode()
+        def decode_frames():
+            for frame_batch in video.split(output_batch_size or video.shape[1], dim=1):
+                batch, frames, channels, height, width = frame_batch.shape
+                pixels = run_frame_layers(self.output_layers, frame_batch.reshape(batch * frames, channels, height, width), self.frame_batch_size)
+                pixels = F.pixel_shuffle(pixels.clamp_(0, 1), self.autoencoder.patch_size)
+                yield pixels.reshape(batch, frames, *pixels.shape[1:])
+
+        # Issue all causal exchanges even if the caller does not consume every pixel batch.
+        return decode_frames()

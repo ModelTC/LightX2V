@@ -1,11 +1,9 @@
 {
     "infer_steps": 40,
     "num_frames": 81,
-    "text_len": 512,
     "size": [720, 1280],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
-    "cross_attn_2_type": "flash_attn3",
     "sample_guide_scale": [
         4.0,
         3.0

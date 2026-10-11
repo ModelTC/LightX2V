@@ -35,7 +35,7 @@
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ring",
-        "seq_p_fp8_comm": true,
+        "seq_p_quant_scheme": "fp8",
         "seq_p_head_parallel": true,
         "seq_p_tensor_fusion": false
     }

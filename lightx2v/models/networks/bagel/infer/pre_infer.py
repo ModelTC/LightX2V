@@ -9,27 +9,17 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 class BagelPreInfer:
     def __init__(self, config, llm_config):
-        self.config = config
         self.head_dim = llm_config.get("head_dim", llm_config["hidden_size"] // llm_config["num_attention_heads"])
         if self.head_dim % 2:
             raise ValueError(f"BAGEL RoPE head_dim must be even, got {self.head_dim}.")
 
-        rope_scaling = llm_config.get("rope_scaling")
-        rope_scaling_type = None if rope_scaling is None else rope_scaling.get("rope_type", rope_scaling.get("type"))
-        if rope_scaling_type not in (None, "default"):
-            raise NotImplementedError(f"BAGEL currently supports only default RoPE, got rope_scaling type {rope_scaling_type!r}.")
-
         rope_theta = llm_config.get("rope_theta", 10000.0)
         self.inv_freq = 1.0 / (rope_theta ** (torch.arange(0, self.head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / self.head_dim))
-        self.attention_scaling = 1.0
         self.rope = None
         self.connector_activation = ACT2FN[config.get("connector_act", "gelu_pytorch_tanh")]
 
     def set_rope(self, rope):
         self.rope = rope
-
-    def set_scheduler(self, scheduler):
-        self.scheduler = scheduler
 
     def embed_tokens(self, weights, packed_text_ids):
         packed_text_ids = packed_text_ids.to(AI_DEVICE)
@@ -50,8 +40,6 @@ class BagelPreInfer:
             cos = emb.cos()
             sin = emb.sin()
 
-        cos = cos * self.attention_scaling
-        sin = sin * self.attention_scaling
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
     def prepare_rope(self, packed_sequence, packed_position_ids, device=AI_DEVICE):

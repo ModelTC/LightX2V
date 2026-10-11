@@ -10,6 +10,7 @@ from lightx2v_train.infer import build_inferencer
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
 from lightx2v_train.runtime.fsdp import apply_fsdp2, fsdp2_enabled
+from lightx2v_train.runtime.precision import configure_precision
 
 
 def parse_args():
@@ -91,6 +92,7 @@ def _build_low_model_for_dual_infer(config, reference_model):
 def main():
     args = parse_args()
     config = load_config(args.config)
+    configure_precision(config, section="inference")
     init_distributed(config)
     setup_logger(config)
 

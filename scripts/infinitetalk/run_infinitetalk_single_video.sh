@@ -16,7 +16,7 @@ python -m lightx2v.infer \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/infinitetalk/infinitetalk_480p_single_distilled.json \
 --prompt "A man is talking" \
---video_path /data/nvme4/gushiqiao/new/InfiniteTalk/examples/single/ref_video.mp4 \
---audio_path /data/nvme4/gushiqiao/new/InfiniteTalk/examples/single/1.wav \
+--video_path /path/to/ref_video.mp4 \
+--audio_path /path/to/audio.wav \
 --save_result_path ${lightx2v_path}/save_results/infinitetalk_single_video_480p.mp4 \
 --seed 42

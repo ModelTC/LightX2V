@@ -1,21 +1,10 @@
 {
     "infer_steps": 4,
-    "in_dim": 36,
-    "dim": 5120,
-    "ffn_dim": 13824,
-    "freq_dim": 256,
-    "num_heads": 40,
-    "num_layers": 40,
-    "out_dim": 16,
-    "eps": 1e-06,
-    "model_type": "i2v",
     "num_frames": 81,
-    "text_len": 512,
     "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
-    "cross_attn_2_type": "sage_attn2",
     "sample_guide_scale": [
         3.5,
         3.5
@@ -40,8 +29,6 @@
     "dit_quant_scheme": "int8-q8f",
     "high_noise_quantized_ckpt": "/path/to/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
     "low_noise_quantized_ckpt": "/path/to/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
-    "high_noise_original_ckpt": "/path/to/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
-    "low_noise_original_ckpt": "/path/to/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
     "disagg_mode": "encoder",
     "disagg_config": {
         "bootstrap_addr": "192.168.0.166",
@@ -50,8 +37,6 @@
         "encoder_engine_rank": 0,
         "transformer_engine_rank": 1,
         "decoder_engine_rank": 2,
-        "protocol": "rdma",
-        "local_hostname": "192.168.0.139",
-        "metadata_server": "P2PHANDSHAKE"
+        "local_hostname": "192.168.0.139"
     }
 }

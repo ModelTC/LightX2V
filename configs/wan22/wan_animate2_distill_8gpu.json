@@ -39,7 +39,6 @@
     "refer_offset_h": 0,
     "refer_offset_w": -1,
     "refer_stride": 1,
-    "sparse_type": 0,
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -58,8 +57,7 @@
     "vae_dtype": "torch.bfloat16",
     "parallel": {
         "seq_p_size": 8,
-        "seq_p_attn_type": "ulysses",
-        "vae_parallel": false
+        "seq_p_attn_type": "ulysses"
     },
     "dit_original_ckpt": "/path/to/wan_animate_2_bf16_distillation.safetensors",
     "t5_original_ckpt": "/path/to/models_t5_umt5-xxl-enc-bf16.pth",

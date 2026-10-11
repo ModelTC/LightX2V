@@ -96,7 +96,6 @@ class WanT2VModel(BaseModel):
         scheduler_config = self.config.get("scheduler", {})
         self.num_train_timesteps = scheduler_config.get("num_train_timesteps", 1000)
         self.max_sequence_length = model_config.get("max_sequence_length", 512)
-        self.transformer_param_dtype = get_running_dtype(model_config.get("transformer_param_dtype", "fp32"))
         self.vae_dtype = get_running_dtype(model_config.get("vae_dtype", "fp32"))
         self.t5_dtype = get_running_dtype(model_config.get("t5_dtype", "bf16"))
         self.t5_cpu = model_config.get("t5_cpu", False)
@@ -272,7 +271,7 @@ class WanT2VModel(BaseModel):
         inputs = sample["inputs"]
         latent = inputs.get("latents")
         if latent is not None:
-            latent = latent.to(device=self.device, dtype=self.running_dtype)
+            latent = latent.to(device=self.device, dtype=self.latent_dtype)
             if latent.ndim == 4:
                 latent = latent.unsqueeze(0)
             if latent.shape[0] != 1:
@@ -289,7 +288,7 @@ class WanT2VModel(BaseModel):
         if video.shape[0] != 1:
             raise ValueError("Wan training only supports physical batch size 1.")
         latent = torch.stack(self.vae.encode(self._batch_to_list(video)), dim=0)
-        return latent.to(dtype=self.running_dtype)
+        return latent.to(dtype=self.latent_dtype)
 
     def encode_condition(self, sample):
         conditioning = sample["conditioning"]
@@ -427,7 +426,7 @@ class WanT2VModel(BaseModel):
             height // self.vae_scale_factor_spatial,
             width // self.vae_scale_factor_spatial,
         )
-        return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
+        return torch.randn(shape, generator=generator, device=self.device, dtype=self.latent_dtype)
 
     def decode_latent(self, latent):
         if self.vae is None:

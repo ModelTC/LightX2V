@@ -1,0 +1,5 @@
+# Chinese counterpart: openai.yaml
+interface:
+  display_name: "LightX2V CPU Block Offload and Weight Sharing"
+  short_description: "Integrate CPU block offload with host/NUMA shared weights"
+  default_prompt: "Use $support-cpu-block-offload to integrate CPU block offload and shared CPU weights for a LightX2V model, delivering a directly editable launcher with eight GPUs and host sharing by default, CLI host/NUMA selection, a configuration, bilingual guides, and validation results."

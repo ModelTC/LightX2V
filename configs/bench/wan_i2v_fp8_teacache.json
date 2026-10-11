@@ -1,0 +1,23 @@
+{
+    "infer_steps": 40,
+    "num_frames": 81,
+    "size": [480, 832],
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "sample_guide_scale": 5,
+    "sample_shift": 5,
+    "enable_cfg": true,
+    "cpu_offload": false,
+    "dit_quantized": true,
+    "dit_quantized_ckpt": "/path/to/Wan2.1-I2V-14B-480P-Lightx2v/fp8",
+    "dit_quant_scheme": "fp8-sgl",
+    "feature_caching": "Tea",
+    "coefficients": [
+        [2.57151496e05, -3.54229917e04, 1.40286849e03, -1.35890334e01, 1.32517977e-01],
+        [-3.02331670e02, 2.23948934e02, -5.25463970e01, 5.87348440e00, -2.01973289e-01]
+    ],
+    "use_ret_steps": false,
+    "teacache_thresh": 0.2,
+    "use_tiling_vae": true
+}

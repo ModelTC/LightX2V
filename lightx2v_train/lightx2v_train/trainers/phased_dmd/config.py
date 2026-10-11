@@ -136,7 +136,7 @@ class PhasedDmdConfig(DmdScheduleConfig):
             guidance_distill=float(phased.get("guidance_distill", 6.0)),
             student_2=student_2,
             fake_2=fake_2,
-            enable_fake_low_high=bool(phased.get("enable_fake_low_high", True)),
+            enable_fake_low_high=bool(phased.get("enable_fake_low_high", False)),
             student_2_train_type=student_2["train_type"],
             fake_2_train_type=fake_2["train_type"],
             fake_low_high_train_type=fake_2["train_type"],

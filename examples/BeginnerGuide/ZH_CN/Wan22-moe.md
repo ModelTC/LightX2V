@@ -248,7 +248,7 @@ wan_moe_t2v.json 内容如下
 
 `size` 表示目标尺寸，按 `[高度, 宽度]` 填写。
 
-`self_attn_1_type`, `cross_attn_1_type`, `cross_attn_2_type` 表示wan2.2模型内部的三个注意力层的算子的类型，这里使用flash_attn3，仅限于Hopper架构的显卡(H100, H20等)，其他显卡可以使用flash_attn2进行替代
+`self_attn_1_type`、`cross_attn_1_type` 分别指定自注意力和文本交叉注意力算子。Hopper 显卡（H100、H20 等）使用 `flash_attn3`，其他支持的显卡使用 `flash_attn2`。
 
 `sample_guide_scale` 表示CFG引导尺度，两个值分别对应高噪声阶段和低噪声阶段
 
@@ -265,19 +265,17 @@ wan_moe_t2v_distill_lora.json内容如下：
 {
     "infer_steps": 4,
     "num_frames": 81,
-    "text_len": 512,
     "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
-    "cross_attn_2_type": "flash_attn3",
     "sample_guide_scale": [
         4.0,
         3.0
     ],
     "sample_shift": 5.0,
     "enable_cfg": false,
-    "cpu_offload": true,
+    "cpu_offload": false,
     "offload_granularity": "model",
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
@@ -311,19 +309,17 @@ wan_moe_i2v_distill_model.json内容如下
 {
     "infer_steps": 4,
     "num_frames": 81,
-    "text_len": 512,
     "size": [720, 1280],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
-    "cross_attn_2_type": "flash_attn3",
     "sample_guide_scale": [
         3.5,
         3.5
     ],
     "sample_shift": 5.0,
     "enable_cfg": false,
-    "cpu_offload": true,
+    "cpu_offload": false,
     "offload_granularity": "block",
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
@@ -349,12 +345,10 @@ wan_moe_i2v_distill_quant.json内容如下：
 {
     "infer_steps": 4,
     "num_frames": 81,
-    "text_len": 512,
     "size": [720, 1280],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
-    "cross_attn_2_type": "flash_attn3",
     "sample_guide_scale": [
         3.5,
         3.5

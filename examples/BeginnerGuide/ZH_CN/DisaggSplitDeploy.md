@@ -242,7 +242,7 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
 
 ## 2. 配置方法
 
-所有分离部署参数统一在 config json 的 `disagg_config` 字段中配置。
+路由和队列参数写在 `disagg_config` 中。Mooncake 读取 `MOONCAKE_CONFIG_PATH` 指定的文件（脚本使用 `configs/mooncake_config.json`），对应的 `MOONCAKE_*` 环境变量优先。
 
 ### 2.1 T2V 配置示例
 
@@ -252,11 +252,9 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
 {
     "infer_steps": 50,
     "num_frames": 81,
-    "text_len": 512,
     "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
-    "cross_attn_2_type": "sage_attn2",
     "sample_guide_scale": 5,
     "sample_shift": 5,
     "enable_cfg": true,
@@ -267,10 +265,7 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 0,
         "sender_engine_rank": 0,
-        "receiver_engine_rank": 1,
-        "protocol": "rdma",
-        "local_hostname": "localhost",
-        "metadata_server": "P2PHANDSHAKE"
+        "receiver_engine_rank": 1
     }
 }
 ```
@@ -285,9 +280,6 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
         "bootstrap_room": 0,
         "sender_engine_rank": 0,
         "receiver_engine_rank": 1,
-        "protocol": "rdma",
-        "local_hostname": "localhost",
-        "metadata_server": "P2PHANDSHAKE",
         "decoder_engine_rank": 2,
         "decoder_bootstrap_room": 1
     }
@@ -303,10 +295,7 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 1,
         "sender_engine_rank": 1,
-        "receiver_engine_rank": 2,
-        "protocol": "rdma",
-        "local_hostname": "localhost",
-        "metadata_server": "P2PHANDSHAKE"
+        "receiver_engine_rank": 2
     }
 }
 ```
@@ -321,7 +310,6 @@ I2V 使用 **ViT-H/14** CLIP 图像编码器，其输出为完整序列特征（
 {
     "infer_steps": 40,
     "num_frames": 81,
-    "text_len": 512,
     "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "sample_guide_scale": 5,
@@ -335,10 +323,7 @@ I2V 使用 **ViT-H/14** CLIP 图像编码器，其输出为完整序列特征（
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 2,
         "sender_engine_rank": 0,
-        "receiver_engine_rank": 1,
-        "protocol": "rdma",
-        "local_hostname": "localhost",
-        "metadata_server": "P2PHANDSHAKE"
+        "receiver_engine_rank": 1
     }
 }
 ```
@@ -364,10 +349,7 @@ Wan T2V Decoder 见上文；Qwen Image I2I Decoder 示例（`configs/disagg/qwen
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 2,
         "sender_engine_rank": 1,
-        "receiver_engine_rank": 2,
-        "protocol": "rdma",
-        "local_hostname": "localhost",
-        "metadata_server": "P2PHANDSHAKE"
+        "receiver_engine_rank": 2
     }
 }
 ```
@@ -386,9 +368,6 @@ Decoder 的 `bootstrap_room` 必须与 Transformer 配置中的 `**decoder_boots
 | `receiver_engine_rank`   | Phase1 中 Transformer 的 rank；Phase2 中 Decoder 的 rank              |
 | `decoder_engine_rank`    | **仅 Transformer 配置**：Phase2 中 Decoder 的 rank，用于建立 Phase2 发送      |
 | `decoder_bootstrap_room` | **仅 Transformer 配置**：Phase2 房间号，需与 Decoder 的 `bootstrap_room` 一致 |
-| `protocol`               | Mooncake 传输协议：`"rdma"`（推荐）或 `"tcp"`                              |
-| `local_hostname`         | 本节点主机名/IP，用于 Mooncake P2P 握手                                     |
-| `metadata_server`        | Mooncake 元数据服务，单节点使用 `"P2PHANDSHAKE"` 即可                         |
 | `clip_embed_dim`         | CLIP 输出的展平元素总数（**仅 I2V 需要**，ViT-H/14 为 329216）                   |
 
 
@@ -569,9 +548,6 @@ Controller 不加载模型，仅初始化三组 RDMA ring buffer：
     "encoder_engine_rank": 0,
     "transformer_engine_rank": 1,
     "decoder_engine_rank": 4,
-    "protocol": "rdma",
-    "local_hostname": "localhost",
-    "metadata_server": "P2PHANDSHAKE",
     "rdma_buffer_slots": 128,
     "rdma_buffer_slot_size": 4096,
     "rdma_request_handshake_port": 5566,
@@ -598,10 +574,7 @@ Encoder 以 HTTP 服务方式运行，加载 Text Encoder，推理完成后将�
     "bootstrap_addr": "127.0.0.1",
     "bootstrap_room": 0,
     "sender_engine_rank": 0,
-    "receiver_engine_rank": 1,
-    "protocol": "rdma",
-    "local_hostname": "localhost",
-    "metadata_server": "P2PHANDSHAKE"
+    "receiver_engine_rank": 1
   }
 }
 ```
@@ -628,10 +601,7 @@ Transformer 作为 pull worker，从 Phase1 ring 消费任务，推理后写入 
     "bootstrap_addr": "127.0.0.1",
     "bootstrap_room": 0,
     "sender_engine_rank": 0,
-    "receiver_engine_rank": 1,
-    "protocol": "rdma",
-    "local_hostname": "localhost",
-    "metadata_server": "P2PHANDSHAKE"
+    "receiver_engine_rank": 1
   }
 }
 ```
@@ -657,10 +627,7 @@ Decoder 作为 pull worker，从 Phase2 ring 消费任务，执行 VAE 解码并
     "bootstrap_addr": "127.0.0.1",
     "bootstrap_room": 0,
     "sender_engine_rank": 1,
-    "receiver_engine_rank": 4,
-    "protocol": "rdma",
-    "local_hostname": "localhost",
-    "metadata_server": "P2PHANDSHAKE"
+    "receiver_engine_rank": 4
   }
 }
 ```
@@ -805,4 +772,4 @@ while True:
 | **推荐场景**   | 生产多机部署                         | 单机验证、无 RDMA 硬件环境 |
 
 
-> 如无 RDMA 硬件，将 `disagg_config` 中 `protocol` 设为 `"tcp"` 即可正常工作。
+> 启动前设置 `export MOONCAKE_PROTOCOL=tcp` 可让 Mooncake 使用 TCP；去中心化队列仍需 RDMA 硬件。

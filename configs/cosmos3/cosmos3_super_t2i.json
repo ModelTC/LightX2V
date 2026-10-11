@@ -4,15 +4,12 @@
     "sample_shift": 3.0,
     "size": [1024, 1024],
     "num_frames": 1,
-    "fps": 24.0,
     "enable_cfg": true,
-    "feature_caching": "NoCaching",
     "rms_norm_type": "one-pass",
     "attn_rms_norm_type": "one-pass",
     "rope_type": "cosmos3_rope",
     "self_attn_type": "flash_attn3",
     "causal_self_attn_type": "flash_attn3",
     "vae_cpu_offload": false,
-    "cpu_offload": false,
-    "offload_granularity": "block"
+    "cpu_offload": false
 }

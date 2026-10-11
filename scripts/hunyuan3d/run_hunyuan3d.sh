@@ -4,14 +4,14 @@ lightx2v_path=/path/to/LightX2V
 model_path=/path/to/Hunyuan3D-2.1
 
 # Hunyuan3D-2.1 full pipeline: image -> shape mesh (.glb) -> textured mesh (.glb)
-# 1. git clone Hunyuan3D-2.1 and install following readme，use “pip install --no-cache-dir --no-build-isolation -v -e . ” to compile（pybind11==2.13.4 is need）
-# 2. ln -sfn /path/to/Hunyuan3D-2.1/hy3dpaint ${lightx2v_path}/tools/postprocess/hy3dpaint
+# Clone Hunyuan3D-2.1 and follow its README to install dependencies.
+# Build with pybind11==2.13.4: pip install --no-cache-dir --no-build-isolation -v -e .
 
 export CUDA_VISIBLE_DEVICES=0
 
 source ${lightx2v_path}/scripts/base/base.sh
 export DTYPE=FP16
-export hy_repo=/path/to/Hunyuan3D-2.1
+hy_repo=/path/to/Hunyuan3D-2.1
 
 image_path=${hy_repo}/assets/demo.png
 output_dir=${lightx2v_path}/save_results/hunyuan3d
@@ -34,6 +34,7 @@ echo "Saved mesh: ${mesh_path}"
 
 echo "=== Step 2/2: mesh texture (paint) ==="
 python ${lightx2v_path}/tools/postprocess/postprocess_paint.py \
+    --hy_repo ${hy_repo} \
     --model_path "${model_path}" \
     --mesh_path "${mesh_path}" \
     --image_path "${image_path}" \

@@ -18,7 +18,7 @@ class Flux2VAE:
         self.config = config
         self.cpu_offload = config.get("vae_cpu_offload", config.get("cpu_offload", False))
         self.latent_channels = config.get("latent_channels", 16)
-        self.vae_scale_factor = config.get("vae_scale_factor", 8)
+        self.vae_scale_factor = config["vae_scale_factor"]
         self.load()
 
     def load(self):

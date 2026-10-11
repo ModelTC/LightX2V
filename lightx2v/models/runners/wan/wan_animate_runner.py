@@ -249,7 +249,7 @@ class WanAnimateRunner(WanRunner):
                 y_reft = self.vae_encoder.encode(
                     torch.concat(
                         [
-                            refer_t_pixel_values.unsqueeze(2)[0, :, : self.mask_reft_len],
+                            refer_t_pixel_values[:, : self.mask_reft_len],
                             bg_pixel_values[:, self.mask_reft_len :],
                         ],
                         dim=1,
@@ -274,7 +274,7 @@ class WanAnimateRunner(WanRunner):
                     torch.concat(
                         [
                             torch.nn.functional.interpolate(
-                                refer_t_pixel_values.unsqueeze(2)[0, :, : self.mask_reft_len].cpu(),
+                                refer_t_pixel_values[:, : self.mask_reft_len].cpu(),
                                 size=(H, W),
                                 mode="bicubic",
                             ),
@@ -310,12 +310,18 @@ class WanAnimateRunner(WanRunner):
         return y, pose_latents
 
     def prepare_input(self):
+        num_frames = self.get_num_frames()
+        refert_num = self.config["refert_num"]
+        if refert_num not in (1, 5):
+            raise ValueError(f"WanAnimate refert_num must be 1 or 5, got {refert_num}")
+        if num_frames <= refert_num:
+            raise ValueError(f"WanAnimate num_frames must exceed refert_num ({refert_num}), got {num_frames}")
+
         pose_video_path = self.input_info.pose_video_path
         face_video_path = self.input_info.face_video_path
         src_ref_path = self.input_info.ref_image_paths
         self.cond_images, self.face_images, self.refer_images = self.prepare_source(pose_video_path, face_video_path, src_ref_path)
         self.refer_pixel_values = torch.tensor(self.refer_images / 127.5 - 1, dtype=GET_DTYPE(), device=AI_DEVICE).permute(2, 0, 1)  # chw
-        num_frames = self.get_num_frames()
         self.latent_t = num_frames // self.config["vae_stride"][0] + 1
         self.latent_h = self.refer_pixel_values.shape[-2] // self.config["vae_stride"][1]
         self.latent_w = self.refer_pixel_values.shape[-1] // self.config["vae_stride"][2]
@@ -324,7 +330,7 @@ class WanAnimateRunner(WanRunner):
         target_len = self.get_valid_len(
             self.real_frame_len,
             num_frames,
-            overlap=self.config["refert_num"] if "refert_num" in self.config else 1,
+            overlap=refert_num,
         )
         logger.info("real frames: {} target frames: {}".format(self.real_frame_len, target_len))
         self.cond_images = self.inputs_padding(self.cond_images, target_len)
@@ -404,7 +410,7 @@ class WanAnimateRunner(WanRunner):
                 dtype=GET_DTYPE(),
             )  # c t h w
         else:
-            refer_t_pixel_values = self.gen_video[0, :, -self.config["refert_num"] :].transpose(0, 1).clone().detach().to(AI_DEVICE)  # c t h w
+            refer_t_pixel_values = self.gen_video[0, :, -self.config["refert_num"] :].clone().detach().to(AI_DEVICE)  # c t h w
 
         bg_pixel_values, mask_pixel_values = None, None
         if self.config["replace_flag"] if "replace_flag" in self.config else False:

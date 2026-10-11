@@ -979,10 +979,11 @@ class WanTransformerInferDynamicBlock(WanTransformerInferCaching):
 class WanTransformerInferMagCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
-        self.magcache_thresh = config["magcache_thresh"]
-        self.K = config["magcache_K"]
-        self.retention_ratio = config["magcache_retention_ratio"]
-        self.mag_ratios = np.array(config["magcache_ratios"])
+        if not config["magcache_calibration"]:
+            self.magcache_thresh = config["magcache_thresh"]
+            self.K = config["magcache_K"]
+            self.retention_ratio = config["magcache_retention_ratio"]
+            self.mag_ratios = np.array(config["magcache_ratios"])
         # {True: cond_param, False: uncond_param}
         self.accumulated_err = {True: 0.0, False: 0.0}
         self.accumulated_steps = {True: 0, False: 0}

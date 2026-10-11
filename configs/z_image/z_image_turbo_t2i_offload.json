@@ -1,11 +1,9 @@
 {
     "aspect_ratio": "16:9",
-    "num_channels_latents": 16,
     "infer_steps": 9,
     "attn_type": "flash_attn3",
     "enable_cfg": false,
     "sample_guide_scale": 0.0,
-    "patch_size": 2,
     "cpu_offload": true,
     "offload_granularity": "model",
     "qwen3_quantized": true,
@@ -13,5 +11,5 @@
     "qwen3_quantized_ckpt": "JunHowie/Qwen3-4B-GPTQ-Int4",
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-sgl",
-    "dit_quantized_ckpt": "lightx2v/Z-Image-Turbo-Quantized/z_image_turbo_scaled_fp8_e4m3fn.safetensors"
+    "dit_quantized_ckpt": "/path/to/Z-Image-Turbo-Quantized/z_image_turbo_scaled_fp8_e4m3fn.safetensors"
 }

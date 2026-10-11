@@ -60,7 +60,6 @@ inference:
     enable_cfg: true
     batch_cfg: true
     cfg_guidance_scale: 3.0
-    allow_tf32: true
     seed: 42
     fps: 24
     video_quality: 6.0

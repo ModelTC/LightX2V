@@ -1,9 +1,7 @@
 {
     "infer_steps": 30,
-    "sample_guide_scale": 1.0,
     "sample_shift": 10.0,
     "size": [720, 640],
-    "num_frames": 17,
     "fps": 10.0,
     "enable_cfg": false,
     "action_mode": "forward_dynamics",
@@ -11,16 +9,12 @@
     "view_point": "concat_view",
     "action_chunk_size": 16,
     "action_chunk_index": 0,
-    "feature_caching": "NoCaching",
     "rms_norm_type": "one-pass",
     "attn_rms_norm_type": "one-pass",
     "rope_type": "cosmos3_rope",
     "self_attn_type": "flash_attn3",
     "causal_self_attn_type": "flash_attn3",
-    "add_resolution_template": false,
-    "add_duration_template": false,
     "use_system_prompt": false,
     "vae_cpu_offload": false,
-    "cpu_offload": false,
-    "offload_granularity": "block"
+    "cpu_offload": false
 }

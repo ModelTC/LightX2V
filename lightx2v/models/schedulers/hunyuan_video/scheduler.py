@@ -198,7 +198,7 @@ class HunyuanVideo15SRScheduler(HunyuanVideo15Scheduler):
             return cond
         elif "i2v" in task:
             cond[:, :c, :1] = img_cond
-            cond[:, c + 1, 0] = 1
+            cond[:, c, 0] = 1
             return cond
         else:
             raise ValueError(f"Unsupported task: {task}")

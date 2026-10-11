@@ -2,10 +2,11 @@ import math
 
 import torch
 
-from lightx2v.common.ops.mm.triton_kernels import fp8_quantize_range_triton
-
 try:
     from lightx2v_kernel.gemm import FP8_F16_ACCUM_MM_AVAILABLE, cutlass_scaled_fp8_mm_f16_accum
+
+    if FP8_F16_ACCUM_MM_AVAILABLE:
+        from lightx2v.common.ops.mm.triton_kernels import fp8_quantize_range_triton
 except ImportError:
     FP8_F16_ACCUM_MM_AVAILABLE = False
     cutlass_scaled_fp8_mm_f16_accum = None
@@ -13,7 +14,7 @@ except ImportError:
 
 def fp8_f16_accum_mm_unavailable_reason():
     if not FP8_F16_ACCUM_MM_AVAILABLE:
-        return "the lightx2v-kernel extension does not provide the FP8-F16 accumulation op"
+        return "FP8-F16 accumulation requires the lightx2v-kernel extension with the FP8-F16 accumulation op and Triton"
     if not torch.cuda.is_available():
         return "CUDA is unavailable"
     capability = torch.cuda.get_device_capability()

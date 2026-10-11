@@ -3,7 +3,6 @@
     "sample_guide_scale": 5.0,
     "flow_shift": 1.0,
     "image_size": "auto",
-    "feature_caching": "NoCaching",
     "moe_backend": "multi_micro",
     "attn_impl": "torch_sdpa",
     "flashinfer_autotune_mode": "auto",

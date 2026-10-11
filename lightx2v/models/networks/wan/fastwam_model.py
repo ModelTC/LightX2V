@@ -12,11 +12,12 @@ from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 
 
 class FastWAMNativeModel(BaseTransformerModel):
+    model_type = "fastwam"
     pre_weight_class = FastWAMPreWeights
     transformer_weight_class = FastWAMTransformerWeights
 
     def __init__(self, model_path, config, device):
-        super().__init__(model_path, config, device, model_type="fastwam")
+        super().__init__(model_path, config, device, model_type=self.model_type)
         self.sensitive_layer = {
             "norm",
             "modulation",

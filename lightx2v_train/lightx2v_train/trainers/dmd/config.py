@@ -1,4 +1,5 @@
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -50,6 +51,7 @@ class DmdConfig:
     random_schedule_sigma_max: float
     random_schedule_sampling_method: str
     latent_dtype: torch.dtype | None
+    rollout_use_ste: bool = False
 
     @classmethod
     def from_mapping(
@@ -75,7 +77,13 @@ class DmdConfig:
         negative_prompt = default_negative_prompt if default_negative_prompt is not None else configured_negative_prompt
 
         random_schedule = dmd.get("random_schedule", {})
-        latent_dtype = dmd.get("latent_dtype")
+        rollout = dmd.get("rollout", {})
+        if not isinstance(rollout, Mapping):
+            raise ValueError("training.dmd.rollout must be a mapping.")
+        rollout_use_ste = rollout.get("use_ste", False)
+        if not isinstance(rollout_use_ste, bool):
+            raise ValueError("training.dmd.rollout.use_ste must be a boolean.")
+        latent_dtype = dmd.get("latent_dtype", config["model"].get("latent_dtype", "fp32"))
         if latent_dtype is not None:
             latent_dtype = get_running_dtype(str(latent_dtype).lower())
         generation_shapes = dmd.get("generation_shapes")
@@ -97,7 +105,7 @@ class DmdConfig:
             ),
             guidance_scale=float(teacher.get("guidance_scale", 3.0)),
             negative_prompt=negative_prompt,
-            cfg_norm=teacher.get("cfg_norm", "layer_norm"),
+            cfg_norm=teacher.get("cfg_norm", "none"),
             generation_shapes=generation_shapes,
             random_schedule_enabled=bool(random_schedule.get("enabled", False)),
             random_schedule_num_steps_min=int(random_schedule.get("num_steps_min", 1)),
@@ -114,6 +122,7 @@ class DmdConfig:
                 "stratified",
             ),
             latent_dtype=latent_dtype,
+            rollout_use_ste=rollout_use_ste,
         )
 
 

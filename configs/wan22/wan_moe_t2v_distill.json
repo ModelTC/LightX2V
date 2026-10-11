@@ -24,6 +24,6 @@
         500,
         250
     ],
-    "high_noise_original_ckpt": "Wan2.2-T2V-A14B/distill_models/high_noise_model/distill_model.safetensors",
-    "low_noise_original_ckpt": "Wan2.2-T2V-A14B/distill_models/low_noise_model/distill_model.safetensors"
+    "high_noise_original_ckpt": "/path/to/Wan2.2-T2V-A14B/distill_models/high_noise_model/distill_model.safetensors",
+    "low_noise_original_ckpt": "/path/to/Wan2.2-T2V-A14B/distill_models/low_noise_model/distill_model.safetensors"
 }

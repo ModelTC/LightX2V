@@ -51,6 +51,10 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **September 22, 2026:** 🚀 We support and optimize [SwiftVR](https://huggingface.co/H-oliday/SwiftVR); for usage instructions, please refer to [this guide](https://github.com/ModelTC/LightX2V/tree/main/scripts/swiftvr).
+
+- **September 20, 2026:** 🚀 We provide day-0 support for [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1); for usage instructions, please refer to [this guide](https://github.com/ModelTC/LightX2V/tree/main/scripts/qwen_image_21).
+
 - **August 27, 2026:** 🚀 We release the [MiniMax-H3 Turbo 8-step v1.0 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors) for fast 768p audio-video generation with MiniMax-H3, delivering improved video and audio quality.
 
 - **August 11, 2026:** 🚀 We release and support the [MiniMax-H3 Turbo 4-step v1.0 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors). The released DMD configs under `configs/minimax_h3/dmd` run H3 at 1344x768 with `video_flow_shift=6`, `audio_flow_shift=3`, LoRA alpha 128, and 4-step guidance-free inference.
@@ -261,15 +265,15 @@ pipe.generate(
 
 We provide multiple frontend interface deployment options:
 
-- **🎨 Gradio Interface**: Clean and user-friendly web interface, perfect for quick experience and prototyping
-  - 📖 [Gradio Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_gradio.html)
+- **🎨 Gradio Interface**: The web interface is maintained in the separate [Gradio-Lightx2v repository](https://github.com/ModelTC/Gradio-Lightx2v)
+  - 📖 See the new repository for installation and startup instructions
 - **🎯 ComfyUI Interface**: Powerful node-based workflow interface, supporting complex video generation tasks
   - 📖 [ComfyUI Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_comfyui.html)
-- **🚀 Windows One-Click Deployment**: Convenient deployment solution designed for Windows users, featuring automatic environment configuration and intelligent parameter optimization
-  - 📖 [Windows One-Click Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_local_windows.html)
+- **🚀 Windows Local Deployment**: Batch inference and legacy one-click bundle instructions; install the new Gradio application separately
+  - 📖 [Windows Local Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_local_windows.html)
 
 **💡 Recommended Solutions**:
-- **First-time Users**: We recommend the Windows one-click deployment solution
+- **Windows Users**: Follow the Windows local deployment guide
 - **Advanced Users**: We recommend the ComfyUI interface for more customization options
 - **Quick Experience**: The Gradio interface provides the most intuitive operation experience
 
@@ -306,7 +310,7 @@ We provide multiple frontend interface deployment options:
 ### 🛠️ **Deployment Guides**
 - [Low-Resource Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_resource.html) - Optimized 8GB VRAM solutions
 - [Low-Latency Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_latency.html) - Ultra-fast inference optimization
-- [Gradio Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_gradio.html) - Web interface setup
+- [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) - Separate web application and setup instructions
 - [Service Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_service.html) - Production API service deployment
 - [Lora Model Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/lora_deploy.html) - Flexible Lora deployment
 

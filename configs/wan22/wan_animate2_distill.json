@@ -39,7 +39,6 @@
     "refer_offset_h": 0,
     "refer_offset_w": -1,
     "refer_stride": 1,
-    "sparse_type": 0,
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",

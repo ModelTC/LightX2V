@@ -5,10 +5,10 @@
 
 # set path firstly
 # The model_pathpoints to LTX-2, while the config includes the weights for LTX-2.3
-lightx2v_path=
-model_path=
-video_path=
-image_path=
+lightx2v_path=/path/to/LightX2V
+model_path=Lightricks/LTX-2
+video_path=/path/to/video.mp4
+image_path=${lightx2v_path}/assets/inputs/imgs/girl.png
 
 export CUDA_VISIBLE_DEVICES=0
 

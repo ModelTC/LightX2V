@@ -44,57 +44,6 @@ class RingAttnWeight(AttnWeightTemplate):
         q,
         k,
         v,
-        slice_qkv_len,
-        cu_seqlens_qkv,
-        attention_module=None,
-        seq_p_group=None,
-        use_fp8_comm=False,
-        use_fp4_comm=False,
-        use_tensor_fusion=False,
-        enable_head_parallel=False,
-        seq_p_prepost_backend="torch",
-        seq_p_a2a_backend="torch",
-        seq_p_quant_scheme=None,
-        img_first=True,
-        q_only_img=False,
-        aux_first=False,
-        **kwargs,
-    ):
-        """Deprecated compatibility adapter for the legacy joined-token API."""
-        if not img_first or q_only_img or aux_first:
-            raise ValueError("RingAttn legacy apply only supports image-only self-attention with img_first=True and no auxiliary region.")
-        q = flatten_seq_p_tensor(q, "q")
-        k = flatten_seq_p_tensor(k, "k")
-        v = flatten_seq_p_tensor(v, "v")
-        self._legacy_validate_layout(q, slice_qkv_len, cu_seqlens_qkv)
-        if use_fp8_comm and use_fp4_comm:
-            raise ValueError("use_fp8_comm and use_fp4_comm cannot both be enabled.")
-        legacy_quant_scheme = "fp8" if use_fp8_comm else "fp4" if use_fp4_comm else None
-        if seq_p_quant_scheme is not None and legacy_quant_scheme is not None and seq_p_quant_scheme != legacy_quant_scheme:
-            raise ValueError("seq_p_quant_scheme conflicts with legacy communication flags.")
-        quant_scheme = seq_p_quant_scheme if seq_p_quant_scheme is not None else legacy_quant_scheme
-        output, aux_output = self.apply_new(
-            q=q,
-            k=k,
-            v=v,
-            attention_module=attention_module,
-            seq_p_group=seq_p_group,
-            prepost_backend=seq_p_prepost_backend,
-            a2a_backend=seq_p_a2a_backend,
-            quant_scheme=quant_scheme,
-            tensor_fusion=use_tensor_fusion,
-            head_parallel=enable_head_parallel,
-            attention_kwargs=kwargs,
-        )
-        if aux_output is not None:
-            raise RuntimeError("RingAttn legacy adapter received an unexpected auxiliary output.")
-        return output
-
-    def apply_new(
-        self,
-        q,
-        k,
-        v,
         aux_q=None,
         aux_k=None,
         aux_v=None,
@@ -198,18 +147,6 @@ class RingAttnWeight(AttnWeightTemplate):
         for name in ("cu_seqlens_q", "cu_seqlens_kv", "max_seqlen_q", "max_seqlen_kv"):
             if attention_kwargs.get(name) is not None:
                 raise ValueError(f"RingAttn does not support packed-varlen metadata {name!r}.")
-
-    @staticmethod
-    def _legacy_validate_layout(q, slice_qkv_len, cu_seqlens_qkv):
-        split_len = int(slice_qkv_len.item()) if isinstance(slice_qkv_len, torch.Tensor) else int(slice_qkv_len)
-        if split_len != q.shape[0]:
-            raise ValueError("RingAttn image-only self-attention requires slice_qkv_len == local sequence length.")
-        if cu_seqlens_qkv is None or len(cu_seqlens_qkv) != 2:
-            raise ValueError("RingAttn only supports one image sequence; cu_seqlens_qkv must be [0, local_seq_len].")
-        cu_start = int(cu_seqlens_qkv[0].item()) if isinstance(cu_seqlens_qkv[0], torch.Tensor) else int(cu_seqlens_qkv[0])
-        cu_end = int(cu_seqlens_qkv[1].item()) if isinstance(cu_seqlens_qkv[1], torch.Tensor) else int(cu_seqlens_qkv[1])
-        if (cu_start, cu_end) != (0, q.shape[0]):
-            raise ValueError("RingAttn only supports cu_seqlens_qkv == [0, local_seq_len].")
 
     @staticmethod
     def _normalize_attention_output(output, q, method_name):

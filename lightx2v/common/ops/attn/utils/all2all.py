@@ -1,6 +1,8 @@
 import torch
 import torch.distributed as dist
 
+from .seq_p import validate_quant_scheme
+
 try:
     from sageattn3_sparse import dequant_fp4 as dequant_fp4_sage3
     from sageattn3_sparse import quant_fp4 as quant_fp4_sage3
@@ -35,7 +37,7 @@ def _fp8_all_to_all(input_t, group=None):
 def _fp4_all_to_all(input_t, group=None):
     """All-to-all with SageAttention3 FP4 compression along the last dim."""
     if quant_fp4_sage3 is None or dequant_fp4_sage3 is None:
-        raise ImportError("sageattn3_sparse quant_fp4/dequant_fp4 is required for seq_p_fp4_comm.")
+        raise ImportError("sageattn3_sparse quant_fp4/dequant_fp4 is required for sequence-parallel FP4 communication.")
 
     shape = input_t.shape
     hidden = shape[-1]
@@ -52,19 +54,21 @@ def _fp4_all_to_all(input_t, group=None):
     ).reshape(shape)
 
 
-def all2all_seq2head(input, group=None, use_fp8_comm=False, use_fp4_comm=False):
+def all2all_seq2head(input, group=None, quant_scheme=None):
     """
     将输入张量从 [seq_len/N, heads, hidden_dims] 转换为 [seq_len, heads/N, hidden_dims] 的格式。
 
     参数:
         input (torch.Tensor): 输入张量，形状为 [seq_len/N, heads, hidden_dims]
+        group: 序列并行进程组；None 表示默认进程组。
+        quant_scheme: 通信量化格式；支持 None、"fp8" 和 "fp4"。
 
     返回:
         torch.Tensor: 转换后的输出张量，形状为 [seq_len, heads/N, hidden_dims]
     """
     # 确保输入是一个3D张量
     assert input.dim() == 3, f"input must be 3D tensor"
-    assert not (use_fp8_comm and use_fp4_comm), "use_fp8_comm and use_fp4_comm can't be enabled at the same time."
+    validate_quant_scheme(quant_scheme)
 
     # 获取当前进程的世界大小
     world_size = dist.get_world_size(group=group)
@@ -82,9 +86,9 @@ def all2all_seq2head(input, group=None, use_fp8_comm=False, use_fp4_comm=False):
     )
 
     # 执行 all-to-all 操作，将输入张量的内容分发到所有进程
-    if use_fp8_comm:
+    if quant_scheme == "fp8":
         output = _fp8_all_to_all(input_t, group=group)
-    elif use_fp4_comm:
+    elif quant_scheme == "fp4":
         output = _fp4_all_to_all(input_t, group=group)
     else:
         output = torch.empty_like(input_t)

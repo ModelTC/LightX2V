@@ -10,6 +10,9 @@ FP8_F16_ACCUM_PROJECTION_SUFFIXES = (
     ".attn.to_q",
     ".attn.to_k",
     ".attn.to_v",
+    # The runtime-only fused projection must preserve the same accumulation
+    # contract as the three checkpoint-backed projections it replaces.
+    ".attn.to_qkv",
     ".attn.to_out.0",
     ".ff.net.0.proj",
     ".ff.net.2",

@@ -125,6 +125,8 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             override.pop("share_with_teacher", None)
         role_config = copy.deepcopy(self.config)
         role_config["model"] = base_model_config
+        if role == "teacher_2":
+            role_config["model"]["transformer_param_dtype"] = self.model_config["running_dtype"]
         role_config["model"].update(override)
         return role_config
 

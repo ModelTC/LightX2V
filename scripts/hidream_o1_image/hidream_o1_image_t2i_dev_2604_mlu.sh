@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/nb/LightX2V
-model_path=/data/nvme1/yongyang/nb/models/HiDream-ai/HiDream-O1-Image-Dev-2604
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/models/HiDream-O1-Image-Dev-2604
 
 export PLATFORM=cambricon_mlu
 export MLU_VISIBLE_DEVICES=0

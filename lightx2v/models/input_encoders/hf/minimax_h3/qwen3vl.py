@@ -4,8 +4,9 @@ MiniMax-H3 reads ``hidden_states[50]`` from the released Qwen3-VL
 conditioner.  In Transformers' hidden-state convention that is the embedding
 output after decoder layers 0 through 49, before the final RMSNorm.  This
 module executes exactly that prefix with LightX2V weight and operator classes.
-The vision tower is loaded lazily for keyframe/reference requests; the last
-fourteen decoder layers, final norm, and LM head are never loaded.
+The tokenizer, pixel processor, text backbone, and vision tower are loaded
+together on initialization by default. The last fourteen decoder layers,
+final norm, and LM head are never loaded.
 
 Only the Hugging Face tokenizer and pixel processor are reused. By default,
 model tensors are streamed directly from the official sharded ``text_encoder``
@@ -837,8 +838,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
             storage.post_process()
 
     @classmethod
-    def _load_native_weights(cls, backbone, text_encoder_path, text_config):
-        text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
+    def _preflight_native_checkpoint(cls, backbone, text_encoder_path, text_config):
         modules = dict(backbone.named_weight_modules())
         expected_shapes = cls._expected_weight_shapes(text_config)
         if modules.keys() != expected_shapes.keys():
@@ -876,6 +876,18 @@ class MiniMaxH3Qwen3VLTextEncoder:
                     checkpoint_dtypes.add(tensor_slice.get_dtype())
         if len(checkpoint_dtypes) != 1:
             raise ValueError(f"MiniMax-H3 Qwen3-VL weights must use one floating dtype, got {sorted(checkpoint_dtypes)}")
+
+        return weight_map, checkpoint_dtypes.pop()
+
+    @classmethod
+    def _load_native_weights(cls, backbone, text_encoder_path, text_config):
+        text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
+        modules = dict(backbone.named_weight_modules())
+        root = Path(text_encoder_path)
+        weight_map, checkpoint_dtype = cls._preflight_native_checkpoint(backbone, root, text_config)
+        by_shard = defaultdict(list)
+        for name in modules:
+            by_shard[weight_map[name]].append(name)
 
         logger.info(
             "Loading {} native Qwen3-VL tensors (embedding + layers 0..{}) from {} shards with {} host weights",
@@ -915,7 +927,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
         # CPU-loaded common weights keep their canonical copy in pin_weight.
         # Activate those copies so the object is usable before/after offload.
         backbone.to_cpu()
-        return checkpoint_dtypes.pop()
+        return checkpoint_dtype
 
     @staticmethod
     def _load_quantized_weights(backbone, checkpoint_path):
@@ -1009,7 +1021,11 @@ class MiniMaxH3Qwen3VLTextEncoder:
             block_offload=self.block_offload,
             tp_group=self.tp_group,
         )
-        if quantized:
+        if self.config.get("text_encoder_shared_cpu_weights", False):
+            from lightx2v.models.input_encoders.hf.minimax_h3.shared_weights import load_shared_text_weights
+
+            load_shared_text_weights(self, text_encoder, text_encoder_path, text_config)
+        elif quantized:
             self._load_quantized_weights(text_encoder, checkpoint_path)
         else:
             self._load_native_weights(text_encoder, checkpoint_path, text_config)
@@ -1026,14 +1042,25 @@ class MiniMaxH3Qwen3VLTextEncoder:
         text_encoder_path = self._component_path("text_encoder_path", "text_encoder")
         model_config = self._read_model_config(text_encoder_path)
         vision_config = dict(model_config["vision_config"])
-        logger.info(f"Building native MiniMax-H3 Qwen3-VL vision tower from {text_encoder_path}")
-        self.vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config)
+        logger.info(
+            "Building native MiniMax-H3 Qwen3-VL vision tower from {} for image input task.",
+            text_encoder_path,
+        )
+        vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config)
+        if not self.cpu_offload:
+            vision_encoder.to(AI_DEVICE)
+        self.vision_encoder = vision_encoder
         return self.vision_encoder
 
     def unload_text_encoder(self):
         text_encoder = self.text_encoder
         self.text_encoder = None
         if text_encoder is not None:
+            owner = getattr(text_encoder, "shared_cpu_weight_owner", None)
+            if owner is not None:
+                torch_device_module.synchronize()
+                text_encoder.release_block_offload_buffers()
+                owner.close()
             del text_encoder
             gc.collect()
             _empty_device_cache()
@@ -1055,14 +1082,16 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     def load(self):
         self.load_tokenizer()
+        self.load_processor()
         self.load_text_encoder()
+        self.load_vision_encoder()
         return self
 
     def unload(self):
-        self.unload_vision_encoder()
-        self.unload_text_encoder()
-        self.unload_processor()
         self.unload_tokenizer()
+        self.unload_processor()
+        self.unload_text_encoder()
+        self.unload_vision_encoder()
 
     def _ensure_loaded(self):
         if self.tokenizer is None:

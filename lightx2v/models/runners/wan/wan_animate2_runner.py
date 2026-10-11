@@ -447,7 +447,7 @@ class WanAnimate2Runner(WanRunner):
 
         prompt = input_info.prompt
         ref_video_prompt = input_info.ref_video_prompt or prompt
-        negative_prompt = input_info.negative_prompt or ""
+        negative_prompt = input_info.negative_prompt
         context_ref = self._encode_text(ref_video_prompt)
 
         if self.config.get("enable_cfg", False) and self.config.get("cfg_parallel", False):

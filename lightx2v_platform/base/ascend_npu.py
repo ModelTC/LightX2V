@@ -7,6 +7,7 @@ from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 @PLATFORM_DEVICE_REGISTER("ascend_npu")
 class NpuDevice:
     name = "ascend_npu"
+    block_offload_backend = "lightx2v_platform.ops.offload.ascend_npu.NpuBlockOffload"
 
     @staticmethod
     def init_device_env():
@@ -26,6 +27,19 @@ class NpuDevice:
     @staticmethod
     def get_device() -> str:
         return "npu"
+
+    @staticmethod
+    def copy_to_cpu(destination, source, non_blocking=False):
+        """Copy to CPU without losing the strides of an existing host tensor."""
+        if not destination.is_contiguous():
+            # NPU D2H copy_ can ignore a strided host destination's layout.
+            # Complete D2H before the CPU copy, even for a non-blocking request.
+            return destination.copy_(source.contiguous().to("cpu", non_blocking=False))
+        return destination.copy_(source, non_blocking=non_blocking)
+
+    @staticmethod
+    def copy_transposed_weight_to_device(tensor, device, non_blocking=False):
+        return tensor.t().to(device, non_blocking=non_blocking).t()
 
     @staticmethod
     def init_parallel_env():

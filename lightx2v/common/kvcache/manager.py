@@ -6,7 +6,6 @@ from lightx2v.utils.envs import GET_DTYPE
 
 from .base import BaseKVCachePool
 from .fifo import FIFOKVCachePool
-from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
 from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, SpatialRollingKVCachePool, StepRollingKVCachePool
 from .static import StaticKVCachePool
 from .utils import *
@@ -81,6 +80,11 @@ def _static_kwargs(_config, _ar_config, _kv_quant):
 
 
 def _get_self_attn_kv_cache_entry(scheme: str, step: bool):
+    if scheme == "kivi" and (scheme, bool(step)) not in SELF_ATTN_KV_CACHE_REGISTRY:
+        from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
+
+        SELF_ATTN_KV_CACHE_REGISTRY.setdefault(("kivi", False), (KIVIQuantRollingKVCachePool, _kivi_kwargs))
+        SELF_ATTN_KV_CACHE_REGISTRY.setdefault(("kivi", True), (StepKiviQuantRollingKVCachePool, _step_kivi_kwargs))
     entry = SELF_ATTN_KV_CACHE_REGISTRY.get((scheme, bool(step)))
     if entry is None:
         raise NotImplementedError(f"self-attention KV cache scheme={scheme!r}, step_kv_cache={step} is not registered.")
@@ -89,8 +93,6 @@ def _get_self_attn_kv_cache_entry(scheme: str, step: bool):
 
 register_self_attn_kv_cache("fp", RollingKVCachePool, kwargs_builder=_fp_kwargs)
 register_self_attn_kv_cache("fp", StepRollingKVCachePool, step=True, kwargs_builder=_step_fp_kwargs)
-register_self_attn_kv_cache("kivi", KIVIQuantRollingKVCachePool, kwargs_builder=_kivi_kwargs)
-register_self_attn_kv_cache("kivi", StepKiviQuantRollingKVCachePool, step=True, kwargs_builder=_step_kivi_kwargs)
 register_self_attn_kv_cache("fifo", FIFOKVCachePool, kwargs_builder=_fifo_kwargs)
 register_self_attn_kv_cache("static", StaticKVCachePool, kwargs_builder=_static_kwargs)
 

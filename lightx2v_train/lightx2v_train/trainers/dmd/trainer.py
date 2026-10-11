@@ -37,6 +37,7 @@ from lightx2v_train.tricks import (
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from .config import DmdScheduleConfig
+from .rollout import full_rollout_with_ste
 from .runtime import _DmdRuntime
 from .score_sampling import ScoreSigmaContext, build_score_sigma_sampler
 
@@ -48,9 +49,15 @@ class DmdTrainer(_DmdRuntime):
     trainer_name = "dmd"
     supports_diversity_loss = True
     supports_real_data_fake = True
+    rollout_use_ste = False
 
     def __init__(self, config):
         super().__init__(config)
+        self.rollout_use_ste = self.parsed_dmd_config.rollout_use_ste
+        if self.rollout_use_ste:
+            if self.trainer_name != "dmd":
+                raise ValueError(f"{self.trainer_name} does not support training.dmd.rollout.use_ste; use training.method=dmd.")
+            logger.info("[dmd] STE rollout: full endpoint for student/fake; one selected step supplies the student gradient.")
         parsed = DmdScheduleConfig.from_mapping(
             config,
             dmd_config=self.dmd_config,
@@ -661,12 +668,39 @@ class DmdTrainer(_DmdRuntime):
             self.scheduler.num_inference_steps,
         )
 
+    def _run_full_rollout_with_ste(self, condition, xt, gradient_step_idx=None):
+        def predict_velocity(latents, idx):
+            sigma = self.scheduler.sigma_at(
+                idx,
+                device=self.student.device,
+                dtype=self.latent_dtype,
+            )
+            return self._predict_velocity(self.student, latents, sigma, condition)
+
+        return full_rollout_with_ste(
+            xt,
+            self.scheduler.num_inference_steps,
+            predict_velocity,
+            partial(self.student.step, self.scheduler),
+            gradient_step_idx=gradient_step_idx,
+        )
+
     def run_back_simulation(self, condition, latent_shape, grad_enabled, xt=None):
         latent_hw = self.student.latent_hw(latent_shape)
         self._prepare_sampling_schedule(latent_shape)
         self._prepare_timestep_lookup(latent_hw, num_steps=self.scheduler.num_inference_steps)
         if xt is None:
             xt = self.sample_initial_latents(latent_shape)
+
+        # Zoe runs every DMD role in eval mode. Gradients are controlled by
+        # autograd contexts, not by module.train(), which keeps rollout
+        # dropout and other training-only behavior deterministic.
+        self.student.set_training(False)
+        if self.rollout_use_ste:
+            gradient_step_idx = self.sample_end_step() if grad_enabled else None
+            x0, _, _ = self._run_full_rollout_with_ste(condition, xt, gradient_step_idx)
+            # Score sampling follows the full endpoint, not the gradient step.
+            return self.student.to_dtype(x0, self.latent_dtype), *self._denoised_timestep_window(self.scheduler.num_inference_steps - 1)
 
         end_step_idx = (
             self.sample_end_step()
@@ -677,10 +711,6 @@ class DmdTrainer(_DmdRuntime):
             )
         )
         x0 = None
-        # Zoe runs every DMD role in eval mode. Gradients are controlled by
-        # autograd contexts, not by module.train(), which keeps rollout
-        # dropout and other training-only behavior deterministic.
-        self.student.set_training(False)
         for idx in range(end_step_idx + 1):
             sigma = self.scheduler.sigma_at(
                 idx,

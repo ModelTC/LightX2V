@@ -77,16 +77,6 @@ class LTX2Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, None, lora_path, lora_strength)
-        if self.config.get("tensor_parallel", False):
-            self.use_tp = True
-            self.tp_group = self.config.get("device_mesh").get_group(mesh_dim="tensor_p")
-            self.tp_rank = dist.get_rank(self.tp_group)
-            self.tp_size = dist.get_world_size(self.tp_group)
-        else:
-            self.tp_group = None
-            self.use_tp = False
-            self.tp_rank = 0
-            self.tp_size = 1
 
         # Track original video sequence length before padding (for sequence parallel)
         self.original_video_seq_len = None
@@ -389,7 +379,7 @@ class LTX2Model(BaseTransformerModel):
         v_skip = False if is_rerun else _mm_guider_should_skip_step(v_p["skip_step"], step_i)
         a_skip = False if is_rerun else _mm_guider_should_skip_step(a_p["skip_step"], step_i)
 
-        need_neg = (not math.isclose(v_p["cfg_scale"], 1.0)) or (not math.isclose(a_p["cfg_scale"], 1.0))
+        need_neg = sch.needs_negative_prompt
         need_ptb = (not math.isclose(v_p["stg_scale"], 0.0)) or (not math.isclose(a_p["stg_scale"], 0.0))
         need_mod = (not math.isclose(v_p["modality_scale"], 1.0)) or (not math.isclose(a_p["modality_scale"], 1.0))
 
@@ -680,7 +670,7 @@ class LTX2Model(BaseTransformerModel):
                     raise NotImplementedError("LTX2 mm_guider 与 cfg_parallel 同时使用尚未实现，请关闭其一。")
                 self._infer_mm_guider_cfg(inputs)
             else:
-                assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
+                assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
                 if self.config["cfg_parallel"]:
                     # ==================== CFG Parallel Processing ====================
                     cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")

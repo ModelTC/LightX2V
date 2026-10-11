@@ -8,8 +8,8 @@ class HidreamO1ImagePreWeights(WeightModule):
         super().__init__()
         self.config = config
         self.mm_type = config.get("mm_type", config.get("dit_quant_scheme", "Default"))
-        self.tms_token_id = config.get("tms_token_id", 151673)
-        self.frequency_embedding_size = config.get("timestep_frequency_embedding_size", 256)
+        self.tms_token_id = config["tms_token_id"]
+        self.frequency_embedding_size = config["timestep_frequency_embedding_size"]
         self.add_module("input_embeddings", EMBEDDING_WEIGHT_REGISTER["Default"]("model.language_model.embed_tokens.weight"))
         self.add_module("t_embedder_linear_1", self._mm("model.t_embedder1.mlp.0.weight", "model.t_embedder1.mlp.0.bias"))
         self.add_module("t_embedder_linear_2", self._mm("model.t_embedder1.mlp.2.weight", "model.t_embedder1.mlp.2.bias"))

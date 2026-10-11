@@ -51,6 +51,10 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年9月22日：** 🚀 我们支持并优化了[SwiftVR](https://huggingface.co/H-oliday/SwiftVR)，使用方法参考[这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/swiftvr)。
+
+- **2026年9月20日：** 🚀 我们day 0支持了[Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1)，使用方法参考[这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/qwen_image_21)。
+
 - **2026年8月27日：** 🚀 我们发布了 [MiniMax-H3 Turbo 8-step v1.0 768p 蒸馏 LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors)，用于通过 MiniMax-H3 快速生成 768p 音视频，并带来更高的视频与音频质量。
 
 - **2026年8月11日：** 🚀 我们发布并支持 [MiniMax-H3 Turbo 4-step v1.0 768p 蒸馏 LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors)。`configs/minimax_h3/dmd` 下的推理配置默认以 1344x768 分辨率运行 H3，使用 `video_flow_shift=6`、`audio_flow_shift=3`、LoRA alpha 128，并支持 4 步无 CFG 推理。
@@ -261,15 +265,15 @@ pipe.generate(
 
 我们提供了多种前端界面部署方式：
 
-- **🎨 Gradio界面**: 简洁易用的Web界面，适合快速体验和原型开发
-  - 📖 [Gradio部署文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_gradio.html)
+- **🎨 Gradio界面**: Web界面在独立仓库 [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) 维护
+  - 📖 安装和启动方法请参阅新仓库
 - **🎯 ComfyUI界面**: 强大的节点式工作流界面，支持复杂的视频生成任务
   - 📖 [ComfyUI部署文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_comfyui.html)
-- **🚀 Windows一键部署**: 专为Windows用户设计的便捷部署方案，支持自动环境配置和智能参数优化
-  - 📖 [Windows一键部署文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_local_windows.html)
+- **🚀 Windows本地部署**: 支持批处理脚本推理，并保留旧版一键整合包说明；新Gradio应用单独安装
+  - 📖 [Windows本地部署文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_local_windows.html)
 
 **💡 推荐方案**:
-- **首次使用**: 建议选择Windows一键部署方案
+- **Windows用户**: 请参阅Windows本地部署文档
 - **高级用户**: 推荐使用ComfyUI界面获得更多自定义选项
 - **快速体验**: Gradio界面提供最直观的操作体验
 
@@ -306,7 +310,7 @@ pipe.generate(
 ### 🛠️ **部署指南**
 - [低资源场景部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_resource.html) - 优化的8GB显存解决方案
 - [低延迟场景部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_latency.html) - 极速推理优化
-- [Gradio部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_gradio.html) - Web界面搭建
+- [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) - 独立Web应用与部署说明
 - [服务化部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_service.html) - 生产级API服务部署
 - [Lora模型部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/lora_deploy.html) - Lora灵活部署
 

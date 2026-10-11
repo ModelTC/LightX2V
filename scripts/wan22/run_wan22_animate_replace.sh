@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=
-model_path=
-video_path=
-refer_path=
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Wan2.2-Animate-14B
+video_path=/path/to/video.mp4
+refer_path=/path/to/ref.png
 
 export CUDA_VISIBLE_DEVICES=0
 
@@ -29,10 +29,10 @@ python -m lightx2v.infer \
 --task animate \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/wan22/wan_animate_replace_4090.json \
---pose_video_path ${lightx2v_path}/save_results/animate/process_results/src_pose.mp4 \
---face_video_path ${lightx2v_path}/save_results/animate/process_results/src_face.mp4 \
---ref_image_paths ${lightx2v_path}/save_results/animate/process_results/src_ref.png \
---background_video_path ${lightx2v_path}/save_results/animate/process_results/src_bg.mp4 \
---mask_path ${lightx2v_path}/save_results/animate/process_results/src_mask.mp4 \
+--pose_video_path ${lightx2v_path}/save_results/replace/process_results/src_pose.mp4 \
+--face_video_path ${lightx2v_path}/save_results/replace/process_results/src_face.mp4 \
+--ref_image_paths ${lightx2v_path}/save_results/replace/process_results/src_ref.png \
+--background_video_path ${lightx2v_path}/save_results/replace/process_results/src_bg.mp4 \
+--mask_path ${lightx2v_path}/save_results/replace/process_results/src_mask.mp4 \
 --prompt "视频中的人在做动作" \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_wan22_replace.mp4

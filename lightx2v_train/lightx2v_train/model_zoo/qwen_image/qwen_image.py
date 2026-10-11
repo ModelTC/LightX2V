@@ -77,7 +77,7 @@ class QwenImageModel(BaseModel):
             model_path,
             transformer=None,
             vae=None,
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.text_encoder_dtype,
         ).to(self.device)
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.text_pipeline.text_encoder.eval()
@@ -88,7 +88,7 @@ class QwenImageModel(BaseModel):
         self.vae = AutoencoderKLQwenImage.from_pretrained(
             model_path,
             subfolder="vae",
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.vae_dtype,
         ).to(device)
         self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
@@ -110,10 +110,10 @@ class QwenImageModel(BaseModel):
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
-        return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.transformer_param_dtype)
 
     def load_full_weights_for_resume(self, resume_ckpt_path):
-        self.transformer = QwenImageTransformer2DModel.from_pretrained(resume_ckpt_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        self.transformer = QwenImageTransformer2DModel.from_pretrained(resume_ckpt_path, subfolder="transformer").to(self.device, dtype=self.transformer_param_dtype)
 
     def denoiser_module(self):
         return self.transformer
@@ -163,10 +163,10 @@ class QwenImageModel(BaseModel):
             image = image.unsqueeze(0)
         if image.ndim != 4:
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
-        image = image.to(device=self.device, dtype=self.running_dtype)
+        image = image.to(device=self.device, dtype=self.vae_dtype)
         pixel_values = image.unsqueeze(2)
         latent = getattr(self.vae.encode(pixel_values).latent_dist, mode)()  # (B, C, T, H, W)
-        return self._normalize_latents(latent)
+        return self._normalize_latents(latent.to(dtype=self.latent_dtype))
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
@@ -204,16 +204,17 @@ class QwenImageModel(BaseModel):
         )
 
     def denoise(self, denoiser_input, timestep_or_sigma, condition):
-        prediction = self.transformer(
-            hidden_states=denoiser_input.hidden_states,
-            timestep=timestep_or_sigma,  # timestep_or_sigma is in [0, 1] not [0, 1000]
-            guidance=None,
-            encoder_hidden_states_mask=condition["prompt_embed_mask"],
-            encoder_hidden_states=condition["prompt_embed"],
-            img_shapes=denoiser_input.img_shapes,
-            attention_kwargs={},
-            return_dict=False,
-        )[0]
+        with self.transformer_forward_context():
+            prediction = self.transformer(
+                hidden_states=denoiser_input.hidden_states.to(dtype=self.running_dtype),
+                timestep=timestep_or_sigma,  # timestep_or_sigma is in [0, 1] not [0, 1000]
+                guidance=None,
+                encoder_hidden_states_mask=condition["prompt_embed_mask"],
+                encoder_hidden_states=condition["prompt_embed"],
+                img_shapes=denoiser_input.img_shapes,
+                attention_kwargs={},
+                return_dict=False,
+            )[0]
         return prediction[:, : denoiser_input.target_token_length]
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
@@ -228,10 +229,10 @@ class QwenImageModel(BaseModel):
         latent_h = height // self.vae_scale_factor
         latent_w = width // self.vae_scale_factor
         shape = (1, self.latent_channels, 1, latent_h, latent_w)
-        return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
+        return torch.randn(shape, generator=generator, device=self.device, dtype=self.latent_dtype)
 
     def decode_latent(self, latent):
-        latent = self._denormalize_latents(latent)
+        latent = self._denormalize_latents(latent.to(dtype=self.latent_dtype)).to(dtype=self.vae_dtype)
         image = self.vae.decode(latent).sample  # (B, C, T, H, W)
         image = image[:, :, 0, :, :]  # drop temporal dim -> (B, C, H, W), T == 1
         return self.image_processor.postprocess(image, output_type="pil")

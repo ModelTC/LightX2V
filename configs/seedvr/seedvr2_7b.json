@@ -1,5 +1,5 @@
 {
-  "num_frames": 81,
+  "sr_segment_length": 81,
   "size": [1080, 1920],
   "infer_steps": 1,
   "fps": 16,
@@ -8,6 +8,6 @@
   "use_tiling_vae": true,
   "cpu_offload": true,
   "offload_granularity": "block",
-  "resize_mode": "adaptive",
+  "match_target_size": false,
   "color_fix": "gpu"
 }

@@ -88,14 +88,6 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             action=None if cond.action is None else uncond.action + guide * (cond.action - uncond.action),
         )
 
-    @staticmethod
-    def _detach_cfg_output(output):
-        return Cosmos3PostInferModuleOutput(
-            vision=output.vision,
-            sound=output.sound,
-            action=output.action,
-        )
-
     def _set_scheduler_noise_pred(self, output):
         self.scheduler.noise_pred = output.vision
         self.scheduler.noise_pred_sound = output.sound
@@ -156,7 +148,7 @@ class Cosmos3TransformerModel(BaseTransformerModel):
         text_encoder_output = inputs["text_encoder_output"]
         do_cfg = self.config.get("enable_cfg", True)
         if do_cfg:
-            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
+            assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
             if self.config.get("cfg_parallel", False):
                 cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
                 assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
@@ -170,7 +162,7 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             self._set_scheduler_noise_pred(self._combine_cfg_output(cond, uncond))
         else:
             cond = self._infer_cond_uncond(text_encoder_output["cond_input_ids"])
-            self._set_scheduler_noise_pred(self._detach_cfg_output(cond))
+            self._set_scheduler_noise_pred(cond)
 
         if self.cpu_offload:
             self.pre_weight.to_cpu()

@@ -1,13 +1,11 @@
 #!/bin/bash
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-lightx2v_path="$(cd -- "${script_dir}/../.." && pwd)"
-workspace_path="$(dirname -- "${lightx2v_path}")"
-model_path="${HUNYUAN_IMAGE3_MODEL_PATH:-${workspace_path}/HunyuanImage-3-Instruct}"
-hunyuan_image3_path="${HUNYUAN_IMAGE3_SOURCE_PATH:-${workspace_path}/HunyuanImage-3.0}"
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/HunyuanImage-3-Instruct
+hunyuan_image3_path=/path/to/HunyuanImage-3.0
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
-export PYTHONPATH="${hunyuan_image3_path}:${PYTHONPATH:-}"
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export HUNYUAN_IMAGE3_REPO_PATH=${hunyuan_image3_path}
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=0
 
 source "${lightx2v_path}/scripts/base/base.sh"

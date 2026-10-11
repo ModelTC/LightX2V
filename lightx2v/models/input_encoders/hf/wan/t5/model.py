@@ -30,7 +30,6 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     TritonQuantLinearFp8,  # noqa E402
 )
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8  # noqa E402
-from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8  # noqa E402
 from lightx2v_platform.ops.mm.iluvatar_cuda.q_linear import IluvatarQuantLinearInt8  # noqa E402
 
 from lightx2v.models.input_encoders.hf.wan.t5.tokenizer import HuggingfaceTokenizer  # noqa E402
@@ -52,26 +51,32 @@ __all__ = [
 
 
 class T5OffloadBlocksWeights(WeightModule):
-    def __init__(self, block_nums, mm_type, lazy_load=False, lazy_load_path=None):
+    def __init__(self, block_nums, mm_type, lazy_load=False, lazy_load_path=None, rms_norm_type="sgl-kernel"):
         super().__init__()
         self.block_nums = block_nums
         self.offload_block_buffers = WeightModuleList(
-            [T5OffloadSelfAttention(i, mm_type, create_cuda_buffer=True, create_cpu_buffer=False, lazy_load=lazy_load, lazy_load_path=lazy_load_path) for i in range(1)]
+            [T5OffloadSelfAttention(i, mm_type, create_cuda_buffer=True, create_cpu_buffer=False, lazy_load=lazy_load, lazy_load_path=lazy_load_path, rms_norm_type=rms_norm_type) for i in range(1)]
         )
         if lazy_load:
             self.offload_block_cpu_buffers = WeightModuleList(
-                [T5OffloadSelfAttention(i, mm_type, create_cuda_buffer=False, create_cpu_buffer=True, lazy_load=lazy_load, lazy_load_path=lazy_load_path) for i in range(1)]
+                [
+                    T5OffloadSelfAttention(i, mm_type, create_cuda_buffer=False, create_cpu_buffer=True, lazy_load=lazy_load, lazy_load_path=lazy_load_path, rms_norm_type=rms_norm_type)
+                    for i in range(1)
+                ]
             )
             self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
         self.blocks = WeightModuleList(
-            [T5OffloadSelfAttention(i, mm_type, create_cpu_buffer=False, create_cuda_buffer=False, lazy_load=lazy_load, lazy_load_path=lazy_load_path) for i in range(block_nums)]
+            [
+                T5OffloadSelfAttention(i, mm_type, create_cpu_buffer=False, create_cuda_buffer=False, lazy_load=lazy_load, lazy_load_path=lazy_load_path, rms_norm_type=rms_norm_type)
+                for i in range(block_nums)
+            ]
         )
         self.add_module("offload_block_buffers", self.offload_block_buffers)
         self.add_module("blocks", self.blocks)
 
 
 class T5OffloadSelfAttention(WeightModule):
-    def __init__(self, block_index, mm_type, block_prefix="blocks", create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_path=None):
+    def __init__(self, block_index, mm_type, block_prefix="blocks", create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_path=None, rms_norm_type="sgl-kernel"):
         super().__init__()
         self.block_index = block_index
         if mm_type is None:
@@ -79,11 +84,11 @@ class T5OffloadSelfAttention(WeightModule):
         self.mm_type = mm_type
         self.add_module(
             "norm1",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](f"{block_prefix}.{self.block_index}.norm1.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
+            RMS_WEIGHT_REGISTER[rms_norm_type](f"{block_prefix}.{self.block_index}.norm1.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
         )
         self.add_module(
             "norm2",
-            RMS_WEIGHT_REGISTER["sgl-kernel"](f"{block_prefix}.{self.block_index}.norm2.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
+            RMS_WEIGHT_REGISTER[rms_norm_type](f"{block_prefix}.{self.block_index}.norm2.weight", create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_path),
         )
         self.add_module(
             "pos_embedding",
@@ -227,6 +232,8 @@ class T5Attention(nn.Module):
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-npu":
+                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
+
                 linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
@@ -312,6 +319,8 @@ class T5FeedForward(nn.Module):
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-npu":
+                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
+
                 linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
@@ -467,6 +476,7 @@ class T5Encoder(nn.Module):
         quant_scheme=None,
         lazy_load=False,
         lazy_load_path=None,
+        rms_norm_type="sgl-kernel",
     ):
         super(T5Encoder, self).__init__()
         self.cpu_offload = cpu_offload
@@ -486,7 +496,7 @@ class T5Encoder(nn.Module):
 
         if cpu_offload:
             self.offload_manager = WeightAsyncStreamManager(offload_granularity="block")
-            self.blocks_weights = T5OffloadBlocksWeights(num_layers, quant_scheme, lazy_load, lazy_load_path)
+            self.blocks_weights = T5OffloadBlocksWeights(num_layers, quant_scheme, lazy_load, lazy_load_path, rms_norm_type=rms_norm_type)
             self.offload_manager.init_cuda_buffer(self.blocks_weights.offload_block_buffers, None)
             if lazy_load:
                 self.offload_manager.init_cpu_buffer(self.blocks_weights.offload_block_cpu_buffers)
@@ -799,6 +809,7 @@ class T5EncoderModel:
         lazy_load=False,
         load_from_rank0=False,
         dummy_model=False,
+        rms_norm_type="sgl-kernel",
     ):
         self.text_len = text_len
         self.dtype = dtype
@@ -823,6 +834,7 @@ class T5EncoderModel:
                 quant_scheme=quant_scheme,
                 lazy_load=lazy_load,
                 lazy_load_path=self.checkpoint_path,
+                rms_norm_type=rms_norm_type,
             )
             .eval()
             .requires_grad_(False)

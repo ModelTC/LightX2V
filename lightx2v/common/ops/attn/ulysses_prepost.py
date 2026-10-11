@@ -1,16 +1,13 @@
 import torch
 
-from .kernels.ulysses_layout import (
-    attn_post,
-    attn_post_fp8,
-    attn_pre,
-    attn_pre_fp8,
-    qkv_post,
-    qkv_post_fp8,
-    qkv_pre,
-    qkv_pre_fp8,
-)
 from .utils.seq_p import pack_seq_p_tensor, unpack_seq_p_tensor, validate_quant_scheme
+
+try:
+    from .kernels import ulysses_layout
+except ModuleNotFoundError as exc:
+    if exc.name != "triton":
+        raise
+    ulysses_layout = None
 
 
 def _join_tokens(tensor, aux, aux_first):
@@ -128,6 +125,10 @@ class TorchUlyssesPrePost:
 class TritonUlyssesPrePost:
     """Fused Triton layout and FP8 communication-quantization backend."""
 
+    def __init__(self):
+        if ulysses_layout is None:
+            raise ModuleNotFoundError("Ulysses Triton pre/post requires Triton", name="triton")
+
     @staticmethod
     def _validate(q, k, v, quant_scheme):
         if q.shape != k.shape or q.shape != v.shape:
@@ -140,9 +141,9 @@ class TritonUlyssesPrePost:
     def pack_qkv(cls, q, k, v, world_size, quant_scheme=None, qkv_fusion=True, head_index=None):
         cls._validate(q, k, v, quant_scheme)
         if quant_scheme == "fp8":
-            payload, scale, _, _ = qkv_pre_fp8(q, k, v, world_size, head_index=head_index)
+            payload, scale, _, _ = ulysses_layout.qkv_pre_fp8(q, k, v, world_size, head_index=head_index)
             return ((payload, scale),)
-        return ((qkv_pre(q, k, v, world_size, head_index=head_index), None),)
+        return ((ulysses_layout.qkv_pre(q, k, v, world_size, head_index=head_index), None),)
 
     @staticmethod
     def unpack_qkv(
@@ -167,8 +168,8 @@ class TritonUlyssesPrePost:
         q_only = aux_q is None and aux_k is not None
 
         if scale is None:
-            return qkv_post(payload, q_source, k_source, v_source, rank, aux_len, qkv_first, q_only=q_only, head_index=head_index)
-        return qkv_post_fp8(
+            return ulysses_layout.qkv_post(payload, q_source, k_source, v_source, rank, aux_len, qkv_first, q_only=q_only, head_index=head_index)
+        return ulysses_layout.qkv_post_fp8(
             payload,
             scale,
             payload.shape,
@@ -188,16 +189,16 @@ class TritonUlyssesPrePost:
         if quant_scheme == "fp4":
             raise ValueError("prepost_backend='triton' does not support FP4 communication.")
         if quant_scheme == "fp8":
-            payload, scale, _, _ = attn_pre_fp8(output, local_len, world_size, shard_heads, hidden_dims)
+            payload, scale, _, _ = ulysses_layout.attn_pre_fp8(output, local_len, world_size, shard_heads, hidden_dims)
             return ((payload, scale),)
-        return ((attn_pre(output, local_len, world_size, shard_heads, hidden_dims), None),)
+        return ((ulysses_layout.attn_pre(output, local_len, world_size, shard_heads, hidden_dims), None),)
 
     @staticmethod
     def unpack_attn(packed, output_dtype, hidden_dims):
         payload, scale = packed[0]
         if scale is None:
-            return attn_post(payload)
-        return attn_post_fp8(payload, scale, payload.shape, scale.shape, output_dtype)
+            return ulysses_layout.attn_post(payload)
+        return ulysses_layout.attn_post_fp8(payload, scale, payload.shape, scale.shape, output_dtype)
 
 
 def create_ulysses_prepost_backend(name):

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-lightx2v_path=/path/to/lightX2V
+lightx2v_path=/path/to/LightX2V
 model_path=/path/to/model
 # export ASCEND_RT_VISIBLE_DEVICES=0
 export PLATFORM=ascend_npu

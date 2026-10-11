@@ -13,8 +13,8 @@
 
 set -e
 
-lightx2v_path=${LIGHTX2V_PATH:-/home/fuhaiwen/LightX2V}
-model_path=${QWEN_IMAGE_MODEL_PATH:-/home/fuhaiwen/models/qwen-2512}
+lightx2v_path=${LIGHTX2V_PATH:-/path/to/LightX2V}
+model_path=${QWEN_IMAGE_MODEL_PATH:-/path/to/qwen-2512}
 
 GPU_ENCODER=${GPU_ENCODER:-6}
 GPU_TRANSFORMER=${GPU_TRANSFORMER:-7}
@@ -38,7 +38,8 @@ CUDA_VISIBLE_DEVICES=${GPU_DECODER} python -m lightx2v.server \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/disagg/qwen/qwen_image_t2i_disagg_decode.json" \
     --host 0.0.0.0 \
-    --port 8008 &
+    --port 8008 \
+    --metric_port 18008 &
 PID_DECODER=$!
 
 # 2. Start Transformer
@@ -49,7 +50,8 @@ CUDA_VISIBLE_DEVICES=${GPU_TRANSFORMER} python -m lightx2v.server \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/disagg/qwen/qwen_image_t2i_disagg_transformer.json" \
     --host 0.0.0.0 \
-    --port 8003 &
+    --port 8003 \
+    --metric_port 18003 &
 PID_TRANSFORMER=$!
 
 # 3. Start Encoder last
@@ -60,7 +62,8 @@ CUDA_VISIBLE_DEVICES=${GPU_ENCODER} python -m lightx2v.server \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/disagg/qwen/qwen_image_t2i_disagg_encoder.json" \
     --host 0.0.0.0 \
-    --port 8002 &
+    --port 8002 \
+    --metric_port 18002 &
 PID_ENCODER=$!
 
 echo ""

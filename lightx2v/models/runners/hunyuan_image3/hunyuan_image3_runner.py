@@ -105,7 +105,6 @@ class HunyuanImage3Runner(DefaultRunner):
         return None, None
 
     def init_scheduler(self):
-        super().init_scheduler()
         self.scheduler = HunyuanImage3Scheduler(self.config)
 
     def init_modules(self):
@@ -401,11 +400,7 @@ class HunyuanImage3Runner(DefaultRunner):
         return bool(self.config.get("enable_kv_cache", True))
 
     def _hunyuan_text_kv_cache_enabled(self):
-        if "enable_text_kv_cache" in self.config:
-            return bool(self.config["enable_text_kv_cache"])
-        if "enable_kv_cache" in self.config:
-            return bool(self.config["enable_kv_cache"])
-        return hasattr(self, "hunyuan_config")
+        return bool(self.config.get("enable_text_kv_cache", self.config.get("enable_kv_cache", True)))
 
     def _get_ar_cuda_graph_controller(self):
         controller = getattr(self, "_hunyuan_ar_cuda_graph_controller", None)
@@ -419,9 +414,7 @@ class HunyuanImage3Runner(DefaultRunner):
         return controller
 
     def _hunyuan_num_layers(self):
-        hunyuan_config = getattr(self, "hunyuan_config", None)
-        fallback = self.config.get("num_hidden_layers", getattr(hunyuan_config, "num_hidden_layers", 1))
-        return int(self.config.get("num_layers") or fallback)
+        return self.model.transformer_weights.blocks_num
 
     def _hunyuan_taylor_cache_enabled(self):
         return bool(self.config.get("use_taylor_cache", False))
@@ -1607,12 +1600,10 @@ class HunyuanImage3Runner(DefaultRunner):
     def generate_ti2t(self, input_info):
         self._ensure_pipeline_modules()
         seed = input_info.seed
-        image_paths = self._split_image_paths(getattr(input_info, "image_path", None) or self.config.get("image_path"))
-        align_image_size = getattr(input_info, "align_image_size", None)
-        if align_image_size is None:
-            align_image_size = self.config.get("align_image_size", False)
+        image_paths = self._split_image_paths(input_info.image_path)
+        align_image_size = bool(input_info.align_image_size)
 
-        batch_cond_images = self._build_batch_cond_images(image_paths, bool(align_image_size))
+        batch_cond_images = self._build_batch_cond_images(image_paths, align_image_size)
         cond_inputs = self._prepare_cond_inputs(batch_cond_images, cfg_factor=1, seed=seed)
         return self._generate_text(input_info, batch_cond_images=batch_cond_images, cond_inputs=cond_inputs)
 
@@ -1639,11 +1630,8 @@ class HunyuanImage3Runner(DefaultRunner):
         self._ensure_pipeline_modules()
         prompt = getattr(input_info, "prompt", "")
         seed = input_info.seed
-        image_paths = self._split_image_paths(getattr(input_info, "image_path", None) or self.config.get("image_path"))
-        align_image_size = getattr(input_info, "align_image_size", None)
-        if align_image_size is None:
-            align_image_size = self.config.get("align_image_size", False)
-        align_image_size = bool(align_image_size)
+        image_paths = self._split_image_paths(input_info.image_path)
+        align_image_size = bool(input_info.align_image_size)
 
         batch_cond_images = self._build_batch_cond_images(image_paths, align_image_size)
         image_size = self._resolve_ti2i_image_size(self._resolve_image_size(input_info), batch_cond_images)
@@ -1727,6 +1715,11 @@ class HunyuanImage3Runner(DefaultRunner):
             if controller is not None:
                 controller.close()
         finally:
-            context = self.config.get("parallel_context")
-            if context is not None:
-                context.close()
+            try:
+                model = getattr(self, "model", None)
+                if model is not None:
+                    model.close_shared_cpu_weights()
+            finally:
+                context = self.config.get("parallel_context")
+                if context is not None:
+                    context.close()

@@ -1,8 +1,9 @@
 {
     "infer_steps": 50,
-    "transformer_model_name": "729p_t2v",
+    "transformer_model_name": "720p_t2v",
     "fps": 24,
     "num_frames": 121,
+    "aspect_ratio": "16:9",
     "vae_stride": [4, 16, 16],
     "sample_shift": 5.0,
     "sample_guide_scale": 6.0,
@@ -15,6 +16,5 @@
     "offload_granularity": "block",
     "vae_cpu_offload": false,
     "byt5_cpu_offload": false,
-    "qwen25vl_cpu_offload": true,
-    "siglip_cpu_offload": false
+    "qwen25vl_cpu_offload": true
 }

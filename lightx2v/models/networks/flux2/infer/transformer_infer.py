@@ -23,14 +23,30 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
-            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            parallel_config = self.config["parallel"]
+            self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel_config.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel_config.get("seq_p_quant_scheme")
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
+            self.enable_head_parallel = parallel_config.get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
-            self.seq_p_fp8_comm = False
-            self.seq_p_fp4_comm = False
+            self.seq_p_prepost_backend = "torch"
+            self.seq_p_a2a_backend = "torch"
+            self.seq_p_quant_scheme = None
+            self.seq_p_tensor_fusion = False
             self.enable_head_parallel = False
+
+    def _maybe_apply_stale_kv(self, key, value, num_txt_tokens, block_idx, block_type=None):
+        """Hook for stale-KV cache in PipeFusion mode.  No-op in base class.
+
+        Subclasses (PipeFusion) override this to cache image KV across patches
+        while keeping text KV fresh. ``block_type`` distinguishes double vs
+        single blocks, whose ``block_idx`` both restart from 0.
+        """
+        return key, value
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -91,46 +107,53 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         query = torch.cat([txt_query, img_query], dim=0)
         key = torch.cat([txt_key, img_key], dim=0)
-        value = torch.cat([txt_value, img_value], dim=0)
 
         query, key = block_weights.rope.apply(query, key, image_rotary_emb, positions=image_rotary_positions)
-
-        total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
 
         model_cls = self.config.get("model_cls", "flux2_klein")
 
         if self.seq_p_group is not None:
-            txt_len = encoder_hidden_states.shape[0]
-            attn_output = block_weights.calculate_parallel.apply(
-                q=query,
-                k=key,
-                v=value,
-                slice_qkv_len=txt_len,
-                cu_seqlens_qkv=cu_seqlens,
+            txt_len = txt_query.shape[0]
+            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply(
+                q=query[txt_len:],
+                k=key[txt_len:],
+                v=img_value,
+                aux_q=query[:txt_len],
+                aux_k=key[:txt_len],
+                aux_v=txt_value,
                 attention_module=block_weights.calculate,
                 seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                enable_head_parallel=self.enable_head_parallel,
-                img_first=False,
-                model_cls=model_cls,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.enable_head_parallel,
+                aux_first=True,
+                attention_kwargs={"model_cls": model_cls},
             )
+            if txt_attn_output is None:
+                raise RuntimeError("Flux2 double-stream attention expected a text auxiliary output.")
         else:
+            value = torch.cat([txt_value, img_value], dim=0)
+            num_txt_tokens = encoder_hidden_states.shape[0]
+            key, value = self._maybe_apply_stale_kv(key, value, num_txt_tokens, block_weights.block_idx, block_type=block_weights.block_type)
+            total_len = query.shape[0]
+            kv_len = key.shape[0]  # may differ from total_len in PipeFusion (stale-KV)
+            cu_seqlens_q = torch.tensor([0, total_len], dtype=torch.int32)
+            cu_seqlens_kv = torch.tensor([0, kv_len], dtype=torch.int32)
             attn_output = block_weights.calculate.apply(
                 q=query,
                 k=key,
                 v=value,
-                cu_seqlens_q=cu_seqlens,
-                cu_seqlens_kv=cu_seqlens,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_kv,
                 max_seqlen_q=total_len,
-                max_seqlen_kv=total_len,
+                max_seqlen_kv=kv_len,
                 model_cls=model_cls,
             )
-
-        txt_len = encoder_hidden_states.shape[0]
-        txt_attn_output = attn_output[:txt_len]
-        img_attn_output = attn_output[txt_len:]
+            txt_len = encoder_hidden_states.shape[0]
+            txt_attn_output = attn_output[:txt_len]
+            img_attn_output = attn_output[txt_len:]
 
         img_attn_output = block_weights.to_out.apply(img_attn_output)
         txt_attn_output = block_weights.to_add_out.apply(txt_attn_output)
@@ -197,35 +220,43 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         query, key = block_weights.rope.apply(query, key, image_rotary_emb, positions=image_rotary_positions)
 
-        total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
-
         model_cls = self.config.get("model_cls", "flux2_klein")
 
         if self.seq_p_group is not None:
-            attn_output = block_weights.calculate_parallel.apply(
-                q=query,
-                k=key,
-                v=value,
-                slice_qkv_len=num_txt_tokens,
-                cu_seqlens_qkv=cu_seqlens,
+            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply(
+                q=query[num_txt_tokens:],
+                k=key[num_txt_tokens:],
+                v=value[num_txt_tokens:],
+                aux_q=query[:num_txt_tokens],
+                aux_k=key[:num_txt_tokens],
+                aux_v=value[:num_txt_tokens],
                 attention_module=block_weights.calculate,
                 seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                enable_head_parallel=self.enable_head_parallel,
-                img_first=False,
-                model_cls=model_cls,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.enable_head_parallel,
+                aux_first=True,
+                attention_kwargs={"model_cls": model_cls},
             )
+            if txt_attn_output is None:
+                raise RuntimeError("Flux2 single-stream attention expected a text auxiliary output.")
+            attn_output = torch.cat([txt_attn_output, img_attn_output], dim=0)
         else:
+            key, value = self._maybe_apply_stale_kv(key, value, num_txt_tokens, block_weights.block_idx, block_type=block_weights.block_type)
+            total_len = query.shape[0]
+            kv_len = key.shape[0]  # may differ from total_len in PipeFusion (stale-KV)
+            cu_seqlens_q = torch.tensor([0, total_len], dtype=torch.int32)
+            cu_seqlens_kv = torch.tensor([0, kv_len], dtype=torch.int32)
             attn_output = block_weights.calculate.apply(
                 q=query,
                 k=key,
                 v=value,
-                cu_seqlens_q=cu_seqlens,
-                cu_seqlens_kv=cu_seqlens,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_kv,
                 max_seqlen_q=total_len,
-                max_seqlen_kv=total_len,
+                max_seqlen_kv=kv_len,
                 model_cls=model_cls,
             )
 

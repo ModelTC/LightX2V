@@ -8,7 +8,7 @@ from lightx2v.models.networks.worldplay.ar_model import WorldPlayARModel
 from lightx2v.models.networks.worldplay.pose_utils import load_pose, pose_to_input
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner
 from lightx2v.models.schedulers.worldplay.ar_scheduler import WorldPlayARScheduler
-from lightx2v.utils.input_info import UNSET, WorldPlayI2VInputInfo, WorldPlayT2VInputInfo
+from lightx2v.utils.input_info import WorldPlayI2VInputInfo, WorldPlayT2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -21,12 +21,6 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     """
     Runner for HY-WorldPlay AR (Autoregressive) model with action conditioning.
 
-    Key differences from WorldPlayDistillRunner:
-    - Uses causal attention for autoregressive generation
-    - Implements KV cache for efficient frame-by-frame generation
-    - Supports chunk-based training and inference
-    - No guidance embedding required
-
     Extends HunyuanVideo15Runner with:
     - Action conditioning support
     - ProPE (camera pose) conditioning
@@ -34,13 +28,13 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     - Memory window selection for long videos
     """
 
+    scheduler_class = WorldPlayARScheduler
     input_info_cls_by_task = {"t2v": WorldPlayT2VInputInfo, "i2v": WorldPlayI2VInputInfo}
     supported_request_fields_by_task = {task: request_fields | {"pose"} for task, request_fields in HunyuanVideo15Runner.supported_request_fields_by_task.items()}
 
     def __init__(self, config):
         # AR-specific parameters
         self.chunk_latent_frames = config.get("chunk_latent_frames", 4)
-        self.model_type = config.get("model_type", "ar")
         self.action_ckpt = config.get("action_ckpt", None)
         self.use_prope = config.get("use_prope", True)
 
@@ -66,14 +60,14 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
         input_info.pose = load_pose(input_info.pose)
         num_frames = (len(input_info.pose) - 1) * self.config["vae_stride"][0] + 1
         requested_frames = request_data.get("num_frames")
-        if requested_frames is not None and requested_frames is not UNSET and requested_frames != num_frames:
+        if requested_frames is not None and requested_frames != num_frames:
             raise ValueError(f"pose corresponds to {num_frames} frames, but num_frames is {requested_frames}; they must match.")
         input_info.num_frames = num_frames
         return input_info
 
     def init_scheduler(self):
         """Initialize WorldPlay AR scheduler."""
-        self.scheduler = WorldPlayARScheduler(self.config)
+        self.scheduler = self.scheduler_class(self.config)
 
         if self.sr_version is not None:
             from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15SRScheduler

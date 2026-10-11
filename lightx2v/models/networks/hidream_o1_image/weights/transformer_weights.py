@@ -13,11 +13,11 @@ class HidreamO1ImageTransformerWeights(WeightModule):
         self.mm_type = config.get("mm_type", config.get("dit_quant_scheme", "Default"))
         self.rms_norm_type = config.get("rms_norm_type", "one-pass")
         self.attn_type = config["attn_type"]
-        self.blocks_num = int(config.get("num_hidden_layers", config.get("num_layers", 0)))
+        self.blocks_num = config["num_hidden_layers"]
         self.device = AI_DEVICE
         self.blocks = WeightModuleList(HidreamO1ImageDecoderBlockWeights(i, config, self.mm_type, self.rms_norm_type, self.attn_type) for i in range(self.blocks_num))
         self.add_module("blocks", self.blocks)
-        self.add_module("norm", RMS_WEIGHT_REGISTER[self.rms_norm_type]("model.language_model.norm.weight", eps=config.get("rms_norm_eps", 1e-6)))
+        self.add_module("norm", RMS_WEIGHT_REGISTER[self.rms_norm_type]("model.language_model.norm.weight", eps=config["rms_norm_eps"]))
         self.add_module("final_linear", MM_WEIGHT_REGISTER[self.mm_type]("model.final_layer2.linear.weight", "model.final_layer2.linear.bias"))
 
     def configure_model(self, text_config, device):
@@ -56,14 +56,14 @@ class HidreamO1ImageDecoderBlockWeights(WeightModule):
         self.head_dim = None
         self.act_fn = None
         prefix = f"model.language_model.layers.{block_index}"
-        self.add_module("input_layernorm", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.input_layernorm.weight", eps=config.get("rms_norm_eps", 1e-6)))
-        self.add_module("post_attention_layernorm", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.post_attention_layernorm.weight", eps=config.get("rms_norm_eps", 1e-6)))
+        self.add_module("input_layernorm", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.input_layernorm.weight", eps=config["rms_norm_eps"]))
+        self.add_module("post_attention_layernorm", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.post_attention_layernorm.weight", eps=config["rms_norm_eps"]))
         self.add_module("q_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.self_attn.q_proj.weight", f"{prefix}.self_attn.q_proj.bias"))
         self.add_module("k_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.self_attn.k_proj.weight", f"{prefix}.self_attn.k_proj.bias"))
         self.add_module("v_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.self_attn.v_proj.weight", f"{prefix}.self_attn.v_proj.bias"))
         self.add_module("o_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.self_attn.o_proj.weight", f"{prefix}.self_attn.o_proj.bias"))
-        self.add_module("q_norm", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.self_attn.q_norm.weight", eps=config.get("rms_norm_eps", 1e-6)))
-        self.add_module("k_norm", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.self_attn.k_norm.weight", eps=config.get("rms_norm_eps", 1e-6)))
+        self.add_module("q_norm", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.self_attn.q_norm.weight", eps=config["rms_norm_eps"]))
+        self.add_module("k_norm", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.self_attn.k_norm.weight", eps=config["rms_norm_eps"]))
         self.add_module("gate_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.mlp.gate_proj.weight", None))
         self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.mlp.up_proj.weight", None))
         self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.mlp.down_proj.weight", None))

@@ -24,7 +24,6 @@ class HidreamPreInferOutput:
     rope_positions_ar: torch.Tensor | None = None
     rope_cos_sin_gen: RopeFreqs | None = None
     rope_positions_gen: torch.Tensor | None = None
-    seq_p_cu_seqlens_qkv: torch.Tensor | None = None
     vinput_mask_gen: torch.Tensor | None = None
     seq_p_padding_size: int = 0
 

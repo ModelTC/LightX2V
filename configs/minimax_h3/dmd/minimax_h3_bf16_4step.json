@@ -11,8 +11,6 @@
   "text_encoder_cpu_offload": true,
   "text_encoder_offload_granularity": "block",
   "vae_cpu_offload": true,
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "flash_attn3",
   "rms_type": "torch_native",
   "rope_type": "torch_real_rope",

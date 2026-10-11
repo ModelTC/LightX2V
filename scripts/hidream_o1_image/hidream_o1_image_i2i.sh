@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/nb/LightX2V
-model_path=/data/nvme1/yongyang/nb/models/HiDream-ai/HiDream-O1-Image
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/models/HiDream-O1-Image
 
 export CUDA_VISIBLE_DEVICES=0
 
 # keep the same effective inputs/outputs as HiDream-O1-Image/hidream_o1_image_i2i.sh
 prompt="remove the earphones"
-ref_images=/data/nvme1/yongyang/nb/HiDream-O1-Image/assets/edit/test.jpg
+ref_images=/path/to/HiDream-O1-Image/assets/edit/test.jpg
 output_image=${lightx2v_path}/results/edit.png
 
 # set environment variables

@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/dok/bugs/v1/LightX2V
-model_path=/data/nvme1/wushuo/hf_models/Wan2.2-Animate-14B
-video_path=/data/nvme1/yongyang/dok/bugs/examples/qqqq/input1.mp4
-refer_path=/data/nvme1/yongyang/dok/bugs/examples/qqqq/src_ref.png
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Wan2.2-Animate-14B
+video_path=/path/to/input1.mp4
+refer_path=/path/to/src_ref.png
 
 export CUDA_VISIBLE_DEVICES=0
 

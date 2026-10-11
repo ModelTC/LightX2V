@@ -38,13 +38,6 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 _MATRIX_GAME3_CONFIG_ROOT_RELATIVE = Path("Matrix-Game-3.0")
-_MATRIX_GAME3_DEFAULT_NEGATIVE_PROMPT = (
-    "Vibrant colors, overexposure, static, blurred details, subtitles, style, artwork, "
-    "painting, still image, overall grayness, worst quality, low quality, JPEG compression "
-    "residue, ugly, mutilated, extra fingers, poorly drawn hands, poorly drawn faces, "
-    "deformed, disfigured, malformed limbs, fused fingers, still image, cluttered background, "
-    "three legs, crowded background, walking backwards"
-)
 _MATRIX_GAME3_WSAD_OFFSET = 12.35
 _MATRIX_GAME3_DIAGONAL_OFFSET = 8.73
 _MATRIX_GAME3_MOUSE_PITCH_SENSITIVITY = 15.0
@@ -1051,7 +1044,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
                     config["lightvae_pruning_rate"] = 0.75
             if "sub_model_folder" not in config:
                 config["sub_model_folder"] = "base_model" if config["use_base_model"] else "base_distilled_model"
-            config["num_channels_latents"] = int(config.get("num_channels_latents", 48))
             config["vae_stride"] = tuple(config.get("vae_stride", (4, 16, 16)))
             config["patch_size"] = tuple(config.get("patch_size", (1, 2, 2)))
             # Load the official MG3 sub-model config before the parent runner
@@ -1067,14 +1059,10 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         # - first segment predicts 57 frames from the input image;
         # - later segments operate on a 56-frame window;
         # - every new segment contributes 40 new frames and reuses 16 historical frames.
-        action_config = self.config.get("action_config", {})
         self.first_clip_frame = int(self.config.get("first_clip_frame", 57))
         self.clip_frame = int(self.config.get("clip_frame", 56))
         self.incremental_segment_frames = int(self.config.get("incremental_segment_frames", 40))
-        self.past_frame = int(self.config.get("past_frame", 16))
         self.conditioning_latent_frames = int(self.config.get("conditioning_latent_frames", 4))
-        self.mouse_dim_in = int(self.config.get("mouse_dim_in", action_config.get("mouse_dim_in", 2)))
-        self.keyboard_dim_in = int(self.config.get("keyboard_dim_in", action_config.get("keyboard_dim_in", 6)))
 
         # Session-scoped caches filled by `_prepare_matrix_game3_session()` and then
         # consumed incrementally as each segment is initialized and decoded.
@@ -1099,15 +1087,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         self._mg3_tail_latents: Optional[torch.Tensor] = None
         self._mg3_noise_generator: Optional[torch.Generator] = None
 
-    def run_text_encoder(self, input_info):
-        # Official Matrix-Game-3 base inference uses a non-empty default negative
-        # prompt for CFG. If the caller leaves `--negative_prompt` empty, reuse the
-        # official default so the unconditional branch matches the reference path.
-        if self.config.get("enable_cfg", False) and not getattr(input_info, "negative_prompt", ""):
-            input_info.negative_prompt = self.config.get("sample_neg_prompt", _MATRIX_GAME3_DEFAULT_NEGATIVE_PROMPT)
-            logger.info("[matrix-game-3] negative_prompt not provided; falling back to the official sample_neg_prompt for CFG.")
-        return super().run_text_encoder(input_info)
-
     def load_transformer(self):
         from lightx2v.models.networks.wan.matrix_game3_model import WanMtxg3Model
 
@@ -1129,16 +1108,8 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         # diffusion step. The inlined FlowUniPC adapter already mirrors the official
         # per-step semantics while keeping the denoiser itself on the native
         # LightX2V path, so prefer it for both base and distilled checkpoints.
-        try:
-            self.scheduler = MatrixGame3OfficialSchedulerAdapter(self.config, FlowUniPCMultistepScheduler)
-            logger.info("[matrix-game-3] using inlined FlowUniPCMultistepScheduler for MG3 sampling.")
-            return
-        except Exception as exc:
-            logger.warning(
-                "[matrix-game-3] failed to initialize inlined MG3 scheduler ({}); falling back to LightX2V WanScheduler.",
-                exc,
-            )
-        super().init_scheduler()
+        self.scheduler = MatrixGame3OfficialSchedulerAdapter(self.config, FlowUniPCMultistepScheduler)
+        logger.info("[matrix-game-3] using inlined FlowUniPCMultistepScheduler for MG3 sampling.")
 
     def _get_sub_model_folder(self) -> str:
         """Resolve which MG3 sub-model folder should be used for config lookup."""
@@ -1189,14 +1160,13 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
 
         with self.config.temporarily_unlocked():
             self.config.update(model_config)
-            self.config["num_channels_latents"] = int(model_config.get("in_dim", self.config.get("num_channels_latents", 48)))
+            self.config["num_channels_latents"] = model_config["in_dim"]
             self.config["vae_stride"] = tuple(self.config.get("vae_stride", (4, 16, 16)))
             self.config["patch_size"] = tuple(model_config.get("patch_size", self.config.get("patch_size", (1, 2, 2))))
-            self.config["sample_neg_prompt"] = self.config.get("sample_neg_prompt", _MATRIX_GAME3_DEFAULT_NEGATIVE_PROMPT)
 
-        action_config = self.config.get("action_config", {})
-        self.keyboard_dim_in = int(self.config.get("keyboard_dim_in", action_config.get("keyboard_dim_in", 6)))
-        self.mouse_dim_in = int(self.config.get("mouse_dim_in", action_config.get("mouse_dim_in", 2)))
+        action_config = model_config["action_config"]
+        self.keyboard_dim_in = action_config["keyboard_dim_in"]
+        self.mouse_dim_in = action_config["mouse_dim_in"]
 
     def _get_official_modules(self) -> dict[str, Any]:
         """Expose inlined Matrix-Game-3 helpers through a module-like interface."""
@@ -1242,7 +1212,7 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
     def _segment_latent_shape(self, lat_h: int, lat_w: int, frame_count: int) -> list[int]:
         """Compute `[C, T, H, W]` latent shape for one segment window."""
         return [
-            self.config.get("num_channels_latents", 48),
+            self.config["num_channels_latents"],
             (frame_count - 1) // self.config["vae_stride"][0] + 1,
             lat_h,
             lat_w,
@@ -1387,12 +1357,12 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
     def _load_control_payload(self, action_path: str) -> dict[str, Any]:
         """Load keyboard/mouse/pose/intrinsics controls from a file or a directory."""
         if not action_path:
-            logger.warning("[matrix-game-3] action_path missing, fallback to zero keyboard/mouse and identity poses.")
+            logger.warning("[matrix-game-3] action_path missing; using benchmark actions.")
             return {}
 
         path = Path(action_path)
         if not path.exists():
-            logger.warning("[matrix-game-3] action_path not found: {}. Fallback to zero keyboard/mouse and identity poses.", action_path)
+            logger.warning("[matrix-game-3] action_path not found: {}; using benchmark actions.", action_path)
             return {}
 
         if path.is_dir():
@@ -1426,16 +1396,16 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
             return self._normalize_payload_keys(data)
         if suffix == ".json":
             with path.open("r") as f:
-                data = json.load(f)
-            return self._normalize_payload_keys(data)
-        if suffix == ".npy":
+                array = json.load(f)
+        elif suffix == ".npy":
             array = np.load(path, allow_pickle=True)
         elif suffix in {".pt", ".pth"}:
             array = torch.load(path, map_location="cpu")
-            if isinstance(array, dict):
-                return self._normalize_payload_keys(array)
         else:
             raise ValueError(f"unsupported action_path format: {path}")
+
+        if isinstance(array, dict):
+            return self._normalize_payload_keys(array)
 
         if "keyboard" in stem:
             return {"keyboard_cond": array}

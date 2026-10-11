@@ -15,6 +15,7 @@ from lightx2v_train.runtime.distributed import (
     is_distributed,
 )
 from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
+from lightx2v_train.schedulers.wan_unipc import build_wan_unipc_scheduler, wan_unipc_timestep_to_sigma
 from lightx2v_train.utils.constants import LINGBOT_VIDEO_NEGATIVE_PROMPT, WAN_NEGATIVE_PROMPT
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
@@ -63,6 +64,16 @@ def _target_hw_for_sample(sample, default_height, default_width):
 class WanT2VInferencer(BaseInferencer):
     negative_prompt = WAN_NEGATIVE_PROMPT
 
+    def _build_unipc_scheduler(self, num_inference_steps):
+        if self.infer_config.get("denoising_step_list") is not None:
+            raise ValueError("WAN UniPC inference does not support inference.denoising_step_list.")
+        return build_wan_unipc_scheduler(
+            self.scheduler.num_train_timesteps,
+            num_inference_steps,
+            device=self.model.device,
+            shift=float(self.infer_config.get("unipc_shift", 5.0)),
+        )
+
     def _inference_sigmas(self, num_inference_steps):
         return None
 
@@ -83,6 +94,9 @@ class WanT2VInferencer(BaseInferencer):
         default_height = self.infer_config.get("default_height", 480)
         default_width = self.infer_config.get("default_width", 832)
         num_inference_steps = self.infer_config.get("num_inference_steps", 50)
+        scheduler_type = str(self.infer_config.get("scheduler_type", "euler")).lower()
+        if scheduler_type not in {"euler", "unipc"}:
+            raise ValueError("WAN inference.scheduler_type must be 'euler' or 'unipc'.")
         fps = self.infer_config.get("fps", 16)
         video_quality = self.infer_config.get("video_quality", 6.0)
         macro_block_size = self.infer_config.get("macro_block_size", 16)
@@ -138,17 +152,26 @@ class WanT2VInferencer(BaseInferencer):
                 pos_cond = broadcast_sequence_parallel_value(pos_cond)
                 latent = broadcast_sequence_parallel_value(latent)
                 latent_hw = (latent.shape[-2], latent.shape[-1])
-                self.scheduler.set_timesteps(
-                    num_inference_steps,
-                    sigmas=self._inference_sigmas(num_inference_steps),
-                    latent_hw=latent_hw,
-                )
-                total_steps = len(self.scheduler.infer_timesteps)
+                if scheduler_type == "unipc":
+                    sample_scheduler = self._build_unipc_scheduler(num_inference_steps)
+                    sample_timesteps = sample_scheduler.timesteps
+                else:
+                    self.scheduler.set_timesteps(
+                        num_inference_steps,
+                        sigmas=self._inference_sigmas(num_inference_steps),
+                        latent_hw=latent_hw,
+                    )
+                    sample_scheduler = self.scheduler
+                    sample_timesteps = self.scheduler.infer_timesteps
+                total_steps = len(sample_timesteps)
 
                 if should_log_sample:
                     logger.info("[infer] sample={}/{} seed={} size={}x{} start", i + 1, len(prompts), seed, height, width)
-                for step_idx, _ in enumerate(self.scheduler.infer_timesteps):
-                    sigma = self.scheduler.infer_sigmas[step_idx].unsqueeze(0)
+                for step_idx, timestep in enumerate(sample_timesteps):
+                    if scheduler_type == "unipc":
+                        sigma = wan_unipc_timestep_to_sigma(timestep, self.scheduler.num_train_timesteps).reshape(1)
+                    else:
+                        sigma = self.scheduler.infer_sigmas[step_idx].unsqueeze(0)
                     denoise_model = self._denoise_model_for_step(
                         step_idx,
                         total_steps,
@@ -160,7 +183,10 @@ class WanT2VInferencer(BaseInferencer):
                         neg_cond=neg_cond,
                         model=denoise_model,
                     )
-                    latent = self.scheduler.step(model_output, step_idx, latent)
+                    if scheduler_type == "unipc":
+                        latent = sample_scheduler.step(model_output.float(), timestep, latent, return_dict=False)[0]
+                    else:
+                        latent = self.scheduler.step(model_output, step_idx, latent)
                     step = step_idx + 1
                     if should_log_sample and (step == 1 or step % infer_log_every_steps == 0 or step == total_steps):
                         logger.info("[infer] sample={}/{} step={}/{}", i + 1, len(prompts), step, total_steps)
@@ -364,9 +390,6 @@ class LingBotVideoT2VInferencer(BaseInferencer):
         self.guidance_scale = float(self.infer_config.get("cfg_guidance_scale", 3.0))
         self.enable_cfg = bool(self.infer_config.get("enable_cfg", self.guidance_scale > 1.0))
         self.batch_cfg = bool(self.infer_config.get("batch_cfg", False))
-        if self.infer_config.get("allow_tf32", True) and torch.cuda.is_available():
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.set_float32_matmul_precision("high")
         saved_paths = []
         self.model.set_denoiser_eval()
         num_slots = (len(prompts) + world_size - 1) // world_size

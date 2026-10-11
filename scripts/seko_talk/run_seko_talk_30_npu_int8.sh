@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/data/wq/proj/sd/code/LightX2V
-model_path=/root/SekoTalk-Distill-int8
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/SekoTalk-Distill-int8
 export ASCEND_RT_VISIBLE_DEVICES=4
 export PLATFORM=ascend_npu
 export DTYPE="BF16"

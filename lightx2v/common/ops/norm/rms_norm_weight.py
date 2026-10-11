@@ -5,16 +5,11 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.norm.triton_ops import (
-    fused_norm_3drope,
-    fused_qk_norm_3drope,
-    fused_qk_rms_norm,
-    rms_norm_kernel,
-)
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage, StorageDescription
 
 try:
     import sgl_kernel
@@ -34,6 +29,13 @@ except ImportError:
     magi_register_custom_op = None
 
 from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
+
+try:
+    from .triton_ops import fused_qk_rms_norm
+except ModuleNotFoundError as exc:
+    if exc.name != "triton":
+        raise
+    fused_qk_rms_norm = None
 
 
 @torch.library.custom_op(
@@ -60,7 +62,7 @@ def rmsnorm_flashinfer_fake(
     return torch.empty_like(input_tensor)
 
 
-class RMSWeightTemplate(metaclass=ABCMeta):
+class RMSWeightTemplate(FloatingWeightStorage, metaclass=ABCMeta):
     def __init__(
         self,
         weight_name,
@@ -96,6 +98,11 @@ class RMSWeightTemplate(metaclass=ABCMeta):
             self.base_attrs.append((self.weight_name, "weight", False))
         else:
             self.weight = None
+
+    def describe_storage(self, metadata):
+        description = super().describe_storage(metadata)
+        auxiliary = (("weight_diff", self.weight_diff_name),) if self.weight_name is not None else ()
+        return StorageDescription(description.tensors, auxiliary)
 
     def _get_lora_attr_mapping(self):
         if self.weight_name is not None:
@@ -500,6 +507,9 @@ class RMSWeightOnePass(RMSWeight):
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
+        from .triton_ops import rms_norm_kernel
+
+        self._kernel = rms_norm_kernel
         super().__init__(
             weight_name,
             create_cuda_buffer,
@@ -518,7 +528,7 @@ class RMSWeightOnePass(RMSWeight):
             return torch.nn.functional.rms_norm(input_tensor, (input_tensor.shape[-1],), eps=self.eps)
         if use_magi_custom_ops() and magi_register_custom_op is not None:
             return torch.ops.lightx2v.rms_norm(input_tensor, w, self.eps)
-        return rms_norm_kernel(input_tensor, w, self.eps)
+        return self._kernel(input_tensor, w, self.eps)
 
 
 def apply_qk_rms_norm(
@@ -533,6 +543,9 @@ def apply_qk_rms_norm(
         return query, key
 
     if use_triton and norm_q is not None and norm_k is not None and norm_q.eps == norm_k.eps and query.is_cuda and key.is_cuda and query.shape[-1] == key.shape[-1]:
+        if fused_qk_rms_norm is None:
+            raise ModuleNotFoundError("Fused QK RMSNorm requires Triton", name="triton")
+
         q_shape = query.shape
         k_shape = key.shape
         head_dim = q_shape[-1]
@@ -580,6 +593,9 @@ class RMSWeightFusedQKNorm3DRope:
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
+        from .triton_ops import fused_qk_norm_3drope
+
+        self._kernel = fused_qk_norm_3drope
         self.q_weight_name_t = q_weight_name_t
         self.q_weight_name_hw = q_weight_name_hw
         self.k_weight_name_t = k_weight_name_t
@@ -607,7 +623,7 @@ class RMSWeightFusedQKNorm3DRope:
         k : [seq, num_kv_heads, head_dim] bfloat16
         """
         cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
-        fused_qk_norm_3drope(
+        self._kernel(
             q,
             k,
             self._w_qt,
@@ -645,6 +661,9 @@ class RMSWeightDualNorm3DRope:
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
+        from .triton_ops import fused_norm_3drope
+
+        self._kernel = fused_norm_3drope
         self.weight_name_t = weight_name_t
         self.weight_name_hw = weight_name_hw
         self.create_cuda_buffer = create_cuda_buffer
@@ -662,7 +681,7 @@ class RMSWeightDualNorm3DRope:
     def apply(self, x, cos_sin):
         """In-place fused dual-RMSNorm + 3D Neox-RoPE on x: [seq, num_heads, head_dim]."""
         cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
-        fused_norm_3drope(
+        self._kernel(
             x,
             self._w_t,
             self._w_hw,

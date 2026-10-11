@@ -2,15 +2,17 @@
 
 import torch
 
-from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate
+from lightx2v_platform.ops.mm.template import MMWeightPerChannelQuantTemplate
 from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
 
 from .fp8_scaled_mm import fp8_scaled_mm, per_token_quant_fp8
 
 
 @PLATFORM_MM_WEIGHT_REGISTER("fp8-musa")
-class MMWeightWfp8channelAfp8tokendynamicMusa(MMWeightQuantTemplate):
+class MMWeightWfp8channelAfp8tokendynamicMusa(MMWeightPerChannelQuantTemplate):
     """W8A8 FP8 linear with per-channel weights and per-token activations."""
+
+    checkpoint_dtype = torch.float8_e4m3fn
 
     def __init__(
         self,
@@ -38,21 +40,6 @@ class MMWeightWfp8channelAfp8tokendynamicMusa(MMWeightQuantTemplate):
         self.load_func = self.load_fp8_perchannel_sym
         self.weight_need_transpose = True
         self.act_quant_func = per_token_quant_fp8
-        self.base_attrs = [
-            (self.weight_name, "weight", False),
-            (self.weight_scale_name, "weight_scale", False),
-        ]
-        if self.bias_name is not None:
-            self.base_attrs.append((self.bias_name, "bias", False))
-
-    def load(self, weight_dict):
-        super().load(weight_dict)
-        # Offload buffers reuse the source block's tensor names.  They only
-        # allocate/copy reusable storage, so consuming those entries here
-        # would leave the real block with no tensors to load afterwards.
-        if not self.create_cuda_buffer and not self.create_cpu_buffer:
-            for tensor_name, _, _ in self.base_attrs:
-                weight_dict.pop(tensor_name, None)
 
     def apply(self, input_tensor):
         if input_tensor.ndim < 2:

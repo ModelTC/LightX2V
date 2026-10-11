@@ -1,4 +1,5 @@
 import gc
+from pathlib import Path
 
 import torch
 import torchvision.transforms.functional as TF
@@ -188,7 +189,7 @@ class ZImageRunner(DefaultRunner):
             # embedding_list[0] shape is (seq_len, hidden_dim), use shape[0] for sequence length
             self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["enable_cfg"] and neg_prompt is not None:
+            if self.config["enable_cfg"]:
                 neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt])
                 neg_prompt_embeds = neg_prompt_embeds_list[0]
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -202,7 +203,7 @@ class ZImageRunner(DefaultRunner):
                 self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
                 text_encoder_output["prompt_embeds"] = prompt_embeds
                 text_encoder_output["image_info"] = image_info
-                if self.config["enable_cfg"] and neg_prompt is not None:
+                if self.config["enable_cfg"]:
                     neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt], image_list)
                     neg_prompt_embeds = neg_prompt_embeds_list[0]
                     self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -213,7 +214,7 @@ class ZImageRunner(DefaultRunner):
                 prompt_embeds = prompt_embeds_list[0]
                 self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
                 text_encoder_output["prompt_embeds"] = prompt_embeds
-                if self.config["enable_cfg"] and neg_prompt is not None:
+                if self.config["enable_cfg"]:
                     neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt])
                     neg_prompt_embeds = neg_prompt_embeds_list[0]
                     self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -224,7 +225,7 @@ class ZImageRunner(DefaultRunner):
             prompt_embeds = prompt_embeds_list[0]
             self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["enable_cfg"] and neg_prompt is not None:
+            if self.config["enable_cfg"]:
                 neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt])
                 neg_prompt_embeds = neg_prompt_embeds_list[0]
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -273,8 +274,7 @@ class ZImageRunner(DefaultRunner):
             "3:2": (1584, 1056),
             "2:3": (1056, 1584),
         }
-        as_maps = self.config.get("aspect_ratios", {})
-        as_maps.update(default_aspect_ratios)
+        as_maps = {**default_aspect_ratios, **self.config.get("aspect_ratios", {})}
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
@@ -319,7 +319,7 @@ class ZImageRunner(DefaultRunner):
         vae_scale_factor = self.config["vae_scale_factor"]
         height = 2 * (int(height) // (vae_scale_factor * 2))
         width = 2 * (int(width) // (vae_scale_factor * 2))
-        num_channels_latents = self.config.get("num_channels_latents", 16)
+        num_channels_latents = self.config.get("in_channels", 16)
         self.input_info.latent_shape = (1, num_channels_latents, height, width)
 
         patch_size = self.config.get("patch_size", 2)
@@ -374,7 +374,9 @@ class ZImageRunner(DefaultRunner):
 
         if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
             image = images[0]
-            image.save(input_info.save_result_path)
+            path = Path(input_info.save_result_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            image.save(path)
             logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator

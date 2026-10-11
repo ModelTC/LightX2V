@@ -126,6 +126,9 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
             save_json("mag_ratio", self.norm_ratio)
             save_json("mag_std", self.norm_std)
             save_json("cos_dis", self.cos_dis)
+            self.norm_ratio = [[1.0], [1.0]]
+            self.norm_std = [[0.0], [0.0]]
+            self.cos_dis = [[0.0], [0.0]]
 
 
 class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):

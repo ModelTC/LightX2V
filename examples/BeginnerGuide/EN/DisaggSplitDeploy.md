@@ -141,11 +141,11 @@ The pipeline is split by `disagg_mode` into three roles, with two Mooncake phase
 
 ## 2. Configuration
 
-All disagg options live under `disagg_config` in the config JSON.
+Set routing and queue parameters in `disagg_config`. Mooncake reads the file selected by `MOONCAKE_CONFIG_PATH` (`configs/mooncake_config.json` in the scripts); corresponding `MOONCAKE_*` environment variables take precedence.
 
 ### 2.1 T2V (Wan)
 
-**Encoder** (`configs/disagg/wan/wan_t2v_disagg_encoder.json`): `disagg_mode: "encoder"`, plus `bootstrap_addr`, `bootstrap_room`, `sender_engine_rank`, `receiver_engine_rank`, `protocol`, `local_hostname`, `metadata_server`.
+**Encoder** (`configs/disagg/wan/wan_t2v_disagg_encoder.json`): `disagg_mode: "encoder"`, plus `bootstrap_addr`, `bootstrap_room`, `sender_engine_rank`, `receiver_engine_rank`.
 
 **Transformer** (`configs/disagg/wan/wan_t2v_disagg_transformer.json`): `disagg_mode: "transformer"` and Phase2 fields:
 - `decoder_engine_rank`: Decoder rank for Phase2.
@@ -172,9 +172,6 @@ I2V uses CLIP ViT-H/14; you must set **`clip_embed_dim`: 329216** (257×1280) so
 | `receiver_engine_rank` | Phase1: Transformer rank; Phase2: Decoder rank |
 | `decoder_engine_rank` | **Transformer only**: Decoder rank for Phase2 |
 | `decoder_bootstrap_room` | **Transformer only**: Phase2 room; must match Decoder’s `bootstrap_room` |
-| `protocol` | `"rdma"` (recommended) or `"tcp"` |
-| `local_hostname` | This node’s hostname/IP for Mooncake P2P handshake |
-| `metadata_server` | Use `"P2PHANDSHAKE"` for single-node |
 | `clip_embed_dim` | **I2V only**: 329216 for ViT-H/14 |
 
 ---
@@ -265,9 +262,6 @@ The controller does not load any model; it only initializes three RDMA ring buff
     "encoder_engine_rank": 0,
     "transformer_engine_rank": 1,
     "decoder_engine_rank": 4,
-    "protocol": "rdma",
-    "local_hostname": "localhost",
-    "metadata_server": "P2PHANDSHAKE",
     "rdma_buffer_slots": 128,
     "rdma_buffer_slot_size": 4096,
     "rdma_request_handshake_port": 5566,
@@ -294,10 +288,7 @@ The Encoder runs as an HTTP service, loads the Text Encoder, and writes features
     "bootstrap_addr": "127.0.0.1",
     "bootstrap_room": 0,
     "sender_engine_rank": 0,
-    "receiver_engine_rank": 1,
-    "protocol": "rdma",
-    "local_hostname": "localhost",
-    "metadata_server": "P2PHANDSHAKE"
+    "receiver_engine_rank": 1
   }
 }
 ```
@@ -324,10 +315,7 @@ The Transformer runs as a pull worker, consuming tasks from the Phase1 ring and 
     "bootstrap_addr": "127.0.0.1",
     "bootstrap_room": 0,
     "sender_engine_rank": 0,
-    "receiver_engine_rank": 1,
-    "protocol": "rdma",
-    "local_hostname": "localhost",
-    "metadata_server": "P2PHANDSHAKE"
+    "receiver_engine_rank": 1
   }
 }
 ```
@@ -353,10 +341,7 @@ The Decoder runs as a pull worker, consuming tasks from the Phase2 ring, perform
     "bootstrap_addr": "127.0.0.1",
     "bootstrap_room": 0,
     "sender_engine_rank": 1,
-    "receiver_engine_rank": 4,
-    "protocol": "rdma",
-    "local_hostname": "localhost",
-    "metadata_server": "P2PHANDSHAKE"
+    "receiver_engine_rank": 4
   }
 }
 ```
@@ -510,4 +495,4 @@ The benchmark script distributes requests round-robin to different Transformer r
 | Hardware | InfiniBand / RoCE | Any network |
 | When to use | Production, multi-node | Single-node or no RDMA |
 
-Without RDMA hardware, set `protocol` to `"tcp"` in `disagg_config`.
+Set `export MOONCAKE_PROTOCOL=tcp` before startup to use TCP for Mooncake transfers. Decentralized queues still require RDMA hardware.

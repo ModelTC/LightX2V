@@ -3,7 +3,6 @@ model:
     pretrained_model_name_or_path: models/Wan2.2-T2V-A14B/high_noise_model
     max_sequence_length: 512
     running_dtype: bf16
-    transformer_param_dtype: bf16
     vae_dtype: fp32
     load_vae: true
     load_text_encoder: true
@@ -92,12 +91,10 @@ training:
     save_total_limit: 5
     dmd:
         ida:
-            enabled: true
             decay: 0.97
         num_inference_steps: 4
         fake_update_ratio: 5
         div_loss:
-            enabled: true
             weight: 5.0e-2
             teacher_inference_steps: 40
             anchor_step: 10
@@ -106,16 +103,13 @@ training:
         norm_clip_min: 1.0e-4
         phased:
             match_timestep: 500
-            enable_fake_low_high: true
             score_timestep_margin: 20
             guidance_distill: 4.0
             fake_real_high:
-                enabled: true
                 weight: 1.0e-1
                 timestep_list:
                     - 750
             fake_real_low:
-                enabled: true
                 weight: 1.0e-1
                 timestep_list:
                     - 500

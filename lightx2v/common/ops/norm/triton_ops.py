@@ -7,6 +7,7 @@ import torch
 import triton  # type: ignore
 import triton.language as tl  # type: ignore
 from torch import Tensor
+from torch.utils._python_dispatch import _get_current_dispatch_mode
 
 try:
     from magi_compiler import magi_register_custom_op
@@ -1053,8 +1054,12 @@ def fused_qk_rms_norm(
     block_d = triton.next_power_of_2(d)
     block_s = min(16, triton.next_power_of_2(max(1, max(n_q, n_k) // 512)))
     grid = (triton.cdiv(n_q, block_s) + triton.cdiv(n_k, block_s),)
+    # Eager inference avoids dispatch overhead; tracing still captures the kernel.
+    kernel = _fused_qk_rms_norm_kernel
+    if torch.compiler.is_compiling() or _get_current_dispatch_mode() is not None:
+        kernel = torch.library.wrap_triton(kernel)
     with torch.cuda.device(q.device):
-        torch.library.wrap_triton(_fused_qk_rms_norm_kernel)[grid](
+        kernel[grid](
             q,
             k,
             w_q,

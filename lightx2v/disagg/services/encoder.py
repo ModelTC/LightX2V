@@ -523,20 +523,17 @@ class EncoderService(BaseService):
         sender = self.data_sender.get(room)
 
         prompt = config.get("prompt")
-        negative_prompt = config.get("negative_prompt")
         if prompt is None:
             raise ValueError("prompt is required in config.")
 
         # 1. Text Encoding
-        text_len = config.get("text_len", 512)
+        text_len = config["text_len"]
 
         context = self.text_encoder.infer([prompt])
         context = torch.stack([torch.cat([u, u.new_zeros(text_len - u.size(0), u.size(1))]) for u in context])
 
         if config.get("enable_cfg", False):
-            if negative_prompt is None:
-                raise ValueError("negative_prompt is required in config when enable_cfg is True.")
-            context_null = self.text_encoder.infer([negative_prompt])
+            context_null = self.text_encoder.infer([config.get("negative_prompt") or ""])
             context_null = torch.stack([torch.cat([u, u.new_zeros(text_len - u.size(0), u.size(1))]) for u in context_null])
         else:
             context_null = None

@@ -5,8 +5,6 @@
     "size": [720, 1280],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
-    "cross_attn_2_type": "sage_attn2",
-    "sample_guide_scale": 1.0,
     "sample_shift": 10.0,
     "enable_cfg": false,
     "cpu_offload": false,

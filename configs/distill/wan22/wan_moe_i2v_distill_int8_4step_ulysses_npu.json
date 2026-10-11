@@ -1,7 +1,6 @@
 {
     "infer_steps": 4,
     "num_frames": 81,
-    "text_len": 512,
     "size": [720, 1280],
     "distill_method": "dmd2",
     "rainfusion_attn_setting": {
@@ -11,7 +10,6 @@
     },
     "self_attn_1_type": "rainfusion_attn",
     "cross_attn_1_type": "npu_flash_attn",
-    "cross_attn_2_type": "npu_flash_attn",
     "sample_guide_scale": [
         3.5,
         3.5

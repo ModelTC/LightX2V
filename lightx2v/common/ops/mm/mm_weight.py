@@ -6,6 +6,8 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 try:
     from magi_compiler import magi_register_custom_op
 except ImportError:
@@ -17,14 +19,6 @@ from lightx2v.common.ops.mm.fp8_f16_accum import (
     validate_fp8_f16_accum_qmax,
 )
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
-from lightx2v.common.ops.mm.triton_kernels import (
-    fp8_gemm_bias_triton,
-    fp8_gemm_triton,
-    fp8_quantize_triton,
-    int8_gemm_bias_triton,
-    int8_gemm_triton,
-    int8_quantize_triton,
-)
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import GGMLTensor
@@ -32,7 +26,7 @@ from lightx2v.utils.ggml_tensor import dequantize_tensor as gguf_dequantize_tens
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage, StorageDescription, WeightStorage, require_dtype
 
 try:
     from lightx2v_kernel.gemm import (
@@ -235,6 +229,8 @@ class MMWeightTemplate(metaclass=ABCMeta):
     def _get_lora_target_device(self):
         if hasattr(self, "weight") and self.weight is not None:
             return self.weight.device
+        if getattr(self, "pin_weight", None) is not None:
+            return self.pin_weight.device
         return AI_DEVICE
 
     def set_config(self, config={}):
@@ -330,7 +326,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
 
 
 @MM_WEIGHT_REGISTER("Default")
-class MMWeight(MMWeightTemplate):
+class MMWeight(FloatingWeightStorage, MMWeightTemplate):
     def __init__(
         self,
         weight_name,
@@ -354,6 +350,10 @@ class MMWeight(MMWeightTemplate):
             lora_prefix,
             lora_path,
         )
+
+    def describe_storage(self, metadata):
+        self.validate_checkpoint(metadata)
+        return StorageDescription(tuple(WeightStorage(name, attr, metadata[name].shape, GET_DTYPE(), transpose) for name, attr, transpose in self.base_attrs))
 
     def load(self, weight_dict):
         if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
@@ -750,6 +750,24 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
         self.weight_need_transpose = True
         self.scale_force_fp32 = True
 
+    def validate_checkpoint(self, metadata):
+        require_dtype(self.weight_name, metadata[self.weight_name].dtype, (torch.float8_e4m3fn,))
+
+    def describe_storage(self, metadata):
+        self.validate_checkpoint(metadata)
+        tensors = []
+        for name, attr, transpose in self.base_attrs:
+            source = metadata[name]
+            dtype = source.dtype
+            if attr == "weight":
+                transpose = self.weight_need_transpose
+            elif attr == "weight_scale":
+                dtype = torch.float32 if self.scale_force_fp32 else dtype
+            elif attr == "bias":
+                dtype = torch.float32 if self.bias_force_fp32 else self.infer_dtype
+            tensors.append(WeightStorage(name, attr, source.shape, dtype, transpose))
+        return StorageDescription(tuple(tensors))
+
     def apply(self, input_tensor):
         shape = (input_tensor.shape[0], self.weight.shape[1])
         dtype = input_tensor.dtype
@@ -757,13 +775,16 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
         output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
 
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        bias = self._get_actual_bias()
+        if bias is not None and bias.dtype != dtype:
+            bias = bias.to(dtype)
         torch.ops._C.cutlass_scaled_mm(
             output_tensor,
             input_tensor_quant,
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self._get_actual_bias(),
+            bias,
         )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
@@ -1586,6 +1607,8 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         if vllm_ops is not None:
             self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
         else:
+            from .triton_kernels import fp8_quantize_triton
+
             self.act_quant_func = fp8_quantize_triton
 
     def apply(self, input_tensor):
@@ -1644,6 +1667,8 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         if vllm_ops is not None:
             self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
         else:
+            from .triton_kernels import int8_quantize_triton
+
             self.act_quant_func = int8_quantize_triton
 
     def apply(self, input_tensor):
@@ -1696,15 +1721,19 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
             lora_prefix,
             lora_path,
         )
+        from .triton_kernels import fp8_gemm_bias_triton, fp8_gemm_triton, fp8_quantize_triton
+
         self.load_func = self.load_fp8_perchannel_sym
         self.act_quant_func = fp8_quantize_triton
+        self._gemm = fp8_gemm_triton
+        self._gemm_bias = fp8_gemm_bias_triton
         self.weight_need_transpose = False
         self.bias_force_fp32 = True
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
         if self.bias is not None:
-            output_tensor = fp8_gemm_bias_triton(
+            output_tensor = self._gemm_bias(
                 input_tensor_quant,
                 self.weight,
                 self._get_actual_bias(),
@@ -1713,7 +1742,7 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
                 output_dtype=self.infer_dtype,
             )
         else:
-            output_tensor = fp8_gemm_triton(
+            output_tensor = self._gemm(
                 input_tensor_quant,
                 self.weight,
                 input_tensor_scale,
@@ -1759,15 +1788,19 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
             lora_prefix,
             lora_path,
         )
+        from .triton_kernels import int8_gemm_bias_triton, int8_gemm_triton, int8_quantize_triton
+
         self.load_func = self.load_int8_perchannel_sym
         self.act_quant_func = int8_quantize_triton
+        self._gemm = int8_gemm_triton
+        self._gemm_bias = int8_gemm_bias_triton
         self.weight_need_transpose = False
         self.bias_force_fp32 = True
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
         if self.bias is not None:
-            output_tensor = int8_gemm_bias_triton(
+            output_tensor = self._gemm_bias(
                 input_tensor_quant,
                 self.weight,
                 self._get_actual_bias(),
@@ -1776,7 +1809,7 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
                 output_dtype=self.infer_dtype,
             )
         else:
-            output_tensor = int8_gemm_triton(
+            output_tensor = self._gemm(
                 input_tensor_quant,
                 self.weight,
                 input_tensor_scale,
@@ -2083,6 +2116,8 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         elif torchao_int8_quant:
             self.act_quant_func = self.act_quant_int8_perchannel_sym_torchao
         else:
+            from .triton_kernels import int8_quantize_triton
+
             self.act_quant_func = int8_quantize_triton
         self.weight_need_transpose = True
         self.scale_force_fp32 = True
@@ -2201,7 +2236,6 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
         self.act_quant_func = self.act_quant_int8_perchannel_sym_torchao
 
     def apply(self, input_tensor):
-        input_tensor = input_tensor
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
         output_tensor = torchao_int8_gemm(
             input_tensor_quant,

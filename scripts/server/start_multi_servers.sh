@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/mnt/afs/users/lijiaqi2/deploy-comfyui-ljq-custom_nodes/ComfyUI-Lightx2vWrapper/lightx2v
-model_path=/mnt/afs/users/lijiaqi2/wan_model/Wan2.1-R2V0909-Audio-14B-720P-fp8
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Wan2.1-R2V0909-Audio-14B-720P-fp8
 
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3

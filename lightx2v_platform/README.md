@@ -15,6 +15,8 @@ Currently supported backends include:
 - Intel AIPC PTL
 - iluvatar
 - T-head PPU
+- Apple MPS
+- Biren SUPA
 
 For the corresponding Docker environments, see: https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
 

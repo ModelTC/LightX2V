@@ -46,6 +46,8 @@ class WanDreamZeroRunner(WanRunner):
         self.cache_name = "pos"
 
     def init_scheduler(self):
+        if self.config["infer_steps"] != self.config["action_infer_steps"]:
+            raise ValueError("DreamZero requires infer_steps to equal action_infer_steps")
         self.scheduler = DreamZeroFlowUniPCScheduler(self.config, shift_key="sample_shift", infer_steps_key="infer_steps")
         self.action_scheduler = DreamZeroFlowUniPCScheduler(self.config, shift_key="action_sample_shift", infer_steps_key="action_infer_steps")
 
@@ -152,6 +154,7 @@ class WanDreamZeroRunner(WanRunner):
             tokenizer_path=tokenizer_path,
             shard_fn=None,
             cpu_offload=t5_offload,
+            rms_norm_type=self.config.get("t5_rms_norm_type", "sgl-kernel"),
             t5_quantized=False,
             t5_quantized_ckpt=None,
             quant_scheme=None,

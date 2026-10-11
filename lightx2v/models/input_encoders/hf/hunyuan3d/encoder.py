@@ -51,8 +51,7 @@ class Hunyuan3DConditionEncoder(nn.Module):
 
         image_processor = ImageProcessorV2(**pipeline_cfg["image_processor"]["params"])
         conditioner = SingleImageEncoder(**pipeline_cfg["conditioner"]["params"])
-        if "conditioner" in ckpt:
-            conditioner.load_state_dict(ckpt["conditioner"])
+        conditioner.load_state_dict(ckpt["conditioner"])
 
         conditioner.eval()
         for param in conditioner.parameters():
