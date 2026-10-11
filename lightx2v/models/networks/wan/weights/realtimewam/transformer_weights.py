@@ -20,7 +20,7 @@ class FasterWAMActionOnlyWeights(WeightModule):
 
 
 class RealtimeWAMPackedProjection:
-    """Pack loaded Linear weights once, then return views of the combined output."""
+    """Pack Linear weights once, release originals, and return output views."""
 
     def __init__(self, modules):
         if any(module.has_lora_branch for module in modules):
@@ -32,6 +32,8 @@ class RealtimeWAMPackedProjection:
         self.linear = MM_WEIGHT_REGISTER["Default"]("realtimewam.packed.weight", "realtimewam.packed.bias" if bias is not None else None)
         self.linear.weight = torch.cat(weights).contiguous().t()
         self.linear.bias = bias
+        for module in modules:
+            module.weight = module.bias = None
 
     def apply(self, x):
         return self.linear.apply(x).split(self.widths, dim=-1)
@@ -59,7 +61,7 @@ class RealtimeWAMTransformerWeights(FastWAMTransformerWeights):
         return action
 
     def pack_projections(self):
-        # Derived caches: retain the original registered checkpoint modules.
+        # Keep module registrations; release their weights after packing.
         for expert in (self.video, self.action):
             for block in expert.blocks:
                 attn = block.self_attn
