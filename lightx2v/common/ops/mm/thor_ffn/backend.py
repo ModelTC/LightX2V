@@ -1,4 +1,5 @@
 from functools import lru_cache
+import os
 from pathlib import Path
 from threading import local
 
@@ -39,10 +40,12 @@ def down_bias(mm_weight, x):
 @lru_cache(None)
 def extension():
     root = Path(__file__).resolve().parent
+    # CUTLASS_PATH points to the checkout root, not its include directory.
+    cutlass_root = Path(os.environ.get("CUTLASS_PATH") or "/opt/cutlass").expanduser().resolve()
     return load(
         name="thor_ffn_cutlass_v1",
         sources=[str(root / "extension.cu")],
-        extra_include_paths=["/opt/cutlass/include", "/opt/cutlass/tools/util/include"],
+        extra_include_paths=[str(cutlass_root / "include"), str(cutlass_root / "tools/util/include")],
         extra_cflags=["-O3"],
         extra_cuda_cflags=[
             "-O3",

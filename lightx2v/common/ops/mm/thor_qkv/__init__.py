@@ -1,5 +1,6 @@
 """DreamZero Thor QKV projection using the thor-gemm-bench kernel."""
 import ctypes
+import os
 from functools import lru_cache
 from pathlib import Path
 from threading import local
@@ -13,8 +14,10 @@ _state = local()
 @lru_cache(None)
 def extension():
     root = Path(__file__).parent
+    # CUTLASS_PATH points to the checkout root, not its include directory.
+    cutlass_root = Path(os.environ.get("CUTLASS_PATH") or "/opt/cutlass").expanduser().resolve()
     path = load(name="dreamzero_qkv_cutlass_v1", sources=[str(root / "adapter.cu")],
-                extra_include_paths=["/opt/cutlass/include"],
+                extra_include_paths=[str(cutlass_root / "include")],
                 extra_cuda_cflags=["-O3", "-std=c++17", "-arch=sm_110a", "--expt-relaxed-constexpr"],
                 is_python_module=False, verbose=False)
     lib = ctypes.CDLL(path)
