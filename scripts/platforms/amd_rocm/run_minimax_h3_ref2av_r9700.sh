@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # MiniMax-H3 Ref2AV on 2 x Radeon AI PRO R9700 (gfx1201, 32 GB), tensor parallel 2.
-# Requires an aiter build that provides gfx1201_sage_attention.
+# Requires an aiter build that provides gfx1201_sage_attention (and gfx1201_sol_attention for sol).
 #
 # The configs enable "use_adaln_cache": generate the cache once with the same config before inference
 # (tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh, --model-variant ref2av).
 #
-# bash scripts/platforms/amd_rocm/run_minimax_h3_ref2av_r9700.sh [sage]
+# bash scripts/platforms/amd_rocm/run_minimax_h3_ref2av_r9700.sh [sage|sol]
 
 # set path firstly
 lightx2v_path=
@@ -14,7 +14,8 @@ model_path=
 
 case "${1:-sage}" in
   sage) config_json=${lightx2v_path}/configs/platforms/amd_rocm/minimax_h3_ref2av_r9700_sage.json ;;
-  *) echo "Usage: $0 [sage]" >&2; exit 2 ;;
+  sol) config_json=${lightx2v_path}/configs/platforms/amd_rocm/minimax_h3_ref2av_r9700_sol.json ;;
+  *) echo "Usage: $0 [sage|sol]" >&2; exit 2 ;;
 esac
 
 export PLATFORM=amd_rocm
