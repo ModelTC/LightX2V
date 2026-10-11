@@ -10,6 +10,12 @@
 hf download Qwen/Qwen-Image-2.1 --local-dir Qwen/Qwen-Image-2.1
 ```
 
+Turbo 模型权重：[Qwen/Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)。下载命令：
+
+```bash
+hf download Qwen/Qwen-Image-2.1-Turbo --local-dir Qwen/Qwen-Image-2.1-Turbo
+```
+
 ## 2. 环境安装
 
 根据 GPU 型号选择 [LightX2V Docker 镜像](https://hub.docker.com/r/lightx2v/lightx2v/tags)。在宿主机的工作目录中拉取对应镜像：
@@ -59,6 +65,22 @@ bash scripts/qwen_image_21/qwen_image_21_i2i.sh
 传入 `--resolution 2048` 可仅为本次请求覆盖配置值，不传则使用配置。该值须为正整数，控制参考图缩放和自动输出尺寸；显式传入 `--size` 时，输出尺寸仍由 `--size` 决定。
 
 默认配置已经启用通用优化路径：FlashAttention3、FlashInfer RoPE、Triton LayerNorm 与 modulation、融合 QK RMSNorm、融合 Transformer block 算子、关闭 CFG 的推理路径及 OpenCV 结果保存。
+
+### Qwen-Image-2.1-Turbo
+
+Qwen-Image-2.1-Turbo 是 Qwen-Image-2.1 的官方加速版本，支持文生图和图像编辑，仅需 8 步去噪推理。
+
+先设置脚本中的 `lightx2v_path`、`model_path`（Qwen-Image-2.1-Turbo 模型目录）和 `CUDA_VISIBLE_DEVICES`，然后运行：
+
+```bash
+# 文生图
+bash scripts/qwen_image_21/qwen_image_21_turbo_t2i.sh
+
+# 图生图
+bash scripts/qwen_image_21/qwen_image_21_turbo_i2i.sh
+```
+
+图生图按需修改 `--image_path` 和 `--prompt`，默认参考图为模型目录下的 `assets/turbo-boat-input.png`。
 
 ### 3.2 RTX 5090 案例
 

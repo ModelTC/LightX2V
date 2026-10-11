@@ -10,6 +10,12 @@ Download the official weights from [Qwen/Qwen-Image-2.1](https://huggingface.co/
 hf download Qwen/Qwen-Image-2.1 --local-dir Qwen/Qwen-Image-2.1
 ```
 
+Download the Turbo weights from [Qwen/Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo):
+
+```bash
+hf download Qwen/Qwen-Image-2.1-Turbo --local-dir Qwen/Qwen-Image-2.1-Turbo
+```
+
 ## 2. Environment Setup
 
 Choose the [LightX2V Docker image](https://hub.docker.com/r/lightx2v/lightx2v/tags) for your GPU. Pull the corresponding image in a working directory on the host:
@@ -59,6 +65,22 @@ For image-to-image, remove the script's `--size` argument to determine the outpu
 Pass `--resolution 2048` to override the config for one request; omit it to use the config. The value must be a positive integer. It controls reference-image resizing and automatic output sizing; an explicit `--size` still determines the output dimensions.
 
 The default config already enables the general optimization path: FlashAttention3, FlashInfer RoPE, Triton LayerNorm and modulation, fused QK RMSNorm, fused transformer-block operators, CFG-disabled inference, and OpenCV result saving.
+
+### Qwen-Image-2.1-Turbo
+
+Qwen-Image-2.1-Turbo is the official accelerated version of Qwen-Image-2.1. It supports text-to-image generation and image editing with 8 denoising steps.
+
+Set `lightx2v_path`, `model_path` (the Qwen-Image-2.1-Turbo directory), and `CUDA_VISIBLE_DEVICES` in the scripts, then run:
+
+```bash
+# Text-to-image
+bash scripts/qwen_image_21/qwen_image_21_turbo_t2i.sh
+
+# Image-to-image
+bash scripts/qwen_image_21/qwen_image_21_turbo_i2i.sh
+```
+
+For image-to-image, edit `--image_path` and `--prompt` as needed. The default input is the model's `assets/turbo-boat-input.png`.
 
 ### 3.2 RTX 5090 examples
 
