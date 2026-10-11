@@ -16,6 +16,7 @@
   "gripper_postprocess": true,
   "default_prompt": "A video recorded from a robot's point of view executing the following instruction: {task_prompt}",
   "triton_ops": true,
+  "t5_cpu_offload": true,
   "layer_norm_type": "Triton",
   "cuda_graph": true,
   "warmup": true,
