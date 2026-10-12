@@ -3,6 +3,8 @@ import importlib
 import torch
 
 from lightx2v_train.runtime.backend.base import BaseBackend
+from lightx2v_train.runtime.ops.attention import npu_attention
+from lightx2v_train.runtime.ops.rope import rope_apply_real
 
 
 class AscendBackend(BaseBackend):
@@ -11,6 +13,8 @@ class AscendBackend(BaseBackend):
     process_group_backend = "hccl"
     positional_dtype = torch.float32
     diffusers_attention_backend = "_native_npu"
+    rope_apply = staticmethod(rope_apply_real)
+    attention_compute = staticmethod(npu_attention)
 
     @staticmethod
     def _load_extension() -> None:

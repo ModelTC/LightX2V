@@ -6,12 +6,17 @@ from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 
+from lightx2v_train.runtime.ops.attention import sdpa_attention
+from lightx2v_train.runtime.ops.rope import rope_apply_complex
+
 
 class BaseBackend(ABC):
     """Common device operations shared by all compute backends."""
 
     positional_dtype = torch.float64
     diffusers_attention_backend = None
+    rope_apply = staticmethod(rope_apply_complex)
+    attention_compute = staticmethod(sdpa_attention)
 
     def __init__(self):
         self._device_module = None

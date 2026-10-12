@@ -71,6 +71,8 @@ def distributed_flex_attention(roped_query, roped_key, value, block_mask):
 
 
 class CausalWanSelfAttention(nn.Module):
+    attention = staticmethod(attention)
+
     def __init__(self, dim, num_heads, local_attn_size=-1, sink_size=0, qk_norm=True, eps=1e-6):
         assert dim % num_heads == 0
         super().__init__()
@@ -308,7 +310,7 @@ class CausalWanSelfAttention(nn.Module):
                     window_start = max(0, local_end_index - attention_window_size)
                     window_k = kv_cache["k"][:, window_start:local_end_index]
                     window_v = kv_cache["v"][:, window_start:local_end_index]
-            x = attention(roped_query, window_k, window_v)
+            x = self.attention(roped_query, window_k, window_v)
             if sequence_parallel_cache:
                 x = all_to_all_4d(x, scatter_dim=1, gather_dim=2)
             if not defer_cache_update:

@@ -3,6 +3,7 @@ import importlib
 import torch
 
 from lightx2v_train.runtime.backend.base import BaseBackend
+from lightx2v_train.runtime.ops.rope import rope_apply_real
 
 
 class MluBackend(BaseBackend):
@@ -11,6 +12,7 @@ class MluBackend(BaseBackend):
     process_group_backend = "cncl"
     positional_dtype = torch.float32
     diffusers_attention_backend = "native"
+    rope_apply = staticmethod(rope_apply_real)
 
     @staticmethod
     def _load_extension() -> None:

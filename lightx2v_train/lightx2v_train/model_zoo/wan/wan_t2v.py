@@ -1,6 +1,7 @@
 import math
 import os
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 import torch
@@ -36,6 +37,7 @@ from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
 from ..base import BaseModel
+from ..native.wan.modules.attention import flash_attention
 from ..native.wan.modules.causal_model import CausalWanModel
 from ..native.wan.modules.model import WanModel
 from ..native.wan.modules.t5 import T5EncoderModel
@@ -170,7 +172,13 @@ class WanT2VModel(BaseModel):
         else:
             transformer = WanModel.from_pretrained(model_path, torch_dtype=self.transformer_param_dtype)
             transformer.freqs = backend.prepare_rotary_frequencies(transformer.freqs)
+            for block in transformer.blocks:
+                block.self_attn.rope_apply = backend.rope_apply
         transformer.positional_dtype = backend.positional_dtype
+        attention = partial(flash_attention, attention_compute=backend.attention_compute)
+        for block in transformer.blocks:
+            block.self_attn.attention = attention
+            block.cross_attn.attention = attention
         # FSDP2 moves and shards one block at a time; loading the complete
         # denoiser on the accelerator first needlessly raises peak memory.
         device = backend.host_device if fsdp2_enabled(self.config) else self.device

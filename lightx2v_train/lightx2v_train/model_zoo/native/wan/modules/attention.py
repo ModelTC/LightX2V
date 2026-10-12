@@ -1,7 +1,7 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import torch
 
-from lightx2v_train.runtime.ops.attention import training_attention
+from lightx2v_train.runtime.ops.attention import sdpa_attention, training_attention
 
 try:
     import flash_attn_interface
@@ -47,6 +47,7 @@ def flash_attention(
     deterministic=False,
     dtype=torch.bfloat16,
     version=None,
+    attention_compute=sdpa_attention,
 ):
     """
     q:              [B, Lq, Nq, C1].
@@ -74,6 +75,7 @@ def flash_attention(
             causal=causal,
             window_size=window_size,
             dtype=dtype,
+            attention_compute=attention_compute,
         )
     half_dtypes = (torch.float16, torch.bfloat16)
     assert dtype in half_dtypes
@@ -163,6 +165,7 @@ def attention(
     deterministic=False,
     dtype=torch.bfloat16,
     fa_version=None,
+    attention_compute=sdpa_attention,
 ):
     return flash_attention(
         q=q,
@@ -178,4 +181,5 @@ def attention(
         deterministic=deterministic,
         dtype=dtype,
         version=fa_version,
+        attention_compute=attention_compute,
     )

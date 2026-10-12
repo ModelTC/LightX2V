@@ -8,6 +8,40 @@ import torch
 import torch.nn.functional as F
 
 
+def sdpa_attention(q, k, v, *, mask, dropout_p, softmax_scale, dtype):
+    q, k = q.to(v.dtype), k.to(v.dtype)
+    return F.scaled_dot_product_attention(
+        q.transpose(1, 2),
+        k.transpose(1, 2),
+        v.transpose(1, 2),
+        attn_mask=mask,
+        dropout_p=dropout_p,
+        scale=softmax_scale,
+    ).transpose(1, 2)
+
+
+def npu_attention(q, k, v, *, mask, dropout_p, softmax_scale, dtype):
+    from torch_npu import npu_fusion_attention
+
+    compute_dtype = v.dtype if v.dtype in (torch.float16, torch.bfloat16) else dtype
+    q, k, v = (tensor.to(compute_dtype).contiguous() for tensor in (q, k, v))
+    output = npu_fusion_attention(
+        q,
+        k,
+        v,
+        q.size(2),
+        input_layout="BSND",
+        atten_mask=None if mask is None else (~mask).contiguous(),
+        scale=softmax_scale if softmax_scale is not None else 1.0 / math.sqrt(q.size(-1)),
+        pre_tockens=2147483647,
+        next_tockens=2147483647,
+        keep_prob=1.0 - dropout_p,
+    )[0]
+    if mask is not None:
+        output = output.masked_fill(~mask.any(dim=-1).transpose(1, 2).unsqueeze(-1), 0)
+    return output
+
+
 def _lengths(lengths, batch: int, maximum: int) -> list[int]:
     if lengths is None:
         return [maximum] * batch
@@ -49,6 +83,7 @@ def training_attention(
     causal: bool = False,
     window_size: tuple[int, int] = (-1, -1),
     dtype: torch.dtype = torch.bfloat16,
+    attention_compute=sdpa_attention,
 ):
     """Execute differentiable attention, retaining padded output shape.
 
@@ -86,37 +121,7 @@ def training_attention(
                 key = key.repeat_interleave(repeats, dim=2)
                 value = value.repeat_interleave(repeats, dim=2)
             mask = _visibility_mask(query, key, causal, window_size)
-            if query.device.type == "npu":
-                # Vendor extension remains lazy and confined to the operator.
-                from torch_npu import npu_fusion_attention
-
-                compute_dtype = value.dtype if value.dtype in (torch.float16, torch.bfloat16) else dtype
-                query, key, value = (tensor.to(compute_dtype).contiguous() for tensor in (query, key, value))
-                output = npu_fusion_attention(
-                    query,
-                    key,
-                    value,
-                    query.size(2),
-                    input_layout="BSND",
-                    atten_mask=None if mask is None else (~mask).contiguous(),
-                    scale=softmax_scale if softmax_scale is not None else 1.0 / math.sqrt(query.size(-1)),
-                    pre_tockens=2147483647,
-                    next_tockens=2147483647,
-                    keep_prob=1.0 - dropout_p,
-                )[0]
-                if mask is not None:
-                    # Fully masked rows occur in rectangular causal attention.
-                    output = output.masked_fill(~mask.any(dim=-1).transpose(1, 2).unsqueeze(-1), 0)
-            else:
-                query, key = query.to(value.dtype), key.to(value.dtype)
-                output = F.scaled_dot_product_attention(
-                    query.transpose(1, 2),
-                    key.transpose(1, 2),
-                    value.transpose(1, 2),
-                    attn_mask=mask,
-                    dropout_p=dropout_p,
-                    scale=softmax_scale,
-                ).transpose(1, 2)
+            output = attention_compute(query, key, value, mask=mask, dropout_p=dropout_p, softmax_scale=softmax_scale, dtype=dtype)
             output = output.to(output_dtype)
         if query_length < q.size(1):
             output = torch.cat([output, output.new_zeros(1, q.size(1) - query_length, q.size(2), v.size(-1))], dim=1)
