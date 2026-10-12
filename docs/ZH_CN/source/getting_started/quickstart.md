@@ -144,7 +144,7 @@ python setup.py install
 > 💡 **提示**:
 > - 如果不需要使用量化功能，可以跳过此步骤
 > - 量化模型可以从 [LightX2V HuggingFace](https://huggingface.co/lightx2v) 下载
-> - 更多量化相关信息请参考 [量化文档](method_tutorials/quantization.html)
+> - 更多量化相关信息请参考 [量化文档](../method_tutorials/quantization.md)
 
 #### 步骤 5: 验证安装
 ```python
@@ -275,7 +275,7 @@ python setup.py install
 > 💡 **提示**:
 > - 建议使用默认的 Triton kernel 进行推理
 > - 量化模型可以从 [LightX2V HuggingFace](https://huggingface.co/lightx2v) 下载
-> - 更多量化相关信息请参考 [量化文档](method_tutorials/quantization.html)
+> - 更多量化相关信息请参考 [量化文档](../method_tutorials/quantization.md)
 
 #### 步骤 8: 验证安装
 ```python
