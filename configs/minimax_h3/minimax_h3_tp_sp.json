@@ -20,7 +20,6 @@
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
-  "audio_sampling_rate": 32000,
   "parallel": {
     "tensor_p_size": 2,
     "seq_p_size": 2,

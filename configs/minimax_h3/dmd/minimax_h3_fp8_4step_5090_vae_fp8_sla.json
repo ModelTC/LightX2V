@@ -30,7 +30,6 @@
   "audio_flow_shift": 3.0,
   "h3_step_update": "training_euler",
   "vae_spatial_scale_factor": 16,
-  "audio_sampling_rate": 32000,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-f16-accum",
   "dit_quantized_ckpt": "/path/to/minimax_h3_dit_fp8_f16_accum.safetensors",

@@ -27,7 +27,7 @@ scripts/<model>/offload/*.sh
 
 See `lightx2v/utils/set_config.py` and `lightx2v/models/runners/default_runner.py` for configuration and device initialization. `set_init_device()` selects CPU according to offload settings. The runner handles orchestration; model and component loaders own weights. Preserve checkpoint formats already supported by the family; adding sharing should not require converting every model to a different format.
 
-`build_startup_config()` reads `shared_cpu_weight_scope` from JSON, overriding the internal `auto` default. The four current shared configurations explicitly set `host`; change this field to `numa` in JSON for NUMA sharing. There is no CLI option for this field. The startup configuration returned by `build_cli_inputs()` contains the value; per-request inputs do not.
+`build_startup_config()` reads `shared_cpu_weight_scope` from JSON, overriding the internal `auto` default. Wan currently uses `numa`; the other three models use `host`. Change this field in JSON to switch sharing modes. There is no CLI option for this field. The startup configuration returned by `build_cli_inputs()` contains the value; per-request inputs do not.
 
 Key contracts in [base_model.py](../../../../lightx2v/models/networks/base_model.py):
 

@@ -10,10 +10,10 @@ Trace block definitions from `register_offload_group` in [TransformerWeights](..
 
 Inference uses the existing [offload TransformerInfer](../../../../lightx2v/models/networks/wan/infer/offload/transformer_infer.py); common code handles loading, layout, and transfers. The former Wan-specific `models/networks/wan/weights/block_layout.py` has been replaced by the common loader. Do not restore it based on stale IDE tabs or historical paths.
 
-- [CUDA continuous configuration](../../../../configs/wan/layout/continuous.json): the current example uses LightX2V FP8-vLLM weights and CUDA attention. T5 and CLIP also have their own quantization settings.
-- [NPU continuous configuration](../../../../configs/wan/layout/continuous_npu.json): original floating-point weights, explicit NPU operators, and component offload.
+- [CUDA contiguous configuration](../../../../configs/wan/layout/contiguous.json): the current example uses LightX2V FP8-vLLM weights and CUDA attention. T5 and CLIP also have their own quantization settings.
+- [NPU contiguous configuration](../../../../configs/wan/layout/contiguous_npu.json): original floating-point weights, explicit NPU operators, and component offload.
 - The [T5 weight implementation](../../../../lightx2v/models/input_encoders/hf/wan/t5/model.py) accepts `rms_norm_type`, selected through the runner's `t5_rms_norm_type`, while preserving the original CUDA default. See [WanRunner](../../../../lightx2v/models/runners/wan/wan_runner.py); other callers must pass consistent arguments too.
-- The [CUDA entry point](../../../../scripts/wan/offload_layout/run_contiguous.sh) and [NPU entry point](../../../../scripts/wan/offload_layout/run_contiguous_npu.sh) each have a corresponding baseline script. Check paths, environment settings, and actual output names before running them.
+- The [CUDA entry point](../../../../scripts/wan/inference/offload_layout/run_contiguous.sh) and [NPU entry point](../../../../scripts/wan/inference/offload_layout/run_contiguous_npu.sh) each have a corresponding baseline script. Check paths, environment settings, and actual output names before running them.
 
 A contiguous DiT layout does not mean T5, CLIP, and VAE share that layout. The current GPU and NPU examples differ in quantization and component residency policies, so they cannot directly measure layout benefits across platforms.
 
@@ -23,8 +23,8 @@ A contiguous DiT layout does not mean T5, CLIP, and VAE share that layout. The c
 
 Inference uses the existing [QwenImageOffloadTransformerInfer](../../../../lightx2v/models/networks/qwen_image/infer/offload/transformer_infer.py) with the same common group declaration, storage contracts, and transfer logic. There is no Qwen-specific layout loader.
 
-- [CUDA continuous configuration](../../../../configs/qwen_image/layout/continuous.json): the current example uses original Qwen-Image-2512 BF16 weights and `flash_attn3`. Read weights/inference code for other defaults.
-- [NPU continuous configuration](../../../../configs/qwen_image/layout/continuous_npu.json): BF16, `npu_flash_attn`, and PyTorch real RoPE, norm, and modulation.
+- [CUDA contiguous configuration](../../../../configs/qwen_image/layout/contiguous.json): the current example uses original Qwen-Image-2512 BF16 weights and `flash_attn3`. Read weights/inference code for other defaults.
+- [NPU contiguous configuration](../../../../configs/qwen_image/layout/contiguous_npu.json): BF16, `npu_flash_attn`, and PyTorch real RoPE, norm, and modulation.
 - [TransformerInfer](../../../../lightx2v/models/networks/qwen_image/infer/transformer_infer.py) uses `modulate_type` to decide whether to import Qwen Triton kernels, preserving the default CUDA kernels.
 - The [text encoder](../../../../lightx2v/models/input_encoders/hf/qwen25/qwen25_vlforconditionalgeneration.py) and [VAE](../../../../lightx2v/models/video_encoders/hf/qwen_image/vae.py) are each offloaded as whole components. Contiguous blocks apply only to the DiT.
 - Both [CUDA](../../../../scripts/qwen_image/offload_layout/run_contiguous.sh) and [NPU](../../../../scripts/qwen_image/offload_layout/run_contiguous_npu.sh) entry points and their baseline counterparts exist. NPU launchers accept `MODEL_PATH`, locate the repository automatically, and write outputs under it. Do not assume all older scripts support the same environment overrides.
@@ -42,4 +42,4 @@ The weight directory should contain the original model's `transformer/`, `text_e
 | The text encoder or VAE still has CUDA-only dependencies | That component's configuration or platform operators; DiT layout cannot fix it |
 | No native block offload, or an incompatible native nn.Module representation | Analyze gaps in block weights, slots, and scheduling before deciding the change scope |
 
-Use the two implementations as references for mechanisms. Do not turn their layer indices, parameter counts, precision, shapes, or paths into common constants. See the [Wan guide](../../../../scripts/wan/offload_layout/README.md) and [Qwen guide](../../../../scripts/qwen_image/offload_layout/README.md) for existing commands, adapting them to the target machine before execution.
+Use the two implementations as references for mechanisms. Do not turn their layer indices, parameter counts, precision, shapes, or paths into common constants. See the [Wan guide](../../../../scripts/wan/inference/offload_layout/README.md) and [Qwen guide](../../../../scripts/qwen_image/offload_layout/README.md) for existing commands, adapting them to the target machine before execution.

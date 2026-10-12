@@ -93,8 +93,9 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.self_attn_cu_seqlens_qkv = torch.tensor([0, query_len], dtype=torch.int32)
         self.cross_attn_cu_seqlens_q = torch.tensor([0, query_len], dtype=torch.int32)
         if self.has_image_context:
-            self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, 257], dtype=torch.int32)
-            context_len -= 257
+            self.image_context_len = context_len - self.config["text_len"]
+            self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, self.image_context_len], dtype=torch.int32)
+            context_len -= self.image_context_len
         self.cross_attn_cu_seqlens_kv = torch.tensor([0, context_len], dtype=torch.int32)
 
         if self.has_post_adapter:
@@ -353,8 +354,8 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         norm3_out = phase.norm3.apply(x)
         if self.has_image_context:
-            context_img = context[:257]
-            context = context[257:]
+            context_img = context[: self.image_context_len]
+            context = context[self.image_context_len :]
         else:
             context_img = None
 

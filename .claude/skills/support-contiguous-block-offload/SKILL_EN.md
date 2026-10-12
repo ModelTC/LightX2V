@@ -58,12 +58,12 @@ scripts/<model>/offload_layout/
   README_CN.md
 configs/<model>/layout/
   baseline.json
-  continuous.json
+  contiguous.json
   baseline_npu.json
-  continuous_npu.json
+  contiguous_npu.json
 ```
 
-Within each platform, keep baseline and contiguous variants identical in model, checkpoint, precision, input, seed, sampling, component offload, and compute operators. Prefer adding only `"cpu_offload_layout": "contiguous"`. Scripts use `contiguous`; configuration filenames retain `continuous`.
+Within each platform, keep baseline and contiguous variants identical in model, checkpoint, precision, input, seed, sampling, component offload, and compute operators. Prefer adding only `"cpu_offload_layout": "contiguous"`. Use `contiguous` consistently in script and configuration filenames.
 
 Keep scripts simple and make model paths, device selection, and output paths explicit. Do not treat development-machine absolute paths as universal requirements. Document actual commands and precision requirements. Handle timing tools, downloads, commits, or pushes only when requested.
 
