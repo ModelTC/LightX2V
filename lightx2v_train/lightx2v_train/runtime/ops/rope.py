@@ -6,12 +6,12 @@ import torch
 
 
 def positional_compute_dtype(device) -> torch.dtype:
-    return torch.float32 if torch.device(device).type == "npu" else torch.float64
+    return torch.float32 if torch.device(device).type in {"npu", "mlu"} else torch.float64
 
 
 def prepare_rotary_frequencies(frequencies: torch.Tensor, device) -> torch.Tensor:
-    """Use real FP32 pairs on devices without FP64/complex arithmetic."""
-    if torch.device(device).type == "npu":
+    """Use explicit real FP32 pairs on NPU and MLU devices."""
+    if torch.device(device).type in {"npu", "mlu"}:
         if frequencies.is_complex():
             frequencies = torch.view_as_real(frequencies)
         frequencies = frequencies.float()

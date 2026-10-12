@@ -13,6 +13,7 @@ _BACKEND_SPECS = {
     "nvidia": ("lightx2v_train.runtime.backend.nvidia", "NvidiaBackend"),
     "ascend_npu": ("lightx2v_train.runtime.backend.ascend", "AscendBackend"),
     "musa": ("lightx2v_train.runtime.backend.musa", "MusaBackend"),
+    "cambricon_mlu": ("lightx2v_train.runtime.backend.mlu", "MluBackend"),
 }
 _AUTO_BACKENDS = ("nvidia",)
 
