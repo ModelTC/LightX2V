@@ -26,6 +26,7 @@ RUNNER_MODULES = {
     "ltx2_ar": "lightx2v.models.runners.ltx2.ltx2_runner",
     "minimax_h3": "lightx2v.models.runners.minimax_h3.minimax_h3_runner",
     "minimax_h3_causal": "lightx2v.models.runners.minimax_h3_causal.minimax_h3_causal_runner",
+    "minimax_h3_world": "lightx2v.models.runners.minimax_h3_world.minimax_h3_world_runner",
     "motus": "lightx2v.models.runners.motus.motus_runner",
     "neopp": "lightx2v.models.runners.neopp.neopp_runner",
     "qwen_image": "lightx2v.models.runners.qwen_image.qwen_image_runner",
