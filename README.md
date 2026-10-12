@@ -51,6 +51,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **October 13, 2026:** 🎉 We released the [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App), which now supports local inference on MacBook for [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1), as well as [Qwen-Image-2.1-PE-T2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0) and [Qwen-Image-2.1-PE-I2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0).
+
 - **September 22, 2026:** 🚀 We support and optimize [SwiftVR](https://huggingface.co/H-oliday/SwiftVR); for usage instructions, please refer to [this guide](https://github.com/ModelTC/LightX2V/tree/main/scripts/swiftvr).
 
 - **September 20, 2026:** 🚀 We provide day-0 support for [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1); for usage instructions, please refer to [this guide](https://github.com/ModelTC/LightX2V/tree/main/scripts/qwen_image_21).
