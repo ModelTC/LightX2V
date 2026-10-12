@@ -30,6 +30,12 @@ LoRA (Low-Rank Adaptation) 是一种高效的模型微调技术，通过低秩�
 - `lora_path`: LoRA 权重文件路径列表，支持多个 LoRA 同时加载
 - `strength_model`: LoRA 强度系数 (alpha)，控制 LoRA 对原模型的影响程度
 
+### FP32 精度合并
+
+在推理 JSON 顶层设置 `"lora_merge_force_fp32": true`，可让通用 LoRA 合并和 MiniMax-H3 专用合并使用 FP32 读取低秩矩阵、计算增量并与底座权重相加，最后写回底座原来的 dtype。默认值为 `false`，保持原有合并行为。
+
+这只改变合并过程，不改变模型的常驻权重精度、推理计算精度或 LoRA 的 alpha/strength。H3 仍按层加载并先做 TP 分片，FP32 合并会增加单层合并期间的临时内存。此选项不作用于 `lora_dynamic_apply` 动态 LoRA 分支。
+
 ### 命令行方式
 
 直接在命令行中指定 LoRA 路径（仅支持加载单个 LoRA）：

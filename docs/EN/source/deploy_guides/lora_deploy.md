@@ -31,6 +31,12 @@ Specify LoRA path in configuration file:
 - `lora_path`: LoRA weight file path list, supports loading multiple LoRAs simultaneously
 - `strength_model`: LoRA strength coefficient (alpha), controls LoRA's influence on the original model
 
+### FP32 Merging
+
+Set `"lora_merge_force_fp32": true` at the top level of the inference JSON to load LoRA factors, compute deltas, and add them to base weights in FP32, then write each result back in the base weight's original dtype. Both the generic and MiniMax-H3 merge paths support this option. It defaults to `false` to preserve existing behavior.
+
+This changes merging only, not resident model dtypes, inference precision, or LoRA alpha/strength. H3 still loads one layer at a time and shards the factors before multiplication; FP32 merging requires additional temporary memory for that layer. This option does not affect the `lora_dynamic_apply` runtime LoRA branch.
+
 ### Command Line Method
 
 Specify LoRA path directly in command line (supports loading single LoRA only):
