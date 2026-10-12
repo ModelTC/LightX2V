@@ -79,7 +79,7 @@ huggingface-cli download lightx2v/RealtimeWAM \
 
 ### Inference
 
-The end-to-end inference latency of **RealtimeWAM<sup>*</sup>** and **RealtimeWAM<sup>†</sup>** can be measured using the following scripts.
+Run the following scripts for BF16 or FP8 inference with **RealtimeWAM<sup>*</sup>** and **RealtimeWAM<sup>†</sup>**.
 
 ```bash
 # RealtimeWAM*, based on Fast-WAM
@@ -87,18 +87,43 @@ bash scripts/realtimewam/run_libero_fastwam_i2va.sh
 
 # RealtimeWAM†, based on Faster-WAM
 bash scripts/realtimewam/run_libero_fasterwam_i2va.sh
+
+# RealtimeWAM*, FP8
+bash scripts/realtimewam/run_libero_fastwam_i2va_fp8.sh
+
+# RealtimeWAM†, FP8
+bash scripts/realtimewam/run_libero_fasterwam_i2va_fp8.sh
 ```
 
 We provide example inference inputs in [`examples/realtimewam/assets/`](https://github.com/ModelTC/LightX2V/tree/main/examples/realtimewam/assets/).
 
+#### Latency
+
 The measured latency is reported in the logs under **`RealtimeWAM End-to-End Latency (Excluding Text Encoding)`**, in milliseconds. It includes VAE encoding and video/action inference, while excluding text encoding.
 
-Inference latency comparisons are shown below. Speedups are relative to the original model on the same GPU. The scripts above can be used to reproduce the inference latencies reported in our paper. LightX2V achieves slightly lower latency than reported in the paper.
+Inference latency comparisons are shown below. Speedups are relative to the original model on the same GPU. The BF16 scripts above can be used to reproduce the inference latencies reported in our paper. LightX2V achieves slightly lower latency than reported in the paper. Our FP8 inference scripts can further reduce latency.
 
 | GPU | Fast-WAM (ms) | RealtimeWAM<sup>*</sup> (ms) | Speedup<sup>*</sup> | Faster-WAM (ms) | RealtimeWAM<sup>†</sup> (ms) | Speedup<sup>†</sup> |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | NVIDIA H100 | 300 | **12.2** | **24.56×** | 219 | **16.1** | **13.56×** |
 | NVIDIA RTX 4090D | 481 | **27.2** | **17.68×** | 362 | **44.7** | **8.11×** |
+
+#### Memory
+
+LightX2V also provides memory optimizations, including text encoder offload and FP8 quantization, to reduce GPU memory usage. The table below shows memory usage with LIBERO inputs, sampled after inference with warmup and CUDA Graph enabled. Values are in GiB and exclude initialization peaks.
+
+| Model | Text offload | Precision | Allocated memory (GiB) | `nvidia-smi` usage (GiB) |
+| --- | :---: | :---: | ---: | ---: |
+| **RealtimeWAM<sup>*</sup>** | ❌ | BF16 | 23.24 | 24.38 |
+| **RealtimeWAM<sup>*</sup>** | ✅ | BF16 | 14.98 | 16.12 |
+| **RealtimeWAM<sup>*</sup>** | ✅ | FP8 | **9.41** | **11.50** |
+| **RealtimeWAM<sup>†</sup>** | ❌ | BF16 | 22.38 | 23.53 |
+| **RealtimeWAM<sup>†</sup>** | ✅ | BF16 | 14.12 | 15.27 |
+| **RealtimeWAM<sup>†</sup>** | ✅ | FP8 | **8.98** | **10.67** |
+
+Enable text encoder offload and FP8 quantization with `"t5_cpu_offload": true` and `"quant_fp8": true` in the config, respectively.
+
+Allocated memory is measured with `torch.cuda.memory_allocated()`. `nvidia-smi` usage also includes PyTorch's cached memory, CUDA contexts, and other GPU allocations.
 
 ### Evaluation
 
