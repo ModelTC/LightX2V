@@ -5,6 +5,32 @@ from lightx2v.models.networks.wan.weights.fastwam.transformer_weights import Fas
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, TENSOR_REGISTER
 
 
+@torch.no_grad()
+def replace_linears_with_fp8(weights):
+    """Quantize loaded block linears once, after BF16 QKV/KV packing."""
+
+    def quantize(linear):
+        if isinstance(linear, MM_WEIGHT_REGISTER["fp8-sgl"]):
+            return linear
+        quant = MM_WEIGHT_REGISTER["fp8-sgl"](linear.weight_name, linear.bias_name)
+        quant.set_config({"weight_auto_quant": True})
+        # Loaded MMWeight stores [in, out]; weight quantization expects [out, in].
+        quant.load_func({linear.weight_name: linear._get_actual_weight().detach().t().contiguous()})
+        quant.bias = linear._get_actual_bias()
+        quant.post_process()
+        return quant
+
+    for expert in (weights.video, weights.action):
+        for block in expert.blocks:
+            block.self_attn.qkv.linear = quantize(block.self_attn.qkv.linear)
+            targets = [(block.self_attn, "o"), (block.ffn, "fc0"), (block.ffn, "fc2")]
+            if hasattr(block, "cross_attn"):
+                block.cross_attn.kv.linear = quantize(block.cross_attn.kv.linear)
+                targets.extend([(block.cross_attn, "q"), (block.cross_attn, "o")])
+            for owner, name in targets:
+                owner.add_module(name, quantize(getattr(owner, name)))
+
+
 def condition_layers(config):
     interval = config.get("action_condition_interval") if config.get("kv_fusion", False) else 1
     if type(interval) is not int or interval <= 0:
