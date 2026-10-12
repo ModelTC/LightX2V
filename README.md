@@ -4,7 +4,6 @@
 <img alt="logo" src="assets/img_lightx2v.png" width=75%></img>
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ModelTC/lightx2v)
 [![Doc](https://img.shields.io/badge/docs-English-99cc2)](https://lightx2v-en.readthedocs.io/en/latest)
 [![Doc](https://img.shields.io/badge/文档-中文-99cc2)](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/lightx2v/lightx2v/tags)
@@ -24,6 +23,8 @@
 > 📝 **More content is available on our [LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)**
 
 > 🌟 **Developer Newbie Guide: [LightX2V Developer Quick Start Guide](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
+
+> 🌟 **: MacBook local inference app: [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)**
 
 > 👋 **Join our WeChat group! LightX2V Robot WeChat ID: random42seed**
 
