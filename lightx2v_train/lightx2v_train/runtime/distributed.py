@@ -217,7 +217,8 @@ def get_parallel_device_mesh():
 
 def barrier():
     if dist.is_available() and dist.is_initialized():
-        dist.barrier(**get_backend().barrier_kwargs(dist.get_backend()))
+        backend = get_backend()
+        backend.barrier()
 
 
 def reduce_mean(value):

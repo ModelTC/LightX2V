@@ -87,8 +87,7 @@ class WanT2VModel(BaseModel):
     ):
         model_config = self.config["model"]
         model_path = model_config["pretrained_model_name_or_path"]
-        # Wan2.2 stores high/low denoisers below a shared VAE/T5 root.
-        # Keep these independently configurable while preserving Wan2.1 paths.
+        # Wan2.2 experts share VAE/T5 weights but use separate denoisers.
         self.components_root = model_config.get("components_root", model_path)
         self.transformer_path = model_config.get("transformer_path", model_path)
 
@@ -158,6 +157,7 @@ class WanT2VModel(BaseModel):
         self.vae_scale_factor_spatial = source.vae_scale_factor_spatial
 
     def _load_transformer(self, model_path):
+        backend = get_backend()
         if self.use_causal_transformer:
             transformer = CausalWanModel.from_pretrained(
                 model_path,
@@ -169,9 +169,11 @@ class WanT2VModel(BaseModel):
             )
         else:
             transformer = WanModel.from_pretrained(model_path, torch_dtype=self.transformer_param_dtype)
+            transformer.freqs = backend.prepare_rotary_frequencies(transformer.freqs)
+        transformer.positional_dtype = backend.positional_dtype
         # FSDP2 moves and shards one block at a time; loading the complete
         # denoiser on the accelerator first needlessly raises peak memory.
-        device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
+        device = backend.host_device if fsdp2_enabled(self.config) else self.device
         return transformer.to(device, dtype=self.transformer_param_dtype)
 
     def _configure_transformer(self):
@@ -243,21 +245,15 @@ class WanT2VModel(BaseModel):
             self._inject_lora(self._lora_config_for_infer(), adapter_name=adapter_name)
         denoiser = self.denoiser_module()
         expected = get_peft_model_state_dict(denoiser, adapter_name=adapter_name)
-        if not expected or set(expected) != set(peft_state_dict):
-            missing = sorted(set(expected) - set(peft_state_dict))
-            unexpected = sorted(set(peft_state_dict) - set(expected))
+        missing = sorted(expected.keys() - peft_state_dict.keys())
+        unexpected = sorted(peft_state_dict.keys() - expected.keys())
+        if missing or unexpected:
             raise RuntimeError(f"Wan LoRA keys do not match adapter {adapter_name}: missing={missing}, unexpected={unexpected}")
-        incompatible = set_peft_model_state_dict(denoiser, peft_state_dict, adapter_name=adapter_name)
-        if incompatible:
-            missing_lora = [key for key in incompatible.missing_keys if "lora_" in key and adapter_name in key.split(".")]
-            if incompatible.unexpected_keys or missing_lora:
-                raise RuntimeError(f"Incomplete Wan LoRA load: missing={missing_lora}, unexpected={incompatible.unexpected_keys}")
+        set_peft_model_state_dict(denoiser, peft_state_dict, adapter_name=adapter_name)
         loaded = get_peft_model_state_dict(denoiser, adapter_name=adapter_name)
-        if not loaded or set(loaded) != set(peft_state_dict):
-            raise RuntimeError(f"Wan LoRA adapter state was not loaded: {adapter_name}")
-        for key, value in loaded.items():
-            actual = value.detach().cpu()
-            expected_value = peft_state_dict[key].to(dtype=actual.dtype, device="cpu")
+        for key, value in peft_state_dict.items():
+            actual = loaded[key].detach().cpu()
+            expected_value = value.to(dtype=actual.dtype, device="cpu")
             if actual.shape != expected_value.shape or not torch.equal(actual, expected_value):
                 raise RuntimeError(f"Wan LoRA tensor was not loaded correctly: {key}")
         # Native Wan has no Diffusers PEFT mixin to select an existing adapter.
@@ -265,15 +261,11 @@ class WanT2VModel(BaseModel):
             if isinstance(module, BaseTunerLayer):
                 module.set_adapter(adapter_name)
         self._infer_lora_adapter_name = adapter_name
-        up_tensors = [value for key, value in loaded.items() if ".lora_B." in key]
-        nonzero_up_tensors = sum(bool(torch.count_nonzero(value).item()) for value in up_tensors)
         logger.info(
-            "Loaded Wan inference LoRA from {} adapter={} tensors={} nonzero_lora_B_tensors={}/{}",
+            "Loaded Wan inference LoRA from {} adapter={} tensors={}",
             weight_path,
             adapter_name,
             len(loaded),
-            nonzero_up_tensors,
-            len(up_tensors),
         )
 
     def unload_lora_for_infer(self):

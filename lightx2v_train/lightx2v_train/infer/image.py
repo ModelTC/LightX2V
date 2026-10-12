@@ -52,15 +52,15 @@ class ImageInferencer(BaseInferencer):
             raise RuntimeError("image_infer requires a loaded VAE for decoding.")
 
         cpu_offload = self.infer_config.get("vae_cpu_offload", False)
-        backend = get_backend() if cpu_offload else None
-        if backend is not None:
+        if cpu_offload:
+            backend = get_backend()
             backend.synchronize()
             backend.empty_cache()
             vae.to(self.model.device)
         try:
             return self.model.decode_latent(latent)
         finally:
-            if backend is not None:
+            if cpu_offload:
                 vae.to(backend.host_device)
                 backend.empty_cache()
 

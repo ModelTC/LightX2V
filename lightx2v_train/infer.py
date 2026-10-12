@@ -57,7 +57,7 @@ def _load_full_checkpoint_for_infer(model, model_config):
 
 
 def _build_low_model_for_dual_infer(config, reference_model):
-    model_config = config.get("model", {})
+    model_config = config["model"]
     low_override = model_config.get("student_2")
     if not isinstance(low_override, dict):
         raise ValueError("wan_t2v_dual_infer requires model.student_2.")
@@ -103,7 +103,7 @@ def main():
     try:
         sample_processor = build_sample_processor(config)
         model = build_model(config)
-        uses_cache_dataset = config.get("data", {}).get("val", {}).get("name") == "cache_dataset"
+        uses_cache_dataset = config["data"]["val"].get("name") == "cache_dataset"
         model.load_components(
             load_transformer=True,
             load_vae=True,
@@ -111,11 +111,11 @@ def main():
         )
         _load_full_checkpoint_for_infer(
             model,
-            config.get("model", {}),
+            config["model"],
         )
 
-        lora_config = config.get("inference", {}).get("lora_config", None)
-        lora_path = lora_config.get("path", None) if lora_config else None
+        lora_config = config["inference"].get("lora_config")
+        lora_path = lora_config.get("path") if lora_config else None
         if fsdp2_enabled(config) and lora_path:
             model.load_lora_for_infer(lora_path)
         apply_fsdp2(model, config)

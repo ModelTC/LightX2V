@@ -14,9 +14,3 @@ class MetaxBackend(BaseBackend):
 
     def load_device_module(self):
         return torch.cuda
-
-    def barrier_kwargs(self, process_group_backend: str) -> dict:
-        backend = str(process_group_backend).lower()
-        if backend == self.process_group_backend or backend.endswith(f":{self.process_group_backend}"):
-            return self._device_id_kwargs()
-        return {}

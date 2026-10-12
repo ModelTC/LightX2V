@@ -222,22 +222,7 @@ MLU_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 \
 
 Qwen-Image-2512 T2I LoRA training also passed a 20-step check on eight MLU590 devices with FSDP2, BF16, gradient checkpointing, and a target image area of 512 × 512 pixels. All training losses were finite, the LoRA weights and eight-rank model/optimizer checkpoint were saved, and four validation images were generated both before and after training. This checks the training and inference workflow; longer training and other model/method combinations need separate validation.
 
-Run the runtime checks from the repository root with a visible MLU device:
-
-```bash
-LD_LIBRARY_PATH=/usr/local/neuware/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}} \
-    PYTHONPATH=lightx2v_train MLU_VISIBLE_DEVICES=0 \
-    python -m unittest discover -s lightx2v_train/tests -p test_mlu_runtime.py -v
-```
-
-Two-device DDP and FSDP2 checks also passed in this environment: three BF16 training steps, finite gradients, parameter updates, and DCP model/optimizer resume with the next step matching uninterrupted training exactly. The sequence-parallel all-to-all and all-gather outputs and gradients passed as well. Run each mode (`ddp`, `fsdp2`, or `sp`) in a fresh job from `lightx2v_train/`. `--require-mlu` makes missing hardware an error:
-
-```bash
-LD_LIBRARY_PATH=/usr/local/neuware/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}} \
-    PLATFORM=cambricon_mlu MLU_VISIBLE_DEVICES=0,1 \
-    torchrun --standalone --nproc_per_node=2 tests/test_mlu_distributed.py \
-    --mode fsdp2 --require-mlu
-```
+Two-device DDP and FSDP2 checks also passed in this environment: three BF16 training steps, finite gradients, parameter updates, and DCP model/optimizer resume with the next step matching uninterrupted training exactly. The sequence-parallel all-to-all and all-gather outputs and gradients passed as well.
 
 ### Usage Example
 

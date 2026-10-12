@@ -8,7 +8,7 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat
 
-from lightx2v_train.runtime.ops.rope import apply_rotary_pairs, positional_compute_dtype, prepare_rotary_frequencies
+from lightx2v_train.runtime.ops.rope import apply_rotary_pairs
 from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, all_to_all_4d, is_sequence_parallel_enabled, shrink_sequence
 
 from .attention import flash_attention
@@ -16,11 +16,11 @@ from .attention import flash_attention
 __all__ = ["WanModel"]
 
 
-def sinusoidal_embedding_1d(dim, position):
+def sinusoidal_embedding_1d(dim, position, dtype):
     # preprocess
     assert dim % 2 == 0
     half = dim // 2
-    position = position.to(positional_compute_dtype(position.device))
+    position = position.to(dtype)
 
     # calculation
     sinusoid = torch.outer(position, torch.pow(10000, -torch.arange(half).to(position).div(half)))
@@ -451,6 +451,7 @@ class WanModel(ModelMixin, ConfigMixin):
     ignore_for_config = ["patch_size", "cross_attn_norm", "qk_norm", "text_dim", "window_size"]
     _no_split_modules = ["WanAttentionBlock"]
     _supports_gradient_checkpointing = True
+    positional_dtype = torch.float64
 
     @register_to_config
     def __init__(
@@ -611,7 +612,7 @@ class WanModel(ModelMixin, ConfigMixin):
         # params
         device = self.patch_embedding.weight.device
         if self.freqs.device != device:
-            self.freqs = prepare_rotary_frequencies(self.freqs, device)
+            self.freqs = self.freqs.to(device)
 
         if y is not None:
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
@@ -627,7 +628,7 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # time embeddings
         # with amp.autocast(dtype=torch.float32):
-        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t).type_as(x))
+        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t, self.positional_dtype).type_as(x))
         e0 = self.time_projection(e).unflatten(1, (6, self.dim))
         # assert e.dtype == torch.float32 and e0.dtype == torch.float32
 
@@ -734,7 +735,7 @@ class WanModel(ModelMixin, ConfigMixin):
         # params
         device = self.patch_embedding.weight.device
         if self.freqs.device != device:
-            self.freqs = prepare_rotary_frequencies(self.freqs, device)
+            self.freqs = self.freqs.to(device)
 
         if y is not None:
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
@@ -750,7 +751,7 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # time embeddings
         # with amp.autocast(dtype=torch.float32):
-        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t).type_as(x))
+        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t, self.positional_dtype).type_as(x))
         e0 = self.time_projection(e).unflatten(1, (6, self.dim))
         # assert e.dtype == torch.float32 and e0.dtype == torch.float32
 

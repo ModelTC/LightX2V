@@ -9,6 +9,7 @@ class MusaBackend(BaseBackend):
     name = "musa"
     device_type = "musa"
     process_group_backend = "mccl"
+    diffusers_attention_backend = "native"
 
     @staticmethod
     def _load_extension() -> None:
@@ -29,14 +30,3 @@ class MusaBackend(BaseBackend):
     def load_device_module(self):
         self._load_extension()
         return getattr(torch, self.device_type, None)
-
-    def resolve_attention_backend(self, requested: str | None = None) -> str | None:
-        if requested is None or str(requested).lower() == "auto":
-            return "native"
-        return super().resolve_attention_backend(requested)
-
-    def barrier_kwargs(self, process_group_backend: str) -> dict:
-        backend = str(process_group_backend).lower()
-        if backend == self.process_group_backend or backend.endswith(f":{self.process_group_backend}"):
-            return self._device_id_kwargs()
-        return {}

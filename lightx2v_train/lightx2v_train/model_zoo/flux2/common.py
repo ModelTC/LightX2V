@@ -60,7 +60,7 @@ class Flux2ModelBase(BaseModel):
         self.text_pipeline.text_encoder.eval()
 
     def _load_vae(self, model_path):
-        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config.get("inference", {}).get("vae_cpu_offload", False)
+        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config["inference"].get("vae_cpu_offload", False)
         device = torch.device("cpu") if use_cpu else self.device
         self.vae = AutoencoderKLFlux2.from_pretrained(
             model_path,
@@ -88,10 +88,8 @@ class Flux2ModelBase(BaseModel):
     def _reuse_model_state_from(self, source):
         del source
 
-    def load_transformer(self, model_path=None):
-        model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
-        # Let FSDP2 move and shard one block at a time. Loading the complete
-        # transformer on the accelerator first defeats its memory savings.
+    def load_transformer(self, model_path):
+        # FSDP2 moves and shards one block at a time.
         device = torch.device("cpu") if fsdp2_enabled(self.config) else self.device
         transformer = Flux2Transformer2DModel.from_pretrained(
             model_path,
@@ -99,9 +97,6 @@ class Flux2ModelBase(BaseModel):
             torch_dtype=self.transformer_param_dtype,
         ).to(device)
         return prepare_diffusers_attention(transformer, self.config)
-
-    def load_full_weights_for_resume(self, resume_ckpt_path):
-        self.transformer = self.load_transformer(resume_ckpt_path)
 
     def denoiser_module(self):
         return self.transformer

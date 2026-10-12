@@ -16,20 +16,14 @@ _BACKEND_SPECS = {
     "cambricon_mlu": ("lightx2v_train.runtime.backend.mlu", "MluBackend"),
     "metax_cuda": ("lightx2v_train.runtime.backend.metax", "MetaxBackend"),
 }
-_AUTO_BACKENDS = ("nvidia",)
-
 _BACKEND: BaseBackend | None = None
 
 
 def _resolve_backend_name() -> str:
-    value = os.getenv("PLATFORM")
-    if value is None or str(value).lower() == "auto":
-        for name in _AUTO_BACKENDS:
-            if _load_backend_class(name).is_available():
-                return name
-        return "cpu"
+    name = os.getenv("PLATFORM", "auto").lower()
+    if name == "auto":
+        return "nvidia" if _load_backend_class("nvidia").is_available() else "cpu"
 
-    name = str(value).lower()
     if name not in _BACKEND_SPECS:
         expected = ", ".join(_BACKEND_SPECS)
         raise RuntimeError(f"Unsupported training platform {name!r}; expected one of: {expected}.")
@@ -38,14 +32,7 @@ def _resolve_backend_name() -> str:
 
 def _load_backend_class(name: str):
     module_name, class_name = _BACKEND_SPECS[name]
-    backend_class = getattr(importlib.import_module(module_name), class_name)
-    if not issubclass(backend_class, BaseBackend):
-        raise TypeError(f"{class_name} must inherit from BaseBackend.")
-    return backend_class
-
-
-def _create_backend(name: str) -> BaseBackend:
-    return _load_backend_class(name)()
+    return getattr(importlib.import_module(module_name), class_name)
 
 
 def init_backend() -> BaseBackend:
@@ -54,7 +41,7 @@ def init_backend() -> BaseBackend:
         return _BACKEND
 
     name = _resolve_backend_name()
-    backend = _create_backend(name)
+    backend = _load_backend_class(name)()
     local_rank = os.getenv("LOCAL_RANK")
     backend.initialize(None if local_rank is None else int(local_rank))
     _BACKEND = backend

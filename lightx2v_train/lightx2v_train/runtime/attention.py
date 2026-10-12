@@ -19,21 +19,14 @@ def configured_attention_backend(config: Mapping | None) -> str | None:
 
 
 def prepare_diffusers_attention(module, config: Mapping | None = None):
-    """Select a module's processors while restoring Diffusers' global default.
-
-    Backends decide the default operator, while Diffusers owns processor wiring.
-    No model class names or training-algorithm decisions belong in this adapter.
-    """
+    """Set module-local attention while restoring Diffusers' global default."""
     backend = get_backend().resolve_attention_backend(configured_attention_backend(config))
     if backend is None:
         return module
-    setter = getattr(module, "set_attention_backend", None)
-    if setter is None:
-        raise RuntimeError(f"{type(module).__name__} cannot select attention backend {backend!r}.")
     from diffusers.models.attention_dispatch import attention_backend
 
     # ModelMixin.set_attention_backend also changes the process-wide default.
     # The context restores that default while retaining processor-local choices.
     with attention_backend(backend):
-        setter(backend)
+        module.set_attention_backend(backend)
     return module

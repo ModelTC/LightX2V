@@ -87,7 +87,7 @@ class LongCatImageModel(BaseModel):
         self.text_pipeline.text_encoder.eval()
 
     def _load_vae(self, model_path):
-        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config.get("inference", {}).get("vae_cpu_offload", False)
+        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config["inference"].get("vae_cpu_offload", False)
         device = torch.device("cpu") if use_cpu else self.device
         self.vae = AutoencoderKL.from_pretrained(
             model_path,
@@ -106,17 +106,14 @@ class LongCatImageModel(BaseModel):
     def latent_channels(self):
         return int(self.vae_config["latent_channels"] if isinstance(self.vae_config, dict) else self.vae_config.latent_channels)
 
-    def load_transformer(self, model_path=None):
-        model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
+    def load_transformer(self):
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
         transformer = LongCatImageTransformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
             torch_dtype=self.transformer_param_dtype,
         ).to(self.device)
         return prepare_diffusers_attention(transformer, self.config)
-
-    def load_full_weights_for_resume(self, resume_ckpt_path):
-        self.transformer = self.load_transformer(resume_ckpt_path)
 
     def denoiser_module(self):
         return self.transformer
