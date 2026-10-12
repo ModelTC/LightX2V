@@ -38,7 +38,7 @@ Preserve FP8 scale semantics. The current baseline first casts released FP32 che
 
 The adapter requires `cpu_offload=true`, `offload_granularity=block`, `dit_quantized=true`, and `dit_quant_scheme=fp8-vllm`, with matching inference and sensitive dtypes. `_validate_config()` defines its TP, lazy-loading, online-quantization, and LoRA/adapter restrictions. FP8 checkpoint format and inference dtype are separate concepts: default BF16 inference does not establish support for sharing unquantized BF16 checkpoints or for every Wan family member.
 
-The entry point is [scripts/wan/offload](../../../../scripts/wan/offload/), with `run_wan_block_shared_offload.sh` and `configs/offload/block/wan_block_shared.json`. Defaults are I2V, host sharing, and eight GPUs with SP8. Set `shared_cpu_weight_scope` to `numa` in JSON to switch modes. When changing GPU count, edit the GPU list, process count, and JSON parallel layout together. T2V also needs a matching T2V checkpoint, configuration, and input arguments.
+The entry point is [scripts/wan/inference/shared_offload](../../../../scripts/wan/inference/shared_offload/), with `run_wan_block_shared_offload.sh` and `configs/offload/block/wan_block_shared.json`. Defaults are I2V, NUMA sharing, and eight GPUs with SP8. Set `shared_cpu_weight_scope` to `host` in JSON to switch modes. When changing GPU count, edit the GPU list, process count, and JSON parallel layout together. T2V also needs a matching T2V checkpoint, configuration, and input arguments.
 
 The current script inherits the BF16 default from `base.sh`; `SENSITIVE_LAYER_DTYPE=None` follows the main dtype. Existing environment values can change these settings. Old FP16 validation records cover only that precision. Full BF16 inference after the default change requires separate evidence.
 
@@ -128,14 +128,14 @@ Whole-module audio VAE offload remains a separate private path. Video VAE sharin
 
 `load_model()`, `init_run()`, `_offload_transformer()`, and `run_main()` in `lightx2v/models/runners/minimax_h3/minimax_h3_runner.py` determine component-loading order and phase transitions. Every rank must enter shared component initialization in the same order. Do not create shared text/VAE modules only on rank 0.
 
-The entry point is [scripts/minimax_h3/offload](../../../../scripts/minimax_h3/offload/), with `run_minimax_h3_block_shared_offload.sh` and `configs/minimax_h3/offload/minimax_h3_block_shared_offload.json`. Select `t2av/i2av/l2av/fl2av/ref2av` with `--task` in the script and supply the corresponding inputs. Defaults are `t2av`, `--model-variant fl2av`, host sharing, and eight GPUs with SP8. Select NUMA by setting `shared_cpu_weight_scope` to `numa` in JSON. When changing GPU count, update the GPU list, process count, and JSON layout together.
+The entry point is [scripts/minimax_h3/inference/shared_offload](../../../../scripts/minimax_h3/inference/shared_offload/), with `run_minimax_h3_block_shared_offload.sh` and `configs/minimax_h3/shared_offload/minimax_h3_block_shared_offload.json`. For base tasks, use `--model-variant fl2av` and select `t2av/i2av/l2av/fl2av` with `--task`. For reference generation, use `--model-variant ref2av --task ref2av` and supply the corresponding inputs. Defaults are `t2av`, `--model-variant fl2av`, host sharing, and eight GPUs with SP8. Select NUMA by setting `shared_cpu_weight_scope` to `numa` in JSON. When changing GPU count, update the GPU list, process count, and JSON layout together.
 
 Match the AdaLN cache to `--model-variant` and actual transformer weights, not only the task name. Variant `fl2av` uses `transformer/` and an fl2av cache; the dedicated `ref2av` variant uses `transformer_ref/` and a ref2av cache. Steps, flow shifts, and cache directory must also match. The cache tool has been restored to upstream's direct-file launch style:
 
 ```bash
 python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
   --model_path "${model_path}" \
-  --config_json "${lightx2v_path}/configs/minimax_h3/offload/minimax_h3_block_shared_offload.json" \
+  --config_json "${lightx2v_path}/configs/minimax_h3/shared_offload/minimax_h3_block_shared_offload.json" \
   --model-variant fl2av
 ```
 

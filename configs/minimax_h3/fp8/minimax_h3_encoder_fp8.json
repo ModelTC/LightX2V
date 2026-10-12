@@ -21,7 +21,6 @@
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
-  "audio_sampling_rate": 32000,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-sgl",
   "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors"

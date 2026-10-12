@@ -196,7 +196,7 @@ taew2_1.pth 权重可以从[这里](https://github.com/madebyollin/taehv/raw/ref
 - **[1.3B模型480p视频生成配置](https://github.com/ModelTC/LightX2V/tree/main/configs/offload/block/wan_t2v_1_3b.json)**
   - 1.3B模型推理瓶颈是T5 encoder，配置文件专门针对T5进行优化
 
-**[启动脚本](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_lazy_load.sh)**
+**[启动脚本](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/inference/run_wan_i2v_lazy_load.sh)**
 
 
 ## 📚 参考资源

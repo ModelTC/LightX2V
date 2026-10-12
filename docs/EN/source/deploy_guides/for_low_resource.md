@@ -194,7 +194,7 @@ When using the above distilled models, you can further optimize performance:
 - **[1.3B Model 480p Video Generation Configuration](https://github.com/ModelTC/LightX2V/tree/main/configs/offload/block/wan_t2v_1_3b.json)**
   - The inference bottleneck for 1.3B models is the T5 encoder, so the configuration file specifically optimizes for T5
 
-**[Launch Script](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/run_wan_i2v_lazy_load.sh)**
+**[Launch Script](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/inference/run_wan_i2v_lazy_load.sh)**
 
 ## 📚 Reference Resources
 

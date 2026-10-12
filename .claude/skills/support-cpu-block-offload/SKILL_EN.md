@@ -97,13 +97,13 @@ scripts/<model>/offload/
 └── README_CN.md
 ```
 
-Prefer `configs/<model>/offload/` for configurations; Wan retains `configs/offload/block/`. The four current examples default to host sharing and eight GPUs, explicitly setting `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7` and `--nproc_per_node=8`. Hunyuan defaults to TP2 × SP2 × CFG2; the other three use SP8.
+Prefer `configs/<model>/offload/` for configurations; Wan retains `configs/offload/block/` and uses `scripts/wan/inference/shared_offload/` for its launcher. The four current examples default to eight GPUs, explicitly setting `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7` and `--nproc_per_node=8`. Hunyuan defaults to TP2 × SP2 × CFG2; the other three use SP8.
 
-Select scope with `shared_cpu_weight_scope` in the JSON configuration. This is a startup setting, not a CLI or per-request option. The four current JSON files explicitly set `host`; change this field to `numa` for NUMA sharing. If the field is absent from JSON, the internal default remains `auto`. Distinguish the examples' host default from the internal auto default.
+Select scope with `shared_cpu_weight_scope` in the JSON configuration. This is a startup setting, not a CLI or per-request option. Wan currently uses `numa`; the other three models use `host`. Change this field to switch sharing modes. If the field is absent from JSON, the internal default remains `auto`. Distinguish each example's default from the internal `auto` default.
 
 The current scripts do not use `TASK`, `CONFIG_JSON`, `SHARED_CPU_WEIGHT_SCOPE`, or similar environment variables to override their commands. They do not forward arguments appended to `bash script.sh` or infer GPU counts. Edit the full command to change paths, GPUs, task, and inputs; update the JSON to change sharing scope and parallel settings. To change command-line options without editing the script, run the full Python command directly. Do not reintroduce environment-variable wrappers, temporary JSON generators, or duplicate launchers for scope, GPU count, or task.
 
-Default shared configurations include `cpu_offload=true`, `offload_granularity="block"`, `shared_cpu_weights=true`, `shared_cpu_weight_scope="host"`, `shared_cpu_weight_backend="sysv"`, `shared_cpu_weight_strict_numa=true`, `shared_cpu_weight_register_chunk_mb=128`, and `lazy_load=false`. Enable additional component-sharing flags only when their paths are implemented. Private block baselines may be used for validation; that alone does not justify new permanent scripts or dedicated configurations in the shared entry directory. Existing entry points elsewhere are not an automatic cleanup target.
+Default shared configurations include `cpu_offload=true`, `offload_granularity="block"`, `shared_cpu_weights=true`, `shared_cpu_weight_scope` (using the model's default above), `shared_cpu_weight_backend="sysv"`, `shared_cpu_weight_strict_numa=true`, `shared_cpu_weight_register_chunk_mb=128`, and `lazy_load=false`. Enable additional component-sharing flags only when their paths are implemented. Private block baselines may be used for validation; that alone does not justify new permanent scripts or dedicated configurations in the shared entry directory. Existing entry points elsewhere are not an automatic cleanup target.
 
 Scripts and configurations must also follow these constraints:
 

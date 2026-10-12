@@ -129,13 +129,13 @@ Self-Forcing 针对 1.3B 的自回归模型进行步数蒸馏、CFG蒸馏。Ligh
 **T2V 完整模型：**
 
 ```bash
-bash scripts/wan/distill/run_wan_t2v_distill_model_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_t2v_distill_model.sh
 ```
 
 **I2V 完整模型：**
 
 ```bash
-bash scripts/wan/distill/run_wan_i2v_distill_model_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_i2v_distill_model.sh
 ```
 
 ### 步数蒸馏 LoRA 推理脚本
@@ -143,13 +143,13 @@ bash scripts/wan/distill/run_wan_i2v_distill_model_4step_cfg.sh
 **T2V LoRA：**
 
 ```bash
-bash scripts/wan/distill/run_wan_t2v_distill_lora_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_t2v_distill_lora.sh
 ```
 
 **I2V LoRA：**
 
 ```bash
-bash scripts/wan/distill/run_wan_i2v_distill_lora_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_i2v_distill_lora.sh
 ```
 
 ## 🔧 服务化部署

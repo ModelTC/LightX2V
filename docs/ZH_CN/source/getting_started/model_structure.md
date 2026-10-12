@@ -197,7 +197,7 @@ lightx2v_path=/path/to/LightX2V
 
 # 运行脚本
 cd LightX2V/scripts
-bash wan/distill/run_wan_i2v_distill_4step_cfg.sh
+bash wan/inference/distill/run_wan_i2v_distill_single_file.sh
 ```
 
 > 💡 **提示**：当目录下只有一个模型文件时，LightX2V 会自动加载该文件。
@@ -272,7 +272,7 @@ wan2.1_i2v_720p_multi/
 
 ```bash
 cd LightX2V/scripts
-bash wan/distill/run_wan_i2v_distill_4step_cfg.sh
+bash wan/inference/distill/run_wan_i2v_distill_single_file.sh
 ```
 
 ### Wan2.2 单文件模型

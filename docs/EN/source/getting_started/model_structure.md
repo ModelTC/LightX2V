@@ -197,7 +197,7 @@ lightx2v_path=/path/to/LightX2V
 
 # Run script
 cd LightX2V/scripts
-bash wan/distill/run_wan_i2v_distill_4step_cfg.sh
+bash wan/inference/distill/run_wan_i2v_distill_single_file.sh
 ```
 
 > 💡 **Tip**: When there's only one model file in the directory, LightX2V will automatically load it.
@@ -272,7 +272,7 @@ Edit configuration file (e.g., `configs/distill/wan_i2v_distill_4step_cfg.json`)
 
 ```bash
 cd LightX2V/scripts
-bash wan/distill/run_wan_i2v_distill_4step_cfg.sh
+bash wan/inference/distill/run_wan_i2v_distill_single_file.sh
 ```
 
 > 💡 **Tip**: Other components (T5, CLIP, VAE, tokenizer, etc.) need to be manually organized into the model directory
