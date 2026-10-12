@@ -84,7 +84,8 @@ def _ddp_kwargs(config):
         "static_graph": config.get("static_graph", False),
         "gradient_as_bucket_view": config.get("gradient_as_bucket_view", False),
     }
-    kwargs.update(get_backend().ddp_kwargs())
+    backend = get_backend()
+    kwargs.update(backend.ddp_kwargs())
     return kwargs
 
 

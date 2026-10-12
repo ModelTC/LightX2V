@@ -13,10 +13,6 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=1
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-cd "${REPO_DIR}"
-
 torchrun \
     --standalone \
     --nproc_per_node=8 \
