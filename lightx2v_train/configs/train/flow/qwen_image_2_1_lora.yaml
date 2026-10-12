@@ -5,7 +5,7 @@ distributed:
 
 model:
     name: qwen_image_2_1
-    pretrained_model_name_or_path: ${oc.env:QWEN_IMAGE_21_MODEL_PATH,/data/wushuo1/models/Qwen-Image-2.1}
+    pretrained_model_name_or_path: /data/models/Qwen-Image-2.1
     running_dtype: bf16
 
 data:
@@ -20,15 +20,15 @@ data:
         target_area: 1048576
         shuffle: true
         data_path:
-            - ${oc.env:QWEN_IMAGE_21_TRAIN_DATA,/data/wushuo1/data/LightX2V_train_data_examples/dataset_v1/train.jsonl}
-            - ${oc.env:QWEN_IMAGE_21_EDIT_TRAIN_DATA,/data/wushuo1/data/LightX2V_train_data_examples/dataset_edit/train.jsonl}
+            - /data/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /data/LightX2V_train_data_examples/dataset_edit/train.jsonl
     val:
         name: image_dataset
         num_workers: 2
         shuffle: false
         data_path:
-            - ${oc.env:QWEN_IMAGE_21_VAL_DATA,/data/wushuo1/data/LightX2V_train_data_examples/dataset_v1/val.jsonl}
-            - ${oc.env:QWEN_IMAGE_21_EDIT_VAL_DATA,/data/wushuo1/data/LightX2V_train_data_examples/dataset_edit/val.jsonl}
+            - /data/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /data/LightX2V_train_data_examples/dataset_edit/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000
@@ -74,7 +74,7 @@ training:
         adam_beta2: 0.999
         weight_decay: 0.01
         adam_epsilon: 0.00000001
-    output_dir: ${oc.env:QWEN_IMAGE_21_OUTPUT_DIR,./output_train/qwen_image_2_1_lora}
+    output_dir: ./output_train/qwen_image_2_1_lora
 
 inference:
     method: image_infer
@@ -83,8 +83,8 @@ inference:
     num_inference_steps: 40
     enable_cfg: false
     seed: 42
-    output_dir: ${oc.env:QWEN_IMAGE_21_INFER_OUTPUT_DIR,./output_infer/qwen_image_2_1_lora}
-    infer_every_iters: ${training.save_every_iters}
+    output_dir: ./output_infer/qwen_image_2_1_lora
+    infer_every_iters: 100
 
 logging:
     rank_zero_only: true
