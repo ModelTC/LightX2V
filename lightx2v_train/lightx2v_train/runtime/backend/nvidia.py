@@ -14,7 +14,3 @@ class NvidiaBackend(BaseBackend):
 
     def load_device_module(self):
         return torch.cuda
-
-    def configure_math(self) -> None:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True

@@ -1,6 +1,6 @@
 import json
 import os
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 
 import torch
 from diffusers.models.modeling_utils import SAFETENSORS_WEIGHTS_NAME, SAFE_WEIGHTS_INDEX_NAME
@@ -53,9 +53,8 @@ class BaseModel(CapabilityProvider):
 
     def transformer_forward_context(self):
         # Autocast changes forward computation, not the optimizer's FP32 parameters.
-        if self.device.type in {"cpu", "cuda"} and self.running_dtype in {torch.float16, torch.bfloat16}:
-            return torch.autocast(device_type=self.device.type, dtype=self.running_dtype)
-        return nullcontext()
+        backend = get_backend()
+        return backend.autocast(dtype=self.running_dtype)
 
     def register_capabilities(self):
         self.capabilities.register(

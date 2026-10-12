@@ -196,9 +196,6 @@ class WanT2VModel(BaseModel):
             raise RuntimeError("Wan transformer is not loaded. Set model.load_transformer=True for training.")
         return self.transformer
 
-    def transformer_forward_context(self):
-        return get_backend().autocast(dtype=self.running_dtype, enabled=self.running_dtype in {torch.float16, torch.bfloat16})
-
     def add_lora(self, rank, alpha, target_modules):
         lora_config = LoraConfig(
             r=rank,

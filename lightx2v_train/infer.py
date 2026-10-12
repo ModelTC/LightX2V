@@ -3,14 +3,14 @@ import copy
 from pathlib import Path
 
 import torch
-from loguru import logger
-
 from lightx2v_train.data import build_data, build_sample_processor
-from lightx2v_train.infer import build_inferencer
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
 from lightx2v_train.runtime.fsdp import apply_fsdp2, fsdp2_enabled
 from lightx2v_train.runtime.precision import configure_precision
+from loguru import logger
+
+from lightx2v_train.infer import build_inferencer
 
 
 def parse_args():

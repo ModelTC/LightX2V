@@ -37,7 +37,6 @@ class BaseBackend(ABC):
 
         if local_rank is not None:
             self.set_device(local_rank)
-        self.configure_math()
         return self
 
     @property
@@ -89,9 +88,6 @@ class BaseBackend(ABC):
             dist.barrier(device_ids=[self.device.index])
         else:
             dist.barrier()
-
-    def configure_math(self) -> None:
-        pass
 
     def resolve_attention_backend(self, requested: str | None = None) -> str | None:
         """Resolve an operator policy without knowing the consuming model."""
