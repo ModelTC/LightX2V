@@ -180,13 +180,26 @@ For attention operators installation, please refer to our documentation: **[Engl
 
 ### Training Platform
 
-For cache building, training, and inference in `lightx2v_train`, select the platform with the `PLATFORM` environment variable. Before launching on Ascend, run:
+For cache building, training, and inference in `lightx2v_train`, select the platform with the `PLATFORM` environment variable:
 
 ```bash
 export PLATFORM=ascend_npu
+# Or select MThreads MUSA, using the same platform name as inference:
+export PLATFORM=musa
 ```
 
 `runtime.platform` in YAML is not used for platform selection. If `PLATFORM` is unset or `auto`, the runtime uses CUDA when available and otherwise CPU.
+
+For MUSA, install the vendor's matching PyTorch and `torch_musa` wheels with the required MUSA driver, SDK, and MCCL runtime. The training backend uses native `musa` devices, MCCL for distributed communication, and PyTorch SDPA for automatic attention selection. FSDP2 requires `fully_shard`, `MixedPrecisionPolicy`, and `FSDPModule` from `torch.distributed.fsdp`; use a vendor stack that supports these APIs and MUSA FSDP2.
+
+After setting the model and dataset paths in the [Qwen-Image LoRA configuration](lightx2v_train/configs/train/flow/qwen_image_lora_dist.yaml), launch from the repository root:
+
+```bash
+MUSA_VISIBLE_DEVICES=0,1 CONFIG=/path/to/qwen_image_lora.yaml \
+    bash lightx2v_train/scripts/run_qwen_image_t2i_lora_musa_fsdp2.sh
+```
+
+The script defaults to devices `0,1,2,3,4,5,6,7` and `configs/train/flow/qwen_image_lora_dist.yaml`. It starts one process per visible device; `CONFIG` can select another YAML file.
 
 ### Usage Example
 
