@@ -1,9 +1,10 @@
 import torch
 from diffusers import AutoencoderKLQwenImage21, QwenImage21Pipeline, QwenImage21Transformer2DModel
 from diffusers.image_processor import VaeImageProcessor
-from diffusers.utils.peft_utils import get_adapter_name
 
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImage21ConsistencyModelCapability
+from lightx2v_train.runtime.backend import get_backend
+from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.utils.image_ops import image_tensor_to_pil
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
@@ -13,7 +14,7 @@ from .qwen_image import QwenImageDenoiserInput, QwenImageModel
 
 @MODEL_REGISTER("qwen_image_2_1")
 class QwenImage21Model(QwenImageModel):
-    """Qwen-Image 2.1's single-stream backbone with Qwen's shared training capabilities."""
+    """Qwen-Image 2.1 text-to-image and image editing."""
 
     pipeline_cls = QwenImage21Pipeline
     distribution_matching_uses_sample_context = True
@@ -30,7 +31,7 @@ class QwenImage21Model(QwenImageModel):
         self.vae = AutoencoderKLQwenImage21.from_pretrained(
             model_path,
             subfolder="vae",
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.vae_dtype,
         ).to(device)
         self.vae.requires_grad_(False)
         self.vae.eval()
@@ -42,28 +43,15 @@ class QwenImage21Model(QwenImageModel):
         )
 
     def load_transformer(self):
+        device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
         return QwenImage21Transformer2DModel.from_pretrained(
             self.config["model"]["pretrained_model_name_or_path"],
             subfolder="transformer",
-            torch_dtype=self.running_dtype,
-        ).to(self.device)
-
-    def load_full_weights_for_resume(self, resume_ckpt_path):
-        self.transformer = QwenImage21Transformer2DModel.from_pretrained(
-            resume_ckpt_path,
-            subfolder="transformer",
-            torch_dtype=self.running_dtype,
-        ).to(self.device)
+            torch_dtype=self.transformer_param_dtype,
+        ).to(device)
 
     def add_lora(self, rank, alpha, target_modules):
         super().add_lora(rank, alpha, target_modules or ["to_q", "to_k", "to_v", "to_out.0"])
-
-    def load_lora_for_infer(self, lora_path, adapter_name=None):
-        denoiser = self.denoiser_module()
-        adapter_name = adapter_name or get_adapter_name(denoiser)
-        state_dict, metadata = self.pipeline_cls.lora_state_dict(lora_path, use_safetensors=True, return_lora_metadata=True)
-        denoiser.load_lora_adapter(state_dict, adapter_name=adapter_name, metadata=metadata)
-        self._infer_lora_adapter_name = adapter_name
 
     def _encode_target_latent(self, sample, *, mode):
         self._validate_image_size(*sample["inputs"]["target_pixel_values"].shape[-2:])
@@ -81,7 +69,6 @@ class QwenImage21Model(QwenImageModel):
             if not isinstance(prompt, str):
                 (prompt,) = prompt
             role_prompts.append(prompt)
-        # Share references and padding across prompt branches.
         encoded = self.encode_prompt_condition(role_prompts, image=condition_images or None)
         conditions = [{key: value[index : index + 1] for key, value in encoded.items()} for index in range(len(role_prompts))]
         if vae_images:
@@ -98,8 +85,8 @@ class QwenImage21Model(QwenImageModel):
             if image.ndim == 4:
                 image = image.unsqueeze(0)
             self._validate_image_size(*image.shape[-2:])
-            image = image.to(device=self.device, dtype=self.running_dtype)
-            latent = self._normalize_latents(self.vae.encode(image).latent_dist.mode())
+            image = image.to(device=self.device, dtype=self.vae_dtype)
+            latent = self._normalize_latents(self.vae.encode(image).latent_dist.mode().to(dtype=self.latent_dtype))
             batch, channels, _, height, width = latent.shape
             packed_latents.append(latent.reshape(batch, channels, height * width).transpose(1, 2))
             img_shapes.append((1, height, width))
@@ -119,27 +106,21 @@ class QwenImage21Model(QwenImageModel):
         return {"prompt_embed": prompt_embed, "prompt_embed_mask": prompt_embed_mask, "image_pad_mask": image_pad_mask}
 
     def _reference_image_mask(self, condition, source_token_length):
-        embeds = condition["prompt_embed"]
-        mask = condition.get("image_pad_mask")
-        if mask is None:
-            if source_token_length:
-                raise ValueError("Editing caches require image_pad_mask; rebuild the cache.")
-            # Previously built T2I caches contain only text embeddings.
-            mask = torch.zeros(embeds.shape[:2], dtype=torch.bool, device=embeds.device)
+        mask = condition["image_pad_mask"]
         if not torch.all(mask.sum(dim=1) * 4 == source_token_length):
             raise ValueError("Reference image slots must expand to the VAE token count; check vision/VAE image sizes.")
         if not torch.equal(mask, mask[:1].expand_as(mask)):
             raise ValueError("Image-token layouts must match within a batch; use batch_size=1 for mixed tasks.")
         return mask
 
-    def prepare_denoiser_input(self, noisy_latent, condition=None):
+    def prepare_denoiser_input(self, noisy_latent, condition):
         batch, channels, _, height, width = noisy_latent.shape
         if height % 2 or width % 2:
             raise ValueError("Qwen-Image 2.1 requires even latent height and width (image dimensions divisible by 32).")
         # Each 64-channel spatial position is one token.
         packed = noisy_latent.reshape(batch, channels, height * width).transpose(1, 2)
-        source_latents = None if condition is None else condition.get("source_latents")
-        source_shapes = [] if condition is None else condition.get("source_img_shapes", [])
+        source_latents = condition.get("source_latents")
+        source_shapes = condition.get("source_img_shapes", [])
         if source_latents is not None:
             if any(t != 1 or h <= 0 or w <= 0 or h % 2 or w % 2 for t, h, w in source_shapes):
                 raise ValueError("Qwen-Image 2.1 reference shapes must be (1, even_height, even_width).")
@@ -169,19 +150,17 @@ class QwenImage21Model(QwenImageModel):
             ],
             dim=1,
         )
-        prediction = self.transformer(
-            hidden_states=denoiser_input.hidden_states,
-            timestep=timestep_or_sigma.reshape(-1).expand(batch),
-            encoder_hidden_states=embeds,
-            encoder_hidden_states_mask=condition.get("prompt_embed_mask"),
-            img_shapes=denoiser_input.img_shapes,
-            img_mask=img_mask,
-            attention_kwargs={},
-            # Recompute the trainable prefix each step to preserve its gradients.
-            kv_cache=None,
-            kv_cache_mode=None,
-            return_dict=False,
-        )[0]
+        with self.transformer_forward_context():
+            prediction = self.transformer(
+                hidden_states=denoiser_input.hidden_states.to(dtype=self.running_dtype),
+                timestep=timestep_or_sigma.reshape(-1).expand(batch),
+                encoder_hidden_states=embeds,
+                encoder_hidden_states_mask=condition["prompt_embed_mask"],
+                img_shapes=denoiser_input.img_shapes,
+                img_mask=img_mask,
+                attention_kwargs={},
+                return_dict=False,
+            )[0]
         # 2.1 returns the joint text/image sequence, with target image tokens last.
         return prediction[:, -denoiser_input.target_token_length :]
 
