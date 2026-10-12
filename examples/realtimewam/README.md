@@ -114,16 +114,14 @@ LightX2V also provides memory optimizations, including text encoder offload and 
 
 | Model | Text offload | Precision | Allocated memory (GiB) | `nvidia-smi` usage (GiB) |
 | --- | :---: | :---: | ---: | ---: |
-| **RealtimeWAM<sup>*</sup>** | ❌ | BF16 | 23.24 | 24.38 |
-| **RealtimeWAM<sup>*</sup>** | ✅ | BF16 | 14.98 | 16.12 |
-| **RealtimeWAM<sup>*</sup>** | ✅ | FP8 | **9.41** | **11.50** |
-| **RealtimeWAM<sup>†</sup>** | ❌ | BF16 | 22.38 | 23.53 |
-| **RealtimeWAM<sup>†</sup>** | ✅ | BF16 | 14.12 | 15.27 |
-| **RealtimeWAM<sup>†</sup>** | ✅ | FP8 | **8.98** | **10.67** |
+| **RealtimeWAM<sup>*</sup>** | ❌ | BF16 | 23.24 | 24.84 |
+| **RealtimeWAM<sup>*</sup>** | ✅ | BF16 | 14.97 | 16.58 |
+| **RealtimeWAM<sup>*</sup>** | ✅ | FP8 | **9.41** | **11.01** |
+| **RealtimeWAM<sup>†</sup>** | ❌ | BF16 | 22.38 | 24.00 |
+| **RealtimeWAM<sup>†</sup>** | ✅ | BF16 | 14.11 | 15.74 |
+| **RealtimeWAM<sup>†</sup>** | ✅ | FP8 | **8.98** | **10.57** |
 
-Enable text encoder offload and FP8 quantization with `"t5_cpu_offload": true` and `"quant_fp8": true` in the config, respectively.
-
-Allocated memory is measured with `torch.cuda.memory_allocated()`. `nvidia-smi` usage also includes PyTorch's cached memory, CUDA contexts, and other GPU allocations.
+Enable text encoder offload with `"t5_cpu_offload": true`. To load an offline FP8 checkpoint, set `"dit_quantized": true`, `"dit_quant_scheme": "fp8-sgl"`, and `"dit_quantized_ckpt"` to its `.pt` path. Weights are loaded directly in FP8. Activations are quantized dynamically during inference. Allocated memory is measured with `torch.cuda.memory_allocated()`. `nvidia-smi` usage also includes PyTorch's cached memory, CUDA contexts, and other GPU allocations.
 
 ### Evaluation
 

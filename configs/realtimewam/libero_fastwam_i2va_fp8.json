@@ -1,5 +1,4 @@
 {
-  "adapter_model_path": "/path/to/RealtimeWAM/realtimewam_libero_fast.pt",
   "dataset_stats_path": "/path/to/RealtimeWAM/libero_dataset_stats.json",
   "camera_size": 224,
   "action_chunk_size": 32,
@@ -21,5 +20,7 @@
   "cuda_graph": true,
   "warmup": true,
   "kv_fusion": false,
-  "quant_fp8": true
+  "dit_quantized": true,
+  "dit_quant_scheme": "fp8-sgl",
+  "dit_quantized_ckpt": "/path/to/RealtimeWAM/realtimewam_libero_fast_fp8.pt"
 }

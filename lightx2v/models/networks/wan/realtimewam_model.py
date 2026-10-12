@@ -3,7 +3,7 @@ import torch
 from lightx2v.models.networks.wan.fastwam_model import FastWAMNativeModel
 from lightx2v.models.networks.wan.infer.realtimewam import RealtimeWAMPreInfer, RealtimeWAMTransformerInfer
 from lightx2v.models.networks.wan.weights.realtimewam import RealtimeWAMTransformerWeights
-from lightx2v.models.networks.wan.weights.realtimewam.transformer_weights import condition_layers, replace_linears_with_fp8
+from lightx2v.models.networks.wan.weights.realtimewam.transformer_weights import condition_layers
 from lightx2v.utils.envs import GET_DTYPE
 
 
@@ -37,11 +37,12 @@ class RealtimeWAM(FastWAMNativeModel):
                 raise ValueError(f"KV fusion logits do not match interval ending at layer {index}")
         return weights
 
+    def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        return self._load_ckpt(unified_dtype, sensitive_layer)
+
     def _init_weights(self, weight_dict=None):
         super()._init_weights(weight_dict)
         self.transformer_weights.pack_projections()
-        if self.config.get("quant_fp8", False):
-            replace_linears_with_fp8(self.transformer_weights)
 
     def prepare_video_noise(self, latent_shape, seed):
         frames = self.config.get("num_video_frames", 9)
