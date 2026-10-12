@@ -24,7 +24,7 @@
 
 > 🌟 **Developer Newbie Guide: [LightX2V Developer Quick Start Guide](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
 
-> 🌟 **: MacBook local inference app: [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)**
+> 🍎 **MacBook local inference app: [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)**
 
 > 👋 **Join our WeChat group! LightX2V Robot WeChat ID: random42seed**
 

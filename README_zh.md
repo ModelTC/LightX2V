@@ -24,7 +24,7 @@
 
 > 🌟 **开发者新手入门教程: [LightX2V 开发者快速入门教程](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
 
-> 🌟 **: MacBook本地推理APP: [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)**
+> 🍎 **: MacBook本地推理APP: [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)**
 
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
 
