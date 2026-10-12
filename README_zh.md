@@ -52,7 +52,7 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
-- **2026年10月13日：** 🎉 我们发布了[LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)，目前已经支持了[Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1)以及[Qwen-Image-2.1-PE-T2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0)和[Qwen-Image-2.1-PE-I2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0)在macbook上的本地化推理。
+- **2026年10月13日：** 🎉 我们发布了[LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)，目前已经支持了[Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)以及[Qwen-Image-2.1-PE-T2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0)和[Qwen-Image-2.1-PE-I2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0)在macbook上的本地化推理。
 
 - **2026年9月22日：** 🚀 我们支持并优化了[SwiftVR](https://huggingface.co/H-oliday/SwiftVR)，使用方法参考[这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/swiftvr)。
 
