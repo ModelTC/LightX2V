@@ -178,52 +178,6 @@ uv pip install -v . # pip install -v .
 ### (Optional) Install Attention/Quantize Operators
 For attention operators installation, please refer to our documentation: **[English Docs](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html#step-4-install-attention-operators) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id9)**
 
-### Training Platform
-
-For cache building, training, and inference in `lightx2v_train`, select the platform with the `PLATFORM` environment variable:
-
-```bash
-export PLATFORM=ascend_npu
-# Or select MThreads MUSA, using the same platform name as inference:
-export PLATFORM=musa
-```
-
-`runtime.platform` in YAML is not used for platform selection. If `PLATFORM` is unset or `auto`, the runtime uses CUDA when available and otherwise CPU.
-
-For MUSA, install the vendor's matching PyTorch and `torch_musa` wheels with the required MUSA driver, SDK, and MCCL runtime. The training backend uses native `musa` devices, MCCL for distributed communication, and PyTorch SDPA for automatic attention selection. FSDP2 requires `fully_shard`, `MixedPrecisionPolicy`, and `FSDPModule` from `torch.distributed.fsdp`; use a vendor stack that supports these APIs and MUSA FSDP2.
-
-After setting the model and dataset paths in the [Qwen-Image LoRA configuration](lightx2v_train/configs/train/flow/qwen_image_lora_dist.yaml), launch from the repository root:
-
-```bash
-MUSA_VISIBLE_DEVICES=0,1 CONFIG=/path/to/qwen_image_lora.yaml \
-    bash lightx2v_train/scripts/run_qwen_image_t2i_lora_musa_fsdp2.sh
-```
-
-The script defaults to devices `0,1,2,3,4,5,6,7` and `configs/train/flow/qwen_image_lora_dist.yaml`. It starts one process per visible device; `CONFIG` can select another YAML file.
-
-For Cambricon MLU, use the same platform name as inference:
-
-```bash
-export PLATFORM=cambricon_mlu
-```
-
-The Qwen-Image LoRA FSDP2 launch script configures the Neuware library path and MLU environment, defaults to eight visible devices, and sets the process count to the number of visible devices. Set the model and dataset paths in `lightx2v_train/configs/train/flow/qwen_image_lora_dist.yaml`, which uses `distributed.backend: auto` to select CNCL on MLU, then run:
-
-```bash
-bash lightx2v_train/scripts/run_qwen_image_t2i_lora_mlu_fsdp2.sh
-
-# Two devices; --config and NPROC_PER_NODE can be overridden.
-MLU_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 \
-    bash lightx2v_train/scripts/run_qwen_image_t2i_lora_mlu_fsdp2.sh \
-    --config /path/to/qwen_image_lora.yaml
-```
-
-`NEUWARE_HOME` defaults to `/usr/local/neuware`. Use matching PyTorch and torch_mlu packages from the Cambricon environment. The runtime checks use MLU590 with PyTorch 2.11.0, torch_mlu 1.33.1, and Diffusers 0.38.0. They cover SDPA outputs and gradients, RoPE, BF16 autocast, and a small Qwen-Image LoRA model with gradient checkpointing and adapter save/reload.
-
-Qwen-Image-2512 T2I LoRA training also passed a 20-step check on eight MLU590 devices with FSDP2, BF16, gradient checkpointing, and a target image area of 512 × 512 pixels. All training losses were finite, the LoRA weights and eight-rank model/optimizer checkpoint were saved, and four validation images were generated both before and after training. This checks the training and inference workflow; longer training and other model/method combinations need separate validation.
-
-Two-device DDP and FSDP2 checks also passed in this environment: three BF16 training steps, finite gradients, parameter updates, and DCP model/optimizer resume with the next step matching uninterrupted training exactly. The sequence-parallel all-to-all and all-gather outputs and gradients passed as well.
-
 ### Usage Example
 
 See the [MiniMax-H3 guide](scripts/minimax_h3/README.md) for checkpoint layout, local LoRA paths, CLI presets, and server/POST examples.
