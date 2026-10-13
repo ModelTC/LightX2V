@@ -64,7 +64,6 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
         self.kv_cache_manager = None
         self.stream_waveform = None
         self.last_rest_audio = None
-        self.stream_contexts = {}
         # Called on rank 0 with (RGB [1,3,F,H,W], start_frame, is_final).
         self.stream_callback = None
 
@@ -81,7 +80,6 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
         self.action_travel = None
         self.stream_waveform = None
         self.last_rest_audio = None
-        self.stream_contexts = {}
 
     def run_text_encoder(self, input_info, keyframes=None, references=None):
         if not self.action_prompt_travel_config.enabled or not input_info.action_prompts:
@@ -275,8 +273,6 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
             if waveform.shape[0] == 1:
                 latents = latents.expand(2, -1, -1)
             clean = latents[..., chunk.audio_frames].transpose(1, 2).reshape(-1, latents.shape[1]).contiguous()
-            if dist.get_rank() == 0:
-                logger.debug(f"{index} chunk clean audio shape: {latents.shape} {clean.shape}")
             self.scheduler.prepare_chunk(index, clean)
             for step in range(self.scheduler.infer_steps):
                 self.check_stop()
@@ -285,12 +281,8 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
                 self.scheduler.step_post()
                 if self.progress_callback:
                     self.progress_callback(100 * (index * self.scheduler.infer_steps + step + 1) / (len(chunks) * self.scheduler.infer_steps), 100)
-            if dist.get_rank() == 0:
-                logger.debug(f"{index} chunk video latents shape: {self.scheduler.video_latents.shape} {chunk.video_frames.stop} {chunk.video_frames.start}")
             video = unpatchify_video_tokens(self.scheduler.video_latents, chunk.video_frames.stop - chunk.video_frames.start, self.scheduler.latent_height, self.scheduler.latent_width)
             for frames in decoder.push(video):
-                if dist.get_rank() == 0:
-                    logger.debug(f"{index} chunk video shape: {frames.shape}")
                 videos.append(frames)
                 if self.stream_callback is not None and (not dist.is_initialized() or dist.get_rank() == 0):
                     self.stream_callback(frames, emitted, False)
@@ -323,7 +315,6 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
         self.waveform = None
         self.stream_waveform = None
         self.last_rest_audio = None
-        self.stream_contexts = {}
 
     def _get_stream_chunk(self, chunk_index):
         chunk_index = int(chunk_index)
