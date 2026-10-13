@@ -22,6 +22,9 @@ from .objective_factory import CONSISTENCY_OBJECTIVE_REGISTER
 
 
 def _where_condition(mask: Tensor, positive: Any, negative: Any):
+    if mask.numel() == 1:
+        # Select the full sample; CFG branches can have different text lengths.
+        return positive if mask.item() else negative
     if torch.is_tensor(positive):
         if not torch.is_tensor(negative):
             raise TypeError(f"MeanFlow condition branches have incompatible types: Tensor and {type(negative).__name__}.")

@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 from contextlib import contextmanager
@@ -327,7 +328,11 @@ class BaseModel(CapabilityProvider):
         os.makedirs(output_dir, exist_ok=True)
         lora_state_dict = convert_state_dict_to_diffusers(peft_state_dict)
         if hasattr(self.pipeline_cls, "save_lora_weights"):
-            self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True)
+            save_kwargs = {}
+            if "transformer_lora_adapter_metadata" in inspect.signature(self.pipeline_cls.save_lora_weights).parameters:
+                # Preserve alpha/rank scaling when loading the adapter.
+                save_kwargs["transformer_lora_adapter_metadata"] = self.denoiser_module().peft_config[adapter_name or "default"].to_dict()
+            self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True, **save_kwargs)
         else:
             save_file(lora_state_dict, os.path.join(output_dir, "pytorch_lora_weights.safetensors"))
         if auxiliary_state_dict:

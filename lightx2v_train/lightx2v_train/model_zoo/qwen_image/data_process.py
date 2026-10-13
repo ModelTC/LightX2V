@@ -1,4 +1,5 @@
 import torch
+from PIL import Image
 from diffusers import AutoencoderKLQwenImage
 from diffusers.image_processor import VaeImageProcessor
 
@@ -165,3 +166,73 @@ class QwenImageEditDataProcessor(QwenImageDataProcessor):
             condition_images.append(pil_to_image_tensor(condition_image))
             vae_images.append(self.image_processor.preprocess(image, vae_height, vae_width)[0].unsqueeze(1))
         return condition_images, vae_images
+
+
+@SAMPLE_PROCESSOR_REGISTER("qwen_image_2_1")
+class QwenImage21DataProcessor(QwenImageDataProcessor):
+    """Prepare RGB/RGBA targets and optional reference images for Qwen-Image-2.1."""
+
+    image_mode = "RGBA"
+
+    def __init__(self, config):
+        processor_config = config.get("data", {}).get("processor", {})
+        size_multiple = int(processor_config.get("size_multiple", 32))
+        # 16x VAE downsampling and 2x2 VLM image slots require multiples of 32.
+        if size_multiple <= 0 or size_multiple % 32:
+            raise ValueError("Qwen-Image-2.1 size_multiple must be a positive multiple of 32")
+        self.image_processor = VaeImageProcessor(
+            vae_scale_factor=size_multiple,
+            vae_latent_channels=64,
+            do_convert_rgb=False,
+            do_resize=False,
+        )
+        self.target_area = _target_area_from_config(config)
+        self.reference_image_area = int(processor_config.get("reference_image_area", self.target_area))
+        self.unconditional_prompt = config["model"].get("unconditional_prompt", " ")
+
+    def __call__(self, sample):
+        inputs = sample["inputs"]
+        meta = sample["meta"]
+        target_image = inputs.pop("target_image", None)
+        source_images = inputs.pop("source_images", [])
+        if target_image is not None:
+            # Training follows the target image's aspect ratio.
+            target_pixels = self._process_target(target_image, sample)
+            inputs["target_pixel_values"] = target_pixels
+            meta["target_height"] = int(target_pixels.shape[-2])
+            meta["target_width"] = int(target_pixels.shape[-1])
+        if source_images:
+            reference_image = source_images[-1]
+            meta["reference_image_height"] = reference_image.height
+            meta["reference_image_width"] = reference_image.width
+            condition_images, vae_images = self._process_source_images(source_images)
+            inputs["source_condition_images"] = condition_images
+            inputs["source_vae_pixel_values"] = vae_images
+        return sample
+
+    def infer_target_size(self, sample, default_height, default_width):
+        meta = sample["meta"]
+        height, _ = _explicit_target_size(sample)
+        if height is not None or "reference_image_height" not in meta:
+            return super().infer_target_size(sample, default_height, default_width)
+        reference_height = _optional_scalar(meta, "reference_image_height")
+        reference_width = _optional_scalar(meta, "reference_image_width")
+        width, height = self._resolve_target_size(sample, reference_width / reference_height, int(default_height) * int(default_width))
+        return height, width
+
+    def _process_source_images(self, source_images):
+        condition_images = []
+        vae_images = []
+        multiple = int(self.image_processor.config.vae_scale_factor)
+        for image in source_images:
+            width, height = calculate_area_dimensions(self.reference_image_area, image.width / image.height, multiple)
+            # Both encoders share geometry; only VLM composites alpha over white.
+            rgba_image = self.image_processor.resize(image.convert(self.image_mode), height, width)
+            white = Image.new("RGB", rgba_image.size, (255, 255, 255))
+            white.paste(rgba_image, mask=rgba_image.getchannel("A"))
+            condition_images.append(pil_to_image_tensor(white))
+            vae_images.append(self.image_processor.preprocess(rgba_image)[0].unsqueeze(1))
+        return condition_images, vae_images
+
+    def _process_target(self, image, sample):
+        return super()._process_target(image.convert(self.image_mode), sample)

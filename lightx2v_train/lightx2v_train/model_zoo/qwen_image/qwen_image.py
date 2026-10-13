@@ -34,6 +34,8 @@ class QwenImageModel(BaseModel):
 
     pipeline_cls = QwenImagePipeline
     distribution_matching_capability_cls = GenericDistributionMatchingCapability
+    distribution_matching_uses_sample_context = False
+    consistency_model_capability_cls = QwenImageConsistencyModelCapability
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -50,11 +52,12 @@ class QwenImageModel(BaseModel):
                     temporal_size=1,
                 ),
                 guidance_in_denoiser_space=True,
+                uses_sample_context=self.distribution_matching_uses_sample_context,
             ),
         )
         self.capabilities.register(
             ConsistencyModelCapability,
-            QwenImageConsistencyModelCapability(self),
+            self.consistency_model_capability_cls(self),
         )
 
     def load_components(
