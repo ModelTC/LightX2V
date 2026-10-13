@@ -2,6 +2,12 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
+## 近期工作：LightX2V APP（macOS）
+
+我们近期推出的 [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App) 是面向 Apple Silicon Mac 的原生 macOS 应用，适用于 macOS 14 及以上版本。APP 基于 LightX2V 在本地运行 [Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)，通过图形界面完成文生图和图像编辑。
+
+LightX2V APP 还提供可选提示词增强功能，支持配套的 [Qwen-Image-2.1-PE-T2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0) 和 [Qwen-Image-2.1-PE-I2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0) 模型。
+
 ## 1. 模型下载
 
 官方模型权重：[Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1)。下载命令：
