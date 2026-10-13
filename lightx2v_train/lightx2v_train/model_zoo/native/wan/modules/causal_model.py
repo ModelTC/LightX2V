@@ -71,6 +71,8 @@ def distributed_flex_attention(roped_query, roped_key, value, block_mask):
 
 
 class CausalWanSelfAttention(nn.Module):
+    attention = staticmethod(attention)
+
     def __init__(self, dim, num_heads, local_attn_size=-1, sink_size=0, qk_norm=True, eps=1e-6):
         assert dim % num_heads == 0
         super().__init__()
@@ -308,7 +310,7 @@ class CausalWanSelfAttention(nn.Module):
                     window_start = max(0, local_end_index - attention_window_size)
                     window_k = kv_cache["k"][:, window_start:local_end_index]
                     window_v = kv_cache["v"][:, window_start:local_end_index]
-            x = attention(roped_query, window_k, window_v)
+            x = self.attention(roped_query, window_k, window_v)
             if sequence_parallel_cache:
                 x = all_to_all_4d(x, scatter_dim=1, gather_dim=2)
             if not defer_cache_update:
@@ -448,6 +450,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
     ignore_for_config = ["patch_size", "cross_attn_norm", "qk_norm", "text_dim"]
     _no_split_modules = ["WanAttentionBlock"]
     _supports_gradient_checkpointing = True
+    positional_dtype = torch.float64
 
     @register_to_config
     def __init__(
@@ -908,7 +911,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
 
         # time embeddings
         # with amp.autocast(dtype=torch.float32):
-        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).type_as(x))
+        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten(), self.positional_dtype).type_as(x))
         e0 = self.time_projection(e).unflatten(1, (6, self.dim)).unflatten(dim=0, sizes=t.shape)
         # assert e.dtype == torch.float32 and e0.dtype == torch.float32
 
@@ -1108,7 +1111,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
 
         # time embeddings
         # with amp.autocast(dtype=torch.float32):
-        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).type_as(x))
+        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten(), self.positional_dtype).type_as(x))
         e0 = self.time_projection(e).unflatten(1, (6, self.dim)).unflatten(dim=0, sizes=t.shape)
         # assert e.dtype == torch.float32 and e0.dtype == torch.float32
 
@@ -1132,7 +1135,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             x = torch.cat([clean_x, x], dim=1)
             if aug_t is None:
                 aug_t = torch.zeros_like(t)
-            e_clean = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, aug_t.flatten()).type_as(x))
+            e_clean = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, aug_t.flatten(), self.positional_dtype).type_as(x))
             e0_clean = self.time_projection(e_clean).unflatten(1, (6, self.dim)).unflatten(dim=0, sizes=t.shape)
             e0 = torch.cat([e0_clean, e0], dim=1)
 

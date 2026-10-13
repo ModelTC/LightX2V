@@ -4,6 +4,10 @@ import torch
 from diffusers import AutoencoderKLFlux2, Flux2Transformer2DModel
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
+from lightx2v_train.runtime.attention import prepare_diffusers_attention
+from lightx2v_train.runtime.fsdp import fsdp2_enabled
+from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
+
 from ..base import BaseModel
 
 
@@ -56,11 +60,13 @@ class Flux2ModelBase(BaseModel):
         self.text_pipeline.text_encoder.eval()
 
     def _load_vae(self, model_path):
+        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config["inference"].get("vae_cpu_offload", False)
+        device = torch.device("cpu") if use_cpu else self.device
         self.vae = AutoencoderKLFlux2.from_pretrained(
             model_path,
             subfolder="vae",
             torch_dtype=self.vae_dtype,
-        ).to(self.device)
+        ).to(device)
         self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
         self.vae.eval()
@@ -82,13 +88,15 @@ class Flux2ModelBase(BaseModel):
     def _reuse_model_state_from(self, source):
         del source
 
-    def load_transformer(self, model_path=None):
-        model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
-        return Flux2Transformer2DModel.from_pretrained(
+    def load_transformer(self, model_path):
+        # FSDP2 moves and shards one block at a time.
+        device = torch.device("cpu") if fsdp2_enabled(self.config) else self.device
+        transformer = Flux2Transformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
             torch_dtype=self.transformer_param_dtype,
-        ).to(self.device)
+        ).to(device)
+        return prepare_diffusers_attention(transformer, self.config)
 
     def denoiser_module(self):
         return self.transformer
@@ -144,9 +152,10 @@ class Flux2ModelBase(BaseModel):
         if image.ndim != 4:
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
         image = image.to(device=self.device, dtype=self.vae_dtype)
-        distribution = self.vae.encode(image).latent_dist
-        latent = getattr(distribution, mode)()
-        return self._normalize_patch_latents(latent)
+        with self._active_vae() as vae:
+            distribution = vae.encode(image).latent_dist
+            latent = getattr(distribution, mode)()
+            return self._normalize_patch_latents(latent)
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
@@ -185,14 +194,15 @@ class Flux2ModelBase(BaseModel):
 
     def _encode_reference_images(self, images):
         latents = []
-        for image in images:
-            if image.ndim == 3:
-                image = image.unsqueeze(0)
-            if image.ndim != 4:
-                raise ValueError(f"Expected source image with shape [B, C, H, W], got {tuple(image.shape)}")
-            image = image.to(device=self.device, dtype=self.vae_dtype)
-            latent = self.vae.encode(image).latent_dist.mode()
-            latents.append(self._normalize_patch_latents(latent))
+        with self._active_vae() as vae:
+            for image in images:
+                if image.ndim == 3:
+                    image = image.unsqueeze(0)
+                if image.ndim != 4:
+                    raise ValueError(f"Expected source image with shape [B, C, H, W], got {tuple(image.shape)}")
+                image = image.to(device=self.device, dtype=self.vae_dtype)
+                latent = vae.encode(image).latent_dist.mode()
+                latents.append(self._normalize_patch_latents(latent))
 
         batch_size = latents[0].shape[0]
         if any(latent.shape[0] != batch_size for latent in latents):
