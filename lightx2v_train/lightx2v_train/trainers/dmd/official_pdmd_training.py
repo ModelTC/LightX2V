@@ -48,8 +48,12 @@ def validate_official_pdmd_config(config):
     training = config["training"]
     dmd = training.get("dmd", {})
     matching = config["model"].get("capabilities", {}).get("distribution_matching", {})
-    if training.get("method") != "dmd" or config["model"]["name"] != "minimax_h3_ref2av":
-        raise ValueError("official_pdmd currently supports the H3 Ref2AV DMD trainer with a Ref cost sampler only")
+    if training.get("method") != "dmd" or config["model"]["name"] not in {"minimax_h3_ref2av", "minimax_h3_t2av"}:
+        raise ValueError("official_pdmd requires an H3 DMD model (Ref2AV or base/keyframe tasks)")
+    if config["model"]["name"] == "minimax_h3_t2av":
+        data = config["data"]["train"]
+        if data.get("name") != "minimax_h3_cache_dataset" or data.get("route_mode") != "stratified":
+            raise ValueError("official_pdmd base/keyframe tasks require minimax_h3_cache_dataset with route_mode=stratified")
     if not matching.get("official_pdmd", False):
         raise ValueError("training.dmd.official_pdmd requires model.capabilities.distribution_matching.official_pdmd=true")
     if dmd.get("update_order", "fake_first") != "fake_first":
@@ -225,7 +229,7 @@ class OfficialH3PdmdTraining:
         self._load_cursor(checkpoint, iteration)
         sampler = t.dataloader_train.sampler
         if not hasattr(sampler, "configure_from_microbatch_offset"):
-            raise ValueError("official H3 PDMD currently requires the Ref cost sampler with an explicit microbatch cursor")
+            raise ValueError("official H3 PDMD requires a sampler with an explicit microbatch cursor")
         sampler.configure_from_microbatch_offset(start_microbatch=self.consumed_microbatches, gradient_accumulation_iters=self.accum, fake_update_ratio=self.critic_steps)
         t.setup(resume_ckpt_path=checkpoint)
         self.cached = move_tensors(self.cached, t.student.device)

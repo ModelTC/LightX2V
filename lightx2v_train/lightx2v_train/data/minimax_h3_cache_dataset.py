@@ -1225,6 +1225,8 @@ class MiniMaxH3TaskCycleSampler(Sampler):
         self.blocks_by_cell = None
         self.runs_per_epoch = None
         self._stratified_boundary_guard = 0
+        self.start_microbatch = None
+        self.microbatches_per_epoch = None
         self._permutation_cache = {}
         self._pools = self._build_pools()
 
@@ -1275,6 +1277,7 @@ class MiniMaxH3TaskCycleSampler(Sampler):
         gradient_accumulation_iters=None,
         fake_update_ratio=None,
     ):
+        self.start_microbatch = None
         start_iteration = int(start_iteration)
         if start_iteration < 0:
             raise ValueError(f"start_iteration must be non-negative, got {start_iteration}.")
@@ -1382,6 +1385,29 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             self.runs_per_epoch,
             [f"{task}/{bucket}" for task, bucket in (self.expected_group(index) for index in range(self.schedule_period))],
         )
+
+    def configure_from_microbatch_offset(self, *, start_microbatch, gradient_accumulation_iters=1, fake_update_ratio=5):
+        """Official PDMD consumes new data only on critic updates.
+
+        Use an absolute fresh-microbatch cursor instead of the legacy
+        student+critic outer-iteration schedule. Exact per-batch route balance
+        makes additional route loss scaling unnecessary in the PDMD loop.
+        """
+        if self.route_mode != "stratified" or self.num_replicas % self.schedule_period:
+            raise ValueError("Official PDMD task sampling requires stratified routes and DP world size divisible by the route schedule period.")
+        if int(start_microbatch) < 0:
+            raise ValueError("start_microbatch must be non-negative")
+        self.configure(start_iteration=0, gradient_accumulation_iters=gradient_accumulation_iters, fake_update_ratio=fake_update_ratio)
+        self.start_microbatch = int(start_microbatch)
+        self.epoch = 0
+        self.microbatches_per_epoch = max(1, sum(map(len, self._pools.values())) // self.num_replicas)
+
+    def _cursor_sample_index(self, absolute_microbatch):
+        slot = absolute_microbatch * self.num_replicas + self.rank
+        key = self.route_schedule[slot % self.schedule_period]
+        ordinal = self._route_occurrences_before(slot, key)
+        data_epoch, position = divmod(ordinal, len(self._pools[key]))
+        return self._cell_permutation(key, data_epoch)[position]
 
     def expected_group(self, outer_iteration):
         """Return ``(task, bucket)`` for a zero-based outer iteration."""
@@ -1517,7 +1543,7 @@ class MiniMaxH3TaskCycleSampler(Sampler):
 
         grad_accum = self.gradient_accumulation_iters if gradient_accumulation_iters is None else int(gradient_accumulation_iters)
         fake_ratio = self.fake_update_ratio if fake_update_ratio is None else int(fake_update_ratio)
-        return {
+        metadata = {
             "route_mode": self.route_mode,
             "task_order": list(self.task_order),
             "task_bucket_order": {task: list(self.task_bucket_order[task]) for task in self.task_order},
@@ -1529,6 +1555,13 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             "fake_update_ratio": fake_ratio,
             "seed": self.seed,
         }
+        if self.start_microbatch is not None:
+            metadata.update(
+                data_consumption_mode="optimizer_update_critic_only",
+                student_data_source="reuse_preceding_critic_trajectory",
+                resume_cursor_unit="absolute_global_microbatch",
+            )
+        return metadata
 
     def _route_occurrences_before(self, role_slot, key):
         role_slot = int(role_slot)
@@ -1615,6 +1648,11 @@ class MiniMaxH3TaskCycleSampler(Sampler):
         return self._cell_permutation(key, data_epoch)[position]
 
     def __iter__(self):
+        if self.start_microbatch is not None:
+            start = self.start_microbatch + self.epoch * self.microbatches_per_epoch
+            for offset in range(self.microbatches_per_epoch):
+                yield self._cursor_sample_index(start + offset)
+            return
         if self.runs_per_epoch is None:
             raise RuntimeError("MiniMaxH3TaskCycleSampler.configure() must be called by the trainer before iterating the dataloader.")
         if self.route_mode == "stratified":
@@ -1661,6 +1699,8 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             yield from rank_block
 
     def __len__(self):
+        if self.start_microbatch is not None:
+            return self.microbatches_per_epoch
         if self.runs_per_epoch is None:
             raise RuntimeError("MiniMaxH3TaskCycleSampler.configure() must be called before its length is queried.")
         return self.runs_per_epoch * self.samples_per_outer_iteration
