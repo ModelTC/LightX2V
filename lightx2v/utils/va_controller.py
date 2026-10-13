@@ -31,12 +31,13 @@ class VAController:
             self.world_size = dist.get_world_size()
         self.target_reader_rank = int(os.getenv("READER_RANK", "0")) % self.world_size
         self.target_recorder_rank = int(os.getenv("RECORDER_RANK", "0")) % self.world_size
-        self.init_base(model_runner.config, model_runner.input_info, model_runner.vsr_model is not None)
+        vsr_model = getattr(model_runner, "vsr_model", None)
+        self.init_base(model_runner.config, model_runner.input_info, vsr_model is not None)
         self.init_recorder()
         self.init_reader(model_runner)
 
     def init_base(self, config, input_info, has_vsr_model):
-        self.stream_config = input_info.stream_config
+        self.stream_config = getattr(input_info, "stream_config", {})
         logger.info(f"VAController init base with stream config: {self.stream_config}")
         self.audio_path = input_info.audio_path
         self.output_video_path = input_info.save_result_path
@@ -84,10 +85,15 @@ class VAController:
 
         # for seko_talk_ar, the audio_sr is the same as the sample_rate
         self.is_seko_talk_ar = config.get("model_cls") == "seko_talk_ar"
+        self.is_minimax_h3_causal = config.get("model_cls") == "minimax_h3_causal"
         if self.is_seko_talk_ar:
             self.latent_per_chunk = config["ar_config"]["num_frame_per_chunk"]
             self.audio_window_secs = config.get("audio_window", 1.0)
             self.look_ahead_secs = config.get("look_ahead", 0.0)
+        self.record_audio_sr = self.audio_sr
+        if self.is_minimax_h3_causal:
+            self.audio_sr = int(config.get("audio_sampling_rate", 32000))
+            self.record_audio_sr = int(config.get("target_audio_sampling_rate", 24000))
 
     def init_recorder(self):
         if not self.output_video_path or self.rank != self.target_recorder_rank:
@@ -98,7 +104,7 @@ class VAController:
 
             self.recorder = WsVideoChunkRecorder(
                 fps=self.record_fps,
-                sample_rate=self.audio_sr,
+                sample_rate=self.record_audio_sr,
                 slice_frame=self.slice_frame,
                 prev_frame=self.prev_frame_length,
                 on_output=self.ws_output.get("on_output") or self.ws_output.get("on_chunk"),
@@ -114,7 +120,7 @@ class VAController:
                 whip_shared_path=whip_shared_path,
                 livestream_url=self.output_video_path,
                 fps=self.record_fps,
-                sample_rate=self.audio_sr,
+                sample_rate=self.record_audio_sr,
                 slice_frame=self.slice_frame,
                 prev_frame=self.prev_frame_length,
             )
@@ -124,7 +130,7 @@ class VAController:
             self.recorder = VARecorder(
                 livestream_url=self.output_video_path,
                 fps=self.record_fps,
-                sample_rate=self.audio_sr,
+                sample_rate=self.record_audio_sr,
                 slice_frame=self.slice_frame,
                 prev_frame=self.prev_frame_length,
                 stream_config=self.stream_config,
@@ -137,8 +143,20 @@ class VAController:
         segment_duration = self.max_num_frames / self.target_fps
         prev_duration = self.prev_frame_length / self.target_fps
         if audio_type == "ws":
-            from lightx2v.utils.va_reader_ws import SekoARWSReader
+            from lightx2v.utils.va_reader_ws import MinimaxH3CausalWSReader, SekoARWSReader
 
+            if self.is_minimax_h3_causal:
+                self.reader = MinimaxH3CausalWSReader(
+                    rank=self.rank,
+                    world_size=self.world_size,
+                    stream_url=self.audio_path.get("data", ""),
+                    sample_rate=self.audio_sr,
+                    target_rank=self.target_reader_rank,
+                    model_runner=model_runner,
+                    audio_source=self.audio_path.get("source"),
+                    audio_format=self.audio_path.get("audio_format", "pcm_s16le/16000/1"),
+                )
+                return
             if not self.is_seko_talk_ar:
                 raise ValueError("audio_path type=ws currently requires model_cls=seko_talk_ar")
             self.reader = SekoARWSReader(
@@ -231,27 +249,32 @@ class VAController:
         if isinstance(self.reader, OmniVAReader):
             self.len_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)
             self.flag_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)
-            if self.is_seko_talk_ar:
-                self.prev_tensor = torch.full((1, 1, self.prev_frame_length), -1, dtype=torch.int64, device=AI_DEVICE)
+            if self.is_seko_talk_ar or self.is_minimax_h3_causal:
+                self.prev_tensor = torch.zeros((1, 1, self.prev_frame_length), dtype=torch.int64, device=AI_DEVICE)
                 return
             self.prev_tensor = torch.zeros((1, 3, self.prev_frame_length, self.tgt_h, self.tgt_w), dtype=torch.float, device=AI_DEVICE)
+
+    def truncate_buffer(self, size: int, prefix: str):
+        # truncate the stream buffer to keep the max infer time length
+        # and broadcast the prev video tensor to all ranks
+        if self.rank == self.target_recorder_rank:
+            logger.warning(f"runner recv {prefix}, truncate stream buffer")
+            video_tensor = self.recorder.truncate_stream_buffer(self.est_infer_end_idx)
+            if video_tensor is not None:
+                self.flag_tensor.fill_(1)
+                self.prev_tensor.copy_(video_tensor)
+            else:
+                self.flag_tensor.fill_(0)
+        dist.broadcast(self.flag_tensor, src=self.target_recorder_rank)
+        if self.flag_tensor.item() == 1:
+            dist.broadcast(self.prev_tensor, src=self.target_recorder_rank)
+            return True
 
     def omni_reader_next_control(self):
         immediate_switch = self.reader.get_immediate_switch()
         if immediate_switch == 1:
-            # truncate the stream buffer to keep the max infer time length
-            # and broadcast the prev video tensor to all ranks
-            if self.rank == self.target_recorder_rank:
-                logger.warning(f"runner recv immediate switch, truncate stream buffer")
-                video_tensor = self.recorder.truncate_stream_buffer(self.est_infer_end_idx)
-                if video_tensor is not None:
-                    self.flag_tensor.fill_(1)
-                    self.prev_tensor.copy_(video_tensor)
-                else:
-                    self.flag_tensor.fill_(0)
-            dist.broadcast(self.flag_tensor, src=self.target_recorder_rank)
-            if self.flag_tensor.item() == 1:
-                dist.broadcast(self.prev_tensor, src=self.target_recorder_rank)
+            ret = self.truncate_buffer(self.est_infer_end_idx, "immediate switch")
+            if ret:
                 return NextControl(action="blank_to_voice", data=self.prev_tensor)
         else:
             # get the length of stream buffer, broadcast to all ranks
@@ -272,20 +295,14 @@ class VAController:
         if not os.path.exists(image_switch):
             logger.warning(f"Switch image path {image_switch} does not exist")
             return None
-        # truncate the stream buffer to keep the max infer time length
-        if self.rank == self.target_recorder_rank:
-            logger.warning(f"runner recv image switch, truncate stream buffer")
-            self.recorder.truncate_stream_buffer(self.est_switch_image_end_idx)
+        # self.truncate_buffer(self.est_switch_image_end_idx + self.est_infer_end_idx, "image switch")
         return NextControl(action="switch_image", data=image_switch)
 
     def omni_reader_action_control(self):
         action_switch = self.reader.get_action_switch()
         if not isinstance(action_switch, str) or len(action_switch) == 0:
             return None
-        # truncate the stream buffer to keep the max infer time length
-        if self.rank == self.target_recorder_rank:
-            logger.warning(f"runner recv action switch, truncate stream buffer")
-            self.recorder.truncate_stream_buffer(self.est_switch_action_end_idx)
+        # self.truncate_buffer(self.est_switch_action_end_idx + self.est_infer_end_idx, "action switch")
         return NextControl(action="perform_action", data=action_switch)
 
     def pub_livestream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor, valid_duration=1e9):

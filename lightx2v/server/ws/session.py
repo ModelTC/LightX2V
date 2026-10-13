@@ -74,6 +74,7 @@ def apply_run_input(input_info, *, prompt, negative_prompt, image_path, size, au
             "image_path": image_path,
             "audio_path": audio_path,
             "save_result_path": save_result_path,
+            "action_prompts": {"0": [""]},
         }
     )
 
@@ -235,7 +236,8 @@ class LiveSession:
             reason = msg.interrupt.reason if msg.interrupt else ""
             self.audio_source.on_clear_audio(reason)
         elif which == "set_prompt":
-            logger.info("SetPrompt ignored")
+            prompt = msg.set_prompt.prompt if msg.set_prompt else ""
+            self.audio_source.on_action_switch(prompt)
         else:
             raise ValueError(f"unexpected client message {which}")
 

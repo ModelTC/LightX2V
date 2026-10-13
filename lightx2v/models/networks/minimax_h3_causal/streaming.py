@@ -5,7 +5,8 @@ from dataclasses import dataclass
 
 import torch
 
-from lightx2v.models.networks.minimax_h3.packing import AUDIO_TAG, VIDEO_TAG, MiniMaxH3PackedSequence
+from lightx2v.models.networks.minimax_h3.packing import AUDIO_TAG, LATENTS_PER_CHUNK, VIDEO_TAG, MiniMaxH3PackedSequence, causal_chunk_audio_range
+from lightx2v.models.networks.minimax_h3.packing_ref2av import _frame_position_grid, _temporal_position_grid
 
 
 @dataclass(frozen=True)
@@ -93,3 +94,29 @@ class MiniMaxH3StreamingPlan:
             torch.arange(video_rows, positions.shape[0]),
             torch.empty(0, dtype=torch.long),
         )
+
+
+def build_causal_stream_chunk(chunk_index, latent_height, latent_width, rotary_time, patch_size=(1, 2, 2)):
+    """One live chunk: 5 video latents and the audio slice aligned to their rotary end."""
+    _, patch_h, patch_w = patch_size
+    start = chunk_index * LATENTS_PER_CHUNK
+    end = start + LATENTS_PER_CHUNK
+    audio_start, audio_end = causal_chunk_audio_range(chunk_index)
+    frame_grid, width_grid = _frame_position_grid(latent_height, latent_width, patch_h, patch_w)
+    rows_per_frame = frame_grid.shape[0]
+    frame_time = _temporal_position_grid(end, rotary_time)[start:end]
+    video_positions = torch.empty((end - start) * rows_per_frame, 3, dtype=torch.float64)
+    video_positions[:, 0] = frame_time.repeat_interleave(rows_per_frame)
+    video_positions[:, 1:] = frame_grid.repeat(end - start, 1)
+    count = audio_end - audio_start
+    time = rotary_time + torch.arange(audio_start, audio_end, dtype=torch.float64)
+    audio_positions = torch.zeros(count * 2, 3, dtype=torch.float64)
+    audio_positions[:, 0] = time.repeat(2)
+    audio_positions[:count, 2] = float(width_grid[0])
+    audio_positions[count:, 2] = float(width_grid[-1])
+    return MiniMaxH3Chunk(
+        slice(start, end),
+        slice(start * rows_per_frame, end * rows_per_frame),
+        slice(audio_start, audio_end),
+        torch.cat((video_positions, audio_positions)),
+    )

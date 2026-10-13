@@ -62,7 +62,7 @@ def _try_recv(ws, chunks, size, timeout=0.01):
     return ""
 
 
-def _mux_raw(output, width, height, fps, video_bytes, audio_bytes):
+def _mux_raw(output, width, height, fps, video_bytes, audio_bytes, sample_rate=16000):
     os.makedirs(os.path.dirname(os.path.abspath(output)) or ".", exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ws_raw_") as tmp:
         h264_path = os.path.join(tmp, "video.h264")
@@ -79,7 +79,7 @@ def _mux_raw(output, width, height, fps, video_bytes, audio_bytes):
             "-f",
             "s16le",
             "-ar",
-            "16000",
+            str(int(sample_rate)),
             "-ac",
             "1",
             "-i",
@@ -108,6 +108,7 @@ def parse_args():
     parser.add_argument("--request_id", type=str, default="ws-client")
     parser.add_argument("--chunk_bytes", type=int, default=3200, help="PCM bytes per AudioChunk (100ms at 16k mono s16le)")
     parser.add_argument("--fps", type=float, default=16.0)
+    parser.add_argument("--output_audio_sr", type=int, default=16000, help="s16le sample rate of received audio (16000 seko, 24000 H3)")
     parser.add_argument("--prompt", type=str, default="")
     parser.add_argument("--negative_prompt", type=str, default="")
     parser.add_argument("--seed", type=int, default=42)
@@ -162,7 +163,7 @@ def main():
     audio_bytes = b"".join(c.audio_data for c in chunks)
     if size[0] <= 0 or size[1] <= 0 or not video_bytes:
         raise SystemExit("no video received")
-    _mux_raw(args.output, size[0], size[1], args.fps, video_bytes, audio_bytes)
+    _mux_raw(args.output, size[0], size[1], args.fps, video_bytes, audio_bytes, sample_rate=args.output_audio_sr)
     print(f"wrote {len(chunks)} chunks to {args.output}")
 
 
