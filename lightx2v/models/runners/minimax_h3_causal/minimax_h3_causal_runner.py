@@ -433,7 +433,10 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
                 if control.action == "perform_action":
                     self.inputs["text_encoder_output"] = self.encode_action_prompt(control.data)
                     self.fill_condition_cache(overwrite=True)
-                    logger.info(f"H3 prompt switched before chunk {chunk_idx}: {control.data}")
+                    if self.va_controller.recorder is not None:
+                        self.va_controller.recorder.emit_prompt_update(control.data)
+                    if dist.get_rank() == 0:
+                        logger.info(f"H3 prompt switched before chunk {chunk_idx}: {control.data}")
                     continue
 
                 chunk = self._get_stream_chunk(chunk_idx)

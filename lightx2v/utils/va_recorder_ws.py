@@ -11,6 +11,7 @@ from loguru import logger
 
 START_SPEAKING = 0
 STOP_SPEAKING = 1
+PROMPT_UPDATE = 2
 
 
 class H264AnnexBEncoder:
@@ -142,6 +143,11 @@ class WsVideoChunkRecorder:
             self.on_output(item)
         except Exception:
             logger.error(f"on_output failed: {traceback.format_exc()}")
+
+    def emit_prompt_update(self, prompt: str = ""):
+        prompt = str(prompt)[:100]
+        logger.info(f"PROMPT_UPDATE seq={self.sequence}: {prompt}")
+        self._emit(("event", PROMPT_UPDATE, prompt))
 
     def buffer_stream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor, valid_duration=1e9):
         N, height, width, C = images.shape
