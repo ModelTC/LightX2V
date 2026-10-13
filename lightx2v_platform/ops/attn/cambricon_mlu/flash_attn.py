@@ -26,10 +26,13 @@ class MluFlashAttnWeight(AttnWeightTemplate):
         else:
             raise ValueError(f"mlu_flash_attn: unsupported q shape {tuple(q.shape)}, expected 3D or 4D")
 
+        # Cached condition tokens make KV longer than Q.
         if max_seqlen_q is None:
-            raise ValueError("mlu_flash_attn: max_seqlen_q is required")
+            max_seqlen_q = q.shape[-3] if cu_seqlens_q is None else (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item()
+        if max_seqlen_kv is None:
+            max_seqlen_kv = k.shape[-3] if cu_seqlens_kv is None else (cu_seqlens_kv[1:] - cu_seqlens_kv[:-1]).max().item()
 
-        total_seqlen = bs * max_seqlen_q
+        total_seqlen = q.shape[0] if q.dim() == 3 else q.shape[0] * q.shape[1]
 
         if bs == 1:
             if q.dim() == 3:
