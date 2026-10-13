@@ -20,6 +20,7 @@ from transformers import Qwen3VLProcessor
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.embedding.embedding_weight import EmbeddingWeight
 from lightx2v.common.ops.mm.mm_weight import MMWeightTP, unwrap_tp_weight
+from lightx2v.common.ops.norm.layer_norm_weight import LNWeightTemplate
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV3D_WEIGHT_REGISTER, EMBEDDING_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -273,6 +274,7 @@ class QwenImage21TextEncoder(WeightModule):
     def _load_weights(self, path, config):
         quantized = bool(config.get("text_encoder_quantized", False))
         required = set()
+        norm_dtypes = {}
 
         def collect(module):
             if isinstance(module, WeightModule):
@@ -282,7 +284,12 @@ class QwenImage21TextEncoder(WeightModule):
             storage = unwrap_tp_weight(module)
             attrs = getattr(storage, "base_attrs", None)
             if attrs is not None:
-                required.update(name for name, _, _ in attrs if name is not None)
+                names = {name for name, _, _ in attrs if name is not None}
+                required.update(names)
+                if isinstance(storage, LNWeightTemplate):
+                    # LayerNorm's affine parameters must match its compute dtype.
+                    dtype = torch.float32 if storage.sensitive_layer_dtype != storage.infer_dtype else storage.infer_dtype
+                    norm_dtypes.update(dict.fromkeys(names, dtype))
                 return
             for attr in ("weight_name", "bias_name"):
                 name = getattr(storage, attr, None)
@@ -299,7 +306,7 @@ class QwenImage21TextEncoder(WeightModule):
         for shard in sorted(path.glob("*.safetensors")):
             with safe_open(shard, framework="pt", device=device) as handle:
                 for name in original_names.intersection(handle.keys()):
-                    weights[name] = self._select_tp_shard(name, handle.get_tensor(name)).to(GET_DTYPE())
+                    weights[name] = self._select_tp_shard(name, handle.get_tensor(name)).to(norm_dtypes.get(name, GET_DTYPE()))
 
         if quantized:
             checkpoint_path = Path(config["text_encoder_quantized_ckpt"])
