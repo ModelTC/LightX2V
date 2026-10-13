@@ -11,13 +11,15 @@ _plan_cache = local()
 
 
 @lru_cache(None)
-def down_extension():
+def native_down_extension():
+    cutlass_root = Path(os.environ.get("CUTLASS_PATH") or "/opt/cutlass").expanduser().resolve()
     return load(
-        name="thor_ffn_cublaslt_down_v1",
-        sources=[str(Path(__file__).with_name("cublaslt_down.cu"))],
+        name="thor_ffn_dram_opt_down_v1",
+        sources=[str(Path(__file__).with_name("down_dram_opt.cu"))],
+        extra_include_paths=[str(cutlass_root / "include"), str(cutlass_root / "tools/util/include")],
         extra_cflags=["-O3"],
-        extra_cuda_cflags=["-O3", "-std=c++17", "-arch=sm_110a"],
-        extra_ldflags=["-lcublasLt"],
+        extra_cuda_cflags=["-O3", "-std=c++17", "-arch=sm_110a", "--expt-relaxed-constexpr", "--expt-extended-lambda", "-diag-suppress=20012,177"],
+        extra_ldflags=["-lcuda"],
         verbose=False,
     )
 
@@ -30,9 +32,27 @@ def down_bias(mm_weight, x):
         return mm_weight.apply(x)
     weight = mm_weight._get_actual_weight().t().contiguous()
     bias = mm_weight._get_actual_bias().contiguous()
-    y = down_extension().run(x.contiguous(), weight, bias)
-    if mm_weight.has_lora_branch:
-        y = y + mm_weight.apply_lora(x)
+    if (
+        not mm_weight.has_lora_branch
+        and x.is_cuda
+        and x.dtype == weight.dtype == bias.dtype == torch.bfloat16
+        and x.is_contiguous()
+        and x.shape == (1785, 13824)
+        and weight.shape == (5120, 13824)
+        and bias.shape == (5120,)
+        and torch.cuda.get_device_capability(x.device) == (11, 0)
+    ):
+        y = torch.empty((1785, 5120), device=x.device, dtype=x.dtype)
+        key = (x.device, torch.cuda.current_stream(x.device).cuda_stream)
+        cached = getattr(_plan_cache, "down_entry", None)
+        if cached is None or cached[0] != key:
+            plan = native_down_extension().DownPlan(x)
+            _plan_cache.down_entry = (key, plan)
+        else:
+            plan = cached[1]
+        plan.run_with(x, weight, bias, y)
+    else:
+        return mm_weight.apply(x)
     return y
 
 

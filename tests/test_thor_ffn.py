@@ -35,8 +35,7 @@ class TestThorFFN(unittest.TestCase):
         mm.has_lora_branch = True
         mm.apply_lora = lambda x: torch.full((x.shape[0], 2), 0.5)
         x = torch.tensor([[1.0, 2.0]])
-        native = SimpleNamespace(run=lambda x, w, b: x @ w.t() + b)
-        with patch.object(backend, "down_extension", return_value=native):
+        with patch.object(backend, "native_down_extension", side_effect=AssertionError("LoRA must use fallback")):
             expected = x @ (mm.weight + mm.weight_diff) + mm.bias + mm.bias_diff + 0.5
             torch.testing.assert_close(backend.down_bias(mm, x), expected)
             mm.weight_diff.mul_(2)
@@ -45,7 +44,7 @@ class TestThorFFN(unittest.TestCase):
 
     def test_down_preserves_other_backend_dispatch(self):
         mm = SimpleNamespace(apply=lambda x: x + 2)
-        with patch.object(backend, "down_extension", side_effect=AssertionError("unexpected native call")):
+        with patch.object(backend, "native_down_extension", side_effect=AssertionError("unexpected native call")):
             torch.testing.assert_close(backend.down_bias(mm, torch.ones(1)), torch.full((1,), 3.0))
 
     def test_lora_is_added_before_gelu_without_loading_extension(self):
@@ -145,6 +144,43 @@ class TestThorFFN(unittest.TestCase):
         torch.cuda.synchronize()
         # Includes C++ at::Tensor owners, which Python weakrefs cannot detect.
         self.assertLess(torch.cuda.memory_allocated() - before, 1024 * 1024)
+
+
+class TestThorDownPlan(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("THOR_FFN_RUN_CUDA_TESTS") == "1", "opt-in Thor CUDA/JIT test")
+    def test_rebind_stream_and_tensor_lifetime(self):
+        previous_tf32 = torch.backends.cuda.matmul.allow_tf32
+        self.addCleanup(setattr, torch.backends.cuda.matmul, "allow_tf32", previous_tf32)
+        torch.backends.cuda.matmul.allow_tf32 = False
+        stream = torch.cuda.Stream()
+        with torch.inference_mode(), torch.cuda.stream(stream):
+            ext = backend.native_down_extension()
+            plan = None
+            for seed in (1140, 1141, 1142):
+                torch.manual_seed(seed)
+                x = torch.randn((1785, 13824), device="cuda", dtype=torch.bfloat16)
+                w = torch.randn((5120, 13824), device="cuda", dtype=torch.bfloat16)
+                b = torch.randn(5120, device="cuda", dtype=torch.bfloat16)
+                y = torch.empty((1785, 5120), device="cuda", dtype=torch.bfloat16)
+                if plan is None:
+                    plan = ext.DownPlan(x)
+                plan.run_with(x, w, b, y)
+                ref = x.float() @ w.float().t() + b.float()
+                rms = ref.square().mean().sqrt()
+                diff = (y.float() - ref).abs()
+                self.assertEqual(int((diff > (0.01 * ref.abs() + 0.001 * rms)).sum()), 0)
+                refs = [weakref.ref(t) for t in (x, w, b, y)]
+                del x, w, b, y, ref, rms, diff
+                gc.collect()
+                self.assertTrue(all(r() is None for r in refs))
+            stream.synchronize()
+        with self.assertRaisesRegex(RuntimeError, "stream changed"):
+            plan.run_with(
+                torch.empty((1785, 13824), device="cuda", dtype=torch.bfloat16),
+                torch.empty((5120, 13824), device="cuda", dtype=torch.bfloat16),
+                torch.empty(5120, device="cuda", dtype=torch.bfloat16),
+                torch.empty((1785, 5120), device="cuda", dtype=torch.bfloat16),
+            )
 
 
 if __name__ == "__main__":
