@@ -1,0 +1,27 @@
+{
+    "infer_steps": 4,
+    "sigmas": [1.0, 0.75, 0.5, 0.25],
+    "do_time_shift": true,
+    "shift_terminal": null,
+    "latent_dtype": "fp32",
+    "resolution": 1024,
+    "attn_type": "npu_flash_attn",
+    "rope_type": "torch_real_rope",
+    "rms_norm_type": "fp32_variance",
+    "layer_norm_type": "torch",
+    "modulate_type": "torch",
+    "fused_qk_rms_norm": false,
+    "fused_block_ops": false,
+    "enable_cfg": false,
+    "sample_guide_scale": 1.0,
+    "cpu_offload": true,
+    "offload_granularity": "model",
+    "text_encoder_cpu_offload": true,
+    "lora_dynamic_apply": false,
+    "lora_configs": [
+        {
+            "path": "Qwen-Image-2.1-Lightning/pytorch_lora_weights.safetensors",
+            "strength": 1.0
+        }
+    ]
+}
