@@ -20,10 +20,11 @@ Do not keep every guard merely because it appears safer. Determine what happens 
 
 1. Inspect call sites, configuration files, and defaults to determine who controls each input.
 2. Find `isinstance` chains, `None` fallbacks, case normalization, repeated `hasattr` checks, capability-combination guards, and long exception messages.
-3. Remove branches outside the actual input space so the code directly expresses the normal path.
-4. For stable but non-obvious contracts, keep at most one short comment. Do not restate the code in comments.
-5. Preserve the minimum boundary checks needed to prevent silent errors.
-6. Keep changes local, then run the relevant syntax checks, lint checks, and focused tests.
+3. Check that optional configuration reads such as `config.get` provide an explicit, appropriate default consistent with the setting's semantics, caller contract, and existing behavior when omitted. Use `config[key]` for required settings; do not hide missing settings with arbitrary defaults or use `or default` to replace valid `False`, `0`, or other falsy values.
+4. Remove branches outside the actual input space so the code directly expresses the normal path.
+5. For stable but non-obvious contracts, keep at most one short comment. Do not restate the code in comments.
+6. Preserve the minimum boundary checks needed to prevent silent errors.
+7. Keep changes local, then run the relevant syntax checks, lint checks, and focused tests.
 
 ## Common Simplifications
 
