@@ -223,6 +223,86 @@ class Fl2avPdmdTest(unittest.TestCase):
             for rows in role.model.transformer.conditions:
                 torch.testing.assert_close(rows[0], condition["noised_condition_video_latents"], rtol=0, atol=0)
 
+    def test_legacy_t2av_text_cache_uses_view_geometry_for_four_and_eight_steps(self):
+        # The legacy T2AV text cache records landscape dimensions even when
+        # its metadata view selects portrait generation. It has no VAE rows.
+        for height, width in ((64, 96), (96, 64)):
+            roles = []
+            for coefficient in (0.05, 0.1, 0.2):
+                model = model_wrapper(reference=False)
+                model.transformer = TinyTransformer(coefficient)
+                roles.append(MiniMaxH3DistributionMatchingCapability(model, {"official_pdmd": True, "geometry_from_metadata": True}))
+            student, fake, teacher = roles
+            teacher.model.transformer.requires_grad_(False)
+            cached = {
+                "task": "t2av",
+                "prompt_embeds": torch.randn(1, 4, 5120),
+                "text_token_tags": torch.ones(4, dtype=torch.long),
+                "target_height": 64,
+                "target_width": 96,
+                "target_num_frames": 124,
+                "keyframe_anchors": torch.empty(0, dtype=torch.long),
+            }
+            batch = default_collate(
+                [
+                    {
+                        "inputs": {},
+                        "conditioning": {"positive": _strip_condition_batch(cached)},
+                        "meta": {"target_height": height, "target_width": width, "target_num_frames": 124},
+                    }
+                ]
+            )
+            condition, _ = student.encode_conditions(batch, "", 1.0, lambda x: x)
+            self.assertEqual((condition["target_height"], condition["target_width"]), (height, width))
+            self.assertEqual((cached["target_height"], cached["target_width"]), (64, 96))
+            self.assertEqual(int(batch["conditioning"]["positive"]["target_height"]), 64)
+            torch.testing.assert_close(condition["prompt_embeds"], cached["prompt_embeds"].bfloat16(), rtol=0, atol=0)
+            shape = student.latent_shape(batch, [], lambda x: x)
+            initial = student.initial_latents(shape, torch.float32, lambda x: x)
+            for steps in (4, 8):
+                with self.subTest(height=height, width=width, steps=steps):
+                    trajectory = full_rollout(student, initial, condition, rollout_grid(steps), rollout_grid(steps))
+                    self.assertEqual(len(trajectory.states), steps + 1)
+                    fresh = joint_noise_like(initial, torch.Generator().manual_seed(42))
+                    critic_objective(student, fake, trajectory, torch.tensor([0.6, 0.4]), fresh).backward()
+                    self.assertTrue(torch.isfinite(fake.model.transformer.weight.grad))
+                    self.assertIsNone(student.model.transformer.weight.grad)
+                    fake.model.transformer.zero_grad(set_to_none=True)
+                    loss, _ = student_objective(student, fake, teacher, trajectory, steps - 1, 0.5)
+                    loss.backward()
+                    self.assertTrue(torch.isfinite(student.model.transformer.weight.grad))
+                    self.assertIsNone(fake.model.transformer.weight.grad)
+                    self.assertIsNone(teacher.model.transformer.weight.grad)
+                    student.model.transformer.zero_grad(set_to_none=True)
+
+    def test_keyframe_cache_geometry_is_not_overridden_by_metadata(self):
+        capability = MiniMaxH3DistributionMatchingCapability(model_wrapper(reference=False), {"geometry_from_metadata": True})
+        for task, anchors in (("i2av", [0]), ("fl2av", [0, 1])):
+            cached = {
+                "task": task,
+                "prompt_embeds": torch.randn(1, 4, 5120),
+                "text_token_tags": torch.ones(4, dtype=torch.long),
+                "target_height": 64,
+                "target_width": 96,
+                "target_num_frames": 124,
+                "keyframe_anchors": torch.tensor(anchors),
+                "condition_video_latents": torch.randn(6 * len(anchors), 96),
+            }
+            batch = default_collate(
+                [
+                    {
+                        "inputs": {},
+                        "conditioning": {"positive": _strip_condition_batch(cached)},
+                        "meta": {"target_height": 96, "target_width": 64, "target_num_frames": 124},
+                    }
+                ]
+            )
+            condition, _ = capability.encode_conditions(batch, "", 1.0, lambda x: x)
+            self.assertEqual((condition["target_height"], condition["target_width"]), (64, 96))
+            shape = capability.latent_shape(batch, [], lambda x: x)
+            with self.assertRaisesRegex(ValueError, "cached target_height"):
+                capability._layout(condition, shape)
+
     def test_both_launchers_dry_run_and_reject_wrong_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

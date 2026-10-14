@@ -204,6 +204,27 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
     def generation_shape_dimensions(self) -> int:
         return 3
 
+    def _metadata_geometry(self, batch, broadcast):
+        metadata = batch.get("meta", {})
+        condition = batch.get("conditioning", {}).get("positive", {})
+
+        def dimension(name, fallback=None):
+            value = metadata.get(name, condition.get(name, fallback))
+            if value is None:
+                raise KeyError(f"H3 metadata requires {name}.")
+            if torch.is_tensor(value):
+                if value.numel() != 1:
+                    raise ValueError(f"H3 metadata {name} must contain one value.")
+                value = value.item()
+            if isinstance(value, (list, tuple)):
+                if len(value) != 1:
+                    raise ValueError(f"H3 metadata {name} must contain one value.")
+                value = value[0]
+            return int(broadcast(int(value)))
+
+        num_frames = self.options.fixed_num_frames or dimension("target_num_frames", metadata.get("num_frames"))
+        return num_frames, dimension("target_height"), dimension("target_width")
+
     def latent_shape(
         self,
         batch,
@@ -213,25 +234,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         prompt = batch.get("conditioning", {}).get("prompt", "")
         _require_single_prompt(prompt)
         if self.options.geometry_from_metadata:
-            metadata = batch.get("meta", {})
-            condition = batch.get("conditioning", {}).get("positive", {})
-
-            def dimension(name, fallback=None):
-                value = metadata.get(name, condition.get(name, fallback))
-                if value is None:
-                    raise KeyError(f"H3 metadata requires {name}.")
-                if torch.is_tensor(value):
-                    if value.numel() != 1:
-                        raise ValueError(f"H3 metadata {name} must contain one value.")
-                    value = value.item()
-                if isinstance(value, (list, tuple)):
-                    if len(value) != 1:
-                        raise ValueError(f"H3 metadata {name} must contain one value.")
-                    value = value[0]
-                return int(broadcast(int(value)))
-
-            num_frames = self.options.fixed_num_frames or dimension("target_num_frames", metadata.get("num_frames"))
-            height, width = dimension("target_height"), dimension("target_width")
+            num_frames, height, width = self._metadata_geometry(batch, broadcast)
         else:
             num_frames, height, width = resolve_generation_shape(
                 generation_shapes,
@@ -285,6 +288,12 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
                 # are converted to the transformer's running dtype.
                 cached_condition = {**conditioning.get("shared", {}), **cached_condition}
                 condition = self.model.prepare_text_condition(cached_condition)
+        if self.options.geometry_from_metadata and condition.get("task") == "t2av":
+            # Legacy text-only caches store a default landscape size. Their
+            # embeddings can be reused by portrait metadata views, unlike
+            # I2AV/FL2AV keyframe VAE rows whose spatial layout must match.
+            num_frames, height, width = self._metadata_geometry(batch, broadcast)
+            condition = {**condition, "target_num_frames": num_frames, "target_height": height, "target_width": width}
         condition = self._prepare_condition_for_rollout(condition, broadcast)
         return broadcast(condition), None
 
