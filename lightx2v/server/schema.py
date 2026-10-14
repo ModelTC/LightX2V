@@ -58,6 +58,9 @@ class VideoTaskRequest(BaseTaskRequest):
         None,
         description="Number of output frames; defaults to the startup config",
     )
+    draft_steps: int | None = Field(None, gt=0, strict=True, description="MiniMax-H3 draft prefix length; omitted uses the configured full schedule")
+    resample_source_video: str | None = Field(None, description="Server-local MiniMax-H3 draft MP4 with audio; re-encoded at the requested size")
+    resample_strength: float | None = Field(None, ge=0, le=1, allow_inf_nan=False, description="MiniMax-H3 source noise strength; omitted uses the startup config or 0.9")
     reuse_prefix_segments: int = Field(
         0,
         ge=0,

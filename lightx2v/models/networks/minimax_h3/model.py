@@ -618,7 +618,7 @@ class MiniMaxH3Model(BaseTransformerModel):
     @torch.no_grad()
     def infer(self, inputs):
         prepost_offload = self.block_offload and not self.prepost_resident
-        if prepost_offload and self.scheduler.step_index == 0:
+        if prepost_offload and self.scheduler.step_index == getattr(self.scheduler, "start_step_index", 0):
             self.pre_weight.to_cuda()
             self.post_weight.to_cuda()
         output = self._infer_cond_uncond(inputs, infer_condition=True)
