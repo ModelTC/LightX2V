@@ -43,10 +43,10 @@ class H264AnnexBEncoder:
         self.pts = 0
 
     def encode(self, images: torch.Tensor) -> bytes:
+        t0 = time.perf_counter()
         frames = (images * 255).clamp(0, 255).to(torch.uint8).contiguous().cpu().numpy()
         raw_bytes = frames.nbytes
         out = bytearray()
-        t0 = time.perf_counter()
         for i in range(frames.shape[0]):
             vf = av.VideoFrame.from_ndarray(frames[i], format="rgb24")
             vf = vf.reformat(format="yuv420p")
@@ -220,17 +220,17 @@ class WsVideoChunkRecorder:
     def schedule_stream_buffer(self):
         interval = self.slice_frame / self.fps
         logger.info(f"Schedule stream buffer interval={interval:.3f}s send_slices={self.send_slices}")
-        t = None
+        deadline = time.monotonic()
         while not self.stop_schedule:
             try:
+                deadline += interval
+                time.sleep(max(0.0, deadline - time.monotonic()))
                 item = None
                 with self.stream_buffer_lock:
                     if self.stream_buffer:
                         item = self.stream_buffer.pop(0)
-                if t is not None:
-                    time.sleep(max(0.0, interval - (time.time() - t)))
-                t = time.time()
                 if item is None:
+                    deadline = time.monotonic()
                     continue
                 self.send_buffer.append(item)
                 self._send_ready()
