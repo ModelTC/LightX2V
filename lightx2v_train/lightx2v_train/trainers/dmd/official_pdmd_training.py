@@ -87,6 +87,7 @@ class OfficialH3PdmdTraining:
         self.seed = int(trainer.config.get("seed", 42))
         self.cached = []
         self.consumed_microbatches = 0
+        self.route_loss_scale = lambda microbatch: 1.0
         validate_official_pdmd_config(trainer.config)
 
     def recipe(self):
@@ -178,6 +179,7 @@ class OfficialH3PdmdTraining:
         generator = torch.Generator().manual_seed(stream_seed(self.seed, "exit", iteration))
         index = int(torch.randint(t.num_inference_steps, (1,), generator=generator))
         totals = {}
+        batch_start = self.consumed_microbatches - self.accum if role == "student" else self.consumed_microbatches
         for micro in range(self.accum):
             slot = micro * get_world_size() + self.rank()
             if role == "student":
@@ -198,6 +200,8 @@ class OfficialH3PdmdTraining:
                 metrics = {"score_sigma_video": sigmas[0], "score_sigma_audio": sigmas[1]}
                 if role_at(iteration + 1, self.critic_steps) == "student":
                     self.cached.append(trajectory)
+            route_scale = self.route_loss_scale(batch_start + micro)
+            loss = loss * route_scale
             (loss / self.accum).backward()
             for name, value in {"loss": loss.detach(), **metrics}.items():
                 value = value.detach().item() if torch.is_tensor(value) else float(value)
@@ -231,6 +235,7 @@ class OfficialH3PdmdTraining:
         if not hasattr(sampler, "configure_from_microbatch_offset"):
             raise ValueError("official H3 PDMD requires a sampler with an explicit microbatch cursor")
         sampler.configure_from_microbatch_offset(start_microbatch=self.consumed_microbatches, gradient_accumulation_iters=self.accum, fake_update_ratio=self.critic_steps)
+        self.route_loss_scale = getattr(sampler, "cursor_microbatch_loss_scale", self.route_loss_scale)
         t.setup(resume_ckpt_path=checkpoint)
         self.cached = move_tensors(self.cached, t.student.device)
         self.video_grid = rollout_grid(t.num_inference_steps, float(self.dmd.get("official_rollout_video_shift", 1.0)), t.student.device)

@@ -1,6 +1,7 @@
-# FL2AV-only official-source PDMD using the legacy 5s/768p condition cache.
-# Registry name minimax_h3_t2av also handles FL2AV; load transformer/, NOT transformer_ref/.
-# 32 GPUs: 16 landscape + 16 portrait per fresh batch. Student reuses critic data.
+# Base/keyframe official-source PDMD: T2AV + I2AV + FL2AV, legacy 5s/768p cache.
+# Registry name minimax_h3_t2av handles all three; load transformer/, NOT transformer_ref/.
+# 32 GPUs: task counts rotate 11/11/10; orientations shuffled naturally within each task.
+# Route loss weights balance the three tasks. Student reuses critic data.
 # Student LoRA FP32 rank128/alpha8, base/teacher BF16, full fake FP32; BF16 FSDP compute.
 # 250000 single-role optimizer updates, save every 50. Start in a NEW output directory.
 seed: 42
@@ -66,13 +67,17 @@ data:
         pin_memory: true
         shuffle: false
         drop_last: true
-        # Reuse the legacy three-task view, but select FL2AV only.
+        # Use every task in the legacy three-task view.
         seed: 42
-        tasks: [fl2av]
+        tasks: [t2av, i2av, fl2av]
         buckets: [landscape, portrait]
-        task_order: [fl2av]
-        task_bucket_order: {fl2av: [landscape, portrait]}
+        task_order: [t2av, i2av, fl2av]
+        task_bucket_order:
+            t2av: [landscape, portrait]
+            i2av: [landscape, portrait]
+            fl2av: [landscape, portrait]
         route_mode: stratified
+        balance_orientation: false
         balance_route_loss: true
         require_all_routes_per_optimizer_step: true
         require_all_tasks: true

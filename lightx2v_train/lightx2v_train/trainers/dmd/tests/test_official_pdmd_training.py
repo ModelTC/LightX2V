@@ -7,7 +7,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import torch
 
@@ -143,7 +143,11 @@ class OfficialPdmdTrainingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as output:
             runner, trainer, encoded, _ = fixture(output=output)
             events = []
-            sampler = SimpleNamespace(configure_from_microbatch_offset=lambda **kwargs: events.append(("sampler", kwargs)))
+            weighted_offsets = []
+            sampler = SimpleNamespace(
+                configure_from_microbatch_offset=lambda **kwargs: events.append(("sampler", kwargs)),
+                cursor_microbatch_loss_scale=lambda offset: weighted_offsets.append(offset) or 1.0,
+            )
             trainer.dataloader_train = SimpleNamespace(sampler=sampler)
             trainer._resolve_resume = lambda: (None, 0)
             trainer.setup = lambda **kwargs: events.append(("setup", kwargs))
@@ -158,6 +162,7 @@ class OfficialPdmdTrainingTest(unittest.TestCase):
             self.assertEqual([event[0] for event in events], ["sampler", "setup"])
             self.assertEqual(events[0][1]["start_microbatch"], 0)
             self.assertEqual(encoded, list(range(5)))
+            self.assertEqual(weighted_offsets, [0, 1, 2, 3, 4, 4])
             self.assertEqual(trainer.student.on_iteration_start.call_count, 6)
             self.assertEqual(trainer.lr_scheduler.last_epoch, 1)
             self.assertEqual(trainer.fake_lr_scheduler.last_epoch, 5)
@@ -195,6 +200,38 @@ class OfficialPdmdTrainingTest(unittest.TestCase):
         self.assertEqual(float(differentiable_student[0][2][0]), float(differentiable_student[1][2][0]))
         self.assertIsNone(trainer.teacher.parameter.grad)
         self.assertIsNone(trainer.fake.parameter.grad)
+
+    def test_route_weight_cursor_reuses_preceding_critic_window(self):
+        runner, _, _, _ = fixture(accum=2)
+        offsets = []
+
+        def loss_scale(offset):
+            offsets.append(offset)
+            return 0.9 if offset % 3 else 1.1
+
+        runner.route_loss_scale = loss_scale
+        samples = itertools.count()
+        for iteration in range(6):
+            runner._update(samples, iteration)
+        self.assertEqual(offsets, list(range(10)) + [8, 9])
+        self.assertEqual(runner.consumed_microbatches, 10)
+
+    def test_route_weights_scale_both_losses_and_gradients(self):
+        module = "lightx2v_train.trainers.dmd.official_pdmd_training"
+        for iteration, name, value in ((0, "fake", -0.2), (5, "student", 0.3)):
+            runner, _, _, _ = fixture()
+            runner.route_loss_scale = lambda offset: 0.5
+            if name == "student":
+                runner.cached = [None]
+                runner.consumed_microbatches = 5
+            with (
+                patch(f"{module}.critic_objective", side_effect=lambda student, fake, *args: fake.parameter.square()),
+                patch(f"{module}.student_objective", side_effect=lambda student, *args: (student.parameter.square(), {})),
+            ):
+                role, metrics = runner._update(itertools.count(), iteration)
+            self.assertEqual(role, name)
+            self.assertAlmostEqual(metrics["loss"], value**2 * 0.5, places=6)
+            self.assertAlmostEqual(metrics["grad_norm"], abs(value), places=6)
 
     def test_resume_before_student_reuses_serialized_trajectory_without_reading(self):
         with tempfile.TemporaryDirectory() as output:

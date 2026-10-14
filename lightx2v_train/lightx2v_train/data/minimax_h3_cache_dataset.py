@@ -1148,6 +1148,8 @@ class MiniMaxH3TaskCycleSampler(Sampler):
     Sequence-parallel peers share one logical data-parallel rank and therefore
     receive exactly the same sample; different data-parallel ranks may receive
     different routes without changing the model/FSDP collective order.
+    With ``balance_orientation=false``, each route is a whole task: enabled
+    orientations are shuffled together, preserving their natural frequency.
 
     ``start_iteration`` is the number of completed outer iterations.  Both
     modes derive route and shuffle positions from that absolute value, so an
@@ -1170,6 +1172,7 @@ class MiniMaxH3TaskCycleSampler(Sampler):
         route_mode="homogeneous",
         balance_route_loss=False,
         require_all_routes_per_optimizer_step=False,
+        balance_orientation=True,
     ):
         self.dataset = dataset
         (
@@ -1181,18 +1184,20 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             bucket_order,
             task_bucket_order,
         )
-        self.active_cells = tuple((task, bucket) for task in self.task_order for bucket in self.task_bucket_order[task])
+        self.balance_orientation = bool(balance_orientation)
+        route_buckets = self.task_bucket_order if self.balance_orientation else {task: ("mixed",) for task in self.task_order}
+        self.active_cells = tuple((task, bucket) for task in self.task_order for bucket in route_buckets[task])
         bucket_cycle_length = 1
         for task in self.task_order:
-            task_bucket_count = len(self.task_bucket_order[task])
+            task_bucket_count = len(route_buckets[task])
             bucket_cycle_length = bucket_cycle_length * task_bucket_count // math.gcd(bucket_cycle_length, task_bucket_count)
         self.schedule_period = len(self.task_order) * bucket_cycle_length
-        # Task-major ordering keeps aspect pairs adjacent.  With the common
-        # two-bucket setup, every even-sized global optimizer batch is exactly
-        # 50/50 landscape/portrait while the task remainder rotates over time.
+        # With balanced orientations, task-major ordering keeps aspect pairs
+        # adjacent, so even-sized global batches are 50/50 landscape/portrait.
+        # Otherwise each task has one mixed-orientation route.
         # Repeating shorter bucket lists to the LCM retains equal task weight
         # for task-specific bucket configurations.
-        self.route_schedule = tuple((task, self.task_bucket_order[task][occurrence % len(self.task_bucket_order[task])]) for task in self.task_order for occurrence in range(bucket_cycle_length))
+        self.route_schedule = tuple((task, route_buckets[task][occurrence % len(route_buckets[task])]) for task in self.task_order for occurrence in range(bucket_cycle_length))
         if len(self.route_schedule) != self.schedule_period:
             raise AssertionError("MiniMax-H3 route schedule has an invalid period.")
         self.route_frequency = Counter(self.route_schedule)
@@ -1257,7 +1262,9 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             row = sample["row"]
             task = str(row.get("task", "")).strip().lower()
             bucket = self._row_bucket(row)
-            key = (task, bucket)
+            if bucket not in self.task_bucket_order.get(task, ()):
+                continue
+            key = (task, bucket if self.balance_orientation else "mixed")
             if key in pools:
                 pools[key].append(dataset_index)
         missing = [f"{task}/{bucket}" for (task, bucket), pool in pools.items() if not pool]
@@ -1390,11 +1397,11 @@ class MiniMaxH3TaskCycleSampler(Sampler):
         """Official PDMD consumes new data only on critic updates.
 
         Use an absolute fresh-microbatch cursor instead of the legacy
-        student+critic outer-iteration schedule. Exact per-batch route balance
-        makes additional route loss scaling unnecessary in the PDMD loop.
+        student+critic outer-iteration schedule. Remainder routes rotate when
+        the global batch is not divisible by the route schedule period.
         """
-        if self.route_mode != "stratified" or self.num_replicas % self.schedule_period:
-            raise ValueError("Official PDMD task sampling requires stratified routes and DP world size divisible by the route schedule period.")
+        if self.route_mode != "stratified":
+            raise ValueError("Official PDMD task sampling requires stratified routes.")
         if int(start_microbatch) < 0:
             raise ValueError("start_microbatch must be non-negative")
         self.configure(start_iteration=0, gradient_accumulation_iters=gradient_accumulation_iters, fake_update_ratio=fake_update_ratio)
@@ -1409,12 +1416,25 @@ class MiniMaxH3TaskCycleSampler(Sampler):
         data_epoch, position = divmod(ordinal, len(self._pools[key]))
         return self._cell_permutation(key, data_epoch)[position]
 
+    def cursor_microbatch_loss_scale(self, absolute_microbatch):
+        """Balance routes in the fresh critic batch, including student reuse."""
+        if not self.balance_route_loss:
+            return 1.0
+        update_index = int(absolute_microbatch) // self.gradient_accumulation_iters
+        slot = int(absolute_microbatch) * self.num_replicas + self.rank
+        key = self.route_schedule[slot % self.schedule_period]
+        count = self.optimizer_step_route_counts(role_update_index=update_index)[key]
+        target_frequency = self.route_frequency[key] / self.schedule_period
+        return self.global_optimizer_slots * target_frequency / count
+
     def expected_group(self, outer_iteration):
         """Return ``(task, bucket)`` for a zero-based outer iteration."""
         outer_iteration = int(outer_iteration)
         if outer_iteration < 0:
             raise ValueError(f"outer_iteration must be non-negative, got {outer_iteration}.")
         task = self.task_order[outer_iteration % len(self.task_order)]
+        if not self.balance_orientation:
+            return task, "mixed"
         task_occurrence = outer_iteration // len(self.task_order)
         task_buckets = self.task_bucket_order[task]
         bucket = task_buckets[task_occurrence % len(task_buckets)]
@@ -1555,6 +1575,8 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             "fake_update_ratio": fake_ratio,
             "seed": self.seed,
         }
+        if not self.balance_orientation:
+            metadata["balance_orientation"] = False
         if self.start_microbatch is not None:
             metadata.update(
                 data_consumption_mode="optimizer_update_critic_only",
@@ -1612,7 +1634,8 @@ class MiniMaxH3TaskCycleSampler(Sampler):
         if cached is not None:
             return cached
         task, bucket = key
-        cell_index = self.bucket_order.index(bucket) * len(self.task_order) + self.task_order.index(task)
+        bucket_index = self.bucket_order.index(bucket) if self.balance_orientation else len(self.bucket_order)
+        cell_index = bucket_index * len(self.task_order) + self.task_order.index(task)
         generator = torch.Generator()
         generator.manual_seed(self.seed + int(data_epoch) * 1_000_003 + cell_index * 9_176)
         pool = self._pools[key]
@@ -1680,7 +1703,8 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             outer_iteration = self.start_iteration + self.epoch * self.runs_per_epoch + local_run
             key = self.expected_group(outer_iteration)
             task_occurrence = outer_iteration // len(self.task_order)
-            cell_occurrence = task_occurrence // len(self.task_bucket_order[key[0]])
+            bucket_count = len(self.task_bucket_order[key[0]]) if self.balance_orientation else 1
+            cell_occurrence = task_occurrence // bucket_count
             cell_blocks = self.blocks_by_cell[key]
             data_epoch = cell_occurrence // cell_blocks
             block_index = cell_occurrence % cell_blocks
@@ -1946,6 +1970,7 @@ def build_minimax_h3_cache_dataset(data_config, train_or_val="train", unconditio
             seed=data_config.get("seed", 0),
             drop_last=data_config.get("drop_last", True),
             route_mode=data_config.get("route_mode", "homogeneous"),
+            balance_orientation=data_config.get("balance_orientation", True),
             balance_route_loss=data_config.get("balance_route_loss", False),
             require_all_routes_per_optimizer_step=data_config.get(
                 "require_all_routes_per_optimizer_step",
