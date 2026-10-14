@@ -196,7 +196,7 @@ class Cosmos3Runner(DefaultRunner):
         if not os.path.exists(tokenizer_path):
             tokenizer_path = self.config["model_path"]
         logger.info(f"Loading Cosmos3 tokenizer from {tokenizer_path}")
-        return AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+        return AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=self.config.get("trust_remote_code", False))
 
     def load_image_encoder(self):
         return None
