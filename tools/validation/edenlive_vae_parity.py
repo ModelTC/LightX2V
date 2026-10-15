@@ -29,9 +29,9 @@ def main():
     component = Path(args.model_path) / f"vae-{variant}"
     weight = component / f"Wan2.{2 if variant == '5b' else 1}_VAE.pth"
     reference = Wan22DiffusersAdapter._load_vae_from_original(AutoencoderKLWan, weight, component, torch.bfloat16).cuda().eval()
-    config = build_startup_config(
-        dict(model_cls="edenlive", task="i2v", model_path=args.model_path, vae_path=str(weight), config_json=str(Path(__file__).resolve().parents[2] / "configs/edenlive" / f"{args.profile}.json"))
-    )
+    model_cls = args.profile.split("_")[0] + "_edenlive" + ("_ar" if args.profile.endswith("_few_step") else "")
+    config = build_startup_config(dict(model_cls=model_cls, task="i2v", model_path=args.model_path, config_json=str(Path(__file__).resolve().parents[2] / "configs/edenlive" / f"{args.profile}.json")))
+    config["vae_path"] = str(weight)
     runner = EdenLiveRunner(config)
     native = runner.load_vae_decoder()
     fixture = torch.load(args.fixture, weights_only=True)["decode_video_latents"][0]

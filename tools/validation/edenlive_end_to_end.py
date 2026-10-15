@@ -121,7 +121,7 @@ def main():
         def encode(self):
             result = original_input(self)
             condition = result["image_encoder_output"]
-            image = condition["vae_encoder_out"] if self.config["eden_variant"] == "14b" else condition["clean_first_frame"]
+            image = condition["vae_encoder_out"] if self.config["model_cls"].startswith("wan21_") else condition["clean_first_frame"]
             captures["encode_image_condition"] = [image.detach().cpu()[None]]
             if condition["clip_encoder_out"] is not None:
                 captures["encode_clip_image_embeds"] = [condition["clip_encoder_out"].detach().cpu()[None]]
@@ -129,17 +129,22 @@ def main():
 
         EdenLiveRunner._run_input_encoder_local_i2v = encode
         variant = "5b" if "5b" in args.profile else "14b"
+        model_cls = args.profile.split("_")[0] + "_edenlive" + ("_ar" if args.profile.endswith("_few_step") else "")
         config = build_startup_config(
             dict(
-                model_cls="edenlive",
+                model_cls=model_cls,
                 task="i2v",
                 model_path=args.model_path,
+                config_json=str(Path(__file__).resolve().parents[2] / "configs/edenlive" / f"{args.profile}.json"),
+            )
+        )
+        config.update(
+            dict(
                 dit_original_ckpt=args.converted_path,
                 t5_original_ckpt=str(Path(args.wan_path) / "models_t5_umt5-xxl-enc-bf16.pth"),
                 t5_tokenizer_path=str(Path(args.model_path) / "umt5/tokenizer"),
                 vae_path=str(Path(args.model_path) / f"vae-{variant}" / f"Wan2.{2 if variant == '5b' else 1}_VAE.pth"),
                 clip_original_ckpt=str(Path(args.wan_path) / "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth") if variant == "14b" else None,
-                config_json=str(Path(__file__).resolve().parents[2] / "configs/edenlive" / f"{args.profile}.json"),
             )
         )
         if args.sp:

@@ -14,7 +14,7 @@ class EdenLivePreInfer(WanPreInfer):
         x = scheduler.latents_input.to(self.infer_dtype)
         start, frames = scheduler.chunk_start, x.shape[1]
         condition = inputs["image_encoder_output"]
-        if self.config["eden_variant"] == "14b":
+        if self.config["model_cls"].startswith("wan21_"):
             x = torch.cat((x, condition["vae_encoder_out"][:, start : start + frames]), dim=0)
         control = inputs["proxy_features"]
         if not scheduler.infer_condition and self.config["proxy_unconditional_control"] == "zero":

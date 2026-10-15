@@ -1,25 +1,4 @@
 {
-    "eden_variant": "5b",
-    "eden_causal": false,
-    "dim": 3072,
-    "num_heads": 24,
-    "num_layers": 30,
-    "ffn_dim": 14336,
-    "freq_dim": 256,
-    "text_dim": 4096,
-    "in_dim": 1072,
-    "out_dim": 48,
-    "num_channels_latents": 48,
-    "vae_stride": [
-        4,
-        16,
-        16
-    ],
-    "patch_size": [
-        1,
-        2,
-        2
-    ],
     "text_len": 512,
     "size": [
         704,

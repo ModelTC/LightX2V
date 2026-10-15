@@ -13,7 +13,7 @@ class EdenLiveScheduler(WanScheduler):
         self.condition_frame = image_encoder_output["clean_first_frame"].to(self.latents)
         self.chunk_start = 0
         self.cache_update = False
-        if self.config["eden_causal"]:
+        if self.config["model_cls"].endswith("_ar"):
             self.timesteps = torch.tensor(self.config["ar_config"]["denoising_step_list"], device=AI_DEVICE, dtype=torch.float32)
             self.sigmas = self.timesteps / 1000
             self.timesteps = self.sigmas * 1000
@@ -28,7 +28,7 @@ class EdenLiveScheduler(WanScheduler):
             self.timestep_list = [None] * self.solver_order
             self.lower_order_nums = 0
             self.last_sample = None
-            if self.config["eden_variant"] == "14b":
+            if self.config["model_cls"].startswith("wan21_"):
                 sigmas = torch.linspace(1, 1 / 1000, self.infer_steps + 1, dtype=torch.float32)[:-1]
                 sigmas = self.sample_shift * sigmas / (1 + (self.sample_shift - 1) * sigmas)
                 sigmas[0] -= 1e-6
@@ -39,22 +39,22 @@ class EdenLiveScheduler(WanScheduler):
         self.step_index = step_index
         self.chunk_start = chunk_start
         self.cache_update = cache_update
-        frames = self.config["ar_config"]["num_frame_per_chunk"] if self.config["eden_causal"] else self.latents.shape[1]
+        frames = self.config["ar_config"]["num_frame_per_chunk"] if self.config["model_cls"].endswith("_ar") else self.latents.shape[1]
         self.latents_input = self.latents[:, chunk_start : chunk_start + frames]
         self.timestep_input = torch.zeros(1, device=AI_DEVICE) if cache_update else self.timesteps[step_index : step_index + 1].float()
-        if chunk_start == 0 and (self.config["eden_causal"] or self.config["eden_variant"] == "5b"):
+        if chunk_start == 0 and (self.config["model_cls"].endswith("_ar") or self.config["model_cls"].startswith("wan22_")):
             self.latents_input[:, :1] = self.condition_frame
             if not cache_update:
                 self.timestep_input = self.timestep_input.expand(self.latents_input.shape[1]).clone()
                 self.timestep_input[0] = 0
 
     def step_post(self):
-        if not self.config["eden_causal"]:
-            if self.config["eden_variant"] == "14b":
+        if not self.config["model_cls"].endswith("_ar"):
+            if self.config["model_cls"].startswith("wan21_"):
                 self.latents = (self.latents.float() + self.noise_pred.float() * (self.sigmas[self.step_index + 1] - self.sigmas[self.step_index])).to(self.latents.dtype)
             else:
                 self._step_unipc()
-            if self.config["eden_variant"] == "5b":
+            if self.config["model_cls"].startswith("wan22_"):
                 self.latents[:, :1] = self.condition_frame
             return
         sigma = self.sigmas[self.step_index].to(self.latents_input.dtype)

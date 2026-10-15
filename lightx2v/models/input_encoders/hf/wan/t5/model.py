@@ -33,6 +33,7 @@ from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8  
 from lightx2v_platform.ops.mm.iluvatar_cuda.q_linear import IluvatarQuantLinearInt8  # noqa E402
 
 from lightx2v.models.input_encoders.hf.wan.t5.tokenizer import HuggingfaceTokenizer  # noqa E402
+from lightx2v.models.input_encoders.hf.wan.weight_mapping import remap_hf_umt5_weights  # noqa E402
 from lightx2v.utils.envs import *  # noqa E402
 from lightx2v.utils.registry_factory import (  # noqa E402
     EMBEDDING_WEIGHT_REGISTER,  # noqa E402
@@ -858,6 +859,9 @@ class T5EncoderModel:
                 cpu_offload=cpu_offload,
                 load_from_rank0=load_from_rank0,
             )
+
+            if "shared.weight" in weights_dict:
+                weights_dict = remap_hf_umt5_weights(weights_dict)
 
             if cpu_offload:
                 block_weights_dict = split_block_weights(weights_dict)

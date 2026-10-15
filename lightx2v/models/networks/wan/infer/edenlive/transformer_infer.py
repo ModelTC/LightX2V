@@ -91,7 +91,7 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
             dist.all_gather(gathered_k, k, self.seq_p_group)
             dist.all_gather(gathered_v, v, self.seq_p_group)
             k, v = torch.cat(gathered_k)[:current_tokens], torch.cat(gathered_v)[:current_tokens]
-        if self.config["eden_causal"]:
+        if self.config["model_cls"].endswith("_ar"):
             pool = self.cache_pools[self.scheduler.infer_condition]
             layer = self.block_idx
             if self.config["ar_config"].get("kv_offload", False):
@@ -136,6 +136,6 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
             max_seqlen_q=q.shape[0],
             max_seqlen_kv=k.shape[0],
         )
-        if self.config["eden_causal"] and self.config["ar_config"].get("kv_offload", False):
+        if self.config["model_cls"].endswith("_ar") and self.config["ar_config"].get("kv_offload", False):
             pool.end_layer(layer, next_prefetch=None)
         return phase.self_attn_o.apply(attention)

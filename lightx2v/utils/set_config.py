@@ -105,7 +105,38 @@ def load_model_config(deployment_config):
 
     assert os.path.exists(model_path), f"Model path not found: {model_path}"
 
-    if model_cls == "wan2.1_sf_mtxg2":
+    if model_cls in {"wan21_edenlive", "wan21_edenlive_ar", "wan22_edenlive", "wan22_edenlive_ar"}:
+        variant = "5b" if model_cls.startswith("wan22_") else "14b"
+        component_files = {
+            "dit_original_ckpt": f"dit-{variant}" + ("" if model_cls.endswith("_ar") else "-bidir"),
+            "vae_path": f"vae-{variant}/Wan2.{2 if variant == '5b' else 1}_VAE.pth",
+            "t5_original_ckpt": "umt5/text_encoder/model.safetensors",
+            "t5_tokenizer_path": "umt5/tokenizer",
+        }
+        if variant == "14b":
+            component_files["clip_original_ckpt"] = "clip/image_encoder/model.safetensors"
+        for key, filename in component_files.items():
+            model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
+        dit_path = model_config["dit_original_ckpt"]
+        dit_dir = dit_path if os.path.isdir(dit_path) else os.path.dirname(dit_path)
+        with open(os.path.join(dit_dir, "config.json"), "r") as f:
+            checkpoint_config = json.load(f)
+        model_config.update(checkpoint_config)
+        model_config.update(
+            dim=checkpoint_config["num_attention_heads"] * checkpoint_config["attention_head_dim"],
+            num_heads=checkpoint_config["num_attention_heads"],
+            # Released configs record the base input width, excluding the trained proxy channels.
+            in_dim=checkpoint_config["in_channels"] + 1024,
+            out_dim=checkpoint_config["out_channels"],
+            num_channels_latents=checkpoint_config["out_channels"],
+        )
+        vae_config_path = os.path.join(os.path.dirname(model_config["vae_path"]), "config.json")
+        with open(vae_config_path, "r") as f:
+            vae_config = json.load(f)
+        temporal_scale = vae_config.get("scale_factor_temporal", 2 ** sum(vae_config["temperal_downsample"]))
+        spatial_scale = vae_config.get("scale_factor_spatial", 2 ** (len(vae_config["dim_mult"]) - 1) * vae_config.get("patch_size", 1))
+        model_config["vae_stride"] = [temporal_scale, spatial_scale, spatial_scale]
+    elif model_cls == "wan2.1_sf_mtxg2":
         config_path = os.path.join(model_path, deployment_config["sub_model_folder"], "config.json")
         with open(config_path, "r") as f:
             model_config.update(json.load(f))
@@ -321,7 +352,7 @@ def normalize_startup_config(config, model_config):
 
 def build_cli_inputs(args):
     args_data = {key: value for key, value in vars(args).items() if value is not None}
-    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "task", "dit_original_ckpt", "t5_original_ckpt", "t5_tokenizer_path", "clip_original_ckpt", "vae_path"}
+    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "task"}
     startup_args = {key: value for key, value in args_data.items() if key in startup_fields}
     request_data = {key: value for key, value in args_data.items() if key not in startup_fields}
     request_data["task"] = args.task

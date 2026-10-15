@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--converted-path", required=True)
     parser.add_argument("--config", required=True)
+    parser.add_argument("--model-cls", choices=["wan21_edenlive", "wan21_edenlive_ar", "wan22_edenlive", "wan22_edenlive_ar"], required=True)
     parser.add_argument("--boundary", choices=["dino", "dit", "dynamic", "text"], required=True)
     parser.add_argument("--wan-path")
     parser.add_argument("--offload", choices=["none", "block", "model"], default="none")
@@ -49,14 +50,14 @@ def main():
 
         config = build_startup_config(
             dict(
-                model_cls="edenlive",
+                model_cls=args.model_cls,
                 task="i2v",
                 model_path=args.model_path,
                 config_json=args.config,
-                t5_original_ckpt=str(Path(args.wan_path) / "models_t5_umt5-xxl-enc-bf16.pth"),
-                t5_tokenizer_path=str(root / "umt5/tokenizer"),
             )
         )
+        config["t5_original_ckpt"] = str(Path(args.wan_path) / "models_t5_umt5-xxl-enc-bf16.pth")
+        config["t5_tokenizer_path"] = str(root / "umt5/tokenizer")
         config["t5_cpu_offload"] = args.offload != "none"
         encoder = EdenLiveRunner(config).load_text_encoder()[0]
         reference = UMT5EncoderModel.from_pretrained(str(root / "umt5/text_encoder"), torch_dtype=torch.bfloat16).cuda().eval()
@@ -119,7 +120,8 @@ def main():
     from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveScheduler
     from lightx2v.utils.set_config import build_startup_config
 
-    config = build_startup_config(dict(model_cls="edenlive", task="i2v", model_path=args.model_path, config_json=args.config, dit_original_ckpt=args.converted_path))
+    config = build_startup_config(dict(model_cls=args.model_cls, task="i2v", model_path=args.model_path, config_json=args.config))
+    config["dit_original_ckpt"] = args.converted_path
     if args.sp or args.cfg_parallel:
         from lightx2v.utils.set_config import init_parallel
 
@@ -130,9 +132,9 @@ def main():
         init_parallel(config)
     config["cpu_offload"] = args.offload != "none"
     config["offload_granularity"] = args.offload if args.offload != "none" else "block"
-    if config["eden_causal"]:
+    if config["model_cls"].endswith("_ar"):
         config["ar_config"]["kv_offload"] = args.kv_offload
-    source = root / (("dit-5b" if config["eden_variant"] == "5b" else "dit-14b") + ("" if config["eden_causal"] else "-bidir"))
+    source = root / (("dit-5b" if config["model_cls"].startswith("wan22_") else "dit-14b") + ("" if config["model_cls"].endswith("_ar") else "-bidir"))
     from edenlive.models.adapters.wan22_diffusers.adapter import Wan22DiffusersAdapter
     from edenlive.models.adapters.wan22_diffusers.channel_concat import enable_wan_channel_concat
 
@@ -160,7 +162,7 @@ def main():
         compare("dynamic-segment-attention", actual, expected)
         torch.testing.assert_close(actual, expected, atol=args.atol, rtol=0)
         return
-    if not config["eden_causal"]:
+    if not config["model_cls"].endswith("_ar"):
         from edenlive.models.adapters.wan22_diffusers.wan_ops import wan_parallel_forward
 
         latent_shape = [config["out_dim"], 7, 4, 6]
@@ -171,7 +173,7 @@ def main():
         image_condition = {}
         latent_input = scheduler.latents_input[None]
         image_embeds = None
-        if config["eden_variant"] == "14b":
+        if config["model_cls"].startswith("wan21_"):
             image_condition["vae_encoder_out"] = torch.randn(20, 7, 4, 6, device="cuda", dtype=torch.bfloat16)
             image_condition["clip_encoder_out"] = torch.randn(257, 1280, device="cuda", dtype=torch.bfloat16)
             image_embeds = image_condition["clip_encoder_out"][None]
@@ -242,7 +244,7 @@ def main():
         image_condition = {}
         image_embeds = None
         latent_input = scheduler.latents_input[None]
-        if config["eden_variant"] == "14b":
+        if config["model_cls"].startswith("wan21_"):
             image_condition["vae_encoder_out"] = torch.randn(20, 25, 4, 6, device="cuda", dtype=torch.bfloat16)
             image_condition["clip_encoder_out"] = torch.randn(257, 1280, device="cuda", dtype=torch.bfloat16)
             image_embeds = image_condition["clip_encoder_out"][None]

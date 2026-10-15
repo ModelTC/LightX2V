@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 from lightx2v.common.kvcache.manager import build_self_attn_kv_cache
 from lightx2v.models.input_encoders.edenlive.proxy_dino import ProxyDINO
@@ -11,18 +12,22 @@ from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, WanRunner
 from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveScheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.input_info import EdenLiveInputInfo
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-@RUNNER_REGISTER("edenlive")
+@RUNNER_REGISTER("wan21_edenlive")
+@RUNNER_REGISTER("wan21_edenlive_ar")
+@RUNNER_REGISTER("wan22_edenlive")
+@RUNNER_REGISTER("wan22_edenlive_ar")
 class EdenLiveRunner(WanRunner):
     input_info_cls_by_task = {"i2v": EdenLiveInputInfo}
     supported_request_fields_by_task = {"i2v": WanRunner.supported_request_fields_by_task["i2v"] | {"video_path"}}
 
     def __init__(self, config):
         super().__init__(config)
-        if config["eden_variant"] == "5b":
+        if config["model_cls"].startswith("wan22_"):
             from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 
             self.vae_cls = Wan2_2_VAE
@@ -75,11 +80,11 @@ class EdenLiveRunner(WanRunner):
         return vae
 
     def load_vae_encoder(self):
-        vae = Wan22DenseRunner.load_vae_encoder(self) if self.config["eden_variant"] == "5b" else super().load_vae_encoder()
+        vae = Wan22DenseRunner.load_vae_encoder(self) if self.config["model_cls"].startswith("wan22_") else super().load_vae_encoder()
         return self._configure_vae_norm(vae)
 
     def load_vae_decoder(self):
-        vae = Wan22DenseRunner.load_vae_decoder(self) if self.config["eden_variant"] == "5b" else super().load_vae_decoder()
+        vae = Wan22DenseRunner.load_vae_decoder(self) if self.config["model_cls"].startswith("wan22_") else super().load_vae_decoder()
         return self._configure_vae_norm(vae)
 
     _resolve_wan22_vae_paths = Wan22DenseRunner._resolve_wan22_vae_paths
@@ -108,7 +113,7 @@ class EdenLiveRunner(WanRunner):
         clean = self.vae_encoder.encode(image[None, :, None].to(GET_DTYPE()))
         clean = clean[0] if clean.ndim == 5 else clean
         image_latent, clip = None, None
-        if self.config["eden_variant"] == "14b":
+        if self.config["model_cls"].startswith("wan21_"):
             pixels = image.new_zeros(1, 3, frames, height, width)
             pixels[0, :, 0] = image
             image_latent = self.vae_encoder.encode(pixels.to(GET_DTYPE()))
@@ -121,10 +126,8 @@ class EdenLiveRunner(WanRunner):
         prompt = self.input_info.prompt
         if prompt.endswith(".json"):
             metadata = json.loads(Path(prompt).read_text())
-            chunk = self.config["ar_config"]["num_frame_per_chunk"] if self.config["eden_causal"] else 1
-            self.prompts = (
-                [metadata["staticPrompt"]] if self.config["eden_variant"] == "14b" and not self.config["eden_causal"] else frame_prompts(metadata, self.input_info.latent_shape[1], fps, chunk)
-            )
+            chunk = self.config["ar_config"]["num_frame_per_chunk"] if self.config["model_cls"].endswith("_ar") else 1
+            self.prompts = [metadata["staticPrompt"]] if self.config["model_cls"] == "wan21_edenlive" else frame_prompts(metadata, self.input_info.latent_shape[1], fps, chunk)
         else:
             self.prompts = [prompt]
         original_prompt = self.input_info.prompt
@@ -137,7 +140,7 @@ class EdenLiveRunner(WanRunner):
     def _prepare_chunk_inputs(self, start, frames):
         pixels = self.proxy_pixels[:, start : start + frames].permute(1, 0, 2, 3).to(AI_DEVICE)
         self.inputs["proxy_features"] = self.proxy_encoder.infer((pixels + 1) / 2).to(GET_DTYPE())
-        if self.config["eden_causal"]:
+        if self.config["model_cls"].endswith("_ar"):
             index = start // self.config["ar_config"]["num_frame_per_chunk"]
             text = self.prompts[index] if len(self.prompts) > 1 else self.prompts[0]
             self.inputs["text_encoder_output"] = self.prompt_embeddings[text]
@@ -153,12 +156,13 @@ class EdenLiveRunner(WanRunner):
                 key: torch.cat([self.prompt_embeddings[text][key] for text, _ in groups], dim=1) for key, value in self.prompt_embeddings[self.prompts[0]].items() if value is not None
             }
 
+    @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         self.init_run()
         total = self.scheduler.latents.shape[1]
         ar = self.config.get("ar_config", {})
-        chunk = ar["num_frame_per_chunk"] if self.config["eden_causal"] else total
-        if self.config["eden_causal"]:
+        chunk = ar["num_frame_per_chunk"] if self.config["model_cls"].endswith("_ar") else total
+        if self.config["model_cls"].endswith("_ar"):
             if not 0 <= ar["sink_size"] <= ar["local_attn_size"] - chunk:
                 raise ValueError("The attention window must fit sink frames and the current chunk")
             if ar["local_attn_size"] % chunk or ar["sink_size"] % chunk:
@@ -171,21 +175,28 @@ class EdenLiveRunner(WanRunner):
                 pools[branch] = pool
             self.model.transformer_infer.cache_pools = pools
         for start in range(0, total, chunk):
+            logger.info(f"start chunk {start // chunk + 1}/{(total + chunk - 1) // chunk}")
             self._prepare_chunk_inputs(start, min(chunk, total - start))
             for step in range(self.scheduler.infer_steps):
                 self.check_stop()
-                self.scheduler.step_pre(step, chunk_start=start)
-                self.model.infer(self.inputs)
-                self.scheduler.step_post()
+                logger.info(f"==> step_index: {step + 1} / {self.scheduler.infer_steps}")
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.scheduler.step_pre(step, chunk_start=start)
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    self.model.infer(self.inputs)
+                with ProfilingContext4DebugL1("step_post"):
+                    self.scheduler.step_post()
                 if self.progress_callback:
                     self.progress_callback(100 * (start * self.scheduler.infer_steps + (step + 1) * min(chunk, total - start)) / (total * self.scheduler.infer_steps), 100)
-            if self.config["eden_causal"]:
-                self.scheduler.step_pre(self.scheduler.infer_steps - 1, chunk_start=start, cache_update=True)
-                self.model.infer(self.inputs)
+            if self.config["model_cls"].endswith("_ar"):
+                with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                    self.scheduler.step_pre(self.scheduler.infer_steps - 1, chunk_start=start, cache_update=True)
+                with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
+                    self.model.infer(self.inputs)
         self.gen_video = self.run_vae_decoder(self.scheduler.latents)
         self.gen_video_final = self.gen_video.float()
         result = self.process_images_after_vae_decoder()
-        if self.config["eden_causal"] and ar.get("kv_offload", False):
+        if self.config["model_cls"].endswith("_ar") and ar.get("kv_offload", False):
             for pool in self.model.transformer_infer.cache_pools.values():
                 pool.sync_all()
         self.model.transformer_infer.cache_pools = {}
