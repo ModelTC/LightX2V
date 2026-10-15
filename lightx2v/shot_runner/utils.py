@@ -2,6 +2,7 @@ import os
 import subprocess
 from typing import Optional, Tuple, Union
 
+import imageio_ffmpeg as ffmpeg
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -105,7 +106,7 @@ def array_to_video(
         height, width = image_array.shape[1], image_array.shape[2]
     if lossless:
         command = [
-            "ffmpeg",
+            ffmpeg.get_ffmpeg_exe(),
             "-y",  # (optional) overwrite output file if it exists
             "-f",
             "rawvideo",
@@ -130,7 +131,7 @@ def array_to_video(
         ]
     else:
         command = [
-            "ffmpeg",
+            ffmpeg.get_ffmpeg_exe(),
             "-y",  # (optional) overwrite output file if it exists
             "-f",
             "rawvideo",
@@ -154,22 +155,21 @@ def array_to_video(
 
     if not disable_log:
         print(f'Running "{" ".join(command)}"')
-    process = subprocess.Popen(
+    write_error = None
+    with subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
         stderr=subprocess.PIPE,
-    )
-    if process.stdin is None or process.stderr is None:
-        raise BrokenPipeError("No buffer received.")
-    index = 0
-    while True:
-        if index >= image_array.shape[0]:
-            break
-        process.stdin.write(image_array[index].tobytes())
-        index += 1
-    process.stdin.close()
-    process.stderr.close()
-    process.wait()
+    ) as process:
+        try:
+            with process.stdin:
+                for frame in image_array:
+                    process.stdin.write(frame.tobytes())
+        except BrokenPipeError as error:
+            write_error = error
+        stderr = process.stderr.read().decode("utf-8", errors="replace")
+    if process.returncode or write_error is not None:
+        raise RuntimeError(f"FFmpeg encoding failed (exit {process.returncode}): {stderr.strip()}") from write_error
 
 
 def pad_for_libx264(image_array):
@@ -244,6 +244,6 @@ def save_audio(
     if os.path.exists(out_video):
         os.remove(out_video)
 
-    subprocess.call(["ffmpeg", "-y", "-i", video_name, "-i", audio_name, out_video])
+    subprocess.call([ffmpeg.get_ffmpeg_exe(), "-y", "-i", video_name, "-i", audio_name, out_video])
 
     return out_video
