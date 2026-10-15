@@ -26,14 +26,14 @@ class ProxyDINO(WeightModule):
         self.add_module("patch", CONV2D_WEIGHT_REGISTER["Default"]("backbone.embeddings.patch_embeddings.weight", "backbone.embeddings.patch_embeddings.bias", stride=self.config["patch_size"]))
         for name in ("cls_token", "register_tokens"):
             self.register_parameter(name, TENSOR_REGISTER["Default"]("backbone.embeddings." + name))
-        self.add_module("final_norm", LN_WEIGHT_REGISTER["torch-fp32"]("backbone.norm.weight", "backbone.norm.bias", eps=self.config["layer_norm_eps"]))
+        self.add_module("final_norm", LN_WEIGHT_REGISTER["torch"]("backbone.norm.weight", "backbone.norm.bias", eps=self.config["layer_norm_eps"]))
         self.add_module("projection", MM_WEIGHT_REGISTER["Default"]("patch_projection.weight", "patch_projection.bias"))
         self.blocks = []
         for i in range(self.config["num_hidden_layers"]):
             block = WeightModule()
             prefix = f"backbone.layer.{i}."
             for name in ("norm1", "norm2"):
-                block.add_module(name, LN_WEIGHT_REGISTER["torch-fp32"](prefix + name + ".weight", prefix + name + ".bias", eps=self.config["layer_norm_eps"]))
+                block.add_module(name, LN_WEIGHT_REGISTER["torch"](prefix + name + ".weight", prefix + name + ".bias", eps=self.config["layer_norm_eps"]))
             for name in ("q_proj", "k_proj", "v_proj", "o_proj"):
                 key = prefix + "attention." + name
                 block.add_module(name, MM_WEIGHT_REGISTER["Default"](key + ".weight", key + ".bias" if name != "k_proj" else None))
@@ -73,7 +73,7 @@ class ProxyDINO(WeightModule):
             pixels = torch.stack(resized).to(device=images.device, dtype=torch.float32) / 255
         mean = pixels.new_tensor((0.485, 0.456, 0.406))[None, :, None, None]
         std = pixels.new_tensor((0.229, 0.224, 0.225))[None, :, None, None]
-        return (pixels - mean) / std
+        return pixels.sub_(mean).div_(std)
 
     @torch.no_grad()
     def infer(self, images):
@@ -99,10 +99,10 @@ class ProxyDINO(WeightModule):
                 first, second = patches.chunk(2, dim=-1)
                 tensor[:, self.prefix :] = (patches * cos + torch.cat((-second, first), dim=-1) * sin).to(tensor.dtype)
             attention = self.attention.apply(q=q, k=k, v=v).reshape(batch * sequence, hidden)
-            x = x + block.o_proj.apply(attention).view_as(x) * block.layer_scale1.tensor
+            x.addcmul_(block.o_proj.apply(attention).view_as(x), block.layer_scale1.tensor)
             normalized = block.norm2.apply(x).flatten(0, 1).to(torch.bfloat16)
             y = block.down_proj.apply(F.gelu(block.up_proj.apply(normalized), approximate="none"))
-            x = x + y.view_as(x) * block.layer_scale2.tensor
+            x.addcmul_(y.view_as(x), block.layer_scale2.tensor)
         x = self.final_norm.apply(x)[:, self.prefix :].reshape(-1, hidden).to(torch.bfloat16)
         features = F.normalize(self.projection.apply(x).float(), dim=-1)
         return features.view(batch, height, width, -1).permute(3, 0, 1, 2).unsqueeze(0).contiguous()

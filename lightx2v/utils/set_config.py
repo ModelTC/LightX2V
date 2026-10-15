@@ -12,6 +12,27 @@ from lightx2v.utils.lockable_dict import LockableDict
 from lightx2v.utils.utils import find_torch_model_path, is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+EDENLIVE_COMPONENT_FILES = {
+    "wan21_edenlive": {
+        "dit_original_ckpt": "dit-14b-bidir",
+        "vae_path": "vae-14b/Wan2.1_VAE.pth",
+        "clip_original_ckpt": "clip/image_encoder/model.safetensors",
+    },
+    "wan21_edenlive_ar": {
+        "dit_original_ckpt": "dit-14b",
+        "vae_path": "vae-14b/Wan2.1_VAE.pth",
+        "clip_original_ckpt": "clip/image_encoder/model.safetensors",
+    },
+    "wan22_edenlive": {
+        "dit_original_ckpt": "dit-5b-bidir",
+        "vae_path": "vae-5b/Wan2.2_VAE.pth",
+    },
+    "wan22_edenlive_ar": {
+        "dit_original_ckpt": "dit-5b",
+        "vae_path": "vae-5b/Wan2.2_VAE.pth",
+    },
+}
+
 
 def get_default_config():
     return LockableDict(
@@ -105,16 +126,12 @@ def load_model_config(deployment_config):
 
     assert os.path.exists(model_path), f"Model path not found: {model_path}"
 
-    if model_cls in {"wan21_edenlive", "wan21_edenlive_ar", "wan22_edenlive", "wan22_edenlive_ar"}:
-        variant = "5b" if model_cls.startswith("wan22_") else "14b"
+    if model_cls in EDENLIVE_COMPONENT_FILES:
         component_files = {
-            "dit_original_ckpt": f"dit-{variant}" + ("" if model_cls.endswith("_ar") else "-bidir"),
-            "vae_path": f"vae-{variant}/Wan2.{2 if variant == '5b' else 1}_VAE.pth",
             "t5_original_ckpt": "umt5/text_encoder/model.safetensors",
             "t5_tokenizer_path": "umt5/tokenizer",
+            **EDENLIVE_COMPONENT_FILES[model_cls],
         }
-        if variant == "14b":
-            component_files["clip_original_ckpt"] = "clip/image_encoder/model.safetensors"
         for key, filename in component_files.items():
             model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
         dit_path = model_config["dit_original_ckpt"]
@@ -122,6 +139,9 @@ def load_model_config(deployment_config):
         with open(os.path.join(dit_dir, "config.json"), "r") as f:
             checkpoint_config = json.load(f)
         model_config.update(checkpoint_config)
+        model_config.setdefault("text_len", 512)
+        model_config.setdefault("rope_type", "flashinfer_rope")
+        model_config.setdefault("modulate_type", "triton")
         model_config.update(
             dim=checkpoint_config["num_attention_heads"] * checkpoint_config["attention_head_dim"],
             num_heads=checkpoint_config["num_attention_heads"],

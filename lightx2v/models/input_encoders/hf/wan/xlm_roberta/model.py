@@ -21,7 +21,6 @@ from lightx2v.models.input_encoders.hf.q_linear import (
     VllmQuantLinearFp8,
     VllmQuantLinearInt8,
 )
-from lightx2v.models.input_encoders.hf.wan.weight_mapping import remap_hf_clip_vision_weights
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -589,10 +588,7 @@ class CLIPModel:
         self.model.visual.precast_patch_input = bool(precast_patch_input)
         if not dummy_model:
             weight_dict = load_weights(self.checkpoint_path, cpu_offload=cpu_offload, remove_key="textual", load_from_rank0=load_from_rank0)
-            if "vision_model.embeddings.class_embedding" in weight_dict:
-                self.model.visual.load_state_dict(remap_hf_clip_vision_weights(weight_dict, self.model.visual.num_layers))
-            else:
-                self.model.load_state_dict(weight_dict)
+            self.model.load_state_dict(weight_dict)
         else:
             from loguru import logger
 

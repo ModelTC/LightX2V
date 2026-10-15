@@ -18,4 +18,4 @@ python -m lightx2v.infer \
   --image_path /data/nvme6/gushiqiao/codes/vast/EdenLive-Official-wp-demo/examples/samples/cryo-crossing/cover.png \
   --video_path /data/nvme6/gushiqiao/codes/vast/EdenLive-Official-wp-demo/examples/samples/cryo-crossing/recording.mp4 \
   --seed 42 \
-  --save_result_path "${lightx2v_path}/save_results/edenlive_5b_bidir.mp4"
+  --save_result_path "${lightx2v_path}/save_results/edenlive_5b_bidir1.mp4"

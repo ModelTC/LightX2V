@@ -68,15 +68,11 @@ class RMS_norm(nn.Module):
         shape = (dim, *broadcastable_dims) if channel_first else (dim,)
 
         self.channel_first = channel_first
-        self.use_fp32_l2_norm = False
         self.scale = dim**0.5
         self.gamma = nn.Parameter(torch.ones(shape))
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.0
 
     def forward(self, x):
-        if self.use_fp32_l2_norm:
-            normalized = F.normalize(x.float(), dim=1 if self.channel_first else -1).to(x.dtype)
-            return normalized * self.scale * self.gamma + self.bias
         return F.normalize(x, dim=(1 if self.channel_first else -1)) * self.scale * self.gamma + self.bias
 
 

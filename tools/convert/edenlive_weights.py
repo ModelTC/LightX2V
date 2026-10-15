@@ -1,4 +1,4 @@
-"""Map Hugging Face encoder checkpoints to the existing native Wan encoders."""
+"""Convert EdenLive Hugging Face encoder weights to native Wan tensor names."""
 
 import torch
 

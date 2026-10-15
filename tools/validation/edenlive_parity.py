@@ -45,7 +45,8 @@ def main():
     if args.boundary == "text":
         from transformers import UMT5EncoderModel
 
-        from lightx2v.models.runners.wan.edenlive_runner import EdenLiveRunner
+        from lightx2v.models.runners.wan import edenlive_runner  # noqa: F401
+        from lightx2v.utils.registry_factory import RUNNER_REGISTER
         from lightx2v.utils.set_config import build_startup_config
 
         config = build_startup_config(
@@ -59,7 +60,7 @@ def main():
         config["t5_original_ckpt"] = str(Path(args.wan_path) / "models_t5_umt5-xxl-enc-bf16.pth")
         config["t5_tokenizer_path"] = str(root / "umt5/tokenizer")
         config["t5_cpu_offload"] = args.offload != "none"
-        encoder = EdenLiveRunner(config).load_text_encoder()[0]
+        encoder = RUNNER_REGISTER[args.model_cls](config).load_text_encoder()[0]
         reference = UMT5EncoderModel.from_pretrained(str(root / "umt5/text_encoder"), torch_dtype=torch.bfloat16).cuda().eval()
         for text in ("A person walks across an icy landscape.", "blurry, low quality"):
             ids, mask = encoder.tokenizer([text], return_mask=True, add_special_tokens=True)
@@ -116,11 +117,13 @@ def main():
     from edenlive.models.adapters.wan22_diffusers.wan_ops import allocate_wan_kv_cache, patch_wan_transformer_forward, wan_causal_forward_with_cache
 
     from lightx2v.common.kvcache.manager import build_self_attn_kv_cache
-    from lightx2v.models.networks.wan.edenlive_model import EdenLiveModel
-    from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveScheduler
+    from lightx2v.models.runners.wan import edenlive_runner  # noqa: F401
+    from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler
+    from lightx2v.utils.registry_factory import RUNNER_REGISTER
     from lightx2v.utils.set_config import build_startup_config
 
     config = build_startup_config(dict(model_cls=args.model_cls, task="i2v", model_path=args.model_path, config_json=args.config))
+    source = root / Path(config["dit_original_ckpt"]).name
     config["dit_original_ckpt"] = args.converted_path
     if args.sp or args.cfg_parallel:
         from lightx2v.utils.set_config import init_parallel
@@ -132,9 +135,10 @@ def main():
         init_parallel(config)
     config["cpu_offload"] = args.offload != "none"
     config["offload_granularity"] = args.offload if args.offload != "none" else "block"
-    if config["model_cls"].endswith("_ar"):
+    runner = RUNNER_REGISTER[args.model_cls](config)
+    scheduler = runner.scheduler
+    if isinstance(scheduler, EdenLiveARScheduler):
         config["ar_config"]["kv_offload"] = args.kv_offload
-    source = root / (("dit-5b" if config["model_cls"].startswith("wan22_") else "dit-14b") + ("" if config["model_cls"].endswith("_ar") else "-bidir"))
     from edenlive.models.adapters.wan22_diffusers.adapter import Wan22DiffusersAdapter
     from edenlive.models.adapters.wan22_diffusers.channel_concat import enable_wan_channel_concat
 
@@ -142,8 +146,7 @@ def main():
     enable_wan_channel_concat(reference, 1024, condition_rmsnorm=config["proxy_condition_rmsnorm"])
     reference = reference.to(device="cuda", dtype=torch.bfloat16).eval()
     patch_wan_transformer_forward(reference)
-    native = EdenLiveModel(args.model_path, config, torch.device("cpu" if config["cpu_offload"] else "cuda"))
-    scheduler = EdenLiveScheduler(config)
+    native = runner.load_transformer()
     native.set_scheduler(scheduler)
     if args.boundary == "dynamic":
         from types import SimpleNamespace
@@ -162,7 +165,7 @@ def main():
         compare("dynamic-segment-attention", actual, expected)
         torch.testing.assert_close(actual, expected, atol=args.atol, rtol=0)
         return
-    if not config["model_cls"].endswith("_ar"):
+    if not isinstance(scheduler, EdenLiveARScheduler):
         from edenlive.models.adapters.wan22_diffusers.wan_ops import wan_parallel_forward
 
         latent_shape = [config["out_dim"], 7, 4, 6]
@@ -173,13 +176,16 @@ def main():
         image_condition = {}
         latent_input = scheduler.latents_input[None]
         image_embeds = None
-        if config["model_cls"].startswith("wan21_"):
+        if config["use_image_encoder"]:
             image_condition["vae_encoder_out"] = torch.randn(20, 7, 4, 6, device="cuda", dtype=torch.bfloat16)
             image_condition["clip_encoder_out"] = torch.randn(257, 1280, device="cuda", dtype=torch.bfloat16)
             image_embeds = image_condition["clip_encoder_out"][None]
             latent_input = torch.cat((latent_input, image_condition["vae_encoder_out"][None]), dim=1)
         inputs = dict(proxy_features=control, text_encoder_output=dict(context=text, context_null=text), image_encoder_output=image_condition)
         timestep = scheduler.timestep_input[None] if scheduler.timestep_input.numel() > 1 else scheduler.timestep_input
+        if timestep.ndim == 2:
+            tokens_per_frame = (latent_shape[2] // config["patch_size"][1]) * (latent_shape[3] // config["patch_size"][2])
+            timestep = timestep.repeat_interleave(tokens_per_frame, dim=1)
         expected = wan_parallel_forward(reference, torch.cat((latent_input, control), dim=1), timestep, text, encoder_hidden_states_image=image_embeds).sample[0]
         native.infer(inputs)
         compare("bidir-dit", scheduler.noise_pred, expected)
@@ -244,7 +250,7 @@ def main():
         image_condition = {}
         image_embeds = None
         latent_input = scheduler.latents_input[None]
-        if config["model_cls"].startswith("wan21_"):
+        if config["use_image_encoder"]:
             image_condition["vae_encoder_out"] = torch.randn(20, 25, 4, 6, device="cuda", dtype=torch.bfloat16)
             image_condition["clip_encoder_out"] = torch.randn(257, 1280, device="cuda", dtype=torch.bfloat16)
             image_embeds = image_condition["clip_encoder_out"][None]

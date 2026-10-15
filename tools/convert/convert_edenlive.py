@@ -86,9 +86,7 @@ def convert_encoder(source, output, kind, overwrite):
     import torch
     from safetensors.torch import load_file
 
-    # Import the pure weight mapper without initializing the inference runtime/GPU.
-    sys.path.insert(0, str(REPO_ROOT / "lightx2v/models/input_encoders/hf/wan"))
-    from weight_mapping import remap_hf_clip_vision_weights, remap_hf_umt5_weights
+    from tools.convert.edenlive_weights import remap_hf_clip_vision_weights, remap_hf_umt5_weights
 
     destination = output / "model.safetensors"
     key = "token_embedding.weight" if kind == "t5" else "visual.patch_embedding.weight"

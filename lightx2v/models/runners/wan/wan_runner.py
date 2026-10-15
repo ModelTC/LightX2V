@@ -278,7 +278,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             model = build_wan_model_with_lora(WanModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
         return model
 
-    def load_image_encoder(self, dtype=torch.float16):
+    def load_image_encoder(self):
         image_encoder = None
         if self.config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
             # offload config
@@ -303,7 +303,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 clip_original_ckpt = find_torch_model_path(self.config, "clip_original_ckpt", clip_model_name)
 
             image_encoder = CLIPModel(
-                dtype=dtype,
+                dtype=torch.float16,
                 device=clip_device,
                 checkpoint_path=clip_original_ckpt,
                 clip_quantized=clip_quantized,

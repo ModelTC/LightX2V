@@ -352,10 +352,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         else:
             x.add_(y_out * gate_msa.squeeze())
 
-        return x, self.infer_cross_attn_output(phase, x, context)
-
-    def infer_cross_attn_output(self, phase, x, context):
-        norm3_out = phase.norm3.apply(x).to(self.infer_dtype)
+        norm3_out = phase.norm3.apply(x)
         if self.has_image_context:
             context_img = context[: self.image_context_len]
             context = context[self.image_context_len :]
@@ -406,7 +403,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         if self.clean_cuda_cache:
             del q, k, v, norm3_out, context, context_img
             torch_device_module.empty_cache()
-        return attn_out
+        return x, attn_out
 
     def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa=None):
         x.add_(attn_out)

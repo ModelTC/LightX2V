@@ -239,13 +239,6 @@ class LNWeight(LNWeightTemplate):
         return output_tensor
 
 
-@LN_WEIGHT_REGISTER("torch-fp32")
-class LNWeightFP32(LNWeightTemplate):
-    def apply(self, input_tensor):
-        weight, bias = self._get_actual_weight(), self._get_actual_bias()
-        return torch.nn.functional.layer_norm(input_tensor.float(), (input_tensor.shape[-1],), weight.float() if weight is not None else None, bias.float() if bias is not None else None, self.eps)
-
-
 @LN_WEIGHT_REGISTER("Triton")
 class LNWeight(LNWeightTemplate):
     def __init__(

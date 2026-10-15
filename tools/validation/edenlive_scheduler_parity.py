@@ -5,7 +5,8 @@ from pathlib import Path
 import torch
 from diffusers import UniPCMultistepScheduler
 
-from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveScheduler
+from lightx2v.models.runners.wan import edenlive_runner  # noqa: F401
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import build_startup_config
 
 
@@ -22,7 +23,7 @@ def main():
         profile = f"wan{22 if variant == '5b' else 21}_{variant}_{mode}"
         model_cls = f"wan{22 if variant == '5b' else 21}_edenlive" + ("_ar" if mode == "few_step" else "")
         config = build_startup_config(dict(model_cls=model_cls, task="i2v", model_path=args.model_path, config_json=str(Path(__file__).resolve().parents[2] / "configs/edenlive" / f"{profile}.json")))
-        native = EdenLiveScheduler(config)
+        native = RUNNER_REGISTER[model_cls](config).scheduler
         native.prepare(42, [config["out_dim"], 3, 2, 2], {"clean_first_frame": torch.zeros(config["out_dim"], 1, 2, 2, device="cuda")})
         sample = native.latents.clone()[None]
         if mode == "bidir" and variant == "5b":

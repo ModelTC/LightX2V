@@ -121,7 +121,7 @@ def main():
         def encode(self):
             result = original_input(self)
             condition = result["image_encoder_output"]
-            image = condition["vae_encoder_out"] if self.config["model_cls"].startswith("wan21_") else condition["clean_first_frame"]
+            image = condition["vae_encoder_out"] if condition["vae_encoder_out"] is not None else condition["clean_first_frame"]
             captures["encode_image_condition"] = [image.detach().cpu()[None]]
             if condition["clip_encoder_out"] is not None:
                 captures["encode_clip_image_embeds"] = [condition["clip_encoder_out"].detach().cpu()[None]]

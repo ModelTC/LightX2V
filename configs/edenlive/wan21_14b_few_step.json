@@ -1,5 +1,4 @@
 {
-    "text_len": 512,
     "size": [
         480,
         832
@@ -14,13 +13,13 @@
     "proxy_resize_mode": "bicubic_center_crop",
     "proxy_condition_rmsnorm": true,
     "proxy_unconditional_control": "zero",
-    "self_attn_1_type": "torch_sdpa",
-    "cross_attn_1_type": "torch_sdpa",
-    "cross_attn_2_type": "torch_sdpa",
-    "rms_norm_type": "torch_native",
-    "layer_norm_type": "torch-fp32",
-    "rope_type": "torch_complex_rope",
-    "modulate_type": "torch",
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "rms_norm_type": "sgl-kernel",
+    "layer_norm_type": "Triton",
+    "rope_type": "flashinfer_rope",
+    "modulate_type": "triton",
     "cpu_offload": false,
     "mxfp8_fuse_enable": false,
     "ar_config": {
@@ -36,11 +35,5 @@
             500.0
         ]
     },
-    "t5_rms_norm_type": "torch",
-    "video_save_options": {
-        "crf": 18,
-        "preset": "fast",
-        "round_pixels": true
-    },
-    "video_save_method": "imageio"
+    "t5_rms_norm_type": "sgl-kernel"
 }

@@ -1,8 +1,8 @@
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from lightx2v.models.networks.wan.infer.edenlive.pre_infer import EdenLivePreInfer
-from lightx2v.models.networks.wan.infer.edenlive.transformer_infer import EdenLiveTransformerInfer
+from lightx2v.models.networks.wan.infer.edenlive.pre_infer import EdenLivePreInfer, Wan21EdenLivePreInfer
+from lightx2v.models.networks.wan.infer.edenlive.transformer_infer import EdenLiveARTransformerInfer, EdenLiveTransformerInfer
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
@@ -21,19 +21,26 @@ class EdenLivePreWeights(WanPreWeights):
 
 class EdenLiveModel(WanModel):
     pre_weight_class = EdenLivePreWeights
-
-    def infer(self, inputs):
-        if self.cpu_offload and self.offload_granularity == "model" and self.scheduler.cache_update:
-            self.to_cuda()
-        super().infer(inputs)
+    pre_infer_cls = EdenLivePreInfer
+    transformer_infer_cls = EdenLiveTransformerInfer
 
     def _infer_cond_uncond(self, inputs, infer_condition=True):
         return super()._infer_cond_uncond(inputs, infer_condition).to(GET_DTYPE())
 
     def _init_infer_class(self):
-        self.pre_infer_class = EdenLivePreInfer
-        self.transformer_infer_class = EdenLiveTransformerInfer
+        self.pre_infer_class = self.pre_infer_cls
+        self.transformer_infer_class = self.transformer_infer_cls
         self.post_infer_class = WanPostInfer
+
+    def _init_infer(self):
+        super()._init_infer()
+        if self.config["rope_type"] == "torch_real_rope":
+            # Match upstream's BF16 rounding between the real-valued RoPE operations.
+            for block in self.transformer_weights.blocks:
+                rope = block.compute_phases[0].rope
+                if self.config.get("rope_chunk", False):
+                    rope = rope.inner
+                rope.compute_dtype = GET_DTYPE()
 
     def _seq_parallel_pre_process(self, output):
         world = dist.get_world_size(self.seq_p_group)
@@ -47,3 +54,20 @@ class EdenLiveModel(WanModel):
             output.embed = F.pad(output.embed, (0, 0, 0, padding)).chunk(world)[rank]
             output.embed0 = F.pad(output.embed0, (0, 0, 0, 0, 0, padding)).chunk(world)[rank]
         return output
+
+
+class Wan21EdenLiveModel(EdenLiveModel):
+    pre_infer_cls = Wan21EdenLivePreInfer
+
+
+class EdenLiveARModel(EdenLiveModel):
+    transformer_infer_cls = EdenLiveARTransformerInfer
+
+    def infer(self, inputs):
+        if self.cpu_offload and self.offload_granularity == "model" and self.scheduler.cache_update:
+            self.to_cuda()
+        super().infer(inputs)
+
+
+class Wan21EdenLiveARModel(EdenLiveARModel):
+    pre_infer_cls = Wan21EdenLivePreInfer
