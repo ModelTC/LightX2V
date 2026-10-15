@@ -1,0 +1,7 @@
+inherits: base
+reward:
+  custom_reward_function:
+    reward_kwargs:
+      weights:
+        videoalign_mq: 1.0
+        videoalign_ta: 1.0

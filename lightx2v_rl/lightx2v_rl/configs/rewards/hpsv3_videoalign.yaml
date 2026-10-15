@@ -1,0 +1,8 @@
+inherits: base
+reward:
+  custom_reward_function:
+    reward_kwargs:
+      weights:
+        hpsv3_general: 1.0
+        hpsv3_percentile: 1.0
+        videoalign_mq: 1.0

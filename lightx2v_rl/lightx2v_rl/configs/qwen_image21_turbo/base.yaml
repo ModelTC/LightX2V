@@ -1,0 +1,128 @@
+# Official Qwen-Image-2.1-Turbo model/data defaults, independent of the Wan recipe.
+inherits: common/fewstep
+actor_rollout_ref:
+  model:
+    architecture: QwenImage21Pipeline
+    rl_adapter: qwen_image21
+    path: lightx2v_rl/models/Qwen-Image-2.1-Turbo
+    tokenizer_path: ${actor_rollout_ref.model.path}/processor
+    custom_chat_template: null
+    fewstep:
+      bridge: geo
+      min_steps: 8
+      max_steps: 8
+      timestep_shift: 1.0
+      timestep_sampling_mode: fixed_uniform
+      cycle_train_idx: true
+    external_lib: lightx2v_rl.models.qwen_image.register
+  actor:
+    ppo_mini_batch_size: 4
+    ppo_micro_batch_size_per_gpu: 1
+    enable_timestep_staging: false
+    fsdp_config:
+      forward_prefetch: false
+  rollout:
+    external_lib: lightx2v_rl.models.qwen_image.rollout_registration
+    tensor_model_parallel_size: 1
+    max_num_seqs: 1
+    max_prompt_embed_length: 4096
+    prompt_length: 4096
+    'n': 4
+    enable_prompt_embed_cache: false
+    step_execution: false
+    agent:
+      default_agent_loop: qwen_image21_agent
+      agent_loop_config_path: lightx2v_rl/lightx2v_rl/configs/qwen_image21_turbo/agent.yaml
+    pipeline:
+      _target_: lightx2v_rl.models.qwen_image.config.QwenImage21PipelineConfig
+      height: 2048
+      width: 2048
+      num_frames: 1
+      num_inference_steps: 8
+      true_cfg_scale: 1.0
+      guidance_scale: 1.0
+      max_sequence_length: 4096
+      output_type: image
+      output_resolution: 1024
+      max_reference_tokens: 8192
+      max_reference_images: 1
+      replay_prompt_length: 4096
+      use_kv_cache: false
+    val_kwargs:
+      'n': 1
+      seed: 20261009
+      pipeline:
+        _target_: lightx2v_rl.models.qwen_image.config.QwenImage21PipelineConfig
+        height: ${actor_rollout_ref.rollout.pipeline.height}
+        width: ${actor_rollout_ref.rollout.pipeline.width}
+        num_frames: 1
+        num_inference_steps: 8
+        true_cfg_scale: 1.0
+        guidance_scale: 1.0
+        max_sequence_length: 4096
+        output_type: image
+        output_resolution: ${actor_rollout_ref.rollout.pipeline.output_resolution}
+        max_reference_tokens: ${actor_rollout_ref.rollout.pipeline.max_reference_tokens}
+        max_reference_images: 1
+        replay_prompt_length: 4096
+        use_kv_cache: true
+algorithm:
+  global_std: false
+data:
+  train_files:
+  - lightx2v_rl/data/opengpt4o/train.jsonl
+  val_files:
+  - lightx2v_rl/data/opengpt4o/val_t2i.jsonl
+  - lightx2v_rl/data/opengpt4o/val_i2i.jsonl
+  train_batch_size: 4
+  gen_batch_size: 4
+  val_batch_size: 1
+  validation_shuffle: false
+  dataloader_num_workers: 0
+  max_prompt_length: 4096
+  custom_cls:
+    path: pkg://lightx2v_rl.data.opengpt4o
+    name: OpenGPT4oDataset
+    collate_fn: collate_fn
+  sampler:
+    class_path: pkg://lightx2v_rl.data.opengpt4o
+    class_name: AlternatingTaskSampler
+reward:
+  num_workers: 1
+  accelerator_workers:
+    enabled: false
+  reward_functions: {}
+  models: {}
+  reward_model:
+    enable: false
+    enable_resource_pool: false
+  custom_reward_function:
+    path: pkg://lightx2v_rl.rewards.image_client
+    name: compute_score
+    use_accelerator: false
+    reward_kwargs:
+      unifiedreward_endpoint: http://127.0.0.1:8792
+      hps_endpoint: http://127.0.0.1:8791
+      unifiedreward_weight: 1.0
+      hps_weight: 0.5
+      hps_offset: 0.0
+      hps_scale: 1.0
+      image_layout: CHW
+      timeout_seconds: 1800
+      max_concurrent_samples: 8
+trainer:
+  experiment_name: qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}
+  n_gpus_per_node: 4
+  total_training_steps: 1000
+  total_epochs: 100
+  save_freq: 100
+  test_freq: 20
+  val_before_train: true
+  default_local_dir: lightx2v_rl/outputs/qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}
+  validation_data_dir: lightx2v_rl/outputs/qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}/validation
+  validation_data_max_samples: 16
+  v1:
+    sync:
+      parameter_sync_step: 1
+    sampler:
+      drop_incomplete_groups: false

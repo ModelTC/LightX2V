@@ -1,0 +1,14 @@
+# Isolated legacy inference environment, intentionally separate from verl-omni.
+# Install torch/torchvision first from the official cu128 index; see setup script.
+torch==2.8.0
+torchvision==0.23.0
+transformers==4.51.3
+peft==0.17.0
+accelerate==1.4.0
+huggingface-hub==0.34.4
+tokenizers==0.21.4
+safetensors==0.5.3
+numpy==1.26.4
+Pillow==11.3.0
+omegaconf==2.3.0
+requests>=2.32.3,<3

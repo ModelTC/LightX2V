@@ -1,0 +1,26 @@
+# Shared external 6 UR + 2 HPS service pool and existing-Ray connection.
+reward:
+  num_workers: 12
+  custom_reward_function:
+    reward_kwargs:
+      unifiedreward_endpoint:
+      - http://${oc.env:LIGHTX2V_REWARD_HOST}:8792
+      - http://${oc.env:LIGHTX2V_REWARD_HOST}:8793
+      - http://${oc.env:LIGHTX2V_REWARD_HOST}:8794
+      - http://${oc.env:LIGHTX2V_REWARD_HOST}:8795
+      - http://${oc.env:LIGHTX2V_REWARD_HOST}:8796
+      - http://${oc.env:LIGHTX2V_REWARD_HOST}:8797
+      hps_endpoint:
+      - http://${oc.env:LIGHTX2V_REWARD_HOST}:8791
+      - http://${oc.env:LIGHTX2V_REWARD_HOST}:8798
+trainer:
+  n_gpus_per_node: 8
+  validation_data_dir: ${trainer.default_local_dir}/validation
+ray_kwargs:
+  ray_init:
+    address: auto
+    runtime_env:
+      env_vars:
+        HF_HUB_OFFLINE: '1'
+        TRANSFORMERS_OFFLINE: '1'
+        TOKENIZERS_PARALLELISM: 'false'
