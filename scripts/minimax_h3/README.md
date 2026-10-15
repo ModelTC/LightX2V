@@ -127,6 +127,18 @@ python scripts/minimax_h3/server/post_fl2av.py
 
 Each base request must specify `task`; see the task table for inputs. The image examples encode client-local files as Base64; server-accessible absolute paths also work.
 
+The reference service uses `--model-variant ref2av`:
+
+```bash
+bash scripts/minimax_h3/server/start_server_ref2av.sh
+```
+
+Set the reference image path in the client, then send a request from another terminal:
+
+```bash
+python scripts/minimax_h3/server/post_ref2av.py
+```
+
 ## Request and startup settings
 
 - **Startup and requests**: set model paths, variant, weights/LoRA, kernels, offload, parallelism, compile, and warmup at startup. Pass `prompt`, media paths, `seed`, and the output path through Python, CLI, or POST.

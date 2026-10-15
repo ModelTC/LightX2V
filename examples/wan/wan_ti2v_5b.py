@@ -13,7 +13,7 @@ pipe = LightX2VPipeline(
 )
 
 # Alternative: create generator from config JSON file
-# pipe.create_generator(config_json="../configs/wan22/wan_ti2v_t2v.json")
+# pipe.create_generator(config_json="/path/to/LightX2V/configs/wan22/wan_ti2v.json")
 
 # Create generator with specified parameters
 pipe.create_generator(

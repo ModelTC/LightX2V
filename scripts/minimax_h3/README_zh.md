@@ -127,6 +127,18 @@ python scripts/minimax_h3/server/post_fl2av.py
 
 基础请求须指定 `task`，输入见任务表。图片示例上传客户端本地文件的 Base64，也可传服务端可访问的绝对路径。
 
+参考任务服务使用 `--model-variant ref2av`：
+
+```bash
+bash scripts/minimax_h3/server/start_server_ref2av.sh
+```
+
+设置客户端的参考图片路径，在另一终端发送请求：
+
+```bash
+python scripts/minimax_h3/server/post_ref2av.py
+```
+
 ## 请求参数与启动配置
 
 - **启动与请求**：启动时设置模型路径、分支、权重／LoRA、算子、卸载、并行、编译和预热；通过 Python、CLI 或 POST 传入 `prompt`、媒体路径、`seed` 和输出路径。

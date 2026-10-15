@@ -116,7 +116,7 @@ bash start_encoder_service.sh
 
 **运行推理:**
 
-编写运行脚本 (`scripts/qwen_image/qwen_image_i2i_2511_service.sh`):
+编写运行脚本 (`scripts/qwen_image/inference/text_encoder/qwen_image_i2i_2511_service.sh`):
 
 ```bash
 python -m lightx2v.infer \
@@ -164,7 +164,7 @@ Kernel Mode 适合单机高性能推理场景。它不在后台启动独立服�
 
 **运行推理:**
 
-编写运行脚本 (`scripts/qwen_image/qwen_image_i2i_2511_kernel.sh`):
+编写运行脚本 (`scripts/qwen_image/inference/text_encoder/qwen_image_i2i_2511_kernel.sh`):
 
 ```bash
 python -m lightx2v.infer \

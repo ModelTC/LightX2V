@@ -43,10 +43,11 @@ cd LightX2V/scripts/qwen_image
 bash qwen_image_t2i_2512.sh
 
 # 推理2512文生图步数蒸馏模型，默认是8步，需要下载LoRA模型，然后修改config_json文件中的lora_configs的路径
-bash qwen_image_t2i_2512_distill.sh
+bash inference/distill/qwen_image_t2i_2512_distill.sh
 
 # 推理2512文生图步数蒸馏+FP8量化模型，默认是8步，需要下载FP8量化模型，然后修改config_json文件中的dit_quantized_ckpt的路径
-bash qwen_image_t2i_2512_distill_fp8.sh
+# 将脚本的 --config_json 改为 ${lightx2v_path}/configs/qwen_image/qwen_image_t2i_2512_distill_fp8.json
+bash inference/distill/qwen_image_t2i_2512_distill.sh
 ```
 
 图像编辑模型
@@ -55,10 +56,11 @@ bash qwen_image_t2i_2512_distill_fp8.sh
 bash qwen_image_i2i_2511.sh
 
 # 推理2511图像编辑步数蒸馏模型，默认是8步，需要下载LoRA模型，然后修改config_json文件中的lora_configs的路径
-bash qwen_image_i2i_2511_distill.sh
+bash inference/distill/qwen_image_i2i_2511_distill.sh
 
 # 推理2511图像编辑步数蒸馏+FP8量化模型，默认是8步，需要下载FP8量化模型，然后修改config_json文件中的dit_quantized_ckpt的路径
-bash qwen_image_i2i_2511_distill_fp8.sh
+# 将脚本的 --config_json 改为 ${lightx2v_path}/configs/qwen_image/qwen_image_i2i_2511_distill_fp8.json
+bash inference/distill/qwen_image_i2i_2511_distill.sh
 ```
 
 ## 使用方式二：安装并使用python脚本

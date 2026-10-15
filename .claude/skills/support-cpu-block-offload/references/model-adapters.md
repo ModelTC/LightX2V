@@ -58,7 +58,7 @@
 
 `validate_qwen_shared_block_views()` 在公共地址校验之外，依据算子的 `base_attrs` 验证是否采用规定的转置方向。这可发现方阵上仅比较 shape 检测不到的布局错误。
 
-启动入口在 [scripts/qwen_image/offload](../../../../scripts/qwen_image/offload/)，统一脚本为 `qwen_image_2512_block_shared_offload.sh`，配置为 `configs/qwen_image/offload/qwen_image_2512_block_shared.json`。默认 T2I、host + 8 卡 SP8，在 JSON 中将 `shared_cpu_weight_scope` 改为 `numa` 切换 NUMA。该共享 adapter 当前不支持 I2I。
+启动入口在 [scripts/qwen_image/inference/shared_offload](../../../../scripts/qwen_image/inference/shared_offload/)，统一脚本为 `qwen_image_2512_block_shared_offload.sh`，配置为 `configs/qwen_image/shared_offload/qwen_image_2512_block_shared.json`。默认 T2I、host + 8 卡 SP8，在 JSON 中将 `shared_cpu_weight_scope` 改为 `numa` 切换 NUMA。该共享 adapter 当前不支持 I2I。
 
 当前示例共享 DiT blocks；编码器和 VAE 没有因此自动开启共享。扩展新组件需要独立 loader、owner、生命周期和证据。
 

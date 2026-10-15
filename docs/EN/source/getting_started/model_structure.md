@@ -315,10 +315,10 @@ lightx2v_path=/path/to/LightX2V
 
 # Run script
 cd LightX2V/scripts
-bash wan22/distill/run_wan22_moe_i2v_distill_fp8_4step.sh
+bash wan22/inference/distill/run_wan22_moe_i2v_distill.sh
 ```
 
-> 💡 **Tip**: Set `high_noise_quantized_ckpt` and `low_noise_quantized_ckpt` in `configs/distill/wan22/wan_moe_i2v_distill_quant.json` to the two downloaded files before running the script.
+> 💡 **Tip**: Set the script's `--config_json` to `${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_quant.json`, then set `high_noise_quantized_ckpt` and `low_noise_quantized_ckpt` in that JSON to the two downloaded files.
 
 #### Scenario B: Multiple Model Files Per Directory
 

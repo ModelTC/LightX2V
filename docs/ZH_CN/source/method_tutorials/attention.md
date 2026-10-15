@@ -31,7 +31,7 @@
 
 如需更换为其他类型，只需将对应值替换为上述表格中的类型名称即可。
 
-Wan2.1 的 `cross_attn_2_type` 用于 I2V/FLF2V 的图像交叉注意力，T2V/VACE 配置无需此字段。
+Wan 的 `cross_attn_2_type` 用于图像交叉注意力。Wan2.1 的 I2V/FLF2V 和 Wan2.2 的 Animate/Animate2 配置需要保留；T2V/VACE，以及关闭图像编码器的 Wan2.2 MoE、TI2V 和 S2V 配置无需此字段。
 
 tips: radial_attn因为稀疏算法原理的限制只能用在self attention
 
