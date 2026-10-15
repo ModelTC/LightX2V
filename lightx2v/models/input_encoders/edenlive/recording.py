@@ -1,4 +1,5 @@
 import math
+from bisect import bisect_right
 
 import av
 import numpy as np
@@ -50,11 +51,12 @@ def prepare_recording(video_path, image_path, height, width, fps, max_frames):
     return proxy, cover, num_frames
 
 
-def frame_prompts(metadata, latent_frames, fps, chunk_size):
-    prompts = []
-    for start in range(0, latent_frames, chunk_size):
-        end = min(start + chunk_size, latent_frames)
-        start_ms, end_ms = max(0, 4 * start - 3) * 1000 / fps, (4 * end - 3) * 1000 / fps
-        texts = dict.fromkeys(event["text"] for event in metadata.get("dynamicPrompts", []) if event["startMs"] < end_ms and event["endMs"] > start_ms)
-        prompts.append(" ".join((metadata["staticPrompt"], *texts)))
-    return prompts
+def frame_prompts(prompt_travel, latent_frames, chunk_size, temporal_stride):
+    texts = prompt_travel["prompt_travel_text"]
+    starts = prompt_travel["prompt_travel_start_frames"]
+    if len(texts) != len(starts):
+        raise ValueError("prompt_travel_text and prompt_travel_start_frames must have the same length")
+    start_latents = [frame // temporal_stride for frame in starts]
+    if starts[0] != 0 or any(left >= right for left, right in zip(start_latents, start_latents[1:])):
+        raise ValueError("prompt_travel_start_frames must start at 0 and map to strictly increasing latent frames")
+    return [texts[bisect_right(start_latents, start) - 1] for start in range(0, latent_frames, chunk_size)]

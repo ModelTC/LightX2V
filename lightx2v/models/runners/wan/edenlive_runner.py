@@ -1,6 +1,3 @@
-import json
-from pathlib import Path
-
 import torch
 from loguru import logger
 
@@ -10,9 +7,10 @@ from lightx2v.models.input_encoders.edenlive.recording import frame_prompts, pre
 from lightx2v.models.networks.wan.edenlive_model import EdenLiveARModel, EdenLiveModel
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, WanRunner
 from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler, EdenLiveScheduler
+from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.input_info import EdenLiveInputInfo
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -22,6 +20,8 @@ class EdenLiveRunner:
 
     model_class = EdenLiveModel
     scheduler_class = EdenLiveScheduler
+    _WARMUP_TASKS = ("i2v",)
+    _WARMUP_RESOLUTIONS = ((480, 480), (480, 832))
     input_info_cls_by_task = {"i2v": EdenLiveInputInfo}
     supported_request_fields_by_task = {"i2v": WanRunner.supported_request_fields_by_task["i2v"] | {"video_path"}}
 
@@ -40,8 +40,7 @@ class EdenLiveRunner:
         self.proxy_encoder = self.load_proxy_encoder()
 
     def load_proxy_encoder(self):
-        root = Path(self.config["model_path"]) / "vision-encoder"
-        return ProxyDINO(str(root / "backbone"), str(root / "projection.safetensors"), self.config["proxy_resize_mode"])
+        return ProxyDINO(self.config["model_path"], self.config["proxy_resize_mode"])
 
     def encode_image_condition(self, image, frames):
         if not self.is_wan21:
@@ -55,10 +54,14 @@ class EdenLiveRunner:
         mask[:, 0] = 1
         return {"vae_encoder_out": torch.cat((mask, image_latent)), "clip_encoder_out": self.run_image_encoder(image[None])}
 
-    def prompt_schedule(self, metadata):
-        if self.is_wan21:
-            return [metadata["staticPrompt"]]
-        return frame_prompts(metadata, self.input_info.latent_shape[1], self.config["fps"], 1)
+    def prompt_schedule(self, chunk_size=1):
+        prompt_travel = self.config.get("prompt_travel")
+        if prompt_travel is None:
+            return [self.input_info.prompt]
+        if self.config["model_cls"] == "wan21_edenlive":
+            raise ValueError("Wan2.1 bidirectional EdenLive does not support prompt_travel")
+        logger.info("Prompt travel enabled: start_frames={}", prompt_travel["prompt_travel_start_frames"])
+        return frame_prompts(prompt_travel, self.input_info.latent_shape[1], chunk_size, self.config["vae_stride"][0])
 
     def _run_input_encoder_local_i2v(self):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
@@ -71,14 +74,16 @@ class EdenLiveRunner:
         self.input_info.num_frames = frames
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
         self.proxy_pixels = proxy
+        return self._encode_inputs(image, frames)
+
+    def _encode_inputs(self, image, frames):
         image = image.to(device=AI_DEVICE)
         clean = self.vae_encoder.encode(image[None, :, None].to(GET_DTYPE()))
         clean = clean[0] if clean.ndim == 5 else clean
         image_condition = self.encode_image_condition(image, frames)
         image_condition["clean_first_frame"] = clean
         self.prompt_embeddings = {}
-        prompt = self.input_info.prompt
-        self.prompts = self.prompt_schedule(json.loads(Path(prompt).read_text())) if prompt.endswith(".json") else [prompt]
+        self.prompts = self.prompt_schedule()
         original_prompt = self.input_info.prompt
         for text in dict.fromkeys(self.prompts):
             self.input_info.prompt = text
@@ -106,8 +111,8 @@ class EdenLiveRunner:
         self.inputs["proxy_features"] = self.proxy_encoder.infer(pixels.add_(1).mul_(0.5)).to(GET_DTYPE())
         self._prepare_text_inputs(start)
 
-    def _run_steps(self, start, frames, total):
-        for step in range(self.scheduler.infer_steps):
+    def _run_steps(self, start, frames, total, step_indices=None):
+        for step in range(self.scheduler.infer_steps) if step_indices is None else step_indices:
             self.check_stop()
             logger.info(f"==> step_index: {step + 1} / {self.scheduler.infer_steps}")
             with ProfilingContext4DebugL1("step_pre"):
@@ -119,35 +124,85 @@ class EdenLiveRunner:
             if self.progress_callback:
                 self.progress_callback(100 * (start * self.scheduler.infer_steps + (step + 1) * frames) / (total * self.scheduler.infer_steps), 100)
 
-    def _run_diffusion(self):
+    def _run_diffusion(self, step_indices=None):
         total = self.scheduler.latents.shape[1]
         self._prepare_chunk_inputs(0, total)
-        self._run_steps(0, total, total)
+        self._run_steps(0, total, total, step_indices)
+        return self.run_vae_decoder(self.scheduler.latents)
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         self.init_run()
-        self._run_diffusion()
-        self.gen_video = self.run_vae_decoder(self.scheduler.latents)
+        self.gen_video = self._run_diffusion()
         self.gen_video_final = self.gen_video
         result = self.process_images_after_vae_decoder()
         self.end_run()
         return result
+
+    @torch.no_grad()
+    def _run_warmup(self):
+        lazy_load = self.config.get("lazy_load", False)
+        if lazy_load:
+            self.vae_encoder, self.vae_decoder = self.load_vae()
+            self.image_encoder = self.load_image_encoder()
+        latent_frames = self.config.get("ar_config", {}).get("local_attn_size", 3) + self.config.get("ar_config", {}).get("num_frame_per_chunk", 3) + 1
+        num_frames = self.config.get("num_frames")
+        if num_frames is None:
+            num_frames = (latent_frames - 1) * self.config["vae_stride"][0] + 1
+        try:
+            for height, width in self._WARMUP_RESOLUTIONS:
+                logger.info("EdenLive warmup: {}x{}, {} frames", height, width, num_frames)
+                self.scheduler.generator = None
+                stride_t, stride_h, stride_w = self.config["vae_stride"]
+                self.input_info = EdenLiveInputInfo(prompt="warmup", negative_prompt="warmup", seed=0, num_frames=num_frames)
+                self.input_info.latent_shape = [self.config["out_dim"], (num_frames - 1) // stride_t + 1, height // stride_h, width // stride_w]
+                self.proxy_pixels = torch.zeros(3, self.input_info.latent_shape[1], height, width)
+                try:
+                    self.inputs = self._encode_inputs(torch.zeros(3, height, width, device=AI_DEVICE), num_frames)
+                    self.scheduler.prepare(0, self.input_info.latent_shape, self.inputs["image_encoder_output"])
+                    self._run_diffusion(step_indices=(0,))
+                finally:
+                    getattr(torch, AI_DEVICE).synchronize()
+                    if self.config["cpu_offload"] and self.config.get("offload_granularity", "block") == "model":
+                        self.model.to_cpu()
+                    self.clear_warmup_state()
+        finally:
+            self.input_info = None
+            self.proxy_pixels = None
+            self.prompt_embeddings = {}
+            self.prompts = []
+            if hasattr(self, "inputs"):
+                del self.inputs
+
+    def clear_warmup_state(self):
+        self.scheduler.clear()
+        self.model.transformer_infer.clear_request_state()
+
+    def clean_lazy_load_warmup(self):
+        super().clean_lazy_load_warmup()
+        del self.proxy_encoder
+
+    def end_run(self):
+        self.model.transformer_infer.clear_request_state()
+        self.proxy_pixels = None
+        self.prompt_embeddings = {}
+        self.prompts = []
+        super().end_run()
 
 
 class EdenLiveARRunner(EdenLiveRunner):
     model_class = EdenLiveARModel
     scheduler_class = EdenLiveARScheduler
 
-    def prompt_schedule(self, metadata):
-        return frame_prompts(metadata, self.input_info.latent_shape[1], self.config["fps"], self.config["ar_config"]["num_frame_per_chunk"])
+    def prompt_schedule(self):
+        return super().prompt_schedule(self.config["ar_config"]["num_frame_per_chunk"])
 
     def _prepare_text_inputs(self, start):
         index = start // self.config["ar_config"]["num_frame_per_chunk"]
         text = self.prompts[index] if len(self.prompts) > 1 else self.prompts[0]
         self.inputs["text_encoder_output"] = self.prompt_embeddings[text]
 
-    def _run_diffusion(self):
+    def _run_diffusion(self, step_indices=None):
         total = self.scheduler.latents.shape[1]
         ar = self.config["ar_config"]
         chunk = ar["num_frame_per_chunk"]
@@ -162,36 +217,47 @@ class EdenLiveARRunner(EdenLiveRunner):
             pool._init_kv_buffer()
             pools[branch] = pool
         self.model.transformer_infer.cache_pools = pools
-        for start in range(0, total, chunk):
-            logger.info(f"start chunk {start // chunk + 1}/{(total + chunk - 1) // chunk}")
-            frames = min(chunk, total - start)
-            self._prepare_chunk_inputs(start, frames)
-            self._run_steps(start, frames, total)
-            with ProfilingContext4DebugL1("step_pre_in_rerun"):
-                self.scheduler.step_pre(self.scheduler.infer_steps - 1, chunk_start=start, cache_update=True)
-            with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
-                self.model.infer(self.inputs)
-        if ar.get("kv_offload", False):
-            for pool in pools.values():
-                pool.sync_all()
-        self.model.transformer_infer.cache_pools = {}
+        decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder)
+        try:
+            with no_sync_profiling(enabled=decoder.is_async):
+                for start in range(0, total, chunk):
+                    logger.info(f"start chunk {start // chunk + 1}/{(total + chunk - 1) // chunk}")
+                    frames = min(chunk, total - start)
+                    self._prepare_chunk_inputs(start, frames)
+                    self._run_steps(start, frames, total, step_indices)
+                    with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                        self.scheduler.step_pre(self.scheduler.infer_steps - 1, chunk_start=start, cache_update=True)
+                    with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
+                        self.model.infer(self.inputs)
+                    if decoder.is_async:
+                        decoder.submit(self.vae_decoder.cached_decode_withflag, self.scheduler.latents[:, start : start + frames], start == 0, start + frames == total)
+                decoded_chunks = decoder.finish()
+        finally:
+            decoder.finish()
+            if ar.get("kv_offload", False):
+                for pool in pools.values():
+                    pool.sync_all()
+            self.model.transformer_infer.cache_pools = {}
+        return torch.cat(decoded_chunks, dim=2) if decoder.is_async else self.run_vae_decoder(self.scheduler.latents)
 
 
 @RUNNER_REGISTER("wan21_edenlive")
 class Wan21EdenLiveRunner(EdenLiveRunner, WanRunner):
-    pass
+    _SUPPORTS_GENERIC_WARMUP = True
 
 
 @RUNNER_REGISTER("wan22_edenlive")
 class Wan22EdenLiveRunner(EdenLiveRunner, Wan22DenseRunner):
-    pass
+    _SUPPORTS_GENERIC_WARMUP = True
+    _WARMUP_RESOLUTIONS = ((512, 512), (704, 1280))
 
 
 @RUNNER_REGISTER("wan21_edenlive_ar")
 class Wan21EdenLiveARRunner(EdenLiveARRunner, WanRunner):
-    pass
+    _SUPPORTS_GENERIC_WARMUP = True
 
 
 @RUNNER_REGISTER("wan22_edenlive_ar")
 class Wan22EdenLiveARRunner(EdenLiveARRunner, Wan22DenseRunner):
-    pass
+    _SUPPORTS_GENERIC_WARMUP = True
+    _WARMUP_RESOLUTIONS = ((512, 512), (704, 1280))

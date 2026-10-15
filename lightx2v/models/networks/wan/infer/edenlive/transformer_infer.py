@@ -10,12 +10,32 @@ from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffl
 class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
+        self.text_len = config["text_len"]
+        self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block"
         if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "phase":
             raise NotImplementedError("EdenLive supports block or model offload")
 
     def infer(self, weights, pre_infer_out):
         self.current_pre = pre_infer_out
+        frames, height, width = pre_infer_out.grid_sizes.tuple
+        self.key_freqs = self._freqs(self._visible_frames(frames), height, width, pre_infer_out.x.device)
+        self.query_freqs = self.key_freqs[-frames * height * width :]
+        if self.seq_parallel:
+            tokens = frames * height * width
+            start = pre_infer_out.adapter_args["seq_start"]
+            self.query_freqs = F.pad(self.query_freqs, (0, 0, 0, 0, 0, (-tokens) % dist.get_world_size(self.seq_p_group)))[start : start + pre_infer_out.x.shape[0]]
         return super().infer(weights, pre_infer_out)
+
+    def _visible_frames(self, frames):
+        return frames
+
+    def get_compile_block_key(self, block_idx, block):
+        return id(block) if self.block_offload else block_idx
+
+    def clear_request_state(self):
+        self.current_pre = None
+        self.key_freqs = None
+        self.query_freqs = None
 
     def infer_block(self, block, x, pre_infer_out, self_attn_kwargs=None):
         # The timestep embedding is shared by every block.
@@ -62,16 +82,16 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
                 end = cursor + frames * tokens_per_frame
                 left, right = max(cursor - local_start, 0), min(end - local_start, q.shape[0])
                 if right > left:
-                    text_start = index * self.config["text_len"]
-                    text_end = text_start + self.config["text_len"]
+                    text_start = index * self.text_len
+                    text_end = text_start + self.text_len
                     output = phase.cross_attn_1.apply(
                         q=q[left:right],
                         k=k[text_start:text_end],
                         v=v[text_start:text_end],
                         cu_seqlens_q=torch.tensor([0, right - left], dtype=torch.int32),
-                        cu_seqlens_kv=torch.tensor([0, self.config["text_len"]], dtype=torch.int32),
+                        cu_seqlens_kv=torch.tensor([0, self.text_len], dtype=torch.int32),
                         max_seqlen_q=right - left,
-                        max_seqlen_kv=self.config["text_len"],
+                        max_seqlen_kv=self.text_len,
                     )
                     attention[left:right] = output.view(right - left, self.num_heads, self.head_dim)
                 cursor = end
@@ -79,17 +99,16 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
         if self.has_image_context:
             k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, self.num_heads, self.head_dim)
             v_img = phase.cross_attn_v_img.apply(context_img).view_as(k_img)
-            attention.add_(
-                phase.cross_attn_2.apply(
-                    q=q,
-                    k=k_img,
-                    v=v_img,
-                    cu_seqlens_q=self.cross_attn_cu_seqlens_q,
-                    cu_seqlens_kv=self.cross_attn_cu_seqlens_kv_img,
-                    max_seqlen_q=q.shape[0],
-                    max_seqlen_kv=k_img.shape[0],
-                )
+            image_attention = phase.cross_attn_2.apply(
+                q=q,
+                k=k_img,
+                v=v_img,
+                cu_seqlens_q=self.cross_attn_cu_seqlens_q,
+                cu_seqlens_kv=self.cross_attn_cu_seqlens_kv_img,
+                max_seqlen_q=q.shape[0],
+                max_seqlen_kv=k_img.shape[0],
             )
+            attention.add_(image_attention)
         return phase.cross_attn_o.apply(attention)
 
     def _freqs(self, frames, height, width, device):
@@ -119,19 +138,11 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
         return phase.self_attn_o.apply(attention)
 
     def _self_attention(self, phase, q, k, v, grid_sizes):
-        _, height, width = grid_sizes
-        current_tokens = math.prod(grid_sizes)
-        visible_frames = k.shape[0] // (height * width)
-        key_freqs = self._freqs(visible_frames, height, width, q.device)
-        query_freqs = key_freqs[-current_tokens:]
-        if self.seq_parallel:
-            start = self.current_pre.adapter_args["seq_start"]
-            query_freqs = F.pad(query_freqs, (0, 0, 0, 0, 0, (-current_tokens) % dist.get_world_size(self.seq_p_group)))[start : start + q.shape[0]]
         if q.shape[0] == k.shape[0]:
-            q, k = phase.rope.apply(q, k, key_freqs)
+            q, k = phase.rope.apply(q, k, self.key_freqs)
         else:
-            q = phase.rope.apply_single(q, query_freqs)
-            k = phase.rope.apply_single(k, key_freqs)
+            q = phase.rope.apply_single(q, self.query_freqs)
+            k = phase.rope.apply_single(k, self.key_freqs)
         return phase.self_attn_1.apply(
             q=q,
             k=k,
@@ -148,6 +159,18 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer):
         super().__init__(config)
         self.cache_pools = {}
 
+    def _visible_frames(self, frames):
+        ar = self.config["ar_config"]
+        return min(self.scheduler.chunk_start, ar["local_attn_size"] - ar["num_frame_per_chunk"]) + frames
+
+    def get_compile_block_key(self, block_idx, block):
+        return block_idx
+
+    def clear_request_state(self):
+        super().clear_request_state()
+        self.cache_pools = {}
+
+    @torch.compiler.disable
     def _self_attention(self, phase, q, k, v, grid_sizes):
         frames, height, width = grid_sizes
         current_tokens = math.prod(grid_sizes)

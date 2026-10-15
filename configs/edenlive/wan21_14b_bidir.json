@@ -21,6 +21,5 @@
     "rope_type": "flashinfer_rope",
     "modulate_type": "triton",
     "cpu_offload": false,
-    "mxfp8_fuse_enable": false,
-    "t5_rms_norm_type": "sgl-kernel"
+    "mxfp8_fuse_enable": false
 }

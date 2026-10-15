@@ -11,6 +11,13 @@ class EdenLiveScheduler(WanScheduler):
         super().__init__(config)
         self.is_wan21 = config["model_cls"] in ["wan21_edenlive", "wan21_edenlive_ar"]
 
+    def clear(self):
+        super().clear()
+        self.condition_frame = None
+        self.latents_input = None
+        self.chunk_start = 0
+        self.cache_update = False
+
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(latent_shape, generator=self.generator, device=AI_DEVICE, dtype=GET_DTYPE())

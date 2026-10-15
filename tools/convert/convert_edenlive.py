@@ -6,6 +6,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -118,23 +119,69 @@ def convert_release(source, output, overwrite):
     copy_tree(source, output, overwrite, exclude=converted_files)
     config_dir = output / "configs"
     config_dir.mkdir(parents=True, exist_ok=True)
-    for profile in sorted((REPO_ROOT / "configs/edenlive").glob("*.json")):
-        shutil.copy2(profile, config_dir / profile.name)
+    profiles = REPO_ROOT / "configs/edenlive"
+    for profile in sorted(profiles.rglob("*.json")):
+        destination = config_dir / profile.relative_to(profiles)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(profile, destination)
     print(f"Ready: model_path={output}, config_json={config_dir}/<profile>.json", flush=True)
+
+
+def quantize_dit(source, output, linear_type, output_name, device, overwrite):
+    from safetensors import safe_open
+
+    checkpoint = source / "diffusion_pytorch_model.safetensors" if source.is_dir() else source
+    with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+        if "head.head.weight" not in handle.keys():
+            raise ValueError("Quantization requires a converted native EdenLive DiT checkpoint")
+    name = output_name or f"{source.stem}-{linear_type}"
+    if skip_checkpoint(output / f"{name}.safetensors", "head.head.weight", overwrite):
+        return
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools/convert/converter.py"),
+            "--source",
+            str(checkpoint),
+            "--output",
+            str(output),
+            "--output_name",
+            name,
+            "--model_type",
+            "wan_dit",
+            "--quantized",
+            "--linear_type",
+            linear_type,
+            "--non_linear_dtype",
+            "torch.bfloat16",
+            "--ignore-keys",
+            "none",
+            "--device",
+            device,
+            "--single_file",
+        ],
+        check=True,
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--all", action="store_true", help="Convert a complete EdenLive release, including encoders and VAE assets")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--all", action="store_true", help="Convert a complete EdenLive release, including encoders and VAE assets")
+    mode.add_argument("--quantize", choices=["fp8", "int8-convrot"], help="Quantize a converted native DiT into one safetensors file")
+    parser.add_argument("--output_name", help="Quantized output filename, without .safetensors")
+    parser.add_argument("--device", default="cuda", help="Device for quantization, e.g. cuda:0 or cpu")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing outputs; otherwise keep native checkpoints already present")
     args = parser.parse_args()
     source, output = Path(args.source).resolve(), Path(args.output).resolve()
     if source == output or source in output.parents:
         raise ValueError("Output must be outside the source directory")
     output.mkdir(parents=True, exist_ok=True)
-    if args.all:
+    if args.quantize:
+        quantize_dit(source, output, args.quantize, args.output_name, args.device, args.overwrite)
+    elif args.all:
         convert_release(source, output, args.overwrite)
     else:
         convert_dit(source, output, args.overwrite)

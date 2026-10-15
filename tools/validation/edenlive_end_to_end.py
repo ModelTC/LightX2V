@@ -1,7 +1,6 @@
 """Save upstream/native inference fixtures and videos for parity inspection."""
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -21,7 +20,12 @@ def main():
     parser.add_argument("--frames", type=int, default=25)
     parser.add_argument("--sp", action="store_true")
     parser.add_argument("--capture-dit", action="store_true")
+    parser.add_argument(
+        "--prompt",
+        default="Cinematic photorealism. A vast volcanic cavern dominated by a churning, incandescent molten lava lake, dark basalt formations, and jagged stalactites. Dynamic heat haze and glowing orange embers fill the air. Seen from a first-person viewpoint, a heavy industrial cryo-blaster with frosted metallic plating and cyan energy vents is held ready. Projectiles flash-freeze bubbling magma into dense slabs of hissing glacial ice. Dramatic lighting balances intense fiery magma radiance against cool cyan cryo luminescence.",
+    )
     args = parser.parse_args()
+    base_profile = args.profile.removesuffix("_prompt_travel")
     sys.path.insert(0, args.upstream)
     root = Path(args.upstream)
     output = Path(args.output)
@@ -38,7 +42,7 @@ def main():
         from edenlive.inference.offline import run_offline_inference
         from edenlive.models.adapters.wan22_diffusers.adapter import Wan22DiffusersAdapter
 
-        config = load_config(root / "edenlive/configs" / f"{args.profile.replace('5b_', '5b_720p_').replace('14b_', '14b_480p_')}.yaml")
+        config = load_config(root / "edenlive/configs" / f"{base_profile.replace('5b_', '5b_720p_').replace('14b_', '14b_480p_')}.yaml")
         config["model"]["pretrained_dir"] = args.model_path
         config["data"]["dataset"]["params"]["max_frames"] = args.frames
         config["inference"]["max_batches"] = 1
@@ -130,7 +134,7 @@ def main():
 
         EdenLiveRunner._run_input_encoder_local_i2v = encode
         variant = "5b" if "5b" in args.profile else "14b"
-        model_cls = args.profile.split("_")[0] + "_edenlive" + ("_ar" if args.profile.endswith("_few_step") else "")
+        model_cls = base_profile.split("_")[0] + "_edenlive" + ("_ar" if base_profile.endswith("_few_step") else "")
         config = build_startup_config(
             dict(
                 model_cls=model_cls,
@@ -155,11 +159,9 @@ def main():
             init_parallel(config)
         runner = build_runner(config)
         sample = root / "examples/samples/cryo-crossing"
-        metadata = json.loads((sample / "prompts.json").read_text())
-        prompt = str(sample / "prompts.json") if "few_step" in args.profile else metadata["staticPrompt"]
         request = dict(
             task="i2v",
-            prompt=prompt,
+            prompt=args.prompt,
             image_path=str(sample / "cover.png"),
             video_path=str(sample / "recording.mp4"),
             num_frames=args.frames,
@@ -169,7 +171,7 @@ def main():
         if config["enable_cfg"]:
             import yaml
 
-            profile = yaml.safe_load((root / "edenlive/configs" / f"{args.profile.replace('5b_', '5b_720p_').replace('14b_', '14b_480p_')}.yaml").read_text())
+            profile = yaml.safe_load((root / "edenlive/configs" / f"{base_profile.replace('5b_', '5b_720p_').replace('14b_', '14b_480p_')}.yaml").read_text())
             request["negative_prompt"] = profile["inference"].get("negative_prompt", profile["model"].get("negative_prompt", ""))
         runner.run_request(runner.prepare_request(request))
     if not args.sp or dist.get_rank() == 0:

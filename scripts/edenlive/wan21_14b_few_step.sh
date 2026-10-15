@@ -1,9 +1,9 @@
 #!/bin/bash
 
-lightx2v_path=/path/to/LightX2V
-model_path=/path/to/EdenLive-x2v
+lightx2v_path=/data/nvme6/gushiqiao/codes/vast/LightX2V
+model_path=/data/nvme3/gushiqiao/models/EdenLive-x2v
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 source ${lightx2v_path}/scripts/base/base.sh

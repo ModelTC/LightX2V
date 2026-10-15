@@ -76,7 +76,7 @@ def main():
 
         for resize in ["bilinear", "bicubic_center_crop", "bicubic"]:
             reference = create_checkpoint_dinov3_encoder(str(root / "vision-encoder/backbone"), str(root / "vision-encoder/projection.safetensors")).cuda().float()
-            native = ProxyDINO(str(root / "vision-encoder/backbone"), str(root / "vision-encoder/projection.safetensors"), resize)
+            native = ProxyDINO(str(root), resize)
             images = torch.rand(3, 3, 128, 224, device="cuda")
             captures = []
             for block in native.blocks:

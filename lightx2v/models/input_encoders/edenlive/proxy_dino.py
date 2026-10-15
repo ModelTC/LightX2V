@@ -14,14 +14,15 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class ProxyDINO(WeightModule):
-    def __init__(self, model_path, checkpoint_path, resize_mode):
+    def __init__(self, model_path, resize_mode):
         super().__init__()
-        self.config = json.loads((Path(model_path) / "config.json").read_text())
+        root = Path(model_path) / "vision-encoder"
+        self.config = json.loads((root / "backbone/config.json").read_text())
         self.resize_mode = resize_mode
         self.heads = self.config["num_attention_heads"]
         self.head_dim = self.config["hidden_size"] // self.heads
         self.prefix = 1 + self.config["num_register_tokens"]
-        state = load_file(checkpoint_path)
+        state = load_file(str(root / "projection.safetensors"))
         state = {k.removeprefix("model.module.encoder."): v.to(AI_DEVICE) for k, v in state.items()}
         self.add_module("patch", CONV2D_WEIGHT_REGISTER["Default"]("backbone.embeddings.patch_embeddings.weight", "backbone.embeddings.patch_embeddings.bias", stride=self.config["patch_size"]))
         for name in ("cls_token", "register_tokens"):

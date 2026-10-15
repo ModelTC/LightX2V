@@ -13,9 +13,9 @@
     "proxy_resize_mode": "bicubic_center_crop",
     "proxy_condition_rmsnorm": true,
     "proxy_unconditional_control": "zero",
-    "self_attn_1_type": "flash_attn3",
-    "cross_attn_1_type": "flash_attn3",
-    "cross_attn_2_type": "flash_attn3",
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
     "rms_norm_type": "sgl-kernel",
     "layer_norm_type": "Triton",
     "rope_type": "flashinfer_rope",
@@ -34,6 +34,5 @@
             750.0,
             500.0
         ]
-    },
-    "t5_rms_norm_type": "sgl-kernel"
+    }
 }
