@@ -209,6 +209,7 @@ class T5Attention(nn.Module):
         self.dim_attn = dim_attn
         self.num_heads = num_heads
         self.head_dim = dim_attn // num_heads
+        self.use_sdpa = False
 
         if quantized:
             if quant_scheme in ["int8", "int8-vllm"]:
@@ -274,9 +275,14 @@ class T5Attention(nn.Module):
             attn_bias.masked_fill_(mask == 0, torch.finfo(x.dtype).min)
 
         # compute attention (T5 does not use scaling)
-        attn = torch.einsum("binc,bjnc->bnij", q, k) + attn_bias
-        attn = F.softmax(attn.float(), dim=-1).type_as(attn)
-        x = torch.einsum("bnij,bjnc->binc", attn, v)
+        if self.use_sdpa:
+            # Preserve the relative-bias layout used by the upstream SDPA kernel.
+            attn_bias = attn_bias.permute(0, 2, 3, 1).contiguous().permute(0, 3, 1, 2)
+            x = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=attn_bias, scale=1.0).transpose(1, 2).contiguous()
+        else:
+            attn = torch.einsum("binc,bjnc->bnij", q, k) + attn_bias
+            attn = F.softmax(attn.float(), dim=-1).type_as(attn)
+            x = torch.einsum("bnij,bjnc->binc", attn, v)
         x = x.reshape(b, -1, n * c)
         x = self.o(x)
 
@@ -479,6 +485,7 @@ class T5Encoder(nn.Module):
         rms_norm_type="sgl-kernel",
     ):
         super(T5Encoder, self).__init__()
+        self.use_sdpa = False
         self.cpu_offload = cpu_offload
         self.dim = dim
         self.dim_attn = dim_attn
@@ -550,9 +557,14 @@ class T5Encoder(nn.Module):
             attn_bias.masked_fill_(mask == 0, torch.finfo(x.dtype).min)
 
         # compute attention (T5 does not use scaling)
-        attn = torch.einsum("binc,bjnc->bnij", q, k) + attn_bias
-        attn = F.softmax(attn.float(), dim=-1).type_as(attn)
-        x = torch.einsum("bnij,bjnc->binc", attn, v)
+        if self.use_sdpa:
+            # Preserve the relative-bias layout used by the upstream SDPA kernel.
+            attn_bias = attn_bias.permute(0, 2, 3, 1).contiguous().permute(0, 3, 1, 2)
+            x = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=attn_bias, scale=1.0).transpose(1, 2).contiguous()
+        else:
+            attn = torch.einsum("binc,bjnc->bnij", q, k) + attn_bias
+            attn = F.softmax(attn.float(), dim=-1).type_as(attn)
+            x = torch.einsum("bnij,bjnc->binc", attn, v)
         x = x.reshape(b, -1, n * c)
         x = attn_phase.attn_o.apply(x.squeeze(0)).unsqueeze(0)
         return x

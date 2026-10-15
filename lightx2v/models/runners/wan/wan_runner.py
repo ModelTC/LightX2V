@@ -278,7 +278,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             model = build_wan_model_with_lora(WanModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
         return model
 
-    def load_image_encoder(self):
+    def load_image_encoder(self, dtype=torch.float16):
         image_encoder = None
         if self.config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
             # offload config
@@ -303,7 +303,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 clip_original_ckpt = find_torch_model_path(self.config, "clip_original_ckpt", clip_model_name)
 
             image_encoder = CLIPModel(
-                dtype=torch.float16,
+                dtype=dtype,
                 device=clip_device,
                 checkpoint_path=clip_original_ckpt,
                 clip_quantized=clip_quantized,
@@ -1187,7 +1187,11 @@ class Wan22DenseRunner(WanRunner):
             default_pruning_rate = 0.75
 
         decoder_path = self.config.get("vae_path") or find_torch_model_path(self.config, filename=decoder_filename)
-        teacher_encoder_path = self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
+        teacher_encoder_path = (
+            decoder_path
+            if resolved_vae_type == "wan2.2"
+            else self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
+        )
 
         return {
             "vae_path": decoder_path,

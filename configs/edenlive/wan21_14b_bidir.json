@@ -1,0 +1,54 @@
+{
+    "eden_variant": "14b",
+    "eden_causal": false,
+    "dim": 5120,
+    "num_heads": 40,
+    "num_layers": 40,
+    "ffn_dim": 13824,
+    "freq_dim": 256,
+    "text_dim": 4096,
+    "in_dim": 1060,
+    "out_dim": 16,
+    "num_channels_latents": 16,
+    "vae_stride": [
+        4,
+        8,
+        8
+    ],
+    "patch_size": [
+        1,
+        2,
+        2
+    ],
+    "text_len": 512,
+    "size": [
+        480,
+        832
+    ],
+    "fps": 16,
+    "num_frames": 81,
+    "infer_steps": 30,
+    "sample_shift": 3.0,
+    "sample_guide_scale": 3.0,
+    "enable_cfg": true,
+    "use_image_encoder": true,
+    "proxy_resize_mode": "bicubic",
+    "proxy_condition_rmsnorm": true,
+    "proxy_unconditional_control": "same",
+    "self_attn_1_type": "torch_sdpa",
+    "cross_attn_1_type": "torch_sdpa",
+    "cross_attn_2_type": "torch_sdpa",
+    "rms_norm_type": "torch_native",
+    "layer_norm_type": "torch-fp32",
+    "rope_type": "torch_complex_rope",
+    "modulate_type": "torch",
+    "cpu_offload": false,
+    "mxfp8_fuse_enable": false,
+    "t5_rms_norm_type": "torch",
+    "video_save_options": {
+        "crf": 18,
+        "preset": "fast",
+        "round_pixels": true
+    },
+    "video_save_method": "imageio"
+}

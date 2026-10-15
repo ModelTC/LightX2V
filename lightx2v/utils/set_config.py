@@ -321,7 +321,7 @@ def normalize_startup_config(config, model_config):
 
 def build_cli_inputs(args):
     args_data = {key: value for key, value in vars(args).items() if value is not None}
-    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "task"}
+    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "task", "dit_original_ckpt", "t5_original_ckpt", "t5_tokenizer_path", "clip_original_ckpt", "vae_path"}
     startup_args = {key: value for key, value in args_data.items() if key in startup_fields}
     request_data = {key: value for key, value in args_data.items() if key not in startup_fields}
     request_data["task"] = args.task

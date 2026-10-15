@@ -222,6 +222,9 @@ def save_to_video(
     method: str = "imageio",
     lossless: bool = False,
     output_pix_fmt: Optional[str] = "yuv420p",
+    crf: Optional[int] = None,
+    preset: Optional[str] = None,
+    round_pixels: bool = False,
 ) -> None:
     """
     Save ComfyUI Image tensor to video file
@@ -241,12 +244,22 @@ def save_to_video(
 
     if method == "imageio":
         # Convert to uint8
-        frames = (images * 255).to(torch.uint8).cpu().numpy()
-        imageio.mimsave(output_path, frames, fps=fps)  # type: ignore
+        scaled = images * 255
+        frames = (scaled.round() if round_pixels else scaled).to(torch.uint8).cpu().numpy()
+        writer_options = {}
+        if crf is not None or preset is not None:
+            params = []
+            if crf is not None:
+                params.extend(["-crf", str(crf)])
+            if preset is not None:
+                params.extend(["-preset", preset])
+            writer_options = dict(quality=None, pixelformat=output_pix_fmt, macro_block_size=1, ffmpeg_params=params + ["-movflags", "+faststart"])
+        imageio.mimsave(output_path, frames, fps=fps, **writer_options)  # type: ignore
 
     elif method == "ffmpeg":
         # Convert to numpy and scale to [0, 255]
-        frames = (images * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
+        scaled = (images * 255).clamp(0, 255)
+        frames = (scaled.round() if round_pixels else scaled).to(torch.uint8).cpu().numpy()
 
         # Convert RGB to BGR for OpenCV/FFmpeg
         frames = frames[..., ::-1].copy()
@@ -317,6 +330,12 @@ def save_to_video(
                 "-an",  # No audio
                 output_path,
             ]
+
+        if not lossless:
+            if crf is not None:
+                command[-1:-1] = ["-crf", str(crf)]
+            if preset is not None:
+                command[-1:-1] = ["-preset", preset]
 
         # Run FFmpeg (stderr to DEVNULL: avoids pipe buffer deadlock; no need to capture for errors)
         process = subprocess.Popen(

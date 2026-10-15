@@ -5,6 +5,7 @@ import torch
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 RUNNER_MODULES = {
+    "edenlive": "lightx2v.models.runners.wan.edenlive_runner",
     "bagel": "lightx2v.models.runners.bagel.bagel_runner",
     "cosmos3": "lightx2v.models.runners.cosmos3.cosmos3_runner",
     "dreamzero": "lightx2v.models.runners.wan.wan_dreamzero_runner",
