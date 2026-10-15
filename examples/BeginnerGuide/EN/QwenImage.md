@@ -50,13 +50,14 @@ Text-to-Image Models
 bash qwen_image_t2i_2512.sh
 
 # Inference with 2512 text-to-image step-distilled model, default is 8 steps, requires modify the lora_configs path in config_json file
-bash qwen_image_t2i_2512_distill.sh
+bash inference/distill/qwen_image_t2i_2512_distill.sh
 
 # Inference with 2512 text-to-image step-distilled + FP8 quantized model, default is 8 steps, requires modify the dit_quantized_ckpt path in config_json file
-bash qwen_image_t2i_2512_distill_fp8.sh
+# Set --config_json in this script to ${lightx2v_path}/configs/qwen_image/qwen_image_t2i_2512_distill_fp8.json
+bash inference/distill/qwen_image_t2i_2512_distill.sh
 ```
 
-Note 1: In the scripts qwen_image_t2i_2512_distill.sh、qwen_image_t2i_2512_distill_fp8.sh, the model_path parameter shall be consistent with that in qwen_image_t2i_2512.sh, and it refers to the local path of the Qwen-Image-2512 model for all these scripts.
+Note 1: Both BF16 LoRA and FP8 distilled inference use `inference/distill/qwen_image_t2i_2512_distill.sh`. Keep `model_path` set to the local Qwen-Image-2512 directory.
 
 Note 2: The config_json file to be modified is located in the directory LightX2V/configs/qwen_image, lora_configs and dit_quantized_ckpt respectively refer to the local paths of the distilled model being used.
 
@@ -67,10 +68,11 @@ Image Editing Models
 bash qwen_image_i2i_2511.sh
 
 # Inference with 2511 image editing step-distilled model, default is 8 steps, requires modify the lora_configs path in config_json file
-bash qwen_image_i2i_2511_distill.sh
+bash inference/distill/qwen_image_i2i_2511_distill.sh
 
 # Inference with 2511 image editing step-distilled + FP8 quantized model, default is 8 steps, requires modify the dit_quantized_ckpt path in config_json file
-bash qwen_image_i2i_2511_distill_fp8.sh
+# Set --config_json in this script to ${lightx2v_path}/configs/qwen_image/qwen_image_i2i_2511_distill_fp8.json
+bash inference/distill/qwen_image_i2i_2511_distill.sh
 ```
 Note 1: The model_path parameter in all bash scripts shall be set to the path of the Qwen-Image-2511 model. The paths to be modified in the config_json file refer respectively to the paths of the distilled model being used.
 

@@ -43,10 +43,11 @@ Text-to-Image Models
 bash qwen_image_t2i_2512.sh
 
 # Inference with 2512 text-to-image step-distilled model, default is 8 steps, requires downloading LoRA model, then modify the lora_configs path in config_json file
-bash qwen_image_t2i_2512_distill.sh
+bash inference/distill/qwen_image_t2i_2512_distill.sh
 
 # Inference with 2512 text-to-image step-distilled + FP8 quantized model, default is 8 steps, requires downloading FP8 quantized model, then modify the dit_quantized_ckpt path in config_json file
-bash qwen_image_t2i_2512_distill_fp8.sh
+# Set --config_json in this script to ${lightx2v_path}/configs/qwen_image/qwen_image_t2i_2512_distill_fp8.json
+bash inference/distill/qwen_image_t2i_2512_distill.sh
 ```
 
 Image Editing Models
@@ -55,10 +56,11 @@ Image Editing Models
 bash qwen_image_i2i_2511.sh
 
 # Inference with 2511 image editing step-distilled model, default is 8 steps, requires downloading LoRA model, then modify the lora_configs path in config_json file
-bash qwen_image_i2i_2511_distill.sh
+bash inference/distill/qwen_image_i2i_2511_distill.sh
 
 # Inference with 2511 image editing step-distilled + FP8 quantized model, default is 8 steps, requires downloading FP8 quantized model, then modify the dit_quantized_ckpt path in config_json file
-bash qwen_image_i2i_2511_distill_fp8.sh
+# Set --config_json in this script to ${lightx2v_path}/configs/qwen_image/qwen_image_i2i_2511_distill_fp8.json
+bash inference/distill/qwen_image_i2i_2511_distill.sh
 ```
 
 ## Usage Method 2: Install and Use Python Scripts

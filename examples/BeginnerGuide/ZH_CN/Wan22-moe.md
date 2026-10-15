@@ -64,9 +64,9 @@ Wan2.2-T2V-A14B
 cd LightX2V/scripts/wan22
 bash run_wan22_moe_t2v.sh
 
-# 步数蒸馏模型 Lora
-cd LightX2V/scripts/wan22/distill
-bash run_wan22_moe_t2v_distill_lora_4step.sh
+# 步数蒸馏模型 LoRA
+cd inference/distill
+bash run_wan22_moe_t2v_distill.sh
 ```
 使用单张H100，运行时间及使用`watch -n 1 nvidia-smi`观测的峰值显存测试如下：
 1. Wan2.2-T2V-A14B模型：Total Cost cost 823.492400 seconds；78940MiB
@@ -77,15 +77,17 @@ Wan2.2-I2V-A14B
 cd LightX2V/scripts/wan22
 bash run_wan22_moe_i2v.sh
 
-# 步数蒸馏模型 Lora
-cd LightX2V/scripts/wan22/distill
-bash run_wan22_moe_i2v_distill_lora_4step.sh
+# 各例运行前，按以下路径修改脚本的 --config_json
+cd inference/distill
 
-# 步数蒸馏模型 merge Lora
-bash run_wan22_moe_i2v_distill_model_4step.sh
+# LoRA：${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_with_lora.json
+bash run_wan22_moe_i2v_distill.sh
 
-# 步数蒸馏+FP8量化模型
-bash run_wan22_moe_i2v_distill_fp8_4step.sh
+# 完整蒸馏权重：${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_model.json
+bash run_wan22_moe_i2v_distill.sh
+
+# FP8：${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_quant.json
+bash run_wan22_moe_i2v_distill.sh
 ```
 使用单张H100，运行时间及观测的峰值显存测试如下：
 1. Wan2.2-I2V-A14B模型：Total Cost cost 430.041016 seconds；79058MiB
@@ -93,7 +95,7 @@ bash run_wan22_moe_i2v_distill_fp8_4step.sh
 3. 步数蒸馏模型 merge Lora：Total Cost cost 67.036318 seconds；79108MiB
 4. 步数蒸馏+FP8量化模型：Total Cost cost 57.134773 seconds；47274MiB
 
-注意：bash脚本中的model_path为pre-train原模型的路径；config文件中的lora_configs、dit_original_ckpt和dit_quantized_ckpt为所使用的蒸馏模型路径，需要修改为绝对路径，例如：/home/user/models/lightx2v/Wan2.2-Distill-Loras/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors
+注意：上述蒸馏脚本中的 `model_path` 指向预训练模型目录。配置中的 `lora_configs[].path`、`high_noise_original_ckpt` / `low_noise_original_ckpt` 或 `high_noise_quantized_ckpt` / `low_noise_quantized_ckpt` 指向实际使用的蒸馏权重，需填写绝对路径；FP8 配置中的 `t5_quantized_ckpt` 也需填写实际文件的绝对路径。
 
 #### 1.2 单卡offload推理
 
@@ -107,9 +109,9 @@ Wan2.2-T2V-A14B
 cd LightX2V/scripts/wan22
 bash run_wan22_moe_t2v.sh
 
-# 步数蒸馏模型 Lora
-cd LightX2V/scripts/wan22/distill
-bash run_wan22_moe_t2v_distill_lora_4step.sh
+# 步数蒸馏模型 LoRA
+cd inference/distill
+bash run_wan22_moe_t2v_distill.sh
 ```
 使用单张H100，运行时间及使用`watch -n 1 nvidia-smi`观测的峰值显存测试如下：
 1. Wan2.2-T2V-A14B模型：Total Cost cost 839.815357 seconds；51894MiB
@@ -120,15 +122,17 @@ Wan2.2-I2V-A14B
 cd LightX2V/scripts/wan22
 bash run_wan22_moe_i2v.sh
 
-# 步数蒸馏模型 Lora
-cd LightX2V/scripts/wan22/distill
-bash run_wan22_moe_i2v_distill_lora_4step.sh
+# 各例运行前，按以下路径修改脚本的 --config_json
+cd inference/distill
 
-# 步数蒸馏模型 merge Lora
-bash run_wan22_moe_i2v_distill_model_4step.sh
+# LoRA：${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_with_lora.json
+bash run_wan22_moe_i2v_distill.sh
 
-# 步数蒸馏+FP8量化模型
-bash run_wan22_moe_i2v_distill_fp8_4step.sh
+# 完整蒸馏权重：${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_model.json
+bash run_wan22_moe_i2v_distill.sh
+
+# FP8：${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_quant.json
+bash run_wan22_moe_i2v_distill.sh
 ```
 使用单张H100，运行时间及观测的峰值显存测试如下：
 1. Wan2.2-I2V-A14B模型：Total Cost cost 477.574723 seconds；43666MiB
@@ -146,7 +150,7 @@ cd LightX2V/scripts/dist_infer
 bash run_wan22_moe_t2v_cfg_ulysses.sh
 
 # 步数蒸馏模型 Lora
-cd LightX2V/scripts/wan22/distill
+cd ../wan22/inference/distill
 bash run_wan22_moe_t2v_distill_lora_4step_cfg_ulysses.sh
 ```
 使用8张H100，运行时间及观测的峰值显存测试如下：
@@ -158,18 +162,31 @@ Wan2.2-I2V-A14B
 cd LightX2V/scripts/dist_infer
 bash run_wan22_moe_i2v_cfg_ulysses.sh
 
-# 步数蒸馏模型 Lora
-cd LightX2V/scripts/wan22/distill
-bash run_wan22_moe_i2v_distill_lora_4step_cfg_ulysses.sh
-
-# 步数蒸馏模型 merge Lora
-cd LightX2V/scripts/wan22/distill
-bash run_wan22_moe_i2v_distill_model_4step_cfg_ulysses.sh
-
-# 步数蒸馏+FP8量化模型
-cd LightX2V/scripts/wan22/distill
-bash run_wan22_moe_i2v_distill_fp8_4step_cfg_ulysses.sh
 ```
+
+I2V 蒸馏共用 `scripts/wan22/inference/distill/run_wan22_moe_i2v_distill.sh`，通过 `--config_json` 选择配置：
+
+| 权重形式 | `configs/distill/wan22/` 下的配置 |
+| --- | --- |
+| LoRA | `wan_moe_i2v_distill_with_lora.json` |
+| 完整蒸馏权重 | `wan_moe_i2v_distill_model.json` |
+| FP8 蒸馏权重 | `wan_moe_i2v_distill_quant.json` |
+
+在所选 JSON 中修改或添加以下字段，保留对应权重路径、采样参数和其他设置：
+
+```json
+{
+    "enable_cfg": true,
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ulysses",
+        "cfg_p_size": 2
+    }
+}
+```
+
+在脚本中设置八张 GPU 的 `CUDA_VISIBLE_DEVICES`，将 `python -m lightx2v.infer` 改为 `torchrun --nproc_per_node=8 -m lightx2v.infer`，再运行所选脚本。这会启用 CFG2 × SP4；只有增加进程数不会开启 CFG。
+
 使用8张H100，运行时间及观测的峰值显存测试如下：
 1. Wan2.2-I2V-A14B模型：Total Cost cost 258.464609 seconds；74510MiB
 2. 步数蒸馏模型 Lora：Total Cost cost 55.125003 seconds；73776MiB
@@ -227,7 +244,6 @@ wan_moe_t2v.json 内容如下
     "size": [720, 1280],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
-    "cross_attn_2_type": "flash_attn3",
     "sample_guide_scale": [
         4.0,
         3.0

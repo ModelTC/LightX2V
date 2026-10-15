@@ -58,7 +58,7 @@ Current requirements include T2I, unquantized BF16 weights, both main and sensit
 
 Beyond common address validation, `validate_qwen_shared_block_views()` uses operator `base_attrs` to verify the required transpose orientation. This catches layout errors that shape checks alone would miss for square matrices.
 
-The entry point is [scripts/qwen_image/offload](../../../../scripts/qwen_image/offload/), with `qwen_image_2512_block_shared_offload.sh` and `configs/qwen_image/offload/qwen_image_2512_block_shared.json`. Defaults are T2I, host sharing, and eight GPUs with SP8. Select NUMA by setting `shared_cpu_weight_scope` to `numa` in JSON. This shared adapter currently does not support I2I.
+The entry point is [scripts/qwen_image/inference/shared_offload](../../../../scripts/qwen_image/inference/shared_offload/), with `qwen_image_2512_block_shared_offload.sh` and `configs/qwen_image/shared_offload/qwen_image_2512_block_shared.json`. Defaults are T2I, host sharing, and eight GPUs with SP8. Select NUMA by setting `shared_cpu_weight_scope` to `numa` in JSON. This shared adapter currently does not support I2I.
 
 The example shares DiT blocks. It does not automatically enable sharing for the encoder or VAE. Each additional component requires its own loader, owner, lifecycle, and evidence.
 

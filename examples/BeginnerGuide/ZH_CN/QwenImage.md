@@ -50,13 +50,14 @@ cd LightX2V/scripts/qwen_image
 bash qwen_image_t2i_2512.sh
 
 # 推理2512文生图步数蒸馏模型，默认是8步，需要修改config_json文件中的lora_configs的路径
-bash qwen_image_t2i_2512_distill.sh
+bash inference/distill/qwen_image_t2i_2512_distill.sh
 
 # 推理2512文生图步数蒸馏+FP8量化模型，默认是8步，需要修改config_json文件中的dit_quantized_ckpt的路径
-bash qwen_image_t2i_2512_distill_fp8.sh
+# 将脚本的 --config_json 改为 ${lightx2v_path}/configs/qwen_image/qwen_image_t2i_2512_distill_fp8.json
+bash inference/distill/qwen_image_t2i_2512_distill.sh
 ```
 
-注意1：在qwen_image_t2i_2512_distill.sh、qwen_image_t2i_2512_distill_fp8.sh脚本中，model_path与qwen_image_t2i_2512.sh保持一致，都为Qwen-Image-2512模型的本地路径
+注意1：BF16 LoRA 和 FP8 蒸馏均使用 `inference/distill/qwen_image_t2i_2512_distill.sh`，`model_path` 保持为 Qwen-Image-2512 的本地路径。
 
 注意2：需要修改的config_json文件在LightX2V/configs/qwen_image中，lora_configs、dit_quantized_ckpt分别为所使用蒸馏模型的本地路径
 
@@ -67,10 +68,11 @@ bash qwen_image_t2i_2512_distill_fp8.sh
 bash qwen_image_i2i_2511.sh
 
 # 推理2511图像编辑步数蒸馏模型，默认是8步，需要修改config_json文件中的lora_configs的路径
-bash qwen_image_i2i_2511_distill.sh
+bash inference/distill/qwen_image_i2i_2511_distill.sh
 
 # 推理2511图像编辑步数蒸馏+FP8量化模型，默认是8步，需要修改config_json文件中的dit_quantized_ckpt的路径
-bash qwen_image_i2i_2511_distill_fp8.sh
+# 将脚本的 --config_json 改为 ${lightx2v_path}/configs/qwen_image/qwen_image_i2i_2511_distill_fp8.json
+bash inference/distill/qwen_image_i2i_2511_distill.sh
 ```
 注意1：bash脚本的model_path都为Qwen-Image-2511路径，config_json文件中需要修改的路径分别为所使用蒸馏模型的路径
 

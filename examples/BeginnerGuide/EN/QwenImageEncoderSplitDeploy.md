@@ -116,7 +116,7 @@ On the LightX2V side, simply modify the `config_json` to enable Service Mode.
 
 **Run Inference:**
 
-Create a run script (`scripts/qwen_image/qwen_image_i2i_2511_service.sh`):
+Create a run script (`scripts/qwen_image/inference/text_encoder/qwen_image_i2i_2511_service.sh`):
 
 ```bash
 python -m lightx2v.infer \
@@ -164,7 +164,7 @@ Simply modify `config_json` to enable Kernel Mode.
 
 **Run Inference:**
 
-Create run script (`scripts/qwen_image/qwen_image_i2i_2511_kernel.sh`):
+Create run script (`scripts/qwen_image/inference/text_encoder/qwen_image_i2i_2511_kernel.sh`):
 
 ```bash
 python -m lightx2v.infer \
