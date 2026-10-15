@@ -79,6 +79,7 @@ def main():
     else:
         from lightx2v.models.runners.runner_factory import build_runner
         from lightx2v.models.runners.wan.edenlive_runner import EdenLiveRunner
+        from lightx2v.models.runners.wan.wan_runner import WanRunner
         from lightx2v.utils.set_config import build_startup_config
 
         if args.capture_dit:
@@ -94,14 +95,14 @@ def main():
                 return result
 
             EdenLiveModel._infer_cond_uncond = forward
-        original = EdenLiveRunner.run_vae_decoder
+        original = WanRunner.run_vae_decoder
 
         def decode(self, latent):
             captures["decode_video_latents"] = [latent.detach().cpu()]
             return original(self, latent)
 
         EdenLiveRunner.run_vae_decoder = decode
-        original_text = EdenLiveRunner.run_text_encoder
+        original_text = WanRunner.run_text_encoder
 
         def text(self, info):
             result = original_text(self, info)

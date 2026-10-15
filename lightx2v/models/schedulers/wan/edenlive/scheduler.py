@@ -7,6 +7,10 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class EdenLiveScheduler(WanScheduler):
+    def __init__(self, config):
+        super().__init__(config)
+        self.is_wan21 = config["model_cls"] in ["wan21_edenlive", "wan21_edenlive_ar"]
+
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(latent_shape, generator=self.generator, device=AI_DEVICE, dtype=GET_DTYPE())
@@ -30,23 +34,17 @@ class EdenLiveScheduler(WanScheduler):
 
     def step_pre(self, step_index, chunk_start=0, cache_update=False):
         self._prepare_step(step_index, chunk_start, self.latents.shape[1], cache_update)
+        if not self.is_wan21 and chunk_start == 0:
+            self._pin_first_frame()
 
-
-class Wan21EdenLiveScheduler(EdenLiveScheduler):
     def _prepare_timesteps(self):
-        sigmas = torch.linspace(1, 1 / 1000, self.infer_steps + 1, dtype=torch.float32)[:-1]
-        sigmas = self.sample_shift * sigmas / (1 + (self.sample_shift - 1) * sigmas)
-        sigmas[0] -= 1e-6
-        self.sigmas = torch.cat((sigmas, sigmas.new_zeros(1))).to(AI_DEVICE)
-        self.timesteps = self.sigmas[:-1] * 1000
-
-    def step_post(self):
-        delta = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
-        self.latents = self.latents.float().add_(self.noise_pred.float().mul_(delta)).to(self.latents.dtype)
-
-
-class Wan22EdenLiveScheduler(EdenLiveScheduler):
-    def _prepare_timesteps(self):
+        if self.is_wan21:
+            sigmas = torch.linspace(1, 1 / 1000, self.infer_steps + 1, dtype=torch.float32)[:-1]
+            sigmas = self.sample_shift * sigmas / (1 + (self.sample_shift - 1) * sigmas)
+            sigmas[0] -= 1e-6
+            self.sigmas = torch.cat((sigmas, sigmas.new_zeros(1))).to(AI_DEVICE)
+            self.timesteps = self.sigmas[:-1] * 1000
+            return
         # Diffusers UniPC flow schedule: linspace(1, 1/N, steps+1), shifted once.
         sigmas = np.linspace(1, 1 / 1000, self.infer_steps + 1)[:-1]
         sigmas = self.sample_shift * sigmas / (1 + (self.sample_shift - 1) * sigmas)
@@ -58,12 +56,11 @@ class Wan22EdenLiveScheduler(EdenLiveScheduler):
         self.lower_order_nums = 0
         self.last_sample = None
 
-    def step_pre(self, step_index, chunk_start=0, cache_update=False):
-        super().step_pre(step_index, chunk_start, cache_update)
-        if chunk_start == 0:
-            self._pin_first_frame()
-
     def step_post(self):
+        if self.is_wan21:
+            delta = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
+            self.latents = self.latents.float().add_(self.noise_pred.float().mul_(delta)).to(self.latents.dtype)
+            return
         # Keep the upstream BF16 solver arithmetic; Wan's default solver upcasts.
         sample = self.latents
         prediction = self.noise_pred.to(sample.dtype)

@@ -7,9 +7,9 @@ from loguru import logger
 from lightx2v.common.kvcache.manager import build_self_attn_kv_cache
 from lightx2v.models.input_encoders.edenlive.proxy_dino import ProxyDINO
 from lightx2v.models.input_encoders.edenlive.recording import frame_prompts, prepare_recording
-from lightx2v.models.networks.wan.edenlive_model import EdenLiveARModel, EdenLiveModel, Wan21EdenLiveARModel, Wan21EdenLiveModel
+from lightx2v.models.networks.wan.edenlive_model import EdenLiveARModel, EdenLiveModel
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, WanRunner
-from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler, Wan21EdenLiveScheduler, Wan22EdenLiveScheduler
+from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler, EdenLiveScheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.input_info import EdenLiveInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -17,9 +17,17 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-class EdenLiveRunner(WanRunner):
+class EdenLiveRunner:
+    """Combine EdenLive inference with the Wan component loaders in concrete runners."""
+
+    model_class = EdenLiveModel
+    scheduler_class = EdenLiveScheduler
     input_info_cls_by_task = {"i2v": EdenLiveInputInfo}
     supported_request_fields_by_task = {"i2v": WanRunner.supported_request_fields_by_task["i2v"] | {"video_path"}}
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.is_wan21 = config["model_cls"] in ["wan21_edenlive", "wan21_edenlive_ar"]
 
     def init_scheduler(self):
         self.scheduler = self.scheduler_class(self.config)
@@ -36,10 +44,21 @@ class EdenLiveRunner(WanRunner):
         return ProxyDINO(str(root / "backbone"), str(root / "projection.safetensors"), self.config["proxy_resize_mode"])
 
     def encode_image_condition(self, image, frames):
-        return {"vae_encoder_out": None, "clip_encoder_out": None}
+        if not self.is_wan21:
+            return {"vae_encoder_out": None, "clip_encoder_out": None}
+        height, width = image.shape[-2:]
+        pixels = image.new_zeros(1, 3, frames, height, width)
+        pixels[0, :, 0] = image
+        image_latent = self.vae_encoder.encode(pixels.to(GET_DTYPE()))
+        image_latent = image_latent[0] if image_latent.ndim == 5 else image_latent
+        mask = image_latent.new_zeros(4, *image_latent.shape[1:])
+        mask[:, 0] = 1
+        return {"vae_encoder_out": torch.cat((mask, image_latent)), "clip_encoder_out": self.run_image_encoder(image[None])}
 
     def prompt_schedule(self, metadata):
-        return [metadata["staticPrompt"]]
+        if self.is_wan21:
+            return [metadata["staticPrompt"]]
+        return frame_prompts(metadata, self.input_info.latent_shape[1], self.config["fps"], 1)
 
     def _run_input_encoder_local_i2v(self):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
@@ -68,7 +87,19 @@ class EdenLiveRunner(WanRunner):
         return {"image_encoder_output": image_condition, "text_encoder_output": self.prompt_embeddings[self.prompts[0]]}
 
     def _prepare_text_inputs(self, start):
-        self.inputs["text_encoder_output"] = self.prompt_embeddings[self.prompts[0]]
+        if len(self.prompts) == 1:
+            self.inputs["text_encoder_output"] = self.prompt_embeddings[self.prompts[0]]
+            return
+        groups = []
+        for text in self.prompts:
+            if groups and groups[-1][0] == text:
+                groups[-1][1] += 1
+            else:
+                groups.append([text, 1])
+        self.inputs["text_segments"] = [count for _, count in groups]
+        self.inputs["text_encoder_output"] = {
+            key: torch.cat([self.prompt_embeddings[text][key] for text, _ in groups], dim=1) for key, value in self.prompt_embeddings[self.prompts[0]].items() if value is not None
+        }
 
     def _prepare_chunk_inputs(self, start, frames):
         pixels = self.proxy_pixels[:, start : start + frames].permute(1, 0, 2, 3).to(AI_DEVICE)
@@ -104,46 +135,8 @@ class EdenLiveRunner(WanRunner):
         return result
 
 
-@RUNNER_REGISTER("wan21_edenlive")
-class Wan21EdenLiveRunner(EdenLiveRunner):
-    model_class = Wan21EdenLiveModel
-    scheduler_class = Wan21EdenLiveScheduler
-
-    def encode_image_condition(self, image, frames):
-        height, width = image.shape[-2:]
-        pixels = image.new_zeros(1, 3, frames, height, width)
-        pixels[0, :, 0] = image
-        image_latent = self.vae_encoder.encode(pixels.to(GET_DTYPE()))
-        image_latent = image_latent[0] if image_latent.ndim == 5 else image_latent
-        mask = image_latent.new_zeros(4, *image_latent.shape[1:])
-        mask[:, 0] = 1
-        return {"vae_encoder_out": torch.cat((mask, image_latent)), "clip_encoder_out": self.run_image_encoder(image[None])}
-
-
-@RUNNER_REGISTER("wan22_edenlive")
-class Wan22EdenLiveRunner(EdenLiveRunner, Wan22DenseRunner):
-    model_class = EdenLiveModel
-    scheduler_class = Wan22EdenLiveScheduler
-
-    def prompt_schedule(self, metadata):
-        return frame_prompts(metadata, self.input_info.latent_shape[1], self.config["fps"], 1)
-
-    def _prepare_text_inputs(self, start):
-        if len(self.prompts) == 1:
-            return super()._prepare_text_inputs(start)
-        groups = []
-        for text in self.prompts:
-            if groups and groups[-1][0] == text:
-                groups[-1][1] += 1
-            else:
-                groups.append([text, 1])
-        self.inputs["text_segments"] = [count for _, count in groups]
-        self.inputs["text_encoder_output"] = {
-            key: torch.cat([self.prompt_embeddings[text][key] for text, _ in groups], dim=1) for key, value in self.prompt_embeddings[self.prompts[0]].items() if value is not None
-        }
-
-
-class EdenLiveARMixin:
+class EdenLiveARRunner(EdenLiveRunner):
+    model_class = EdenLiveARModel
     scheduler_class = EdenLiveARScheduler
 
     def prompt_schedule(self, metadata):
@@ -184,11 +177,21 @@ class EdenLiveARMixin:
         self.model.transformer_infer.cache_pools = {}
 
 
+@RUNNER_REGISTER("wan21_edenlive")
+class Wan21EdenLiveRunner(EdenLiveRunner, WanRunner):
+    pass
+
+
+@RUNNER_REGISTER("wan22_edenlive")
+class Wan22EdenLiveRunner(EdenLiveRunner, Wan22DenseRunner):
+    pass
+
+
 @RUNNER_REGISTER("wan21_edenlive_ar")
-class Wan21EdenLiveARRunner(EdenLiveARMixin, Wan21EdenLiveRunner):
-    model_class = Wan21EdenLiveARModel
+class Wan21EdenLiveARRunner(EdenLiveARRunner, WanRunner):
+    pass
 
 
 @RUNNER_REGISTER("wan22_edenlive_ar")
-class Wan22EdenLiveARRunner(EdenLiveARMixin, Wan22EdenLiveRunner):
-    model_class = EdenLiveARModel
+class Wan22EdenLiveARRunner(EdenLiveARRunner, Wan22DenseRunner):
+    pass

@@ -7,14 +7,19 @@ from lightx2v.models.networks.wan.infer.utils import sinusoidal_embedding_1d
 
 
 class EdenLivePreInfer(WanPreInfer):
-    def _get_latents_input(self, inputs):
-        return self.scheduler.latents_input.to(self.infer_dtype)
+    def __init__(self, config):
+        super().__init__(config)
+        self.is_wan21 = config["model_cls"] in ["wan21_edenlive", "wan21_edenlive_ar"]
 
     @torch.no_grad()
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
         scheduler = self.scheduler
-        x = self._get_latents_input(inputs)
+        x = scheduler.latents_input.to(self.infer_dtype)
         condition = inputs["image_encoder_output"]
+        if self.is_wan21:
+            start = scheduler.chunk_start
+            image_latent = condition["vae_encoder_out"][:, start : start + x.shape[1]]
+            x = torch.cat((x, image_latent), dim=0)
         control = inputs["proxy_features"].to(x)
         if not scheduler.infer_condition and self.config["proxy_unconditional_control"] == "zero":
             control = torch.zeros_like(control)
@@ -47,11 +52,3 @@ class EdenLivePreInfer(WanPreInfer):
             grid_sizes=GridOutput(torch.tensor([grid], device=x.device, dtype=torch.int32), grid),
             adapter_args={"text_segments": inputs.get("text_segments")},
         )
-
-
-class Wan21EdenLivePreInfer(EdenLivePreInfer):
-    def _get_latents_input(self, inputs):
-        x = super()._get_latents_input(inputs)
-        start = self.scheduler.chunk_start
-        condition = inputs["image_encoder_output"]["vae_encoder_out"][:, start : start + x.shape[1]]
-        return torch.cat((x, condition), dim=0)
