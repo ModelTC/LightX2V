@@ -1,15 +1,8 @@
 import torch
 import torch.distributed as dist
-from loguru import logger
-
-try:
-    from flash_attn.flash_attn_interface import flash_attn_varlen_func
-except ImportError:
-    logger.info("flash_attn_varlen_func not found, please install flash_attn2 first")
-    flash_attn_varlen_func = None
 
 from lightx2v.common.ops.attn.utils.all2all import all2all_seq2head
-from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import align_hidden_states_and_mask, calculate_n_query_tokens, get_qk_lens_audio_range
+from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import align_hidden_states_and_mask
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.models.networks.wan.infer.self_forcing.transformer_infer import WanSFTransformerInfer
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
@@ -23,42 +16,43 @@ class WanAudioPostAdapterMixin:
         self.has_post_adapter = True
         self.phases_num = 4
         self.audio_num_tokens = int(config.get("audio_num_tokens", config.get("num_audio_tokens", 128)))
+        self.audio_attn = ATTN_WEIGHT_REGISTER[config.get("audio_attn_type", "flash_attn2")]()
 
     @torch.no_grad()
     def reset_post_adapter_states(self):
         self.post_adapter_states_ready = False
 
+    def prepare_post_adapter_states(self, x, pre_infer_out):
+        # Use host shape metadata to keep tensor-dependent slices out of tracing.
+        _, height, width = pre_infer_out.grid_sizes.tuple
+        tokens_per_frame = height * width
+        tokens_per_rank = x.shape[0]
+        rank = dist.get_rank(self.seq_p_group) if self.seq_p_group is not None else 0
+        start = tokens_per_rank * rank
+        self.n_query_tokens = max(0, min(tokens_per_rank, pre_infer_out.valid_token_len - start))
+        if self.n_query_tokens:
+            end = start + self.n_query_tokens
+            self.t0 = start // tokens_per_frame
+            self.t1 = (end + tokens_per_frame - 1) // tokens_per_frame
+            query_lengths = [min(end, (frame + 1) * tokens_per_frame) - max(start, frame * tokens_per_frame) for frame in range(self.t0, self.t1)]
+        else:
+            self.t0, self.t1 = 0, 1
+            query_lengths = [1]
+        self.max_seqlen_q = max(query_lengths)
+        self.max_seqlen_k = self.audio_num_tokens
+        self.perceiver_attn_cu_seqlens_q = torch.tensor([0, *query_lengths], dtype=torch.int32).cumsum(0, dtype=torch.int32).to(x.device)
+        self.perceiver_attn_cu_seqlens_k = (torch.arange(len(query_lengths) + 1, dtype=torch.int32) * self.audio_num_tokens).to(x.device)
+        self.post_adapter_states_ready = True
+
     @torch.no_grad()
     def infer_post_adapter(self, phase, x, pre_infer_out):
-        grid_sizes = pre_infer_out.grid_sizes.tensor
         audio_encoder_output = pre_infer_out.adapter_args["audio_encoder_output"]
         person_mask_latens = pre_infer_out.adapter_args["person_mask_latens"]
-        pre_frame_tokens = grid_sizes[0][1:].prod()
-        n_tokens = pre_infer_out.valid_token_len
 
         ori_dtype = x.dtype
-        device = x.device
-
-        if self.seq_p_group is not None:
-            sp_size = dist.get_world_size(self.seq_p_group)
-            sp_rank = dist.get_rank(self.seq_p_group)
-        else:
-            sp_size = 1
-            sp_rank = 0
 
         if not self.post_adapter_states_ready:
-            n_tokens_per_rank = torch.tensor(x.size(0), dtype=torch.int32)
-            self.n_query_tokens = calculate_n_query_tokens(sp_rank, sp_size, n_tokens_per_rank, n_tokens)
-            self.q_lens, self.k_lens, self.max_seqlen_q, self.max_seqlen_k, self.t0, self.t1 = get_qk_lens_audio_range(
-                n_tokens_per_rank=n_tokens_per_rank,
-                n_query_tokens=self.n_query_tokens,
-                n_tokens_per_frame=pre_frame_tokens,
-                sp_rank=sp_rank,
-                num_tokens_x4=self.audio_num_tokens,
-            )
-            self.perceiver_attn_cu_seqlens_q = torch.cat([self.q_lens.new_zeros([1]), self.q_lens]).cumsum(0, dtype=torch.int32).to(device, non_blocking=True)
-            self.perceiver_attn_cu_seqlens_k = torch.cat([self.k_lens.new_zeros([1]), self.k_lens]).cumsum(0, dtype=torch.int32).to(device, non_blocking=True)
-            self.post_adapter_states_ready = True
+            self.prepare_post_adapter_states(x, pre_infer_out)
 
         hidden_states_aligned, hidden_states_tail, person_mask_aligned = align_hidden_states_and_mask(self.n_query_tokens, x, person_mask_latens)
         total_residual = None
@@ -94,25 +88,15 @@ class WanAudioPostAdapterMixin:
         k = k.view(k.size(0), self.num_heads, self.head_dim)
         v = v.view(v.size(0), self.num_heads, self.head_dim)
 
-        if "npu" in AI_DEVICE:
-            out = ATTN_WEIGHT_REGISTER.get("npu_flash_attn")().apply(
-                q=q, k=k, v=v, cu_seqlens_q=self.perceiver_attn_cu_seqlens_q, cu_seqlens_kv=self.perceiver_attn_cu_seqlens_k, max_seqlen_q=self.max_seqlen_q, max_seqlen_kv=self.max_seqlen_k
-            )
-        else:
-            out = flash_attn_varlen_func(
-                q=q,
-                k=k,
-                v=v,
-                cu_seqlens_q=self.perceiver_attn_cu_seqlens_q,
-                cu_seqlens_k=self.perceiver_attn_cu_seqlens_k,
-                max_seqlen_q=self.max_seqlen_q,
-                max_seqlen_k=self.max_seqlen_k,
-                dropout_p=0.0,
-                softmax_scale=None,
-                causal=False,
-                window_size=(-1, -1),
-                deterministic=False,
-            )
+        out = self.audio_attn.apply(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_q=self.perceiver_attn_cu_seqlens_q,
+            cu_seqlens_kv=self.perceiver_attn_cu_seqlens_k,
+            max_seqlen_q=self.max_seqlen_q,
+            max_seqlen_kv=self.max_seqlen_k,
+        )
         out = out.view(-1, self.num_heads * self.head_dim)
         return phase.to_out.apply(out) * gate
 
@@ -121,6 +105,10 @@ class WanAudioTransformerInfer(WanAudioPostAdapterMixin, WanOffloadTransformerIn
     def __init__(self, config):
         super().__init__(config)
         self._setup_audio_post_adapter(config)
+
+    def infer_main_blocks(self, blocks, pre_infer_out):
+        self.prepare_post_adapter_states(pre_infer_out.x, pre_infer_out)
+        return super().infer_main_blocks(blocks, pre_infer_out)
 
 
 class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer):

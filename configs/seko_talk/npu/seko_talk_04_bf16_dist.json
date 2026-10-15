@@ -7,6 +7,7 @@
     "self_attn_1_type": "npu_flash_attn",
     "cross_attn_1_type": "npu_flash_attn",
     "cross_attn_2_type": "npu_flash_attn",
+    "audio_attn_type": "npu_flash_attn",
     "sample_guide_scale": 1.0,
     "sample_shift": 5,
     "enable_cfg": false,

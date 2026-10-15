@@ -113,6 +113,10 @@ class SelfAttention(nn.Module):
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
+            elif quant_scheme == "int8-metax":
+                from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8
+
+                linear_cls = MetaxQuantLinearInt8
             else:
                 raise NotImplementedError(f"Unsupported CLip quant scheme: {quant_scheme}")
         else:
@@ -211,6 +215,10 @@ class AttentionBlock(nn.Module):
                 linear_cls = MluQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
+            elif quant_scheme == "int8-metax":
+                from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8
+
+                linear_cls = MetaxQuantLinearInt8
             else:
                 raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:

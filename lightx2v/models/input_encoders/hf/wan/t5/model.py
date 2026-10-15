@@ -237,6 +237,10 @@ class T5Attention(nn.Module):
                 linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
+            elif quant_scheme == "int8-metax":
+                from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8
+
+                linear_cls = MetaxQuantLinearInt8
             else:
                 raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
@@ -324,6 +328,10 @@ class T5FeedForward(nn.Module):
                 linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
+            elif quant_scheme == "int8-metax":
+                from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8
+
+                linear_cls = MetaxQuantLinearInt8
             else:
                 raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:
