@@ -40,8 +40,9 @@ class WanAudioPostAdapterMixin:
             query_lengths = [1]
         self.max_seqlen_q = max(query_lengths)
         self.max_seqlen_k = self.audio_num_tokens
-        self.perceiver_attn_cu_seqlens_q = torch.tensor([0, *query_lengths], dtype=torch.int32).cumsum(0, dtype=torch.int32).to(x.device)
-        self.perceiver_attn_cu_seqlens_k = (torch.arange(len(query_lengths) + 1, dtype=torch.int32) * self.audio_num_tokens).to(x.device)
+        metadata_device = x.device if getattr(self.audio_attn, "cu_seqlens_on_device", True) else "cpu"
+        self.perceiver_attn_cu_seqlens_q = torch.tensor([0, *query_lengths], dtype=torch.int32).cumsum(0, dtype=torch.int32).to(metadata_device)
+        self.perceiver_attn_cu_seqlens_k = (torch.arange(len(query_lengths) + 1, dtype=torch.int32) * self.audio_num_tokens).to(metadata_device)
         self.post_adapter_states_ready = True
 
     @torch.no_grad()

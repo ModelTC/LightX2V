@@ -34,8 +34,7 @@ class TorchSDPAWeight(AttnWeightTemplate):
         v = v.transpose(1, 2)
         if attn_mask is not None and attn_mask.dtype != torch.bool:
             attn_mask = attn_mask.to(q.dtype)
-        # Hunyuan3D upstream Attention uses SDPA flash kernel (see hy3dshape hunyuandit.py).
-        # Matching this context is required for bit-identical attention vs the reference.
+        # Match Hunyuan3D's upstream SDPA kernel selection.
         sdpa_ctx = nullcontext()
         if kwargs.get("model_cls") == "hunyuan3d":
             sdpa_ctx = torch.backends.cuda.sdp_kernel(
@@ -44,8 +43,6 @@ class TorchSDPAWeight(AttnWeightTemplate):
                 enable_mem_efficient=True,
             )
         with sdpa_ctx:
-            # q/k/v are (B, H, S, D) here, so head count is dim 1. GQA models such as
-            # neopp (32 q heads, 8 kv heads) need SDPA to broadcast the kv groups.
             x = F.scaled_dot_product_attention(
                 q,
                 k,

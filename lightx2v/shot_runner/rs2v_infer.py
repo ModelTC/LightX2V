@@ -262,6 +262,7 @@ def main():
     parser.add_argument("--size", type=int, nargs=2, default=None, help="Output size in pixels: HEIGHT WIDTH (requires resize_mode=fixed_shape)")
     parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk image and mask resize mode; defaults to the startup config.")
     parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
+    parser.add_argument("--num_frames", type=int, default=None, help="Requested frames per generated segment; defaults to duration-based sizing or the startup config.")
     parser.add_argument("--video_duration", type=float, default=20, help="Video duration in seconds")
 
     args = parser.parse_args()

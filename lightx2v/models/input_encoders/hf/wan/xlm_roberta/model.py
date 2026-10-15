@@ -11,6 +11,7 @@ from loguru import logger
 # from lightx2v.attentions import attention
 from lightx2v.common.ops.attn import TorchSDPAWeight
 from lightx2v.models.input_encoders.hf.q_linear import (
+    MusaQuantLinearFp8,
     Q8FQuantLinearFp8,
     Q8FQuantLinearInt8,
     SglQuantLinearFp8,
@@ -95,6 +96,8 @@ class SelfAttention(nn.Module):
                 linear_cls = VllmQuantLinearInt8
             elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
+            elif quant_scheme == "fp8-musa":
+                linear_cls = MusaQuantLinearFp8
             elif quant_scheme == "fp8-vllm":
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
@@ -197,6 +200,8 @@ class AttentionBlock(nn.Module):
                 linear_cls = VllmQuantLinearInt8
             elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
+            elif quant_scheme == "fp8-musa":
+                linear_cls = MusaQuantLinearFp8
             elif quant_scheme == "fp8-vllm":
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
