@@ -681,13 +681,16 @@ class BaseTransformerModel(ABC):
 
         weight_dict = {}
         for safetensor_path in safetensors_files:
+            adapter_model_path = self.config.get("adapter_model_path")
+            if adapter_model_path and os.path.realpath(safetensor_path) == os.path.realpath(adapter_model_path):
+                continue
             with safe_open(safetensor_path, framework="pt") as f:
                 self._record_checkpoint_metadata(f)
                 logger.info(f"Loading weights from {safetensor_path}")
                 for k in f.keys():
                     if any(remove_key in k for remove_key in remove_keys):
                         continue
-                    if self.config.get("dit_quant_scheme") == "int8-metal" and k.endswith(".weight_scale"):
+                    if self.config.get("dit_quant_scheme") in ["int8-metal", "fp8-musa"] and k.endswith("weight_scale"):
                         weight_dict[k] = f.get_tensor(k).to(device=self.device, dtype=torch.float32)
                     elif f.get_tensor(k).dtype in [torch.float16, torch.bfloat16, torch.float]:
                         if unified_dtype or all(s not in k for s in sensitive_layer):

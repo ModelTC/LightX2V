@@ -48,10 +48,16 @@ class WanInfiniteTalkModel(WanModel):
             adapter_weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=adapter_offload, load_from_rank0=load_from_rank0)
             target_device = torch.device("cpu") if adapter_offload else torch.device(AI_DEVICE)
             target_dtype = GET_DTYPE()
+            musa_fp8 = self.config.get("adapter_quant_scheme") == "fp8-musa"
             for key, tensor in adapter_weights_dict.items():
-                adapter_weights_dict[key] = (
-                    tensor.to(device=target_device, dtype=target_dtype) if (tensor.is_floating_point() and tensor.dtype != torch.float8_e4m3fn) else tensor.to(device=target_device)
-                )
+                if musa_fp8 and key.endswith(".weight_scale"):
+                    adapter_weights_dict[key] = tensor.to(device=target_device, dtype=torch.float32)
+                elif musa_fp8 and tensor.is_floating_point() and tensor.dtype != torch.float8_e4m3fn and any(pattern in key for pattern in sensitive_layer):
+                    adapter_weights_dict[key] = tensor.to(device=target_device, dtype=GET_SENSITIVE_DTYPE())
+                else:
+                    adapter_weights_dict[key] = (
+                        tensor.to(device=target_device, dtype=target_dtype) if (tensor.is_floating_point() and tensor.dtype != torch.float8_e4m3fn) else tensor.to(device=target_device)
+                    )
             return adapter_weights_dict
         else:
             return self._load_safetensor_to_dict(adapter_model_path, unified_dtype, sensitive_layer)

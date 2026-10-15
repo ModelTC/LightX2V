@@ -21,6 +21,7 @@ from lightx2v.common.ops import *  # noqa E402
 from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason  # noqa E402
 from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     F16AccumQuantLinearFp8,  # noqa E402
+    MusaQuantLinearFp8,  # noqa E402
     Q8FQuantLinearFp8,  # noqa E402
     Q8FQuantLinearInt8,  # noqa E402
     SglQuantLinearFp8,  # noqa E402
@@ -220,6 +221,8 @@ class T5Attention(nn.Module):
                 linear_cls = SglQuantLinearFp8
             elif quant_scheme == "fp8-f16-accum":
                 linear_cls = F16AccumQuantLinearFp8
+            elif quant_scheme == "fp8-musa":
+                linear_cls = MusaQuantLinearFp8
             elif quant_scheme == "fp8-vllm":
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
@@ -313,6 +316,8 @@ class T5FeedForward(nn.Module):
                 linear_cls = SglQuantLinearFp8
             elif quant_scheme == "fp8-f16-accum":
                 linear_cls = F16AccumQuantLinearFp8
+            elif quant_scheme == "fp8-musa":
+                linear_cls = MusaQuantLinearFp8
             elif quant_scheme == "fp8-vllm":
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":

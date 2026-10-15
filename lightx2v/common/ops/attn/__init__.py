@@ -21,4 +21,5 @@ from .svg2_attn import Svg2AttnWeight
 from .svg_attn import SvgAttnWeight
 from .torch_sdpa import TorchSDPAWeight
 from .torch_sdpa_mps import TorchSDPAMPSWeight
+from .torch_sdpa_varlen import TorchSDPAVarlenWeight
 from .ulysses_attn import UlyssesAttnWeight

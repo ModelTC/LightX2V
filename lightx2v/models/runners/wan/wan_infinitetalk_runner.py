@@ -7,10 +7,12 @@ import shutil
 import subprocess
 import tempfile
 import wave
+from contextlib import contextmanager
 
 import imageio_ffmpeg as ffmpeg
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from PIL import Image
@@ -140,83 +142,72 @@ class InfiniteTalkRunner(WanRunner):
         self.cond_video_fps = None
         self.cond_video_frame_count = None
         self.stream_saved_video_needs_audio_remux = False
+        self._warmed_segment_shapes = set()
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
 
-    @ProfilingContext4DebugL1("Warmup")
-    @torch.no_grad()
     def run_warmup(self):
-        """Warm representative requests through the regular encoders and VAE."""
-        # Preserve this worker's RNG states across init_run()'s seeding.
-        numpy_rng, python_rng = np.random.get_state(), random.getstate()
-        model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model"
-        try:
-            with torch.random.fork_rng(devices=[torch.cuda.current_device()]), tempfile.TemporaryDirectory(prefix="infinitetalk_warmup_") as directory:
-                for height, width in self._WARMUP_SIZES:
-                    try:
-                        try:
-                            self._prepare_warmup_inputs(directory, height, width)
-                            logger.info(f"InfiniteTalk warmup: {self.target_h}x{self.target_w}x{self.input_info.num_frames}")
-                            self.inputs = self.run_input_encoder()
-                            self.init_run()
-                            self.init_run_segment(0)
-                            for step in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
-                                self.scheduler.step_pre(step)
-                                self.model.infer(self.dit_inputs)
-                                if not bool(torch.isfinite(self.scheduler.noise_pred).all()):
-                                    raise RuntimeError("InfiniteTalk warmup produced non-finite outputs")
-                                self.scheduler.step_post()
-                        finally:
-                            # Warmup can stop before infer() offloads at the last step.
-                            if model_offload:
-                                self.model.to_cpu()
-                        self.run_vae_decoder(self.scheduler.latents)
-                        torch_device_module.synchronize()
-                    finally:
-                        self.end_run()
-                        self.input_info = None
-        finally:
-            np.random.set_state(numpy_rng)
-            random.setstate(python_rng)
-        logger.info("InfiniteTalk warmup completed")
-        self._maybe_freeze_gc()
+        logger.info("[Warmup] InfiniteTalk warmup waits for the request's segment shape")
 
-    def _prepare_warmup_inputs(self, directory, height, width):
-        # The regular loaders consume files; avoid duplicating their feature
-        # layouts here. The image aspect ratios select two resolution buckets.
-        image_path = os.path.join(directory, "image.png")
-        audio_path = os.path.join(directory, "audio.wav")
-        frames = self.config["num_frames"]
-        Image.new("RGB", (width, height), color=0).save(image_path)
-        # Leave one frame of audio margin before conversion to an integer length.
-        sample_count = math.ceil((frames + 1) * self.audio_sample_rate / self.target_fps)
-        with wave.open(audio_path, "wb") as audio:
-            audio.setnchannels(1)
-            audio.setsampwidth(2)
-            audio.setframerate(self.audio_sample_rate)
-            audio.writeframes(b"\0\0" * sample_count)
-        # Inherit num_frames from config: sparse attention forbids overriding it.
-        self.input_info = self.prepare_request(
-            {
-                "seed": 0,
-                "prompt": "A person speaking naturally.",
-                "image_path": image_path,
-                "audio_path": audio_path,
-                "video_duration": frames / self.target_fps,
-                "return_result_tensor": True,
-            }
+    def _segment_warmup_key(self):
+        def shape(tensor):
+            return (tuple(tensor.shape), tensor.dtype) if tensor is not None else None
+
+        return (
+            shape(self.scheduler.latents),
+            shape(self.scheduler.latent_motion_frames),
+            self.scheduler.is_first_clip,
+            self.scheduler.cur_motion_frames_latent_num,
+            tuple((group, name, shape(tensor)) for group in ("text_encoder_output", "image_encoder_output") for name, tensor in sorted(self.dit_inputs[group].items())),
+            shape(self.dit_inputs["audio_encoder_output"]),
+            shape(self.dit_inputs["ref_target_masks"]),
         )
-        self.input_info.save_result_path = None
-        human_num = 2 if self.config.get("infinitetalk_mode", "single") == "multi" else 1
-        # Supply these files directly so configured media cannot replace them.
-        self._prepare_input_data(
-            {
-                "prompt": self.input_info.prompt,
-                "cond_video": image_path,
-                "cond_audio": {f"person{index + 1}": audio_path for index in range(human_num)},
-            }
-        )
+
+    @contextmanager
+    def _isolate_segment_warmup(self):
+        scheduler = self.scheduler
+        state = vars(scheduler).copy()
+        python_rng = random.getstate()
+        numpy_rng = np.random.get_state()
+        cpu_rng = torch.get_rng_state()
+        device_rng = torch_device_module.get_rng_state()
+        try:
+            # step_pre writes the motion prefix in place.
+            scheduler.latents = scheduler.latents.clone()
+            yield
+        finally:
+            try:
+                torch_device_module.synchronize()
+            finally:
+                vars(scheduler).clear()
+                vars(scheduler).update(state)
+                random.setstate(python_rng)
+                np.random.set_state(numpy_rng)
+                torch.set_rng_state(cpu_rng)
+                torch_device_module.set_rng_state(device_rng)
+
+    @torch.no_grad()
+    def _maybe_warmup_segment(self):
+        if not self.config.get("warmup", False):
+            return
+        key = self._segment_warmup_key()
+        if key in self._warmed_segment_shapes:
+            return
+        logger.info(f"[Warmup] InfiniteTalk segment: latent_shape={tuple(self.scheduler.latents.shape)}, first={self.scheduler.is_first_clip}")
+        with ProfilingContext4DebugL1("InfiniteTalk segment warmup"), self._isolate_segment_warmup():
+            self.check_stop()
+            try:
+                self.scheduler.step_pre(0)
+                self.model.infer(self.dit_inputs)
+                self.scheduler.step_post()
+            finally:
+                if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
+                    self.model.to_cpu()
+            self.run_vae_decoder(self.scheduler.latents)
+        if dist.is_initialized() and dist.get_world_size() > 1:
+            dist.barrier()
+        self._warmed_segment_shapes.add(key)
 
     def load_vae(self):
         encoder, decoder = super().load_vae()
@@ -225,6 +216,7 @@ class InfiniteTalkRunner(WanRunner):
                 raise ValueError("InfiniteTalk vae_use_compile requires the native Wan 2.1 encoder and decoder")
             encoder.compile()
         return encoder, decoder
+
 
     def check_segment_reuse_support(self):
         pass
@@ -1118,6 +1110,7 @@ class InfiniteTalkRunner(WanRunner):
 
     @ProfilingContext4DebugL1("Run segment DiT")
     def run_segment(self, segment_idx=0):
+        self._maybe_warmup_segment()
         self._run_dit_clip(self.dit_inputs)
         return self.scheduler.latents
 
@@ -1315,16 +1308,16 @@ class InfiniteTalkRunner(WanRunner):
             "1:a:0",
             "-shortest",
         ]
-        cmd = [
-            *base_cmd,
-            "-c:a",
-            "copy",
-            tmp_path,
-        ]
+        # New FFmpeg versions can copy PCM into MP4 as ipcm, which older
+        # decoders cannot read. Copy known MPEG audio inputs and encode other
+        # formats (including WAV/PCM) to AAC for playback compatibility.
+        copy_audio = os.path.splitext(audio_path)[1].lower() in {".mp3", ".aac"}
+        audio_options = ["-c:a", "copy"] if copy_audio else ["-c:a", "aac", "-b:a", "192k"]
+        cmd = [*base_cmd, *audio_options, tmp_path]
         try:
             res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
-            if res.returncode != 0:
-                # Fallback to aac re-encoding (e.g. for WAV/PCM inputs)
+            if res.returncode != 0 and copy_audio:
+                # Fall back to AAC if the source cannot be copied into MP4.
                 cmd = [
                     *base_cmd,
                     "-c:a",
@@ -1334,6 +1327,8 @@ class InfiniteTalkRunner(WanRunner):
                     tmp_path,
                 ]
                 subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+            elif res.returncode != 0:
+                res.check_returncode()
             os.replace(tmp_path, video_path)
             logger.info(f"Muxed audio from {audio_path}")
         except subprocess.TimeoutExpired as exc:
