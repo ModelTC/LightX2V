@@ -312,13 +312,14 @@ class QwenImage21VAE(nn.Module):
             for shard in sorted(path.glob("*.safetensors")):
                 state.update(load_file(shard))
         self.load_state_dict(state, strict=True, assign=True)
-        self.register_buffer("latents_mean", torch.tensor(cfg["latents_mean"]).to(GET_DTYPE()).reshape(1, -1, 1, 1, 1), persistent=False)
-        self.register_buffer("latents_std", torch.tensor(cfg["latents_std"]).to(GET_DTYPE()).reshape(1, -1, 1, 1, 1), persistent=False)
         # FP8 weights and FP32 scales must retain their checkpoint dtypes.
         if quantized_ckpt:
             self.to(device=AI_DEVICE)
         else:
             self.to(dtype=GET_DTYPE(), device=AI_DEVICE)
+        latent_dtype = torch.float32 if config.get("latent_dtype", None) == "fp32" else GET_DTYPE()
+        self.register_buffer("latents_mean", torch.tensor(cfg["latents_mean"], dtype=latent_dtype, device=AI_DEVICE).reshape(1, -1, 1, 1, 1), persistent=False)
+        self.register_buffer("latents_std", torch.tensor(cfg["latents_std"], dtype=latent_dtype, device=AI_DEVICE).reshape(1, -1, 1, 1, 1), persistent=False)
         self.eval().requires_grad_(False)
         if config.get("vae_use_compile", False):
             logger.info("[Compile] Using torch.compile for Qwen-Image-2.1 VAE")
@@ -366,7 +367,7 @@ class QwenImage21VAE(nn.Module):
             moments = self._encode_tiled(image)
         else:
             moments = self.encoder(image)
-        mean = self.quant_conv(moments).chunk(2, dim=1)[0]
+        mean = self.quant_conv(moments).chunk(2, dim=1)[0].to(self.latents_mean.dtype)
         return ((mean - self.latents_mean) / self.latents_std).flatten(2).transpose(1, 2)
 
     def _encode_tiled(self, image):
@@ -484,8 +485,8 @@ class QwenImage21VAE(nn.Module):
     @torch.inference_mode()
     def decode(self, latents, size):
         h, w = size
-        z = latents.transpose(1, 2).reshape(1, self.config["z_dim"], 1, h // self.scale_factor, w // self.scale_factor).to(GET_DTYPE())
-        z = self.post_quant_conv(z * self.latents_std + self.latents_mean)
+        z = latents.transpose(1, 2).reshape(1, self.config["z_dim"], 1, h // self.scale_factor, w // self.scale_factor).to(self.latents_mean.dtype)
+        z = self.post_quant_conv((z * self.latents_std + self.latents_mean).to(GET_DTYPE()))
         use_parallel = self.vae_decode_parallel and dist.is_initialized() and dist.get_world_size() > 1
         if use_parallel:
             decoded = self._decode_dist(z)
