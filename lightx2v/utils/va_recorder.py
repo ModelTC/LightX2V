@@ -7,7 +7,6 @@ import threading
 import time
 import traceback
 
-import imageio_ffmpeg as ffmpeg
 import numpy as np
 import torch
 import torchaudio as ta
@@ -167,7 +166,7 @@ class VARecorder:
     def start_ffmpeg_process_local(self):
         """Start ffmpeg process that connects to our TCP sockets"""
         ffmpeg_cmd = [
-            ffmpeg.get_ffmpeg_exe(),
+            "ffmpeg",
             "-fflags",
             "nobuffer",
             "-analyzeduration",

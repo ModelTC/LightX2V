@@ -114,6 +114,10 @@ class SelfAttention(nn.Module):
                 linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
+            elif quant_scheme == "int8-npu":
+                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
+
+                linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
             elif quant_scheme == "int8-metax":
@@ -218,6 +222,10 @@ class AttentionBlock(nn.Module):
                 linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
+            elif quant_scheme == "int8-npu":
+                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
+
+                linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
             elif quant_scheme == "int8-metax":
