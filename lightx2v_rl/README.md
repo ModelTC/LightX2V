@@ -341,7 +341,9 @@ lightx2v_rl/.venv-rl/bin/python -m lightx2v_rl.train \
 | Qwen-Image-2.1-Turbo | `qwen_image21_turbo_geo` | `qwen_image21_turbo_cps` | `qwen_image21_turbo_flow_grpo` |
 | Wan2.1 T2V | `wan_geo` | `wan_cps` | `wan_flow_grpo` |
 
-默认每 20 iter 验证一次，可用 `trainer.test_freq` 调整。Qwen 默认训练前也验证，T2I / I2I 按 batch 1:1 交替；一个 iter 只处理一种任务。训练使用所选随机 bridge，验证使用确定性生成路径。
+默认训练 5000 iter，每 20 iter 验证一次，分别通过 `trainer.total_training_steps` 和 `trainer.test_freq` 调整。Qwen 默认训练前也验证，T2I / I2I 按 batch 1:1 交替；一个 iter 只处理一种任务。训练使用所选随机 bridge，验证使用确定性生成路径。
+
+Qwen 训练默认开启 `actor_rollout_ref.rollout.pipeline.init_same_noise=true`：同一输入（prompt 与参考图）的候选共享初始噪声，各候选的 bridge 转移噪声保持独立，适用于 Geo、CPS 和 Flow-GRPO。开启时需配置 `actor_rollout_ref.rollout.seed`（默认 42），初始 seed 由它与训练步、任务、样本标识派生，不依赖 worker 分配；初始 latent 仍由官方 pipeline 生成。使用随机训练步选择时，同组也共享该步的位置。验证继续使用原有固定 seed 和官方确定性生成路径。设为 `false` 可恢复各候选独立初始噪声的行为。
 
 ### Qwen：单机示例
 

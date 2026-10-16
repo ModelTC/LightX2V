@@ -107,7 +107,7 @@ trainer:
   device: cuda
   n_gpus_per_node: 8
   nnodes: 1
-  total_training_steps: 100
+  total_training_steps: 5000
   total_epochs: 10
   save_freq: 20
   test_freq: 20

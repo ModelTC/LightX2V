@@ -106,6 +106,11 @@ class QwenImage21FewStepRollout:
     must participate in differentiable replay, and reduced-precision cached and
     uncached forwards are not numerically identical. Evaluation uses the
     official cached path by default.
+
+    Serving passes a fresh group-seeded initial_generator for each candidate
+    request. The official pipeline still constructs the latents; generator is
+    reserved for that candidate's independent stochastic bridge. Omitting
+    initial_generator preserves the original single-stream behavior.
     """
 
     def __init__(self, pipeline: Any, config: FewStepConfig):
@@ -130,6 +135,7 @@ class QwenImage21FewStepRollout:
         num_images_per_prompt: int = 1,
         cycle_index: int = 0,
         generator: torch.Generator | list[torch.Generator] | None = None,
+        initial_generator: torch.Generator | list[torch.Generator] | None = None,
         height: int = 2048,
         width: int = 2048,
         output_resolution: int = 1024,
@@ -160,7 +166,7 @@ class QwenImage21FewStepRollout:
             image=references or None,
             true_cfg_scale=1.0,
             num_images_per_prompt=num_images_per_prompt,
-            generator=generator,
+            generator=generator if initial_generator is None else initial_generator,
             height=height,
             width=width,
             output_resolution=output_resolution,
@@ -199,7 +205,10 @@ class QwenImage21FewStepRollout:
                 if self.config.cycle_train_idx:
                     selected_step = cycle_index % (num_steps - 1)
                 else:
-                    rng = generator[0] if isinstance(generator, list) else generator
+                    # The shared stream also keeps random step selection the
+                    # same within a group; only the bridge stream differs.
+                    rng = call_kwargs["generator"]
+                    rng = rng[0] if isinstance(rng, list) else rng
                     rng_device = "cpu" if rng is None else rng.device
                     selected_step = int(torch.randint(num_steps - 1, (), device=rng_device, generator=rng))
             if step_index != selected_step:

@@ -48,6 +48,7 @@ actor_rollout_ref:
       max_reference_images: 1
       replay_prompt_length: 4096
       use_kv_cache: false
+      init_same_noise: true
     val_kwargs:
       'n': 1
       seed: 20261009
@@ -117,7 +118,6 @@ reward:
 trainer:
   experiment_name: qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}
   n_gpus_per_node: 4
-  total_training_steps: 1000
   total_epochs: 100
   save_freq: 100
   test_freq: 20

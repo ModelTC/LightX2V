@@ -113,12 +113,19 @@ class _QwenImage21Serving(nn.Module):
         else:
             generator.manual_seed(int(seed))
         is_training = bool(extras.get("logprobs", False))
+        initial_generator = None
+        if is_training and extras.get("init_same_noise", True):
+            initial_seed = metadata.get("initial_noise_seed")
+            if initial_seed is None:
+                raise ValueError("Group-shared initial noise requires initial_noise_seed from QwenImage21AgentLoop.")
+            initial_generator = torch.Generator("cpu").manual_seed(int(initial_seed))
         result = QwenImage21FewStepRollout(self._pipeline, config).generate(
             prompt,
             task_type=task_type,
             reference_images=references,
             cycle_index=max(int(extras.get("global_steps", 1)) - 1, 0),
             generator=generator,
+            initial_generator=initial_generator,
             height=int(params.height),
             width=int(params.width),
             output_resolution=int(extras.get("output_resolution", 1024)),

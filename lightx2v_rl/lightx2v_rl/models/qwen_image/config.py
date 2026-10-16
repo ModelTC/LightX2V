@@ -14,3 +14,4 @@ class QwenImage21PipelineConfig(DiffusionPipelineConfig):
     max_reference_images: int = 1
     replay_prompt_length: int = 4096
     use_kv_cache: bool = False
+    init_same_noise: bool = True

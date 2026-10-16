@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from hashlib import blake2b
 from uuid import uuid4
 
 from PIL import Image
@@ -34,6 +36,27 @@ class QwenImage21AgentLoop(AgentLoopBase):
         prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
         if len(prompt_ids) > self.rollout_config.prompt_length:
             raise ValueError("Prompt exceeds rollout.prompt_length; increase it rather than truncate silently.")
+        metadata = {"qwen_image21_prompt": prompt, "task_type": task_type}
+        if sampling_params.get("logprobs", False) and sampling_params.get("init_same_noise", True):
+            if self.rollout_config.seed is None or sampling_params.get("global_steps") is None:
+                raise ValueError("Group-shared initial noise requires rollout.seed and the training global_steps.")
+            # Every candidate of an input has the same dataset identity and
+            # original prompt index, even when dispatched to different workers.
+            # Do not derive this from the candidate seed or the random uid.
+            group_key = [
+                int(self.rollout_config.seed),
+                int(sampling_params["global_steps"]),
+                task_type,
+                str(extra.get("sample_id", prompt)),
+                int(kwargs.get("index", extra.get("index", 0))),
+            ]
+            metadata["initial_noise_seed"] = int.from_bytes(
+                blake2b(
+                    json.dumps(group_key, ensure_ascii=False).encode("utf-8"),
+                    digest_size=8, person=b"qwen-init-noise",
+                ).digest(),
+                "big",
+            )
         metrics = {}
         with simple_timer("generate_sequences", metrics):
             output = await self.server_manager.generate(
@@ -41,7 +64,7 @@ class QwenImage21AgentLoop(AgentLoopBase):
                 prompt_ids=prompt_ids,
                 sampling_params=sampling_params,
                 image_data=images or None,
-                mm_processor_kwargs={"qwen_image21_prompt": prompt, "task_type": task_type},
+                mm_processor_kwargs=metadata,
             )
         metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1
         return DiffusionAgentLoopOutput(
