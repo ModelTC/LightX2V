@@ -17,5 +17,5 @@ python -m lightx2v.infer \
 --sr_ratio 2.0 \
 --video_path $video_path \
 --model_path $model_path \
---config_json ${lightx2v_path}/configs/seedvr/4090/seedvr2_3b.json \
+--config_json ${lightx2v_path}/configs/seedvr/seedvr2_3b.json \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_seedvr2_sr.mp4

@@ -4,6 +4,24 @@
 
 Set `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES` in the selected script. Commands below use repository-relative paths; absolute script paths also work.
 
+## Environment and weights
+
+Complete the [environment setup](../../docs/EN/source/getting_started/quickstart.md).
+Download only the models and additional weights needed for the selected task:
+
+```bash
+hf download Wan-AI/Wan2.2-T2V-A14B --local-dir Wan-AI/Wan2.2-T2V-A14B
+hf download Wan-AI/Wan2.2-I2V-A14B --local-dir Wan-AI/Wan2.2-I2V-A14B
+
+hf download lightx2v/Wan2.2-Distill-Models --local-dir lightx2v/Wan2.2-Distill-Models
+hf download lightx2v/Wan2.2-Distill-Loras --local-dir lightx2v/Wan2.2-Distill-Loras
+
+hf download lightx2v/Encoders --include "models_t5_umt5-xxl-enc-fp8.pth" --local-dir encoders/t5
+```
+
+Keep `model_path` pointed at the complete base model directory. Set the checkpoint
+and LoRA paths in the selected JSON to the downloaded local files.
+
 ## Basic tasks
 
 | Task | Script | Model weights |
@@ -137,3 +155,25 @@ Paths below are relative to `inference/`:
 | NVFP4 + sparse attention, eight GPUs | `extreme/`: T2V/I2V examples |
 
 RainFusion, NPU, and Extreme examples retain their own operator and communication settings. Use matching hardware and dependencies; NPU scripts select devices with `ASCEND_RT_VISIBLE_DEVICES`.
+
+## Python API examples
+
+See the [Python API guide](../../docs/EN/source/getting_started/python_api.md) for
+generator setup, configuration precedence, offload and repeated generation.
+Edit paths in the selected file, then run it from the repository root after installation.
+These examples retain their own model, sampling and attention settings; using a
+Shell launcher's JSON is an explicit change of configuration.
+
+| Use case | Python entry |
+| --- | --- |
+| MoE T2V | [wan_moe_t2v.py](inference/wan_moe_t2v.py) |
+| MoE I2V + offload | [wan_i2v.py](inference/wan_i2v.py) |
+| MoE I2V distilled | [wan_i2v_distilled.py](inference/distill/wan_i2v_distilled.py) |
+| MoE I2V distilled LoRA | [wan_i2v_with_distill_loras.py](inference/distill/wan_i2v_with_distill_loras.py) |
+| TI2V 5B | [wan_ti2v_5b.py](inference/wan_ti2v_5b.py) |
+| Animate | [wan_animate.py](inference/wan_animate.py) |
+
+MoE quantized inference needs matching high/low-noise DiT checkpoints; quantized
+T5 uses `t5_quantized_ckpt`. Set all paths in the chosen JSON to local files.
+For CPU offload, select `cpu_offload` and a supported `offload_granularity` using
+the [offload guide](../../docs/EN/source/deploy_guides/for_low_resource.md).

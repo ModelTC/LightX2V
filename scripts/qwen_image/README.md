@@ -4,6 +4,29 @@
 
 Set `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES` in the selected script. Commands below use repository-relative paths; absolute sh paths also work.
 
+## Environment and weights
+
+Complete the [environment setup](../../docs/EN/source/getting_started/quickstart.md).
+Download only the models and additional weights needed for the selected task:
+
+```bash
+# download from huggingface
+# Inference with 2512 text-to-image original model
+hf download Qwen/Qwen-Image-2512 --local-dir Qwen/Qwen-Image-2512
+
+# Inference with 2512 text-to-image step-distilled model
+hf download lightx2v/Qwen-Image-2512-Lightning --local-dir lightx2v/Qwen-Image-2512-Lightning
+
+# Inference with 2511 image editing original model
+hf download Qwen/Qwen-Image-Edit-2511 --local-dir Qwen/Qwen-Image-Edit-2511
+
+# Inference with 2511 image editing step-distilled model
+hf download lightx2v/Qwen-Image-Edit-2511-Lightning --local-dir lightx2v/Qwen-Image-Edit-2511-Lightning
+```
+
+Keep `model_path` pointed at the complete base model directory. Set the checkpoint
+and LoRA paths in the selected JSON to the downloaded local files.
+
 ## Basic tasks
 
 | Task | Weights | Script |
@@ -110,6 +133,37 @@ Scripts default to BF16 LoRA or distilled weights. For FP8, use the same script 
 | Feature | Usage |
 | --- | --- |
 | TensorRT VAE | Select the [T2I config](../../configs/qwen_image/qwen_image_t2i_2512_trt.json) or [I2I config](../../configs/qwen_image/qwen_image_i2i_2511_trt.json) in the base script and set `trt_vae_config.trt_engine_path`. They use static and multi-profile engines, respectively. |
-| LightLLM text encoder | Use the [kernel script](inference/text_encoder/qwen_image_i2i_2511_kernel.sh) or [service script](inference/text_encoder/qwen_image_i2i_2511_service.sh). Service mode requires a running LightLLM server and `lightllm_config.service_url`; see the [deployment guide](../../examples/BeginnerGuide/EN/QwenImageEncoderSplitDeploy.md). |
+| LightLLM text encoder | Use the [kernel script](inference/text_encoder/qwen_image_i2i_2511_kernel.sh) or [service script](inference/text_encoder/qwen_image_i2i_2511_service.sh). Service mode requires a running LightLLM server and `lightllm_config.service_url`; see the [deployment guide](../../docs/EN/source/deploy_guides/qwen_image_encoder.md). |
 | Shared CPU offload | See the [usage guide](inference/shared_offload/README.md). Configs are in `configs/qwen_image/shared_offload/`. |
 | Baseline / contiguous layouts | See the [usage guide](inference/offload_layout/README.md) for GPU and NPU examples. |
+
+## Python API examples
+
+See the [Python API guide](../../docs/EN/source/getting_started/python_api.md) for
+generator setup, configuration precedence, offload and repeated generation.
+Edit paths in the selected file, then run it from the repository root after installation.
+These examples retain their own model, sampling and attention settings; using a
+Shell launcher's JSON is an explicit change of configuration.
+
+| Use case | Steps | Python entry |
+| --- | --- | --- |
+| Edit 2511 FP8 | 4 | [qwen_2511_fp8.py](inference/qwen_2511_fp8.py) |
+| Edit 2511 LoRA | 4 | [qwen_2511_with_distill_lora.py](inference/qwen_2511_with_distill_lora.py) |
+| Edit 2511 FP8 + dynamic LoRA | 4 | [qwen_2511_with_distill_lora_dynamic.py](inference/qwen_2511_with_distill_lora_dynamic.py) |
+| Edit 2511 switch LoRA | 8 | [qwen_2511_with_distill_lora_dynamic_switch_lora.py](inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py) |
+| 2512 FP8 | 4 | [qwen_2512_fp8.py](inference/qwen_2512_fp8.py) |
+| 2512 LoRA | 4 | [qwen_2512_with_distill_lora.py](inference/qwen_2512_with_distill_lora.py) |
+| 2512 FP8 + dynamic LoRA | 4 | [qwen_2512_with_distill_lora_dynamic.py](inference/qwen_2512_with_distill_lora_dynamic.py) |
+| Qwen Image dynamic LoRA | 4 | [qwen_image_with_distill_lora_dynamic.py](inference/qwen_image_with_distill_lora_dynamic.py) |
+
+The four-step examples use the released four-step weights, following the
+[official inference examples](https://github.com/ModelTC/LightX2V-Qwen-Image-Lightning#run-4-step-edit-2511-model).
+The LoRA-switching example uses local LoRA placeholders; choose two LoRAs compatible
+with its eight-step settings. The eight-step Shell presets above use their matching weights.
+
+### Recorded DiT timing comparison
+
+The following figure records the Edit-2511 DiT comparison from 2025-12-23,
+excluding warmup; it is not an end-to-end latency measurement.
+
+![Qwen-Image-Edit-2511](../../assets/figs/qwen/qwen-image-edit-2511.png)

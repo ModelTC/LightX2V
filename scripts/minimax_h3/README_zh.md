@@ -20,15 +20,35 @@
 
 ## AdaLN 缓存
 
-通过 `use_adaln_cache: true` 启用 AdaLN 缓存。启用缓存时，先用相同模型、配置、步数和 flow shift 生成持久化缓存：
+AdaLN 缓存会预先保存推理中可复用的计算结果，减少重复计算。**示例配置已启用缓存，首次推理或启动服务前需先生成；已有匹配缓存可跳过。**
 
-```bash
-bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
-```
+1. **确认缓存配置。** 推理 JSON 中保留以下字段（示例配置已包含）：
 
-缓存脚本中的 `lightx2v_path`、`model_path`、`--config_json` 和 `--model-variant` 与推理保持一致。JSON 中须设置 `adaln_cache_dir`，示例配置使用 `~/.cache/lightx2v/adaln`。
+   ```json
+   {
+     "use_adaln_cache": true,
+     "adaln_cache_dir": "~/.cache/lightx2v/adaln"
+   }
+   ```
 
-已有匹配缓存可复用。
+2. **编辑[缓存生成脚本](../../tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh)。** 按下表设置参数：
+
+   | 参数 | 如何设置 |
+   | --- | --- |
+   | `lightx2v_path`、`model_path` | 与推理脚本使用相同的仓库路径和模型路径。 |
+   | `CUDA_VISIBLE_DEVICES` | 选择用于生成缓存的 GPU，例如 `0`；生成缓存只需单卡。 |
+   | `--config_json` | 指向推理使用的 JSON。 |
+   | `--model-variant` | `t2av`、`i2av`、`l2av`、`fl2av` 均填 `fl2av`；参考任务填 `ref2av`。 |
+
+3. **生成缓存。** 在仓库根目录运行：
+
+   ```bash
+   bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
+   ```
+
+   日志出现 `AdaLN cache saved to` 即表示完成，随后可运行下方的离线推理或启动服务。缓存保存在 `adaln_cache_dir` 下的子目录中，推理会自动读取，无需手动指定缓存文件。
+
+> **缓存复用**：修改 `--model-variant`、`infer_steps`、`video_flow_shift`、`audio_flow_shift` 时，需重新生成缓存；其他改动可直接复用。例如，29 步基础配置与四步 LoRA 配置需分别生成缓存。
 
 ## 离线推理
 
@@ -73,6 +93,18 @@ bash scripts/minimax_h3/run_minimax_h3_ref2av.sh
   }
 }
 ```
+
+## Python API
+
+[四步 DMD T2AV 示例](inference/distill/minimax_h3_t2av_dmd.py) 使用
+`configs/minimax_h3/dmd/minimax_h3_bf16_4step.json`。安装后，修改脚本中的
+`MODEL_PATH`、`OUTPUT_PATH` 和该 JSON 中的本地 LoRA 路径，再从仓库根目录运行：
+
+```bash
+python scripts/minimax_h3/inference/distill/minimax_h3_t2av_dmd.py
+```
+
+生成器创建与配置优先级见 [Python API 指南](../../docs/ZH_CN/source/getting_started/python_api.md)。
 
 ## LoRA
 

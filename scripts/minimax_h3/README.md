@@ -20,15 +20,35 @@ Set `--model-variant` at startup: `fl2av` supports the first four tasks in the t
 
 ## AdaLN cache
 
-Enable AdaLN caching with `use_adaln_cache: true`. Before using the cache, generate it with the same model, config, inference-step count, and flow shifts as inference:
+The AdaLN cache stores reusable computation results to avoid repeating work during inference. **Example configs already enable caching. Generate the cache before your first inference run or server startup; skip this step if a matching cache exists.**
 
-```bash
-bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
-```
+1. **Check the cache settings.** Keep these fields in your inference JSON (already included in the example configs):
 
-Match the cache script's `lightx2v_path`, `model_path`, `--config_json`, and `--model-variant` to inference. Set `adaln_cache_dir` in the JSON; example configs use `~/.cache/lightx2v/adaln`.
+   ```json
+   {
+     "use_adaln_cache": true,
+     "adaln_cache_dir": "~/.cache/lightx2v/adaln"
+   }
+   ```
 
-An existing matching cache can be reused.
+2. **Edit the [cache generation script](../../tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh).** Set the following parameters:
+
+   | Parameter | Setting |
+   | --- | --- |
+   | `lightx2v_path`, `model_path` | Use the same repository and model paths as inference. |
+   | `CUDA_VISIBLE_DEVICES` | Select a GPU, e.g. `0`; cache generation only needs one GPU. |
+   | `--config_json` | Use the inference JSON. |
+   | `--model-variant` | Use `fl2av` for `t2av`, `i2av`, `l2av`, and `fl2av`; use `ref2av` for reference generation. |
+
+3. **Generate the cache.** Run from the repository root:
+
+   ```bash
+   bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
+   ```
+
+   The log message `AdaLN cache saved to` confirms completion. You can then run offline inference or start a server as described below. Files are stored in a subdirectory of `adaln_cache_dir` and loaded automatically during inference; no cache file path is needed.
+
+> **Cache reuse**: regenerate the cache when changing `--model-variant`, `infer_steps`, `video_flow_shift`, or `audio_flow_shift`; other changes can reuse the existing cache. For example, generate separate caches for the 29-step base config and a four-step LoRA config.
 
 ## Offline inference
 
@@ -73,6 +93,20 @@ Add `video_codec_options` to the inference JSON to configure MP4 encoding, for e
   }
 }
 ```
+
+## Python API
+
+The [four-step DMD T2AV example](inference/distill/minimax_h3_t2av_dmd.py) uses
+`configs/minimax_h3/dmd/minimax_h3_bf16_4step.json`. After installation, set
+`MODEL_PATH` and `OUTPUT_PATH` in the script and the local LoRA path in that JSON,
+then run from the repository root:
+
+```bash
+python scripts/minimax_h3/inference/distill/minimax_h3_t2av_dmd.py
+```
+
+See the [Python API guide](../../docs/EN/source/getting_started/python_api.md)
+for generator setup and configuration precedence.
 
 ## LoRA
 
