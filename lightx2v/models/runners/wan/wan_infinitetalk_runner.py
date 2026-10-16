@@ -2,9 +2,11 @@ import gc
 import json
 import math
 import os
+import random
 import shutil
 import subprocess
 import tempfile
+import wave
 
 import imageio_ffmpeg as ffmpeg
 import numpy as np
@@ -104,6 +106,9 @@ def _is_video(path):
 
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
+    _WARMUP_SIZES = ((512, 512), (512, 896))
+    _WARMUP_STEP_COUNT = 2
+
     supported_request_fields_by_task = {
         "s2v": COMMON_REQUEST_FIELDS
         | PROMPT_FIELDS
@@ -138,6 +143,80 @@ class InfiniteTalkRunner(WanRunner):
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
+
+    @ProfilingContext4DebugL1("Warmup")
+    @torch.no_grad()
+    def run_warmup(self):
+        """Warm representative requests through the regular encoders and VAE."""
+        # Preserve this worker's RNG states across init_run()'s seeding.
+        numpy_rng, python_rng = np.random.get_state(), random.getstate()
+        model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model"
+        try:
+            with torch.random.fork_rng(devices=[torch.cuda.current_device()]), tempfile.TemporaryDirectory(prefix="infinitetalk_warmup_") as directory:
+                for height, width in self._WARMUP_SIZES:
+                    try:
+                        try:
+                            self._prepare_warmup_inputs(directory, height, width)
+                            logger.info(f"InfiniteTalk warmup: {self.target_h}x{self.target_w}x{self.input_info.num_frames}")
+                            self.inputs = self.run_input_encoder()
+                            self.init_run()
+                            self.init_run_segment(0)
+                            for step in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
+                                self.scheduler.step_pre(step)
+                                self.model.infer(self.dit_inputs)
+                                if not bool(torch.isfinite(self.scheduler.noise_pred).all()):
+                                    raise RuntimeError("InfiniteTalk warmup produced non-finite outputs")
+                                self.scheduler.step_post()
+                        finally:
+                            # Warmup can stop before infer() offloads at the last step.
+                            if model_offload:
+                                self.model.to_cpu()
+                        self.run_vae_decoder(self.scheduler.latents)
+                        torch_device_module.synchronize()
+                    finally:
+                        self.end_run()
+                        self.input_info = None
+        finally:
+            np.random.set_state(numpy_rng)
+            random.setstate(python_rng)
+        logger.info("InfiniteTalk warmup completed")
+        self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, directory, height, width):
+        # The regular loaders consume files; avoid duplicating their feature
+        # layouts here. The image aspect ratios select two resolution buckets.
+        image_path = os.path.join(directory, "image.png")
+        audio_path = os.path.join(directory, "audio.wav")
+        frames = self.config["num_frames"]
+        Image.new("RGB", (width, height), color=0).save(image_path)
+        # Leave one frame of audio margin before conversion to an integer length.
+        sample_count = math.ceil((frames + 1) * self.audio_sample_rate / self.target_fps)
+        with wave.open(audio_path, "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(self.audio_sample_rate)
+            audio.writeframes(b"\0\0" * sample_count)
+        # Inherit num_frames from config: sparse attention forbids overriding it.
+        self.input_info = self.prepare_request(
+            {
+                "seed": 0,
+                "prompt": "A person speaking naturally.",
+                "image_path": image_path,
+                "audio_path": audio_path,
+                "video_duration": frames / self.target_fps,
+                "return_result_tensor": True,
+            }
+        )
+        self.input_info.save_result_path = None
+        human_num = 2 if self.config.get("infinitetalk_mode", "single") == "multi" else 1
+        # Supply these files directly so configured media cannot replace them.
+        self._prepare_input_data(
+            {
+                "prompt": self.input_info.prompt,
+                "cond_video": image_path,
+                "cond_audio": {f"person{index + 1}": audio_path for index in range(human_num)},
+            }
+        )
 
     def load_vae(self):
         encoder, decoder = super().load_vae()
@@ -816,8 +895,7 @@ class InfiniteTalkRunner(WanRunner):
         logger.info(f"InfiniteTalk ref_target_masks built: human_num={human_num}, mask_shape={tuple(masks.shape)}")
         return masks
 
-    def _prepare_input_data(self):
-        input_data = self._load_input_data()
+    def _prepare_input_data(self, input_data):
         if self.input_info.prompt:
             input_data["prompt"] = self.input_info.prompt
         self.input_info.prompt = input_data["prompt"]
@@ -867,6 +945,8 @@ class InfiniteTalkRunner(WanRunner):
         return torch.concat([msk, y], dim=0)
 
     def _build_clip_context(self, cond_image):
+        if not self.config.get("use_image_encoder", True):
+            return None
         return self.run_image_encoder(cond_image[:, :, -1])
 
     def _run_dit_clip(self, dit_inputs):
@@ -1278,6 +1358,7 @@ class InfiniteTalkRunner(WanRunner):
             self.gen_video = None
             self.gen_video_final = None
             self.scheduler.clear()
+            self.model.pre_infer.clear_request_rope_cache()
             torch.cuda.empty_cache()
             gc.collect()
 
@@ -1296,7 +1377,7 @@ class InfiniteTalkRunner(WanRunner):
 
         try:
             try:
-                self._prepare_input_data()
+                self._prepare_input_data(self._load_input_data())
                 self.inputs = self.load_reused_inputs() if self.reuse else self.run_input_encoder()
                 result = self.run_main()
             finally:

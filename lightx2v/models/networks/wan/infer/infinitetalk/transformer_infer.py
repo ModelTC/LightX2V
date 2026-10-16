@@ -114,8 +114,8 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             q, k = phase.rope.apply(q, k, cos_sin, positions=self.rope_positions)
 
         x_ref_attn_map = None
-        ref_target_masks = pre_infer_out.adapter_args.get("ref_target_masks")
-        if pre_infer_out.adapter_args.get("human_num", 1) > 1 and ref_target_masks is not None:
+        if pre_infer_out.adapter_args.get("human_num", 1) > 1 and pre_infer_out.adapter_args.get("ref_target_masks") is not None:
+            ref_target_masks = pre_infer_out.adapter_args["ref_target_masks"]
             if self.config["seq_parallel"]:
                 token_count = self._seq_parallel_token_count(pre_infer_out)
                 map_q = self._seq_parallel_gather_tokens(q)[:token_count]

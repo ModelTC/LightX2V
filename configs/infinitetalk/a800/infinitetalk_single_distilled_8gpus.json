@@ -56,5 +56,6 @@
     },
     "audio_sp_mode": "full",
     "use_compile": true,
+    "warmup": true,
     "vae_use_compile": true
 }
