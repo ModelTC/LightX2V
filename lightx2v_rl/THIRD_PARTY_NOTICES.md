@@ -73,8 +73,8 @@ Copyright 2026 Bytedance Ltd. and/or its affiliates
 ```
 
 Tracked patches cover generic extension/data-transport interfaces, RGBA
-validation images, offline engine defaults, rollout port reservation, and
-custom metric tracking.
+validation images, offline engine defaults, rollout port reservation, custom
+metric tracking, and validation reward metadata collection.
 Upstream source-file notices remain in the submodule and patches. This package's
 algorithm-specific implementations remain outside the submodule.
 

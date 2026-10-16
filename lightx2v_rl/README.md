@@ -408,6 +408,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash lightx2v_rl/scripts/train/train_qwen21.sh \
 
 默认采用精简指标视图，展示 reward、policy / KL loss、clip 比例、学习率、梯度及耗时；Qwen 按 T2I / I2I 区分训练和验证曲线。`time/rollout_and_reward_s` 包含生成与等待评分，不能视为纯推理耗时。完整原始指标另存为 `outputs/metrics/*.jsonl`。
 
+Qwen 验证分项显示在 `eval_t2i/`、`eval_i2i/` 下：`reward` 为组合总分，`unifiedreward` 为未乘权重的归一化分数，`hpsv3_raw` 为未乘权重的 HPS 分数，`ur_clipped_fraction` 为评分越界裁剪比例。任务独有的原始维度保存在完整指标和验证明细中，不适用的维度不按零分参与均值。更新运行时补丁后需重新启动训练进程，新产生的 eval 才会记录这些明细。
+
 | 内容 | 模块内位置 |
 | --- | --- |
 | 安装日志 | `outputs/setup/` |
