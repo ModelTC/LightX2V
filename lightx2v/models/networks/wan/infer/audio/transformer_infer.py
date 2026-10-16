@@ -16,7 +16,7 @@ class WanAudioPostAdapterMixin:
         self.has_post_adapter = True
         self.phases_num = 4
         self.audio_num_tokens = int(config.get("audio_num_tokens", config.get("num_audio_tokens", 128)))
-        self.audio_attn = ATTN_WEIGHT_REGISTER[config.get("audio_attn_type", "flash_attn2")]()
+        self.audio_attn = ATTN_WEIGHT_REGISTER[config.get("audio_attn_type", "flash_attn2_varlen")]()
 
     @torch.no_grad()
     def reset_post_adapter_states(self):
