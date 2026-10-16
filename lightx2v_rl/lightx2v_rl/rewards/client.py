@@ -87,7 +87,7 @@ def compute_score(
     """Score one uint8 video using its text prompt in reward_model.ground_truth.
 
     Returns upstream's scalar ``score``, plus every weighted and raw metric for
-    logging. This does not implement FewStepRL's per-reward advantage estimator.
+    logging. The trainer's optional per-reward estimator consumes the raw fields.
     """
     payload, weights = _prepare_score_request(solution_image, ground_truth, extra_info, weights,
                                              aggregation, source_fps, video_layout)

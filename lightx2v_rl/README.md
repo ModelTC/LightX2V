@@ -309,7 +309,21 @@ CUDA_VISIBLE_DEVICES=2 LIGHTX2V_UNIFIEDREWARD_HOST=0.0.0.0 \
 - Qwen 默认 `UnifiedReward_normalized + 0.5 × HPSv3_general_raw`，同一图像的两项评分并发请求。0.5 是乘数，不代表固定贡献比例。T2I 的三个 1–5 分维度归一化为 `(均值 - 1) / 4`，I2I 的两个 0–25 分维度归一化为 `均值 / 25`。
 - Wan 可选 `--reward-config hpsv3`、`videoalign`、`hpsv3_videoalign`。默认聚合为 `sum(weight_i × reward_i) / 指标数量`，VideoAlign 保留 checkpoint 的 z-score 标准化。
 
-两条路径返回 scalar reward，再计算 GRPO advantage。评分失败或非有限结果会报错；UnifiedReward 有限的越界分数会先按量表裁剪，并保留原始值和裁剪指标。具体权重、指标与 endpoint 见 [Qwen 配置](lightx2v_rl/configs/qwen_image21_turbo/base.yaml) 和 [视频 reward 配置](lightx2v_rl/configs/rewards/)。
+以上组合分数用于 reward 日志和 eval，训练默认采用 FewStepRL 的逐 reward advantage：每项未乘权重的分数先减去当前输入候选组的均值，再除以该项在本轮所有候选组中的最大标准差加 `epsilon`，最后按权重求和。这样先处理各项 reward 的尺度差异，再表达权重偏好；合并后不再次标准化，进入 policy loss 时仍按 `adv_clip_max` 裁剪。
+
+```yaml
+algorithm:
+  weight_advantages: true
+  reward_advantage:
+    normalization: max_group_std
+    epsilon: 0.0001
+```
+
+`normalization` 也可设为 `group`（各组自己的标准差）或 `global`（该项在本轮所有样本的标准差），三者都减去当前组的均值。`algorithm.norm_adv_by_std_in_grpo=false` 时仅做组内中心化。启动命令追加 `algorithm.weight_advantages=false` 可恢复先合成 scalar reward、再计算 GRPO advantage 的路径；该路径继续使用原有 `algorithm.global_std` 设置。
+
+Qwen 的训练分量为 `unifiedreward_normalized` 和 `hpsv3_general_calibrated`：UR 保持 `[0,1]` 归一化，HPS 使用 `(raw - hps_offset) / hps_scale`，默认即原始分数。两个分量各自计算 advantage 后，以 `1.0` 和 `0.5` 合并，HPS 权重仅应用一次。Wan 使用各指标的 `*_raw` 分量；这里的 raw 指未乘组合权重，VideoAlign 已有的 checkpoint 标准化仍然保留。内置配方中的 advantage 权重引用 reward 权重，修改 `reward.custom_reward_function.reward_kwargs` 下的对应权重即可同步调整；权重为零的项不参与 advantage，激活项缺失或分数非有限时直接报错。自定义 reward 需在 `algorithm.reward_advantage.weights` 中显式配置未加权分量名称及权重。
+
+切换 advantage 策略不会改变原始 reward 日志、组合总分或 eval 的评分口径。评分失败或非有限结果会报错；UnifiedReward 有限的越界分数会先按量表裁剪，并保留原始值和裁剪指标。具体权重、指标与 endpoint 见 [Qwen 配置](lightx2v_rl/configs/qwen_image21_turbo/base.yaml) 和 [视频 reward 配置](lightx2v_rl/configs/rewards/)。
 
 ## 训练
 
@@ -445,7 +459,7 @@ lightx2v_rl/
 
 新增 reward 放在 `rewards/`，新增数据集放在 `data/`。算法和模型专属逻辑留在本模块，submodule 只维护必要的通用接口补丁。升级 verl-omni 时需重新验证补丁、配置和 Actor / rollout 数据契约。
 
-当前 advantage 路径为 scalar reward → GRPO，尚未迁移 FewStepRL 的逐 reward advantage 与 `max_group_std` estimator。
+共享 advantage 逻辑位于 `backends/verl_omni/advantage.py`，通过通用扩展接口接入训练器；各模型的分量名称与权重由配方配置。
 
 ## 常见问题
 

@@ -14,6 +14,7 @@ ENGINE_DEFAULTS_PATCH = PACKAGE_ROOT / "patches" / "0003-offline-engine-argument
 ROLLOUT_PORT_PATCH = PACKAGE_ROOT / "patches" / "0004-reserve-rollout-master-ports.patch"
 TRACKING_PATCH = PACKAGE_ROOT / "patches" / "0005-custom-tracking-class.patch"
 VALIDATION_REWARD_PATCH = PACKAGE_ROOT / "patches" / "0006-validation-reward-details.patch"
+ADVANTAGE_PATCH = PACKAGE_ROOT / "patches" / "0007-custom-advantage-function.patch"
 
 
 def prepare_runtime(checkout: Path = DEFAULT_CHECKOUT, *, check_only: bool = False) -> Path:
@@ -74,7 +75,7 @@ def prepare_runtime(checkout: Path = DEFAULT_CHECKOUT, *, check_only: bool = Fal
     pending = []
     applied_patches = []
     for patch in (PATCH, MEDIA_PATCH, ENGINE_DEFAULTS_PATCH, ROLLOUT_PORT_PATCH, TRACKING_PATCH,
-                  VALIDATION_REWARD_PATCH):
+                  VALIDATION_REWARD_PATCH, ADVANTAGE_PATCH):
         if not patch.is_file():
             raise RuntimeError(f"Missing runtime extension patch: {patch}")
         if git("apply", "--reverse", "--check", str(patch)).returncode == 0:

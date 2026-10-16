@@ -68,6 +68,10 @@ actor_rollout_ref:
         use_kv_cache: true
 algorithm:
   global_std: false
+  reward_advantage:
+    weights:
+      unifiedreward_normalized: ${reward.custom_reward_function.reward_kwargs.unifiedreward_weight}
+      hpsv3_general_calibrated: ${reward.custom_reward_function.reward_kwargs.hps_weight}
 data:
   train_files:
   - lightx2v_rl/data/opengpt4o/train.jsonl

@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field, fields
 from typing import Any
 
+from verl_omni.trainer.config import DiffusionAlgoConfig
 from verl_omni.workers.config.diffusion.actor import DiffusionLossConfig
 from verl_omni.workers.config.diffusion.model import DiffusionModelConfig
 from verl_omni.workers.config.diffusion.rollout import DiffusionRolloutAlgoConfig
@@ -11,6 +12,17 @@ from lightx2v_rl.algorithms.fewstep import FewStepConfig
 from lightx2v_rl.models.registry import get_model_spec
 
 FEWSTEP_LOSS_MODES = frozenset({"fewstep_geo", "fewstep_cps", "fewstep_flow_grpo"})
+
+
+@dataclass
+class FewStepAlgoConfig(DiffusionAlgoConfig):
+    """External advantage options; verl-omni only dispatches the generic hook."""
+
+    custom_advantage_function: str = "lightx2v_rl.backends.verl_omni.advantage.compute_advantages"
+    weight_advantages: bool = True
+    reward_advantage: dict[str, Any] = field(default_factory=lambda: {
+        "normalization": "max_group_std", "epsilon": 1e-4, "weights": {},
+    })
 
 
 def get_fewstep_config(model_config: Any) -> FewStepConfig:

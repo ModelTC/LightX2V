@@ -6,6 +6,7 @@ from omegaconf import OmegaConf
 
 from lightx2v_rl.algorithms.fewstep import FewStepConfig
 from lightx2v_rl.models.registry import get_model_spec, validate_model_recipe
+from lightx2v_rl.training.advantage import validate_advantage_config
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
 REWARD_RECIPES = ("hpsv3", "videoalign", "hpsv3_videoalign")
@@ -83,7 +84,8 @@ def validate_recipe(config, *, require_inputs: bool = False):
     if rollout.pipeline.guidance_scale != rollout.pipeline.true_cfg_scale:
         raise ValueError("Rollout guidance_scale must equal true_cfg_scale.")
     if config.algorithm.adv_estimator != "flow_grpo":
-        raise ValueError("These recipes use the upstream scalar flow_grpo advantage estimator.")
+        raise ValueError("FewStep recipes require the flow_grpo advantage estimator.")
+    advantage_weights = validate_advantage_config(config.algorithm)
     if not config.trainer.use_v1 or config.trainer.v1.trainer_mode != "sync":
         raise ValueError("The initial FewStep recipes require the synchronous v1 trainer.")
     validate_model_recipe(config, fewstep)
@@ -93,6 +95,8 @@ def validate_recipe(config, *, require_inputs: bool = False):
     if not OmegaConf.select(config, "reward.reward_functions", default={}):
         required.append("reward.custom_reward_function.path")
     missing = [key for key in required if OmegaConf.select(config, key, default=None) in (None, "")]
+    if config.algorithm.get("weight_advantages", True) and not advantage_weights:
+        missing.append("algorithm.reward_advantage.weights")
     if require_inputs and missing:
         raise ValueError("Set required runtime inputs: " + ", ".join(missing))
     return fewstep, missing

@@ -30,9 +30,19 @@ as **CPS / `cps`**. The original Wan CPS fixed-denominator KL surrogate is
 preserved and documented in the objective implementation.
 
 This is a migration of the Wan policy mathematics and rollout behavior.
-Reward model ports and weighted
-score aggregation are described below; per-reward advantage/stat-tracking code,
-the NFT trainer, and Qwen-specific objective variants are not migrated.
+Reward model ports and weighted score aggregation are described below.
+The NFT trainer and Qwen-specific objective variants are not migrated.
+
+FewStepRL's `genrl/advantages.py` and `genrl/stat_tracking.py` supply the
+per-reward advantage weighting and `max_group_std` normalization semantics,
+under the same source commit and Apache License 2.0. The adaptation in
+`lightx2v_rl/algorithms/fewstep/advantages.py` and its
+`lightx2v_rl/backends/verl_omni/advantage.py` adapter uses the gathered rollout candidate
+groups, explicit unweighted reward components, and configurable normalization.
+It centers each component within its group, optionally divides by the selected
+component-specific standard deviation, then sums the weighted advantages
+without a second normalization. Existing scalar reward logging and validation
+scores remain unchanged. Persistent prompt-history tracking is not migrated.
 
 **HPSv3 and VideoAlign reward ports**
 
@@ -74,7 +84,8 @@ Copyright 2026 Bytedance Ltd. and/or its affiliates
 
 Tracked patches cover generic extension/data-transport interfaces, RGBA
 validation images, offline engine defaults, rollout port reservation, custom
-metric tracking, and validation reward metadata collection.
+metric tracking, validation reward metadata collection, and a custom advantage
+extension hook.
 Upstream source-file notices remain in the submodule and patches. This package's
 algorithm-specific implementations remain outside the submodule.
 

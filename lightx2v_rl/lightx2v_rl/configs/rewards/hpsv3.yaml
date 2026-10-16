@@ -1,4 +1,9 @@
 inherits: base
+algorithm:
+  reward_advantage:
+    weights:
+      hpsv3_general_raw: ${reward.custom_reward_function.reward_kwargs.weights.hpsv3_general}
+      hpsv3_percentile_raw: ${reward.custom_reward_function.reward_kwargs.weights.hpsv3_percentile}
 reward:
   custom_reward_function:
     reward_kwargs:

@@ -69,10 +69,18 @@ actor_rollout_ref:
         _target_: lightx2v_rl.backends.verl_omni.config.FewStepRolloutAlgoConfig
         fewstep: ${actor_rollout_ref.model.fewstep}
 algorithm:
+  _target_: lightx2v_rl.backends.verl_omni.config.FewStepAlgoConfig
   trainer_type: policy_gradient
   sample_source: online
   adv_estimator: flow_grpo
+  custom_advantage_function: lightx2v_rl.backends.verl_omni.advantage.compute_advantages
+  weight_advantages: true
+  reward_advantage:
+    normalization: max_group_std
+    epsilon: 0.0001
+    weights: {}
   norm_adv_by_std_in_grpo: true
+  # Used only by the scalar-reward path (weight_advantages: false).
   global_std: true
 data:
   train_files: null

@@ -43,8 +43,8 @@ def validate_recipe(config, fewstep):
         raise ValueError("Incomplete-group refill can cross task boundaries; disable it for exact alternation.")
     if OmegaConf.select(config, "data.sampler.class_name") != "AlternatingTaskSampler":
         raise ValueError("Qwen mixed training requires the alternating task sampler.")
-    if config.algorithm.get("global_std", False):
-        raise ValueError("Qwen multitask recipes use per-input-group advantage normalization.")
+    if not config.algorithm.get("weight_advantages", True) and config.algorithm.get("global_std", False):
+        raise ValueError("Qwen combined-reward advantages require per-input-group normalization.")
     if config.data.val_batch_size < 1 or config.data.get("validation_shuffle", False):
         raise ValueError("Qwen validation requires a positive batch size and ordered per-task metrics.")
     nodes = int(config.trainer.get("nnodes", 1))
