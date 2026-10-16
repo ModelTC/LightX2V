@@ -11,3 +11,6 @@
 [submodule "lightx2v_ros/src/simulator/simulator/robolab_node/RoboLab"]
 	path = lightx2v_ros/src/simulator/simulator/robolab_node/RoboLab
 	url = https://github.com/ModelTC/RoboLab.git
+[submodule "third_party/verl-omni"]
+	path = third_party/verl-omni
+	url = https://github.com/verl-project/verl-omni.git
