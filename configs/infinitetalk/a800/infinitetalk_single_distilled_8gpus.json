@@ -54,5 +54,6 @@
         },
         "sparse_operator": "sla_triton_operator"
     },
-    "audio_sp_mode": "full"
+    "audio_sp_mode": "full",
+    "use_compile": true
 }
