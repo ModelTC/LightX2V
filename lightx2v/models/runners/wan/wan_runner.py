@@ -20,6 +20,8 @@ from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.wan.distill_model import WanDistillModel
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
+from lightx2v.models.networks.wan.infer.utils import image_latent_size
 from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -181,6 +183,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
                             scheduler.step_post()
                             previous_step_index = step_index
                     finally:
+                        self.release_resident_blocks()
                         if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
                             for model in filter(None, self.get_warmup_models()):
                                 model.to_cpu()
@@ -513,6 +516,19 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.end_run()
         return gen_video_final
 
+    def run_segment(self, segment_idx=0):
+        try:
+            return super().run_segment(segment_idx)
+        finally:
+            # Drop resident weights before VAE decode, including on cancellation.
+            self.release_resident_blocks()
+
+    def release_resident_blocks(self):
+        if self.config["model_cls"] == "wan2.1":
+            infer = self.model.transformer_infer
+            if isinstance(infer, WanOffloadTransformerInfer):
+                infer.release_resident_blocks()
+
     def reuse_key(self):
         reuse_key = {
             "prompt": self.input_info.prompt,
@@ -827,13 +843,10 @@ class WanRunner(DisaggMixin, DefaultRunner):
     )
     def run_vae_encoder(self, first_frame, last_frame=None):
         h, w = first_frame.shape[2:]
-        aspect_ratio = h / w
         target_height, target_width = self.get_target_size()
-        max_area = target_height * target_width
 
         # Calculate initial latent dimensions
-        ori_latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
-        ori_latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
+        ori_latent_h, ori_latent_w = image_latent_size((h, w), (target_height, target_width), self.config["vae_stride"], self.config["patch_size"])
 
         # Adjust latent dimensions for optimal 2D grid splitting when using distributed processing
         if dist.is_initialized() and dist.get_world_size() > 1:
