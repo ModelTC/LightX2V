@@ -90,6 +90,13 @@ class TorchComplexRope(RopeTemplate):
 
 @ROPE_REGISTER("torch_real_rope")
 class TorchRealRope(RopeTemplate):
+    def prepare_freqs(self, freqs, rotary_dim: int | None = None):
+        # Prepare real caches before tracing the transformer block. Extracting
+        # real/imaginary parts inside the graph otherwise retains complex ops.
+        if torch.is_tensor(freqs) and torch.is_complex(freqs):
+            return freqs.real.contiguous(), freqs.imag.contiguous()
+        return freqs
+
     def _cos_sin(self, freqs, rotary_dim: int):
         if torch.is_tensor(freqs) and torch.is_complex(freqs):
             return freqs.real, freqs.imag, True
