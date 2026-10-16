@@ -1274,16 +1274,16 @@ class InfiniteTalkRunner(WanRunner):
             "1:a:0",
             "-shortest",
         ]
-        # New FFmpeg versions can copy PCM into MP4 as ipcm, which older
-        # decoders cannot read. Copy known MPEG audio inputs and encode other
-        # formats (including WAV/PCM) to AAC for playback compatibility.
-        copy_audio = os.path.splitext(audio_path)[1].lower() in {".mp3", ".aac"}
-        audio_options = ["-c:a", "copy"] if copy_audio else ["-c:a", "aac", "-b:a", "192k"]
-        cmd = [*base_cmd, *audio_options, tmp_path]
+        cmd = [
+            *base_cmd,
+            "-c:a",
+            "copy",
+            tmp_path,
+        ]
         try:
             res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
-            if res.returncode != 0 and copy_audio:
-                # Fall back to AAC if the source cannot be copied into MP4.
+            if res.returncode != 0:
+                # Fallback to aac re-encoding (e.g. for WAV/PCM inputs)
                 cmd = [
                     *base_cmd,
                     "-c:a",
@@ -1293,8 +1293,6 @@ class InfiniteTalkRunner(WanRunner):
                     tmp_path,
                 ]
                 subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
-            elif res.returncode != 0:
-                res.check_returncode()
             os.replace(tmp_path, video_path)
             logger.info(f"Muxed audio from {audio_path}")
         except subprocess.TimeoutExpired as exc:
