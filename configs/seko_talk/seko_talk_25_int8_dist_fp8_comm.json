@@ -7,6 +7,7 @@
     "self_attn_1_type": "spas_sage_attn3",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
+    "audio_attn_type": "flash_attn2",
     "sample_guide_scale": 1,
     "sample_shift": 5,
     "enable_cfg": false,

@@ -224,8 +224,9 @@ def main():
         print_request(input_info, runner.get_supported_request_fields(input_info.task))
         runner.run_request(input_info)
 
-    # Clean up distributed process group
+    # Rank 0 may still be muxing the output video.
     if dist.is_initialized():
+        dist.barrier()
         dist.destroy_process_group()
         logger.info("Distributed process group cleaned up")
 

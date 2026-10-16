@@ -35,6 +35,7 @@ elif PLATFORM == "metax_cuda":
     # their one-time snapshot. Keep attention last to preserve that boundary.
     # isort: off
     from .moe.metax_cuda import *
+    from .mm.metax_cuda import *
     from .norm.metax_cuda import *
     from .rope.metax_cuda import *
     from .attn.metax_cuda import *

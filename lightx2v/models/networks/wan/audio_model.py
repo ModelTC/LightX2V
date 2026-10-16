@@ -12,7 +12,7 @@ from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.audio.transformer_weights import WanAudioTransformerWeights
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
-from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -28,9 +28,20 @@ class WanAudioModel(WanModel):
     def _load_adapter_ckpt(self):
         if self.config.get("adapter_model_path", None) is None:
             if self.config.get("adapter_quantized", False):
-                if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f", "fp8-vllm", "fp8-sgl", "fp8-torchao", "fp8-triton"]:
+                if self.config.get("adapter_quant_scheme", None) in ["fp8", "fp8-q8f", "fp8-vllm", "fp8-sgl", "fp8-torchao", "fp8-triton", "fp8-musa"]:
                     adapter_model_name = "audio_adapter_model_fp8.safetensors"
-                elif self.config.get("adapter_quant_scheme", None) in ["int8", "int8-q8f", "int8-vllm", "int8-torchao", "int8-sgl", "int8-triton", "int8-tmo", "int8-npu", "int8-iluvatar"]:
+                elif self.config.get("adapter_quant_scheme", None) in [
+                    "int8",
+                    "int8-q8f",
+                    "int8-vllm",
+                    "int8-torchao",
+                    "int8-sgl",
+                    "int8-triton",
+                    "int8-tmo",
+                    "int8-npu",
+                    "int8-metax",
+                    "int8-iluvatar",
+                ]:
                     adapter_model_name = "audio_adapter_model_int8.safetensors"
                 elif self.config.get("adapter_quant_scheme", None) in ["mxfp4"]:
                     adapter_model_name = "audio_adapter_model_mxfp4.safetensors"
@@ -68,8 +79,16 @@ class WanAudioModel(WanModel):
         adapter_weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=adapter_offload, remove_key="audio", load_from_rank0=load_from_rank0)
         target_device = torch.device("cpu") if adapter_offload else torch.device(AI_DEVICE)
         target_dtype = GET_DTYPE()
+        musa_fp8 = self.config.get("adapter_quant_scheme") == "fp8-musa"
         for key, tensor in adapter_weights_dict.items():
-            adapter_weights_dict[key] = tensor.to(device=target_device, dtype=target_dtype) if (tensor.is_floating_point() and tensor.dtype != torch.float8_e4m3fn) else tensor.to(device=target_device)
+            if musa_fp8 and key.endswith(".weight_scale"):
+                adapter_weights_dict[key] = tensor.to(device=target_device, dtype=torch.float32)
+            elif musa_fp8 and tensor.is_floating_point() and tensor.dtype != torch.float8_e4m3fn and any(pattern in key for pattern in self.sensitive_layer):
+                adapter_weights_dict[key] = tensor.to(device=target_device, dtype=GET_SENSITIVE_DTYPE())
+            else:
+                adapter_weights_dict[key] = (
+                    tensor.to(device=target_device, dtype=target_dtype) if (tensor.is_floating_point() and tensor.dtype != torch.float8_e4m3fn) else tensor.to(device=target_device)
+                )
         return adapter_weights_dict
 
     def _init_infer_class(self):

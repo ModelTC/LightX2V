@@ -2,7 +2,10 @@ import gc
 import io
 import json
 import os
+import random
 import warnings
+from contextlib import contextmanager
+from copy import copy
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -36,6 +39,10 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
+
+
+def _rs2v_warmup_shape(tensor):
+    return None if tensor is None else (tuple(tensor.shape), tensor.dtype)
 
 
 def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None, size=None):
@@ -311,12 +318,93 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.task = self.config.get("task", "i2v")
         self.prev_frame_length = self.config.get("prev_frame_length", 5)
         self.video_duration = self.config.get("video_duration", 5)
+        self._rs2v_warmed_shapes = set()
 
         self.frame_preprocessor = FramePreprocessorTorchVersion()
 
     def init_scheduler(self):
         """Initialize the audio Euler scheduler."""
         self.scheduler = EulerScheduler(self.config)
+
+    def warmup(self):
+        if self.config["model_cls"] != "seko_talk" or self.task != "rs2v":
+            return super().warmup()
+        if self.config.get("warmup", False):
+            logger.info("[Warmup] SekoTalk RS2V warmup waits for the request's segment shape")
+
+    def _rs2v_warmup_key(self):
+        info = self.input_info
+        return (
+            tuple(info.latent_shape),
+            _rs2v_warmup_shape(info.audio_clip),
+            _rs2v_warmup_shape(info.overlap_latent),
+            info.is_first,
+            info.is_last,
+            tuple((group, name, _rs2v_warmup_shape(tensor)) for group in ("text_encoder_output", "image_encoder_output") for name, tensor in sorted(self.inputs[group].items())),
+            _rs2v_warmup_shape(self.inputs["person_mask_latens"]),
+        )
+
+    @contextmanager
+    def _isolate_rs2v_warmup(self):
+        """Restore request state while keeping the compiled block dictionaries."""
+        scheduler = self.model.scheduler
+        states = [(owner, vars(owner).copy()) for owner in (scheduler, self.model.pre_infer, self.model.transformer_infer)]
+        input_info, inputs = self.input_info, self.inputs
+        decoder = self.vae_decoder.model
+        cache_names = ("_feat_map", "_conv_idx", "_conv_num")
+        decode_cache = {name: vars(decoder)[name] for name in cache_names if name in vars(decoder)}
+        python_rng = random.getstate()
+        numpy_rng = np.random.get_state()
+        cpu_rng = torch.get_rng_state()
+        device_rng = torch_device_module.get_rng_state()
+        failed = False
+        try:
+            # Encoded inputs and cached VAE tensors are read-only; isolate their containers.
+            self.input_info = copy(input_info)
+            self.inputs = inputs.copy()
+            scheduler._audio_t_emb_cache = {}
+            # WanVAE creates these caches on its first decode.
+            if "_feat_map" in decode_cache:
+                decoder._feat_map = decoder._feat_map.copy()
+            yield
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                torch_device_module.synchronize()
+            except Exception:
+                if not failed:
+                    raise
+                logger.warning("[Warmup] Device synchronization also failed while cleaning up a failed RS2V warmup")
+            finally:
+                self.input_info, self.inputs = input_info, inputs
+                for owner, state in states:
+                    vars(owner).clear()
+                    vars(owner).update(state)
+                for name in cache_names:
+                    vars(decoder).pop(name, None)
+                vars(decoder).update(decode_cache)
+                random.setstate(python_rng)
+                np.random.set_state(numpy_rng)
+                torch.set_rng_state(cpu_rng)
+                torch_device_module.set_rng_state(device_rng)
+
+    def _maybe_warmup_rs2v_clip(self):
+        if not self.config.get("warmup", False) or self.config["model_cls"] != "seko_talk" or self.task != "rs2v":
+            return
+        key = self._rs2v_warmup_key()
+        if key in self._rs2v_warmed_shapes:
+            return
+        logger.info(
+            f"[Warmup] SekoTalk RS2V segment: latent_shape={self.input_info.latent_shape}, first={self.input_info.is_first}, last={self.input_info.is_last}, reference_state={self.input_info.ref_state}"
+        )
+        with self._isolate_rs2v_warmup():
+            self._run_clip_main()
+        if dist.is_initialized() and dist.get_world_size() > 1:
+            dist.barrier()
+        self._rs2v_warmed_shapes.add(key)
+        logger.info("[Warmup] SekoTalk RS2V segment warmup completed")
 
     def read_audio_input(self, audio_path):
         """Read audio input - handles both single and multi-person scenarios"""
@@ -874,8 +962,15 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return self.model.scheduler.latents
 
     def run_clip_main(self):
+        self._maybe_warmup_rs2v_clip()
+        return self._run_clip_main()
+
+    def _run_clip_main(self):
         self.scheduler.set_audio_adapter(self.audio_adapter)
 
+        if self.config["model_cls"] == "seko_talk" and self.task == "rs2v":
+            # Each segment's seed controls its initial noise, including after warmup.
+            self.model.scheduler.generator = None
         self.model.scheduler.prepare(
             seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, infer_steps=self.config["infer_steps"], image_encoder_output=self.inputs["image_encoder_output"]
         )

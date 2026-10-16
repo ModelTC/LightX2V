@@ -50,9 +50,12 @@ class WanInfiniteTalkPreInfer(WanPreInfer):
         image_encoder_output = inputs.get("image_encoder_output", {})
         original_vae_encoder_out = image_encoder_output.get("vae_encoder_out")
 
-        self.scheduler.latents = original_latents.to(GET_DTYPE())
+        # Patch embeddings follow the sensitive-layer dtype in the checkpoint
+        # loader. Both inputs to the patch convolution must use that dtype.
+        patch_dtype = weights.patch_embedding.weight.dtype
+        self.scheduler.latents = original_latents.to(patch_dtype)
         if original_vae_encoder_out is not None:
-            image_encoder_output["vae_encoder_out"] = original_vae_encoder_out.to(GET_DTYPE())
+            image_encoder_output["vae_encoder_out"] = original_vae_encoder_out.to(patch_dtype)
         try:
             pre_out = super().infer(weights, inputs, kv_start=kv_start, kv_end=kv_end)
         finally:

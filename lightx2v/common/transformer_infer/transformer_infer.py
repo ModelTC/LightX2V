@@ -13,7 +13,7 @@ class BaseTransformerInfer(ABC):
         self.compile_backend = config.get("compile_backend", "default")
         self.compiled_blocks = {}
         self._compile_backend_obj = self._create_compile_backend() if self.use_compile else None
-        if self._compile_backend_obj is not None:
+        if self.use_compile:
             logger.info(f"[Compile] Using torch.compile (backend={self.compile_backend}) for {type(self).__name__}")
 
     def _create_compile_backend(self):

@@ -7,13 +7,15 @@ import torch
 import torchaudio as ta
 from loguru import logger
 
-from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
+from lightx2v.shot_runner.shot_base import ClipConfig, ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.input_info import calculate_num_frames_from_duration
 from lightx2v.utils.profiler import *
+from lightx2v.utils.set_config import build_cli_inputs, init_parallel
 from lightx2v.utils.utils import is_main_process, seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace
 from lightx2v.utils.va_controller import VAController
+from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
 def get_reference_state_sequence(frames_per_clip=17, target_fps=16):
@@ -247,6 +249,9 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=None, help="The seed for random generator")
+    parser.add_argument("--model_cls", type=str, default=None)
+    parser.add_argument("--task", type=str, default=None)
+    parser.add_argument("--model_path", type=str, default=None)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default=None)
@@ -257,12 +262,21 @@ def main():
     parser.add_argument("--size", type=int, nargs=2, default=None, help="Output size in pixels: HEIGHT WIDTH (requires resize_mode=fixed_shape)")
     parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk image and mask resize mode; defaults to the startup config.")
     parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
+    parser.add_argument("--num_frames", type=int, default=None, help="Requested frames per generated segment; defaults to duration-based sizing or the startup config.")
     parser.add_argument("--video_duration", type=float, default=20, help="Video duration in seconds")
 
     args = parser.parse_args()
 
-    request_data = vars(args)
-    clip_configs = load_clip_configs(request_data.pop("config_json"))
+    if args.model_path is not None:
+        startup_config, request_data = build_cli_inputs(args)
+        if startup_config["parallel"]:
+            platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
+            platform_device.init_parallel_env()
+            init_parallel(startup_config)
+        clip_configs = [ClipConfig(name="rs2v_clip", config_json=startup_config)]
+    else:
+        request_data = {key: value for key, value in vars(args).items() if key not in {"model_cls", "task", "model_path"}}
+        clip_configs = load_clip_configs(request_data.pop("config_json"))
 
     with ProfilingContext4DebugL1("Init Pipeline Cost Time"):
         shot_rs2v_pipe = ShotRS2VPipeline(clip_configs)
