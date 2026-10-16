@@ -28,6 +28,9 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         if config.get("cpu_offload", False) and offload_granularity not in {"block", "model"}:
             raise NotImplementedError(f"InfiniteTalk currently supports block/model offload, not {offload_granularity} offload.")
         super().__init__(config)
+        self.audio_sp_mode = config.get("audio_sp_mode", "replicated")
+        if self.audio_sp_mode not in {"replicated", "full"}:
+            raise ValueError("audio_sp_mode must be replicated or full")
         self.phases_num = 4
         self.rope_1d = RotaryPositionalEmbedding1D(self.head_dim)
         self.audio_attn_cu_seqlens_q = None
@@ -86,7 +89,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             gate_msa,
         )
         x.add_(attn_out)
-        if self.config["seq_parallel"]:
+        if self.config["seq_parallel"] and self.audio_sp_mode == "replicated":
             local_len = x.shape[0]
             token_count = self._seq_parallel_token_count(pre_infer_out)
             full_x = self._seq_parallel_gather_tokens(x)[:token_count]
@@ -111,8 +114,8 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             q, k = phase.rope.apply(q, k, cos_sin, positions=self.rope_positions)
 
         x_ref_attn_map = None
-        ref_target_masks = pre_infer_out.adapter_args.get("ref_target_masks")
-        if pre_infer_out.adapter_args.get("human_num", 1) > 1 and ref_target_masks is not None:
+        if pre_infer_out.adapter_args.get("human_num", 1) > 1 and pre_infer_out.adapter_args.get("ref_target_masks") is not None:
+            ref_target_masks = pre_infer_out.adapter_args["ref_target_masks"]
             if self.config["seq_parallel"]:
                 token_count = self._seq_parallel_token_count(pre_infer_out)
                 map_q = self._seq_parallel_gather_tokens(q)[:token_count]
@@ -222,17 +225,38 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         return mask_attn.permute(2, 0, 1).reshape(class_num * batch_size, -1)
 
     def infer_audio_cross_attn(self, phase, x, pre_infer_out, x_ref_attn_map):
+        """Keep frame-local audio attention independent when sharding video tokens."""
         audio_embedding = pre_infer_out.adapter_args["audio_embedding"].to(device=x.device, dtype=GET_DTYPE())
         human_num = pre_infer_out.adapter_args.get("human_num", 1)
         grid_t, grid_h, grid_w = pre_infer_out.grid_sizes.tuple
         spatial_tokens = grid_h * grid_w
+        frame_count = grid_t
+        sharded = self.config["seq_parallel"] and self.audio_sp_mode == "full"
 
-        x_norm = phase.norm_x.apply(x)
-        x_frames = x_norm.view(grid_t, spatial_tokens, -1)
+        if sharded:
+            local_length = x.shape[0]
+            token_start = dist.get_rank(self.seq_p_group) * local_length
+            valid_length = max(0, min(local_length, grid_t * spatial_tokens - token_start))
+            if valid_length == 0:
+                return torch.zeros_like(x)
+            frame_start = token_start // spatial_tokens
+            frame_end = (token_start + valid_length + spatial_tokens - 1) // spatial_tokens
+            frame_count = frame_end - frame_start
+            query_padding = token_start % spatial_tokens
+            audio_embedding = audio_embedding[frame_start:frame_end]
+            queries = x[:valid_length]
+        else:
+            queries = x
 
-        q = phase.q_linear.apply(x_frames.reshape(grid_t * spatial_tokens, -1)).view(grid_t, spatial_tokens, self.num_heads, self.head_dim)
+        q = phase.q_linear.apply(phase.norm_x.apply(queries)).view(-1, self.num_heads, self.head_dim)
+        if sharded:
+            # A contiguous shard can start/end within a frame. Only queries are
+            # padded; each frame still attends to its own complete audio KV.
+            q = F.pad(q, (0, 0, 0, 0, query_padding, frame_count * spatial_tokens - query_padding - valid_length))
+        q = q.view(frame_count, spatial_tokens, self.num_heads, self.head_dim)
+
         audio_tokens = audio_embedding.shape[1]
-        kv = phase.kv_linear.apply(audio_embedding.reshape(grid_t * audio_tokens, -1)).view(grid_t, audio_tokens, 2, self.num_heads, self.head_dim)
+        kv = phase.kv_linear.apply(audio_embedding.reshape(frame_count * audio_tokens, -1)).view(frame_count, audio_tokens, 2, self.num_heads, self.head_dim)
         encoder_k, encoder_v = kv.unbind(dim=2)
 
         if human_num > 1:
@@ -241,15 +265,16 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
                 q,
                 encoder_k,
                 x_ref_attn_map,
-                grid_t,
+                frame_count,
                 human_num,
                 pre_infer_out,
+                query_token_range=(frame_start * spatial_tokens, frame_end * spatial_tokens) if sharded else None,
             )
 
         if self.audio_attn_cu_seqlens_q is None:
-            self.audio_attn_cu_seqlens_q = torch.arange(0, (grid_t + 1) * spatial_tokens, spatial_tokens, dtype=torch.int32)
+            self.audio_attn_cu_seqlens_q = torch.arange(0, (frame_count + 1) * spatial_tokens, spatial_tokens, dtype=torch.int32)
         if self.audio_attn_cu_seqlens_kv is None:
-            self.audio_attn_cu_seqlens_kv = torch.arange(0, (grid_t + 1) * audio_tokens, audio_tokens, dtype=torch.int32)
+            self.audio_attn_cu_seqlens_kv = torch.arange(0, (frame_count + 1) * audio_tokens, audio_tokens, dtype=torch.int32)
 
         attn_out = phase.audio_attn.apply(
             q=q,
@@ -260,6 +285,10 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             max_seqlen_q=spatial_tokens,
             max_seqlen_kv=audio_tokens,
         )
+        if sharded:
+            attn_out = attn_out.reshape(-1, self.num_heads * self.head_dim)
+            output = phase.proj.apply(attn_out[query_padding : query_padding + valid_length].contiguous())
+            return F.pad(output, (0, 0, 0, local_length - valid_length))
         return phase.proj.apply(attn_out).view_as(x)
 
     def _multi_human_rope_ranges(self, human_num, dtype, device):
@@ -280,6 +309,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         grid_t,
         human_num,
         pre_infer_out,
+        query_token_range=None,
     ):
         if x_ref_attn_map is None:
             return q, encoder_k
@@ -314,6 +344,9 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         max_indices = torch.clamp(max_indices, max=human_map_count)
         normalized_map = torch.stack([*human_positions, back], dim=1)
         normalized_pos = normalized_map[range(x_ref_attn_map.size(1)), max_indices]
+        if query_token_range is not None:
+            # Normalize using the full reference map before selecting this rank.
+            normalized_pos = normalized_pos[query_token_range[0] : query_token_range[1]]
 
         q_rope = rearrange(q, "t s h d -> 1 h (t s) d")
         q_rope = self.rope_1d(phase.rope_1d, q_rope, normalized_pos)
@@ -321,6 +354,11 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
 
         k_rope = rearrange(encoder_k, "t s h d -> 1 h (t s) d")
         encoder_rope = pre_infer_out.adapter_args.get("audio_encoder_rope")
+        if query_token_range is not None:
+            # Cached encoder positions cover every frame; build the same repeated
+            # per-frame positions for this rank instead of indexing backend-specific
+            # RoPE cache layouts.
+            encoder_rope = None
         if encoder_rope is None:
             audio_tokens = encoder_k.shape[1]
             per_frame = torch.zeros(audio_tokens, dtype=encoder_k.dtype, device=encoder_k.device)
