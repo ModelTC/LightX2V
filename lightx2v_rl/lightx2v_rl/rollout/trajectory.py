@@ -94,7 +94,5 @@ def sample_trajectory(
 
     if recorded is None:
         empty = state.new_empty((state.shape[0], 0))
-        return FewStepTrajectory(
-            state, state.new_empty((state.shape[0], 0, *state.shape[1:])), empty, empty, empty, None
-        )
+        return FewStepTrajectory(state, state.new_empty((state.shape[0], 0, *state.shape[1:])), empty, empty, empty, None)
     return FewStepTrajectory(state, *recorded, paths.train_step_index)

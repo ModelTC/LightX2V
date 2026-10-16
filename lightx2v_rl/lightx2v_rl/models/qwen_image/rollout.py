@@ -88,11 +88,14 @@ def pad_qwen_replay_tensors(
         if value.shape[1] > capacity:
             raise ValueError(f"{key} length {value.shape[1]} exceeds configured transport capacity {capacity}.")
         padded_value = value.new_zeros((batch_size, capacity, *value.shape[2:]))
-        padded_value[:, :value.shape[1]] = value
+        padded_value[:, : value.shape[1]] = value
         padded[key] = padded_value
     for key, length in lengths.items():
         padded[key] = torch.full(
-            (batch_size, 1), length, dtype=torch.long, device=tensors["all_latents"].device,
+            (batch_size, 1),
+            length,
+            dtype=torch.long,
+            device=tensors["all_latents"].device,
         )
     return padded
 
@@ -257,15 +260,23 @@ class QwenImage21FewStepRollout:
             if not isinstance(official_output, tuple):
                 raise RuntimeError("The official QwenImage21 pipeline must request scheduler return_dict=False.")
             transition = bridge_step(
-                model_output.float(), sample.float(), sigma, next_sigma,
-                config=self.config, generator=generator,
+                model_output.float(),
+                sample.float(),
+                sigma,
+                next_sigma,
+                config=self.config,
+                generator=generator,
             )
             # Keep the same latent dtype as the actual scheduler. Score the
             # rounded action that the model will observe at the following step.
             next_sample = transition.next_sample.to(official_output[0].dtype)
             scored = bridge_step(
-                model_output.float(), sample.float(), sigma, next_sigma,
-                config=self.config, next_sample=next_sample.float(),
+                model_output.float(),
+                sample.float(),
+                sigma,
+                next_sigma,
+                config=self.config,
+                next_sample=next_sample.float(),
             )
             batch_size = sample.shape[0]
             tensors.update(

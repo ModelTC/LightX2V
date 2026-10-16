@@ -76,10 +76,7 @@ def _snapshot(repo: str, cache_roots: list[Path], required: tuple[str, ...]) -> 
         for candidate in dict.fromkeys(candidates):
             if candidate.is_dir() and all((candidate / name).is_file() for name in required):
                 return candidate
-    raise FileNotFoundError(
-        f"No complete local snapshot for {repo}; searched {', '.join(map(str, cache_roots))}. "
-        "Provide the cache location with --hf-cache. This script never downloads weights."
-    )
+    raise FileNotFoundError(f"No complete local snapshot for {repo}; searched {', '.join(map(str, cache_roots))}. Provide the cache location with --hf-cache. This script never downloads weights.")
 
 
 def _base_files(base: Path, destination: str, origin: str) -> list[AssetFile]:
@@ -159,12 +156,7 @@ def _copy_file(source: Path, destination: Path) -> tuple[str, str]:
     resolved_source = source.resolve()
     # HF LFS cache blobs are named by their SHA-256; verify known source hashes
     # without another full read of the cached multi-gigabyte checkpoint.
-    if (
-        resolved_source.parent.name == "blobs"
-        and len(resolved_source.name) == 64
-        and all(character in "0123456789abcdef" for character in resolved_source.name)
-        and digest != resolved_source.name
-    ):
+    if resolved_source.parent.name == "blobs" and len(resolved_source.name) == 64 and all(character in "0123456789abcdef" for character in resolved_source.name) and digest != resolved_source.name:
         raise ValueError(f"Copied asset does not match its Hugging Face blob digest: {source}")
     return method, digest
 

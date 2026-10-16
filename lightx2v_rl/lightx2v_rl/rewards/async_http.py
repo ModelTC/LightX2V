@@ -40,9 +40,7 @@ async def post_json(session, endpoint, route, *, payload, content_type, timeout_
     validate_timeout(timeout_seconds)
     url = endpoint.rstrip("/") + route
     try:
-        async with session.post(url, data=payload, headers={"Content-Type": content_type},
-                                timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-                                allow_redirects=False) as response:
+        async with session.post(url, data=payload, headers={"Content-Type": content_type}, timeout=aiohttp.ClientTimeout(total=timeout_seconds), allow_redirects=False) as response:
             if not 200 <= response.status < 300:
                 detail = (await response.content.read(4096)).decode("utf-8", errors="replace")
                 raise RemoteRewardError(f"Reward service {endpoint} returned HTTP {response.status}: {detail}")

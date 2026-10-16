@@ -90,7 +90,9 @@ def compute_advantages(*, data, config):
     normalization = options.get("normalization", "max_group_std")
     with torch.no_grad():
         combined = compute_weighted_advantages(
-            components, [groups[index] for index in rows], weights,
+            components,
+            [groups[index] for index in rows],
+            weights,
             global_std=normalization == "global",
             max_group_std=normalization == "max_group_std",
             norm_by_std=config.get("norm_adv_by_std_in_grpo", True),

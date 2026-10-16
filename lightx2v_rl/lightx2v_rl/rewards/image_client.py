@@ -12,10 +12,23 @@ from lightx2v_rl.rewards.async_http import gather_scores, scoring_limiter, valid
 from lightx2v_rl.rewards.endpoint_pool import normalize_endpoints, select_endpoint
 
 
-async def compute_score(data_source, solution_image, ground_truth, extra_info=None, *,
-                  unifiedreward_endpoint="http://127.0.0.1:8792", hps_endpoint="http://127.0.0.1:8791",
-                  unifiedreward_weight=1.0, hps_weight=0.5, hps_offset=0.0, hps_scale=1.0,
-                  timeout_seconds=1800.0, image_layout="CHW", max_tokens=4096, max_concurrent_samples=8):
+async def compute_score(
+    data_source,
+    solution_image,
+    ground_truth,
+    extra_info=None,
+    *,
+    unifiedreward_endpoint="http://127.0.0.1:8792",
+    hps_endpoint="http://127.0.0.1:8791",
+    unifiedreward_weight=1.0,
+    hps_weight=0.5,
+    hps_offset=0.0,
+    hps_scale=1.0,
+    timeout_seconds=1800.0,
+    image_layout="CHW",
+    max_tokens=4096,
+    max_concurrent_samples=8,
+):
     """Score one image, retaining separate raw, normalized and weighted metrics.
 
     T2I UR = (mean(alignment, coherence, style)-1)/4.
@@ -65,28 +78,38 @@ async def compute_score(data_source, solution_image, ground_truth, extra_info=No
         endpoint = select_endpoint(ur_pool, name="unifiedreward_endpoint")
         try:
             scores = await unifiedreward.score_image_async(
-                task_type, ground_truth, image, references, session=session,
-                endpoint=endpoint, timeout_seconds=timeout_seconds, max_tokens=max_tokens,
+                task_type,
+                ground_truth,
+                image,
+                references,
+                session=session,
+                endpoint=endpoint,
+                timeout_seconds=timeout_seconds,
+                max_tokens=max_tokens,
             )
         except video_client.RemoteRewardError as exc:
             raise video_client.RemoteRewardError(f"UnifiedReward replica {endpoint} failed: {exc}") from exc
-        return {**{"unifiedreward_" + key: value for key, value in scores.items()},
-                "unifiedreward": unifiedreward_weight * scores["normalized"]}
+        return {**{"unifiedreward_" + key: value for key, value in scores.items()}, "unifiedreward": unifiedreward_weight * scores["normalized"]}
 
     async def score_hps(session, video):
         endpoint = select_endpoint(hps_pool, name="hps_endpoint")
         try:
             scores = await video_client.compute_score_async(
-                data_source, video, ground_truth, extra_info, session=session,
-                endpoint=endpoint, weights={"hpsv3_general": 1.0}, aggregation="sum",
+                data_source,
+                video,
+                ground_truth,
+                extra_info,
+                session=session,
+                endpoint=endpoint,
+                weights={"hpsv3_general": 1.0},
+                aggregation="sum",
                 timeout_seconds=timeout_seconds,
             )
         except video_client.RemoteRewardError as exc:
             raise video_client.RemoteRewardError(f"HPSv3 replica {endpoint} failed: {exc}") from exc
         raw = scores["hpsv3_general_raw"]
         calibrated = (raw - hps_offset) / hps_scale
-        return {"hpsv3_general_raw": raw, "hpsv3_general_calibrated": calibrated,
-                "hpsv3_general": hps_weight * calibrated}
+        return {"hpsv3_general_raw": raw, "hpsv3_general_calibrated": calibrated, "hpsv3_general": hps_weight * calibrated}
 
     async with scoring_limiter(max_concurrent_samples):
         image, references, video = await asyncio.to_thread(prepare_images)

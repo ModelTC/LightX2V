@@ -53,7 +53,8 @@ class QwenImage21AgentLoop(AgentLoopBase):
             metadata["initial_noise_seed"] = int.from_bytes(
                 blake2b(
                     json.dumps(group_key, ensure_ascii=False).encode("utf-8"),
-                    digest_size=8, person=b"qwen-init-noise",
+                    digest_size=8,
+                    person=b"qwen-init-noise",
                 ).digest(),
                 "big",
             )

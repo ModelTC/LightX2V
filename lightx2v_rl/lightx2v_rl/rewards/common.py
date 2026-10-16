@@ -73,10 +73,16 @@ def encode_request(video, prompt, metrics, source_fps) -> bytes:
     metrics = validate_metrics(list(metrics))
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("Reward ground_truth must contain the nonempty generation prompt")
-    metadata = json.dumps({
-        "version": PROTOCOL_VERSION, "prompt": prompt, "metrics": metrics,
-        "source_fps": positive_fps(source_fps),
-    }, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    metadata = json.dumps(
+        {
+            "version": PROTOCOL_VERSION,
+            "prompt": prompt,
+            "metrics": metrics,
+            "source_fps": positive_fps(source_fps),
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
     if len(metadata) > 65536:
         raise ValueError("Reward metadata exceeds 64 KiB")
     stream = io.BytesIO()

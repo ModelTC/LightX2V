@@ -102,18 +102,13 @@ class HPSv3Scorer:
         import transformers
 
         if transformers.__version__ != "4.51.3":
-            raise RuntimeError(
-                "HPSv3 requires transformers==4.51.3 in the isolated reward environment; "
-                f"found {transformers.__version__}. Start the reward server with .venv-reward."
-            )
+            raise RuntimeError(f"HPSv3 requires transformers==4.51.3 in the isolated reward environment; found {transformers.__version__}. Start the reward server with .venv-reward.")
         from safetensors.torch import load_file
         from transformers import AutoProcessor
 
         from ._vendor.hpsv3.model import Qwen2VLRewardModelBT
 
-        processor = AutoProcessor.from_pretrained(
-            str(self.base_model_path), padding_side="right", local_files_only=True, trust_remote_code=False
-        )
+        processor = AutoProcessor.from_pretrained(str(self.base_model_path), padding_side="right", local_files_only=True, trust_remote_code=False)
         processor.tokenizer.add_special_tokens({"additional_special_tokens": ["<|Reward|>"]})
         special_token_ids = processor.tokenizer.convert_tokens_to_ids(["<|Reward|>"])
         dtype = torch.bfloat16 if self.device.type == "cuda" else torch.float32

@@ -88,8 +88,12 @@ class OpenGPT4oDataset(Dataset):
             "data_source": f"opengpt4o/{row['task_type']}",
             "reward_model": {"style": "model", "ground_truth": row["prompt"]},
             "extra_info": {
-                "index": index, "sample_id": row["id"], "task_type": row["task_type"],
-                "source_images": paths, "prompt": row["prompt"], "metadata": row.get("metadata", {}),
+                "index": index,
+                "sample_id": row["id"],
+                "task_type": row["task_type"],
+                "source_images": paths,
+                "prompt": row["prompt"],
+                "metadata": row.get("metadata", {}),
             },
             "index": index,
             "tools_kwargs": {},
@@ -202,9 +206,15 @@ class AlternatingTaskSampler(Sampler[int]):
         self.epoch, self.cursor = int(epoch), 0
 
     def state_dict(self):
-        return {"epoch": self.epoch, "cursor": self.cursor, "seed": self.seed,
-                "batch_size": self.batch_size, "length": len(self), "dataset_length": len(self.data_source),
-                "dataset_fingerprint": self.dataset_fingerprint}
+        return {
+            "epoch": self.epoch,
+            "cursor": self.cursor,
+            "seed": self.seed,
+            "batch_size": self.batch_size,
+            "length": len(self),
+            "dataset_length": len(self.data_source),
+            "dataset_fingerprint": self.dataset_fingerprint,
+        }
 
     def load_state_dict(self, state):
         for key in ("seed", "batch_size", "length", "dataset_length", "dataset_fingerprint"):

@@ -152,10 +152,7 @@ def bridge_step(
         std_dev_t = torch.sqrt(sigma / (1 - torch.where(sigma == 1, next_sigma, sigma))) * config.noise_level
         if config.diffusion_clip:
             std_dev_t = torch.minimum(std_dev_t, config.diffusion_clip_value / sqrt_dt)
-        mean = (
-            sample * (1 + std_dev_t.square() / (2 * sigma) * dt)
-            + model_output * (1 + std_dev_t.square() * (1 - sigma) / (2 * sigma)) * dt
-        )
+        mean = sample * (1 + std_dev_t.square() / (2 * sigma) * dt) + model_output * (1 + std_dev_t.square() * (1 - sigma) / (2 * sigma)) * dt
         std = std_dev_t * sqrt_dt
     else:  # CPS: intentionally matches the Wan bridge, including its noise convention.
         std = next_sigma * math.sin(config.noise_level * math.pi / 2)
@@ -171,9 +168,7 @@ def bridge_step(
         next_sample = mean + std * variance_noise
     else:
         next_sample = next_sample.float()
-    log_prob = (
-        -(next_sample.detach() - mean).square() / (2 * std.square()) - torch.log(std) - math.log(math.sqrt(2 * math.pi))
-    )
+    log_prob = -(next_sample.detach() - mean).square() / (2 * std.square()) - torch.log(std) - math.log(math.sqrt(2 * math.pi))
     return BridgeStepOutput(
         next_sample=next_sample,
         log_prob=_mean_nonbatch(log_prob),

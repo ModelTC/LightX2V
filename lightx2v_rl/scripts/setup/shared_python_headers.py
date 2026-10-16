@@ -23,9 +23,14 @@ def environment():
     if include != Path(sys.base_prefix) / "include" / f"python{sys.version_info.major}.{sys.version_info.minor}":
         raise RuntimeError(f"Unsupported system Python include layout: {include}")
     distro = platform.freedesktop_os_release()
-    identity = dict(python=list(sys.version_info[:3]), soabi=sysconfig.get_config_var("SOABI"),
-                    machine=platform.machine(), distro=distro["ID"], distro_version=distro["VERSION_ID"],
-                    multiarch=sysconfig.get_config_var("MULTIARCH"))
+    identity = dict(
+        python=list(sys.version_info[:3]),
+        soabi=sysconfig.get_config_var("SOABI"),
+        machine=platform.machine(),
+        distro=distro["ID"],
+        distro_version=distro["VERSION_ID"],
+        multiarch=sysconfig.get_config_var("MULTIARCH"),
+    )
     if not all(identity.values()):
         raise RuntimeError("Cannot determine complete Python/platform identity.")
     return identity, include.parent
@@ -33,8 +38,7 @@ def environment():
 
 def cache_path(cache_base, identity):
     version = ".".join(map(str, identity["python"]))
-    parts = (f"{identity['distro']}-{identity['distro_version']}",
-             f"python-{version}-{identity['machine']}-{identity['soabi']}")
+    parts = (f"{identity['distro']}-{identity['distro_version']}", f"python-{version}-{identity['machine']}-{identity['soabi']}")
     if any(not re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts):
         raise RuntimeError("Unsafe Python/platform cache identity.")
     return Path(cache_base).joinpath(*parts)
@@ -45,8 +49,7 @@ def probe(include_root, directories):
     if not compiler[0]:
         raise RuntimeError("A C compiler (cc/gcc, or CC) is required to verify Python headers.")
     command = compiler + ["-E", "-x", "c", "-", f"-I{include_root / directories[0]}", f"-I{include_root}"]
-    result = subprocess.run(command, input="#include <Python.h>\n", text=True, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE, timeout=30, check=False)
+    result = subprocess.run(command, input="#include <Python.h>\n", text=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30, check=False)
     if result.returncode:
         raise RuntimeError(f"Python headers failed C preprocessing:\n{result.stderr[-4000:]}")
 
@@ -117,7 +120,7 @@ def link_headers(cache_base, include_root, identity):
             missing.append((target, path / "include" / directory))
             continue
         prefix = f"include/{directory}/"
-        files = [name[len(prefix):] for name in manifest["files"] if name.startswith(prefix)]
+        files = [name[len(prefix) :] for name in manifest["files"] if name.startswith(prefix)]
         if not target.is_dir() or not all((target / name).is_file() for name in files):
             raise RuntimeError(f"Refusing to replace existing incomplete header path: {target}")
     created = []

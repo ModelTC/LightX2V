@@ -75,8 +75,7 @@ def build_request(task_type, prompt, image, source_images=(), *, model="UnifiedR
     template = T2I_PROMPT if task_type == "t2i" else I2I_PROMPT
     content = [{"type": "image_url", "image_url": {"url": encode_image(value)}} for value in images]
     content.append({"type": "text", "text": template.replace("{prompt}", prompt)})
-    return {"model": model, "messages": [{"role": "user", "content": content}],
-            "temperature": 0.0, "max_tokens": max_tokens, "chat_template_kwargs": {"enable_thinking": False}}
+    return {"model": model, "messages": [{"role": "user", "content": content}], "temperature": 0.0, "max_tokens": max_tokens, "chat_template_kwargs": {"enable_thinking": False}}
 
 
 def parse_response(text, task_type):
@@ -116,8 +115,7 @@ def parse_response(text, task_type):
     scores = {key: min(upper, max(lower, value)) for key, value in raw_scores.items()}
     clip_max_abs = max(abs(raw_scores[key] - value) for key, value in scores.items())
     if clip_max_abs:
-        LOGGER.warning("UnifiedReward %s scores clipped to [%s, %s]: raw=%s bounded=%s",
-                       task_type, lower, upper, raw_scores, scores)
+        LOGGER.warning("UnifiedReward %s scores clipped to [%s, %s]: raw=%s bounded=%s", task_type, lower, upper, raw_scores, scores)
     # Compute normalization over scoring axes only, before adding diagnostics.
     scores["normalized"] = (sum(scores.values()) / len(scores) - lower) / (upper - lower)
     scores.update({key + "_raw": value for key, value in raw_scores.items()})
@@ -136,16 +134,12 @@ def _parse_completion(result, task_type):
             return parse_response(content, task_type)
         except RemoteRewardError as exc:
             # Include a bounded, escaped excerpt, never the image request body.
-            raise RemoteRewardError(
-                f"{exc}; task={task_type}; request_id={str(result.get('id', 'unknown'))[:128]!r}; "
-                f"response_excerpt={str(content)[:2048]!r}"
-            ) from exc
+            raise RemoteRewardError(f"{exc}; task={task_type}; request_id={str(result.get('id', 'unknown'))[:128]!r}; response_excerpt={str(content)[:2048]!r}") from exc
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise RemoteRewardError(f"UnifiedReward invalid completion: {exc}") from exc
 
 
-def score_image(task_type, prompt, image, source_images=(), *, endpoint="http://127.0.0.1:8792",
-                model="UnifiedReward", timeout_seconds=1800.0, max_tokens=4096):
+def score_image(task_type, prompt, image, source_images=(), *, endpoint="http://127.0.0.1:8792", model="UnifiedReward", timeout_seconds=1800.0, max_tokens=4096):
     """Synchronous diagnostic API; training uses score_image_async."""
     parts = urlsplit(endpoint)
     if parts.scheme not in {"http", "https"} or not parts.netloc or parts.query or parts.fragment:
@@ -153,8 +147,7 @@ def score_image(task_type, prompt, image, source_images=(), *, endpoint="http://
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive and finite")
     payload = build_request(task_type, prompt, image, source_images, model=model, max_tokens=max_tokens)
-    request = Request(endpoint.rstrip("/") + "/v1/chat/completions",
-                      data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+    request = Request(endpoint.rstrip("/") + "/v1/chat/completions", data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             result = json.loads(response.read(1024 * 1024))
@@ -166,17 +159,13 @@ def score_image(task_type, prompt, image, source_images=(), *, endpoint="http://
         raise RemoteRewardError(f"UnifiedReward request failed: {exc}") from exc
 
 
-async def score_image_async(task_type, prompt, image, source_images=(), *, session,
-                            endpoint="http://127.0.0.1:8792", model="UnifiedReward",
-                            timeout_seconds=1800.0, max_tokens=4096):
+async def score_image_async(task_type, prompt, image, source_images=(), *, session, endpoint="http://127.0.0.1:8792", model="UnifiedReward", timeout_seconds=1800.0, max_tokens=4096):
     """Use native async HTTP, keeping JPEG/base64/JSON work off the event loop."""
     from lightx2v_rl.rewards.async_http import post_json
 
     def encode_payload():
-        return json.dumps(build_request(task_type, prompt, image, source_images,
-                                        model=model, max_tokens=max_tokens)).encode("utf-8")
+        return json.dumps(build_request(task_type, prompt, image, source_images, model=model, max_tokens=max_tokens)).encode("utf-8")
 
     payload = await asyncio.to_thread(encode_payload)
-    result = await post_json(session, endpoint, "/v1/chat/completions", payload=payload,
-                             content_type="application/json", timeout_seconds=timeout_seconds)
+    result = await post_json(session, endpoint, "/v1/chat/completions", payload=payload, content_type="application/json", timeout_seconds=timeout_seconds)
     return _parse_completion(result, task_type)

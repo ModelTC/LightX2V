@@ -134,8 +134,10 @@ class FewStepTracking:
             self.raw_path.touch(exist_ok=False)
             print(f"Full training metrics: {self.raw_path}", flush=True)
         self._backend = _create_backend(
-            project_name=project_name, experiment_name=experiment_name,
-            default_backend=default_backend, config=config,
+            project_name=project_name,
+            experiment_name=experiment_name,
+            default_backend=default_backend,
+            config=config,
         )
 
     def log(self, data, step, backend=None):

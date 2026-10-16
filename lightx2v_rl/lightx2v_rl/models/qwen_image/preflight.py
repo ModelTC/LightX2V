@@ -63,9 +63,7 @@ def check(config_name, *, skip_cuda=False, skip_services=False, overrides=None):
     if config.actor_rollout_ref.model.architecture != "QwenImage21Pipeline":
         raise ValueError("This preflight is for the QwenImage21 recipes.")
     report = {"model": check_snapshot(config.actor_rollout_ref.model.path)}
-    report["unifiedreward"] = check_snapshot(repository_path(
-        os.environ.get("LIGHTX2V_UNIFIEDREWARD_MODEL") or "lightx2v_rl/models/rewards/unifiedreward"
-    ))
+    report["unifiedreward"] = check_snapshot(repository_path(os.environ.get("LIGHTX2V_UNIFIEDREWARD_MODEL") or "lightx2v_rl/models/rewards/unifiedreward"))
     resolve_reward_assets()
     train = OpenGPT4oDataset(config.data.train_files)
     validation = OpenGPT4oDataset(config.data.val_files)
@@ -82,8 +80,10 @@ def check(config_name, *, skip_cuda=False, skip_services=False, overrides=None):
             raise ValueError(f"Both tasks must be present in {name}.")
         report["data"][name] = counts
     from diffusers import QwenImage21Pipeline  # noqa: F401
+
     if not skip_cuda:
         import torch
+
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is unavailable on this host.")
         report["cuda_devices"] = torch.cuda.device_count()

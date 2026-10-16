@@ -138,7 +138,9 @@ class FewStepQwenImage21Model(DiffusionModelBase):
         from diffusers import FlowMatchEulerDiscreteScheduler
 
         scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            model_config.local_path, subfolder="scheduler", local_files_only=True,
+            model_config.local_path,
+            subfolder="scheduler",
+            local_files_only=True,
         )
         cls.set_timesteps(scheduler, model_config, "cpu")
         return scheduler
@@ -162,9 +164,17 @@ class FewStepQwenImage21Model(DiffusionModelBase):
 
     @classmethod
     def prepare_model_inputs(
-        cls, module, model_config, latents, timesteps, prompt_embeds,
-        prompt_embeds_mask, negative_prompt_embeds, negative_prompt_embeds_mask,
-        micro_batch, step,
+        cls,
+        module,
+        model_config,
+        latents,
+        timesteps,
+        prompt_embeds,
+        prompt_embeds_mask,
+        negative_prompt_embeds,
+        negative_prompt_embeds_mask,
+        micro_batch,
+        step,
     ):
         if step != 0 or timesteps.shape != (latents.shape[0], 1):
             raise ValueError("Qwen FewStep batches contain one sampled transition per candidate.")
@@ -180,20 +190,28 @@ class FewStepQwenImage21Model(DiffusionModelBase):
 
     @classmethod
     def forward_and_sample_previous_step(
-        cls, module, scheduler, model_config, model_inputs, negative_model_inputs,
-        scheduler_inputs, step,
+        cls,
+        module,
+        scheduler,
+        model_config,
+        model_inputs,
+        negative_model_inputs,
+        scheduler_inputs,
+        step,
     ):
         if step != 0 or scheduler_inputs is None:
             raise ValueError("Qwen FewStep replay requires the sampled transition batch.")
         latents = scheduler_inputs["all_latents"]
         prediction = cls.forward(module, model_config, model_inputs, negative_model_inputs)
         transition = bridge_step(
-            prediction.float(), latents[:, 0].float(),
+            prediction.float(),
+            latents[:, 0].float(),
             # Retain scheduler sigmas verbatim: a t=1000*sigma round-trip can
             # change float32 values, and the BF16 model timestep is different.
             scheduler_inputs["qwen_sigmas"][:, 0].float(),
             scheduler_inputs["qwen_next_sigmas"][:, 0].float(),
-            config=get_fewstep_config(model_config), next_sample=latents[:, 1].float(),
+            config=get_fewstep_config(model_config),
+            next_sample=latents[:, 1].float(),
         )
         return {
             "log_probs": transition.log_prob,

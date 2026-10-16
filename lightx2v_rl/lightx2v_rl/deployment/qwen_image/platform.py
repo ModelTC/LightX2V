@@ -19,13 +19,20 @@ from pathlib import Path
 from lightx2v_rl.paths import REPOSITORY_ROOT
 
 TORCHRUN_VARIABLES = {
-    "RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE", "GROUP_RANK", "GROUP_WORLD_SIZE",
-    "ROLE_RANK", "ROLE_WORLD_SIZE", "ROLE_NAME", "MASTER_ADDR", "MASTER_PORT", "NODE_RANK",
+    "RANK",
+    "LOCAL_RANK",
+    "WORLD_SIZE",
+    "LOCAL_WORLD_SIZE",
+    "GROUP_RANK",
+    "GROUP_WORLD_SIZE",
+    "ROLE_RANK",
+    "ROLE_WORLD_SIZE",
+    "ROLE_NAME",
+    "MASTER_ADDR",
+    "MASTER_PORT",
+    "NODE_RANK",
 }
-RECIPES = {
-    f"qwen_image21_turbo_{algorithm}_{nodes * 8}gpu": nodes
-    for algorithm in ("geo", "cps", "flow_grpo") for nodes in (4, 5)
-}
+RECIPES = {f"qwen_image21_turbo_{algorithm}_{nodes * 8}gpu": nodes for algorithm in ("geo", "cps", "flow_grpo") for nodes in (4, 5)}
 
 
 def recipe_node_count(env):
@@ -79,15 +86,16 @@ def discover_address(env):
 
 def child_environment(env, addresses, rank):
     validate_addresses(addresses, recipe_node_count(env))
-    result = {key: value for key, value in env.items()
-              if key not in TORCHRUN_VARIABLES and not key.startswith("TORCHELASTIC_")}
-    result.update({
-        "LIGHTX2V_HEAD_IP": addresses[0],
-        "LIGHTX2V_NODE_IP": addresses[rank],
-        "LIGHTX2V_REWARD_HOST": addresses[-1],
-        "LIGHTX2V_RL_CONFIG": env.get("LIGHTX2V_RL_CONFIG", "qwen_image21_turbo_geo_40gpu"),
-        "RAY_ADDRESS": f"{addresses[0]}:6379",
-    })
+    result = {key: value for key, value in env.items() if key not in TORCHRUN_VARIABLES and not key.startswith("TORCHELASTIC_")}
+    result.update(
+        {
+            "LIGHTX2V_HEAD_IP": addresses[0],
+            "LIGHTX2V_NODE_IP": addresses[rank],
+            "LIGHTX2V_REWARD_HOST": addresses[-1],
+            "LIGHTX2V_RL_CONFIG": env.get("LIGHTX2V_RL_CONFIG", "qwen_image21_turbo_geo_40gpu"),
+            "RAY_ADDRESS": f"{addresses[0]}:6379",
+        }
+    )
     return result
 
 
@@ -121,20 +129,21 @@ class OwnedProcesses:
             # tee drains both streams continuously and finishes before bash
             # exposes its exit status. Arguments remain positional, never shell
             # source; pipefail preserves a failing training command's status.
-            command = ["bash", "-o", "pipefail", "-c",
-                       'rl_train_log=$1; shift; "$@" 2>&1 | tee -- "$rl_train_log"',
-                       "lightx2v-train-tee", str(log_path), *command]
+            command = ["bash", "-o", "pipefail", "-c", 'rl_train_log=$1; shift; "$@" 2>&1 | tee -- "$rl_train_log"', "lightx2v-train-tee", str(log_path), *command]
             environment = dict(self.env)
             environment.setdefault("PYTHONUNBUFFERED", "1")
         else:
             stream = log_path.open("w")
             self.streams.append(stream)
         self.children[role] = subprocess.Popen(
-            command, cwd=self.root, env=environment, start_new_session=True,
-            stdout=stream, stderr=subprocess.STDOUT,
+            command,
+            cwd=self.root,
+            env=environment,
+            start_new_session=True,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
         )
-        print(f"Started {role}, pid={self.children[role].pid}; log={log_path}"
-              + (" (also platform stdout)" if role == "train" else ""), flush=True)
+        print(f"Started {role}, pid={self.children[role].pid}; log={log_path}" + (" (also platform stdout)" if role == "train" else ""), flush=True)
         self._remember_children()
 
     def _remember_children(self):
@@ -195,8 +204,7 @@ class OwnedProcesses:
 
 
 def service_failure_message(role, code, log_dir=None):
-    message = (f"Training exited with status {code}." if role == "train"
-               else f"{role} exited unexpectedly ({code}); inspect its service log.")
+    message = f"Training exited with status {code}." if role == "train" else f"{role} exited unexpectedly ({code}); inspect its service log."
     if log_dir is None:
         return message
     path = Path(log_dir) / f"{role}.log"
@@ -243,8 +251,7 @@ def _close_resources(*callbacks):
         raise failures[0]
 
 
-def supervise(rank, processes, exchange, *, head_ready, cluster_ready, reward_ready,
-              num_nodes=4, startup_timeout=1800, interval=1.0, clock=time.monotonic, sleep=time.sleep):
+def supervise(rank, processes, exchange, *, head_ready, cluster_ready, reward_ready, num_nodes=4, startup_timeout=1800, interval=1.0, clock=time.monotonic, sleep=time.sleep):
     """All ranks exchange a small CPU status record, including during long training."""
     deadline = clock() + startup_timeout
     state = dict(error=None, head_ready=False, ready=False, training_started=False, done=False)
@@ -272,9 +279,13 @@ def supervise(rank, processes, exchange, *, head_ready, cluster_ready, reward_re
                         code = processes.poll("train")
                         if code is not None:
                             if code:
-                                raise RuntimeError(service_failure_message(
-                                    "train", code, getattr(processes, "log_dir", None),
-                                ))
+                                raise RuntimeError(
+                                    service_failure_message(
+                                        "train",
+                                        code,
+                                        getattr(processes, "log_dir", None),
+                                    )
+                                )
                             state["done"] = True
                 elif rank == reward_rank:
                     if not state["ready"]:
@@ -295,15 +306,13 @@ def supervise(rank, processes, exchange, *, head_ready, cluster_ready, reward_re
                 return
             state["training_started"] = states[0]["training_started"]
             if rank == 0 and not train_started and clock() >= next_status:
-                print(f"Waiting for startup: head={states[0]['head_ready']}, "
-                      f"cluster={states[0]['ready']}, reward={states[reward_rank]['ready']}", flush=True)
+                print(f"Waiting for startup: head={states[0]['head_ready']}, cluster={states[0]['ready']}, reward={states[reward_rank]['ready']}", flush=True)
                 next_status = clock() + 30
             if 0 < rank < reward_rank and states[0]["head_ready"]:
                 service = "worker"
             if rank == 0 and not train_started and all(item["ready"] for item in states):
                 try:
-                    print(f"All {reward_rank} Ray nodes and eight reward services are ready; starting one training driver.",
-                          flush=True)
+                    print(f"All {reward_rank} Ray nodes and eight reward services are ready; starting one training driver.", flush=True)
                     processes.start("train")
                     train_started = state["training_started"] = True
                 except Exception as exc:
@@ -363,7 +372,10 @@ class RayReadiness:
             self.stream = (self.log_dir / "ray-readiness.log").open("w")
         self.process = subprocess.Popen(
             [sys.executable, "-m", "lightx2v_rl.deployment.qwen_image.platform", "--probe-ray"],
-            cwd=self.root, env=self.env, stdout=self.stream, stderr=subprocess.STDOUT,
+            cwd=self.root,
+            env=self.env,
+            stdout=self.stream,
+            stderr=subprocess.STDOUT,
         )
         self.started = now
         return False
@@ -423,11 +435,9 @@ def main(argv=None):
 
     probe = None
     try:
-        records = exchange(dict(ip=address, config=os.environ.get("LIGHTX2V_RL_CONFIG", "qwen_image21_turbo_geo_40gpu"),
-                                overrides=args.overrides))
+        records = exchange(dict(ip=address, config=os.environ.get("LIGHTX2V_RL_CONFIG", "qwen_image21_turbo_geo_40gpu"), overrides=args.overrides))
         addresses = validate_addresses([record["ip"] for record in records], num_nodes)
-        if any((record["config"], record["overrides"]) != (records[0]["config"], records[0]["overrides"])
-               for record in records):
+        if any((record["config"], record["overrides"]) != (records[0]["config"], records[0]["overrides"]) for record in records):
             raise ValueError("All nodes must receive the same recipe and training overrides.")
         root = REPOSITORY_ROOT
         env = child_environment(os.environ, addresses, rank)
@@ -438,8 +448,16 @@ def main(argv=None):
         print(f"Platform rank {rank}: {address}; head={addresses[0]}, reward={addresses[-1]}; logs={log_dir}", flush=True)
         processes = OwnedProcesses(root, env, args.overrides, log_dir)
         probe = RayReadiness(root, env, log_dir)
-        supervise(rank, processes, exchange, head_ready=lambda: head_is_ready(addresses[0]), cluster_ready=probe,
-                  reward_ready=lambda: rewards_are_ready(addresses[-1]), num_nodes=num_nodes, startup_timeout=timeout)
+        supervise(
+            rank,
+            processes,
+            exchange,
+            head_ready=lambda: head_is_ready(addresses[0]),
+            cluster_ready=probe,
+            reward_ready=lambda: rewards_are_ready(addresses[-1]),
+            num_nodes=num_nodes,
+            startup_timeout=timeout,
+        )
         return 0
     finally:
         callbacks = [probe.close] if probe is not None else []

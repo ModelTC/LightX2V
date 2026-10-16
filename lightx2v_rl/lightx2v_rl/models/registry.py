@@ -28,14 +28,10 @@ def register_model(spec: ModelSpec):
 def get_model_spec(architecture: str, adapter: str | None = None) -> ModelSpec:
     # Different generations may share a Diffusers pipeline class (e.g. Wan).
     # Explicit adapter identities keep future dual-expert implementations separate.
-    candidates = [spec for spec in _MODELS.values() if spec.architecture == architecture
-                  and (adapter is None or spec.name == adapter)]
+    candidates = [spec for spec in _MODELS.values() if spec.architecture == architecture and (adapter is None or spec.name == adapter)]
     if len(candidates) == 1:
         return candidates[0]
-    raise ValueError(
-        f"Unsupported or ambiguous RL architecture/adapter: {architecture!r}/{adapter!r}; "
-        f"set model.rl_adapter to a matching registered adapter: {', '.join(sorted(_MODELS))}"
-    )
+    raise ValueError(f"Unsupported or ambiguous RL architecture/adapter: {architecture!r}/{adapter!r}; set model.rl_adapter to a matching registered adapter: {', '.join(sorted(_MODELS))}")
 
 
 def resolve_hook(target: str):
@@ -54,15 +50,23 @@ def validate_model_recipe(config, fewstep):
         resolve_hook(spec.validator)(config, fewstep)
 
 
-register_model(ModelSpec(
-    name="wan2_1", architecture="WanPipeline", family="wan",
-    learner_registration="lightx2v_rl.models.wan.register",
-    rollout_registration="lightx2v_rl.models.wan.rollout_registration",
-))
-register_model(ModelSpec(
-    name="qwen_image21", architecture="QwenImage21Pipeline", family="qwen_image",
-    learner_registration="lightx2v_rl.models.qwen_image.register",
-    rollout_registration="lightx2v_rl.models.qwen_image.rollout_registration",
-    validator="lightx2v_rl.models.qwen_image.validation.validate_recipe",
-    preflight="lightx2v_rl.models.qwen_image.preflight.check",
-))
+register_model(
+    ModelSpec(
+        name="wan2_1",
+        architecture="WanPipeline",
+        family="wan",
+        learner_registration="lightx2v_rl.models.wan.register",
+        rollout_registration="lightx2v_rl.models.wan.rollout_registration",
+    )
+)
+register_model(
+    ModelSpec(
+        name="qwen_image21",
+        architecture="QwenImage21Pipeline",
+        family="qwen_image",
+        learner_registration="lightx2v_rl.models.qwen_image.register",
+        rollout_registration="lightx2v_rl.models.qwen_image.rollout_registration",
+        validator="lightx2v_rl.models.qwen_image.validation.validate_recipe",
+        preflight="lightx2v_rl.models.qwen_image.preflight.check",
+    )
+)

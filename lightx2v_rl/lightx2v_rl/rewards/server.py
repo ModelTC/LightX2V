@@ -36,8 +36,7 @@ class ScoreEngine:
         return {
             "version": PROTOCOL_VERSION,
             "status": "ready",
-            "metrics": list((HPS_METRICS if self.hpsv3 is not None else ())
-                            + (VIDEOALIGN_METRICS if self.videoalign is not None else ())),
+            "metrics": list((HPS_METRICS if self.hpsv3 is not None else ()) + (VIDEOALIGN_METRICS if self.videoalign is not None else ())),
         }
 
     def score(self, video, prompt, metrics, source_fps):
@@ -67,6 +66,7 @@ def make_server(engine, host="127.0.0.1", port=8791):
     Use one upstream CPU reward worker initially. There is no video codec or
     pickle deserialization on this route; NPZ transports original uint8 pixels.
     """
+
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
             super().setup()
@@ -147,15 +147,21 @@ def main(argv=None):
             from lightx2v_rl.rewards.hpsv3 import HPSv3Scorer
 
             hps = HPSv3Scorer(
-                assets["hpsv3"]["base_model"], assets["hpsv3"]["checkpoint"], device=args.hps_device,
-                frame_chunk_size=args.hps_frame_chunk_size or None, attn_implementation=args.attention,
+                assets["hpsv3"]["base_model"],
+                assets["hpsv3"]["checkpoint"],
+                device=args.hps_device,
+                frame_chunk_size=args.hps_frame_chunk_size or None,
+                attn_implementation=args.attention,
             )
         if "videoalign" in models:
             from lightx2v_rl.rewards.videoalign import VideoAlignReward
 
             alignment = VideoAlignReward(
-                assets["videoalign"]["checkpoint_dir"], assets["videoalign"]["base_model"],
-                device=args.videoalign_device, sample_fps=args.videoalign_sample_fps, attention=args.attention,
+                assets["videoalign"]["checkpoint_dir"],
+                assets["videoalign"]["base_model"],
+                device=args.videoalign_device,
+                sample_fps=args.videoalign_sample_fps,
+                attention=args.attention,
             )
         engine = ScoreEngine(hps, alignment)
         LOGGER.info("Loading local reward models: %s", ", ".join(models))

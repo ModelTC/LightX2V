@@ -64,7 +64,9 @@ class _QwenImage21Serving(nn.Module):
         # Load on CPU first. The runtime's subsequent Module.to(cuda) uses its
         # tracked allocator, allowing sleep() to release every component.
         self._pipeline = QwenImage21Pipeline.from_pretrained(
-            od_config.model, torch_dtype=od_config.dtype, local_files_only=True,
+            od_config.model,
+            torch_dtype=od_config.dtype,
+            local_files_only=True,
         )
         for name, component in self._pipeline.components.items():
             if isinstance(component, nn.Module):
@@ -173,7 +175,9 @@ def register_serving_architecture():
     from vllm_omni.diffusion.registry import register_diffusion_model
 
     register_diffusion_model(
-        "QwenImage21Pipeline", __name__, "GeoQwenImage21Serving",
+        "QwenImage21Pipeline",
+        __name__,
+        "GeoQwenImage21Serving",
     )
 
 

@@ -30,7 +30,8 @@ def _request(endpoint, route, *, payload=None, timeout_seconds=1800.0):
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive and finite")
     request = Request(
-        endpoint.rstrip("/") + route, data=payload,
+        endpoint.rstrip("/") + route,
+        data=payload,
         headers={"Content-Type": "application/x-npz"} if payload is not None else {},
     )
     try:
@@ -89,8 +90,7 @@ def compute_score(
     Returns upstream's scalar ``score``, plus every weighted and raw metric for
     logging. The trainer's optional per-reward estimator consumes the raw fields.
     """
-    payload, weights = _prepare_score_request(solution_image, ground_truth, extra_info, weights,
-                                             aggregation, source_fps, video_layout)
+    payload, weights = _prepare_score_request(solution_image, ground_truth, extra_info, weights, aggregation, source_fps, video_layout)
     result = _request(endpoint, "/score", payload=payload, timeout_seconds=timeout_seconds)
     return _parse_score_response(result, weights, aggregation)
 
@@ -119,18 +119,34 @@ def _parse_score_response(result, weights, aggregation):
     return aggregate_scores(scores, weights, aggregation)
 
 
-async def compute_score_async(data_source, solution_image, ground_truth, extra_info=None, *, session,
-                              endpoint="http://127.0.0.1:8791", weights=None, aggregation="mean",
-                              source_fps=16.0, timeout_seconds=1800.0, video_layout="TCHW"):
+async def compute_score_async(
+    data_source,
+    solution_image,
+    ground_truth,
+    extra_info=None,
+    *,
+    session,
+    endpoint="http://127.0.0.1:8791",
+    weights=None,
+    aggregation="mean",
+    source_fps=16.0,
+    timeout_seconds=1800.0,
+    video_layout="TCHW",
+):
     """Async transport with the same NPZ protocol and score semantics as Wan."""
     from lightx2v_rl.rewards.async_http import post_json
 
     payload, weights = await asyncio.to_thread(
-        _prepare_score_request, solution_image, ground_truth, extra_info,
-        weights, aggregation, source_fps, video_layout,
+        _prepare_score_request,
+        solution_image,
+        ground_truth,
+        extra_info,
+        weights,
+        aggregation,
+        source_fps,
+        video_layout,
     )
-    result = await post_json(session, endpoint, "/score", payload=payload,
-                             content_type="application/x-npz", timeout_seconds=timeout_seconds)
+    result = await post_json(session, endpoint, "/score", payload=payload, content_type="application/x-npz", timeout_seconds=timeout_seconds)
     return _parse_score_response(result, weights, aggregation)
 
 

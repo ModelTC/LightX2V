@@ -20,9 +20,13 @@ class FewStepAlgoConfig(DiffusionAlgoConfig):
 
     custom_advantage_function: str = "lightx2v_rl.backends.verl_omni.advantage.compute_advantages"
     weight_advantages: bool = True
-    reward_advantage: dict[str, Any] = field(default_factory=lambda: {
-        "normalization": "max_group_std", "epsilon": 1e-4, "weights": {},
-    })
+    reward_advantage: dict[str, Any] = field(
+        default_factory=lambda: {
+            "normalization": "max_group_std",
+            "epsilon": 1e-4,
+            "weights": {},
+        }
+    )
 
 
 def get_fewstep_config(model_config: Any) -> FewStepConfig:

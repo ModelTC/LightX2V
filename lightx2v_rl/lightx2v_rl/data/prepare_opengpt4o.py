@@ -37,19 +37,21 @@ def read_annotations(source: Path) -> list[dict]:
             images = [safe_relative_path(p) for p in item.get("input_image", [])]
             if task == "i2i" and not images:
                 raise ValueError(f"Missing reference images: {filename} row {index}")
-            rows.append({
-                "id": f"opengpt4o-{task}-{index:06d}",
-                "task_type": task,
-                "prompt": prompt,
-                "source_images": images,
-                "metadata": {
-                    "annotation_file": filename,
-                    "annotation_index": index,
-                    "category": item.get("meta-task", ""),
-                    "target_image": safe_relative_path(item["output_image"]),
-                    "num_references": len(images),
-                },
-            })
+            rows.append(
+                {
+                    "id": f"opengpt4o-{task}-{index:06d}",
+                    "task_type": task,
+                    "prompt": prompt,
+                    "source_images": images,
+                    "metadata": {
+                        "annotation_file": filename,
+                        "annotation_index": index,
+                        "category": item.get("meta-task", ""),
+                        "target_image": safe_relative_path(item["output_image"]),
+                        "num_references": len(images),
+                    },
+                }
+            )
     return rows
 
 
@@ -202,6 +204,7 @@ def split_rows(rows: list[dict], source_hashes: dict, *, validation_size: int = 
     # Stable ordering makes the split independent of annotation traversal order.
     components.sort(key=lambda group: min(row["id"] for row in group))
     random.Random(seed).shuffle(components)
+
     def stratum(row):
         return "i2i_multi_reference" if len(row["source_images"]) > 1 else row["task_type"]
 
@@ -273,13 +276,19 @@ def prepare(source: Path, output: Path, *, validation_size=256, seed=42, include
             hashes[name] = {"sha256": file_digest(path), "size": path.stat().st_size}
         write_json(hash_path, hashes)
     train, val = split_rows(rows, hashes, validation_size=validation_size, seed=seed)
-    summary = {"schema_version": 1, "seed": seed, "requested_validation_per_task": validation_size,
-               "include_multi_reference": include_multi_reference, "source": relative_source,
-               "annotation_counts": dict(Counter(row["task_type"] for row in rows)),
-               "targets_extracted": False,
-               "reference_files": len(hashes), "reference_bytes": sum(x["size"] for x in hashes.values()),
-               "duplicate_reference_files": len(hashes) - len({entry["sha256"] for entry in hashes.values()}),
-               "split_grouping": ["normalized_prompt", "source_path", "source_sha256", "target_source_path_overlap"]}
+    summary = {
+        "schema_version": 1,
+        "seed": seed,
+        "requested_validation_per_task": validation_size,
+        "include_multi_reference": include_multi_reference,
+        "source": relative_source,
+        "annotation_counts": dict(Counter(row["task_type"] for row in rows)),
+        "targets_extracted": False,
+        "reference_files": len(hashes),
+        "reference_bytes": sum(x["size"] for x in hashes.values()),
+        "duplicate_reference_files": len(hashes) - len({entry["sha256"] for entry in hashes.values()}),
+        "split_grouping": ["normalized_prompt", "source_path", "source_sha256", "target_source_path_overlap"],
+    }
     for split, selected in (("train", train), ("val", val)):
         enabled = [r for r in selected if include_multi_reference or len(r["source_images"]) <= 1]
         write_manifest(output / f"{split}.jsonl", enabled)
@@ -303,8 +312,7 @@ def main(argv=None):
     parser.add_argument("--include-multi-reference", action="store_true", help="Include two-reference rows in train/val (requires a suitable reward)")
     parser.add_argument("--skip-extract", action="store_true", help="Use already extracted images, checking hashes and existence")
     args = parser.parse_args(argv)
-    prepare(args.source, args.output, validation_size=args.validation_size, seed=args.seed,
-            include_multi_reference=args.include_multi_reference, extract=not args.skip_extract)
+    prepare(args.source, args.output, validation_size=args.validation_size, seed=args.seed, include_multi_reference=args.include_multi_reference, extract=not args.skip_extract)
 
 
 if __name__ == "__main__":

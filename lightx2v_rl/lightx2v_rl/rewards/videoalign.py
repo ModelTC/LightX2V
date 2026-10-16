@@ -134,10 +134,7 @@ def normalize_scores(scores: Mapping[str, float], inference_config: Mapping | No
 def _checkpoint_path(checkpoint_dir: Path) -> Path:
     if (checkpoint_dir / "model.pth").is_file():
         return checkpoint_dir
-    candidates = [
-        path for path in checkpoint_dir.glob("checkpoint-*")
-        if path.is_dir() and path.name.removeprefix("checkpoint-").isdigit()
-    ]
+    candidates = [path for path in checkpoint_dir.glob("checkpoint-*") if path.is_dir() and path.name.removeprefix("checkpoint-").isdigit()]
     if not candidates:
         raise FileNotFoundError(f"No VideoAlign checkpoint-* directory under {checkpoint_dir}")
     return max(candidates, key=lambda path: int(path.name.removeprefix("checkpoint-")))
@@ -147,10 +144,7 @@ def _load_model(checkpoint_dir: Path, base_model_path: Path, config: dict, dtype
     import transformers
 
     if transformers.__version__.split("+")[0] != "4.51.3":
-        raise RuntimeError(
-            "VideoAlign's migrated checkpoint requires transformers==4.51.3. "
-            "Run the reward server in its separate reward environment; do not downgrade the verl environment."
-        )
+        raise RuntimeError("VideoAlign's migrated checkpoint requires transformers==4.51.3. Run the reward server in its separate reward environment; do not downgrade the verl environment.")
     from peft import LoraConfig, get_peft_model
     from transformers import AutoProcessor
 
@@ -184,23 +178,22 @@ def _load_model(checkpoint_dir: Path, base_model_path: Path, config: dict, dtype
         excluded = lora.get("lora_namespan_exclude") or []
         if isinstance(excluded, str):
             excluded = ast.literal_eval(excluded)
-        targets = [
-            name for name, module in model.named_modules()
-            if isinstance(module, (torch.nn.Linear, torch.nn.Embedding))
-            and not any(part in name for part in excluded)
-        ]
+        targets = [name for name, module in model.named_modules() if isinstance(module, (torch.nn.Linear, torch.nn.Embedding)) and not any(part in name for part in excluded)]
         if lora.get("num_lora_modules", -1) > 0:
             targets = targets[-lora["num_lora_modules"] :]
-        model = get_peft_model(model, LoraConfig(
-            target_modules=targets,
-            r=lora["lora_r"],
-            lora_alpha=lora["lora_alpha"],
-            lora_dropout=lora["lora_dropout"],
-            task_type=lora["lora_task_type"],
-            use_rslora=lora.get("use_rslora", False),
-            bias="none",
-            modules_to_save=lora.get("lora_modules_to_save"),
-        ))
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                target_modules=targets,
+                r=lora["lora_r"],
+                lora_alpha=lora["lora_alpha"],
+                lora_dropout=lora["lora_dropout"],
+                task_type=lora["lora_task_type"],
+                use_rslora=lora.get("use_rslora", False),
+                bias="none",
+                modules_to_save=lora.get("lora_modules_to_save"),
+            ),
+        )
     model.config.tokenizer_padding_side = processor.tokenizer.padding_side
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     checkpoint = _checkpoint_path(checkpoint_dir)
@@ -211,10 +204,7 @@ def _load_model(checkpoint_dir: Path, base_model_path: Path, config: dict, dtype
         from safetensors.torch import load_file
 
         adapter = load_file(str(checkpoint / "adapter_model.safetensors"))
-        adapter = {
-            key.replace(".lora_A.", ".lora_A.default.").replace(".lora_B.", ".lora_B.default."): value
-            for key, value in adapter.items()
-        }
+        adapter = {key.replace(".lora_A.", ".lora_A.default.").replace(".lora_B.", ".lora_B.default."): value for key, value in adapter.items()}
         state = torch.load(checkpoint / "non_lora_state_dict.pth", map_location="cpu", weights_only=True)
         combined = model.state_dict()
         combined.update(state)
@@ -271,28 +261,42 @@ class VideoAlignReward:
             config = json.load(handle)
         if not (self.base_model_path / "config.json").is_file():
             raise FileNotFoundError(f"Missing local Qwen2-VL base model: {self.base_model_path}")
-        model, processor = _load_model(
-            self.checkpoint_dir, self.base_model_path, config, self.dtype, self.attention
-        )
+        model, processor = _load_model(self.checkpoint_dir, self.base_model_path, config, self.dtype, self.attention)
         self.model, self.processor, self.config = model.to(self.device), processor, config
 
     def _predict(self, video: torch.Tensor, prompt: str, source_fps: float) -> dict[str, float]:
         data = self.config["data_config"]
         tensor = prepare_video(video, source_fps, data, self.sample_fps)
         content = {
-            "type": "video", "video": "file://in_memory.mp4",
-            "max_pixels": data.get("max_frame_pixels"), "sample_type": data.get("sample_type", "uniform"),
+            "type": "video",
+            "video": "file://in_memory.mp4",
+            "max_pixels": data.get("max_frame_pixels"),
+            "sample_type": data.get("sample_type", "uniform"),
         }
         if self.sample_fps is not None or data.get("num_frames") is None:
             content["fps"] = self.sample_fps if self.sample_fps is not None else data.get("fps", 2.0)
         else:
             content["nframes"] = data["num_frames"]
-        chat = [[{"role": "user", "content": [content, {
-            "type": "text", "text": build_prompt(prompt, data["eval_dim"], data["prompt_template_type"]),
-        }]}]]
+        chat = [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        content,
+                        {
+                            "type": "text",
+                            "text": build_prompt(prompt, data["eval_dim"], data["prompt_template_type"]),
+                        },
+                    ],
+                }
+            ]
+        ]
         batch = self.processor(
             text=self.processor.apply_chat_template(chat, tokenize=False, add_generation_prompt=True),
-            images=None, videos=[tensor], padding=True, return_tensors="pt",
+            images=None,
+            videos=[tensor],
+            padding=True,
+            return_tensors="pt",
             videos_kwargs={"do_rescale": True},
         )
         batch = {key: value.to(self.device) if isinstance(value, torch.Tensor) else value for key, value in batch.items()}
@@ -318,9 +322,7 @@ class VideoAlignReward:
             raise ValueError("VideoAlign requires a nonempty text prompt")
         if not math.isfinite(source_fps) or source_fps <= 0:
             raise ValueError("VideoAlign source_fps must be positive and finite")
-        requested = self.dimensions if dimensions is None else tuple(
-            dict.fromkeys(name.removeprefix("videoalign_").upper() for name in dimensions)
-        )
+        requested = self.dimensions if dimensions is None else tuple(dict.fromkeys(name.removeprefix("videoalign_").upper() for name in dimensions))
         if not requested or any(name not in {"VQ", "MQ", "TA"} for name in requested):
             raise ValueError("VideoAlign dimensions must be a nonempty subset of VQ, MQ, TA")
         self._ensure_loaded()

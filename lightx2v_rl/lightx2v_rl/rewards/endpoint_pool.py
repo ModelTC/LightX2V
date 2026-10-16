@@ -30,8 +30,7 @@ def normalize_endpoints(value, *, name="reward endpoint"):
         if valid:
             try:
                 parts = urlsplit(endpoint)
-                valid = (parts.scheme in {"http", "https"} and bool(parts.hostname)
-                         and not parts.query and not parts.fragment)
+                valid = parts.scheme in {"http", "https"} and bool(parts.hostname) and not parts.query and not parts.fragment
                 # Accessing port also rejects malformed or out-of-range ports.
                 parts.port
             except ValueError:

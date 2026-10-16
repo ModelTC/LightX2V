@@ -13,9 +13,11 @@ REWARD_RECIPES = ("hpsv3", "videoalign", "hpsv3_videoalign")
 RECIPE_ALIASES = {
     **{f"wan_{name}": f"wan/{name}" for name in ("base", "geo", "cps", "flow_grpo")},
     **{f"reward_{name}": f"rewards/{name}" for name in ("base", *REWARD_RECIPES)},
-    **{f"qwen_image21_turbo_{bridge}{suffix}": f"qwen_image21_turbo/{bridge}{profile}"
-       for bridge in ("geo", "cps", "flow_grpo")
-       for suffix, profile in (("", ""), ("_32gpu", "_4nodes"), ("_40gpu", "_5nodes"))},
+    **{
+        f"qwen_image21_turbo_{bridge}{suffix}": f"qwen_image21_turbo/{bridge}{profile}"
+        for bridge in ("geo", "cps", "flow_grpo")
+        for suffix, profile in (("", ""), ("_32gpu", "_4nodes"), ("_40gpu", "_5nodes"))
+    },
     "qwen_image21_agent": "qwen_image21_turbo/agent",
 }
 
@@ -72,10 +74,7 @@ def validate_recipe(config, *, require_inputs: bool = False):
     for algo in (rollout.algo, rollout.val_kwargs.algo):
         if OmegaConf.to_container(algo.fewstep, resolve=True) != OmegaConf.to_container(model.fewstep, resolve=True):
             raise ValueError("Rollout and learner FewStep options must match.")
-    if (
-        actor.diffusion_loss.clip_ratio != fewstep.clip_range
-        or actor.diffusion_loss.adv_clip_max != fewstep.adv_clip_max
-    ):
+    if actor.diffusion_loss.clip_ratio != fewstep.clip_range or actor.diffusion_loss.adv_clip_max != fewstep.adv_clip_max:
         raise ValueError("Loss clipping options must match model.fewstep.")
     if fewstep.kl_beta > 0 and not actor.use_kl_loss:
         raise ValueError("Positive FewStep kl_beta requires actor.use_kl_loss=true.")
@@ -100,7 +99,6 @@ def validate_recipe(config, *, require_inputs: bool = False):
     if require_inputs and missing:
         raise ValueError("Set required runtime inputs: " + ", ".join(missing))
     return fewstep, missing
-
 
 
 def compose_runtime_config(recipe, overrides: list[str], checkout: Path):

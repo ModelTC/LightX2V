@@ -20,17 +20,17 @@ from lightx2v_rl.training.config import (
 # Re-export the recipe API for existing external callers of the CLI module.
 __all__ = ["compose_runtime_config", "load_recipe", "load_training_recipe", "validate_recipe", "main"]
 
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="wan_geo", help="Bundled recipe name or YAML path")
     parser.add_argument(
-        "--reward-config", choices=REWARD_RECIPES,
+        "--reward-config",
+        choices=REWARD_RECIPES,
         help="Optional HPSv3/VideoAlign HTTP reward recipe; merged before key=value overrides",
     )
     parser.add_argument("--checkout", type=Path, default=DEFAULT_CHECKOUT)
-    parser.add_argument(
-        "--check-config", action="store_true", help="Validate recipe only; does not load models/runtime"
-    )
+    parser.add_argument("--check-config", action="store_true", help="Validate recipe only; does not load models/runtime")
     parser.add_argument("--print-config", action="store_true", help="Print recipe overlay, without launching training")
     parser.add_argument("overrides", nargs="*", help="OmegaConf dotted key=value overrides")
     args = parser.parse_args(argv)
@@ -50,15 +50,11 @@ def main(argv=None):
                 print("Required before training: " + ", ".join(missing))
             return
         if sys.version_info < (3, 11):
-            raise RuntimeError(
-                "The pinned verl-omni training runtime requires Python >= 3.11; core tests support 3.10."
-            )
+            raise RuntimeError("The pinned verl-omni training runtime requires Python >= 3.11; core tests support 3.10.")
         checkout = prepare_runtime(args.checkout, check_only=True)
         installed = importlib.util.find_spec("verl_omni")
         if installed is None or Path(installed.origin).resolve().parent != checkout / "verl_omni":
-            raise RuntimeError(
-                "Install the pinned checkout editable in the training environment: pip install -e third_party/verl-omni"
-            )
+            raise RuntimeError("Install the pinned checkout editable in the training environment: pip install -e third_party/verl-omni")
         config = resolve_runtime_paths(compose_runtime_config(recipe, args.overrides, checkout))
         validate_recipe(config, require_inputs=True)
         from verl_omni.trainer.main_diffusion_v1 import run_diffusion_v1
