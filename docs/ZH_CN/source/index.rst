@@ -24,7 +24,7 @@
     </div>
 
 
-LightX2V 是一个轻量级的视频生成推理框架，集成多种先进的视频生成推理技术，统一支持 文本生成视频 (T2V)、图像生成视频 (I2V) 等多种生成任务及模型。X2V 表示将不同的输入模态（X，如文本或图像）转换（to）为视频输出（V）。
+LightX2V 是一个轻量级的图像与视频生成推理框架，集成多种推理加速技术，统一支持多个模型的文本生成视频（T2V）、图像生成视频（I2V）、文本生成图像（T2I）和图像编辑（I2I）任务。X2V 表示将不同的输入模态（X，如文本或图像）转换为视觉输出（Vision）。
 
 GitHub: https://github.com/ModelTC/lightx2v
 
@@ -38,6 +38,8 @@ HuggingFace: https://huggingface.co/lightx2v
    :caption: 快速入门
 
    快速入门 <getting_started/quickstart.md>
+   生成第一个视频 <getting_started/first_generation.md>
+   Python API <getting_started/python_api.md>
    模型结构 <getting_started/model_structure.md>
    基准测试 <getting_started/benchmark.md>
 
@@ -65,3 +67,6 @@ HuggingFace: https://huggingface.co/lightx2v
    Gradio部署 <deploy_guides/deploy_gradio.md>
    ComfyUI部署 <deploy_guides/deploy_comfyui.md>
    本地windows电脑部署 <deploy_guides/deploy_local_windows.md>
+   Diffusion Model 分离部署 <deploy_guides/disagg.md>
+   Qwen Image 文本编码器部署 <deploy_guides/qwen_image_encoder.md>
+   Qwen Image TensorRT VAE <deploy_guides/qwen_image_vae_tensorrt.md>

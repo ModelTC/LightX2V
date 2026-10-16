@@ -6,6 +6,25 @@ This directory provides inference, server, and distillation examples for Wan2.1 
 
 Set `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES` in the script. Command paths below are relative to the repository root; absolute script paths also work.
 
+## Environment and weights
+
+Complete the [environment setup](../../docs/EN/source/getting_started/quickstart.md).
+Download only the models and additional weights needed for the selected task:
+
+```bash
+# Download from HuggingFace
+hf download Wan-AI/Wan2.1-T2V-14B --local-dir Wan-AI/Wan2.1-T2V-14B
+hf download Wan-AI/Wan2.1-I2V-14B-480P --local-dir Wan-AI/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-720P --local-dir Wan-AI/Wan2.1-I2V-14B-720P
+
+# Download distilled models
+hf download lightx2v/Wan2.1-Distill-Models --local-dir lightx2v/Wan2.1-Distill-Models
+hf download lightx2v/Wan2.1-Distill-Loras --local-dir lightx2v/Wan2.1-Distill-Loras
+```
+
+Keep `model_path` pointed at the complete base model directory. Set the checkpoint
+and LoRA paths in the selected JSON to the downloaded local files.
+
 ## Basic tasks
 
 | Task | Script | Example weights |
@@ -91,3 +110,28 @@ For T2V/I2V, add `"use_compile": true` to enable compilation and `"warmup": true
 - `run_wan_i2v_distill_single_file.sh`: a single distilled DiT file, its config, encoders, and VAE in the same model directory.
 - `run_wan_t2v_distill_dynamic_cfg.sh`: a dynamic CFG model; `cfg_scale` in the JSON controls guidance strength.
 - `run_wan_t2v_distill_model_ulysses.sh`: an eight-GPU Ulysses example for the full distilled T2V model.
+
+## Python API examples
+
+See the [Python API guide](../../docs/EN/source/getting_started/python_api.md) for
+generator setup, configuration precedence, offload and repeated generation.
+Edit paths in the selected file, then run it from the repository root after installation.
+These examples retain their own model, sampling and attention settings; using a
+Shell launcher's JSON is an explicit change of configuration.
+
+| Use case | Python entry |
+| --- | --- |
+| Wan2.1 T2V 14B | [wan_t2v.py](inference/wan_t2v.py) |
+| Wan2.1 FLF2V | [wan_flf2v.py](inference/wan_flf2v.py) |
+| Wan2.1 VACE | [wan_vace.py](inference/wan_vace.py) |
+| Wan2.1 T2V 1.3B NVFP4, 4-step | [wan_t2v_nvfp4.py](inference/distill/wan_t2v_nvfp4.py) |
+| Wan2.1 I2V 14B NVFP4, 4-step | [wan_i2v_nvfp4.py](inference/distill/wan_i2v_nvfp4.py) |
+
+The T2V Python example uses the 14B model, `sage_attn2`, guidance 5 and shift 5;
+the basic Shell launcher uses the 1.3B model with its JSON settings. Keep these
+choices explicit when comparing outputs. For NVFP4, use the named 4-step weights
+from [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4), keep `distill_method="dmd2"`,
+and install the [quantization kernels](../../lightx2v_kernel/README.md).
+
+For CPU offload, set `cpu_offload` and a supported `offload_granularity` in the JSON;
+see the [offload guide](../../docs/EN/source/deploy_guides/for_low_resource.md).

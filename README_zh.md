@@ -18,13 +18,13 @@
 
 [快速开始](#-快速开始) · [模型生态](#-支持的模型生态) · [文档与部署](#-文档与部署)
 
-> 🌐 **立即在线体验！** **[LightX2V Studio](https://x2v.light-ai.top/)** 是免费、轻量、快速的 AI 视频生成平台，无需安装即可体验 MiniMax-H3 / Wan 2.2 / SekoTalk / Qwen-Image / SwiftVR 等模型。
+> 🌐 **在线创作 AI 图像与视频，免费、快速、轻松上手：[LightX2V Studio](https://x2v.light-ai.top/)**
 
 > 🍎 **MacBook 本地推理 App: [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)**
 
 > 🤗 **HuggingFace 模型仓库: [LightX2V HuggingFace](https://huggingface.co/lightx2v)**
 
-> 🌟 **开发者新手入门教程: [LightX2V 开发者快速入门教程](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
+> 🌟 **开发者新手入门教程: [LightX2V 开发者快速入门教程](docs/ZH_CN/source/getting_started/first_generation.md)**
 
 > 📝 **技术博客：[LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)**
 
@@ -41,22 +41,7 @@ pre-commit run --all-files
 
 感谢以下社区开发者为 LightX2V 作出的贡献：
 
-- [zhtshr](https://github.com/zhtshr)
-- [triple-Mu](https://github.com/triple-Mu)
-- [vivienfanghuagood](https://github.com/vivienfanghuagood)
-- [yeahdongcn](https://github.com/yeahdongcn)
-
-<details>
-<summary>更多社区贡献者</summary>
-
-- [kikidouloveme79](https://github.com/kikidouloveme79)
-- [ziyanxzy](https://github.com/ziyanxzy)
-- [Tyr0727](https://github.com/Tyr0727)
-- [hufangjian2017](https://github.com/hufangjian2017)
-- [Fatemanx](https://github.com/Fatemanx)
-- [qiuxin2012](https://github.com/qiuxin2012)
-
-</details>
+[zhtshr](https://github.com/zhtshr) · [triple-Mu](https://github.com/triple-Mu) · [vivienfanghuagood](https://github.com/vivienfanghuagood) · [yeahdongcn](https://github.com/yeahdongcn) · [kikidouloveme79](https://github.com/kikidouloveme79) · [ziyanxzy](https://github.com/ziyanxzy) · [Tyr0727](https://github.com/Tyr0727) · [hufangjian2017](https://github.com/hufangjian2017) · [Fatemanx](https://github.com/Fatemanx) · [qiuxin2012](https://github.com/qiuxin2012)
 
 ## :fire: 最新动态
 
@@ -70,10 +55,10 @@ pre-commit run --all-files
 
 - **2026年8月11日：** 🚀 我们发布并支持了 [MiniMax-H3 Turbo 4 步 768p 蒸馏 LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors)，支持通过 4 步无 CFG 推理生成 768p 同步音视频。详见 [MiniMax-H3 使用说明](scripts/minimax_h3/README_zh.md)。
 
-- **2026年8月7日：** 🚀 我们正式支持了 [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) 的同步音视频生成，并发布了 [提示词改写 LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA)，可将简短提示词扩展为包含画面、音景和音乐的结构化描述。详见 [MiniMax-H3 使用说明](scripts/minimax_h3/README_zh.md)。
-
 <details>
 <summary>历史动态</summary>
+
+- **2026年8月7日：** 🚀 我们正式支持了 [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) 的同步音视频生成，并发布了 [提示词改写 LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA)，可将简短提示词扩展为包含画面、音景和音乐的结构化描述。详见 [MiniMax-H3 使用说明](scripts/minimax_h3/README_zh.md)。
 
 - **2026年7月28日：** 🚀 我们发布了 LingBot-Video 的 4 步蒸馏 LoRA：[LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video)。该 LoRA 支持 T2V、T2I 和 I2V 任务，只需 4 步且无需 CFG 即可完成推理。使用方式请参考 [LingBot-Video 推理脚本](scripts/lingbot_video)。
 
@@ -89,7 +74,7 @@ pre-commit run --all-files
 
 - **2026年4月20日：** 🚀 我们很高兴发布 [Wan2.2-I2V-A14B-4step-720p-high](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors) 和 [Wan2.2-I2V-A14B-4step-720p-low](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors) 两个新模型。与之前的版本相比，这一版本基于高质量的 720p 数据集进行训练，并采用了优化过的低噪声训练算法。这些改进显著提升了模型在细粒度细节渲染以及视觉纹理方面的表现。
 
-- **2026年4月17日：** 🚀 我们支持了 [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) 模型。在单张 H100 显卡上，LightX2V 可实现约 1.2 倍的推理加速。详细用法请参考 [此教程](examples/worldmirror/README_zh.md)。
+- **2026年4月17日：** 🚀 我们支持了 [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) 模型。在单张 H100 显卡上，LightX2V 可实现约 1.2 倍的推理加速。详细用法请参考 [此教程](scripts/worldmirror/README_zh.md)。
 
 - **2026年4月10日：** 🎉 我们更新了分离部署的技术博客
   - [LightX2V 分离部署：突破扩散模型推理的显存与吞吐瓶颈](https://light-ai.top/LightX2V-BLOG/posts/Disaggregation/)
@@ -102,19 +87,19 @@ pre-commit run --all-files
 
 - **2026年2月11日：** 🎉 我们很高兴宣布推出 **[GenRL](https://github.com/ModelTC/GenRL)** —— 一个用于视觉生成的可扩展强化学习训练框架！GenRL 支持使用 GRPO 算法对 diffusion/flow 模型进行多奖励优化训练（HPSv3、VideoAlign 等）。我们已经发布了在多机多卡上训练的高性能 LoRA checkpoints，在美学质量、运动连贯性和文本-视频对齐等方面都有显著提升。欢迎查看我们在 HuggingFace 上的 [模型合集](https://huggingface.co/collections/lightx2v/genrl)！觉得有用的话欢迎给个 ⭐！
 
-- **2026年1月20日：** 🚀 我们支持了 [LTX-2](https://huggingface.co/Lightricks/LTX-2) 音频-视频生成模型，包含 CFG 并行、block 级别 offload、FP8 per-tensor 量化等先进特性。使用示例可参考 [examples/ltx2](https://github.com/ModelTC/LightX2V/tree/main/examples/ltx2) 和 [scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2)。
+- **2026年1月20日：** 🚀 我们支持了 [LTX-2](https://huggingface.co/Lightricks/LTX-2) 音频-视频生成模型，包含 CFG 并行、block 级别 offload、FP8 per-tensor 量化等先进特性。使用示例可参考 [scripts/ltx2/inference](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2/inference) 和 [scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2)。
 
-- **2026年1月6日：** 🚀 我们更新了 [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) 和 [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) 的 8 步的 CFG/步数蒸馏模型。可以在 [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) 和 [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) 下载对应的权重进行使用。使用教程参考 [这里](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image)。
+- **2026年1月6日：** 🚀 我们更新了 [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) 和 [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) 的 8 步的 CFG/步数蒸馏模型。可以在 [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) 和 [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) 下载对应的权重进行使用。使用教程参考 [这里](scripts/qwen_image/README_zh.md)。
 
 - **2026年1月6日：** 🚀 支持燧原 Enflame S60 (GCU) 的部署。
 
-- **2025年12月31日：** 🚀 我们 day 0 支持了 [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) 文生图模型。我们的 [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) 已经更新了 CFG/步数蒸馏 LoRA 权重。使用方式可以参考 [这里](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image)。
+- **2025年12月31日：** 🚀 我们 day 0 支持了 [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) 文生图模型。我们的 [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) 已经更新了 CFG/步数蒸馏 LoRA 权重。使用方式可以参考 [这里](scripts/qwen_image/README_zh.md)。
 
 - **2025年12月27日：** 🚀 支持摩尔线程 MUSA 的部署。
 
 - **2025年12月25日：** 🚀 支持 AMD ROCm 和 Ascend 910B 的部署。
 
-- **2025年12月23日：** 🚀 我们 day 0 支持了 [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) 的图像编辑模型，H100 单卡，LightX2V 可带来约 1.4 倍的速度提升，支持 CFG 并行/Ulysses 并行，高效 Offload 等技术。我们的 [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) 已经更新了 CFG/步数蒸馏 LoRA 和 FP8 权重。使用方式可以参考 [这里](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image)。结合 LightX2V，4 步 CFG/步数蒸馏，FP8 模型，最高可以加速约 42 倍。可以在 [LightX2V 在线服务](https://x2v.light-ai.top/login) 的图生图的 Qwen-Image-Edit-2511 进行体验。
+- **2025年12月23日：** 🚀 我们 day 0 支持了 [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) 的图像编辑模型，H100 单卡，LightX2V 可带来约 1.4 倍的速度提升，支持 CFG 并行/Ulysses 并行，高效 Offload 等技术。我们的 [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) 已经更新了 CFG/步数蒸馏 LoRA 和 FP8 权重。使用方式可以参考 [这里](scripts/qwen_image/README_zh.md)。结合 LightX2V，4 步 CFG/步数蒸馏，FP8 模型，最高可以加速约 42 倍。可以在 [LightX2V 在线服务](https://x2v.light-ai.top/login) 的图生图的 Qwen-Image-Edit-2511 进行体验。
 
 - **2025年12月22日：** 🚀 新增 **Wan2.1 NVFP4 量化感知 4 步蒸馏模型** 支持；模型与权重已发布在 HuggingFace： [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4)。
 
@@ -124,15 +109,15 @@ pre-commit run --all-files
 
 - **2025年11月24日：** 🚀 我们发布了 HunyuanVideo-1.5 的 4 步蒸馏模型！这些模型支持**超快速 4 步推理**，无需 CFG 配置，相比标准 50 步推理可实现约**25 倍加速**。现已提供基础版本和 FP8 量化版本：[Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models)。
 
-- **2025年11月21日：** 🚀 我们 day 0 支持了 [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) 的视频生成模型，同样 GPU 数量，LightX2V 可带来约 2 倍以上的速度提升，并支持更低显存 GPU 部署（如 24G RTX4090）。支持 CFG 并行/Ulysses 并行，高效 Offload，TeaCache/MagCache 等技术。同时支持沐曦，寒武纪等国产芯片部署。我们很快将在我们的 [HuggingFace 主页](https://huggingface.co/lightx2v) 更新更多模型，包括步数蒸馏，VAE 蒸馏等相关模型。量化模型和轻量 VAE 模型现已可用：[Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models) 用于量化推理，[HunyuanVideo-1.5 轻量 TAE](https://huggingface.co/lightx2v/Autoencoders/blob/main/lighttaehy1_5.safetensors) 用于快速 VAE 解码。使用教程参考 [这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15)，或查看 [示例目录](https://github.com/ModelTC/LightX2V/tree/main/examples) 获取代码示例。
+- **2025年11月21日：** 🚀 我们 day 0 支持了 [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) 的视频生成模型，同样 GPU 数量，LightX2V 可带来约 2 倍以上的速度提升，并支持更低显存 GPU 部署（如 24G RTX4090）。支持 CFG 并行/Ulysses 并行，高效 Offload，TeaCache/MagCache 等技术。同时支持沐曦，寒武纪等国产芯片部署。我们很快将在我们的 [HuggingFace 主页](https://huggingface.co/lightx2v) 更新更多模型，包括步数蒸馏，VAE 蒸馏等相关模型。量化模型和轻量 VAE 模型现已可用：[Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models) 用于量化推理，[HunyuanVideo-1.5 轻量 TAE](https://huggingface.co/lightx2v/Autoencoders/blob/main/lighttaehy1_5.safetensors) 用于快速 VAE 解码。使用教程参考 [这里](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15)，或查看 [Python API 指南](docs/ZH_CN/source/getting_started/python_api.md) 获取代码示例。
 
 </details>
 
 ## 💡 快速开始
 
-推荐通过服务接口使用 LightX2V，以下以 MiniMax-H3 文生音视频（T2AV）为例。
+推荐通过服务接口使用 LightX2V，以下分别展示 Qwen-Image-2.1 文生图（T2I）和 MiniMax-H3 文生音视频（T2AV）。
 
-### 环境与模型准备
+### 环境准备
 
 推荐使用 [Docker 环境](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html)。在准备好的环境中获取仓库：
 
@@ -140,8 +125,6 @@ pre-commit run --all-files
 git clone https://github.com/ModelTC/LightX2V.git
 cd LightX2V
 ```
-
-按 [MiniMax-H3 使用说明](scripts/minimax_h3/README_zh.md) 准备权重与首次 AdaLN 缓存，确认所需算子，并设置启动脚本中的仓库路径、模型路径和显卡。以下命令在仓库根目录运行。
 
 <details>
 <summary>其他安装方式（Git / 源码）</summary>
@@ -165,6 +148,30 @@ uv pip install -v . # 或：pip install -v .
 </details>
 
 ### 使用示例
+
+两个服务默认都使用 `8000` 端口，切换示例前请先停止已有服务。
+
+#### Qwen-Image-2.1：文生图
+
+按 [Qwen-Image-2.1 使用说明](scripts/qwen_image_21/README_zh.md) 准备权重，并设置启动脚本中的仓库路径、模型路径和显卡。以下命令在仓库根目录运行。
+
+```bash
+# 终端 1：启动服务
+bash scripts/qwen_image_21/server/start_server.sh
+```
+
+模型加载完成后，在另一个终端提交示例请求：
+
+```bash
+# 终端 2：提交 T2I 请求
+python scripts/qwen_image_21/server/post_t2i.py
+```
+
+修改 [请求脚本](scripts/qwen_image_21/server/post_t2i.py) 中的提示词、尺寸和种子即可生成自己的图片。请求完成后，图片默认保存到仓库下的 `save_results/qwen_image_21_t2i.png`。
+
+#### MiniMax-H3：文生音视频
+
+按 [MiniMax-H3 使用说明](scripts/minimax_h3/README_zh.md) 准备权重与首次 AdaLN 缓存，设置启动脚本中的仓库路径、模型路径和显卡。以下命令在仓库根目录运行。
 
 ```bash
 # 终端 1：启动服务
@@ -273,34 +280,14 @@ python scripts/minimax_h3/server/post_t2av.py
 | 低资源与低延迟部署 | [低资源部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_resource.html) · [低延迟部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_latency.html) |
 | 模型量化与 LoRA 部署 | [模型量化](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/quantization.html) · [LoRA 部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/lora_deploy.html) |
 | 推理性能优化 | [权重卸载](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/offload.html) · [特征缓存](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/cache.html) · [注意力算子](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/attention.html) · [并行推理](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/parallel.html) · [变分辨率推理](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/changing_resolution.html) · [步数蒸馏](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/step_distill.html) |
-| Wan2.1 NVFP4 四步推理 | [I2V 示例](examples/wan/wan_i2v_nvfp4.py) · [T2V 示例](examples/wan/wan_t2v_nvfp4.py) · [量化算子安装](lightx2v_kernel/README.md) |
-| 代码示例与开发参考 | [examples](examples) |
+| Wan2.1 NVFP4 四步推理 | [I2V 示例](scripts/wan/inference/distill/wan_i2v_nvfp4.py) · [T2V 示例](scripts/wan/inference/distill/wan_t2v_nvfp4.py) · [量化算子安装](lightx2v_kernel/README.md) |
+| 代码示例与开发参考 | [Python API](docs/ZH_CN/source/getting_started/python_api.md) · [scripts](scripts) |
 
 ## 🤝 致谢
 
 感谢以下开源项目与社区为 LightX2V 提供的模型、工具与研究成果：
 
-- [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan)
-- [Wan-Video](https://github.com/Wan-Video)
-- [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
-- [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
-- [FlashAttention](https://github.com/Dao-AILab/flash-attention)
-- [SageAttention](https://github.com/thu-ml/SageAttention)
-
-<details>
-<summary>更多开源项目</summary>
-
-- [LightLLM](https://github.com/ModelTC/LightLLM)
-- [sglang](https://github.com/sgl-project/sglang)
-- [vllm](https://github.com/vllm-project/vllm)
-- [flashinfer](https://github.com/flashinfer-ai/flashinfer)
-- [MagiAttention](https://github.com/SandAI-org/MagiAttention)
-- [radial-attention](https://github.com/mit-han-lab/radial-attention)
-- [xDiT](https://github.com/xdit-project/xDiT)
-- [FastVideo](https://github.com/hao-ai-lab/FastVideo)
-- [Mooncake](https://github.com/kvcache-ai/Mooncake)
-
-</details>
+[Tencent-Hunyuan](https://github.com/Tencent-Hunyuan) · [Wan-Video](https://github.com/Wan-Video) · [Qwen-Image](https://github.com/QwenLM/Qwen-Image) · [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) · [FlashAttention](https://github.com/Dao-AILab/flash-attention) · [SageAttention](https://github.com/thu-ml/SageAttention) · [LightLLM](https://github.com/ModelTC/LightLLM) · [sglang](https://github.com/sgl-project/sglang) · [vllm](https://github.com/vllm-project/vllm) · [flashinfer](https://github.com/flashinfer-ai/flashinfer) · [MagiAttention](https://github.com/SandAI-org/MagiAttention) · [radial-attention](https://github.com/mit-han-lab/radial-attention) · [xDiT](https://github.com/xdit-project/xDiT) · [FastVideo](https://github.com/hao-ai-lab/FastVideo) · [Mooncake](https://github.com/kvcache-ai/Mooncake)
 
 同时感谢支持生态发展的云端推理平台：
 

@@ -142,7 +142,7 @@ def main():
         "--pose_video_path",
         type=str,
         default=None,
-        help="Pose driving video for Wan s2v / animate (e.g. examples/pose.mp4).",
+        help="Pose driving video for Wan s2v / animate (e.g. /path/to/pose.mp4).",
     )
     parser.add_argument(
         "--face_video_path",
