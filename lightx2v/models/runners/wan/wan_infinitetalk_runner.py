@@ -19,6 +19,7 @@ from lightx2v.models.networks.wan.infinitetalk_model import WanInfiniteTalkModel
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
+from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
@@ -137,6 +138,14 @@ class InfiniteTalkRunner(WanRunner):
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
+
+    def load_vae(self):
+        encoder, decoder = super().load_vae()
+        if self.config.get("vae_use_compile", False):
+            if not isinstance(encoder, WanVAE) or decoder is not encoder:
+                raise ValueError("InfiniteTalk vae_use_compile requires the native Wan 2.1 encoder and decoder")
+            encoder.compile()
+        return encoder, decoder
 
     def check_segment_reuse_support(self):
         pass
