@@ -1,0 +1,8 @@
+# Codex UI metadata. Optional English template: openai_en.yaml.
+interface:
+  display_name: "LightX2V CPU Block Offload 与权重共享"
+  short_description: "接入 CPU 分块卸载与权重共享，按启动 JSON 配置 host／NUMA"
+  default_prompt: "使用 $support-cpu-block-offload 为目标模型接入 CPU block offload 与共享 CPU 权重，沿用模型目录和任务要求的并行规模，通过启动 JSON 配置 host／NUMA，并提供入口、双语说明和验证结果。"
+
+policy:
+  allow_implicit_invocation: false
