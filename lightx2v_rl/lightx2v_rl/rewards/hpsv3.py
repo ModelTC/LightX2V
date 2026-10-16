@@ -1,8 +1,8 @@
 """Framewise HPSv3 rewards migrated from FewStepRL.
 
 Copyright 2025 Jintao Zhang, Haoxu Wang, Jianfei Chen (Apache-2.0).
-HPSv3 inference portions: Copyright (c) 2024 HPSv3 Team (MIT); see
-``_vendor/hpsv3/LICENSE``. This module never imports FewStepRL at runtime.
+HPSv3 inference portions: Copyright (c) 2024 HPSv3 Team (MIT).
+This module never imports FewStepRL at runtime.
 
 The model is loaded only on first use. Run it in the separate reward environment
 with Transformers 4.51.3; verl-omni's Transformers 5 environment is incompatible

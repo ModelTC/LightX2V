@@ -474,4 +474,4 @@ lightx2v_rl/
 | 多节点出现 rendezvous 断连 | 优先查看最早的训练或服务异常，以及对应节点日志；断连可能是作业退出的后续现象 |
 | reward 连接失败 | 检查服务健康、endpoint、端口与节点网络；避免手工服务和平台入口重复占用同一端口 |
 
-参考：[verl-omni 安装](../third_party/verl-omni/docs/start/install.md)、[diffusion v1 trainer](../third_party/verl-omni/docs/start/diffusion_v1.md)、[LICENSE](LICENSE)、[第三方授权说明](THIRD_PARTY_NOTICES.md)。
+参考：[verl-omni 安装](../third_party/verl-omni/docs/start/install.md)、[diffusion v1 trainer](../third_party/verl-omni/docs/start/diffusion_v1.md)。

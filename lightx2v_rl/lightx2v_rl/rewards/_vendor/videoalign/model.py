@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Kling Team, Kuaishou Technology
-# Extracted from VideoAlign trainer.py; see LICENSE and PROVENANCE.md.
+# Extracted from VideoAlign trainer.py; see PROVENANCE.md.
 import torch
 from torch import nn
 from transformers import Qwen2VLForConditionalGeneration

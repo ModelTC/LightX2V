@@ -2,7 +2,7 @@
 
 The velocity callback uses normalized sigma. Both rollout and actor replay use
 the bridge in algorithms.fewstep, including its non-batch mean log probability.
-Adapted from FewStepRL 3dd8e422 (Apache-2.0); see THIRD_PARTY_NOTICES.md.
+Adapted from FewStepRL 3dd8e422 (Apache-2.0).
 """
 
 from collections.abc import Callable

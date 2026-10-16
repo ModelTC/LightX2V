@@ -4,7 +4,6 @@ Upstream: https://github.com/KwaiVGI/VideoAlign
 
 - `model.py`: only `Qwen2VLRewardModelBT` from `trainer.py`; training imports omitted.
 - `prompt_template.py`: unchanged prompts and formatting helper.
-- `LICENSE`: original MIT license.
 
 The wrapper in `../../videoalign.py` ports FewStepRL's in-memory preprocessing,
 grayscale MQ evaluation and checkpoint normalization without importing its

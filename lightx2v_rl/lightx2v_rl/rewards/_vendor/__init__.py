@@ -1,1 +1,1 @@
-"""Minimal inference code; see each subpackage's LICENSE and provenance."""
+"""Minimal inference code from upstream reward models."""

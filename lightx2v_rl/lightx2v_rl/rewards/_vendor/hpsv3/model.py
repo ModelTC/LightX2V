@@ -1,4 +1,4 @@
-# Copyright (c) 2024 HPSv3 Team. MIT License; see LICENSE in this directory.
+# Copyright (c) 2024 HPSv3 Team. MIT License.
 # Extracted from ModelTC/HPSv3 a2eb2ef2c7b5d91a566347a5825cf6d872122149.
 # Inference-only extraction: training dependencies removed. The fp32 reward head
 # explicitly casts hidden states, avoiding a bf16/fp32 dtype mismatch.
