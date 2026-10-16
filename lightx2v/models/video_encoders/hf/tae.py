@@ -60,7 +60,7 @@ class TGrow(nn.Module):
         return x.reshape(-1, C, H, W)
 
 
-def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
+def apply_model_with_memblocks(model, x, parallel, show_progress_bar, memory=None):
     """
     Apply a sequential model with memblocks to the given input.
     Args:
@@ -73,6 +73,8 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
     Returns NTCHW tensor of output data.
     """
     assert x.ndim == 5, f"TAEHV operates on NTCHW tensors, but got {x.ndim}-dim tensor"
+    if parallel and memory is not None:
+        raise ValueError("Persistent TAE memory requires sequential decoding")
     N, T, C, H, W = x.shape
     if parallel:
         x = x.reshape(N * T, C, H, W)
@@ -101,7 +103,7 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar):
         # we'll update it for every source node that we consume.
         progress_bar = tqdm(range(T), disable=not show_progress_bar)
         # we'll also need a separate addressable memory per node as well
-        mem = [None] * len(model)
+        mem = [None] * len(model) if memory is None else memory
         while work_queue:
             xt, i = work_queue.pop(0)
             if i == 0:
@@ -277,7 +279,7 @@ class TAEHV(nn.Module):
             x = torch.cat([x, padding], 1)
         return apply_model_with_memblocks(self.encoder, x, parallel, show_progress_bar)
 
-    def decode_video(self, x, parallel=True, show_progress_bar=True):
+    def decode_video(self, x, parallel=True, show_progress_bar=True, memory=None, first_chunk=True):
         """Decode a sequence of frames.
 
         Args:
@@ -287,11 +289,11 @@ class TAEHV(nn.Module):
               if False, frames will be processed sequentially.
         Returns NTCHW RGB tensor with ~[0, 1] values.
         """
-        x = apply_model_with_memblocks(self.decoder, x, parallel, show_progress_bar)
+        x = apply_model_with_memblocks(self.decoder, x, parallel, show_progress_bar, memory=memory)
         if self.model_type == "hy15":
             x = x.clamp_(-1, 1)
         else:
             x = x.clamp_(0, 1)
         if self.patch_size > 1:
             x = F.pixel_shuffle(x, self.patch_size)
-        return x[:, self.frames_to_trim :]
+        return x[:, self.frames_to_trim :] if first_chunk else x

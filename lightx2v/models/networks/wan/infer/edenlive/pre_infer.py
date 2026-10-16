@@ -50,5 +50,5 @@ class EdenLivePreInfer(WanPreInfer):
             x=x,
             context=context,
             grid_sizes=GridOutput(torch.tensor([grid], device=x.device, dtype=torch.int32), grid),
-            adapter_args={"text_segments": inputs.get("text_segments")},
+            adapter_args={"text_segments": inputs.get("text_segments"), "context_id": id(inputs["text_encoder_output"][text_key])},
         )

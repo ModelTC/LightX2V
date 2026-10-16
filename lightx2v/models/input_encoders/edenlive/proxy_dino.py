@@ -52,8 +52,13 @@ class ProxyDINO(WeightModule):
             if module.bias is not None:
                 module.bias = module.bias.to(torch.bfloat16)
         self.attention = ATTN_WEIGHT_REGISTER["torch_sdpa"]()
+        # Preserve the former CPU division and GPU normalization rounding exactly.
+        values = torch.arange(256, dtype=torch.float32).div_(127.5).sub_(1)
+        self.pixel_values = values.add_(1).mul_(0.5).to(AI_DEVICE)
 
     def preprocess(self, images):
+        """Convert uint8 RGB to the original normalized DINO input."""
+        images = self.pixel_values[images.int()].contiguous()
         size = (480, 832)
         if self.resize_mode == "bilinear":
             pixels = F.interpolate(images.float(), size=size, mode="bilinear", align_corners=False, antialias=True)

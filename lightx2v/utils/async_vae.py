@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import torch
@@ -21,7 +22,7 @@ class AsyncVAEChunkDecoder:
       - Caller should use ``no_sync_profiling`` when measuring with profilers on.
     """
 
-    def __init__(self, enabled: bool, device: torch.device | str | None = None) -> None:
+    def __init__(self, enabled: bool, device: torch.device | str | None = None, on_chunk: Callable | None = None, dispatch_in_worker: bool = False) -> None:
         self.enabled = bool(enabled) and torch.cuda.is_available()
         self._device = torch.device(device) if device is not None else None
         if self._device is not None and self._device.type != "cuda":
@@ -37,6 +38,12 @@ class AsyncVAEChunkDecoder:
         self._logged_decode_events = 0
         self._vae_decoder: Any | None = None
         self._saved_vae_cpu_offload = False
+        self._on_chunk = on_chunk
+        self._callback_executor = None
+        self._callback_futures = []
+        self._dispatch_in_worker = dispatch_in_worker
+        self._decode_executor = None
+        self._decode_futures = []
 
         if bool(enabled) and not self.enabled:
             logger.warning("[AsyncVAEChunkDecoder] async VAE requested but CUDA is unavailable; falling back to sync decode.")
@@ -47,6 +54,8 @@ class AsyncVAEChunkDecoder:
         config: dict[str, Any],
         device: torch.device | str | None = None,
         vae_decoder: Any | None = None,
+        on_chunk: Callable | None = None,
+        dispatch_in_worker: bool = False,
     ) -> "AsyncVAEChunkDecoder":
         ar_config = config.get("ar_config", {})
         enabled = bool(
@@ -54,8 +63,8 @@ class AsyncVAEChunkDecoder:
                 "async_vae_decode",
                 ar_config.get("async_vae_decode", config.get("streaming_vae", False) and config.get("async_vae", False)),
             )
-        )
-        decoder = cls(enabled=enabled, device=device)
+        ) or ar_config.get("overlap_kv_vae", False)
+        decoder = cls(enabled=enabled, device=device, on_chunk=on_chunk, dispatch_in_worker=dispatch_in_worker)
         if vae_decoder is not None:
             decoder.prepare_vae(vae_decoder)
         return decoder
@@ -124,6 +133,8 @@ class AsyncVAEChunkDecoder:
                 self._num_submitted,
                 chunk_ms / 1000.0,
             )
+            if self._on_chunk is not None:
+                self._on_chunk(self._chunks[-1], self._num_submitted - 1)
             return
 
         device = self._resolve_device(args)
@@ -131,6 +142,14 @@ class AsyncVAEChunkDecoder:
         # LongLive: diffusion_done.record() then vae_stream.wait_event(diffusion_done)
         diffusion_done = torch.cuda.Event()
         diffusion_done.record(torch.cuda.current_stream(device))
+        if self._dispatch_in_worker:
+            for value in list(args) + list(kwargs.values()):
+                if isinstance(value, torch.Tensor) and value.device.type == "cuda":
+                    value.record_stream(stream)
+            if self._decode_executor is None:
+                self._decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vae-decode")
+            self._decode_futures.append(self._decode_executor.submit(self._decode_chunk, decode_fn, args, kwargs, diffusion_done, self._num_submitted - 1))
+            return
 
         # LongLive waits for the previous chunk's VAE before queueing the next
         # decode (stateful cached VAE). Measure exposed wait here; do not block
@@ -158,14 +177,57 @@ class AsyncVAEChunkDecoder:
                 value.record_stream(stream)
         if isinstance(output, torch.Tensor) and output.device.type == "cuda":
             output.record_stream(stream)
+        if self._on_chunk is not None:
+            if self._callback_executor is None:
+                self._callback_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vae-chunks")
+            self._callback_futures.append(self._callback_executor.submit(self._deliver_chunk, output, self._num_submitted - 1, decode_end))
+
+    def _deliver_chunk(self, output, index, done):
+        done.synchronize()
+        with torch.cuda.device(output.device):
+            self._on_chunk(output, index)
+
+    def _decode_chunk(self, decode_fn, args, kwargs, diffusion_done, index):
+        with torch.cuda.device(self._stream.device), torch.cuda.stream(self._stream), torch.no_grad():
+            self._stream.wait_event(diffusion_done)
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record(self._stream)
+            output = decode_fn(*args, **kwargs)
+            end.record(self._stream)
+            self._chunks.append(output)
+            self._decode_events.append((start, end))
+            if self._on_chunk is not None:
+                end.synchronize()
+                self._on_chunk(output, index)
+
+    def wait_for_chunk(self) -> torch.Tensor:
+        """Wait for the latest worker decode without resetting temporal history."""
+        self._decode_futures[-1].result()
+        self._decode_events[-1][1].synchronize()
+        return self._chunks[-1]
 
     def finish(self) -> list[torch.Tensor]:
+        if self._decode_executor is not None:
+            t0 = time.perf_counter()
+            self._decode_executor.shutdown(wait=True)
+            self._decode_executor = None
+            self._finish_wait_ms += (time.perf_counter() - t0) * 1000.0
+        decode_futures, self._decode_futures = self._decode_futures, []
+        for future in decode_futures:
+            future.result()
         if self._stream is not None:
             t0 = time.perf_counter()
             self._stream.synchronize()
             wait_ms = (time.perf_counter() - t0) * 1000.0
             self._finish_wait_ms += wait_ms
             self._log_new_async_chunks(wait_ms, wait_kind="finish_wait")
+        if self._callback_executor is not None:
+            self._callback_executor.shutdown(wait=True)
+            self._callback_executor = None
+        futures, self._callback_futures = self._callback_futures, []
+        for future in futures:
+            future.result()
         self._log_timing()
         chunks = self._chunks
         self._chunks = []

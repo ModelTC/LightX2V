@@ -55,3 +55,29 @@ Phase offload is unsupported. The common warmup gate still rejects disaggregated
 | Lazy block / SP / TP / LoRA combinations | Not validated in this change |
 
 The warmup and quantization test files have 13 passing tests and 4 ConvRot cases skipped for missing dependencies. Video tests use the repository's `cryo-crossing` input. Compilation and component offload paths allow BF16 numerical differences. Comparing eager and compile in the same block mode for 5B, 25 frames, gives a decoded RGB mean absolute difference of approximately 4/255 and PSNR of 30.94 dB. These results establish functionality.
+## Wan2.2 LightVAE TLR decoder
+
+`configs/edenlive/quantized/wan22_5b_few_step_fp8_lightvae.json` enables FP8, compile, startup warmup, and LightVAE for 5B AR, with `num_frames=null`. The runner imports `lightvae.wan22_lightvae_decoder.Decoder` from the installed package, retaining its TLR computations and automatically selected Triton kernels. Checkpoint metadata supplies the decoder architecture.
+
+LightVAE is optional. Use `python -m pip install lightvae` when a release is available on your package index. The validation environment currently has no indexed release; install the local LightVAE project as a regular package:
+
+```bash
+python -m pip install /path/to/LightVAE
+```
+
+LightVAE source paths are not required in `PYTHONPATH`. Set:
+
+```json
+"use_lightvae": true,
+"lightvae_path": "/data/nvme6/gushiqiao/models/LightVAE/lightvae-lite-wan22-decoder.safetensors"
+```
+
+The original Wan2.2 VAE encodes the first frame. The LightVAE adapter reuses that encoder's mean/std to denormalize DiT latents before decoding. Existing component loading, lazy loading, and VAE CPU offload remain available. Use `--model_cls wan22_edenlive_ar` and select the new JSON through `--config_json`.
+
+Full-sequence decoding after AR denoising remains the default. The four LightTAE / LightVAE configurations in `configs/edenlive/streaming/` enable 16 FPS streaming with FP8, compile, startup warmup, and `num_frames=null`. Set `streaming_vae=true` for synchronous chunk decoding, and `ar_config.async_vae_decode=true` to overlap decoding on a side CUDA stream with the next chunk's DiT.
+
+Streaming LightVAE requires a package exposing `Decoder.new_cache()` and `Decoder.forward(..., cache=...)`; reinstall the updated local project with the pip command above. It preserves TLR and temporal upsampling history across chunks. LightTAE preserves MemBlock history and trims startup frames only once. The original VAE continues to encode the conditioning image.
+
+Register `pipe.runner.set_chunk_callback(callback)` before `pipe.generate(...)`. The callback receives `(pixels, index, is_last)`: a GPU tensor of shape `[1,3,T,H,W]` in `[-1,1]`, a zero-based index, and the final-chunk flag. Three latent frames produce nine pixel frames initially and twelve in each subsequent full chunk. Async VAE dispatch runs on a worker thread while the inference thread can submit the next DiT chunk. Callbacks run in order on that worker after the chunk's CUDA event completes; synchronous callbacks run on the inference thread. Keep callbacks short. Inference waits for callbacks to finish and propagates consumer errors. Complete-video output and saving still accumulate decoded chunks for final concatenation.
+
+`scripts/edenlive/wan22_5b_few_step.sh` selects the 16 FPS synchronous LightTAE streaming configuration. Optionally set `ar_config.overlap_kv_vae=true` to overlap the current chunk's KV commit and VAE on separate CUDA streams. Both finish before the inference thread delivers the chunk and starts the next DINO / DiT chunk. Keep `ar_config.async_vae_decode=false` for this scheduling mode. It stays disabled by default because the single H200 1280×704 test did not improve throughput.

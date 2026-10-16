@@ -28,7 +28,7 @@ def make_runner(monkeypatch, mode="none", fail=False):
     scheduler.clear = clear
     scheduler.prepare = prepare
     runner = SimpleNamespace(
-        config={"out_dim": 48, "vae_stride": [4, 16, 16], "num_frames": 9, "cpu_offload": mode != "none", "offload_granularity": mode},
+        config={"out_dim": 48, "vae_stride": [4, 16, 16], "size": [32, 32], "num_frames": 9, "cpu_offload": mode != "none", "offload_granularity": mode},
         scheduler=scheduler,
         model=SimpleNamespace(transformer_infer=SimpleNamespace(clear_request_state=lambda: events.append("infer_clear")), to_cpu=lambda: events.append("cpu")),
         _WARMUP_RESOLUTIONS=((32, 32), (32, 64)),
@@ -75,6 +75,14 @@ def test_warmup_exception_cleanup(monkeypatch):
     assert not hasattr(runner, "inputs")
 
 
+def test_warmup_includes_configured_resolution(monkeypatch):
+    runner, events = make_runner(monkeypatch)
+    runner.config["size"] = [64, 32]
+    module.EdenLiveRunner._run_warmup(runner)
+    assert [(event[1][1:]) for event in events if isinstance(event, tuple)] == [(32, 32), (32, 64), (64, 32)]
+    assert events.count("clear") == 3
+
+
 def test_specialized_subclass_must_opt_in():
     class OtherRunner(module.Wan21EdenLiveRunner):
         pass
@@ -103,12 +111,22 @@ def test_compile_cache_uses_staging_or_layer_identity(monkeypatch, infer_class, 
     monkeypatch.setattr(torch, "compile", lambda fn, dynamic: compiled.append(fn) or fn)
     infer = infer_class.__new__(infer_class)
     infer.init_compile({"use_compile": True})
+    infer.reuse_cross_kv = False
     infer.block_offload = True
-    infer.infer_block = lambda block, value: value + 1
-    slots = [object(), object()]
+    pre = SimpleNamespace(grid_sizes=SimpleNamespace(tuple=(1, 1, 1)))
+    if infer_class is EdenLiveARTransformerInfer:
+        infer.config = {"ar_config": {}}
+        infer.scheduler = SimpleNamespace(infer_condition=True)
+        infer.cache_pools = {True: object()}
+        infer.prepare_self_attn_cache = lambda *args: (None, None)
+        infer.commit_kv = lambda *args: None
+        infer.infer_block = lambda block, value, *args: (value + 1, None, None)
+    else:
+        infer.infer_block = lambda block, value, *args: value + 1
+    slots = [SimpleNamespace(compute_phases=[None]), SimpleNamespace(compute_phases=[None])]
     for _ in range(2):
         for layer in range(4):
-            assert infer.run_block(layer, slots[layer % 2], 0) == 1
+            assert infer.run_block(layer, slots[layer % 2], 0, pre) == 1
     assert len(compiled) == len(infer.compiled_blocks) == expected
 
 
@@ -119,3 +137,15 @@ def test_eager_does_not_compile(monkeypatch):
     infer.infer_block = lambda block, value: value + 1
     assert infer.run_block(0, object(), 2) == 3
     assert not infer.compiled_blocks
+
+
+def test_compile_options_are_forwarded(monkeypatch):
+    options = {"emulate_precision_casts": True}
+    observed = []
+    monkeypatch.setattr(torch, "compile", lambda fn, **kwargs: observed.append(kwargs) or fn)
+    infer = EdenLiveTransformerInfer.__new__(EdenLiveTransformerInfer)
+    infer.init_compile({"use_compile": True, "compile_options": options})
+    infer.block_offload = False
+    infer.infer_block = lambda block, value: value
+    assert infer.run_block(0, object(), 2) == 2
+    assert observed == [{"dynamic": None, "options": options}]

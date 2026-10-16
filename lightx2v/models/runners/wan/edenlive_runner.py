@@ -1,9 +1,11 @@
+from contextlib import nullcontext
+
 import torch
 from loguru import logger
 
 from lightx2v.common.kvcache.manager import build_self_attn_kv_cache
 from lightx2v.models.input_encoders.edenlive.proxy_dino import ProxyDINO
-from lightx2v.models.input_encoders.edenlive.recording import frame_prompts, prepare_recording
+from lightx2v.models.input_encoders.edenlive.recording import RecordingReader, frame_prompts, prepare_cover, prepare_recording
 from lightx2v.models.networks.wan.edenlive_model import EdenLiveARModel, EdenLiveModel
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, WanRunner
 from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler, EdenLiveScheduler
@@ -28,6 +30,16 @@ class EdenLiveRunner:
     def __init__(self, config):
         super().__init__(config)
         self.is_wan21 = config["model_cls"] in ["wan21_edenlive", "wan21_edenlive_ar"]
+        self.chunk_callback = None
+        self.recording_reader = None
+
+    def run_pipeline(self, input_info):
+        try:
+            return super().run_pipeline(input_info)
+        finally:
+            if self.recording_reader is not None:
+                self.recording_reader.close()
+                self.recording_reader = None
 
     def init_scheduler(self):
         self.scheduler = self.scheduler_class(self.config)
@@ -41,6 +53,25 @@ class EdenLiveRunner:
 
     def load_proxy_encoder(self):
         return ProxyDINO(self.config["model_path"], self.config["proxy_resize_mode"])
+
+    def load_vae(self):
+        if self.is_wan21 or not self.config.get("use_lightvae", False):
+            return super().load_vae()
+        self.vae_encoder = self.load_vae_encoder()
+        return self.vae_encoder, self.load_vae_decoder()
+
+    def load_vae_decoder(self):
+        if self.is_wan21 or not self.config.get("use_lightvae", False):
+            return super().load_vae_decoder()
+        from lightx2v.models.video_encoders.hf.wan.lightvae import Wan22LightVAEDecoder
+
+        return Wan22LightVAEDecoder(
+            vae_path=self.config["lightvae_path"],
+            scale=self.vae_encoder.scale,
+            dtype=GET_DTYPE(),
+            device=AI_DEVICE,
+            cpu_offload=self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False)),
+        )
 
     def encode_image_condition(self, image, frames):
         if not self.is_wan21:
@@ -70,11 +101,14 @@ class EdenLiveRunner:
             self.proxy_encoder = self.load_proxy_encoder()
         height, width = self.get_target_size()
         fps = self.config["fps"]
-        proxy, image, frames = prepare_recording(self.input_info.video_path, self.input_info.image_path, height, width, fps, self.input_info.num_frames)
+        proxy, image, frames = self.load_recording(height, width, fps)
         self.input_info.num_frames = frames
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
         self.proxy_pixels = proxy
         return self._encode_inputs(image, frames)
+
+    def load_recording(self, height, width, fps):
+        return prepare_recording(self.input_info.video_path, self.input_info.image_path, height, width, fps, self.input_info.num_frames)
 
     def _encode_inputs(self, image, frames):
         image = image.to(device=AI_DEVICE)
@@ -107,9 +141,12 @@ class EdenLiveRunner:
         }
 
     def _prepare_chunk_inputs(self, start, frames):
-        pixels = self.proxy_pixels[:, start : start + frames].permute(1, 0, 2, 3).to(AI_DEVICE)
-        self.inputs["proxy_features"] = self.proxy_encoder.infer(pixels.add_(1).mul_(0.5)).to(GET_DTYPE())
+        pixels = self.get_proxy_chunk(start, frames).permute(1, 0, 2, 3).to(AI_DEVICE)
+        self.inputs["proxy_features"] = self.proxy_encoder.infer(pixels).to(GET_DTYPE())
         self._prepare_text_inputs(start)
+
+    def get_proxy_chunk(self, start, frames):
+        return self.proxy_pixels[:, start : start + frames]
 
     def _run_steps(self, start, frames, total, step_indices=None):
         for step in range(self.scheduler.infer_steps) if step_indices is None else step_indices:
@@ -150,13 +187,13 @@ class EdenLiveRunner:
         if num_frames is None:
             num_frames = (latent_frames - 1) * self.config["vae_stride"][0] + 1
         try:
-            for height, width in self._WARMUP_RESOLUTIONS:
+            for height, width in dict.fromkeys((*self._WARMUP_RESOLUTIONS, tuple(self.config["size"]))):
                 logger.info("EdenLive warmup: {}x{}, {} frames", height, width, num_frames)
                 self.scheduler.generator = None
                 stride_t, stride_h, stride_w = self.config["vae_stride"]
                 self.input_info = EdenLiveInputInfo(prompt="warmup", negative_prompt="warmup", seed=0, num_frames=num_frames)
                 self.input_info.latent_shape = [self.config["out_dim"], (num_frames - 1) // stride_t + 1, height // stride_h, width // stride_w]
-                self.proxy_pixels = torch.zeros(3, self.input_info.latent_shape[1], height, width)
+                self.proxy_pixels = torch.zeros(self.input_info.latent_shape[1], height, width, 3, dtype=torch.uint8).permute(3, 0, 1, 2)
                 try:
                     self.inputs = self._encode_inputs(torch.zeros(3, height, width, device=AI_DEVICE), num_frames)
                     self.scheduler.prepare(0, self.input_info.latent_shape, self.inputs["image_encoder_output"])
@@ -194,6 +231,24 @@ class EdenLiveARRunner(EdenLiveRunner):
     model_class = EdenLiveARModel
     scheduler_class = EdenLiveARScheduler
 
+    def load_recording(self, height, width, fps):
+        self.recording_reader = RecordingReader(self.input_info.video_path, height, width, fps, self.input_info.num_frames, self.config["ar_config"]["num_frame_per_chunk"])
+        return None, prepare_cover(self.input_info.image_path, height, width), self.recording_reader.num_frames
+
+    def get_proxy_chunk(self, start, frames):
+        if self.recording_reader is None:
+            return super().get_proxy_chunk(start, frames)
+        return self.recording_reader.next_chunk()
+
+    def set_chunk_callback(self, callback):
+        """Receive decoded (B,C,T,H,W) chunks in [-1,1] as callback(pixels, index, is_last).
+
+        Async decoding delivers callbacks in order from a worker thread after
+        the chunk is ready on GPU. Keep the callback short to avoid queuing output.
+        With overlap_kv_vae, callbacks run on the caller after both stages finish.
+        """
+        self.chunk_callback = callback
+
     def prompt_schedule(self):
         return super().prompt_schedule(self.config["ar_config"]["num_frame_per_chunk"])
 
@@ -217,20 +272,34 @@ class EdenLiveARRunner(EdenLiveRunner):
             pool._init_kv_buffer()
             pools[branch] = pool
         self.model.transformer_infer.cache_pools = pools
-        decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder)
+        num_chunks = (total + chunk - 1) // chunk
+        on_chunk = None if self.chunk_callback is None else lambda pixels, index: self.chunk_callback(pixels, index, index == num_chunks - 1)
+        overlap_kv_vae = ar.get("overlap_kv_vae", False)
+        decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder, on_chunk=None if overlap_kv_vae else on_chunk, dispatch_in_worker=True)
+        streaming = decoder.is_async or self.config.get("streaming_vae", False) or on_chunk is not None
         try:
             with no_sync_profiling(enabled=decoder.is_async):
                 for start in range(0, total, chunk):
-                    logger.info(f"start chunk {start // chunk + 1}/{(total + chunk - 1) // chunk}")
-                    frames = min(chunk, total - start)
-                    self._prepare_chunk_inputs(start, frames)
-                    self._run_steps(start, frames, total, step_indices)
-                    with ProfilingContext4DebugL1("step_pre_in_rerun"):
-                        self.scheduler.step_pre(self.scheduler.infer_steps - 1, chunk_start=start, cache_update=True)
-                    with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
-                        self.model.infer(self.inputs)
-                    if decoder.is_async:
-                        decoder.submit(self.vae_decoder.cached_decode_withflag, self.scheduler.latents[:, start : start + frames], start == 0, start + frames == total)
+                    logger.info(f"start chunk {start // chunk + 1}/{num_chunks}")
+                    chunk_profile = ProfilingContext4DebugL1(f"chunk {start // chunk + 1}/{num_chunks} end_to_end") if streaming and not decoder.is_async else nullcontext()
+                    with chunk_profile:
+                        frames = min(chunk, total - start)
+                        self._prepare_chunk_inputs(start, frames)
+                        self._run_steps(start, frames, total, step_indices)
+                        with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                            self.scheduler.step_pre(self.scheduler.infer_steps - 1, chunk_start=start, cache_update=True)
+                        decode_args = (self.scheduler.latents[:, start : start + frames], start == 0, start + frames == total)
+                        if overlap_kv_vae:
+                            decoder.submit(self.vae_decoder.cached_decode_withflag, *decode_args)
+                        with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
+                            self.model.infer(self.inputs)
+                        if overlap_kv_vae:
+                            torch.cuda.current_stream(AI_DEVICE).synchronize()
+                            pixels = decoder.wait_for_chunk()
+                            if on_chunk is not None:
+                                on_chunk(pixels, start // chunk)
+                        elif streaming:
+                            decoder.submit(self.vae_decoder.cached_decode_withflag, *decode_args)
                 decoded_chunks = decoder.finish()
         finally:
             decoder.finish()
@@ -238,7 +307,7 @@ class EdenLiveARRunner(EdenLiveRunner):
                 for pool in pools.values():
                     pool.sync_all()
             self.model.transformer_infer.cache_pools = {}
-        return torch.cat(decoded_chunks, dim=2) if decoder.is_async else self.run_vae_decoder(self.scheduler.latents)
+        return torch.cat(decoded_chunks, dim=2) if streaming else self.run_vae_decoder(self.scheduler.latents)
 
 
 @RUNNER_REGISTER("wan21_edenlive")

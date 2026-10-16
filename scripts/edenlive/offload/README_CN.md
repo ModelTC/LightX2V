@@ -55,3 +55,42 @@ phase offload 未接入。公共 warmup gate 仍拒绝 disagg、unload_modules �
 | lazy block / SP / TP / LoRA 组合 | 本轮未验证 |
 
 `test_cases/test_edenlive_warmup.py` 和 `test_cases/test_edenlive_quantized.py` 共 13 项通过，4 项 ConvRot 测试因缺少依赖跳过。视频测试使用仓库 `cryo-crossing` 输入；compile 和不同组件 offload 路径允许 BF16 数值差异。5B 25 帧同模式 eager/compile 对比的解码 RGB 平均绝对差约 4/255，PSNR 约 30.94 dB。以上是功能验证结果。
+
+## Wan2.2 LightVAE TLR decoder
+
+`configs/edenlive/quantized/wan22_5b_few_step_fp8_lightvae.json` 为 5B AR 提供 FP8 + compile + warmup + LightVAE 配置，`num_frames=null`。运行时通过安装的 `lightvae` 包调用 `lightvae.wan22_lightvae_decoder.Decoder`，保留包内 TLR 低秩计算及自动选择的 Triton kernel。模型结构直接读取权重中的 metadata。
+
+LightVAE 是可选依赖。包索引提供发行版时可用 `python -m pip install lightvae`。当前验证环境的索引尚未提供该包，使用本地 LightVAE 工程进行普通 pip 安装：
+
+```bash
+python -m pip install /path/to/LightVAE
+```
+
+无需把 LightVAE 源码加入 `PYTHONPATH`。配置中指定：
+
+```json
+"use_lightvae": true,
+"lightvae_path": "/data/nvme6/gushiqiao/models/LightVAE/lightvae-lite-wan22-decoder.safetensors"
+```
+
+原版 Wan2.2 VAE 继续编码首帧；LightVAE decoder 使用同一个编码器的 mean/std，将 DiT latent 反归一化后解码。组件加载、lazy load 和 VAE CPU offload 沿用现有流程。推理入口使用 `--model_cls wan22_edenlive_ar`，将 `--config_json` 切换为上述配置即可。
+
+默认仍在 AR 去噪完成后整段解码。逐块解码使用 `configs/edenlive/streaming/` 下的 LightTAE / LightVAE 同步和异步配置，均为 16 FPS、FP8 + compile + warmup、`num_frames=null`。`streaming_vae=true` 开启同步出块，`ar_config.async_vae_decode=true` 将解码放到独立 CUDA stream，与下一块 DiT 重叠。
+
+LightVAE 流式模式需要安装带 `Decoder.new_cache()` 和 `Decoder.forward(..., cache=...)` 的新版包；更新本地工程后重新执行上面的 pip 安装命令即可。跨块保留 TLR 和时间上采样缓存，原版 VAE 继续负责首帧编码。LightTAE 同样保留 MemBlock 历史，只对首块裁掉启动帧。
+
+通过 Python API 接收每个解码完成的块：
+
+```python
+def on_chunk(pixels, index, is_last):
+    # pixels: GPU tensor, [1, 3, T, H, W]，范围 [-1, 1]；index 从 0 开始。
+    # 3 个 latent 的首块为 9 帧，后续完整块为 12 帧。
+    print(index, pixels.shape, is_last)
+
+pipe.runner.set_chunk_callback(on_chunk)
+pipe.generate(...)  # 正常传入 prompt、image_path、video_path 等参数
+```
+
+同步模式在推理线程回调；异步模式由独立工作线程提交 VAE 计算，并在该块 CUDA event 完成后按序回调，主线程可继续提交下一块 DiT。回调应尽快返回，慢速传输可交给自己的队列。推理结束前会等待全部回调，回调异常会向调用方抛出。现有完整视频返回和保存流程仍保留，因此当前还会累计像素块供最终拼接。
+
+`scripts/edenlive/wan22_5b_few_step.sh` 默认选择 LightTAE、16 FPS、同步流式配置。可选设置 `ar_config.overlap_kv_vae=true`，让同一块的 KV commit 和 VAE 解码在独立 CUDA stream 并行；两者完成后在推理线程回调出块，再开始下一块 DINO / DiT。该模式保持 `ar_config.async_vae_decode=false`，不跨块重叠解码。当前 H200 1280×704 单轮实测没有提速，因此默认关闭。
