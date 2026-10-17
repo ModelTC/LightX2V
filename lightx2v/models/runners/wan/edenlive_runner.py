@@ -9,7 +9,6 @@ from lightx2v.models.input_encoders.edenlive.recording import RecordingReader, f
 from lightx2v.models.networks.wan.edenlive_model import EdenLiveARModel, EdenLiveModel
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, WanRunner
 from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler, EdenLiveScheduler
-from lightx2v.models.video_encoders.hf.wan.lightvae import Wan22LightVAEDecoder
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.input_info import EdenLiveInputInfo
@@ -87,6 +86,8 @@ class EdenLiveRunner:
     def load_vae_decoder(self):
         if self.is_wan21 or not self.config.get("use_lightvae", False):
             return super().load_vae_decoder()
+        from lightx2v.models.video_encoders.hf.wan.lightvae import Wan22LightVAEDecoder
+
         return Wan22LightVAEDecoder(
             vae_path=self.config["lightvae_path"],
             scale=self.vae_encoder.scale,

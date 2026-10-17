@@ -18,13 +18,6 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
-try:
-    from comfy_kitchen.tensor.int8 import TensorWiseINT8Layout
-except ImportError as error:
-    CONVROT_IMPORT_ERROR = error
-else:
-    CONVROT_IMPORT_ERROR = None
-
 PREFIX = "model.module.encoder."
 LINEAR_PATTERN = re.compile(r"^(?:backbone\.layer\.\d+\.(?:attention\.[qkvo]_proj|mlp\.(?:up_proj|down_proj))|patch_projection)\.weight$")
 LAYER_PATTERN = re.compile(r"^backbone\.layer\.(\d+)\.")
@@ -90,8 +83,7 @@ def _validate_linear_names(names):
 @torch.no_grad()
 def convert_proxy_dino(source, output, device="cpu", group_size=256, overwrite=False, report_path=None):
     """Save an independent checkpoint compatible with ``int8-convrot`` modules."""
-    if CONVROT_IMPORT_ERROR is not None:
-        raise ImportError("ProxyDINO INT8 ConvRot conversion requires comfy-kitchen") from CONVROT_IMPORT_ERROR
+    from comfy_kitchen.tensor.int8 import TensorWiseINT8Layout
 
     source = Path(source).resolve()
     output = Path(output).resolve()

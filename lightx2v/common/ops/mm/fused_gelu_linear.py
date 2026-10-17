@@ -20,11 +20,6 @@ from triton.language.extra.cuda import libdevice
 from lightx2v.common.ops.mm.projection_group import _backend_apis_available, convrot_projection_mm
 
 try:
-    from torch.utils.cpp_extension import load
-except (ImportError, OSError, RuntimeError):
-    load = None
-
-try:
     import comfy_kitchen
     import comfy_kitchen.backends.cuda as kitchen_cuda
 except ImportError:
@@ -107,7 +102,7 @@ def prepare_convrot_gelu_fusion(device=None):
     Build products use PyTorch's extension cache; no installed package changes.
     """
     global _extension, _extension_error
-    if load is None or not torch.cuda.is_available() or not _backend_apis_available():
+    if not torch.cuda.is_available() or not _backend_apis_available():
         return False
     device = torch.device("cuda", torch.cuda.current_device()) if device is None else torch.device(device)
     if device.type != "cuda" or torch.cuda.get_device_capability(device) != (12, 0):
@@ -121,6 +116,8 @@ def prepare_convrot_gelu_fusion(device=None):
                 return False
             if _extension is None:
                 try:
+                    from torch.utils.cpp_extension import load
+
                     library = load(
                         name="lightx2v_convrot_gelu_sm120",
                         sources=[str(Path(__file__).resolve().parents[4] / "lightx2v_kernel/csrc/quantization/convrot_gelu_quant.cu")],

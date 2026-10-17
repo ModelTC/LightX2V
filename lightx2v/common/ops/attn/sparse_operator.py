@@ -5,30 +5,6 @@ from lightx2v.utils.registry_factory import SPARSE_OPERATOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
-    from .kernels.sla_kernel import _attention
-except ImportError as exc:
-    _attention = None
-    _attention_import_error = exc
-else:
-    _attention_import_error = None
-
-try:
-    from .utils.sla_util import get_cuda_arch
-except ImportError as exc:
-    get_cuda_arch = None
-    _sla_import_error = exc
-else:
-    _sla_import_error = None
-
-try:
-    from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordinal_lut_triton, sage2_block_sparse_attn
-except ImportError as exc:
-    block_map_incremental_lut_triton = block_map_ordinal_lut_triton = sage2_block_sparse_attn = None
-    _sparge_import_error = exc
-else:
-    _sparge_import_error = None
-
-try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
     from flash_attn.cute.block_sparsity import BlockSparseTensorsTorch
 except (ImportError, AttributeError) as exc:
@@ -61,8 +37,7 @@ except ImportError:
 @SPARSE_OPERATOR_REGISTER("sla_triton_operator")
 class SlaTritonOperator:
     def __init__(self, operator_setting={}):
-        if _attention_import_error is not None:
-            raise _attention_import_error
+        from .kernels.sla_kernel import _attention
 
         self._attention = _attention
         self.q_block_size = 128
@@ -99,10 +74,8 @@ class SlaTritonOperator:
 @SPARSE_OPERATOR_REGISTER("spas_sage2_operator")
 class SparseSageAttentionV2Operator:
     def __init__(self, operator_setting={}):
-        if _sla_import_error is not None:
-            raise _sla_import_error
-        if _sparge_import_error is not None:
-            raise _sparge_import_error
+        from .utils.sla_util import get_cuda_arch
+        from .utils.sparge_util import block_map_incremental_lut_triton, sage2_block_sparse_attn
 
         self._block_map_incremental_lut_triton = block_map_incremental_lut_triton
         self._sage2_block_sparse_attn = sage2_block_sparse_attn
@@ -141,8 +114,7 @@ class SparseSageAttentionV2Operator:
 @SPARSE_OPERATOR_REGISTER("spas_sage3_operator")
 class SparseSageAttentionV3Operator:
     def __init__(self, operator_setting={}):
-        if _sparge_import_error is not None:
-            raise _sparge_import_error
+        from .utils.sparge_util import block_map_ordinal_lut_triton
 
         self._block_map_ordinal_lut_triton = block_map_ordinal_lut_triton
         self.q_block_size = 128
@@ -177,8 +149,7 @@ class SparseSageAttentionV3Operator:
 @SPARSE_OPERATOR_REGISTER("spas_fa4_operator")
 class SparseFlashAttentionV4Operator:
     def __init__(self, operator_setting={}):
-        if _sparge_import_error is not None:
-            raise _sparge_import_error
+        from .utils.sparge_util import block_map_ordinal_lut_triton
 
         self._block_map_ordinal_lut_triton = block_map_ordinal_lut_triton
         self.q_block_size = 128

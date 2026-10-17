@@ -3,14 +3,6 @@ from .manager import KVCacheManager
 from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, SpatialRollingKVCachePool
 from .static import StaticKVCachePool
 
-try:
-    from . import quant
-except ImportError as error:
-    quant = None
-    _quant_import_error = error
-else:
-    _quant_import_error = None
-
 __all__ = [
     "FIFOKVCachePool",
     "HybridStepRollingKVCachePool",
@@ -25,8 +17,7 @@ __all__ = [
 
 def __getattr__(name):
     if name in {"KIVIQuantRollingKVCachePool", "StepKiviQuantRollingKVCachePool"}:
-        if _quant_import_error is not None:
-            raise _quant_import_error
+        from . import quant
 
         return getattr(quant, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

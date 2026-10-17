@@ -10,14 +10,6 @@ from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, SpatialRo
 from .static import StaticKVCachePool
 from .utils import *
 
-try:
-    from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
-except ImportError as error:
-    KIVIQuantRollingKVCachePool = StepKiviQuantRollingKVCachePool = None
-    _kivi_import_error = error
-else:
-    _kivi_import_error = None
-
 SELF_ATTN_KV_CACHE_REGISTRY = {}
 
 
@@ -89,8 +81,7 @@ def _static_kwargs(_config, _ar_config, _kv_quant):
 
 def _get_self_attn_kv_cache_entry(scheme: str, step: bool):
     if scheme == "kivi" and (scheme, bool(step)) not in SELF_ATTN_KV_CACHE_REGISTRY:
-        if _kivi_import_error is not None:
-            raise _kivi_import_error
+        from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
 
         SELF_ATTN_KV_CACHE_REGISTRY.setdefault(("kivi", False), (KIVIQuantRollingKVCachePool, _kivi_kwargs))
         SELF_ATTN_KV_CACHE_REGISTRY.setdefault(("kivi", True), (StepKiviQuantRollingKVCachePool, _step_kivi_kwargs))

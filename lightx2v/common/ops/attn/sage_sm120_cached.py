@@ -7,47 +7,11 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from .sage_sm90_fused import make_transposed_v
 from .template import AttnWeightTemplate
 
-try:
-    from sageattention import _fused
-except ImportError as exc:
-    _fused = None
-    _fused_import_error = exc
-else:
-    _fused_import_error = None
-
-try:
-    from sageattention import _qattn_sm89
-except ImportError as exc:
-    _qattn_sm89 = None
-    _attn_import_error = exc
-else:
-    _attn_import_error = None
-
-try:
-    from sageattention.quant import per_warp_int8
-except ImportError as exc:
-    per_warp_int8 = None
-    _warp_import_error = exc
-else:
-    _warp_import_error = None
-
-try:
-    from sageattention.quant import per_channel_fp8
-except ImportError as exc:
-    per_channel_fp8 = None
-    _channel_import_error = exc
-else:
-    _channel_import_error = None
-
 
 @torch.library.custom_op("lightx2v::sage_sm120_transposed_v", mutates_args=(), device_types="cuda")
 def sage_sm120_transposed_v(q: torch.Tensor, k: torch.Tensor, transposed_v: torch.Tensor) -> torch.Tensor:
-    if _fused_import_error is not None:
-        raise _fused_import_error
-    if _attn_import_error is not None:
-        raise _attn_import_error
-    if _warp_import_error is not None:
-        raise _warp_import_error
+    from sageattention import _fused, _qattn_sm89
+    from sageattention.quant import per_warp_int8
 
     dim = q.shape[-1]
     if dim not in (64, 128):
@@ -68,10 +32,8 @@ def sage_sm120_transposed_v_fake(q, k, transposed_v):
 
 def prepare_sage_sm120_kv(k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Quantize static [tokens, heads, dim] K/V exactly as native SM120 Sage."""
-    if _fused_import_error is not None:
-        raise _fused_import_error
-    if _channel_import_error is not None:
-        raise _channel_import_error
+    from sageattention import _fused
+    from sageattention.quant import per_channel_fp8
 
     if k.ndim != 3 or k.shape != v.shape or k.shape[-1] not in (64, 128):
         raise ValueError("SM120 prepared K/V require matching [tokens, heads, dim] tensors with head_dim 64 or 128")
@@ -91,10 +53,7 @@ def prepare_sage_sm120_kv(k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tenso
 @torch.library.custom_op("lightx2v::sage_sm120_cached_kv", mutates_args=(), device_types="cuda")
 def sage_sm120_cached_kv(q: torch.Tensor, ki: torch.Tensor, ks: torch.Tensor, vf: torch.Tensor, vs: torch.Tensor) -> torch.Tensor:
     """Attend to prepared static K/V, quantizing only the current query."""
-    if _fused_import_error is not None:
-        raise _fused_import_error
-    if _attn_import_error is not None:
-        raise _attn_import_error
+    from sageattention import _fused, _qattn_sm89
 
     q = q.contiguous().unsqueeze(0)
     dim = q.shape[-1]

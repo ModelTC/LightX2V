@@ -5,7 +5,6 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
@@ -29,15 +28,14 @@ try:
 except ImportError:
     magi_register_custom_op = None
 
+from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
+
 try:
-    from .triton_ops import fused_norm_3drope, fused_qk_norm_3drope, fused_qk_rms_norm, rms_norm_kernel
+    from .triton_ops import fused_qk_rms_norm
 except ModuleNotFoundError as exc:
     if exc.name != "triton":
         raise
-    fused_norm_3drope = fused_qk_norm_3drope = fused_qk_rms_norm = rms_norm_kernel = None
-    _triton_import_error = exc
-else:
-    _triton_import_error = None
+    fused_qk_rms_norm = None
 
 
 @torch.library.custom_op(
@@ -509,8 +507,7 @@ class RMSWeightOnePass(RMSWeight):
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
-        if _triton_import_error is not None:
-            raise _triton_import_error
+        from .triton_ops import rms_norm_kernel
 
         self._kernel = rms_norm_kernel
         super().__init__(
@@ -596,8 +593,7 @@ class RMSWeightFusedQKNorm3DRope:
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
-        if _triton_import_error is not None:
-            raise _triton_import_error
+        from .triton_ops import fused_qk_norm_3drope
 
         self._kernel = fused_qk_norm_3drope
         self.q_weight_name_t = q_weight_name_t
@@ -665,8 +661,7 @@ class RMSWeightDualNorm3DRope:
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
-        if _triton_import_error is not None:
-            raise _triton_import_error
+        from .triton_ops import fused_norm_3drope
 
         self._kernel = fused_norm_3drope
         self.weight_name_t = weight_name_t

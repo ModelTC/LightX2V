@@ -1,5 +1,4 @@
 import torch
-from loguru import logger
 
 from .base import BaseKVCachePool
 from .utils import _kvcache_dma_stream_priority
@@ -171,6 +170,8 @@ class RollingKVCachePool(BaseKVCachePool):
         self._init_ring_metadata()
 
     def _init_kv_buffer_offload(self) -> None:
+        from loguru import logger
+
         L, N, H, D = self._num_layers, self._cache_size, self._num_heads, self._head_dim
         d = self._device
 
@@ -485,6 +486,8 @@ class StepRollingKVCachePool(RollingKVCachePool):
         self._init_ring_metadata()
 
     def _init_kv_buffer_offload(self) -> None:
+        from loguru import logger
+
         S, L, N, H, D = self.num_steps, self._num_layers, self._cache_size, self._num_heads, self._head_dim
         d = self._device
 
@@ -627,6 +630,8 @@ class HybridStepRollingKVCachePool(StepRollingKVCachePool):
         self._init_ring_metadata()
 
     def _init_kv_buffer_offload(self) -> None:
+        from loguru import logger
+
         self._k_cpu_buckets = self._allocate_buckets("cpu", pin_memory=True)
         self._v_cpu_buckets = self._allocate_buckets("cpu", pin_memory=True)
         self._k_gpu_buf = torch.empty(self._cache_size, self._num_heads, self._head_dim, dtype=self._dtype, device=self._device)

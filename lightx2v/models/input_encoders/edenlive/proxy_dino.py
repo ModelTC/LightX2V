@@ -17,20 +17,6 @@ from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV2D_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, TENSOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-_flash_attn_import_error = None
-try:
-    from flash_attn import flash_attn_func
-except ImportError as error:
-    flash_attn_func = None
-    _flash_attn_import_error = error
-
-_sageattention_import_error = None
-try:
-    from sageattention import sageattn
-except ImportError as error:
-    sageattn = None
-    _sageattention_import_error = error
-
 
 class _ProxyAttention:
     """Dense batched attention; every input is [batch, tokens, heads, width]."""
@@ -38,12 +24,16 @@ class _ProxyAttention:
     def __init__(self, attention_type):
         self.attention_type = attention_type
         if attention_type == "flash_attn2":
-            if flash_attn_func is None:
-                raise ImportError("ProxyDINO flash_attn2 requires flash-attn") from _flash_attn_import_error
+            try:
+                from flash_attn import flash_attn_func
+            except ImportError as error:
+                raise ImportError("ProxyDINO flash_attn2 requires flash-attn") from error
             self.function = flash_attn_func
         elif attention_type == "sage_attn2":
-            if sageattn is None:
-                raise ImportError("ProxyDINO sage_attn2 requires sageattention") from _sageattention_import_error
+            try:
+                from sageattention import sageattn
+            except ImportError as error:
+                raise ImportError("ProxyDINO sage_attn2 requires sageattention") from error
             self.function = sageattn
         else:
             raise ValueError(f"Unsupported ProxyDINO attention_type: {attention_type!r}")

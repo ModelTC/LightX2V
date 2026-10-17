@@ -4,27 +4,9 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
 
-try:
-    from sageattention import _fused, _qattn_sm90
-    from sageattention.triton.quant_per_thread import quant_query_per_thread_int8_kernel
-except ImportError as exc:
-    _fused = _qattn_sm90 = quant_query_per_thread_int8_kernel = None
-    _sage_import_error = exc
-else:
-    _sage_import_error = None
-
-try:
-    from .kernels.sage_sm90_fused_quant import center_quant_key, update_transposed_v_kernel
-except ImportError as exc:
-    center_quant_key = update_transposed_v_kernel = None
-    _quant_import_error = exc
-else:
-    _quant_import_error = None
-
 
 def update_transposed_v(v, workspace, start):
-    if _quant_import_error is not None:
-        raise _quant_import_error
+    from .kernels.sage_sm90_fused_quant import update_transposed_v_kernel
 
     batch, length, heads, dim = v.shape
     if length:
@@ -41,10 +23,10 @@ def make_transposed_v(v, total_tokens):
 
 @torch.library.custom_op("lightx2v::sage_sm90_transposed_v", mutates_args=(), device_types="cuda")
 def sage_sm90_transposed_v(q: torch.Tensor, k: torch.Tensor, transposed_v: torch.Tensor) -> torch.Tensor:
-    if _sage_import_error is not None:
-        raise _sage_import_error
-    if _quant_import_error is not None:
-        raise _quant_import_error
+    from sageattention import _fused, _qattn_sm90
+    from sageattention.triton.quant_per_thread import quant_query_per_thread_int8_kernel
+
+    from .kernels.sage_sm90_fused_quant import center_quant_key
 
     batch, queries, q_heads, dim = q.shape
     if dim not in (64, 128):

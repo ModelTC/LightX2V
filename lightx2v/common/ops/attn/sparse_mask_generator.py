@@ -9,22 +9,6 @@ from lightx2v.utils.registry_factory import SPARSE_MASK_GENERATOR_REGISTER
 from .nbhd_attn import generate_nbhd_mask
 from .svg_attn import diagonal_band_mask_from_sparsity, get_attention_mask, wan_hidden_states_placement, wan_sparse_head_placement
 
-try:
-    from .utils.sla_util import get_block_map
-except ImportError as exc:
-    get_block_map = None
-    _sla_import_error = exc
-else:
-    _sla_import_error = None
-
-try:
-    from .utils.sparge_util import get_block_map_meansim
-except ImportError as exc:
-    get_block_map_meansim = None
-    _sparge_import_error = exc
-else:
-    _sparge_import_error = None
-
 
 class GeneralMaskGenerator(ABC):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
@@ -47,8 +31,7 @@ class GeneralMaskGenerator(ABC):
 @SPARSE_MASK_GENERATOR_REGISTER("sla_mask_generator")
 class SlaMaskGenerator(GeneralMaskGenerator):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
-        if _sla_import_error is not None:
-            raise _sla_import_error
+        from .utils.sla_util import get_block_map
 
         self._get_block_map = get_block_map
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
@@ -69,8 +52,7 @@ class SlaMaskGenerator(GeneralMaskGenerator):
 @SPARSE_MASK_GENERATOR_REGISTER("sparge_mask_generator")
 class SpargeMaskGenerator(GeneralMaskGenerator):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
-        if _sparge_import_error is not None:
-            raise _sparge_import_error
+        from .utils.sparge_util import get_block_map_meansim
 
         self._get_block_map_meansim = get_block_map_meansim
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
