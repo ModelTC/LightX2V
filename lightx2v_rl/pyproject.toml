@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lightx2v-rl"
+version = "0.1.0"
+description = "Few-step diffusion RL algorithms and external verl-omni adapters for LightX2V"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = ["torch>=2.6", "omegaconf>=2.3", "numpy>=1.26", "aiohttp>=3.9,<4", "Pillow"]
+
+[project.scripts]
+lightx2v-rl = "lightx2v_rl.train:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lightx2v_rl*"]
+
+[tool.setuptools.package-data]
+lightx2v_rl = ["configs/**/*.yaml", "rewards/_vendor/*/PROVENANCE*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

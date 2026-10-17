@@ -1,0 +1,18 @@
+diff --git a/verl_omni/trainer/diffusion/v1/trainer_base.py b/verl_omni/trainer/diffusion/v1/trainer_base.py
+index 083e683..00cfc1d 100644
+--- a/verl_omni/trainer/diffusion/v1/trainer_base.py
++++ b/verl_omni/trainer/diffusion/v1/trainer_base.py
+@@ -341,7 +341,12 @@ class PolicyGradientDiffusionTrainerV1(ABC):
+         # initialize SkipManager for V1 rollout skip support (no-op until configured).
+         SkipManager.init(self.config)
+ 
+-        self.logger = Tracking(
++        tracking_cls = Tracking
++        if tracking_fqn := self.config.trainer.get("tracking_class"):
++            from verl.utils.import_utils import load_class_from_fqn
++
++            tracking_cls = load_class_from_fqn(tracking_fqn, "Tracking")
++        self.logger = tracking_cls(
+             project_name=self.config.trainer.project_name,
+             experiment_name=self.config.trainer.experiment_name,
+             default_backend=self.config.trainer.logger,

@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # set path firstly
 lightx2v_path=/path/to/LightX2V

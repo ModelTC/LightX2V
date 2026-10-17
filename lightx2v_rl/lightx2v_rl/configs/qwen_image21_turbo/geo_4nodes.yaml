@@ -1,0 +1,19 @@
+# Legacy four-node compatibility profile; new deployments use geo_5nodes.
+inherits:
+- geo
+- cluster
+actor_rollout_ref:
+  actor:
+    ppo_mini_batch_size: 24
+    ppo_epochs: 1
+  rollout:
+    agent:
+      num_workers: 24
+data:
+  train_batch_size: 24
+  gen_batch_size: 24
+  val_batch_size: 24
+trainer:
+  nnodes: 3
+  experiment_name: qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}_32gpu
+  default_local_dir: lightx2v_rl/outputs/qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}_32gpu
