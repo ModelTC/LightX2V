@@ -45,13 +45,13 @@ def center_quant_key(k, mean, output, scale, length: tl.constexpr, heads: tl.con
 
 
 @triton.jit
-def update_transposed_v_kernel(v, output, length, heads: tl.constexpr, dim: tl.constexpr, padded, start):
+def update_transposed_v_kernel(v, output, length, heads: tl.constexpr, dim: tl.constexpr, padded, start, stride_b, stride_n, stride_h, stride_d):
     rows = tl.program_id(0) * 32 + tl.arange(0, 32)
     head = tl.program_id(1)
     batch = tl.program_id(2) // triton.cdiv(dim, 32)
     columns = (tl.program_id(2) % triton.cdiv(dim, 32)) * 32 + tl.arange(0, 32)
     mask = (rows[:, None] < length) & (columns[None, :] < dim)
-    values = tl.load(v + ((batch * length + rows[:, None]) * heads + head) * dim + columns[None, :], mask, 0)
+    values = tl.load(v + batch * stride_b + rows[:, None] * stride_n + head * stride_h + columns[None, :] * stride_d, mask, 0)
     position = start + rows
     # Inverse of Sage's [0,1,8,9,2,3,10,11,4,5,12,13,6,7,14,15] permutation.
     permuted = (position & ~15) | (position & 1) | ((position & 8) >> 2) | ((position & 2) << 1) | ((position & 4) << 1)

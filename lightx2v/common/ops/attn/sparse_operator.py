@@ -34,15 +34,74 @@ except ImportError:
     flashinfer = None
 
 
+@torch.library.custom_op("lightx2v::sla_sage2_prepared", mutates_args=(), device_types="cuda")
+def sla_sage2_prepared(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, lut: torch.Tensor, valid: torch.Tensor, block_q: int, block_k: int, arch: str) -> torch.Tensor:
+    from .utils.sparge_util import sage2_block_sparse_attn
+
+    return sage2_block_sparse_attn(q, k, v, lut, valid, block_q, block_k, arch)
+
+
+@sla_sage2_prepared.register_fake
+def _sla_sage2_prepared_fake(q, k, v, lut, valid, block_q, block_k, arch):
+    return torch.empty_like(q)
+
+
+@torch.library.custom_op("lightx2v::sla_triton_attention", mutates_args=(), device_types="cuda")
+def sla_triton_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, topk_ratio: float, block_q: int, block_k: int) -> torch.Tensor:
+    from .kernels.sla_kernel_ar import _attention_ar
+    from .utils.sla_util import get_block_map
+
+    qh = q.unsqueeze(0).transpose(1, 2).contiguous()
+    kh = k.unsqueeze(0).transpose(1, 2).contiguous()
+    mask, lut, topk = get_block_map(qh, kh, topk_ratio, block_q, block_k)
+    output = _attention_ar.apply(q.contiguous().unsqueeze(0), k.contiguous().unsqueeze(0), v.contiguous().unsqueeze(0), mask, lut, topk, block_q, block_k)
+    return output.reshape(q.shape[0], -1)
+
+
+@sla_triton_attention.register_fake
+def _sla_triton_attention_fake(q, k, v, topk_ratio, block_q, block_k):
+    return q.new_empty((q.shape[0], q.shape[1] * q.shape[2]))
+
+
+@torch.library.custom_op("lightx2v::sla_sage2_attention", mutates_args=(), device_types="cuda")
+def sla_sage2_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, topk_ratio: float, block_q: int, block_k: int, arch: str) -> torch.Tensor:
+    from .utils.sla_util import get_block_map
+    from .utils.sparge_util import block_map_incremental_lut_triton, sage2_block_sparse_attn
+
+    qh = q.unsqueeze(0).transpose(1, 2).contiguous()
+    kh = k.unsqueeze(0).transpose(1, 2).contiguous()
+    vh = v.unsqueeze(0).transpose(1, 2).contiguous()
+    mask, _, _ = get_block_map(qh, kh, topk_ratio, block_q, block_k)
+    lut, valid = block_map_incremental_lut_triton(mask)
+    output = sage2_block_sparse_attn(qh, kh, vh, lut, valid, block_q, block_k, arch)
+    return output.transpose(1, 2).reshape(q.shape[0], -1)
+
+
+@sla_sage2_attention.register_fake
+def _sla_sage2_attention_fake(q, k, v, topk_ratio, block_q, block_k, arch):
+    return q.new_empty((q.shape[0], q.shape[1] * q.shape[2]))
+
+
 @SPARSE_OPERATOR_REGISTER("sla_triton_operator")
 class SlaTritonOperator:
     def __init__(self, operator_setting={}):
         from .kernels.sla_kernel import _attention
+        from .kernels.sla_kernel_ar import _attention_ar
 
         self._attention = _attention
+        self._attention_ar = _attention_ar
         self.q_block_size = 128
         self.k_block_size = 128
         self.operator_setting = operator_setting
+
+    def apply_sla(self, q, k, v, topk_ratio, **kwargs):
+        return sla_triton_attention(q, k, v, topk_ratio, self.q_block_size, self.k_block_size)
+
+    def apply_lut(self, q, k, v, mask, lut, topk, **kwargs):
+        """Use SLA's prepared router directly, including unequal AR Q/K lengths."""
+        q, k, v = q.contiguous().unsqueeze(0), k.contiguous().unsqueeze(0), v.contiguous().unsqueeze(0)
+        out = self._attention_ar.apply(q, k, v, mask, lut, topk, self.q_block_size, self.k_block_size)
+        return out.reshape(q.shape[1], -1)
 
     def __call__(
         self,
@@ -73,12 +132,15 @@ class SlaTritonOperator:
 
 @SPARSE_OPERATOR_REGISTER("spas_sage2_operator")
 class SparseSageAttentionV2Operator:
+    reuse_prepared_qk = True
+
     def __init__(self, operator_setting={}):
         from .utils.sla_util import get_cuda_arch
         from .utils.sparge_util import block_map_incremental_lut_triton, sage2_block_sparse_attn
 
         self._block_map_incremental_lut_triton = block_map_incremental_lut_triton
         self._sage2_block_sparse_attn = sage2_block_sparse_attn
+        self._sage2_prepared = sla_sage2_prepared
         self.operator_setting = operator_setting
 
         self.arch = get_cuda_arch(torch.cuda.current_device())
@@ -86,6 +148,21 @@ class SparseSageAttentionV2Operator:
             self.q_block_size, self.k_block_size = 64, 128
         else:
             self.q_block_size, self.k_block_size = 128, 64
+
+    def apply_sla(self, q, k, v, topk_ratio, **kwargs):
+        return sla_sage2_attention(q, k, v, topk_ratio, self.q_block_size, self.k_block_size, self.arch)
+
+    def apply_lut(self, q, k, v, mask, lut, topk, prepared_qk=None, **kwargs):
+        """Consume SLA's mask without inspecting its population on the CPU."""
+        if prepared_qk is None:
+            q = q.unsqueeze(0).transpose(1, 2).contiguous()
+            k = k.unsqueeze(0).transpose(1, 2).contiguous()
+        else:
+            q, k = prepared_qk
+        v = v.unsqueeze(0).transpose(1, 2).contiguous()
+        incremental_lut, valid_block_num = self._block_map_incremental_lut_triton(mask)
+        out = self._sage2_prepared(q, k, v, incremental_lut, valid_block_num, self.q_block_size, self.k_block_size, self.arch)
+        return out.transpose(1, 2).reshape(q.shape[2], -1)
 
     def __call__(
         self,

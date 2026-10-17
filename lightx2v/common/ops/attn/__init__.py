@@ -13,6 +13,8 @@ from .rainfusion_attn import RainfusionAttnWeight
 from .ring_attn import RingAttnWeight
 from .sage_attn import SageAttn2KInt8VFP8Weight, SageAttn2Weight, SageAttn3Weight, SparseSageAttn2Weight, SparseSageAttn3Weight
 from .sage_sm90_fused import SageAttn2Sm90FusedWeight
+from .sage_sm120_cached import SageAttn2Sm120CachedWeight
+from .sla_sm120_cached import SlaSage2Sm120CachedWeight
 from .sol_attn import SolAttnWeight
 from .sparge_attn import SpargeAttnWeight
 from .sparse_mask_generator import NbhdMaskGenerator, SlaMaskGenerator, SpargeMaskGenerator, SvgMaskGenerator

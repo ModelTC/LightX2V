@@ -35,14 +35,21 @@ class SlaMaskGenerator(GeneralMaskGenerator):
 
         self._get_block_map = get_block_map
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
-        sparsity_ratio = self.sparse_setting.get("sparsity_ratio", 0.8)
+        sparsity_ratio = float(self.sparse_setting.get("sparsity_ratio", 0.8))
+        if not 0.0 <= sparsity_ratio < 1.0:
+            raise ValueError(f"SLA sparsity_ratio must be in [0, 1), got {sparsity_ratio}")
         self.topk_ratio = 1 - sparsity_ratio
 
-    def __call__(self, q, k):
+    def prepare(self, q, k, return_qk=False):
+        """Return the router's mask and LUT without a host synchronization."""
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
-        sparse_map, lut, topk = self._get_block_map(q, k, topk_ratio=self.topk_ratio, BLKQ=self.q_block_size, BLKK=self.k_block_size)
+        prepared = self._get_block_map(q, k, topk_ratio=self.topk_ratio, BLKQ=self.q_block_size, BLKK=self.k_block_size)
+        return (*prepared, (q, k)) if return_qk else prepared
+
+    def __call__(self, q, k):
+        sparse_map, _, _ = self.prepare(q, k)
         # return: [B, H, Q_block_num, K_block_num]
         return sparse_map
 

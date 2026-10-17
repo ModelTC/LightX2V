@@ -2,6 +2,7 @@ from loguru import logger
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, SPARSE_MASK_GENERATOR_REGISTER, SPARSE_OPERATOR_REGISTER
 
+from .sparse_mask_generator import SlaMaskGenerator
 from .template import AttnWeightTemplate
 
 
@@ -40,6 +41,31 @@ class GeneralSparseAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        if isinstance(self.mask_generator, SlaMaskGenerator) and hasattr(self.operator, "apply_sla") and q.is_cuda:
+            # Keep the shape-dependent router within the CUDA custom op. Python
+            # top-k sizing otherwise specializes each growing AR history length,
+            # and compiler fusion can alter the router's BF16 rounding.
+            return self.operator.apply_sla(q, k, v, self.mask_generator.topk_ratio)
+        if isinstance(self.mask_generator, SlaMaskGenerator) and hasattr(self.operator, "apply_lut"):
+            if getattr(self.operator, "reuse_prepared_qk", False):
+                mask, lut, topk, prepared_qk = self.mask_generator.prepare(q, k, return_qk=True)
+                kwargs["prepared_qk"] = prepared_qk
+            else:
+                mask, lut, topk = self.mask_generator.prepare(q, k)
+            return self.operator.apply_lut(
+                q,
+                k,
+                v,
+                mask,
+                lut,
+                topk,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_kv,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_kv=max_seqlen_kv,
+                **kwargs,
+            )
+
         # Generate sparse mask
         mask = self.mask_generator(q, k)
 

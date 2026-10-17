@@ -10,6 +10,8 @@ def compress_kernel(
     L,
     D: tl.constexpr,
     BLOCK_L: tl.constexpr,
+    CENTER=None,
+    CENTERED: tl.constexpr = False,
 ):
     idx_l = tl.program_id(0)
     idx_bh = tl.program_id(1)
@@ -26,28 +28,38 @@ def compress_kernel(
         mask=offs_l[:, None] < L,
         other=0.0,
     )
+    if CENTERED:
+        center = tl.load(CENTER + idx_bh * D + offs_d).to(tl.float32)
+        # Match the materialized subtraction's rounding before FP32 reduction.
+        # Padding must remain zero after centering the partial final block.
+        centered = (x.to(tl.float32) - center[None, :]).to(x.dtype)
+        x = tl.where(offs_l[:, None] < L, centered, 0.0)
 
     nx = min(BLOCK_L, L - idx_l * BLOCK_L)
     x_mean = tl.sum(x, axis=0, dtype=tl.float32) / nx
     tl.store(XM + xm_offset + idx_l * D + offs_d, x_mean.to(XM.dtype.element_ty))
 
 
-def mean_pool(x, BLK):
+def mean_pool(x, BLK, center=None):
     assert x.is_contiguous()
 
     B, H, L, D = x.shape
+    if center is not None:
+        assert center.shape == (B, H, 1, D)
+        assert center.is_contiguous() and center.dtype == x.dtype and center.device == x.device
     L_BLOCKS = (L + BLK - 1) // BLK
     x_mean = torch.empty((B, H, L_BLOCKS, D), device=x.device, dtype=x.dtype)
 
     grid = (L_BLOCKS, B * H)
-    compress_kernel[grid](x, x_mean, L, D, BLK)
+    compress_kernel[grid](x, x_mean, L, D, BLK, center, CENTERED=center is not None)
     return x_mean
 
 
-def get_block_map(q, k, topk_ratio, BLKQ=64, BLKK=64):
-    arg_k = k - torch.mean(k, dim=-2, keepdim=True)  # smooth-k technique in SageAttention
+def get_block_map(q, k, topk_ratio, BLKQ=64, BLKK=64, fuse_centered_pool=True, center=None):
+    if center is None:
+        center = torch.mean(k, dim=-2, keepdim=True)  # smooth-k technique in SageAttention
     pooled_qblocks = mean_pool(q, BLKQ)
-    pooled_kblocks = mean_pool(arg_k, BLKK)
+    pooled_kblocks = mean_pool(k, BLKK, center) if fuse_centered_pool else mean_pool(k - center, BLKK)
 
     # GQA
     num_q_heads = q.size(1)

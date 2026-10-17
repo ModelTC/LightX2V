@@ -89,6 +89,9 @@ def test_history_reuse_matches_ring_cache_through_eviction_and_cfg(monkeypatch):
         ("sage_attn2", True, True),
         ("sage_attn2_sm90_fused", True, True),
         ("sage_attn2", True, False),
+        ("sage_attn2_sm120_cached", False, True),
+        ("sage_attn2_sm120_cached", True, True),
+        ("sage_attn2_sm120_cached", True, False),
         ("sage_attn2_sm90_fused", True, False),
     ],
 )
@@ -98,15 +101,18 @@ def test_persistent_gpu_workspace_matches_materialized_history(backend, compile_
 
     if backend == "sage_attn2_sm90_fused" and torch.cuda.get_device_capability() != (9, 0):
         pytest.skip("SM90 required")
+    if backend == "sage_attn2_sm120_cached" and torch.cuda.get_device_capability() != (12, 0):
+        pytest.skip("SM120 required")
     reference, cached = make_infer(False), make_infer(reuse_history)
     for infer in [reference, cached]:
         infer.num_heads, infer.head_dim = 2, 128
-        infer.transposed_v_cache = backend == "sage_attn2_sm90_fused"
+        infer.transposed_v_cache = backend in ("sage_attn2_sm90_fused", "sage_attn2_sm120_cached")
         for branch in [True, False]:
             pool = RollingKVCachePool(1, 18 * 15, 2, 128, torch.bfloat16, torch.device("cuda"))
             pool._init_kv_buffer()
             infer.cache_pools[branch] = pool
     phase = SimpleNamespace(rope=FlashInferRope(), self_attn_1=ATTN_WEIGHT_REGISTER[backend]())
+    reference_phase = SimpleNamespace(rope=phase.rope, self_attn_1=ATTN_WEIGHT_REGISTER["sage_attn2"]()) if backend == "sage_attn2_sm120_cached" else phase
     if compile_attention:
         torch.compiler.reset()
     compute = torch.compile(cached._self_attention, fullgraph=True, dynamic=None, options={"emulate_precision_casts": True}) if compile_attention else cached._self_attention
@@ -124,7 +130,7 @@ def test_persistent_gpu_workspace_matches_materialized_history(backend, compile_
                         angle = torch.arange(length, device="cuda").view(-1, 1, 1) * torch.linspace(0.001, 0.1, 64, device="cuda")
                         infer.key_freqs = phase.rope.prepare_freqs(torch.polar(torch.ones_like(angle), angle))
                         infer.query_freqs = infer.key_freqs[-frames * 15 :]
-                    expected = run_attention(reference, phase, q.clone(), k.clone(), v.clone(), (frames, 3, 5))
+                    expected = run_attention(reference, reference_phase, q.clone(), k.clone(), v.clone(), (frames, 3, 5))
                     raw_k, raw_v = k.clone(), v.clone()
                     actual = run_attention(cached, phase, q.clone(), raw_k, raw_v, (frames, 3, 5), compute)
                     torch.testing.assert_close(raw_k, k, rtol=0, atol=0)
@@ -146,6 +152,7 @@ def test_cross_kv_refreshes_for_prompt_and_guidance_branch(monkeypatch):
 
     infer = EdenLiveARTransformerInfer.__new__(EdenLiveARTransformerInfer)
     infer.reuse_cross_kv = True
+    infer.reuse_quantized_cross_kv = False
     infer.cross_kv_cache = {}
     infer.has_image_context = False
     infer.scheduler = SimpleNamespace(infer_condition=True)

@@ -554,7 +554,8 @@ class WanSelfAttention(WeightModule):
 
         # general_sparse_attn setting
         if self.config["self_attn_1_type"] == "general_sparse_attn":
-            attnmap_frame_num = ((self.config["num_frames"] - 1) // self.config["vae_stride"][0] + 1) // self.config["patch_size"][0]
+            num_frames = self.config.get("num_frames")
+            attnmap_frame_num = None if num_frames is None else ((num_frames - 1) // self.config["vae_stride"][0] + 1) // self.config["patch_size"][0]
             attention_weights_cls.attnmap_frame_num = attnmap_frame_num
             general_sparse_attn_setting = self.config.get("general_sparse_attn_setting", {})
             if "sparse_mask_generator" in general_sparse_attn_setting:
@@ -567,6 +568,8 @@ class WanSelfAttention(WeightModule):
                 attention_weights_cls.operator_setting = general_sparse_attn_setting["operator_setting"]
 
         attention_weight = attention_weights_cls()
+        if self.config["self_attn_1_type"] == "sla_sage2_sm120_cached":
+            attention_weight.set_config(self.config.get("general_sparse_attn_setting", {}).get("sparse_setting", {}))
         if self.config["self_attn_1_type"] == "sol_attn":
             attention_weight.set_config(self.config.get("sol_attn_setting", {}))
         self.add_module("self_attn_1", attention_weight)

@@ -11,7 +11,7 @@ def update_transposed_v(v, workspace, start):
     batch, length, heads, dim = v.shape
     if length:
         grid = ((length + 31) // 32, heads, batch * ((dim + 31) // 32))
-        update_transposed_v_kernel[grid](v, workspace, length, heads, dim, workspace.shape[-1], start)
+        update_transposed_v_kernel[grid](v, workspace, length, heads, dim, workspace.shape[-1], start, *v.stride())
 
 
 def make_transposed_v(v, total_tokens):

@@ -37,12 +37,27 @@ class EdenLiveRunner:
         try:
             return super().run_pipeline(input_info)
         finally:
+            model = getattr(self, "model", None)
+            if model is not None:
+                model.transformer_infer.clear_request_state()
+                pre_infer = getattr(model, "pre_infer", None)
+                if pre_infer is not None and hasattr(pre_infer, "clear_request_state"):
+                    pre_infer.clear_request_state()
             if self.recording_reader is not None:
                 self.recording_reader.close()
                 self.recording_reader = None
 
     def init_scheduler(self):
         self.scheduler = self.scheduler_class(self.config)
+
+    def get_supported_request_fields(self, task):
+        fields = super().get_supported_request_fields(task)
+        sparse = self.config.get("general_sparse_attn_setting", {})
+        if self.config.get("self_attn_1_type") == "general_sparse_attn" and sparse.get("sparse_mask_generator") == "sla_mask_generator":
+            # SLA routes from the current Q/K lengths, including a short final
+            # chunk. It does not need the fixed frame count used by SVG/nbhd.
+            fields = fields | {"num_frames"}
+        return fields
 
     def load_transformer(self):
         return self.model_class(self.config["model_path"], self.config, self.init_device)
@@ -52,7 +67,16 @@ class EdenLiveRunner:
         self.proxy_encoder = self.load_proxy_encoder()
 
     def load_proxy_encoder(self):
-        return ProxyDINO(self.config["model_path"], self.config["proxy_resize_mode"])
+        return ProxyDINO(
+            self.config["model_path"],
+            self.config["proxy_resize_mode"],
+            use_cuda_graph=self.config.get("proxy_cuda_graph", False),
+            attention_type=self.config.get("proxy_attn_type", "torch_sdpa"),
+            quantized_ckpt=self.config.get("proxy_quantized_ckpt"),
+            residual_dtype=self.config.get("proxy_residual_dtype", "float32"),
+            fuse_ops=self.config.get("proxy_fuse_ops", False),
+            share_qkv_quant=self.config.get("proxy_share_qkv_activation_quant", False),
+        )
 
     def load_vae(self):
         if self.is_wan21 or not self.config.get("use_lightvae", False):
@@ -214,6 +238,9 @@ class EdenLiveRunner:
     def clear_warmup_state(self):
         self.scheduler.clear()
         self.model.transformer_infer.clear_request_state()
+        pre_infer = getattr(self.model, "pre_infer", None)
+        if pre_infer is not None and hasattr(pre_infer, "clear_request_state"):
+            pre_infer.clear_request_state()
 
     def clean_lazy_load_warmup(self):
         super().clean_lazy_load_warmup()
@@ -221,6 +248,9 @@ class EdenLiveRunner:
 
     def end_run(self):
         self.model.transformer_infer.clear_request_state()
+        pre_infer = getattr(self.model, "pre_infer", None)
+        if pre_infer is not None and hasattr(pre_infer, "clear_request_state"):
+            pre_infer.clear_request_state()
         self.proxy_pixels = None
         self.prompt_embeddings = {}
         self.prompts = []
