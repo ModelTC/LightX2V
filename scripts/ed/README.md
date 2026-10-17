@@ -178,6 +178,8 @@ For the supplied Wan2.2 LightTAE checkpoint, decoding uses:
 
 The original Wan VAE still encodes the cover frame. `use_cuda_graph` controls graph use for both DiT and ProxyDINO; unsupported execution paths use their regular compiled/eager implementation.
 
+LightTAE's streaming tensor decoder follows `use_compile`. Its persistent memory and first/last-chunk handling are retained, while progress-bar work stays outside compilation. Set the existing `vae_use_compile` override to `false` for an eager-decoder comparison. First use of a new shape includes compilation and belongs in warmup. Whole-video decoding without persistent memory stays eager; reaching the compiled shape-cache limit also falls back to eager.
+
 ## 5. Optimization Coverage
 
 | Area | Optimization and scope |
@@ -192,7 +194,7 @@ The original Wan VAE still encodes the cover frame. `use_cuda_graph` controls gr
 | KV commit | In the final layer's cache-only pass, compute required K/V and skip the unused attention/FFN/output suffix. |
 | ProxyDINO | GPU bilinear preprocessing, fused Q/K RoPE and normalization, model-dtype residuals, dense batched attention, and optional shared INT8 QKV quantization. |
 | Recording input | Decode sequentially and prefetch the next RGB uint8 chunk in a CPU worker. |
-| Compile / warmup | Compile eligible blocks and warm their execution before timed requests; first startup includes compilation. |
+| Compile / warmup | Compile eligible DiT blocks and the sequential LightTAE decoder; warm their shapes and streaming states before timed requests. |
 | CUDA Graph | Reuse eligible fixed-shape DiT and bilinear ProxyDINO graphs to reduce launch overhead. |
 | Decode / memory | Stream LightTAE chunks; release completed-request references and KV pools before assembling the final video. |
 

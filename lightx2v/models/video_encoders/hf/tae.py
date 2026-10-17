@@ -10,7 +10,9 @@ from collections import namedtuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from loguru import logger
 from safetensors.torch import load_file
+from torch._dynamo.exc import FailOnRecompileLimitHit
 from tqdm.auto import tqdm
 
 DecoderResult = namedtuple("DecoderResult", ("frame", "memory"))
@@ -79,7 +81,7 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar, memory=Non
     if parallel:
         x = x.reshape(N * T, C, H, W)
         # parallel over input timesteps, iterate over blocks
-        for b in tqdm(model, disable=not show_progress_bar):
+        for b in tqdm(model) if show_progress_bar else model:
             if isinstance(b, MemBlock):
                 NT, C, H, W = x.shape
                 T = NT // N
@@ -101,12 +103,12 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar, memory=Non
         work_queue = [TWorkItem(xt, 0) for t, xt in enumerate(x.reshape(N, T * C, H, W).chunk(T, dim=1))]
         # in addition to manually managing our queue, we also need to manually manage our progressbar.
         # we'll update it for every source node that we consume.
-        progress_bar = tqdm(range(T), disable=not show_progress_bar)
+        progress_bar = tqdm(range(T)) if show_progress_bar else None
         # we'll also need a separate addressable memory per node as well
         mem = [None] * len(model) if memory is None else memory
         while work_queue:
             xt, i = work_queue.pop(0)
-            if i == 0:
+            if i == 0 and progress_bar is not None:
                 # new source node consumed
                 progress_bar.update(1)
             if i == len(model):
@@ -156,12 +158,28 @@ def apply_model_with_memblocks(model, x, parallel, show_progress_bar, memory=Non
                     xt = b(xt)
                     # add successor to work queue
                     work_queue.insert(0, TWorkItem(xt, i + 1))
-        progress_bar.close()
+        if progress_bar is not None:
+            progress_bar.close()
         x = torch.stack(out, 1)
     return x
 
 
 class TAEHV(nn.Module):
+    def compile_decoder(self):
+        """Compile fixed-shape tensor work while keeping streaming state in the caller."""
+        if getattr(self, "_compiled_decoder", None) is not None:
+            return
+
+        def decode(x, memory):
+            return apply_model_with_memblocks(self.decoder, x, parallel=False, show_progress_bar=False, memory=memory)
+
+        self._compiled_decoder = torch.compile(
+            decode,
+            fullgraph=True,
+            dynamic=False,
+            options={"emulate_precision_casts": True, "layout_optimization": False, "conv_1x1_as_mm": False},
+        )
+
     def __init__(self, checkpoint_path="taehv.pth", decoder_time_upscale=(True, True), decoder_space_upscale=(True, True, True), patch_size=1, latent_channels=16, model_type="wan21"):
         """Initialize pretrained TAEHV from the given checkpoint.
 
@@ -289,7 +307,18 @@ class TAEHV(nn.Module):
               if False, frames will be processed sequentially.
         Returns NTCHW RGB tensor with ~[0, 1] values.
         """
-        x = apply_model_with_memblocks(self.decoder, x, parallel, show_progress_bar, memory=memory)
+        compiled_decoder = getattr(self, "_compiled_decoder", None)
+        if compiled_decoder is not None and not parallel and memory is not None:
+            try:
+                x = compiled_decoder(x, memory)
+            except FailOnRecompileLimitHit:
+                # Guard-limit failures precede execution, so streaming state
+                # has not advanced. Runtime failures must still propagate.
+                self._compiled_decoder = None
+                logger.warning("LightTAE compilation reached its shape cache limit; using eager decoding")
+                x = apply_model_with_memblocks(self.decoder, x, parallel, show_progress_bar, memory=memory)
+        else:
+            x = apply_model_with_memblocks(self.decoder, x, parallel, show_progress_bar, memory=memory)
         if self.model_type == "hy15":
             x = x.clamp_(-1, 1)
         else:

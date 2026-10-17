@@ -178,6 +178,8 @@ CUDA_VISIBLE_DEVICES=0 bash scripts/ed/run_hopper.sh
 
 首帧仍由原版 Wan VAE 编码。`use_cuda_graph` 同时控制 DiT 和 ProxyDINO 的 Graph；执行条件不满足时使用原有 compiled/eager 路径。
 
+LightTAE 的流式解码张量计算跟随 `use_compile` 开关，保留跨块缓存和首尾块处理，进度条不进入编译区域。使用现有 `vae_use_compile=false` 可单独对比 eager 解码；新形状首次执行包含编译开销，需在预热阶段完成。不带持久缓存的整段视频解码保持 eager；编译形状缓存达到上限时也回退到 eager。
+
 ## 5. 优化项
 
 | 范围 | 优化内容与适用场景 |
@@ -192,7 +194,7 @@ CUDA_VISIBLE_DEVICES=0 bash scripts/ed/run_hopper.sh
 | KV commit | 最后一层仅更新缓存的 pass 只计算所需 K/V，省去未使用的 attention、FFN 与输出后缀。 |
 | ProxyDINO | GPU bilinear 预处理、融合 Q/K RoPE 与归一化、模型 dtype 残差、batch dense attention，以及可选共享 INT8 QKV 量化。 |
 | 录屏输入 | 顺序解码，CPU worker 提前读取下一块 RGB uint8 数据。 |
-| Compile / warmup | 编译满足条件的 block，并在正式请求计时前预热；首次启动包含编译开销。 |
+| Compile / warmup | 编译满足条件的 DiT block 与 LightTAE 顺序解码器，并在正式计时前预热对应形状和流式缓存状态。 |
 | CUDA Graph | 复用满足固定形状条件的 DiT 与 bilinear ProxyDINO Graph，减少 kernel launch 开销。 |
 | 解码与显存 | 逐块 LightTAE 解码；拼接完整视频前释放已结束请求引用与 KV pool。 |
 

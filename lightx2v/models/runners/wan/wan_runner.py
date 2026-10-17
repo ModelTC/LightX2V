@@ -431,11 +431,17 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("vae_weight_dtype") is not None:
             vae_config["weight_dtype"] = self._resolve_vae_dtype(self.config["vae_weight_dtype"])
         if self.config.get("use_tae", False):
-            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
-            vae_decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+            vae_decoder = self.load_tiny_vae_decoder()
         else:
             vae_decoder = self.vae_cls(**vae_config)
         return vae_decoder
+
+    def load_tiny_vae_decoder(self):
+        tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
+        decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+        if self.config.get("vae_use_compile", self.config.get("use_compile", False)):
+            decoder.taehv.compile_decoder()
+        return decoder
 
     def load_vae(self):
         vae_encoder = self.load_vae_encoder()
@@ -1226,8 +1232,7 @@ class Wan22DenseRunner(WanRunner):
     def load_vae_decoder(self):
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         if self.config.get("use_tae", False):
-            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
-            return self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+            return self.load_tiny_vae_decoder()
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
 
     def get_warmup_image_encoder_output(self, latent_shape):
