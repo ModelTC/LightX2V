@@ -56,7 +56,14 @@ class MiniMaxH3CausalScheduler(MiniMaxH3Scheduler):
         self.audio_latents = self.condition_video.new_empty((0, 32))
         self.cache_start = self.evicted_rows = 0
 
-    def prepare_chunk(self, index, clean_audio):
+    def prepare_chunk(self, index, clean_audio, chunk=None):
+        if chunk is not None:
+            if index == len(self.plan.chunks):
+                self.plan.chunks.append(chunk)
+            elif 0 <= index < len(self.plan.chunks):
+                self.plan.chunks[index] = chunk
+            else:
+                raise ValueError(f"live chunk {index} skipped planned length {len(self.plan.chunks)}")
         self.prepared_inputs = None
         self.overwrite_condition = False
         self.condition_phase = False
@@ -68,7 +75,18 @@ class MiniMaxH3CausalScheduler(MiniMaxH3Scheduler):
         self.cache_start = prefix.shape[0]
         previous_end = self.plan.condition_layout.sequence_length if index == 0 else self.plan.prefix_positions(index - 1).shape[0] + self.plan.chunks[index - 1].positions.shape[0]
         self.evicted_rows = previous_end - self.cache_start
-        self.video_latents = self.video_noise[self.plan.chunks[index].video_rows].to(AI_DEVICE)
+        rows = self.plan.chunks[index].video_rows
+        if rows.stop <= self.video_noise.shape[0]:
+            self.video_latents = self.video_noise[rows].to(AI_DEVICE)
+        else:
+            num_latents = self.plan.chunks[index].video_frames.stop - self.plan.chunks[index].video_frames.start
+            noise = torch.randn(
+                (1, 24, num_latents, self.latent_height, self.latent_width),
+                generator=self.generator,
+                device=AI_DEVICE,
+                dtype=torch.float32,
+            )
+            self.video_latents = patchify_video_latents(noise, tuple(self.config["patch_size"]))
         self.audio_latents = clean_audio.to(AI_DEVICE)
 
     def step_pre(self, step_index):
