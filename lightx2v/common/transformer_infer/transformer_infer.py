@@ -11,6 +11,7 @@ class BaseTransformerInfer(ABC):
     def init_compile(self, config):
         self.use_compile = config.get("use_compile", False)
         self.compile_backend = config.get("compile_backend", "default")
+        self.compile_options = dict(config.get("compile_options", {}))
         self.compiled_blocks = {}
         self._compile_backend_obj = self._create_compile_backend() if self.use_compile else None
         if self._compile_backend_obj is not None:
@@ -35,7 +36,8 @@ class BaseTransformerInfer(ABC):
             return self.infer_block(block, *args)
 
         if self.compile_backend == "default":
-            compiled = torch.compile(block_runner, dynamic=None)
+            options = {"options": self.compile_options} if self.compile_options else {}
+            compiled = torch.compile(block_runner, dynamic=None, **options)
         else:
             compiled = torch.compile(block_runner, dynamic=None, backend=self._compile_backend_obj)
         self.compiled_blocks[key] = (block, compiled)

@@ -431,11 +431,17 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("vae_weight_dtype") is not None:
             vae_config["weight_dtype"] = self._resolve_vae_dtype(self.config["vae_weight_dtype"])
         if self.config.get("use_tae", False):
-            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
-            vae_decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+            vae_decoder = self.load_tiny_vae_decoder()
         else:
             vae_decoder = self.vae_cls(**vae_config)
         return vae_decoder
+
+    def load_tiny_vae_decoder(self):
+        tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
+        decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+        if self.config.get("vae_use_compile", self.config.get("use_compile", False)):
+            decoder.taehv.compile_decoder()
+        return decoder
 
     def load_vae(self):
         vae_encoder = self.load_vae_encoder()
@@ -1187,7 +1193,11 @@ class Wan22DenseRunner(WanRunner):
             default_pruning_rate = 0.75
 
         decoder_path = self.config.get("vae_path") or find_torch_model_path(self.config, filename=decoder_filename)
-        teacher_encoder_path = self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
+        teacher_encoder_path = (
+            decoder_path
+            if resolved_vae_type == "wan2.2"
+            else self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
+        )
 
         return {
             "vae_path": decoder_path,
@@ -1222,8 +1232,7 @@ class Wan22DenseRunner(WanRunner):
     def load_vae_decoder(self):
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         if self.config.get("use_tae", False):
-            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
-            return self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+            return self.load_tiny_vae_decoder()
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
 
     def get_warmup_image_encoder_output(self, latent_shape):
