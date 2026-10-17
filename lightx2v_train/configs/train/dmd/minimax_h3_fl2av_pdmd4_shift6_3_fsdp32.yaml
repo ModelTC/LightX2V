@@ -102,7 +102,7 @@ training:
     lr_warmup_iters: 0
     save_every_iters: 50
     # Local storage policy: unlike LoRA-only upstream, our fake is full-size.
-    save_total_limit: 5
+    save_total_limit: 2
     dmd:
         official_pdmd: true
         num_inference_steps: 4

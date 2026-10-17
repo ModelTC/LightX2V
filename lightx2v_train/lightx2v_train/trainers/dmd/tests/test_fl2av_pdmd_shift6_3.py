@@ -23,7 +23,7 @@ def recipe(steps, suffix="shift6_3"):
 
 
 class Fl2avPdmdShift63Test(unittest.TestCase):
-    def test_only_rollout_and_inference_shifts_change(self):
+    def test_only_shifts_and_checkpoint_limit_change(self):
         env = {"H3_MODEL_PATH": "/model", "H3_FL2AV_CACHE": "/cache", "H3_FL2AV_PDMD_OUTPUT": "/output"}
         with patch.dict(os.environ, env):
             for steps in (4, 8):
@@ -38,7 +38,10 @@ class Fl2avPdmdShift63Test(unittest.TestCase):
                     self.assertEqual((dmd["official_rollout_video_shift"], dmd["official_rollout_audio_shift"]), (6.0, 3.0))
                     self.assertEqual((matching["video_flow_shift"], matching["audio_flow_shift"]), (6.0, 3.0))
                     self.assertFalse(new["scheduler"]["time_shift_settings"]["do_time_shift"])
-                    # Normalizing these four fields must recover the original recipe exactly.
+                    self.assertEqual(new["training"]["save_every_iters"], 50)
+                    self.assertEqual(new["training"]["save_total_limit"], 2)
+                    # Normalize intentional overrides to recover the original recipe exactly.
+                    new["training"]["save_total_limit"] = old["training"]["save_total_limit"]
                     dmd["official_rollout_video_shift"] = 1.0
                     dmd["official_rollout_audio_shift"] = 1.0
                     matching["video_flow_shift"] = 12.0
