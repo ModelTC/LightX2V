@@ -12,7 +12,7 @@ fi
 : "${MASTER_PORT:?ACP must set the same MASTER_PORT on all four workers}"
 H3_CODE_ROOT="${H3_CODE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 H3_PYTHON="${H3_PYTHON:-python}"
-config="$H3_CODE_ROOT/lightx2v_train/configs/train/dmd/minimax_h3_fl2av_pdmd${steps}_official_fsdp32.yaml"
+config="${H3_FL2AV_PDMD_CONFIG:-$H3_CODE_ROOT/lightx2v_train/configs/train/dmd/minimax_h3_fl2av_pdmd${steps}_official_fsdp32.yaml}"
 export H3_MODEL_PATH="${H3_MODEL_PATH:-/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3}"
 export H3_FL2AV_CACHE="${H3_FL2AV_CACHE:-${H3_MULTITASK_3TASK_PORTRAIT_VIEW:-/mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_dmd_cache_5s_768p/task_aware_view_3task_portrait}}"
 export H3_FL2AV_PDMD_OUTPUT="${H3_FL2AV_PDMD_OUTPUT:-$H3_CODE_ROOT/outputs/minimax_h3_fl2av_3task_pdmd${steps}_official_lorafp32_32gpu}"
@@ -95,12 +95,15 @@ if any(counts[(task, bucket)] == 0 for task in tasks for bucket in data["buckets
     raise SystemExit(f"Need both orientations and at least 32 rows per task: {summary}")
 print(f"H3 three-task cache: {json.dumps(summary, sort_keys=True)}, total={sum(counts.values())}; tasks=T2AV/I2AV/FL2AV")
 print(f"Official PDMD: steps={sys.argv[2]}, 4 x 8 GPUs, global_batch=32, orientations=natural_random (no fixed landscape/portrait quota)")
+matching = model["capabilities"]["distribution_matching"]
+dmd = training["dmd"]
+print(f"Training rollout shifts: video={dmd.get('official_rollout_video_shift', 1.0)}, audio={dmd.get('official_rollout_audio_shift', 1.0)}; inference shifts: video={matching['video_flow_shift']}, audio={matching['audio_flow_shift']}")
 print("Task rows rotate 11/11/10 across fresh batches; route loss weights give equal weight to T2AV/I2AV/FL2AV.")
 print(f"optimizer_updates={training['max_train_iters']}, save_every_iters={training['save_every_iters']}, save_total_limit={training['save_total_limit']}")
 print("5 critic updates -> 1 student update; student reuses the preceding critic trajectory, without reading a new batch.")
 print("Precision: student base BF16 + LoRA FP32; teacher BF16; fake full FP32; FSDP BF16 compute / FP32 reduction.")
 print(f"config={sys.argv[1]}\ndata={root}\noutput={training['output_dir']}")
-print("Use a NEW output directory, not a FL2AV-only, Ref2AV, legacy DMD, or different-step PDMD checkpoint directory.")
+print("Use a NEW output directory, not a FL2AV-only, Ref2AV, legacy DMD, or different-step/shift PDMD checkpoint directory.")
 PY
 
 cd "$H3_CODE_ROOT/lightx2v_train"
