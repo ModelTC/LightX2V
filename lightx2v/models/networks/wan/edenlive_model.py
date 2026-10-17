@@ -2,8 +2,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from lightx2v.models.networks.wan.infer.edenlive.convrot_projection import ConvRotProjectionGroup
-from lightx2v.models.networks.wan.infer.edenlive.packed_projection import FP8ProjectionGroup
+from lightx2v.common.ops.mm.optimized_linear import make_gelu_linear, make_projection_group
 from lightx2v.models.networks.wan.infer.edenlive.pre_infer import EdenLivePreInfer
 from lightx2v.models.networks.wan.infer.edenlive.transformer_infer import EdenLiveARTransformerInfer, EdenLiveTransformerInfer
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
@@ -24,28 +23,20 @@ class EdenLiveModel(WanModel):
         if infer is not None and hasattr(infer, "invalidate_cuda_graph"):
             infer.invalidate_cuda_graph()
         super()._apply_weights(weight_dict)
-        pack = self.config.get("pack_qkv", False)
-        share = pack or self.config.get("share_qkv_activation_quant", False)
-        projection_group = {"fp8-sgl": FP8ProjectionGroup, "int8-convrot": ConvRotProjectionGroup}.get(self.config.get("dit_quant_scheme"))
-        enabled = (
-            share
-            and projection_group is not None
-            and not self.config.get("cpu_offload", False)
-            and not self.config.get("lazy_load", False)
-            and not self.config.get("seq_parallel", False)
-            and not self.config.get("tensor_parallel", False)
+        resident = not any(self.config.get(key, False) for key in ("cpu_offload", "lazy_load", "seq_parallel", "tensor_parallel"))
+        fuse_gelu = (
+            resident
+            and self.config.get("use_compile", False)
+            and self.config.get("compile_backend", "default") == "default"
+            and self.config.get("compile_options", {}).get("emulate_precision_casts", True)
         )
         for index, block in enumerate(self.transformer_weights.blocks):
-            phase = block.compute_phases[0]
-            modules = (phase.self_attn_q, phase.self_attn_k, phase.self_attn_v)
-            phase.self_attn_projection_group = projection_group.from_modules(modules, packed=pack) if enabled else None
-            phase.self_attn_cache_kv_projection_group = (
-                projection_group.from_modules(modules[1:]) if enabled and self.config.get("skip_cache_update_suffix", False) and index == len(self.transformer_weights.blocks) - 1 else None
-            )
-            phase = block.compute_phases[1]
-            modules = (phase.cross_attn_k, phase.cross_attn_v)
-            # Text K/V share one quantization when the prompt cache is refreshed.
-            phase.cross_kv_projection_group = projection_group.from_modules(modules) if enabled else None
+            self_attn, cross_attn, ffn = block.compute_phases
+            qkv = (self_attn.self_attn_q, self_attn.self_attn_k, self_attn.self_attn_v)
+            self_attn.self_attn_projection_group = make_projection_group(qkv, packed=True) if resident else None
+            self_attn.self_attn_cache_kv_projection_group = make_projection_group(qkv[1:]) if resident and index == len(self.transformer_weights.blocks) - 1 else None
+            cross_attn.cross_kv_projection_group = make_projection_group((cross_attn.cross_attn_k, cross_attn.cross_attn_v)) if resident else None
+            ffn.ffn_gelu = make_gelu_linear(ffn.ffn_2, enabled=fuse_gelu)
 
     def _infer_cond_uncond(self, inputs, infer_condition=True):
         return super()._infer_cond_uncond(inputs, infer_condition).to(GET_DTYPE())
@@ -74,8 +65,7 @@ class EdenLiveARModel(EdenLiveModel):
     @torch.no_grad()
     def infer(self, inputs):
         if (
-            self.config.get("skip_cache_update_suffix", False)
-            and self.scheduler.cache_update
+            self.scheduler.cache_update
             and not self.cpu_offload
             and not self.config.get("enable_cfg", False)
             and not self.config.get("seq_parallel", False)

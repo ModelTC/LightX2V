@@ -1,13 +1,26 @@
 import argparse
-import sys
 from pathlib import Path
 
 import torch
 from diffusers import UniPCMultistepScheduler
 
-from lightx2v.models.runners.wan import edenlive_runner  # noqa: F401
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.set_config import build_startup_config
+if __package__ in (None, ""):
+    from edenlive_bootstrap import configure_import_paths
+else:
+    from tools.validation.edenlive_bootstrap import configure_import_paths
+
+configure_import_paths()
+
+from lightx2v.models.runners.wan import edenlive_runner  # noqa: E402, F401
+from lightx2v.utils.registry_factory import RUNNER_REGISTER  # noqa: E402
+from lightx2v.utils.set_config import build_startup_config  # noqa: E402
+
+try:
+    from edenlive.schedulers.flow_matching import FlowMatchingScheduler
+except ImportError as error:
+    UPSTREAM_IMPORT_ERROR = error
+else:
+    UPSTREAM_IMPORT_ERROR = None
 
 
 def main():
@@ -15,8 +28,8 @@ def main():
     parser.add_argument("--upstream", required=True)
     parser.add_argument("--model-path", required=True)
     args = parser.parse_args()
-    sys.path.insert(0, args.upstream)
-    from edenlive.schedulers.flow_matching import FlowMatchingScheduler
+    if UPSTREAM_IMPORT_ERROR is not None:
+        raise ImportError("Scheduler parity requires the EdenLive dependencies from --upstream") from UPSTREAM_IMPORT_ERROR
 
     torch.set_grad_enabled(False)
     for variant, mode in [("5b", "few_step"), ("14b", "few_step"), ("5b", "bidir"), ("14b", "bidir")]:

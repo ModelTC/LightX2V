@@ -5,6 +5,7 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
@@ -28,14 +29,15 @@ try:
 except ImportError:
     magi_register_custom_op = None
 
-from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
-
 try:
-    from .triton_ops import fused_qk_rms_norm
+    from .triton_ops import fused_norm_3drope, fused_qk_norm_3drope, fused_qk_rms_norm, rms_norm_kernel
 except ModuleNotFoundError as exc:
     if exc.name != "triton":
         raise
-    fused_qk_rms_norm = None
+    fused_norm_3drope = fused_qk_norm_3drope = fused_qk_rms_norm = rms_norm_kernel = None
+    _triton_import_error = exc
+else:
+    _triton_import_error = None
 
 
 @torch.library.custom_op(
@@ -507,7 +509,8 @@ class RMSWeightOnePass(RMSWeight):
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
-        from .triton_ops import rms_norm_kernel
+        if _triton_import_error is not None:
+            raise _triton_import_error
 
         self._kernel = rms_norm_kernel
         super().__init__(
@@ -593,7 +596,8 @@ class RMSWeightFusedQKNorm3DRope:
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
-        from .triton_ops import fused_qk_norm_3drope
+        if _triton_import_error is not None:
+            raise _triton_import_error
 
         self._kernel = fused_qk_norm_3drope
         self.q_weight_name_t = q_weight_name_t
@@ -661,7 +665,8 @@ class RMSWeightDualNorm3DRope:
         lora_prefix="diffusion_model.blocks",
         lora_path="",
     ):
-        from .triton_ops import fused_norm_3drope
+        if _triton_import_error is not None:
+            raise _triton_import_error
 
         self._kernel = fused_norm_3drope
         self.weight_name_t = weight_name_t
@@ -693,3 +698,11 @@ class RMSWeightDualNorm3DRope:
             sin_w,
             eps=self.eps,
         )
+
+
+def apply_projection_norm(norm, projected):
+    if torch.compiler.is_compiling() and type(norm) is RMSWeightSgl and not projected.is_contiguous() and norm.sensitive_layer_dtype == norm.infer_dtype and flashinfer_rmsnorm is not None:
+        # The compiled SGL path already uses this kernel. Its row-stride
+        # support avoids copying slices of the packed projection output.
+        return rmsnorm_flashinfer(projected, norm._get_actual_weight(), norm.eps, norm.enable_pdl)
+    return norm.apply(projected)

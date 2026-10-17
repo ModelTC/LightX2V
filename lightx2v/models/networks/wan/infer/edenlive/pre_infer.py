@@ -45,8 +45,7 @@ class EdenLivePreInfer(WanPreInfer):
         config = self.config
         scheduler = self.scheduler
         if (
-            not config.get("cache_pre_infer_projections", False)
-            or type(scheduler) is not EdenLiveARScheduler
+            type(scheduler) is not EdenLiveARScheduler
             or not isinstance(getattr(scheduler, "generator", None), torch.Generator)
             or config.get("cpu_offload", False)
             or config.get("lazy_load", False)
@@ -128,7 +127,7 @@ class EdenLivePreInfer(WanPreInfer):
 
     def _interpolate_proxy(self, source, x, cache_projections):
         zero = not self.scheduler.infer_condition and self.config["proxy_unconditional_control"] == "zero"
-        signature = self._tensor_signature(source) if cache_projections and self.config.get("cache_proxy_interpolation", False) else None
+        signature = self._tensor_signature(source) if cache_projections else None
         key = (signature, tuple(x.shape[1:]), x.device, x.dtype, zero, self.scheduler.chunk_start) if signature is not None else None
         cached = self._proxy_interpolation_cache
         if cached is not None and cached[0] == key and cached[1] is source and cached[3] == self._tensor_signature(cached[2]):

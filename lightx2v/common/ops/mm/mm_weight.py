@@ -67,6 +67,59 @@ except ImportError:
     comfy_kitchen = None
 
 
+try:
+    from q8_kernels.functional.linear import q8_linear
+except ImportError:
+    q8_linear = None
+
+try:
+    from q8_kernels.functional.linear import fp8_linear
+except ImportError:
+    fp8_linear = None
+
+try:
+    import deep_gemm
+except ImportError:
+    deep_gemm = None
+
+try:
+    from torchao.quantization.utils import (
+        quant_int8_per_token_matmul as torchao_int8_gemm,
+    )
+    from torchao.quantization.utils import (
+        quantize_activation_per_token_absmax as torchao_int8_quant,
+    )
+except ImportError:
+    try:
+        from torchao.quantization.utils import (
+            _quant_int8_per_token_matmul as torchao_int8_gemm,
+        )
+        from torchao.quantization.utils import (
+            _quantize_activation_per_token_absmax as torchao_int8_quant,
+        )
+    except ImportError:
+        torchao_int8_gemm, torchao_int8_quant = None, None
+
+try:
+    import gguf
+except ImportError:
+    gguf = None
+
+try:
+    import marlin_cuda_quant
+except ImportError:
+    marlin_cuda_quant = None
+
+
+_triton_mm_import_error = None
+try:
+    from .triton_kernels import fp8_gemm_bias_triton, fp8_gemm_triton, fp8_quantize_triton, int8_gemm_bias_triton, int8_gemm_triton, int8_quantize_triton
+except ImportError as error:
+    fp8_gemm_bias_triton = fp8_gemm_triton = fp8_quantize_triton = None
+    int8_gemm_bias_triton = int8_gemm_triton = int8_quantize_triton = None
+    _triton_mm_import_error = error
+
+
 if comfy_kitchen is not None:
     # Keep comfy-kitchen's DLPack implementation opaque to FakeTensor tracing.
     @torch.library.custom_op(
@@ -113,50 +166,6 @@ if magi_register_custom_op is not None and sgl_kernel is not None:
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         return sgl_fp8_scaled_mm(mat_a, mat_b, scales_a, scales_b, out_dtype, bias)
-
-
-try:
-    from q8_kernels.functional.linear import q8_linear
-except ImportError:
-    q8_linear = None
-
-try:
-    from q8_kernels.functional.linear import fp8_linear
-except ImportError:
-    fp8_linear = None
-
-try:
-    import deep_gemm
-except ImportError:
-    deep_gemm = None
-
-try:
-    from torchao.quantization.utils import (
-        quant_int8_per_token_matmul as torchao_int8_gemm,
-    )
-    from torchao.quantization.utils import (
-        quantize_activation_per_token_absmax as torchao_int8_quant,
-    )
-except ImportError:
-    try:
-        from torchao.quantization.utils import (
-            _quant_int8_per_token_matmul as torchao_int8_gemm,
-        )
-        from torchao.quantization.utils import (
-            _quantize_activation_per_token_absmax as torchao_int8_quant,
-        )
-    except ImportError:
-        torchao_int8_gemm, torchao_int8_quant = None, None
-
-try:
-    import gguf
-except ImportError:
-    gguf = None
-
-try:
-    import marlin_cuda_quant
-except ImportError:
-    marlin_cuda_quant = None
 
 
 class MMWeightTemplate(metaclass=ABCMeta):
@@ -1601,7 +1610,8 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
         if vllm_ops is not None:
             self.act_quant_func = self.act_quant_fp8_perchannel_sym_vllm
         else:
-            from .triton_kernels import fp8_quantize_triton
+            if _triton_mm_import_error is not None:
+                raise _triton_mm_import_error
 
             self.act_quant_func = fp8_quantize_triton
 
@@ -1661,7 +1671,8 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
         if vllm_ops is not None:
             self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
         else:
-            from .triton_kernels import int8_quantize_triton
+            if _triton_mm_import_error is not None:
+                raise _triton_mm_import_error
 
             self.act_quant_func = int8_quantize_triton
 
@@ -1715,7 +1726,8 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
             lora_prefix,
             lora_path,
         )
-        from .triton_kernels import fp8_gemm_bias_triton, fp8_gemm_triton, fp8_quantize_triton
+        if _triton_mm_import_error is not None:
+            raise _triton_mm_import_error
 
         self.load_func = self.load_fp8_perchannel_sym
         self.act_quant_func = fp8_quantize_triton
@@ -1782,7 +1794,8 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
             lora_prefix,
             lora_path,
         )
-        from .triton_kernels import int8_gemm_bias_triton, int8_gemm_triton, int8_quantize_triton
+        if _triton_mm_import_error is not None:
+            raise _triton_mm_import_error
 
         self.load_func = self.load_int8_perchannel_sym
         self.act_quant_func = int8_quantize_triton
@@ -2110,7 +2123,8 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         elif torchao_int8_quant:
             self.act_quant_func = self.act_quant_int8_perchannel_sym_torchao
         else:
-            from .triton_kernels import int8_quantize_triton
+            if _triton_mm_import_error is not None:
+                raise _triton_mm_import_error
 
             self.act_quant_func = int8_quantize_triton
         self.weight_need_transpose = True

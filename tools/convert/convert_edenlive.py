@@ -10,15 +10,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+import torch
+from safetensors import safe_open
+from safetensors.torch import load_file, save_file
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+from tools.convert.edenlive_weights import remap_hf_clip_vision_weights, remap_hf_umt5_weights  # noqa: E402
 from tools.convert.key_mapping import get_key_mapping_rules  # noqa: E402
 
 
 def skip_checkpoint(destination, required_key, overwrite):
     if not destination.exists() or overwrite:
         return False
-    from safetensors import safe_open
 
     with safe_open(str(destination), framework="pt", device="cpu") as handle:
         if required_key not in handle.keys():
@@ -28,8 +32,6 @@ def skip_checkpoint(destination, required_key, overwrite):
 
 
 def save_checkpoint(weights, destination):
-    from safetensors.torch import save_file
-
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".tmp")
     save_file(weights, str(temporary))
@@ -60,9 +62,6 @@ def copy_tree(source, output, overwrite, exclude=()):
 
 
 def convert_dit(source, output, overwrite):
-    import torch
-    from safetensors.torch import load_file
-
     destination = output / "diffusion_pytorch_model.safetensors"
     if skip_checkpoint(destination, "head.head.weight", overwrite):
         return
@@ -84,11 +83,6 @@ def convert_dit(source, output, overwrite):
 
 
 def convert_encoder(source, output, kind, overwrite):
-    import torch
-    from safetensors.torch import load_file
-
-    from tools.convert.edenlive_weights import remap_hf_clip_vision_weights, remap_hf_umt5_weights
-
     destination = output / "model.safetensors"
     key = "token_embedding.weight" if kind == "t5" else "visual.patch_embedding.weight"
     if skip_checkpoint(destination, key, overwrite):
@@ -128,8 +122,6 @@ def convert_release(source, output, overwrite):
 
 
 def quantize_dit(source, output, linear_type, output_name, device, overwrite):
-    from safetensors import safe_open
-
     checkpoint = source / "diffusion_pytorch_model.safetensors" if source.is_dir() else source
     with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
         if "head.head.weight" not in handle.keys():

@@ -159,29 +159,15 @@ __global__ void gelu_convrot_quant_kernel(const __nv_bfloat16* input, int8_t* qu
     }
 }
 
-// This narrow export also permits exhaustive BF16 GELU validation without
-// entangling overflow in the subsequent ConvRot transform.
-__global__ void rounded_gelu_kernel(const __nv_bfloat16* input, __nv_bfloat16* output, int64_t count) {
-    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (index < count) output[index] = __float2bfloat16_rn(rounded_gelu(__bfloat162float(input[index])));
-}
-
 } // namespace
 
-extern "C" int edenlive_prepare_convrot_gelu() {
+extern "C" int lightx2v_prepare_convrot_gelu() {
     return static_cast<int>(cudaFuncSetAttribute(gelu_convrot_quant_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSharedBytes));
 }
 
-extern "C" int edenlive_gelu_convrot_quant(const void* input, void* quantized, void* scales, int rows, void* stream) {
+extern "C" int lightx2v_gelu_convrot_quant(const void* input, void* quantized, void* scales, int rows, void* stream) {
     if (rows == 0) return 0;
     gelu_convrot_quant_kernel<<<rows, kThreads, kSharedBytes, static_cast<cudaStream_t>(stream)>>>(
         static_cast<const __nv_bfloat16*>(input), static_cast<int8_t*>(quantized), static_cast<float*>(scales));
-    return static_cast<int>(cudaGetLastError());
-}
-
-extern "C" int edenlive_rounded_gelu(const void* input, void* output, int64_t count, void* stream) {
-    if (count == 0) return 0;
-    rounded_gelu_kernel<<<(count + 255) / 256, 256, 0, static_cast<cudaStream_t>(stream)>>>(
-        static_cast<const __nv_bfloat16*>(input), static_cast<__nv_bfloat16*>(output), count);
     return static_cast<int>(cudaGetLastError());
 }

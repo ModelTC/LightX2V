@@ -9,6 +9,7 @@ from lightx2v.models.input_encoders.edenlive.recording import RecordingReader, f
 from lightx2v.models.networks.wan.edenlive_model import EdenLiveARModel, EdenLiveModel
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, WanRunner
 from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler, EdenLiveScheduler
+from lightx2v.models.video_encoders.hf.wan.lightvae import Wan22LightVAEDecoder
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.input_info import EdenLiveInputInfo
@@ -28,12 +29,20 @@ class EdenLiveRunner:
     supported_request_fields_by_task = {"i2v": WanRunner.supported_request_fields_by_task["i2v"] | {"video_path"}}
 
     def __init__(self, config):
+        config.setdefault("proxy_resize_mode", "bilinear")
+        config.setdefault("proxy_condition_rmsnorm", False)
+        config.setdefault("proxy_unconditional_control", "same")
         super().__init__(config)
         self.is_wan21 = config["model_cls"] in ["wan21_edenlive", "wan21_edenlive_ar"]
         self.chunk_callback = None
         self.recording_reader = None
 
     def run_pipeline(self, input_info):
+        # Keep only the current request's output. The caller may still own its
+        # previous result, but the runner must not retain it during input encode
+        # or while the next full video is being assembled.
+        self.gen_video = None
+        self.gen_video_final = None
         try:
             return super().run_pipeline(input_info)
         finally:
@@ -50,15 +59,6 @@ class EdenLiveRunner:
     def init_scheduler(self):
         self.scheduler = self.scheduler_class(self.config)
 
-    def get_supported_request_fields(self, task):
-        fields = super().get_supported_request_fields(task)
-        sparse = self.config.get("general_sparse_attn_setting", {})
-        if self.config.get("self_attn_1_type") == "general_sparse_attn" and sparse.get("sparse_mask_generator") == "sla_mask_generator":
-            # SLA routes from the current Q/K lengths, including a short final
-            # chunk. It does not need the fixed frame count used by SVG/nbhd.
-            fields = fields | {"num_frames"}
-        return fields
-
     def load_transformer(self):
         return self.model_class(self.config["model_path"], self.config, self.init_device)
 
@@ -67,15 +67,15 @@ class EdenLiveRunner:
         self.proxy_encoder = self.load_proxy_encoder()
 
     def load_proxy_encoder(self):
+        # The AR DiT kernels use cached/fused layouts; Proxy uses batched Sage2.
+        # Preserve the SDPA default for the original non-realtime profiles.
+        proxy_attention = "sage_attn2" if self.config["self_attn_1_type"] in ("sage_attn2_sm90_fused", "sage_attn2_sm120_cached") else "torch_sdpa"
         return ProxyDINO(
             self.config["model_path"],
             self.config["proxy_resize_mode"],
-            use_cuda_graph=self.config.get("proxy_cuda_graph", False),
-            attention_type=self.config.get("proxy_attn_type", "torch_sdpa"),
+            use_cuda_graph=self.config.get("use_cuda_graph", False),
+            attention_type=proxy_attention,
             quantized_ckpt=self.config.get("proxy_quantized_ckpt"),
-            residual_dtype=self.config.get("proxy_residual_dtype", "float32"),
-            fuse_ops=self.config.get("proxy_fuse_ops", False),
-            share_qkv_quant=self.config.get("proxy_share_qkv_activation_quant", False),
         )
 
     def load_vae(self):
@@ -87,8 +87,6 @@ class EdenLiveRunner:
     def load_vae_decoder(self):
         if self.is_wan21 or not self.config.get("use_lightvae", False):
             return super().load_vae_decoder()
-        from lightx2v.models.video_encoders.hf.wan.lightvae import Wan22LightVAEDecoder
-
         return Wan22LightVAEDecoder(
             vae_path=self.config["lightvae_path"],
             scale=self.vae_encoder.scale,
@@ -275,7 +273,6 @@ class EdenLiveARRunner(EdenLiveRunner):
 
         Async decoding delivers callbacks in order from a worker thread after
         the chunk is ready on GPU. Keep the callback short to avoid queuing output.
-        With overlap_kv_vae, callbacks run on the caller after both stages finish.
         """
         self.chunk_callback = callback
 
@@ -304,8 +301,7 @@ class EdenLiveARRunner(EdenLiveRunner):
         self.model.transformer_infer.cache_pools = pools
         num_chunks = (total + chunk - 1) // chunk
         on_chunk = None if self.chunk_callback is None else lambda pixels, index: self.chunk_callback(pixels, index, index == num_chunks - 1)
-        overlap_kv_vae = ar.get("overlap_kv_vae", False)
-        decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder, on_chunk=None if overlap_kv_vae else on_chunk, dispatch_in_worker=True)
+        decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder, on_chunk=on_chunk, dispatch_in_worker=True)
         streaming = decoder.is_async or self.config.get("streaming_vae", False) or on_chunk is not None
         try:
             with no_sync_profiling(enabled=decoder.is_async):
@@ -319,24 +315,26 @@ class EdenLiveARRunner(EdenLiveRunner):
                         with ProfilingContext4DebugL1("step_pre_in_rerun"):
                             self.scheduler.step_pre(self.scheduler.infer_steps - 1, chunk_start=start, cache_update=True)
                         decode_args = (self.scheduler.latents[:, start : start + frames], start == 0, start + frames == total)
-                        if overlap_kv_vae:
-                            decoder.submit(self.vae_decoder.cached_decode_withflag, *decode_args)
                         with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
                             self.model.infer(self.inputs)
-                        if overlap_kv_vae:
-                            torch.cuda.current_stream(AI_DEVICE).synchronize()
-                            pixels = decoder.wait_for_chunk()
-                            if on_chunk is not None:
-                                on_chunk(pixels, start // chunk)
-                        elif streaming:
+                        if streaming:
                             decoder.submit(self.vae_decoder.cached_decode_withflag, *decode_args)
                 decoded_chunks = decoder.finish()
         finally:
-            decoder.finish()
-            if ar.get("kv_offload", False):
-                for pool in pools.values():
-                    pool.sync_all()
-            self.model.transformer_infer.cache_pools = {}
+            try:
+                decoder.finish()
+            finally:
+                try:
+                    if ar.get("kv_offload", False):
+                        for pool in pools.values():
+                            pool.sync_all()
+                finally:
+                    self.model.transformer_infer.cache_pools = {}
+                    # The graph binds separate history storage. Release both
+                    # request-local references before allocating the full video,
+                    # including when decoding or offload synchronization fails.
+                    pools.clear()
+                    pool = None
         return torch.cat(decoded_chunks, dim=2) if streaming else self.run_vae_decoder(self.scheduler.latents)
 
 

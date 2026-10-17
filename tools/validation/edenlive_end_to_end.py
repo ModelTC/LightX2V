@@ -2,10 +2,38 @@
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
+import yaml
+
+if __package__ in (None, ""):
+    from edenlive_bootstrap import configure_import_paths
+else:
+    from tools.validation.edenlive_bootstrap import configure_import_paths
+
+configure_import_paths()
+
+try:
+    from edenlive.core.config import load_config
+    from edenlive.inference.offline import run_offline_inference
+    from edenlive.models.adapters.wan22_diffusers.adapter import Wan22DiffusersAdapter
+except ImportError as error:
+    UPSTREAM_IMPORT_ERROR = error
+else:
+    UPSTREAM_IMPORT_ERROR = None
+
+try:
+    from lightx2v.models.networks.wan.edenlive_model import EdenLiveModel
+    from lightx2v.models.runners.runner_factory import build_runner
+    from lightx2v.models.runners.wan.edenlive_runner import EdenLiveRunner
+    from lightx2v.models.runners.wan.wan_runner import WanRunner
+    from lightx2v.utils.set_config import build_startup_config, init_parallel
+except ImportError as error:
+    NATIVE_IMPORT_ERROR = error
+else:
+    NATIVE_IMPORT_ERROR = None
 
 
 def main():
@@ -26,21 +54,17 @@ def main():
     )
     args = parser.parse_args()
     base_profile = args.profile.removesuffix("_prompt_travel")
-    sys.path.insert(0, args.upstream)
     root = Path(args.upstream)
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     torch.set_grad_enabled(False)
     captures = {}
     if args.sp:
-        import torch.distributed as dist
-
         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
         dist.init_process_group("nccl")
     if args.backend == "upstream":
-        from edenlive.core.config import load_config
-        from edenlive.inference.offline import run_offline_inference
-        from edenlive.models.adapters.wan22_diffusers.adapter import Wan22DiffusersAdapter
+        if UPSTREAM_IMPORT_ERROR is not None:
+            raise ImportError("The upstream backend requires the EdenLive dependencies from --upstream") from UPSTREAM_IMPORT_ERROR
 
         config = load_config(root / "edenlive/configs" / f"{base_profile.replace('5b_', '5b_720p_').replace('14b_', '14b_480p_')}.yaml")
         config["model"]["pretrained_dir"] = args.model_path
@@ -81,14 +105,10 @@ def main():
         os.chdir(root)
         run_offline_inference(config)
     else:
-        from lightx2v.models.runners.runner_factory import build_runner
-        from lightx2v.models.runners.wan.edenlive_runner import EdenLiveRunner
-        from lightx2v.models.runners.wan.wan_runner import WanRunner
-        from lightx2v.utils.set_config import build_startup_config
+        if NATIVE_IMPORT_ERROR is not None:
+            raise ImportError("The native backend requires the LightX2V dependencies") from NATIVE_IMPORT_ERROR
 
         if args.capture_dit:
-            from lightx2v.models.networks.wan.edenlive_model import EdenLiveModel
-
             original_forward = EdenLiveModel._infer_cond_uncond
 
             def forward(self, inputs, infer_condition=True):
@@ -153,8 +173,6 @@ def main():
             )
         )
         if args.sp:
-            from lightx2v.utils.set_config import init_parallel
-
             config["parallel"] = {"seq_p_size": dist.get_world_size(), "vae_parallel": False}
             init_parallel(config)
         runner = build_runner(config)
@@ -169,8 +187,6 @@ def main():
             save_result_path=str(output / "native.mp4"),
         )
         if config["enable_cfg"]:
-            import yaml
-
             profile = yaml.safe_load((root / "edenlive/configs" / f"{base_profile.replace('5b_', '5b_720p_').replace('14b_', '14b_480p_')}.yaml").read_text())
             request["negative_prompt"] = profile["inference"].get("negative_prompt", profile["model"].get("negative_prompt", ""))
         runner.run_request(runner.prepare_request(request))

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Precision-preserving BF16 GELU + ConvRot INT8 FFN activation fusion.
+"""Precision-preserving GELU/activation quantization for FP8-SGL and ConvRot.
 
-Only the activation quantizer is locally compiled; GEMM and its epilogue remain
-in the installed comfy-kitchen backend. Unsupported shapes/backends execute the
-original GELU followed by the original ConvRot linear. Call
-``prepare_convrot_gelu_fusion`` during warmup to compile before CUDA capture.
+Both backends preserve the compiled GELU(tanh) BF16 rounding boundary and
+reuse their original quantization/GEMM arithmetic. FP8-SGL uses a Triton
+quantizer; INT8 ConvRot lazily compiles its SM120 CUDA quantizer before capture.
+Unsupported ConvRot shapes/backends retain the original GELU + linear path.
 """
 
 import ctypes
@@ -13,14 +13,85 @@ from threading import Lock
 
 import torch
 import torch.nn.functional as F
+import triton
+import triton.language as tl
+from triton.language.extra.cuda import libdevice
 
-from lightx2v.models.networks.wan.infer.edenlive.convrot_projection import _backend_apis_available, convrot_projection_mm
+from lightx2v.common.ops.mm.projection_group import _backend_apis_available, convrot_projection_mm
+
+try:
+    from torch.utils.cpp_extension import load
+except (ImportError, OSError, RuntimeError):
+    load = None
 
 try:
     import comfy_kitchen
     import comfy_kitchen.backends.cuda as kitchen_cuda
 except ImportError:
     comfy_kitchen = kitchen_cuda = None
+
+
+@triton.jit
+def _gelu_quant_fp8_sgl_kernel(input_ptr, quantized_ptr, scale_ptr, width: tl.constexpr, block: tl.constexpr):
+    row = tl.program_id(0)
+    columns = tl.arange(0, block)
+    x = tl.load(input_ptr + row * width + columns, columns < width, 0.0).to(tl.float32)
+
+    # Match the compiled GELU's operation order with FP fusion disabled.
+    half_x = x * 0.5
+    cubic = (x * x) * x
+    argument = (x + cubic * 0.044715) * 0.7978845608028654
+    activated = (half_x * (1.0 + libdevice.tanh(argument))).to(tl.bfloat16).to(tl.float32)
+
+    absmax = tl.maximum(tl.max(tl.where(columns < width, tl.abs(activated), 0.0), 0), 0.0)
+    scale = tl.div_rn(absmax, 448.0)
+    inverse_scale = tl.div_rn(1.0, scale)
+    values = activated * inverse_scale
+    # SGL has no positive epsilon floor. Preserve its NaN clamp order when
+    # a zero row produces scale=0 and activated * inverse_scale is NaN.
+    values = tl.maximum(tl.minimum(values, 448.0), -448.0)
+    tl.store(quantized_ptr + row * width + columns, values, columns < width)
+    tl.store(scale_ptr + row, scale)
+
+
+def _validate_fp8_input(input_tensor):
+    if input_tensor.ndim != 2 or input_tensor.dtype != torch.bfloat16:
+        raise ValueError("fused_gelu_quant_fp8_sgl requires a two-dimensional BF16 input")
+    if input_tensor.shape[1] == 0:
+        raise ValueError("fused_gelu_quant_fp8_sgl requires a nonempty hidden dimension")
+
+
+@torch.library.custom_op("lightx2v::fused_gelu_quant_fp8_sgl", mutates_args=(), device_types="cuda")
+def fused_gelu_quant_fp8_sgl(input_tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return FP8 activations and FP32 [tokens, 1] scales for BF16 GELU(tanh).
+
+    This matches the compiled path with ``emulate_precision_casts``
+    enabled. It is intended for finite activations and does not change input.
+    """
+    _validate_fp8_input(input_tensor)
+    input_tensor = input_tensor.contiguous()
+    quantized = torch.empty(input_tensor.shape, device=input_tensor.device, dtype=torch.float8_e4m3fn)
+    scales = torch.empty((input_tensor.shape[0], 1), device=input_tensor.device, dtype=torch.float32)
+    if input_tensor.shape[0]:
+        _gelu_quant_fp8_sgl_kernel[(input_tensor.shape[0],)](
+            input_tensor,
+            quantized,
+            scales,
+            input_tensor.shape[1],
+            triton.next_power_of_2(input_tensor.shape[1]),
+            num_warps=8,
+            enable_fp_fusion=False,
+        )
+    return quantized, scales
+
+
+@fused_gelu_quant_fp8_sgl.register_fake
+def _fused_gelu_quant_fp8_sgl_fake(input_tensor):
+    _validate_fp8_input(input_tensor)
+    return (
+        input_tensor.new_empty(input_tensor.shape, dtype=torch.float8_e4m3fn),
+        input_tensor.new_empty((input_tensor.shape[0], 1), dtype=torch.float32),
+    )
 
 
 _extension = None
@@ -36,7 +107,7 @@ def prepare_convrot_gelu_fusion(device=None):
     Build products use PyTorch's extension cache; no installed package changes.
     """
     global _extension, _extension_error
-    if not torch.cuda.is_available() or not _backend_apis_available():
+    if load is None or not torch.cuda.is_available() or not _backend_apis_available():
         return False
     device = torch.device("cuda", torch.cuda.current_device()) if device is None else torch.device(device)
     if device.type != "cuda" or torch.cuda.get_device_capability(device) != (12, 0):
@@ -50,34 +121,30 @@ def prepare_convrot_gelu_fusion(device=None):
                 return False
             if _extension is None:
                 try:
-                    from torch.utils.cpp_extension import load
-
                     library = load(
-                        name="lightx2v_edenlive_convrot_gelu_sm120",
-                        sources=[str(Path(__file__).with_name("convrot_gelu_quant.cu"))],
+                        name="lightx2v_convrot_gelu_sm120",
+                        sources=[str(Path(__file__).resolve().parents[4] / "lightx2v_kernel/csrc/quantization/convrot_gelu_quant.cu")],
                         extra_cuda_cflags=["-O3", "--use_fast_math", "-arch=sm_120"],
                         is_python_module=False,
                         verbose=False,
                     )
                     _extension = ctypes.CDLL(library)
-                    _extension.edenlive_prepare_convrot_gelu.argtypes = []
-                    _extension.edenlive_prepare_convrot_gelu.restype = ctypes.c_int
-                    _extension.edenlive_gelu_convrot_quant.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
-                    _extension.edenlive_gelu_convrot_quant.restype = ctypes.c_int
-                    _extension.edenlive_rounded_gelu.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64, ctypes.c_void_p]
-                    _extension.edenlive_rounded_gelu.restype = ctypes.c_int
+                    _extension.lightx2v_prepare_convrot_gelu.argtypes = []
+                    _extension.lightx2v_prepare_convrot_gelu.restype = ctypes.c_int
+                    _extension.lightx2v_gelu_convrot_quant.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+                    _extension.lightx2v_gelu_convrot_quant.restype = ctypes.c_int
                 except (OSError, RuntimeError) as error:
                     _extension_error = error
                     return False
             if index not in _prepared_devices:
-                error = _extension.edenlive_prepare_convrot_gelu()
+                error = _extension.lightx2v_prepare_convrot_gelu()
                 if error:
                     return False
                 _prepared_devices.add(index)
     return True
 
 
-def _validate(input_tensor, weight, weight_scale, bias, out_dtype, convrot_groupsize):
+def _validate_convrot(input_tensor, weight, weight_scale, bias, out_dtype, convrot_groupsize):
     if input_tensor.ndim != 2 or input_tensor.dtype not in (torch.bfloat16, torch.float16, torch.float32):
         raise ValueError("fused_gelu_int8_convrot_linear requires a two-dimensional floating input")
     if convrot_groupsize not in (16, 64, 256):
@@ -94,7 +161,7 @@ def _validate(input_tensor, weight, weight_scale, bias, out_dtype, convrot_group
         raise ValueError("ConvRot requires floating output")
 
 
-def _supported(input_tensor, weight, weight_scale, out_dtype, groupsize):
+def _supports_convrot_fusion(input_tensor, weight, weight_scale, out_dtype, groupsize):
     if (
         input_tensor.dtype != torch.bfloat16
         or out_dtype != torch.bfloat16
@@ -125,11 +192,11 @@ def fused_gelu_convrot_int8_quant(input_tensor: torch.Tensor) -> tuple[torch.Ten
     quantized = torch.empty_like(input_tensor, dtype=torch.int8)
     scales = input_tensor.new_empty((input_tensor.shape[0], 1), dtype=torch.float32)
     with torch.cuda.device(input_tensor.device):
-        error = _extension.edenlive_gelu_convrot_quant(
+        error = _extension.lightx2v_gelu_convrot_quant(
             input_tensor.data_ptr(), quantized.data_ptr(), scales.data_ptr(), input_tensor.shape[0], torch.cuda.current_stream(input_tensor.device).cuda_stream
         )
     if error:
-        raise RuntimeError(f"EdenLive GELU ConvRot quantizer CUDA error {error}")
+        raise RuntimeError(f"GELU ConvRot quantizer CUDA error {error}")
     return quantized, scales
 
 
@@ -150,12 +217,12 @@ def fused_gelu_int8_convrot_linear(
     convrot_groupsize: int,
 ) -> torch.Tensor:
     """Precisely fuse GELU/rotation/quantization and reuse the original GEMM."""
-    _validate(input_tensor, weight, weight_scale, bias, out_dtype, convrot_groupsize)
+    _validate_convrot(input_tensor, weight, weight_scale, bias, out_dtype, convrot_groupsize)
     if comfy_kitchen is None:
         raise ImportError("ConvRot activation fusion requires comfy-kitchen")
     if input_tensor.shape[0] == 0:
         return input_tensor.new_empty((0, weight.shape[0]), dtype=out_dtype)
-    if _supported(input_tensor, weight, weight_scale, out_dtype, convrot_groupsize):
+    if _supports_convrot_fusion(input_tensor, weight, weight_scale, out_dtype, convrot_groupsize):
         quantized, scales = fused_gelu_convrot_int8_quant(input_tensor)
         return convrot_projection_mm(quantized, weight.contiguous(), scales, weight_scale.contiguous(), bias, out_dtype)
     return comfy_kitchen.int8_linear(
@@ -171,5 +238,5 @@ def fused_gelu_int8_convrot_linear(
 
 @fused_gelu_int8_convrot_linear.register_fake
 def _fused_gelu_int8_convrot_linear_fake(input_tensor, weight, weight_scale, bias, out_dtype, convrot_groupsize):
-    _validate(input_tensor, weight, weight_scale, bias, out_dtype, convrot_groupsize)
+    _validate_convrot(input_tensor, weight, weight_scale, bias, out_dtype, convrot_groupsize)
     return input_tensor.new_empty((input_tensor.shape[0], weight.shape[0]), dtype=out_dtype)

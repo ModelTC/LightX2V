@@ -63,7 +63,7 @@ class AsyncVAEChunkDecoder:
                 "async_vae_decode",
                 ar_config.get("async_vae_decode", config.get("streaming_vae", False) and config.get("async_vae", False)),
             )
-        ) or ar_config.get("overlap_kv_vae", False)
+        )
         decoder = cls(enabled=enabled, device=device, on_chunk=on_chunk, dispatch_in_worker=dispatch_in_worker)
         if vae_decoder is not None:
             decoder.prepare_vae(vae_decoder)
@@ -200,12 +200,6 @@ class AsyncVAEChunkDecoder:
             if self._on_chunk is not None:
                 end.synchronize()
                 self._on_chunk(output, index)
-
-    def wait_for_chunk(self) -> torch.Tensor:
-        """Wait for the latest worker decode without resetting temporal history."""
-        self._decode_futures[-1].result()
-        self._decode_events[-1][1].synchronize()
-        return self._chunks[-1]
 
     def finish(self) -> list[torch.Tensor]:
         if self._decode_executor is not None:

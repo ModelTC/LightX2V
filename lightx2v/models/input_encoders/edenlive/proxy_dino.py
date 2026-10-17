@@ -9,10 +9,27 @@ from PIL import Image
 from safetensors.torch import load_file
 
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.common.ops.mm.optimized_linear import make_projection_group
+from lightx2v.common.ops.norm.l2_normalize import l2_normalize
+from lightx2v.common.ops.rope.rotary_qk import apply_rotary_qk
 from lightx2v.models.input_encoders.edenlive.proxy_cuda_graph import ProxyCUDAGraph
-from lightx2v.models.networks.wan.infer.edenlive.convrot_projection import ConvRotProjectionGroup
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV2D_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, TENSOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+_flash_attn_import_error = None
+try:
+    from flash_attn import flash_attn_func
+except ImportError as error:
+    flash_attn_func = None
+    _flash_attn_import_error = error
+
+_sageattention_import_error = None
+try:
+    from sageattention import sageattn
+except ImportError as error:
+    sageattn = None
+    _sageattention_import_error = error
 
 
 class _ProxyAttention:
@@ -21,16 +38,12 @@ class _ProxyAttention:
     def __init__(self, attention_type):
         self.attention_type = attention_type
         if attention_type == "flash_attn2":
-            try:
-                from flash_attn import flash_attn_func
-            except ImportError as error:
-                raise ImportError("ProxyDINO flash_attn2 requires flash-attn") from error
+            if flash_attn_func is None:
+                raise ImportError("ProxyDINO flash_attn2 requires flash-attn") from _flash_attn_import_error
             self.function = flash_attn_func
         elif attention_type == "sage_attn2":
-            try:
-                from sageattention import sageattn
-            except ImportError as error:
-                raise ImportError("ProxyDINO sage_attn2 requires sageattention") from error
+            if sageattn is None:
+                raise ImportError("ProxyDINO sage_attn2 requires sageattention") from _sageattention_import_error
             self.function = sageattn
         else:
             raise ValueError(f"Unsupported ProxyDINO attention_type: {attention_type!r}")
@@ -50,20 +63,13 @@ class ProxyDINO(WeightModule):
         attention_type="torch_sdpa",
         *,
         quantized_ckpt=None,
-        residual_dtype="float32",
-        fuse_ops=False,
-        share_qkv_quant=False,
     ):
         super().__init__()
         root = Path(model_path) / "vision-encoder"
         self.config = json.loads((root / "backbone/config.json").read_text())
         self.resize_mode = resize_mode
-        if residual_dtype not in ("float32", "bfloat16"):
-            raise ValueError("ProxyDINO residual_dtype must be float32 or bfloat16")
-        self.residual_dtype = getattr(torch, residual_dtype)
-        self.fuse_ops = fuse_ops
+        self.infer_dtype = GET_DTYPE()
         self.quantized = quantized_ckpt is not None
-        self.share_qkv_quant = share_qkv_quant
         linear_type = "int8-convrot" if self.quantized else "Default"
         self.heads = self.config["num_attention_heads"]
         self.head_dim = self.config["hidden_size"] // self.heads
@@ -124,29 +130,29 @@ class ProxyDINO(WeightModule):
             if getattr(block.k_proj, "bias_name", None) is None:
                 block.k_proj.bias = None
         super().load(state)
-        if hasattr(self, "residual_dtype"):
+        if hasattr(self, "infer_dtype"):
             self._prepare_loaded_weights()
 
     def _prepare_loaded_weights(self):
-        # Match upstream autocast linear/conv while residuals and LayerScale stay FP32.
+        # Floating weights, normalization, tokens and residuals share the model dtype.
+        # Preserve converted INT8 weights and their FP32 quantization scales.
         for module in (self.patch, self.projection, *(m for b in self.blocks for m in (b.q_proj, b.k_proj, b.v_proj, b.o_proj, b.up_proj, b.down_proj))):
             if module.weight.dtype != torch.int8:
-                module.weight = module.weight.to(torch.bfloat16)
+                module.weight = module.weight.to(self.infer_dtype)
             if getattr(module, "bias", None) is not None:
-                module.bias = module.bias.to(torch.bfloat16)
-        if self.residual_dtype == torch.bfloat16:
-            for parameter in (self.cls_token, self.register_tokens, *(p for b in self.blocks for p in (b.layer_scale1, b.layer_scale2))):
-                parameter.tensor = parameter.tensor.to(torch.bfloat16)
-            for norm in (self.final_norm, *(n for b in self.blocks for n in (b.norm1, b.norm2))):
-                norm.weight = norm.weight.to(torch.bfloat16)
-                norm.bias = norm.bias.to(torch.bfloat16)
+                module.bias = module.bias.to(self.infer_dtype)
+        for parameter in (self.cls_token, self.register_tokens, *(p for b in self.blocks for p in (b.layer_scale1, b.layer_scale2))):
+            parameter.tensor = parameter.tensor.to(self.infer_dtype)
+        for norm in (self.final_norm, *(n for b in self.blocks for n in (b.norm1, b.norm2))):
+            norm.weight = norm.weight.to(self.infer_dtype)
+            norm.bias = norm.bias.to(self.infer_dtype)
         for block in self.blocks:
             block.qkv_group = None
-            if self.quantized and self.share_qkv_quant:
+            if self.quantized:
                 # DINO omits K bias; an explicit zero enables shared-input
                 # GEMMs without changing the effective linear projection.
                 block.k_proj.bias = torch.zeros_like(block.q_proj.bias)
-                block.qkv_group = ConvRotProjectionGroup.from_modules((block.q_proj, block.k_proj, block.v_proj))
+                block.qkv_group = make_projection_group((block.q_proj, block.k_proj, block.v_proj), packed=False)
 
     def preprocess(self, images):
         """Convert uint8 RGB to the original normalized DINO input."""
@@ -177,8 +183,8 @@ class ProxyDINO(WeightModule):
     def _rope(self, height, width, device):
         key = (height, width, device)
         if key not in self._rope_cache:
-            cy = (torch.arange(height, device=device).float() + 0.5) / height
-            cx = (torch.arange(width, device=device).float() + 0.5) / width
+            cy = (torch.arange(height, device=device, dtype=torch.float32) + 0.5) / height
+            cx = (torch.arange(width, device=device, dtype=torch.float32) + 0.5) / width
             coordinates = torch.stack(torch.meshgrid(cy, cx, indexing="ij"), dim=-1).flatten(0, 1) * 2 - 1
             frequencies = (1 / self.config["rope_theta"] ** torch.arange(0, 1, 4 / self.head_dim, dtype=torch.float32)).to(device)
             angles = (2 * math.pi * coordinates[:, :, None] * frequencies).flatten(1).tile(2)[:, None]
@@ -197,36 +203,23 @@ class ProxyDINO(WeightModule):
         height, width = (n // self.config["patch_size"] for n in pixels.shape[-2:])
         cos, sin = self._rope(height, width, pixels.device)
         batch = pixels.shape[0]
-        patch = self.patch.apply(pixels.to(torch.bfloat16)).flatten(2).transpose(1, 2)
+        patch = self.patch.apply(pixels.to(self.infer_dtype)).flatten(2).transpose(1, 2)
         x = torch.cat((self.cls_token.tensor.expand(batch, -1, -1), self.register_tokens.tensor.expand(batch, -1, -1), patch), dim=1)
         sequence, hidden = x.shape[1:]
         for block in self.blocks:
-            normalized = block.norm1.apply(x).flatten(0, 1).to(torch.bfloat16)
+            normalized = block.norm1.apply(x).flatten(0, 1).to(self.infer_dtype)
             if block.qkv_group is None:
                 q, k, v = (module.apply(normalized) for module in (block.q_proj, block.k_proj, block.v_proj))
             else:
                 q, k, v = block.qkv_group.apply(normalized)
             q, k, v = (tensor.view(batch, sequence, self.heads, self.head_dim) for tensor in (q, k, v))
-            if self.fuse_ops:
-                from lightx2v.models.input_encoders.edenlive.proxy_fusions import proxy_rope_qk
-
-                q, k = proxy_rope_qk(q, k, cos, sin, self.prefix)
-            else:
-                for tensor in (q, k):
-                    patches = tensor[:, self.prefix :].float()
-                    first, second = patches.chunk(2, dim=-1)
-                    tensor[:, self.prefix :] = (patches * cos + torch.cat((-second, first), dim=-1) * sin).to(tensor.dtype)
+            q, k = apply_rotary_qk(q, k, cos, sin, self.prefix)
             attention = self.attention.apply(q=q, k=k, v=v).reshape(batch * sequence, hidden)
             x.addcmul_(block.o_proj.apply(attention).view_as(x), block.layer_scale1.tensor)
-            normalized = block.norm2.apply(x).flatten(0, 1).to(torch.bfloat16)
+            normalized = block.norm2.apply(x).flatten(0, 1).to(self.infer_dtype)
             y = block.down_proj.apply(F.gelu(block.up_proj.apply(normalized), approximate="none"))
             x.addcmul_(y.view_as(x), block.layer_scale2.tensor)
-        x = self.final_norm.apply(x)[:, self.prefix :].reshape(-1, hidden).to(torch.bfloat16)
+        x = self.final_norm.apply(x)[:, self.prefix :].reshape(-1, hidden).to(self.infer_dtype)
         projected = self.projection.apply(x)
-        if self.fuse_ops and self.residual_dtype == torch.bfloat16:
-            from lightx2v.models.input_encoders.edenlive.proxy_fusions import proxy_normalize
-
-            features = proxy_normalize(projected, out_dtype=torch.bfloat16)
-        else:
-            features = F.normalize(projected if self.residual_dtype == torch.bfloat16 else projected.float(), dim=-1)
+        features = l2_normalize(projected, out_dtype=self.infer_dtype)
         return features.view(batch, height, width, -1).permute(3, 0, 1, 2).unsqueeze(0).contiguous()

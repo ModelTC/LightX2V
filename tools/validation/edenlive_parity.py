@@ -3,11 +3,52 @@
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 import torch.distributed as dist
+
+if __package__ in (None, ""):
+    from edenlive_bootstrap import configure_import_paths
+else:
+    from tools.validation.edenlive_bootstrap import configure_import_paths
+
+configure_import_paths()
+
+from diffusers import WanTransformer3DModel  # noqa: E402
+from transformers import UMT5EncoderModel  # noqa: E402
+
+import lightx2v.common.ops  # noqa: E402, F401
+from lightx2v.common.kvcache.manager import build_self_attn_kv_cache  # noqa: E402
+from lightx2v.models.input_encoders.edenlive.proxy_dino import ProxyDINO  # noqa: E402
+from lightx2v.models.runners.wan import edenlive_runner  # noqa: E402, F401
+from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler  # noqa: E402
+from lightx2v.utils.registry_factory import RUNNER_REGISTER  # noqa: E402
+from lightx2v.utils.set_config import build_startup_config, init_parallel  # noqa: E402
+
+try:
+    from edenlive.models.proxy_dino.encoder import create_checkpoint_dinov3_encoder, encode_proxy_dino
+except ImportError as error:
+    DINO_IMPORT_ERROR = error
+else:
+    DINO_IMPORT_ERROR = None
+
+try:
+    from edenlive.core.types import RuntimeContext
+    from edenlive.models.adapters.wan22_diffusers.adapter import Wan22DiffusersAdapter
+    from edenlive.models.adapters.wan22_diffusers.channel_concat import enable_wan_channel_concat
+    from edenlive.models.adapters.wan22_diffusers.wan_ops import (
+        _cross_attention,
+        allocate_wan_kv_cache,
+        patch_wan_transformer_forward,
+        wan_causal_forward_with_cache,
+        wan_parallel_forward,
+    )
+except ImportError as error:
+    DIT_IMPORT_ERROR = error
+else:
+    DIT_IMPORT_ERROR = None
 
 
 def compare(name, actual, expected):
@@ -19,8 +60,6 @@ def compare(name, actual, expected):
 
 
 def main():
-    import lightx2v.common.ops  # noqa: F401
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--upstream", required=True)
     parser.add_argument("--model-path", required=True)
@@ -38,17 +77,10 @@ def main():
     if args.sp or args.cfg_parallel:
         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
         dist.init_process_group("nccl")
-    sys.path.insert(0, args.upstream)
     root = Path(args.model_path)
     torch.set_grad_enabled(False)
     torch.manual_seed(42)
     if args.boundary == "text":
-        from transformers import UMT5EncoderModel
-
-        from lightx2v.models.runners.wan import edenlive_runner  # noqa: F401
-        from lightx2v.utils.registry_factory import RUNNER_REGISTER
-        from lightx2v.utils.set_config import build_startup_config
-
         config = build_startup_config(
             dict(
                 model_cls=args.model_cls,
@@ -70,9 +102,8 @@ def main():
             torch.testing.assert_close(actual, expected, atol=args.atol, rtol=0)
         return
     if args.boundary == "dino":
-        from edenlive.models.proxy_dino.encoder import create_checkpoint_dinov3_encoder, encode_proxy_dino
-
-        from lightx2v.models.input_encoders.edenlive.proxy_dino import ProxyDINO
+        if DINO_IMPORT_ERROR is not None:
+            raise ImportError("DINO parity requires the EdenLive dependencies from --upstream") from DINO_IMPORT_ERROR
 
         for resize in ["bilinear", "bicubic_center_crop", "bicubic"]:
             reference = create_checkpoint_dinov3_encoder(str(root / "vision-encoder/backbone"), str(root / "vision-encoder/projection.safetensors")).cuda().float()
@@ -112,22 +143,13 @@ def main():
                 compare(f"{resize}-block-input-{index}", captures[index], states[index])
             del reference, native
         return
-    from diffusers import WanTransformer3DModel
-    from edenlive.core.types import RuntimeContext
-    from edenlive.models.adapters.wan22_diffusers.wan_ops import allocate_wan_kv_cache, patch_wan_transformer_forward, wan_causal_forward_with_cache
 
-    from lightx2v.common.kvcache.manager import build_self_attn_kv_cache
-    from lightx2v.models.runners.wan import edenlive_runner  # noqa: F401
-    from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler
-    from lightx2v.utils.registry_factory import RUNNER_REGISTER
-    from lightx2v.utils.set_config import build_startup_config
-
+    if DIT_IMPORT_ERROR is not None:
+        raise ImportError("DiT parity requires the EdenLive dependencies from --upstream") from DIT_IMPORT_ERROR
     config = build_startup_config(dict(model_cls=args.model_cls, task="i2v", model_path=args.model_path, config_json=args.config))
     source = root / Path(config["dit_original_ckpt"]).name
     config["dit_original_ckpt"] = args.converted_path
     if args.sp or args.cfg_parallel:
-        from lightx2v.utils.set_config import init_parallel
-
         config["parallel"] = {"cfg_p_size" if args.cfg_parallel else "seq_p_size": dist.get_world_size()}
         if args.cfg_parallel:
             config["enable_cfg"] = True
@@ -139,8 +161,6 @@ def main():
     scheduler = runner.scheduler
     if isinstance(scheduler, EdenLiveARScheduler):
         config["ar_config"]["kv_offload"] = args.kv_offload
-    from edenlive.models.adapters.wan22_diffusers.adapter import Wan22DiffusersAdapter
-    from edenlive.models.adapters.wan22_diffusers.channel_concat import enable_wan_channel_concat
 
     reference = Wan22DiffusersAdapter._load_widened_transformer(WanTransformer3DModel, source, torch.bfloat16)
     enable_wan_channel_concat(reference, 1024, condition_rmsnorm=config["proxy_condition_rmsnorm"])
@@ -149,10 +169,6 @@ def main():
     native = runner.load_transformer()
     native.set_scheduler(scheduler)
     if args.boundary == "dynamic":
-        from types import SimpleNamespace
-
-        from edenlive.models.adapters.wan22_diffusers.wan_ops import _cross_attention
-
         hidden = torch.randn(18, config["dim"], device="cuda", dtype=torch.bfloat16)
         text = torch.randn(1024, config["dim"], device="cuda", dtype=torch.bfloat16)
         native.transformer_infer.current_pre = SimpleNamespace(grid_sizes=SimpleNamespace(tuple=(3, 2, 3)), adapter_args={"text_segments": [2, 1]})
@@ -166,8 +182,6 @@ def main():
         torch.testing.assert_close(actual, expected, atol=args.atol, rtol=0)
         return
     if not isinstance(scheduler, EdenLiveARScheduler):
-        from edenlive.models.adapters.wan22_diffusers.wan_ops import wan_parallel_forward
-
         latent_shape = [config["out_dim"], 7, 4, 6]
         scheduler.prepare(42, latent_shape, {"clean_first_frame": torch.randn(config["out_dim"], 1, 4, 6, device="cuda", dtype=torch.bfloat16)})
         scheduler.step_pre(0)

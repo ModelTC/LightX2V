@@ -9,6 +9,22 @@ from lightx2v.utils.registry_factory import SPARSE_MASK_GENERATOR_REGISTER
 from .nbhd_attn import generate_nbhd_mask
 from .svg_attn import diagonal_band_mask_from_sparsity, get_attention_mask, wan_hidden_states_placement, wan_sparse_head_placement
 
+try:
+    from .utils.sla_util import get_block_map
+except ImportError as exc:
+    get_block_map = None
+    _sla_import_error = exc
+else:
+    _sla_import_error = None
+
+try:
+    from .utils.sparge_util import get_block_map_meansim
+except ImportError as exc:
+    get_block_map_meansim = None
+    _sparge_import_error = exc
+else:
+    _sparge_import_error = None
+
 
 class GeneralMaskGenerator(ABC):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
@@ -31,7 +47,8 @@ class GeneralMaskGenerator(ABC):
 @SPARSE_MASK_GENERATOR_REGISTER("sla_mask_generator")
 class SlaMaskGenerator(GeneralMaskGenerator):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
-        from .utils.sla_util import get_block_map
+        if _sla_import_error is not None:
+            raise _sla_import_error
 
         self._get_block_map = get_block_map
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)
@@ -40,16 +57,11 @@ class SlaMaskGenerator(GeneralMaskGenerator):
             raise ValueError(f"SLA sparsity_ratio must be in [0, 1), got {sparsity_ratio}")
         self.topk_ratio = 1 - sparsity_ratio
 
-    def prepare(self, q, k, return_qk=False):
-        """Return the router's mask and LUT without a host synchronization."""
+    def __call__(self, q, k):
         # (L, H, D) -> (B, H, L, D)
         q = q.unsqueeze(0).transpose(1, 2).contiguous()
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
-        prepared = self._get_block_map(q, k, topk_ratio=self.topk_ratio, BLKQ=self.q_block_size, BLKK=self.k_block_size)
-        return (*prepared, (q, k)) if return_qk else prepared
-
-    def __call__(self, q, k):
-        sparse_map, _, _ = self.prepare(q, k)
+        sparse_map, _, _ = self._get_block_map(q, k, topk_ratio=self.topk_ratio, BLKQ=self.q_block_size, BLKK=self.k_block_size)
         # return: [B, H, Q_block_num, K_block_num]
         return sparse_map
 
@@ -57,7 +69,8 @@ class SlaMaskGenerator(GeneralMaskGenerator):
 @SPARSE_MASK_GENERATOR_REGISTER("sparge_mask_generator")
 class SpargeMaskGenerator(GeneralMaskGenerator):
     def __init__(self, q_block_size=128, k_block_size=128, sparse_setting={}, attnmap_frame_num=None):
-        from .utils.sparge_util import get_block_map_meansim
+        if _sparge_import_error is not None:
+            raise _sparge_import_error
 
         self._get_block_map_meansim = get_block_map_meansim
         super().__init__(q_block_size, k_block_size, sparse_setting, attnmap_frame_num)

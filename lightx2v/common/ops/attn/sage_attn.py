@@ -1,14 +1,14 @@
 import torch
 from loguru import logger
 
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+from .template import AttnWeightTemplate
+
 try:
     from magi_compiler import magi_register_custom_op
 except ImportError:
     magi_register_custom_op = None
-
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-
-from .template import AttnWeightTemplate
 
 try:
     from sageattn3_sparse import sage3_block_sparse_attn
@@ -32,17 +32,6 @@ else:
         sageattn = None
 
 
-if magi_register_custom_op is not None and sageattn is not None:
-
-    @magi_register_custom_op(
-        "lightx2v::sage_attn2",
-        infer_output_meta_fn=["q"],
-        is_subgraph_boundary=True,
-    )
-    def _sage_attn2(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        return sageattn(q, k, v, tensor_layout="NHD")
-
-
 try:
     from sageattn3 import sageattn3_blackwell
 except ImportError:
@@ -62,6 +51,34 @@ except ImportError:
     quant_query_per_thread_int8_kernel = None
     qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf = None
     logger.info("sageattention not found, please install sageattention first")
+
+
+try:
+    from .utils.sla_util import get_block_map, get_cuda_arch
+except ImportError as exc:
+    get_block_map = get_cuda_arch = None
+    _sla_import_error = exc
+else:
+    _sla_import_error = None
+
+try:
+    from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordinal_lut_triton, get_block_map_meansim, sage2_block_sparse_attn
+except ImportError as exc:
+    block_map_incremental_lut_triton = block_map_ordinal_lut_triton = get_block_map_meansim = sage2_block_sparse_attn = None
+    _sparge_import_error = exc
+else:
+    _sparge_import_error = None
+
+
+if magi_register_custom_op is not None and sageattn is not None:
+
+    @magi_register_custom_op(
+        "lightx2v::sage_attn2",
+        infer_output_meta_fn=["q"],
+        is_subgraph_boundary=True,
+    )
+    def _sage_attn2(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        return sageattn(q, k, v, tensor_layout="NHD")
 
 
 @torch.library.custom_op("lightx2v::sage_attn2_compiled", mutates_args=(), device_types="cuda")
@@ -169,8 +186,10 @@ class SparseSageAttn2Weight(AttnWeightTemplate):
     sparse_mode = "sla_mode"
 
     def __init__(self):
-        from .utils.sla_util import get_block_map, get_cuda_arch
-        from .utils.sparge_util import block_map_incremental_lut_triton, get_block_map_meansim, sage2_block_sparse_attn
+        if _sla_import_error is not None:
+            raise _sla_import_error
+        if _sparge_import_error is not None:
+            raise _sparge_import_error
 
         self._block_map_incremental_lut_triton = block_map_incremental_lut_triton
         self._get_block_map = get_block_map
@@ -231,8 +250,10 @@ class SparseSageAttn3Weight(AttnWeightTemplate):
     per_block_mean = False
 
     def __init__(self):
-        from .utils.sla_util import get_block_map
-        from .utils.sparge_util import block_map_ordinal_lut_triton, get_block_map_meansim
+        if _sla_import_error is not None:
+            raise _sla_import_error
+        if _sparge_import_error is not None:
+            raise _sparge_import_error
 
         self._block_map_ordinal_lut_triton = block_map_ordinal_lut_triton
         self._get_block_map = get_block_map

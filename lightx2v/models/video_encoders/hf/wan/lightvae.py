@@ -3,13 +3,21 @@ import json
 import torch
 from safetensors import safe_open
 
+_lightvae_import_error = None
+try:
+    from lightvae.wan22_lightvae_decoder import Decoder
+except ImportError as error:
+    Decoder = None
+    _lightvae_import_error = error
+
 
 class Wan22LightVAEDecoder(torch.nn.Module):
     """Adapt the pip-installed LightVAE TLR decoder to normalized Wan latents."""
 
     def __init__(self, vae_path, scale, dtype=torch.bfloat16, device="cuda", cpu_offload=False):
         super().__init__()
-        from lightvae.wan22_lightvae_decoder import Decoder
+        if Decoder is None:
+            raise ImportError("Wan22LightVAEDecoder requires lightvae") from _lightvae_import_error
 
         with safe_open(str(vae_path), framework="pt", device="cpu") as handle:
             config = json.loads(handle.metadata()["checkpoint_metadata"])
