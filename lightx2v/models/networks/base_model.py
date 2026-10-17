@@ -690,9 +690,7 @@ class BaseTransformerModel(ABC):
                 for k in f.keys():
                     if any(remove_key in k for remove_key in remove_keys):
                         continue
-                    if (self.config.get("dit_quant_scheme") == "int8-metal" and k.endswith(".weight_scale")) or (
-                        self.config.get("dit_quant_scheme") == "fp8-musa" and k.endswith("weight_scale")
-                    ):
+                    if (self.config.get("dit_quant_scheme") == "int8-metal" and k.endswith(".weight_scale")) or (self.config.get("dit_quant_scheme") == "fp8-musa" and k.endswith("weight_scale")):
                         weight_dict[k] = f.get_tensor(k).to(device=self.device, dtype=torch.float32)
                     elif f.get_tensor(k).dtype in [torch.float16, torch.bfloat16, torch.float]:
                         if unified_dtype or all(s not in k for s in sensitive_layer):
