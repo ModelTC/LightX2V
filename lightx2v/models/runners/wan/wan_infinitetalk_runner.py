@@ -2,16 +2,14 @@ import gc
 import json
 import math
 import os
-import random
 import shutil
 import subprocess
 import tempfile
-from contextlib import contextmanager
+from contextlib import suppress
 
 import imageio_ffmpeg as ffmpeg
 import numpy as np
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from PIL import Image
@@ -25,6 +23,7 @@ from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkSc
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.input_info import S2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, save_to_video, wan_vae_to_comfy
@@ -106,6 +105,9 @@ def _is_video(path):
 
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
+    _WARMUP_RESOLUTIONS = ((480, 480), (544, 960))
+    _WARMUP_STEP_COUNT = 2
+
     supported_request_fields_by_task = {
         "s2v": COMMON_REQUEST_FIELDS
         | PROMPT_FIELDS
@@ -137,72 +139,92 @@ class InfiniteTalkRunner(WanRunner):
         self.cond_video_fps = None
         self.cond_video_frame_count = None
         self.stream_saved_video_needs_audio_remux = False
-        self._warmed_segment_shapes = set()
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
 
+    @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
-        logger.info("[Warmup] InfiniteTalk warmup waits for the request's segment shape")
-
-    def _segment_warmup_key(self):
-        def shape(tensor):
-            return (tuple(tensor.shape), tensor.dtype) if tensor is not None else None
-
-        return (
-            shape(self.scheduler.latents),
-            shape(self.scheduler.latent_motion_frames),
-            self.scheduler.is_first_clip,
-            self.scheduler.cur_motion_frames_latent_num,
-            tuple((group, name, shape(tensor)) for group in ("text_encoder_output", "image_encoder_output") for name, tensor in sorted(self.dit_inputs[group].items())),
-            shape(self.dit_inputs["audio_encoder_output"]),
-            shape(self.dit_inputs["ref_target_masks"]),
-        )
-
-    @contextmanager
-    def _isolate_segment_warmup(self):
-        scheduler = self.scheduler
-        state = vars(scheduler).copy()
-        python_rng = random.getstate()
-        numpy_rng = np.random.get_state()
-        cpu_rng = torch.get_rng_state()
-        device_rng = torch_device_module.get_rng_state()
-        try:
-            # step_pre writes the motion prefix in place.
-            scheduler.latents = scheduler.latents.clone()
-            yield
-        finally:
+        num_frames = int(self.config["num_frames"])
+        model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model"
+        for height, width in self._WARMUP_RESOLUTIONS:
+            logger.info(f"Warmup InfiniteTalk: {height}x{width}x{num_frames}")
+            transformer_offloaded = True
             try:
+                self._prepare_warmup_inputs(height, width, num_frames)
+                self.init_run()
+                for segment_idx in range(2):
+                    self.init_run_segment(segment_idx)
+                    transformer_offloaded = not model_offload
+                    for step_index in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
+                        self.scheduler.step_pre(step_index)
+                        self.model.infer(self.dit_inputs)
+                        self.scheduler.step_post()
+
+                    if model_offload:
+                        self.model.to_cpu()
+                        transformer_offloaded = True
+
+                    videos = self.run_vae_decoder(self.scheduler.latents)
+                    if segment_idx == 0:
+                        self.cond_frame = videos[:, :, -self.motion_frame :].to(dtype=torch.float32, device=AI_DEVICE)
+                    del videos
                 torch_device_module.synchronize()
             finally:
-                vars(scheduler).clear()
-                vars(scheduler).update(state)
-                random.setstate(python_rng)
-                np.random.set_state(numpy_rng)
-                torch.set_rng_state(cpu_rng)
-                torch_device_module.set_rng_state(device_rng)
+                if not transformer_offloaded:
+                    with suppress(Exception):
+                        self.model.to_cpu()
+                self.clear_warmup_state()
 
-    @torch.no_grad()
-    def _maybe_warmup_segment(self):
-        if not self.config.get("warmup", False):
-            return
-        key = self._segment_warmup_key()
-        if key in self._warmed_segment_shapes:
-            return
-        logger.info(f"[Warmup] InfiniteTalk segment: latent_shape={tuple(self.scheduler.latents.shape)}, first={self.scheduler.is_first_clip}")
-        with ProfilingContext4DebugL1("InfiniteTalk segment warmup"), self._isolate_segment_warmup():
-            self.check_stop()
-            try:
-                self.scheduler.step_pre(0)
-                self.model.infer(self.dit_inputs)
-                self.scheduler.step_post()
-            finally:
-                if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
-                    self.model.to_cpu()
-            self.run_vae_decoder(self.scheduler.latents)
-        if dist.is_initialized() and dist.get_world_size() > 1:
-            dist.barrier()
-        self._warmed_segment_shapes.add(key)
+        logger.info("[Warmup] Warmup completed")
+        self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, height, width, num_frames):
+        self.input_info = S2VInputInfo(
+            task="s2v",
+            seed=0,
+            prompt="Make the character speak naturally according to the audio." if (height, width) == self._WARMUP_RESOLUTIONS[0] else "A person speaks calmly with a relaxed expression.",
+            size=[height, width],
+            num_frames=num_frames,
+            return_result_tensor=True,
+        )
+        self.src_h = self.target_h = height
+        self.src_w = self.target_w = width
+        self.input_data = {}
+        # Reuse the static-frame cache without reading a user image or applying resolution buckets.
+        self.cond_file_path = self.cond_static_image_path = ""
+        self.cond_static_image = Image.new("RGB", (width, height), color=0)
+        human_num = 2 if self.config.get("infinitetalk_mode", "single") == "multi" else 1
+        silence = np.zeros(math.ceil(2 * num_frames * self.audio_sample_rate / self.target_fps), dtype=np.float32)
+        self.inputs = {
+            "text_encoder_output": self.run_text_encoder(self.input_info),
+            "full_audio_embs": [self._load_or_encode_audio(silence) for _ in range(human_num)],
+            "human_num": human_num,
+        }
+
+    def clear_warmup_state(self):
+        try:
+            if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "block":
+                self.model.pre_weight.to_cpu()
+                self.model.transformer_weights.non_block_weights_to_cpu()
+                self.model.transformer_infer.offload_manager.need_init_first_buffer = True
+            self.model.pre_infer.clear_request_rope_cache()
+            self.model.transformer_infer.cos_sin = None
+            self.model.transformer_infer.rope_positions = None
+            self.model.transformer_infer.audio_attn_cu_seqlens_q = None
+            self.model.transformer_infer.audio_attn_cu_seqlens_kv = None
+            self.vae_encoder.model.clear_cache()
+            if self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False)):
+                self.vae_encoder.to_cpu()
+            if self.vae_decoder is not self.vae_encoder and not self.config.get("use_tae", False):
+                self.vae_decoder.model.clear_cache()
+                if self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False)):
+                    self.vae_decoder.to_cpu()
+        finally:
+            self.end_run()
+            self.input_info = None
+            self.input_data = None
+            self.cond_file_path = None
 
     def check_segment_reuse_support(self):
         pass
@@ -1076,7 +1098,6 @@ class InfiniteTalkRunner(WanRunner):
         }
 
     def run_segment(self, segment_idx=0):
-        self._maybe_warmup_segment()
         self._run_dit_clip(self.dit_inputs)
         return self.scheduler.latents
 
