@@ -33,15 +33,15 @@
     "warmup": true,
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-sgl",
-    "dit_quantized_ckpt": "/mnt/devsft_afs_2/gushiqiao/vast/EdenLive-x2v/quantized/dit-5b-fp8.safetensors",
+    "dit_quantized_ckpt": "/path/to/EdenLive-x2v/quantized/dit-5b-fp8.safetensors",
     "use_tae": true,
-    "tae_path": "/mnt/devsft_afs_2/gushiqiao/vast/lighttaew2_2.safetensors",
+    "tae_path": "/path/to/EdenLive-x2v/decoder-5b/lighttaew2_2.pth",
     "need_scaled": true,
     "streaming_vae": true,
     "t5_cpu_offload": false,
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-sgl",
     "t5_rms_norm_type": "torch",
-    "t5_quantized_ckpt": "/mnt/devsft_afs_2/gushiqiao/vast/EdenLive-x2v/quantized/t5-fp8.safetensors",
+    "t5_quantized_ckpt": "/path/to/EdenLive-x2v/quantized/t5-fp8.safetensors",
     "use_cuda_graph": true
 }

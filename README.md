@@ -45,6 +45,8 @@ We thank the following community developers for their contributions to LightX2V:
 
 ## :fire: Latest News
 
+- **October 17, 2026:** 🚀 We now support [EdenLive](scripts/edenlive/README.md) for video generation controlled by text, a first-frame image, and a proxy recording. Wan2.1 14B and Wan2.2 5B each support bidirectional and four-step autoregressive inference, with realtime profiles for RTX 5090 and H100/H200. See the [deployment guide](scripts/edenlive/README.md) for model conversion, quantization, and streaming inference.
+
 - **October 13, 2026:** 🎉 We released the [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App), which supports local inference on MacBook with Qwen-Image-2.1 [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo), [PE-T2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0), and [PE-I2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0) models.
 
 - **September 22, 2026:** 🚀 We added and optimized support for [SwiftVR](https://huggingface.co/H-oliday/SwiftVR), covering image and video restoration and super-resolution. See the [usage guide](scripts/swiftvr/README.md).
@@ -232,6 +234,7 @@ Models and variants are grouped by their primary use.
 - ✅ [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast)
 - ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0)
 - ✅ [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay) (bidirectional, autoregressive, and distilled)
+- ✅ [EdenLive](scripts/edenlive/README.md) (Wan2.1 14B / Wan2.2 5B; bidirectional and four-step autoregressive)
 - ✅ [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (3D reconstruction)
 - ✅ [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
 - ✅ [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base)
