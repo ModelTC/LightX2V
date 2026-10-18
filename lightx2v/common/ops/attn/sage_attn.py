@@ -64,6 +64,16 @@ except ImportError:
     logger.info("sageattention not found, please install sageattention first")
 
 
+@torch.library.custom_op("lightx2v::sage_attn2_compiled", mutates_args=(), device_types="cuda")
+def sage_attn2_compiled(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    return sageattn(q, k, v, tensor_layout="NHD").contiguous()
+
+
+@sage_attn2_compiled.register_fake
+def sage_attn2_compiled_fake(q, k, v):
+    return torch.empty_like(q)
+
+
 @ATTN_WEIGHT_REGISTER("sage_attn2")
 class SageAttn2Weight(AttnWeightTemplate):
     def __init__(self):
@@ -92,6 +102,8 @@ class SageAttn2Weight(AttnWeightTemplate):
             max_seqlen_kv = k.shape[-3]
         if magi_register_custom_op is not None and sageattn is not None:
             x = torch.ops.lightx2v.sage_attn2(q, k, v).view(bs * max_seqlen_q, -1)
+        elif torch.compiler.is_compiling():
+            x = sage_attn2_compiled(q, k, v).view(bs * max_seqlen_q, -1)
         else:
             x = sageattn(q, k, v, tensor_layout="NHD").view(bs * max_seqlen_q, -1)
         return x

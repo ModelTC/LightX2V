@@ -3,6 +3,15 @@ import triton
 import triton.language as tl
 
 
+@torch.compiler.assume_constant_result
+def _forward_launch_options(device, dim, block_m, block_n):
+    if dim >= 128 and torch.cuda.get_device_capability(device) == (12, 0):
+        if dim == 128 and block_m == block_n == 128:
+            return 8, 2
+        return 4, 1
+    return 4, 3
+
+
 @triton.jit
 def _attn_fwd(
     Q,
@@ -48,7 +57,7 @@ def _attn_fwd(
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     o_s = tl.zeros([BLOCK_M, D], dtype=tl.float32)
 
-    q = tl.load(Q_ptrs, mask=offs_m[:, None] < LQ)
+    q = tl.load(Q_ptrs, mask=offs_m[:, None] < LQ, other=0.0)
     for block_idx in tl.range(topk):
         idx_n = tl.load(LUT_ptr + block_idx).to(tl.int64)
         k_start = idx_n * BLOCK_N
@@ -57,11 +66,13 @@ def _attn_fwd(
         K_ptrs = K + kv_offset + (k_start + offs_n)[None, :] * HD + offs_d[:, None]
         V_ptrs = V + kv_offset + (k_start + offs_n)[:, None] * HD + offs_d[None, :]
 
-        k = tl.load(K_ptrs, mask=k_mask[None, :])
+        k = tl.load(K_ptrs, mask=k_mask[None, :], other=0.0)
         qk = tl.dot(q, k) * (qk_scale * 1.4426950408889634)
         qk = tl.where(k_mask[None, :], qk, float("-inf"))
 
-        v = tl.load(V_ptrs, mask=k_mask[:, None])
+        # Masked lanes still participate in the dot product. In particular,
+        # zero attention probabilities must not multiply undefined V lanes.
+        v = tl.load(V_ptrs, mask=k_mask[:, None], other=0.0)
         local_m = tl.max(qk, 1)
         new_m = tl.maximum(m_i, local_m)
         qk = qk - new_m[:, None]
@@ -284,6 +295,17 @@ class _attention_ar(torch.autograd.Function):
         B, LQ, H, D = q.shape
         _, LK, _, Dk = k.shape
 
+        if not (q.is_contiguous() and k.is_contiguous() and v.is_contiguous() and lut.is_contiguous()):
+            raise ValueError("SLA AR attention requires contiguous BLHD tensors and LUT")
+        if k.shape != v.shape or k.shape[0] != B or k.shape[2] != H or Dk != D:
+            raise ValueError("SLA AR attention requires matching batch, heads and dimensions in Q/K/V")
+        if BLOCK_M not in (64, 128) or BLOCK_N not in (64, 128):
+            raise ValueError("SLA AR attention supports block sizes 64 and 128")
+        if not 1 <= topk <= triton.cdiv(LK, BLOCK_N):
+            raise ValueError("SLA AR attention requires at least one valid key block")
+        if lut.shape != (B, H, triton.cdiv(LQ, BLOCK_M), topk):
+            raise ValueError("SLA AR attention LUT shape does not match Q/K and topk")
+
         if qk_scale is None:
             qk_scale = D**-0.5
 
@@ -293,7 +315,11 @@ class _attention_ar(torch.autograd.Function):
         lse = torch.empty((B, H, LQ), device=q.device, dtype=torch.float32)
 
         grid = (M_BLOCKS, B * H)
-        _attn_fwd[grid](q, k, v, qk_scale, topk, lut, lse, o_s, H, LQ, LK, M_BLOCKS, D, BLOCK_M, BLOCK_N, num_warps=4, num_stages=3)
+        # Four warps and three stages at D=128 require 160 KiB of shared
+        # memory, while SM120 permits 99 KiB. Eight warps and two stages fit
+        # this budget and improve occupancy without changing the arithmetic.
+        num_warps, num_stages = _forward_launch_options(q.device, D, BLOCK_M, BLOCK_N)
+        _attn_fwd[grid](q, k, v, qk_scale, topk, lut, lse, o_s, H, LQ, LK, M_BLOCKS, D, BLOCK_M, BLOCK_N, num_warps=num_warps, num_stages=num_stages)
 
         ctx.save_for_backward(q, k, v, k_block_id, lut, lse, o_s)
         ctx.qk_scale = qk_scale
