@@ -244,7 +244,10 @@ def _fused_ln_kernel(
     for j in tl.static_range(10):
         x, offs, cols, mask = _ln_residual_row_tile(X, RES, GATE, seg, rows, rmask, j, stride_gate, RES_MODE, R)
         if RES_MODE != 0:
-            tl.store(X + offs, x, mask=mask)
+            # The updated residual is not read again until the next norm, after
+            # several GEMMs; evict-first keeps y (the next GEMM's A operand)
+            # L2 resident instead.  Cache hint only: results are unchanged.
+            tl.store(X + offs, x, mask=mask, eviction_policy="evict_first")
         normed = rstd[:, None, None] * (x.to(tl.float32) - mean[:, None, None])
         if AFFINE:
             w = tl.load(W + cols).to(tl.float32)
