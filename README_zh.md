@@ -45,7 +45,7 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
-- **2026年10月17日：** 🚀 我们现已支持 [EdenLive](scripts/edenlive/README_zh.md)，结合文本提示词、首帧图像和 proxy 录屏控制视频生成，覆盖 Wan2.1 14B 与 Wan2.2 5B 的双向及 4 步自回归推理。提供 RTX 5090 与 H100/H200 实时配置，模型转换、量化及流式推理用法请参考[部署指南](scripts/edenlive/README_zh.md)。
+- **2026年10月18日：** 🚀 我们现已支持 [EdenLive](scripts/edenlive/README_zh.md)，结合文本提示词、首帧图像和 proxy 录屏控制视频生成，覆盖 Wan2.1 14B 与 Wan2.2 5B 的双向及 4 步自回归推理。提供 RTX 5090 与 H100/H200 实时配置，模型转换、量化及流式推理用法请参考[部署指南](scripts/edenlive/README_zh.md)。
 
 - **2026年10月13日：** 🎉 我们发布了 [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)，支持在 MacBook 上本地运行 Qwen-Image-2.1 的 [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)、[PE-T2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0) 和 [PE-I2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0) 模型。
 
