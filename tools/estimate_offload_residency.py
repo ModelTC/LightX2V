@@ -205,6 +205,68 @@ def build_qwen_case(config, prompt, negative_prompt=" "):
     )
 
 
+def build_qwen_image_21_case(config, prompt, image_path=None):
+    """Measure denoising against a synthetic condition KV prefix, using one real block."""
+    from transformers import Qwen3VLProcessor
+
+    from lightx2v.models.networks.qwen_image_21.infer.offload.transformer_infer import validate_qwen_image_21_residency_config
+    from lightx2v.models.networks.qwen_image_21.infer.pre_infer import QwenImage21PreOutput, build_token_layout
+    from lightx2v.models.networks.qwen_image_21.infer.transformer_infer import QwenImage21TransformerInfer
+    from lightx2v.models.networks.qwen_image_21.input_utils import condition_token_metadata, prepare_condition_inputs, prepare_images
+    from lightx2v.models.networks.qwen_image_21.weights.transformer_weights import QwenImage21BlockWeights
+
+    validate_qwen_image_21_residency_config(config)
+    task = config["task"]
+    if task not in ("t2i", "i2i"):
+        raise ValueError("Qwen-Image-2.1 measurement supports t2i and i2i")
+    images, pixel_size = prepare_images(task, config["resolution"], config.get("size", []), config.get("aspect_ratio", ""), image_path)
+    scale = config["vae_scale_factor"]
+    shapes = [(1, image.height // scale, image.width // scale) for image in images] + [(1, pixel_size[0] // scale, pixel_size[1] // scale)]
+    processor = Qwen3VLProcessor.from_pretrained(Path(config["model_path"]) / "processor", local_files_only=True)
+    drop_index, image_id = condition_token_metadata(processor)
+    inputs = prepare_condition_inputs(processor, prompt, images)
+    mask = (inputs.input_ids[0] == image_id)[drop_index:]
+    infer = QwenImage21TransformerInfer(config)
+    layout = build_token_layout(mask.to(AI_DEVICE), shapes, config["axes_dims_rope"], rope=infer.rope)
+    reference_sizes = [[image.height, image.width] for image in images]
+    del inputs, processor, images
+
+    checkpoint_path = config.get("dit_original_ckpt", None) or config.get("transformer_model_path", None) or str(Path(config["model_path"]) / "transformer")
+    blocks, manager, block_bytes = load_block(config, checkpoint_path, QwenImage21BlockWeights, "transformer_blocks.0.", block_kwargs=dict(index=0, config=config))
+    heads, head_dim = config["num_attention_heads"], config["attention_head_dim"]
+    dim = heads * head_dim
+    torch.manual_seed(42)
+    source = torch.randn(layout.target_len, dim, device=AI_DEVICE, dtype=GET_DTYPE()) * 0.05
+    pre = QwenImage21PreOutput(
+        hidden_states=source,
+        temb=None,
+        modulation=torch.randn(1, 4 * dim, device=AI_DEVICE, dtype=GET_DTYPE()) * 0.05,
+        layout=layout,
+        rotary=layout.rotary[layout.prefix_len :],
+        rotary_positions=layout.rotary_positions[: layout.target_len] if layout.rotary_positions is not None else None,
+    )
+    modulation = infer._modulation(pre)
+    # Prefill is performed once per request, so it is not part of per-step c.
+    cached_k = torch.randn(layout.prefix_len, heads, head_dim, device=AI_DEVICE, dtype=GET_DTYPE()) * 0.05
+    cached_v = torch.randn_like(cached_k) * 0.05
+    hidden = torch.empty_like(source)
+    return SimpleNamespace(
+        blocks=blocks,
+        manager=manager,
+        infer=infer,
+        pre=pre,
+        block_bytes=block_bytes,
+        grid=shapes[-1],
+        pixel_size=pixel_size,
+        text_tokens=int((~mask).sum()),
+        prefix_tokens=layout.prefix_len,
+        target_tokens=layout.target_len,
+        reference_image_sizes=reference_sizes,
+        compute=lambda: (infer.run_block(0, manager.cuda_buffers[0], hidden, modulation, pre.rotary, pre.rotary_positions, cached_k, cached_v),),
+        reset=lambda: hidden.copy_(source),
+    )
+
+
 def build_minimax_h3_case(config, prompt):
     """Measure the joint text/audio/video block using H3's packed layout and AdaLN cache."""
     from transformers import Qwen2TokenizerFast
@@ -320,9 +382,9 @@ def write_json(path, content):
 @torch.no_grad()
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-cls", choices=("wan2.1", "qwen_image", "minimax_h3"), default="wan2.1")
+    parser.add_argument("--model-cls", choices=("wan2.1", "qwen_image", "qwen_image_21", "minimax_h3"), default="wan2.1")
     parser.add_argument("--model-variant", choices=("fl2av",))
-    parser.add_argument("--task", choices=("t2v", "i2v", "t2i", "t2av"), required=True)
+    parser.add_argument("--task", choices=("t2v", "i2v", "t2i", "i2i", "t2av"), required=True)
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--image-path")
@@ -339,10 +401,12 @@ def main():
             parser.error("MiniMax-H3 measurement requires --task t2av and --prompt matching inference")
         deployment["model_variant"] = args.model_variant or deployment.get("model_variant", "fl2av")
     config = build_startup_config(deployment)
+    if args.model_cls in ("qwen_image", "qwen_image_21") and args.prompt is None:
+        parser.error("Qwen measurement requires --prompt matching inference")
     if args.model_cls == "qwen_image":
-        if args.prompt is None:
-            parser.error("Qwen measurement requires --prompt matching inference")
         case = build_qwen_case(config, args.prompt, args.negative_prompt)
+    elif args.model_cls == "qwen_image_21":
+        case = build_qwen_image_21_case(config, args.prompt, args.image_path)
     elif args.model_cls == "minimax_h3":
         case = build_minimax_h3_case(config, args.prompt)
     else:
@@ -354,6 +418,8 @@ def main():
         # Match normalized frame counts used to construct the measured input.
         if args.model_cls in ("wan2.1", "minimax_h3"):
             deployment["num_frames"] = config["num_frames"]
+        elif args.model_cls == "qwen_image_21":
+            deployment["size"] = case.pixel_size
         report = {
             "model_cls": args.model_cls,
             "model_path": args.model_path,
@@ -381,6 +447,8 @@ def main():
         }
         if args.model_cls == "qwen_image":
             report["text_lengths"] = case.text_lengths
+        elif args.model_cls == "qwen_image_21":
+            report.update(task=args.task, compute_phase="denoise", prefix_tokens=case.prefix_tokens, target_tokens=case.target_tokens, reference_image_sizes=case.reference_image_sizes)
         else:
             report["num_frames"] = config["num_frames"]
         if args.model_cls == "minimax_h3":

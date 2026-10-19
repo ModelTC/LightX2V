@@ -13,7 +13,6 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from PIL import Image
 from safetensors import safe_open
 from transformers import Qwen3VLProcessor
 
@@ -21,6 +20,7 @@ from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.embedding.embedding_weight import EmbeddingWeight
 from lightx2v.common.ops.mm.mm_weight import MMWeightTP, unwrap_tp_weight
 from lightx2v.common.ops.norm.layer_norm_weight import LNWeightTemplate
+from lightx2v.models.networks.qwen_image_21.input_utils import condition_token_metadata, prepare_condition_inputs
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV3D_WEIGHT_REGISTER, EMBEDDING_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -244,10 +244,7 @@ class QwenImage21TextEncoder(WeightModule):
             raise ValueError("text_encoder_quant_scheme requires text_encoder_quantized=true")
 
         self.processor = Qwen3VLProcessor.from_pretrained(root / "processor", local_files_only=True)
-        self.system = "Comprehend and analyze the provided prompt."
-        system_tokens = self.processor.apply_chat_template([{"role": "system", "content": [{"type": "text", "text": self.system}]}], tokenize=True, return_dict=False)
-        self.drop_index = len(system_tokens[0])
-        self.image_id = self.processor.tokenizer.encode("<|image_pad|>")[0]
+        self.drop_index, self.image_id = condition_token_metadata(self.processor)
 
         embedding_name = "model.language_model.embed_tokens.weight"
         if self.tp_size > 1:
@@ -413,26 +410,12 @@ class QwenImage21TextEncoder(WeightModule):
 
     @torch.inference_mode()
     def infer(self, prompt, images=None):
-        prefix = ""
-        vision_images = []
-        for index, image in enumerate(images or []):
-            prefix += (" " if index else "") + f"<image{index + 1}><|vision_start|><|image_pad|><|vision_end|>"
-            white = Image.new("RGB", image.size, "white")
-            white.paste(image, mask=image.getchannel("A"))
-            vision_images.append(white)
-        text = f"<|im_start|>system\n{self.system}<|im_end|>\n<|im_start|>user\n{prefix}{prompt or ' '}<|im_end|>\n<|im_start|>assistant\n"
-        kwargs = {"text": [text], "padding": True, "padding_side": "left", "return_tensors": "pt"}
-        if vision_images:
-            kwargs["images"] = vision_images
-            # Runner already resized both encoder inputs to one aligned grid.
-            # A second smart-resize can change the VLM slot count at small sizes.
-            kwargs["do_resize"] = False
-        inputs = self.processor(**kwargs).to(AI_DEVICE)
+        inputs = prepare_condition_inputs(self.processor, prompt, images).to(AI_DEVICE)
         ids = inputs.input_ids[0]
         image_mask = ids == self.image_id
         x = self.embedding.apply(ids)
         deepstack = []
-        if vision_images:
+        if images:
             features, deepstack = self.vision.forward(inputs.pixel_values, inputs.image_grid_thw)
             x[image_mask] = features
         positions = self._position_ids(ids, image_mask, inputs.get("image_grid_thw"))

@@ -1,0 +1,37 @@
+{
+    "infer_steps": 8,
+    "sigmas": [
+        1,
+        0.978453,
+        0.95418,
+        0.926626,
+        0.89508,
+        0.845148,
+        0.704534,
+        0.414568
+    ],
+    "do_time_shift": false,
+    "resolution": 2048,
+    "size": [
+        2048,
+        2048
+    ],
+    "attn_type": "flash_attn3",
+    "rope_type": "flashinfer_rope",
+    "rms_norm_type": "fp32_variance",
+    "layer_norm_type": "Triton",
+    "modulate_type": "triton",
+    "fused_qk_rms_norm": true,
+    "fused_block_ops": true,
+    "fused_block_min_tokens": 1024,
+    "enable_cfg": false,
+    "sample_guide_scale": 1,
+    "warmup": true,
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "cpu_offload_layout": "per_tensor",
+    "use_event_offload": true,
+    "offload_resident_blocks": 0,
+    "text_encoder_cpu_offload": true,
+    "feature_caching": "NoCaching"
+}

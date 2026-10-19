@@ -1,60 +1,33 @@
-# Qwen Image CPU Offload with Resident Weights
+# Qwen Image Resident Blocks
 
 English | [简体中文](README_CN.md)
 
-Run Qwen Image text-to-image generation on a single device and compare two ways of managing block weights: `baseline` keeps all block weights in CPU memory and transfers them to device memory as needed; the residency strategy keeps some block weights in device memory throughout denoising to reduce repeated transfers.
+Run Qwen Image text-to-image on one device to compare a zero-residency baseline with resident blocks. Baseline transfers weights from the CPU as needed; residency keeps the estimated number of blocks evenly distributed across the model to reduce repeated transfers.
 
-Run `estimate` first to measure one block's computation and transfer times and generate a config with an estimated resident block count. Then run `run` for inference. Resident blocks are distributed evenly across the model's layers. Use `run_baseline` for comparison, or run it on its own.
+Prepare the complete `Qwen-Image-2512` BF16 model and set `lightx2v_path` and `model_path` at the top of the scripts. Keep positive and negative prompts identical across all three scripts, and use the same seed for inference. Defaults are 16:9 and 50 steps.
 
-Install the project dependencies for your platform, then run the commands below from the repository root.
+Run the commands below from the repository root: estimate and generate the residency config first, then compare inference runs. Baseline also runs independently.
 
 ## NVIDIA GPU
 
-Use the BF16 weights for `Qwen-Image-2512`. The model directory should contain `transformer`, `text_encoder`, `tokenizer`, `scheduler`, and `vae`. Set `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES` at the top of all three scripts, keeping the values consistent.
-
-The base config is `configs/qwen_image/residency/baseline.json`.
+Set `CUDA_VISIBLE_DEVICES` in all three CUDA scripts.
 
 ```bash
 bash scripts/qwen_image/inference/offload_residency/estimate.sh
-bash scripts/qwen_image/inference/offload_residency/run.sh
 bash scripts/qwen_image/inference/offload_residency/run_baseline.sh
+bash scripts/qwen_image/inference/offload_residency/run.sh
 ```
 
 ## Ascend NPU
 
-Use the BF16 weights for the same model. Set `lightx2v_path`, `model_path`, and `ASCEND_RT_VISIBLE_DEVICES` at the top of all three NPU scripts. The base config is `configs/qwen_image/residency/baseline_npu.json`.
+Set `ASCEND_RT_VISIBLE_DEVICES` in all three NPU scripts.
 
 ```bash
 bash scripts/qwen_image/inference/offload_residency/estimate_npu.sh
-bash scripts/qwen_image/inference/offload_residency/run_npu.sh
 bash scripts/qwen_image/inference/offload_residency/run_baseline_npu.sh
+bash scripts/qwen_image/inference/offload_residency/run_npu.sh
 ```
 
-## Changing inputs and settings
+Base configs are in `configs/qwen_image/residency/`: `baseline.json` for CUDA and `baseline_npu.json` for NPU. Outputs go to `save_results/qwen_residency/`: `resident.json` is the generated config, `resident.profile.json` is the measurement report, and `baseline.png` and `resident.png` are inference outputs. NPU filenames use the `_npu` suffix. Rerunning overwrites files with the same names.
 
-The defaults are a coffee shop prompt, a 16:9 aspect ratio, 50 steps, and `seed=42`. When changing the positive or negative prompt, update the estimation script and both inference scripts: estimation constructs inputs based on prompt length. Keep `seed` consistent between the two inference scripts.
-
-To change the aspect ratio or step count, edit `aspect_ratio` and `infer_steps` in your platform's base config, then rerun estimation to generate a matching residency config.
-
-`cpu_offload_layout` defaults to `per_tensor`. To use contiguous weight transfers, change it to `contiguous` in the base config and rerun estimation. Use the same layout for the baseline and the residency strategy.
-
-These scripts are for text-to-image generation on a single device. They do not support image editing or layered generation.
-
-## Results and comparison
-
-Files are saved in `save_results/qwen_residency/`. Running the scripts again overwrites results with the same names.
-
-| Output | NVIDIA GPU | Ascend NPU |
-| --- | --- | --- |
-| Generated residency config | `resident.json` | `resident_npu.json` |
-| Measurement report | `resident.profile.json` | `resident_npu.profile.json` |
-| Image with resident weights | `resident.png` | `resident_npu.png` |
-| Baseline image | `baseline.png` | `baseline_npu.png` |
-
-In the generated config, `offload_resident_blocks` is the number of resident blocks. In the measurement report, `resident_blocks` and `streamed_blocks` are the numbers of blocks kept on the device and transferred as needed, respectively. `compute_ms` and `transfer_ms` are one block's computation and transfer times in milliseconds. A result of zero resident blocks is valid: the tool estimates that the current input does not require additional resident weights.
-
-To compare timings, set `PROFILING_DEBUG_LEVEL` to `1` in both inference scripts and run them sequentially on the same device. Check the per-step `infer_main` timings in the logs. These include both positive and negative DiT passes and weight transfers, but exclude text encoding and VAE decoding. The first step includes initialization overhead; use subsequent steps to compare steady-state performance.
-
-Keeping more blocks resident uses more device memory. The tool does not automatically reduce the count based on available memory. To reduce memory use, lower `offload_resident_blocks` in the generated config. Rerunning estimation overwrites manual changes.
-
-Rerun estimation after changing the device, model weights, quantization, attention implementation, prompts, image dimensions, or transfer layout. The estimate selects a resident block count; use inference comparisons to measure the actual speedup.
+In the generated config, `offload_resident_blocks` is the resident count; `0` means no resident blocks. Re-estimate after changing the device, inputs, or base config. Profiling follows [base.sh](../../../base/base.sh).

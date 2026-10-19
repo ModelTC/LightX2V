@@ -74,8 +74,8 @@ checkpoint 优先采用对应量化/原始覆盖路径，其次 `transformer_mod
 
 两套目录均有 `estimate.sh`、`run.sh`、`run_baseline.sh` 及对应 `_npu.sh`。CUDA 脚本使用 `PLATFORM=cuda` 和 `CUDA_VISIBLE_DEVICES`；Ascend 使用 `PLATFORM=ascend_npu` 和 `ASCEND_RT_VISIBLE_DEVICES`，运行时代码通过 `AI_DEVICE="npu"` 选择设备接口。不要将平台名与设备名混用。
 
-脚本先填写 `lightx2v_path`、`model_path`，source [base.sh](../../../../scripts/base/base.sh)，再切换到项目根目录执行。`base.sh` 的 `DTYPE` 默认 BF16、`SENSITIVE_LAYER_DTYPE` 默认 None（跟随主 dtype），外部已设置的值会保留；比较时记录最终值。
+脚本先填写 `lightx2v_path`、`model_path`，source [base.sh](../../../../scripts/base/base.sh)，配置、输入、输出和 `mkdir` 路径直接使用 `"${lightx2v_path}/..."`，保留调用时的工作目录，不添加 `set -e`。`base.sh` 的 `DTYPE` 默认 BF16、`SENSITIVE_LAYER_DTYPE` 默认 None（跟随主 dtype），外部已设置的值会保留；比较时记录最终值。
 
-当前脚本在 source 后显式设置 `PROFILING_DEBUG_LEVEL=0`。需要计时时修改两份推理脚本中的该行，单纯在调用脚本前 export 不会覆盖它。计时标签与验证范围见 [验证与调试](validation-and-debugging.md)。
+脚本沿用 `base.sh` 中的 `PROFILING_DEBUG_LEVEL`，当前为 `2`。需要调整时修改该公共设置，baseline 与常驻使用相同级别。在调用脚本前 export 不会覆盖 `base.sh` 中的显式赋值。计时标签与验证范围见 [验证与调试](validation-and-debugging.md)。
 
 现有 CUDA 验证与 NPU 静态检查只能覆盖各自条件。新增 NPU 测试要实际执行估测与推理入口；没有硬件时明确保留“未实测”，不通过删改精度或输入掩盖限制。

@@ -13,7 +13,7 @@ First inspect current tests and the target environment. Run checks that cover th
 | Config output | Other source settings retained, count consistent with report, failed writes do not leave partial JSON |
 | Inference callback or slot scheduling | Block/state ordering, actual transferred layers, ready/free dependencies, numerical equivalence for both layouts |
 | Lifetime | Repeated execution, rebuilding after release, cancellation/exceptions, warmup and pre-VAE release, CPU sources retained |
-| Launchers or configs | Run consumes estimator output, baseline runs independently, inputs/environment match, paths resolve |
+| Launchers or configs | Check shell syntax; launch from outside the repository and verify config/input/output paths and the unchanged working directory; run consumes estimator output, baseline runs independently, inputs/environment match, profiling comes from `base.sh` |
 
 ## Existing check entry points
 
@@ -56,7 +56,7 @@ Complete integration also executes the target platform's estimation, residency, 
 
 ## Timing and memory
 
-Run representative performance comparisons when requested. Use the same device and conditions, run the paths sequentially, and record cold/warm state and repeated measurements. Do not generalize from the single fastest run. Current launchers explicitly set `PROFILING_DEBUG_LEVEL=0` after sourcing `base.sh`; change that value to `1` in both inference launchers for the relevant timing output.
+Run representative performance comparisons when requested. Use the same device and conditions, run the paths sequentially, and record cold/warm state and repeated measurements. Do not generalize from the single fastest run. Launchers inherit `PROFILING_DEBUG_LEVEL` from `base.sh`, currently `2`, which enables the relevant timing output. Adjust it in `base.sh` when needed and use the same level for both paths.
 
 | Model | Log label | Current timing scope |
 |---|---|---|

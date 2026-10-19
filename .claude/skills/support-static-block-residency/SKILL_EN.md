@@ -69,6 +69,8 @@ Version the base configs. The baseline uses `cpu_offload=true`, `offload_granula
 
 Keep project path, model path, and device selection explicit at the top of each launcher. Use `scripts/base/base.sh` and retain full Python commands and output paths. Development-machine absolute paths are editable examples, not general requirements. Do not add layers of environment-variable wrappers, automatic device-count inference, or duplicate task/layout launchers just to standardize a template.
 
+Omit `set -e`, `export PROFILING_DEBUG_LEVEL=0`, and `cd "${lightx2v_path}"` from launchers. Use `"${lightx2v_path}/..."` directly for config, input, output, and `mkdir` paths so launchers preserve the caller's working directory. Inherit profiling from `base.sh`; adjust the shared setting when needed and use the same level for baseline and resident runs.
+
 On each platform, match checkpoint, task, inputs, seed, steps, dtype, operators, layout, and other component offload settings between baseline and residency. The baseline runs independently; residency inference follows estimation for that platform. Users may manually lower `r` in the generated config; rerunning estimation overwrites that change.
 
 Use English `README.md` and Chinese `README_CN.md` with reciprocal language links. Explain assets, editable settings, execution order, output locations, and timing scope. Keep implementation details and historical experiment reports out of the usage guide.

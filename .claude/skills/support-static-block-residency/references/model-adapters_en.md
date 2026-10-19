@@ -74,8 +74,8 @@ Outputs are under `save_results/qwen_residency/`: `resident.json`, `resident.pro
 
 Both directories contain `estimate.sh`, `run.sh`, and `run_baseline.sh`, with `_npu.sh` counterparts. CUDA launchers use `PLATFORM=cuda` and `CUDA_VISIBLE_DEVICES`; Ascend uses `PLATFORM=ascend_npu` and `ASCEND_RT_VISIBLE_DEVICES`, while runtime code selects the device API through `AI_DEVICE="npu"`. Do not confuse platform and device names.
 
-Launchers set `lightx2v_path` and `model_path`, source [base.sh](../../../../scripts/base/base.sh), then execute from the project root. In `base.sh`, `DTYPE` defaults to BF16 and `SENSITIVE_LAYER_DTYPE` to None, following the main dtype. Existing external values are retained; record effective values for comparisons.
+Launchers set `lightx2v_path` and `model_path`, source [base.sh](../../../../scripts/base/base.sh), and use `"${lightx2v_path}/..."` for config, input, output, and `mkdir` paths. They keep the caller's working directory and omit `set -e`. In `base.sh`, `DTYPE` defaults to BF16 and `SENSITIVE_LAYER_DTYPE` to None, following the main dtype. Existing external values are retained; record effective values for comparisons.
 
-Current launchers explicitly set `PROFILING_DEBUG_LEVEL=0` after sourcing the base script. For timing, edit that line in both inference launchers; exporting a value before invoking the script will not override it. See [validation and debugging](validation-and-debugging_en.md) for timing labels and coverage.
+Launchers inherit `PROFILING_DEBUG_LEVEL` from `base.sh`, currently `2`. Adjust the shared setting there when needed and keep it identical for baseline and resident runs. Exporting a value before invoking a launcher does not override the explicit assignment in `base.sh`. See [validation and debugging](validation-and-debugging_en.md) for timing labels and coverage.
 
 Existing CUDA validation and NPU static checks cover their respective conditions only. New NPU validation must actually execute estimation and inference entry points. Without hardware, retain an explicit untested status rather than hiding limitations by changing precision or inputs.

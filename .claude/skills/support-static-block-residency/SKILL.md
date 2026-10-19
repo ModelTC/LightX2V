@@ -69,6 +69,8 @@ configs/<model>/residency/
 
 脚本顶部明确项目路径、模型路径和设备，沿用 `scripts/base/base.sh`，保留完整 Python 命令与结果路径。开发机绝对路径是可编辑示例，不是通用要求。不为模板增加多层环境变量包装器、自动卡数推导或重复的任务/布局脚本。
 
+启动脚本不添加 `set -e`、`export PROFILING_DEBUG_LEVEL=0` 或 `cd "${lightx2v_path}"`。配置、输入、输出和 `mkdir` 路径直接使用 `"${lightx2v_path}/..."`，让脚本保留调用时的工作目录。profiling 统一沿用 `base.sh`；需要调整时修改公共设置，baseline 与常驻使用相同级别。
+
 同一平台 baseline 与常驻策略保持 checkpoint、task、输入、seed、步数、dtype、算子、布局和其他组件 offload 设置一致。baseline 可单独运行；常驻推理先运行对应估测。生成配置中的 `r` 可手动调低，重新估测会覆盖修改。
 
 `README.md` 为英文，`README_CN.md` 为中文，添加双向语言链接。说明资产准备、修改位置、执行顺序、输出位置及计时口径；不把内部实现说明和历史实验报告堆入使用指南。
