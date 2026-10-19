@@ -112,3 +112,16 @@ The tests compare neighbor lookup against CPU hash, sparse convolution against d
 The old experimental TRELLIS fallback indexed its kernel with coordinate offsets `-1/0/1`, so negative indices selected a different weight slice. This implementation uses kernel indices `0/1/2`, matching the official FlexGEMM offset order and dense convolution. It also fixes the decoder BF16 storage gap and BiRefNet's FP32 deformable-convolution path. These corrections change geometry relative to that experiment; old mesh metrics and old latency numbers must not be used as acceptance results for this port. Measure both variants from this checkout with the frozen manifests. The lookup optimization itself preserves outputs between the corrected BF16 variants.
 
 Latency depends on CPU decoding, storage, runtime versions, device clocks, and contention. A100 statistics define the measurement protocol; they do not make MLU times directly interchangeable with A100 times.
+
+## Measured MLU results
+
+The complete frozen suites were run on MLU590-M9D (80 GB, driver 6.5.42), with one device per process and the environment versions above. The first pair is excluded. Both suites had zero failed runs; all returned tensors, including coordinates and mesh topology, were exactly equal between baseline and optimized variants. Both warmup variants passed the BF16 matrix-operand audit.
+
+| Model | Effective pairs | Pipeline p50, baseline / optimized (s) | Median paired pipeline change | Main-call statistic, baseline / optimized (s) |
+| --- | ---: | ---: | ---: | ---: |
+| VGGT | 35 | 25.106818 / 8.343892 | -66.812% | 5.101998 / 5.102104 |
+| TRELLIS.2 | 39 | 39.752405 / 12.215323 | -69.384% | 0.212628 / 0.212445 |
+
+The main-call statistic follows the reduction defined above: one forward for VGGT; the median of 36 sampler calls per TRELLIS request, then the median across requests. VGGT's gain comes from CPU preprocessing; its forward time is unchanged. TRELLIS's lookup optimization benefits sparse decoding outside those sampler calls. Some `segment_reduce` operations fall back to CPU in this `torch_mlu` version; that cost is included in the measurements.
+
+Both model-specific Docker recipes were also built from the vendor runtime and checked with two diagnostic requests each, with networking disabled and only public weights/input assets mounted. They required no host source checkout or experimental patch. The four TRELLIS diagnostic GLB files were byte-identical to their corresponding full-suite outputs. These diagnostics check environment independence; the table uses the full suites. Full-dataset ground-truth quality metrics have not been rerun for this corrected implementation.
