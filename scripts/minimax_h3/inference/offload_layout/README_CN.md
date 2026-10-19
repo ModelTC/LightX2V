@@ -25,3 +25,5 @@ bash scripts/minimax_h3/inference/offload_layout/run_contiguous_npu.sh
 ```
 
 配置位于 `configs/minimax_h3/layout/`，提示词在脚本的 `--prompt` 中设置。结果保存在 `save_results/minimax_h3_layout/`，重复运行会覆盖同名结果。
+
+`cpu_offload_block_contiguous` 在 baseline 配置中为 `false`，在 contiguous 配置中为 `true`。

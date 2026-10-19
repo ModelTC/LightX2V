@@ -1,6 +1,6 @@
 ---
 name: support-contiguous-block-offload
-description: Integrate, review, and debug cpu_offload_layout=contiguous for LightX2V models. Covers common block declarations, operator storage contracts, NVIDIA CUDA and Ascend NPU isolation, baseline/contiguous entry points, and correctness validation. Intended for persistent contiguous pinned weights, without automatically adding multiprocess weight sharing or runtime packing.
+description: Integrate, review, and debug cpu_offload_block_contiguous=true for LightX2V models. Covers common block declarations, operator storage contracts, NVIDIA CUDA and Ascend NPU isolation, baseline/contiguous entry points, and correctness validation. Intended for persistent contiguous pinned weights, without automatically adding multiprocess weight sharing or runtime packing.
 ---
 
 # Integrating Contiguous CPU Block Offload
@@ -63,7 +63,7 @@ configs/<model>/layout/
   contiguous_npu.json
 ```
 
-Within each platform, keep baseline and contiguous variants identical in model, checkpoint, precision, input, seed, sampling, component offload, and compute operators. Prefer adding only `"cpu_offload_layout": "contiguous"`. Use `contiguous` consistently in script and configuration filenames.
+Within each platform, keep baseline and contiguous variants identical in model, checkpoint, precision, input, seed, sampling, component offload, and compute operators. Change `cpu_offload_block_contiguous` from `false` in the baseline to `true`. This field accepts only booleans, defaults to `false` when omitted, and is independent of the resident count. Use `contiguous` consistently in script and configuration filenames.
 
 Keep scripts simple and make model paths, device selection, and output paths explicit. Do not treat development-machine absolute paths as universal requirements. Document actual commands and precision requirements. Handle timing tools, downloads, commits, or pushes only when requested.
 

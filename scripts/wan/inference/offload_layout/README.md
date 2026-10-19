@@ -27,3 +27,5 @@ bash scripts/wan/inference/offload_layout/run_contiguous_npu.sh
 ```
 
 Configs are in `configs/wan/layout/`. Set the input image through `--image_path` in each script. Videos are saved to `save_results/wan_layout/`; rerunning a script overwrites its output.
+
+`cpu_offload_block_contiguous` is `false` in baseline configs and `true` in contiguous configs.

@@ -12,6 +12,7 @@ from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 
 from .infer.offload import QwenImage21OffloadTransformerInfer
+from .infer.offload.transformer_infer import validate_qwen_image_21_residency_config
 from .infer.post_infer import QwenImage21PostInfer
 from .infer.pre_infer import QwenImage21PreInfer
 from .infer.transformer_infer import QwenImage21TransformerInfer
@@ -27,6 +28,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
     post_weight_class = QwenImage21PostWeights
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
+        validate_qwen_image_21_residency_config(config, lora_path)
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {
             "model",
             "block",

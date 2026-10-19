@@ -92,4 +92,6 @@ This path may still hold temporary checkpoint tensors during loading. Do not des
 - Cleanup waits for computation and then closes the current transfer, waiting for copies to finish. Partially initialized resources must also be releasable.
 - Names such as `cuda_buffers` and `create_cuda_buffer` are existing interfaces; the platform determines the actual device. Do not rewrite all callers merely to standardize terminology.
 
+`cpu_offload_block_contiguous` accepts only booleans and defaults to `false`; `true` enables contiguous storage. The obsolete string layout field raises a migration error instead of silently falling back.
+
 Use `validate_contiguous_config()` as the source of truth for current boundaries: a single rank, block granularity, static private weights, eager execution, NoCaching, and matching sensitive-layer/main precision. Sharing, lazy loading, parallelism, LoRA/adapters, compile/graph modes, dynamic quantization, and related combinations currently have explicit restrictions. Do not silently disable user settings to pass validation or present current restrictions as permanent impossibilities.

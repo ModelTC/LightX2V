@@ -92,4 +92,6 @@ self.register_offload_group(
 - 清理时先等待计算完成，再关闭当前 transfer，等待传输结束；初始化失败的部分资源也需要可释放。
 - 接口中 `cuda_buffers`、`create_cuda_buffer` 等是已有命名，实际设备由平台决定；不为命名统一改写所有调用者。
 
+`cpu_offload_block_contiguous` 只接受布尔值，默认 `false`；`true` 才开启连续布局。旧字符串布局字段会报错并提示迁移，不能静默回退。
+
 当前配置边界以 `validate_contiguous_config()` 为准：单 rank、block 粒度、静态私有权重、eager、NoCaching、敏感层与主精度一致。共享、lazy load、并行、LoRA/adapter、compile/graph、动态量化等组合目前有显式限制。不要静默关闭用户配置来通过验证，也不要把这些限制写成未来永远无法支持的原则。
