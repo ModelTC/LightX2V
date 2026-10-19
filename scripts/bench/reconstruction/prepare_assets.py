@@ -22,11 +22,13 @@ GSO_ARCHIVE_SHA256 = "d5451221671f1e6cde403d226a3473762f9f45a322c7154aba806f7243
 def prepare_weights(model, output):
     repo, revision = REVISIONS[model]
     patterns = ["model.pt"] if model == "vggt" else ["pipeline.json", "ckpts/*512_bf16.*", "ckpts/ss_flow_img_dit_1_3B_64_bf16.*", "ckpts/*dec_next_dc_f16c32_fp16.*"]
+    patterns += ["LICENSE*", "README.md"]
     snapshot_download(repo, revision=revision, local_dir=output, allow_patterns=patterns)
     if model == "trellis2":
         for component in ("base", "dinov3", "rembg"):
             repo, revision = REVISIONS[component]
-            patterns = ["ckpts/ss_dec_conv3d_16l8_fp16.*"] if component == "base" else ["*.json", "*.safetensors", "*.py", "README.md"]
+            patterns = ["ckpts/ss_dec_conv3d_16l8_fp16.*"] if component == "base" else ["*.json", "*.safetensors", "*.py"]
+            patterns += ["LICENSE*", "README.md"]
             snapshot_download(repo, revision=revision, local_dir=output / component, allow_patterns=patterns)
 
 

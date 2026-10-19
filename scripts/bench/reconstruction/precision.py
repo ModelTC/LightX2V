@@ -17,11 +17,11 @@ class BF16Audit(TorchDispatchMode):
         name = str(func)
         operands = ()
         operator = name.rsplit(".", 1)[0]
-        if operator in {"aten.mm", "aten.bmm"}:
+        if operator in {"aten.mm", "aten.bmm", "aten.matmul"}:
             operands = args[:2]
         elif operator in {"aten.addmm", "aten.baddbmm"}:
             operands = args[1:3]
-        elif "convolution" in name or operator in {"aten.conv1d", "aten.conv2d", "aten.conv3d", "aten.conv_transpose2d", "aten.conv_transpose3d"}:
+        elif any(kind in name.lower() for kind in ("convolution", "conv1d", "conv2d", "conv3d", "conv_transpose")):
             operands = args[:2]
         elif "scaled_dot_product" in name:
             operands = args[:3]
