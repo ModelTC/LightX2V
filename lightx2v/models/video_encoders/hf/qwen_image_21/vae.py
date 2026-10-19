@@ -1,10 +1,3 @@
-"""Single-frame RGBA VAE, with the released Qwen-Image-2.1 weight names.
-
-The residual spatial shortcuts are shared with native Wan 2.2. Convolutions
-are the image specialization (2D checkpoint kernels); temporal resampler
-weights are loaded for compatibility but are unused for the first frame.
-"""
-
 import json
 from pathlib import Path
 
@@ -73,13 +66,9 @@ def _tiled_forward(x, forward, tile_size, halo, input_scale=1, output_scale=1):
 
 
 class ImageConv(FP8Conv2d):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.image_padding = (self.padding[1], self.padding[1], self.padding[0], self.padding[0])
-        self.padding = (0, 0)
-
+    @torch.no_grad()
     def forward(self, x):
-        return super().forward(F.pad(x.squeeze(2), self.image_padding)).unsqueeze(2)
+        return super().forward(x.squeeze(2)).unsqueeze(2)
 
 
 class ImageRMSNorm(nn.Module):
@@ -88,11 +77,18 @@ class ImageRMSNorm(nn.Module):
         self.gamma = nn.Parameter(torch.ones((channels,) + ((1, 1) if images else (1, 1, 1))))
         self.scale = channels**0.5
 
+    @torch.no_grad()
     def forward(self, x):
-        return F.normalize(x.float(), dim=1).to(x.dtype) * self.scale * self.gamma
+        if x.dtype not in (torch.float16, torch.bfloat16) or self.gamma.dtype != x.dtype:
+            return F.normalize(x.float(), dim=1).to(x.dtype) * self.scale * self.gamma
+        # Low-precision inputs give us a private FP32 buffer to reuse.
+        value = x.float()
+        norm = value.norm(2, dim=1, keepdim=True).clamp_min_(1e-12)
+        return value.div_(norm).to(x.dtype).mul_(self.scale).mul_(self.gamma)
 
 
 class ImageAvgDown3D(AvgDown3D):
+    @torch.no_grad()
     def forward(self, x):
         # Express temporal padding as 4D channel padding. MPSGraph's 5D
         # constant padding can corrupt large spatial tensors (PyTorch #194922).
@@ -104,6 +100,23 @@ class ImageAvgDown3D(AvgDown3D):
         return super().forward(x)
 
 
+class ImageDupUp3D(DupUp3D):
+    @torch.no_grad()
+    def forward(self, x, first_chunk=False):
+        if not first_chunk or x.shape[2] != 1 or self.in_channels % self.out_channels:
+            return super().forward(x, first_chunk=first_chunk)
+        # Write only the retained frame, without expanded temporal buffers.
+        batch, _, _, height, width = x.shape
+        factor = self.factor_s
+        step = self.in_channels // self.out_channels
+        output = x.new_empty((batch, self.out_channels, 1, height * factor, width * factor))
+        for row in range(factor):
+            for column in range(factor):
+                offset = ((self.factor_t - 1) * factor * factor + row * factor + column) // self.repeats
+                output[..., row::factor, column::factor].copy_(x[:, offset::step])
+        return output
+
+
 class ResidualBlock(nn.Module):
     def __init__(self, in_dim, out_dim):
         super().__init__()
@@ -113,9 +126,12 @@ class ResidualBlock(nn.Module):
         self.conv2 = ImageConv(out_dim, out_dim, 3, padding=1)
         self.conv_shortcut = ImageConv(in_dim, out_dim, 1) if in_dim != out_dim else nn.Identity()
 
+    @torch.no_grad()
     def forward(self, x):
-        h = self.conv1(F.silu(self.norm1(x)))
-        return self.conv2(F.silu(self.norm2(h))) + self.conv_shortcut(x)
+        h = self.conv1(F.silu(self.norm1(x), inplace=True))
+        h = self.norm2(h)
+        h = self.conv2(F.silu(h, inplace=True))
+        return h.add_(self.conv_shortcut(x))
 
 
 class AttentionBlock(nn.Module):
@@ -125,6 +141,7 @@ class AttentionBlock(nn.Module):
         self.to_qkv = nn.Conv2d(dim, dim * 3, 1)
         self.proj = nn.Conv2d(dim, dim, 1)
 
+    @torch.no_grad()
     def forward(self, x):
         b, c, _, h, w = x.shape
         value = x.permute(0, 2, 1, 3, 4).reshape(b, c, h, w)
@@ -140,11 +157,13 @@ class MidBlock(nn.Module):
         self.resnets = nn.ModuleList([ResidualBlock(dim, dim), ResidualBlock(dim, dim)])
         self.attentions = nn.ModuleList([AttentionBlock(dim)])
 
+    @torch.no_grad()
     def forward(self, x):
         return self.resnets[1](self.attentions[0](self.resnets[0](x)))
 
 
 class Upsample(nn.Module):
+    @torch.no_grad()
     def forward(self, x):
         return F.interpolate(x.float(), scale_factor=2, mode="nearest-exact").to(x.dtype)
 
@@ -159,6 +178,7 @@ class Resample(nn.Module):
         if temporal:
             self.time_conv = ImageConv(dim, dim * 2 if up else dim, 1)
 
+    @torch.no_grad()
     def forward(self, x):
         b, c, _, h, w = x.shape
         # Keep the reference's frame folding, including singleton-axis strides:
@@ -174,6 +194,7 @@ class DownBlock(nn.Module):
         self.downsampler = Resample(out_dim, False, temporal) if down else None
         self.avg_shortcut = shortcut_cls(in_dim, out_dim, 2 if temporal else 1, 2 if down else 1)
 
+    @torch.no_grad()
     def forward(self, x):
         h = x
         for block in self.resnets:
@@ -188,8 +209,9 @@ class UpBlock(nn.Module):
         super().__init__()
         self.resnets = nn.ModuleList([ResidualBlock(in_dim if i == 0 else out_dim, out_dim) for i in range(count + 1)])
         self.upsampler = Resample(out_dim, True, temporal) if up else None
-        self.avg_shortcut = DupUp3D(in_dim, out_dim, 2 if temporal else 1, 2) if up else None
+        self.avg_shortcut = ImageDupUp3D(in_dim, out_dim, 2 if temporal else 1, 2) if up else None
 
+    @torch.no_grad()
     def forward(self, x):
         h = x
         for block in self.resnets:
@@ -235,6 +257,7 @@ class Encoder(nn.Module):
     def forward_mid(self, x):
         return self.conv_out(F.silu(self.norm_out(self.mid_block(x))))
 
+    @torch.no_grad()
     def forward(self, x):
         return self.forward_mid(self.forward_down(x))
 
@@ -264,11 +287,13 @@ class Decoder(nn.Module):
     def forward_up(self, x):
         for block in self.up_blocks:
             x = block(x)
-        return self.conv_out(F.silu(self.norm_out(x)))
+        x = self.norm_out(x)
+        return self.conv_out(F.silu(x, inplace=True))
 
     def forward_mid(self, x):
         return self.mid_block(self.conv_in(x))
 
+    @torch.no_grad()
     def forward(self, x):
         return self.forward_up(self.forward_mid(x))
 
