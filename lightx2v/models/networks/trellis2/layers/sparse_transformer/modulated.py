@@ -57,7 +57,7 @@ class ModulatedSparseTransformerCrossBlock(nn.Module):
         else:
             self.modulation = nn.Parameter(torch.randn(6 * channels) / channels**0.5)
 
-    def _forward(self, x: SparseTensor, mod: torch.Tensor, context: Union[torch.Tensor, VarLenTensor]) -> SparseTensor:
+    def forward(self, x: SparseTensor, mod: torch.Tensor, context: Union[torch.Tensor, VarLenTensor]) -> SparseTensor:
         if self.share_mod:
             (shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp) = (self.modulation + mod).type(mod.dtype).chunk(6, dim=1)
         else:
@@ -76,6 +76,3 @@ class ModulatedSparseTransformerCrossBlock(nn.Module):
         h = h * gate_mlp
         x = x + h
         return x
-
-    def forward(self, x: SparseTensor, mod: torch.Tensor, context: Union[torch.Tensor, VarLenTensor]) -> SparseTensor:
-        return self._forward(x, mod, context)

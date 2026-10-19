@@ -56,7 +56,7 @@ class ModulatedTransformerCrossBlock(nn.Module):
         else:
             self.modulation = nn.Parameter(torch.randn(6 * channels) / channels**0.5)
 
-    def _forward(self, x: torch.Tensor, mod: torch.Tensor, context: torch.Tensor, phases: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mod: torch.Tensor, context: torch.Tensor, phases: Optional[torch.Tensor] = None) -> torch.Tensor:
         if self.share_mod:
             (shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp) = (self.modulation + mod).type(mod.dtype).chunk(6, dim=1)
         else:
@@ -75,6 +75,3 @@ class ModulatedTransformerCrossBlock(nn.Module):
         h = h * gate_mlp.unsqueeze(1)
         x = x + h
         return x
-
-    def forward(self, x: torch.Tensor, mod: torch.Tensor, context: torch.Tensor, phases: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self._forward(x, mod, context, phases)

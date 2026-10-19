@@ -26,7 +26,7 @@ class SparseResBlockC2S3d(nn.Module):
             self.to_subdiv = sp.SparseLinear(channels, 8)
         self.updown = sp.SparseChannel2Spatial(2)
 
-    def _forward(self, x: sp.SparseTensor, subdiv: sp.SparseTensor = None) -> sp.SparseTensor:
+    def forward(self, x: sp.SparseTensor, subdiv: sp.SparseTensor = None) -> sp.SparseTensor:
         if self.pred_subdiv:
             subdiv = self.to_subdiv(x)
         h = x.replace(self.norm1(x.feats))
@@ -44,9 +44,6 @@ class SparseResBlockC2S3d(nn.Module):
         else:
             return h
 
-    def forward(self, x: sp.SparseTensor, subdiv: sp.SparseTensor = None) -> sp.SparseTensor:
-        return self._forward(x, subdiv)
-
 
 class SparseConvNeXtBlock3d(nn.Module):
     def __init__(self, channels: int, mlp_ratio: float = 4.0):
@@ -56,14 +53,11 @@ class SparseConvNeXtBlock3d(nn.Module):
         self.conv = sp.SparseConv3d(channels, channels, 3)
         self.mlp = nn.Sequential(nn.Linear(channels, int(channels * mlp_ratio)), nn.SiLU(), nn.Linear(int(channels * mlp_ratio), channels))
 
-    def _forward(self, x: sp.SparseTensor) -> sp.SparseTensor:
+    def forward(self, x: sp.SparseTensor) -> sp.SparseTensor:
         h = self.conv(x)
         h = h.replace(self.norm(h.feats))
         h = h.replace(self.mlp(h.feats))
         return h + x
-
-    def forward(self, x: sp.SparseTensor) -> sp.SparseTensor:
-        return self._forward(x)
 
 
 class SparseUnetVaeDecoder(nn.Module):

@@ -21,7 +21,7 @@ def make_sincos_pos_embed(embed_dim: int, pos: torch.Tensor, omega_0: float = 10
     """This function generates a 1D positional embedding from a given grid using sine and cosine functions."""
     assert embed_dim % 2 == 0
     device = pos.device
-    omega = torch.arange(embed_dim // 2, dtype=torch.float32 if device.type == "mps" else torch.double, device=device)
+    omega = torch.arange(embed_dim // 2, dtype=torch.float32, device=device)
     omega /= embed_dim / 2.0
     omega = 1.0 / omega_0**omega
     pos = pos.reshape(-1)

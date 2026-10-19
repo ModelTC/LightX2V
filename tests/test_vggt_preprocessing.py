@@ -6,6 +6,7 @@ from reconstruction_imports import cpu_imports
 from torchvision.transforms.functional import to_tensor
 
 with cpu_imports():
+    from lightx2v.models.networks.vggt.heads.utils import make_sincos_pos_embed
     from lightx2v.models.networks.vggt.utils.image_processor import load_images
 
 
@@ -35,3 +36,13 @@ def test_parallel_preprocessing_preserves_pixels_and_order(tmp_path):
 def test_invalid_preprocessing_request(paths, workers):
     with pytest.raises(ValueError):
         load_images(paths, workers=workers)
+
+
+@pytest.mark.parametrize("dimension", [64, 256, 1024])
+def test_position_embedding_fp32_matches_high_precision_reference(dimension):
+    positions = torch.linspace(-1, 1, 97)
+    frequencies = 100 ** (-torch.arange(dimension // 2, dtype=torch.float64) / (dimension / 2))
+    phase = torch.outer(positions.double(), frequencies)
+    reference = torch.cat((phase.sin(), phase.cos()), dim=1).float()
+    actual = make_sincos_pos_embed(dimension, positions)
+    torch.testing.assert_close(actual, reference, rtol=1e-6, atol=2e-7)
