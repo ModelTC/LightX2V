@@ -348,19 +348,25 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
         if not self.config.get("audio_mono", False):
             block = block.expand(2, -1).contiguous()
 
-        prefix_samples = chunk.audio_frames.start * hop
         if chunk_idx == 0 or self.stream_waveform is None:
             self.stream_waveform = block
-        elif self.stream_waveform.shape[-1] != prefix_samples:
-            raise ValueError(f"live audio prefix has {self.stream_waveform.shape[-1]} samples; chunk {chunk_idx} expects {prefix_samples}")
         else:
             self.stream_waveform = torch.cat((self.stream_waveform, block), dim=-1)
+        window_secs = float(self.config.get("audio_encode_window_secs", 15))
+        if window_secs > 0:
+            max_samples = max(hop, int(window_secs * self.audio_vae.sampling_rate) // hop * hop)
+            if self.stream_waveform.shape[-1] > max_samples:
+                if dist.get_rank() == 0:
+                    logger.warning(f"stream_waveform truncate from {self.stream_waveform.shape} to {max_samples}")
+                self.stream_waveform = self.stream_waveform[..., -max_samples:].contiguous()
 
         encode_waveform = self.stream_waveform[:1] if self.config.get("audio_mono", False) else self.stream_waveform
-        latents = self.audio_vae.encode(encode_waveform[..., : chunk.audio_frames.stop * hop], return_cpu=False)
+        latents = self.audio_vae.encode(encode_waveform, return_cpu=False)
         if encode_waveform.shape[0] == 1:
             latents = latents.expand(2, -1, -1)
-        clean = latents[..., chunk.audio_frames].transpose(1, 2).reshape(-1, latents.shape[1]).contiguous()
+        n_audio = chunk.num_audio_frames
+        start = encode_waveform.shape[-1] // hop - n_audio
+        clean = latents[..., start : start + n_audio].transpose(1, 2).reshape(-1, latents.shape[1]).contiguous()
         if dist.get_rank() == 0:
             logger.debug(f"chunk[{chunk_idx}] clean audio shape: {clean.shape}")
         return clean
@@ -425,7 +431,6 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
             last_origin_audio = None
             last_chunk_idx = 0
             last_valid_duration = 0
-            next_t = None
             self.last_rest_audio = None
 
             while True:
