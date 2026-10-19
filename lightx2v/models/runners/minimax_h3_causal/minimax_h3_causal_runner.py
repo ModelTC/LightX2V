@@ -433,10 +433,14 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
                 if control.action == "perform_action":
                     self.inputs["text_encoder_output"] = self.encode_action_prompt(control.data)
                     self.fill_condition_cache(overwrite=True)
-                    if self.va_controller.recorder is not None:
+                    if self.va_controller.recorder is not None and hasattr(self.va_controller.recorder, "emit_prompt_update"):
                         self.va_controller.recorder.emit_prompt_update(control.data)
                     if dist.get_rank() == 0:
                         logger.info(f"H3 prompt switched before chunk {chunk_idx}: {control.data}")
+                    continue
+
+                elif control.action == "wait":
+                    time.sleep(0.01)
                     continue
 
                 chunk = self._get_stream_chunk(chunk_idx)
@@ -481,9 +485,6 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
                     last_valid_duration = valid_duration
                     chunk_idx += 1
                     fail_count = 0
-                    if next_t is not None:
-                        time.sleep(max(0.0, next_t - time.time()))
-                    next_t = time.time() + 17 / 24.0
 
         finally:
             if hasattr(self.model, "inputs"):

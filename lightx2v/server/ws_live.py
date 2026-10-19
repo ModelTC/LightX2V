@@ -106,6 +106,7 @@ async def follower_loop(runner, input_info):
                 negative_prompt=cmd["negative_prompt"],
                 image_path=cmd["image_path"],
                 size=cmd["size"],
+                stream_config=cmd.get("stream_config"),
             )
             logger.info(f"Rank {RANK} input_info: {input_info}")
             thread, future = launch_pipeline(runner, input_info, RANK, loop)
@@ -159,8 +160,9 @@ async def run_websocket_server(args, runner, input_info):
                         state.session = None
                         session = None
                         continue
-                    pump_task = asyncio.create_task(session.pump_video(websocket))
-                    if session.future is not None:
+                    if session.sends_ws_output:
+                        pump_task = asyncio.create_task(session.pump_video(websocket))
+                    if pump_task is not None and session.future is not None:
                         session.future.add_done_callback(lambda fut: session.mark_pipeline_done(*(fut.result() if not fut.cancelled() else (False, "cancelled"))))
                     continue
 

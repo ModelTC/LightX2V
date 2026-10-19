@@ -317,6 +317,7 @@ class RefA2VInputInfo(T2AVInputInfo):
     image_path: Any = ""
     audio_path: str = ""
     action_prompts: dict[str, Any] | list[Any] | None = None
+    stream_config: dict = field(default_factory=dict)
 
 
 @dataclass

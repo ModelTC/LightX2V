@@ -2,9 +2,11 @@
 """Minimal protobuf websocket client for seko_talk_ar live inference."""
 
 import argparse
+import json
 import os
 import subprocess
 import tempfile
+import time
 import wave
 
 from lightx2v.server.ws.protocol import (
@@ -99,6 +101,15 @@ def _mux_raw(output, width, height, fps, video_bytes, audio_bytes, sample_rate=1
         subprocess.check_call(cmd)
 
 
+def send_full_audio(ws, pcm: bytes, chunk_bytes: int, seq: int) -> int:
+    ws.send(ClientMessage(audio_start=Empty()).serialize())
+    for i in range(0, len(pcm), chunk_bytes):
+        ws.send(ClientMessage(audio=AudioChunk(sequence=seq, data=pcm[i : i + chunk_bytes])).serialize())
+        seq += 1
+    ws.send(ClientMessage(audio_end=Empty()).serialize())
+    return seq
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="LightX2V seko_talk_ar websocket live client")
     parser.add_argument("--url", type=str, default="ws://127.0.0.1:8765/v1/live")
@@ -114,6 +125,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--aspect_ratio", type=str, default="16:9")
     parser.add_argument("--chunk_frames", type=int, default=8)
+    parser.add_argument("--output_url", type=str, default="", help="http(s)/rtmp URL to push output directly instead of receiving WS video")
     return parser.parse_args()
 
 
@@ -129,6 +141,9 @@ def main():
     pcm = read_wav_pcm16_mono(args.audio)
     ext = os.path.splitext(args.image)[1].lstrip(".") or "jpg"
     audio_secs = len(pcm) / 16000.0 / 2
+    stream_config = {}
+    if args.output_url:
+        stream_config["output_url"] = args.output_url
 
     start = Start(
         request_id=args.request_id,
@@ -140,25 +155,39 @@ def main():
         seed=args.seed,
         aspect_ratio=args.aspect_ratio,
         chunk_frames=args.chunk_frames,
+        config_json=json.dumps(stream_config, ensure_ascii=False) if stream_config else "",
     )
 
     chunks = []
     size = [0, 0]
     with connect(args.url, max_size=None) as ws:
         ws.send(ClientMessage(start=start).serialize())
-        ws.send(ClientMessage(audio_start=Empty()).serialize())
         seq = 1
-        for i in range(0, len(pcm), args.chunk_bytes):
-            ws.send(ClientMessage(audio=AudioChunk(sequence=seq, data=pcm[i : i + args.chunk_bytes])).serialize())
-            seq += 1
-        ws.send(ClientMessage(audio_end=Empty()).serialize())
-        print(f"audio sent {audio_secs:.2f}s, recv video")
+        if args.output_url:
+            print(f"loop audio {audio_secs:.2f}s to {args.output_url}; Ctrl-C to stop")
+            round_idx = 1
+            try:
+                while True:
+                    seq = send_full_audio(ws, pcm, args.chunk_bytes, seq)
+                    print(f"round-{round_idx} audio sent ({audio_secs:.2f}s), seq now {seq}")
+                    deadline = time.monotonic() + audio_secs
+                    while time.monotonic() < deadline:
+                        if _try_recv(ws, chunks, size, timeout=min(1.0, deadline - time.monotonic())) == "closed":
+                            raise SystemExit("websocket closed while looping audio")
+                    round_idx += 1
+            except KeyboardInterrupt:
+                print("stop")
+        else:
+            seq = send_full_audio(ws, pcm, args.chunk_bytes, seq)
+            print(f"audio sent {audio_secs:.2f}s, recv video")
+            reason = ""
+            while not reason:
+                reason = _try_recv(ws, chunks, size, timeout=1.0)
+            print(f"recv done ({reason}), mux {len(chunks)} chunks then disconnect")
 
-        reason = ""
-        while not reason:
-            reason = _try_recv(ws, chunks, size, timeout=1.0)
-        print(f"recv done ({reason}), mux {len(chunks)} chunks then disconnect")
-
+    if args.output_url:
+        print(f"output pushed to {args.output_url}, skip local mux")
+        return
     video_bytes = b"".join(c.video_data for c in chunks)
     audio_bytes = b"".join(c.audio_data for c in chunks)
     if size[0] <= 0 or size[1] <= 0 or not video_bytes:

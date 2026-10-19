@@ -47,6 +47,7 @@ def parse_aspect_ratios(value: str) -> dict:
 
 DEFAULT_PROMPT = "The video features a person is saying something."
 DEFAULT_NEGATIVE_PROMPT = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+OUTPUT_URL_PREFIXES = ("http://", "https://", "rtmp://")
 
 
 def resolve_aspect_ratio(value: str) -> tuple[str, list[int]]:
@@ -56,15 +57,33 @@ def resolve_aspect_ratio(value: str) -> tuple[str, list[int]]:
     return ar, list(ASPECT_RATIOS[ar])
 
 
-def apply_run_input(input_info, *, prompt, negative_prompt, image_path, size, audio_source=None, on_output=None, chunk_frames=8):
+def parse_stream_config(config_json: str) -> dict:
+    try:
+        config = json.loads(config_json) if config_json.strip() else {}
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Start.config_json is invalid JSON: {error}") from error
+    if not isinstance(config, dict):
+        raise ValueError("Start.config_json must be a JSON object")
+    output_url = config.get("output_url")
+    if output_url is not None and (not isinstance(output_url, str) or not output_url.startswith(OUTPUT_URL_PREFIXES)):
+        raise ValueError("config_json.output_url must start with http://, https://, or rtmp://")
+    return config
+
+
+def apply_run_input(input_info, *, prompt, negative_prompt, image_path, size, audio_source=None, on_output=None, chunk_frames=8, stream_config=None):
+    stream_config = dict(stream_config or {})
+    output_url = stream_config.get("output_url")
     audio_path = {"type": "ws", "source": audio_source} if audio_source else {"type": "ws"}
-    save_result_path = {"type": "ws"}
-    if on_output is not None:
+    if output_url:
+        save_result_path = {"type": "stream", "data": output_url}
+    elif on_output is not None:
         save_result_path = {
             "type": "ws",
             "on_output": on_output,
             "chunk_frames": int(chunk_frames or 8),
         }
+    else:
+        save_result_path = {"type": "ws"}
     # 设置 seed 会导致片段间有雪花点，因此暂不设置 seed
     input_info.update(
         {
@@ -75,6 +94,7 @@ def apply_run_input(input_info, *, prompt, negative_prompt, image_path, size, au
             "audio_path": audio_path,
             "save_result_path": save_result_path,
             "action_prompts": {"0": [""]},
+            "stream_config": stream_config,
         }
     )
 
@@ -161,6 +181,7 @@ class LiveSession:
         self.future: Optional[asyncio.Future] = None
         self.tmp_dir = None
         self.request_id = ""
+        self.stream_config = {}
         self.busy = False
 
     def _on_output(self, item):
@@ -172,6 +193,8 @@ class LiveSession:
         if not images or not images[0]:
             raise ValueError("Start.image_data is required")
 
+        self.stream_config = parse_stream_config(start.config_json)
+        logger.info(f"Rank {self.rank} stream_config: {self.stream_config}")
         self.request_id = start.request_id or "ws-session"
         self.tmp_dir = tempfile.TemporaryDirectory(prefix=f"lightx2v_ws_{self.request_id}_")
         image_path = os.path.join(self.tmp_dir.name, f"ref{_image_suffix(start.image_fromat)}")
@@ -208,6 +231,7 @@ class LiveSession:
             audio_source=self.audio_source,
             on_output=self._on_output,
             chunk_frames=start.chunk_frames,
+            stream_config=self.stream_config,
         )
         logger.info(f"Rank {self.rank} input_info: {self.input_info}")
         return {
@@ -217,7 +241,12 @@ class LiveSession:
             # "seed": seed,
             "image_path": image_path,
             "size": size,
+            "stream_config": self.stream_config,
         }
+
+    @property
+    def sends_ws_output(self):
+        return not self.stream_config.get("output_url")
 
     def start_pipeline(self):
         self.busy = True
