@@ -29,16 +29,30 @@ from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage, StorageDescription, WeightStorage, require_dtype
 
 try:
-    from lightx2v_kernel.gemm import (
-        cutlass_scaled_mxfp4_mm,
-        cutlass_scaled_mxfp6_mxfp8_mm,
-        cutlass_scaled_mxfp8_mm,
-        cutlass_scaled_nvfp4_mm,
-        scaled_mxfp4_quant,
-        scaled_mxfp6_quant,
-        scaled_mxfp8_quant,
-        scaled_nvfp4_quant,
-    )
+    try:
+        from lightx2v_kernel_nvidia.gemm import (
+            cutlass_scaled_mxfp4_mm,
+            cutlass_scaled_mxfp6_mxfp8_mm,
+            cutlass_scaled_mxfp8_mm,
+            cutlass_scaled_nvfp4_mm,
+            scaled_mxfp4_quant,
+            scaled_mxfp6_quant,
+            scaled_mxfp8_quant,
+            scaled_nvfp4_quant,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name != "lightx2v_kernel_nvidia":
+            raise
+        from lightx2v_kernel.gemm import (
+            cutlass_scaled_mxfp4_mm,
+            cutlass_scaled_mxfp6_mxfp8_mm,
+            cutlass_scaled_mxfp8_mm,
+            cutlass_scaled_nvfp4_mm,
+            scaled_mxfp4_quant,
+            scaled_mxfp6_quant,
+            scaled_mxfp8_quant,
+            scaled_nvfp4_quant,
+        )
 except ImportError:
     scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm = None, None
     scaled_mxfp4_quant, cutlass_scaled_mxfp4_mm = None, None

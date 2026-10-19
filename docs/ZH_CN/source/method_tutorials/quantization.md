@@ -202,7 +202,7 @@ python tools/convert/converter.py \
 `vae_encoder_conv_mode` 属于启动设置。上面的转换命令是离线权重转换工具，其输出参数描述
 checkpoint 文件，与推理结果的保存参数各有职责。
 
-FP8 Conv3D 当前仅支持 SM120，并要求安装由包含该算子的代码版本构建的 `lightx2v_kernel` wheel。kernel
+FP8 Conv3D 当前仅支持 SM120，并要求安装由包含该算子的代码版本构建的 `lightx2v_kernel_nvidia`（或兼容的旧版 `lightx2v_kernel`）wheel。kernel
 会在新 Conv3D shape 首次出现时自动调优，并在当前进程内复用最优配置，不需要额外的离线调优步骤。
 
 ### T5 模型量化

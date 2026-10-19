@@ -120,7 +120,7 @@ def prepare_convrot_gelu_fusion(device=None):
 
                     library = load(
                         name="lightx2v_convrot_gelu_sm120",
-                        sources=[str(Path(__file__).resolve().parents[4] / "lightx2v_kernel/csrc/quantization/convrot_gelu_quant.cu")],
+                        sources=[str(Path(__file__).resolve().parents[4] / "lightx2v_kernel/nvidia/csrc/quantization/convrot_gelu_quant.cu")],
                         extra_cuda_cflags=["-O3", "--use_fast_math", "-arch=sm_120"],
                         is_python_module=False,
                         verbose=False,

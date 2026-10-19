@@ -20,7 +20,7 @@ export PYTHONFAULTHANDLER=1
 export PYTHONUNBUFFERED=1
 
 source ${lightx2v_path}/scripts/base/base.sh
-export PYTHONPATH=${lightx2v_path}/lightx2v_kernel_xpu/python:${PYTHONPATH}
+export PYTHONPATH=${lightx2v_path}/lightx2v_kernel/intel_xpu/python:${PYTHONPATH}
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 

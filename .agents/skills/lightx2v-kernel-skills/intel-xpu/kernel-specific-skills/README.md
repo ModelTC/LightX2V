@@ -2,7 +2,7 @@
 
 Reference index for the skills below; this file is not an invocable skill entry.
 
-Available kernel references in this checkout. The bundled samples and historical benchmarks do not establish runtime support in LightX2V; Python exports are defined in `lightx2v_kernel_xpu/csrc/entry.cpp` and `python/sycl_kernels/__init__.py` at the repository root.
+Available kernel references in this checkout. The bundled samples and historical benchmarks do not establish runtime support in LightX2V; Python exports are defined in `lightx2v_kernel/intel_xpu/csrc/entry.cpp` and `lightx2v_kernel/intel_xpu/python/sycl_kernels/__init__.py`, relative to the repository root.
 
 ## Sub-Skills
 

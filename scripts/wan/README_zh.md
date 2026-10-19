@@ -126,7 +126,7 @@ T2V／I2V 在基础 JSON 中添加 `"use_compile": true` 开启编译、`"warmup
 T2V Python 示例使用 14B 模型、`sage_attn2`、guidance 5、shift 5；基础 Shell 入口使用
 1.3B 模型和其 JSON 设置。比较输出时需明确这些区别。NVFP4 使用
 [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4) 中对应的四步权重，
-保留 `distill_method="dmd2"`，并安装[量化算子](../../lightx2v_kernel/README.md)。
+保留 `distill_method="dmd2"`，并安装[量化算子](../../lightx2v_kernel/nvidia/README.md)。
 
 需要 CPU offload 时，在 JSON 中设置 `cpu_offload` 和支持的 `offload_granularity`，
 见[参数卸载](../../docs/ZH_CN/source/deploy_guides/for_low_resource.md)。

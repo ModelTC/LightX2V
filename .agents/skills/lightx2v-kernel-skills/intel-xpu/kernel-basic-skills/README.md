@@ -4,7 +4,7 @@ Reference index for the skills below; this file is not an invocable skill entry.
 
 Foundational skills for writing and optimizing SYCL-ESIMD kernels on Intel Xe2/Xe3 GPUs.
 
-These are programming references, not a guarantee that each hardware limit or historical benchmark applies to every SKU. Check the target compiler headers and device properties. Production Python integration is maintained in [lightx2v_kernel_xpu](../../../../../lightx2v_kernel_xpu/README.md).
+These are programming references, not a guarantee that each hardware limit or historical benchmark applies to every SKU. Check the target compiler headers and device properties. Production Python integration is maintained in [lightx2v_kernel/intel_xpu](../../../../../lightx2v_kernel/intel_xpu/README.md).
 
 ## Sub-Skills
 

@@ -6,7 +6,7 @@ from lightx2v_platform.registry_factory import PLATFORM_ROPE_REGISTER
 
 @PLATFORM_ROPE_REGISTER("minimax_h3_xpu_rope")
 class MiniMaxH3XpuRope(RopeTemplate):
-    """MiniMax-H3 partial split-half RoPE backed by lightx2v_kernel_xpu."""
+    """MiniMax-H3 partial split-half RoPE backed by lightx2v_kernel/intel_xpu."""
 
     def __init__(self, layout="split_half", compute_dtype=torch.float32):
         super().__init__(layout=layout, compute_dtype=compute_dtype)

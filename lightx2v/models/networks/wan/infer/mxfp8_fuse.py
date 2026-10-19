@@ -4,12 +4,22 @@ from loguru import logger
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
-    from lightx2v_kernel.gemm import (
-        cutlass_scaled_mxfp8_mm,
-        cutlass_scaled_mxfp8_mm_residual_gate,
-        scaled_mxfp8_gelu_quant,
-        scaled_mxfp8_modulate_quant,
-    )
+    try:
+        from lightx2v_kernel_nvidia.gemm import (
+            cutlass_scaled_mxfp8_mm,
+            cutlass_scaled_mxfp8_mm_residual_gate,
+            scaled_mxfp8_gelu_quant,
+            scaled_mxfp8_modulate_quant,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name != "lightx2v_kernel_nvidia":
+            raise
+        from lightx2v_kernel.gemm import (
+            cutlass_scaled_mxfp8_mm,
+            cutlass_scaled_mxfp8_mm_residual_gate,
+            scaled_mxfp8_gelu_quant,
+            scaled_mxfp8_modulate_quant,
+        )
 
     _WAN_MXFP8_FFN_IMPORT_ERROR = None
 except Exception as exc:
@@ -62,7 +72,7 @@ class WanMxfp8FuseMixin:
             raise RuntimeError("mxfp8_quant_fuse is only enabled on SM120/SM120a GPUs")
         if cutlass_scaled_mxfp8_mm is None or cutlass_scaled_mxfp8_mm_residual_gate is None or scaled_mxfp8_gelu_quant is None or scaled_mxfp8_modulate_quant is None:
             detail = f": {type(_WAN_MXFP8_FFN_IMPORT_ERROR).__name__}: {_WAN_MXFP8_FFN_IMPORT_ERROR}" if _WAN_MXFP8_FFN_IMPORT_ERROR is not None else ""
-            raise RuntimeError(f"mxfp8_quant_fuse requires lightx2v_kernel with MXFP8 fused quant ops{detail}")
+            raise RuntimeError(f"mxfp8_quant_fuse requires lightx2v_kernel_nvidia (or compatible legacy lightx2v_kernel) with MXFP8 fused quant ops{detail}")
         for name in module_names:
             module = getattr(phase, name)
             if getattr(module, "has_lora_branch", False) or getattr(module, "has_diff", False):
