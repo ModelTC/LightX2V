@@ -124,6 +124,7 @@ def parse_args():
     parser.add_argument("--negative_prompt", type=str, default="")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--aspect_ratio", type=str, default="16:9")
+    parser.add_argument("--resolution", type=str, default="", help="output resolution key, e.g. 480p or 720p")
     parser.add_argument("--chunk_frames", type=int, default=8)
     parser.add_argument("--output_url", type=str, default="", help="http(s)/rtmp URL to push output directly instead of receiving WS video")
     return parser.parse_args()
@@ -144,6 +145,8 @@ def main():
     stream_config = {}
     if args.output_url:
         stream_config["output_url"] = args.output_url
+    if args.resolution:
+        stream_config["resolution"] = args.resolution
 
     start = Start(
         request_id=args.request_id,

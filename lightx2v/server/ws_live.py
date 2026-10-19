@@ -82,7 +82,7 @@ def build_parser():
         "--aspect_ratios",
         type=str,
         default=None,
-        help=('Override aspect ratio map (JSON). Format: {"width:height": [height, width], ...}, e.g. \'{"1:1":[480,480],"16:9":[352,640],"9:16":[640,352]}\''),
+        help=('Override aspect ratio map (JSON). Format: {"480p":{"1:1":[h,w],"16:9":[h,w]},"720p":{...}}'),
     )
     return parser
 

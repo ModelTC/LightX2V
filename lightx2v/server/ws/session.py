@@ -21,11 +21,30 @@ from lightx2v.server.ws.protocol import (
 from lightx2v.utils.va_reader_ws import WsAudioSource, parse_pcm_audio_format
 
 ASPECT_RATIOS = {
-    "1:1": [480, 480],
-    "16:9": [352, 640],
-    "9:16": [640, 352],
+    "480p": {
+        "1:1": [480, 480],
+        "16:9": [352, 640],
+        "9:16": [640, 352],
+    }
 }
+DEFAULT_RESOLUTION = "480p"
 DEFAULT_ASPECT_RATIO = "16:9"
+
+
+def _parse_ratio_shapes(resolution: str, ratios: dict) -> dict:
+    if not isinstance(ratios, dict) or not ratios:
+        raise ValueError(f"resolution {resolution!r} must map to a non-empty aspect_ratio object")
+    parsed = {}
+    for ratio, shape in ratios.items():
+        if not isinstance(ratio, str):
+            raise ValueError(f"aspect ratio key must be str, got {type(ratio).__name__}: {ratio}")
+        if not (isinstance(shape, list) and len(shape) == 2):
+            raise ValueError(f"{resolution}/{ratio} must map to [height, width], got {shape}")
+        height, width = shape
+        if not isinstance(height, int) or not isinstance(width, int) or height <= 0 or width <= 0:
+            raise ValueError(f"{resolution}/{ratio} must map to positive integer [height, width], got {shape}")
+        parsed[ratio] = [height, width]
+    return parsed
 
 
 def parse_aspect_ratios(value: str) -> dict:
@@ -33,15 +52,10 @@ def parse_aspect_ratios(value: str) -> dict:
     if not isinstance(data, dict) or not data:
         raise ValueError("aspect_ratios must be a non-empty JSON object")
     parsed = {}
-    for ratio, shape in data.items():
-        if not isinstance(ratio, str):
-            raise ValueError(f"aspect ratio key must be str, got {type(ratio).__name__}: {ratio}")
-        if not (isinstance(shape, list) and len(shape) == 2):
-            raise ValueError(f"aspect ratio {ratio} must map to [height, width], got {shape}")
-        height, width = shape
-        if not isinstance(height, int) or not isinstance(width, int) or height <= 0 or width <= 0:
-            raise ValueError(f"aspect ratio {ratio} must map to positive integer [height, width], got {shape}")
-        parsed[ratio] = [height, width]
+    for resolution, ratios in data.items():
+        if not isinstance(resolution, str) or not resolution.strip():
+            raise ValueError(f"resolution key must be a non-empty str, got {resolution!r}")
+        parsed[resolution.strip()] = _parse_ratio_shapes(resolution.strip(), ratios)
     return parsed
 
 
@@ -50,11 +64,15 @@ DEFAULT_NEGATIVE_PROMPT = "镜头晃动，色调艳丽，过曝，静态，细�
 OUTPUT_URL_PREFIXES = ("http://", "https://", "rtmp://")
 
 
-def resolve_aspect_ratio(value: str) -> tuple[str, list[int]]:
+def resolve_aspect_ratio(value: str, resolution: Optional[str] = None) -> tuple[str, list[int]]:
+    res = (resolution or DEFAULT_RESOLUTION).strip()
+    if res not in ASPECT_RATIOS:
+        raise ValueError(f"invalid resolution {res!r}, valid: {list(ASPECT_RATIOS)}")
+    ratios = ASPECT_RATIOS[res]
     ar = (value or DEFAULT_ASPECT_RATIO).strip()
-    if ar not in ASPECT_RATIOS:
-        raise ValueError(f"invalid aspect_ratio {ar!r}, valid: {list(ASPECT_RATIOS)}")
-    return ar, list(ASPECT_RATIOS[ar])
+    if ar not in ratios:
+        raise ValueError(f"invalid aspect_ratio {ar!r} for resolution {res!r}, valid: {list(ratios)}")
+    return ar, list(ratios[ar])
 
 
 def parse_stream_config(config_json: str) -> dict:
@@ -67,6 +85,14 @@ def parse_stream_config(config_json: str) -> dict:
     output_url = config.get("output_url")
     if output_url is not None and (not isinstance(output_url, str) or not output_url.startswith(OUTPUT_URL_PREFIXES)):
         raise ValueError("config_json.output_url must start with http://, https://, or rtmp://")
+    if "resolution" in config:
+        resolution = config["resolution"]
+        if not isinstance(resolution, str) or not resolution.strip():
+            raise ValueError("config_json.resolution must be a non-empty string")
+        resolution = resolution.strip()
+        if resolution not in ASPECT_RATIOS:
+            raise ValueError(f"invalid resolution {resolution!r}, valid: {list(ASPECT_RATIOS)}")
+        config["resolution"] = resolution
     return config
 
 
@@ -204,7 +230,7 @@ class LiveSession:
         prompt = start.prompt or DEFAULT_PROMPT
         negative_prompt = start.negative_prompt or DEFAULT_NEGATIVE_PROMPT
         seed = int(start.seed or 42)
-        _, size = resolve_aspect_ratio(start.aspect_ratio)
+        _, size = resolve_aspect_ratio(start.aspect_ratio, self.stream_config.get("resolution"))
 
         seg_duration = 1.0
         try:

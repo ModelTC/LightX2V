@@ -45,7 +45,7 @@ message Start {
   int64 seed = 8;
   string aspect_ratio = 9;   // 1:1 | 16:9 | 9:16, default 16:9
   uint32 chunk_frames = 10;  // 分片帧数，默认8帧，fps=16时等于0.5s
-  string config_json = 11;   // JSON object, e.g. {"output_url":"rtmp://..."}
+  string config_json = 11;   // JSON object, e.g. {"output_url":"rtmp://...","resolution":"480p"}
 }
 
 message AudioChunk {
