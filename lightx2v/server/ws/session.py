@@ -75,13 +75,8 @@ def resolve_aspect_ratio(value: str, resolution: Optional[str] = None) -> tuple[
     return ar, list(ratios[ar])
 
 
-def parse_stream_config(config_json: str) -> dict:
-    try:
-        config = json.loads(config_json) if config_json.strip() else {}
-    except json.JSONDecodeError as error:
-        raise ValueError(f"Start.config_json is invalid JSON: {error}") from error
-    if not isinstance(config, dict):
-        raise ValueError("Start.config_json must be a JSON object")
+def parse_stream_config(config_json) -> dict:
+    config = dict(config_json or {})
     output_url = config.get("output_url")
     if output_url is not None and (not isinstance(output_url, str) or not output_url.startswith(OUTPUT_URL_PREFIXES)):
         raise ValueError("config_json.output_url must start with http://, https://, or rtmp://")

@@ -2,7 +2,6 @@
 """Minimal protobuf websocket client for seko_talk_ar live inference."""
 
 import argparse
-import json
 import os
 import subprocess
 import tempfile
@@ -158,7 +157,7 @@ def main():
         seed=args.seed,
         aspect_ratio=args.aspect_ratio,
         chunk_frames=args.chunk_frames,
-        config_json=json.dumps(stream_config, ensure_ascii=False) if stream_config else "",
+        config_json=stream_config,
     )
 
     chunks = []
