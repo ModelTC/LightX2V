@@ -8,4 +8,4 @@ VGGT uses ordered parallel image preprocessing. TRELLIS selects a neighbor-map a
 
 The integration has been exercised on a single MLU590 per process. CUDA/A100 and MetaX performance, distributed inference, and CPU offload are not validated here. TRELLIS exports geometry GLB and returns texture voxel attributes; baked texture export and cascade resolutions are outside this integration. The source licenses included with the two models also apply.
 
-Historical TRELLIS experiment results used a different sparse-convolution weight index and incomplete decoder BF16 storage. The new implementation corrects both. Validate this checkout's A/B outputs and measurements; do not substitute the historical mesh metrics.
+Historical TRELLIS experiment results used a different sparse-convolution weight index, incomplete decoder BF16 storage, and FP32 BiRefNet deformable convolutions. The new implementation corrects these paths, using a portable sampled-feature/BF16-GEMM backend for deformable convolution. Validate this checkout's A/B outputs and measurements; do not substitute the historical mesh metrics.

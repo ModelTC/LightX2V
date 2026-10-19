@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 
-__all__ = ["VarLenTensor", "varlen_cat", "varlen_unbind", "SparseTensor", "sparse_cat", "sparse_unbind"]
+__all__ = ["VarLenTensor", "varlen_unbind", "SparseTensor", "sparse_cat", "sparse_unbind"]
 
 
 class VarLenTensor:
@@ -216,26 +216,6 @@ class VarLenTensor:
         return f"VarLenTensor(shape={self.shape}, dtype={self.dtype}, device={self.device})"
 
 
-def varlen_cat(inputs: List[VarLenTensor], dim: int = 0) -> VarLenTensor:
-    """Concatenate a list of varlen tensors.
-
-    Args:
-        inputs (List[VarLenTensor]): List of varlen tensors to concatenate."""
-    if dim == 0:
-        new_feats = torch.cat([input.feats for input in inputs], dim=0)
-        start = 0
-        new_layout = []
-        for input in inputs:
-            for section in input.layout:
-                new_layout.append(slice(start, start + section.stop - section.start))
-                start += section.stop - section.start
-        output = VarLenTensor(feats=new_feats, layout=new_layout)
-    else:
-        feats = torch.cat([input.feats for input in inputs], dim=dim)
-        output = inputs[0].replace(feats)
-    return output
-
-
 def varlen_unbind(input: VarLenTensor, dim: int) -> Union[List[VarLenTensor]]:
     """Unbind a varlen tensor along a dimension.
 
@@ -419,18 +399,6 @@ class SparseTensor(VarLenTensor):
         new_tensor = SparseTensor(new_data, shape=torch.Size([self._shape[0]] + list(feats.shape[1:])) if self._shape is not None else None, scale=self._scale, spatial_cache=self._spatial_cache)
         return new_tensor
 
-    def __merge_sparse_cache(self, other: "SparseTensor") -> dict:
-        new_cache = {}
-        for k in set(list(self._spatial_cache.keys()) + list(other._spatial_cache.keys())):
-            if k in self._spatial_cache:
-                new_cache[k] = self._spatial_cache[k]
-            if k in other._spatial_cache:
-                if k not in new_cache:
-                    new_cache[k] = other._spatial_cache[k]
-                else:
-                    new_cache[k].update(other._spatial_cache[k])
-        return new_cache
-
     def __elemwise__(self, other: Union[torch.Tensor, VarLenTensor], op: callable) -> "SparseTensor":
         if isinstance(other, torch.Tensor):
             try:
@@ -442,8 +410,6 @@ class SparseTensor(VarLenTensor):
             other = other.feats
         new_feats = op(self.feats, other)
         new_tensor = self.replace(new_feats)
-        if isinstance(other, SparseTensor):
-            new_tensor._spatial_cache = self.__merge_sparse_cache(other)
         return new_tensor
 
     def __getitem__(self, idx):

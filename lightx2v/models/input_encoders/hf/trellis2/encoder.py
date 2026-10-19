@@ -1,6 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License; see lightx2v/models/networks/trellis2/LICENSE.
 
+from importlib import import_module
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -9,16 +11,41 @@ from torchvision import transforms
 from transformers import AutoModelForImageSegmentation, DINOv3ViTModel
 
 from lightx2v.common.ops.inference_module import bind_linear_operators, cast_matrix_weights
+from lightx2v.utils.registry_factory import CONV2D_WEIGHT_REGISTER
+
+
+class BiRefDeformConv(torch.nn.Module):
+    def __init__(self, source, backend, linear_backend):
+        super().__init__()
+        self.offset_conv = source.offset_conv
+        self.modulator_conv = source.modulator_conv
+        conv = source.regular_conv
+        bias_name = "bias" if conv.bias is not None else None
+        self.op = CONV2D_WEIGHT_REGISTER[backend]("weight", bias_name, stride=conv.stride, padding=conv.padding, dilation=conv.dilation, groups=conv.groups, linear_backend=linear_backend)
+        weights = {"weight": conv.weight}
+        if bias_name is not None:
+            weights[bias_name] = conv.bias
+        self.op.load(weights)
+
+    def forward(self, x):
+        offset = self.offset_conv(x)
+        mask = 2 * torch.sigmoid(self.modulator_conv(x))
+        return self.op.apply(x, offset, mask)
 
 
 class TrellisImageEncoder:
-    def __init__(self, dino_path, rembg_path, device, linear_backend="Default"):
+    def __init__(self, dino_path, rembg_path, device, linear_backend="Default", deform_conv_backend="torch_deform_bf16"):
         self.device = device
         self.dino = DINOv3ViTModel.from_pretrained(dino_path, local_files_only=True).eval().to(device)
         self.rembg = AutoModelForImageSegmentation.from_pretrained(rembg_path, trust_remote_code=True, local_files_only=True).eval().to(device)
         for model in (self.dino, self.rembg):
             cast_matrix_weights(model)
             bind_linear_operators(model, linear_backend)
+        deform_type = import_module(type(self.rembg).__module__).DeformableConv2d
+        for parent in list(self.rembg.modules()):
+            for name, child in list(parent.named_children()):
+                if isinstance(child, deform_type):
+                    setattr(parent, name, BiRefDeformConv(child, deform_conv_backend, linear_backend).eval())
         self.normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         self.rembg_transform = transforms.Compose([transforms.Resize((1024, 1024)), transforms.ToTensor(), self.normalize])
 

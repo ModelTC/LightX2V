@@ -1,13 +1,18 @@
 import pytest
 import torch
+from reconstruction_imports import cpu_imports
+from torchvision.ops import deform_conv2d
 
-import lightx2v.common.ops  # noqa: F401
-from lightx2v.common.ops.inference_module import InferenceAttention
-from lightx2v.common.ops.sparse import SparseConv3d, SparseTensor, VarLenTensor
-from lightx2v.common.ops.sparse.attention.packed import PackedAttention
-from lightx2v.common.ops.sparse.neighbor_map import cpu_hash_neighbors, sorted_neighbors
-from lightx2v.models.schedulers.trellis2.flow_euler import FlowEulerSampler
-from lightx2v.models.video_encoders.hf.trellis2.mesh_extraction import flexible_dual_grid_to_mesh
+with cpu_imports():
+    import lightx2v.common.ops.attn.torch_sdpa  # noqa: F401
+    from lightx2v.common.ops.conv.deform_conv2d import deformable_columns
+    from lightx2v.common.ops.inference_module import InferenceAttention
+    from lightx2v.common.ops.sparse import SparseConv3d, SparseTensor, VarLenTensor
+    from lightx2v.common.ops.sparse.attention.packed import PackedAttention
+    from lightx2v.common.ops.sparse.neighbor_map import cpu_hash_neighbors, sorted_neighbors
+    from lightx2v.common.ops.sparse.spatial import SparseChannel2Spatial
+    from lightx2v.models.schedulers.trellis2.flow_euler import FlowEulerSampler
+    from lightx2v.models.video_encoders.hf.trellis2.mesh_extraction import flexible_dual_grid_to_mesh
 
 
 @pytest.mark.parametrize("dilation", [(1, 1, 1), (2, 1, 3)])
@@ -28,6 +33,15 @@ def test_empty_neighbor_map():
     maps = sorted_neighbors(coords, (3, 3, 3), (1, 1, 1))
     assert len(maps) == 27
     assert all(indices.numel() == 0 for _, indices in maps)
+
+
+def test_channel_to_spatial_preserves_batch_and_feature_order():
+    coords = torch.tensor([[0, 2, 3, 4], [1, 0, 1, 2]], dtype=torch.int32)
+    values = SparseTensor(torch.arange(32).reshape(2, 16).float(), coords)
+    mask = torch.tensor([[True, False, False, True, False, False, False, False], [False, True, False, False, True, False, False, False]])
+    result = SparseChannel2Spatial()(values, values.replace(mask))
+    torch.testing.assert_close(result.coords, torch.tensor([[0, 4, 6, 8], [0, 5, 7, 8], [1, 1, 2, 4], [1, 0, 2, 5]], dtype=torch.int32))
+    torch.testing.assert_close(result.feats, torch.tensor([[0, 1], [6, 7], [18, 19], [24, 25]], dtype=torch.float32))
 
 
 def test_submanifold_convolution_matches_dense():
@@ -99,3 +113,22 @@ def test_dual_grid_mesh_rejects_linear_key_aliases():
     flags[0, 0] = True
     with pytest.raises(ValueError, match="connected dual-grid quads"):
         flexible_dual_grid_to_mesh(coords, torch.full((4, 3), 0.5), flags, torch.ones(4, 1), aabb=[[-0.5] * 3, [0.5] * 3], grid_size=2)
+
+
+@pytest.mark.parametrize("kernel,stride,padding,dilation", [((1, 1), (1, 1), (0, 0), (1, 1)), ((3, 3), (1, 1), (1, 1), (1, 1)), ((3, 2), (2, 1), (2, 1), (2, 1))])
+@pytest.mark.parametrize("modulated", [False, True])
+def test_deformable_sampling_matches_torchvision(kernel, stride, padding, dilation, modulated):
+    torch.manual_seed(19)
+    values = torch.randn(2, 3, 9, 11)
+    weight = torch.randn(4, 3, *kernel)
+    out_h, out_w = [(size + 2 * pad - dil * (k - 1) - 1) // step + 1 for size, pad, dil, k, step in zip(values.shape[-2:], padding, dilation, kernel, stride)]
+    offset = torch.randn(2, 2 * kernel[0] * kernel[1], out_h, out_w) * 0.3
+    mask = torch.rand(2, kernel[0] * kernel[1], out_h, out_w) * 2 if modulated else None
+    expected = deform_conv2d(values, offset, weight, stride=stride, padding=padding, dilation=dilation, mask=mask)
+    actual = torch.empty_like(expected).flatten(2)
+    for start in range(0, out_h * out_w, 13):
+        stop = min(start + 13, out_h * out_w)
+        columns = deformable_columns(values, offset, mask, kernel, stride, padding, dilation, start, stop)
+        projected = torch.nn.functional.linear(columns, weight.flatten(1))
+        actual[:, :, start:stop] = projected.reshape(2, stop - start, 4).transpose(1, 2)
+    torch.testing.assert_close(actual.reshape_as(expected), expected, rtol=1e-4, atol=2e-5)

@@ -2,9 +2,11 @@ import numpy as np
 import pytest
 import torch
 from PIL import Image
+from reconstruction_imports import cpu_imports
 from torchvision.transforms.functional import to_tensor
 
-from lightx2v.models.networks.vggt.utils.image_processor import load_images
+with cpu_imports():
+    from lightx2v.models.networks.vggt.utils.image_processor import load_images
 
 
 def test_parallel_preprocessing_preserves_pixels_and_order(tmp_path):

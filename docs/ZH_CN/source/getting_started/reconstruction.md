@@ -8,4 +8,4 @@ VGGT 的优化是保持输入顺序的图像预处理并行化；TRELLIS 的邻�
 
 目前验证范围是每个进程独占一张 MLU590。尚未验证 CUDA/A100、MetaX 的性能，以及分布式推理和 CPU offload。TRELLIS 导出几何 GLB，并返回纹理体素属性；首版不包含纹理烘焙和级联分辨率。使用时还须遵守随模型源码保留的许可证。
 
-旧 TRELLIS 实验存在稀疏卷积权重索引错误和 decoder BF16 转换遗漏，新实现修正了这两点。因此需要验收本版本的 A/B 数值和性能，不能直接套用旧实验的几何精度指标。
+旧 TRELLIS 实验存在稀疏卷积权重索引错误、decoder BF16 转换遗漏，以及 BiRefNet deformable convolution 使用 FP32 的问题。新实现修正这些路径；deformable convolution 采用可移植的采样加 BF16 GEMM 实现。因此需要验收本版本的 A/B 数值和性能，不能直接套用旧实验的几何精度指标。
