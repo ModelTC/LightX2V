@@ -104,7 +104,7 @@ class BaseTransformerModel(ABC):
             backend = get_block_offload_backend(required=False)
             if backend is not None:
                 backend.prepare()
-            if self.config.get("cpu_offload_layout") == "contiguous" or (backend is not None and backend.validate_checkpoint):
+            if self.config.get("cpu_offload_block_contiguous", False) or (backend is not None and backend.validate_checkpoint):
                 self._checkpoint_metadata = {}
 
     def _init_tensor_parallel(self):
@@ -355,7 +355,7 @@ class BaseTransformerModel(ABC):
         self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
         if self.lazy_load:
             self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
-        if self.config.get("cpu_offload_layout") == "contiguous":
+        if self.config.get("cpu_offload_block_contiguous", False):
             self.transformer_infer.offload_manager.init_contiguous_group(self.transformer_weights.offload_group)
 
     def _should_init_empty_model(self):
@@ -402,7 +402,7 @@ class BaseTransformerModel(ABC):
             from lightx2v.common.offload.block_loader import prepare_contiguous_group, validate_group_checkpoints
 
             group = self.transformer_weights.offload_group
-            if self.config.get("cpu_offload_layout") == "contiguous":
+            if self.config.get("cpu_offload_block_contiguous", False):
                 prepare_contiguous_group(group, self.original_weight_dict, self._checkpoint_metadata)
             elif group is not None and not self.lazy_load and not self.config.get("dummy_model"):
                 validate_group_checkpoints(group, self._checkpoint_metadata)

@@ -24,8 +24,7 @@
   "t5_cpu_offload": false,
   "vae_cpu_offload": false,
   "clip_cpu_offload": false,
-  "cpu_offload_layout": "per_tensor",
-  "use_event_offload": true,
+  "cpu_offload_block_contiguous": false,
   "offload_resident_blocks": 0,
   "t5_quantized_ckpt": "models/Wan2.1-I2V-14B-720P-Lightx2v/fp8/models_t5_umt5-xxl-enc-fp8.pth"
 }

@@ -10,9 +10,9 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def validate_wan_residency_config(config):
-    if "offload_resident_blocks" not in config and not config.get("use_event_offload", False):
+    if "offload_resident_blocks" not in config:
         return
-    uniform_resident_indices(config["num_layers"], config.get("offload_resident_blocks", 0))
+    uniform_resident_indices(config["num_layers"], config["offload_resident_blocks"])
     if config["model_cls"] != "wan2.1" or config["task"] not in ("t2v", "i2v"):
         raise ValueError("Static Wan residency currently supports Wan2.1 t2v/i2v")
     validate_residency_config(config)
@@ -44,9 +44,9 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.infer_func = self.infer_without_offload
 
             if offload_granularity != "model":
-                if "offload_resident_blocks" in config or config.get("use_event_offload", False):
+                if "offload_resident_blocks" in config:
                     self.offload_manager = EventSlotWeightAsyncStreamManager(offload_granularity)
-                    self.resident_blocks = ResidentBlocks(config.get("offload_resident_blocks", 0))
+                    self.resident_blocks = ResidentBlocks(config["offload_resident_blocks"])
                 else:
                     self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
             self.lazy_load = self.config.get("lazy_load", False)

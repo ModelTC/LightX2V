@@ -18,11 +18,10 @@
   "enable_cfg": true,
   "cpu_offload": true,
   "offload_granularity": "block",
-  "cpu_offload_layout": "per_tensor",
+  "cpu_offload_block_contiguous": false,
   "t5_cpu_offload": true,
   "t5_rms_norm_type": "torch",
   "vae_cpu_offload": true,
   "clip_cpu_offload": true,
-  "use_event_offload": true,
   "offload_resident_blocks": 0
 }

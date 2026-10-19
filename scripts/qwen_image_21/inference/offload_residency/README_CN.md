@@ -37,3 +37,5 @@ bash scripts/qwen_image_21/inference/offload_residency/run_npu.sh
 基础配置位于 `configs/qwen_image_21/residency/`，CUDA 使用 `baseline.json`，NPU 使用 `baseline_npu.json`。结果保存在 `save_results/qwen_image_21_residency/`：`resident.json` 为常驻配置，`resident.profile.json` 为测量报告，`baseline.png` 和 `resident.png` 为推理结果；NPU 文件带 `_npu` 后缀。重复运行会覆盖同名文件。
 
 生成配置中的 `offload_resident_blocks` 是常驻数量，`0` 表示零常驻。修改设备、输入或基础配置后重新估测。profiling 统一沿用 [base.sh](../../../base/base.sh)。
+
+`cpu_offload_block_contiguous` 控制连续布局，默认 `false`；设为 `true` 后重新估测，baseline 与常驻使用相同值。

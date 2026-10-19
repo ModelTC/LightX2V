@@ -12,9 +12,9 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def validate_qwen_residency_config(config):
-    if "offload_resident_blocks" not in config and not config.get("use_event_offload", False):
+    if "offload_resident_blocks" not in config:
         return
-    uniform_resident_indices(config["num_layers"], config.get("offload_resident_blocks", 0))
+    uniform_resident_indices(config["num_layers"], config["offload_resident_blocks"])
     if config["model_cls"] != "qwen_image" or config["task"] != "t2i" or config.get("layered", False):
         raise ValueError("Static Qwen residency currently supports Qwen Image t2i")
     validate_residency_config(config)
@@ -33,9 +33,9 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
             offload_granularity = self.config.get("offload_granularity", "block")
             if offload_granularity == "block":
                 self.infer_func = self.infer_with_blocks_offload
-                if "offload_resident_blocks" in config or config.get("use_event_offload", False):
+                if "offload_resident_blocks" in config:
                     self.offload_manager = EventSlotWeightAsyncStreamManager(offload_granularity)
-                    self.resident_blocks = ResidentBlocks(config.get("offload_resident_blocks", 0))
+                    self.resident_blocks = ResidentBlocks(config["offload_resident_blocks"])
                 else:
                     self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
             elif offload_granularity == "phase":

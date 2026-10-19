@@ -25,3 +25,5 @@ bash scripts/minimax_h3/inference/offload_layout/run_contiguous_npu.sh
 ```
 
 Configs are in `configs/minimax_h3/layout/`. Set the prompt through `--prompt` in each script. Outputs are saved to `save_results/minimax_h3_layout/`; rerunning a script overwrites its output.
+
+`cpu_offload_block_contiguous` is `false` in baseline configs and `true` in contiguous configs.

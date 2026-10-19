@@ -29,8 +29,7 @@
     "warmup": true,
     "cpu_offload": true,
     "offload_granularity": "block",
-    "cpu_offload_layout": "per_tensor",
-    "use_event_offload": true,
+    "cpu_offload_block_contiguous": false,
     "offload_resident_blocks": 0,
     "text_encoder_cpu_offload": true,
     "feature_caching": "NoCaching"

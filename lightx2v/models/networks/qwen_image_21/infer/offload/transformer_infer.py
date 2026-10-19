@@ -13,14 +13,14 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def validate_qwen_image_21_residency_config(config, lora_path=None):
-    if "offload_resident_blocks" not in config and not config.get("use_event_offload", False):
+    if "offload_resident_blocks" not in config:
         return
     if config.get("offload_granularity", "model") != "block":
         raise ValueError("Static Qwen-Image-2.1 residency requires offload_granularity='block'")
     validate_residency_config(config)
     if lora_path:
         raise ValueError("Static Qwen-Image-2.1 residency does not support LoRA")
-    uniform_resident_indices(config["num_layers"], config.get("offload_resident_blocks", 0))
+    uniform_resident_indices(config["num_layers"], config["offload_resident_blocks"])
     if not config["causal_condition"]:
         raise ValueError("Static Qwen-Image-2.1 residency requires causal condition KV caching")
     if GET_DTYPE() != torch.bfloat16 or config.get("dit_quant_scheme", "Default") != "Default":
@@ -35,8 +35,8 @@ class QwenImage21OffloadTransformerInfer(QwenImage21TransformerInfer):
 
     def __init__(self, config):
         super().__init__(config)
-        use_residency = "offload_resident_blocks" in config or config.get("use_event_offload", False)
-        self.resident_blocks = ResidentBlocks(config.get("offload_resident_blocks", 0)) if use_residency else None
+        use_residency = "offload_resident_blocks" in config
+        self.resident_blocks = ResidentBlocks(config["offload_resident_blocks"]) if use_residency else None
         offload_granularity = config.get("offload_granularity", "model")
         if offload_granularity == "block":
             manager_class = EventSlotWeightAsyncStreamManager if use_residency else WeightAsyncStreamManager

@@ -11,12 +11,12 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def validate_minimax_h3_residency_config(config):
-    if "offload_resident_blocks" not in config and not config.get("use_event_offload", False):
+    if "offload_resident_blocks" not in config:
         return
     if config.get("offload_granularity", "model") != "block":
         raise ValueError("Static MiniMax-H3 residency requires offload_granularity='block'")
     validate_residency_config(config)
-    uniform_resident_indices(config["num_layers"], config.get("offload_resident_blocks", 0))
+    uniform_resident_indices(config["num_layers"], config["offload_resident_blocks"])
     if config.get("model_cls") != "minimax_h3" or config.get("model_variant") != "fl2av":
         raise ValueError("Static MiniMax-H3 residency currently requires the fl2av model variant")
     if not config.get("use_adaln_cache", False) or GET_DTYPE() != torch.bfloat16:
@@ -26,7 +26,7 @@ def validate_minimax_h3_residency_config(config):
             raise ValueError(f"Static MiniMax-H3 residency does not support {option}")
     if config.get("dit_quant_scheme", "Default") != "Default":
         raise ValueError("Static MiniMax-H3 residency requires unquantized block weights")
-    if config.get("cpu_offload_layout") == "contiguous" and config.get("dit_release_block_offload_buffers", False):
+    if config.get("cpu_offload_block_contiguous", False) and config.get("dit_release_block_offload_buffers", False):
         raise ValueError("MiniMax-H3 contiguous offload does not support dit_release_block_offload_buffers")
 
 
@@ -36,7 +36,7 @@ class MiniMaxH3OffloadTransformerInfer(MiniMaxH3TransformerInfer):
     def __init__(self, config):
         validate_minimax_h3_residency_config(config)
         super().__init__(config)
-        self.resident_blocks = ResidentBlocks(config.get("offload_resident_blocks", 0)) if "offload_resident_blocks" in config or config.get("use_event_offload", False) else None
+        self.resident_blocks = ResidentBlocks(config["offload_resident_blocks"]) if "offload_resident_blocks" in config else None
         offload_granularity = config.get("offload_granularity", "model")
         if offload_granularity == "block":
             self.offload_manager = self.create_offload_manager()

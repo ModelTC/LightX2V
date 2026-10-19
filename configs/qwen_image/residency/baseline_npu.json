@@ -14,7 +14,6 @@
   "offload_granularity": "block",
   "qwen25vl_cpu_offload": true,
   "vae_cpu_offload": true,
-  "use_event_offload": true,
   "offload_resident_blocks": 0,
-  "cpu_offload_layout": "per_tensor"
+  "cpu_offload_block_contiguous": false
 }

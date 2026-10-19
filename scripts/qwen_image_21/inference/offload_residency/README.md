@@ -37,3 +37,5 @@ After switching to image editing, estimate again before running both inference s
 Base configs are in `configs/qwen_image_21/residency/`: `baseline.json` for CUDA and `baseline_npu.json` for NPU. Outputs go to `save_results/qwen_image_21_residency/`: `resident.json` is the generated config, `resident.profile.json` is the measurement report, and `baseline.png` and `resident.png` are inference outputs. NPU filenames use the `_npu` suffix. Rerunning overwrites files with the same names.
 
 In the generated config, `offload_resident_blocks` is the resident count; `0` means no resident blocks. Re-estimate after changing the device, inputs, or base config. Profiling follows [base.sh](../../../base/base.sh).
+
+`cpu_offload_block_contiguous` controls contiguous storage and defaults to `false`. Re-estimate after setting it to `true`, using the same value for baseline and residency.

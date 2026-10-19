@@ -33,3 +33,5 @@ bash scripts/minimax_h3/inference/offload_residency/run_npu.sh
 生成配置中的 `offload_resident_blocks` 是常驻数量，`0` 表示零常驻。修改设备、输入或基础配置后重新估测。profiling 统一沿用 [base.sh](../../../base/base.sh)。
 
 更改权重、步数或采样偏移时，还需重新生成匹配的 AdaLN 缓存。
+
+`cpu_offload_block_contiguous` 控制连续布局，默认 `false`；设为 `true` 后重新估测，baseline 与常驻使用相同值。

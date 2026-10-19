@@ -22,5 +22,5 @@
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
-  "cpu_offload_layout": "contiguous"
+  "cpu_offload_block_contiguous": true
 }

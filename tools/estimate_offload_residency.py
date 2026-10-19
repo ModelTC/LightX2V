@@ -75,14 +75,14 @@ def load_block(config, checkpoint_path, block_class, prefix, sensitive_layers=()
     slots = [block_class(**kwargs, create_cuda_buffer=True) for _ in range(2)]
     blocks = [block]
     group = OffloadGroup(blocks, slots, (prefix,))
-    if config.get("cpu_offload_layout", "per_tensor") == "contiguous":
+    if config.get("cpu_offload_block_contiguous", False):
         prepare_contiguous_group(group, weights, metadata)
     for item in (*slots, block):
         item.load(dict(weights))
     del weights
     manager = EventSlotWeightAsyncStreamManager("block")
     manager.init_cuda_buffer(slots)
-    if config.get("cpu_offload_layout", "per_tensor") == "contiguous":
+    if config.get("cpu_offload_block_contiguous", False):
         manager.init_contiguous_group(group)
 
     sources = block.state_dict()
@@ -395,7 +395,9 @@ def main():
     started = time.perf_counter()
     output = args.output_config or args.config.with_name(args.config.stem + ".resident.json")
     deployment = json.loads(args.config.read_text())
-    deployment.update(model_cls=args.model_cls, model_path=args.model_path, task=args.task, cpu_offload=True, offload_granularity="block", use_event_offload=True, offload_resident_blocks=0)
+    deployment.pop("use_event_offload", None)
+    deployment.setdefault("cpu_offload_block_contiguous", False)
+    deployment.update(model_cls=args.model_cls, model_path=args.model_path, task=args.task, cpu_offload=True, offload_granularity="block", offload_resident_blocks=0)
     if args.model_cls == "minimax_h3":
         if args.task != "t2av" or not args.prompt:
             parser.error("MiniMax-H3 measurement requires --task t2av and --prompt matching inference")
@@ -426,7 +428,7 @@ def main():
             "device": torch_device_module.get_device_name(),
             "dtype": str(GET_DTYPE()),
             "quant_scheme": config.get("dit_quant_scheme", "Default"),
-            "layout": config.get("cpu_offload_layout", "per_tensor"),
+            "layout": "contiguous" if config["cpu_offload_block_contiguous"] else "per_tensor",
             "pixel_size": case.pixel_size,
             "block_grid": case.grid,
             "text_tokens": case.text_tokens,
