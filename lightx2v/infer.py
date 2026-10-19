@@ -13,7 +13,8 @@ from lightx2v.utils.utils import validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
-def main():
+def build_parser():
+    """Declare CLI options; request values are separated by build_cli_inputs."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=None, help="The seed for random generator")
     parser.add_argument(
@@ -186,7 +187,11 @@ def main():
     parser.add_argument("--reference_video_frame_cap", type=int, default=None, help="(v2av) Maximum number of frames to read from the reference/control video. Defaults to the full clip.")
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     startup_config, request_data = build_cli_inputs(args)
     if startup_config["parallel"]:
         platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)

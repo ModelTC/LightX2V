@@ -68,3 +68,9 @@ Documentation
    Disaggregated Deployment <deploy_guides/disagg.md>
    Qwen Image Text Encoder <deploy_guides/qwen_image_encoder.md>
    Qwen Image TensorRT VAE <deploy_guides/qwen_image_vae_tensorrt.md>
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Developer Guides
+
+   Adding Request Parameters <developer_guides/request_parameters.md>
