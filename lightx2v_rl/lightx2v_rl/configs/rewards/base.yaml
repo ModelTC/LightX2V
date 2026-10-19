@@ -1,0 +1,19 @@
+reward:
+  num_workers: 1
+  accelerator_workers:
+    enabled: false
+  reward_functions: {}
+  models: {}
+  reward_model:
+    enable: false
+    enable_resource_pool: false
+  custom_reward_function:
+    path: pkg://lightx2v_rl.rewards.client
+    name: compute_score
+    use_accelerator: false
+    reward_kwargs:
+      endpoint: http://127.0.0.1:8791
+      aggregation: mean
+      source_fps: 16.0
+      timeout_seconds: 1800
+      video_layout: TCHW

@@ -1,0 +1,48 @@
+diff --git a/verl_omni/workers/rollout/vllm_rollout/vllm_omni_async_server.py b/verl_omni/workers/rollout/vllm_rollout/vllm_omni_async_server.py
+index 13e4768..1db00da 100644
+--- a/verl_omni/workers/rollout/vllm_rollout/vllm_omni_async_server.py
++++ b/verl_omni/workers/rollout/vllm_rollout/vllm_omni_async_server.py
+@@ -16,7 +16,8 @@ import asyncio
+ import json
+ import logging
+ import os
+-from dataclasses import asdict
++from copy import deepcopy
++from dataclasses import MISSING, asdict, fields, is_dataclass
+ from typing import Any, Optional
+ 
+ import ray
+@@ -91,12 +92,31 @@ def _restore_raw_compilation_config(engine_args: dict, args: Any) -> None:
+         engine_args["compilation_config"] = raw_compilation_config
+ 
+ 
++def _dataclass_defaults(cls: type) -> dict:
++    """Read declared defaults without constructing an engine argument object.
++
++    EngineArgs.__post_init__ resolves model paths in offline mode and loads
++    plugins. Neither belongs in default inspection. Nested config factories
++    still run so their normalized defaults match the real engine arguments.
++    """
++    defaults = {}
++    for field in fields(cls):
++        if field.default is not MISSING:
++            value = field.default
++        elif field.default_factory is not MISSING:
++            value = field.default_factory()
++        else:
++            continue
++        defaults[field.name] = asdict(value) if is_dataclass(value) and not isinstance(value, type) else deepcopy(value)
++    return defaults
++
++
+ def _drop_defaulted_engine_args(engine_args: dict) -> dict:
+     """Keep only explicitly-set engine arguments, dropping upstream defaults."""
+     global _ENGINE_ARGS_DEFAULTS
+     if _ENGINE_ARGS_DEFAULTS is None:
+-        defaults = asdict(OmniEngineArgs(model=""))
+-        defaults.update(asdict(OrchestratorArgs()))
++        defaults = _dataclass_defaults(OmniEngineArgs)
++        defaults.update(_dataclass_defaults(OrchestratorArgs))
+         _ENGINE_ARGS_DEFAULTS = defaults
+     defaults = _ENGINE_ARGS_DEFAULTS
+     return {

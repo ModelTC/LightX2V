@@ -4,6 +4,25 @@
 
 设置所选脚本中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`。以下命令使用仓库相对路径，也可使用脚本绝对路径。
 
+## 环境与权重
+
+先完成[环境安装](../../docs/ZH_CN/source/getting_started/quickstart.md)，按所选任务下载需要的基础模型和额外权重：
+
+```bash
+# 从huggingface下载
+hf download Wan-AI/Wan2.2-T2V-A14B --local-dir Wan-AI/Wan2.2-T2V-A14B
+hf download Wan-AI/Wan2.2-I2V-A14B --local-dir Wan-AI/Wan2.2-I2V-A14B
+
+# 下载蒸馏模型
+hf download lightx2v/Wan2.2-Distill-Models --local-dir lightx2v/Wan2.2-Distill-Models
+hf download lightx2v/Wan2.2-Distill-Loras --local-dir lightx2v/Wan2.2-Distill-Loras
+
+# 下载 UMT5-XXL 文本编码器 FP8 量化权重
+hf download lightx2v/Encoders --include "models_t5_umt5-xxl-enc-fp8.pth" --local-dir encoders/t5
+```
+
+`model_path` 指向完整基础模型目录。所选 JSON 中的 checkpoint 和 LoRA 路径填写下载后的本地文件路径。
+
 ## 基础任务
 
 | 任务 | 脚本 | 模型权重 |
@@ -137,3 +156,22 @@ I2V 完整权重、LoRA、FP8 使用 CFG2 × SP4 时，在对应单卡 JSON 中�
 | NVFP4 + 稀疏注意力，八卡 | `extreme/`：T2V／I2V 示例 |
 
 RainFusion、NPU、Extreme 示例保留各自的算子和通信设置，需使用匹配的硬件与依赖；NPU 脚本通过 `ASCEND_RT_VISIBLE_DEVICES` 选择设备。
+
+## Python API 示例
+
+生成器创建、配置优先级、卸载和多次生成见 [Python API 指南](../../docs/ZH_CN/source/getting_started/python_api.md)。
+安装后，修改所选文件中的路径，从仓库根目录运行。各示例保留各自的模型、采样和注意力设置；
+改用 Shell 入口的 JSON 属于显式切换配置。
+
+| 用法 | Python 入口 |
+| --- | --- |
+| MoE T2V | [wan_moe_t2v.py](inference/wan_moe_t2v.py) |
+| MoE I2V + offload | [wan_i2v.py](inference/wan_i2v.py) |
+| MoE I2V distilled | [wan_i2v_distilled.py](inference/distill/wan_i2v_distilled.py) |
+| MoE I2V distilled LoRA | [wan_i2v_with_distill_loras.py](inference/distill/wan_i2v_with_distill_loras.py) |
+| TI2V 5B | [wan_ti2v_5b.py](inference/wan_ti2v_5b.py) |
+| Animate | [wan_animate.py](inference/wan_animate.py) |
+
+MoE 量化推理需要匹配的高噪声、低噪声 DiT 权重；量化 T5 使用 `t5_quantized_ckpt`。
+在所选 JSON 中填写本地文件路径。需要 CPU offload 时设置 `cpu_offload` 和支持的
+`offload_granularity`，见[参数卸载](../../docs/ZH_CN/source/deploy_guides/for_low_resource.md)。

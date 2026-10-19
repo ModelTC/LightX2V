@@ -1,0 +1,37 @@
+{
+    "size": [
+        704,
+        1280
+    ],
+    "fps": 24,
+    "num_frames": 121,
+    "infer_steps": 48,
+    "sample_shift": 5,
+    "sample_guide_scale": 3,
+    "enable_cfg": true,
+    "use_image_encoder": false,
+    "proxy_resize_mode": "bilinear",
+    "proxy_condition_rmsnorm": false,
+    "proxy_unconditional_control": "same",
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "rms_norm_type": "sgl-kernel",
+    "layer_norm_type": "Triton",
+    "rope_type": "flashinfer_rope",
+    "modulate_type": "triton",
+    "cpu_offload": false,
+    "mxfp8_fuse_enable": false,
+    "prompt_travel": {
+        "prompt_travel_text": [
+            "Cinematic photorealism. A first-person view of a volcanic cavern with a glowing lava lake, dark basalt formations and drifting steam. A heavy cryo-blaster with cyan energy vents is held in the foreground. The player fires a cryogenic beam into the lava, freezes a thick ice platform with billowing steam, and steps onto it.",
+            "Cinematic photorealism. A first-person view of a volcanic cavern with a glowing lava lake, dark basalt formations and drifting steam. A heavy cryo-blaster with cyan energy vents is held in the foreground. The player shoots successive freezing bursts onto the magma and jumps between ice platforms toward a distant stone arch.",
+            "Cinematic photorealism. A first-person view of a volcanic cavern with a glowing lava lake, dark basalt formations and drifting steam. A heavy cryo-blaster with cyan energy vents is held in the foreground. The player reaches the solid stone threshold, passes beneath the arch, and turns back toward the glowing lava lake."
+        ],
+        "prompt_travel_start_frames": [
+            0,
+            48,
+            96
+        ]
+    }
+}

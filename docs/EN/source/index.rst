@@ -23,7 +23,7 @@ Welcome to Lightx2v!
     <strong>LightX2V: Light Video Generation Inference Framework</strong>
     </div>
 
-LightX2V is a lightweight video generation inference framework designed to provide an inference tool that leverages multiple advanced video generation inference techniques. As a unified inference platform, this framework supports various generation tasks such as text-to-video (T2V) and image-to-video (I2V) across different models. X2V means transforming different input modalities (such as text or images) to video output.
+LightX2V is a lightweight inference framework for image and video generation. It brings together inference acceleration techniques and supports text-to-video (T2V), image-to-video (I2V), text-to-image (T2I), and image editing (I2I) across multiple models. X2V means transforming different input modalities (X, such as text or images) into visual output (Vision).
 
 GitHub: https://github.com/ModelTC/lightx2v
 
@@ -37,6 +37,8 @@ Documentation
    :caption: Quick Start
 
    Quick Start <getting_started/quickstart.md>
+   First Video <getting_started/first_generation.md>
+   Python API <getting_started/python_api.md>
    Model Structure <getting_started/model_structure.md>
    Benchmark <getting_started/benchmark.md>
 
@@ -63,3 +65,6 @@ Documentation
    Gradio Deployment <deploy_guides/deploy_gradio.md>
    ComfyUI Deployment <deploy_guides/deploy_comfyui.md>
    Local Windows Deployment <deploy_guides/deploy_local_windows.md>
+   Disaggregated Deployment <deploy_guides/disagg.md>
+   Qwen Image Text Encoder <deploy_guides/qwen_image_encoder.md>
+   Qwen Image TensorRT VAE <deploy_guides/qwen_image_vae_tensorrt.md>

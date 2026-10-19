@@ -1,0 +1,12 @@
+inherits: base
+algorithm:
+  reward_advantage:
+    weights:
+      videoalign_mq_raw: ${reward.custom_reward_function.reward_kwargs.weights.videoalign_mq}
+      videoalign_ta_raw: ${reward.custom_reward_function.reward_kwargs.weights.videoalign_ta}
+reward:
+  custom_reward_function:
+    reward_kwargs:
+      weights:
+        videoalign_mq: 1.0
+        videoalign_ta: 1.0

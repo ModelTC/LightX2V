@@ -4,6 +4,27 @@
 
 设置所选脚本中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`。以下命令使用仓库相对路径，也可使用 sh 的绝对路径。
 
+## 环境与权重
+
+先完成[环境安装](../../docs/ZH_CN/source/getting_started/quickstart.md)，按所选任务下载需要的基础模型和额外权重：
+
+```bash
+# 从huggingface下载
+# 推理2512文生图原始模型
+hf download Qwen/Qwen-Image-2512 --local-dir Qwen/Qwen-Image-2512
+
+# 推理2512文生图步数蒸馏模型
+hf download lightx2v/Qwen-Image-2512-Lightning --local-dir lightx2v/Qwen-Image-2512-Lightning
+
+# 推理2511图像编辑原始模型
+hf download Qwen/Qwen-Image-Edit-2511 --local-dir Qwen/Qwen-Image-Edit-2511
+
+# 推理2511图像编辑步数蒸馏模型
+hf download lightx2v/Qwen-Image-Edit-2511-Lightning --local-dir lightx2v/Qwen-Image-Edit-2511-Lightning
+```
+
+`model_path` 指向完整基础模型目录。所选 JSON 中的 checkpoint 和 LoRA 路径填写下载后的本地文件路径。
+
 ## 基础任务
 
 | 任务 | 权重 | 脚本 |
@@ -110,6 +131,33 @@ python scripts/qwen_image/server/post_i2i_reuse.py
 | 功能 | 用法 |
 | --- | --- |
 | TensorRT VAE | 在基础脚本中选择 [T2I 配置](../../configs/qwen_image/qwen_image_t2i_2512_trt.json) 或 [I2I 配置](../../configs/qwen_image/qwen_image_i2i_2511_trt.json)，设置 `trt_vae_config.trt_engine_path`。两者分别使用静态与多 profile 引擎。 |
-| LightLLM 文本编码器 | [kernel 脚本](inference/text_encoder/qwen_image_i2i_2511_kernel.sh) 或 [service 脚本](inference/text_encoder/qwen_image_i2i_2511_service.sh)。service 模式需先启动 LightLLM 服务并设置 `lightllm_config.service_url`，见[部署说明](../../examples/BeginnerGuide/ZH_CN/QwenImageEncoderSplitDeploy.md)。 |
+| LightLLM 文本编码器 | [kernel 脚本](inference/text_encoder/qwen_image_i2i_2511_kernel.sh) 或 [service 脚本](inference/text_encoder/qwen_image_i2i_2511_service.sh)。service 模式需先启动 LightLLM 服务并设置 `lightllm_config.service_url`，见[部署说明](../../docs/ZH_CN/source/deploy_guides/qwen_image_encoder.md)。 |
 | 共享 CPU offload | [使用说明](inference/shared_offload/README_CN.md)，配置位于 `configs/qwen_image/shared_offload/`。 |
 | baseline / contiguous 布局 | [使用说明](inference/offload_layout/README_CN.md)，提供 GPU 和 NPU 示例。 |
+
+## Python API 示例
+
+生成器创建、配置优先级、卸载和多次生成见 [Python API 指南](../../docs/ZH_CN/source/getting_started/python_api.md)。
+安装后，修改所选文件中的路径，从仓库根目录运行。各示例保留各自的模型、采样和注意力设置；
+改用 Shell 入口的 JSON 属于显式切换配置。
+
+| 用法 | 步数 | Python 入口 |
+| --- | --- | --- |
+| Edit 2511 FP8 | 4 | [qwen_2511_fp8.py](inference/qwen_2511_fp8.py) |
+| Edit 2511 LoRA | 4 | [qwen_2511_with_distill_lora.py](inference/qwen_2511_with_distill_lora.py) |
+| Edit 2511 FP8 + dynamic LoRA | 4 | [qwen_2511_with_distill_lora_dynamic.py](inference/qwen_2511_with_distill_lora_dynamic.py) |
+| Edit 2511 switch LoRA | 8 | [qwen_2511_with_distill_lora_dynamic_switch_lora.py](inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py) |
+| 2512 FP8 | 4 | [qwen_2512_fp8.py](inference/qwen_2512_fp8.py) |
+| 2512 LoRA | 4 | [qwen_2512_with_distill_lora.py](inference/qwen_2512_with_distill_lora.py) |
+| 2512 FP8 + dynamic LoRA | 4 | [qwen_2512_with_distill_lora_dynamic.py](inference/qwen_2512_with_distill_lora_dynamic.py) |
+| Qwen Image dynamic LoRA | 4 | [qwen_image_with_distill_lora_dynamic.py](inference/qwen_image_with_distill_lora_dynamic.py) |
+
+四步示例使用已发布的四步权重，采样步数与[官方推理示例](https://github.com/ModelTC/LightX2V-Qwen-Image-Lightning#run-4-step-edit-2511-model)一致。
+LoRA 切换示例使用本地 LoRA 占位路径，请选择两个与其八步设置兼容的 LoRA。
+上文八步 Shell 配置使用各自匹配的权重。
+
+### 已记录的 DiT 耗时对比
+
+下图为 2025-12-23 记录的 Edit-2511 DiT 耗时对比，不包含预热，也不表示端到端延迟。
+
+![Qwen-Image-Edit-2511](../../assets/figs/qwen/qwen-image-edit-2511.png)

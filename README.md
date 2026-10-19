@@ -18,13 +18,13 @@
 
 [Quick Start](#-quick-start) · [Models](#-supported-model-ecosystem) · [Documentation & Deployment](#-documentation--deployment)
 
-> 🌐 **Try it online now!** **[LightX2V Studio](https://x2v.light-ai.top/)** is a free, lightweight, and fast AI video generation platform. No installation is required to try MiniMax-H3 / Wan 2.2 / SekoTalk / Qwen-Image / SwiftVR and more.
+> 🌐 **Create AI images and videos online. Free, fast, and easy to get started: [LightX2V Studio](https://x2v.light-ai.top/)**
 
 > 🍎 **MacBook local inference app: [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)**
 
 > 🤗 **HuggingFace Model Repository: [LightX2V HuggingFace](https://huggingface.co/lightx2v)**
 
-> 🌟 **Developer Quick Start: [LightX2V Developer Quick Start Guide](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
+> 🌟 **Developer Quick Start: [LightX2V Developer Quick Start Guide](docs/EN/source/getting_started/first_generation.md)**
 
 > 📝 **Technical Blog: [LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)**
 
@@ -41,24 +41,11 @@ pre-commit run --all-files
 
 We thank the following community developers for their contributions to LightX2V:
 
-- [zhtshr](https://github.com/zhtshr)
-- [triple-Mu](https://github.com/triple-Mu)
-- [vivienfanghuagood](https://github.com/vivienfanghuagood)
-- [yeahdongcn](https://github.com/yeahdongcn)
-
-<details>
-<summary>More community contributors</summary>
-
-- [kikidouloveme79](https://github.com/kikidouloveme79)
-- [ziyanxzy](https://github.com/ziyanxzy)
-- [Tyr0727](https://github.com/Tyr0727)
-- [hufangjian2017](https://github.com/hufangjian2017)
-- [Fatemanx](https://github.com/Fatemanx)
-- [qiuxin2012](https://github.com/qiuxin2012)
-
-</details>
+[zhtshr](https://github.com/zhtshr) · [triple-Mu](https://github.com/triple-Mu) · [vivienfanghuagood](https://github.com/vivienfanghuagood) · [yeahdongcn](https://github.com/yeahdongcn) · [kikidouloveme79](https://github.com/kikidouloveme79) · [ziyanxzy](https://github.com/ziyanxzy) · [Tyr0727](https://github.com/Tyr0727) · [hufangjian2017](https://github.com/hufangjian2017) · [Fatemanx](https://github.com/Fatemanx) · [qiuxin2012](https://github.com/qiuxin2012)
 
 ## :fire: Latest News
+
+- **October 18, 2026:** 🚀 We now support [EdenLive](scripts/edenlive/README.md) for video generation controlled by text, a first-frame image, and a proxy recording. Wan2.1 14B and Wan2.2 5B each support bidirectional and four-step autoregressive inference, with realtime profiles for RTX 5090 and H100/H200. See the [deployment guide](scripts/edenlive/README.md) for model conversion, quantization, and streaming inference.
 
 - **October 13, 2026:** 🎉 We released the [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App), which supports local inference on MacBook with Qwen-Image-2.1 [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo), [PE-T2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0), and [PE-I2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0) models.
 
@@ -70,10 +57,10 @@ We thank the following community developers for their contributions to LightX2V:
 
 - **August 11, 2026:** 🚀 We released the [MiniMax-H3 Turbo 4-step 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors) and added support for generating 768p video with synchronized audio in 4 inference steps without CFG. See the [MiniMax-H3 guide](scripts/minimax_h3/README.md).
 
-- **August 7, 2026:** 🚀 We added support for synchronized video and audio generation with [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) and released a [Prompt Rewriter LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA) that expands short prompts into structured descriptions of visuals, soundscapes, and music. See the [MiniMax-H3 guide](scripts/minimax_h3/README.md).
-
 <details>
 <summary>Earlier updates</summary>
+
+- **August 7, 2026:** 🚀 We added support for synchronized video and audio generation with [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) and released a [Prompt Rewriter LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA) that expands short prompts into structured descriptions of visuals, soundscapes, and music. See the [MiniMax-H3 guide](scripts/minimax_h3/README.md).
 
 - **July 28, 2026:** 🚀 We release the [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) 4-step distilled LoRA for LingBot-Video. It supports T2V, T2I, and I2V generation in only 4 inference steps without CFG. See the [LingBot-Video inference scripts](scripts/lingbot_video) for usage.
 
@@ -89,7 +76,7 @@ We thank the following community developers for their contributions to LightX2V:
 
 - **April 20, 2026:** 🚀 We are excited to release the [Wan2.2-I2V-A14B-4step-720p-high](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors) and [Wan2.2-I2V-A14B-4step-720p-low](https://huggingface.co/lightx2v/Wan2.2-Distill-Models/blob/main/wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors) models. Compared to previous iterations, this version was trained on a high-quality 720p dataset and features an optimized low-noise training algorithm. These enhancements significantly boost the model's performance in fine-grained detail rendering and visual texture.
 
-- **April 17, 2026:** 🚀 We support the [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) model. On a single H100 GPU, LightX2V delivers approximately 1.2× speedup. For detailed usage instructions, please refer to [this guide](examples/worldmirror/README.md).
+- **April 17, 2026:** 🚀 We support the [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0.git) model. On a single H100 GPU, LightX2V delivers approximately 1.2× speedup. For detailed usage instructions, please refer to [this guide](scripts/worldmirror/README.md).
 
 - **April 10, 2026:** 🎉 We released a technical blog on disaggregated deployment
   - [LightX2V Disaggregated Deployment: Breaking the Memory and Throughput Bottlenecks of Diffusion Model Inference](https://light-ai.top/LightX2V-BLOG/posts/Disaggregation/)
@@ -102,19 +89,19 @@ We thank the following community developers for their contributions to LightX2V:
 
 - **February 11, 2026:** 🎉 We are excited to announce **[GenRL](https://github.com/ModelTC/GenRL)** - a scalable reinforcement learning framework for visual generation! GenRL enables training diffusion/flow models with multi-reward optimization (HPSv3, VideoAlign, etc.) using GRPO algorithm. We've released high-performance LoRA checkpoints trained with multi-node multi-GPU setup, demonstrating significant improvements in aesthetic quality, motion coherence, and text-video alignment. Check out our [model collection](https://huggingface.co/collections/lightx2v/genrl) on HuggingFace! Give us a ⭐ if you find it useful!
 
-- **January 20, 2026:** 🚀 We support the [LTX-2](https://huggingface.co/Lightricks/LTX-2) audio-video generation model, featuring CFG parallelism, block-level offload, and FP8 per-tensor quantization. Usage examples can be found in [examples/ltx2](https://github.com/ModelTC/LightX2V/tree/main/examples/ltx2) and [scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2).
+- **January 20, 2026:** 🚀 We support the [LTX-2](https://huggingface.co/Lightricks/LTX-2) audio-video generation model, featuring CFG parallelism, block-level offload, and FP8 per-tensor quantization. Usage examples can be found in [scripts/ltx2/inference](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2/inference) and [scripts/ltx2](https://github.com/ModelTC/LightX2V/tree/main/scripts/ltx2).
 
-- **January 6, 2026:** 🚀 We updated the 8-step CFG/step-distilled models for [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) and [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511). You can download the corresponding weights from [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) and [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) for use. Usage tutorials can be found [here](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image).
+- **January 6, 2026:** 🚀 We updated the 8-step CFG/step-distilled models for [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) and [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511). You can download the corresponding weights from [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) and [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) for use. Usage tutorials can be found [here](scripts/qwen_image/README.md).
 
 - **January 6, 2026:** 🚀 Supported deployment on Enflame S60 (GCU).
 
-- **December 31, 2025:** 🚀 We support the [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) text-to-image model since Day 0. Our [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) has been updated with CFG / step-distilled LoRA. Usage examples can be found [here](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image).
+- **December 31, 2025:** 🚀 We support the [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) text-to-image model since Day 0. Our [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) has been updated with CFG / step-distilled LoRA. Usage examples can be found [here](scripts/qwen_image/README.md).
 
 - **December 27, 2025:** 🚀 Supported deployment on MThreads MUSA.
 
 - **December 25, 2025:** 🚀 Supported deployment on AMD ROCm and Ascend 910B.
 
-- **December 23, 2025:** 🚀 We support the [Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) image editing model since Day 0. On a single H100 GPU, LightX2V delivers approximately 1.4× speedup. We support for CFG parallelism, Ulysses parallelism, and efficient offloading technologies. Our [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) has been updated with CFG / step-distilled LoRA and FP8 weights. Usage examples can be found [here](https://github.com/ModelTC/LightX2V/tree/main/examples/qwen_image). Combined with LightX2V, 4-step CFG / step distillation, and the FP8 model, the maximum acceleration can reach up to approximately 42×. Feel free to try [LightX2V Online Service](https://x2v.light-ai.top/login) with *Image to Image* and *Qwen-Image-Edit-2511* model.
+- **December 23, 2025:** 🚀 We support the [Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) image editing model since Day 0. On a single H100 GPU, LightX2V delivers approximately 1.4× speedup. We support for CFG parallelism, Ulysses parallelism, and efficient offloading technologies. Our [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) has been updated with CFG / step-distilled LoRA and FP8 weights. Usage examples can be found [here](scripts/qwen_image/README.md). Combined with LightX2V, 4-step CFG / step distillation, and the FP8 model, the maximum acceleration can reach up to approximately 42×. Feel free to try [LightX2V Online Service](https://x2v.light-ai.top/login) with *Image to Image* and *Qwen-Image-Edit-2511* model.
 
 - **December 22, 2025:** 🚀 Added **Wan2.1 NVFP4 quantization-aware 4-step distilled models**; weights are available on HuggingFace: [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4).
 
@@ -124,15 +111,15 @@ We thank the following community developers for their contributions to LightX2V:
 
 - **November 24, 2025:** 🚀 We released 4-step distilled models for HunyuanVideo-1.5! These models enable **ultra-fast 4-step inference** without CFG requirements, achieving approximately **25x speedup** compared to standard 50-step inference. Both base and FP8 quantized versions are now available: [Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models).
 
-- **November 21, 2025:** 🚀 We support the [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) video generation model since Day 0. With the same number of GPUs, LightX2V can achieve a speed improvement of over 2 times and supports deployment on GPUs with lower memory (such as the 24GB RTX 4090). It also supports CFG/Ulysses parallelism, efficient offloading, TeaCache/MagCache technologies, and more. We will soon update more models on our [HuggingFace page](https://huggingface.co/lightx2v), including step distillation, VAE distillation, and other related models. Quantized models and lightweight VAE models are now available: [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models) for quantized inference, and [LightTAE for HunyuanVideo-1.5](https://huggingface.co/lightx2v/Autoencoders/blob/main/lighttaehy1_5.safetensors) for fast VAE decoding. Refer to [this](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15) for usage tutorials, or check out the [examples directory](https://github.com/ModelTC/LightX2V/tree/main/examples) for code examples.
+- **November 21, 2025:** 🚀 We support the [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) video generation model since Day 0. With the same number of GPUs, LightX2V can achieve a speed improvement of over 2 times and supports deployment on GPUs with lower memory (such as the 24GB RTX 4090). It also supports CFG/Ulysses parallelism, efficient offloading, TeaCache/MagCache technologies, and more. We will soon update more models on our [HuggingFace page](https://huggingface.co/lightx2v), including step distillation, VAE distillation, and other related models. Quantized models and lightweight VAE models are now available: [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models) for quantized inference, and [LightTAE for HunyuanVideo-1.5](https://huggingface.co/lightx2v/Autoencoders/blob/main/lighttaehy1_5.safetensors) for fast VAE decoding. Refer to [this](https://github.com/ModelTC/LightX2V/tree/main/scripts/hunyuan_video_15) for usage tutorials, or check out the [Python API guide](docs/EN/source/getting_started/python_api.md) for code examples.
 
 </details>
 
 ## 💡 Quick Start
 
-We recommend using LightX2V through its service API. The example below uses MiniMax-H3 for text-to-audio-video (T2AV) generation.
+We recommend using LightX2V through its service API. The examples below cover Qwen-Image-2.1 text-to-image (T2I) generation and MiniMax-H3 text-to-audio-video (T2AV) generation.
 
-### Environment and Model Preparation
+### Environment Setup
 
 We recommend the [Docker environment](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html). Clone the repository in your prepared environment:
 
@@ -140,8 +127,6 @@ We recommend the [Docker environment](https://lightx2v-en.readthedocs.io/en/late
 git clone https://github.com/ModelTC/LightX2V.git
 cd LightX2V
 ```
-
-Follow the [MiniMax-H3 guide](scripts/minimax_h3/README.md) to prepare the weights and initial AdaLN cache, check the required kernels, and set the repository path, model path, and GPU in the server script. Run the commands below from the repository root.
 
 <details>
 <summary>Other installation options (Git / source)</summary>
@@ -164,7 +149,31 @@ See the [environment setup guide](https://lightx2v-en.readthedocs.io/en/latest/g
 
 </details>
 
-### Usage Example
+### Usage Examples
+
+Both servers use port `8000` by default. Stop the running server before switching examples.
+
+#### Qwen-Image-2.1: Text-to-Image
+
+Follow the [Qwen-Image-2.1 guide](scripts/qwen_image_21/README.md) to prepare the weights, then set the repository path, model path, and GPU in the server script. Run the commands below from the repository root.
+
+```bash
+# Terminal 1: start the server
+bash scripts/qwen_image_21/server/start_server.sh
+```
+
+After the model loads, submit the example request from another terminal:
+
+```bash
+# Terminal 2: submit a T2I request
+python scripts/qwen_image_21/server/post_t2i.py
+```
+
+Edit the prompt, size, and seed in the [request script](scripts/qwen_image_21/server/post_t2i.py) to generate your own images. Once the request completes, the image is saved by default to `save_results/qwen_image_21_t2i.png` under the repository root.
+
+#### MiniMax-H3: Text-to-Audio-Video
+
+Follow the [MiniMax-H3 guide](scripts/minimax_h3/README.md) to prepare the weights and initial AdaLN cache, and set the repository path, model path, and GPU in the server script. Run the commands below from the repository root.
 
 ```bash
 # Terminal 1: start the server
@@ -225,6 +234,7 @@ Models and variants are grouped by their primary use.
 - ✅ [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast)
 - ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0)
 - ✅ [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay) (bidirectional, autoregressive, and distilled)
+- ✅ [EdenLive](scripts/edenlive/README.md) (Wan2.1 14B / Wan2.2 5B; bidirectional and four-step autoregressive)
 - ✅ [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (3D reconstruction)
 - ✅ [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
 - ✅ [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base)
@@ -273,34 +283,14 @@ Available optimizations depend on the model, hardware, and selected configuratio
 | Resource-Constrained and Low-Latency Deployment | [Low-Resource Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_resource.html) · [Low-Latency Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_latency.html) |
 | Model Quantization & LoRA Deployment | [Quantization](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/quantization.html) · [LoRA Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/lora_deploy.html) |
 | Inference Performance Optimization | [Weight Offloading](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/offload.html) · [Feature Caching](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/cache.html) · [Attention Kernels](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/attention.html) · [Parallel Inference](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/parallel.html) · [Variable-Resolution Inference](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/changing_resolution.html) · [Step Distillation](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/step_distill.html) |
-| Wan2.1 NVFP4 4-Step Inference | [I2V Example](examples/wan/wan_i2v_nvfp4.py) · [T2V Example](examples/wan/wan_t2v_nvfp4.py) · [Quantization Kernel Installation](lightx2v_kernel/README.md) |
-| Code Examples & Development References | [examples](examples) |
+| Wan2.1 NVFP4 4-Step Inference | [I2V Example](scripts/wan/inference/distill/wan_i2v_nvfp4.py) · [T2V Example](scripts/wan/inference/distill/wan_t2v_nvfp4.py) · [Quantization Kernel Installation](lightx2v_kernel/README.md) |
+| Code Examples & Development References | [Python API](docs/EN/source/getting_started/python_api.md) · [scripts](scripts) |
 
 ## 🤝 Acknowledgments
 
 We thank the following open-source projects and communities for the models, tools, and research that have helped shape LightX2V:
 
-- [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan)
-- [Wan-Video](https://github.com/Wan-Video)
-- [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
-- [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
-- [FlashAttention](https://github.com/Dao-AILab/flash-attention)
-- [SageAttention](https://github.com/thu-ml/SageAttention)
-
-<details>
-<summary>More open-source projects</summary>
-
-- [LightLLM](https://github.com/ModelTC/LightLLM)
-- [sglang](https://github.com/sgl-project/sglang)
-- [vllm](https://github.com/vllm-project/vllm)
-- [flashinfer](https://github.com/flashinfer-ai/flashinfer)
-- [MagiAttention](https://github.com/SandAI-org/MagiAttention)
-- [radial-attention](https://github.com/mit-han-lab/radial-attention)
-- [xDiT](https://github.com/xdit-project/xDiT)
-- [FastVideo](https://github.com/hao-ai-lab/FastVideo)
-- [Mooncake](https://github.com/kvcache-ai/Mooncake)
-
-</details>
+[Tencent-Hunyuan](https://github.com/Tencent-Hunyuan) · [Wan-Video](https://github.com/Wan-Video) · [Qwen-Image](https://github.com/QwenLM/Qwen-Image) · [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) · [FlashAttention](https://github.com/Dao-AILab/flash-attention) · [SageAttention](https://github.com/thu-ml/SageAttention) · [LightLLM](https://github.com/ModelTC/LightLLM) · [sglang](https://github.com/sgl-project/sglang) · [vllm](https://github.com/vllm-project/vllm) · [flashinfer](https://github.com/flashinfer-ai/flashinfer) · [MagiAttention](https://github.com/SandAI-org/MagiAttention) · [radial-attention](https://github.com/mit-han-lab/radial-attention) · [xDiT](https://github.com/xdit-project/xDiT) · [FastVideo](https://github.com/hao-ai-lab/FastVideo) · [Mooncake](https://github.com/kvcache-ai/Mooncake)
 
 We also thank the cloud inference platforms supporting the wider ecosystem:
 

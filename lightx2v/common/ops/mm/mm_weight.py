@@ -18,7 +18,7 @@ from lightx2v.common.ops.mm.fp8_f16_accum import (
     fp8_f16_accum_mm_available,
     validate_fp8_f16_accum_qmax,
 )
-from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
+from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_per_token_quant, sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import GGMLTensor
@@ -663,11 +663,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_fp8_perchannel_sym_sgl(self, x):
-        m, k = x.shape
-        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device="cuda", requires_grad=False)
-        input_tensor_scale = torch.empty((m, 1), dtype=torch.float32, device="cuda", requires_grad=False)
-        sgl_kernel.sgl_per_token_quant_fp8(x, input_tensor_quant, input_tensor_scale)
-        return input_tensor_quant, input_tensor_scale
+        return sgl_fp8_per_token_quant(x)
 
     def act_quant_int8_perchannel_sym_vllm(self, x):
         input_tensor_quant, input_tensor_scale, _ = vllm_ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)

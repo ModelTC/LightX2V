@@ -1,0 +1,19 @@
+# Primary five-node deployment: four training nodes + one reward node.
+inherits:
+- geo
+- cluster
+actor_rollout_ref:
+  actor:
+    ppo_mini_batch_size: 32
+    ppo_epochs: 1
+  rollout:
+    agent:
+      num_workers: 32
+data:
+  train_batch_size: 32
+  gen_batch_size: 32
+  val_batch_size: 32
+trainer:
+  nnodes: 4
+  experiment_name: qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}_40gpu
+  default_local_dir: lightx2v_rl/outputs/qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}_40gpu

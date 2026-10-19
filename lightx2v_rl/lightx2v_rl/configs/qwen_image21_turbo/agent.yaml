@@ -1,0 +1,2 @@
+- name: qwen_image21_agent
+  _target_: lightx2v_rl.models.qwen_image.agent.QwenImage21AgentLoop

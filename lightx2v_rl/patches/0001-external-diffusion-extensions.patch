@@ -1,0 +1,186 @@
+diff --git a/verl_omni/pipelines/model_base.py b/verl_omni/pipelines/model_base.py
+index 2f1231a..6fe6307 100644
+--- a/verl_omni/pipelines/model_base.py
++++ b/verl_omni/pipelines/model_base.py
+@@ -114,6 +114,16 @@ class DiffusionModelBase(ABC):
+         """
+         return True
+ 
++    @classmethod
++    def cast_forward_inputs(cls) -> bool:
++        """Whether FSDP may cast every floating model input to parameter dtype.
++
++        Adapters with precision-sensitive conditioning (for example fractional
++        timesteps) may return False and explicitly cast only activation inputs
++        in prepare_model_inputs. This leaves the default behavior unchanged.
++        """
++        return True
++
+     @classmethod
+     def get_fsdp_ignored_module_names(cls, model_config) -> list[str]:
+         """Submodule name components to leave unsharded under FSDP2 (default: none).
+diff --git a/verl_omni/trainer/diffusion/diffusion_algos.py b/verl_omni/trainer/diffusion/diffusion_algos.py
+index 788e546..2af71d6 100644
+--- a/verl_omni/trainer/diffusion/diffusion_algos.py
++++ b/verl_omni/trainer/diffusion/diffusion_algos.py
+@@ -37,6 +37,9 @@ class DiffusionLossResult:
+     loss: torch.Tensor
+     metrics: dict[str, Any]
+     add_loss_metric: bool = False
++    # Custom objectives may include their own reference-policy regularization.
++    # The worker still requests reference outputs when use_kl_loss is enabled.
++    includes_kl_loss: bool = False
+ 
+ 
+ def _format_available_keys(mapping: Any) -> str:
+diff --git a/verl_omni/utils/config.py b/verl_omni/utils/config.py
+index 71cc608..458b061 100644
+--- a/verl_omni/utils/config.py
++++ b/verl_omni/utils/config.py
+@@ -9,6 +9,19 @@ from __future__ import annotations
+ from typing import Any
+ 
+ 
++def instantiate_config(config: Any, base_type: type) -> Any:
++    """Honor a declared config subclass and validate the runtime's base contract."""
++    from verl.utils.config import omega_conf_to_dataclass
++
++    if isinstance(config, base_type):
++        return config
++    target = config.get("_target_") if hasattr(config, "get") else None
++    result = omega_conf_to_dataclass(config, dataclass_type=None if target else base_type)
++    if not isinstance(result, base_type):
++        raise TypeError(f"Config target must produce {base_type.__name__}, got {type(result).__name__}.")
++    return result
++
++
+ def _select(config: Any, path: str, default: Any = None) -> Any:
+     value = config
+     for part in path.split("."):
+diff --git a/verl_omni/workers/engine/fsdp/diffusers_impl.py b/verl_omni/workers/engine/fsdp/diffusers_impl.py
+index a2e7047..f8f9cb2 100644
+--- a/verl_omni/workers/engine/fsdp/diffusers_impl.py
++++ b/verl_omni/workers/engine/fsdp/diffusers_impl.py
+@@ -363,7 +363,12 @@ class DiffusersFSDPEngine(LoRAAdapterMixin, BaseEngine, ABC):
+             param_dtype,
+             preserve_fp32_modules=preserve_fp32_modules,
+         )
+-        mixed_precision = MixedPrecision(param_dtype=param_dtype, reduce_dtype=reduce_dtype, buffer_dtype=buffer_dtype)
++        mixed_precision = MixedPrecision(
++            param_dtype=param_dtype,
++            reduce_dtype=reduce_dtype,
++            buffer_dtype=buffer_dtype,
++            cast_root_forward_inputs=model_cls.cast_forward_inputs(),
++        )
+ 
+         auto_wrap_policy = get_fsdp_wrap_policy(
+             module=module,
+@@ -408,7 +413,9 @@ class DiffusersFSDPEngine(LoRAAdapterMixin, BaseEngine, ABC):
+             # - ref: CPUOffloadPolicy(pin_memory=True)
+             assert CPUOffloadPolicy is not None, "PyTorch version >= 2.4 is required for using fully_shard API (FSDP2)"
+             mp_policy = MixedPrecisionPolicy(
+-                param_dtype=param_dtype, reduce_dtype=reduce_dtype, cast_forward_inputs=True
++                param_dtype=param_dtype,
++                reduce_dtype=reduce_dtype,
++                cast_forward_inputs=model_cls.cast_forward_inputs(),
+             )
+             offload_policy = None
+             if self.engine_config.offload_policy or self.engine_config.forward_only:
+@@ -1179,6 +1186,8 @@ class PPODiffusersFSDPEngine(DiffusersFSDPEngine):
+         )
+ 
+     def prepare_model_outputs(self, output, micro_batch: TensorDict):
++        if isinstance(output, dict):
++            return output
+         log_prob, prev_sample_mean, std_dev_t, sqrt_dt = output
+         return {
+             "log_probs": log_prob,
+diff --git a/verl_omni/workers/engine/veomni/diffusion_impl.py b/verl_omni/workers/engine/veomni/diffusion_impl.py
+index 2685111..eee8621 100644
+--- a/verl_omni/workers/engine/veomni/diffusion_impl.py
++++ b/verl_omni/workers/engine/veomni/diffusion_impl.py
+@@ -420,6 +420,8 @@ class VeOmniDiffusionEngine(BaseEngine):
+         )
+ 
+     def prepare_model_outputs(self, output, micro_batch: TensorDict):
++        if isinstance(output, dict):
++            return output
+         log_prob, prev_sample_mean, std_dev_t, sqrt_dt = output
+         return {
+             "log_probs": log_prob,
+diff --git a/verl_omni/workers/rollout/replica.py b/verl_omni/workers/rollout/replica.py
+index 3d82b7e..eadbf69 100644
+--- a/verl_omni/workers/rollout/replica.py
++++ b/verl_omni/workers/rollout/replica.py
+@@ -15,12 +15,12 @@ import asyncio
+ from typing import Any, Optional
+ 
+ from pydantic import BaseModel, ConfigDict
+-from verl.utils.config import omega_conf_to_dataclass
+ from verl.utils.tracking import RLInsightLogger
+ from verl.workers.rollout.llm_server import LLMServerManager
+ from verl.workers.rollout.replica import RolloutReplicaRegistry
+ from verl.workers.rollout.utils import update_prometheus_config
+ 
++from verl_omni.utils.config import instantiate_config
+ from verl_omni.workers.config import DiffusionRolloutConfig
+ from verl_omni.workers.rollout.base import get_rollout_sequence_parallel_size, get_rollout_world_size
+ 
+@@ -49,7 +49,7 @@ class DiffusionLLMServerManager(LLMServerManager):
+ 
+         # TODO: replace this lifecycle override with the replica-size hook once the verl pin includes
+         # https://github.com/verl-project/verl/pull/8070. The lifecycle test compares against the current pin.
+-        config = omega_conf_to_dataclass(self.rollout_config, dataclass_type=DiffusionRolloutConfig)
++        config = instantiate_config(self.rollout_config, DiffusionRolloutConfig)
+         start_rank = self.start_rank if start_rank is None else start_rank
+         replica_size = get_rollout_world_size(config)
+         world_size = self.worker_group.world_size if self.worker_group else config.n_gpus_per_node * config.nnodes
+diff --git a/verl_omni/workers/rollout/vllm_rollout/vllm_omni_strategy_base.py b/verl_omni/workers/rollout/vllm_rollout/vllm_omni_strategy_base.py
+index 140ee23..e9311c1 100644
+--- a/verl_omni/workers/rollout/vllm_rollout/vllm_omni_strategy_base.py
++++ b/verl_omni/workers/rollout/vllm_rollout/vllm_omni_strategy_base.py
+@@ -17,12 +17,12 @@ from abc import ABC, abstractmethod
+ from typing import TYPE_CHECKING, Any, Optional
+ 
+ import torch
+-from verl.utils.config import omega_conf_to_dataclass
+ from verl.utils.tokenizer import normalize_token_ids
+ from verl.utils.tracking import RLInsightLogger
+ from vllm_omni.lora.request import LoRARequest
+ 
+ from verl_omni.pipelines.rollout_request import OmniRolloutRequest
++from verl_omni.utils.config import instantiate_config
+ 
+ if TYPE_CHECKING:
+     from argparse import Namespace
+@@ -88,7 +88,7 @@ class OmniStrategyBase(ABC):
+         Returns:
+             The mode's rollout-config dataclass instance.
+         """
+-        return omega_conf_to_dataclass(config, dataclass_type=self.rollout_config_cls)
++        return instantiate_config(config, self.rollout_config_cls)
+ 
+     def init_model_config(self, model_config: Any) -> Any:
+         """Convert the raw model config into :attr:`model_config_cls`.
+@@ -99,7 +99,7 @@ class OmniStrategyBase(ABC):
+         Returns:
+             The mode's model-config dataclass instance.
+         """
+-        return omega_conf_to_dataclass(model_config, dataclass_type=self.model_config_cls)
++        return instantiate_config(model_config, self.model_config_cls)
+ 
+     def validate_configs(self) -> None:
+         """Validate/normalize ``self.server.config`` after it is built.
+diff --git a/verl_omni/workers/utils/losses.py b/verl_omni/workers/utils/losses.py
+index 3afda6f..aeeb5ee 100644
+--- a/verl_omni/workers/utils/losses.py
++++ b/verl_omni/workers/utils/losses.py
+@@ -98,7 +98,7 @@ def diffusion_loss(config: DiffusionActorConfig, model_output, data: TensorDict,
+     if loss_result.add_loss_metric:
+         metrics["actor/loss"] = Metric(value=loss_value, aggregation=AggregationType.MEAN)
+ 
+-    if config.use_kl_loss:
++    if config.use_kl_loss and not loss_result.includes_kl_loss:
+         loss_func = get_diffusion_loss_fn("kl")
+         loss_func.validate_inputs(loss_name="kl", model_output=model_output, data=data)
+         kl_result = loss_func(config=config, model_output=model_output, data=data)
