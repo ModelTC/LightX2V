@@ -4,7 +4,7 @@ from torch.nn import functional as F
 
 from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
 from lightx2v.models.networks.base_model import BaseTransformerModel
-from lightx2v.models.networks.qwen_image.infer.offload.transformer_infer import QwenImageOffloadTransformerInfer
+from lightx2v.models.networks.qwen_image.infer.offload.transformer_infer import QwenImageOffloadTransformerInfer, validate_qwen_residency_config
 from lightx2v.models.networks.qwen_image.infer.post_infer import QwenImagePostInfer
 from lightx2v.models.networks.qwen_image.infer.pre_infer import QwenImagePreInfer
 from lightx2v.models.networks.qwen_image.infer.transformer_infer import QwenImageTransformerInfer
@@ -22,6 +22,7 @@ class QwenImageTransformerModel(BaseTransformerModel):
     post_weight_class = QwenImagePostWeights
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
+        validate_qwen_residency_config(config)
         super().__init__(model_path, config, device, None, lora_path, lora_strength)
         self.in_channels = self.config["in_channels"]
         self.attention_kwargs = {}

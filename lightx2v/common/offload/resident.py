@@ -12,6 +12,31 @@ def uniform_resident_indices(num_blocks, count):
     return tuple(k * num_blocks // count for k in range(count))
 
 
+def validate_residency_config(config):
+    if not config.get("cpu_offload", False) or config.get("offload_granularity", "block") != "block":
+        raise ValueError("Static residency requires CPU block offload")
+    if AI_DEVICE not in ("cuda", "npu"):
+        raise ValueError("Static residency requires CUDA or NPU stream events")
+    # These paths change the block source, execution order, or model state.
+    incompatible = (
+        "lazy_load",
+        "shared_cpu_weights",
+        "parallel",
+        "seq_parallel",
+        "tensor_parallel",
+        "cfg_parallel",
+        "pipefusion_parallel",
+        "lora_configs",
+        "lora_dynamic_apply",
+        "adapter_model_path",
+        "changing_resolution",
+        "use_compile",
+        "enable_cuda_graph",
+    )
+    if any(config.get(key, False) for key in incompatible) or config.get("feature_caching", "NoCaching") != "NoCaching":
+        raise ValueError("Static residency requires single-device eager execution with fixed weights, fixed resolution, and NoCaching")
+
+
 class ResidentBlocks:
     def __init__(self, count):
         self.count = count
@@ -36,7 +61,7 @@ class ResidentBlocks:
         except BaseException:
             self.release()
             raise
-        logger.info("Wan static residency: resident={}, streamed={}, indices={}", self.count, len(blocks) - self.count, list(self.indices))
+        logger.info("Static residency: resident={}, streamed={}, indices={}", self.count, len(blocks) - self.count, list(self.indices))
 
     def release(self):
         if not self.active:

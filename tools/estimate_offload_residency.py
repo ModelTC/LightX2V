@@ -1,4 +1,4 @@
-"""Measure one Wan block and write a static resident-block count into a config.
+"""Measure one Wan or Qwen Image block and write a static resident-block count into a config.
 
 Run with python -m tools.estimate_offload_residency --help.
 """
@@ -20,12 +20,18 @@ from lightx2v.common.offload.block_loader import OffloadGroup, prepare_contiguou
 from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager
 from lightx2v.common.offload.resident import uniform_resident_indices
 from lightx2v.common.offload.safetensors_checkpoint import SafetensorsCheckpoint
+from lightx2v.models.networks.qwen_image.infer.module_io import QwenPreInferModuleOutput
+from lightx2v.models.networks.qwen_image.infer.offload.transformer_infer import validate_qwen_residency_config
+from lightx2v.models.networks.qwen_image.infer.transformer_infer import QwenImageTransformerInfer
+from lightx2v.models.networks.qwen_image.infer.utils import get_qwen_image_size
+from lightx2v.models.networks.qwen_image.weights.transformer_weights import QwenImageTransformerAttentionBlock
 from lightx2v.models.networks.wan.infer.module_io import GridOutput, WanPreInferModuleOutput
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import validate_wan_residency_config
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.models.networks.wan.infer.utils import image_latent_size
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerAttentionBlock
+from lightx2v.models.schedulers.qwen_image.scheduler import QwenEmbedRope
 from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v.utils.set_config import build_startup_config
@@ -48,30 +54,27 @@ def estimate_resident_count(num_blocks, compute_ms, transfer_ms):
     return num_blocks - math.floor(num_blocks * compute_ms / transfer_ms)
 
 
-def build_wan_case(config, image_path=None):
-    """Load only blocks.0 and use the production operators with synthetic inputs."""
-    validate_wan_residency_config(config)
+def load_block(config, checkpoint_path, block_class, prefix, sensitive_layers=()):
+    """Load one CPU block and the same two device slots used by inference."""
     validate_contiguous_config(config)
     backend = get_block_offload_backend(required=False)
     if backend is not None:
         backend.prepare()
-    checkpoint_key = "dit_quantized_ckpt" if config.get("dit_quantized", False) else "dit_original_ckpt"
-    checkpoint_path = config.get(checkpoint_key) or config["model_path"]
     checkpoint = SafetensorsCheckpoint(checkpoint_path)
-    names = [name for name in checkpoint.weight_map if name.startswith("blocks.0.")]
+    names = [name for name in checkpoint.weight_map if name.startswith(prefix)]
     if not names:
-        raise ValueError("Checkpoint contains no Wan blocks.0 weights")
+        raise ValueError(f"Checkpoint contains no {prefix} weights")
     weights = checkpoint.load_tensors(names)
     metadata = {name: TensorMetadata(tuple(value.shape), value.dtype) for name, value in weights.items()}
     for name, value in weights.items():
         if value.dtype in (torch.float16, torch.bfloat16, torch.float32):
-            dtype = GET_SENSITIVE_DTYPE() if any(key in name for key in ("norm", "embedding", "modulation", "time", "before_proj", "after_proj")) else GET_DTYPE()
+            dtype = GET_SENSITIVE_DTYPE() if any(key in name for key in sensitive_layers) else GET_DTYPE()
             weights[name] = value.to(dtype)
     kwargs = dict(block_index=0, task=config["task"], mm_type=config.get("dit_quant_scheme", "Default"), config=config)
-    block = WanTransformerAttentionBlock(**kwargs)
-    slots = [WanTransformerAttentionBlock(**kwargs, create_cuda_buffer=True) for _ in range(2)]
+    block = block_class(**kwargs)
+    slots = [block_class(**kwargs, create_cuda_buffer=True) for _ in range(2)]
     blocks = [block]
-    group = OffloadGroup(blocks, slots, ("blocks.0.",))
+    group = OffloadGroup(blocks, slots, (prefix,))
     if config.get("cpu_offload_layout", "per_tensor") == "contiguous":
         prepare_contiguous_group(group, weights, metadata)
     for item in (*slots, block):
@@ -82,6 +85,20 @@ def build_wan_case(config, image_path=None):
     if config.get("cpu_offload_layout", "per_tensor") == "contiguous":
         manager.init_contiguous_group(group)
 
+    sources = block.state_dict()
+    block_bytes = sum(value.numel() * value.element_size() for value in sources.values() if isinstance(value, torch.Tensor))
+    if manager.contiguous_transfer is not None:
+        block_bytes = block.block_buffer.layout.nbytes
+    return blocks, manager, block_bytes
+
+
+def build_wan_case(config, image_path=None):
+    """Load only blocks.0 and use the production operators with synthetic inputs."""
+    validate_wan_residency_config(config)
+    checkpoint_key = "dit_quantized_ckpt" if config.get("dit_quantized", False) else "dit_original_ckpt"
+    checkpoint_path = config.get(checkpoint_key) or config["model_path"]
+    blocks, manager, block_bytes = load_block(config, checkpoint_path, WanTransformerAttentionBlock, "blocks.0.", ("norm", "embedding", "modulation", "time", "before_proj", "after_proj"))
+    block = blocks[0]
     stride, patch = config["vae_stride"], config["patch_size"]
     if config["task"] == "i2v":
         if image_path is None:
@@ -119,11 +136,73 @@ def build_wan_case(config, image_path=None):
     infer.reset_infer_states(x, context)
     if infer._sol_global_morton_enabled:
         raise ValueError("The single-block estimator does not implement Sol-Attn Morton input reordering")
-    sources = block.state_dict()
-    block_bytes = sum(value.numel() * value.element_size() for value in sources.values() if isinstance(value, torch.Tensor))
-    if manager.contiguous_transfer is not None:
-        block_bytes = block.block_buffer.layout.nbytes
-    return SimpleNamespace(blocks=blocks, manager=manager, infer=infer, pre=pre, block_bytes=block_bytes, grid=grid, pixel_size=[latent_h * stride[1], latent_w * stride[2]])
+    hidden = torch.empty_like(x)
+    return SimpleNamespace(
+        blocks=blocks,
+        manager=manager,
+        infer=infer,
+        pre=pre,
+        block_bytes=block_bytes,
+        grid=grid,
+        pixel_size=[latent_h * stride[1], latent_w * stride[2]],
+        text_tokens=config["text_len"],
+        compute=lambda: (infer.run_block(0, manager.cuda_buffers[0], hidden, pre),),
+        reset=lambda: hidden.copy_(pre.x),
+    )
+
+
+def build_qwen_case(config, prompt, negative_prompt=" "):
+    """Use real block weights, tokenizer lengths and production RoPE with synthetic activations."""
+    from transformers import Qwen2Tokenizer
+
+    validate_qwen_residency_config(config)
+    size = get_qwen_image_size(config, config.get("size", []))
+    if size is None:
+        raise ValueError("Qwen measurement requires a valid aspect_ratio or size")
+    width, height = size
+    grid = (1, height // config["vae_scale_factor"] // 2, width // config["vae_scale_factor"] // 2)
+    tokenizer = Qwen2Tokenizer.from_pretrained(config.get("qwen25vl_tokenizer_path", os.path.join(config["model_path"], "tokenizer")))
+    prompts = [prompt, negative_prompt] if config["enable_cfg"] else [prompt]
+    tokens = tokenizer([config["prompt_template_encode"].format(text) for text in prompts], add_special_tokens=True)["input_ids"]
+    lengths = [len(ids) - config["prompt_template_encode_start_idx"] for ids in tokens]
+    if min(lengths) <= 0 or max(lengths) > config.get("tokenizer_max_length", 4096):
+        raise ValueError(f"Qwen text lengths outside the supported tokenizer range: {lengths}")
+    # The shorter CFG branch generally has less computation available to hide transfers.
+    text_tokens = min(lengths)
+    checkpoint_key = "dit_quantized_ckpt" if config.get("dit_quantized", False) else "dit_original_ckpt"
+    checkpoint_path = config.get(checkpoint_key) or config.get("transformer_model_path") or os.path.join(config["model_path"], "transformer")
+    blocks, manager, block_bytes = load_block(config, checkpoint_path, QwenImageTransformerAttentionBlock, "transformer_blocks.0.")
+    dim = config["num_attention_heads"] * config["attention_head_dim"]
+    torch.manual_seed(42)
+    image = torch.randn(math.prod(grid), dim, device=AI_DEVICE, dtype=GET_DTYPE()) * 0.05
+    text = torch.randn(text_tokens, dim, device=AI_DEVICE, dtype=GET_DTYPE()) * 0.05
+    temb = torch.randn(1, dim, device=AI_DEVICE, dtype=GET_DTYPE()) * 0.05
+    rope = QwenEmbedRope(theta=10000, axes_dim=[16, 56, 56], scale_rope=True)
+    sources = rope([[grid]], text_tokens, AI_DEVICE)
+    operators = [blocks[0].compute_phases[i].rope for i in (0, 1)]
+    freqs = tuple(op.prepare_freqs(source) for op, source in zip(operators, sources))
+    positions = tuple(op.prepare_positions(freq) for op, freq in zip(operators, freqs))
+    pre = QwenPreInferModuleOutput(image, text, temb, temb, freqs, positions)
+    infer = QwenImageTransformerInfer(config)
+    hidden, encoder_hidden = torch.empty_like(image), torch.empty_like(text)
+
+    def reset():
+        hidden.copy_(image)
+        encoder_hidden.copy_(text)
+
+    return SimpleNamespace(
+        blocks=blocks,
+        manager=manager,
+        infer=infer,
+        pre=pre,
+        block_bytes=block_bytes,
+        grid=grid,
+        pixel_size=[height, width],
+        text_tokens=text_tokens,
+        text_lengths=lengths,
+        compute=lambda: infer.run_block(0, manager.cuda_buffers[0], hidden, encoder_hidden, temb, temb, freqs, positions, None),
+        reset=reset,
+    )
 
 
 def measure_ms(action, stream, prepare=None):
@@ -145,17 +224,12 @@ def measure_ms(action, stream, prepare=None):
 
 
 def measure_block(case):
-    manager, pre = case.manager, case.pre
+    manager = case.manager
     torch_device_module.synchronize()
     d, transfer_samples, _ = measure_ms(lambda: manager.copy_block_to_buffer(manager.cuda_buffers[0], 0, case.blocks), manager.cuda_load_stream)
-    hidden = torch.empty_like(pre.x)
     torch_device_module.synchronize()
-    c, compute_samples, result = measure_ms(
-        lambda: case.infer.run_block(0, manager.cuda_buffers[0], hidden, pre),
-        manager.compute_stream,
-        prepare=lambda: hidden.copy_(pre.x),
-    )
-    if not torch.isfinite(result).all():
+    c, compute_samples, result = measure_ms(case.compute, manager.compute_stream, prepare=case.reset)
+    if not all(torch.isfinite(tensor).all() for tensor in result):
         raise RuntimeError("The representative block produced non-finite output")
     return c, d, compute_samples, transfer_samples
 
@@ -176,11 +250,13 @@ def write_json(path, content):
 @torch.no_grad()
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-cls", choices=("wan2.1",), default="wan2.1")
-    parser.add_argument("--task", choices=("t2v", "i2v"), required=True)
+    parser.add_argument("--model-cls", choices=("wan2.1", "qwen_image"), default="wan2.1")
+    parser.add_argument("--task", choices=("t2v", "i2v", "t2i"), required=True)
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--image-path")
+    parser.add_argument("--prompt")
+    parser.add_argument("--negative-prompt", default=" ")
     parser.add_argument("--output-config", type=Path)
     args = parser.parse_args()
     started = time.perf_counter()
@@ -188,13 +264,19 @@ def main():
     deployment = json.loads(args.config.read_text())
     deployment.update(model_cls=args.model_cls, model_path=args.model_path, task=args.task, cpu_offload=True, offload_granularity="block", use_event_offload=True, offload_resident_blocks=0)
     config = build_startup_config(deployment)
-    case = build_wan_case(config, args.image_path)
+    if args.model_cls == "qwen_image":
+        if args.prompt is None:
+            parser.error("Qwen measurement requires --prompt matching inference")
+        case = build_qwen_case(config, args.prompt, args.negative_prompt)
+    else:
+        case = build_wan_case(config, args.image_path)
     try:
         c, d, compute_samples, transfer_samples = measure_block(case)
         count = estimate_resident_count(config["num_layers"], c, d)
         deployment["offload_resident_blocks"] = count
         # Match normalized frame counts used to construct the measured input.
-        deployment["num_frames"] = config["num_frames"]
+        if args.model_cls == "wan2.1":
+            deployment["num_frames"] = config["num_frames"]
         report = {
             "model_cls": args.model_cls,
             "model_path": args.model_path,
@@ -202,10 +284,9 @@ def main():
             "dtype": str(GET_DTYPE()),
             "quant_scheme": config.get("dit_quant_scheme", "Default"),
             "layout": config.get("cpu_offload_layout", "per_tensor"),
-            "num_frames": config["num_frames"],
             "pixel_size": case.pixel_size,
             "block_grid": case.grid,
-            "text_tokens": config["text_len"],
+            "text_tokens": case.text_tokens,
             "num_blocks": config["num_layers"],
             "compute_ms": c,
             "transfer_ms": d,
@@ -221,6 +302,10 @@ def main():
             "elapsed_seconds": time.perf_counter() - started,
             "output_config": str(output),
         }
+        if args.model_cls == "qwen_image":
+            report["text_lengths"] = case.text_lengths
+        else:
+            report["num_frames"] = config["num_frames"]
         write_json(output.with_suffix(".profile.json"), report)
         write_json(output, deployment)
         print(json.dumps(report, indent=2))

@@ -2,7 +2,7 @@ import torch
 
 from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
-from lightx2v.common.offload.resident import ResidentBlocks, uniform_resident_indices
+from lightx2v.common.offload.resident import ResidentBlocks, uniform_resident_indices, validate_residency_config
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -15,28 +15,7 @@ def validate_wan_residency_config(config):
     uniform_resident_indices(config["num_layers"], config.get("offload_resident_blocks", 0))
     if config["model_cls"] != "wan2.1" or config["task"] not in ("t2v", "i2v"):
         raise ValueError("Static Wan residency currently supports Wan2.1 t2v/i2v")
-    if not config.get("cpu_offload", False) or config.get("offload_granularity", "block") != "block":
-        raise ValueError("Static residency requires CPU block offload")
-    if AI_DEVICE not in ("cuda", "npu"):
-        raise ValueError("Static residency requires CUDA or NPU stream events")
-    # These paths change the block source, execution order, or model state.
-    incompatible = (
-        "lazy_load",
-        "shared_cpu_weights",
-        "parallel",
-        "seq_parallel",
-        "tensor_parallel",
-        "cfg_parallel",
-        "pipefusion_parallel",
-        "lora_configs",
-        "lora_dynamic_apply",
-        "adapter_model_path",
-        "changing_resolution",
-        "use_compile",
-        "enable_cuda_graph",
-    )
-    if any(config.get(key, False) for key in incompatible) or config.get("feature_caching", "NoCaching") != "NoCaching":
-        raise ValueError("Static residency requires single-device eager execution with fixed weights, fixed resolution, and NoCaching")
+    validate_residency_config(config)
 
 
 class WanOffloadTransformerInfer(WanTransformerInfer):
