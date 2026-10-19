@@ -18,7 +18,7 @@
 
 [快速开始](#-快速开始) · [模型生态](#-支持的模型生态) · [文档与部署](#-文档与部署)
 
-> 🌐 **在线创作 AI 图像与视频，免费、快速、轻松上手：[LightX2V Studio](https://x2v.light-ai.top/)**
+> 🌐 **在线体验基于 LightX2V 的 AI 数字人与多模态内容生产平台： [LightX2V Studio](https://x2v.light-ai.top/)**
 
 > 🍎 **MacBook 本地推理 App: [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)**
 

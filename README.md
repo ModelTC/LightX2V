@@ -18,7 +18,7 @@
 
 [Quick Start](#-quick-start) · [Models](#-supported-model-ecosystem) · [Documentation & Deployment](#-documentation--deployment)
 
-> 🌐 **Create AI images and videos online. Free, fast, and easy to get started: [LightX2V Studio](https://x2v.light-ai.top/)**
+> 🌐 **Try the LightX2V-powered AI avatar and multimodal content production platform online: [LightX2V Studio](https://x2v.light-ai.top/)**
 
 > 🍎 **MacBook local inference app: [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)**
 
