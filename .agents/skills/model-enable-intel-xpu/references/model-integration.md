@@ -141,17 +141,17 @@ touch lightx2v/models/schedulers/$MODEL/__init__.py
 
 使用新内核（CUTE attention、XPU RMSNorm、INT8 GEMM）需要先编译 `sycl_kernels`。
 
-当前 LightX2V 使用仓库根目录的 `lightx2v_kernel_xpu/`。skill 内旧 Windows 工程保留为独立历史参考包，其接口、构建和二进制不代表当前支持。构建细节见 [wheel 集成说明](../../lightx2v-kernel-skills/intel-xpu/integration-skills/sycl-esimd-to-python-wheel/SKILL.md)。
+当前 LightX2V 使用仓库根目录的 `lightx2v_kernel/intel_xpu/`。skill 内旧 Windows 工程保留为独立历史参考包，其接口、构建和二进制不代表当前支持。构建细节见 [wheel 集成说明](../../lightx2v-kernel-skills/intel-xpu/integration-skills/sycl-esimd-to-python-wheel/SKILL.md)。
 
 - Linux `build.sh` 将 `XPU_TARGET=bmg|ptl-h`（默认 `bmg`）传给 CMake/CUTE，`build_version.py` 添加 `+bmg` / `+ptlh` 后缀。但独立的 `lgrf_uni/build.sh` 仍写死 legacy ESIMD SDP 的 `ptl-h` 目标，不读取该变量；wheel 后缀不代表其中所有内核均适用于该设备。
 - Windows `build.bat` 当前在 ESIMD 编译命令中写死 `ptl-h`，没有读取 `XPU_TARGET`，并关闭 CUTE。仅设置环境变量不能把它变为另一硬件目标；先核对 DLL 和 CMake 目标是否与实际设备一致。
 - 不按“Arc”名称猜 AOT target；先读取设备信息并核对编译器支持。按实际产物选择一个 wheel，避免通配符同时安装多个 target 的 wheel。
-- oneAPI、oneDNN 和 PyTorch ABI 必须匹配。以当前项目构建文件、[环境说明](../../../../lightx2v_kernel_xpu/README.md) 和目标机器实测为依据，不在 skill 中另维护固定版本推荐。
+- oneAPI、oneDNN 和 PyTorch ABI 必须匹配。以当前项目构建文件、[环境说明](../../../../lightx2v_kernel/intel_xpu/README.md) 和目标机器实测为依据，不在 skill 中另维护固定版本推荐。
 
 Linux 示例（CUTE 目标为 BMG；使用 legacy SDP 前还须核对或修改其独立构建目标）：
 ```bash
 source /opt/intel/oneapi/setvars.sh
-cd lightx2v_kernel_xpu
+cd lightx2v_kernel/intel_xpu
 XPU_TARGET=bmg ./build.sh
 ls dist/*.whl
 # 从输出中选择本次构建的 wheel，再用 python -m pip install <wheel> 安装

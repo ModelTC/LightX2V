@@ -39,7 +39,7 @@ Correctness: rel_rms = 0.0003
 ### Test 4: FP16 x FP8 + bias
 - [512, 4096, 4096]: rel_rms = 0.0128, PASS
 
-## PyTorch Wrapper Results (lightx2v_kernel_xpu)
+## PyTorch Wrapper Results (lightx2v_kernel/intel_xpu)
 
 ### FP16 x FP8
 

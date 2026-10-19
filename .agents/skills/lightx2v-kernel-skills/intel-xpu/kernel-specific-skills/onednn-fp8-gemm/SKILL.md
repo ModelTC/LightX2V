@@ -289,7 +289,7 @@ target_link_libraries(${MODULE} torch torch_python dnnl)
 | FP16xU4 GEMV [1,4096,2048] | 0.009 ms | 1.8 | jit:gemm:any |
 | FP16xU4 attn [512,4096,4096] | 0.132 ms | 130.2 | jit:gemm:any |
 
-### PyTorch Wrapper (lightx2v_kernel_xpu)
+### PyTorch Wrapper (lightx2v_kernel/intel_xpu)
 
 | Config | FP16xFP8 | BF16xFP8 | Speedup vs native |
 |--------|----------|----------|-------------------|

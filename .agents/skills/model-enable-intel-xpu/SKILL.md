@@ -107,7 +107,7 @@ def apply(self, input_tensor):
     return output.reshape(*input_tensor.shape[:-1], self.weight.shape[0])
 ```
 
-**关键点**：INT8 scale 为每行（per-channel）保存（shape `(out_dim, 1)`），与 FP8 一致；`int8-intel-xpu` 要求激活为 FP16/BF16，且需要 `lightx2v_kernel_xpu` 编译出 `sycl_kernels.onednn_w8a8_int8`（见下方"前置条件"）。
+**关键点**：INT8 scale 为每行（per-channel）保存（shape `(out_dim, 1)`），与 FP8 一致；`int8-intel-xpu` 要求激活为 FP16/BF16，且需要 `lightx2v_kernel/intel_xpu` 编译出 `sycl_kernels.onednn_w8a8_int8`（见下方"前置条件"）。
 
 ---
 
@@ -254,7 +254,7 @@ def forward(self, x):
 
 ## 前置条件：编译 sycl_kernels
 
-使用仓库根目录 lightx2v_kernel_xpu；历史 Windows 包仅供比较。按目标 GPU、oneAPI、oneDNN 与 PyTorch ABI 构建并验证。
+使用仓库根目录 lightx2v_kernel/intel_xpu；历史 Windows 包仅供比较。按目标 GPU、oneAPI、oneDNN 与 PyTorch ABI 构建并验证。
 
 详见 [前置条件：编译 sycl_kernels](references/model-integration.md#前置条件编译-sycl_kernels)。
 

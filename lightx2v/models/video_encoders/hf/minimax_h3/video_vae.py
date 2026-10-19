@@ -67,7 +67,12 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
-    from lightx2v_kernel.conv3d import fp8_conv3d
+    try:
+        from lightx2v_kernel_nvidia.conv3d import fp8_conv3d
+    except ModuleNotFoundError as exc:
+        if exc.name != "lightx2v_kernel_nvidia":
+            raise
+        from lightx2v_kernel.conv3d import fp8_conv3d
 except (AttributeError, ImportError, RuntimeError) as import_error:
     fp8_conv3d = None
     _FP8_CONV3D_IMPORT_ERROR = import_error
@@ -783,7 +788,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         policy: Fp8EncoderConvPolicy,
     ) -> None:
         if fp8_conv3d is None:
-            raise ImportError("MiniMax-H3 FP8 Encoder Conv3D requires lightx2v_kernel Conv3D support") from _FP8_CONV3D_IMPORT_ERROR
+            raise ImportError("MiniMax-H3 FP8 Encoder Conv3D requires lightx2v_kernel_nvidia (or compatible legacy lightx2v_kernel) Conv3D support") from _FP8_CONV3D_IMPORT_ERROR
         if self.execution_device.type != "cuda":
             raise RuntimeError("MiniMax-H3 FP8 Encoder Conv3D requires CUDA")
 

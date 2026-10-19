@@ -1,0 +1,370 @@
+# LightX2V Intel XPU Kernels
+
+SYCL/ESIMD custom kernels for LightX2V inference on Intel Arc GPU (Xe2 / PTL-H).
+
+Exposed as the Python package `sycl_kernels`:
+
+- `sycl_kernels.rms_norm(weight, input, eps)` provides ESIMD RMSNorm for
+  contiguous FP32/FP16/BF16 XPU tensors with hidden size up to 8192 and
+  divisible by 32. For MiniMax-H3, select it with `"rms_type": "intel_xpu"`;
+  unsupported contracts use the torch fallback.
+- `sycl_kernels.minimax_h3_rope(input, freqs)` provides MiniMax-H3 partial
+  split-half RoPE for contiguous BF16 `[rows, heads, 128]` input and FP32
+  `[rows, 96]` frequencies. It rotates the first 96 head dimensions and
+  passes the remaining 32 dimensions through.
+- `sycl_kernels.minimax_h3_rope_cached(input, cos, sin)` applies the same
+  operation with the FP32 cosine/sine caches produced by LightX2V.
+
+| Function | Description |
+|----------|-------------|
+| `sdp(Q, K, V)` | ESIMD Flash Attention — `[B, L, H, 128]` fp16/bf16, PTL-H doubleGRF |
+| `onednn_w8a8_int8(x, qweight, scales[, bias])` | Dynamic W8A8 GEMM — rowwise INT8 activation quantization × INT8 weights |
+| `onednn_w8a16_fp8(x, qweight, scales[, bias])` | Cached W8A16 GEMM — fp16/bf16/fp32 activations × FP8 E4M3/E5M2 weights, per-column scale |
+| `onednn_w4a16(x, weight, scales, zeros[, bias])` | W4A16 GEMM — fp16/bf16 activations × INT4 packed weights |
+
+Tested on **Intel Arc B390 GPU** (PTL-H / Xe2), PyTorch 2.9.1+xpu, oneAPI 2025.2.
+
+---
+
+## Requirements
+
+| Component | Version |
+|-----------|---------|
+| Intel oneAPI Base Toolkit | 2025.2 (provides `icpx`, `icx`, SYCL/ESIMD headers) |
+| oneDNN | 2025.2.0 (must match oneAPI version) |
+| C++ toolchain | Windows: Visual Studio 2022; Linux: GCC-compatible system linker/toolchain |
+| PyTorch | 2.9.1+xpu |
+| Python | 3.11 |
+| miniforge / miniconda | latest |
+
+> The oneDNN, oneAPI, and PyTorch versions must align. Mixing versions causes linker or runtime errors.
+
+---
+
+## Environment Setup
+
+```cmd
+conda create -n lightx2v_kernel python=3.11
+conda activate lightx2v_kernel
+conda install -c conda-forge ninja
+pip install cmake scikit-build-core wheel
+pip install onednn==2025.2.0 onednn_devel==2025.2.0
+pip install --no-cache-dir torch==2.9.1+xpu torchvision torchaudio ^
+    --index-url https://download.pytorch.org/whl/xpu
+```
+
+---
+
+## Build
+
+### Windows
+
+Open **cmd.exe** (not PowerShell), activate the conda env, then run:
+
+```cmd
+conda activate lightx2v_kernel
+cd D:\path\to\LightX2V\lightx2v_kernel\intel_xpu
+call build.bat
+```
+
+`build.bat` auto-detects Visual Studio (via vswhere), oneAPI, cmake, and the active Python — no hard-coded paths. It runs five steps:
+
+| Step | Action | Output |
+|------|--------|--------|
+| 1 | Build ESIMD DLL with `icpx` (PTL-H, doubleGRF) | `lgrf_uni\esimd.unify.lgrf.dll` |
+| 2 | Build PyTorch C++ extension with CMake + ninja | `_cmake_build\_ext.cp311-win_amd64.pyd` |
+| 3 | Copy `.pyd` + `.dll` to package dir | `python\sycl_kernels\` |
+| 4 | Run smoke test | `test\test_sdp.py` |
+| 5 | Build wheel (`pip wheel --no-build-isolation`) | `dist\sycl_kernels-0.0.1-cp311-win_amd64.whl` |
+
+Logs: `build_test.log` (full output), `build_test.err` (compiler warnings).
+
+> **Note on wheel build**: Step 5 uses `pip wheel --no-build-isolation` rather than
+> `python -m build --no-isolation`. The latter fails when `cmake` is only a system binary
+> (not pip-installed): scikit-build-core dynamically injects `cmake>=3.22` as a build
+> requirement and the `build` package rejects it. `pip wheel` skips that pre-check and
+> locates cmake directly from PATH.
+
+### Linux
+
+Activate the oneAPI environment and the Python environment containing PyTorch
+XPU and oneDNN, then run:
+
+```bash
+source /opt/intel/oneapi/setvars.sh
+cd /path/to/lightx2v_kernel/intel_xpu
+./build.sh
+```
+
+The Linux build follows the same five steps as Windows. It produces
+`lgrf_uni/libesimd.unify.lgrf.so`, a `_ext*.so` Python extension, and a Linux
+wheel under `dist/`. Set `PYTHON`, `CMAKE`, or `CXX` to override the detected
+commands; set `SKIP_TESTS=1` only when building on a host without an XPU.
+
+---
+
+## Install Wheel
+
+```cmd
+pip install dist\sycl_kernels-0.0.1-cp311-win_amd64.whl --force-reinstall --no-deps
+```
+
+---
+
+## Usage
+
+```python
+import torch
+import sycl_kernels
+
+# ── Flash Attention (SDP) ─────────────────────────────────────────────────────
+# Q, K, V : [B, L, H, 128]  fp16 or bf16  on XPU  (B=1, D=128 required)
+# Returns : [B, L, H, 128]  same dtype as input
+# Dispatch: fp16 → sdp_fp16 kernel,  bf16 → sdp_bf16io kernel
+Q = torch.randn(1, 14040, 12, 128, dtype=torch.bfloat16, device="xpu")
+K = torch.randn(1, 14040, 12, 128, dtype=torch.bfloat16, device="xpu")
+V = torch.randn(1, 14040, 12, 128, dtype=torch.bfloat16, device="xpu")
+out = sycl_kernels.sdp(Q, K, V)                    # [1, 14040, 12, 128] bf16
+
+# ── Dynamic W8A8 INT8 GEMM ───────────────────────────────────────────────────
+# x       : [M, K]  fp16 or bf16  on XPU
+# qweight : [N, K]  int8           on XPU
+# scales  : [N]     fp32           on XPU  (per-output-channel dequant scale)
+# bias    : [N]     floating point on XPU  (optional, fused by oneDNN)
+# Returns : [M, N]  same dtype as x
+out = sycl_kernels.onednn_w8a8_int8(x, qweight, scales)
+out = sycl_kernels.onednn_w8a8_int8(x, qweight, scales, bias)
+
+# ── W8A16 FP8 GEMM ────────────────────────────────────────────────────────────
+# x       : [M, K]  fp16/bf16/fp32   on XPU
+# qweight : [N, K]  float8_e4m3fn or float8_e5m2 on XPU
+# scales  : [N, 1]  fp32             on XPU  (per-output-channel absmax scale)
+# bias    : [N]     same dtype as x  on XPU  (optional)
+# Returns : [M, N]  same dtype as x
+out = sycl_kernels.onednn_w8a16_fp8(x, qweight, scales)
+out = sycl_kernels.onednn_w8a16_fp8(x, qweight, scales, bias)
+# Repeated shapes reuse cached oneDNN primitives. Known MiniMax-H3 large
+# projections are split along N to avoid unsupported full-size primitives.
+hits, misses, size = sycl_kernels.fp8_cache_stats()
+
+# ── W4A16 GEMM ────────────────────────────────────────────────────────────────
+# x      : [M, K]    fp16 or bf16    on XPU
+# weight : [N, K//2] int8 (INT4×2)   on XPU  (two INT4 packed per byte)
+# scales : [N, G]    fp16 or bf16    on XPU  (G = K / group_size)
+# zeros  : [N, G]    fp16 or bf16    on XPU
+# bias   : [N]       fp16/bf16       on XPU  (optional)
+# Returns: [M, N]    same dtype as x
+out = sycl_kernels.onednn_w4a16(x, weight, scales, zeros)
+out = sycl_kernels.onednn_w4a16(x, weight, scales, zeros, bias)
+```
+
+---
+
+## Tests
+
+```cmd
+REM Flash Attention — correctness + performance (both fp16 and bf16):
+python test\test_sdp.py
+
+REM W8A16 FP8 GEMM — correctness + benchmark:
+python test\test_fp8.py
+
+REM W4A16 GEMM — correctness + benchmark:
+python test\test_linear.py
+```
+
+> Running from source without installing the wheel: set PYTHONPATH first.
+> ```cmd
+> set PYTHONPATH=D:\path\to\LightX2V\lightx2v_kernel\intel_xpu\python;%PYTHONPATH%
+> python test\test_sdp.py
+> ```
+
+---
+
+## Performance (Intel Arc B390, PTL-H / Xe2)
+
+### Flash Attention — LightX2V WAN inference shapes
+
+| Shape | Kernel | ms/iter | TFLOPS | vs torch SDPA |
+|-------|--------|--------:|-------:|:-------------:|
+| Self-attn Q/K/V = [14040, 12, 128] | sdp bf16 | 33.9 | 35.7 | **1.47×** |
+| Self-attn Q/K/V = [14040, 12, 128] | sdp fp16 | 35.4 | 34.2 | 1.12× |
+| Self-attn Q/K/V = [14040, 12, 128] | torch SDPA bf16 | 49.9 | 24.2 | baseline |
+| Cross-attn Q=[14040,12,128] K/V=[512,12,128] | sdp bf16 | 1.58 | 27.9 | 1.07× |
+| Cross-attn Q=[14040,12,128] K/V=[512,12,128] | sdp fp16 | 1.81 | 24.5 | — |
+
+### Flash Attention kernel architecture
+
+`sdp()` dispatches to one of two ESIMD kernels depending on input dtype:
+
+| Kernel | I/O dtype | QK DPAS acc | SV DPAS acc | Notes |
+|--------|-----------|-------------|-------------|-------|
+| `sdp_fp16` | fp16 | fp32 | **fp16** | Native fp16 accumulator on Xe2 — no conversion overhead |
+| `sdp_bf16io` | bf16 | bf16 | **fp16** | bf16 I/O, fp16 internal; V bf16→fp16 hidden in DPAS |
+
+Both kernels use:
+- doubleGRF (256 registers / thread) compiled AOT for PTL-H
+- SLM-based ping-pong V buffering
+- Barrier moved before compensation (SLM loads overlap with compensation ALU)
+- Interleaved l=0/l=1 compensation overlaps with SxV DPAS pipeline
+- Precomputed `normAlpha` cached across calls (avoids per-call XPU fill kernel)
+- Explicit `.wait()` on each submit — prevents output tensor use-after-free when caller discards the return value
+
+### W8A16 FP8 GEMM
+
+Run `python test\test_fp8.py` for benchmark numbers on your hardware.
+FP16 activations use the optimised `jit:gemm` path; BF16 falls back to `ocl:ref` on PTL-H.
+
+---
+
+## Project Layout
+
+```
+lightx2v_kernel\intel_xpu\
+├── lgrf_uni\                   # ESIMD DLL source (compiled by icpx)
+│   ├── sdp_kernels.cpp         # DLL entry points: sdp_fp16, sdp_bf16io
+│   ├── single_kernels\
+│   │   ├── flash.attn.b.mha128.fp16.opt.h   # FP16 Flash Attention kernel
+│   │   └── flash.attn.b.mha128.bf16io.h     # BF16 I/O Flash Attention kernel
+│   ├── esimd_kernel_api.h      # DLL export macro
+│   ├── build.bat               # Windows icpx compile command
+│   └── build.sh                # Linux icpx compile command
+├── csrc\                       # PyTorch C++ extension source (compiled by icx via CMake)
+│   ├── entry.cpp               # pybind11 module registration
+│   ├── sdp.cpp                 # sdp() Python wrapper — dtype dispatch + normAlpha cache
+│   ├── sdp_kernels.h           # DLL function declarations
+│   ├── onednn.cpp              # W4A16 GEMM via oneDNN
+│   ├── onednn_fp8.cpp          # W8A16 FP8 GEMM via oneDNN
+│   └── utils.h                 # get_queue() helper
+├── python\sycl_kernels\        # Python package (importable after Step 3)
+│   ├── __init__.py             # DLL load + re-export
+│   └── version.py
+├── test\
+│   ├── test_sdp.py             # Flash Attention correctness + perf
+│   ├── test_fp8.py             # W8A16 FP8 correctness + perf
+│   └── test_linear.py         # W4A16 correctness + perf
+├── CMakeLists.txt              # CMake build for .pyd
+├── pyproject.toml              # scikit-build-core wheel config
+├── build.bat                # Original full build script
+├── build.sh                 # Linux full build script
+```
+# CUTE FMHA
+
+The Linux build script also builds the generic CUTLASS-SYCL CUTE self-attention
+kernel for `[B, L, H, 128]` FP16/BF16 tensors. CMake automatically downloads
+the pinned sycl-tla revision when CUTE FMHA is enabled:
+
+```bash
+XPU_TARGET=bmg ./build.sh
+```
+
+For offline builds or local sycl-tla development, set `CUTLASS_SYCL_ROOT` to
+an existing checkout before configuring or running `build.sh`.
+
+The default target is `bmg` for Battlemage GPUs such as Intel B60; use
+`XPU_TARGET=ptl-h` only for PTL-H. The Python API is
+`sycl_kernels.cute_sdp(q, k, v)`. It supports non-causal self-attention with
+batch size 1, equal Q/K/V sequence lengths, head dimension 128, and contiguous
+or materializable BLHD inputs.
+
+On Linux, the wheel version records its build target: BMG builds use
+`0.0.1+bmg`, while PTL-H builds use `0.0.1+ptlh`. Windows builds use the base
+version `0.0.1` because CUTE FMHA is disabled there.
+
+CUTE FMHA is disabled on Windows because the current sycl-tla kernel produces
+incorrect attention results there. `build.bat` builds only the existing
+ESIMD/oneDNN extension, and `sycl_kernels.has_cute_fmha()` returns `False`.
+
+### MiniMax-H3 fused QKV norm and RoPE
+
+Enable the optional Triton path in the model config with:
+
+```json
+{"use_fused_qkv": true, "use_fused_qkv_norm_rope": true}
+```
+
+This combines Q/K RMSNorm, split-half RoPE, and V copying in one launch on
+CUDA or XPU. The default is disabled. Supported RoPE implementations are `torch_real_rope`
+and `minimax_h3_xpu_rope`, with FP32 computation and FP32 full-width
+`[tokens, rotary_dim]` cosine/sine caches. Unsupported norm or RoPE modes
+retain the separate configured operations. FP16, BF16 and FP32 inputs are
+supported, including partial rotation and padded token strides. The fused
+path preserves the norm output cast and the XPU BF16 RoPE intermediate
+rounding when that backend is active. The Triton path needs no C++ rebuild.
+The two switches are independent: `use_fused_qkv` controls only the QKV
+projection, while `use_fused_qkv_norm_rope` may also be enabled with separate
+Q/K/V projections. The norm/RoPE operator accepts Q, K and V separately, so
+the separate-projection path does not concatenate them first.
+
+To select the native XPU ESIMD kernel, use:
+
+```json
+{"use_fused_qkv": true, "use_fused_qkv_norm_rope": true, "qkv_norm_rope_type": "intel_xpu"}
+```
+
+`qkv_norm_rope_type` accepts `triton` or `intel_xpu` and defaults to `triton`. The ESIMD
+kernel supports head dimension 128 and rotary dimension 96 with FP16,
+BF16 or FP32 inputs. Other shapes or an older extension fall back to
+Triton, then the separate configured operations if Triton is unavailable.
+The native path does not require Triton. Rebuild the extension with
+`./build.sh`, or update just this sidecar from an existing configured build:
+
+```bash
+cd lightx2v_kernel/intel_xpu
+cmake --build _cmake_build --target minimax_h3_qkv_norm_torch -j 2
+cp _cmake_build/minimax_h3_qkv_norm_torch.so python/sycl_kernels/
+```
+
+When using the local build without reinstalling the package, prepend
+`lightx2v_kernel/intel_xpu/python` to `PYTHONPATH` from the repository root so the
+new Python API and sidecar are loaded together.
+
+Run correctness tests from the repository root with:
+
+```bash
+PYTHONPATH=lightx2v_kernel/intel_xpu/python:$PYTHONPATH python -m pytest lightx2v_kernel/intel_xpu/test/test_minimax_h3_fused_qkv.py -q
+```
+
+### MiniMax-H3 Video VAE D64 attention
+
+The BMG CUTE FMHA sidecar exposes
+`sycl_kernels.minimax_h3_vae_sdp_d64(q, k, v)` for the Video VAE tile
+attention contract: FP16 Q/K/V shaped `[1, 32, S, 64]`, dense BLHD-backed Q/K,
+and a V view backed by a fused three-wide QKV projection. Select the LightX2V
+adapter with `"vae_attn_type": "minimax_h3_xpu_cute"`; unsupported contracts
+fall back to Torch SDPA.
+
+Rebuild all three `cute_fmha*.so` libraries together after updating the CUTE
+wrapper. Their SYCL kernel names are isolated by library namespace: sharing a
+kernel name between the dense and sparse parameter layouts can cause
+`UR_RESULT_ERROR_DEVICE_LOST` when the VAE runs after SLA. The generic library
+also applies a coordinate-based tail mask for non-aligned lengths such as 1797.
+Run the load-order and numerical regressions on BMG from the repository root:
+
+```bash
+PYTHONPATH=lightx2v_kernel/intel_xpu/python:$PYTHONPATH python -m pytest lightx2v_kernel/intel_xpu/test/test_cute_library_isolation.py -q
+```
+
+### MiniMax-H3 SLA block-sparse attention
+
+The Linux BMG build also exposes an SLA forward path for BF16 MiniMax-H3
+self-attention in `[B,L,H,128]` layout:
+
+```python
+lut = sycl_kernels.sla_block_map(q, k, keep_ratio=0.15, block_q=128, block_k=128)
+out = sycl_kernels.sparse_block_attention(q, k, v, lut)
+# Or route and execute in one call:
+out = sycl_kernels.sla_sparse_attention(q, k, v, keep_ratio=0.15)
+```
+
+The CUTE kernel fuses sparse QK, online softmax, and PV and never materializes
+the score matrix. The optimized contract is forward-only, non-causal, B=1,
+BF16, D=128, equal Q/K/V head counts, and 128x128 SLA blocks. Other supported
+64/128 block or GQA shapes currently use a slower Triton-XPU fallback.
+
+Benchmark the kernel, router, and dense CUTE baseline separately with:
+
+```bash
+ONEAPI_DEVICE_SELECTOR=level_zero:0 PYTHONPATH=python \
+  python test/bench_sla_sparse_attention.py
+```

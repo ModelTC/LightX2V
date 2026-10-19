@@ -12,18 +12,18 @@ description: >
 
 ## Current repository entry points
 
-The maintained LightX2V project is [lightx2v_kernel_xpu](../../../../../../lightx2v_kernel_xpu/README.md) at the repository root. The [older Windows reference package](assets/lightx2v_kernel_xpu/README.md) is retained with its original sources and prebuilt artifacts for standalone examples and historical comparison. It is not the current runtime implementation; check its documented environment and ABI before reusing binaries.
+The maintained LightX2V project is [lightx2v_kernel/intel_xpu](../../../../../../lightx2v_kernel/intel_xpu/README.md) at the repository root. The [older Windows reference package](assets/lightx2v_kernel_xpu/README.md) is retained with its original sources and prebuilt artifacts for standalone examples and historical comparison. It is not the current runtime implementation; check its documented environment and ABI before reusing binaries.
 
 Before copying the legacy bridge, read its [validation and device-cache limitations](assets/lightx2v_kernel_xpu/README.md#reference-package-limitations). Its success messages and exit status do not establish numerical correctness. An adapted validation entry must propagate failed checks; wrappers must enforce device/shape contracts and keep caches valid for the requested device and stream lifecycle.
 
 | Source | Responsibility |
 |---|---|
-| [CMakeLists.txt](../../../../../../lightx2v_kernel_xpu/CMakeLists.txt) | Target registration, compiler-matched UR shim, SYCL sources, library linkage and wheel installs |
-| [build.sh](../../../../../../lightx2v_kernel_xpu/build.sh) / [build.bat](../../../../../../lightx2v_kernel_xpu/build.bat) | Existing Linux/Windows build and smoke-check orchestration |
-| [entry.cpp](../../../../../../lightx2v_kernel_xpu/csrc/entry.cpp) | Legacy pybind exports: SDP, INT8/FP8/INT4 GEMM and FP8 cache helpers |
-| [Python package](../../../../../../lightx2v_kernel_xpu/python/sycl_kernels/__init__.py) | Library loading, wrappers, CUTE/SLA and norm/RoPE capability probes |
-| [pyproject.toml](../../../../../../lightx2v_kernel_xpu/pyproject.toml) / [build_version.py](../../../../../../lightx2v_kernel_xpu/build_version.py) | Wheel metadata and target-specific version suffixes |
-| [test/](../../../../../../lightx2v_kernel_xpu/test/) | Operator correctness and benchmark entry points |
+| [CMakeLists.txt](../../../../../../lightx2v_kernel/intel_xpu/CMakeLists.txt) | Target registration, compiler-matched UR shim, SYCL sources, library linkage and wheel installs |
+| [build.sh](../../../../../../lightx2v_kernel/intel_xpu/build.sh) / [build.bat](../../../../../../lightx2v_kernel/intel_xpu/build.bat) | Existing Linux/Windows build and smoke-check orchestration |
+| [entry.cpp](../../../../../../lightx2v_kernel/intel_xpu/csrc/entry.cpp) | Legacy pybind exports: SDP, INT8/FP8/INT4 GEMM and FP8 cache helpers |
+| [Python package](../../../../../../lightx2v_kernel/intel_xpu/python/sycl_kernels/__init__.py) | Library loading, wrappers, CUTE/SLA and norm/RoPE capability probes |
+| [pyproject.toml](../../../../../../lightx2v_kernel/intel_xpu/pyproject.toml) / [build_version.py](../../../../../../lightx2v_kernel/intel_xpu/build_version.py) | Wheel metadata and target-specific version suffixes |
+| [test/](../../../../../../lightx2v_kernel/intel_xpu/test/) | Operator correctness and benchmark entry points |
 
 For a LightX2V change, adapt the existing project. For a standalone wheel, use the bridge layout below and adapt CMake targets, package names, exports and install destinations to the requested output project; do not require changes to LightX2V itself. Read [Windows build notes](references/windows-build-notes.md) for non-interactive shell and tool-discovery failures. Reviewing this documentation alone does not require running a build or inference.
 
@@ -200,7 +200,7 @@ Linux, from the repository root:
 
 ```bash
 source /opt/intel/oneapi/setvars.sh
-cd lightx2v_kernel_xpu
+cd lightx2v_kernel/intel_xpu
 XPU_TARGET=bmg ./build.sh
 ls dist/*.whl
 ```
@@ -212,7 +212,7 @@ The command above selects BMG for CMake/CUTE, while `lgrf_uni/build.sh` still bu
 Windows, in cmd.exe with the intended environment active:
 
 ```cmd
-cd /d C:\path\to\LightX2V\lightx2v_kernel_xpu
+cd /d C:\path\to\LightX2V\lightx2v_kernel\intel_xpu
 call build.bat
 dir dist\*.whl
 ```

@@ -283,7 +283,7 @@ python scripts/minimax_h3/server/post_t2av.py
 | 低资源与低延迟部署 | [低资源部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_resource.html) · [低延迟部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_latency.html) |
 | 模型量化与 LoRA 部署 | [模型量化](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/quantization.html) · [LoRA 部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/lora_deploy.html) |
 | 推理性能优化 | [权重卸载](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/offload.html) · [特征缓存](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/cache.html) · [注意力算子](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/attention.html) · [并行推理](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/parallel.html) · [变分辨率推理](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/changing_resolution.html) · [步数蒸馏](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/step_distill.html) |
-| Wan2.1 NVFP4 四步推理 | [I2V 示例](scripts/wan/inference/distill/wan_i2v_nvfp4.py) · [T2V 示例](scripts/wan/inference/distill/wan_t2v_nvfp4.py) · [量化算子安装](lightx2v_kernel/README.md) |
+| Wan2.1 NVFP4 四步推理 | [I2V 示例](scripts/wan/inference/distill/wan_i2v_nvfp4.py) · [T2V 示例](scripts/wan/inference/distill/wan_t2v_nvfp4.py) · [量化算子安装](lightx2v_kernel/nvidia/README.md) |
 | 代码示例与开发参考 | [Python API](docs/ZH_CN/source/getting_started/python_api.md) · [scripts](scripts) |
 
 ## 🤝 致谢

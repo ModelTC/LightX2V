@@ -131,7 +131,7 @@ The T2V Python example uses the 14B model, `sage_attn2`, guidance 5 and shift 5;
 the basic Shell launcher uses the 1.3B model with its JSON settings. Keep these
 choices explicit when comparing outputs. For NVFP4, use the named 4-step weights
 from [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4), keep `distill_method="dmd2"`,
-and install the [quantization kernels](../../lightx2v_kernel/README.md).
+and install the [quantization kernels](../../lightx2v_kernel/nvidia/README.md).
 
 For CPU offload, set `cpu_offload` and a supported `offload_granularity` in the JSON;
 see the [offload guide](../../docs/EN/source/deploy_guides/for_low_resource.md).

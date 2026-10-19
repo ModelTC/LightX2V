@@ -28,7 +28,7 @@ export CCL_SYCL_REDUCE_SCATTER_SIMPLE_THRESHOLD=4294967296
 export CCL_SYCL_ALLGATHERV_SIMPLE_THRESHOLD=4294967296
 
 source ${lightx2v_path}/scripts/base/base.sh
-export PYTHONPATH=${lightx2v_path}/lightx2v_kernel_xpu/python:${PYTHONPATH}
+export PYTHONPATH=${lightx2v_path}/lightx2v_kernel/intel_xpu/python:${PYTHONPATH}
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 

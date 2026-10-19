@@ -59,7 +59,7 @@ A powerful model weight conversion tool that supports format conversion, quantiz
 - `--device`: Device for quantization, `cpu` or `cuda` (default)
 - `--comfyui_mode`: ComfyUI compatible mode (only int8 and fp8)
 - `--full_quantized`: Full quantization mode (effective in ComfyUI mode)
-For nvfp4, mxfp4, mxfp6 and mxfp8, please install them fllowing LightX2V/lightx2v_kernel/README.md.
+For nvfp4, mxfp4, mxfp6 and mxfp8, please install them fllowing LightX2V/lightx2v_kernel/nvidia/README.md.
 
 ### LoRA Parameters
 
@@ -494,4 +494,4 @@ python tools/convert/converter.py \
 
 This profile uses weight qmax=14. The `qwen_image_21_5090_1k.json` config selects `fp8-f16-accum` and activation qmax=7 through `dit_fp8_activation_qmax`. Set its checkpoint path and the project/model paths in `qwen_image_21_t2i_5090_1k.sh`.
 The recommended config also requires `text_encoder_quantized_ckpt`; see the `convert_qwen_image_21_text_encoder_fp8` docstring in [converter.py](converter.py) for its conversion command.
-Requires the SM120 FP16 accumulation op in lightx2v-kernel. Startup rejects ordinary FP8 checkpoints and unavailable kernels. Raising activation qmax can overflow FP16 accumulation; validate numerical and image quality when changing it.
+Requires the SM120 FP16 accumulation op in lightx2v-kernel-nvidia (or a compatible legacy lightx2v-kernel wheel). Startup rejects ordinary FP8 checkpoints and unavailable kernels. Raising activation qmax can overflow FP16 accumulation; validate numerical and image quality when changing it.

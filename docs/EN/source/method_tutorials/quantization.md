@@ -209,7 +209,7 @@ overrides continue to use `size=[height, width]`, `num_frames`, and `save_result
 warmup, and `vae_encoder_conv_mode` remain startup settings. The conversion command above is an offline
 weight-conversion tool, so its output arguments describe a checkpoint rather than an inference result.
 
-FP8 Conv3D currently supports SM120 only and requires a `lightx2v_kernel` wheel built from a revision containing the
+FP8 Conv3D currently supports SM120 only and requires a `lightx2v_kernel_nvidia` (or compatible legacy `lightx2v_kernel`) wheel built from a revision containing the
 FP8 Conv3D operator. A new Conv3D shape is tuned automatically on first use and its winner is reused by later calls in
 the same process; no separate offline tuning step is required.
 
