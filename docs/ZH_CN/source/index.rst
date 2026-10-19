@@ -42,6 +42,7 @@ HuggingFace: https://huggingface.co/lightx2v
    Python API <getting_started/python_api.md>
    模型结构 <getting_started/model_structure.md>
    基准测试 <getting_started/benchmark.md>
+   VGGT 与 TRELLIS.2 <getting_started/reconstruction.md>
 
 .. toctree::
    :maxdepth: 1

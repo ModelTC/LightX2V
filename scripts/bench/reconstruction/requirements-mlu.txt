@@ -1,0 +1,16 @@
+# Install into the vendor PyTorch 2.9.1 / torch_mlu 1.31.1 runtime.
+# Do not replace its torch or torchvision wheels with CUDA wheels from PyPI.
+diffusers==0.36.0
+omegaconf==2.3.0
+scipy==1.18.1
+transformers==4.57.0
+huggingface-hub==0.36.2
+numpy==2.4.6
+pillow==12.3.0
+timm==1.0.30
+kornia==0.8.3
+kornia-rs==0.2.0
+safetensors==0.7.0
+trimesh==4.4.1
+imageio==2.38.1
+imageio-ffmpeg==0.6.0

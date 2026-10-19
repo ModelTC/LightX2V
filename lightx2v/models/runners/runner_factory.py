@@ -35,6 +35,8 @@ RUNNER_MODULES = {
     "seko_talk": "lightx2v.models.runners.wan.wan_audio_runner",
     "seko_talk_ar": "lightx2v.models.runners.wan.wan_audio_runner",
     "swiftvr": "lightx2v.models.runners.swiftvr.swiftvr_runner",
+    "trellis2": "lightx2v.models.runners.trellis2.trellis2_runner",
+    "vggt": "lightx2v.models.runners.vggt.vggt_runner",
     "wan2.1": "lightx2v.models.runners.wan.wan_runner",
     "wan2.1_sf": "lightx2v.models.runners.wan.wan_sf_runner",
     "wan2.1_sf_mtxg2": "lightx2v.models.runners.wan.wan_matrix_game2_runner",

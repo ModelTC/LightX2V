@@ -41,6 +41,7 @@ Documentation
    Python API <getting_started/python_api.md>
    Model Structure <getting_started/model_structure.md>
    Benchmark <getting_started/benchmark.md>
+   VGGT and TRELLIS.2 <getting_started/reconstruction.md>
 
 .. toctree::
    :maxdepth: 1

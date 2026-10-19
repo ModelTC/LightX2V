@@ -1,0 +1,8 @@
+{
+    "model_cls": "trellis2",
+    "task": "i23d",
+    "pipeline_type": "512",
+    "attn_type": "torch_sdpa",
+    "linear_backend": "Default",
+    "neighbor_map": "sorted"
+}

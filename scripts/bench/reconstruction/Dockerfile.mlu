@@ -1,0 +1,20 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG MODEL=vggt
+WORKDIR /opt/lightx2v
+COPY scripts/bench/reconstruction/requirements* /tmp/reconstruction/
+RUN if [ "$MODEL" = "vggt" ]; then \
+        /torch/venv3/pytorch_infer/bin/pip install -r /tmp/reconstruction/requirements-vggt-mlu.txt; \
+    elif [ "$MODEL" = "trellis2" ]; then \
+        /torch/venv3/pytorch_infer/bin/pip install -r /tmp/reconstruction/requirements-mlu.txt; \
+    else exit 1; fi
+COPY pyproject.toml README.md LICENSE ./
+COPY lightx2v ./lightx2v
+COPY lightx2v_platform ./lightx2v_platform
+COPY configs/vggt ./configs/vggt
+COPY configs/trellis2 ./configs/trellis2
+COPY scripts/bench/reconstruction ./scripts/bench/reconstruction
+RUN /torch/venv3/pytorch_infer/bin/pip install --no-deps -e .
+ENV PLATFORM=cambricon_mlu DTYPE=BF16
+ENTRYPOINT ["/torch/venv3/pytorch_infer/bin/python"]

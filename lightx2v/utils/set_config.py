@@ -166,7 +166,7 @@ def load_model_config(deployment_config):
         if os.path.exists(os.path.join(transformer_path, "config.json")):
             with open(os.path.join(transformer_path, "config.json"), "r") as f:
                 model_config.update(json.load(f))
-    elif model_cls in {"hunyuan3d", "hidream_o1_image"}:
+    elif model_cls in {"hunyuan3d", "hidream_o1_image", "vggt", "trellis2"}:
         # These runners load their own model configuration.
         pass
     elif model_cls == "wan2.2_s2v":
