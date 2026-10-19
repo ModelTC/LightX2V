@@ -15,20 +15,20 @@ def parse_shape(value):
             return k, n
     except ValueError:
         pass
-    raise argparse.ArgumentTypeError("尺寸应为 KxN；K 必须为 1024 的正整数倍，N 为 128 的正整数倍")
+    raise argparse.ArgumentTypeError("Expected KxN; K must be a positive multiple of 1024 and N a positive multiple of 128")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="离线编译 INT8 Metal 算子，必须指定至少一个 (K,N) 组合。")
-    parser.add_argument("shapes", nargs="+", type=parse_shape, metavar="KxN", help="必填，例如 4096x4096 4096x12288")
-    parser.add_argument("--output-dir", type=Path, default=Path("build/metallib"), help="产物目录，默认当前目录下的 build/metallib")
+    parser = argparse.ArgumentParser(description="Compile INT8 Metal kernels offline; at least one (K,N) pair is required.")
+    parser.add_argument("shapes", nargs="+", type=parse_shape, metavar="KxN", help="Required shapes, e.g. 4096x4096 4096x12288")
+    parser.add_argument("--output-dir", type=Path, default=Path("build/metallib"), help="Output directory; defaults to build/metallib under the current directory")
     args = parser.parse_args()
 
     try:
         subprocess.run(["xcrun", "-sdk", "macosx", "metal", "--version"], check=True, stdout=subprocess.DEVNULL)
     except (FileNotFoundError, subprocess.CalledProcessError):
         print(
-            "Metal 编译器不可用。请先安装并配置 Xcode；缺少 Metal Toolchain 时执行：\n  xcodebuild -downloadComponent MetalToolchain",
+            "Metal compiler is unavailable. Install and configure Xcode; if the Metal Toolchain is missing, run:\n  xcodebuild -downloadComponent MetalToolchain",
             file=sys.stderr,
         )
         return 1
@@ -42,7 +42,7 @@ def main():
         air = stem.with_suffix(".air")
         library = stem.with_suffix(".metallib")
         metal.write_text(source.replace("{{K}}", str(k)).replace("{{N}}", str(n)))
-        print(f"编译 K={k}, N={n} ...", flush=True)
+        print(f"Compiling K={k}, N={n} ...", flush=True)
         try:
             subprocess.run(
                 [
@@ -62,9 +62,9 @@ def main():
             )
             subprocess.run(["xcrun", "-sdk", "macosx", "metallib", str(air), "-o", str(library)], check=True)
         except subprocess.CalledProcessError as error:
-            print(f"编译失败（退出码 {error.returncode}），请查看上方工具链错误。", file=sys.stderr)
+            print(f"Compilation failed (exit code {error.returncode}); see the toolchain errors above.", file=sys.stderr)
             return 1
-        print(f"生成：{library}", flush=True)
+        print(f"Generated: {library}", flush=True)
     return 0
 
 
