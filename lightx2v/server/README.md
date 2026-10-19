@@ -6,6 +6,9 @@ The LightX2V server is a distributed video/image generation service built with F
 
 ## Directory Structure
 
+For request defaults, model/task capability checks, and adding fields across CLI,
+Python, JSON, forms and OpenAI, see [Adding Request Parameters](../../docs/EN/source/developer_guides/request_parameters.md).
+
 ```
 server/
 ├── __init__.py
@@ -18,6 +21,7 @@ server/
 │   ├── __init__.py
 │   ├── router.py            # Main router aggregation
 │   ├── deps.py              # Dependency injection container
+│   ├── request_parsing.py   # Schema-driven form decoding and documentation
 │   ├── server.py            # ApiServer class
 │   ├── files.py             # /v1/files/*
 │   ├── service_routes.py    # /v1/service/*
