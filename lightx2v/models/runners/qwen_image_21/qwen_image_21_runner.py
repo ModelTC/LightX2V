@@ -77,11 +77,12 @@ class QwenImage21Runner(DefaultRunner):
             if parallel.get("seq_p_quant_scheme") not in (None, "fp8", "fp4"):
                 raise ValueError("qwen_image_21 seq_p_quant_scheme supports only fp8 and fp4")
         if config.get("dit_quantized"):
-            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum", "fp8-rocm", "int8-rocm"):
-                raise ValueError("qwen_image_21 DiT quantization supports only fp8-sgl, fp8-f16-accum, fp8-rocm and int8-rocm")
+            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum", "fp8-rocm", "int8-rocm", "int8-metal"):
+                raise ValueError("qwen_image_21 DiT quantization supports fp8-sgl, fp8-f16-accum, fp8-rocm, int8-rocm and int8-metal")
             # fp8-rocm / int8-rocm quantize the released BF16 weights on load, no prequantized checkpoint.
-            if config["dit_quant_scheme"] not in ("fp8-rocm", "int8-rocm") and not config.get("dit_quantized_ckpt"):
-                raise ValueError("qwen_image_21 FP8 requires dit_quantized_ckpt")
+            # int8-metal loads prequantized weights from model_path/transformer by default.
+            if config["dit_quant_scheme"] not in ("fp8-rocm", "int8-rocm", "int8-metal") and not config.get("dit_quantized_ckpt"):
+                raise ValueError("qwen_image_21 quantization requires dit_quantized_ckpt")
             if config["dit_quant_scheme"] == "fp8-f16-accum":
                 validate_fp8_f16_accum_qmax(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
         elif config.get("dit_quant_scheme", "Default") != "Default":
@@ -104,7 +105,9 @@ class QwenImage21Runner(DefaultRunner):
             raise ValueError("Qwen-Image-2.1 MPS streaming requires cpu_offload=true and offload_granularity=block")
         if not config.get("dit_disk_streaming") or not config.get("text_encoder_disk_streaming") or not config.get("text_encoder_cpu_offload"):
             raise ValueError("Qwen-Image-2.1 MPS streaming requires both DiT/text encoder disk streaming and text_encoder_cpu_offload=true")
-        for key in ("warmup", "dit_quantized", "text_encoder_quantized", "tensor_parallel", "text_encoder_tensor_parallel", "seq_parallel", "shared_cpu_weights"):
+        if config.get("dit_quantized") and config.get("dit_quant_scheme") != "int8-metal":
+            raise ValueError("Qwen-Image-2.1 MPS streaming quantization requires int8-metal")
+        for key in ("warmup", "text_encoder_quantized", "tensor_parallel", "text_encoder_tensor_parallel", "seq_parallel", "shared_cpu_weights"):
             if config.get(key):
                 raise ValueError(f"Qwen-Image-2.1 MPS streaming does not support {key}")
 

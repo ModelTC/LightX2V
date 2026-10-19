@@ -858,6 +858,47 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
         return output_tensor
 
 
+@MM_WEIGHT_REGISTER("int8-metal")
+class MMWeightInt8Metal(MMWeightQuantTemplate):
+    """Per-channel INT8 checkpoint weights and dynamic per-token INT8 on MPS."""
+
+    checkpoint_dtype = torch.int8
+
+    def __init__(self, *args, **kwargs):
+        from lightx2v_kernel_apple.int8_gemm import int8_matmul
+
+        super().__init__(*args, **kwargs)
+        self._gemm = int8_matmul
+        self.scale_force_fp32 = True
+
+    def validate_checkpoint(self, metadata):
+        require_dtype(self.weight_name, metadata[self.weight_name].dtype, (torch.int8,))
+
+    def describe_storage(self, metadata):
+        self.validate_checkpoint(metadata)
+        tensors = []
+        for name, attr, transpose in self.base_attrs:
+            source = metadata[name]
+            dtype = source.dtype
+            if attr == "weight":
+                transpose = True
+            elif attr == "weight_scale":
+                dtype = torch.float32
+            elif attr == "bias":
+                dtype = self.infer_dtype
+            tensors.append(WeightStorage(name, attr, source.shape, dtype, transpose))
+        return StorageDescription(tuple(tensors))
+
+    def load(self, weight_dict):
+        if not self.lazy_load and not isinstance(weight_dict, BlockLoadContext):
+            require_dtype(self.weight_name, weight_dict[self.weight_name].dtype, (torch.int8,))
+        super().load(weight_dict)
+
+    def apply(self, input_tensor):
+        output = self._gemm(input_tensor, self.weight, self.weight_scale, self._get_actual_bias())
+        return output + self.apply_lora(input_tensor) if self.has_lora_branch else output
+
+
 @MM_WEIGHT_REGISTER("mxfp4")
 class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
     """

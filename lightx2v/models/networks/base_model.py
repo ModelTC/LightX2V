@@ -134,6 +134,7 @@ class BaseTransformerModel(ABC):
             "int8-triton",
             "fp8-vllm",
             "int8-vllm",
+            "int8-metal",
             "int8-vllm-hygon-dcu",
             "fp8-q8f",
             "int8-q8f",
@@ -647,7 +648,9 @@ class BaseTransformerModel(ABC):
                 for k in f.keys():
                     if any(remove_key in k for remove_key in remove_keys):
                         continue
-                    if f.get_tensor(k).dtype in [torch.float16, torch.bfloat16, torch.float]:
+                    if self.config.get("dit_quant_scheme") == "int8-metal" and k.endswith(".weight_scale"):
+                        weight_dict[k] = f.get_tensor(k).to(device=self.device, dtype=torch.float32)
+                    elif f.get_tensor(k).dtype in [torch.float16, torch.bfloat16, torch.float]:
                         if unified_dtype or all(s not in k for s in sensitive_layer):
                             weight_dict[k] = f.get_tensor(k).to(GET_DTYPE()).to(self.device)
                         else:
