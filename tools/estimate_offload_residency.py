@@ -1,4 +1,4 @@
-"""Measure one Wan or Qwen Image block and write a static resident-block count into a config.
+"""Measure one model block and write a static resident-block count into a config.
 
 Run with python -m tools.estimate_offload_residency --help.
 """
@@ -54,14 +54,14 @@ def estimate_resident_count(num_blocks, compute_ms, transfer_ms):
     return num_blocks - math.floor(num_blocks * compute_ms / transfer_ms)
 
 
-def load_block(config, checkpoint_path, block_class, prefix, sensitive_layers=()):
+def load_block(config, checkpoint_path, block_class, prefix, sensitive_layers=(), *, block_kwargs=None, exclude_keys=()):
     """Load one CPU block and the same two device slots used by inference."""
     validate_contiguous_config(config)
     backend = get_block_offload_backend(required=False)
     if backend is not None:
         backend.prepare()
     checkpoint = SafetensorsCheckpoint(checkpoint_path)
-    names = [name for name in checkpoint.weight_map if name.startswith(prefix)]
+    names = [name for name in checkpoint.weight_map if name.startswith(prefix) and not any(key in name for key in exclude_keys)]
     if not names:
         raise ValueError(f"Checkpoint contains no {prefix} weights")
     weights = checkpoint.load_tensors(names)
@@ -70,7 +70,7 @@ def load_block(config, checkpoint_path, block_class, prefix, sensitive_layers=()
         if value.dtype in (torch.float16, torch.bfloat16, torch.float32):
             dtype = GET_SENSITIVE_DTYPE() if any(key in name for key in sensitive_layers) else GET_DTYPE()
             weights[name] = value.to(dtype)
-    kwargs = dict(block_index=0, task=config["task"], mm_type=config.get("dit_quant_scheme", "Default"), config=config)
+    kwargs = block_kwargs if block_kwargs is not None else dict(block_index=0, task=config["task"], mm_type=config.get("dit_quant_scheme", "Default"), config=config)
     block = block_class(**kwargs)
     slots = [block_class(**kwargs, create_cuda_buffer=True) for _ in range(2)]
     blocks = [block]
@@ -205,6 +205,76 @@ def build_qwen_case(config, prompt, negative_prompt=" "):
     )
 
 
+def build_minimax_h3_case(config, prompt):
+    """Measure the joint text/audio/video block using H3's packed layout and AdaLN cache."""
+    from transformers import Qwen2TokenizerFast
+
+    from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3PreInferOutput
+    from lightx2v.models.networks.minimax_h3.infer.offload.transformer_infer import validate_minimax_h3_residency_config
+    from lightx2v.models.networks.minimax_h3.infer.pre_infer import MiniMaxH3PreInfer
+    from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
+    from lightx2v.models.networks.minimax_h3.packing import TEXT_TAG, align_num_frames
+    from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3TransformerBlockWeights
+    from lightx2v.models.schedulers.minimax_h3.scheduler import MiniMaxH3Scheduler
+
+    validate_minimax_h3_residency_config(config)
+    tokenizer_path = config.get("tokenizer_path") or os.path.join(config["model_path"], "tokenizer")
+    tokenizer = Qwen2TokenizerFast.from_pretrained(tokenizer_path, local_files_only=True)
+    text_tokens = len(tokenizer(prompt, add_special_tokens=False)["input_ids"])
+    if text_tokens == 0:
+        raise ValueError("MiniMax-H3 measurement requires a nonempty --prompt matching inference")
+    height, width = config["size"]
+    config["num_frames"] = align_num_frames(config["num_frames"])
+    scheduler = MiniMaxH3Scheduler(config)
+    scheduler.prepare(42, config["num_frames"], height, width, torch.full((text_tokens,), TEXT_TAG, dtype=torch.long))
+    sample_step = min(1, scheduler.infer_steps - 1)
+    scheduler.step_pre(sample_step)
+    layout = scheduler.layout
+    torch.manual_seed(42)
+    source = torch.randn(layout.sequence_length, config["hidden_size"], device=AI_DEVICE, dtype=GET_DTYPE()) * 0.05
+    pre_infer = MiniMaxH3PreInfer(config)
+    pre = MiniMaxH3PreInferOutput(
+        hidden_states=source,
+        temb=None,
+        timestep_indices=scheduler.timestep_indices,
+        adaln_indices=scheduler.timestep_indices * 3 + layout.token_tags.clamp(min=0),
+        rotary_emb=pre_infer._rotary_embedding(layout.position_ids),
+        video_indices=layout.video_indices,
+        audio_indices=layout.audio_indices,
+        text_indices=layout.text_indices,
+    )
+    infer = MiniMaxH3TransformerInfer(config)
+    infer.set_scheduler(scheduler)
+    infer.block_idx = 0
+    infer._prepare_adaln_cache(pre)
+    checkpoint_path = config.get("dit_original_ckpt") or os.path.join(config["model_path"], "transformer")
+    blocks, manager, block_bytes = load_block(
+        config,
+        checkpoint_path,
+        MiniMaxH3TransformerBlockWeights,
+        "transformer_blocks.0.",
+        block_kwargs=dict(index=0, config=config),
+        exclude_keys=(".adaln_proj.",),
+    )
+    hidden = torch.empty_like(source)
+    patch = config["patch_size"]
+    return SimpleNamespace(
+        blocks=blocks,
+        manager=manager,
+        infer=infer,
+        pre=pre,
+        block_bytes=block_bytes,
+        grid=(scheduler.num_latent_frames // patch[0], scheduler.latent_height // patch[1], scheduler.latent_width // patch[2]),
+        pixel_size=[height, width],
+        text_tokens=text_tokens,
+        video_tokens=layout.video_indices.numel(),
+        audio_tokens=layout.audio_indices.numel(),
+        sample_step=sample_step,
+        compute=lambda: (infer.run_block(0, manager.cuda_buffers[0], hidden, pre),),
+        reset=lambda: hidden.copy_(source),
+    )
+
+
 def measure_ms(action, stream, prepare=None):
     samples = []
     result = None
@@ -250,8 +320,9 @@ def write_json(path, content):
 @torch.no_grad()
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-cls", choices=("wan2.1", "qwen_image"), default="wan2.1")
-    parser.add_argument("--task", choices=("t2v", "i2v", "t2i"), required=True)
+    parser.add_argument("--model-cls", choices=("wan2.1", "qwen_image", "minimax_h3"), default="wan2.1")
+    parser.add_argument("--model-variant", choices=("fl2av",))
+    parser.add_argument("--task", choices=("t2v", "i2v", "t2i", "t2av"), required=True)
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--image-path")
@@ -263,11 +334,17 @@ def main():
     output = args.output_config or args.config.with_name(args.config.stem + ".resident.json")
     deployment = json.loads(args.config.read_text())
     deployment.update(model_cls=args.model_cls, model_path=args.model_path, task=args.task, cpu_offload=True, offload_granularity="block", use_event_offload=True, offload_resident_blocks=0)
+    if args.model_cls == "minimax_h3":
+        if args.task != "t2av" or not args.prompt:
+            parser.error("MiniMax-H3 measurement requires --task t2av and --prompt matching inference")
+        deployment["model_variant"] = args.model_variant or deployment.get("model_variant", "fl2av")
     config = build_startup_config(deployment)
     if args.model_cls == "qwen_image":
         if args.prompt is None:
             parser.error("Qwen measurement requires --prompt matching inference")
         case = build_qwen_case(config, args.prompt, args.negative_prompt)
+    elif args.model_cls == "minimax_h3":
+        case = build_minimax_h3_case(config, args.prompt)
     else:
         case = build_wan_case(config, args.image_path)
     try:
@@ -275,7 +352,7 @@ def main():
         count = estimate_resident_count(config["num_layers"], c, d)
         deployment["offload_resident_blocks"] = count
         # Match normalized frame counts used to construct the measured input.
-        if args.model_cls == "wan2.1":
+        if args.model_cls in ("wan2.1", "minimax_h3"):
             deployment["num_frames"] = config["num_frames"]
         report = {
             "model_cls": args.model_cls,
@@ -306,6 +383,8 @@ def main():
             report["text_lengths"] = case.text_lengths
         else:
             report["num_frames"] = config["num_frames"]
+        if args.model_cls == "minimax_h3":
+            report.update(model_variant=config["model_variant"], video_tokens=case.video_tokens, audio_tokens=case.audio_tokens, sample_step=case.sample_step)
         write_json(output.with_suffix(".profile.json"), report)
         write_json(output, deployment)
         print(json.dumps(report, indent=2))
