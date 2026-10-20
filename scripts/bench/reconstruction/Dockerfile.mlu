@@ -1,0 +1,16 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG MODEL
+WORKDIR /opt/lightx2v
+COPY scripts/bench/${MODEL}/requirements-mlu.txt /tmp/requirements-mlu.txt
+RUN /torch/venv3/pytorch_infer/bin/pip install -r /tmp/requirements-mlu.txt
+COPY pyproject.toml README.md LICENSE ./
+COPY lightx2v ./lightx2v
+COPY lightx2v_platform ./lightx2v_platform
+COPY configs/${MODEL} ./configs/${MODEL}
+COPY scripts/bench/reconstruction ./scripts/bench/reconstruction
+COPY scripts/bench/${MODEL} ./scripts/bench/${MODEL}
+RUN /torch/venv3/pytorch_infer/bin/pip install --no-deps -e .
+ENV PLATFORM=cambricon_mlu DTYPE=BF16
+ENTRYPOINT ["/torch/venv3/pytorch_infer/bin/python"]

@@ -85,6 +85,9 @@ include-package-data = true
 include = ["lightx2v*"]
 exclude = ["lightx2v_kernel*"]
 
+[tool.setuptools.package-data]
+"lightx2v.models.networks" = ["*/LICENSE", "*/LICENSE.txt"]
+
 [tool.ruff]
 exclude = [
     ".git",
