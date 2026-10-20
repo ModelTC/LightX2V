@@ -74,6 +74,10 @@ bash scripts/minimax_h3/run_minimax_h3_ref2av.sh
 }
 ```
 
+## 少步草片与 RGB 视频重生成
+
+低成本抽卡的草片筛选、高清重生成与启动脚本，参见 [MiniMax-H3 Roll 文档](../minimax_h3_roll/README_zh.md)。
+
 ## LoRA
 
 | DiT 权重 | `lora_dynamic_apply` | 行为 |

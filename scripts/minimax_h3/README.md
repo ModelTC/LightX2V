@@ -74,6 +74,10 @@ Add `video_codec_options` to the inference JSON to configure MP4 encoding, for e
 }
 ```
 
+## Low-cost candidate generation
+
+For low-resolution drafts, candidate selection, and higher-resolution regeneration, see the [MiniMax-H3 Roll documentation](../minimax_h3_roll/README.md).
+
 ## LoRA
 
 | DiT weights | `lora_dynamic_apply` | Behavior |
