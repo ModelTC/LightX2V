@@ -15,7 +15,7 @@ from lightx2v.models.networks.minimax_h3.packing import (
     video_latent_num_frames,
 )
 from lightx2v.models.networks.minimax_h3.packing_ref2av import build_ref2av_packed_sequence
-from lightx2v.models.schedulers.minimax_h3.resampling import flow_predict_clean, flow_renoise, select_suffix_index, validate_draft_steps, validate_source_latents
+from lightx2v.models.schedulers.minimax_h3.resampling import flow_predict_clean, flow_renoise, validate_draft_steps, validate_resample_start_step, validate_source_latents
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -81,7 +81,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
         references=None,
         source_video_latents: torch.Tensor | None = None,
         source_audio_latents: torch.Tensor | None = None,
-        resample_strength: float = 0.9,
+        resample_start_step: int = 1,
         draft_steps: int | None = None,
     ):
         validate_t2av_geometry(num_frames, height, width)
@@ -103,11 +103,10 @@ class MiniMaxH3Scheduler(BaseScheduler):
                 video_shape=(1, int(self.config.get("in_channels", 24)), latent_frames, latent_height, latent_width),
                 audio_shape=(AUDIO_CHANNELS, int(self.config.get("audio_in_channels", 32)), num_audio_latents),
             )
-            self.start_step_index = select_suffix_index(self.video_sigmas, resample_strength)
+            self.start_step_index = validate_resample_start_step(resample_start_step, self.infer_steps)
             index = self.start_step_index
             resampling_metadata = {
                 "mode": "suffix",
-                "requested_strength": float(resample_strength),
                 "start_step_index": index,
                 "remaining_steps": self.infer_steps - index,
                 "q": 1.0 - index / self.infer_steps,

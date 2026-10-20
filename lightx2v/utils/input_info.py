@@ -277,7 +277,7 @@ class T2AVInputInfo(InputInfo):
     num_frames: Optional[int] = None
     draft_steps: Optional[int] = None
     resample_source_video: Optional[str] = None
-    resample_strength: Optional[float] = None
+    resample_start_step: int | None = None
 
 
 @dataclass
@@ -297,7 +297,7 @@ class I2AVInputInfo(InputInfo):
     num_frames: Optional[int] = None
     draft_steps: Optional[int] = None
     resample_source_video: Optional[str] = None
-    resample_strength: Optional[float] = None
+    resample_start_step: int | None = None
 
 
 @dataclass

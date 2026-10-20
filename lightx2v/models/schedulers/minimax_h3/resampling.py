@@ -1,10 +1,9 @@
 """CPU-testable helpers for MiniMax-H3 suffix regeneration and prefix drafts.
 
-The resample_strength is the *video sigma*, not a fraction of the inference steps.
-Audio uses the sigma at the same index of its own shifted schedule.
+The resample_start_step selects an exact index of the original schedule.
+Video and audio use that index with their respective shifted sigmas.
 """
 
-import math
 from numbers import Integral
 
 import torch
@@ -32,25 +31,11 @@ def flow_predict_clean(sample: torch.Tensor, velocity: torch.Tensor, sigma: torc
     return sample.float() + sigma * velocity.to(device=sample.device, dtype=torch.float32)
 
 
-def select_suffix_index(video_sigmas: torch.Tensor, resample_strength: float) -> int:
-    """Snap to the nearest original sigma knot, including the clean endpoint.
-
-    Equidistant nearest knots prefer less noise. A small tolerance accounts for
-    the original FP32 grid, e.g. the representation of the exact knot 2/3.
-    """
-    resample_strength = float(resample_strength)
-    if not math.isfinite(resample_strength) or not 0.0 <= resample_strength <= 1.0:
-        raise ValueError(f"MiniMax-H3 resample_strength must be finite and in [0, 1], got {resample_strength}")
-    sigmas = video_sigmas.detach().float().cpu()
-    if sigmas.ndim != 1 or sigmas.numel() < 2 or not bool(torch.isfinite(sigmas).all()):
-        raise ValueError("Expected a finite one-dimensional sigma schedule")
-    if sigmas[0] != 1 or sigmas[-1] != 0 or not bool((sigmas[:-1] > sigmas[1:]).all()):
-        raise ValueError("Expected a strictly decreasing sigma schedule from 1 to 0")
-    distances = (sigmas.double() - resample_strength).abs()
-    exact = torch.nonzero(distances <= 1e-7).flatten()
-    if exact.numel():
-        return int(exact[-1])
-    return int(torch.nonzero(distances <= distances.min() + 1e-7)[-1, 0])
+def validate_resample_start_step(resample_start_step: int, infer_steps: int) -> int:
+    """Select a suffix by zero-based index; infer_steps is the clean endpoint."""
+    if not 0 <= resample_start_step <= infer_steps:
+        raise ValueError(f"MiniMax-H3 resample_start_step must be an integer in [0, {infer_steps}], got {resample_start_step!r}")
+    return int(resample_start_step)
 
 
 def validate_source_latents(video, audio, *, video_shape, audio_shape):

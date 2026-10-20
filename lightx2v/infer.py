@@ -118,10 +118,10 @@ def main():
     )
     parser.add_argument("--resample_source_video", type=str, default=None, help="MiniMax-H3 source video with audio; RGB frames are resized to the target canvas before VAE encoding and regeneration.")
     parser.add_argument(
-        "--resample_strength",
-        type=float,
+        "--resample_start_step",
+        type=int,
         default=None,
-        help="MiniMax-H3 requested video sigma in [0,1], snapped to the nearest point on the original sampling grid. Defaults to the startup config or 0.9.",
+        help="MiniMax-H3 zero-based regeneration start index in [0,infer_steps]. Defaults to the startup config or 1; 0 runs all steps, infer_steps only decodes the VAE-encoded source.",
     )
     parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config.")
     parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")

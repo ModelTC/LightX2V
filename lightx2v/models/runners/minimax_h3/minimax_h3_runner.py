@@ -42,7 +42,7 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, RESAMPLING_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
-from lightx2v.models.schedulers.minimax_h3.resampling import select_suffix_index, validate_draft_steps
+from lightx2v.models.schedulers.minimax_h3.resampling import validate_draft_steps, validate_resample_start_step
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
@@ -551,7 +551,7 @@ class MiniMaxH3Runner(DefaultRunner):
             raise ValueError("MiniMax-H3 draft_steps cannot be combined with resample_source_video")
         if not resample_source_video:
             return
-        select_suffix_index(self.scheduler.video_sigmas, self._resample_option("resample_strength", 0.9))
+        validate_resample_start_step(self._resample_option("resample_start_step", 1), self.scheduler.infer_steps)
         validate_t2av_geometry(self.request_num_frames, self.request_height, self.request_width)
         source = os.fspath(resample_source_video)
         if not os.path.isfile(source):
@@ -645,7 +645,7 @@ class MiniMaxH3Runner(DefaultRunner):
             references=self.prepared_references,
             source_video_latents=self.source_video_latents,
             source_audio_latents=self.source_audio_latents,
-            resample_strength=self._resample_option("resample_strength", 0.9),
+            resample_start_step=self._resample_option("resample_start_step", 1),
             draft_steps=getattr(self.input_info, "draft_steps", None),
         )
         logger.info(
@@ -654,7 +654,7 @@ class MiniMaxH3Runner(DefaultRunner):
             f"video={self.scheduler.video_latents.shape[0]}, total={self.scheduler.layout.sequence_length}"
         )
         if self.scheduler.start_step_index == self.scheduler.infer_steps:
-            logger.info("MiniMax-H3 resample_strength snapped to clean endpoint; decoding VAE-encoded source with zero DiT evaluations")
+            logger.info("MiniMax-H3 resample_start_step reached the clean endpoint; decoding VAE-encoded source with zero DiT evaluations")
             return
         if not self.config.get("cpu_offload", False):
             logger.info("MiniMax-H3 transformer is resident on the accelerator")

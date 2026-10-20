@@ -3,7 +3,7 @@
 COMMON_REQUEST_FIELDS = frozenset({"return_result_tensor", "save_result_path", "seed", "task"})
 PROMPT_FIELDS = frozenset({"negative_prompt", "prompt"})
 VIDEO_OUTPUT_FIELDS = frozenset({"size", "num_frames"})
-RESAMPLING_FIELDS = frozenset({"draft_steps", "resample_source_video", "resample_strength"})
+RESAMPLING_FIELDS = frozenset({"draft_steps", "resample_source_video", "resample_start_step"})
 
 IMAGE_REQUEST_FIELDS = COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"aspect_ratio", "size"}
 VIDEO_REQUEST_FIELDS = COMMON_REQUEST_FIELDS | PROMPT_FIELDS | VIDEO_OUTPUT_FIELDS
