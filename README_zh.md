@@ -28,7 +28,7 @@
 
 > 📝 **技术博客：[LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)**
 
-> 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
+> 👋 **加入微信交流群，LightX2V加群机器人微信号: Jo-1212liz**
 
 ## 🧾 社区代码贡献指南
 
