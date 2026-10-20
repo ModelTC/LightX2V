@@ -37,6 +37,7 @@ Documentation
    :caption: Quick Start
 
    Quick Start <getting_started/quickstart.md>
+   VGGT BF16 <getting_started/vggt.md>
    First Video <getting_started/first_generation.md>
    Python API <getting_started/python_api.md>
    Model Structure <getting_started/model_structure.md>
