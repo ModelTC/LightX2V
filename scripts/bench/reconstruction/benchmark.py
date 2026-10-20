@@ -11,12 +11,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from scripts.bench.reconstruction.fixtures import load_requests, sha256, unique_images
-from scripts.bench.reconstruction.precision import BF16Audit
 
 from lightx2v.models.runners.runner_factory import build_runner
 from lightx2v.utils.set_config import build_startup_config
 from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
+from scripts.bench.reconstruction.fixtures import load_requests, sha256, unique_images
+from scripts.bench.reconstruction.precision import BF16Audit
 
 
 @contextmanager
@@ -140,4 +140,3 @@ def run_benchmark(model, task, manifest, call_targets, set_variant, request_fiel
     changes = [100 * (pair["optimized"] / pair["baseline"] - 1) for pair in pairs.values() if len(pair) == 2]
     summary.update(effective_pairs=len(changes), paired_pipeline_change_median_percent=float(np.median(changes)) if changes else None, grade="formal_candidate" if len(changes) >= 31 else "diagnostic")
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-
