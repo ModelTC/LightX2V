@@ -108,6 +108,10 @@ python scripts/minimax_h3/inference/distill/minimax_h3_t2av_dmd.py
 See the [Python API guide](../../docs/EN/source/getting_started/python_api.md)
 for generator setup and configuration precedence.
 
+## Low-cost candidate generation
+
+For low-resolution drafts, candidate selection, and higher-resolution regeneration, see the [MiniMax-H3 Roll documentation](../minimax_h3_roll/README.md).
+
 ## LoRA
 
 | DiT weights | `lora_dynamic_apply` | Behavior |

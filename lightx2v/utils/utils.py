@@ -1,6 +1,7 @@
 import os
 import random
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import imageio
@@ -692,6 +693,55 @@ def fixed_shape_resize(img, target_height, target_width):
 
     h, w = resized_img.shape[-2:]
     return resized_img, h, w
+
+
+def resize_resampling_frames(frames, height, width, *, workers=4, parallel=True, device="cpu"):
+    """Lanczos-resize RGB frames, optionally sharing the work across ranks.
+
+    Each rank decodes the same source, but resizes only its contiguous frame
+    slice. Gather uint8 pixels before the existing CPU float conversion so
+    interpolation, frame order and normalization match serial execution.
+    All ranks in the default process group must participate when parallel.
+    """
+    if frames.ndim != 4 or frames.shape[-1] != 3 or frames.dtype != np.uint8 or not len(frames):
+        raise ValueError("Regeneration frames must be nonempty uint8 [F,H,W,3] RGB")
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError("resample_resize_workers must be a positive integer")
+    if height < 1 or width < 1:
+        raise ValueError("Regeneration target height and width must be positive")
+    if frames.shape[1:3] == (height, width):
+        return frames
+
+    distributed = parallel and dist.is_initialized() and dist.get_world_size() > 1
+    world_size = dist.get_world_size() if distributed else 1
+    rank = dist.get_rank() if distributed else 0
+    chunk_size = (len(frames) + world_size - 1) // world_size
+    start = rank * chunk_size
+    count = max(0, min(chunk_size, len(frames) - start))
+    resized = np.empty((chunk_size, height, width, 3), dtype=np.uint8)
+    resized[count:] = 0
+
+    def resize_one(index):
+        resized[index] = np.asarray(Image.fromarray(frames[start + index]).resize((width, height), Image.Resampling.LANCZOS))
+
+    if workers == 1 or count < 2:
+        for index in range(count):
+            resize_one(index)
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, count)) as pool:
+            # Iterating also propagates worker exceptions before returning.
+            for _ in pool.map(resize_one, range(count)):
+                pass
+
+    if not distributed:
+        return resized
+    # NCCL needs CUDA tensors; Gloo can gather directly on CPU (also useful
+    # for CPU tests). Only uint8 crosses the collective, never float pixels.
+    gather_device = "cpu" if dist.get_backend() == "gloo" else device
+    local = torch.from_numpy(resized).to(gather_device)
+    gathered = torch.empty((chunk_size * world_size, height, width, 3), dtype=torch.uint8, device=gather_device)
+    dist.all_gather_into_tensor(gathered, local)
+    return gathered[: len(frames)].cpu().numpy()
 
 
 def check_path_exists(path: str) -> None:

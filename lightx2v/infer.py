@@ -90,6 +90,19 @@ def build_parser():
         help="Input source video path. Its role is determined by the selected task.",
     )
     parser.add_argument("--video_duration", type=float, default=None, help="Requested output duration in seconds for audio-driven video generation.")
+    parser.add_argument(
+        "--draft_steps",
+        type=int,
+        default=None,
+        help="MiniMax-H3: only a positive K smaller than configured infer_steps enables a draft prefix and final velocity projection. Omit or use K >= infer_steps for normal sampling.",
+    )
+    parser.add_argument("--resample_source_video", type=str, default=None, help="MiniMax-H3 source video with audio; RGB frames are resized to the target canvas before VAE encoding and regeneration.")
+    parser.add_argument(
+        "--resample_start_step",
+        type=int,
+        default=None,
+        help="MiniMax-H3 zero-based regeneration start index in [0,infer_steps]. Defaults to the startup config or 1; 0 runs all steps, infer_steps only decodes the VAE-encoded source.",
+    )
     parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config.")
     parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
     parser.add_argument("--image_strength", type=str, default=None, help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")

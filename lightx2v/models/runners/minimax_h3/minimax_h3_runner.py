@@ -1,3 +1,4 @@
+import math
 import os
 from contextlib import suppress
 
@@ -15,6 +16,7 @@ from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
     TEXT_TAG,
     align_num_frames,
+    audio_latent_num_frames,
     prepare_keyframe_image,
     resolve_canvas_size,
     unpack_audio_tokens,
@@ -39,8 +41,9 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     trim_reference_num_frames,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, RESAMPLING_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
+from lightx2v.models.schedulers.minimax_h3.resampling import validate_draft_steps, validate_resample_start_step
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
@@ -49,6 +52,7 @@ from lightx2v.utils.input_info import INPUT_INFO_TYPES
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import resize_resampling_frames
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -98,11 +102,11 @@ class MiniMaxH3Runner(DefaultRunner):
     )
     _WARMUP_STEP_COUNT = 2
     supported_request_fields_by_task = {
-        "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"},
-        "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "prompt"},
-        "l2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"last_frame_path", "prompt"},
-        "fl2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "last_frame_path", "prompt"},
-        "ref2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"audio_path", "image_path", "prompt", "video_path"},
+        "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"prompt"},
+        "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"image_path", "prompt"},
+        "l2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"last_frame_path", "prompt"},
+        "fl2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"image_path", "last_frame_path", "prompt"},
+        "ref2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"audio_path", "image_path", "prompt", "video_path"},
     }
 
     def __init__(self, config):
@@ -192,6 +196,8 @@ class MiniMaxH3Runner(DefaultRunner):
         self.condition_audio_latents = []
         self.keyframe_anchors = ()
         self.prepared_references = None
+        self.source_video_latents = None
+        self.source_audio_latents = None
 
     def clear_warmup_state(self):
         self.scheduler.clear()
@@ -528,6 +534,62 @@ class MiniMaxH3Runner(DefaultRunner):
                 audio_latents.append(latent)
         return video_latents, audio_latents
 
+    def _resample_option(self, key, default=None):
+        value = getattr(self.input_info, key, None)
+        return self.config.get(key, default) if value is None else value
+
+    def _prepare_resampling_source(self):
+        """Resize source RGB to the target canvas, then encode clean AV.
+
+        Same-size inputs skip resizing. Video encoding uses the existing
+        seed-42 posterior sample; audio encoding uses the posterior mean.
+        """
+        self.source_video_latents = None
+        self.source_audio_latents = None
+        resample_source_video = self._resample_option("resample_source_video")
+        draft_steps = validate_draft_steps(getattr(self.input_info, "draft_steps", None), self.scheduler.infer_steps)
+        if draft_steps is not None and resample_source_video:
+            raise ValueError("MiniMax-H3 draft_steps cannot be combined with resample_source_video")
+        if not resample_source_video:
+            return
+        validate_resample_start_step(self._resample_option("resample_start_step", 1), self.scheduler.infer_steps)
+        validate_t2av_geometry(self.request_num_frames, self.request_height, self.request_width)
+        source = os.fspath(resample_source_video)
+        if not os.path.isfile(source):
+            raise ValueError(f"MiniMax-H3 regeneration source is not a local file: {source}")
+        frames, fps, soundtrack = decode_reference_video(source)
+        if not math.isfinite(fps) or abs(fps - 24.0) > 1e-4:
+            raise ValueError(f"Source video must have 24 fps; got {fps}. Convert it explicitly before regeneration")
+        if frames.shape[0] != self.request_num_frames:
+            raise ValueError(f"Source video has {frames.shape[0]} frames; request has {self.request_num_frames}. Regeneration preserves duration and does not trim or pad video")
+        if soundtrack is None:
+            raise ValueError("Source video has no soundtrack. MiniMax-H3 regeneration requires a source video with audio")
+        source_height, source_width = frames.shape[1:3]
+        if (source_height, source_width) != (self.request_height, self.request_width):
+            frames = resize_resampling_frames(
+                frames,
+                self.request_height,
+                self.request_width,
+                workers=self.config.get("resample_resize_workers", 4),
+                parallel=self.config.get("resample_resize_parallel", True),
+                device=AI_DEVICE,
+            )
+        self._ensure_vae_loaded()
+        pixels = torch.from_numpy(frames).permute(3, 0, 1, 2)[None].float().div_(255.0)
+        self.source_video_latents = self.video_vae.encode_condition(pixels, video=True).float()
+        del pixels, frames
+        # Align samples to H3's rounded 40 Hz audio latent count, removing
+        # only codec padding / the final fractional hop. No temporal resize.
+        num_samples = audio_latent_num_frames(self.request_num_frames) * self.audio_vae.hop_length
+        waveform, sample_rate = soundtrack
+        waveform = prepare_reference_waveform(waveform, sample_rate, self.audio_vae.sampling_rate, self.request_num_frames / 24.0 + 0.1)
+        missing = num_samples - waveform.shape[-1]
+        if missing > self.audio_vae.sampling_rate / 24:
+            raise ValueError("Source audio is more than one video frame shorter than the requested clip; refusing an implicit duration change")
+        waveform = torch.nn.functional.pad(waveform, (0, max(0, missing)))[:, :num_samples].contiguous()
+        self.source_audio_latents = self.audio_vae.encode(waveform).float()
+        logger.info(f"MiniMax-H3 RGB regeneration source {source}: {source_width}x{source_height} -> {self.request_width}x{self.request_height}, audio=source")
+
     @ProfilingContext4DebugL2("Run Input Encoder")
     def _run_input_encoder_local_h3(self):
         task = self.input_info.task
@@ -582,12 +644,19 @@ class MiniMaxH3Runner(DefaultRunner):
             condition_video_latents=self.condition_video_latents,
             condition_audio_latents=self.condition_audio_latents,
             references=self.prepared_references,
+            source_video_latents=self.source_video_latents,
+            source_audio_latents=self.source_audio_latents,
+            resample_start_step=self._resample_option("resample_start_step", 1),
+            draft_steps=getattr(self.input_info, "draft_steps", None),
         )
         logger.info(
             "MiniMax-H3 packed layout: "
             f"text={prompt_embeds.shape[0]}, audio={self.scheduler.audio_latents.shape[0]}, "
             f"video={self.scheduler.video_latents.shape[0]}, total={self.scheduler.layout.sequence_length}"
         )
+        if self.scheduler.start_step_index == self.scheduler.infer_steps:
+            logger.info("MiniMax-H3 resample_start_step reached the clean endpoint; decoding VAE-encoded source with zero DiT evaluations")
+            return
         if not self.config.get("cpu_offload", False):
             logger.info("MiniMax-H3 transformer is resident on the accelerator")
         elif self.config.get("offload_granularity", "model") == "model":
@@ -603,7 +672,10 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def run_segment(self, segment_idx=0):
         infer_steps = self.scheduler.infer_steps
-        for step_index in range(infer_steps):
+        start_index = self.scheduler.start_step_index
+        end_index = self.scheduler.draft_steps if self.scheduler.draft_steps is not None else infer_steps
+        remaining_steps = end_index - start_index
+        for step_index in range(start_index, end_index):
             with ProfilingContext4DebugL1(
                 "Run Dit every step",
                 recorder_mode=GET_RECORDER_MODE(),
@@ -617,9 +689,14 @@ class MiniMaxH3Runner(DefaultRunner):
                 with ProfilingContext4DebugL1("🚀 infer_main"):
                     self.model.infer(self.inputs)
                 with ProfilingContext4DebugL1("step_post"):
-                    self.scheduler.step_post()
+                    if self.scheduler.draft_steps is not None and step_index == end_index - 1:
+                        self.scheduler.project_clean()
+                    else:
+                        self.scheduler.step_post()
                 if self.progress_callback:
-                    self.progress_callback(((step_index + 1) / infer_steps) * 100, 100)
+                    self.progress_callback(((step_index - start_index + 1) / remaining_steps) * 100, 100)
+        if remaining_steps == 0 and self.progress_callback:
+            self.progress_callback(100, 100)
         return self.scheduler.video_latents, self.scheduler.audio_latents
 
     @ProfilingContext4DebugL2("Offload DiT")
@@ -735,6 +812,7 @@ class MiniMaxH3Runner(DefaultRunner):
         should_offload_transformer = self.config.get("cpu_offload", False)
         transformer_offloaded = not should_offload_transformer
         try:
+            self._prepare_resampling_source()
             self.init_run()
             try:
                 video_rows, audio_rows = self.run_segment(0)

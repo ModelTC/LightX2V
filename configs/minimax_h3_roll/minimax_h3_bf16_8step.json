@@ -1,0 +1,35 @@
+{
+    "infer_steps": 8,
+    "num_frames": 362,
+    "size": [480, 864],
+    "fps": 24,
+    "enable_cfg": false,
+    "cpu_offload": true,
+    "offload_granularity": "model",
+    "use_adaln_cache": true,
+    "adaln_cache_dir": "~/.cache/lightx2v/adaln",
+    "text_encoder_cpu_offload": true,
+    "vae_cpu_offload": false,
+    "vae_decode_parallel": true,
+    "attn_type": "sage_attn2",
+    "rms_type": "sgl-kernel",
+    "rope_type": "minimax_h3_triton_rope",
+    "feature_caching": "NoCaching",
+    "use_compile": false,
+    "video_flow_shift": 6.0,
+    "audio_flow_shift": 3.0,
+    "h3_step_update": "training_euler",
+    "vae_spatial_scale_factor": 16,
+    "lora_dynamic_apply": true,
+    "lora_configs": [
+      {
+        "path": "/path/to/lightx2v/Minimax-h3-Turbo/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors",
+        "strength": 1.0,
+        "alpha": 8
+      }
+    ],
+    "parallel": {
+      "seq_p_size": 8,
+      "seq_p_attn_type": "ulysses"
+  }
+}
