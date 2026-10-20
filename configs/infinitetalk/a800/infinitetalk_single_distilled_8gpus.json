@@ -31,6 +31,13 @@
     "vae_cpu_offload": false,
     "clip_cpu_offload": false,
     "self_attn_1_type": "general_sparse_attn",
+    "general_sparse_attn_setting": {
+        "sparse_mask_generator": "sla_mask_generator",
+        "sparse_setting": {
+            "sparsity_ratio": 0.8
+        },
+        "sparse_operator": "sla_triton_operator"
+    },
     "cross_attn_1_type": "flash_attn2",
     "cross_attn_2_type": "flash_attn2",
     "audio_cross_attn_type": "flash_attn2",
@@ -47,15 +54,9 @@
         "seq_p_size": 8,
         "seq_p_attn_type": "ulysses"
     },
-    "general_sparse_attn_setting": {
-        "sparse_mask_generator": "sla_mask_generator",
-        "sparse_setting": {
-            "sparsity_ratio": 0.8
-        },
-        "sparse_operator": "sla_triton_operator"
-    },
     "audio_sp_mode": "full",
     "use_compile": true,
     "warmup": true,
-    "vae_use_compile": true
+    "vae_use_compile": true,
+    "cache_condition_encoders": true
 }
