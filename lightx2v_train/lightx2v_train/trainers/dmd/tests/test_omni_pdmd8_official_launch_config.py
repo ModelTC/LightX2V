@@ -49,6 +49,7 @@ class OmniPdmd8OfficialLaunchConfigTests(unittest.TestCase):
                 "--nnodes=4 --nproc_per_node=8",
                 "steps=8, optimizer_updates=250000, student_updates=41666, critic_updates=208334",
                 "Checkpoint: save_every_iters=50, save_total_limit=5",
+                "Training rollout shifts: video=12.0, audio=3.0",
                 "global_microbatch=32, batch_mode=count_random",
                 "lora_param_dtype=fp32",
                 "fake: train_type=full, lr=1e-05",

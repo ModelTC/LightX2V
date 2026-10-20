@@ -1,7 +1,7 @@
-# MiniMax-H3 Ref2AV: source-aligned 4-step PDMD on 32 ACP GPUs
+# MiniMax-H3 Ref2AV: 4/8-step PDMD on 32 ACP GPUs
 
-This is an opt-in training path, separate from the existing eight-step PDMD,
-legacy DMD, HEAD and DMAD recipes. It follows the released
+This is an opt-in training path, separate from older PDMD/DMD, HEAD and DMAD
+recipes. It follows the released
 [ZeamoxWang/pdmd training implementation](https://github.com/ZeamoxWang/pdmd/tree/6b6e10635495a2d9b989fee393235d406d3840c4)
 at commit `6b6e10635495a2d9b989fee393235d406d3840c4`, specifically
 `training/configs/pdmd_4nfe_544p.json`, `training/train.py`, and
@@ -11,8 +11,12 @@ conditions. It is not a reproduction of the published T2AV quality score.
 
 ## Recipe and retained overrides
 
-The new configuration is
-`configs/train/dmd/minimax_h3_ref2av_omni_imageonly_pdmd4_official_fsdp32.yaml`.
+The independent configurations are
+`configs/train/dmd/minimax_h3_ref2av_omni_imageonly_pdmd4_official_fsdp32.yaml`
+and `configs/train/dmd/minimax_h3_ref2av_omni_imageonly_pdmd8_official_fsdp32.yaml`.
+They use the same recipe except for the rollout step count. Both apply the
+user-requested training rollout shifts: video **12**, audio **3**. This
+schedule is a local override of the released unshifted training schedule.
 Both `training.dmd.official_pdmd` and
 `model.capabilities.distribution_matching.official_pdmd` are enabled, so the
 source-aligned update loop and losses are selected together.
@@ -20,7 +24,7 @@ source-aligned update loop and losses are selected together.
 | Setting | This recipe |
 | --- | --- |
 | Update order | Five critic updates, then one student update |
-| Training rollout | Full four-step, no-grad Euler rollout; video/audio grid `[1, .75, .5, .25, 0]` |
+| Training rollout | Full four- or eight-step, no-grad Euler rollout; apply `s*u/(1+(s-1)*u)` to the uniform base grid, with video/audio shifts 12/3. Four-step video grid `[1, .972973, .923077, .8, 0]`; audio grid `[1, .9, .75, .5, 0]` |
 | Student update | Reuse the immediately preceding critic rollout; one grad-enabled student forward at a randomly selected rollout state |
 | Student score query | Shared random ratio inside that step's video/audio intervals; query follows the student's predicted trajectory, without fresh Gaussian re-noising |
 | Critic score query | Full rollout endpoint plus fresh Gaussian noise; independent uniform video/audio sigmas; if video sigma > .95, audio sigma is drawn from [.85, 1] |
@@ -28,7 +32,7 @@ source-aligned update loop and losses are selected together.
 | Projection / normalization | Projection denominator epsilon `1e-8`, normalizer floor `1e-5`; nonfinite normalized updates become zero |
 | Optimizers | AdamW; student LR `5e-5`, critic LR `1e-5`; betas `(0, .9)`, epsilon `1e-8`, no weight decay; gradient norm clip 1 |
 | LoRA initialization | Kaiming-uniform A, zero B in the new opt-in path; old recipes keep Gaussian A |
-| Inference shifts | Video/audio 12/3; these are **not** applied to the explicit physical sigmas of this training loop |
+| Inference shifts | Video/audio 12/3; training has separate rollout-shift fields, and explicit physical sigmas pass through without a second shift |
 | Duration | 250000 single-role optimizer updates; checkpoint every 50 (user overrides) |
 
 The following are intentional user/task overrides, not upstream defaults:
@@ -38,6 +42,9 @@ The following are intentional user/task overrides, not upstream defaults:
   `training.student.lora.param_dtype: fp32`; BF16 FSDP compute is unchanged.
 - Existing Omni image-only reference cache and 124-frame 768p geometry.
   Image-only refers to the conditioning; H3 still generates joint video/audio.
+- Training rollout video/audio shifts **12/3**. Student score queries follow
+  the shifted rollout intervals; critic sigma sampling retains its independent
+  uniform sampling and existing high-video-noise audio constraint.
 - FSDP2 over **32 ranks**, SP disabled, batch 1/rank and accumulation 1.
   Upstream uses global batch 16 and a shared frozen base with two LoRA roles;
   this port retains separate student, critic and teacher models.
@@ -80,10 +87,25 @@ H3_CODE_ROOT="$PWD" \
 H3_PYTHON="$VIRTUAL_ENV/bin/python" \
 H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3 \
 H3_REF2AV_CACHE=/mnt/lm_data_afs/gushiqiao/datasets/omni_r2v_image_only_100k_20261004/latent_match124_bf16/metadata.jsonl \
-H3_REF2AV_DMD_OUTPUT=/mnt/lm_data_afs/gushiqiao/outputs/h3_omni_pdmd4_official_lorafp32_32gpu_250k_run01 \
-H3_RDZV_ID=h3_omni_pdmd4_official_lorafp32_32gpu_250k_run01 \
+H3_PDMD_OFFICIAL_CONFIG="$PWD/lightx2v_train/configs/train/dmd/minimax_h3_ref2av_omni_imageonly_pdmd4_official_fsdp32.yaml" \
+H3_REF2AV_DMD_OUTPUT=/mnt/lm_data_afs/gushiqiao/outputs/h3_pdmd4_official_shift12_3_lorafp32_32gpu_20261020 \
+H3_RDZV_ID=h3_pdmd4_official_shift12_3_lorafp32_32gpu_20261020 \
 KERNELS_CACHE=/mnt/lm_data_afs/gushiqiao/cache/kernels \
 bash lightx2v_train/scripts/run_minimax_h3_ref2av_omni_imageonly_pdmd4_official_fsdp32_32gpu_acp.sh
+```
+
+For eight steps, use the independent entry point and its dedicated override:
+
+```bash
+H3_CODE_ROOT="$PWD" \
+H3_PYTHON="$VIRTUAL_ENV/bin/python" \
+H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3 \
+H3_REF2AV_CACHE=/mnt/lm_data_afs/gushiqiao/datasets/omni_r2v_image_only_100k_20261004/latent_match124_bf16/metadata.jsonl \
+H3_PDMD8_OFFICIAL_CONFIG="$PWD/lightx2v_train/configs/train/dmd/minimax_h3_ref2av_omni_imageonly_pdmd8_official_fsdp32.yaml" \
+H3_REF2AV_DMD_OUTPUT=/mnt/lm_data_afs/gushiqiao/outputs/h3_pdmd8_official_shift12_3_lorafp32_32gpu_20261020 \
+H3_RDZV_ID=h3_pdmd8_official_shift12_3_lorafp32_32gpu_20261020 \
+KERNELS_CACHE=/mnt/lm_data_afs/gushiqiao/cache/kernels \
+bash lightx2v_train/scripts/run_minimax_h3_ref2av_omni_imageonly_pdmd8_official_fsdp32_32gpu_acp.sh
 ```
 
 Append `--dry-run` to perform read-only cache-receipt/checksum and configuration
@@ -92,6 +114,7 @@ payloads, initialize CUDA or launch training. A successful preflight is not a
 GPU memory or training-correctness guarantee.
 
 Set `H3_PDMD_OFFICIAL_CONFIG` to a separate YAML to customize this recipe.
+The eight-step launcher instead reads `H3_PDMD8_OFFICIAL_CONFIG`.
 Stale `H3_CONFIG_PATH`, `H3_PDMD`, `H3_PDMD_COUNT_RANDOM_CONFIG` and
 `H3_REF2AV_EXPECTED_ROWS` from older runs cannot select another recipe here.
 
@@ -104,6 +127,8 @@ New checkpoints include per-rank official-PDMD state, the consumed dataloader
 microbatch cursor and, where needed, the cached preceding-critic trajectory.
 Recipe and world-size changes are checked before resuming. Old DMD/PDMD
 checkpoints or incomplete official state must not be treated as compatible.
+Changing rollout shifts from 1/1 to 12/3 changes the recipe. Start a new output
+directory rather than resuming checkpoints from the unshifted recipe.
 
 CPU configuration/preflight regression tests cover the retained data/precision
 settings, 4-step recipe, single-role update accounting, old-recipe isolation,

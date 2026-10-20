@@ -805,7 +805,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         sigma = torch.as_tensor(sigma, device=self.device, dtype=torch.float32)
         if self.options.official_pdmd and sigma.shape == (2,):
             # The official loop owns both physical schedules, including its
-            # unshifted rollout and independently sampled critic noise levels.
+            # configured rollout grids and independently sampled critic noise levels.
             return sigma[0:1], sigma[1:2]
         if self.options.legacy_numerics and sigma.shape == (2,):
             # The legacy score sampler supplies the physical (video, audio)

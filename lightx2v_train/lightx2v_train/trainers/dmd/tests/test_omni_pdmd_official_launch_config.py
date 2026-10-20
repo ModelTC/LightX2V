@@ -67,8 +67,8 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
         self.assertEqual(dmd["fake_update_ratio"], 5)
         self.assertEqual(dmd["model_mode"], "eval")
         self.assertEqual(dmd["latent_dtype"], "fp32")
-        self.assertEqual(dmd["official_rollout_video_shift"], 1.0)
-        self.assertEqual(dmd["official_rollout_audio_shift"], 1.0)
+        self.assertEqual(dmd["official_rollout_video_shift"], 12.0)
+        self.assertEqual(dmd["official_rollout_audio_shift"], 3.0)
         self.assertEqual(matching["video_flow_shift"], 12.0)
         self.assertEqual(matching["audio_flow_shift"], 3.0)
         self.assertEqual(dmd["critic_video_threshold"], 0.95)
@@ -180,6 +180,7 @@ class OmniPdmdOfficialLaunchConfigTests(unittest.TestCase):
                 CONFIG.name,
                 "optimizer_updates=250000, student_updates=41666, critic_updates=208334",
                 "Checkpoint: save_every_iters=50, save_total_limit=5",
+                "Training rollout shifts: video=12.0, audio=3.0",
                 "global_microbatch=32, batch_mode=count_random",
                 "rank=128, alpha=8",
                 "lora_param_dtype=fp32",

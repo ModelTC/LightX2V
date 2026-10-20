@@ -102,6 +102,7 @@ critic_updates = training["max_train_iters"] - student_updates
 print(f"Verified cache: completed={counts[0]}, failed={counts[1]}, input_rows={counts[2]}, ref_image_counts={receipt.get('reference_image_counts', {})}")
 print(f"Official PDMD Ref2AV: 4 x 8 GPUs, steps=8, optimizer_updates={training['max_train_iters']}, student_updates={student_updates}, critic_updates={critic_updates}, fake_first, global_microbatch=32, batch_mode=count_random")
 print(f"Checkpoint: save_every_iters={training['save_every_iters']}, save_total_limit={training['save_total_limit']}")
+print(f"Training rollout shifts: video={dmd['official_rollout_video_shift']}, audio={dmd['official_rollout_audio_shift']}; critic sigmas retain independent sampling")
 print("Each iteration is ONE role's optimizer update, not a student+critic outer round. Critic uses a full rollout; student reuses the last critic rollout.")
 print("Sampling: one image count per global batch; balanced counts 1..6; natural random orientations, no fixed 16+16 quota. Rotating subsets are NOT a full-data pass per epoch.")
 print(f"config={sys.argv[1]}\ndata={manifest}\noutput={training['output_dir']}")

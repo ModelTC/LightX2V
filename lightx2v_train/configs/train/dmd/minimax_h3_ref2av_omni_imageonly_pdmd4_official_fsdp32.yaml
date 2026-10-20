@@ -26,8 +26,8 @@ model:
         transformer_param_dtype: bf16
     capabilities:
         distribution_matching:
-            # Inference shifts only. Official training supplies explicit
-            # video/audio physical sigmas from unshifted rollout grids below.
+            # Inference shifts. Training uses the explicit per-modality
+            # rollout shifts below; physical sigmas are not shifted twice.
             video_flow_shift: 12.0
             audio_flow_shift: 3.0
             video_loss_weight: 0.8
@@ -107,8 +107,9 @@ training:
         fake_update_ratio: 5
         model_mode: eval
         latent_dtype: fp32
-        official_rollout_video_shift: 1.0
-        official_rollout_audio_shift: 1.0
+        # User override: shifted training rollout for video/audio.
+        official_rollout_video_shift: 12.0
+        official_rollout_audio_shift: 3.0
         critic_video_threshold: 0.95
         critic_audio_floor: 0.85
         generation_shapes:
