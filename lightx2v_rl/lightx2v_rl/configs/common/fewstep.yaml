@@ -1,0 +1,117 @@
+# Shared FewStep learner/runtime defaults; each model supplies its own pipeline and registration.
+actor_rollout_ref:
+  model:
+    _target_: lightx2v_rl.backends.verl_omni.config.FewStepModelConfig
+    path: null
+    model_type: diffusion_model
+    algorithm: fewstep_${actor_rollout_ref.model.fewstep.bridge}
+    attn_backend: native
+    lora_rank: 0
+    fewstep:
+      bridge: geo
+      cycle_train_idx: true
+      timestep_sampling_mode: fixed_uniform
+      noise_level: 0.3
+      diffusion_clip: true
+      diffusion_clip_value: 0.45
+      loss_reweighting: matched
+      geo_reweight_multiplier: 0.5
+      difficulty_reweighting: constant
+      clip_range: 0.001
+      adv_clip_max: 5.0
+      kl_beta: 0.0003
+  actor:
+    strategy: fsdp2
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 1
+    ppo_epochs: 1
+    use_kl_loss: true
+    kl_loss_coef: ${actor_rollout_ref.model.fewstep.kl_beta}
+    optim:
+      lr: 1.0e-06
+      weight_decay: 0.0001
+    fsdp_config:
+      strategy: fsdp2
+      model_dtype: bfloat16
+      param_offload: true
+      optimizer_offload: true
+    diffusion_loss:
+      _target_: lightx2v_rl.backends.verl_omni.config.FewStepLossConfig
+      loss_mode: ${actor_rollout_ref.model.algorithm}
+      clip_ratio: ${actor_rollout_ref.model.fewstep.clip_range}
+      adv_clip_max: ${actor_rollout_ref.model.fewstep.adv_clip_max}
+  ref:
+    log_prob_micro_batch_size_per_gpu: 1
+    fsdp_config:
+      strategy: fsdp2
+      model_dtype: bfloat16
+      param_offload: true
+  rollout:
+    name: vllm_omni
+    rollout_attn_backend: TORCH_SDPA
+    tensor_model_parallel_size: 1
+    max_num_seqs: 1
+    enforce_eager: true
+    load_format: safetensors
+    'n': 8
+    seed: 42
+    full_determinism: true
+    calculate_log_probs: true
+    log_prob_micro_batch_size_per_gpu: 1
+    algo:
+      _target_: lightx2v_rl.backends.verl_omni.config.FewStepRolloutAlgoConfig
+      fewstep: ${actor_rollout_ref.model.fewstep}
+    val_kwargs:
+      pipeline:
+        num_inference_steps: ${actor_rollout_ref.model.fewstep.max_steps}
+        output_type: np
+      algo:
+        _target_: lightx2v_rl.backends.verl_omni.config.FewStepRolloutAlgoConfig
+        fewstep: ${actor_rollout_ref.model.fewstep}
+algorithm:
+  _target_: lightx2v_rl.backends.verl_omni.config.FewStepAlgoConfig
+  trainer_type: policy_gradient
+  sample_source: online
+  adv_estimator: flow_grpo
+  custom_advantage_function: lightx2v_rl.backends.verl_omni.advantage.compute_advantages
+  weight_advantages: true
+  reward_advantage:
+    normalization: max_group_std
+    epsilon: 0.0001
+    weights: {}
+  norm_adv_by_std_in_grpo: true
+  # Used only by the scalar-reward path (weight_advantages: false).
+  global_std: true
+data:
+  train_files: null
+  val_files: null
+  train_batch_size: 8
+  max_prompt_length: 512
+  return_raw_chat: true
+  seed: 42
+reward:
+  num_workers: 1
+  custom_reward_function:
+    path: null
+    name: compute_score
+trainer:
+  project_name: lightx2v_rl
+  experiment_name: fewstep_${actor_rollout_ref.model.fewstep.bridge}
+  logger:
+  - console
+  tracking_class: lightx2v_rl.training.tracking.FewStepTracking
+  metric_logging:
+    mode: compact
+    save_raw: true
+    raw_dir: lightx2v_rl/outputs/metrics
+  device: cuda
+  n_gpus_per_node: 8
+  nnodes: 1
+  total_training_steps: 5000
+  total_epochs: 10
+  save_freq: 20
+  test_freq: 20
+  val_before_train: false
+  use_v1: true
+  v1:
+    trainer_mode: sync

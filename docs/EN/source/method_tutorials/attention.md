@@ -31,7 +31,7 @@ For example, for radial_attn, the configuration is as follows:
 
 To switch to other types, simply replace the corresponding values with the type names from the table above.
 
-For Wan2.1, `cross_attn_2_type` selects image cross-attention for I2V/FLF2V; T2V/VACE configs do not need this field.
+For Wan, `cross_attn_2_type` selects image cross-attention. Keep it in Wan2.1 I2V/FLF2V and Wan2.2 Animate/Animate2 configs; T2V/VACE and Wan2.2 MoE, TI2V, and S2V configs with the image encoder disabled do not need it.
 
 Tips: radial_attn can only be used in self attention due to the limitations of its sparse algorithm principle.
 

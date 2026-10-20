@@ -18,7 +18,7 @@ from lightx2v.common.ops.mm.fp8_f16_accum import (
     fp8_f16_accum_mm_available,
     validate_fp8_f16_accum_qmax,
 )
-from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
+from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_per_token_quant, sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import GGMLTensor
@@ -29,16 +29,30 @@ from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage, StorageDescription, WeightStorage, require_dtype
 
 try:
-    from lightx2v_kernel.gemm import (
-        cutlass_scaled_mxfp4_mm,
-        cutlass_scaled_mxfp6_mxfp8_mm,
-        cutlass_scaled_mxfp8_mm,
-        cutlass_scaled_nvfp4_mm,
-        scaled_mxfp4_quant,
-        scaled_mxfp6_quant,
-        scaled_mxfp8_quant,
-        scaled_nvfp4_quant,
-    )
+    try:
+        from lightx2v_kernel_nvidia.gemm import (
+            cutlass_scaled_mxfp4_mm,
+            cutlass_scaled_mxfp6_mxfp8_mm,
+            cutlass_scaled_mxfp8_mm,
+            cutlass_scaled_nvfp4_mm,
+            scaled_mxfp4_quant,
+            scaled_mxfp6_quant,
+            scaled_mxfp8_quant,
+            scaled_nvfp4_quant,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name != "lightx2v_kernel_nvidia":
+            raise
+        from lightx2v_kernel.gemm import (
+            cutlass_scaled_mxfp4_mm,
+            cutlass_scaled_mxfp6_mxfp8_mm,
+            cutlass_scaled_mxfp8_mm,
+            cutlass_scaled_nvfp4_mm,
+            scaled_mxfp4_quant,
+            scaled_mxfp6_quant,
+            scaled_mxfp8_quant,
+            scaled_nvfp4_quant,
+        )
 except ImportError:
     scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm = None, None
     scaled_mxfp4_quant, cutlass_scaled_mxfp4_mm = None, None
@@ -663,11 +677,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_fp8_perchannel_sym_sgl(self, x):
-        m, k = x.shape
-        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device="cuda", requires_grad=False)
-        input_tensor_scale = torch.empty((m, 1), dtype=torch.float32, device="cuda", requires_grad=False)
-        sgl_kernel.sgl_per_token_quant_fp8(x, input_tensor_quant, input_tensor_scale)
-        return input_tensor_quant, input_tensor_scale
+        return sgl_fp8_per_token_quant(x)
 
     def act_quant_int8_perchannel_sym_vllm(self, x):
         input_tensor_quant, input_tensor_scale, _ = vllm_ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
@@ -846,6 +856,47 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
+
+
+@MM_WEIGHT_REGISTER("int8-metal")
+class MMWeightInt8Metal(MMWeightQuantTemplate):
+    """Per-channel INT8 checkpoint weights and dynamic per-token INT8 on MPS."""
+
+    checkpoint_dtype = torch.int8
+
+    def __init__(self, *args, **kwargs):
+        from lightx2v_kernel_apple.int8_gemm import int8_matmul
+
+        super().__init__(*args, **kwargs)
+        self._gemm = int8_matmul
+        self.scale_force_fp32 = True
+
+    def validate_checkpoint(self, metadata):
+        require_dtype(self.weight_name, metadata[self.weight_name].dtype, (torch.int8,))
+
+    def describe_storage(self, metadata):
+        self.validate_checkpoint(metadata)
+        tensors = []
+        for name, attr, transpose in self.base_attrs:
+            source = metadata[name]
+            dtype = source.dtype
+            if attr == "weight":
+                transpose = True
+            elif attr == "weight_scale":
+                dtype = torch.float32
+            elif attr == "bias":
+                dtype = self.infer_dtype
+            tensors.append(WeightStorage(name, attr, source.shape, dtype, transpose))
+        return StorageDescription(tuple(tensors))
+
+    def load(self, weight_dict):
+        if not self.lazy_load and not isinstance(weight_dict, BlockLoadContext):
+            require_dtype(self.weight_name, weight_dict[self.weight_name].dtype, (torch.int8,))
+        super().load(weight_dict)
+
+    def apply(self, input_tensor):
+        output = self._gemm(input_tensor, self.weight, self.weight_scale, self._get_actual_bias())
+        return output + self.apply_lora(input_tensor) if self.has_lora_branch else output
 
 
 @MM_WEIGHT_REGISTER("mxfp4")

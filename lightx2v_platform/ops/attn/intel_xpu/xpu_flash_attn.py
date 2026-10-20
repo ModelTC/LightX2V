@@ -43,7 +43,7 @@ except ImportError:
         "[intel_xpu_flash_attn] sycl_kernels not found — falling back to torch SDPA.\n"
         "  For best performance on Intel Arc GPU, build and install the ESIMD kernel:\n"
         + _target_instructions
-        + "    cd lightx2v_kernel_xpu\n"
+        + "    cd lightx2v_kernel/intel_xpu\n"
         + "    conda activate lightx2v_kernel\n"
         + _install_instructions,
         stacklevel=2,

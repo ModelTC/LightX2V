@@ -10,6 +10,7 @@ from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
 from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3MpsQwen3VLTextEncoder, MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.models.networks.minimax_h3.infer.offload.transformer_infer import MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
@@ -703,6 +704,8 @@ class MiniMaxH3Runner(DefaultRunner):
         if not self.config.get("cpu_offload", False):
             return
         if self.model.block_offload:
+            if isinstance(self.model.transformer_infer, MiniMaxH3OffloadTransformerInfer):
+                self.model.transformer_infer.release_resident_blocks()
             if not self.model.prepost_resident:
                 logger.info("Offloading MiniMax-H3 pre/post weights")
                 self.model.pre_weight.to_cpu()

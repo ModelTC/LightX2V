@@ -34,8 +34,8 @@
     "rope_type": "npu_rope",
     "layer_norm_type": "npu_layer_norm",
     "rms_norm_type": "npu_rms_norm",
-    "high_noise_quantized_ckpt": "models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
-    "low_noise_quantized_ckpt": "models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
+    "high_noise_quantized_ckpt": "/path/to/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
+    "low_noise_quantized_ckpt": "/path/to/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
     "parallel": {
         "seq_p_size": 2,
         "seq_p_attn_type": "ulysses"

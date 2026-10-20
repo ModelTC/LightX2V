@@ -16,6 +16,5 @@
     "use_image_encoder": false,
     "vae_dtype": "torch.float32",
     "self_attn_1_type": "flash_attn3",
-    "cross_attn_1_type": "flash_attn3",
-    "cross_attn_2_type": "flash_attn3"
+    "cross_attn_1_type": "flash_attn3"
 }

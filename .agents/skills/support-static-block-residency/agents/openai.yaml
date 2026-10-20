@@ -1,0 +1,4 @@
+interface:
+  display_name: "LightX2V 静态 Block 常驻权重"
+  short_description: "接入独立估测、均匀常驻与双缓冲搬运，提供脚本和验证说明"
+  default_prompt: "使用 $support-static-block-residency 接入或审查 LightX2V 静态 block 常驻权重，按任务范围处理独立估测、均匀分布、启动脚本及验证。"

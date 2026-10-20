@@ -9,7 +9,7 @@ export CUDA_VISIBLE_DEVICES=0
 source "${lightx2v_path}/scripts/base/base.sh"
 mkdir -p "${lightx2v_path}/save_results"
 
-python "${lightx2v_path}/examples/neopp/replay_kv.py" \
+python "${lightx2v_path}/scripts/neopp/replay_kv.py" \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/neopp/neopp_dense.json" \
     --task i2i \

@@ -1,0 +1,71 @@
+diff --git a/verl_omni/utils/net_utils.py b/verl_omni/utils/net_utils.py
+index c97585c..3aea0de 100644
+--- a/verl_omni/utils/net_utils.py
++++ b/verl_omni/utils/net_utils.py
+@@ -12,10 +12,17 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++import errno
+ import random
+ import socket
+ from collections.abc import Sequence
+ 
++# Linux abstract Unix sockets reserve candidates across rollout processes in
++# the same network namespace without occupying the eventual TCPStore socket.
++# Keep reservations until this server exits; the kernel also releases them on
++# abnormal exit, so there are no stale lock files to clean up.
++_PORT_RESERVATIONS: list[socket.socket] = []
++
+ 
+ def ephemeral_port_range() -> tuple[int, int]:
+     try:
+@@ -27,26 +34,42 @@ def ephemeral_port_range() -> tuple[int, int]:
+ 
+ 
+ def get_non_ephemeral_free_port(address: str = "127.0.0.1") -> int:
+-    """Pick a free port below the kernel's ephemeral port range.
++    """Pick and reserve a free TCP port for this Linux rollout server.
+ 
+     The consumer binds the port only after worker spawn + model load, and ports
+     inside the ephemeral range can be claimed as source ports by unrelated
+     connections in that window (later failing to listen with ``EADDRINUSE``).
++    A separate abstract socket prevents cooperating servers from selecting the
++    same candidate before TCP bind. Unrelated programs do not honor this lease.
+     """
+     lo, _ = ephemeral_port_range()
+     if lo <= 1024:
+         raise RuntimeError(f"Ephemeral port range starts at {lo}; no non-privileged candidate ports below it.")
+     candidates = range(1024, lo)
+-    start = random.randrange(len(candidates))
++    # Training replicas share seeded PRNG state. Port allocation must not use
++    # or advance it (seed=42 previously made every replica choose port 21976).
++    start = random.SystemRandom().randrange(len(candidates))
+     for offset in range(len(candidates)):
+         port = candidates[(start + offset) % len(candidates)]
+-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
++        reservation = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
++        try:
+             try:
+-                sock.bind((address, port))
+-            except OSError:
++                reservation.bind(f"\0verl-omni-master-port-{port}")
++            except OSError as exc:
++                if exc.errno != errno.EADDRINUSE:
++                    raise
+                 continue
++            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
++                try:
++                    sock.bind((address, port))
++                except OSError:
++                    continue
++            _PORT_RESERVATIONS.append(reservation)
++            reservation = None
+             return port
++        finally:
++            if reservation is not None:
++                reservation.close()
+     raise RuntimeError(f"No free non-ephemeral port on {address} below {lo}.")
+ 
+ 

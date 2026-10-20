@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # set path firstly
 lightx2v_path=/path/to/LightX2V
@@ -18,7 +19,7 @@ python ${lightx2v_path}/tools/preprocess/preprocess_data.py \
     --refer_path $refer_path \
     --save_path ${lightx2v_path}/save_results/animate/process_results \
     --resolution_area 1280 720 \
-    --retarget_flag \
+    --retarget_flag
 
 python -m lightx2v.infer \
 --model_cls wan2.2_animate \

@@ -1,0 +1,5 @@
+inherits: geo_4nodes
+actor_rollout_ref:
+  model:
+    fewstep:
+      bridge: cps

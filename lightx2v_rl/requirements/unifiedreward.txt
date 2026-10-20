@@ -1,0 +1,4 @@
+# Separate from the training env and legacy HPS/VideoAlign env.
+# Native Qwen3.5 support plus Transformers 5 processor_config.json compatibility.
+vllm==0.20.2
+transformers==5.5.4

@@ -1,0 +1,26 @@
+# Single-transformer Wan T2V adapter; dual-expert Wan2.2 is not supported yet.
+inherits: common/fewstep
+actor_rollout_ref:
+  model:
+    architecture: WanPipeline
+    rl_adapter: wan2_1
+    external_lib: lightx2v_rl.models.wan.register
+    custom_chat_template: '{% for message in messages %}{% if message["role"] == "user"
+      %}{{ message["content"] }}{% endif %}{% endfor %}</s>'
+    fewstep:
+      min_steps: 4
+      max_steps: 4
+      timestep_shift: 5.0
+  rollout:
+    external_lib: lightx2v_rl.models.wan.rollout_registration
+    pipeline:
+      height: 480
+      width: 832
+      num_frames: 81
+      num_inference_steps: ${actor_rollout_ref.model.fewstep.max_steps}
+      true_cfg_scale: 1.0
+      guidance_scale: ${actor_rollout_ref.rollout.pipeline.true_cfg_scale}
+      max_sequence_length: 512
+      output_type: np
+trainer:
+  experiment_name: wan_${actor_rollout_ref.model.fewstep.bridge}

@@ -693,3 +693,11 @@ class RMSWeightDualNorm3DRope:
             sin_w,
             eps=self.eps,
         )
+
+
+def apply_projection_norm(norm, projected):
+    if torch.compiler.is_compiling() and type(norm) is RMSWeightSgl and not projected.is_contiguous() and norm.sensitive_layer_dtype == norm.infer_dtype and flashinfer_rmsnorm is not None:
+        # The compiled SGL path already uses this kernel. Its row-stride
+        # support avoids copying slices of the packed projection output.
+        return rmsnorm_flashinfer(projected, norm._get_actual_weight(), norm.eps, norm.enable_pdl)
+    return norm.apply(projected)

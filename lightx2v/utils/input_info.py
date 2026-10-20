@@ -51,6 +51,11 @@ class I2VInputInfo(InputInfo):
 
 
 @dataclass
+class EdenLiveInputInfo(I2VInputInfo):
+    video_path: str = ""
+
+
+@dataclass
 class ActionI2VInputInfo(I2VInputInfo):
     pose: Optional[str] = None
     action_path: str = ""

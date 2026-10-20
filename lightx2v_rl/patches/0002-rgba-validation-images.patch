@@ -1,0 +1,14 @@
+diff --git a/verl_omni/trainer/diffusion/ray_diffusion_trainer.py b/verl_omni/trainer/diffusion/ray_diffusion_trainer.py
+--- a/verl_omni/trainer/diffusion/ray_diffusion_trainer.py
++++ b/verl_omni/trainer/diffusion/ray_diffusion_trainer.py
+@@ -326,7 +326,9 @@ def dump_generations(
+     else:
+         images_pil = outputs[:n].cpu().permute(0, 2, 3, 1).numpy()
+         for i, image in enumerate(images_pil):
+-            image_path = os.path.join(visual_folder, f"{i}.jpg")
++            # JPEG cannot retain an image model's transparency channel.
++            extension = "png" if image.shape[-1] == 4 else "jpg"
++            image_path = os.path.join(visual_folder, f"{i}.{extension}")
+             try:
+                 Image.fromarray(image).save(image_path)
+             except (OSError, ValueError) as error:

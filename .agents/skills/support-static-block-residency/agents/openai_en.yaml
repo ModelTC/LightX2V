@@ -1,0 +1,4 @@
+interface:
+  display_name: "LightX2V Static Block Residency"
+  short_description: "Estimate and integrate uniformly resident offload blocks"
+  default_prompt: "Use $support-static-block-residency to integrate or review static block residency in LightX2V, covering standalone estimation, uniform placement, launchers, and validation within the requested scope."

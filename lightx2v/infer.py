@@ -2,7 +2,6 @@ import argparse
 import json
 import os
 
-import torch
 import torch.distributed as dist
 from loguru import logger
 
@@ -14,27 +13,8 @@ from lightx2v.utils.utils import validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
-def distributed_barrier():
-    import torch.distributed as dist
-
-    if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() <= 1:
-        return False
-
-    from lightx2v_platform.base.global_var import AI_DEVICE
-
-    if AI_DEVICE == "cuda" and torch.cuda.is_available():
-        torch.cuda.synchronize()
-        dist.barrier(device_ids=[torch.cuda.current_device()])
-    else:
-        dist.barrier()
-
-    from loguru import logger
-
-    logger.info(f"[Barrier] synchronized all ranks")
-    return True
-
-
-def main():
+def build_parser():
+    """Declare CLI options; request values are separated by build_cli_inputs."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=None, help="The seed for random generator")
     parser.add_argument(
@@ -155,7 +135,7 @@ def main():
         "--pose_video_path",
         type=str,
         default=None,
-        help="Pose driving video for Wan s2v / animate (e.g. examples/pose.mp4).",
+        help="Pose driving video for Wan s2v / animate (e.g. /path/to/pose.mp4).",
     )
     parser.add_argument(
         "--face_video_path",
@@ -220,7 +200,11 @@ def main():
     parser.add_argument("--reference_video_frame_cap", type=int, default=None, help="(v2av) Maximum number of frames to read from the reference/control video. Defaults to the full clip.")
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     startup_config, request_data = build_cli_inputs(args)
     if startup_config["parallel"]:
         platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)

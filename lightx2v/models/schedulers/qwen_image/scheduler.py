@@ -1,5 +1,4 @@
 import inspect
-import json
 import math
 import os
 from math import prod
@@ -439,8 +438,7 @@ class QwenImageScheduler(BaseScheduler):
             self.layers = config.get("layers", 4)
         scheduler_path = config.get("scheduler_path", os.path.join(config["model_path"], "scheduler"))
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(scheduler_path)
-        with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
-            self.scheduler_config = json.load(f)
+        self.scheduler_config = self.scheduler.config
         self.dtype = torch.bfloat16
         self.sample_guide_scale = self.config.get("sample_guide_scale", None)
         self.zero_cond_t = config.get("zero_cond_t", False)

@@ -56,7 +56,7 @@ export CUDA_VISIBLE_DEVICES=0
 # set environment variables
 source "${lightx2v_path}/scripts/base/base.sh"
 
-# Supported tasks: fl2av, ref2av
+# Supported model-variant: fl2av (task: t2av, i2av, l2av, fl2av), ref2av
 python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
   --model_path "${model_path}" \
   --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3.json" \

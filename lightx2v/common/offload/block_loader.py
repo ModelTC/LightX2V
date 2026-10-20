@@ -25,10 +25,12 @@ class OffloadGroup:
 
 
 def validate_contiguous_config(config, lora_path=None):
-    layout = config.get("cpu_offload_layout", "per_tensor")
-    if layout not in ("per_tensor", "contiguous"):
-        raise ValueError(f"Unsupported cpu_offload_layout: {layout!r}")
-    if layout != "contiguous":
+    if "cpu_offload_layout" in config:
+        raise ValueError("Replace cpu_offload_layout with cpu_offload_block_contiguous: per_tensor -> false, contiguous -> true")
+    contiguous = config.get("cpu_offload_block_contiguous", False)
+    if type(contiguous) is not bool:
+        raise ValueError("cpu_offload_block_contiguous must be a boolean")
+    if not contiguous:
         return
     get_block_offload_backend()
     if not config.get("cpu_offload") or config.get("offload_granularity", "block") != "block":

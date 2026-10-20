@@ -110,6 +110,7 @@ PRODUCTION_MM_EXCLUSIONS = {
     "fp8-pertensor": "checkpoint scale granularity requires a separate synthetic weight contract",
     "int4-g128-marlin": "groupwise INT4 packing requires a separate synthetic weight contract",
     "int8-convrot": "ConvRot requires checkpoint-provided rotation metadata",
+    "int8-metal": "Apple MPS backend is outside this CUDA benchmark runner",
     "mxfp4": "microscaling weight layout requires a separate synthetic weight contract",
     "mxfp6-mxfp8": "microscaling weight layout requires a separate synthetic weight contract",
     "mxfp8": "microscaling weight layout requires a separate synthetic weight contract",

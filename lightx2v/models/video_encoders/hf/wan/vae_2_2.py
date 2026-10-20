@@ -952,6 +952,20 @@ class WanVAE_(nn.Module):
         self.clear_cache()
         return out
 
+    def cached_decode_withflag(self, z, scale, is_first, is_last, offload_cache=False):
+        if is_first:
+            self.clear_cache()
+        z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(1, self.z_dim, 1, 1, 1)
+        x = self.conv2(z)
+        frames = []
+        for index in range(x.shape[2]):
+            self._conv_idx = [0]
+            frames.append(self.decoder(x[:, :, index : index + 1], feat_cache=self._feat_map, feat_idx=self._conv_idx, first_chunk=is_first and index == 0, offload_cache=offload_cache))
+        images = unpatchify(torch.cat(frames, dim=2), patch_size=2)
+        if is_last:
+            self.clear_cache()
+        return images
+
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
@@ -1295,6 +1309,15 @@ class Wan2_2_VAE:
         images = self.model.decode(zs.unsqueeze(0), self.scale, offload_cache=self.offload_cache if self.cpu_offload else False).float().clamp_(-1, 1)
         if self.cpu_offload:
             images = images.cpu().float()
+            self.to_cpu()
+        return images
+
+    def cached_decode_withflag(self, zs, is_first, is_last):
+        if self.cpu_offload:
+            self.to_cuda()
+        images = self.model.cached_decode_withflag(zs.unsqueeze(0), self.scale, is_first, is_last, offload_cache=self.offload_cache if self.cpu_offload else False).float().clamp_(-1, 1)
+        if self.cpu_offload:
+            images = images.cpu()
             self.to_cpu()
         return images
 

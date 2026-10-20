@@ -6,6 +6,23 @@
 
 设置脚本中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`。以下命令使用仓库相对路径，也可改用脚本绝对路径。
 
+## 环境与权重
+
+先完成[环境安装](../../docs/ZH_CN/source/getting_started/quickstart.md)，按所选任务下载需要的基础模型和额外权重：
+
+```bash
+# 从huggingface下载
+hf download Wan-AI/Wan2.1-T2V-14B --local-dir Wan-AI/Wan2.1-T2V-14B
+hf download Wan-AI/Wan2.1-I2V-14B-480P --local-dir Wan-AI/Wan2.1-I2V-14B-480P
+hf download Wan-AI/Wan2.1-I2V-14B-720P --local-dir Wan-AI/Wan2.1-I2V-14B-720P
+
+# 下载蒸馏模型
+hf download lightx2v/Wan2.1-Distill-Models --local-dir lightx2v/Wan2.1-Distill-Models
+hf download lightx2v/Wan2.1-Distill-Loras --local-dir lightx2v/Wan2.1-Distill-Loras
+```
+
+`model_path` 指向完整基础模型目录。所选 JSON 中的 checkpoint 和 LoRA 路径填写下载后的本地文件路径。
+
 ## 基础任务
 
 | 任务 | 脚本 | 示例权重 |
@@ -91,3 +108,25 @@ T2V／I2V 在基础 JSON 中添加 `"use_compile": true` 开启编译、`"warmup
 - `run_wan_i2v_distill_single_file.sh`：蒸馏 DiT 单文件与配置、编码器、VAE 位于同一模型目录。
 - `run_wan_t2v_distill_dynamic_cfg.sh`：dynamic CFG 模型，JSON 中的 `cfg_scale` 控制引导强度。
 - `run_wan_t2v_distill_model_ulysses.sh`：完整蒸馏 T2V 模型的 8 卡 Ulysses 示例。
+
+## Python API 示例
+
+生成器创建、配置优先级、卸载和多次生成见 [Python API 指南](../../docs/ZH_CN/source/getting_started/python_api.md)。
+安装后，修改所选文件中的路径，从仓库根目录运行。各示例保留各自的模型、采样和注意力设置；
+改用 Shell 入口的 JSON 属于显式切换配置。
+
+| 用法 | Python 入口 |
+| --- | --- |
+| Wan2.1 T2V 14B | [wan_t2v.py](inference/wan_t2v.py) |
+| Wan2.1 FLF2V | [wan_flf2v.py](inference/wan_flf2v.py) |
+| Wan2.1 VACE | [wan_vace.py](inference/wan_vace.py) |
+| Wan2.1 T2V 1.3B NVFP4, 4-step | [wan_t2v_nvfp4.py](inference/distill/wan_t2v_nvfp4.py) |
+| Wan2.1 I2V 14B NVFP4, 4-step | [wan_i2v_nvfp4.py](inference/distill/wan_i2v_nvfp4.py) |
+
+T2V Python 示例使用 14B 模型、`sage_attn2`、guidance 5、shift 5；基础 Shell 入口使用
+1.3B 模型和其 JSON 设置。比较输出时需明确这些区别。NVFP4 使用
+[Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4) 中对应的四步权重，
+保留 `distill_method="dmd2"`，并安装[量化算子](../../lightx2v_kernel/nvidia/README.md)。
+
+需要 CPU offload 时，在 JSON 中设置 `cpu_offload` 和支持的 `offload_granularity`，
+见[参数卸载](../../docs/ZH_CN/source/deploy_guides/for_low_resource.md)。

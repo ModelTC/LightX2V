@@ -15,7 +15,7 @@
   "enable_cfg": true,
   "cpu_offload": true,
   "offload_granularity": "block",
-  "cpu_offload_layout": "contiguous",
+  "cpu_offload_block_contiguous": true,
   "t5_cpu_offload": true,
   "t5_rms_norm_type": "torch",
   "vae_cpu_offload": true,

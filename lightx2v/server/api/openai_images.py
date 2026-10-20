@@ -6,30 +6,43 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from ..schema import ImageTaskRequest, Usage
+from ..schema import ImageTaskRequest, Usage, hide_request_defaults
 from ..services.file_service import FileService
 from ..task_manager import TaskStatus, task_manager
 from .deps import get_services
+from .request_parsing import form_request_openapi, parse_form_request
 
 router = APIRouter()
 
 _SIZE_PATTERN = re.compile(r"^\s*(\d+)\s*x\s*(\d+)\s*$", re.IGNORECASE)
 OPENAI_IMAGE_RESULT_POLL_INTERVAL_SECONDS = 0.2
+OPENAI_IMAGE_PROTOCOL_FIELDS = {"model", "n", "size", "response_format", "user"}
 
 
-class OpenAIImageGenerationRequest(BaseModel):
+class OpenAIImageRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra=lambda schema: hide_request_defaults(schema, keep_defaults=OPENAI_IMAGE_PROTOCOL_FIELDS))
+
     prompt: str = Field(..., description="Text prompt")
     model: Optional[str] = Field(default=None, description="Ignored for compatibility")
     n: int = Field(default=1, description="Number of images, currently only supports 1")
     size: Optional[str] = Field(default=None, description="Image size, e.g. 1024x1024")
     resolution: Optional[int] = Field(None, gt=0, description="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config")
-    response_format: Literal["b64_json"] = Field(default="b64_json")
     user: Optional[str] = Field(default=None, description="Ignored for compatibility")
     seed: Optional[int] = Field(default=None, description="Optional random seed")
+
+
+class OpenAIImageGenerationRequest(OpenAIImageRequest):
+    response_format: Literal["b64_json"] = "b64_json"
+
+
+class OpenAIImageEditRequest(OpenAIImageRequest):
+    response_format: Literal["url", "b64_json"] = "url"
+    negative_prompt: str = ""
+    i2i_denoise_strength: Optional[float] = None
 
 
 class OpenAIImageResponse(BaseModel):
@@ -177,60 +190,27 @@ def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, r
     return response
 
 
-def _build_image_task_request(
-    prompt: str,
-    *,
-    task: str,
-    negative_prompt: Optional[str] = None,
-    seed: Optional[int] = None,
-    size: Optional[list[int]] = None,
-    resolution: Optional[int] = None,
-    image_path: str = "",
-    image_mask_path: str = "",
-    i2i_denoise_strength: Optional[float] = None,
-) -> ImageTaskRequest:
-    payload = {"task": task, "prompt": prompt}
-    optional_fields = {
-        "image_mask_path": image_mask_path,
-        "image_path": image_path,
-    }
-    payload.update({key: value for key, value in optional_fields.items() if value})
-    if negative_prompt is not None:
-        payload["negative_prompt"] = negative_prompt
-    if size:
-        payload["size"] = size
-    if resolution is not None:
-        payload["resolution"] = resolution
-    if seed is not None:
-        payload["seed"] = seed
-    if i2i_denoise_strength is not None:
-        payload["i2i_denoise_strength"] = i2i_denoise_strength
-    return ImageTaskRequest(**payload)
-
-
-@router.post("/generations", response_model=OpenAIImageResponse)
-async def create_openai_image_generation(request: Request, body: OpenAIImageGenerationRequest):
+def _build_image_task_request(body: OpenAIImageRequest, *, task: str) -> ImageTaskRequest:
     if body.n != 1:
         raise HTTPException(status_code=400, detail="Only n=1 is currently supported")
     if not body.prompt.strip():
         raise HTTPException(status_code=400, detail="prompt is required")
 
-    image_size = None
+    # The OpenAI schema is the public field allowlist. Only protocol fields need
+    # special handling; explicitly submitted inference fields pass through.
+    payload = body.model_dump(exclude_unset=True, exclude_none=True, exclude=OPENAI_IMAGE_PROTOCOL_FIELDS)
     if body.size:
         try:
             width, height = _shape_from_size(body.size)
-            image_size = [height, width]
+            payload["size"] = [height, width]
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    return ImageTaskRequest(task=task, **payload)
 
-    message = _build_image_task_request(
-        task="t2i",
-        prompt=body.prompt,
-        seed=body.seed,
-        size=image_size,
-        resolution=body.resolution,
-    )
 
+@router.post("/generations", response_model=OpenAIImageResponse)
+async def create_openai_image_generation(request: Request, body: OpenAIImageGenerationRequest):
+    message = _build_image_task_request(body, task="t2i")
     result_png, usage = await _run_sync_image_task(request, message)
     return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
 
@@ -248,43 +228,33 @@ async def _save_upload_file(file: UploadFile, file_service: FileService) -> str:
     return str(file_path)
 
 
-@router.post("/edits", response_model=OpenAIImageResponse)
+@router.post(
+    "/edits",
+    response_model=OpenAIImageResponse,
+    openapi_extra=form_request_openapi(
+        OpenAIImageEditRequest,
+        image={"type": "array", "items": {"type": "string", "format": "binary"}},
+        mask={"type": "string", "format": "binary"},
+    ),
+)
 async def create_openai_image_edit(
     request: Request,
     image: list[UploadFile] | None = File(default=None),
-    prompt: str = Form(...),
     mask: UploadFile | None = File(default=None),
-    model: str | None = Form(default=None),
-    n: int = Form(default=1),
-    size: str | None = Form(default=None),
-    resolution: int | None = Form(default=None, gt=0),
-    response_format: Literal["url", "b64_json"] = Form(default="url"),
-    user: str | None = Form(default=None),
-    negative_prompt: str = Form(default=""),
-    seed: int | None = Form(default=None),
-    i2i_denoise_strength: float | None = Form(default=None),
 ):
     form = await request.form()
     image_uploads = list(image or [])
     if not image_uploads:
         image_uploads = [upload for upload in form.getlist("image[]") if hasattr(upload, "filename") and hasattr(upload, "read")]
 
-    _ = model, user
-    if n != 1:
-        raise HTTPException(status_code=400, detail="Only n=1 is currently supported")
-    if not prompt.strip():
-        raise HTTPException(status_code=400, detail="prompt is required")
+    # Preserve FastAPI's previous empty-form defaults, except negative_prompt:
+    # its explicitly submitted empty string must still reach the runner.
+    form_data = {key: value for key, value in form.items() if key not in {"image", "image[]", "mask"} and (value != "" or key == "negative_prompt")}
+    body = parse_form_request(OpenAIImageEditRequest, form_data)
+    message = _build_image_task_request(body, task="i2i")
 
     services = get_services()
     assert services.file_service is not None, "File service is not initialized"
-
-    image_size = None
-    if size:
-        try:
-            width, height = _shape_from_size(size)
-            image_size = [height, width]
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
 
     if not image_uploads:
         raise HTTPException(status_code=400, detail="At least one image is required")
@@ -294,23 +264,10 @@ async def create_openai_image_edit(
     image_paths = []
     for image_upload in image_uploads:
         image_paths.append(await _save_upload_file(image_upload, services.file_service))
-    image_path = ",".join(image_paths)
+    message.image_path = ",".join(image_paths)
 
-    image_mask_path = ""
     if mask is not None:
-        image_mask_path = await _save_upload_file(mask, services.file_service)
-
-    message = _build_image_task_request(
-        task="i2i",
-        prompt=prompt,
-        negative_prompt=form.get("negative_prompt"),
-        seed=seed,
-        size=image_size,
-        image_path=image_path,
-        resolution=resolution,
-        image_mask_path=image_mask_path,
-        i2i_denoise_strength=i2i_denoise_strength,
-    )
+        message.image_mask_path = await _save_upload_file(mask, services.file_service)
 
     result_png, usage = await _run_sync_image_task(request, message)
-    return _build_openai_response(request, message.task_id, result_png, response_format, usage, size=size)
+    return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)

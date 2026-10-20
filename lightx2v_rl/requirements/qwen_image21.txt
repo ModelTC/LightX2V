@@ -1,0 +1,7 @@
+# uv overrides for the pinned verl/vLLM-Omni runtime. Diffusers 0.40 lacks
+# QwenImage21Pipeline; keep the official implementation at a reviewed revision.
+diffusers @ git+https://github.com/huggingface/diffusers.git@62cde2b0115d57492d2f5ecefab54994797df2e3
+transformers==5.14.1
+accelerate==1.15.0
+# The pinned vLLM-Omni needs this patch release; verl's GPU extra pins 0.16.0.
+kernels==0.16.1
