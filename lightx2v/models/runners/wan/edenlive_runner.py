@@ -304,6 +304,12 @@ class EdenLiveARRunner(EdenLiveRunner):
         on_chunk = None if self.chunk_callback is None else lambda pixels, index: self.chunk_callback(pixels, index, index == num_chunks - 1)
         decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder, on_chunk=on_chunk, dispatch_in_worker=True)
         streaming = decoder.is_async or self.config.get("streaming_vae", False) or on_chunk is not None
+        decode = self.vae_decoder.cached_decode_withflag
+        if ar.get("decode_to_cpu", False):
+            # Keep decoded chunks in host memory, so GPU memory no longer grows with the video length (chunk callbacks get CPU tensors).
+            def decode(*args):
+                return self.vae_decoder.cached_decode_withflag(*args).cpu()
+
         try:
             with no_sync_profiling(enabled=decoder.is_async):
                 for start in range(0, total, chunk):
@@ -319,7 +325,7 @@ class EdenLiveARRunner(EdenLiveRunner):
                         with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
                             self.model.infer(self.inputs)
                         if streaming:
-                            decoder.submit(self.vae_decoder.cached_decode_withflag, *decode_args)
+                            decoder.submit(decode, *decode_args)
                 decoded_chunks = decoder.finish()
         finally:
             try:

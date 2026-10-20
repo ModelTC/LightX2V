@@ -141,6 +141,8 @@ The launchers use the quantized files prepared above. Checkpoints stored elsewhe
 
 `SAVE_RESULT_PATH` selects the output MP4. `T5_CPU_OFFLOAD=true` reduces resident GPU memory by offloading T5; the performance results below use `false`.
 
+The decoded chunks stay on the GPU until the end of a request, so GPU memory grows with the video length. For long clips, set `"decode_to_cpu": true` in `ar_config`: each decoded chunk is copied to host memory as it is produced. GPU memory then stays at its level for short clips, host memory grows instead, and chunk callbacks receive CPU tensors. The output is unchanged.
+
 ## LightX2V Acceleration
 
 | Component | Optimization |
