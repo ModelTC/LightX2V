@@ -395,7 +395,9 @@ class MMWeight(FloatingWeightStorage, MMWeightTemplate):
 
         if not self.has_lora_branch:
             if hasattr(self, "bias") and self.bias is not None:
-                return torch.addmm(self._get_actual_bias(), input_tensor, self._get_actual_weight(), out=output_tensor)
+                weight = self._get_actual_weight()
+                bias = self._get_actual_bias()
+                return torch.addmm(bias, input_tensor, weight, out=output_tensor)
             return torch.mm(input_tensor, self._get_actual_weight(), out=output_tensor)
         else:
             if hasattr(self, "bias") and self.bias is not None:
