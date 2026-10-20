@@ -37,9 +37,14 @@ class MpsStreamingBlockWeights(WeightModule):
         # Validate every layer before allocating buffers or starting a worker.
         template = block_factory()
         for module in iter_weight_modules(template):
-            for name, _, _ in module.base_attrs:
+            for name, attr, _ in module.base_attrs:
                 dtype, shape, _, _ = checkpoint.tensor_metadata(name)
-                if dtype != GET_DTYPE():
+                expected = GET_DTYPE()
+                if attr == "weight" and hasattr(module, "checkpoint_dtype"):
+                    expected = module.checkpoint_dtype
+                elif attr == "weight_scale":
+                    expected = torch.float32
+                if dtype != expected:
                     raise ValueError(f"MPS disk streaming requires matching checkpoint/inference dtypes: {name}")
                 for index in range(num_layers):
                     layer_dtype, layer_shape, _, _ = checkpoint.tensor_metadata(resolve_block_name(name, index))
@@ -70,6 +75,8 @@ class MpsStreamingBlockWeights(WeightModule):
             for module in iter_weight_modules(block):
                 for name, attr, transpose in module.base_attrs:
                     tensor = getattr(module, attr)
+                    if attr == "weight":
+                        transpose = getattr(module, "weight_need_transpose", transpose)
                     source = tensor.t() if transpose else tensor
                     if source.dtype != tensors[name].dtype or source.data_ptr() != tensors[name].data_ptr():
                         raise ValueError(f"MPS streaming operator must retain checkpoint storage: {name}")

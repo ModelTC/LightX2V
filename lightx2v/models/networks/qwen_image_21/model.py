@@ -83,7 +83,8 @@ class QwenImage21TransformerModel(BaseTransformerModel):
 
         from .weights.transformer_weights import QwenImage21BlockWeights
 
-        checkpoint = SafetensorsCheckpoint(self.model_path)
+        checkpoint_path = self.config.get("dit_quantized_ckpt") or self.model_path
+        checkpoint = SafetensorsCheckpoint(checkpoint_path)
         if checkpoint.block_indices != tuple(range(self.config["num_layers"])):
             raise ValueError("Qwen-Image-2.1 disk-streaming checkpoint has unexpected block indices")
         self.transformer_weights = MpsStreamingBlockWeights(checkpoint, lambda: QwenImage21BlockWeights(0, self.config), self.config["num_layers"])

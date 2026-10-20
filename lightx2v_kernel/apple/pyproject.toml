@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lightx2v-kernel-apple"
+version = "0.0.1"
+description = "Apple Metal kernels for LightX2V"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.14"]
+classifiers = [
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+]
+
+[tool.setuptools.packages.find]
+where = ["python"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"*" = ["*.metal"]
