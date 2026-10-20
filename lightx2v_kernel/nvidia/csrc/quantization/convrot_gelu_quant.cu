@@ -161,11 +161,18 @@ __global__ void gelu_convrot_quant_kernel(const __nv_bfloat16* input, int8_t* qu
 
 } // namespace
 
-extern "C" int lightx2v_prepare_convrot_gelu() {
+// Loaded with ctypes: a Windows DLL exports only the functions marked for export.
+#if defined(_WIN32)
+#define LIGHTX2V_EXPORT __declspec(dllexport)
+#else
+#define LIGHTX2V_EXPORT
+#endif
+
+extern "C" LIGHTX2V_EXPORT int lightx2v_prepare_convrot_gelu() {
     return static_cast<int>(cudaFuncSetAttribute(gelu_convrot_quant_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSharedBytes));
 }
 
-extern "C" int lightx2v_gelu_convrot_quant(const void* input, void* quantized, void* scales, int rows, void* stream) {
+extern "C" LIGHTX2V_EXPORT int lightx2v_gelu_convrot_quant(const void* input, void* quantized, void* scales, int rows, void* stream) {
     if (rows == 0) return 0;
     gelu_convrot_quant_kernel<<<rows, kThreads, kSharedBytes, static_cast<cudaStream_t>(stream)>>>(
         static_cast<const __nv_bfloat16*>(input), static_cast<int8_t*>(quantized), static_cast<float*>(scales));
