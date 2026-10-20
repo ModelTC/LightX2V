@@ -42,6 +42,7 @@ HuggingFace: https://huggingface.co/lightx2v
    Python API <getting_started/python_api.md>
    模型结构 <getting_started/model_structure.md>
    基准测试 <getting_started/benchmark.md>
+   TRELLIS2 BF16 <getting_started/trellis2.md>
 
 .. toctree::
    :maxdepth: 1
