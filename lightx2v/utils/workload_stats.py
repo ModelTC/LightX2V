@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import nullcontext
 from pathlib import Path
+from uuid import uuid4
 
 # Report-name aliases for legacy dynamic SLA entries, not a support list or switch.
 # For every General mask algorithm, the operator consuming the actual mask/ranges records the facts.
@@ -41,7 +43,7 @@ class WorkloadStats:
     Use a separate eager diagnostic; compile and CUDA graph replay are unsupported.
     """
 
-    def __init__(self, output, *, families=None, max_calls=1, moe_distribution=False, provenance=None, on_sparse_inputs=None, on_moe_inputs=None):
+    def __init__(self, output, *, families=None, max_calls=1, moe_distribution=False, provenance=None, on_sparse_inputs=None, on_moe_inputs=None, trace_ranges=False, execution_context=None):
         families = SUPPORTED_FAMILIES if families is None else tuple(families)
         if type(max_calls) is not int or max_calls < 1 or not families or set(families) - set(SUPPORTED_FAMILIES):
             raise ValueError("positive max_calls and supported families are required")
@@ -56,6 +58,10 @@ class WorkloadStats:
         self.on_moe_inputs = on_moe_inputs
         self._core_stack = []
         self._core_number = 0
+        self.trace_ranges = trace_ranges
+        self.execution_context = execution_context
+        self._trace_prefix = f"lightx2v.core.{uuid4().hex}" if trace_ranges else None
+        self._buffered_core = []
         self.core_counts = {}
         self.core_observed = {}
 
@@ -79,9 +85,13 @@ class WorkloadStats:
         global _active
         _active = None
         try:
-            self._stream.close()
+            for row in self._buffered_core:
+                self._core_stream.write(json.dumps(row) + "\n")
         finally:
-            self._core_stream.close()
+            try:
+                self._stream.close()
+            finally:
+                self._core_stream.close()
         summary = {
             "schema_version": 2,
             "kind": "backend_workload_capture",
@@ -90,6 +100,7 @@ class WorkloadStats:
             "max_calls_per_backend": self.max_calls,
             "families": self.families,
             "moe_distribution": self.moe_distribution,
+            "trace_ranges": self.trace_ranges,
             "provenance": self.provenance,
             "observed_operators": self.observed,
             "coverage_gaps": self.gaps,
@@ -147,6 +158,14 @@ class WorkloadStats:
         self._stream.write(json.dumps(row) + "\n")
         self._stream.flush()
 
+    def trace_range(self, number):
+        """Mark apply only in joint diagnostics; core summaries follow it, but in-backend statistics still add overhead."""
+        if not self.trace_ranges:
+            return nullcontext()
+        import torch
+
+        return torch.profiler.record_function(f"{self._trace_prefix}.{number}")
+
     def note_gap(self, operator, reason):
         key = f"{operator}: {reason}"
         self.gaps[key] = self.gaps.get(key, 0) + 1
@@ -160,6 +179,20 @@ class WorkloadStats:
             self.note_gap(schema_name, "sample limit reached; full shape inventory not observed")
             return False
         return True
+
+
+def capture_compute(function, *args, **kwargs):
+    """Run the current core's compute phase once, marking it only in sampled joint diagnostics."""
+    session = _active
+    if session is None or not session.trace_ranges or not session._core_stack:
+        return function(*args, **kwargs)
+    frame = session._core_stack[-1]
+    if not frame["sample"]:
+        return function(*args, **kwargs)
+    scope = f"{frame['call']}.compute"
+    frame["compute_trace_marker"] = f"{session._trace_prefix}.{scope}"
+    with session.trace_range(scope):
+        return function(*args, **kwargs)
 
 
 def record_uncovered(family, operator, reason):
@@ -209,7 +242,10 @@ def capture_core_op(op, apply, parameters, args, kwargs):
         moe_inputs = None
         if session.on_moe_inputs is not None and op.compute_family == "moe":
             moe_inputs = op.replay_inputs(values)
-        result = apply(op, *args, **kwargs)
+        context_before = session.execution_context() if session.execution_context else None
+        with session.trace_range(frame["call"]):
+            result = apply(op, *args, **kwargs)
+        context_after = session.execution_context() if session.execution_context else None
         facts = op.compute_stats(values, result)
         if frame["routes"]:
             facts["actual_backend_routes"] = frame["routes"]
@@ -234,6 +270,12 @@ def capture_core_op(op, apply, parameters, args, kwargs):
             "status": "unsupported" if "unsupported_reason" in facts else "complete",
             **facts,
         }
+        if session.trace_ranges:
+            row["trace_marker"] = f"{session._trace_prefix}.{frame['call']}"
+            if "compute_trace_marker" in frame:
+                row["compute_trace_marker"] = frame["compute_trace_marker"]
+        if session.execution_context:
+            row["execution_context"] = {"before": context_before, "after": context_after}
         if session.on_moe_inputs is not None and op.compute_family == "moe":
             if moe_inputs is None:
                 row["input_export_gap"] = "This MoE backend has no supported replay operand layout"
@@ -246,8 +288,11 @@ def capture_core_op(op, apply, parameters, args, kwargs):
             row["routing"] = frame["moe_routing"]
         elif session.moe_distribution and op.compute_family == "moe":
             row["moe_distribution_gap"] = "This backend/call did not expose production expert counts; total FLOPs do not require them."
-        session._core_stream.write(json.dumps(row) + "\n")
-        session._core_stream.flush()
+        if session.trace_ranges:
+            session._buffered_core.append(row)
+        else:
+            session._core_stream.write(json.dumps(row) + "\n")
+            session._core_stream.flush()
         session.core_counts[backend] = session.core_counts.get(backend, 0) + 1
         return result
     finally:

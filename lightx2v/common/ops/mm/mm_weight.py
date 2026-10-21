@@ -185,6 +185,7 @@ class MMWeightTemplate(CoreOpStatistics, metaclass=ABCMeta):
         m, k = x.shape
         n = output.shape[1]
         return {"shape": {"m": m, "n": n, "k": k},
+                "auxiliary_gemm_present": bool(getattr(self, "has_lora_branch", False)),
                 "work": {"logical_flops": gemm_flops(m, n, k),
                          "definition": "Primary linear 2*M*N*K; excludes LoRA, quantization, bias and epilogue"}}
 

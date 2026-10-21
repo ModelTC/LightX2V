@@ -934,7 +934,7 @@ class _TorchFusedMoE(FusedMoETemplate):
 
         permuted_input, permuted_to_expanded, permuted_experts, counts = self._permute_routes(input, token_selected_experts)
         workload_stats.record_moe_routing(counts)
-        permuted_output = self._run_experts(permuted_input, permuted_experts, counts)
+        permuted_output = workload_stats.capture_compute(self._run_experts, permuted_input, permuted_experts, counts)
         expanded_output = torch.empty_like(permuted_output)
         expanded_output.index_copy_(0, permuted_to_expanded, permuted_output)
         route_output = expanded_output.view(input.shape[0], top_k, self.output_size)
