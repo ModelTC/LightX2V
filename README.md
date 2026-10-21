@@ -191,74 +191,108 @@ Edit the prompt in the [request script](scripts/minimax_h3/server/post_t2av.py) 
 
 ## 🤖 Supported Model Ecosystem
 
-Models and variants are grouped by their primary use.
+LightX2V supports image, video, and world models and provides quantized weights, distilled models, and lightweight autoencoders.
 
-### Video and Audio-Video Generation
+<details>
+<summary><strong>🎬 Video &amp; Audio-Video Generation</strong><br><br>
+<a href="https://huggingface.co/Wan-AI/">Wan</a> · <a href="scripts/ltx2/README.md">LTX</a> · <a href="scripts/minimax_h3/README.md">MiniMax-H3</a> · <a href="scripts/hunyuan_video_15/README.md">HunyuanVideo</a> · <a href="scripts/lingbot_video">LingBot-Video</a> · <a href="scripts/seko_talk">SekoTalk</a> · <a href="scripts/infinitetalk">InfiniteTalk</a> · <a href="scripts/self_forcing/README.md">Self-Forcing</a>
+</summary>
 
-- ✅ [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) (including the causal variant)
-- ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) (including the autoregressive variant) / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) (distilled)
-- ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
-- ✅ [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/)
-- ✅ [Wan2.1-VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) / [Wan2.2-VACE-Fun-A14B](https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B)
-- ✅ [Wan2.2-S2V](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B)
-- ✅ [Wan2.2-Animate](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B) / [Wan2.2-Animate-2](https://huggingface.co/Wan-AI/Wan2.2-Animate-2-14B) (distilled)
-- ✅ [LingBot-Video](https://huggingface.co/robbyant/lingbot-video-moe-30b-a3b) (dense / MoE)
-- ✅ [SekoTalk](https://github.com/OpenSenseNova/SekoTalk) (including the autoregressive variant)
-- ✅ [InfiniteTalk](https://huggingface.co/MeiGen-AI/InfiniteTalk)
-- ✅ [Wan-Dancer](https://huggingface.co/Wan-AI/Wan-Dancer-14B)
-- ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
+| Models / Variants and Weights | Guides / Scripts |
+| --- | --- |
+| [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) (causal RefA2V requires a separate checkpoint) | [Guide](scripts/minimax_h3/README.md) · [Causal](scripts/minimax_h3_causal) |
+| [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) (autoregressive inference requires a separate checkpoint) / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) (distilled) | [Guide](scripts/ltx2/README.md) · [AR example](scripts/ltx2/ltx2_3/run_ltx2_3_ar_t2av.sh) |
+| [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) | [Guide](scripts/hunyuan_video_15/README.md) |
+| [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/) | [Wan2.1](scripts/wan/README.md) · [Wan2.2](scripts/wan22/README.md) |
+| [Wan2.1-VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) / [Wan2.2-VACE-Fun-A14B](https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B) | [Wan2.1](scripts/wan/README.md) · [Wan2.2](scripts/wan22_moe_vace) |
+| [Wan2.2-S2V](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B) | [Guide](scripts/wan22/README.md) |
+| [Wan2.2-Animate](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B) / [Wan2.2-Animate-2](https://huggingface.co/Wan-AI/Wan2.2-Animate-2-14B) (distilled) | [Guide](scripts/wan22/README.md) |
+| LingBot-Video [Dense 1.3B](https://huggingface.co/robbyant/lingbot-video-dense-1.3b) / [MoE 30B-A3B](https://huggingface.co/robbyant/lingbot-video-moe-30b-a3b) | [Scripts](scripts/lingbot_video) |
+| [SekoTalk](https://github.com/OpenSenseNova/SekoTalk) (including the autoregressive variant) | [Scripts](scripts/seko_talk) |
+| [InfiniteTalk](https://huggingface.co/MeiGen-AI/InfiniteTalk) | [Scripts](scripts/infinitetalk) |
+| [Wan-Dancer](https://huggingface.co/Wan-AI/Wan-Dancer-14B) | [Scripts](scripts/wan_dancer) |
+| [Self-Forcing](https://github.com/guandeh17/Self-Forcing) | [Guide](scripts/self_forcing/README.md) |
 
-### Image Generation and Editing
+</details>
 
-- ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image) / [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512)
-- ✅ [Qwen-Image-Edit](https://huggingface.co/Qwen/Qwen-Image-Edit) / [2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) / [2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
-- ✅ [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) / [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)
-- ✅ [Qwen-Image-Layered](https://huggingface.co/Qwen/Qwen-Image-Layered)
-- ✅ FLUX.2 [dev](https://huggingface.co/black-forest-labs/FLUX.2-dev) / [klein](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B) (including base and distilled variants)
-- ✅ [HunyuanImage-3.0-Instruct](https://huggingface.co/tencent/HunyuanImage-3.0-Instruct)
-- ✅ [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image) / [Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo)
-- ✅ [LongCat-Image](https://huggingface.co/meituan-longcat/LongCat-Image) / [Edit](https://huggingface.co/meituan-longcat/LongCat-Image-Edit) / [Edit-Turbo](https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo)
-- ✅ [BAGEL](https://huggingface.co/ByteDance-Seed/BAGEL-7B-MoT)
-- ✅ [HiDream-O1-Image](https://huggingface.co/HiDream-ai/HiDream-O1-Image) / [Dev-2604](https://huggingface.co/HiDream-ai/HiDream-O1-Image-Dev-2604)
-- ✅ [ERNIE-Image](https://huggingface.co/baidu/ERNIE-Image) / [Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo)
-- ✅ [SenseNova-U1](https://github.com/OpenSenseNova/SenseNova-U1) (NeoPP backend, used with LightLLM)
+<details>
+<summary><strong>🎨 Image Generation &amp; Editing</strong><br><br>
+<a href="scripts/qwen_image/README.md">Qwen-Image</a> · <a href="scripts/flux2">FLUX.2</a> · <a href="scripts/hunyuan_image3">HunyuanImage</a> · <a href="scripts/z_image/README.md">Z-Image</a> · <a href="scripts/longcat/README.md">LongCat-Image</a> · <a href="scripts/bagel/README.md">BAGEL</a> · <a href="scripts/hidream_o1_image">HiDream</a> · <a href="scripts/ernie_image">ERNIE-Image</a> · <a href="scripts/neopp/README.md">SenseNova-U1</a>
+</summary>
 
-### Restoration and Super-Resolution
+| Models / Variants and Weights | Guides / Scripts |
+| --- | --- |
+| [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image) / [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) | [Guide](scripts/qwen_image/README.md) |
+| [Qwen-Image-Edit](https://huggingface.co/Qwen/Qwen-Image-Edit) / [2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) / [2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) | [Guide](scripts/qwen_image/README.md) |
+| [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) / [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) | [Guide](scripts/qwen_image_21/README.md) |
+| [Qwen-Image-Layered](https://huggingface.co/Qwen/Qwen-Image-Layered) | [Guide](scripts/qwen_image/README.md) |
+| FLUX.2 [dev](https://huggingface.co/black-forest-labs/FLUX.2-dev) / [klein](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B) (base and distilled klein variants) | [Scripts](scripts/flux2) |
+| [HunyuanImage-3.0-Instruct](https://huggingface.co/tencent/HunyuanImage-3.0-Instruct) | [Scripts](scripts/hunyuan_image3) |
+| [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image) / [Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) | [Turbo guide](scripts/z_image/README.md); base model: enable CFG (guidance > 1) and adjust sampling steps |
+| [LongCat-Image](https://huggingface.co/meituan-longcat/LongCat-Image) / [Edit](https://huggingface.co/meituan-longcat/LongCat-Image-Edit) / [Edit-Turbo](https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo) | [Guide](scripts/longcat/README.md); Edit-Turbo requires its own weights, 8 steps, and CFG disabled |
+| [BAGEL](https://huggingface.co/ByteDance-Seed/BAGEL-7B-MoT) | [Guide](scripts/bagel/README.md) |
+| [HiDream-O1-Image](https://huggingface.co/HiDream-ai/HiDream-O1-Image) / [Dev-2604](https://huggingface.co/HiDream-ai/HiDream-O1-Image-Dev-2604) | [Scripts](scripts/hidream_o1_image) |
+| [ERNIE-Image](https://huggingface.co/baidu/ERNIE-Image) / [Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo) | [Scripts](scripts/ernie_image) |
+| [SenseNova-U1](https://github.com/OpenSenseNova/SenseNova-U1) (NeoPP backend, used with LightLLM) | [Guide](scripts/neopp/README.md) |
 
-- ✅ [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B)
-- ✅ [SwiftVR](https://huggingface.co/H-oliday/SwiftVR)
+</details>
 
-### World Models, Robotics, and 3D
+<details>
+<summary><strong>🔍 Restoration &amp; Super-Resolution</strong><br><br>
+<a href="scripts/seedvr2/README.md">SeedVR2</a> · <a href="scripts/swiftvr/README.md">SwiftVR</a>
+</summary>
 
-- ✅ [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super) (including [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID))
-- ✅ [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast)
-- ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0)
-- ✅ [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay) (bidirectional, autoregressive, and distilled)
-- ✅ [EdenLive](scripts/edenlive/README.md) (Wan2.1 14B / Wan2.2 5B; bidirectional and four-step autoregressive)
-- ✅ [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (3D reconstruction)
-- ✅ [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
-- ✅ [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base)
-- ✅ [Motus](https://huggingface.co/motus-robotics/Motus)
-- ✅ [Fast-WAM](https://github.com/yuantianyuan01/FastWAM)
-- ✅ [RealtimeWAM](https://huggingface.co/lightx2v/RealtimeWAM) (based on Fast-WAM / Faster-WAM)
-- ✅ [Hunyuan3D-2.1](https://huggingface.co/tencent/Hunyuan3D-2.1) (image-to-3D shape generation)
+| Models / Variants and Weights | Guides / Scripts |
+| --- | --- |
+| [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B) | [Guide](scripts/seedvr2/README.md) |
+| [SwiftVR](https://huggingface.co/H-oliday/SwiftVR) | [Guide](scripts/swiftvr/README.md) |
 
-### Quantized and Distilled Models/LoRAs
+</details>
 
-- ✅ [MiniMax-H3 Turbo](https://huggingface.co/lightx2v/Minimax-h3-Turbo) — 4-/8-step 768p distilled LoRAs for T2AV / FL2AV
-- ✅ [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) — 4-step distilled LoRA for T2V, T2I, and I2V
-- ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models) / [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
-- ✅ [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras) / [Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
-- ✅ [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4) / [LightWan2.2-A14B](https://huggingface.co/lightx2v/LightWan2.2-A14B)
-- ✅ [Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models) / [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models)
-- ✅ [Qwen-Image-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Lightning) / [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) / [Qwen-Image-2.1-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning)
-- ✅ [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning)
-- ✅ [Z-Image-Turbo-Quantized](https://huggingface.co/lightx2v/Z-Image-Turbo-Quantized)
-- ✅ [Self-Forcing-FP8](https://huggingface.co/lightx2v/Self-Forcing-FP8) / [Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4)
+<details>
+<summary><strong>🌍 World Models, Robotics &amp; 3D</strong><br><br>
+<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game3">Matrix-Game</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README.md">EdenLive</a> · <a href="scripts/worldmirror/README.md">WorldMirror</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
+</summary>
 
-### Lightweight Autoencoders
+| Models / Variants and Weights | Guides / Scripts |
+| --- | --- |
+| [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super) (including [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID)) | [Scripts](scripts/cosmos3) |
+| [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast) | [Scripts](scripts/lingbot) |
+| [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0) | [2.0](scripts/matrix_game2) · [3.0](scripts/matrix_game3) |
+| [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay) (bidirectional, autoregressive, and distilled) | [Guide](scripts/worldplay/README.md) |
+| [EdenLive](https://huggingface.co/VAST-AI/EdenLive) (Wan2.1 14B / Wan2.2 5B; bidirectional and four-step autoregressive) | [Guide](scripts/edenlive/README.md) |
+| [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (3D reconstruction) | [Guide](scripts/worldmirror/README.md) |
+| [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) | [Scripts](scripts/dreamzero) |
+| [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base) | [Scripts](scripts/lingbot_va) |
+| [Motus](https://huggingface.co/motus-robotics/Motus) | [Scripts](scripts/motus) |
+| [Fast-WAM](https://github.com/yuantianyuan01/FastWAM) | [Scripts](scripts/fastwam) |
+| [RealtimeWAM](https://huggingface.co/lightx2v/RealtimeWAM) (based on Fast-WAM / Faster-WAM) | [Guide](scripts/realtimewam/README.md) |
+| [Hunyuan3D-2.1](https://huggingface.co/tencent/Hunyuan3D-2.1) (image-to-3D shape generation) | [Scripts](scripts/hunyuan3d) |
 
-- ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders) (LightVAE / LightTAE)
+</details>
+
+<details>
+<summary><strong>⚡ LightX2V Acceleration Resources</strong><br><br>
+<strong>Distillation &amp; LoRAs</strong>: <a href="https://huggingface.co/lightx2v/Minimax-h3-Turbo">MiniMax-H3 Turbo</a> · <a href="https://huggingface.co/lightx2v/LightLingBot-Video">LightLingBot-Video</a> · <a href="https://huggingface.co/lightx2v/Wan2.2-Distill-Models">Wan</a> · <a href="https://huggingface.co/lightx2v/Hy1.5-Distill-Models">HunyuanVideo</a> · <a href="https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning">Qwen-Image Lightning</a><br>
+<strong>Quantized weights</strong>: <a href="https://huggingface.co/lightx2v/Wan-NVFP4">Wan NVFP4</a> · <a href="https://huggingface.co/lightx2v/LightWan2.2-A14B">LightWan2.2</a> · <a href="https://huggingface.co/lightx2v/Hy1.5-Quantized-Models">HunyuanVideo</a> · <a href="https://huggingface.co/lightx2v/Z-Image-Turbo-Quantized">Z-Image</a> · <a href="https://huggingface.co/lightx2v/Self-Forcing-FP8">Self-Forcing</a><br>
+<strong>Lightweight autoencoders</strong>: <a href="https://huggingface.co/lightx2v/Autoencoders">LightVAE / LightTAE</a>
+</summary>
+
+| Models / Variants and Weights | Guides / Scripts |
+| --- | --- |
+| [MiniMax-H3 Turbo](https://huggingface.co/lightx2v/Minimax-h3-Turbo) — 4-/8-step distilled LoRAs, including 768p T2AV / FL2AV and 4-step Ref2AV | [Guide](scripts/minimax_h3/README.md) |
+| [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) — 4-step distilled LoRA for T2V, T2I, and I2V | [Scripts](scripts/lingbot_video) |
+| [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models) / [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models) | [Wan2.1](scripts/wan/README.md) · [Wan2.2](scripts/wan22/README.md) |
+| [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras) / [Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras) | [Wan2.1](scripts/wan/README.md) · [Wan2.2](scripts/wan22/README.md) |
+| [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4) / [LightWan2.2-A14B](https://huggingface.co/lightx2v/LightWan2.2-A14B) | [Wan2.1](scripts/wan/README.md) · [Wan2.2](scripts/wan22/README.md) |
+| [Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models) / [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models) | [Guide](scripts/hunyuan_video_15/README.md) |
+| [Qwen-Image-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Lightning) / [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) / [Qwen-Image-2.1-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning) | [Qwen-Image](scripts/qwen_image/README.md) · [2.1](scripts/qwen_image_21/README.md) |
+| [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) | [Guide](scripts/qwen_image/README.md) |
+| [Z-Image-Turbo-Quantized](https://huggingface.co/lightx2v/Z-Image-Turbo-Quantized) | [Guide](scripts/z_image/README.md) |
+| [Self-Forcing-FP8](https://huggingface.co/lightx2v/Self-Forcing-FP8) / [Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4) | [Guide](scripts/self_forcing/README.md) |
+| [Autoencoders](https://huggingface.co/lightx2v/Autoencoders) (LightVAE / LightTAE) | [Python API](docs/EN/source/getting_started/python_api.md) |
+
+</details>
 
 ## 🚀 Core Features
 
