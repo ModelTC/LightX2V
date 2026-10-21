@@ -2,6 +2,8 @@
 
 本文档是 `tools/benchmarks/` 的目录级 Agent 指南，随工具提交和迁移。它规定如何把用户目标转成一次可复现的 benchmark 调研；CLI、schema 和指标定义以 `README.md` 与代码为准，不在这里重复维护。
 
+资源观测复用 [gpu_watch](../runtime/README.md)，任务期限/收尾/重试由Agent按实际环境落实。正式汇总须同时核命令成功、资源check通过和本人任务收尾；受扰原始数据保留但不混入正常计时。
+
 机器专属的容器名、GPU 编号、checkpoint 绝对路径和实验产物不得写入本文档，应保存在本地工作记录中。
 
 ## 任务范围
