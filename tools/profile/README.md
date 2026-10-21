@@ -54,6 +54,8 @@ with Capture(output, enabled=True, warmup=3, count=1, workloads=True,
 
 MoE 专家量不含路由合并。已接入的 owning backend 用同次 `compute_trace_marker` 标记真实专家阶段，阶段外 combine 不再按 GEMM 名字混入专家主体；完整 owner 成本仍保留。缺少或无效专家范围时只给完整 owner，专家精度/效率留未知。阶段内主体不全可识别时按整阶段计时并标“专家阶段含辅助”。`gpu_groups.work_role` 区分核心、辅助、归属待核，保留原 native/kernel 家族；普通与并行消费者使用同一角色事实。
 
+单卡和多卡报告的章节遵循[共同结构](MODULE_PROFILE_REPORT_TEMPLATE.md)，多卡增加通信，同时保留辅助计算/数据搬运、空隙/同步分析。
+
 单卡和多卡报告的主体计算表共用[呈现约定](CORE_COMPUTE_TABLE.md)，固定列、单位、数值格式和合并条件；多卡只追加rank及允许的范围展示。
 
 ## 如何读时间和精度
@@ -91,3 +93,22 @@ with Capture(rank_output, enabled=True, warmup=warmup, count=1,
 ```
 
 `case/candidate/inputs/device/rank` 均沿用生产准备，保留实际 `head_parallel/head_parallel_group_size`，包括非整除尾组；不要改用只支持 bulk 的组件模拟诊断。每个 rank 采集自己的目录；metadata 的 identity.target 包含完整候选配置，另记录共同批次、suite/case、输入文件与源码身份、基础及实际 seed、repeat 和真实组。完整 SP 入口是组合边界，计算量来自实际本地叶子调用，不能把返回的稠密等价量分给每个 kernel。时间线采集先关闭统计，必要时另跑同配置的联合统计。
+
+## 层级并行的辅助报告
+
+正式TP/SP完整层延迟由`tools.benchmarks.module_bench`独立计时。解释某个方案时，沿同一PreparedModule真实call分别采各rank，Capture.metadata保存`identity`（共同全局目标/输入/源码）、`rank`、实际`tp_ranks/sp_ranks`，共同采集批次`run_id`及`measurement_ranks`；None的并行维度记录当前rank的单元素列表。每个目录只采一个active调用，先干净时间线，再按需另跑联合统计。
+
+```bash
+python -m tools.profile.parallel_report \
+  /path/to/capture/rank0 /path/to/capture/rank1 \
+  --output /path/to/new-parallel-profile \
+  --peaks /path/to/peaks.json --platform actual_platform
+```
+
+输入须为同一次同配置的各rank目录，session与trace内嵌元数据一致，不重复rank或混合不同全局身份/TP/SP度数。各rank的run_id须相同；旧采集全部未记录run_id时保留缺口，是否同次由外部运行收据核对，不据此推跨rank关键路径。只传部分rank时只能解释已采部分，不能当跨rank完整覆盖。CLI仅输出并打印`facts.json`路径；中文展示由Agent按[并行诊断模板](PARALLEL_REPORT_TEMPLATE.md)生成，不再自动写Markdown。事实包含每设备活动并集/空隙、核心/通信/辅助计算/拷贝/填充活动及核心通信重叠、实际局部shape/计算量/计时口径/计算效率（未识别主体时标含辅助，LoRA效率留空）、逐次通信和包装自身活动。`collectives`按`host_start_us`排序；`auxiliary_activities`保留排除核心/通信后的逐kernel/拷贝/填充明细。范围耗时与诊断扰动沿用上文定义，不与无profilerbench混用。`auxiliary_compute_ms` 为排除核心和通信后的kernel并集；`copy_ms`/`fill_ms` 分别为gpu_memcpy/gpu_memset并集，kernel执行的数据移动仍计辅助计算。`other_ms` 兼容保留三类合并并集，各类重叠时不能相加。
+
+通信事实只消费trace中经显式External id/correlation关联的`record_param_comms`，不按时间邻近配对，不新增生产hook。输入/输出字节由本次nelems与dtype计算；一调用多kernel只记一次payload，GPU耗时用其活动并集。缺明确关联、未知dtype或元素数保持缺口。逻辑输入GB/s=本次输入字节/通信GPU活动时间，含等待，**不是物理NVLink/网络链路带宽**；不从整层时延、跨rank时间和推算线速或物理峰值比例。原始分组、split和通信参数保存在facts，复杂算法物理发送量不猜。
+
+识别优先查显式关联的CPU通信记录，不要求GPU kernel带有特定backend名称。NCCL名称或GPU事件的`Collective name`仅作为缺少关联时的通信线索；有线索但无法唯一配对时保留活动与缺口，不猜payload或带宽。没有通信证据的陌生活动仍保留在总活动中，不将其猜成通信。这里依赖当前PyTorch trace字段；更换采集格式时须核对实际协议。
+
+嵌套包装按实际同线程core标记将GPU事件归最内层，父包装自身活动排除子owner和通信事件；不将父inclusive计算量除以剩余辅助时间。这些自身活动可能与子调用并行，也可能有未单独标记的计算，因此不声称全是通信辅助或已定位冗余。需要深入时沿原始trace和模型源码追依赖。
