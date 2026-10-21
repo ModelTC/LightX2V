@@ -102,13 +102,16 @@ class WsAudioSource:
             if self.status == "voice":
                 self.status = "blank"
 
-    def on_action_switch(self, prompt: str):
+    def on_action_switch(self, prompt: str, duration: float = 0):
         prompt = str(prompt).strip()
-        if not isinstance(prompt, str) or len(prompt) == 0:
+        if not prompt:
             return
-        logger.debug(f"WsAudioSource action prompt change: {prompt}")
+        if duration != -1 and duration <= 0:
+            logger.warning(f"WsAudioSource ignore action prompt, duration must be -1 or > 0, got {duration}")
+            return
+        logger.debug(f"WsAudioSource action prompt change: {prompt} duration={duration}")
         with self._lock:
-            self.action_switch = prompt
+            self.action_switch = {"prompt": prompt, "duration": duration}
 
     def has_voice(self, duration) -> bool:
         if self.audio_info is None or self.audio_buffer is None or self.audio_buffer.current_size == 0:

@@ -432,16 +432,22 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
             last_chunk_idx = 0
             last_valid_duration = 0
             self.last_rest_audio = None
+            origin_text_output = self.inputs["text_encoder_output"]
+            restore_prompt_at = -1
 
             while True:
                 control = self.va_controller.next_control()
+
                 if control.action == "perform_action":
-                    self.inputs["text_encoder_output"] = self.encode_action_prompt(control.data)
+                    prompt, duration = control.data["prompt"], control.data["duration"]
+                    self.inputs["text_encoder_output"] = self.encode_action_prompt(prompt)
                     self.fill_condition_cache(overwrite=True)
                     if self.va_controller.recorder is not None and hasattr(self.va_controller.recorder, "emit_prompt_update"):
-                        self.va_controller.recorder.emit_prompt_update(control.data)
+                        self.va_controller.recorder.emit_prompt_update(prompt)
+                    if duration > 0:
+                        restore_prompt_at = chunk_idx + max(1, math.ceil(duration * FPS / FRAMES_PER_CHUNK))
                     if dist.get_rank() == 0:
-                        logger.info(f"H3 prompt switched before chunk {chunk_idx}: {control.data}")
+                        logger.info(f"H3 prompt switched before chunk {chunk_idx}: {prompt} duration={duration} restore_prompt_at={restore_prompt_at}")
                     continue
 
                 elif control.action == "wait":
@@ -490,6 +496,14 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
                     last_valid_duration = valid_duration
                     chunk_idx += 1
                     fail_count = 0
+
+                    # restore the origin prompt
+                    if restore_prompt_at >= 0 and chunk_idx >= restore_prompt_at:
+                        self.inputs["text_encoder_output"] = origin_text_output
+                        self.fill_condition_cache(overwrite=True)
+                        restore_prompt_at = -1
+                        if dist.get_rank() == 0:
+                            logger.info(f"H3 prompt restored to origin before chunk {chunk_idx}: {self.action_travel.prompt}")
 
         finally:
             if hasattr(self.model, "inputs"):

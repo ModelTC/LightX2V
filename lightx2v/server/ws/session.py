@@ -29,6 +29,17 @@ ASPECT_RATIOS = {
 }
 DEFAULT_RESOLUTION = "480p"
 DEFAULT_ASPECT_RATIO = "16:9"
+DEFAULT_SET_PROMPT_DURATION = float(os.getenv("SET_PROMPT_DURATION", "3"))
+
+
+def resolve_set_prompt_duration(value) -> float:
+    # -1: hold until next SetPrompt; 0: server default; >0: client duration
+    duration = float(value)
+    if duration == 0:
+        return DEFAULT_SET_PROMPT_DURATION
+    if duration == -1 or duration > 0:
+        return duration
+    raise ValueError(f"SetPrompt.duration must be -1, 0 (server default), or > 0, got {duration}")
 
 
 def _parse_ratio_shapes(resolution: str, ratios: dict) -> dict:
@@ -287,7 +298,8 @@ class LiveSession:
             self.audio_source.on_clear_audio(reason)
         elif which == "set_prompt":
             prompt = msg.set_prompt.prompt if msg.set_prompt else ""
-            self.audio_source.on_action_switch(prompt)
+            duration = resolve_set_prompt_duration(msg.set_prompt.duration if msg.set_prompt else 0.0)
+            self.audio_source.on_action_switch(prompt, duration)
         else:
             raise ValueError(f"unexpected client message {which}")
 

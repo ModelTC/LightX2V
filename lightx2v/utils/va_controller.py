@@ -15,7 +15,7 @@ class NextControl:
         # action: wait, data: None
         # action: fetch, data: None
         # action: switch_image, data: image_path
-        # action: perform_action, data: action prompt
+        # action: perform_action, data: action_switch (str or dict)
         self.action = action
         self.data = data
 
@@ -300,7 +300,7 @@ class VAController:
 
     def omni_reader_action_control(self):
         action_switch = self.reader.get_action_switch()
-        if not isinstance(action_switch, str) or len(action_switch) == 0:
+        if not action_switch:
             return None
         # self.truncate_buffer(self.est_switch_action_end_idx + self.est_infer_end_idx, "action switch")
         return NextControl(action="perform_action", data=action_switch)

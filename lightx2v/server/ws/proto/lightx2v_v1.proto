@@ -67,7 +67,10 @@ message VideoStart {
 
 message Interrupt { string reason = 1; }
 
-message SetPrompt { string prompt = 1; }
+message SetPrompt {
+  string prompt = 1;
+  float duration = 2;  // -1=until next SetPrompt, 0/omit=server default, >0=client seconds
+}
 
 message Failure {
   string code = 1;
