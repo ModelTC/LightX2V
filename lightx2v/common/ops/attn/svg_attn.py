@@ -182,6 +182,8 @@ def diagonal_band_mask_from_sparsity(
 
 @ATTN_WEIGHT_REGISTER("svg_attn")
 class SvgAttnWeight(AttnWeightTemplate):
+    sparse_compute_gap = "SVG BlockMask含块内元素mask，不能按整个块面积充当有效token对。"
+
     head_num = None
     head_dim = None
     sample_mse_max_row = None

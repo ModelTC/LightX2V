@@ -1,5 +1,7 @@
 import torch
 
+from lightx2v.utils import workload_stats
+
 try:
     import sgl_kernel
 except ImportError:
@@ -47,4 +49,7 @@ def sgl_fp8_scaled_mm(
 ) -> torch.Tensor:
     if sgl_kernel is None:
         raise ImportError("sgl_kernel is required for SGL FP8 scaled matrix multiplication")
-    return sgl_kernel.fp8_scaled_mm(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=bias)
+    result = sgl_kernel.fp8_scaled_mm(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=bias)
+    if workload_stats.enabled("gemm"):
+        workload_stats.record_uncovered("gemm", "sgl_kernel::fp8_scaled_mm", "Direct call bypassed the common MM base; HF Linear forward statistics are not integrated")
+    return result

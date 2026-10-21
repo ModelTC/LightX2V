@@ -42,6 +42,28 @@ Agent 应先把请求归入一种或多种工作流：
 - 模型 shape 应保留来源、调用位置和必要时的 `call_count`；理论 sweep 必须明确轴范围，不能伪装成模型真实 shape。
 - 随机生成的 GEMM、dense attention 和 MoE 输入可用于 shape 性能比较；对输入分布敏感的算子必须使用真实 artifact 或明确降低证据等级。
 
+## 何时运行计算量回归
+
+Agent主动按改动影响选择验证，不等待开发者逐次提醒；测试时机、环境、命令和收据在本节维护，不新增自动触发的CI。
+
+- 改公式、会话/采样或producer→consumer接线后，先运行受影响的测试文件或用例；跨职责的代码改动在交付前集中执行三组回归，首次使用新测试环境也应运行三组。
+- 仅改注释/文档且执行语义未变，可复用有明确源码身份的既有结果，记录未重测依据；不因一次普通bench任务或每次小改动默认重跑全部测试。
+- 使用独立CPU环境或已核实依赖相同的环境，保存源码/依赖身份、命令、日志及退出状态；需要结构化收据时导出JUnit到本次新产物目录。失败按原因修复后定向重验，不把跳过当通过。
+- CPU回归只证明数学和Python接线。native执行、数值或性能有实质变化时，另选必要的目标设备验证，遵守资源授权；不自动扩展GPU矩阵。
+
+先准备独立的Linux/Python 3.12环境，避免改动现有推理环境。以下命令从源码根目录执行：
+
+```bash
+python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r tests/requirements-compute-stats.txt
+CUDA_VISIBLE_DEVICES= PLATFORM=cuda SKIP_PLATFORM_CHECK=1 OMP_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 \
+  python -m pytest -q tests/test_compute_stats.py tests/test_core_op_stats.py tests/test_sparse_stats.py
+```
+
+已有同依赖环境可直接执行pytest。需要机器可读结果时，追加`--junitxml=/path/to/new-results/compute-stats.xml`，将路径换成本次新产物目录；同时保留日志、退出状态与源码/依赖身份。`PLATFORM=cuda`和`SKIP_PLATFORM_CHECK=1`只允许导入现有平台模块，实际用CPU wheel执行，不代表CUDA后端已通过。
+
+CPU wheel版本配对见[PyTorch官方安装表](https://pytorch.org/get-started/previous-versions/#v2110)。纯公式使用独立token oracle，接线测试保留实际重排/LUT/ranges、采样/异常和并发反例；默认GPU不可用时仍运行这些CPU用例，不以跳过代替通过。原生CUDA数值/性能仍另需目标环境验证。
+
 ## Backend 与硬件 Peak
 
 1. 候选目录跟随当前 LightX2V registry 和 benchmark adapter 演进，不能固化为某张卡上的静态列表。
@@ -110,3 +132,7 @@ Agent 应先把请求归入一种或多种工作流：
 - 一次性诊断 hook、失败日志和探索记录。
 
 一次性脚本形成复用价值时，应按职责迁入受 Git 管理的位置：模型专属适配放在对应模型侧，通用能力放在 `tools/benchmarks/`。阶段反馈必须区分“已有受控工具支持”和“本次临时生成”，不能把只存在于本地目录的脚本描述为可迁移能力。
+
+## 计算量诊断
+
+显式WorkloadStats按families选择算子，最终consumer自动提供准确算量所需区域；MoE额外分布和tensor导出单独开启。公式与统计边界见README；回归测试按本文指南执行。统计与性能计时分次执行，不靠record_shapes猜计算量；组合父子不相加，未知区域/量化布局和HF旁路明确留缺口。不在compile/CUDA graph内部统计。

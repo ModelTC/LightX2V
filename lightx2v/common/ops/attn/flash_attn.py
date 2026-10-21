@@ -26,6 +26,7 @@ except (ImportError, AttributeError) as exc:
     BlockSparseTensorsTorch = None
 
 
+from lightx2v.utils import workload_stats
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
@@ -299,5 +300,7 @@ class SparseFlashAttn4Weight(AttnWeightTemplate):
             block_sparse_tensors=block_sparse_tensors,
         )
 
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, sparse_map, self.BLKQ, self.BLKK, operator="spas_flash_attn4", layout="BSHD")
         x = x.reshape(bs * max_seqlen_q, -1)
         return x

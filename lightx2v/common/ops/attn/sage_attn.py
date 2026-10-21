@@ -6,6 +6,7 @@ try:
 except ImportError:
     magi_register_custom_op = None
 
+from lightx2v.utils import workload_stats
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
@@ -220,6 +221,8 @@ class SparseSageAttn2Weight(AttnWeightTemplate):
 
         lut, valid_block_num = self._block_map_incremental_lut_triton(sparse_map)
         x = self._sage2_block_sparse_attn(q, k, v, lut, valid_block_num, self.BLKQ, self.BLKK, self.arch)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, sparse_map, self.BLKQ, self.BLKK, operator="spas_sage_attn2")
         x = x.transpose(1, 2).reshape(bs * max_seqlen_q, -1)
         return x
 
@@ -276,6 +279,8 @@ class SparseSageAttn3Weight(AttnWeightTemplate):
 
         lut, valid_block_num = self._block_map_ordinal_lut_triton(sparse_map)
         x = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, sparse_map, self.BLKQ, self.BLKK, operator="spas_sage_attn3")
         x = x.transpose(1, 2).reshape(bs * max_seqlen_q, -1)
         return x
 

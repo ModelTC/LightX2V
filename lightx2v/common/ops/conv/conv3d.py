@@ -4,11 +4,23 @@ import torch
 from loguru import logger
 
 from lightx2v.common.ops.utils import *
+from lightx2v.common.ops.compute_stats import convolution_flops
+from lightx2v.utils.core_op_stats import CoreOpStatistics
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import CONV3D_WEIGHT_REGISTER
 
 
-class Conv3dWeightTemplate(metaclass=ABCMeta):
+class Conv3dWeightTemplate(CoreOpStatistics, metaclass=ABCMeta):
+    compute_family = "convolution"
+
+    def compute_stats(self, arguments, output):
+        x = arguments["input_tensor"]
+        return {
+            "shape": {"input": list(x.shape), "weight": list(self.weight.shape), "output": list(output.shape), "groups": self.groups},
+            "work": {"logical_flops": convolution_flops(output.numel(), self.weight.shape),
+                     "definition": "2*output_elements*weight_input_channels_per_group*kernel_volume; includes padded MACs; excludes bias"},
+        }
+
     def __init__(self, weight_name, bias_name, stride=1, padding=0, dilation=1, groups=1, lora_prefix="diffusion_model.blocks"):
         self.weight_name = weight_name
         self.bias_name = bias_name

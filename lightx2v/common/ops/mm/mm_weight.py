@@ -13,6 +13,7 @@ try:
 except ImportError:
     magi_register_custom_op = None
 
+from lightx2v.common.ops.compute_stats import gemm_flops
 from lightx2v.common.ops.mm.fp8_f16_accum import (
     fp8_f16_accum_linear,
     fp8_f16_accum_mm_available,
@@ -20,6 +21,7 @@ from lightx2v.common.ops.mm.fp8_f16_accum import (
 )
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_per_token_quant, sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
 from lightx2v.common.ops.utils import *
+from lightx2v.utils.core_op_stats import CoreOpStatistics
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import GGMLTensor
 from lightx2v.utils.ggml_tensor import dequantize_tensor as gguf_dequantize_tensor
@@ -173,7 +175,19 @@ except ImportError:
     marlin_cuda_quant = None
 
 
-class MMWeightTemplate(metaclass=ABCMeta):
+class MMWeightTemplate(CoreOpStatistics, metaclass=ABCMeta):
+    compute_family = "gemm"
+
+    def compute_stats(self, arguments, output):
+        x = arguments["input_tensor"]
+        if x.ndim != 2 or not isinstance(output, torch.Tensor) or output.ndim != 2 or output.shape[0] != x.shape[0]:
+            return {"unsupported_reason": "linear input/output must be concrete [M,K]/[M,N] tensors"}
+        m, k = x.shape
+        n = output.shape[1]
+        return {"shape": {"m": m, "n": n, "k": k},
+                "work": {"logical_flops": gemm_flops(m, n, k),
+                         "definition": "Primary linear 2*M*N*K; excludes LoRA, quantization, bias and epilogue"}}
+
     def __init__(
         self,
         weight_name,
@@ -2719,6 +2733,9 @@ class MMWeightTP(MMWeightTemplate):
     - Column split: weight [in_dim, out_dim] -> [in_dim, out_dim/tp_size] per rank
     - Row split: weight [in_dim, out_dim] -> [in_dim/tp_size, out_dim] per rank
     """
+
+    def compute_stats(self, arguments, output):
+        return {"unsupported_reason": "TP is a composite boundary; use its local MM child, not the full output to infer local work"}
 
     def __init__(
         self,

@@ -27,6 +27,52 @@ shape dump / 理论 sweep / 真实 QKV replay
 
 工具没有 model catalog、任务队列、execution plan、bundle manifest 或跨 run 控制面。需要长期保留结果时，直接归档输入 suite、命令、`raw.jsonl` 和报告即可。
 
+## 核心算子计算量诊断
+
+计算量由生产算子基类提供，bench使用同一数学函数；不解析kernel名称，不依赖profiler或`record_shapes`。
+
+`tools/compute_stats.py` 是离线数学转接模块，不是 CLI：例如 `from tools.compute_stats import gemm_flops; gemm_flops(3, 5, 7)` 得到 210。生产公式在 `lightx2v/common/ops/compute_stats.py`；转接用文件加载避免仅算几个乘法却触发 `lightx2v` 的平台/模型初始化。生产统计不反向依赖 tools。attention 的三种区域计算函数在 `lightx2v/common/ops/attn/compute_stats.py`，由 attention 基类公开，内部统一几何和面积→FLOPs换算。
+
+Bench使用源码checkout；`tools`不随LightX2V wheel打包。默认推理与生产统计不依赖`tools`。`WorkloadStats` 是唯一显式入口，`families` 只选择算子类型，不按算法或实现库另开通道；这里的`attention`包含bench中分别比较的dense/sparse类型：
+
+| family | 统计范围 |
+|---|---|
+| `gemm` | common MM基类，包括其FP8/INT8/FP4等具体实现 |
+| `attention` | common dense/sparse attention；最终consumer自动补实际mask/ranges |
+| `convolution` | common Conv2d/3d |
+| `moe` | 同构专家FC1/FC2及gate的主矩阵计算 |
+
+稀疏区域是准确算量的必要输入，选择attention后自动读取；采样超限时不再归约/导出。Dynamic由实际分支函数记录，General由选定consumer记录；不因算法叫SLA或Sparge而复制算术。MoE总量只需shape/专家配置；`moe_distribution=True`才额外读取生产专家分布，原始输入导出由callback单独开启。
+
+边界dtype是Tensor存储类型，未列的名字原样保存；NVFP4/MXFP4等量化方案、计算/累加精度需backend合同，不能从BF16输入或uint8存储猜出。common之外的独立平台模板、paged decode、任意ATen和编译图内部仍有缺口。HF量化Linear的`nn.Module.forward`尚未共享接入；直接SGL调用在执行时明确报告绕过共同MM基类，不猜计算量或增加专用通道。普通SGL MM仍由基类统计。其他不可见旁路仅声明覆盖边界，不声称自动发现。
+
+| 计算 | 逻辑计算量 | 范围 |
+|---|---|---|
+| MM | `2 * batch * m * n * k` | 仅矩阵乘；SGL沿用MM公式 |
+| Attention | `2 * token_pairs * (qk_dim + value_dim)` | QK/PV，不含路由、softmax或量化 |
+| Sparse attention | 上式使用实际选中的有效token对 | sparsity给出固定区域数；mask/ranges给出实际区域；尾块按有效长度计 |
+| Conv2d/3d | `2 * output.numel() * product(weight.shape[1:])` | 含卷积padding计算，weight已反映groups |
+| MoE | `routes * sum(2 * out_features * in_features)` | FC1/FC2及split gate；含scale为0的实际路由，不含激活、重排与combine |
+
+MoE同构专家无drop时，总量由route数和矩阵shape决定；ID/scale改变expert负载与输出。相同块稀疏率也可能因尾块改变有效计算量。Scheduled tile FLOPs另列，不代表物理指令计数；未知量化布局或未暴露最终区域明确报告缺口。
+
+Dynamic稀疏观测的observed_backend映射到canonical候选ID，production_operator另存实际hook身份；其他尚无映射的入口保留原生产名，不猜候选。输入回放只由replay/来源字段表达。
+
+统计默认关闭。只包住现有调用，不需要改模型各层的缩进：
+
+```python
+from lightx2v.utils.workload_stats import WorkloadStats
+
+with WorkloadStats("/path/to/new-stats", families=["attention"], max_calls=1):
+    run_target()  # 原生产调用
+```
+
+`max_calls` 是每个backend采样桶的保存上限（core按具体类，consumer按operator名），不是推理/warmup次数。100次同类MM、上限1，原计算仍执行100次，只保存1条详细事实；不同权重/shape可能被截断，不能据此推整网总量。同类未返回的父调用也预占名额。整层诊断应按覆盖需要提高上限，单次区域参考通常1–2。
+
+产物为`core_ops.jsonl`、中文`core_ops.md`、consumer侧`workloads.jsonl`和`session.json`。后者schema v2记录`families/moe_distribution`及覆盖缺口。parent_call与actual_backend_routes说明归属，父子/consumer可能描述同一工作，不能相加。统计会同步读区域和写文件，只用于独立eager诊断；正式event计时关闭它，compile/CUDA graph capture拒绝，graph replay不可恢复内部调用。
+
+可选`on_sparse_inputs/on_moe_inputs`回调接收同次真实数据；未提供时不导出tensor。MoE出口保留覆盖输出storage前所需的operands；未知出口/量化布局明确留缺口，文件格式与回放由消费者负责。
+
 ## Shape 合同
 
 顶层最小结构：

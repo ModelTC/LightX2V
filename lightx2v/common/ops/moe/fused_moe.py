@@ -12,6 +12,9 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.utils import workload_stats
+from lightx2v.common.ops.compute_stats import routed_matmul_flops
+from lightx2v.utils.core_op_stats import CoreOpStatistics
 from lightx2v.utils.registry_factory import FUSED_MOE_REGISTER
 
 try:
@@ -100,7 +103,34 @@ if _TRITON_AVAILABLE:
         tl.store(output + token_idx * hidden_size + hidden_idx, accumulator, mask=hidden_mask)
 
 
-class FusedMoETemplate(WeightModule, metaclass=ABCMeta):
+class FusedMoETemplate(CoreOpStatistics, WeightModule, metaclass=ABCMeta):
+    compute_family = "moe"
+
+    def route_matmul_shapes(self):
+        """Return per-route FC1/FC2, gate, and local-shard matrix dimensions for homogeneous experts."""
+        return None
+
+    def replay_inputs(self, arguments):
+        """Optionally expose real operands; each backend must define unknown quantized or sharded layouts."""
+        return None
+
+    def compute_stats(self, arguments, output):
+        matrices = self.route_matmul_shapes()
+        if matrices is None:
+            return {"unsupported_reason": "unknown/quantized expert layout needs a logical matrix contract"}
+        selected = arguments["token_selected_experts"]
+        # Supported backends execute every top-k route with equal expert shapes; IDs only change load distribution.
+        routes = selected.numel()
+        return {
+            "shape": {"input": list(arguments["input"].shape), "selected_experts": list(selected.shape), "route_matmul_shapes": matrices},
+            "work": {
+                "logical_flops": routed_matmul_flops(routes, matrices),
+                "routes": routes,
+                "scheduled_tile_flops": None,
+                "definition": "Executed FC1/FC2/gate matmuls over every route and local shard; excludes activation, permutation, scaling and combine; zero scales do not imply skipping; tile padding unknown",
+            },
+        }
+
     @abstractmethod
     def apply(
         self,
@@ -179,6 +209,12 @@ def _flashinfer_result_tensor(result, output: torch.Tensor) -> torch.Tensor:
 
 @FUSED_MOE_REGISTER("flashinfer")
 class FlashInferFusedMoE(FusedMoETemplate):
+    def route_matmul_shapes(self):
+        shards = self.shards
+        if any(shard.quant_scales is not None for shard in shards):
+            return None
+        return [list(weight.shape[1:]) for shard in shards for weight in (shard.fc1_weight, shard.fc2_weight)]
+
     def __init__(
         self,
         shards: FlashInferMoEWeightShard | Sequence[FlashInferMoEWeightShard],
@@ -554,6 +590,9 @@ def lightx2v_multi_micro_fused_moe(
 
 @FUSED_MOE_REGISTER("multi_micro")
 class MultiMicroFusedMoE(FusedMoETemplate):
+    def route_matmul_shapes(self):
+        return [list(weights.shape[-2:]) for weights in (self.fc1_micro_weights, self.fc2_micro_weights) for _ in range(weights.shape[0])]
+
     def __init__(
         self,
         fc1_micro_weights: torch.Tensor,
@@ -634,6 +673,43 @@ def _torch_expert_biases(
 
 
 class _TorchFusedMoE(FusedMoETemplate):
+    def replay_inputs(self, arguments):
+        # Only explicit bounded export stacks/copies expert weights; default calls do neither.
+        if self.input_size != self.output_size or self.weight_dtype not in {torch.float32, torch.float16, torch.bfloat16}:
+            return None
+        if arguments["token_selected_experts"].dtype not in {torch.int32, torch.int64} or arguments["input"].shape[0] == 0:
+            return None
+        if self._grouped:
+            fc1, fc2 = self.grouped_fc1_weight, self.grouped_fc2_weight
+            gate, b1, b2 = self.grouped_fc1_gate_weight, self.grouped_fc1_bias, self.grouped_fc2_bias
+        else:
+            fc1, fc2 = torch.stack(self.fc1_weights), torch.stack(self.fc2_weights)
+            gate = torch.stack(self.fc1_gate_weights) if self.split_swiglu else None
+            b1 = torch.stack(self.fc1_biases) if self.fc1_biases[0] is not None else None
+            b2 = torch.stack(self.fc2_biases) if self.fc2_biases[0] is not None else None
+        # Match production _normalize_inputs and preserve the FP32 routing weights actually used.
+        inputs = {"activation": arguments["input"], "expert_ids": arguments["token_selected_experts"],
+                  "scales": arguments["token_final_scales"].to(dtype=torch.float32).contiguous(), "fc1": fc1, "fc2": fc2,
+                  "fc1_gate": gate, "fc1_bias": b1, "fc2_bias": b2}
+        output = arguments.get("output")
+        if output is not None:
+            # Production may reuse input storage; preserve pre-call values only for explicit export with shared storage.
+            for name, value in inputs.items():
+                if value is not None and value.device == output.device and value.untyped_storage().data_ptr() == output.untyped_storage().data_ptr():
+                    inputs[name] = value.detach().clone()
+        return inputs
+
+    def route_matmul_shapes(self):
+        if self._grouped:
+            weights = [self.grouped_fc1_weight, self.grouped_fc2_weight]
+            if self.split_swiglu:
+                weights.append(self.grouped_fc1_gate_weight)
+            return [list(weight.shape[1:]) for weight in weights]
+        layers = [self.fc1_weights, self.fc2_weights]
+        if self.split_swiglu:
+            layers.append(self.fc1_gate_weights)
+        return [list(layer[0].shape) for layer in layers]
+
     def __init__(
         self,
         fc1_weight: torch.Tensor | Sequence[torch.Tensor],
@@ -857,6 +933,7 @@ class _TorchFusedMoE(FusedMoETemplate):
             return result
 
         permuted_input, permuted_to_expanded, permuted_experts, counts = self._permute_routes(input, token_selected_experts)
+        workload_stats.record_moe_routing(counts)
         permuted_output = self._run_experts(permuted_input, permuted_experts, counts)
         expanded_output = torch.empty_like(permuted_output)
         expanded_output.index_copy_(0, permuted_to_expanded, permuted_output)

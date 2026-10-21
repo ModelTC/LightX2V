@@ -1,6 +1,7 @@
 import torch
 from loguru import logger
 
+from lightx2v.utils import workload_stats
 from lightx2v.utils.registry_factory import SPARSE_OPERATOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -67,6 +68,8 @@ class SlaTritonOperator:
         lut = torch.topk(mask, topk, dim=-1, sorted=False).indices
 
         out = self._attention.apply(q, k, v, mask, lut, topk, self.q_block_size, self.k_block_size)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, lambda: torch.zeros_like(mask, dtype=torch.bool).scatter_(-1, lut, True), self.q_block_size, self.k_block_size, operator=type(self).__name__)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
 
@@ -107,6 +110,8 @@ class SparseSageAttentionV2Operator:
         # (B, H, Q_block_num, K_block_num)
         lut, valid_block_num = self._block_map_incremental_lut_triton(mask)
         out = self._sage2_block_sparse_attn(q, k, v, lut, valid_block_num, self.q_block_size, self.k_block_size, self.arch)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, mask, self.q_block_size, self.k_block_size, operator=type(self).__name__)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
 
@@ -142,6 +147,8 @@ class SparseSageAttentionV3Operator:
         # (B, H, Q_block_num, K_block_num)
         lut, valid_block_num = self._block_map_ordinal_lut_triton(mask)
         out = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, mask, self.q_block_size, self.k_block_size, operator=type(self).__name__)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
 
@@ -192,6 +199,8 @@ class SparseFlashAttentionV4Operator:
             block_sparse_tensors=block_sparse_tensors,
         )
 
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, mask, self.q_block_size, self.k_block_size, operator=type(self).__name__, layout="BSHD")
         out = out.reshape(max_seqlen_q, -1)
         return out
 
@@ -238,6 +247,7 @@ class MagiOperator:
         q_ranges, k_ranges = self.generate_qk_ranges(mask, self.q_block_size, self.k_block_size, seqlen)
         attn_type_map = torch.zeros(len(q_ranges), dtype=torch.int32, device="cpu").to(q.device, non_blocking=True)
 
+        statistics_qkv = (q, k, v)
         q = q.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
         k = k.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
         v = v.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
@@ -252,6 +262,9 @@ class MagiOperator:
             softmax_scale=kwargs.get("softmax_scale", None),
             auto_range_merge=True,
         )[0]
+        # Routing blocks do not specify Magi internal tiles; count logical work from actual ranges only.
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(*statistics_qkv, ranges=(q_ranges, k_ranges), operator=type(self).__name__, layout="SHD")
 
         out = out.reshape(head_num, seqlen, head_dim).permute(1, 0, 2)
 
@@ -281,6 +294,7 @@ class FlexBlockOperator:
         k = k.unsqueeze(0).transpose(1, 2)
         v = v.unsqueeze(0).transpose(1, 2)
 
+        statistics_qkv = (q, k, v)  # Exclude tail padding from logical work; scheduled work uses full tiles.
         pad_len = (self.q_block_size - q.shape[2] % self.q_block_size) % self.q_block_size
         if pad_len > 0:
             q = torch.nn.functional.pad(q, (0, 0, 0, pad_len))
@@ -290,6 +304,8 @@ class FlexBlockOperator:
         # (B, H, Q_block_num, K_block_num)
         mask = mask.bool()
         out = flex_block_attn_func(q, k, v, self.q_block_size, self.k_block_size, mask)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(*statistics_qkv, mask, self.q_block_size, self.k_block_size, operator=type(self).__name__)
 
         if pad_len > 0:
             out = out[:, :, :-pad_len, :]
@@ -375,6 +391,14 @@ class FlashinferOperator:
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
         out = FlashinferOperator.sparse_wrapper.run(q, k, v)
+        if workload_stats.enabled("attention"):
+            # FlashInfer replans effective token lengths; routing blocks are not execution tiles.
+            q_sizes = [min(self.q_block_size, seqlen - start) for start in range(0, seqlen, self.q_block_size)]
+            k_sizes = [min(self.k_block_size, kv_seqlen - start) for start in range(0, kv_seqlen, self.k_block_size)]
+            workload_stats.record_sparse_attn(
+                q.transpose(0, 1), k.transpose(0, 1), v.transpose(0, 1), mask.unsqueeze(0), operator=type(self).__name__, layout="SHD",
+                q_block_sizes=[[q_sizes] * head_num], k_block_sizes=[[k_sizes] * head_num],
+            )
         out = out.transpose(0, 1)
 
         return out.reshape(max_seqlen_q, -1)
