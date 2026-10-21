@@ -141,6 +141,8 @@ bash scripts/edenlive/run_5090.sh
 
 `SAVE_RESULT_PATH` 指定输出 MP4 路径。`T5_CPU_OFFLOAD=true` 通过卸载 T5 降低 GPU 常驻显存；下方性能测试使用 `false`。
 
+解码后的分块在请求结束前一直保留在 GPU 上，因此显存会随视频长度增长。生成长视频时，可在 `ar_config` 中设置 `"decode_to_cpu": true`：每个分块解码后立即复制到主机内存。显存因此保持在短视频时的水平，改为占用主机内存，分块回调收到的是 CPU 张量。输出结果不变。
+
 ## LightX2V 加速
 
 | 组件 | 优化 |
