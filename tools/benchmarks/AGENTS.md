@@ -133,3 +133,24 @@ FlashInfer MoE由adapter在计时外调当前token点，正式调用以False上�
 - 保留raw/catalog/report.json及身份，Agent解释/筛查/决定引用事实且单独保存；不重写原始记录或把建议说成工具自动发现。交付前按模板逐行核对数值/单位/输入及覆盖；必要时用小脚本做算术核对，一次性脚本留本地。
 
 可复用代码、schema、接口说明和本指南随Git迁移；机器信息、权重、tensor、raw、trace、一次性脚本留本地。通用探索成熟后按职责迁入对应模块，不能把本地脚本称正式自动能力。所有结论限定实际输入、硬件与证据范围。
+
+## 完整层 TP/SP
+
+先核模型真实层调用和输入/权重分片，沿已有生产mesh准备`PreparedModule`，工具合同见README。公共全局输入、backend/精度固定，实际TP/SP度数从真实组读取。主结果用无profiler同进程热态层bench；各rank完成边界和输出还原必须可核。模型级切分/最终gather若不在生产每层中，也不重复计入每层。
+
+先用便宜的SP单算子筛选当前TP后的本地输入，再用层内profile看真实MM/attention shape与效率拐点，最后比较完整层。只采主要疑点，不默认展开所有度数/通信精度；同层/输入的最快结果不能直接外推整网。局部profile中的计算量、通信与布局各自保留分母和重叠，缺字节/配对不推带宽。
+
+简单单卡任务若只需同步调用耗时，可使用Capture的无trace观测；需要统一多rank、迭代max、显存和数值预检协议时使用module_bench。只准备一份真实call/reset/权重/参考，分别用于正常bench与独立Capture，勿为诊断再造模拟层。
+
+任务脚本负责调用API、保存JSON/逐rank raw、工厂源码/配置身份和退出状态；依[完整层模板](MODULE_REPORT_TEMPLATE.md)生成中文展示，不恢复通用工厂CLI或额外报告引擎。模板只呈现工具已有事实，不补猜缺失字段；展示修订不自动触发性能重测。
+
+
+## 完整层TP/SP与SP配置遍历
+
+用户要求比较并行配置且未指定attention时，任务侧基线使用`flash_attn2`，允许显式指定其他已可执行生产attention；不改模型/算子工具的通用默认，也不将已有稀疏结果改标签作为新稠密结果。
+
+1. 复用`sp_bench`的runtime probe和`enumerate_candidates`，不另写SP候选白名单。对获准总卡数的每个TP因子，使用实际`SP=world/TP`、`heads=global_heads/TP`，沿模型真实主序列/复制aux语义构造case。`SP=1`只保留一个关闭SP的方案。未probe的计划标明待核；预查通过不等于kernel已执行。
+2. 完整保留Ulysses/Ring、head_parallel/group_size、通信精度、fusion、pre/post与A2A候选及拒绝原因。模型不接受某选项时先查生产接线；能适配便在任务factory中接入并验证，不能适配则记具体缺口，不静默忽略参数。
+3. 用已有`candidate_id`作为SP配置字符串，无须另造解析器；连同TP/SP、attention、完整配置放入`report.factory.config`与capture metadata。核实际实例/调用参数，特别是head group、Ring构造和TP本地heads，不只保存配置意图。
+4. 任务driver逐项调用同一PreparedModule factory和正常bench，按既定测量预算执行；先用新attention的单卡参考，检查数值差异。保留未测/失败项，按同卡数与相同全局模型/输入/attention比较，不把少量样例称完整搜索。资源监督、超时和重试沿既有规则。
+5. 报告表保留`SP配置`列，解释`comm=none`表示沿用输入dtype，`head=1`为head流水，`head_group`为每组本地heads；最快只针对已测有效候选。需要解释原因时对所选方案采完整层profile，沿共同模块报告结构保留全部计算分析，再加通信。

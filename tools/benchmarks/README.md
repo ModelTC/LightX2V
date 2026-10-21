@@ -610,3 +610,53 @@ python3 -m tools.benchmarks.operator_bench report \
   --peaks /path/to/hardware_peaks.json \
   --platform h100_sxm_80gb
 ```
+
+## 完整模型层：TP/SP 比较
+
+`module_bench`测量调用方已经准备好的完整层，不构造模型、权重或并行mesh。它与上述算子bench分开；辅助profile另跑，不进入主计时。
+
+同一任务脚本准备生产层和输入，然后直接调用 API；不另建一套模型工厂 CLI。单进程用 Python，分布式用 `torchrun` 启动该任务脚本：
+
+```python
+import json
+from pathlib import Path
+import torch.distributed as dist
+from tools.benchmarks.module_bench import benchmark, compare
+
+# prepared 由任务侧准备；字段见下表。所有测量 rank 共同调用。
+report, raw = benchmark(prepared, warmup=10, iterations=30, repeats=3)
+leader = not dist.is_initialized() or dist.get_rank(prepared.process_group) == 0
+if leader:
+    output = Path(output_directory)  # 本次新目录，不覆盖旧结果。
+    output.mkdir(parents=True, exist_ok=False)
+    (output / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+    (output / "raw.jsonl").write_text("".join(json.dumps(row, allow_nan=False) + "\n" for row in raw))
+
+# 分别完成各并行方案后，在单进程中读取报告并调用 compare(reports)。
+# 它返回 module_comparison_v1 字典；另存 JSON，不自动生成 Markdown。
+```
+
+`prepare(config)`返回`tools.benchmarks.module_bench.PreparedModule`：
+
+| 字段 | 调用方负责的事实 |
+|---|---|
+| call | 一次真实完整层；保留生产包装器、通信、bias和返回值，不能用合成标准层冒充目标层 |
+| reset | 每次调用前及退出后恢复相同输入/状态；恢复副作用在计时外，不应包含正常每层都要执行的目标工作 |
+| synchronize | 完成本层所有GPU stream及异步通信，CPU场景可为空操作；仅当前stream完成不充分 |
+| check(output) | 计时外还原输出并比较参考；返回status=`strict_equal/pending_review/unavailable`和非空scope，可附误差/参考身份；shape或非有限错误应抛异常 |
+| identity | 非空target/input/source字典；input.kind=`real/synthetic`，保存全局输入和权重/源码身份；可附hardware.name。TP/SP度数不放公共身份中，实际组单独记录 |
+| device | 此rank实际CPU/CUDA device |
+| process_group | 全体测量rank的实际组，None为已初始化WORLD；未初始化分布式只允许单进程 |
+| tp_group / sp_group | 实际生产组，None明确表示该维度关闭/度数1，不按WORLD_SIZE猜度数 |
+
+所有测量rank必须共同调用；工厂拥有mesh和通信生命周期。所有rank须声明相同公共身份和测量参数。比较入口拒绝不同身份，并保留各组实际rank成员、参数和数值状态。仅填写source/sha256并不能证明输入真实，准备代码和实际加载文件须可回查。
+
+每次迭代：reset → 完成准备 → 组barrier → 完成barrier → **host计时开始 → call → 所有目标工作完成 → 计时结束**。默认同进程10次预热，3轮每轮30次；预热也执行barrier。每次取各rank完成延迟最大值，再汇总均值/中位/波动；不是先对各rank求均值再取最大。无profiler、event-list或逐算子统计开销，不声称异步serving吞吐。数值预检只执行一次；call及所有目标工作完成后先协调成功/失败，再进入可能含通信的check，预检输出随后释放，不在正式迭代间额外驻留；工厂若保留输出/缓存，须显式记录。
+
+显存基线取预检、预热和reset全部完成后；峰值逐次在目标call前重置、目标完成后读取并取最大，排除reset/barrier和工具的object collective；结束占用取末次目标完成、返回值释放后、最终reset前。raw保留allocated与reserved及各自峰值/增量，主表只显示allocated。跨rank峰值不是同时发生的整组峰值。CUDA allocator不包含所有驱动/NCCL外部分配，设备总占用另由任务监督监测。
+
+API返回`(report, raw)`：`module_benchmark_v1`保留时延汇总、逐次最慢rank和逐rank显存/数值状态；raw保留各rank逐次样本。`compare(reports)`只接受相同公共身份，返回`module_comparison_v1`，保留参数、实际组和数值状态。任务脚本保存JSON/JSONL、命令、工厂源码与配置内容身份；这些工作不进入计时。中文展示使用[完整层报告模板](MODULE_REPORT_TEMPLATE.md)，API不自动写Markdown。非零差异、参考缺失及比较范围留原始记录；模型层误差不代替最终图像/视频质量。
+
+单层的边界须沿生产调用确定。例如H3在整组blocks前/后做SP切分/最终gather，单层应预先切分，计时`infer_block`，仅检查时还原全局输出；每层都计入最终gather会夸大生产层成本。只用post-SP QKV不能重建完整层。reset和目标调用之间逐次协调普通Python错误，避免失败rank与下一次barrier错序；目标collective内部挂起仍依赖torchrun/group timeout及外部任务监督，不能声称安全恢复任意NCCL错误。
+
+需要解释时，复用`tools.profile.capture.Capture`独立采各rank的同一真实call：先干净时间线，再按疑点联合core统计；record_shapes默认关闭。元数据记录实际TP/SP组及本地/全局输入身份，读取实际本地MM/attention shape。通信带宽必须来自真实payload和关联通信活动的独立分母，未知留空；不以字节除整层延迟，也不把重叠分量相加。
