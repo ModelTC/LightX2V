@@ -38,6 +38,7 @@ HuggingFace: https://huggingface.co/lightx2v
    :caption: 快速入门
 
    快速入门 <getting_started/quickstart.md>
+   VGGT BF16 <getting_started/vggt.md>
    生成第一个视频 <getting_started/first_generation.md>
    Python API <getting_started/python_api.md>
    模型结构 <getting_started/model_structure.md>
