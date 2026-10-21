@@ -191,74 +191,108 @@ python scripts/minimax_h3/server/post_t2av.py
 
 ## 🤖 支持的模型生态
 
-按主要用途列出支持的模型与变体。
+LightX2V 支持多种图像、视频与世界模型，并提供量化权重、蒸馏模型和轻量自编码器。
 
-### 视频与音视频生成
+<details>
+<summary><strong>🎬 视频与音视频生成</strong><br><br>
+<a href="https://huggingface.co/Wan-AI/">Wan</a> · <a href="scripts/ltx2/README_zh.md">LTX</a> · <a href="scripts/minimax_h3/README_zh.md">MiniMax-H3</a> · <a href="scripts/hunyuan_video_15/README.md">HunyuanVideo</a> · <a href="scripts/lingbot_video">LingBot-Video</a> · <a href="scripts/seko_talk">SekoTalk</a> · <a href="scripts/infinitetalk">InfiniteTalk</a> · <a href="scripts/self_forcing/README_zh.md">Self-Forcing</a>
+</summary>
 
-- ✅ [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)（含 Causal 分支）
-- ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)（含自回归分支） / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5)（蒸馏版）
-- ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
-- ✅ [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/)
-- ✅ [Wan2.1-VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) / [Wan2.2-VACE-Fun-A14B](https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B)
-- ✅ [Wan2.2-S2V](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B)
-- ✅ [Wan2.2-Animate](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B) / [Wan2.2-Animate-2](https://huggingface.co/Wan-AI/Wan2.2-Animate-2-14B)（蒸馏版）
-- ✅ [LingBot-Video](https://huggingface.co/robbyant/lingbot-video-moe-30b-a3b)（Dense / MoE）
-- ✅ [SekoTalk](https://github.com/OpenSenseNova/SekoTalk)（含自回归分支）
-- ✅ [InfiniteTalk](https://huggingface.co/MeiGen-AI/InfiniteTalk)
-- ✅ [Wan-Dancer](https://huggingface.co/Wan-AI/Wan-Dancer-14B)
-- ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
+| 模型 / 变体与权重 | 使用指南 / 脚本 |
+| --- | --- |
+| [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)（Causal 分支支持 RefA2V，需专用权重） | [使用指南](scripts/minimax_h3/README_zh.md) · [Causal](scripts/minimax_h3_causal) |
+| [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)（自回归分支需专用权重） / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5)（蒸馏版） | [使用指南](scripts/ltx2/README_zh.md) · [自回归示例](scripts/ltx2/ltx2_3/run_ltx2_3_ar_t2av.sh) |
+| [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) | [使用指南](scripts/hunyuan_video_15/README.md) |
+| [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/) | [Wan2.1](scripts/wan/README_zh.md) · [Wan2.2](scripts/wan22/README_zh.md) |
+| [Wan2.1-VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) / [Wan2.2-VACE-Fun-A14B](https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B) | [Wan2.1](scripts/wan/README_zh.md) · [Wan2.2](scripts/wan22_moe_vace) |
+| [Wan2.2-S2V](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B) | [使用指南](scripts/wan22/README_zh.md) |
+| [Wan2.2-Animate](https://huggingface.co/Wan-AI/Wan2.2-Animate-14B) / [Wan2.2-Animate-2](https://huggingface.co/Wan-AI/Wan2.2-Animate-2-14B)（蒸馏版） | [使用指南](scripts/wan22/README_zh.md) |
+| LingBot-Video [Dense 1.3B](https://huggingface.co/robbyant/lingbot-video-dense-1.3b) / [MoE 30B-A3B](https://huggingface.co/robbyant/lingbot-video-moe-30b-a3b) | [推理脚本](scripts/lingbot_video) |
+| [SekoTalk](https://github.com/OpenSenseNova/SekoTalk)（含自回归分支） | [推理脚本](scripts/seko_talk) |
+| [InfiniteTalk](https://huggingface.co/MeiGen-AI/InfiniteTalk) | [推理脚本](scripts/infinitetalk) |
+| [Wan-Dancer](https://huggingface.co/Wan-AI/Wan-Dancer-14B) | [推理脚本](scripts/wan_dancer) |
+| [Self-Forcing](https://github.com/guandeh17/Self-Forcing) | [使用指南](scripts/self_forcing/README_zh.md) |
 
-### 图像生成与编辑
+</details>
 
-- ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image) / [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512)
-- ✅ [Qwen-Image-Edit](https://huggingface.co/Qwen/Qwen-Image-Edit) / [2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) / [2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
-- ✅ [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) / [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)
-- ✅ [Qwen-Image-Layered](https://huggingface.co/Qwen/Qwen-Image-Layered)
-- ✅ FLUX.2 [dev](https://huggingface.co/black-forest-labs/FLUX.2-dev) / [klein](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B)（含 Base 与蒸馏版）
-- ✅ [HunyuanImage-3.0-Instruct](https://huggingface.co/tencent/HunyuanImage-3.0-Instruct)
-- ✅ [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image) / [Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo)
-- ✅ [LongCat-Image](https://huggingface.co/meituan-longcat/LongCat-Image) / [Edit](https://huggingface.co/meituan-longcat/LongCat-Image-Edit) / [Edit-Turbo](https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo)
-- ✅ [BAGEL](https://huggingface.co/ByteDance-Seed/BAGEL-7B-MoT)
-- ✅ [HiDream-O1-Image](https://huggingface.co/HiDream-ai/HiDream-O1-Image) / [Dev-2604](https://huggingface.co/HiDream-ai/HiDream-O1-Image-Dev-2604)
-- ✅ [ERNIE-Image](https://huggingface.co/baidu/ERNIE-Image) / [Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo)
-- ✅ [SenseNova-U1](https://github.com/OpenSenseNova/SenseNova-U1)（NeoPP 后端，需配合 LightLLM）
+<details>
+<summary><strong>🎨 图像生成与编辑</strong><br><br>
+<a href="scripts/qwen_image/README_zh.md">Qwen-Image</a> · <a href="scripts/flux2">FLUX.2</a> · <a href="scripts/hunyuan_image3">HunyuanImage</a> · <a href="scripts/z_image/README_zh.md">Z-Image</a> · <a href="scripts/longcat/README_zh.md">LongCat-Image</a> · <a href="scripts/bagel/README.md">BAGEL</a> · <a href="scripts/hidream_o1_image">HiDream</a> · <a href="scripts/ernie_image">ERNIE-Image</a> · <a href="scripts/neopp/README.md">SenseNova-U1</a>
+</summary>
 
-### 修复与超分辨率
+| 模型 / 变体与权重 | 使用指南 / 脚本 |
+| --- | --- |
+| [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image) / [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) | [使用指南](scripts/qwen_image/README_zh.md) |
+| [Qwen-Image-Edit](https://huggingface.co/Qwen/Qwen-Image-Edit) / [2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) / [2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) | [使用指南](scripts/qwen_image/README_zh.md) |
+| [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) / [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) | [使用指南](scripts/qwen_image_21/README_zh.md) |
+| [Qwen-Image-Layered](https://huggingface.co/Qwen/Qwen-Image-Layered) | [使用指南](scripts/qwen_image/README_zh.md) |
+| FLUX.2 [dev](https://huggingface.co/black-forest-labs/FLUX.2-dev) / [klein](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B)（klein 支持 Base 与蒸馏版） | [推理脚本](scripts/flux2) |
+| [HunyuanImage-3.0-Instruct](https://huggingface.co/tencent/HunyuanImage-3.0-Instruct) | [推理脚本](scripts/hunyuan_image3) |
+| [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image) / [Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) | [Turbo 使用指南](scripts/z_image/README_zh.md)；基础版需启用 CFG（引导强度 > 1）并调整采样步数 |
+| [LongCat-Image](https://huggingface.co/meituan-longcat/LongCat-Image) / [Edit](https://huggingface.co/meituan-longcat/LongCat-Image-Edit) / [Edit-Turbo](https://huggingface.co/meituan-longcat/LongCat-Image-Edit-Turbo) | [使用指南](scripts/longcat/README_zh.md)；Edit-Turbo 需使用对应权重、8 步采样并关闭 CFG |
+| [BAGEL](https://huggingface.co/ByteDance-Seed/BAGEL-7B-MoT) | [使用指南](scripts/bagel/README.md) |
+| [HiDream-O1-Image](https://huggingface.co/HiDream-ai/HiDream-O1-Image) / [Dev-2604](https://huggingface.co/HiDream-ai/HiDream-O1-Image-Dev-2604) | [推理脚本](scripts/hidream_o1_image) |
+| [ERNIE-Image](https://huggingface.co/baidu/ERNIE-Image) / [Turbo](https://huggingface.co/baidu/ERNIE-Image-Turbo) | [推理脚本](scripts/ernie_image) |
+| [SenseNova-U1](https://github.com/OpenSenseNova/SenseNova-U1)（NeoPP 后端，需配合 LightLLM） | [使用指南](scripts/neopp/README.md) |
 
-- ✅ [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B)
-- ✅ [SwiftVR](https://huggingface.co/H-oliday/SwiftVR)
+</details>
 
-### 世界模型、机器人与三维
+<details>
+<summary><strong>🔍 修复与超分辨率</strong><br><br>
+<a href="scripts/seedvr2/README_zh.md">SeedVR2</a> · <a href="scripts/swiftvr/README_zh.md">SwiftVR</a>
+</summary>
 
-- ✅ [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super)（含 [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID)）
-- ✅ [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast)
-- ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0)
-- ✅ [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay)（双向、自回归与蒸馏版）
-- ✅ [EdenLive](scripts/edenlive/README_zh.md)（Wan2.1 14B / Wan2.2 5B，支持双向与四步自回归推理）
-- ✅ [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0)（三维重建）
-- ✅ [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID)
-- ✅ [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base)
-- ✅ [Motus](https://huggingface.co/motus-robotics/Motus)
-- ✅ [Fast-WAM](https://github.com/yuantianyuan01/FastWAM)
-- ✅ [RealtimeWAM](https://huggingface.co/lightx2v/RealtimeWAM)（基于 Fast-WAM / Faster-WAM）
-- ✅ [Hunyuan3D-2.1](https://huggingface.co/tencent/Hunyuan3D-2.1)（图生三维形状）
+| 模型 / 变体与权重 | 使用指南 / 脚本 |
+| --- | --- |
+| [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B) | [使用指南](scripts/seedvr2/README_zh.md) |
+| [SwiftVR](https://huggingface.co/H-oliday/SwiftVR) | [使用指南](scripts/swiftvr/README_zh.md) |
 
-### 量化、蒸馏模型与 LoRA
+</details>
 
-- ✅ [MiniMax-H3 Turbo](https://huggingface.co/lightx2v/Minimax-h3-Turbo) —— T2AV / FL2AV 的 4 / 8 步 768p 蒸馏 LoRA
-- ✅ [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) —— T2V、T2I、I2V 的 4 步蒸馏 LoRA
-- ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models) / [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
-- ✅ [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras) / [Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
-- ✅ [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4) / [LightWan2.2-A14B](https://huggingface.co/lightx2v/LightWan2.2-A14B)
-- ✅ [Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models) / [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models)
-- ✅ [Qwen-Image-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Lightning) / [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) / [Qwen-Image-2.1-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning)
-- ✅ [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning)
-- ✅ [Z-Image-Turbo-Quantized](https://huggingface.co/lightx2v/Z-Image-Turbo-Quantized)
-- ✅ [Self-Forcing-FP8](https://huggingface.co/lightx2v/Self-Forcing-FP8) / [Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4)
+<details>
+<summary><strong>🌍 世界模型、机器人与三维</strong><br><br>
+<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game3">Matrix-Game</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README_zh.md">EdenLive</a> · <a href="scripts/worldmirror/README_zh.md">WorldMirror</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
+</summary>
 
-### 轻量自编码器
+| 模型 / 变体与权重 | 使用指南 / 脚本 |
+| --- | --- |
+| [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super)（含 [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID)） | [推理脚本](scripts/cosmos3) |
+| [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast) | [推理脚本](scripts/lingbot) |
+| [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0) | [2.0](scripts/matrix_game2) · [3.0](scripts/matrix_game3) |
+| [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay)（双向、自回归与蒸馏版） | [使用指南](scripts/worldplay/README.md) |
+| [EdenLive](https://huggingface.co/VAST-AI/EdenLive)（Wan2.1 14B / Wan2.2 5B，支持双向与四步自回归推理） | [使用指南](scripts/edenlive/README_zh.md) |
+| [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0)（三维重建） | [使用指南](scripts/worldmirror/README_zh.md) |
+| [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) | [推理脚本](scripts/dreamzero) |
+| [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base) | [推理脚本](scripts/lingbot_va) |
+| [Motus](https://huggingface.co/motus-robotics/Motus) | [推理脚本](scripts/motus) |
+| [Fast-WAM](https://github.com/yuantianyuan01/FastWAM) | [推理脚本](scripts/fastwam) |
+| [RealtimeWAM](https://huggingface.co/lightx2v/RealtimeWAM)（基于 Fast-WAM / Faster-WAM） | [使用指南](scripts/realtimewam/README.md) |
+| [Hunyuan3D-2.1](https://huggingface.co/tencent/Hunyuan3D-2.1)（图生三维形状） | [推理脚本](scripts/hunyuan3d) |
 
-- ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)（LightVAE / LightTAE）
+</details>
+
+<details>
+<summary><strong>⚡ LightX2V 加速资源</strong><br><br>
+<strong>蒸馏与 LoRA</strong>：<a href="https://huggingface.co/lightx2v/Minimax-h3-Turbo">MiniMax-H3 Turbo</a> · <a href="https://huggingface.co/lightx2v/LightLingBot-Video">LightLingBot-Video</a> · <a href="https://huggingface.co/lightx2v/Wan2.2-Distill-Models">Wan</a> · <a href="https://huggingface.co/lightx2v/Hy1.5-Distill-Models">HunyuanVideo</a> · <a href="https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning">Qwen-Image Lightning</a><br>
+<strong>量化权重</strong>：<a href="https://huggingface.co/lightx2v/Wan-NVFP4">Wan NVFP4</a> · <a href="https://huggingface.co/lightx2v/LightWan2.2-A14B">LightWan2.2</a> · <a href="https://huggingface.co/lightx2v/Hy1.5-Quantized-Models">HunyuanVideo</a> · <a href="https://huggingface.co/lightx2v/Z-Image-Turbo-Quantized">Z-Image</a> · <a href="https://huggingface.co/lightx2v/Self-Forcing-FP8">Self-Forcing</a><br>
+<strong>轻量自编码器</strong>：<a href="https://huggingface.co/lightx2v/Autoencoders">LightVAE / LightTAE</a>
+</summary>
+
+| 模型 / 变体与权重 | 使用指南 / 脚本 |
+| --- | --- |
+| [MiniMax-H3 Turbo](https://huggingface.co/lightx2v/Minimax-h3-Turbo) —— 4 / 8 步蒸馏 LoRA，含 768p T2AV / FL2AV 与 4 步 Ref2AV | [使用指南](scripts/minimax_h3/README_zh.md) |
+| [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) —— T2V、T2I、I2V 的 4 步蒸馏 LoRA | [推理脚本](scripts/lingbot_video) |
+| [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models) / [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models) | [Wan2.1](scripts/wan/README_zh.md) · [Wan2.2](scripts/wan22/README_zh.md) |
+| [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras) / [Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras) | [Wan2.1](scripts/wan/README_zh.md) · [Wan2.2](scripts/wan22/README_zh.md) |
+| [Wan-NVFP4](https://huggingface.co/lightx2v/Wan-NVFP4) / [LightWan2.2-A14B](https://huggingface.co/lightx2v/LightWan2.2-A14B) | [Wan2.1](scripts/wan/README_zh.md) · [Wan2.2](scripts/wan22/README_zh.md) |
+| [Hy1.5-Distill-Models](https://huggingface.co/lightx2v/Hy1.5-Distill-Models) / [Hy1.5-Quantized-Models](https://huggingface.co/lightx2v/Hy1.5-Quantized-Models) | [使用指南](scripts/hunyuan_video_15/README.md) |
+| [Qwen-Image-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Lightning) / [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) / [Qwen-Image-2.1-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning) | [Qwen-Image](scripts/qwen_image/README_zh.md) · [2.1](scripts/qwen_image_21/README_zh.md) |
+| [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) | [使用指南](scripts/qwen_image/README_zh.md) |
+| [Z-Image-Turbo-Quantized](https://huggingface.co/lightx2v/Z-Image-Turbo-Quantized) | [使用指南](scripts/z_image/README_zh.md) |
+| [Self-Forcing-FP8](https://huggingface.co/lightx2v/Self-Forcing-FP8) / [Self-Forcing-NVFP4](https://huggingface.co/lightx2v/Self-Forcing-NVFP4) | [使用指南](scripts/self_forcing/README_zh.md) |
+| [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)（LightVAE / LightTAE） | [Python API](docs/ZH_CN/source/getting_started/python_api.md) |
+
+</details>
 
 ## 🚀 核心特性
 
