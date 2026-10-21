@@ -1,28 +1,78 @@
-# 模型范围采集
+# 模型范围 Profiler
 
-在同进程真实同步函数/实例方法上采集TensorBoard时间线与可选核心事实。入口实际调用目标；工具不重放，也不提供正式无开销请求计时。
+回答一次真实函数/模块的时间花在哪里。算子多后端竞速使用 `tools/benchmarks`；本工具产生诊断时间线、同次计算量和中文报告，不提供正式请求吞吐或后端排名。
+
+## 最短路径
+
+入口必须在**同一进程**实际调用目标至少 `skip + warmup + count` 次。工具不重放目标，也不替入口编造预热。
 
 ```bash
+# 先看正常时间线；默认scheduler warmup=1，active=1，record_shapes关闭。
 python -m tools.profile.capture --target my_model:Block.forward \
-  --output /tmp/profile-clean --warmup 3 my_entry.py
+  --output /tmp/profile-clean --warmup 3 my_entry.py --entry-option value
+
+# 需要同次shape、计算量、实际路由和kernel对应时，单独做联合诊断。
 python -m tools.profile.capture --target my_model:Block.forward \
-  --output /tmp/profile-facts --warmup 3 --workloads my_entry.py
-tensorboard --logdir /tmp/profile-clean
+  --output /tmp/profile-facts --warmup 3 --workloads my_entry.py --entry-option value
+
+python -m tools.profile.trace_report /tmp/profile-facts/*.pt.trace.json.gz \
+  --output /tmp/profile-report --peaks /path/to/peaks.json --platform my_gpu
+tensorboard --logdir /tmp/profile-facts
 ```
 
-同一进程至少调用skip+warmup+count次。scheduler warmup默认1，active默认1；调用不足为capture_incomplete并CLI非零退出。模型warmup与采集器warmup用途不同，不保证跨进程缓存。进入active前完成当前CUDA设备预热队列；--synchronize-cuda仅在整个目标前后同步，不逐kernel同步。
+TensorBoard 使用 PyTorch Profiler 插件（`torch-tb-profiler`）。也可在 VS Code 的 TensorBoard 扩展中选择同一个 logdir。文件存在、插件解析成功、IDE 实际打开是三个不同证据。主要原始文件是 `.pt.trace.json.gz`，其内容为 PyTorch/Kineto trace；兼容旧插件的 runtime 分类转换保留原分类。无需搬运到本地浏览器。
 
-API：`with Capture(output, enabled=True, warmup=3) as capture:`，由入口循环调用`capture.call(model.forward, input)`。默认enabled=False。普通同步Python函数/实例方法可临时包装；异步/生成器/静态或类方法描述符、缓存别名不接管。退出/异常恢复原方法和argv/path。目标owner与实际__main__入口同源时提前拒绝，改用独立driver或Capture API。
+目标格式为 `module:function` 或 `module:Class.method`，支持普通同步 Python 函数/实例方法。临时包装在退出/异常后恢复，不修改模型源码；目标定义与 `__main__` 入口须分开，同文件会在执行入口前拒绝，可用导入目标的独立 driver 或 API。异步、生成器、静态/类方法描述符和已缓存的函数别名不由此 CLI 接管。`--module` 表示入口是模块名；入口的参数放最后。需要更精确的调用位置时使用 API：
 
-record_shapes默认关闭，--record-shapes只供ATen调试，不据它计算FLOPs。--workloads复用共用算子统计并给实际apply唯一标记；--moe-distribution额外记录生产专家分布，实际稀疏区域随统计自动取得，--stats-max-calls默认每类4096，超限有coverage gap。core_ops写盘在apply标记外，backend统计和workloads写盘仍可能在apply内；CPU归约/搬运可能同步，判断生产空隙须另采干净时间线。
+```python
+from tools.profile.capture import Capture
 
---observe-only只记录host边界，不启动profiler；--stats-only只采计算量、不启动profiler，无scheduler warmup。异步GPU的host返回不等于完成。多设备队列边界由调用方明确。
+with Capture(output, enabled=True, warmup=3, count=1, workloads=True,
+             metadata={"description": "模型、权重、固定输入及精度来源"}) as capture:
+    for request in real_requests:
+        result = capture.call(model.forward, request)
+```
 
-产物为session.json、逐次calls.jsonl、一份.pt.trace.json.gz及可选call_*.stats。trace为PyTorch/Kineto格式，面向TensorBoard PyTorch Profiler插件；runtime分类兼容转换保留原分类。session保存状态、参数和实际加载Python身份；失败/不完整产物保留。统计与逐次runtime边界只覆盖实际core/backend统计入口，编译图/graph内部缺口不猜。
+`Capture` 默认 `enabled=False`，直接执行原函数。模型内置 warmup 准备模型，profiler scheduler warmup 准备本进程的采集器，两者用途不同；没有跨进程 cache 预热保证。进入 active 前完成一次当前 CUDA 设备的预热队列。`--synchronize-cuda` 才在每次**整个目标**前后同步当前设备；它不逐 kernel 同步，但可能改变与范围外工作的重叠。多设备队列需要调用方明确边界。
 
---library-log-dir用于尚未导入torch的新CLI进程，在库初始化前打开cuBLAS/cuBLASLt日志；退出恢复环境并保存实际库/设置/日志。日志可能在进程退出最后flush，用library_precision.read_library_logs读取最终文件。它包含预热，是进程级API证据，不按时间或shape猜逐次归属；设置许可/API computeType不证明物理部分归约。
+`--observe-only` 只记录 host 调用，不启动 profiler 或统计；异步 CUDA 的 host 返回不等于 GPU 完成。`--stats-only` 只采计算量，无 scheduler warmup；入口可自行先预热。`--record-shapes` 只供明确的 ATen shape 调试，默认关闭，报告不从该字段推算计算量。`--stats-max-calls` 默认每类 backend 4096 条，超过上限有 coverage gap。`--moe-distribution`只额外保存生产专家分布；稀疏实际区域随计算量统计自动取得，导出需显式callback；总量仍复用共用算子数学。
 
-源码顺序：capture.py真实调用/scheduler→workload_stats.py显式标记→library_precision.py设置及新进程日志。原TorchTraceProfileContext和analyze_torch_trace_gap.py不变。
+## 产物与范围
+
+- `session.json`：状态、scheduler、调用/失败计数、加载的 Python 源身份和 metadata；`calls.jsonl` 是逐次 host 边界。
+- 一份 TensorBoard trace：只包含 active 周期。调用不够为 `capture_incomplete`，CLI 非零退出，已有失败事实保留。
+- 联合或 stats-only 模式下的 `call_*.stats/`：共用 core/backend 计算量、实际区域及 coverage。联合采样给真实 apply 唯一标记；形状、实际 route 与该次调用的 kernel 沿标记/CPU 嵌套/correlation 关联。core_ops 写盘移出核心 apply 标记；apply 内的 backend 区域统计、workloads 写盘及拷贝/同步仍可能影响采集，所以必须与干净时间线区分。
+- 分析目录的 `report.md` 和 `facts.json`：前者首屏看总体/热点，后者保留完整事件下标、关联、精度证据与缺口。`--scope` 精确选 annotation，`--occurrence` 选其第几次；GPU 异步尾部按关联保留，不裁到 host 结束；其他scope中存在的唯一标记不计作本范围缺口。
+
+统计会话的`status/coverage_gaps`会保留到普通及并行分析的facts，并在存在缺口时提示采样覆盖。达到采样上限、未接入等均不表示算子没有执行；有效样本只解释已观测调用，不外推完整调用分布。
+
+统计覆盖实际 core-op 和已接入的 backend 统计入口，不覆盖任意 raw ATen 或编译图内部。eager 联合统计不改变生产 compile 默认；需要编译性能时采干净编译时间线，另外 eager 查计算量，不能将两次运行冒充逐次绑定。CUDA graph 内部缺少事实时也不能由名称补造。
+
+同一调用多个计算 kernel 合并覆盖时间，计算量只列一次；无法识别主体 kernel 时仍展示实际 shape/计算量，以“含辅助”注明包含拷贝/填充的完整算子活动并集分母。LoRA激活时主线性计算量不含其两次GEMM，尚未单独定位主GEMM时按完整owner展示耗时、效率留空。完整owner计时不改变kernel身份：布局转换、逐元素和量化仍列辅助；卷积的implicit-GEMM属于卷积主体。组合父子只发布实际叶子计算量；父完整逻辑量仍见原始统计，其自身辅助保留在成本表。无法拆分的父额外计算只报时间，不从完整父量推效率。稀疏只按真实最终 mask/ranges 算 selected logical，scheduled tile 包含可证的 padding；dense-equivalent 只算 QK/PV。均不含路由、softmax、量化，也不声称是物理指令数。外部 Sparge 等未暴露最终区域时，实际效率留空；第二项 `*` 是稠密等价效率，不是硬件利用率。
+
+已核实的 `lightx2v::dynamic_sparse_sage2` 内，GEMM 用于生成 SLA 路由图，归入辅助成本并保留 GEMM 家族；其计算量未采集，不计入 QK/PV 主体效率。不能将此规则推广到任意 attention 内的 GEMM。
+
+MoE 专家量不含路由合并。已接入的 owning backend 用同次 `compute_trace_marker` 标记真实专家阶段，阶段外 combine 不再按 GEMM 名字混入专家主体；完整 owner 成本仍保留。缺少或无效专家范围时只给完整 owner，专家精度/效率留未知。阶段内主体不全可识别时按整阶段计时并标“专家阶段含辅助”。`gpu_groups.work_role` 区分核心、辅助、归属待核，保留原 native/kernel 家族；普通与并行消费者使用同一角色事实。
+
+单卡和多卡报告的主体计算表共用[呈现约定](CORE_COMPUTE_TABLE.md)，固定列、单位、数值格式和合并条件；多卡只追加rank及允许的范围展示。
+
+## 如何读时间和精度
+
+GPU活动并集：合并重叠区间，只计一次，包含 kernel/拷贝/填充。
+
+GPU首末跨度：首个到最后一个关联活动的时间，包含中间间隙。
+
+可见空隙：上述跨度内，本 trace 没有显示本设备任何活动的区间。范围外但同期可见的活动不会误算为空隙；trace 看不见的其他进程仍需外部动态监测。各分类覆盖可能重叠，不相加。CPU 自身时间扣除同线程子区间并集，不扣异步 GPU，也不把等待当计算。分类结合真实native关联与kernel名称，不依赖计算量样本；无法识别的活动注明类型待识别，保留原因并汇入其他，不因此发布FLOPs。
+
+同步 API 的等待、上层调用和空隙交集用于定位；不能仅凭 `cudaStreamSynchronize` 很长判它多余。高空隙先比较干净/联合采集，检查同进程预热、CPU准备和异步队列，再查生产依赖。profile 开销不进入正式 benchmark 的 event-list 结果。
+
+精度分开保存实际输入/输出、名义计算/累加、部分归约许可。custom GEMM/FP4 类型和 PyTorch 原生 GEMM 合同在 `operator_facts.py` 集中，消费实际关联的CPU native名称及kernel类型；外层BF16可以经过量化，不能替代真实GEMM精度。联合采集在每次core入口前后读取设置，不拿预热前快照冒充active事实；缺失或变化时不应用这份设置推断名义累加。原始设置只存于该 core 的事实，不把配置的归约许可再发布成实际库行为；未核实的 cuBLAS 私有短名不作为精度合同。边界设置也不证明opaque内部所有部分归约，未知保留。只有已核实的版本/API/类型才发布，输入 BF16 不自动证明全程严格 FP32。`--library-log-dir` 在尚未 import torch 的新 CLI 进程打开 cuBLAS/cuBLASLt API 日志，分析时同名参数附上退出后的证据。日志包含预热，是进程级补证，不按时间/shape猜分配到某次 GEMM；API computeType 不证明每条物理指令的中间精度。
+
+峰值复用 benchmark 的显式文件与 SKU/SM/dtype/accumulator 校验；没有匹配文件只报告绝对时间/计算效率。Agent 更换硬件时主动查厂商规格并建档，代码不联网或硬填 H100 常数。GEMM 理想字节量只计一次读 A/B、写输出，未测量 DRAM 流量；理想算术强度=FLOPs/上述字节量，roofline=min(名义计算峰值, 名义显存带宽×算术强度)。它只是理想参照，不能单凭它断定内存瓶颈。
+
+## 源码阅读顺序
+
+`capture.py`（真实调用与scheduler）→ `workload_stats.py` 的显式 trace_ranges（核心标记）→ `trace_report.py`（关联/并集/中文界面）。精度规则单看 `operator_facts.py`，库日志单看 `library_precision.py`；原 `TorchTraceProfileContext` 不变，原 `analyze_torch_trace_gap.py` 仍可单独使用。
 
 ## SP 算子的真实流水
 
@@ -41,6 +91,3 @@ with Capture(rank_output, enabled=True, warmup=warmup, count=1,
 ```
 
 `case/candidate/inputs/device/rank` 均沿用生产准备，保留实际 `head_parallel/head_parallel_group_size`，包括非整除尾组；不要改用只支持 bulk 的组件模拟诊断。每个 rank 采集自己的目录；metadata 的 identity.target 包含完整候选配置，另记录共同批次、suite/case、输入文件与源码身份、基础及实际 seed、repeat 和真实组。完整 SP 入口是组合边界，计算量来自实际本地叶子调用，不能把返回的稠密等价量分给每个 kernel。时间线采集先关闭统计，必要时另跑同配置的联合统计。
-
-
-MoE可分离的实际专家调用复用trace_ranges记录compute_trace_marker；只在已采样联合诊断时标记，不新增导出/预热/计算量通道。
