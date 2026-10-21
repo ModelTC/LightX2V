@@ -80,6 +80,50 @@ The default outputs are `save_results/minimax_h3_roll_fl2av/draft.mp4` and `resa
 
 To use different inputs, update both frame paths and the prompt in both scripts. Point regeneration's `--resample_source_video` to the selected draft with audio and keep both frame arguments. Remove `--draft_steps 3` from the draft script to generate a full 8-step draft. For roughly 15 seconds, change `--num_frames` to `362` in both scripts. Each script loads the model separately.
 
+## Ref2AV launchers
+
+Ref2AV uses reference media to guide generation. The two independent scripts default to eight-GPU SP8 and BF16/BF16, using the base model's `transformer_ref/` weights and a separate [Ref2AV 8-step config](../../configs/minimax_h3_roll/minimax_h3_ref2av_bf16_8step.json):
+
+- [run_minimax_h3_ref2av_draft.sh](run_minimax_h3_ref2av_draft.sh): generate a 480p K3 draft from a reference image.
+- [run_minimax_h3_ref2av_resample.sh](run_minimax_h3_ref2av_resample.sh): regenerate a selected draft at 768p while retaining the reference image.
+
+Before running, edit `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES` in both scripts. The base-model directory must include `transformer_ref/`; set the config's LoRA path to your local [minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors). This example uses video/audio shifts `12/3`, `alpha=8`, and `reference_image_resize_mode="match"`.
+
+Before the first run, prepare a matching AdaLN cache with the Ref2AV config and `--model-variant ref2av`. Skip this step if a matching cache already exists:
+
+```bash
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3
+
+export CUDA_VISIBLE_DEVICES=0
+source "${lightx2v_path}/scripts/base/base.sh"
+
+python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
+  --model_path "${model_path}" \
+  --config_json "${lightx2v_path}/configs/minimax_h3_roll/minimax_h3_ref2av_bf16_8step.json" \
+  --model-variant ref2av
+```
+
+The example uses a bird image already included in the repository as an appearance reference. It does not lock the first or last frame, and no additional media download is needed:
+
+![Bird reference](../../assets/inputs/imgs/flf2v_input_first_frame-fs8.png)
+
+Both scripts use the same prompt, describing the reference bird hopping along a garden fence, tilting its head, and flapping its wings:
+
+```text
+The fluffy blue bird from the reference image hops along a wooden garden fence, tilts its head and flaps its small wings. Keep its round body, blue feathers and expressive eyes consistent. A gentle camera pan follows the bird in warm morning sunlight. Sound: cheerful chirping, soft wingbeats and a light breeze.
+```
+
+```bash
+bash scripts/minimax_h3_roll/run_minimax_h3_ref2av_draft.sh
+# Inspect save_results/minimax_h3_roll_ref2av/draft.mp4, then regenerate the selected draft.
+bash scripts/minimax_h3_roll/run_minimax_h3_ref2av_resample.sh
+```
+
+The default outputs are `save_results/minimax_h3_roll_ref2av/draft.mp4` and `resample.mp4`. Both stages pass `--model-variant ref2av --task ref2av` and use the same `--image_path`, prompt, seed `42`, and frame count `124`. The draft uses `--size 480 864 --draft_steps 3`; regeneration uses `--size 768 1344 --resample_start_step 1` and runs the last 7 steps of the original 8-step schedule. Remove `--draft_steps 3` from the draft script to generate a full 8-step draft. For roughly 15 seconds, change `--num_frames` to `362` in both scripts. Each script loads the model separately.
+
+To use different references, update `--image_path` and the prompt in both scripts. You can also add `--video_path` / `--audio_path`, with comma-separated paths for multiple files of the same type; audio references require an image or video reference as well. Retain the original references during regeneration and pass the selected draft with audio as `--resample_source_video`. The `--video_path` argument supplies a reference video and does not replace that parameter.
+
 ## Parameters and workflow
 
 | Field | Default | Meaning |

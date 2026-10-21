@@ -80,6 +80,50 @@ bash scripts/minimax_h3_roll/run_minimax_h3_fl2av_resample.sh
 
 替换输入时，两个脚本都应修改首尾图和提示词；重生成的 `--resample_source_video` 指向选中的带音轨草片，同时保留首尾帧参数。删除草片脚本中的 `--draft_steps 3` 可生成完整 8 步草片。15 秒例子将两个脚本的 `--num_frames` 都改为 `362`。每个脚本分别加载模型。
 
+## Ref2AV 启动脚本
+
+Ref2AV 使用参考素材引导生成。两个独立脚本默认八卡 SP8、BF16/BF16，使用基础模型的 `transformer_ref/` 权重和单独的 [Ref2AV 8 步配置](../../configs/minimax_h3_roll/minimax_h3_ref2av_bf16_8step.json)：
+
+- [run_minimax_h3_ref2av_draft.sh](run_minimax_h3_ref2av_draft.sh)：根据参考图生成 480p K3 草片。
+- [run_minimax_h3_ref2av_resample.sh](run_minimax_h3_ref2av_resample.sh)：保留参考图条件，将选中的草片重生成为 768p 视频。
+
+运行前修改两个脚本中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`。基础模型目录需包含 `transformer_ref/`；将配置中的 LoRA 路径改为本地的 [minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors)。此示例使用 video/audio shift `12/3`、`alpha=8` 和 `reference_image_resize_mode="match"`。
+
+首次运行前，用 Ref2AV 配置和 `--model-variant ref2av` 准备匹配的 AdaLN 缓存；已有匹配缓存时跳过这一步：
+
+```bash
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3
+
+export CUDA_VISIBLE_DEVICES=0
+source "${lightx2v_path}/scripts/base/base.sh"
+
+python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
+  --model_path "${model_path}" \
+  --config_json "${lightx2v_path}/configs/minimax_h3_roll/minimax_h3_ref2av_bf16_8step.json" \
+  --model-variant ref2av
+```
+
+示例复用仓库内的小鸟图片作为外观参考，不固定首尾帧，无需另外下载素材：
+
+![小鸟参考图](../../assets/inputs/imgs/flf2v_input_first_frame-fs8.png)
+
+两个脚本使用同一提示词，描述参考小鸟在花园木栅栏上跳跃、歪头和振翅：
+
+```text
+The fluffy blue bird from the reference image hops along a wooden garden fence, tilts its head and flaps its small wings. Keep its round body, blue feathers and expressive eyes consistent. A gentle camera pan follows the bird in warm morning sunlight. Sound: cheerful chirping, soft wingbeats and a light breeze.
+```
+
+```bash
+bash scripts/minimax_h3_roll/run_minimax_h3_ref2av_draft.sh
+# 查看 save_results/minimax_h3_roll_ref2av/draft.mp4 后，重生成选中的草片。
+bash scripts/minimax_h3_roll/run_minimax_h3_ref2av_resample.sh
+```
+
+默认输出到 `save_results/minimax_h3_roll_ref2av/draft.mp4` 和 `resample.mp4`。两个阶段都传 `--model-variant ref2av --task ref2av`，使用相同的 `--image_path`、提示词、seed `42` 和帧数 `124`。草片为 `--size 480 864 --draft_steps 3`；重生成为 `--size 768 1344 --resample_start_step 1`，执行原 8 步时间表的后 7 步。删除草片脚本中的 `--draft_steps 3` 可生成完整 8 步草片；15 秒例子将两个脚本的 `--num_frames` 都改为 `362`。每个脚本分别加载模型。
+
+替换参考输入时，两个脚本都应同步修改 `--image_path` 和提示词；也可添加 `--video_path` / `--audio_path`，同类多个文件用逗号分隔，音频参考需同时提供图片或视频参考。重生成时保留原始参考输入，将选中的带音轨草片传给 `--resample_source_video`；`--video_path` 表示参考视频，不能替代该参数。
+
 ## 参数与固定流程
 
 | 字段 | 默认值 | 用途 |
