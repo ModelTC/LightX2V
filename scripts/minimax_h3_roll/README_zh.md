@@ -15,14 +15,14 @@
 - [run_minimax_h3_t2av_draft.sh](run_minimax_h3_t2av_draft.sh)：生成 480p 草片。
 - [run_minimax_h3_t2av_resample.sh](run_minimax_h3_t2av_resample.sh)：将选中的草片重生成为 768p 视频。
 
-脚本运行前直接修改两个脚本中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`，设置 `--config_json` 对应配置中的本地 LoRA 路径，并按[模型和尺寸](#模型和尺寸)准备匹配的 AdaLN 缓存。
+脚本运行前直接修改两个脚本中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`，设置 `--config_json` 对应配置中的本地 LoRA 路径，并准备匹配的 AdaLN 缓存。
 
 ```bash
 bash scripts/minimax_h3_roll/run_minimax_h3_t2av_draft.sh
 bash scripts/minimax_h3_roll/run_minimax_h3_t2av_resample.sh
 ```
 
-默认输出到 `save_results/minimax_h3_roll_t2av/draft.mp4` 和 `resample.mp4`。默认草片执行配置的完整步数（当前为 8），重生成从 `resample_start_step=1` 开始（当前为后 7 步）。两个阶段使用相同提示词、seed 和帧数，各自启动一次 `lightx2v.infer`，会分别加载模型；需要复用模型时使用下文的 Python 批处理或 HTTP server。
+默认输出到 `save_results/minimax_h3_roll_t2av/draft.mp4` 和 `resample.mp4`。草片脚本显式设置 `--draft_steps 3`，生成 K3 草片；删除该参数则执行配置的完整 8 步。重生成从 `resample_start_step=1` 开始（当前为后 7 步）。两个阶段使用相同提示词、seed 和帧数，各自启动一次 `lightx2v.infer`，会分别加载模型；需要复用模型时使用下文的 Python 示例或 HTTP server。
 
 输入和生成参数直接在脚本中修改：
 
@@ -32,14 +32,14 @@ bash scripts/minimax_h3_roll/run_minimax_h3_t2av_resample.sh
 | `--config_json` | `configs/minimax_h3_roll/minimax_h3_bf16_8step.json`（相对仓库根目录） | 启动配置；LoRA、shift 和步数由配置决定。 |
 | `CUDA_VISIBLE_DEVICES` / `--nproc_per_node` | `0,1,2,3,4,5,6,7` / `8` | GPU 和进程数，须与配置的并行规模匹配。 |
 | `--prompt` / `--seed` / `--num_frames` | 雨中黄色电车示例 / `42` / `124` | 两阶段共用的提示词、随机种子和帧数。 |
-| `--draft_steps` | 不传 | 沿用配置步数；在草片命令中添加 `--draft_steps 3` 可生成3步草片。 |
+| `--draft_steps` | `3` | 脚本生成 3 步草片；删除该参数则沿用配置的完整步数。 |
 | `--size` | 草片 `480 864`；重生成 `768 1344` | `[高度, 宽度]`，高清重生成可改为 `1088 1920`。 |
 | `--resample_start_step` | `1` | 重生成在原时间表中的起点索引。 |
 | `--resample_source_video` | `save_results/minimax_h3_roll_t2av/draft.mp4`（相对仓库根目录） | 要重生成的草片，可指定已选中的带音轨视频。 |
 | `--save_result_path` | `save_results/minimax_h3_roll_t2av/{draft,resample}.mp4`（相对仓库根目录） | 结果文件；再次使用相同路径会覆盖对应结果。 |
 | `DTYPE` / `SENSITIVE_LAYER_DTYPE` | `BF16` / `BF16` | 推理精度，与现有 H3 离线脚本一致。 |
 
-生成 K3 草片时，在草片脚本的 `torchrun` 命令中添加 `--draft_steps 3`，查看结果后再运行重生成脚本：
+草片脚本已设置 `--draft_steps 3`。生成 K3 草片并查看结果后，再运行重生成脚本：
 
 ```bash
 bash scripts/minimax_h3_roll/run_minimax_h3_t2av_draft.sh
@@ -48,6 +48,37 @@ bash scripts/minimax_h3_roll/run_minimax_h3_t2av_resample.sh
 ```
 
 换 seed 时修改 `--save_result_path` 保留候选草片，并把重生成脚本的 `--resample_source_video` 指向选中的草片。15 秒例子将两个脚本中的 `--num_frames` 都改为 `362`。重生成已有视频时，直接修改 `--resample_source_video`，同时设置与源视频匹配的帧数和所需提示词。
+
+## FL2AV 启动脚本
+
+FL2AV 同时使用首帧和尾帧图片。两个独立脚本沿用上文的八卡 SP8、BF16/BF16 和 8 步 LoRA 配置：
+
+- [run_minimax_h3_fl2av_draft.sh](run_minimax_h3_fl2av_draft.sh)：根据首尾帧生成 480p K3 草片。
+- [run_minimax_h3_fl2av_resample.sh](run_minimax_h3_fl2av_resample.sh)：保留首尾帧条件，将选中的草片重生成为 768p 视频。
+
+运行前修改两个脚本中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`，设置 `configs/minimax_h3_roll/minimax_h3_bf16_8step.json` 中的本地 LoRA 路径，并准备匹配的 AdaLN 缓存。
+
+示例复用仓库内的小鸟首尾帧，无需另外下载图片：
+
+| 首帧：`--image_path` | 尾帧：`--last_frame_path` |
+| --- | --- |
+| ![站立的小鸟](../../assets/inputs/imgs/flf2v_input_first_frame-fs8.png) | ![飞行的小鸟](../../assets/inputs/imgs/flf2v_input_last_frame-fs8.png) |
+
+两个脚本使用同一提示词，描述小鸟起飞并配上鸟鸣、振翅和微风声：
+
+```text
+A fluffy blue bird stands on a wooden ledge, looks up, spreads its wings and takes off into a bright blue sky. The camera follows the bird upward in one continuous shot. Sound: soft chirping, fluttering wings and a gentle breeze.
+```
+
+```bash
+bash scripts/minimax_h3_roll/run_minimax_h3_fl2av_draft.sh
+# 查看 save_results/minimax_h3_roll_fl2av/draft.mp4 后，重生成选中的草片。
+bash scripts/minimax_h3_roll/run_minimax_h3_fl2av_resample.sh
+```
+
+默认输出到 `save_results/minimax_h3_roll_fl2av/draft.mp4` 和 `resample.mp4`。两个阶段都传 `--task fl2av`，使用相同的 `--image_path`、`--last_frame_path`、提示词、seed `42` 和帧数 `124`。草片为 `--size 480 864 --draft_steps 3`；重生成为 `--size 768 1344 --resample_start_step 1`，执行原 8 步时间表的后 7 步。
+
+替换输入时，两个脚本都应修改首尾图和提示词；重生成的 `--resample_source_video` 指向选中的带音轨草片，同时保留首尾帧参数。删除草片脚本中的 `--draft_steps 3` 可生成完整 8 步草片。15 秒例子将两个脚本的 `--num_frames` 都改为 `362`。每个脚本分别加载模型。
 
 ## 参数与固定流程
 
@@ -97,3 +128,93 @@ pipe.generate(
 ```
 
 本配置下省略第一条请求的 `draft_steps` 即生成完整 8 步草片；需要少步草片时显式传入 `draft_steps=3` 等小于 8 的正整数。`draft_steps=8` 或更大时仍走原完整 8 步流程。高清草片也可使用 `size=[1088,1920]`，此时第二阶段不缩放 RGB，但仍需 VAE 重编码和解码。`fl2av` 两次请求均传入 `task="fl2av"`、`image_path` 和 `last_frame_path`，并显式指定各自的 `size`。
+
+## 服务化：串行 draft → resample
+
+启动方式参考 [H3 服务文档](../minimax_h3/README_zh.md#服务与-post-请求)。下面直接使用仓库已提交的 `lightx2v.server` 入口、Roll 配置和图片，客户端代码完整写在文档中。服务启动时加载一次模型，后续草片和重生成请求复用它。
+
+先设置仓库、基础模型和配置中的本地 LoRA 路径，并准备匹配的 AdaLN 缓存，再启动八卡服务。启动时指定 `--model-variant fl2av`，每条请求通过 `task` 选择 T2AV 或 FL2AV：
+
+```bash
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+source "${lightx2v_path}/scripts/base/base.sh"
+
+torchrun --standalone --nproc_per_node=8 -m lightx2v.server \
+  --model_cls minimax_h3 \
+  --model-variant fl2av \
+  --model_path "${model_path}" \
+  --config_json "${lightx2v_path}/configs/minimax_h3_roll/minimax_h3_bf16_8step.json" \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+四卡运行时，将 `CUDA_VISIBLE_DEVICES` 改为四张卡、`--nproc_per_node` 改为 `4`，并将所用配置的 `parallel.seq_p_size` 改为 `4`。
+
+等待服务启动完成，在另一个终端的仓库根目录运行以下客户端。默认生成 T2AV 雨中电车；将 `task` 改为 `"fl2av"` 即使用上文的小鸟首尾帧示例，图片通过 Base64 上传。客户端与服务端不在同一台机器时，修改 `url`。
+
+```bash
+python - <<'PY'
+import base64
+import time
+from pathlib import Path
+
+import requests
+
+url = "http://127.0.0.1:8000"
+task = "t2av"  # 改为 "fl2av" 使用首尾帧示例。
+
+def submit_and_wait(message):
+    response = requests.post(f"{url}/v1/tasks/video/", json=message, timeout=30)
+    response.raise_for_status()
+    task_id = response.json()["task_id"]
+    print(f"Submitted {task_id}", flush=True)
+    deadline = time.monotonic() + 600
+    while time.monotonic() < deadline:
+        response = requests.get(f"{url}/v1/tasks/{task_id}/status", timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        if result["status"] == "completed":
+            if not result.get("save_result_path"):
+                raise RuntimeError(f"Task {task_id} completed without a saved video")
+            print(result, flush=True)
+            return result["save_result_path"]
+        if result["status"] in {"failed", "cancelled"}:
+            raise RuntimeError(f"Task {task_id}: {result}")
+        time.sleep(1)
+    raise TimeoutError(f"Task {task_id}: check its status before submitting another request")
+
+common = {
+    "task": task,
+    "prompt": "A yellow tram passes along a rainy street. Sound: rainfall and a tram bell.",
+    "seed": 42,
+    "num_frames": 124,
+}
+if task == "fl2av":
+    common.update(
+        prompt="A fluffy blue bird stands on a wooden ledge, looks up, spreads its wings and takes off into a bright blue sky. The camera follows the bird upward in one continuous shot. Sound: soft chirping, fluttering wings and a gentle breeze.",
+        image_path=base64.b64encode(Path("assets/inputs/imgs/flf2v_input_first_frame-fs8.png").read_bytes()).decode("ascii"),
+        last_frame_path=base64.b64encode(Path("assets/inputs/imgs/flf2v_input_last_frame-fs8.png").read_bytes()).decode("ascii"),
+    )
+output_dir = f"minimax_h3_roll/{task}_{time.time_ns()}"
+source_video = submit_and_wait({
+    **common,
+    "size": [480, 864],
+    "draft_steps": 3,
+    "save_result_path": f"{output_dir}/draft.mp4",
+})
+submit_and_wait({
+    **common,
+    "size": [768, 1344],
+    "resample_source_video": source_video,
+    "resample_start_step": 1,
+    "save_result_path": f"{output_dir}/resample.mp4",
+})
+PY
+```
+
+这两条请求严格串行：草片状态达到 `completed` 后才提交重生成；失败或取消则停止。草片执行 K3，重生成执行后 7 步；需要 K8 草片时删除第一条请求中的 `draft_steps`。FL2AV 两次请求保留相同首尾帧、提示词、seed 和帧数。
+
+`save_result_path` 的相对路径按服务输出目录解析；重生成使用草片完成后返回的服务端绝对路径。`resample_source_video` 必须指向服务端可读取的带音轨视频。客户端会打印任务 ID 和完成结果，可用 `GET /v1/tasks/{task_id}/result` 下载对应视频。
