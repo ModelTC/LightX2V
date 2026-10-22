@@ -1,0 +1,11 @@
+{
+  "cross_attention_backend": "torch_sdpa",
+  "cpu_offload": true,
+  "offload_granularity": "block",
+  "clip_len": 16,
+  "video_codec": "libx264",
+  "video_crf": 18,
+  "ffmpeg_preset": "fast",
+  "encoder_threads": 8,
+  "queue_size": 3
+}
