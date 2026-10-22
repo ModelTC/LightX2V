@@ -63,10 +63,9 @@ class MiniMaxH3CausalScheduler(MiniMaxH3Scheduler):
         self.chunk_index = index
         self.layout_cpu = self.plan.chunk_layout(index)
         self.layout = _layout_to_device(self.layout_cpu, AI_DEVICE)
-        prefix = self.plan.prefix_positions(index)
-        self.key_position_ids = torch.cat((prefix, self.layout_cpu.position_ids)).to(AI_DEVICE)
-        self.cache_start = prefix.shape[0]
-        previous_end = self.plan.condition_layout.sequence_length if index == 0 else self.plan.prefix_positions(index - 1).shape[0] + self.plan.chunks[index - 1].positions.shape[0]
+        self.cache_start = self.plan.prefix_length(index)
+        self.key_position_ids = torch.cat((self.plan.prefix_positions(index), self.layout_cpu.position_ids)).to(AI_DEVICE)
+        previous_end = self.plan.condition_layout.sequence_length if index == 0 else self.plan.prefix_length(index - 1) + self.plan.chunks[index - 1].positions.shape[0]
         self.evicted_rows = previous_end - self.cache_start
         self.video_latents = self.video_noise[self.plan.chunks[index].video_rows].to(AI_DEVICE)
         self.audio_latents = clean_audio.to(AI_DEVICE)

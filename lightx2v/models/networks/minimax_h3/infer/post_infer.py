@@ -11,6 +11,9 @@ class MiniMaxH3PostInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    def _project_audio(self, weights, hidden_states, pre_infer_out):
+        return weights.audio_proj_out.apply(hidden_states).index_select(0, pre_infer_out.audio_indices)
+
     def infer(self, weights, hidden_states, pre_infer_out):
         modulation = pre_infer_out.norm_out_modulation
         if modulation is None:
@@ -29,5 +32,5 @@ class MiniMaxH3PostInfer:
         # before modality selection.
         hidden_states = hidden_states.float()
         video = weights.proj_out.apply(hidden_states).index_select(0, pre_infer_out.video_indices)
-        audio = weights.audio_proj_out.apply(hidden_states).index_select(0, pre_infer_out.audio_indices)
+        audio = self._project_audio(weights, hidden_states, pre_infer_out)
         return MiniMaxH3VelocityOutput(video=video, audio=audio)

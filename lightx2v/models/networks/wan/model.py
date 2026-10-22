@@ -6,7 +6,11 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
+from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason, validate_fp8_f16_accum_qmax
+from lightx2v.common.ops.mm.mm_weight import MMWeightWfp8channelAfp8channelF16Accum, unwrap_tp_weight
+from lightx2v.common.ops.mm.optimized_linear import make_gelu_linear, make_projection_group
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.wan.fp8_f16_accum_policy import ACTIVATION_QMAX, validate_checkpoint
 from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import (
     WanTransformerInferAdaCaching,
     WanTransformerInferCustomCaching,
@@ -42,6 +46,16 @@ class WanModel(BaseTransformerModel):
     transformer_weight_class = WanTransformerWeights
 
     def __init__(self, model_path, config, device, model_type="wan2.1", lora_path=None, lora_strength=1.0):
+        if config.get("dit_quant_scheme") == "fp8-f16-accum":
+            activation_qmax = validate_fp8_f16_accum_qmax(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
+            if activation_qmax > ACTIVATION_QMAX:
+                raise ValueError(f"Wan FP16 accumulation requires activation qmax <= {ACTIVATION_QMAX}")
+            self.fp8_activation_qmax = activation_qmax
+            reason = fp8_f16_accum_mm_unavailable_reason()
+            if reason is not None:
+                raise RuntimeError(f"Wan fp8-f16-accum is unavailable: {reason}")
+            if not config.get("dummy_model", False):
+                validate_checkpoint(config.get("dit_quantized_ckpt", model_path))
         super().__init__(model_path, config, device, model_type, lora_path, lora_strength)
         if self.lazy_load:
             self.remove_keys.extend(["blocks."])
@@ -58,6 +72,67 @@ class WanModel(BaseTransformerModel):
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
+
+    def _apply_weights(self, weight_dict=None):
+        super()._apply_weights(weight_dict)
+        if self.config.get("dit_quant_scheme") != "fp8-f16-accum":
+            return
+        for _, leaf in self.transformer_weights.named_weight_leaves():
+            linear = unwrap_tp_weight(leaf)
+            if type(linear) is MMWeightWfp8channelAfp8channelF16Accum:
+                linear.enable_fp8_f16_accum(self.fp8_activation_qmax)
+
+    def prepare_autoregressive_projection_groups(self):
+        """Attach shared projection and GELU paths after model weights are loaded."""
+        fuse_gelu = self.config.get("use_compile", False) and self.config.get("compile_backend", "default") == "default" and self.config.get("compile_options", {}).get("emulate_precision_casts", True)
+        blocks = self.transformer_weights.blocks
+        for index, block in enumerate(blocks):
+            self._prepare_projection_phases(block.compute_phases, fuse_gelu=fuse_gelu, cache_kv=index == len(blocks) - 1)
+
+        if self.config.get("dit_quant_scheme") != "fp8-f16-accum" or self.config.get("cpu_offload_layout") == "contiguous":
+            return
+        offload_blocks = getattr(self.transformer_weights, "offload_block_cuda_buffers", None)
+        if offload_blocks is not None:
+            for block in offload_blocks:
+                self._prepare_projection_phases(block.compute_phases, fuse_gelu=fuse_gelu, cache_kv=True, offload_buffers=True)
+        offload_phases = getattr(self.transformer_weights, "offload_phase_cuda_buffers", None)
+        if offload_phases is not None:
+            self._prepare_projection_phases(offload_phases, fuse_gelu=fuse_gelu, cache_kv=True, offload_buffers=True)
+
+    def to_cuda(self):
+        super().to_cuda()
+        if self.config.get("dit_quant_scheme") == "fp8-f16-accum" and self.cpu_offload and self.offload_granularity == "model":
+            # Model offload replaces every tensor, so groups prepared while the
+            # weights were on CPU cannot use the newly uploaded CUDA weights.
+            self.prepare_autoregressive_projection_groups()
+
+    def to_cpu(self):
+        super().to_cpu()
+        if self.config.get("dit_quant_scheme") == "fp8-f16-accum" and self.cpu_offload and self.offload_granularity == "model":
+            # A packed group owns its CUDA allocation even after the original
+            # projection modules have moved to CPU. Release that allocation.
+            for block in self.transformer_weights.blocks:
+                self._clear_projection_phases(block.compute_phases)
+
+    @staticmethod
+    def _clear_projection_phases(phases):
+        phases[0].self_attn_projection_group = None
+        phases[0].self_attn_cache_kv_projection_group = None
+        phases[1].cross_kv_projection_group = None
+        phases[1].cross_img_kv_projection_group = None
+        phases[2].ffn_gelu = None
+
+    @staticmethod
+    def _prepare_projection_phases(phases, *, fuse_gelu, cache_kv, offload_buffers=False):
+        self_attn, cross_attn, ffn = phases[:3]
+        query, key, value = self_attn.self_attn_q, self_attn.self_attn_k, self_attn.self_attn_v
+        self_attn.self_attn_projection_group = make_projection_group((query, key, value), packed=True, offload_buffers=offload_buffers)
+        self_attn.self_attn_cache_kv_projection_group = make_projection_group((key, value), offload_buffers=offload_buffers) if cache_kv else None
+        cross_attn.cross_kv_projection_group = make_projection_group((cross_attn.cross_attn_k, cross_attn.cross_attn_v), offload_buffers=offload_buffers)
+        cross_attn.cross_img_kv_projection_group = (
+            make_projection_group((cross_attn.cross_attn_k_img, cross_attn.cross_attn_v_img), offload_buffers=offload_buffers) if hasattr(cross_attn, "cross_attn_k_img") else None
+        )
+        ffn.ffn_gelu = make_gelu_linear(ffn.ffn_2, enabled=fuse_gelu, offload_buffers=offload_buffers)
 
     def _load_shared_cpu_weights(self, unified_dtype, sensitive_layer):
         """Load rank-private non-block tensors plus NUMA-shared DiT blocks."""
@@ -120,24 +195,21 @@ class WanModel(BaseTransformerModel):
             return "col"
         return None
 
-    def _split_bias_for_tp(self, bias, split_type, tp_size):
-        if split_type == "col":
-            if bias.shape[0] % tp_size != 0:
-                raise ValueError(f"Cannot split bias shape {tuple(bias.shape)} across tensor parallel size {tp_size}")
-            return list(torch.chunk(bias, tp_size, dim=0))
-        raise ValueError(f"Unsupported bias split_type: {split_type}")
-
-    def _split_weight_for_tp(self, key, weight, tp_size):
-        split_type = self._get_split_type(key)
-        if split_type == "col":
-            split_dim = 0
-        elif split_type == "row":
-            split_dim = 1
+    def _split_tensor_for_tp(self, key, tensor):
+        prefix, _, attribute = key.rpartition(".")
+        split_type = self._get_split_type(f"{prefix}.weight")
+        if split_type is None or attribute not in ("weight", "bias", "weight_scale"):
+            return None
+        if attribute == "weight":
+            split_dim = 0 if split_type == "col" else 1
         else:
-            raise ValueError(f"Unknown split_type for {key}")
-        if weight.shape[split_dim] % tp_size != 0:
-            raise ValueError(f"Cannot split {key} shape {tuple(weight.shape)} across tensor parallel size {tp_size} on dimension {split_dim}")
-        return list(torch.chunk(weight, tp_size, dim=split_dim))
+            # Bias and per-output scales follow output channels; row shards keep both whole.
+            if split_type != "col" or (attribute == "weight_scale" and tensor.numel() == 1):
+                return None
+            split_dim = 0
+        if tensor.shape[split_dim] % self.tp_size:
+            raise ValueError(f"Cannot split {key} shape {tuple(tensor.shape)} across tensor parallel size {self.tp_size} on dimension {split_dim}")
+        return tensor.chunk(self.tp_size, dim=split_dim)
 
     def _should_load_weights(self):
         if self.use_tp and self._use_local_tp_load():
@@ -152,18 +224,9 @@ class WanModel(BaseTransformerModel):
 
     def _shard_weights_locally(self, weight_dict):
         local_weights = {}
-        processed_bias = set()
-        storage_device = self.device
         for key, tensor in weight_dict.items():
-            split_type = self._get_split_type(key)
-            if key.endswith(".weight") and split_type is not None:
-                local_weights[key] = self._split_weight_for_tp(key, tensor, self.tp_size)[self.tp_rank].contiguous().to(storage_device)
-                bias_key = key.replace(".weight", ".bias")
-                if bias_key in weight_dict and split_type == "col":
-                    local_weights[bias_key] = self._split_bias_for_tp(weight_dict[bias_key], split_type, self.tp_size)[self.tp_rank].contiguous().to(storage_device)
-                    processed_bias.add(bias_key)
-            elif key not in processed_bias:
-                local_weights[key] = tensor.to(storage_device)
+            shards = self._split_tensor_for_tp(key, tensor)
+            local_weights[key] = (tensor if shards is None else shards[self.tp_rank].contiguous()).to(self.device)
         return local_weights
 
     def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
@@ -179,24 +242,16 @@ class WanModel(BaseTransformerModel):
         target_device = self._rank_device()
 
         if is_weight_loader:
-            processed, meta, processed_bias = {}, {}, set()
+            processed, meta = {}, {}
             for key, tensor in weight_dict.items():
-                split_type = self._get_split_type(key)
-                if key.endswith(".weight") and split_type is not None:
-                    shards = self._split_weight_for_tp(key, tensor, self.tp_size)
-                    for r, shard in enumerate(shards):
-                        processed[f"{key}__tp_{r}"] = shard.contiguous()
-                    meta[key] = {"shape": shards[0].shape, "dtype": shards[0].dtype, "is_tp": True}
-                    bias_key = key.replace(".weight", ".bias")
-                    if bias_key in weight_dict and split_type == "col":
-                        bias_shards = self._split_bias_for_tp(weight_dict[bias_key], split_type, self.tp_size)
-                        for r, shard in enumerate(bias_shards):
-                            processed[f"{bias_key}__tp_{r}"] = shard.contiguous()
-                        meta[bias_key] = {"shape": bias_shards[0].shape, "dtype": bias_shards[0].dtype, "is_tp": True}
-                        processed_bias.add(bias_key)
-                elif key not in processed_bias:
+                shards = self._split_tensor_for_tp(key, tensor)
+                if shards is None:
                     processed[key] = tensor
                     meta[key] = {"shape": tensor.shape, "dtype": tensor.dtype, "is_tp": False}
+                else:
+                    for rank, shard in enumerate(shards):
+                        processed[f"{key}__tp_{rank}"] = shard.contiguous()
+                    meta[key] = {"shape": shards[0].shape, "dtype": shards[0].dtype, "is_tp": True}
             obj_list = [meta]
         else:
             obj_list = [None]
@@ -220,7 +275,7 @@ class WanModel(BaseTransformerModel):
                     distributed[key].copy_(processed[key].to(target_device))
                 dist.broadcast(distributed[key], src=src_rank, group=self.tp_group)
 
-        return distributed
+        return {name: tensor.to(self.device) for name, tensor in distributed.items()}
 
     # ------------------------------------------------------------------ TP --
 
@@ -286,6 +341,8 @@ class WanModel(BaseTransformerModel):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
+        if x is None:
+            return None
 
         if self.config["seq_parallel"]:
             x = self._seq_parallel_post_process(x)

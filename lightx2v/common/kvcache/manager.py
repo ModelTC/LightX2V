@@ -6,95 +6,18 @@ from lightx2v.utils.envs import GET_DTYPE
 
 from .base import BaseKVCachePool
 from .fifo import FIFOKVCachePool
-from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, SpatialRollingKVCachePool, StepRollingKVCachePool
+from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, StepRollingKVCachePool
+from .rolling_offload import OffloadedHybridStepRollingKVCachePool, OffloadedRollingKVCachePool, OffloadedStepRollingKVCachePool
 from .static import StaticKVCachePool
-from .utils import *
-
-SELF_ATTN_KV_CACHE_REGISTRY = {}
 
 
 def parse_hybrid_attn_pattern(pattern: str) -> tuple[int, ...]:
-    if not isinstance(pattern, str) or not pattern:
-        raise ValueError("ar_config.hybrid_attn must be a non-empty string such as 'W2-W2-W2-W2-W21'.")
-
     windows = []
     for part in pattern.split("-"):
-        part = part.upper()
-        if not part.startswith("W") or not part[1:].isdigit():
-            raise ValueError(f"Invalid ar_config.hybrid_attn pattern: {pattern!r}.")
-        window = int(part[1:])
-        if window <= 0:
-            raise ValueError(f"Hybrid attention windows must be positive, got {part!r}.")
-        windows.append(window)
+        if not part.startswith("W") or not part[1:].isdigit() or int(part[1:]) <= 0:
+            raise ValueError(f"Invalid hybrid attention window {part!r}; expected a positive window such as W2.")
+        windows.append(int(part[1:]))
     return tuple(windows)
-
-
-def register_self_attn_kv_cache(scheme: str, cache_cls, *, step: bool = False, kwargs_builder=None) -> None:
-    """Register a self-attention KV cache pool implementation."""
-    SELF_ATTN_KV_CACHE_REGISTRY[(scheme, bool(step))] = (cache_cls, kwargs_builder or (lambda _config, _ar_config, _kv_quant: {}))
-
-
-def _kv_cache_common_kwargs(config, kv_size, dtype, device, *, num_heads: int | None = None):
-    return dict(
-        num_layers=config["num_layers"],
-        cache_size=kv_size,
-        num_heads=config["num_heads"] if num_heads is None else int(num_heads),
-        head_dim=config["dim"] // config["num_heads"],
-        dtype=dtype,
-        device=device,
-    )
-
-
-def _fp_kwargs(_config, ar_config, _kv_quant):
-    return {"kv_offload": ar_config.get("kv_offload", False)}
-
-
-def _step_fp_kwargs(config, ar_config, _kv_quant):
-    return {
-        "num_steps": config.get("infer_steps", ar_config.get("cache_step", 1)),
-        "kv_offload": ar_config.get("kv_offload", False),
-    }
-
-
-def _kivi_kwargs(_config, ar_config, kv_quant):
-    return {
-        "k_cache_type": kv_quant.get("k_cache_type", "int4"),
-        "v_cache_type": kv_quant.get("v_cache_type", "int4"),
-        "group_size": kv_quant.get("group_size", 64),
-        "kv_offload": ar_config.get("kv_offload", False),
-    }
-
-
-def _step_kivi_kwargs(config, ar_config, kv_quant):
-    kwargs = _kivi_kwargs(config, ar_config, kv_quant)
-    kwargs["num_steps"] = config.get("infer_steps")
-    return kwargs
-
-
-def _fifo_kwargs(_config, _ar_config, _kv_quant):
-    return {}
-
-
-def _static_kwargs(_config, _ar_config, _kv_quant):
-    return {}
-
-
-def _get_self_attn_kv_cache_entry(scheme: str, step: bool):
-    if scheme == "kivi" and (scheme, bool(step)) not in SELF_ATTN_KV_CACHE_REGISTRY:
-        from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
-
-        SELF_ATTN_KV_CACHE_REGISTRY.setdefault(("kivi", False), (KIVIQuantRollingKVCachePool, _kivi_kwargs))
-        SELF_ATTN_KV_CACHE_REGISTRY.setdefault(("kivi", True), (StepKiviQuantRollingKVCachePool, _step_kivi_kwargs))
-    entry = SELF_ATTN_KV_CACHE_REGISTRY.get((scheme, bool(step)))
-    if entry is None:
-        raise NotImplementedError(f"self-attention KV cache scheme={scheme!r}, step_kv_cache={step} is not registered.")
-    return entry
-
-
-register_self_attn_kv_cache("fp", RollingKVCachePool, kwargs_builder=_fp_kwargs)
-register_self_attn_kv_cache("fp", StepRollingKVCachePool, step=True, kwargs_builder=_step_fp_kwargs)
-register_self_attn_kv_cache("fifo", FIFOKVCachePool, kwargs_builder=_fifo_kwargs)
-register_self_attn_kv_cache("static", StaticKVCachePool, kwargs_builder=_static_kwargs)
 
 
 def build_self_attn_kv_cache(
@@ -104,58 +27,64 @@ def build_self_attn_kv_cache(
     dtype,
     device,
     *,
-    frame_seq_length: int | None = None,
     num_heads: int | None = None,
     layer_cache_sizes: tuple[int, ...] | None = None,
 ):
-    kv_quant = ar_config.get("kv_quant")
-    common = _kv_cache_common_kwargs(config, kv_size, dtype, device, num_heads=num_heads)
-
-    if not kv_quant:
-        scheme = ar_config.get("kv_cache_scheme", "fp")
-        step = ar_config.get("step_kv_cache", False)
-    else:
-        quant_scheme = kv_quant.get("quant_scheme", "kivi")
-        if quant_scheme != "kivi":
-            raise NotImplementedError(f"Only quant_scheme='kivi' is supported, got {quant_scheme!r}.")
-        if kv_quant.get("calibrate", False):
-            raise NotImplementedError("KV calibration caches were removed; only KIVI inference cache is supported.")
-        else:
-            scheme = quant_scheme
-            step = ar_config.get("step_kv_cache", False)
-
+    """Select storage policy without changing model or manager configuration."""
+    kwargs = dict(
+        num_layers=config["num_layers"],
+        cache_size=kv_size,
+        num_heads=config["num_heads"] if num_heads is None else num_heads,
+        head_dim=config["dim"] // config["num_heads"],
+        dtype=dtype,
+        device=device,
+    )
+    scheme = ar_config.get("kv_cache_scheme", "rolling")
+    step_cache = ar_config.get("step_kv_cache", False)
+    kv_offload = ar_config.get("kv_offload", False)
     if layer_cache_sizes is not None:
-        if scheme != "fp" or not step:
-            raise ValueError("Hybrid attention currently requires ar_config.step_kv_cache=true and the FP KV cache.")
-        return HybridStepRollingKVCachePool(
-            num_steps=config.get("infer_steps", ar_config.get("cache_step", 1)),
-            num_layers=config["num_layers"],
-            layer_cache_sizes=layer_cache_sizes,
-            num_heads=config["num_heads"] if num_heads is None else int(num_heads),
-            head_dim=config["dim"] // config["num_heads"],
-            dtype=dtype,
-            device=device,
-            kv_offload=ar_config.get("kv_offload", False),
-        )
-
-    cache_cls, kwargs_builder = _get_self_attn_kv_cache_entry(scheme, step)
-    return cache_cls(**common, **kwargs_builder(config, ar_config, kv_quant or {}))
+        if scheme != "rolling" or not step_cache:
+            raise ValueError("Hybrid attention requires the rolling cache with step_kv_cache=true.")
+        cache_cls = OffloadedHybridStepRollingKVCachePool if kv_offload else HybridStepRollingKVCachePool
+        kwargs.pop("cache_size")
+        kwargs["layer_cache_sizes"] = layer_cache_sizes
+    elif scheme == "rolling":
+        if kv_offload:
+            cache_cls = OffloadedStepRollingKVCachePool if step_cache else OffloadedRollingKVCachePool
+        else:
+            cache_cls = StepRollingKVCachePool if step_cache else RollingKVCachePool
+    elif scheme == "fifo" and not step_cache:
+        cache_cls = FIFOKVCachePool
+    elif scheme == "static" and not step_cache:
+        cache_cls = StaticKVCachePool
+    else:
+        raise ValueError(f"Unsupported KV cache policy: scheme={scheme!r}, step_kv_cache={step_cache}.")
+    if step_cache:
+        kwargs["num_steps"] = config.get("infer_steps", ar_config.get("cache_step", 1))
+    return cache_cls(**kwargs)
 
 
 class KVCacheManager:
-    def __init__(
-        self,
-        config={},
-        device=torch.device("cuda"),
-        sp_group=None,
-    ):
+    def __init__(self, config, device=torch.device("cuda"), sp_group=None):
         self.config = config
-        self.ar_config = self.config.get("ar_config", {})
+        self.ar_config = config.get("ar_config", {})
         self.dtype = GET_DTYPE()
         self.device = device
         self.sp_group = sp_group
+        self.sp_head_sharded_kv = False
+        self.cache_num_heads = self.tensor_num_heads
         self.self_attn_kv_cache = None
+        self.cross_attn_kv_cache = None
         self.self_attn_kv_caches = {}
+        self.cross_attn_kv_caches = {}
+        self._buffer_signature = None
+
+    @property
+    def tensor_num_heads(self) -> int:
+        if self.config.get("tensor_parallel", False):
+            group = self.config["device_mesh"].get_group(mesh_dim="tensor_p")
+            return self.config["num_heads"] // dist.get_world_size(group)
+        return self.config["num_heads"]
 
     @property
     def current_step(self) -> int:
@@ -163,23 +92,8 @@ class KVCacheManager:
 
     @current_step.setter
     def current_step(self, value: int) -> None:
-        pool = self.self_attn_kv_cache
-        if hasattr(pool, "current_step"):
-            pool.current_step = value
-
-    def _create_self_attn_kv_cache(self):
-        cache = build_self_attn_kv_cache(
-            self.config,
-            self.ar_config,
-            self.kv_size,
-            self.dtype,
-            self.device,
-            frame_seq_length=getattr(self, "frame_seq_length", None),
-            num_heads=getattr(self, "cache_num_heads", None),
-            layer_cache_sizes=getattr(self, "layer_kv_sizes", None),
-        )
-        cache.sp_head_sharded = bool(getattr(self, "sp_head_sharded_kv", False))
-        return cache
+        if hasattr(self.self_attn_kv_cache, "current_step"):
+            self.self_attn_kv_cache.current_step = value
 
     def create_self_attn_kv_cache(
         self,
@@ -191,43 +105,23 @@ class KVCacheManager:
         dtype: torch.dtype | None = None,
         num_heads: int | None = None,
     ):
-        missing = object()
-        old_kv_size = getattr(self, "kv_size", missing)
-        old_dtype = self.dtype
-        old_cache_num_heads = getattr(self, "cache_num_heads", missing)
-        old_scheme = self.ar_config.get("kv_cache_scheme")
-        old_step = self.ar_config.get("step_kv_cache")
-        try:
-            self.kv_size = int(kv_size)
-            self.dtype = self.dtype if dtype is None else dtype
-            if num_heads is not None:
-                self.cache_num_heads = int(num_heads)
-            if kv_cache_scheme is not None:
-                self.ar_config["kv_cache_scheme"] = kv_cache_scheme
-            if step_kv_cache is not None:
-                self.ar_config["step_kv_cache"] = step_kv_cache
-            cache = self._create_self_attn_kv_cache()
-        finally:
-            if old_kv_size is missing:
-                delattr(self, "kv_size")
-            else:
-                self.kv_size = old_kv_size
-            self.dtype = old_dtype
-            if old_cache_num_heads is missing:
-                if hasattr(self, "cache_num_heads"):
-                    delattr(self, "cache_num_heads")
-            else:
-                self.cache_num_heads = old_cache_num_heads
-            if old_scheme is None:
-                self.ar_config.pop("kv_cache_scheme", None)
-            else:
-                self.ar_config["kv_cache_scheme"] = old_scheme
-            if old_step is None:
-                self.ar_config.pop("step_kv_cache", None)
-            else:
-                self.ar_config["step_kv_cache"] = old_step
+        ar_config = dict(self.ar_config)
+        if kv_cache_scheme is not None:
+            ar_config["kv_cache_scheme"] = kv_cache_scheme
+        if step_kv_cache is not None:
+            ar_config["step_kv_cache"] = step_kv_cache
+        cache = build_self_attn_kv_cache(
+            self.config,
+            ar_config,
+            kv_size,
+            self.dtype if dtype is None else dtype,
+            self.device,
+            num_heads=self.cache_num_heads if num_heads is None else num_heads,
+        )
+        cache.sp_head_sharded = self.sp_head_sharded_kv
         self.self_attn_kv_caches[cache_name] = cache
         self.self_attn_kv_cache = cache
+        self._buffer_signature = None
         return cache
 
     def get_self_attn_kv_cache(self, cache_name=None):
@@ -235,220 +129,155 @@ class KVCacheManager:
             return self.self_attn_kv_cache
         return self.self_attn_kv_caches.get(cache_name)
 
-    def _create_cross_attn_kv_cache(self):
-        return BaseKVCachePool(
-            num_layers=self.config["num_layers"],
-            cache_size=self.config["text_len"],
-            num_heads=self.config["num_heads"],
-            head_dim=self.config["dim"] // self.config["num_heads"],
-            dtype=self.dtype,
-            device=self.device,
-        )
+    def get_cross_attn_kv_cache(self, infer_condition=True, kind="text"):
+        cache_name = infer_condition if kind == "text" else (infer_condition, kind)
+        pool = self.cross_attn_kv_caches.get(cache_name)
+        if pool is None:
+            pool = BaseKVCachePool(
+                num_layers=self.config["num_layers"],
+                cache_size=self.config["text_len"] if kind == "text" else 257,
+                num_heads=self.tensor_num_heads,
+                head_dim=self.config["dim"] // self.config["num_heads"],
+                dtype=self.dtype,
+                device=self.device,
+            )
+            self.cross_attn_kv_caches[cache_name] = pool
+            if infer_condition and kind == "text":
+                self.cross_attn_kv_cache = pool
+        return pool
 
-    def _compute_frame_seq_length(self, latent_shape, ref_num_frames: int | None = None):
-        lat_f = latent_shape[1]
-        lat_h = latent_shape[2]
-        lat_w = latent_shape[3]
-        patch_size = self.config.get("patch_size", (1, 2, 2))
-        frame_seq_length = (lat_h // patch_size[1]) * (lat_w // patch_size[2])
-        num_output_frames = lat_f - (lat_f % self.ar_config.get("num_frame_per_chunk", 3))
-        self.ref_num_frames = int(ref_num_frames if ref_num_frames is not None else self.ar_config.get("ref_num_frames", 0))
-        self.ref_tokens_global = self.ref_num_frames * frame_seq_length
-        return frame_seq_length, num_output_frames
-
-    def _create_kv_caches(self, latent_shape, ref_num_frames: int | None = None):
-        """Create (or recreate) cache pools with resolution-dependent sizes."""
-
-        self.frame_seq_length, self.num_output_frames = self._compute_frame_seq_length(latent_shape, ref_num_frames=ref_num_frames)
-        ws = dist.get_world_size(self.sp_group) if self.sp_group is not None else 1
-        self.sp_head_sharded_kv = bool(ws > 1)
-        if self.sp_head_sharded_kv and self.config["num_heads"] % ws != 0:
-            raise ValueError(f"num_heads={self.config['num_heads']} must be divisible by SP world_size={ws} for head-sharded KV cache")
-        self.cache_num_heads = self.config["num_heads"] // ws if self.sp_head_sharded_kv else self.config["num_heads"]
-
-        self.kv_size = self.frame_seq_length * (self.num_output_frames + self.ref_num_frames)
-        self.ref_tokens = self.ref_tokens_global if self.sp_head_sharded_kv else self.ref_tokens_global // ws
+    def _set_cache_layout(self, latent_shape, ref_num_frames):
+        _, latent_frames, latent_height, latent_width = latent_shape
+        _, patch_height, patch_width = self.config.get("patch_size", (1, 2, 2))
+        chunk_frames = self.ar_config.get("num_frame_per_chunk", 3)
+        if chunk_frames <= 0:
+            raise ValueError("ar_config.num_frame_per_chunk must be positive.")
+        self.frame_seq_length = (latent_height // patch_height) * (latent_width // patch_width)
+        self.num_output_frames = latent_frames - latent_frames % chunk_frames
+        self.ref_num_frames = self.ar_config.get("ref_num_frames", 0) if ref_num_frames is None else ref_num_frames
+        self.ref_tokens_global = self.ref_num_frames * self.frame_seq_length
+        # SP caches hold every token and shard the attention heads.
+        world_size = dist.get_world_size(self.sp_group) if self.sp_group is not None else 1
+        if self.tensor_num_heads % world_size:
+            raise ValueError(f"TP-local num_heads={self.tensor_num_heads} must be divisible by SP world_size={world_size}.")
+        self.sp_head_sharded_kv = world_size > 1
+        self.cache_num_heads = self.tensor_num_heads // world_size
+        self.ref_tokens = self.ref_tokens_global
         self.local_attn_size = self.ar_config.get("local_attn_size", -1)
-        self.sink_size = int(self.ar_config.get("sink_size", 0))
+        self.sink_size = self.ar_config.get("sink_size", 0)
         if self.sink_size < 0:
             raise ValueError("ar_config.sink_size must be non-negative.")
-        self.max_attention_size = self.ar_config.get("max_attention_size", None)
         self.hybrid_attn_pattern = self.ar_config.get("hybrid_attn")
         self.hybrid_attn_windows = None
         self.layer_kv_sizes = None
-        self.layer_max_attention_sizes = None
         self.layer_visible_frames = None
-
+        self.max_attention_size = self.ar_config.get("max_attention_size")
+        visible_frames = self.num_output_frames if self.local_attn_size == -1 else self.local_attn_size
+        self.kv_size = (visible_frames + self.ref_num_frames) * self.frame_seq_length
         if self.hybrid_attn_pattern is not None:
-            if self.local_attn_size != -1:
-                raise ValueError("ar_config.hybrid_attn and ar_config.local_attn_size are mutually exclusive.")
-            if self.max_attention_size is not None:
-                raise ValueError("ar_config.max_attention_size cannot be used with ar_config.hybrid_attn.")
-            if not self.ar_config.get("step_kv_cache", False):
-                raise ValueError("ar_config.hybrid_attn requires ar_config.step_kv_cache=true.")
-            if self.ar_config.get("kv_quant"):
-                raise ValueError("ar_config.hybrid_attn does not yet support KV quantization.")
-            if self.sink_size < self.ref_num_frames:
-                raise ValueError(
-                    f"ar_config.sink_size must be greater than or equal to the number of reference frames for hybrid attention: sink_size={self.sink_size}, ref_num_frames={self.ref_num_frames}."
-                )
-
-            window_cycle = parse_hybrid_attn_pattern(self.hybrid_attn_pattern)
-            num_layers = int(self.config["num_layers"])
-            self.hybrid_attn_windows = tuple(window_cycle[layer_id % len(window_cycle)] for layer_id in range(num_layers))
-            chunk_size = int(self.ar_config.get("num_frame_per_chunk", 1))
-            if chunk_size <= 0:
-                raise ValueError("ar_config.num_frame_per_chunk must be positive.")
-
-            self.layer_visible_frames = tuple(self.sink_size + window * chunk_size for window in self.hybrid_attn_windows)
-            layer_kv_sizes = tuple(visible_frames * self.frame_seq_length for visible_frames in self.layer_visible_frames)
-            if not self.sp_head_sharded_kv:
-                layer_kv_sizes = tuple(size // ws for size in layer_kv_sizes)
-            self.layer_kv_sizes = layer_kv_sizes
-            self.layer_max_attention_sizes = layer_kv_sizes
-            self.kv_size = max(layer_kv_sizes)
+            self._set_hybrid_layout(chunk_frames)
+        if self.max_attention_size is None:
             self.max_attention_size = self.kv_size
-        elif self.local_attn_size != -1:
-            self.kv_size = (self.local_attn_size + self.ref_num_frames) * self.frame_seq_length
-            if not self.sp_head_sharded_kv:
-                self.kv_size = self.kv_size // ws
-        else:
-            if not self.sp_head_sharded_kv:
-                self.kv_size = self.kv_size // ws
 
-        if self.max_attention_size is not None and not self.sp_head_sharded_kv:
-            self.max_attention_size = self.max_attention_size // ws
+    def _set_hybrid_layout(self, chunk_frames):
+        if self.local_attn_size != -1 or self.max_attention_size is not None:
+            raise ValueError("hybrid_attn cannot be combined with local_attn_size or max_attention_size.")
+        if not self.ar_config.get("step_kv_cache", False):
+            raise ValueError("Hybrid attention requires a step KV cache.")
+        if self.sink_size < self.ref_num_frames:
+            raise ValueError("Hybrid attention sink_size must cover all reference frames.")
+        windows = parse_hybrid_attn_pattern(self.hybrid_attn_pattern)
+        self.hybrid_attn_windows = tuple(windows[layer % len(windows)] for layer in range(self.config["num_layers"]))
+        self.layer_visible_frames = tuple(self.sink_size + window * chunk_frames for window in self.hybrid_attn_windows)
+        self.layer_kv_sizes = tuple(frames * self.frame_seq_length for frames in self.layer_visible_frames)
+        self.kv_size = max(self.layer_kv_sizes)
+        self.max_attention_size = self.kv_size
 
-        self.max_attention_size = self.kv_size if self.max_attention_size is None else self.max_attention_size
-
-        head_dim = self.config["dim"] // self.config["num_heads"]
-        buffer_sig = (
-            int(self.kv_size),
-            int(self.cache_num_heads),
-            int(self.config["num_layers"]),
-            int(head_dim),
-            str(self.dtype),
-            int(self.frame_seq_length),
-            bool(self.ar_config.get("kv_quant")),
-            bool(self.ar_config.get("kv_offload")),
-            self.config.get("infer_steps"),
-            self.hybrid_attn_pattern,
+    def _cache_signature(self):
+        return (
+            self.kv_size,
+            self.cache_num_heads,
+            self.config["num_heads"],
+            self.config["num_layers"],
+            self.config["dim"] // self.config["num_heads"],
+            self.dtype,
+            str(self.device),
+            self.config["text_len"],
+            self.frame_seq_length,
+            self.ar_config.get("kv_cache_scheme", "rolling"),
+            self.ar_config.get("step_kv_cache", False),
+            self.config.get("infer_steps", self.ar_config.get("cache_step", 1)),
+            self.ar_config.get("kv_offload", False),
             self.layer_kv_sizes,
         )
-        if getattr(self, "self_attn_kv_cache", None) is not None and getattr(self, "_buffer_sig", None) == buffer_sig:
-            self._reset_pools()
-            logger.info(
-                "[KVCacheManager] reuse cached KV buffers (signature matched), skip realloc: kv_cache_size={}, num_output_frames={}",
-                self.kv_size,
-                self.num_output_frames,
-            )
+
+    def initialize(self, latent_shape, ref_num_frames: int | None = None, *, before_allocate=None):
+        """Reset matching buffers or allocate pools for the request layout."""
+        self._set_cache_layout(latent_shape, ref_num_frames)
+        signature = self._cache_signature()
+        if self._buffer_signature == signature:
+            self.reset()
+            logger.info("[KVCacheManager] reuse KV buffers: capacity={}, frame_tokens={}", self.kv_size, self.frame_seq_length)
             return
-
-        self.self_attn_kv_cache = self._create_self_attn_kv_cache()
-        self.cross_attn_kv_cache = self._create_cross_attn_kv_cache()
+        self._buffer_signature = None
+        if before_allocate is not None:
+            before_allocate()
+        self.self_attn_kv_caches.clear()
+        self.cross_attn_kv_caches.clear()
+        self.cross_attn_kv_cache = None
+        self.self_attn_kv_cache = build_self_attn_kv_cache(
+            self.config,
+            self.ar_config,
+            self.kv_size,
+            self.dtype,
+            self.device,
+            num_heads=self.cache_num_heads,
+            layer_cache_sizes=self.layer_kv_sizes,
+        )
+        self.self_attn_kv_cache.sp_head_sharded = self.sp_head_sharded_kv
+        self.cross_attn_kv_cache = self.get_cross_attn_kv_cache()
         self.self_attn_kv_cache._init_kv_buffer()
-        self.cross_attn_kv_cache._init_kv_buffer()
-        self._create_matrix_action_kv_caches()
-        self._buffer_sig = buffer_sig
-
+        self._buffer_signature = signature
         if self.layer_kv_sizes is not None:
-            actual_bytes = self.self_attn_kv_cache.allocated_bytes
-            dense_bytes = (
-                int(self.self_attn_kv_cache.num_steps)
-                * int(self.config["num_layers"])
-                * int(self.kv_size)
-                * int(self.cache_num_heads)
-                * int(head_dim)
-                * torch.empty((), dtype=self.dtype).element_size()
-                * 2
-            )
-            logger.info(
-                "[KVCacheManager] hybrid attention pattern={} windows={} sink_frames={} visible_frames={} buckets={} self_kv={:.2f} GiB dense_max_window={:.2f} GiB saved={:.1%}",
-                self.hybrid_attn_pattern,
-                self.hybrid_attn_windows,
-                self.sink_size,
-                self.layer_visible_frames,
-                self.self_attn_kv_cache.bucket_counts,
-                actual_bytes / 1024**3,
-                dense_bytes / 1024**3,
-                1.0 - actual_bytes / dense_bytes,
-            )
-
+            self._log_hybrid_allocation()
         logger.info(
-            "[KVCacheManager] init: frame_seq_length={}, num_output_frames={}, kv_cache_size={}, max_attention_size={}, ws={}, local_attn_size={}, sink_size={}, kv_quant={}, kv_offload={}, sp_head_sharded_kv={}",
+            "[KVCacheManager] init: frame_tokens={}, output_frames={}, capacity={}, local_attn_size={}, sink_size={}, heads={}, policy={}, kv_offload={}",
             self.frame_seq_length,
             self.num_output_frames,
             self.kv_size,
-            self.max_attention_size,
-            ws,
             self.local_attn_size,
             self.sink_size,
-            bool(self.ar_config.get("kv_quant")),
-            bool(self.ar_config.get("kv_offload")),
-            self.sp_head_sharded_kv,
+            self.cache_num_heads,
+            self.ar_config.get("kv_cache_scheme", "rolling"),
+            self.ar_config.get("kv_offload", False),
+        )
+
+    def _log_hybrid_allocation(self):
+        actual_bytes = self.self_attn_kv_cache.allocated_bytes
+        head_dim = self.config["dim"] // self.config["num_heads"]
+        element_size = torch.empty((), dtype=self.dtype).element_size()
+        dense_bytes = self.self_attn_kv_cache.num_steps * self.config["num_layers"] * self.kv_size * self.cache_num_heads * head_dim * element_size * 2
+        logger.info(
+            "[KVCacheManager] hybrid windows={} visible_frames={} buckets={} self_kv={:.2f} GiB saved={:.1%}",
+            self.hybrid_attn_windows,
+            self.layer_visible_frames,
+            self.self_attn_kv_cache.bucket_counts,
+            actual_bytes / 1024**3,
+            1 - actual_bytes / dense_bytes,
         )
 
     def kv_size_for_layer(self, layer_id: int) -> int:
-        if self.layer_kv_sizes is None:
-            return self.kv_size
-        return self.layer_kv_sizes[int(layer_id)]
+        return self.kv_size if self.layer_kv_sizes is None else self.layer_kv_sizes[layer_id]
 
     def max_attention_size_for_layer(self, layer_id: int) -> int:
-        if self.layer_max_attention_sizes is None:
-            return self.max_attention_size
-        return self.layer_max_attention_sizes[int(layer_id)]
-
-    def visible_frames_for_layer(self, layer_id: int) -> int | None:
-        if self.layer_visible_frames is None:
-            return None
-        return self.layer_visible_frames[int(layer_id)]
+        return self.max_attention_size if self.layer_kv_sizes is None else self.layer_kv_sizes[layer_id]
 
     def uses_sliding_window(self, layer_id: int) -> bool:
         return self.hybrid_attn_windows is not None or self.local_attn_size != -1
 
-    def _reset_pools(self) -> None:
-        """Reset metadata/state of existing pools while keeping allocated buffers resident."""
-        for attr in ("self_attn_kv_cache", "cross_attn_kv_cache", "action_keyboard_kv_cache", "action_mouse_kv_cache"):
-            pool = getattr(self, attr, None)
+    def reset(self) -> None:
+        """Clear request state while retaining buffers bound to compiled graphs."""
+        pools = (self.self_attn_kv_cache, *self.self_attn_kv_caches.values(), *self.cross_attn_kv_caches.values())
+        for pool in dict.fromkeys(pools):
             if pool is not None:
                 pool.reset()
-
-    def _create_matrix_action_kv_caches(self) -> None:
-        """Matrix Game action K/V: keyboard ``RollingKVCachePool``, mouse ``SpatialRollingKVCachePool``."""
-        ac = self.config.get("action_config")
-        self.action_keyboard_kv_cache = None
-        self.action_mouse_kv_cache = None
-        if not ac:
-            return
-
-        heads = int(ac["heads_num"])
-        k_hidden = int(ac.get("keyboard_hidden_dim", 1024))
-        head_dim = k_hidden // heads
-        la = self.ar_config.get("local_attn_size", -1)
-        cache_sz = int(la) if la != -1 else 15
-        num_layers = int(self.config["num_layers"])
-
-        if ac.get("enable_keyboard", False):
-            self.action_keyboard_kv_cache = RollingKVCachePool(
-                num_layers=num_layers,
-                cache_size=cache_sz,
-                num_heads=heads,
-                head_dim=head_dim,
-                dtype=self.dtype,
-                device=self.device,
-                kv_offload=False,
-            )
-            self.action_keyboard_kv_cache._init_kv_buffer()
-
-        if ac.get("enable_mouse", False):
-            self.action_mouse_kv_cache = SpatialRollingKVCachePool(
-                spatial_len=self.frame_seq_length,
-                num_layers=num_layers,
-                cache_size=cache_sz,
-                num_heads=heads,
-                head_dim=head_dim,
-                dtype=self.dtype,
-                device=self.device,
-                kv_offload=False,
-            )
-            self.action_mouse_kv_cache._init_kv_buffer()

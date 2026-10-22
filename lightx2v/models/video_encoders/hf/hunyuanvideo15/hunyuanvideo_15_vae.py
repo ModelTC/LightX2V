@@ -805,11 +805,57 @@ class HunyuanVideo15VAE:
         self.vae = AutoencoderKLConv3D.from_pretrained(os.path.join(checkpoint_path, "vae")).to(dtype).to(device)
         self.vae.cpu_offload = cpu_offload
         self.parallel = parallel
+        self.decode_group = None
         self.world_size_h, self.world_size_w = None, None
 
     @torch.no_grad()
     def encode(self, x):
         return self.vae.encode(x).latent_dist.mode() * self.vae.config.scaling_factor
+
+    def enable_async_decode(self):
+        if self.parallel and self.decode_group is None:
+            self.decode_group = dist.new_group()
+            dist.all_reduce(torch.zeros(1, device=AI_DEVICE), group=self.decode_group)
+
+    @property
+    def cpu_offload(self):
+        return self.vae.cpu_offload
+
+    @cpu_offload.setter
+    def cpu_offload(self, enabled):
+        self.vae.cpu_offload = enabled
+
+    def to_cuda(self):
+        self.vae.to(AI_DEVICE)
+
+    def to_cpu(self):
+        self.vae.to("cpu")
+
+    def reset_decode_state(self):
+        self._stream_decoder = None
+
+    @torch.no_grad()
+    def cached_decode_withflag(self, z, first, last):
+        from lightx2v.models.video_encoders.hf.hunyuanvideo15.streaming import HunyuanVideo15StreamingDecoder
+
+        if self.cpu_offload:
+            self.to_cuda()
+        if first:
+            self._stream_decoder = HunyuanVideo15StreamingDecoder(self.vae)
+        self.vae.enable_tiling()
+        z = z / self.vae.config.scaling_factor
+        if self.parallel and self.world_size_h is not None and self.world_size_w is not None:
+            images = self.decode_dist_2d(z, self.world_size_h, self.world_size_w, self._stream_decoder.decode)
+        else:
+            images = self._stream_decoder.decode(z)
+        self.vae.disable_tiling()
+        if last:
+            self.reset_decode_state()
+            self.world_size_h, self.world_size_w = None, None
+        if self.cpu_offload:
+            images = images.cpu()
+            self.to_cpu()
+        return images
 
     @torch.no_grad()
     def decode(self, z):
@@ -825,7 +871,7 @@ class HunyuanVideo15VAE:
         return video_frames
 
     @torch.no_grad()
-    def decode_dist_2d(self, z, world_size_h, world_size_w):
+    def decode_dist_2d(self, z, world_size_h, world_size_w, decode_fn=None):
         cur_rank = dist.get_rank()
         cur_rank_h = cur_rank // world_size_w
         cur_rank_w = cur_rank % world_size_w
@@ -863,7 +909,7 @@ class HunyuanVideo15VAE:
         zs_chunk = z[:, :, :, h_start:h_end, w_start:w_end].contiguous()
 
         # Decode the chunk
-        images_chunk = self.vae.decode(zs_chunk, return_dict=False)[0]
+        images_chunk = self.vae.decode(zs_chunk, return_dict=False)[0] if decode_fn is None else decode_fn(zs_chunk)
 
         # Remove padding from decoded chunk
         spatial_ratio = 16
@@ -893,9 +939,10 @@ class HunyuanVideo15VAE:
         total_processes = world_size_h * world_size_w
         full_images = [torch.empty_like(images_chunk) for _ in range(total_processes)]
 
-        dist.all_gather(full_images, images_chunk)
+        dist.all_gather(full_images, images_chunk, group=self.decode_group if decode_fn is not None else None)
 
-        self.device_synchronize()
+        if decode_fn is None:
+            self.device_synchronize()
 
         # Reconstruct the full image tensor
         image_rows = []

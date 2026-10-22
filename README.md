@@ -196,7 +196,7 @@ Models and variants are grouped by their primary use.
 ### Video and Audio-Video Generation
 
 - ✅ [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) (including the causal variant)
-- ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) (including the autoregressive variant) / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) (distilled)
+- ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) (distilled)
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Wan2.1-VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) / [Wan2.2-VACE-Fun-A14B](https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B)
@@ -207,6 +207,7 @@ Models and variants are grouped by their primary use.
 - ✅ [InfiniteTalk](https://huggingface.co/MeiGen-AI/InfiniteTalk)
 - ✅ [Wan-Dancer](https://huggingface.co/Wan-AI/Wan-Dancer-14B)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
+- ✅ [Matrix-Game-4](scripts/matrix_game4/README.md) (Wan2.2 5B Control; native autoregressive video rerendering)
 
 ### Image Generation and Editing
 
@@ -232,7 +233,6 @@ Models and variants are grouped by their primary use.
 
 - ✅ [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super) (including [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID))
 - ✅ [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast)
-- ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0)
 - ✅ [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay) (bidirectional, autoregressive, and distilled)
 - ✅ [EdenLive](scripts/edenlive/README.md) (Wan2.1 14B / Wan2.2 5B; bidirectional and four-step autoregressive)
 - ✅ [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (3D reconstruction)

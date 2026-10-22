@@ -57,11 +57,15 @@ class FlashAttn2Weight(AttnWeightTemplate):
             total_seqlen = bs * q.shape[1]
 
         if bs == 1:
-            if len(q.shape) == 3:
-                q = q.unsqueeze(0)
-                k = k.unsqueeze(0)
-                v = v.unsqueeze(0)
-            x = flash_attn_func_v2(q, k, v, softmax_scale=softmax_scale, causal=causal).reshape(total_seqlen, -1)
+            if len(q.shape) == 4:
+                q, k, v = q.squeeze(0), k.squeeze(0), v.squeeze(0)
+            if k.shape[0] > 256:
+                # FA2's dense single-batch kernel can return NaNs for long KV on SM90.
+                cu_q = torch.tensor([0, q.shape[0]], device=q.device, dtype=torch.int32)
+                cu_kv = torch.tensor([0, k.shape[0]], device=k.device, dtype=torch.int32)
+                x = flash_attn_varlen_func_v2(q, k, v, cu_q, cu_kv, q.shape[0], k.shape[0], softmax_scale=softmax_scale, causal=causal).reshape(total_seqlen, -1)
+            else:
+                x = flash_attn_func_v2(q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), softmax_scale=softmax_scale, causal=causal).reshape(total_seqlen, -1)
         else:
             if cu_seqlens_q.is_cpu:
                 cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
@@ -93,6 +97,23 @@ class FlashAttn2Weight(AttnWeightTemplate):
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
         elif q.ndim != 4:
             raise ValueError(f"Dense FlashAttention2 expects 3D or 4D Q/K/V, got q.ndim={q.ndim}.")
+
+        if q.shape[0] == 1 and k.shape[1] > 256:
+            cu_q = torch.tensor([0, q.shape[1]], device=q.device, dtype=torch.int32)
+            cu_kv = torch.tensor([0, k.shape[1]], device=k.device, dtype=torch.int32)
+            output, lse, *_ = flash_attn_varlen_func_v2(
+                q.squeeze(0),
+                k.squeeze(0),
+                v.squeeze(0),
+                cu_q,
+                cu_kv,
+                q.shape[1],
+                k.shape[1],
+                softmax_scale=softmax_scale,
+                causal=False,
+                return_attn_probs=True,
+            )
+            return output.reshape(q.shape[1], -1), lse.transpose(0, 1)
 
         output, lse, *_ = flash_attn_func_v2(
             q.contiguous(),

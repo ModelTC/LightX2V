@@ -12,13 +12,15 @@ from loguru import logger
 from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.lingbot_va_model import WanLingbotVAModel
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
+from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.lingbot_va.scheduler import LingbotVAFlowMatchScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import count_conv3d, patchify
 from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
 from lightx2v.utils.input_info import I2VAInputInfo
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -64,7 +66,7 @@ class _StreamingVAEEncoder:
 
 
 @RUNNER_REGISTER("lingbot_va")
-class LingbotVARunner(Wan22DenseRunner):
+class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
     supported_request_fields_by_task = {
         "i2va": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path"},
     }
@@ -465,9 +467,8 @@ class LingbotVARunner(Wan22DenseRunner):
             obs[key] = np.array(Image.open(file_path).convert("RGB"))
         return {"obs": [obs]}
 
-    def run_vae_decoder(self, pred_latent):
-        decoded = self.vae_decoder.decode(pred_latent.squeeze(0).to(GET_DTYPE()))
-        return decoded[0].permute(1, 2, 3, 0).add(1.0).mul(0.5).clamp(0, 1)
+    def decode_policy_chunk(self, latents, first, last):
+        return self.vae_decoder.cached_decode_withflag(latents[0].to(GET_DTYPE()), first, last)[0].permute(1, 2, 3, 0).add(1).mul(0.5).clamp(0, 1)
 
     def end_run_segment(self, segment_idx=None):
         pass
@@ -475,24 +476,27 @@ class LingbotVARunner(Wan22DenseRunner):
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         self.init_run()
-        for chunk_id in range(self.num_chunks):
-            logger.info(f"LingBot-VA chunk {chunk_id + 1}/{self.num_chunks}")
-            with ProfilingContext4DebugL1(f"chunk end2end {chunk_id + 1}/{self.num_chunks}"):
-                self.check_stop()
-                self.init_run_segment(chunk_id)
-                actions, latents = self.run_segment(chunk_id)
-                self.pred_latent_lst.append(latents)
-                self.pred_action_lst.append(torch.from_numpy(actions))
-                self.end_run_segment(chunk_id)
-            if self.progress_callback:
-                self.progress_callback((chunk_id + 1) / self.num_chunks * 100, 100)
-
-        pred_latent = torch.cat(self.pred_latent_lst, dim=2)
+        decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder, dispatch_in_worker=True)
+        try:
+            with no_sync_profiling(enabled=decoder.is_async):
+                for chunk_id in range(self.num_chunks):
+                    logger.info(f"LingBot-VA chunk {chunk_id + 1}/{self.num_chunks}")
+                    with ProfilingContext4DebugL1(f"chunk end2end {chunk_id + 1}/{self.num_chunks}"):
+                        self.check_stop()
+                        self.init_run_segment(chunk_id)
+                        actions, latents = self.run_segment(chunk_id)
+                        self.pred_action_lst.append(torch.from_numpy(actions))
+                        self.end_run_segment(chunk_id)
+                    decoder.submit(self.decode_policy_chunk, latents, chunk_id == 0, chunk_id == self.num_chunks - 1)
+                    if self.progress_callback:
+                        self.progress_callback((chunk_id + 1) / self.num_chunks * 100, 100)
+                self.gen_video = torch.cat(decoder.finish(), dim=0)
+        finally:
+            decoder.finish()
         self.pred_action = torch.cat(self.pred_action_lst, dim=1)
-        self.gen_video = self.run_vae_decoder(pred_latent)
-        gen_video_final = self.process_images_after_vae_decoder()
+        result = self.process_images_after_vae_decoder()
         self.end_run()
-        return gen_video_final
+        return result
 
     def process_images_after_vae_decoder(self):
         self.gen_video_final = self.gen_video

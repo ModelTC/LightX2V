@@ -633,6 +633,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.cpu_offload = cpu_offload
         self.quant_scheme = quant_scheme
         self.decode_parallel = False
+        self.decode_group = None
         self.encode_parallel = False
         self.infer_dtype = torch.float16
         self.sensitive_layer_dtype = sensitive_layer_dtype
@@ -926,6 +927,15 @@ class MiniMaxH3VideoVAE(nn.Module):
             raise RuntimeError("MiniMax-H3 VAE parallel execution requires tiling")
         self.use_tiling = False
 
+    def to_cuda(self):
+        if self._cpu_weight_sources is None:
+            self.to(self.execution_device)
+        else:
+            self._activate()
+
+    def to_cpu(self):
+        self.offload()
+
     def enable_decode_parallel(self) -> None:
         """Enable tiled parallel decoding; must be called on every rank."""
         if not self.use_tiling:
@@ -933,7 +943,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         if not dist.is_initialized() or dist.get_world_size() <= 1:
             raise RuntimeError("MiniMax-H3 VAE decode parallel requires an initialized multi-rank process group")
         # Initialize the full-group communicator on the VAE device before subset P2P.
-        dist.all_reduce(torch.zeros(1, device=self.execution_device))
+        self.decode_group = dist.new_group()
+        dist.all_reduce(torch.zeros(1, device=self.execution_device), group=self.decode_group)
         self.decode_parallel = True
 
     def enable_encode_parallel(self) -> None:
@@ -1218,9 +1229,9 @@ class MiniMaxH3VideoVAE(nn.Module):
         return task_counts
 
     @staticmethod
-    def _gather_tiles(local_tiles: list[torch.Tensor], task_counts: list[int]) -> list[torch.Tensor] | None:
+    def _gather_tiles(local_tiles: list[torch.Tensor], task_counts: list[int], group=None) -> list[torch.Tensor] | None:
         """Collect tile results on rank 0 in global tile order."""
-        rank = dist.get_rank()
+        rank = dist.get_rank(group)
         # Each active worker sends once; idle ranks have no P2P operations.
         # Rank 0 always owns the first tile and keeps its local list.
         if rank != 0:
@@ -1228,7 +1239,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                 return None
             # Match the receive buffers even when tile outputs are channels-last.
             local_tile_batch = torch.stack(local_tiles).contiguous()
-            send_op = dist.P2POp(dist.isend, local_tile_batch, 0)
+            send_op = dist.P2POp(dist.isend, local_tile_batch, 0, group=group)
             for request in dist.batch_isend_irecv([send_op]):
                 request.wait()
             return None
@@ -1240,7 +1251,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                 continue
             receive_buffer = local_tiles[0].new_empty((task_count, *local_tiles[0].shape))
             receive_buffers.append(receive_buffer)
-            receive_ops.append(dist.P2POp(dist.irecv, receive_buffer, source_rank))
+            receive_ops.append(dist.P2POp(dist.irecv, receive_buffer, source_rank, group=group))
         if receive_ops:
             for request in dist.batch_isend_irecv(receive_ops):
                 request.wait()
@@ -1265,7 +1276,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         local_tiles = all_tiles[local_start:local_end]
         local_tiles = [self.decoder(self.post_quant_conv(tile)) for tile in local_tiles]
 
-        return self._gather_tiles(local_tiles, task_counts)
+        return self._gather_tiles(local_tiles, task_counts, self.decode_group)
 
     def _decode(self, latents: torch.Tensor) -> torch.Tensor | None:
         """Decode tiled latents and assemble the full video on rank 0.

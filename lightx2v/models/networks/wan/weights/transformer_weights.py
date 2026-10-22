@@ -60,7 +60,8 @@ def _mm_weight(
             mm_type = "Calib"
     if config.get("tensor_parallel", False) and split_dim is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        tp_mm_type = config.get("tp_mm_type", "TensorParallel")
+        default_tp_mm = "TensorParallelReplicatedRow" if config.get("model_cls") == "matrix_game4" and mm_type == "Default" else "TensorParallel"
+        tp_mm_type = config.get("tp_mm_type", default_tp_mm)
         return MM_WEIGHT_REGISTER[tp_mm_type](
             weight_name=weight_name,
             bias_name=bias_name,
@@ -91,7 +92,8 @@ def _mm_weight(
 def _rms_weight(config, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, lora_prefix="", lora_path=""):
     if config.get("tensor_parallel", False):
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        tp_rms_norm_type = config.get("tp_rms_norm_type", "TensorParallelFP32")
+        default_norm = "TensorParallelTorch" if config.get("model_cls") == "matrix_game4" and config.get("rms_norm_type") in ("torch", "torch_opaque") else "TensorParallelFP32"
+        tp_rms_norm_type = config.get("tp_rms_norm_type", default_norm)
         return RMS_WEIGHT_REGISTER[tp_rms_norm_type](
             weight_name=weight_name,
             tp_group=tp_group,
@@ -725,7 +727,7 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module("cross_attn_1", ATTN_WEIGHT_REGISTER[self.config["cross_attn_1_type"]]())
 
-        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True) and self.config["model_cls"] != "wan2.1_sf_mtxg2":
+        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
             self.add_module(
                 "cross_attn_k_img",
                 _mm_weight(

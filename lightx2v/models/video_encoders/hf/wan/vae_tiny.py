@@ -13,7 +13,7 @@ class WanVAE_tiny(nn.Module):
     def __init__(self, vae_path="taew2_1.pth", dtype=torch.bfloat16, device="cuda", need_scaled=False):
         super().__init__()
         self.dtype = dtype
-        self.device = torch.device("cuda")
+        self.device = torch.device(device)
         self.taehv = TAEHV(vae_path).to(self.dtype)
         self.temperal_downsample = [True, True, False]
         self.need_scaled = need_scaled
@@ -71,6 +71,15 @@ class WanVAE_tiny(nn.Module):
         # low-memory, set parallel=True for faster + higher memory
         return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False, memory=memory, first_chunk=first_chunk).transpose(1, 2).mul_(2).sub_(1)
 
+    def get_decode_state(self):
+        return torch.utils._pytree.tree_map_only(torch.Tensor, torch.clone, self._decode_memory)
+
+    def set_decode_state(self, state):
+        self._decode_memory = torch.utils._pytree.tree_map_only(torch.Tensor, torch.clone, state)
+
+    def reset_decode_state(self):
+        self._decode_memory = None
+
     @torch.no_grad()
     def cached_decode_withflag(self, latents, is_first_chunk, is_last_chunk):
         if is_first_chunk:
@@ -93,7 +102,7 @@ class Wan2_2_VAE_tiny(nn.Module):
     def __init__(self, vae_path="taew2_2.pth", dtype=torch.bfloat16, device="cuda", need_scaled=False):
         super().__init__()
         self.dtype = dtype
-        self.device = torch.device("cuda")
+        self.device = torch.device(device)
         self.taehv = TAEHV(vae_path, model_type="wan22").to(self.dtype)
         self.need_scaled = need_scaled
         if self.need_scaled:
@@ -214,6 +223,9 @@ class Wan2_2_VAE_tiny(nn.Module):
         return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False, memory=memory, first_chunk=first_chunk).transpose(1, 2).mul_(2).sub_(1)
 
     cached_decode_withflag = WanVAE_tiny.cached_decode_withflag
+    get_decode_state = WanVAE_tiny.get_decode_state
+    set_decode_state = WanVAE_tiny.set_decode_state
+    reset_decode_state = WanVAE_tiny.reset_decode_state
 
     @torch.no_grad()
     def encode_video(self, vid):

@@ -26,7 +26,7 @@
         "num_frame_per_chunk": 3,
         "local_attn_size": 18,
         "sink_size": 6,
-        "kv_cache_scheme": "fp",
+        "kv_cache_scheme": "rolling",
         "step_kv_cache": false,
         "denoising_step_list": [
             1000,
@@ -34,5 +34,11 @@
             833.3333333333,
             625
         ]
-    }
+    },
+    "use_compile": true,
+    "use_cuda_graph": true,
+    "warmup": true,
+    "need_scaled": true,
+    "use_tae": true,
+    "tae_path": "/data/nvme6/gushiqiao/edenlive_training/lighttae_wan22_h3_api_ddp23_500k_20261019/run/lighttaew2_2.safetensors"
 }

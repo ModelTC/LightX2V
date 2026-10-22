@@ -19,7 +19,7 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
     if config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
         tp_mm_type = config.get("tp_mm_type", "TensorParallel")
-        return MM_WEIGHT_REGISTER[tp_mm_type](
+        linear = MM_WEIGHT_REGISTER[tp_mm_type](
             weight_name=f"{name}.weight",
             bias_name=f"{name}.bias" if bias else None,
             mm_type=quant_scheme,
@@ -31,6 +31,9 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
             create_cuda_buffer=create_cuda_buffer,
             lora_prefix=lora_prefix,
         )
+        if quant_scheme == "fp8-f16-accum" and name.endswith(FP8_F16_ACCUM_PROJECTION_SUFFIXES):
+            unwrap_tp_weight(linear).enable_fp8_f16_accum(DIT_FP8_F16_ACCUM_ACTIVATION_QMAX)
+        return linear
 
     linear = MM_WEIGHT_REGISTER[quant_scheme](
         f"{name}.weight",
@@ -155,7 +158,12 @@ class MiniMaxH3AttentionWeights(WeightModule):
     def has_fused_qkv(self):
         if self.to_qkv is None or getattr(unwrap_tp_weight(self.to_qkv), "weight", None) is None:
             return False
-        return not any(getattr(unwrap_tp_weight(module), "has_lora_branch", False) or getattr(unwrap_tp_weight(module), "has_diff", False) for module in (self.to_q, self.to_k, self.to_v))
+        return not any(getattr(unwrap_tp_weight(module), "has_diff", False) for module in (self.to_q, self.to_k, self.to_v))
+
+    def project_fused_qkv(self, hidden_states):
+        base = self.to_qkv.apply(hidden_states).chunk(3, dim=-1)
+        projections = tuple(unwrap_tp_weight(module) for module in (self.to_q, self.to_k, self.to_v))
+        return tuple(output + projection.apply_lora(hidden_states) if projection.has_lora_branch else output for output, projection in zip(base, projections))
 
 
 class MiniMaxH3FeedForwardWeights(WeightModule):

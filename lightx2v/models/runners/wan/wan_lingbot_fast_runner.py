@@ -1,35 +1,20 @@
-import gc
-
 import torch
-from loguru import logger
 
-from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.lingbot_fast_model import WanLingbotFastModel
+from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin
 from lightx2v.models.runners.wan.wan_runner import LingbotRunner, WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.self_forcing.scheduler import WanSFScheduler
-from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
-from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import *
+from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.input_info import ActionI2VInputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import get_rank_and_world_size
-from lightx2v.utils.video_recorder import VideoRecorder
-
-try:
-    import torch.distributed as dist
-except ImportError:
-    dist = None
 
 
 @RUNNER_REGISTER("lingbot_world_fast")
-class LingbotFastRunner(LingbotRunner):
-    """Lingbot fast (autoregressive) runner.
+class LingbotFastRunner(WanAutoregressiveRunnerMixin, LingbotRunner):
+    """Share Wan AR scheduling while retaining Lingbot camera input handling."""
 
-    Inherits LingbotRunner for camera pose handling (set_inputs, load_image_encoder,
-    get_encoder_output_i2v, and all camera helper methods).
-    Adds SF scheduling and segment-based inference.
-    """
-
+    _SUPPORTS_AUTOREGRESSIVE_WARMUP = True
+    _WARMUP_TASKS = ("i2v",)
     supported_request_fields_by_task = {
         "i2v": LingbotRunner.supported_request_fields_by_task["i2v"] - {"num_frames"},
     }
@@ -54,123 +39,34 @@ class LingbotFastRunner(LingbotRunner):
     def init_scheduler(self):
         self.scheduler = WanSFScheduler(self.config)
 
-    @ProfilingContext4DebugL1("init kv cache manager")
-    def init_kv_cache_manager(self):
-        kv_mgr = getattr(self.model, "kv_cache_manager", None)
-        if kv_mgr is None:
-            kv_mgr = KVCacheManager(config=self.config, device=torch.device("cuda"), sp_group=self.model.seq_p_group)
-            self.model.kv_cache_manager = kv_mgr
-        kv_mgr.ar_config = dict(self.config.get("ar_config", {}))
-        kv_mgr._create_kv_caches(self.input_info.latent_shape)
-        self.model.transformer_infer.kv_cache_manager = kv_mgr
-        self.input_info.latent_shape = [self.input_info.latent_shape[0], kv_mgr.num_output_frames, self.input_info.latent_shape[2], self.input_info.latent_shape[3]]
-        self.scheduler.num_output_frames = kv_mgr.num_output_frames
-        self.scheduler.num_chunks = kv_mgr.num_output_frames // self.config.get("ar_config", {}).get("num_frame_per_chunk", 3)
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            sp_group = getattr(self.model, "seq_p_group", None)
-            if sp_group is not None or torch.distributed.get_world_size() > 1:
-                torch.distributed.barrier(group=sp_group)
+    def validate_warmup(self):
+        super().validate_warmup()
+        if self.control_type != "cam":
+            raise NotImplementedError("Lingbot Fast warmup supports camera-conditioned i2v")
 
-    def get_video_segment_num(self):
-        self.video_segment_num = self.scheduler.num_chunks
+    def get_target_latent_size(self, target_height, target_width):
+        _, stride_h, stride_w = self.config["vae_stride"]
+        _, patch_h, patch_w = self.config.get("patch_size", (1, 2, 2))
+        latent_h = target_height // stride_h // patch_h * patch_h
+        latent_w = target_width // stride_w // patch_w * patch_w
+        if torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+            latent_h, latent_w, _, _ = self._adjust_latent_for_grid_splitting(latent_h, latent_w, torch.distributed.get_world_size())
+        return latent_h, latent_w
 
-    def run_segment(self, segment_idx=0):
-        infer_steps = self.model.scheduler.infer_steps
-        for step_index in range(infer_steps):
-            if self.video_segment_num == 1:
-                self.check_stop()
-            logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
-            self.model.kv_cache_manager.current_step = step_index
+    def get_warmup_latent_shape(self, target_height, target_width):
+        return self.get_latent_shape_with_lat_hw(*self.get_target_latent_size(target_height, target_width))
 
-            with ProfilingContext4DebugL1("step_pre"):
-                self.model.scheduler.step_pre(seg_index=segment_idx, step_index=step_index, is_rerun=False)
+    def run_vae_encoder(self, first_frame, last_frame=None):
+        # Use the camera-calibrated output grid for both real requests and warmup.
+        latent_h, latent_w = self.get_target_latent_size(*self.get_target_size())
+        encoded = self.get_vae_encoder_output(first_frame, latent_h, latent_w, last_frame)
+        return encoded, self.get_latent_shape_with_lat_hw(latent_h, latent_w)
 
-            with ProfilingContext4DebugL1("infer_main"):
-                self.model.infer(self.inputs)
-
-            with ProfilingContext4DebugL1("step_post"):
-                self.model.scheduler.step_post()
-
-            if self.progress_callback:
-                current_step = segment_idx * infer_steps + step_index + 1
-                total_all_steps = self.video_segment_num * infer_steps
-                self.progress_callback((current_step / total_all_steps) * 100, 100)
-
-        return self.model.scheduler.stream_output
-
-    def decode_segment_latents(self, segment_idx: int, segment_latents: torch.Tensor) -> torch.Tensor:
-        is_first = segment_idx == 0
-        is_last = segment_idx == self.video_segment_num - 1
-        return self.vae_decoder.cached_decode_withflag(segment_latents.to(GET_DTYPE()), is_first, is_last)
-
-    def init_run(self):
-        self.init_kv_cache_manager()
-        super().init_run()
-
-    @ProfilingContext4DebugL2("Run DiT")
-    def run_main(self, total_steps=None):
-        self.init_run()
-        lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
-        if lazy_vae:
-            self.vae_decoder = self.load_vae_decoder()
-        vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=torch.device("cuda"), vae_decoder=self.vae_decoder)
-
-        with no_sync_profiling(enabled=vae_decoder.is_async):
-            with ProfilingContext4DebugL1(
-                f"AR chunk total {self.video_segment_num} chunks",
-                recorder_mode=GET_RECORDER_MODE(),
-                metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
-                metrics_labels=["DefaultRunner"],
-            ):
-                try:
-                    for segment_idx in range(self.video_segment_num):
-                        logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
-                        with ProfilingContext4DebugL1(
-                            f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
-                            recorder_mode=GET_RECORDER_MODE(),
-                            metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
-                            metrics_labels=["DefaultRunner"],
-                        ):
-                            self.check_stop()
-                            self.init_run_segment(segment_idx)
-                            latents = self.run_segment(segment_idx)
-
-                            with ProfilingContext4DebugL1("step_pre_in_rerun"):
-                                self.model.scheduler.step_pre(
-                                    seg_index=segment_idx,
-                                    step_index=self.model.scheduler.infer_steps - 1,
-                                    is_rerun=True,
-                                )
-                            with ProfilingContext4DebugL1("infer_main_in_rerun"):
-                                self.model.infer(self.inputs)
-
-                        vae_decoder.submit(self.decode_segment_latents, segment_idx, latents)
-                        torch.cuda.empty_cache()
-                    decoded_chunks = vae_decoder.finish()
-                finally:
-                    if "vae_decoder" in locals():
-                        vae_decoder.finish()
-                    if lazy_vae:
-                        del self.vae_decoder
-                        torch.cuda.empty_cache()
-                        gc.collect()
-
-        self.gen_video = torch.cat(decoded_chunks, dim=2)
-        self.gen_video_final = self.gen_video
-        gen_video_final = self.process_images_after_vae_decoder()
-        self.end_run()
-        return gen_video_final
-
-    def init_video_recorder(self):
-        output_video_path = self.input_info.save_result_path
-        self.video_recorder = None
-        if isinstance(output_video_path, dict):
-            output_video_path = output_video_path["data"]
-        logger.info(f"init video_recorder with output_video_path: {output_video_path}")
-        rank, world_size = get_rank_and_world_size()
-        if output_video_path and rank == world_size - 1:
-            record_fps = self.config.get("fps", 16)
-            self.video_recorder = VideoRecorder(
-                livestream_url=output_video_path,
-                fps=record_fps,
-            )
+    def prepare_warmup_inputs(self, height, width, latent_shape, text_output):
+        frame_count = (latent_shape[1] - 1) * self.config["vae_stride"][0] + 1
+        self.input_info = ActionI2VInputInfo(task="i2v", prompt="warmup", size=[height, width], num_frames=frame_count)
+        self.input_info.latent_shape = latent_shape
+        image_output = self.get_warmup_image_encoder_output(latent_shape)
+        camera_channels = 6 * self.config["vae_stride"][1] * self.config["vae_stride"][2]
+        image_output["dit_cond_dict"] = {"c2ws_plucker_emb": torch.zeros(camera_channels, *latent_shape[1:], device=self.init_device, dtype=GET_DTYPE())}
+        self.inputs = {"text_encoder_output": text_output, "image_encoder_output": image_output}

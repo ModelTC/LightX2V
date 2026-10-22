@@ -1,16 +1,13 @@
 import torch
 
+from lightx2v.models.networks.wan.autoregressive_model import WanAutoregressiveModel
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.self_forcing.pre_infer import WanSFPreInfer
 from lightx2v.models.networks.wan.infer.self_forcing.transformer_infer import WanSFTransformerInfer
-from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.utils.envs import GET_DTYPE
 
 
-class WanSFModel(WanModel):
-    def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
-        super().__init__(model_path, config, device, lora_path=lora_path, lora_strength=lora_strength)
-
+class WanSFModel(WanAutoregressiveModel):
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         file_path = self.config["dit_original_ckpt"]
         if file_path.endswith(".safetensors"):
@@ -38,24 +35,3 @@ class WanSFModel(WanModel):
         self.pre_infer_class = WanSFPreInfer
         self.post_infer_class = WanPostInfer
         self.transformer_infer_class = WanSFTransformerInfer
-
-    @torch.no_grad()
-    def infer(self, inputs):
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0:
-                self.to_cuda()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cuda()
-                self.transformer_weights.non_block_weights_to_cuda()
-
-        current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_chunk
-        current_end_frame = (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_chunk
-        noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
-
-        self.scheduler.noise_pred[:, current_start_frame:current_end_frame] = noise_pred
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
-                self.to_cpu()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cpu()
-                self.transformer_weights.non_block_weights_to_cpu()

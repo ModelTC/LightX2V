@@ -917,6 +917,7 @@ class WanVAE:
         self.weight_dtype = dtype if weight_dtype is None else weight_dtype
         self.device = device
         self.parallel = parallel
+        self.decode_group = None
         self.use_tiling = use_tiling
         self.cpu_offload = cpu_offload
         self.use_2d_split = use_2d_split
@@ -1565,9 +1566,7 @@ class WanVAE:
         total_processes = world_size_h * world_size_w
         full_images = [torch.empty_like(images_chunk) for _ in range(total_processes)]
 
-        dist.all_gather(full_images, images_chunk)
-
-        self.device_synchronize()
+        dist.all_gather(full_images, images_chunk, group=self.decode_group)
 
         # Reconstruct the full image tensor
         image_rows = []
@@ -1614,6 +1613,20 @@ class WanVAE:
             self.to_cpu()
 
         return images
+
+    def enable_async_decode(self):
+        if self.parallel and self.decode_group is None:
+            self.decode_group = dist.new_group()
+            dist.all_reduce(torch.zeros(1, device=AI_DEVICE), group=self.decode_group)
+
+    def get_decode_state(self):
+        return torch.utils._pytree.tree_map_only(torch.Tensor, torch.clone, self.model._feat_map)
+
+    def set_decode_state(self, state):
+        self.model._feat_map = torch.utils._pytree.tree_map_only(torch.Tensor, torch.clone, state)
+
+    def reset_decode_state(self):
+        self.model.clear_decode_cache()
 
     def cached_decode_withflag(self, zs, is_first, is_last):
         if self.cpu_offload:

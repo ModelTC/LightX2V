@@ -1,11 +1,10 @@
 #!/bin/bash
 set -eo pipefail
 
-# Set repository/model paths and dit_original_ckpt in the selected JSON config.
-lightx2v_path=/path/to/LightX2V
-model_path=/path/to/MiniMax-H3
+lightx2v_path=/data/nvme6/gushiqiao/codes/report/LightX2V
+model_path=/data/nvme6/gushiqiao/models/MiniMax-H3
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=5,6
 
 # Set environment variables.
 source "${lightx2v_path}/scripts/base/base.sh"
@@ -14,7 +13,7 @@ export SENSITIVE_LAYER_DTYPE=BF16
 
 # Use minimax_h3_causal_compile.json to enable warmup and torch.compile.
 # Warmup runs the configured size/num_frames with a synthetic image and audio.
-torchrun --standalone --nproc_per_node=8 -m lightx2v.infer \
+torchrun --standalone --nproc_per_node=2 -m lightx2v.infer \
   --model_cls minimax_h3_causal \
   --task refa2v \
   --model_path "${model_path}" \

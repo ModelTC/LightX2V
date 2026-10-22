@@ -69,17 +69,12 @@ class WanScheduler(BaseScheduler):
             self.changing_resolution_index = 0
 
     def _uses_conditioned_latent_prefix(self):
-        """Whether this Wan variant keeps a fixed latent prefix during diffusion.
-
-        Vanilla Wan2.2 i2v/s2v already does this for the first encoded frames. MG3
-        reuses the same mechanism, but the carried prefix can be longer on later
-        segments because previous latent tails are stitched back in as conditioning.
-        """
+        """Whether this Wan variant keeps a fixed latent prefix during diffusion."""
         task = self.config.get("task")
         model_cls = str(self.config.get("model_cls", ""))
         if task not in ["i2v", "s2v", "rs2v"]:
             return False
-        return model_cls in {"wan2.2", "wan2.2_matrix_game3"}
+        return model_cls == "wan2.2"
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.rope_request_id += 1

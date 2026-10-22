@@ -6,8 +6,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import RUNNER_MODULES, build_runner
-from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import *
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v.utils.set_config import build_cli_inputs, init_parallel, print_config, print_request
 from lightx2v.utils.utils import validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
@@ -22,7 +21,7 @@ def main():
         required=True,
         choices=RUNNER_MODULES,
     )
-    parser.add_argument("--model-variant", type=str, default=None, help="Model-specific startup weight variant; MiniMax-H3 uses fl2av or ref2av.")
+    parser.add_argument("--model-variant", type=str, default=None, help="Model-specific startup weight variant; MiniMax-H3: fl2av/ref2av; Matrix-Game-4: castle/ancient-egypt/racing.")
 
     parser.add_argument(
         "--task",
@@ -45,9 +44,11 @@ def main():
             "l2av",
             "fl2av",
             "ref2av",
+            "refv2v",
             "refa2v",
             "i2va",
             "v2av",
+            "v2v",
             "ltx2_s2v",
             "sr",
             "recon",
@@ -197,16 +198,21 @@ def main():
 
     validate_config_paths(startup_config)
 
-    with ProfilingContext4DebugL1("Total Cost"):
-        runner = build_runner(startup_config)
-        input_info = runner.prepare_request(request_data)
-        print_request(input_info, runner.get_supported_request_fields(input_info.task))
-        runner.run_request(input_info)
-
-    # Clean up distributed process group
-    if dist.is_initialized():
-        dist.destroy_process_group()
-        logger.info("Distributed process group cleaned up")
+    runner = None
+    try:
+        with no_sync_profiling(startup_config["model_cls"] in ("taomate_h3", "taomate_h3_native", "streamrender_h3", "streamrender_h3_native")), ProfilingContext4DebugL1("Total Cost"):
+            runner = build_runner(startup_config)
+            input_info = runner.prepare_request(request_data)
+            print_request(input_info, runner.get_supported_request_fields(input_info.task))
+            runner.run_request(input_info)
+    finally:
+        try:
+            if runner is not None:
+                runner.close()
+        finally:
+            if dist.is_initialized():
+                dist.destroy_process_group()
+                logger.info("Distributed process group cleaned up")
 
 
 if __name__ == "__main__":

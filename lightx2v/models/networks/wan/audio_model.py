@@ -5,6 +5,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from loguru import logger
 
+from lightx2v.models.networks.wan.autoregressive_model import WanAutoregressiveModel
 from lightx2v.models.networks.wan.infer.audio.post_infer import WanAudioPostInfer
 from lightx2v.models.networks.wan.infer.audio.pre_infer import WanAudioARPreInfer, WanAudioPreInfer
 from lightx2v.models.networks.wan.infer.audio.transformer_infer import WanAudioARTransformerInfer, WanAudioTransformerInfer
@@ -99,7 +100,7 @@ class WanAudioModel(WanModel):
         return pre_infer_out
 
 
-class WanAudioARModel(WanAudioModel):
+class WanAudioARModel(WanAudioModel, WanAutoregressiveModel):
     def _init_infer_class(self):
         super()._init_infer_class()
         self.pre_infer_class = WanAudioARPreInfer
@@ -108,6 +109,10 @@ class WanAudioARModel(WanAudioModel):
 
     @torch.no_grad()
     def infer(self, inputs):
+        text_key = "context" if self.scheduler.infer_condition else "context_null"
+        self.transformer_infer.set_cross_attn_context(inputs["text_encoder_output"][text_key], branch=self.scheduler.infer_condition)
+        if self.transformer_infer.has_image_context:
+            self.transformer_infer.set_cross_attn_context(inputs["image_encoder_output"]["clip_encoder_out"], branch=self.scheduler.infer_condition, kind="image")
         if self.cpu_offload:
             if self.offload_granularity == "model" and self.scheduler.step_index == 0:
                 self.to_cuda()

@@ -9,3 +9,4 @@ from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3PreInfe
 class MiniMaxH3CausalPreInferOutput(MiniMaxH3PreInferOutput):
     key_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None
     valid_sequence_length: int | None = None
+    attention_cache: tuple[torch.Tensor, ...] | None = None

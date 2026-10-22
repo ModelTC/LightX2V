@@ -10,45 +10,41 @@ import torchaudio
 from PIL import Image
 from loguru import logger
 
-from lightx2v.common.kvcache.manager import KVCacheManager
 from lightx2v.models.input_encoders.hf.minimax_h3_causal import MiniMaxH3CausalQwen3VLTextEncoder
 from lightx2v.models.networks.minimax_h3.packing import FPS, FRAMES_PER_CHUNK, align_num_frames, audio_latent_num_frames, unpack_audio_tokens, unpatchify_video_tokens
 from lightx2v.models.networks.minimax_h3.packing_ref2av import MAX_REFERENCE_IMAGES, MiniMaxH3PreparedReference, resolve_reference_image_size
 from lightx2v.models.networks.minimax_h3_causal.model import MiniMaxH3CausalModel
+from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRunnerMixin
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 from lightx2v.models.runners.minimax_h3_causal.action_prompt_travel import ActionPromptTravel, ActionPromptTravelConfig, coerce_action_prompts
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3_causal.scheduler import MiniMaxH3CausalScheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
+from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
-from lightx2v.utils.profiler import ProfilingContext4DebugL1
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 @RUNNER_REGISTER("minimax_h3_causal")
-class MiniMaxH3CausalRunner(MiniMaxH3Runner):
+class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     supported_request_fields_by_task = {
         "refa2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "audio_path", "prompt", "action_prompts"},
     }
 
     def __init__(self, config):
         ar_config = config.get("ar_config", {})
-        if ar_config.get("kv_offload", False):
-            raise NotImplementedError("Causal H3 does not support KV cache offload")
-        if ar_config.get("kv_cache_scheme", "fp") != "fp" or ar_config.get("step_kv_cache", True) is not True:
-            raise ValueError("Causal H3 requires ar_config.kv_cache_scheme='fp' and ar_config.step_kv_cache=true")
-        if ar_config.get("kv_quant"):
-            raise NotImplementedError("Causal H3 does not support KV cache quantization")
+        if ar_config.get("kv_cache_scheme", "rolling") != "rolling" or ar_config.get("step_kv_cache", True) is not True:
+            raise ValueError("Causal H3 requires ar_config.kv_cache_scheme='rolling' and ar_config.step_kv_cache=true")
         if GET_DTYPE() != torch.bfloat16:
             raise ValueError("Causal H3 requires DTYPE=BF16 to match the training checkpoint")
         if config.get("lora_configs"):
             raise ValueError("Causal H3 loads the distilled checkpoint directly; released H3 LoRA adapters are not supported")
         self.action_prompt_travel_config = ActionPromptTravelConfig.model_validate(config.get("action_prompt_travel") or {})
         super().__init__(config)
-        self.kv_cache_manager = None
         # Called on rank 0 with (RGB [1,3,F,H,W], start_frame, is_final).
         self.stream_callback = None
 
@@ -197,19 +193,7 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
 
     def init_run(self):
         super().init_run()
-        heads = int(self.config["num_attention_heads"])
-        head_dim = int(self.config["attention_head_dim"])
-        sp_size = dist.get_world_size(self.model.seq_p_group) if self.model.seq_p_group is not None else 1
-        cache_config = dict(self.config, num_heads=heads, dim=heads * head_dim, ar_config=dict(self.config["ar_config"]))
-        self.kv_cache_manager = KVCacheManager(cache_config, device=AI_DEVICE, sp_group=self.model.seq_p_group)
-        self.scheduler.cache = self.kv_cache_manager.create_self_attn_kv_cache(
-            "media",
-            self.scheduler.plan.cache_size,
-            kv_cache_scheme="fp",
-            step_kv_cache=True,
-            num_heads=heads // self.model.tp_size // sp_size,
-        )
-        self.scheduler.cache._init_kv_buffer()
+        self.model.initialize_kv_cache(self.scheduler.plan.cache_size)
 
     def fill_condition_cache(self, *, overwrite=False):
         self.scheduler.prepare_condition(overwrite=overwrite)
@@ -227,58 +211,67 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
             self.request_num_frames,
             output_uint8=not self.input_info.return_result_tensor and self.stream_callback is None,
         )
-        videos, left, right = [], [], []
-        emitted = 0
+        left, right = [], []
+        self._decoded_video_frames = 0
+        async_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.video_vae, dispatch_in_worker=True)
         chunks = self.scheduler.plan.chunks
         # Mono preprocessing creates identical channels; encode one and reuse
         # its latents while retaining the downstream left/right token layout.
         waveform = self.waveform[:1] if self.config.get("audio_mono", False) else self.waveform
-        for index, chunk in enumerate(chunks):
-            self.check_stop()
-            logger.info(f"MiniMax-H3 causal chunk {index + 1}/{len(chunks)}")
-            # Re-encode only the available waveform prefix, and commit only new
-            # latents. Full-waveform encoding would leak future audio context.
-            latents = self.audio_vae.encode(waveform[..., : chunk.audio_frames.stop * self.audio_vae.hop_length], return_cpu=False)
-            if waveform.shape[0] == 1:
-                latents = latents.expand(2, -1, -1)
-            clean = latents[..., chunk.audio_frames].transpose(1, 2).reshape(-1, latents.shape[1]).contiguous()
-            self.scheduler.prepare_chunk(index, clean)
-            for step in range(self.scheduler.infer_steps):
-                self.check_stop()
-                self.scheduler.step_pre(step)
-                self.model.infer(self.inputs)
-                self.scheduler.step_post()
-                if self.progress_callback:
-                    self.progress_callback(100 * (index * self.scheduler.infer_steps + step + 1) / (len(chunks) * self.scheduler.infer_steps), 100)
-            video = unpatchify_video_tokens(self.scheduler.video_latents, chunk.video_frames.stop - chunk.video_frames.start, self.scheduler.latent_height, self.scheduler.latent_width)
-            for frames in decoder.push(video):
-                videos.append(frames)
-                if self.stream_callback is not None and (not dist.is_initialized() or dist.get_rank() == 0):
-                    self.stream_callback(frames, emitted, False)
-                emitted += frames.shape[2]
-            travel = self.action_travel
-            if travel is not None and travel.config.min_slice_rolling and (index + 1) % travel.config.unit_transition == 0 and index + 1 < len(chunks):
-                # Nonzero ranks do not receive decoded RGB in parallel VAE
-                # mode, but the decoder advances this counter on every rank.
-                seconds = (decoder.emitted_frames or (index + 1) * FRAMES_PER_CHUNK) / FPS
-                if travel.update(seconds):
-                    self.inputs["text_encoder_output"] = self.encode_action_prompt()
-                    self.fill_condition_cache(overwrite=True)
-                    logger.info(f"H3 action prompt updated after chunk {index + 1} at {seconds:.3f}s")
-            left.append(clean[: chunk.num_audio_frames].cpu())
-            right.append(clean[chunk.num_audio_frames :].cpu())
-        tail = decoder.finish()
-        if tail is not None:
-            videos.append(tail)
-            if self.stream_callback is not None and (not dist.is_initialized() or dist.get_rank() == 0):
-                self.stream_callback(tail, emitted, True)
+        try:
+            with no_sync_profiling(enabled=async_decoder.is_async):
+                for index, chunk in enumerate(chunks):
+                    self.check_stop()
+                    logger.info(f"MiniMax-H3 causal chunk {index + 1}/{len(chunks)}")
+                    # Re-encode only the available waveform prefix, and commit only new
+                    # latents. Full-waveform encoding would leak future audio context.
+                    latents = self.audio_vae.encode(waveform[..., : chunk.audio_frames.stop * self.audio_vae.hop_length], return_cpu=False)
+                    if waveform.shape[0] == 1:
+                        latents = latents.expand(2, -1, -1)
+                    clean = latents[..., chunk.audio_frames].transpose(1, 2).reshape(-1, latents.shape[1]).contiguous()
+                    self.scheduler.prepare_chunk(index, clean)
+                    for step in range(self.scheduler.infer_steps):
+                        self.check_stop()
+                        self.scheduler.step_pre(step)
+                        self.model.infer(self.inputs)
+                        self.scheduler.step_post()
+                        if self.progress_callback:
+                            self.progress_callback(100 * (index * self.scheduler.infer_steps + step + 1) / (len(chunks) * self.scheduler.infer_steps), 100)
+                    video = unpatchify_video_tokens(self.scheduler.video_latents, chunk.video_frames.stop - chunk.video_frames.start, self.scheduler.latent_height, self.scheduler.latent_width)
+                    async_decoder.submit(self.decode_video_chunk, decoder, video.clone())
+                    travel = self.action_travel
+                    if travel is not None and travel.config.min_slice_rolling and (index + 1) % travel.config.unit_transition == 0 and index + 1 < len(chunks):
+                        async_decoder.synchronize()
+                        seconds = (decoder.emitted_frames or (index + 1) * FRAMES_PER_CHUNK) / FPS
+                        if travel.update(seconds):
+                            self.inputs["text_encoder_output"] = self.encode_action_prompt()
+                            self.fill_condition_cache(overwrite=True)
+                            logger.info(f"H3 action prompt updated after chunk {index + 1} at {seconds:.3f}s")
+                    left.append(clean[: chunk.num_audio_frames].cpu())
+                    right.append(clean[chunk.num_audio_frames :].cpu())
+                async_decoder.submit(self.decode_video_chunk, decoder)
+                videos = [video for output in async_decoder.finish() for video in output]
+        finally:
+            async_decoder.finish()
         return torch.cat(videos, dim=2) if videos else None, torch.cat((torch.cat(left), torch.cat(right)))
+
+    def decode_video_chunk(self, decoder, video=None):
+        if video is None:
+            tail = decoder.finish()
+            frames = [tail] if tail is not None else []
+        else:
+            frames = decoder.push(video)
+        for pixels in frames:
+            if self.stream_callback is not None and (not dist.is_initialized() or dist.get_rank() == 0):
+                self.stream_callback(pixels, self._decoded_video_frames, video is None)
+            self._decoded_video_frames += pixels.shape[2]
+        return frames
 
     def run_vae_decoder(self, video, audio_rows):
         audio = self.audio_vae.decode(unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)) if video is not None else None
         return video, audio
 
     def end_run(self):
+        self.model.reset_autoregressive_state()
         super().end_run()
-        self.kv_cache_manager = None
         self.waveform = None

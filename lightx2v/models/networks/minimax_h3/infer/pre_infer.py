@@ -26,7 +26,7 @@ class MiniMaxH3PreInfer:
     def __init__(self, config):
         self.config = config
         global_num_heads = int(config.get("num_attention_heads", 56))
-        if config.get("tensor_parallel", False):
+        if config.get("tensor_parallel", False) and config.get("text_refiner_tensor_parallel", True):
             tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
             tp_size = dist.get_world_size(tp_group)
         else:

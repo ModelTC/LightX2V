@@ -39,6 +39,8 @@ def _cache_root(config) -> Path:
 def _selected_profiles(config) -> list[str]:
     if config["model_cls"] == "minimax_h3_causal":
         return ["refa2v_condition", "refa2v_media"]
+    if config["model_cls"] in ("taomate_h3", "taomate_h3_native"):
+        return ["taomate_stage3"]
     model_variant = config["model_variant"]
     if model_variant == "ref2av":
         # Ref2AV always has visual reference rows and may additionally have
@@ -65,6 +67,18 @@ def _timesteps_from_bits(bits: list[int], device="cpu") -> torch.Tensor:
 
 
 def _cache_entries(config, profiles: list[str]) -> list[dict]:
+    if profiles == ["taomate_stage3"]:
+        from lightx2v.models.schedulers.taomate_h3.scheduler import distilled_sigmas
+
+        video_timesteps = 1.0 - distilled_sigmas(float(config.get("video_flow_shift", 12.0)))[:-1]
+        audio_timesteps = 1.0 - distilled_sigmas(float(config.get("audio_flow_shift", 3.0)))[:-1]
+        entries = []
+        for step, (video, audio) in enumerate(zip(video_timesteps, audio_timesteps)):
+            timesteps = torch.unique(torch.stack((video, audio)), sorted=True)
+            entries.append({"name": f"taomate_stage3_step_{step:03d}", "timestep_bits": _float32_bits(timesteps.tolist())})
+        entries.append({"name": "taomate_stage3_clean", "timestep_bits": _float32_bits((1.0,))})
+        return entries
+
     infer_steps = int(config["infer_steps"])
     _, video_timesteps = _make_schedule(
         infer_steps,

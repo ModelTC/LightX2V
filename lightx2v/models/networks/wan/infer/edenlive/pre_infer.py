@@ -47,11 +47,6 @@ class EdenLivePreInfer(WanPreInfer):
         if (
             type(scheduler) is not EdenLiveARScheduler
             or not isinstance(getattr(scheduler, "generator", None), torch.Generator)
-            or config.get("cpu_offload", False)
-            or config.get("lazy_load", False)
-            or config.get("seq_parallel", False)
-            or config.get("tensor_parallel", False)
-            or config.get("use_image_encoder", False)
             or config.get("lora_configs")
             or config.get("lora_dynamic_apply", False)
         ):
@@ -197,5 +192,10 @@ class EdenLivePreInfer(WanPreInfer):
             x=x,
             context=context,
             grid_sizes=GridOutput(torch.tensor([grid], device=x.device, dtype=torch.int32), grid),
-            adapter_args={"text_segments": inputs.get("text_segments"), "context_id": context_id},
+            adapter_args={
+                "text_segments": inputs.get("text_segments"),
+                "context_id": context_id,
+                "context_source": text_source,
+                "image_context_source": condition["clip_encoder_out"] if self.config["use_image_encoder"] else None,
+            },
         )

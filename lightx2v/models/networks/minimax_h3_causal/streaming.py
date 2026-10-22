@@ -63,7 +63,7 @@ class MiniMaxH3StreamingPlan:
             positions = torch.cat((video_positions[video_rows], audio_positions[audio_start:audio_end], audio_positions[num_audio_latents + audio_start : num_audio_latents + audio_end]))
             self.chunks.append(MiniMaxH3Chunk(slice(start, end), video_rows, slice(audio_start, audio_end), positions))
             audio_start = audio_end
-        self.cache_size = max(self.prefix_positions(i).shape[0] + chunk.positions.shape[0] for i, chunk in enumerate(self.chunks))
+        self.cache_size = max(self.prefix_length(i) + chunk.positions.shape[0] for i, chunk in enumerate(self.chunks))
         self.sink_rows = condition_rows + self.chunks[0].positions.shape[0]
 
     def positions(self, chunk_index, current_index):
@@ -76,8 +76,14 @@ class MiniMaxH3StreamingPlan:
         return shifted
 
     def prefix_positions(self, index):
-        kept = sorted(set(range(min(self.sink_chunks, index))) | set(range(max(0, index - self.latest_chunks + 1), index)))
+        kept = self.visible_chunk_indices(index)[:-1]
         return torch.cat([self.condition_layout.position_ids] + [self.positions(i, index) for i in kept])
+
+    def visible_chunk_indices(self, index):
+        return sorted(set(range(min(self.sink_chunks, index))) | set(range(max(0, index - self.latest_chunks + 1), index + 1)))
+
+    def prefix_length(self, index):
+        return self.condition_layout.sequence_length + sum(self.chunks[i].positions.shape[0] for i in self.visible_chunk_indices(index)[:-1])
 
     def chunk_layout(self, index):
         chunk = self.chunks[index]

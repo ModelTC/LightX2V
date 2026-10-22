@@ -503,7 +503,8 @@ class VARecorder:
     def stop(self, wait=True):
         if wait and self.stoppable_t:
             t = self.stoppable_t - time.time()
-            if t > 0:
+            # Local files drain through the queues and FFmpeg finalization below.
+            if self.realtime and t > 0:
                 logger.warning(f"Waiting for {t} seconds to stop ...")
                 time.sleep(t)
             self.stoppable_t = None

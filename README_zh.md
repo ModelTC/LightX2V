@@ -196,7 +196,7 @@ python scripts/minimax_h3/server/post_t2av.py
 ### 视频与音视频生成
 
 - ✅ [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)（含 Causal 分支）
-- ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)（含自回归分支） / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5)（蒸馏版）
+- ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5)（蒸馏版）
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [Wan2.1-VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) / [Wan2.2-VACE-Fun-A14B](https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B)
@@ -207,6 +207,7 @@ python scripts/minimax_h3/server/post_t2av.py
 - ✅ [InfiniteTalk](https://huggingface.co/MeiGen-AI/InfiniteTalk)
 - ✅ [Wan-Dancer](https://huggingface.co/Wan-AI/Wan-Dancer-14B)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
+- ✅ [Matrix-Game-4](scripts/matrix_game4/README_zh.md)（Wan2.2 5B Control，原生自回归视频重渲染）
 
 ### 图像生成与编辑
 
@@ -232,7 +233,6 @@ python scripts/minimax_h3/server/post_t2av.py
 
 - ✅ [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super)（含 [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID)）
 - ✅ [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast)
-- ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0)
 - ✅ [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay)（双向、自回归与蒸馏版）
 - ✅ [EdenLive](scripts/edenlive/README_zh.md)（Wan2.1 14B / Wan2.2 5B，支持双向与四步自回归推理）
 - ✅ [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0)（三维重建）

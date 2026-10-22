@@ -27,10 +27,17 @@ class TorchrunInferenceWorker:
 
     def init(self, args) -> bool:
         try:
+            startup_args = {
+                "config_json": args.config_json,
+                "model_cls": args.model_cls,
+                "model_variant": args.model_variant,
+                "model_path": args.model_path,
+                "task": args.task,
+            }
             if self.world_size > 1:
                 if not self.dist_manager.init_process_group():
                     raise RuntimeError("Failed to initialize distributed process group")
-            else:
+            elif self.world_size == 1:
                 self.dist_manager.rank = 0
                 self.dist_manager.world_size = 1
                 self.dist_manager.device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -45,16 +52,7 @@ class TorchrunInferenceWorker:
                 else:
                     logger.info(f"LoRA directory set to: {self.lora_dir}")
 
-            config = build_startup_config(
-                {
-                    "config_json": args.config_json,
-                    "model_cls": args.model_cls,
-                    "model_variant": args.model_variant,
-                    "model_path": args.model_path,
-                    "task": args.task,
-                }
-            )
-
+            config = build_startup_config(startup_args)
             if config["parallel"]:
                 init_parallel(config)
 
@@ -208,4 +206,8 @@ class TorchrunInferenceWorker:
                 continue
 
     def cleanup(self):
-        self.dist_manager.cleanup()
+        try:
+            if self.runner is not None:
+                self.runner.close()
+        finally:
+            self.dist_manager.cleanup()

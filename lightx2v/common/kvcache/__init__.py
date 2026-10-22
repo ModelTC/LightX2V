@@ -1,6 +1,7 @@
 from .fifo import FIFOKVCachePool
 from .manager import KVCacheManager
-from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, SpatialRollingKVCachePool
+from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, StepRollingKVCachePool
+from .rolling_offload import OffloadedHybridStepRollingKVCachePool, OffloadedRollingKVCachePool, OffloadedStepRollingKVCachePool
 from .static import StaticKVCachePool
 
 __all__ = [
@@ -8,16 +9,9 @@ __all__ = [
     "HybridStepRollingKVCachePool",
     "KVCacheManager",
     "RollingKVCachePool",
-    "SpatialRollingKVCachePool",
-    "KIVIQuantRollingKVCachePool",
-    "StepKiviQuantRollingKVCachePool",
+    "StepRollingKVCachePool",
+    "OffloadedRollingKVCachePool",
+    "OffloadedStepRollingKVCachePool",
+    "OffloadedHybridStepRollingKVCachePool",
     "StaticKVCachePool",
 ]
-
-
-def __getattr__(name):
-    if name in {"KIVIQuantRollingKVCachePool", "StepKiviQuantRollingKVCachePool"}:
-        from . import quant
-
-        return getattr(quant, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

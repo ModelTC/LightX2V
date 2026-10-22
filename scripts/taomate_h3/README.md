@@ -1,0 +1,22 @@
+# TaoMate-H3 T2AV
+
+`taomate_h3` is a LightX2V-native Base10 → Stage3 inference path. The Base10 DiT generates three audio milestones in memory for every five-second segment. The Stage3 DiT consumes them with its rolling clean audio/video KV cache; the shared text encoder, streaming video VAE and audio VAE complete the request. Inference does not import or launch the TaoMate upstream runtime and does not require `teacher_artifact_dir`.
+
+Run [run_t2av_3step.sh](run_t2av_3step.sh) with the [single-GPU config](../../configs/taomate_h3/t2av_3step.json). It uses BF16, block weight offload, online AdaLN computation and asynchronous streaming video decode, so it runs directly from the model weights. Provide any prompt, nonnegative seed and supported 32-aligned canvas. `num_frames` must be a positive multiple of 120, up to 1440 frames per call; subsequent segments retain Stage3 clean KV and feed the previous Base10 audio tail into the next segment. The 1440-frame limit avoids the upstream audio-KV reset boundary, which the native ring has not yet implemented. A call uses the same prompt for all its segments. `prompt_json` and a different prompt per segment are not supported by this native entry point.
+
+The [single-GPU Graph launcher](run_t2av_3step_graph.sh) uses the [Graph config](../../configs/taomate_h3/t2av_3step_graph.json), which compiles both DiTs and captures Stage3 with CUDA Graph during warmup. Base10 runs compiled but without Graph because its weights are released before Stage3; a Base10 Graph would otherwise be captured once and immediately discarded. Stage3 warmup uses shape-matched scratch audio guides, and the formal request generates its real Base10 milestones. The [two-GPU Graph config](../../configs/taomate_h3/t2av_3step_graph_tp2.json) additionally enables tensor parallelism and KV offload; [run_t2av_3step_graph_tp2.sh](run_t2av_3step_graph_tp2.sh) is its launcher. The Graph profiles require a prebuilt Stage3 AdaLN cache at `adaln_cache_dir`. The default profile computes AdaLN online. Build it with:
+
+```bash
+python tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py \
+  --model_cls taomate_h3 --model-variant fl2av \
+  --model_path /data/nvme6/gushiqiao/models/MiniMax-H3 \
+  --config_json configs/taomate_h3/t2av_3step.json
+```
+
+The released Stage3 adapter is selected by `adapter_path` in the configs. The FL2VA base checkpoint is passed as `--model_path`. Base10 weights use the same base checkpoint without the adapter. Base10 is loaded with CPU block offload and released before Stage3 begins so both full DiTs do not need to reside on the GPU at the same time. The native runner retains only request-local guidance tensors and Stage3 clean KV during generation.
+
+On H200 with real weights, the native single-GPU and TP2 Graph paths each generated a 120-frame, five-second clip from the same prompt and seed as two official runs. The official pair differed by 21.18 dB YUV PSNR / 0.6975 SSIM. Native single-GPU video measured 20.66 / 21.07 dB and 0.7046 / 0.6918 SSIM against those two references; native TP2 Graph measured 20.20 / 20.28 dB and 0.6976 / 0.6805 SSIM. Audio log-mel cosine similarity was 0.981 (single GPU) and 0.986 (TP2), while waveform cosine was -0.038 and 0.142: audio spectra are close, but the waveform is not sample-identical.
+
+The final default single-GPU request measured 95.72 seconds for its formal pipeline and 159.09 seconds including model load; a separate single-GPU Graph run measured 90.35 seconds for its formal pipeline and TP2 Graph measured 84.4 seconds. Graph warmup increases first-request total time; its formal run reused 400 captured Stage3 blocks 1,200 times without new captures. These measurements use BF16 CPU block offload and asynchronous streaming VAE decode.
+
+A same-seed two-H200 sequence-parallel (SP2) comparison kept BF16, FA3, `aot_eager` compile, warmup, block/KV offload and asynchronous VAE decode identical. Stage3 Graph captured 400 blocks and reused them 1,200 times for the formal 120-frame request. The formal pipeline took 106.57 seconds with Graph versus 111.67 seconds without Graph (1.048× faster); first-request totals were 266.86 versus 246.01 seconds because capture adds warmup cost. The decoded five-second videos measured 42.89 dB PSNR and 0.9853 SSIM; decoded 48 kHz stereo audio was sample-identical. Both local validation videos are in `save_results/taomate_h3_sp2_{graph,eager}_validation.mp4`.

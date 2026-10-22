@@ -1,0 +1,33 @@
+{
+    "num_frames": 81,
+    "text_len": 512,
+    "size": [
+        720,
+        1280
+    ],
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "sample_shift": 5.0,
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "dit_original_ckpt": "/data/nvme4/models/realtime-video/krea-realtime-video-14b.safetensors",
+    "ar_config": {
+        "local_attn_size": -1,
+        "num_frame_per_chunk": 3,
+        "timesteps_index": [
+            0,
+            179,
+            358,
+            679
+        ],
+        "kv_offload": false
+    },
+    "causal_rope_type": "wan_causal_rope",
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-f16-accum",
+    "dit_quantized_ckpt": "/data/nvme5/gushiqiao/models/wan-ar-fp8-f16-accum/realtime_video_14b_fp8_f16_accum.safetensors",
+    "dit_fp8_activation_qmax": 7.0,
+    "use_compile": true,
+    "use_cuda_graph": true,
+    "warmup": true
+}

@@ -2826,6 +2826,35 @@ class MMWeightTP(MMWeightTemplate):
         return output
 
 
+@MM_WEIGHT_REGISTER("TensorParallelReplicatedRow")
+class MMWeightTPReplicatedRow(MMWeightTP):
+    """Keep row weights whole and use the original dense GEMM on gathered inputs."""
+
+    def _local_lora_weights(self, weight_dict):
+        if self.split_dim == "row":
+            return weight_dict
+        return super()._local_lora_weights(weight_dict)
+
+    def apply(self, input_tensor):
+        if self.split_dim != "row" or self.tp_size == 1:
+            return super().apply(input_tensor)
+        gathered = torch.empty(
+            (self.tp_size * input_tensor.shape[0], input_tensor.shape[1]),
+            dtype=input_tensor.dtype,
+            device=input_tensor.device,
+        )
+        dist.all_gather_into_tensor(gathered, input_tensor.contiguous(), group=self.tp_group)
+        full_input = gathered.view(self.tp_size, *input_tensor.shape).transpose(0, 1).reshape(input_tensor.shape[0], -1)
+        bias = self._mm._get_actual_bias(self._row_split_bias)
+        if bias is not None:
+            output = torch.addmm(bias, full_input, self._mm._get_actual_weight())
+        else:
+            output = torch.mm(full_input, self._mm._get_actual_weight())
+        if self._mm.has_lora_branch:
+            output = output + self._mm.apply_lora(full_input)
+        return output
+
+
 def unwrap_tp_weight(module):
     """Return the concrete tensor-owning MM implementation from a TP wrapper."""
     return module._mm if isinstance(module, MMWeightTP) else module
