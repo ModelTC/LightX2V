@@ -99,7 +99,7 @@ We thank the following community developers for their contributions to LightX2V:
 
 - **December 27, 2025:** 🚀 Supported deployment on MThreads MUSA.
 
-- **December 25, 2025:** 🚀 Supported deployment on AMD ROCm and Ascend 910B.
+- **December 25, 2025:** 🚀 Supported deployment on AMD ROCm and Huawei Ascend 910B.
 
 - **December 23, 2025:** 🚀 We support the [Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) image editing model since Day 0. On a single H100 GPU, LightX2V delivers approximately 1.4× speedup. We support for CFG parallelism, Ulysses parallelism, and efficient offloading technologies. Our [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) has been updated with CFG / step-distilled LoRA and FP8 weights. Usage examples can be found [here](scripts/qwen_image/README.md). Combined with LightX2V, 4-step CFG / step distillation, and the FP8 model, the maximum acceleration can reach up to approximately 42×. Feel free to try [LightX2V Online Service](https://x2v.light-ai.top/login) with *Image to Image* and *Qwen-Image-Edit-2511* model.
 

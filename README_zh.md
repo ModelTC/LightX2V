@@ -99,7 +99,7 @@ pre-commit run --all-files
 
 - **2025年12月27日：** 🚀 支持摩尔线程 MUSA 的部署。
 
-- **2025年12月25日：** 🚀 支持 AMD ROCm 和 Ascend 910B 的部署。
+- **2025年12月25日：** 🚀 支持 AMD ROCm 和 Huawei Ascend 910B 的部署。
 
 - **2025年12月23日：** 🚀 我们 day 0 支持了 [Qwen/Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) 的图像编辑模型，H100 单卡，LightX2V 可带来约 1.4 倍的速度提升，支持 CFG 并行/Ulysses 并行，高效 Offload 等技术。我们的 [HuggingFace](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) 已经更新了 CFG/步数蒸馏 LoRA 和 FP8 权重。使用方式可以参考 [这里](scripts/qwen_image/README_zh.md)。结合 LightX2V，4 步 CFG/步数蒸馏，FP8 模型，最高可以加速约 42 倍。可以在 [LightX2V 在线服务](https://x2v.light-ai.top/login) 的图生图的 Qwen-Image-Edit-2511 进行体验。
 
