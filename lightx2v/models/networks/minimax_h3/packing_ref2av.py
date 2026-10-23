@@ -163,7 +163,7 @@ def build_ref2av_packed_sequence(
     patch_size: tuple[int, int, int] = (1, 2, 2),
 ) -> MiniMaxH3PackedSequence:
     """Build ``[presentation | ordered references | target audio | target video]``."""
-    _, patch_h, patch_w = patch_size
+    patch_t, patch_h, patch_w = patch_size
     num_text_tokens = int(text_token_tags.shape[0])
     num_target_video_rows = num_latent_frames * (latent_height // patch_h) * (latent_width // patch_w)
     num_target_audio_rows = num_audio_latents * AUDIO_CHANNELS
@@ -175,6 +175,8 @@ def build_ref2av_packed_sequence(
     position_ids[:num_text_tokens, 0] = torch.arange(num_text_tokens, dtype=torch.float64)
     target_frame_grid, target_width_grid = _frame_position_grid(latent_height, latent_width, patch_h, patch_w)
     video_indices, audio_indices = [], []
+    cond_image_shapes, cond_image_roles = [], []
+    cond_audio_stream_lens, cond_event_order = [], []
     cursor = num_text_tokens
     rotary_time = float(num_text_tokens)
     for reference in references:
@@ -185,12 +187,23 @@ def build_ref2av_packed_sequence(
             frame_grid, _ = _frame_position_grid(reference.latent_height, reference.latent_width, patch_h, patch_w)
             position_ids[rows, 0] = rotary_time
             position_ids[rows, 1:] = frame_grid
+            cond_image_shapes.append(
+                (
+                    reference.num_latent_frames // patch_t,
+                    reference.latent_height // patch_h,
+                    reference.latent_width // patch_w,
+                )
+            )
+            cond_image_roles.append("dense_prefix")
+            cond_event_order.append(("imgvid", len(cond_image_shapes) - 1))
             rotary_time += 1.0
         elif reference.kind == "audio":
             rows = slice(cursor, cursor + reference.num_audio_rows)
             cursor = rows.stop
             audio_indices.append(torch.arange(rows.start, rows.stop))
             _fill_audio_positions(position_ids, rows, reference.num_audio_latents, rotary_time, target_width_grid)
+            cond_audio_stream_lens.append(reference.num_audio_rows)
+            cond_event_order.append(("audio", len(cond_audio_stream_lens) - 1))
             rotary_time += float(reference.num_audio_latents)
         elif reference.kind == "video":
             audio_rows = slice(cursor, cursor + reference.num_audio_rows)
@@ -203,6 +216,18 @@ def build_ref2av_packed_sequence(
             frame_time = _temporal_position_grid(reference.num_latent_frames, rotary_time)
             position_ids[video_rows, 0] = frame_time.repeat_interleave(frame_grid.shape[0])
             position_ids[video_rows, 1:] = frame_grid.repeat(reference.num_latent_frames, 1)
+            if reference.num_audio_rows:
+                cond_audio_stream_lens.append(reference.num_audio_rows)
+                cond_event_order.append(("audio", len(cond_audio_stream_lens) - 1))
+            cond_image_shapes.append(
+                (
+                    reference.num_latent_frames // patch_t,
+                    reference.latent_height // patch_h,
+                    reference.latent_width // patch_w,
+                )
+            )
+            cond_image_roles.append("independent_cube")
+            cond_event_order.append(("imgvid", len(cond_image_shapes) - 1))
             rotary_time += max(float(reference.num_audio_latents), _temporal_position_span(reference.num_latent_frames))
         else:
             raise ValueError(f"Unknown MiniMax-H3 reference kind: {reference.kind!r}")
@@ -221,14 +246,18 @@ def build_ref2av_packed_sequence(
     token_tags[audio_indices] = AUDIO_TAG
     token_tags[video_indices] = VIDEO_TAG
     return MiniMaxH3PackedSequence(
-        sequence_length,
-        position_ids,
-        token_tags,
-        video_indices,
-        audio_indices,
-        text_indices,
-        num_reference_video_rows,
-        num_reference_audio_rows,
+        sequence_length=sequence_length,
+        position_ids=position_ids,
+        token_tags=token_tags,
+        video_indices=video_indices,
+        audio_indices=audio_indices,
+        text_indices=text_indices,
+        num_condition_video_rows=num_reference_video_rows,
+        num_condition_audio_rows=num_reference_audio_rows,
+        cond_image_shapes=tuple(cond_image_shapes),
+        cond_image_roles=tuple(cond_image_roles),
+        cond_event_order=tuple(cond_event_order),
+        cond_audio_stream_lens=tuple(cond_audio_stream_lens),
     )
 
 

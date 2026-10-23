@@ -49,6 +49,10 @@ class MiniMaxH3PackedSequence:
     text_indices: torch.Tensor
     num_condition_video_rows: int = 0
     num_condition_audio_rows: int = 0
+    cond_image_shapes: tuple[tuple[int, int, int], ...] = ()
+    cond_image_roles: tuple[str, ...] = ()
+    cond_event_order: tuple[tuple[str, int], ...] = ()
+    cond_audio_stream_lens: tuple[int, ...] = ()
 
 
 def resolve_canvas_size(aspect_width: float, aspect_height: float) -> tuple[int, int]:
@@ -280,6 +284,9 @@ def build_packed_sequence(
         text_indices=text_indices,
         num_condition_video_rows=num_condition_rows,
         num_condition_audio_rows=0,
+        cond_image_shapes=tuple((1, latent_height // patch_h, latent_width // patch_w) for _ in keyframe_anchors),
+        cond_image_roles=tuple("joint_cube" for _ in keyframe_anchors),
+        cond_event_order=tuple(("imgvid", index) for index in range(len(keyframe_anchors))),
     )
 
 

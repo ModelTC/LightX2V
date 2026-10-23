@@ -21,6 +21,12 @@ _DENSE_GUARD_LOGS = set()
 _DENSE_BACKEND_WARNINGS = set()
 
 
+def _is_musa_tensor(tensor):
+    """Recognize MUSA tensors, including torchada's CUDA device aliases."""
+
+    return tensor.device.type == "musa" or (os.environ.get("PLATFORM") == "musa" and tensor.device.type in ("cuda", "privateuseone"))
+
+
 class _CompiledSolAttnWithKeywordStream:
     """Adapt CuTe's positional TVM-FFI stream argument to upstream calls."""
 
@@ -129,7 +135,22 @@ def _load_sol_attn():
 
 @torch.compiler.disable
 def _run_sol_attn(q, k, v, *, scale, tau, thresh_type, kv_splits, sink_tokens, sink_start):
-    """Keep CuTe DSL and TVM FFI calls outside TorchDynamo graphs."""
+    """Keep native backend calls outside TorchDynamo graphs."""
+
+    if _is_musa_tensor(q):
+        from lightx2v_platform.ops.attn.mthreads_musa.sol_attn import sol_attn
+
+        return sol_attn(
+            q,
+            k,
+            v,
+            scale=scale,
+            tau=tau,
+            thresh_type=thresh_type,
+            kv_splits=kv_splits,
+            sink_tokens=sink_tokens,
+            sink_start=sink_start,
+        )
 
     return _load_sol_attn()(
         q,
@@ -147,6 +168,9 @@ def _run_sol_attn(q, k, v, *, scale, tau, thresh_type, kv_splits, sink_tokens, s
 @torch.compiler.disable
 def _run_sol_attn_sm120_compile_once(q, k, v, *, scale, tau, thresh_type, kv_splits, sink_tokens, sink_start):
     """Run the shape-polymorphic SM120 kernel with fixed Triton launch metadata."""
+
+    if _is_musa_tensor(q):
+        raise ValueError("MUSA Sol-Attn requires compile_mode='default'; sm120_compile_once is NVIDIA-only.")
 
     # Importing the public backend first installs the PyTorch/CuTe stream
     # compatibility shim used by the pinned SM120 package.
@@ -269,6 +293,8 @@ class SolAttnWeight(AttnWeightTemplate):
         self.sink_start = self.config.get("sink_start")
         self.reorder = str(self.config.get("reorder", "none")).lower()
         self.compile_mode = str(self.config.get("compile_mode", "default")).lower()
+        if "musa_backend" in self.config:
+            raise ValueError("MUSA SOL uses the native implementation only; remove sol_attn_setting.musa_backend from the config.")
         self.strict = bool(self.config.get("strict", False))
         self.dense_steps = int(self.config.get("dense_steps", 0))
         self.dense_layers = _parse_dense_layers(self.config.get("dense_layers", ()))
@@ -389,6 +415,8 @@ class SolAttnWeight(AttnWeightTemplate):
                 return out.reshape(q.shape[0], q.shape[1], -1)
             return out
         except Exception as exc:
+            if _is_musa_tensor(q) and self._strict_enabled():
+                raise RuntimeError(f"Sol-Attn dense guard backend {self.dense_backend_name!r} failed: {exc}") from exc
             warning_key = (self.dense_backend_name, type(exc).__name__, str(exc))
             if warning_key not in _DENSE_BACKEND_WARNINGS:
                 logger.warning(
@@ -410,8 +438,11 @@ class SolAttnWeight(AttnWeightTemplate):
             return f"head dimension must be {HEAD_DIM}, got {q.shape[-1]}"
         if any(tensor.dtype != torch.bfloat16 for tensor in (q, k, v)):
             return "q, k, and v must use torch.bfloat16"
-        if not q.is_cuda or k.device != q.device or v.device != q.device:
-            return "q, k, and v must be on the same CUDA device"
+        musa = _is_musa_tensor(q)
+        if (not musa and not q.is_cuda) or k.device != q.device or v.device != q.device:
+            return "q, k, and v must be on the same CUDA or MUSA device"
+        if any(size == 0 for size in q.shape):
+            return "empty attention dimensions are unsupported"
         if float(drop_rate) != 0.0:
             return "dropout is unsupported"
         if attn_mask is not None:
@@ -424,6 +455,8 @@ class SolAttnWeight(AttnWeightTemplate):
                     return f"packed multi-sequence cu_seqlens_{name} is unsupported"
         if torch.is_grad_enabled() and any(tensor.requires_grad for tensor in (q, k, v)):
             return "the released Sol-Attn kernels are forward-only"
+        if musa:
+            return None
         try:
             major, minor = torch.cuda.get_device_capability(q.device)
         except Exception as exc:
@@ -434,6 +467,10 @@ class SolAttnWeight(AttnWeightTemplate):
 
     @staticmethod
     def _resolve_kv_splits(q, value):
+        if _is_musa_tensor(q):
+            if value != "auto" and int(value) != 1:
+                raise ValueError("MUSA Sol-Attn supports kv_splits=1 only (or 'auto').")
+            return 1
         if value != "auto":
             return int(value)
         arch = tuple(torch.cuda.get_device_capability(q.device))
@@ -523,6 +560,7 @@ class SolAttnWeight(AttnWeightTemplate):
             v = v.index_select(1, permutation)
 
         try:
+            kv_splits = self._resolve_kv_splits(q, self.kv_splits)
             run_kernel = _run_sol_attn_sm120_compile_once if self.compile_mode == "sm120_compile_once" else _run_sol_attn
             out = run_kernel(
                 q,
@@ -531,7 +569,7 @@ class SolAttnWeight(AttnWeightTemplate):
                 scale=scale,
                 tau=self.tau,
                 thresh_type=self.thresh_type,
-                kv_splits=self._resolve_kv_splits(q, self.kv_splits),
+                kv_splits=kv_splits,
                 sink_tokens=self.sink_tokens,
                 sink_start=self.sink_start,
             )
@@ -546,17 +584,16 @@ class SolAttnWeight(AttnWeightTemplate):
 
         if inverse is not None:
             out = out.index_select(1, inverse)
-        arch = torch.cuda.get_device_capability(q.device)
+        device_label = "MUSA (native)" if _is_musa_tensor(q) else "SM{}{}".format(*torch.cuda.get_device_capability(q.device))
         reorder_mode = "morton3d_global" if globally_reordered else self.reorder
-        kernel_log_key = (arch, self.tau, self.thresh_type, self._resolve_kv_splits(q, self.kv_splits), reorder_mode, self.compile_mode)
+        kernel_log_key = (device_label, self.tau, self.thresh_type, kv_splits, reorder_mode, self.compile_mode)
         if kernel_log_key not in _KERNEL_LOGS:
             logger.info(
-                "Sol-Attn active: SM{}{}, tau={}, thresh_type={}, kv_splits={}, reorder={}, compile_mode={}.",
-                arch[0],
-                arch[1],
+                "Sol-Attn active: {}, tau={}, thresh_type={}, kv_splits={}, reorder={}, compile_mode={}.",
+                device_label,
                 self.tau,
                 self.thresh_type,
-                self._resolve_kv_splits(q, self.kv_splits),
+                kv_splits,
                 reorder_mode,
                 self.compile_mode,
             )
