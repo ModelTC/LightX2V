@@ -239,13 +239,14 @@ LightX2V supports image, video, and world models and provides quantized weights,
 
 <details>
 <summary><strong>🔍 Restoration &amp; Super-Resolution</strong><br><br>
-<a href="scripts/seedvr2/README.md">SeedVR2</a> · <a href="scripts/swiftvr/README.md">SwiftVR</a>
+<a href="scripts/seedvr2/README.md">SeedVR2</a> · <a href="scripts/swiftvr/README.md">SwiftVR</a> · <a href="scripts/relayvsr/README.md">RelayVSR</a>
 </summary>
 
 | Models / Variants and Weights | Guides / Scripts |
 | --- | --- |
 | [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B) | [Guide](scripts/seedvr2/README.md) |
 | [SwiftVR](https://huggingface.co/H-oliday/SwiftVR) | [Guide](scripts/swiftvr/README.md) |
+| [RelayVSR](https://huggingface.co/kopper/RelayVSR) | [Guide](scripts/relayvsr/README.md) |
 
 </details>
 
