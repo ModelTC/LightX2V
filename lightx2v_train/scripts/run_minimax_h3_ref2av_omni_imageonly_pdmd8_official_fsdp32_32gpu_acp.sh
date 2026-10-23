@@ -118,7 +118,7 @@ for role in ("student", "fake", "teacher"):
     effective = {**model, **override}
     mixed = {**distributed["fsdp2"]["mixed_precision"], **override.get("distributed", {}).get("fsdp2", {}).get("mixed_precision", {})}
     print(f"precision {role}: transformer_param_dtype={effective.get('transformer_param_dtype')}, running_dtype={effective.get('running_dtype')}, use_autocast={effective.get('use_autocast')}, fsdp={json.dumps(mixed, sort_keys=True)}")
-print("Retained task overrides: Ref2AV image-only cache, 768p, batch 32, student LoRA rank128/alpha8 with configurable adapter parameter dtype, full fake, existing base precision/FSDP2. Use a NEW output directory; 4-step and old outer-iteration checkpoints are not compatible.")
+print(f"Retained task overrides: Ref2AV image-only cache, 768p, batch 32, student LoRA rank{training['student']['lora']['rank']}/alpha{training['student']['lora']['alpha']} with configurable adapter parameter dtype, full fake, existing base precision/FSDP2. Use a NEW output directory; 4-step and old outer-iteration checkpoints are not compatible.")
 PY
 
 cd "$H3_CODE_ROOT/lightx2v_train"
