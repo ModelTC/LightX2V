@@ -13,7 +13,8 @@ from .template import AttnWeightTemplate
 
 HEAD_DIM = 128
 _VALID_KV_SPLITS = (1, 2, 4)
-_VALID_DENSE_BACKENDS = ("flash_attn3", "sage_attn2", "torch_sdpa")
+_VALID_DENSE_BACKENDS = ("flash_attn3", "sage_attn2", "torch_sdpa", "aiter_sage_attn")
+_ROCM_SOL_ARCHS = ("gfx1201",)
 _VALID_COMPILE_MODES = ("default", "sm120_compile_once")
 _FALLBACK_WARNINGS = set()
 _KERNEL_LOGS = set()
@@ -114,10 +115,40 @@ def _parse_dense_layers(value):
     return frozenset(layers)
 
 
+def _is_rocm():
+    return getattr(torch.version, "hip", None) is not None
+
+
+def _rocm_arch(device):
+    return torch.cuda.get_device_properties(device).gcnArchName.split(":")[0]
+
+
+def _load_aiter_sol_attn():
+    """Adapt aiter's gfx1201 Sol-Attn op to the public ``sol_attn.sol_attn`` call."""
+
+    try:
+        import aiter
+    except ImportError as exc:
+        raise ImportError("Sol-Attn on ROCm requires aiter.") from exc
+    if not hasattr(aiter, "gfx1201_sol_attention"):
+        raise ImportError("Sol-Attn on ROCm requires an aiter build that provides gfx1201_sol_attention.")
+    op = aiter.gfx1201_sol_attention
+
+    def sol_attn(q, k, v, *, scale=None, tau=1.0, thresh_type="diag", kv_splits=1, sink_tokens=0, sink_start=None):
+        if thresh_type != "diag":
+            raise ValueError(f"gfx1201_sol_attention implements thresh_type='diag', got {thresh_type!r}.")
+        # kv_splits only partitions the work of the CUDA kernels; it does not change the result.
+        return op(q, k, v, tau=tau, sink_tokens=sink_tokens, sink_start=sink_start, softmax_scale=scale)
+
+    return sol_attn
+
+
 @functools.lru_cache(maxsize=1)
 def _load_sol_attn():
     """Import the optional backend only when it is selected by a config."""
 
+    if _is_rocm():
+        return _load_aiter_sol_attn()
     try:
         module = importlib.import_module("sol_attn")
     except ImportError as exc:
@@ -258,6 +289,10 @@ class SolAttnWeight(AttnWeightTemplate):
             from .torch_sdpa import TorchSDPAWeight
 
             return TorchSDPAWeight()
+        if name == "aiter_sage_attn":
+            if name not in ATTN_WEIGHT_REGISTER:
+                raise ValueError("sol_attn_setting.dense_backend='aiter_sage_attn' requires PLATFORM=amd_rocm.")
+            return ATTN_WEIGHT_REGISTER[name]()
         raise ValueError(f"sol_attn_setting.dense_backend must be one of {_VALID_DENSE_BACKENDS}, got {name!r}.")
 
     def set_config(self, config=None):
@@ -303,6 +338,10 @@ class SolAttnWeight(AttnWeightTemplate):
             raise ValueError("sol_attn_setting.compile_mode='sm120_compile_once' requires kv_splits='auto' or 1.")
         if self.dense_steps < 0:
             raise ValueError("sol_attn_setting.dense_steps must be non-negative.")
+        if _is_rocm() and self.thresh_type != "diag":
+            raise ValueError("Sol-Attn on ROCm (aiter.gfx1201_sol_attention) requires sol_attn_setting.thresh_type='diag'.")
+        if _is_rocm() and self.compile_mode != "default":
+            raise ValueError("sol_attn_setting.compile_mode='sm120_compile_once' is CUDA-only.")
 
     def _strict_enabled(self):
         return self.strict or os.environ.get("SOL_ATTN_STRICT", "0") == "1"
@@ -424,6 +463,11 @@ class SolAttnWeight(AttnWeightTemplate):
                     return f"packed multi-sequence cu_seqlens_{name} is unsupported"
         if torch.is_grad_enabled() and any(tensor.requires_grad for tensor in (q, k, v)):
             return "the released Sol-Attn kernels are forward-only"
+        if _is_rocm():
+            arch = _rocm_arch(q.device)
+            if arch not in _ROCM_SOL_ARCHS:
+                return f"Sol-Attn on ROCm supports {', '.join(_ROCM_SOL_ARCHS)}, got {arch}"
+            return None
         try:
             major, minor = torch.cuda.get_device_capability(q.device)
         except Exception as exc:
@@ -546,14 +590,13 @@ class SolAttnWeight(AttnWeightTemplate):
 
         if inverse is not None:
             out = out.index_select(1, inverse)
-        arch = torch.cuda.get_device_capability(q.device)
+        arch = _rocm_arch(q.device) if _is_rocm() else "SM{}{}".format(*torch.cuda.get_device_capability(q.device))
         reorder_mode = "morton3d_global" if globally_reordered else self.reorder
         kernel_log_key = (arch, self.tau, self.thresh_type, self._resolve_kv_splits(q, self.kv_splits), reorder_mode, self.compile_mode)
         if kernel_log_key not in _KERNEL_LOGS:
             logger.info(
-                "Sol-Attn active: SM{}{}, tau={}, thresh_type={}, kv_splits={}, reorder={}, compile_mode={}.",
-                arch[0],
-                arch[1],
+                "Sol-Attn active: {}, tau={}, thresh_type={}, kv_splits={}, reorder={}, compile_mode={}.",
+                arch,
                 self.tau,
                 self.thresh_type,
                 self._resolve_kv_splits(q, self.kv_splits),
