@@ -40,7 +40,7 @@ class AsyncVideoWriter:
         self.frames = 0
         self.encode_seconds = self.flush_seconds = 0.0
         self.copy_seconds = self.queue_wait_seconds = 0.0
-        self.queue_size = config.get("queue_size", 3)
+        self.queue_size = config.get("queue_size", 16)
         self.closed = False
 
     def _write(self, pixels, copy_start, event):
@@ -52,9 +52,10 @@ class AsyncVideoWriter:
             self.stream = self.container.add_stream(self.config.get("video_codec", "libx264"), rate=self.fps)
             self.stream.width, self.stream.height = pixels.shape[1], pixels.shape[0]
             self.stream.pix_fmt = "yuv420p"
-            self.stream.codec_context.thread_count = self.config.get("encoder_threads", 8)
+            self.stream.codec_context.thread_count = self.config.get("encoder_threads", 16)
             self.stream.options = {"crf": str(self.config.get("video_crf", 18)), "preset": self.config.get("ffmpeg_preset", "fast")}
-        frame = av.VideoFrame.from_ndarray(pixels.numpy(), format="rgb24")
+        # Share the pinned RGB buffer with PyAV.
+        frame = av.VideoFrame.from_numpy_buffer(pixels.numpy(), format="rgb24")
         frame.pts = self.frames
         frame.time_base = 1 / self.fps
         for packet in self.stream.encode(frame):

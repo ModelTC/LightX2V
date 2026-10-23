@@ -36,7 +36,7 @@ def validate_config(config):
     parallel = config.get("parallel") or {}
     if parallel.get("seq_p_size", 1) not in (1, 2):
         raise ValueError("RelayVSR Flash has two KV groups, so sequence parallelism supports 1 or 2 GPUs")
-    for key, default, minimum in (("clip_len", 16, 2), ("queue_size", 3, 1), ("encoder_threads", 8, 1)):
+    for key, default, minimum in (("clip_len", 16, 2), ("queue_size", 16, 1), ("encoder_threads", 16, 1)):
         if config.get(key, default) < minimum:
             raise ValueError(f"RelayVSR {key} must be >= {minimum}")
 
