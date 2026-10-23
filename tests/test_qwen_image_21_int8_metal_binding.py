@@ -20,10 +20,7 @@ def _write_manifest(path, *, shape_counts, library_path, model_revision="revisio
         "schema_version": 1,
         "model_repo": "test/model",
         "model_revision": model_revision,
-        "required_shapes": [
-            {"k": k, "n": n, "weight_count": count}
-            for (k, n), count in sorted(shape_counts.items())
-        ],
+        "required_shapes": [{"k": k, "n": n, "weight_count": count} for (k, n), count in sorted(shape_counts.items())],
         "libraries": [
             {
                 "file": library_path.name,

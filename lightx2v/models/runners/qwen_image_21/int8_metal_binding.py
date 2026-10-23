@@ -54,7 +54,7 @@ def collect_int8_weight_shapes(transformer_path):
         shape = entry.get("shape")
         if not isinstance(shape, list) or len(shape) != 2 or not all(isinstance(value, int) and value > 0 for value in shape):
             raise ValueError(f"INT8 weight must have a positive rank-2 shape: {name}")
-        scale_name = f"{name[:-len('.weight')]}.weight_scale"
+        scale_name = f"{name[: -len('.weight')]}.weight_scale"
         if scale_name not in tensors:
             raise ValueError(f"INT8 weight is missing its weight_scale tensor: {name}")
         n, k = shape
@@ -74,10 +74,7 @@ def _load_manifest(path):
     if not isinstance(manifest, dict):
         raise ValueError(f"INT8 Metal manifest must be an object: {path}")
     if manifest.get("schema_version") != _MANIFEST_SCHEMA_VERSION:
-        raise ValueError(
-            f"Unsupported INT8 Metal manifest schema in {path}: "
-            f"expected {_MANIFEST_SCHEMA_VERSION}, got {manifest.get('schema_version')!r}"
-        )
+        raise ValueError(f"Unsupported INT8 Metal manifest schema in {path}: expected {_MANIFEST_SCHEMA_VERSION}, got {manifest.get('schema_version')!r}")
     return manifest
 
 
@@ -117,10 +114,7 @@ def _manifest_libraries(manifest, path):
             raise ValueError(f"Invalid library filename in {path}: {entry!r}")
         expected_filename = f"int8_k{k}_n{n}.metallib"
         if filename != expected_filename:
-            raise ValueError(
-                f"Library filename does not match K/N in {path}: "
-                f"expected {expected_filename!r}, got {filename!r}"
-            )
+            raise ValueError(f"Library filename does not match K/N in {path}: expected {expected_filename!r}, got {filename!r}")
         if not isinstance(digest, str) or len(digest) != _SHA256_LENGTH or any(char not in "0123456789abcdef" for char in digest):
             raise ValueError(f"Invalid library SHA-256 in {path}: {entry!r}")
         shape = (k, n)
@@ -177,50 +171,29 @@ def validate_int8_metal_binding(config):
     expected_repo = config.get("int8_metal_model_repo")
     expected_revision = config.get("int8_metal_model_revision")
     if expected_repo is not None and manifest.get("model_repo") != expected_repo:
-        raise ValueError(
-            "INT8 Metal manifest model_repo mismatch: "
-            f"expected {expected_repo!r}, got {manifest.get('model_repo')!r}"
-        )
+        raise ValueError(f"INT8 Metal manifest model_repo mismatch: expected {expected_repo!r}, got {manifest.get('model_repo')!r}")
     if expected_revision is not None and manifest.get("model_revision") != expected_revision:
-        raise ValueError(
-            "INT8 Metal manifest model_revision mismatch: "
-            f"expected {expected_revision!r}, got {manifest.get('model_revision')!r}"
-        )
+        raise ValueError(f"INT8 Metal manifest model_revision mismatch: expected {expected_revision!r}, got {manifest.get('model_revision')!r}")
 
     expected_shapes = _manifest_shape_counts(manifest, manifest_path)
     if shape_counts != expected_shapes:
-        raise ValueError(
-            "INT8 Metal checkpoint shape coverage mismatch: "
-            f"expected {expected_shapes}, got {shape_counts}"
-        )
+        raise ValueError(f"INT8 Metal checkpoint shape coverage mismatch: expected {expected_shapes}, got {shape_counts}")
 
     libraries = _manifest_libraries(manifest, manifest_path)
     if set(libraries) != set(shape_counts):
-        raise ValueError(
-            "INT8 Metal manifest library coverage mismatch: "
-            f"expected shapes {sorted(shape_counts)}, got {sorted(libraries)}"
-        )
+        raise ValueError(f"INT8 Metal manifest library coverage mismatch: expected shapes {sorted(shape_counts)}, got {sorted(libraries)}")
     for (k, n), metadata in sorted(libraries.items()):
         library = metallib_dir / metadata["file"]
         if not library.is_file():
             raise FileNotFoundError(f"Missing precompiled INT8 Metal kernel for K={k}, N={n}: {library}")
         actual_size = library.stat().st_size
         if actual_size != metadata["size"]:
-            raise ValueError(
-                f"INT8 Metal library size mismatch for K={k}, N={n}: "
-                f"expected {metadata['size']}, got {actual_size}: {library}"
-            )
+            raise ValueError(f"INT8 Metal library size mismatch for K={k}, N={n}: expected {metadata['size']}, got {actual_size}: {library}")
         actual_digest = _sha256(library)
         if actual_digest != metadata["sha256"]:
-            raise ValueError(
-                f"INT8 Metal library SHA-256 mismatch for K={k}, N={n}: "
-                f"expected {metadata['sha256']}, got {actual_digest}: {library}"
-            )
+            raise ValueError(f"INT8 Metal library SHA-256 mismatch for K={k}, N={n}: expected {metadata['sha256']}, got {actual_digest}: {library}")
 
-    logger.info(
-        "[int8-metal] validated model-bound Metal libraries: "
-        f"revision={manifest.get('model_revision')}, shapes={sorted(shape_counts)}"
-    )
+    logger.info(f"[int8-metal] validated model-bound Metal libraries: revision={manifest.get('model_revision')}, shapes={sorted(shape_counts)}")
     return {
         "verified": True,
         "manifest": str(manifest_path),
