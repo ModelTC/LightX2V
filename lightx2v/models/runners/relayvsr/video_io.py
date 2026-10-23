@@ -49,11 +49,21 @@ class AsyncVideoWriter:
         start = time.perf_counter()
         if self.container is None:
             self.container = av.open(str(self.path), mode="w")
-            self.stream = self.container.add_stream(self.config.get("video_codec", "libx264"), rate=self.fps)
+            codec = self.config.get("video_codec", "libx265")
+            self.stream = self.container.add_stream(codec, rate=self.fps)
             self.stream.width, self.stream.height = pixels.shape[1], pixels.shape[0]
             self.stream.pix_fmt = "yuv420p"
-            self.stream.codec_context.thread_count = self.config.get("encoder_threads", 16)
-            self.stream.options = {"crf": str(self.config.get("video_crf", 18)), "preset": self.config.get("ffmpeg_preset", "fast")}
+            threads = self.config.get("encoder_threads", 16)
+            options = {"crf": str(self.config.get("video_crf", 18)), "preset": self.config.get("ffmpeg_preset", "ultrafast")}
+            if codec == "libx265":
+                options["x265-params"] = f"log-level=warning:pools={threads}"
+                if self.stream.width < 64:
+                    # x265's SIMD path can corrupt memory on very narrow frames.
+                    options["x265-params"] += ":asm=0"
+                self.stream.codec_context.codec_tag = "hvc1"
+            else:
+                self.stream.codec_context.thread_count = threads
+            self.stream.options = options
         # Share the pinned RGB buffer with PyAV.
         frame = av.VideoFrame.from_numpy_buffer(pixels.numpy(), format="rgb24")
         frame.pts = self.frames
@@ -88,7 +98,16 @@ class AsyncVideoWriter:
                 future.result()
             start = time.perf_counter()
             if self.stream is not None:
-                for packet in self.stream.encode():
+                packets = self.stream.encode()
+                if self.stream.codec_context.name == "libx265" and self.frames < 3:
+                    # Match SwiftVR's DTS correction for very short HEVC videos.
+                    decoder = av.CodecContext.create("hevc", "r")
+                    decoder.thread_count = 1
+                    decoder.extradata = self.stream.codec_context.extradata
+                    decoder.open()
+                    for packet in packets:
+                        packet.dts = packet.pts - decoder.reorder_depth
+                for packet in packets:
                     self.container.mux(packet)
             self.flush_seconds = time.perf_counter() - start
         finally:
