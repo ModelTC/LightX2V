@@ -59,3 +59,45 @@ CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 -m lightx2v.in
 Flash has only two KV groups, so sequence parallelism supports at most two GPUs. Partitioned linear operations may introduce BF16 numerical differences; use the default single-GPU eager mode when elementwise parity is required.
 
 Each configuration explicitly lists the cross-attention backend, offload switch, clip length and encoding parameters for easy editing. Defaults are `torch_sdpa`, 16-frame clips and source FPS. CPU encoding uses `libx265`, `ultrafast` and CRF 18, with the `hvc1` tag; `encoder_threads` controls the x265 worker pool.
+
+## Serving and requests
+
+Set the repository and model paths, then start a single-GPU server:
+
+```bash
+lightx2v_path=/path/to/LightX2V
+model_path=/models/RelayVSR
+
+export CUDA_VISIBLE_DEVICES=0
+source "${lightx2v_path}/scripts/base/base.sh"
+
+python -m lightx2v.server \
+  --model_cls relayvsr --task sr \
+  --model_path "${model_path}" \
+  --config_json "${lightx2v_path}/configs/relayvsr/relayvsr_compile.json" \
+  --host 0.0.0.0 --port 8000
+```
+
+The startup configuration enables compilation and warmup. After model loading and warmup finish, check the service status and submit a 4× request from another terminal. Both input and output paths must be absolute paths accessible on the server:
+
+```bash
+curl -fsS http://127.0.0.1:8000/v1/service/status
+
+curl -fsS -X POST http://127.0.0.1:8000/v1/tasks/video/ \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "video_path": "/videos/input.mp4",
+    "sr_ratio": 4,
+    "save_result_path": "/videos/output_x4.mp4",
+    "seed": 42
+  }'
+```
+
+The submission endpoint returns a `task_id` asynchronously. Set the variable below to that value to query the task status:
+
+```bash
+task_id=REPLACE_WITH_RETURNED_TASK_ID
+curl -fsS "http://127.0.0.1:8000/v1/tasks/${task_id}/status"
+```
+
+When the status endpoint reports `status` as `completed`, the video has been saved to the server-side `save_result_path`. If it reports `failed`, check the returned `error`. Submit further requests to the resident server to reuse the loaded model, setting the input path, output path and `seed` for each request. Set `sr_ratio` to `2` for 2× output. Compilation, warmup and encoding options are startup JSON settings; restart the server after changing them.

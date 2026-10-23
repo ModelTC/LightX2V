@@ -57,3 +57,45 @@ CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 -m lightx2v.in
 Flash 只有两个 KV groups，序列并行最多支持两卡。分块线性计算可能带来 BF16 数值差异；需要逐元素对齐时用默认单卡 eager。
 
 每份配置显式列出交叉注意力后端、卸载开关、窗口长度和编码参数，方便修改。默认使用 `torch_sdpa`、16 帧窗口和源帧率。CPU 编码使用 `libx265`、`ultrafast`、CRF 18，并设置 `hvc1` 标记；`encoder_threads` 控制 x265 工作线程池。
+
+## 服务启动与请求
+
+修改仓库和模型路径后，启动单卡服务：
+
+```bash
+lightx2v_path=/path/to/LightX2V
+model_path=/models/RelayVSR
+
+export CUDA_VISIBLE_DEVICES=0
+source "${lightx2v_path}/scripts/base/base.sh"
+
+python -m lightx2v.server \
+  --model_cls relayvsr --task sr \
+  --model_path "${model_path}" \
+  --config_json "${lightx2v_path}/configs/relayvsr/relayvsr_compile.json" \
+  --host 0.0.0.0 --port 8000
+```
+
+示例通过启动配置开启编译和预热。等待模型加载、预热完成后，在另一终端检查服务状态并提交 x4 请求。输入和输出路径都应填写服务端可访问的绝对路径：
+
+```bash
+curl -fsS http://127.0.0.1:8000/v1/service/status
+
+curl -fsS -X POST http://127.0.0.1:8000/v1/tasks/video/ \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "video_path": "/videos/input.mp4",
+    "sr_ratio": 4,
+    "save_result_path": "/videos/output_x4.mp4",
+    "seed": 42
+  }'
+```
+
+提交接口异步返回 `task_id`。将其填入下面的变量，查询任务状态：
+
+```bash
+task_id=REPLACE_WITH_RETURNED_TASK_ID
+curl -fsS "http://127.0.0.1:8000/v1/tasks/${task_id}/status"
+```
+
+状态接口的 `status` 为 `completed` 时，视频已保存到服务端的 `save_result_path`；若为 `failed`，查看返回的 `error`。常驻服务可连续提交请求，复用已加载的模型；每个请求分别设置输入路径、输出路径和 `seed`。将 `sr_ratio` 改为 `2` 即可输出 x2。编译、预热和编码参数通过启动 JSON 配置，修改后需重启服务。
