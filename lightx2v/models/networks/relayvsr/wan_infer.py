@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 
 import torch
 import torch.nn.functional as F
@@ -8,6 +9,7 @@ from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffl
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.transformer_infer import modulate
 
+from .compile import RelayCompileMixin, mark_sequence_dynamic
 from .rope import apply_rope
 from .wan_attention import SpatialAttentionSpec, spatial_attention
 
@@ -38,7 +40,7 @@ class RelayWanPreInfer:
         return hidden + lq
 
 
-class RelayWanTransformerInfer(WanOffloadTransformerInfer):
+class RelayWanTransformerInfer(RelayCompileMixin, WanOffloadTransformerInfer):
     """Wan execution/offload/FFN with RelayVSR's causal reference attention.
 
     Keep the shared block pipeline, offload, normal-size FFN and final residuals.
@@ -80,21 +82,32 @@ class RelayWanTransformerInfer(WanOffloadTransformerInfer):
         self.infer_func(blocks, None, pre)
         return self.cross_cache
 
-    def infer_block(self, block, x, pre_infer_out):
+    def run_block(self, block_idx, block, x, pre_infer_out):
+        if pre_infer_out.adapter_args.get("prepare_cross_kv", False):
+            return self.infer_block(block, x, pre_infer_out)
+        inputs = pre_infer_out.adapter_args
+        cache = (inputs["cache"].k_cache(block_idx), inputs["cache"].v_cache(block_idx))
+        attention = {"q_rope": inputs["q_rope"], "k_rope": inputs["k_rope"], "cache": cache, "cache_slot": inputs["frame"] % self.relay_config["temporal_context_frames"]}
+        pre_infer_out = replace(pre_infer_out, context=self.cross_cache[block_idx])
+        if self.use_compile:
+            mark_sequence_dynamic(x, *cache, *inputs["q_rope"], *inputs["k_rope"])
+        return super().run_block(block_idx, block, x, pre_infer_out, attention)
+
+    def infer_block(self, block, x, pre_infer_out, self_attn_kwargs=None):
         if pre_infer_out.adapter_args.get("prepare_cross_kv", False):
             phase, context = block.compute_phases[1], pre_infer_out.context
             key = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, self.num_heads, self.head_dim)
             value = phase.cross_attn_v.apply(context).view(-1, self.num_heads, self.head_dim)
             self.cross_cache.append((key, value))
             return x
-        return super().infer_block(block, x, pre_infer_out, self_attn_kwargs=pre_infer_out.adapter_args)
+        return super().infer_block(block, x, pre_infer_out, self_attn_kwargs=self_attn_kwargs)
 
     def infer_cross_attn(self, phase, x, context, y_out, gate_msa):
         # RelayVSR has one fixed prompt and no image/CFG branch. Keep its
         # persistent context KV here without changing the Wan family contract.
         x.add_(y_out * gate_msa.squeeze())
         query = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(phase.norm3.apply(x))).view(-1, self.num_heads, self.head_dim)
-        key, value = self.cross_cache[self.block_idx]
+        key, value = context
         attended = phase.cross_attn_1.apply(
             q=query,
             k=key,
@@ -115,14 +128,19 @@ class RelayWanTransformerInfer(WanOffloadTransformerInfer):
         normalized = self.modulate_func(phase.norm2.apply(x), scale=c_scale_msa, shift=c_shift_msa).reshape(1, -1)
         return phase.ffn_2.apply(F.gelu(phase.ffn_0.apply(normalized), approximate="tanh"))
 
-    def infer_self_attn(self, phase, x, shift_msa, scale_msa, grid_sizes=None, *, q_rope, k_rope, cache, frame):
+    def infer_self_attn(self, phase, x, shift_msa, scale_msa, grid_sizes=None, *, q_rope, k_rope, cache, cache_slot):
         _, height, width = grid_sizes
         normalized = self.modulate_func(phase.norm1.apply(x), scale_msa, shift_msa)
-        tokens = height * width
+        tokens = q_rope[0].shape[0]
         query = self.parallel.to_heads(phase.self_attn_norm_q.apply(phase.self_attn_q.apply(normalized)).view(-1, self.num_heads, self.head_dim), tokens)
         key = self.parallel.to_heads(phase.self_attn_norm_k.apply(phase.self_attn_k.apply(normalized)).view(-1, self.num_heads, self.head_dim), tokens)
         value = self.parallel.to_heads(phase.self_attn_v.apply(normalized).view(-1, self.num_heads, self.head_dim), tokens)
-        key, value = cache.update(key, value, self.block_idx, frame)
+        start = cache_slot * tokens
+        cache[0][start : start + tokens].copy_(key)
+        cache[1][start : start + tokens].copy_(value)
+        # Derive both views inside the graph. Independent overlapping inputs
+        # can lose the write-before-read dependency during functionalization.
+        key, value = cache[0][: k_rope[0].shape[0]], cache[1][: k_rope[0].shape[0]]
         query = apply_rope(query, q_rope)
         key = apply_rope(key, k_rope)
         visible = key.shape[0] // tokens

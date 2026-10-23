@@ -35,14 +35,17 @@ class RelayVSRModel:
         self.wan_config = checkpoint_config(wan_path, "wan")
         self.flash_config = checkpoint_config(flash_path, "flash")
         validate_checkpoint_configs(self.wan_config, self.flash_config)
+        # The distilled checkpoint relies on BF16/FP16 rounding between ops.
+        # Keep those casts and avoid rewriting mm + residual into addmm.
+        compile_config = {**config, "compile_options": {"emulate_precision_casts": True, "pattern_matcher": False, **config.get("compile_options", {})}}
         self.parallel = SequenceParallel(group)
         self.wan_weights = WanWeights(wan_path, self.wan_config, config)
         self.flash_weights = FlashWeights(flash_path, self.flash_config)
         self.wan_pre = RelayWanPreInfer(self.wan_config)
-        self.wan_transformer = RelayWanTransformerInfer(self.wan_config, config, self.parallel, self.wan_weights)
+        self.wan_transformer = RelayWanTransformerInfer(self.wan_config, compile_config, self.parallel, self.wan_weights)
         self.wan_post = RelayWanPostInfer({"out_dim": self.wan_config["out_channels"]})
         self.flash_pre = FlashPreInfer()
-        self.flash_transformer = FlashTransformerInfer(self.flash_config, self.parallel)
+        self.flash_transformer = FlashTransformerInfer(self.flash_config, self.parallel, compile_config)
         self.flash_post = FlashPostInfer()
         self.wan_rope = RotaryEmbedding(wan=True, device=torch.device("cuda"), dtype=GET_DTYPE(), head_dim=self.wan_config["attention_head_dim"], max_length=self.wan_config["rope_max_seq_len"])
         self.flash_rope = RotaryEmbedding(wan=False, device=torch.device("cuda"), dtype=GET_DTYPE(), theta=self.flash_config["rope_theta"])

@@ -29,6 +29,16 @@ class SpatialAttentionSpec:
     key_frame_offset: int = 0
 
 
+@torch.library.custom_op("lightx2v::relayvsr_wan_attention", mutates_args=(), device_types="cuda")
+def _compiled_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, geometry: list[int]) -> torch.Tensor:
+    return spatial_attention(query, key, value, SpatialAttentionSpec(*geometry))
+
+
+@_compiled_attention.register_fake
+def _compiled_attention_fake(query, key, value, geometry):
+    return torch.empty_like(query, memory_format=torch.contiguous_format)
+
+
 @triton.jit
 def _spatial_forward(
     Q,
@@ -126,6 +136,9 @@ def _spatial_forward(
 
 def spatial_attention(query, key, value, spec: SpatialAttentionSpec):
     """[B,T*H*W,heads,dim] -> same layout, exact shifted rectangular mask."""
+    if torch.compiler.is_compiling():
+        geometry = [spec.frames, spec.height, spec.width, spec.window_height, spec.window_width, spec.temporal_window, spec.key_frames, spec.query_frame_offset, spec.key_frame_offset]
+        return _compiled_attention(query, key, value, geometry)
     if (
         key.shape != value.shape
         or query.shape[0] != key.shape[0]

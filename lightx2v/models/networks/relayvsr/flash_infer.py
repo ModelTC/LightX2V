@@ -1,6 +1,9 @@
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+
+from .compile import RelayCompileMixin, mark_sequence_dynamic
 from .flash_attention import triton_local_attention
 from .rope import apply_rope
 
@@ -18,12 +21,20 @@ class FlashPreInfer:
         return weights.condition_norm.apply(x) + weights.condition_type.tensor[0]
 
 
-class FlashTransformerInfer:
-    def __init__(self, config, parallel):
+class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
+    def __init__(self, config, parallel, deployment):
         self.config, self.parallel = config, parallel
+        self.init_compile(deployment)
+
+    def run_block(self, block_idx, block, x, condition, past_key, past_value, q_rope, k_rope, windows, height, width):
+        if self.use_compile:
+            mark_sequence_dynamic(x, *q_rope, *k_rope)
+            if not condition:
+                mark_sequence_dynamic(past_key, past_value)
+        return super().run_block(block_idx, block, x, condition, past_key, past_value, q_rope, k_rope, windows, height, width)
 
     def infer_block(self, block, x, condition, past_key, past_value, q_rope, k_rope, windows, height, width):
-        tokens = height * width
+        tokens = q_rope[0].shape[0]
         normalized = block.attention_norm.apply(x)
         query = block.query.apply(normalized).view(-1, 8, 64)
         key_op = block.condition_key if condition else block.key
@@ -38,6 +49,12 @@ class FlashTransformerInfer:
         query = apply_rope(query, q_rope)
         all_key = apply_rope(all_key, k_rope)
         query, all_key, all_value = query.transpose(0, 1)[None], all_key.transpose(0, 1)[None], all_value.transpose(0, 1)[None]
+        if torch.compiler.is_compiling():
+            spatial = self.config["spatial_attention"]
+            names = ("condition_self_window_size",) if condition else ("start_condition_window_size", "end_condition_window_size", "video_window_size")
+            # The attention leaf repeats the video window for the dynamic KV
+            # length; Python history length does not specialize the block.
+            windows = tuple(tuple(spatial[name]) for name in names)
         attended = triton_local_attention(query, all_key, all_value, height, width, windows)
         attended = attended[0].transpose(0, 1)
         x = x + block.output.apply(self.parallel.to_sequence(attended))
@@ -46,15 +63,19 @@ class FlashTransformerInfer:
         return x, key, value
 
     def prepare_condition(self, blocks, x, rope, height, width):
+        if self.use_compile and self.parallel.size > 1:
+            x = x.clone()  # Normalize the first SP shard's storage offset.
         frequencies = rope.for_positions(height, width, (0,))
         window = tuple(self.config["spatial_attention"]["condition_self_window_size"])
         caches = []
-        for block in blocks:
-            x, key, value = self.infer_block(block, x, True, None, None, frequencies, frequencies, (window,), height, width)
+        for index, block in enumerate(blocks):
+            x, key, value = self.run_block(index, block, x, True, None, None, frequencies, frequencies, (window,), height, width)
             caches.append((key, value))
         return caches
 
     def infer(self, blocks, x, conditions, history, rope, frame, height, width):
+        if self.use_compile and self.parallel.size > 1:
+            x = x.clone()
         spatial = self.config["spatial_attention"]
         previous = min(frame, self.config["window_size"] - 1)
         q_rope = rope.for_positions(height, width, (0,))
@@ -67,7 +88,7 @@ class FlashTransformerInfer:
                 past_value = torch.cat((cv, history.v_cache(index)), 0)
             else:
                 past_key, past_value = ck, cv
-            x, key, value = self.infer_block(block, x, False, past_key, past_value, q_rope, k_rope, windows, height, width)
+            x, key, value = self.run_block(index, block, x, False, past_key, past_value, q_rope, k_rope, windows, height, width)
             history.store_kv(key, value, index)
         return x
 

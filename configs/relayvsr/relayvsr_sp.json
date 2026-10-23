@@ -7,6 +7,8 @@
   "ffmpeg_preset": "fast",
   "encoder_threads": 16,
   "queue_size": 16,
+  "use_compile": true,
+  "warmup": true,
   "parallel": {
     "seq_p_size": 2,
     "cfg_p_size": 1

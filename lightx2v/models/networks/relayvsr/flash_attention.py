@@ -9,6 +9,20 @@ import triton
 import triton.language as tl
 
 
+@torch.library.custom_op("lightx2v::relayvsr_flash_attention", mutates_args=(), device_types="cuda")
+def _compiled_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, height: int, width: int, windows: list[int]) -> torch.Tensor:
+    windows = tuple(zip(windows[::2], windows[1::2]))
+    if len(windows) > 1:
+        frames = key.shape[2] // (height * width)
+        windows = windows[:2] + (windows[2],) * (frames - 2)
+    return triton_local_attention(query, key, value, height, width, windows)
+
+
+@_compiled_attention.register_fake
+def _compiled_attention_fake(query, key, value, height, width, windows):
+    return torch.empty_like(query, memory_format=torch.contiguous_format)
+
+
 @triton.jit
 def _forward(
     Q,
@@ -87,6 +101,8 @@ def _forward(
 
 @torch.no_grad()
 def triton_local_attention(query, key, value, height, width, windows):
+    if torch.compiler.is_compiling():
+        return _compiled_attention(query, key, value, height, width, [size for window in windows for size in window])
     with torch.cuda.device(query.device):
         q, k, v = query.contiguous(), key.contiguous(), value.contiguous()
         b, hq, _, d = q.shape

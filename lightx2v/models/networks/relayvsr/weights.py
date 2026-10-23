@@ -7,9 +7,18 @@ from safetensors import safe_open
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.norm.layer_norm_weight import LNWeight
-from lightx2v.common.ops.norm.rms_norm_weight import RMSWeight
+from lightx2v.common.ops.norm.rms_norm_weight import RMSWeight, RMSWeightNative
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV2D_WEIGHT_REGISTER, CONV3D_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, TENSOR_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV2D_WEIGHT_REGISTER, CONV3D_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, TENSOR_REGISTER
+
+from .compile import native_layer_norm, native_rms_norm
+
+
+class RelayRMSNorm(RMSWeightNative):
+    def apply(self, x):
+        if torch.compiler.is_compiling():
+            return native_rms_norm(x, self._get_actual_weight(), self.eps)
+        return super().apply(x)
 
 
 class FP32LayerNorm(LNWeight):
@@ -18,7 +27,10 @@ class FP32LayerNorm(LNWeight):
         self.cast_output = cast_output
 
     def apply(self, x):
-        output = F.layer_norm(x.float(), (x.shape[-1],), None if self.weight is None else self.weight.float(), None if self.bias is None else self.bias.float(), self.eps)
+        if torch.compiler.is_compiling():
+            output = native_layer_norm(x, self.weight, self.bias, self.eps)
+        else:
+            output = F.layer_norm(x.float(), (x.shape[-1],), None if self.weight is None else self.weight.float(), None if self.bias is None else self.bias.float(), self.eps)
         return output.to(x.dtype) if self.cast_output else output
 
 
@@ -36,8 +48,8 @@ class RelayWeights(WeightModule):
     def tensor(self, name, key, *, buffer=False):
         self.add_module(name, TENSOR_REGISTER["Default"](key, create_cuda_buffer=buffer))
 
-    def rms(self, name, key, *, eps, backend="torch_native", buffer=False):
-        self.add_module(name, RMS_WEIGHT_REGISTER[backend](key + ".weight", eps=eps, create_cuda_buffer=buffer))
+    def rms(self, name, key, *, eps, buffer=False):
+        self.add_module(name, RelayRMSNorm(key + ".weight", eps=eps, create_cuda_buffer=buffer))
 
     def conv(self, name, key, *, stride=1, padding=0):
         self.add_module(name, CONV2D_WEIGHT_REGISTER["Default"](key + ".weight", key + ".bias", stride=stride, padding=padding))

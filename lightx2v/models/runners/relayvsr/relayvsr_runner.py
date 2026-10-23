@@ -4,7 +4,7 @@ import tempfile
 import time
 from contextlib import closing
 from fractions import Fraction
-from itertools import islice
+from itertools import islice, repeat
 from pathlib import Path
 from typing import ClassVar
 
@@ -47,6 +47,8 @@ class RelayVSRRunner(DefaultRunner):
 
     supported_request_fields_by_task: ClassVar[dict] = {"sr": COMMON_REQUEST_FIELDS | {"video_path", "image_path", "sr_ratio", "size"}}
 
+    WARMUP_RESOLUTIONS = ((768, 1024), (768, 1344))
+
     def __init__(self, config):
         for key, value in (("infer_steps", 1), ("guidance_scale", 1.0), ("enable_cfg", False), ("fps", None)):
             config.setdefault(key, value)
@@ -73,6 +75,35 @@ class RelayVSRRunner(DefaultRunner):
         self.load_seconds = time.perf_counter() - started
         self.config.lock()
         logger.info("RelayVSR native 4x model loaded in {:.2f}s", self.load_seconds)
+
+    @torch.no_grad()
+    def run_warmup(self):
+        if type(self) is not RelayVSRRunner or self.config["task"] != "sr":
+            raise NotImplementedError("RelayVSR warmup supports the native SR runner only")
+        if self.config.get("lazy_load", False):
+            raise NotImplementedError("RelayVSR warmup does not support lazy loading")
+        started = time.perf_counter()
+        # Fill the causal Wan cache and overwrite every slot once. Flash's
+        # condition, first-frame and history branches follow the normal stream.
+        references = 2 * self.model.wan_config["temporal_context_frames"]
+        frames = (references - 1) * (self.config.get("clip_len", 16) - 1) + 1
+        for height, width in self.WARMUP_RESOLUTIONS:
+            frame = prediction = pixels = None
+            logger.info("RelayVSR warmup: {}x{}, {} reference frames", height, width, references)
+            try:
+                frame = torch.zeros((3, height, width), dtype=torch.uint8, pin_memory=True)
+                with closing(self.restore_frames(repeat(frame, frames), 42)) as predictions:
+                    for prediction in predictions:
+                        for scale in (2, 4):
+                            pixels = self.postprocess(prediction, (height * scale, width * scale))
+                torch.cuda.synchronize()
+            finally:
+                frame = prediction = pixels = None
+                self.timings = None
+                self.input_info = None
+        self.warmup_seconds = time.perf_counter() - started
+        logger.info("RelayVSR warmup completed in {:.2f}s", self.warmup_seconds)
+        self._maybe_freeze_gc()
 
     @staticmethod
     def output_size(input_info, height, width):
