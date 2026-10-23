@@ -7,13 +7,30 @@
 3. 一个 backend 在理论 shape 网格上的表现，以及与其他 backend 的差距；
 4. 最佳实测结果距离硬件名义峰值还有多大 gap。
 
-`operator_bench.py` 只处理 GEMM、dense/sparse attention 和单卡 MoE。Sequence-parallel dense/sparse attention 使用独立的
-`sp_bench.py` 和 suite；模型级调度、TP/SP 混合并行、多机执行和跨硬件性能外推不属于当前版本。
+`operator_bench.py` 处理 GEMM、dense/sparse attention、Conv2d/3d 和单卡 MoE。Sequence-parallel dense/sparse attention 使用独立的
+`sp_bench.py` 和 suite。本工具比较算子；完整模型层、TP/SP组合方案和时间线诊断分别使用其对应工具，不混入算子报告。
+
+## 测试类型与候选命名
+
+每种类型独立定义输入、筛选候选和排名。单卡`sparse_attention`不包含dense对照或SP入口；`dense_attention`独立比较稠密后端，`sp_attention`由`sp_bench.py`比较完整分布式attention路径。SP使用的dense/sparse叶子是其配置，不把SP结果并入单卡排名。
+
+| 测试类型 | 候选名称表达的维度 | 命名与显示规则 |
+|---|---|---|
+| `gemm` | 量化/计算格式、实现库、生产封装或直接调用 | 保留生产registry的`fp8-sgl`等精度-实现名；`Default`显示为Torch生产MM，`torch_linear`为直接MM，二者不冒充两种数学算法。 |
+| `dense_attention` | 实现库及代际 | `flash_attn2/3/4`、`sage_attn2/3`、`torch_sdpa`；显示FA2/3/4、Sage2/3、Torch SDPA。Causal、GQA和shape属于输入合同。 |
+| `sparse_attention` | 稀疏算法、计算实现、生产调用入口 | ID统一为`算法.计算实现.入口`，如`sla.sage2.general`；显示SLA + Sage2（General）。 |
+| `moe` | 实现库、专家矩阵乘组织方式 | `torch_expert_loop`和`torch_grouped_mm`分别表示专家循环与分组MM；top-k、expert配置与实际路由属于输入。 |
+| `convolution` | 卷积维数、实现库 | 类型标题为convolution · conv2d/conv3d；共享后端`torch_convolution`，不因维数另造两个库后端。 |
+| `sp_attention` | 并行算法、attention叶子、通信精度及执行配置 | Ulysses/Ring与leaf分别展示；候选ID保留通信、fusion、pre/post、A2A及head流水配置以便精确重跑，完整ID折叠。 |
+
+稀疏ID的算法为`sla/sparge`；入口为`dynamic/general/specialized/library`。`specialized`对应SparseSage/SparseFlash专用生产类，`library`对应外部库完整稀疏接口；两者可能调用相同计算库，但路由、布局与调用开销可不同。Dynamic/General/专用类都会在调用内生成mask，不能据名称称其为静态/预计算路由。`triton_ar`是不同计算实现变体，保留该信息。
+
+不在候选名追加`_replay`。回放能力仍由输入manifest和哈希表达，原生产registry key单独保存用于源码追溯。重复入口须核对实际数据流后再合并，不能仅凭同一算法或底层kernel名合并；未接入的适用实现继续作为缺口保留。
 
 ## 最小数据流
 
 ```text
-shape dump / 理论 sweep / 真实 QKV replay
+shape dump / 理论 sweep / 真实 attention或MoE replay
                       |
                       v
                 canonical suite
@@ -27,7 +44,17 @@ shape dump / 理论 sweep / 真实 QKV replay
 
 工具没有 model catalog、任务队列、execution plan、bundle manifest 或跨 run 控制面。需要长期保留结果时，直接归档输入 suite、命令、`raw.jsonl` 和报告即可。
 
-## 核心算子计算量诊断
+## 性能测量与实际输入
+
+默认`repeat_runs=3`、每轮`warmup=10`次、正式`iterations=30`次，`prewarm_seconds=0`；CLI可显式覆盖。各轮在同一进程预热后计时，event-list机制与指标见下文。
+
+单卡bench只测性能，不内置FP32数学参考、误差阈值或比较输出归档。计时前和计时后检查输出类型、有限性与shape；`correctness.checked=false`表示未做数值验证，不表示零误差。独立验证的时机与责任见[Agent指南](AGENTS.md#输入计算量和数值)。
+
+稀疏attention在计时外执行一次生产调用，用共用统计取得其最终区域的实际计算量；正式计时关闭统计，不另跑router，不用块密度估算有效token对。缺少或观察到多个区域时，raw的`work`/`actual_tflops`为null，保留dense等价量和缺口。采样结果只代表该次调用，不保证内容相关路由恒定。
+
+真实QKV和MoE回放用于固定性能负载，加载时核对输入身份。MoE保存activation、专家ID/scale及权重，不要求捕获输出或进行完整数值重建。专家直方图仍是合成路由，不能冒充真实模型输入；普通shape输入明确标为synthetic。不同后端使用相同operands与配置，不仅核对shape/seed。未测、硬件/依赖/输入拒绝及未接入仍分别显示。
+
+## 计算量统计与真实MoE回放
 
 计算量由生产算子基类提供，bench使用同一数学函数；不解析kernel名称，不依赖profiler或`record_shapes`。
 
@@ -45,6 +72,12 @@ Bench使用源码checkout；`tools`不随LightX2V wheel打包。默认推理与�
 稀疏区域是准确算量的必要输入，选择attention后自动读取；采样超限时不再归约/导出。Dynamic由实际分支函数记录，General由选定consumer记录；不因算法叫SLA或Sparge而复制算术。MoE总量只需shape/专家配置；`moe_distribution=True`才额外读取生产专家分布，原始输入导出由callback单独开启。
 
 边界dtype是Tensor存储类型，未列的名字原样保存；NVFP4/MXFP4等量化方案、计算/累加精度需backend合同，不能从BF16输入或uint8存储猜出。common之外的独立平台模板、paged decode、任意ATen和编译图内部仍有缺口。HF量化Linear的`nn.Module.forward`尚未共享接入；直接SGL调用在执行时明确报告绕过共同MM基类，不猜计算量或增加专用通道。普通SGL MM仍由基类统计。其他不可见旁路仅声明覆盖边界，不声称自动发现。
+
+稀疏候选从生产路径接入：Dynamic支持SLA的Triton/Triton AR、Sage2/3、FA4、Magi；General支持SLA/SPARGE与Triton、Sage2/3、FA4、Magi、FlexBlock、FlashInfer的组合，另保留已有SparseSage/SparseFlash及外部Sparge入口。Dense后端在独立dense attention测试中比较。实际可尝试集合由架构、依赖及输入筛选，不表示这些组合已在所有设备验证。
+
+默认尝试全部eligible候选，逐轮错开起点；显式`--backend`缩小范围时仍保留未测项。路由和布局变换在生产调用计时内，文件加载及独立统计在外。固定QKV属于输入回放合同，未固定或跳过路由；候选名不追加回放后缀。General与Dynamic分别保留生产入口差异，不因都叫SLA就合并成绩。
+
+覆盖状态区分纳入比较、当前条件拒绝、待补接入或证据。SVG2、Sol-Attn等缺少可复用输入合同的路径保留unmapped；Nbhd、Radial、SVG、RainFusion、Draft等缺少QKV-only suite之外的布局或状态。新mask/operator registry项也会暴露为缺口并阻止完整覆盖结论。具体补输入与接线方向见[Agent指南](AGENTS.md#候选覆盖与补齐)。Magi ranges与变量块可提供实际区域计算量，不因此证明输出数值正确。
 
 | 计算 | 逻辑计算量 | 范围 |
 |---|---|---|
@@ -67,11 +100,19 @@ with WorkloadStats("/path/to/new-stats", families=["attention"], max_calls=1):
     run_target()  # 原生产调用
 ```
 
-`max_calls` 是每个backend采样桶的保存上限（core按具体类，consumer按operator名），不是推理/warmup次数。100次同类MM、上限1，原计算仍执行100次，只保存1条详细事实；不同权重/shape可能被截断，不能据此推整网总量。同类未返回的父调用也预占名额。整层诊断应按覆盖需要提高上限，单次区域参考通常1–2。
+`max_calls` 是每个backend采样桶的保存上限（core按具体类，consumer按operator名），不是推理/warmup次数。100次同类MM、上限1，原计算仍执行100次，只保存1条详细事实；不同权重/shape可能被截断，不能据此推整网总量。同类未返回的父调用也预占名额。整层诊断应按覆盖需要提高上限，单次实际区域统计通常1–2。
 
 产物为`core_ops.jsonl`、中文`core_ops.md`、consumer侧`workloads.jsonl`和`session.json`。后者schema v2记录`families/moe_distribution`及覆盖缺口。parent_call与actual_backend_routes说明归属，父子/consumer可能描述同一工作，不能相加。统计会同步读区域和写文件，只用于独立eager诊断；正式event计时关闭它，compile/CUDA graph capture拒绝，graph replay不可恢复内部调用。
 
-可选`on_sparse_inputs/on_moe_inputs`回调接收同次真实数据；未提供时不导出tensor。MoE出口保留覆盖输出storage前所需的operands；未知出口/量化布局明确留缺口，文件格式与回放由消费者负责。
+`WorkloadStats(on_moe_inputs=...)`只在显式提供回调时暴露实际MoE输入、路由和权重，保存方式由回调决定。
+
+真实MoE输入准备通过现有`--plugin`与`register_backends(registry)`扩展，不规定公共保存格式。内置MoE adapter在prepare阶段接受`options["moe_inputs"]`，字段为`activation`、`fc1`、`fc2`、`expert_ids`、`scales`，以及可选`fc1_gate`、`fc1_bias`、`fc2_bias`；它们是符合实际production factory及case shape/精度的内存operands，不是序列化协议。继承适用adapter时调用父`prepare(case, device, {**options, "moe_inputs": inputs})`；布局无法复用时返回现有`PreparedOperation`准备真实production调用。
+
+Suite用`replay.manifest/sha256`固定输入身份；文件内容、引用权重及实际tensor与suite的一致性由plugin校验，工具不自动解析MoE manifest。声明replay却未传入operands会报错；无replay的内置测例是显式合成负载。任务侧捕获、身份保存与稳定adapter归属见[Agent指南](AGENTS.md#moe真实输入准备)。
+
+内置准备逻辑继续负责production factory、固定输入调用和FlashInfer计时外autotune。其他量化、分片或专家结构用任务adapter调用其真实backend，不将其强行转换为内置布局。
+
+显式MoE捕获在生产调用前取得operands；与调用者的output缓冲共用storage者先克隆，回调在生产返回后保存实际输入，不保存输出。默认调用不克隆。Torch两候选及FlashInfer候选调用生产MoE。FlashInfer在计时外将split gate合并成value在前、SiLU gate在后的packed FC1，再消费同一真实路由和权重；不改变输入精度。其他量化或多shard布局不猜转换。FlashInfer在prepare阶段显式调用`flashinfer.autotune(tuning_buckets=(tokens,))`，只搜索当前token点，`tune_max_num_tokens=tokens`覆盖当前点。普通warmup不会启动该搜索；正式调用使用`autotune(False, tuning_buckets=(tokens,))`固定相同映射，只查缓存、不做搜索。这样同进程切换token数后也不依赖库共享配置的残留状态；False上下文开销属于本adapter的event-list计时。调优耗时属于setup，raw及报告保存`autotune`合同；未调优/调优记录不可混合聚合。需要安装的FlashInfer支持该autotune接口，不静默退回默认tactic。机制参考[FlashInfer autotuning](https://docs.flashinfer.ai/autotuning.html)。采集、加载和调优在计时外；纯计时仍采用event-list。`source`/`replay`保存在报告JSON；模型代表性取决于实际捕获范围。本工具不保存捕获输出，不据此提供数值正确性结论。
 
 ## Shape 合同
 
@@ -107,9 +148,14 @@ Family 对应 shape：
 - `gemm`：`m, n, k, bias`；
 - `dense_attention`：`batch, seq_q, seq_kv, heads, kv_heads, head_dim, causal`；
 - `sparse_attention`：与 dense attention 相同，另外要求 `sparse` 和 `replay`；
-- `moe`：`tokens, hidden_size, intermediate_size, num_experts, top_k, activation, expert_bias`。
+- `moe`：`tokens, hidden_size, intermediate_size, num_experts, top_k, activation, expert_bias`；
+- `convolution`：`input, weight, stride, padding, dilation, groups, bias`；输入为NCHW/NCDHW，stride/padding/dilation为对应长度的整数列表。
 
 当前 attention 合同只接受 fixed-length；`causal=true` 时要求 `seq_q == seq_kv`。Sparse attention 只接受真实 QKV 回放，不提供随机输入或理论 sweep。
+
+`dense_attention`默认使用合成输入；也可添加`replay: {"manifest": "/path/to/qkv.json", "sha256": "<manifest SHA256>"}`，使用下述同一QKV manifest做真实输入计时。所有内置dense后端共用加载器，保留BSHD与batch维度，校验manifest、分片SHA、shape/dtype及完整序列覆盖；文件不存在或不匹配时失败，不退回随机QKV。原backend名不变，dense结果不进入sparse排名；GEMM/Conv等尚未实现回放的类型明确拒绝`replay`字段。来源仍受实际捕获边界约束，leaf输入不因此成为全局pre-SP输入。
+
+单卡`Sage2`使用生产模块已解析的`sageattn`，包括SM89的显式Triton分发；第三方库默认dispatcher不能代替该生产选择。
 
 ## 检查
 
@@ -136,11 +182,13 @@ python3 -m tools.benchmarks.operator_bench sweep \
   --output /tmp/gemm_grid.json
 ```
 
-Dense attention 和 MoE 使用各自的全部必填 shape 字段；不提交预生成网格，避免重复维护由这个命令即可生成的数据文件。
+Dense attention 和 MoE 使用各自的全部必填 shape 字段；不提交预生成网格，避免重复维护由这个命令即可生成的数据文件。CLI sweep只接受标量轴，不支持卷积的列表shape；Conv2d/Conv3d使用上述canonical suite及`run`入口。
 
 ## Sparse Attention 回放
 
-稀疏性取决于 Q/K 内容，只保存 shape 并随机生成输入会让稀疏率和耗时失真。模型侧应在进入 attention backend 前捕获已经完成 RoPE 等变换的 Q/K/V，工具只消费稳定的回放合同。模型专属 hook 留在对应模型侧或本地工作区；与模型无关的可复用捕获能力才进入 benchmark。
+已核实但由模型延迟导入的生产入口仍出现在候选清单中；报告保留其输入限制，不强制加载无关依赖。GeneralSparse的Nbhd/SVG mask也在覆盖表列出所缺frame/context语义，不将独立attention入口的排除当成它们的替代。
+
+稀疏性取决于Q/K内容，shape加随机输入不能代表真实稀疏负载。回放合同的Q/K/V是进入attention backend前、已完成RoPE等变换的实际输入。捕获点与adapter归属见[Agent指南](AGENTS.md#输入计算量和数值)。
 
 Suite case 需要固定 replay manifest 的哈希，并声明目标保留比例：
 
@@ -153,30 +201,39 @@ Suite case 需要固定 replay manifest 的哈希，并声明目标保留比例�
     "heads": 40, "kv_heads": 40, "head_dim": 128, "causal": false
   },
   "precision": {"input_dtype": "bf16"},
-  "sparse": {"keep_ratio": 0.15},
+  "sparse": {"keep_ratio": 0.2},
   "replay": {"manifest": "/path/to/qkv_replay.json", "sha256": "...64 hex..."}
 }
 ```
 
 Replay manifest 使用 `operator_benchmark_qkv_replay_v1`，layout 为 `BSHD`，并为 `q/k/v` 分别记录 dtype、完整 shape 和连续 sequence shards。每个 shard 必须包含相对 manifest 的路径、SHA256、tensor key、`sequence_start` 和 `sequence_end`。加载时会校验 manifest、所有 shard、dtype、shape 和序列覆盖，随后才搬到目标 GPU。
 
-内置回放 backend：
+内置稀疏候选按以下规则生成，不枚举不存在的笛卡尔积：
 
-- `dynamic_sparse_triton_replay`：LightX2V production Triton sparse attention；
-- `dynamic_sparse_sage2_replay`：LightX2V production dynamic sparse attention；
-- `dynamic_sparse_sage3_replay`、`dynamic_sparse_fa4_replay`：Blackwell 代际候选；
-- `sparge_sage2_replay`：production Sparge attention；
-- `spas_sage2_replay`、`spas_sage3_replay`、`spas_fa4_replay`：LightX2V production static sparse 路径；
-- `flash_attn3_replay`、`flash_attn4_replay`、`sage_attn3_replay`：同一份真实 QKV 上的代际 dense 基线。
+| 入口 | 算法 | 计算实现 | 数量 |
+|---|---|---|---:|
+| Dynamic | SLA | Triton、Triton AR、Sage2、Sage3、FA4、Magi | 6 |
+| General | SLA、SPARGE | Triton、Sage2、Sage3、FA4、Magi、FlexBlock、FlashInfer | 14 |
+| 专用类 | SLA、SPARGE | Sage2、Sage3、FA4 | 6 |
+| 外部库完整接口 | SPARGE | Sage2 | 1 |
 
-Artifact 加载、校验和首次初始化计入 `setup_ms`，不进入 kernel latency；稀疏 backend 的原生 block-map/routing 则包含在每次计时中。Raw case 会固化 replay SHA 和稀疏配置，append 与 report 都拒绝身份漂移。
+这是27条已接入的生产调用路径，不代表27种算法、独立kernel或当前设备全部可用。实际按硬件、依赖和输入筛选；稀疏候选目录不包含FA3等dense选项。
+`setup_ms`覆盖adapter.prepare及其后的CUDA同步，包含其中执行的artifact加载、校验和显式autotune。prepare之后的独立预检/计算量采样、warmup和首次惰性初始化不计入setup；正式kernel latency只含event-list测量段。稀疏backend的block-map/routing包含在每次计时中。Raw case固定replay SHA与稀疏配置，append与report拒绝身份漂移。
+
+延迟取各轮平均耗时的中位数；spread是轮间极差（最大值减最小值），不是标准差或置信区间。点估计领先不保证显著或可重复领先，也不表示质量已接受。数值未测不等于数值严格一致。
+
+稀疏理论计算量为对应dense逻辑量×`keep_ratio`，不含选块取整、保护区、校准和padding。实际量来自raw `work`及其范围，不由速率或mask块密度反推；缺最终区域时不发布实际计算效率。展示位置、双效率和高亮统一见[固定报告模板](REPORT_TEMPLATE.md)。
+
+单算子默认稀疏率0.8（`keep_ratio=0.2`），suite显式保存，不改生产或SP默认。某family未指定`--backend`时，run探测并尝试全部eligible候选；`--backend FAMILY=...`显式限制后端，不过滤suite中的其他family，也不支持前缀通配符。目标case由suite决定。eligible仅是依赖/架构预检，实际失败单独保存；报告对账保留未测项。SP的`--dense-backend sage_attn2`可替换`flash_attn2`，再派生对应合法配置。候选选择与完整覆盖判断见[Agent指南](AGENTS.md#候选覆盖与补齐)。
+
+LightX2V的`SparseSageAttn2/3Weight`和`SparseFlashAttn4Weight`已有SLA/Sparge两条生产路由。`sla.*.specialized`保留SLA合同，`sparge.*.specialized`选择同一类的`sparge_mode`，共享加载与实际mask统计，不复制路由实现。新增组合尚需GPU验收，SP暂明确排除；外部`sparge.sage2.library`调用生产`SpargeAttnWeight`，再进入`spas_sage_attn.core.spas_sage2_attn_meansim_topk_cuda`，在库内完成选区与计算。无法提供最终mask时仍报告成功耗时；当前该路径无法提供最终区域，实际计算量留缺口，不把缺证据写成运行失败。
 
 Sparse attention 同时输出两套口径：
 
-- `actual_tflops`：以 `dense work * 实际 block density` 估算选中 QK/PV 的 FLOPs；分子不计 routing FLOPs，但延迟包含每次调用的原生 block-map/routing，用于观察端到端实际算力利用；
+- `actual_tflops`：以本次实际选中有效token对的QK/PV计算量为分子，扣除尾块padding；不计routing FLOPs，但延迟包含每次调用的原生block-map/routing。缺少实际最终区域时为null，不用块密度估算替代；
 - `dense_equivalent_tflops`：以完整 dense work `4*B*H*Sq*Sk*D` 为分子，用于观察同 shape 的等效吞吐和加速收益。
 
-提供硬件 peak profile 后，报告分别输出 `actual_peak_efficiency` 和 `dense_equivalent_peak_efficiency`。两者都使用 suite 输入精度的普通 dense peak，不使用 2:4 structured-sparsity peak。前者是实际有效计算效率的近似值；后者是等效效率，可能超过 100%，不能解释为实际 Tensor Core 利用率。若 backend 内部混合了量化 QK 与浮点 PV 等不同算术，该分母只是统一诊断基准；精确的硬件指令效率还需要 backend 声明计算混合比例。
+提供硬件 peak profile 后，报告分别输出 `actual_peak_efficiency` 和 `dense_equivalent_peak_efficiency`。两者都使用 suite 输入精度的普通 dense peak，不使用 2:4 structured-sparsity peak。前者使用该候选本次最终mask得到的有效QK/PV计算量；缺少最终区域时，实际计算量及对应速率为null，并记录缺口。它是逻辑计算效率；后者是等效效率，可能超过 100%，不能解释为实际 Tensor Core 利用率。若 backend 内部混合了量化 QK 与浮点 PV 等不同算术，该分母只是统一诊断基准；精确的硬件指令效率还需要 backend 声明计算混合比例。
 
 ### Agent 协作入口
 
@@ -210,13 +267,15 @@ python3 -m tools.benchmarks.operator_bench run \
 - `raw.jsonl`：每个 case/backend/repeat 的原始记录；
 - `backend_catalog.json`：本次硬件与依赖环境下冻结的候选目录；
 - `run_summary.json`：本次写入和状态计数；
-- `report.json`、`report.md`：稳定 backend 排名、observed backend 差距和硬件效率。
+- `report.json`：完整性能、精度、覆盖与来源事实；`report.md`：CLI简短结果表。Agent按[固定模板](REPORT_TEMPLATE.md)生成面向开发者的最终`REPORT.md`。
 
-报告区分 `measured_winner` 与正式 `winner`。前者是已测稳定候选中的最快项；后者还要求目标 family 的 production registry 无未映射项、适用依赖无缺失，并且 catalog 中每个 `eligible` 候选都有稳定结果或明确的不可用/正确性结论。缩小 `--backend` 范围仍可用于快速探索，但只生成 measured subset，不发布正式最佳配置。离线 `report` 要恢复正式推荐时需同时传入本次 `--backend-catalog`。
+单卡报告只给事实：`measured_winner`是已测稳定候选中的最快项，`correctness.status=not_checked`明确未执行数值验证，`coverage_blockers`列未测、缺依赖与未接入；不生成`winner`或`quality_approved`。采用、质量取舍与补测由Agent/开发者据事实决定。缩小`--backend`仍可探索，但不能把subset称为全部后端最优。离线`report`传入本次`--backend-catalog`才能重建完整候选对账。
 
-中断后以相同参数增加 `--append`。工具按 `(repeat, case, backend)` 跳过已有记录，并拒绝 suite、backend、测量参数、seed、LightX2V commit、GPU 或 CUDA/PyTorch 环境漂移；这些身份变化时应使用新目录。
+中断后以相同参数增加 `--append`。工具按 `(repeat, case, backend)` 跳过已有记录，并拒绝算子类型、shape、输入/后端精度、实际路由配置、replay/sparse、测量参数、seed、LightX2V commit、GPU 或 CUDA/PyTorch 环境漂移；标签、来源注释和call_count可更新；这些身份变化时应使用新目录。raw的`requested_input_dtype`保存suite请求，`precision`保存adapter声明；即使后端在support阶段拒绝，原请求身份也不会被声明精度覆盖。
 
-共享机器上的卡是否空闲应在启动前用 `nvidia-smi` 确认。`--device` 使用当前进程可见的 CUDA ordinal。
+单卡`run`通过旧raw身份校验后、首个case前保存`backend_catalog.json`。已识别的fatal CUDA上下文错误先写入并flush失败行，再非零退出；不生成成功汇总，已有raw可用离线`report`重建，fatal行归`measurement_error`并阻止完整覆盖。普通后端异常仍单独保存并继续。JSONL按物理换行读取，完整末行无换行时append补分隔；不完整行严格拒绝，不自动删除或修补。
+
+`--device`使用当前进程可见的CUDA ordinal；资源核对与受扰测量处置见[Agent指南](AGENTS.md#一次任务怎样推进)。
 
 ## Backend
 
@@ -245,11 +304,17 @@ Probe 将 LightX2V 当前 `MM_WEIGHT_REGISTER`、`ATTN_WEIGHT_REGISTER` 与 benc
 
 Production registry 中的新 backend 如果既没有 adapter，也没有带原因的排除项，会进入 `unmapped_mm_backends` 或 `unmapped_attention_backends`，汇总到 `unmapped_production_backends`，并令 `catalog_complete=false`。当前架构适用的候选缺少依赖时，`environment_complete=false`。只有两者均成立时 `coverage_complete=true`。
 
-候选目录随当前 LightX2V registry 演进，但每次 probe 的 fingerprint 固定本次比较集合。发布“最佳 backend”结论前，应对目标 family 的全部 `eligible` 候选运行目标 shape；不能把 `dependency_missing` 当作性能落选。尚未进入 LightX2V、也未安装在环境中的外部 kernel 无法自动发现，需要先安装并通过 registry 或 `--plugin` 注册 adapter。
+候选目录随LightX2V registry演进，每次probe的fingerprint标识本次已发现集合，不是代码/依赖身份校验。尚未进入registry或环境的外部kernel无法自动发现，可通过`--plugin`注册adapter。
 
-单卡 benchmark 实质代码只有两个文件：`operator_bench.py` 负责 shape、执行、报告和 CLI，`operator_backends.py` 负责 backend 合同与实现。分布式 SP attention 的进程组、候选约束和计时集中在独立的 `sp_bench.py`，避免让单卡工具依赖 `torchrun`。
+GeneralSparse组合的descriptor使用`production_backend="general_sparse_attn"`和`production_variant="mask=算法;operator=注册名"`关联生产子项；descriptor只描述接线，不能证明任意算法×实现组合可执行。
+
+单卡入口`operator_bench.py`负责shape、执行、报告和CLI；`operator_backends.py`负责backend合同与实现，`reference.py`仅保留SP显式验证使用的小型输出比较函数，单卡执行不调用它；真实MoE输入准备留任务侧plugin。分布式 SP attention 的进程组、候选约束和计时集中在独立的 `sp_bench.py`，避免让单卡工具依赖 `torchrun`。
+
+卷积覆盖按conv2d/conv3d分别读取生产registry：Default映射到同一路径的torch_convolution，ForceFp32明确要求独立精度/转换合同；新增registry项阻止完整推荐。已知VAE FP8分发通过共享lightx2v_kernel.fp8_conv3d执行（Conv2d转单深度Conv3d），当前缺量化权重、scale、累加精度及硬件接线，作为待补项保留，不猜测硬件拒绝或视为已测。历史catalog没有卷积清单时只给已测排序；未登记的原生分发仍需Agent沿生产调用审计，工具不声称自动扫描任意Python分支。
 
 ## Sequence-Parallel Attention
+
+SP候选名称与单卡registry同步；catalog保留leaf的硬件/依赖/接入事实，待验证的SP语义单独记录并使覆盖保持未完整。以下L1报告与诊断仍使用本节既有JSON和`--recommendation-report`入口。
 
 当前 `sp_bench` 支持 Ulysses/Ring dense attention，以及使用真实 QKV replay 的 Ulysses sparse attention；不包含 `kv_all_gather`。Sparse leaf 若不提供 Ring 需要的分块输出和 LSE 合并合同，Ring 会明确记为不支持，不会被当作性能失败。Sparse SP 候选从通用 backend catalog 中筛选；当前已适配 H100 与 Blackwell 的 production sparse leaf，未来出现 eligible 但尚无 SP 合同的 adapter 时会记录为 `unmapped_sparse_sp_backends` 并阻止发布完整候选最优。`sage_attn2` 是低精度 dense attention，不代表稀疏计算。
 
@@ -490,13 +555,19 @@ profile 未收录会标记 `peak_variant_missing`。来源：
 
 - 默认至少 3 个 repeat；
 - 每轮先完成 warmup，再为各 iteration 记录 event pair，所有 kernel 入队后只同步最后一个 event；这避免逐 iteration 的 CPU/GPU 同步间隙；
+- 单算子返回Tensor。计时结束后检查末次输出的类型、有限性及声明shape；未声明shape时核对已验证的预检原始输出shape。失败记录阶段与原因，整次结果不进入有效计时排序。不逐iteration校验，不做数学参考；
 - 对数微秒级 kernel，event pair 本身仍可能形成可观扰动；报告的是逐调用 event latency，不等同于整段循环摊销吞吐；
 - 跨轮 spread 同时超过 `5%` 和 `0.005 ms` 才判为不稳定；
-- capability/measurement error、显式 correctness failure、repeat 不足和不稳定结果不进入 winner；
-- correctness 未检查不会阻塞当前版本；
+- capability/measurement error、显式 correctness failure、repeat 不足和不稳定结果不进入 `measured_winner`；
+- 性能排序与数值验证分开；数值未测不阻塞性能计时，任何性能结果都不自动批准质量；
+- “计算效率”表示逻辑计算量除以实测延迟（TFLOPS/TOPS）；名义peak算力给出峰值比例的分母。没有本次最终mask的稀疏估计量不进入开发者主表，保留缺口原因及已有区域统计。独立benchmark不默认采profiler；若报告链接其他诊断trace，必须注明它不是正式计时那次运行；
+- 稀疏的稠密等价计算效率为完整dense量除以同一耗时，可超过dense峰值，不代表物理利用率；实际区域未知时两项效率均留空。
 - GEMM 使用 `2*M*N*K`；dense attention/MoE 使用 effective work；sparse attention 同时报告实际 block work 和 dense-equivalent work；
 - 量化 GEMM 的 effective rate 包含动态 activation quantization 等 wrapper 开销，相对纯 Tensor Core 峰值的效率是端到端诊断指标；
 - 峰值 profile 必须与 raw 中的 GPU 名称和 CUDA capability 匹配，否则拒绝发布效率。
+
+CLI只生成结构化事实与简表；最终中文报告由Agent按[固定模板](REPORT_TEMPLATE.md)生成，包含硬件峰值、输入/计算量、性能主表、精度/失败及完整候选覆盖。裸CLI不再自动生成该完整页面。
+
 
 已有 raw 可单独重建报告：
 

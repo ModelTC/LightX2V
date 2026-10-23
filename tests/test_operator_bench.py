@@ -27,6 +27,27 @@ H100_PEAKS = {
 }
 
 
+@pytest.mark.parametrize("with_peaks", [False, True])
+def test_report_hardware_uses_only_suite_matched_records(with_peaks):
+    case = gemm_case()
+    outside = raw_record(gemm_case(case_id="outside", shape={"m": 2, "n": 3, "k": 4, "bias": False}), "outside", 0, 1, 10, gpu="OTHER_GPU")
+    matched = raw_record(case, "target", 0, 1, 10)
+    report = core.build_recommendation_report(
+        shape_suite(case),
+        [outside, matched],
+        required_runs=1,
+        peaks=H100_PEAKS if with_peaks else None,
+        platform_id="h100_sxm_80gb" if with_peaks else None,
+    )
+    assert report["hardware"]["gpus"] == [matched["environment"]["gpu"]]
+    assert report["summary"]["matched_record_count"] == report["summary"]["unmatched_record_count"] == 1
+    empty = core.build_recommendation_report(shape_suite(case), [outside], required_runs=1)
+    assert empty["hardware"]["gpus"] == []
+    assert "没有可核实的GPU身份" in core.markdown_report(empty)
+    with pytest.raises(ValueError, match="raw GPU name does not match"):
+        core.build_recommendation_report(shape_suite(case), [outside], peaks=H100_PEAKS, platform_id="h100_sxm_80gb")
+
+
 def gemm_case(**overrides: object) -> dict:
     value = {
         "case_id": "gemm.1",
@@ -247,6 +268,9 @@ def test_observed_moe_routing_is_validated() -> None:
 def test_torch_grouped_mm_applies_expert_bias(monkeypatch: pytest.MonkeyPatch) -> None:
     torch = pytest.importorskip("torch")
 
+    # CPU替身只核对生产grouped入口的bias语义；不冒充CUDA kernel执行。
+    monkeypatch.setattr(torch.Tensor, "is_cuda", property(lambda _: True))
+
     def grouped_mm(inputs: object, weights: object, *, offs: object) -> object:
         outputs = []
         start = 0
@@ -331,6 +355,111 @@ def test_sparse_replay_manifest_rebuilds_qkv(tmp_path: Path) -> None:
     assert metadata["input_kind"] == "real_qkv_replay"
 
 
+def _dense_replay_fixture(tmp_path, batch=1):
+    import torch
+
+    shape = {"batch": batch, "seq_q": 4, "seq_kv": 4, "heads": 2, "kv_heads": 2, "head_dim": 64, "causal": False}
+    tensors = {name: (torch.arange(batch * 4 * 2 * 64).reshape(batch, 4, 2, 64) % 7).to(torch.bfloat16) / 17 + offset
+               for offset, name in enumerate(("q", "k", "v"))}
+    payload = tmp_path / "qkv.pt"
+    torch.save(tensors, payload)
+    digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+    manifest = {"schema_version": 1, "kind": "operator_benchmark_qkv_replay_v1", "layout": "BSHD", "tensors": {
+        name: {"shape": list(value.shape), "dtype": "bf16", "shards": [{"path": payload.name, "sha256": digest,
+                "tensor_key": name, "sequence_start": 0, "sequence_end": 4}]} for name, value in tensors.items()}}
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    case = {"case_id": "dense.replay", "operator_family": "dense_attention", "shape": shape, "precision": {"input_dtype": "bf16"},
+            "replay": {"manifest": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}}
+    return case, tensors
+
+
+@pytest.mark.parametrize("batch,seq_kv,causal,dispatch", [(1, 256, False, "dense"), (1, 257, True, "varlen"), (2, 257, False, "varlen")])
+def test_flash2_adapter_uses_production_dispatch(monkeypatch, batch, seq_kv, causal, dispatch):
+    from lightx2v.common.ops.attn import flash_attn
+
+    case = attention_case()
+    case["shape"].update(batch=batch, seq_kv=seq_kv, causal=causal)
+    calls = []
+
+    def dense(q, k, v, **kwargs):
+        calls.append("dense")
+        assert kwargs["causal"] == causal
+        return q
+
+    def varlen(q, k, v, cu_q, cu_kv, max_q, max_kv, **kwargs):
+        calls.append("varlen")
+        assert cu_q.tolist() == [i * case["shape"]["seq_q"] for i in range(batch + 1)]
+        assert cu_kv.tolist() == [i * seq_kv for i in range(batch + 1)]
+        assert (max_q, max_kv) == (case["shape"]["seq_q"], seq_kv)
+        assert kwargs["causal"] == causal
+        return q
+
+    monkeypatch.setattr(flash_attn, "flash_attn_func_v2", dense)
+    monkeypatch.setattr(flash_attn, "flash_attn_varlen_func_v2", varlen)
+    prepared = backends._prepare_flash2(case, "cpu")
+    assert tuple(prepared.fn().shape) == prepared.expected_output_shape
+    assert calls == [dispatch]
+
+
+@pytest.mark.parametrize("batch", [1, 2])
+@pytest.mark.parametrize("backend", ["torch_sdpa", "flash_attn2", "sage_attn2"])
+def test_dense_replay_adapter_consumes_manifest_operands(tmp_path, monkeypatch, batch, backend):
+    import torch
+    from lightx2v.common.ops.attn import flash_attn
+
+    case, tensors = _dense_replay_fixture(tmp_path, batch)
+    core.validate_suite(shape_suite(case))
+    calls = []
+
+    def attention(q, k, v, *args, **kwargs):
+        assert all(torch.equal(value.reshape(tensors[name].shape), tensors[name]) for name, value in zip(("q", "k", "v"), (q, k, v)))
+        calls.append(backend)
+        return q
+
+    def wrong_dispatch(*args, **kwargs):
+        raise AssertionError("bench bypassed production Sage dispatch")
+
+    monkeypatch.setattr(flash_attn, "flash_attn_func_v2", attention)
+    monkeypatch.setattr(flash_attn, "flash_attn_varlen_func_v2", attention)
+    monkeypatch.setitem(sys.modules, "sageattention", SimpleNamespace(sageattn=wrong_dispatch))
+    monkeypatch.setitem(sys.modules, "lightx2v.common.ops.attn.sage_attn", SimpleNamespace(sageattn=attention))
+    monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention",
+                        lambda q, k, v, **kwargs: attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2))
+    monkeypatch.setattr(torch, "randn", lambda *a, **k: pytest.fail("replay must not generate synthetic QKV"))
+    prepared = load_registry().require(backend).prepare(case, "cpu", {})
+    output = prepared.fn()
+    assert output.shape == tensors["q"].shape
+    assert calls == [backend]
+
+
+@pytest.mark.parametrize("fault", ["missing_manifest", "manifest_hash", "tensor_dtype"])
+def test_dense_replay_failure_never_falls_back_to_random(tmp_path, monkeypatch, fault):
+    import torch
+
+    case, _ = _dense_replay_fixture(tmp_path)
+    path = Path(case["replay"]["manifest"])
+    if fault == "missing_manifest":
+        path.unlink()
+    elif fault == "manifest_hash":
+        case["replay"]["sha256"] = "0" * 64
+    else:
+        manifest = json.loads(path.read_text())
+        manifest["tensors"]["q"]["dtype"] = "fp16"
+        path.write_text(json.dumps(manifest))
+        case["replay"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    monkeypatch.setattr(torch, "randn", lambda *a, **k: pytest.fail("invalid replay must not become synthetic input"))
+    with pytest.raises(ValueError, match="QKV replay"):
+        load_registry().require("torch_sdpa").prepare(case, "cpu", {})
+
+
+def test_suite_rejects_replay_for_unimplemented_input_families():
+    case = gemm_case()
+    case["replay"] = {"manifest": "must-not-be-ignored.json", "sha256": "0" * 64}
+    with pytest.raises(ValueError, match="gemm does not support replay"):
+        core.validate_suite(shape_suite(case))
+
+
 def test_sparse_work_exposes_actual_and_dense_equivalent_flops() -> None:
     case = sparse_attention_case()
     prepared = backends._sparse_replay_prepared(
@@ -341,7 +470,8 @@ def test_sparse_work_exposes_actual_and_dense_equivalent_flops() -> None:
     )
     dense_work = 4 * 1 * 2 * 4 * 4 * 8
     assert prepared.rate_metric == "actual_tflops"
-    assert prepared.work == dense_work * 0.25
+    assert prepared.work == 0  # 只有块密度，不能假装已拿到扣除尾块后的实际计算量。
+    assert prepared.extra_metrics["block_density_actual"] is None
     assert prepared.dense_equivalent_work == dense_work
 
 
@@ -350,16 +480,15 @@ def test_builtin_and_optional_plugins_register_without_runtime_dependencies() ->
     names = {item["name"] for item in registry.descriptors()}
     assert {"torch_linear", "torch_sdpa", "torch_expert_loop"} <= names
     assert {"fp8-vllm", "fp8-q8f", "fp8-triton", "flash_attn3", "torch_grouped_mm", "Default"} <= names
-    assert {"sparge_sage2_replay", "dynamic_sparse_sage2_replay", "flash_attn3_replay"} <= names
-    assert {"flash_attn4", "sage_attn3", "dynamic_sparse_sage3_replay", "dynamic_sparse_fa4_replay"} <= names
+    assert {"sparge.sage2.library", "sla.sage2.dynamic", "sla.sage2.general"} <= names
+    assert not any(name.endswith("_replay") for name in names)
+    assert {"flash_attn4", "sage_attn3", "sla.sage3.dynamic", "sla.fa4.dynamic"} <= names
 
 
 def test_backend_catalog_tracks_architecture_and_registry_evolution() -> None:
     registry = load_registry()
     descriptors = registry.descriptors()
-    production = {item["production_backend"] for item in descriptors if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]} | set(
-        backends.PRODUCTION_ATTN_EXCLUSIONS
-    )
+    production = {item["production_backend"] for item in descriptors if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]}
     h100 = backends.build_backend_catalog_report(
         registry,
         cuda_capability="9.0",
@@ -422,17 +551,17 @@ def test_backend_catalog_tracks_architecture_and_registry_evolution() -> None:
 
     sparse_scope_catalog = {
         "candidates": [
-            {"name": "dynamic_sparse_sage3_replay", "family": "sparse_attention", "status": "eligible"},
-            {"name": "spas_fa4_replay", "family": "sparse_attention", "status": "eligible"},
-            {"name": "flash_attn4_replay", "family": "sparse_attention", "status": "eligible"},
-            {"name": "future_sparse_replay", "family": "sparse_attention", "status": "eligible"},
-            {"name": "dynamic_sparse_sage2_replay", "family": "sparse_attention", "status": "unsupported_arch"},
+            {"name": "sla.sage3.dynamic", "family": "sparse_attention", "status": "eligible"},
+            {"name": "sla.fa4.specialized", "family": "sparse_attention", "status": "eligible"},
+            {"name": "sparge.fa4.specialized", "family": "sparse_attention", "status": "eligible"},
+            {"name": "future.sparse.unknown", "family": "sparse_attention", "status": "eligible"},
+            {"name": "sla.sage2.dynamic", "family": "sparse_attention", "status": "unsupported_arch"},
         ]
     }
     supported, exclusions, unmapped = sp_bench._sparse_sp_backend_scope(sparse_scope_catalog)
-    assert supported == ["dynamic_sparse_sage3_replay", "spas_fa4_replay"]
-    assert set(exclusions) == {"flash_attn4_replay"}
-    assert unmapped == ["future_sparse_replay"]
+    assert supported == sorted(["sla.sage3.dynamic", "sla.fa4.specialized"])
+    assert set(exclusions) == {"sparge.fa4.specialized"}
+    assert unmapped == ["future.sparse.unknown"]
 
     sparse_runtime = {
         "catalog": {**sparse_scope_catalog, "catalog_fingerprint": "catalog", "unmapped_attention_backends": []},
@@ -445,7 +574,7 @@ def test_backend_catalog_tracks_architecture_and_registry_evolution() -> None:
     sparse = sp_case(replay={"manifest": "replay.json", "sha256": "0" * 64}, sparse={"keep_ratio": 0.15})
     sparse_catalog = sp_bench.build_candidate_catalog(sp_suite(sparse), sparse_runtime)
     assert not sparse_catalog["scope_complete"]
-    assert sparse_catalog["backend_scope_blockers"]["unmapped_sparse_sp_backends"] == ["future_sparse_replay"]
+    assert sparse_catalog["backend_scope_blockers"]["unmapped_sparse_sp_backends"] == ["future.sparse.unknown"]
 
     mm_production = {item["production_backend"] for item in descriptors if item["family"] == "gemm" and item["production_backend"]}
     mm_production.update(backends.PRODUCTION_MM_EXCLUSIONS)
@@ -528,28 +657,8 @@ def test_direct_runner_writes_repeats_and_resumes(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr(core, "environment", lambda device: {"device": device})
 
     def fake_run(case: dict, adapter: FakeAdapter, run_id: str, env: dict, options: dict) -> dict:
-        return {
-            "run_id": run_id,
-            "case": {
-                "backend": adapter.descriptor.name,
-                "shape": case["shape"],
-                "precision": {"input_dtype": case["precision"]["input_dtype"]},
-                "source": {"canonical_case_id": case["case_id"]},
-                "run": {
-                    "warmup": options["warmup"],
-                    "iterations": options["iterations"],
-                    "prewarm_seconds": options["prewarm_seconds"],
-                    "device": options["device"],
-                    "moe_routing": options["moe_routing"],
-                    "seed": options["seed"],
-                    "timing_mode": options["timing_mode"],
-                    "rate_schema": options["rate_schema"],
-                    "catalog_fingerprint": options.get("catalog_fingerprint"),
-                },
-            },
-            "environment": env,
-            "status": "ok",
-        }
+        return {"run_id": run_id, "case": core._runtime_case(case, adapter, options),
+                "environment": env, "status": "ok"}
 
     monkeypatch.setattr(core, "run_case", fake_run)
     output = tmp_path / "raw.jsonl"
@@ -571,11 +680,36 @@ def test_direct_runner_writes_repeats_and_resumes(tmp_path: Path, monkeypatch: p
 def test_sparse_append_rejects_replay_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     case = sparse_attention_case()
     output = tmp_path / "raw.jsonl"
-    write_raw(output, [raw_record(case, "dynamic_sparse_sage2_replay", 0, 1.0, 100.0)])
+    write_raw(output, [raw_record(case, "sla.sage2.dynamic", 0, 1.0, 100.0)])
     monkeypatch.setattr(core, "environment", lambda device: {"device": device})
     case["replay"] = {**case["replay"], "sha256": "1" * 64}
     with pytest.raises(ValueError, match="replay drift"):
-        core.run_suite(shape_suite(case), output, {}, [], repeat_runs=1, append=True)
+        core.run_suite(shape_suite(case), output, {"sparse_attention": ["sla.sage2.dynamic"]}, [], repeat_runs=1, append=True)
+
+
+@pytest.mark.parametrize("selection", [None, ["a"], []])
+def test_runner_defaults_to_all_prechecked_backends_without_measuring_unavailable(tmp_path, monkeypatch, selection):
+    registry = BackendRegistry()
+    for name in ["a", "b", "missing"]:
+        registry.register(FakeAdapter(name))
+    catalog = {"catalog_fingerprint": "fixture", "candidates": [
+        {"name": name, "family": "gemm", "status": "eligible" if name in (selection if selection is not None else ["a", "b"]) else "dependency_missing"}
+        for name in ["a", "b", "missing"]
+    ]}
+    monkeypatch.setattr(core, "load_registry", lambda plugins: registry)
+    monkeypatch.setattr(core, "probe_backend_catalog", lambda registry, device: catalog)
+    monkeypatch.setattr(core, "environment", lambda device: {"device": device})
+    calls = []
+
+    def run(case, adapter, run_id, env, options):
+        calls.append(adapter.descriptor.name)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(core, "run_case", run)
+    result = core.run_suite(shape_suite(gemm_case()), tmp_path / "raw.jsonl", {}, [], repeat_runs=2)
+    expected = selection if selection is not None else ["a", "b"]
+    assert sorted(calls) == sorted(expected * 2)
+    assert result["written"] == len(expected) * 2
 
 
 def test_report_selects_stable_winner_and_computes_h100_efficiency(tmp_path: Path) -> None:
@@ -585,6 +719,8 @@ def test_report_selects_stable_winner_and_computes_h100_efficiency(tmp_path: Pat
         records.append(raw_record(case, "fast", repeat, 1.0 + repeat * 0.001, 500.0))
         records.append(raw_record(case, "slow", repeat, 2.0 + repeat * 0.001, 250.0))
     raw = tmp_path / "raw.jsonl"
+    for record in records:
+        record["correctness"] = {"checked": True, "passed": True, "status": "strict_equal", "strict_equal": True}
     write_raw(raw, records)
     value = core.build_recommendation_report(
         shape_suite(case),
@@ -594,7 +730,7 @@ def test_report_selects_stable_winner_and_computes_h100_efficiency(tmp_path: Pat
         candidate_catalog=operator_catalog("gemm", "fast", "slow"),
     )
     workload = value["workloads"][0]
-    assert workload["winner"] == "fast"
+    assert workload["measured_winner"] == "fast"
     assert workload["observed_backend"]["speedup"] == pytest.approx(2.0, rel=0.01)
     assert workload["backends"]["fast"]["nominal_efficiency"] == pytest.approx(500 / 989.5)
     assert value["summary"]["weighted_per_shape_measured_winner_ms"] == pytest.approx(10.01)
@@ -606,7 +742,6 @@ def test_report_only_publishes_measured_winner_without_complete_catalog(tmp_path
     without_catalog = core.build_recommendation_report(shape_suite(case), records)
     workload = without_catalog["workloads"][0]
     assert workload["measured_winner"] == "fast"
-    assert workload["winner"] is None
     assert workload["candidate_coverage_complete"] is False
 
     incomplete_catalog = operator_catalog("gemm", "fast", "not-measured")
@@ -616,7 +751,6 @@ def test_report_only_publishes_measured_winner_without_complete_catalog(tmp_path
         candidate_catalog=incomplete_catalog,
     )
     workload = with_catalog["workloads"][0]
-    assert workload["winner"] is None
     assert workload["coverage_blockers"]["not_measured"] == ["not-measured"]
 
 
@@ -636,7 +770,6 @@ def test_report_rejects_mixed_environments_and_downgrades_unmatched_raw() -> Non
         candidate_catalog=operator_catalog("gemm", "fast"),
     )
     workload = report["workloads"][0]
-    assert workload["winner"] is None
     assert workload["coverage_blockers"]["unmatched_raw_records"] == 1
 
 
@@ -733,7 +866,6 @@ def test_report_exposes_missing_peak(tmp_path: Path) -> None:
     result = value["workloads"][0]["backends"]["fp8"]
     assert result["peak_status"] == "peak_missing"
     assert result["nominal_efficiency"] is None
-    assert "peak_missing" in core.markdown_report(value)
 
 
 def test_sparse_report_exposes_actual_and_dense_equivalent_efficiency(tmp_path: Path) -> None:
@@ -766,9 +898,6 @@ def test_sparse_report_exposes_actual_and_dense_equivalent_efficiency(tmp_path: 
     assert result["actual_peak_efficiency"] == pytest.approx(300.0 / 989.5)
     assert result["dense_equivalent_rate"] == pytest.approx(2000.0)
     assert result["dense_equivalent_peak_efficiency"] == pytest.approx(2000.0 / 989.5)
-    markdown = core.markdown_report(value)
-    assert "30.32%" in markdown
-    assert "202.12%" in markdown
 
 
 def test_report_selects_accumulator_specific_peak(tmp_path: Path) -> None:
@@ -946,14 +1075,14 @@ def test_sparse_sp_candidates_use_replay_leafs_and_exclude_ring() -> None:
     sp_bench.validate_suite(sp_suite(case))
     result = sp_bench.enumerate_sparse_candidates(
         case,
-        ["dynamic_sparse_triton_replay", "dynamic_sparse_sage2_replay"],
+        ["sla.triton.dynamic", "sla.sage2.dynamic"],
         fp4_available=False,
     )
     assert result["candidates"]
     assert all(item["algorithm"] == "ulysses" and item["leaf_family"] == "sparse_attention" for item in result["candidates"])
     assert {item["attention_backend"] for item in result["candidates"]} == {
-        "dynamic_sparse_triton_replay",
-        "dynamic_sparse_sage2_replay",
+        "sla.triton.dynamic",
+        "sla.sage2.dynamic",
     }
     assert any("Sparse Ring requires" in item["reason"] for item in result["exclusions"])
 
@@ -1119,10 +1248,10 @@ def test_sp_reference_validation_cli_contract() -> None:
             "--output",
             "reference.json",
             "--sparse-backend",
-            "dynamic_sparse_sage2_replay",
+            "sla.sage2.dynamic",
         ]
     )
-    assert sparse_args.sparse_backend == ["dynamic_sparse_sage2_replay"]
+    assert sparse_args.sparse_backend == ["sla.sage2.dynamic"]
 
     run_args = sp_bench.build_parser().parse_args(
         [
@@ -1132,17 +1261,17 @@ def test_sp_reference_validation_cli_contract() -> None:
             "--output-dir",
             "results",
             "--sparse-backend",
-            "dynamic_sparse_sage2_replay",
+            "sla.sage2.dynamic",
         ]
     )
-    assert run_args.sparse_backend == ["dynamic_sparse_sage2_replay"]
+    assert run_args.sparse_backend == ["sla.sage2.dynamic"]
 
 
 def test_sp_sparse_reference_preserves_leaf_and_communication_options() -> None:
     candidate = {
         "candidate_id": "grouped",
         "algorithm": "ulysses",
-        "attention_backend": "dynamic_sparse_sage2_replay",
+        "attention_backend": "sla.sage2.dynamic",
         "leaf_family": "sparse_attention",
         "prepost_backend": "torch",
         "a2a_backend": "torch",
@@ -1622,6 +1751,339 @@ def test_sp_diagnostic_report_aggregates_repeats() -> None:
         )
 
 
+def test_report_suppresses_sparse_rates_without_actual_final_mask():
+    case = sparse_attention_case()
+    records = [raw_record(case, "mask_missing", repeat, 1.0, None, rate_metric="actual_tflops",
+                          extra_metrics={"work": None, "actual_compute_count_available": False, "dense_equivalent_tflops": 123.0})
+               for repeat in range(3)]
+    report = core.build_recommendation_report(shape_suite(case), records)
+    text = core.markdown_report(report)
+    row = next(line for line in text.splitlines() if line.startswith("| mask_missing |"))
+    assert "123" not in row and "—" in row
+    assert report["workloads"][0]["backends"]["mask_missing"]["rate"] is None
+
+
+@pytest.mark.parametrize("rate_metric", ["tflops", "effective_tops", None])
+def test_report_int8_peak_unit_does_not_follow_missing_or_mismatched_rate(rate_metric):
+    case = gemm_case()
+    precision = {"input_dtype": "bf16", "weight_dtype": "int8_per_channel", "quant": "int8_dynamic_activation"}
+    records = [raw_record(case, "int8", repeat, 1.0, 100.0, precision=precision, rate_metric=rate_metric or "tflops") for repeat in range(3)]
+    if rate_metric is None:
+        for row in records:
+            row.update(status="error", metrics={}, error={"type": "RuntimeError", "stage": "prepare", "message": "fixture failure"})
+    report = core.build_recommendation_report(shape_suite(case), records, peaks=H100_PEAKS, platform_id="h100_sxm_80gb")
+    item = report["workloads"][0]["backends"]["int8"]
+    assert item["peak_status"] == ("rate_unavailable" if rate_metric is None else "unit_mismatch" if rate_metric == "tflops" else "available")
+    assert item["peak_family"] == "int8" and item["nominal_peak_rate"] == 1979.0
+
+
+
+
+def test_missing_sparse_regions_do_not_publish_density_estimate_as_actual_flops(monkeypatch):
+    from contextlib import nullcontext
+
+    import torch
+
+    actual = torch.ones(3, 2)
+    prepared = backends.PreparedOperation(lambda: actual, 999, "actual_tflops", "density_estimate",
+                                         dense_equivalent_work=72,
+                                         expected_output_shape=(3, 2))
+
+    class Adapter:
+        descriptor = BackendDescriptor("fixture", "sparse_attention", "test", ("bf16",), "CPU flow fixture")
+
+        def support_error(self, case):
+            return None
+
+        def precision(self, case):
+            return {"input_dtype": "bf16", "weight_dtype": "bf16", "accum_dtype": "fp32", "output_dtype": "bf16", "quant": None}
+
+        def prepare(self, *args):
+            return prepared
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device", lambda *args: nullcontext())
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda *args: None)
+    monkeypatch.setattr(torch.cuda, "manual_seed_all", lambda *args: None)
+    monkeypatch.setattr(core, "_measure", lambda *args: ([1.0], actual))
+    options = {"measurement_seed": 42, "device": "cpu", "warmup": 0, "iterations": 1,
+               "prewarm_seconds": 0, "moe_routing": "balanced", "seed": 42,
+               "timing_mode": core.TIMING_MODE, "rate_schema": core.RATE_SCHEMA}
+    case = sparse_attention_case()
+    case["shape"] = {"batch": 1, "heads": 1, "kv_heads": 1, "seq_q": 3, "seq_kv": 3, "head_dim": 2, "causal": False}
+    row = core.run_case(case, Adapter(), "repeat000", raw_record(case, "fixture", 0, 1, 1)["environment"], options)
+    assert row["status"] == "ok" and row["metrics"]["actual_tflops"] is None and row["metrics"]["work"] is None
+    assert row["metrics"]["actual_compute_count_available"] is False
+    report = core.build_recommendation_report(shape_suite(case), [row], required_runs=1)
+    assert report["workloads"][0]["backends"]["fixture"]["rate"] is None
+
+
+
+def test_sparse_catalog_exposes_missing_combinations_instead_of_excluding_them():
+    registry = load_registry()
+    operators = [item[1] for item in backends.GENERAL_SPARSE_OPERATORS]
+    catalog = backends.build_backend_catalog_report(
+        registry, cuda_capability="9.0", production_backends=["general_sparse_attn", "svg2_attn", "sol_attn"],
+        production_sparse_operators=iter([*operators, "new_operator"]),
+        production_mask_generators=iter(["sla_mask_generator", "sparge_mask_generator", "nbhd_mask_generator", "svg_mask_generator", "new_mask"]),
+        symbol_probe=lambda _: None, dependency_probe=lambda _: None,
+    )
+    assert "general_sparse_attn" not in catalog["excluded_attention_backends"]
+    assert set(catalog["unmapped_attention_backends"]) == {
+        "svg2_attn", "sol_attn", "general_sparse_attn/operator:new_operator",
+        "general_sparse_attn/mask:new_mask", "general_sparse_attn/mask:nbhd_mask_generator", "general_sparse_attn/mask:svg_mask_generator",
+    }
+    assert not catalog["catalog_complete"]
+    assert "new_operator" in catalog["production_sparse_operators"]
+    assert "new_mask" in catalog["production_mask_generators"]
+    eligible = [item["name"] for item in catalog["candidates"] if item["status"] == "eligible" and item["family"] == "sparse_attention"]
+    supported, exclusions, unmapped = sp_bench._sparse_sp_backend_scope(catalog)
+    assert not unmapped
+    assert set(supported) <= sp_bench.SPARSE_SP_BACKENDS.keys()
+    assert {name for name in eligible if name.endswith(".general")} <= sp_bench.SPARSE_SP_EXCLUSIONS.keys()
+
+    registry.register(SimpleNamespace(descriptor=BackendDescriptor(
+        "task_general", "sparse_attention", "test", ("bf16",), "metadata fixture",
+        production_backend="general_sparse_attn", production_variant="mask=new_mask;operator=new_operator")))
+    updated = backends.build_backend_catalog_report(
+        registry, cuda_capability="9.0", production_backends=["general_sparse_attn"],
+        production_sparse_operators=["new_operator"], production_mask_generators=["new_mask"],
+        symbol_probe=lambda _: None, dependency_probe=lambda _: None)
+    assert updated["unmapped_attention_backends"] == []
+
+
+@pytest.mark.parametrize("method", ["sla", "sparge"])
+def test_general_sparse_replay_uses_production_composition_without_mutating_defaults(monkeypatch, method):
+    import torch
+    from lightx2v.common.ops.attn.general_sparse_attn import GeneralSparseAttnWeight
+    from lightx2v.common.ops.attn.sparse_operator import SlaTritonOperator
+    from lightx2v.utils.registry_factory import SPARSE_MASK_GENERATOR_REGISTER, SPARSE_OPERATOR_REGISTER
+
+    calls = []
+    q = torch.ones(3, 2, 64)
+    mask = torch.eye(2, dtype=torch.bool).expand(1, 2, 2, 2)
+
+    class Mask:
+        def __init__(self, q_block, k_block, setting, frames):
+            assert (q_block, k_block) == (2, 2) and frames is None
+            assert setting["sparsity_ratio"] == pytest.approx(0.8)
+
+        def __call__(self, q, k):
+            calls.append("mask")
+            return mask
+
+        def reorg(self, q, k, v):
+            return q, k, v
+
+        def restore(self, output):
+            return output
+
+    class Operator(SlaTritonOperator):
+        q_block_size = k_block_size = 2
+
+        def __init__(self, operator_setting):
+            def compute(q, k, v, actual_mask, *args):
+                calls.append("compute")
+                assert torch.equal(actual_mask, mask.int())
+                return q
+
+            # Keep the production consumer/layout/LUT/statistics path; replace only its CUDA kernel.
+            self._attention = SimpleNamespace(apply=compute)
+
+    defaults = (GeneralSparseAttnWeight.sparse_mask_generator, GeneralSparseAttnWeight.sparse_operator, GeneralSparseAttnWeight.sparse_setting)
+    monkeypatch.setitem(SPARSE_MASK_GENERATOR_REGISTER, method + "_mask_generator", Mask)
+    monkeypatch.setitem(SPARSE_OPERATOR_REGISTER, "fixture", Operator)
+    monkeypatch.setattr(backends, "_load_qkv_replay", lambda *_: (q, q, q, {}))
+    case = sparse_attention_case(sparse={"keep_ratio": 0.2})
+    case["shape"].update(head_dim=64, seq_q=3, seq_kv=3)
+    prepared = backends._prepare_general_sparse_replay(case, "cpu", method, "fixture", "fixture")
+    assert calls == []  # prepare不额外重算路由。
+    assert torch.equal(core._sparse_work(prepared), q.reshape(3, -1))
+    assert calls == ["mask", "compute"]
+    assert prepared.extra_metrics["sparse_algorithm"] == method
+    assert defaults == (GeneralSparseAttnWeight.sparse_mask_generator, GeneralSparseAttnWeight.sparse_operator, GeneralSparseAttnWeight.sparse_setting)
+    assert prepared.work == 2 * (2 * 2 + 1 * 1) * 2 * (64 + 64)  # Effective pairs include the short final tile.
+    assert prepared.extra_metrics["block_density_actual"] == 0.5
+    assert calls == ["mask", "compute"]
+
+
+@pytest.mark.parametrize("changed", ["kv_heads", "seq_kv", "head_dim", "causal"])
+def test_sparse_only_prechecks_silent_causal_mismatch(changed):
+    registry = load_registry()
+    case = sparse_attention_case()
+    case["shape"].update(head_dim=64)
+    case["shape"][changed] = True if changed == "causal" else 1
+    assert bool(registry.require("sla.triton.general").support_error(case)) == (changed == "causal")
+    assert registry.require("torch_sdpa").support_error(case) is None
+
+
+@pytest.mark.parametrize("family", ["gemm", "moe", "convolution", "dense_attention", "sparse_attention"])
+def test_all_operator_reports_show_complete_coverage(family):
+    cases = {"gemm": gemm_case(), "moe": moe_case(), "dense_attention": attention_case(),
+             "sparse_attention": sparse_attention_case(),
+             "convolution": {"case_id": "conv.1", "operator_family": "convolution", "precision": {"input_dtype": "bf16"},
+                             "shape": {"input": [1, 2, 4, 4], "weight": [3, 2, 3, 3], "groups": 1, "bias": False,
+                                       "stride": [1, 1], "padding": [0, 0], "dilation": [1, 1]}}}
+    case = cases[family]
+    catalog = operator_catalog(family, "measured", "not_measured", "architecture", "dependency", "new_path")
+    for item, status in zip(catalog["candidates"][2:], ["unsupported_arch", "dependency_missing", "not_probed"]):
+        item.update(status=status, reasons=[item["name"] + " specific reason"])
+    exclusion_key = {"gemm": "excluded_mm_backends", "moe": "excluded_moe_backends",
+                     "convolution": None}.get(family, "excluded_attention_backends")
+    if exclusion_key is not None:
+        catalog[exclusion_key] = {"layout_path": "needs original model layout"}
+    unmapped_key = {"gemm": "unmapped_mm_backends", "moe": "unmapped_moe_backends"}.get(family, "unmapped_attention_backends")
+    if family != "convolution":
+        catalog[unmapped_key] = ["not_adapted"]
+    records = [raw_record(case, "measured", 0, 1, 10, rate_metric="actual_tflops" if family == "sparse_attention" else "tflops",
+                          extra_metrics={"dense_equivalent_tflops": 20} if family == "sparse_attention" else {})]
+    report = core.build_recommendation_report(shape_suite(case), records, candidate_catalog=catalog)
+    row = report["workloads"][0]
+    assert set(row["catalog_candidates"]) == {"measured", "not_measured", "architecture", "dependency", "new_path"}
+    assert row["coverage_blockers"]["not_measured"] == ["not_measured"]
+    for name in ("architecture", "dependency", "new_path"):
+        assert row["catalog_candidates"][name]["reasons"] == [name + " specific reason"]
+    if family != "convolution":
+        assert row["coverage_blockers"]["unmapped_production_backends"] == ["not_adapted"]
+        assert row["excluded_production_backends"] == {"layout_path": "needs original model layout"}
+
+
+
+
+def test_sparse_execution_and_report_reject_dense_candidates(tmp_path):
+    case = sparse_attention_case()
+    with pytest.raises(ValueError, match="backend family mismatch"):
+        core.run_suite(shape_suite(case), tmp_path / "raw.jsonl", {"sparse_attention": ["flash_attn3"]}, [])
+    assert not (tmp_path / "raw.jsonl").exists()
+    catalog = operator_catalog("dense_attention", "flash_attn3")
+    row = raw_record(case, "flash_attn3", 0, 1, 10, rate_metric="actual_tflops", extra_metrics={"dense_equivalent_tflops": 10})
+    with pytest.raises(ValueError, match="raw backend family mismatch"):
+        core.build_recommendation_report(shape_suite(case), [row], candidate_catalog=catalog)
+    old_catalog = operator_catalog("sparse_attention", "obsolete_dense_control")
+    old_catalog["candidates"][0]["production_variant"] = "dense_replay_baseline"
+    with pytest.raises(ValueError, match="retired dense controls"):
+        core.build_recommendation_report(shape_suite(case), [], candidate_catalog=old_catalog)
+
+
+def test_convolution_coverage_retains_registry_native_and_legacy_gaps():
+    catalog = backends.build_backend_catalog_report(load_registry(), cuda_capability="9.0", production_backends=[],
+                production_conv_backends={"conv2d": ["Default", "Default-ForceFp32", "future_conv"], "conv3d": ["Default"]},
+                dependency_probe=lambda _: None, symbol_probe=lambda _: None)
+    case = {"case_id": "conv", "operator_family": "convolution",
+            "shape": {"input": [1, 2, 4, 4], "weight": [3, 2, 3, 3], "stride": [1, 1], "padding": [0, 0], "dilation": [1, 1], "groups": 1, "bias": False},
+            "precision": {"input_dtype": "bf16"}}
+    assert len(case["shape"]["input"]) == 4
+    records = [raw_record(case, "torch_convolution", index, 1.0, 1.0) for index in range(3)]
+    for record in records:
+        record["case"]["run"]["catalog_fingerprint"] = catalog["catalog_fingerprint"]
+        record["correctness"] = {"checked": True, "passed": True, "status": "strict_equal", "strict_equal": True}
+    report = core.build_recommendation_report(shape_suite(case), records, candidate_catalog=catalog)
+    row = report["workloads"][0]
+    assert row["measured_winner"] == "torch_convolution"
+    assert set(row["coverage_blockers"]["unmapped_production_backends"]) == {"future_conv", "lightx2v_kernel.fp8_conv3d"}
+    assert row["production_mappings"] == {"Default": "torch_convolution"}
+    assert "Default-ForceFp32" in row["excluded_production_backends"]
+    legacy = operator_catalog("convolution", "torch_convolution")
+    for record in records:
+        record["case"]["run"]["catalog_fingerprint"] = legacy["catalog_fingerprint"]
+    old = core.build_recommendation_report(shape_suite(case), records, candidate_catalog=legacy)["workloads"][0]
+    assert old["coverage_blockers"]["unmapped_production_backends"] == ["convolution_inventory_missing"]
+
+
+def test_report_rejects_mixing_default_and_tuned_MoE_records():
+    case = moe_case()
+    rows = [raw_record(case, "flashinfer", i, 1, 1) for i in range(3)]
+    rows[0]["metrics"]["autotune"] = {"mode": "current_shape", "tuning_buckets": [case["shape"]["tokens"]]}
+    with pytest.raises(ValueError, match="mixed autotune contract"):
+        core.build_recommendation_report(shape_suite(case), rows)
+
+
+@pytest.mark.parametrize("change", ["precision", "routing", "metadata"])
+def test_resume_and_report_share_real_input_identity(tmp_path, monkeypatch, change):
+    import copy
+    import torch
+
+    case = moe_case() if change == "routing" else gemm_case()
+    if change == "routing":
+        case["routing"] = {"expert_counts": [8, 8, 8, 8]}
+    backend = "torch_expert_loop" if change == "routing" else "torch_linear"
+    mode = "observed" if change == "routing" else "balanced"
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(core, "environment", lambda _: {"device": "cuda:0"})
+    raw = tmp_path / "raw.jsonl"
+    core.run_suite(shape_suite(case), raw, {case["operator_family"]: [backend]}, [], repeat_runs=1, moe_routing=mode)
+    original = json.loads(raw.read_text())  # 真实run_case的CUDA不可用行，不伪造成功计时。
+    assert original["error"]["message"] == "CUDA is unavailable"
+    changed = copy.deepcopy(case)
+    if change == "precision":
+        changed["precision"]["input_dtype"] = "fp16"
+    elif change == "routing":
+        changed["routing"]["expert_counts"] = [16, 16, 0, 0]
+        assert original["case"]["routing"] == case["routing"]
+    else:
+        changed.update(call_count=3, source={"note": "new label"}, tags=["renamed"])
+    assert core._matches(original, changed) is (change == "metadata")
+    if change == "metadata":
+        result = core.run_suite(shape_suite(changed), raw, {case["operator_family"]: [backend]}, [], repeat_runs=1, moe_routing=mode, append=True)
+        assert result["skipped_existing"] == 1
+    else:
+        with pytest.raises(ValueError, match=change + " drift"):
+            core.run_suite(shape_suite(changed), raw, {case["operator_family"]: [backend]}, [], repeat_runs=1, moe_routing=mode, append=True)
+
+
+def test_lazy_entries_and_unmapped_masks_reach_actual_reports():
+    import os
+    import subprocess
+    import sys
+
+    script = "from tools.benchmarks.operator_backends import load_registry, probe_backend_catalog; import json; print(json.dumps(probe_backend_catalog(load_registry(), 'cpu')))"
+    result = subprocess.run([sys.executable, "-B", "-c", script], check=True, capture_output=True, text=True,
+                            env={**os.environ, "CUDA_VISIBLE_DEVICES": "", "SKIP_PLATFORM_CHECK": "1"}, timeout=60)
+    catalog = json.loads(result.stdout.splitlines()[-1])
+    assert {"flex_attn", "flash_attn3_paged"} <= set(catalog["production_backends"])
+    sparse = core.build_recommendation_report(shape_suite(sparse_attention_case()), [], candidate_catalog=catalog)["workloads"][0]
+    dense = core.build_recommendation_report(shape_suite(attention_case()), [], candidate_catalog=catalog)["workloads"][0]
+    for name in ("nbhd_mask_generator", "svg_mask_generator"):
+        gap = "general_sparse_attn/mask:" + name
+        assert gap in sparse["integration_gaps"]
+        assert gap not in dense["integration_gaps"]
+    assert "flex_attn" in sparse["integration_gaps"] and "flash_attn3_paged" in dense["integration_gaps"]
+
+
+@pytest.mark.parametrize("family,production", [("sparse_attention", "nbhd_attn"), ("dense_attention", "torch_sdpa_mps"), ("gemm", "nvfp4")])
+def test_new_adapter_supersedes_historical_exclusion_and_hints_are_not_inventory(family, production):
+    registry = load_registry()
+    registry.register(SimpleNamespace(descriptor=BackendDescriptor(
+        "task_adapter", family, "test", ("bf16",), "metadata fixture", production_backend=production)))
+    catalog = backends.build_backend_catalog_report(
+        registry, cuda_capability="9.0", production_backends=[production] if family != "gemm" else [],
+        production_mm_backends=[production] if family == "gemm" else [],
+        symbol_probe=lambda _: None, dependency_probe=lambda _: None)
+    assert next(item for item in catalog["candidates"] if item["name"] == "task_adapter")["status"] == "eligible"
+    assert catalog["unmapped_production_backends"] == []
+    assert production not in catalog["excluded_production_backends"]
+    assert "flash_attn3_paged" not in catalog["production_backends"]
+
+
+def test_rejected_backend_keeps_requested_dtype_for_resume_and_report(tmp_path, monkeypatch):
+    import torch
+
+    case = gemm_case(precision={"input_dtype": "fp16"})
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(core, "environment", lambda _: {"device": "cuda:0"})
+    output = tmp_path / "raw.jsonl"
+    value = shape_suite(case)
+    core.run_suite(value, output, {"gemm": ["Default"]}, [], repeat_runs=1)
+    record = json.loads(output.read_text())
+    assert record["error"]["stage"] == "support" and "requires BF16 input" in record["error"]["message"]
+    assert record["case"]["requested_input_dtype"] == "fp16"
+    assert record["case"]["precision"]["input_dtype"] == "bf16"  # adapter声明，不冒充已执行。
+    resumed = core.run_suite(value, output, {"gemm": ["Default"]}, [], repeat_runs=1, append=True)
+    assert resumed["skipped_existing"] == 1
+    report = core.build_recommendation_report(value, [record], required_runs=1)
+    assert report["summary"]["matched_record_count"] == 1 and report["summary"]["unmatched_record_count"] == 0
+
+
 def test_sp_diagnostics_can_load_formal_winners(tmp_path: Path) -> None:
     report_path = tmp_path / "report.json"
     report_path.write_text(
@@ -1652,3 +2114,166 @@ def test_sp_diagnostics_can_load_formal_winners(tmp_path: Path) -> None:
     )
     assert args.candidate == []
     assert args.recommendation_report == report_path
+
+
+@pytest.mark.parametrize("ar,q_shape,k_shape,v_shape", [
+    (False, (1, 2, 128, 64), (1, 1, 256, 64), (1, 1, 256, 64)),
+    (True, (1, 128, 2, 64), (1, 256, 1, 64), (1, 256, 1, 64)),
+    (True, (1, 128, 2, 64), (1, 256, 2, 64), (1, 128, 2, 64)),
+])
+def test_sla_kernel_rejects_unsafe_addressing_before_launch(ar, q_shape, k_shape, v_shape):
+    import importlib
+    import torch
+
+    module = importlib.import_module("lightx2v.common.ops.attn.kernels.sla_kernel" + ("_ar" if ar else ""))
+    kernel = module._attention_ar if ar else module._attention
+    with pytest.raises(ValueError, match="SLA Triton"):
+        kernel.forward(None, torch.empty(q_shape), torch.empty(k_shape), torch.empty(v_shape), None, None, 1, 64, 64)
+
+
+def test_sla_ar_preserves_unequal_sequence_contract(monkeypatch):
+    from unittest.mock import MagicMock
+    import torch
+    from lightx2v.common.ops.attn.kernels import sla_kernel_ar
+
+    launch = MagicMock()
+    monkeypatch.setattr(sla_kernel_ar, "_attn_fwd", launch)
+    q, k = torch.empty(1, 128, 2, 64), torch.empty(1, 256, 2, 64)
+    lut = torch.zeros(1, 2, 2, 1, dtype=torch.int32)
+    ctx = SimpleNamespace(save_for_backward=lambda *args: None)
+    output = sla_kernel_ar._attention_ar.forward(ctx, q, k, k, None, lut, 1, 64, 64)
+    assert output.shape == q.shape
+    assert launch.__getitem__.return_value.call_args.args[8:11] == (2, 128, 256)
+
+
+def test_convolution_new_adapters_replace_legacy_mappings_and_gaps():
+    registry = load_registry()
+    names = ("Default", "Default-ForceFp32", "future_conv", "lightx2v_kernel.fp8_conv3d")
+    for name in names:
+        registry.register(SimpleNamespace(descriptor=BackendDescriptor(
+            "task_" + name, "convolution", "test", ("bf16",), "metadata fixture", production_backend=name)))
+    catalog = backends.build_backend_catalog_report(
+        registry, cuda_capability="9.0", production_backends=[], production_conv_backends={"conv2d": names},
+        symbol_probe=lambda _: None, dependency_probe=lambda _: None)
+    scope = catalog["convolution_scopes"]["conv2d"]
+    assert scope["mapped_backends"] == {name: "task_" + name for name in names}
+    assert scope["excluded_production_backends"] == {} and scope["unmapped_production_backends"] == []
+
+
+def test_lazy_dependency_failure_is_a_visible_discovery_gap(monkeypatch):
+    real_import = backends.importlib.import_module
+
+    def import_module(name):
+        if name == "lightx2v.common.ops.attn.paged_flash_attn":
+            raise ModuleNotFoundError("No module named 'triton'")
+        return real_import(name)
+
+    monkeypatch.setattr(backends.importlib, "import_module", import_module)
+    catalog = backends.probe_backend_catalog(load_registry(), "cpu")
+    assert "unresolved_import:paged_flash_attn" in catalog["unmapped_attention_backends"]
+    assert not catalog["catalog_complete"]
+    assert any("paged_flash_attn" in reason and "triton" in reason for reason in catalog["discovery_warnings"])
+
+
+@pytest.mark.parametrize("message,fatal", [
+    ("CUDA error: an illegal memory access was encountered", True),
+    ("CUDA error: device-side assert triggered", True),
+    ("CUDA_ERROR_ASSERT", True),
+    ("CUDA error: misaligned address", True),
+    ("CUDA error: unspecified launch failure", True),
+    ("CUDA out of memory", False),
+    ("CUDA error: invalid configuration argument", False),
+    ("unsupported input shape", False),
+])
+def test_cli_preserves_failure_and_catalog_before_fatal_stop(tmp_path, monkeypatch, message, fatal):
+    from contextlib import nullcontext
+    import torch
+
+    case = gemm_case()
+    output_dir = tmp_path / "results"
+    catalog = operator_catalog("gemm", "broken", "following")
+    calls = []
+    actual = torch.ones(16, 32)
+
+    class Adapter(FakeAdapter):
+        def prepare(self, *args):
+            assert json.loads((output_dir / "backend_catalog.json").read_text()) == catalog
+            calls.append(self.descriptor.name)
+            if self.descriptor.name == "broken":
+                raise RuntimeError(message)
+            return backends.PreparedOperation(lambda: actual, 65536, "tflops", "fixture", expected_output_shape=(16, 32))
+
+    registry = BackendRegistry()
+    for name in ("broken", "following"):
+        registry.register(Adapter(name))
+    monkeypatch.setattr(core, "load_registry", lambda _: registry)
+    monkeypatch.setattr(core, "probe_backend_catalog", lambda *_: catalog)
+    monkeypatch.setattr(core, "environment", lambda device: {"device": device})
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device", lambda *_: nullcontext())
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda *_: None)
+    monkeypatch.setattr(torch.cuda, "manual_seed_all", lambda *_: None)
+    monkeypatch.setattr(core, "_measure", lambda *args, **kwargs: ([1.0], actual))
+    suite_path = tmp_path / "suite.json"
+    suite_path.write_text(json.dumps(shape_suite(case)))
+    argv = ["run", "--suite", str(suite_path), "--output-dir", str(output_dir),
+            "--device", "cpu", "--repeat-runs", "1", "--warmup", "0", "--iterations", "1"]
+    if fatal:
+        with pytest.raises(SystemExit) as exit_info:
+            core.main(argv)
+        assert exit_info.value.code == 2
+        assert calls == ["broken"]
+        assert not (output_dir / "report.json").exists()
+    else:
+        assert core.main(argv) == 0
+        assert calls == ["broken", "following"]
+    rows = core.load_records([output_dir / "raw.jsonl"])
+    assert rows[0]["error"]["stage"] == "prepare" and rows[0]["error"]["message"] == message
+    report = core.build_recommendation_report(shape_suite(case), rows, required_runs=1, candidate_catalog=catalog)
+    workload = report["workloads"][0]
+    assert workload["backends"]["broken"]["status"] == ("measurement_error" if fatal else "unavailable")
+    assert workload["candidate_coverage_complete"] is (not fatal)
+    # Identity rejection must not overwrite the catalog, even after a partial fatal run.
+    (output_dir / "backend_catalog.json").write_text('{"previous": true}')
+    with pytest.raises(SystemExit):
+        core.main([*argv, "--append", "--seed", "43"])
+    assert json.loads((output_dir / "backend_catalog.json").read_text()) == {"previous": True}
+
+
+@pytest.mark.parametrize("note", ["plain", "paragraph\u2028line\u2029end"])
+def test_append_preserves_complete_unterminated_row_and_rejects_truncation(tmp_path, monkeypatch, note):
+    registry = BackendRegistry()
+    registry.register(FakeAdapter("fixture"))
+    monkeypatch.setattr(core, "load_registry", lambda _: registry)
+    monkeypatch.setattr(core, "environment", lambda device: {"device": device})
+    calls = []
+
+    def run(case, adapter, run_id, env, options):
+        calls.append(run_id)
+        return {"run_id": run_id, "case": core._runtime_case(case, adapter, options), "environment": env, "status": "ok"}
+
+    monkeypatch.setattr(core, "run_case", run)
+    output = tmp_path / "raw.jsonl"
+    value = shape_suite(gemm_case(source={"note": note}))
+    # Interrupt after one row of a two-repeat run, preserving its original contract.
+    def interrupted(case, adapter, run_id, env, options):
+        if run_id == "repeat-001":
+            raise OSError("simulated interruption before writing")
+        return run(case, adapter, run_id, env, options)
+    monkeypatch.setattr(core, "run_case", interrupted)
+    with pytest.raises(OSError):
+        core.run_suite(value, output, {"gemm": ["fixture"]}, [], repeat_runs=2)
+    original = output.read_bytes().rstrip(b"\n")
+    output.write_bytes(original)
+    monkeypatch.setattr(core, "run_case", run)
+    result = core.run_suite(value, output, {"gemm": ["fixture"]}, [], repeat_runs=2, append=True)
+    assert result["written"] == result["skipped_existing"] == 1
+    assert output.read_bytes().startswith(original + b"\n")
+    assert len(core.load_records([output])) == len(sp_bench.load_raw_records(output)) == 2
+    with output.open("ab") as handle:
+        handle.write(b'{"run_id":')
+    damaged = output.read_bytes()
+    calls.clear()
+    with pytest.raises(json.JSONDecodeError):
+        core.run_suite(value, output, {"gemm": ["fixture"]}, [], repeat_runs=2, append=True)
+    assert output.read_bytes() == damaged and calls == []

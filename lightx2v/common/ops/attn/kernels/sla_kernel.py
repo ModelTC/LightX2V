@@ -253,6 +253,9 @@ def _attn_bwd_dkdv(
 class _attention(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v, k_block_id, lut, topk, BLOCK_M, BLOCK_N, qk_scale=None):
+        # The kernel uses Q's H/L/D to address all three operands.
+        if q.shape != k.shape or q.shape != v.shape:
+            raise ValueError("SLA Triton requires identical Q/K/V shapes")
         assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous()
         assert k_block_id.is_contiguous() and lut.is_contiguous()
 

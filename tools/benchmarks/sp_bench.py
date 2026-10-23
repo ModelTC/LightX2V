@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.benchmarks.operator_backends import load_registry, probe_backend_catalog
+from tools.benchmarks.operator_backends import GENERAL_SPARSE_OPERATORS, load_registry, probe_backend_catalog
 from tools.benchmarks.operator_bench import environment, normalize_dtype, require, write_json
 
 SUITE_KIND = "sp_attention_benchmark_shape_suite_v1"
@@ -32,28 +32,32 @@ SP_REFERENCE_TOLERANCES = {
     "torch_sdpa": {"bf16": 0.02, "fp16": 0.01, "kind": "exact"},
 }
 SPARSE_SP_BACKENDS = {
-    "dynamic_sparse_triton_replay": {"factory": "dynamic", "operator": "triton"},
-    "dynamic_sparse_sage2_replay": {"factory": "dynamic", "operator": "sage2"},
-    "dynamic_sparse_sage3_replay": {"factory": "dynamic", "operator": "sage3"},
-    "dynamic_sparse_fa4_replay": {"factory": "dynamic", "operator": "fa4"},
-    "sparge_sage2_replay": {"factory": "sparge"},
-    "spas_sage2_replay": {
+    "sla.triton.dynamic": {"factory": "dynamic", "operator": "triton"},
+    "sla.sage2.dynamic": {"factory": "dynamic", "operator": "sage2"},
+    "sla.sage3.dynamic": {"factory": "dynamic", "operator": "sage3"},
+    "sla.fa4.dynamic": {"factory": "dynamic", "operator": "fa4"},
+    "sparge.sage2.library": {"factory": "sparge"},
+    "sla.sage2.specialized": {
         "factory": "class",
         "symbol": "lightx2v.common.ops.attn.sage_attn:SparseSageAttn2Weight",
     },
-    "spas_sage3_replay": {
+    "sla.sage3.specialized": {
         "factory": "class",
         "symbol": "lightx2v.common.ops.attn.sage_attn:SparseSageAttn3Weight",
     },
-    "spas_fa4_replay": {
+    "sla.fa4.specialized": {
         "factory": "class",
         "symbol": "lightx2v.common.ops.attn.flash_attn:SparseFlashAttn4Weight",
     },
 }
 SPARSE_SP_EXCLUSIONS = {
-    "flash_attn3_replay": "dense replay baseline; use a dense SP suite for distributed backend comparison",
-    "flash_attn4_replay": "dense replay baseline; use a dense SP suite for distributed backend comparison",
-    "sage_attn3_replay": "dense replay baseline; use a dense SP suite for distributed backend comparison",
+    **{f"{method}.{label}.general": "new GeneralSparse single-card path; SP semantics/reference validation pending"
+       for method in ("sla", "sparge") for label, *_ in GENERAL_SPARSE_OPERATORS},
+    "sla.triton_ar.dynamic": "new single-card AR path; SP semantics/reference validation pending",
+    "sla.magi.dynamic": "new single-card Magi path; SP semantics/reference validation pending",
+    "sparge.sage2.specialized": "new single-card Sparge candidate; SP semantics/reference validation pending",
+    "sparge.sage3.specialized": "new single-card Sparge candidate; SP semantics/reference validation pending",
+    "sparge.fa4.specialized": "new single-card Sparge candidate; SP semantics/reference validation pending",
 }
 NCCL_ENV_NAMES = (
     "NCCL_ALGO",
@@ -634,13 +638,22 @@ def build_candidate_catalog(
     dependency_blockers = sorted(
         item["name"] for item in backend_catalog.get("candidates", []) if item.get("family") == leaf_family and item.get("status") in {"cuda_unavailable", "dependency_missing"}
     )
-    unmapped_backends = sorted(backend_catalog.get("unmapped_attention_backends", []))
+    attention_scope = backend_catalog.get("attention_scopes", {}).get(leaf_family)
+    unmapped_backends = sorted(attention_scope["unmapped_production_backends"] if attention_scope is not None else backend_catalog.get("unmapped_attention_backends", []))
     sparse_sp_unmapped = sorted(runtime.get("unmapped_sparse_sp_backends", [])) if sparse_mode else []
-    backend_scope_complete = not dependency_blockers and not unmapped_backends and not sparse_sp_unmapped
+    leaf_catalog = {"family": leaf_family,
+                    "candidates": [item for item in backend_catalog.get("candidates", []) if item.get("family") == leaf_family],
+                    "excluded_production_backends": (attention_scope or {}).get("excluded_production_backends", backend_catalog.get("excluded_attention_backends", {})),
+                    "integration_gaps": {name: backend_catalog.get("attention_integration_gaps", {}).get(name, "生产入口缺bench/SP合同；核对输入、依赖及参考后接入。") for name in unmapped_backends}}
+    if sparse_mode:
+        leaf_catalog["excluded_production_backends"] = {**leaf_catalog["excluded_production_backends"], **backend_catalog.get("mask_input_requirements", {})}
+    pending_sparse = runtime.get("sparse_sp_exclusions", {}) if sparse_mode else {}
+    backend_scope_complete = not dependency_blockers and not unmapped_backends and not sparse_sp_unmapped and not pending_sparse
     backend_scope_blockers = {
         "dependency_missing": dependency_blockers,
         "unmapped_production_backends": unmapped_backends,
         "unmapped_sparse_sp_backends": sparse_sp_unmapped,
+        "pending_sparse_sp_backends": sorted(pending_sparse),
     }
     if sparse_mode:
         all_sparse_backends = list(runtime["sparse_backends"])
@@ -658,6 +671,7 @@ def build_candidate_catalog(
         identity = {
             "backend_catalog_fingerprint": runtime["catalog"]["catalog_fingerprint"],
             "leaf_family": leaf_family,
+            "leaf_catalog": leaf_catalog,
             "backend_scope_complete": backend_scope_complete,
             "backend_scope_blockers": backend_scope_blockers,
             "sparse_backends": sparse_backends,
@@ -691,6 +705,7 @@ def build_candidate_catalog(
     identity = {
         "backend_catalog_fingerprint": runtime["catalog"]["catalog_fingerprint"],
         "leaf_family": leaf_family,
+        "leaf_catalog": leaf_catalog,
         "backend_scope_complete": backend_scope_complete,
         "backend_scope_blockers": backend_scope_blockers,
         "dense_backends": dense_backends,
@@ -1837,7 +1852,7 @@ def load_raw_records(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     records = []
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         if not line.strip():
             continue
         record = json.loads(line)

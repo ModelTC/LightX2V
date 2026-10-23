@@ -14,6 +14,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
+from tools.compute_stats import attention_flops, convolution_flops, gemm_flops, routed_matmul_flops
+
 
 @dataclass(frozen=True)
 class BackendDescriptor:
@@ -47,6 +49,7 @@ class PreparedOperation:
     dense_equivalent_work_definition: str | None = None
     extra_metrics: dict[str, Any] = field(default_factory=dict)
     correctness: dict[str, Any] | None = None
+    expected_output_shape: tuple[int, ...] | None = None
 
 
 class BackendAdapter(Protocol):
@@ -84,20 +87,14 @@ class BackendRegistry:
 
 TORCH_DTYPES = ("bf16", "fp16", "fp32")
 
-PRODUCTION_ATTN_EXCLUSIONS = {
-    "draft_attn": "model-specific draft attention",
-    "general_sparse_attn": "composite sparse policy; benchmark its operator variants directly",
-    "nbhd_attn": "model-specific sparse layout",
-    "nbhd_attn_flashinfer": "model-specific sparse layout",
-    "radial_attn": "model-specific sparse layout",
-    "rainfusion_attn": "composite sparse policy",
-    "ring": "distributed attention is outside the single-card scope",
-    "sage_attn2_k_int8_v_fp8": "mixed-precision specialized path requires a separate precision contract",
-    "sol_attn": "composite runtime selector; benchmark its leaf backends directly",
-    "svg2_attn": "model-specific sparse layout",
-    "svg_attn": "model-specific sparse layout",
-    "ulysses": "distributed attention is outside the single-card scope",
-    "ulysses-4090": "distributed attention is outside the single-card scope",
+# Classification hints for entries without adapters; descriptors take precedence.
+ATTENTION_SCOPE_HINTS = {
+    "dense_attention": ("torch_sdpa_mps", "sage_attn2_k_int8_v_fp8", "flash_attn3_paged"),
+    "sparse_attention": (
+        "draft_attn", "flex_attn", "nbhd_attn", "nbhd_attn_flashinfer", "radial_attn",
+        "rainfusion_attn", "svg_attn", "svg2_attn", "sol_attn",
+    ),
+    "sp_attention": ("ring", "ulysses", "ulysses-4090"),
 }
 
 PRODUCTION_MM_EXCLUSIONS = {
@@ -180,7 +177,8 @@ class TorchLinearAdapter:
         dtype = _dtype(torch, str(case["precision"]["input_dtype"]))
         m, n, k = int(shape["m"]), int(shape["n"]), int(shape["k"])
         a = torch.randn((m, k), device=device, dtype=dtype)
-        b = torch.randn((k, n), device=device, dtype=dtype)
+        weight = torch.randn((n, k), device=device, dtype=dtype)
+        b = weight.t()
         if shape["bias"]:
             bias = torch.randn((n,), device=device, dtype=dtype)
 
@@ -191,7 +189,41 @@ class TorchLinearAdapter:
             def fn() -> Any:
                 return torch.mm(a, b)
 
-        return PreparedOperation(fn=fn, work=2 * m * n * k, rate_metric="tflops", work_definition="2*m*n*k")
+        return PreparedOperation(fn=fn, work=gemm_flops(m, n, k), rate_metric="tflops", work_definition="2*m*n*k", expected_output_shape=(m, n))
+
+
+class TorchConvolutionAdapter:
+    descriptor = BackendDescriptor("torch_convolution", "convolution", "builtin_torch", TORCH_DTYPES, "torch conv2d/conv3d; same F.conv path as production Default")
+
+    def support_error(self, case):
+        return None if case["precision"]["input_dtype"] in self.descriptor.input_dtypes else "unsupported convolution dtype"
+
+    def precision(self, case):
+        return _torch_precision(case)
+
+    def prepare(self, case, device, options):
+        import torch
+        import torch.nn.functional as functional
+
+        shape = case["shape"]
+        dtype = _dtype(torch, case["precision"]["input_dtype"])
+        x = torch.randn(shape["input"], device=device, dtype=dtype)
+        weight = torch.randn(shape["weight"], device=device, dtype=dtype)
+        bias = torch.randn(shape["weight"][0], device=device, dtype=dtype) if shape["bias"] else None
+        conv = functional.conv2d if x.ndim == 4 else functional.conv3d
+        kwargs = {key: shape[key] for key in ("stride", "padding", "dilation", "groups")}
+
+        def fn():
+            return conv(x, weight, bias, **kwargs)
+
+        output = fn()
+        return PreparedOperation(
+            fn=fn,
+            work=convolution_flops(output.numel(), weight.shape),
+            expected_output_shape=tuple(output.shape),
+            rate_metric="tflops",
+            work_definition="2*output_elements*weight_channels_per_group*kernel_volume; includes padded MACs; excludes bias",
+        )
 
 
 class TorchSDPAAdapter:
@@ -215,25 +247,13 @@ class TorchSDPAAdapter:
         import torch
         import torch.nn.functional as functional
 
-        shape = case["shape"]
-        dtype = _dtype(torch, str(case["precision"]["input_dtype"]))
-        batch = int(shape["batch"])
-        seq_q, seq_kv = int(shape["seq_q"]), int(shape["seq_kv"])
-        heads, kv_heads, head_dim = int(shape["heads"]), int(shape["kv_heads"]), int(shape["head_dim"])
-        q = torch.randn((batch, heads, seq_q, head_dim), device=device, dtype=dtype)
-        k = torch.randn((batch, kv_heads, seq_kv, head_dim), device=device, dtype=dtype)
-        v = torch.randn((batch, kv_heads, seq_kv, head_dim), device=device, dtype=dtype)
-        kwargs = {"enable_gqa": True} if heads != kv_heads else {}
+        q, k, v = _attention_tensors(case, device, torch)
+        kwargs = {"enable_gqa": True} if q.shape[2] != k.shape[2] else {}
 
         def fn() -> Any:
-            return functional.scaled_dot_product_attention(q, k, v, is_causal=bool(shape["causal"]), **kwargs)
+            return functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=bool(case["shape"]["causal"]), **kwargs).transpose(1, 2)
 
-        return PreparedOperation(
-            fn=fn,
-            work=4 * batch * heads * seq_q * seq_kv * head_dim,
-            rate_metric="effective_tflops",
-            work_definition="4*batch*heads*seq_q*seq_kv*head_dim",
-        )
+        return _attention_prepared(case, fn, "torch_sdpa")
 
 
 def _observed_routes(expert_counts: list[int], tokens: int, top_k: int, device: str, torch: Any) -> Any:
@@ -292,13 +312,82 @@ def _routing(case: dict[str, Any], device: str, distribution: str, torch: Any) -
     return selected, scales, metrics
 
 
+def _moe_operands(case, device, options, torch):
+    """Use task-provided operands, or explicitly prepare a synthetic workload."""
+    inputs = options.get("moe_inputs")
+    if inputs is not None:
+        if not case.get("replay"):
+            raise ValueError("Fixed MoE inputs require a replay identity in the suite")
+        counts = torch.bincount(inputs["expert_ids"].reshape(-1).long(), minlength=case["shape"]["num_experts"])
+        metrics = {"expert_counts": counts.cpu().tolist(), "active_experts": int((counts > 0).sum()),
+                   "routing_distribution": "captured_inputs", "capture_provenance": case.get("source", {})}
+        return inputs, metrics
+    if case.get("replay"):
+        raise ValueError("MoE replay requires a task-local plugin supplying options['moe_inputs']")
+    shape = case["shape"]
+    dtype = _dtype(torch, case["precision"]["input_dtype"])
+    tokens, hidden = shape["tokens"], shape["hidden_size"]
+    experts, intermediate = shape["num_experts"], shape["intermediate_size"]
+    fc1_size = intermediate if shape["activation"] == "gelu" else 2 * intermediate
+    x = torch.randn((tokens, hidden), device=device, dtype=dtype)
+    fc1 = torch.randn((experts, fc1_size, hidden), device=device, dtype=dtype) * 0.02
+    fc2 = torch.randn((experts, hidden, intermediate), device=device, dtype=dtype) * 0.02
+    b1 = torch.randn((experts, fc1_size), device=device, dtype=dtype) * 0.02 if shape["expert_bias"] else None
+    b2 = torch.randn((experts, hidden), device=device, dtype=dtype) * 0.02 if shape["expert_bias"] else None
+    selected, scales, metrics = _routing(case, device, options.get("moe_routing") or "balanced", torch)
+    return {"activation": x, "fc1": fc1, "fc2": fc2, "fc1_bias": b1, "fc2_bias": b2,
+            "expert_ids": selected, "scales": scales}, metrics
+
+
+def _moe_prepared(case, device, options, backend):
+    """Prepare the production MoE on fixed operands; tune only before timing."""
+    import torch
+
+    from lightx2v.common.ops.moe.fused_moe import create_local_fused_moe
+
+    inputs, metrics = _moe_operands(case, device, options, torch)
+    activation = case["shape"]["activation"]
+    fc1, gate = inputs["fc1"], inputs.get("fc1_gate")
+    if backend == "flashinfer" and gate is not None:
+        # FlashInfer生产factory接受packed SwiGLU：value在前，SiLU gate在后。
+        fc1, gate = torch.cat((fc1, gate), dim=1), None
+    op = create_local_fused_moe(backend, fc1, inputs["fc2"], activation,
+                                fc1_bias=inputs.get("fc1_bias"), fc2_bias=inputs.get("fc2_bias"),
+                                fc1_gate_weight=gate)
+    x, expert_ids, scales = inputs["activation"], inputs["expert_ids"], inputs["scales"]
+    fn = lambda: op.apply(x, expert_ids, scales)
+    if backend == "flashinfer":
+        from flashinfer import autotune
+
+        # 调优和调用均固定当前bucket，避免库的共享配置被其他token测例改变。
+        tokens = x.shape[0]
+        op.tune_max_num_tokens = tokens
+        with autotune(tuning_buckets=(tokens,)):
+            op.apply(x, expert_ids, scales)
+        def fn():
+            with autotune(False, tuning_buckets=(tokens,)):
+                return op.apply(x, expert_ids, scales)
+
+        metrics["autotune"] = {"mode": "current_shape", "tune_max_num_tokens": tokens,
+                               "tuning_buckets": [tokens], "inference_tuning_buckets": [tokens]}
+    return PreparedOperation(
+        fn=fn,
+        work=routed_matmul_flops(expert_ids.numel(), op.route_matmul_shapes()),
+        rate_metric="effective_tflops",
+        work_definition="actual_routes_fc1_fc2_gate_matmul_only",
+        extra_metrics=metrics,
+        expected_output_shape=tuple(x.shape),
+    )
+
+
 class TorchExpertLoopAdapter:
     descriptor = BackendDescriptor(
         name="torch_expert_loop",
         family="moe",
         plugin="builtin_torch",
-        input_dtypes=("bf16", "fp16"),
-        description="portable per-expert Torch linear baseline",
+        input_dtypes=TORCH_DTYPES,
+        description="production per-expert Torch MoE",
+        production_backend="torch_expert_loop",
     )
 
     def support_error(self, case: dict[str, Any]) -> str | None:
@@ -309,54 +398,27 @@ class TorchExpertLoopAdapter:
         return _torch_precision(case)
 
     def prepare(self, case: dict[str, Any], device: str, options: dict[str, Any]) -> PreparedOperation:
-        import torch
-        import torch.nn.functional as functional
+        return _moe_prepared(case, device, options, "torch_expert_loop")
 
-        shape = case["shape"]
-        dtype = _dtype(torch, str(case["precision"]["input_dtype"]))
-        tokens = int(shape["tokens"])
-        hidden = int(shape["hidden_size"])
-        intermediate = int(shape["intermediate_size"])
-        experts, top_k = int(shape["num_experts"]), int(shape["top_k"])
-        fc1_size = intermediate if shape["activation"] == "gelu" else 2 * intermediate
-        inputs = torch.randn((tokens, hidden), device=device, dtype=dtype)
-        fc1 = torch.randn((experts, fc1_size, hidden), device=device, dtype=dtype) * 0.02
-        fc2 = torch.randn((experts, hidden, intermediate), device=device, dtype=dtype) * 0.02
-        if shape["expert_bias"]:
-            fc1_bias = torch.randn((experts, fc1_size), device=device, dtype=dtype) * 0.02
-            fc2_bias = torch.randn((experts, hidden), device=device, dtype=dtype) * 0.02
-        else:
-            fc1_bias = fc2_bias = None
-        selected, scales, routing_metrics = _routing(case, device, str(options.get("moe_routing") or "balanced"), torch)
-        output = torch.empty_like(inputs)
 
-        def fn() -> Any:
-            output.zero_()
-            for expert in range(experts):
-                positions = (selected == expert).nonzero(as_tuple=False)
-                if not positions.numel():
-                    continue
-                token_indexes, route_indexes = positions[:, 0], positions[:, 1]
-                value = functional.linear(inputs[token_indexes], fc1[expert], None if fc1_bias is None else fc1_bias[expert])
-                if shape["activation"] == "gelu":
-                    value = functional.gelu(value)
-                else:
-                    value, gate = value.chunk(2, dim=-1)
-                    value = value * functional.silu(gate)
-                value = functional.linear(value, fc2[expert], None if fc2_bias is None else fc2_bias[expert])
-                value = value * scales[token_indexes, route_indexes].to(dtype).unsqueeze(1)
-                output.index_add_(0, token_indexes, value)
-            return output
+class FlashInferMoEAdapter:
+    descriptor = BackendDescriptor(
+        name="flashinfer", family="moe", plugin="lightx2v_fused_moe_registry",
+        input_dtypes=("bf16", "fp16"), description="production FlashInfer CUTLASS MoE",
+        optional_dependencies=("flashinfer",), production_backend="flashinfer",
+        probe_symbols=("lightx2v.common.ops.moe.fused_moe:_flashinfer_cutlass_fused_moe",
+                       "lightx2v.common.ops.moe.fused_moe:_FlashInferActivationType"),
+    )
 
-        routes = tokens * top_k
-        fc1_factor = 2 if shape["activation"] == "swiglu" else 1
-        return PreparedOperation(
-            fn=fn,
-            work=routes * 2 * hidden * intermediate * (fc1_factor + 1),
-            rate_metric="effective_tflops",
-            work_definition="routed_fc1_and_fc2_matmul_only",
-            extra_metrics=routing_metrics,
-        )
+    def support_error(self, case):
+        dtype = case["precision"]["input_dtype"]
+        return None if dtype in self.descriptor.input_dtypes else f"FlashInfer MoE requires BF16/FP16 input, got {dtype}"
+
+    def precision(self, case):
+        return _torch_precision(case)
+
+    def prepare(self, case, device, options):
+        return _moe_prepared(case, device, options, "flashinfer")
 
 
 @dataclass(frozen=True)
@@ -484,10 +546,11 @@ class LightX2VMMAdapter:
             rate_metric = "tflops"
         return PreparedOperation(
             fn=fn,
-            work=2 * m * n * k,
+            work=gemm_flops(m, n, k),
             rate_metric=rate_metric,
             work_definition="2*m*n*k; LightX2V production wrapper apply",
             extra_metrics={"registry_key": self.contract.key},
+            expected_output_shape=(m, n),
         )
 
 
@@ -506,6 +569,9 @@ def _attention_support_error(case: dict[str, Any], backend: str) -> str | None:
 
 
 def _attention_tensors(case: dict[str, Any], device: str, torch: Any) -> tuple[Any, Any, Any]:
+    if "replay" in case:
+        q, k, v, _ = _load_qkv_replay(case, device, torch, keep_batch=True)
+        return q, k, v
     shape = case["shape"]
     dtype = _dtype(torch, str(case["precision"]["input_dtype"]))
     batch, seq_q, seq_kv = int(shape["batch"]), int(shape["seq_q"]), int(shape["seq_kv"])
@@ -518,13 +584,16 @@ def _attention_tensors(case: dict[str, Any], device: str, torch: Any) -> tuple[A
 
 def _attention_prepared(case: dict[str, Any], fn: Callable[[], Any], backend: str) -> PreparedOperation:
     shape = case["shape"]
-    work = 4 * int(shape["batch"]) * int(shape["heads"]) * int(shape["seq_q"]) * int(shape["seq_kv"]) * int(shape["head_dim"])
+    batch, sequence, heads, dim = (shape[key] for key in ("batch", "seq_q", "heads", "head_dim"))
+    output_shape = (batch * sequence, heads * dim) if backend in {"flash_attn4", "sage_attn3"} else (batch, sequence, heads, dim)
+    work = attention_flops(shape["batch"] * shape["heads"] * shape["seq_q"] * shape["seq_kv"], shape["head_dim"], shape["head_dim"])
     return PreparedOperation(
         fn=fn,
         work=work,
         rate_metric="effective_tflops",
         work_definition="4*batch*heads*seq_q*seq_kv*head_dim",
         extra_metrics={"implementation": backend},
+        expected_output_shape=output_shape,
     )
 
 
@@ -536,22 +605,22 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_qkv_replay(case: dict[str, Any], device: str, torch: Any) -> tuple[Any, Any, Any, dict[str, Any]]:
+def _load_qkv_replay(case: dict[str, Any], device: str, torch: Any, *, keep_batch: bool = False) -> tuple[Any, Any, Any, dict[str, Any]]:
     replay = case["replay"]
     manifest_path = Path(replay["manifest"]).resolve()
     if not manifest_path.is_file():
-        raise ValueError(f"sparse replay manifest does not exist: {manifest_path}")
+        raise ValueError(f"QKV replay manifest does not exist: {manifest_path}")
     manifest_sha256 = _file_sha256(manifest_path)
     if manifest_sha256 != replay["sha256"]:
-        raise ValueError(f"sparse replay manifest sha256 mismatch: {manifest_path}")
+        raise ValueError(f"QKV replay manifest sha256 mismatch: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 1 or manifest.get("kind") != "operator_benchmark_qkv_replay_v1":
-        raise ValueError(f"unsupported sparse replay manifest: {manifest_path}")
+        raise ValueError(f"unsupported QKV replay manifest: {manifest_path}")
     if manifest.get("layout") != "BSHD":
-        raise ValueError("sparse replay layout must be BSHD")
+        raise ValueError("QKV replay layout must be BSHD")
     specs = manifest.get("tensors")
     if not isinstance(specs, dict) or set(specs) != {"q", "k", "v"}:
-        raise ValueError("sparse replay manifest requires exactly q/k/v tensors")
+        raise ValueError("QKV replay manifest requires exactly q/k/v tensors")
 
     shape = case["shape"]
     expected_shapes = {
@@ -564,33 +633,34 @@ def _load_qkv_replay(case: dict[str, Any], device: str, torch: Any) -> tuple[Any
     for name in ("q", "k", "v"):
         spec = specs[name]
         if not isinstance(spec, dict) or spec.get("shape") != expected_shapes[name] or spec.get("dtype") != expected_dtype:
-            raise ValueError(f"sparse replay {name} contract does not match the case")
+            raise ValueError(f"QKV replay {name} contract does not match the case")
         shards = spec.get("shards")
         if not isinstance(shards, list) or not shards:
-            raise ValueError(f"sparse replay {name} requires shards")
+            raise ValueError(f"QKV replay {name} requires shards")
         chunks = []
         cursor = 0
         for index, shard in enumerate(shards):
             start, end = shard.get("sequence_start"), shard.get("sequence_end")
             if type(start) is not int or type(end) is not int or start != cursor or end <= start:
-                raise ValueError(f"sparse replay {name} shard coverage drift at {index}")
+                raise ValueError(f"QKV replay {name} shard coverage drift at {index}")
             shard_path = Path(str(shard.get("path")))
             if not shard_path.is_absolute():
                 shard_path = manifest_path.parent / shard_path
             if not shard_path.is_file() or _file_sha256(shard_path) != shard.get("sha256"):
-                raise ValueError(f"sparse replay {name} shard file mismatch at {index}: {shard_path}")
+                raise ValueError(f"QKV replay {name} shard file mismatch at {index}: {shard_path}")
             payload = torch.load(shard_path, map_location="cpu", weights_only=True)
             tensor = payload.get(shard.get("tensor_key")) if isinstance(payload, dict) else None
             expected_shard_shape = [expected_shapes[name][0], end - start, *expected_shapes[name][2:]]
             actual_dtype = str(getattr(tensor, "dtype", "")).removeprefix("torch.")
             dtype_alias = {"bfloat16": "bf16", "float16": "fp16", "float32": "fp32"}.get(actual_dtype)
             if not isinstance(tensor, torch.Tensor) or list(tensor.shape) != expected_shard_shape or dtype_alias != expected_dtype:
-                raise ValueError(f"sparse replay {name} shard tensor mismatch at {index}")
+                raise ValueError(f"QKV replay {name} shard tensor mismatch at {index}")
             chunks.append(tensor)
             cursor = end
         if cursor != expected_shapes[name][1]:
-            raise ValueError(f"sparse replay {name} shards do not cover the sequence")
-        tensors.append(torch.cat(chunks, dim=1).squeeze(0).to(device=device).contiguous())
+            raise ValueError(f"QKV replay {name} shards do not cover the sequence")
+        tensor = torch.cat(chunks, dim=1)
+        tensors.append((tensor if keep_batch else tensor.squeeze(0)).to(device=device).contiguous())
     metadata = {
         "input_kind": "real_qkv_replay",
         "replay_manifest": str(manifest_path),
@@ -607,27 +677,27 @@ def _sparse_replay_prepared(
     metadata: dict[str, Any],
 ) -> PreparedOperation:
     shape = case["shape"]
-    dense_work = 4 * int(shape["batch"]) * int(shape["heads"]) * int(shape["seq_q"]) * int(shape["seq_kv"]) * int(shape["head_dim"])
-    block_density = 1.0 - float(metadata["block_sparsity_actual"])
-    actual_work = round(dense_work * block_density)
+    dense_work = attention_flops(int(shape["batch"]) * int(shape["heads"]) * int(shape["seq_q"]) * int(shape["seq_kv"]), int(shape["head_dim"]), int(shape["head_dim"]))
+    # A separate diagnostic reads final production regions; never estimate from block density.
     return PreparedOperation(
         fn=fn,
-        work=actual_work,
+        work=0,
         rate_metric="actual_tflops",
-        work_definition="selected_block_qk_and_pv_flops_estimated_from_block_density; routing_flops_excluded",
+        work_definition="pending_actual_production_regions",
         dense_equivalent_work=dense_work,
         dense_equivalent_work_definition="4*batch*heads*seq_q*seq_kv*head_dim",
+        expected_output_shape=(int(shape["seq_q"]), int(shape["heads"]) * int(shape["head_dim"])),
         extra_metrics={
             "implementation": backend,
             "keep_ratio": float(case["sparse"]["keep_ratio"]),
-            "block_density_actual": block_density,
+            "block_density_actual": None,
             **metadata,
+            "causal": bool(shape["causal"]),
         },
     )
 
 
 def _prepare_sparge_replay(case: dict[str, Any], device: str) -> PreparedOperation:
-    import spas_sage_attn
     import torch
 
     from lightx2v.common.ops.attn.sparge_attn import SpargeAttnWeight
@@ -640,16 +710,8 @@ def _prepare_sparge_replay(case: dict[str, Any], device: str) -> PreparedOperati
     def fn() -> Any:
         return operator.apply(q, k, v, max_seqlen_q=q.shape[0], max_seqlen_kv=k.shape[0])
 
-    diagnostic_output, sparsity = spas_sage_attn.core.spas_sage2_attn_meansim_topk_cuda(
-        q.unsqueeze(0).transpose(1, 2).contiguous(),
-        k.unsqueeze(0).transpose(1, 2).contiguous(),
-        v.unsqueeze(0).transpose(1, 2).contiguous(),
-        topk=keep_ratio,
-        return_sparsity=True,
-    )
-    del diagnostic_output
-    metadata.update({"routing_scope": "included", "block_sparsity_actual": float(sparsity)})
-    return _sparse_replay_prepared(case, fn, "sparge_sage2_replay", metadata)
+    metadata.update({"routing_scope": "included", "sparse_algorithm": "sparge"})
+    return _sparse_replay_prepared(case, fn, "sparge.sage2.library", metadata)
 
 
 def _prepare_dynamic_sparse_replay(
@@ -661,7 +723,6 @@ def _prepare_dynamic_sparse_replay(
     import torch
 
     from lightx2v.common.ops.attn.dynamic_sparse_attn import DynamicSparseAttnWeight
-    from lightx2v.common.ops.attn.utils.sla_util import get_block_map
 
     q, k, v, metadata = _load_qkv_replay(case, device, torch)
     keep_ratio = float(case["sparse"]["keep_ratio"])
@@ -670,22 +731,12 @@ def _prepare_dynamic_sparse_replay(
     def fn() -> Any:
         return operator.apply(q, k, v, max_seqlen_q=q.shape[0], max_seqlen_kv=k.shape[0])
 
-    q_hnd = q.unsqueeze(0).transpose(1, 2).contiguous()
-    k_hnd = k.unsqueeze(0).transpose(1, 2).contiguous()
-    sparse_map, _lut, real_topk = get_block_map(
-        q_hnd,
-        k_hnd,
-        topk_ratio=keep_ratio,
-        BLKQ=operator.BLKQ,
-        BLKK=operator.BLKK,
-    )
     metadata.update(
         {
             "routing_scope": "included",
+            "sparse_algorithm": "sla",
             "q_block_size": operator.BLKQ,
             "k_block_size": operator.BLKK,
-            "real_topk_blocks_per_row": int(real_topk),
-            "block_sparsity_actual": 1.0 - float(sparse_map.float().mean().item()),
         }
     )
     return _sparse_replay_prepared(case, fn, backend_name, metadata)
@@ -696,11 +747,11 @@ def _prepare_production_sparse_replay(
     device: str,
     class_name: str,
     backend_name: str,
+    sparse_mode: str = "sla_mode",
 ) -> PreparedOperation:
     import torch
 
     from lightx2v.common.ops.attn import flash_attn, sage_attn
-    from lightx2v.common.ops.attn.utils.sla_util import get_block_map
 
     classes = {
         "SparseFlashAttn4Weight": flash_attn.SparseFlashAttn4Weight,
@@ -711,80 +762,59 @@ def _prepare_production_sparse_replay(
     keep_ratio = float(case["sparse"]["keep_ratio"])
     operator = classes[class_name]()
     operator.topk = keep_ratio
+    operator.sparse_mode = sparse_mode
 
     def fn() -> Any:
         return operator.apply(q, k, v, max_seqlen_q=q.shape[0], max_seqlen_kv=k.shape[0])
 
-    q_hnd = q.unsqueeze(0).transpose(1, 2).contiguous()
-    k_hnd = k.unsqueeze(0).transpose(1, 2).contiguous()
-    sparse_map, _lut, real_topk = get_block_map(
-        q_hnd,
-        k_hnd,
-        topk_ratio=keep_ratio,
-        BLKQ=operator.BLKQ,
-        BLKK=operator.BLKK,
-    )
     metadata.update(
         {
             "routing_scope": "included",
+            "sparse_algorithm": sparse_mode.removesuffix("_mode"),
             "q_block_size": operator.BLKQ,
             "k_block_size": operator.BLKK,
-            "real_topk_blocks_per_row": int(real_topk),
-            "block_sparsity_actual": 1.0 - float(sparse_map.float().mean().item()),
         }
     )
     return _sparse_replay_prepared(case, fn, backend_name, metadata)
 
 
-def _prepare_flash3_replay(case: dict[str, Any], device: str) -> PreparedOperation:
+def make_general_sparse_operator(method, operator_name, keep_ratio):
+    from lightx2v.common.ops.attn.general_sparse_attn import GeneralSparseAttnWeight
+
+    return GeneralSparseAttnWeight(
+        sparse_mask_generator=f"{method}_mask_generator",
+        sparse_operator=operator_name,
+        sparse_setting={"sparsity_ratio": 1.0 - keep_ratio},
+    )
+
+
+def _prepare_general_sparse_replay(case, device, method, operator_name, backend_name):
     import torch
 
-    from lightx2v.common.ops.attn.flash_attn import FlashAttn3Weight, flash_attn_func_v3
-
-    if flash_attn_func_v3 is None:
-        raise RuntimeError("FlashAttention3 is unavailable")
     q, k, v, metadata = _load_qkv_replay(case, device, torch)
-    operator = FlashAttn3Weight()
+    operator = make_general_sparse_operator(method, operator_name, float(case["sparse"]["keep_ratio"]))
 
-    def fn() -> Any:
-        return operator.apply(q, k, v, max_seqlen_q=q.shape[0], max_seqlen_kv=k.shape[0], causal=bool(case["shape"]["causal"]))
+    def fn():
+        return operator.apply(q, k, v, max_seqlen_q=q.shape[0], max_seqlen_kv=k.shape[0])
 
-    metadata.update({"routing_scope": "dense_baseline", "block_sparsity_actual": 0.0})
-    return _sparse_replay_prepared(case, fn, "flash_attn3_replay", metadata)
-
-
-def _prepare_production_dense_replay(
-    case: dict[str, Any],
-    device: str,
-    class_name: str,
-    backend_name: str,
-) -> PreparedOperation:
-    import torch
-
-    from lightx2v.common.ops.attn import flash_attn, sage_attn
-
-    classes = {
-        "FlashAttn4Weight": flash_attn.FlashAttn4Weight,
-        "SageAttn3Weight": sage_attn.SageAttn3Weight,
-    }
-    q, k, v, metadata = _load_qkv_replay(case, device, torch)
-    operator = classes[class_name]()
-
-    def fn() -> Any:
-        return operator.apply(q, k, v, max_seqlen_q=q.shape[0], max_seqlen_kv=k.shape[0], causal=bool(case["shape"]["causal"]))
-
-    metadata.update({"routing_scope": "dense_baseline", "block_sparsity_actual": 0.0})
+    metadata.update(routing_scope="included", sparse_algorithm=method,
+                    q_block_size=operator.operator.q_block_size, k_block_size=operator.operator.k_block_size)
     return _sparse_replay_prepared(case, fn, backend_name, metadata)
 
 
 def _prepare_flash2(case: dict[str, Any], device: str) -> PreparedOperation:
     import torch
-    from flash_attn import flash_attn_func
+    from lightx2v.common.ops.attn.flash_attn import FlashAttn2Weight
 
     q, k, v = _attention_tensors(case, device, torch)
+    operator = FlashAttn2Weight()
+    cu_q = torch.arange(q.shape[0] + 1, device=device, dtype=torch.int32) * q.shape[1]
+    cu_kv = torch.arange(k.shape[0] + 1, device=device, dtype=torch.int32) * k.shape[1]
 
     def fn() -> Any:
-        return flash_attn_func(q, k, v, causal=bool(case["shape"]["causal"]))
+        return operator.apply(q, k, v, cu_seqlens_q=cu_q, cu_seqlens_kv=cu_kv,
+                              max_seqlen_q=q.shape[1], max_seqlen_kv=k.shape[1],
+                              causal=bool(case["shape"]["causal"])).reshape(q.shape)
 
     return _attention_prepared(case, fn, "flash_attn2")
 
@@ -803,7 +833,7 @@ def _prepare_flash3(case: dict[str, Any], device: str) -> PreparedOperation:
 
 def _prepare_sage2(case: dict[str, Any], device: str) -> PreparedOperation:
     import torch
-    from sageattention import sageattn
+    from lightx2v.common.ops.attn.sage_attn import sageattn
 
     q, k, v = _attention_tensors(case, device, torch)
 
@@ -903,10 +933,9 @@ class SparseReplayAttentionAdapter:
         dtype = str(case["precision"]["input_dtype"])
         if dtype not in self.descriptor.input_dtypes:
             return f"{self.descriptor.name} does not support dtype {dtype}"
-        if self.descriptor.name != "flash_attn3_replay" and case["shape"]["causal"]:
+        # These prepare functions do not pass a causal mask to production.
+        if case["shape"]["causal"]:
             return f"{self.descriptor.name} does not provide causal replay"
-        if self.descriptor.name not in {"flash_attn3_replay", "flash_attn4_replay"} and int(case["shape"]["head_dim"]) not in {64, 128}:
-            return f"{self.descriptor.name} requires head_dim 64 or 128"
         return None
 
     def precision(self, case: dict[str, Any]) -> dict[str, Any]:
@@ -924,6 +953,8 @@ class TorchGroupedMMAdapter:
         plugin="torch._grouped_mm",
         input_dtypes=("bf16", "fp16"),
         description="single-GPU routed MoE using torch._grouped_mm",
+        production_backend="torch_grouped_mm",
+        probe_symbols=("torch:_grouped_mm",),
     )
 
     def support_error(self, case: dict[str, Any]) -> str | None:
@@ -934,58 +965,7 @@ class TorchGroupedMMAdapter:
         return _torch_precision(case)
 
     def prepare(self, case: dict[str, Any], device: str, options: dict[str, Any]) -> PreparedOperation:
-        import torch
-
-        if not hasattr(torch, "_grouped_mm"):
-            raise RuntimeError("this PyTorch build does not provide torch._grouped_mm")
-        shape = case["shape"]
-        dtype = _dtype(torch, str(case["precision"]["input_dtype"]))
-        tokens, hidden = int(shape["tokens"]), int(shape["hidden_size"])
-        intermediate, experts, top_k = int(shape["intermediate_size"]), int(shape["num_experts"]), int(shape["top_k"])
-        fc1_size = intermediate if shape["activation"] == "gelu" else 2 * intermediate
-        inputs = torch.randn((tokens, hidden), device=device, dtype=dtype)
-        fc1 = torch.randn((experts, fc1_size, hidden), device=device, dtype=dtype).contiguous()
-        fc2 = torch.randn((experts, hidden, intermediate), device=device, dtype=dtype).contiguous()
-        if shape["expert_bias"]:
-            fc1_bias = torch.randn((experts, fc1_size), device=device, dtype=dtype)
-            fc2_bias = torch.randn((experts, hidden), device=device, dtype=dtype)
-        else:
-            fc1_bias = fc2_bias = None
-        selected, scales, metrics = _routing(case, device, str(options.get("moe_routing") or "balanced"), torch)
-        output = torch.empty_like(inputs)
-
-        def fn() -> Any:
-            flat = selected.reshape(-1)
-            counts = torch.bincount(flat, minlength=experts)
-            order = torch.argsort(flat)
-            token_indexes = torch.div(order, top_k, rounding_mode="floor")
-            expert_indexes = flat.index_select(0, order)
-            offsets = counts.cumsum(0, dtype=torch.int32)
-            projected = torch._grouped_mm(inputs.index_select(0, token_indexes), fc1.transpose(1, 2), offs=offsets)
-            if fc1_bias is not None:
-                projected.add_(fc1_bias.index_select(0, expert_indexes))
-            if shape["activation"] == "gelu":
-                projected = torch.nn.functional.gelu(projected)
-            else:
-                value, gate = projected.chunk(2, dim=-1)
-                projected = value * torch.nn.functional.silu(gate)
-            expert_output = torch._grouped_mm(projected, fc2.transpose(1, 2), offs=offsets)
-            if fc2_bias is not None:
-                expert_output.add_(fc2_bias.index_select(0, expert_indexes))
-            expanded = torch.empty_like(expert_output)
-            expanded.index_copy_(0, order, expert_output)
-            routed = expanded.view(tokens, top_k, hidden)
-            output.copy_(torch.bmm(scales.unsqueeze(1), routed.float()).squeeze(1))
-            return output
-
-        fc1_factor = 2 if shape["activation"] == "swiglu" else 1
-        return PreparedOperation(
-            fn=fn,
-            work=tokens * top_k * 2 * hidden * intermediate * (fc1_factor + 1),
-            rate_metric="effective_tflops",
-            work_definition="routed_fc1_and_fc2_matmul_only",
-            extra_metrics=metrics,
-        )
+        return _moe_prepared(case, device, options, "torch_grouped_mm")
 
 
 def _probe_symbol(value: str) -> str | None:
@@ -1015,20 +995,54 @@ def build_backend_catalog_report(
     cuda_capability: str | None,
     production_backends: Iterable[str],
     production_mm_backends: Iterable[str] = (),
+    production_moe_backends: Iterable[str] = (),
+    production_conv_backends: dict[str, Iterable[str]] | None = None,
+    production_sparse_operators: Iterable[str] = (),
+    production_mask_generators: Iterable[str] = (),
     symbol_probe: Callable[[str], str | None] = _probe_symbol,
     dependency_probe: Callable[[str], str | None] = _probe_dependency,
 ) -> dict[str, Any]:
     production = sorted(set(production_backends))
     production_mm = sorted(set(production_mm_backends))
-    descriptors = [item for item in registry.descriptors() if item["family"] in {"gemm", "dense_attention", "sparse_attention", "moe"}]
+    production_moe = sorted(set(production_moe_backends))
+    production_sparse_operators = sorted(set(production_sparse_operators))
+    production_mask_generators = sorted(set(production_mask_generators))
+    descriptors = [item for item in registry.descriptors() if item["family"] in {"gemm", "dense_attention", "sparse_attention", "moe", "convolution"}]
     mapped_attention = {item["production_backend"] for item in descriptors if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]}
     mapped_mm = {item["production_backend"] for item in descriptors if item["family"] == "gemm" and item["production_backend"]}
-    attention_exclusions = {name: reason for name, reason in PRODUCTION_ATTN_EXCLUSIONS.items() if name in production}
-    mm_exclusions = {name: reason for name, reason in PRODUCTION_MM_EXCLUSIONS.items() if name in production_mm}
-    unmapped_attention = sorted(set(production) - mapped_attention - set(attention_exclusions))
+    mm_exclusions = {name: reason for name, reason in PRODUCTION_MM_EXCLUSIONS.items() if name in production_mm and name not in mapped_mm}
+    general_variants = {part for item in descriptors if item["production_backend"] == "general_sparse_attn"
+                        for part in (item["production_variant"] or "").split(";")}
+    sparse_gaps = [f"general_sparse_attn/operator:{name}" for name in production_sparse_operators if f"operator={name}" not in general_variants]
+    sparse_gaps += [f"general_sparse_attn/mask:{name}" for name in production_mask_generators if f"mask={name.removesuffix('_mask_generator')}" not in general_variants]
+    unmapped_attention = sorted(set(production) - mapped_attention - set(ATTENTION_SCOPE_HINTS["sp_attention"])) + sparse_gaps
+    attention_families = {name: family for family, names in ATTENTION_SCOPE_HINTS.items() for name in names}
+    attention_families.update({item["production_backend"]: item["family"] for item in descriptors
+                              if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]})
+    attention_families.update({name: "sparse_attention" for name in sparse_gaps})
+    attention_scopes = {}
+    for family in ("dense_attention", "sparse_attention", "sp_attention"):
+        attention_scopes[family] = {
+            "production_backends": [name for name in production if attention_families.get(name) == family],
+            "excluded_production_backends": {},
+            "unmapped_production_backends": [name for name in unmapped_attention if attention_families.get(name) in {None, family}] if family != "sp_attention" else [],
+        }
     unmapped_mm = sorted(set(production_mm) - mapped_mm - set(mm_exclusions))
-    exclusions = {**attention_exclusions, **mm_exclusions}
-    unmapped = sorted((*unmapped_attention, *unmapped_mm))
+    exclusions = mm_exclusions
+    mapped_moe = {item["production_backend"] for item in descriptors if item["family"] == "moe" and item["production_backend"]}
+    unmapped_moe = sorted(set(production_moe) - mapped_moe)
+    convolution_scopes = {}
+    for subtype, names in (production_conv_backends or {}).items():
+        names = sorted(set(names))
+        mapped = {item["production_backend"]: item["name"] for item in descriptors if item["family"] == "convolution" and item["production_backend"]}
+        if "Default" in names:
+            mapped.setdefault("Default", "torch_convolution")
+        excluded = {"Default-ForceFp32": "forced FP32 conversion is outside the direct Torch adapter"} if subtype == "conv2d" and "Default-ForceFp32" in names and "Default-ForceFp32" not in mapped else {}
+        gaps = dict.fromkeys(sorted((set(names) | {"lightx2v_kernel.fp8_conv3d"}) - set(mapped) - set(excluded)), "production convolution has no benchmark adapter; inspect its input/precision contract")
+        convolution_scopes[subtype] = {"production_backends": names, "mapped_backends": mapped, "excluded_production_backends": excluded,
+                                       "unmapped_production_backends": sorted(gaps), "integration_gaps": gaps}
+    unmapped = sorted((*unmapped_attention, *unmapped_mm, *unmapped_moe,
+                       *(f"{subtype}/{name}" for subtype, scope in convolution_scopes.items() for name in scope["unmapped_production_backends"])))
     candidates = []
     for descriptor in descriptors:
         capabilities = descriptor["cuda_capabilities"]
@@ -1049,6 +1063,9 @@ def build_backend_catalog_report(
         "cuda_capability": cuda_capability,
         "production_backends": production,
         "production_mm_backends": production_mm,
+        "production_moe_backends": production_moe,
+        "production_sparse_operators": sorted(production_sparse_operators),
+        "production_mask_generators": sorted(production_mask_generators),
         "candidates": [
             {
                 "name": item["name"],
@@ -1064,6 +1081,8 @@ def build_backend_catalog_report(
             for item in candidates
         ],
         "exclusions": exclusions,
+        "attention_scopes": attention_scopes,
+        "convolution_scopes": convolution_scopes,
     }
     fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {
@@ -1075,12 +1094,19 @@ def build_backend_catalog_report(
         "coverage_complete": catalog_complete and environment_complete,
         "production_backends": production,
         "production_mm_backends": production_mm,
+        "production_moe_backends": production_moe,
         "excluded_production_backends": exclusions,
-        "excluded_attention_backends": attention_exclusions,
+        "production_sparse_operators": production_sparse_operators,
+        "production_mask_generators": production_mask_generators,
+        "excluded_attention_backends": {},
+        "attention_scopes": attention_scopes,
+        "convolution_scopes": convolution_scopes,
         "excluded_mm_backends": mm_exclusions,
         "unmapped_production_backends": unmapped,
         "unmapped_attention_backends": unmapped_attention,
         "unmapped_mm_backends": unmapped_mm,
+        "unmapped_moe_backends": unmapped_moe,
+        "attention_integration_gaps": dict.fromkeys(unmapped_attention, "production entry has no benchmark adapter; inspect its current input contract"),
         "candidates": candidates,
     }
 
@@ -1089,10 +1115,20 @@ def probe_backend_catalog(registry: BackendRegistry, device: str) -> dict[str, A
     import torch
 
     discovery_output = io.StringIO()
+    unresolved_imports = set()
     with redirect_stdout(discovery_output):
         import lightx2v.common.ops.attn  # noqa: F401
+        for module in ("flex_attn", "paged_flash_attn"):
+            try:
+                importlib.import_module("lightx2v.common.ops.attn." + module)
+            except ImportError as exc:
+                unresolved_imports.add("unresolved_import:" + module)
+                print(f"{module}: {type(exc).__name__}: {exc}")
+        import lightx2v.common.ops.moe.fused_moe  # noqa: F401
+        import lightx2v.common.ops.conv.conv2d  # noqa: F401
+        import lightx2v.common.ops.conv.conv3d  # noqa: F401
         from lightx2v.common.ops.mm import mm_weight as _mm_weight  # noqa: F401
-        from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER
+        from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV2D_WEIGHT_REGISTER, CONV3D_WEIGHT_REGISTER, FUSED_MOE_REGISTER, MM_WEIGHT_REGISTER, SPARSE_MASK_GENERATOR_REGISTER, SPARSE_OPERATOR_REGISTER
 
     capability = None
     if torch.cuda.is_available():
@@ -1101,8 +1137,12 @@ def probe_backend_catalog(registry: BackendRegistry, device: str) -> dict[str, A
     report = build_backend_catalog_report(
         registry,
         cuda_capability=capability,
-        production_backends=ATTN_WEIGHT_REGISTER.keys(),
+        production_backends=ATTN_WEIGHT_REGISTER.keys() | unresolved_imports,
         production_mm_backends=MM_WEIGHT_REGISTER.keys(),
+        production_moe_backends=FUSED_MOE_REGISTER.keys(),
+        production_conv_backends={"conv2d": CONV2D_WEIGHT_REGISTER.keys(), "conv3d": CONV3D_WEIGHT_REGISTER.keys()},
+        production_sparse_operators=SPARSE_OPERATOR_REGISTER.keys(),
+        production_mask_generators=SPARSE_MASK_GENERATOR_REGISTER.keys(),
     )
     report["discovery_warnings"] = [line for line in discovery_output.getvalue().splitlines() if line.strip()]
     return report
@@ -1122,6 +1162,18 @@ class AttentionBackendContract:
 
 
 BLACKWELL_CAPABILITIES = ("10.x", "11.x", "12.x")
+SAGE2_SPARSE_PROBES = ("lightx2v.common.ops.attn.utils.sparge_util:fused", "lightx2v.common.ops.attn.utils.sparge_util:qattn")
+# GeneralSparse将mask策略与计算实现分离；配置只描述现有生产入口。
+GENERAL_SPARSE_OPERATORS = (
+    ("triton", "sla_triton_operator", ("triton",), (), ()),
+    ("sage2", "spas_sage2_operator", ("spas_sage_attn",), (), ("lightx2v.common.ops.attn.utils.sparge_util:sage2_block_sparse_attn", *SAGE2_SPARSE_PROBES)),
+    ("sage3", "spas_sage3_operator", ("sageattn3_sparse",), BLACKWELL_CAPABILITIES, ("lightx2v.common.ops.attn.sparse_operator:sage3_block_sparse_attn",)),
+    ("fa4", "spas_fa4_operator", ("flash_attn.cute",), BLACKWELL_CAPABILITIES, ("lightx2v.common.ops.attn.sparse_operator:flash_attn_func_v4",)),
+    ("magi", "magi_operator", ("magi_attention",), (), ("lightx2v.common.ops.attn.sparse_operator:magi_ffa_func",)),
+    ("flex_block", "flex_block_operator", ("flex_block_attn",), (), ("lightx2v.common.ops.attn.sparse_operator:flex_block_attn_func",)),
+    ("flashinfer", "flashinfer_operator", ("flashinfer",), (), ("flashinfer.sparse:VariableBlockSparseAttentionWrapper",)),
+)
+
 ATTENTION_BACKEND_CONTRACTS = (
     AttentionBackendContract(
         "flash_attn2", "dense_attention", "flash_attn", ("flash_attn",), _prepare_flash2, "flash_attn2", probe_symbols=("lightx2v.common.ops.attn.flash_attn:flash_attn_func_v2",)
@@ -1158,111 +1210,118 @@ ATTENTION_BACKEND_CONTRACTS = (
         probe_symbols=("lightx2v.common.ops.attn.sage_attn:sageattn3_blackwell",),
     ),
     AttentionBackendContract(
-        "sparge_sage2_replay", "sparse_attention", "spas_sage_attn", ("spas_sage_attn",), _prepare_sparge_replay, "sparge_attn", probe_symbols=("lightx2v.common.ops.attn.sparge_attn:spas_sage_attn",)
+        "sparge.sage2.library", "sparse_attention", "spas_sage_attn", ("spas_sage_attn",), _prepare_sparge_replay, "sparge_attn", probe_symbols=("lightx2v.common.ops.attn.sparge_attn:spas_sage_attn",)
     ),
     AttentionBackendContract(
-        "dynamic_sparse_triton_replay",
+        "sla.triton.dynamic",
         "sparse_attention",
         "lightx2v_dynamic_sparse_triton",
         ("lightx2v", "triton"),
-        partial(_prepare_dynamic_sparse_replay, operator_name="triton", backend_name="dynamic_sparse_triton_replay"),
+        partial(_prepare_dynamic_sparse_replay, operator_name="triton", backend_name="sla.triton.dynamic"),
         "dynamic_sparse_attn",
         "operator=triton",
     ),
     AttentionBackendContract(
-        "dynamic_sparse_sage2_replay",
+        "sla.sage2.dynamic",
         "sparse_attention",
         "lightx2v_dynamic_sparse_sage2",
         ("lightx2v", "spas_sage_attn"),
-        partial(_prepare_dynamic_sparse_replay, operator_name="sage2", backend_name="dynamic_sparse_sage2_replay"),
+        partial(_prepare_dynamic_sparse_replay, operator_name="sage2", backend_name="sla.sage2.dynamic"),
         "dynamic_sparse_attn",
         "operator=sage2",
-        probe_symbols=("lightx2v.common.ops.attn.dynamic_sparse_attn:sage2_block_sparse_attn",),
+        probe_symbols=("lightx2v.common.ops.attn.dynamic_sparse_attn:sage2_block_sparse_attn", *SAGE2_SPARSE_PROBES),
     ),
     AttentionBackendContract(
-        "dynamic_sparse_sage3_replay",
+        "sla.sage3.dynamic",
         "sparse_attention",
         "lightx2v_dynamic_sparse_sage3",
         ("lightx2v", "sageattn3_sparse"),
-        partial(_prepare_dynamic_sparse_replay, operator_name="sage3", backend_name="dynamic_sparse_sage3_replay"),
+        partial(_prepare_dynamic_sparse_replay, operator_name="sage3", backend_name="sla.sage3.dynamic"),
         "dynamic_sparse_attn",
         "operator=sage3",
         BLACKWELL_CAPABILITIES,
         ("lightx2v.common.ops.attn.dynamic_sparse_attn:sage3_block_sparse_attn",),
     ),
     AttentionBackendContract(
-        "dynamic_sparse_fa4_replay",
+        "sla.fa4.dynamic",
         "sparse_attention",
         "lightx2v_dynamic_sparse_fa4",
         ("lightx2v", "flash_attn.cute"),
-        partial(_prepare_dynamic_sparse_replay, operator_name="fa4", backend_name="dynamic_sparse_fa4_replay"),
+        partial(_prepare_dynamic_sparse_replay, operator_name="fa4", backend_name="sla.fa4.dynamic"),
         "dynamic_sparse_attn",
         "operator=fa4",
         BLACKWELL_CAPABILITIES,
         ("lightx2v.common.ops.attn.dynamic_sparse_attn:flash_attn_func_v4",),
     ),
     AttentionBackendContract(
-        "spas_sage2_replay",
+        "sla.sage2.specialized",
         "sparse_attention",
         "lightx2v_spas_sage2",
         ("lightx2v", "spas_sage_attn"),
-        partial(_prepare_production_sparse_replay, class_name="SparseSageAttn2Weight", backend_name="spas_sage2_replay"),
+        partial(_prepare_production_sparse_replay, class_name="SparseSageAttn2Weight", backend_name="sla.sage2.specialized"),
         "spas_sage_attn2",
-        probe_symbols=("lightx2v.common.ops.attn.sage_attn:sage2_block_sparse_attn",),
+        probe_symbols=("lightx2v.common.ops.attn.utils.sparge_util:sage2_block_sparse_attn", *SAGE2_SPARSE_PROBES),
     ),
     AttentionBackendContract(
-        "spas_sage3_replay",
+        "sla.sage3.specialized",
         "sparse_attention",
         "lightx2v_spas_sage3",
         ("lightx2v", "sageattn3_sparse"),
-        partial(_prepare_production_sparse_replay, class_name="SparseSageAttn3Weight", backend_name="spas_sage3_replay"),
+        partial(_prepare_production_sparse_replay, class_name="SparseSageAttn3Weight", backend_name="sla.sage3.specialized"),
         "spas_sage_attn3",
         cuda_capabilities=BLACKWELL_CAPABILITIES,
         probe_symbols=("lightx2v.common.ops.attn.sage_attn:sage3_block_sparse_attn",),
     ),
     AttentionBackendContract(
-        "spas_fa4_replay",
+        "sla.fa4.specialized",
         "sparse_attention",
         "lightx2v_spas_fa4",
         ("lightx2v", "flash_attn.cute"),
-        partial(_prepare_production_sparse_replay, class_name="SparseFlashAttn4Weight", backend_name="spas_fa4_replay"),
+        partial(_prepare_production_sparse_replay, class_name="SparseFlashAttn4Weight", backend_name="sla.fa4.specialized"),
         "spas_flash_attn4",
         cuda_capabilities=BLACKWELL_CAPABILITIES,
         probe_symbols=("lightx2v.common.ops.attn.flash_attn:flash_attn_func_v4",),
     ),
     AttentionBackendContract(
-        "flash_attn3_replay",
-        "sparse_attention",
-        "flash_attn_interface",
-        ("flash_attn_interface",),
-        _prepare_flash3_replay,
-        "flash_attn3",
-        "dense_replay_baseline",
-        ("9.0",),
-        ("lightx2v.common.ops.attn.flash_attn:flash_attn_func_v3",),
+        "sparge.sage2.specialized", "sparse_attention", "lightx2v_sparge_sage2", ("lightx2v", "spas_sage_attn"),
+        partial(_prepare_production_sparse_replay, class_name="SparseSageAttn2Weight", backend_name="sparge.sage2.specialized", sparse_mode="sparge_mode"),
+        "spas_sage_attn2", "sparse_mode=sparge_mode",
+        probe_symbols=("lightx2v.common.ops.attn.utils.sparge_util:sage2_block_sparse_attn", *SAGE2_SPARSE_PROBES),
     ),
     AttentionBackendContract(
-        "flash_attn4_replay",
-        "sparse_attention",
-        "flash_attn.cute",
-        ("flash_attn.cute",),
-        partial(_prepare_production_dense_replay, class_name="FlashAttn4Weight", backend_name="flash_attn4_replay"),
-        "flash_attn4",
-        "dense_replay_baseline",
-        BLACKWELL_CAPABILITIES,
+        "sparge.sage3.specialized", "sparse_attention", "lightx2v_sparge_sage3", ("lightx2v", "sageattn3_sparse"),
+        partial(_prepare_production_sparse_replay, class_name="SparseSageAttn3Weight", backend_name="sparge.sage3.specialized", sparse_mode="sparge_mode"),
+        "spas_sage_attn3", "sparse_mode=sparge_mode", BLACKWELL_CAPABILITIES,
+        ("lightx2v.common.ops.attn.sage_attn:sage3_block_sparse_attn",),
+    ),
+    AttentionBackendContract(
+        "sparge.fa4.specialized", "sparse_attention", "lightx2v_sparge_fa4", ("lightx2v", "flash_attn.cute"),
+        partial(_prepare_production_sparse_replay, class_name="SparseFlashAttn4Weight", backend_name="sparge.fa4.specialized", sparse_mode="sparge_mode"),
+        "spas_flash_attn4", "sparse_mode=sparge_mode", BLACKWELL_CAPABILITIES,
         ("lightx2v.common.ops.attn.flash_attn:flash_attn_func_v4",),
     ),
+)
+
+
+ATTENTION_BACKEND_CONTRACTS += tuple(
     AttentionBackendContract(
-        "sage_attn3_replay",
-        "sparse_attention",
-        "sageattn3",
-        ("sageattn3",),
-        partial(_prepare_production_dense_replay, class_name="SageAttn3Weight", backend_name="sage_attn3_replay"),
-        "sage_attn3",
-        "dense_replay_baseline",
-        BLACKWELL_CAPABILITIES,
-        ("lightx2v.common.ops.attn.sage_attn:sageattn3_blackwell",),
-    ),
+        f"sla.{operator}.dynamic", "sparse_attention", "lightx2v_dynamic_sparse_" + operator, dependencies,
+        partial(_prepare_dynamic_sparse_replay, operator_name=operator, backend_name=f"sla.{operator}.dynamic"),
+        "dynamic_sparse_attn", "operator=" + operator, probe_symbols=symbols,
+    )
+    for operator, dependencies, symbols in (
+        ("triton_ar", ("lightx2v", "triton"), ()),
+        ("magi", ("lightx2v", "triton", "magi_attention"), ("lightx2v.common.ops.attn.dynamic_sparse_attn:magi_ffa_func",)),
+    )
+)
+ATTENTION_BACKEND_CONTRACTS += tuple(
+    AttentionBackendContract(
+        f"{method}.{label}.general", "sparse_attention", f"lightx2v_general_{method}_{label}", ("lightx2v", "triton", *dependencies),
+        partial(_prepare_general_sparse_replay, method=method, operator_name=operator, backend_name=f"{method}.{label}.general"),
+        "general_sparse_attn", f"mask={method};operator={operator}", capabilities, symbols,
+    )
+    for method in ("sla", "sparge")
+    for label, operator, dependencies, capabilities, symbols in GENERAL_SPARSE_OPERATORS
 )
 
 
@@ -1293,8 +1352,10 @@ def _attention_adapter(contract: AttentionBackendContract) -> BackendAdapter:
 def load_registry(plugin_modules: Iterable[str] = ()) -> BackendRegistry:
     registry = BackendRegistry()
     registry.register(TorchLinearAdapter())
+    registry.register(TorchConvolutionAdapter())
     registry.register(TorchSDPAAdapter())
     registry.register(TorchExpertLoopAdapter())
+    registry.register(FlashInferMoEAdapter())
     for contract in MM_REGISTRY_CONTRACTS:
         registry.register(LightX2VMMAdapter(contract))
     for contract in ATTENTION_BACKEND_CONTRACTS:
