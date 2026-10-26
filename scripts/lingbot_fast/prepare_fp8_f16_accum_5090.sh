@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-MODEL_DIR=${MODEL_DIR:-/mnt/devsft_afs_2/gushiqiao/ar/models/lingbot-world-v2-14b-causal-fast}
+MODEL_DIR=${MODEL_DIR:-/path/to/models/lingbot-world-v2-14b-causal-fast}
 QUANT_DEVICE=${QUANT_DEVICE:-cpu}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
 export MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}

@@ -1,7 +1,7 @@
 {
   "model_cls": "streamrender_h3",
   "task": "refv2v",
-  "model_path": "/mnt/devsft_afs_2/gushiqiao/ar/models/H3/StreamRender-H3",
+  "model_path": "/path/to/models/H3/StreamRender-H3",
   "fps": 24,
   "size": [
     768,
@@ -44,7 +44,7 @@
   },
   "dit_quantized": false,
   "use_adaln_cache": false,
-  "dit_original_ckpt": "/mnt/devsft_afs_2/gushiqiao/ar/models/H3/StreamRender-H3/backbone",
+  "dit_original_ckpt": "/path/to/models/H3/StreamRender-H3/backbone",
   "video_flow_shift": 6.0,
   "audio_flow_shift": 1.5,
   "use_fused_qkv_norm_rope": true,

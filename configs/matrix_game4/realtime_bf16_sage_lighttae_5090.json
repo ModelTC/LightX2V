@@ -44,7 +44,7 @@
     "vae_cpu_offload": false,
     "t5_cpu_offload": true,
     "dit_quantized": false,
-    "tae_decoder_path": "/mnt/devsft_afs_2/gushiqiao/vast/lighttaew2_2.safetensors",
+    "tae_decoder_path": "/path/to/lighttaew2_2.safetensors",
     "need_scaled": true,
     "t5_quantized": false,
     "streaming_vae": true

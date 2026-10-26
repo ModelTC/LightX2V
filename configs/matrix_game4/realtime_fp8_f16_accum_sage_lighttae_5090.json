@@ -45,13 +45,13 @@
     "t5_cpu_offload": false,
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-f16-accum",
-    "dit_quantized_ckpt": "/mnt/devsft_afs_2/gushiqiao/ar/models/Matrix-Game-4.0/quantized/castle-fp8-f16-accum-qmax14.safetensors",
+    "dit_quantized_ckpt": "/path/to/models/Matrix-Game-4.0/quantized/castle-fp8-f16-accum-qmax14.safetensors",
     "dit_fp8_activation_qmax": 7.0,
-    "tae_decoder_path": "/mnt/devsft_afs_2/gushiqiao/vast/lighttaew2_2.safetensors",
+    "tae_decoder_path": "/path/to/lighttaew2_2.safetensors",
     "need_scaled": true,
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-f16-accum",
-    "t5_quantized_ckpt": "/mnt/devsft_afs_2/gushiqiao/ar/models/Matrix-Game-4.0/quantized/t5-fp8-f16-accum-qmax14.safetensors",
+    "t5_quantized_ckpt": "/path/to/models/Matrix-Game-4.0/quantized/t5-fp8-f16-accum-qmax14.safetensors",
     "t5_rms_norm_type": "torch",
     "streaming_vae": true
 }

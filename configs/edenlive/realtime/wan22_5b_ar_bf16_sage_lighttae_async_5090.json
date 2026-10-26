@@ -41,7 +41,7 @@
   "warmup": true,
   "need_scaled": true,
   "use_tae": true,
-  "tae_path": "/mnt/devsft_afs_2/gushiqiao/vast/lighttaew2_2.safetensors",
+  "tae_path": "/path/to/lighttaew2_2.safetensors",
   "streaming_vae": true,
   "t5_cpu_offload": true,
   "t5_quantized": false,

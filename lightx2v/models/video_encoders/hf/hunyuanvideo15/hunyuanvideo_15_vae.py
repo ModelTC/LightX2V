@@ -964,7 +964,7 @@ class HunyuanVideo15VAE:
 
 
 if __name__ == "__main__":
-    vae = HunyuanVideo15VAE(checkpoint_path="/data/nvme1/yongyang/models/HunyuanVideo-1.5/ckpts/hunyuanvideo-1.5", dtype=torch.float16, device="cuda")
+    vae = HunyuanVideo15VAE(checkpoint_path="/path/to/HunyuanVideo-1.5/ckpts/hunyuanvideo-1.5", dtype=torch.float16, device="cuda")
     z = torch.randn(1, 32, 31, 30, 53, dtype=torch.float16, device="cuda")
     video_frames = vae.decode(z)
     print(video_frames.shape)

@@ -31,9 +31,7 @@ def legal_segment_candidates(candidates, capacity, write_tokens, sink_tokens, wr
     """Keep raw-KV tails; require whole physical segments for encoded-only V."""
     boundaries = (capacity, write_tokens, sink_tokens, *write_alignment)
     return tuple(
-        tokens
-        for tokens in candidates
-        if tokens <= capacity and all(offset % tokens == 0 for offset in write_alignment) and (not value_only or all(offset % tokens == 0 for offset in boundaries))
+        tokens for tokens in candidates if tokens <= capacity and all(offset % tokens == 0 for offset in write_alignment) and (not value_only or all(offset % tokens == 0 for offset in boundaries))
     )
 
 

@@ -40,5 +40,5 @@
     "warmup": true,
     "need_scaled": true,
     "use_tae": true,
-    "tae_path": "/data/nvme6/gushiqiao/edenlive_training/lighttae_wan22_h3_api_ddp23_500k_20261019/run/lighttaew2_2.safetensors"
+    "tae_path": "/path/to/lighttaew2_2.safetensors"
 }

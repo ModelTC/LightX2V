@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/data/nvme6/gushiqiao/codes/report/LightX2V
-model_path=/data/nvme3/gushiqiao/models/EdenLive-x2v
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/EdenLive-x2v
 : "${IMAGE_PATH:?Set IMAGE_PATH to the input image}"
 : "${VIDEO_PATH:?Set VIDEO_PATH to the input video}"
 

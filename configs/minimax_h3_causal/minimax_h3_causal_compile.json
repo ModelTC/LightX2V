@@ -26,7 +26,7 @@
   "audio_flow_shift": 3.0,
   "h3_step_update": "training_euler",
   "audio_sampling_rate": 32000,
-  "dit_original_ckpt": "/data/nvme3/gushiqiao/models/h3_v003.pt",
+  "dit_original_ckpt": "/path/to/h3_v003.pt",
   "ar_config": {
     "num_frame_per_chunk": 5,
     "sink_chunk_num": 1,

@@ -11,7 +11,7 @@
   "shared_cpu_weights": true,
   "shared_cpu_weight_scope": "host",
   "use_adaln_cache": true,
-  "adaln_cache_dir": "/mnt/devsft_afs_2/gushiqiao/ar/models/H3/adaln-realtime-5090-20261025",
+  "adaln_cache_dir": "/path/to/models/H3/adaln-realtime-5090-20261025",
   "text_encoder_cpu_offload": true,
   "text_encoder_tensor_parallel": false,
   "vae_cpu_offload": false,
@@ -28,7 +28,7 @@
   "audio_flow_shift": 3.0,
   "h3_step_update": "training_euler",
   "audio_sampling_rate": 32000,
-  "dit_original_ckpt": "/mnt/devsft_afs_2/gushiqiao/h3_v003.pt",
+  "dit_original_ckpt": "/path/to/h3_v003.pt",
   "ar_config": {
     "num_frame_per_chunk": 5,
     "sink_chunk_num": 1,

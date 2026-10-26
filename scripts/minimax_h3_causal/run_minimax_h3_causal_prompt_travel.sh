@@ -1,8 +1,8 @@
 #!/bin/bash
 set -eo pipefail
 
-lightx2v_path=/data/nvme6/gushiqiao/codes/report/LightX2V
-model_path=/data/nvme6/gushiqiao/models/MiniMax-H3
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 

@@ -41,7 +41,10 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     def __init__(self, config):
         self.segment_prompts = self.segment_seeds = None
         if config.get("prompt_json"):
-            payload = json.loads(Path(config["prompt_json"]).read_text())
+            prompt_path = Path(config["prompt_json"])
+            if not prompt_path.is_absolute() and not prompt_path.exists():
+                prompt_path = Path(__file__).resolve().parents[4] / prompt_path
+            payload = json.loads(prompt_path.read_text())
             prompts = payload.get("prompts")
             seeds = payload.get("seeds")
             if not isinstance(prompts, list) or not prompts or any(not isinstance(prompt, str) or not prompt.strip() for prompt in prompts):

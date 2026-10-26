@@ -10,7 +10,7 @@
     "sample_shift": 5.0,
     "enable_cfg": false,
     "cpu_offload": false,
-    "dit_original_ckpt": "/mnt/devsft_afs_2/gushiqiao/sf/checkpoints/self_forcing_dmd.pt",
+    "dit_original_ckpt": "/path/to/checkpoints/self_forcing_dmd.pt",
     "causal_rope_type": "wan_causal_rope",
     "async_vae_decode": true,
     "ar_config": {
@@ -32,9 +32,9 @@
     "warmup": true,
     "use_compile": true,
     "use_cuda_graph": true,
-    "t5_original_ckpt": "/mnt/devsft_afs_2/gushiqiao/sf/wan_models/Wan2.1-T2V-1.3B/models_t5_umt5-xxl-enc-bf16.pth",
-    "vae_path": "/mnt/devsft_afs_2/gushiqiao/sf/wan_models/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth",
-    "t5_tokenizer_path": "/mnt/devsft_afs_2/gushiqiao/sf/wan_models/Wan2.1-T2V-1.3B/google/umt5-xxl",
+    "t5_original_ckpt": "/path/to/models/Wan2.1-T2V-1.3B/models_t5_umt5-xxl-enc-bf16.pth",
+    "vae_path": "/path/to/models/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth",
+    "t5_tokenizer_path": "/path/to/models/Wan2.1-T2V-1.3B/google/umt5-xxl",
     "fps": 16,
     "t5_rms_norm_type": "torch",
     "streaming_vae": true,
@@ -43,7 +43,7 @@
     "dit_quantized": false,
     "t5_quantized": false,
     "use_tae": true,
-    "tae_path": "/mnt/devsft_afs_2/gushiqiao/vast/lighttaew2_1.safetensors",
+    "tae_path": "/path/to/lighttaew2_1.safetensors",
     "tae_dtype": "BF16",
     "need_scaled": true
 }

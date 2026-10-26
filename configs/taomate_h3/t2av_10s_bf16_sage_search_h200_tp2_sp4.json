@@ -44,12 +44,12 @@
       8192
     ]
   },
-  "adapter_path": "/mnt/devsft_afs_2/gushiqiao/ar/models/H3/TaoMate-H3",
+  "adapter_path": "/path/to/models/H3/TaoMate-H3",
   "offload_granularity": "block",
   "text_encoder_offload_granularity": "block",
   "text_encoder_release_block_offload_buffers": true,
   "allow_online_adaln_offload": true,
-  "prompt_json": "/mnt/devsft_afs_2/gushiqiao/ar/LightX2V/configs/taomate_h3/official_prompts_10s.json",
+  "prompt_json": "configs/taomate_h3/official_prompts_10s.json",
   "base10_attn_type": "sage_attn2",
   "vae_decode_parallel": true,
   "vae_use_compile": true,
