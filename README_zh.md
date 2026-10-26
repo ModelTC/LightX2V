@@ -239,13 +239,14 @@ LightX2V 支持多种图像、视频与世界模型，并提供量化权重、�
 
 <details>
 <summary><strong>🔍 修复与超分辨率</strong><br><br>
-<a href="scripts/seedvr2/README_zh.md">SeedVR2</a> · <a href="scripts/swiftvr/README_zh.md">SwiftVR</a>
+<a href="scripts/seedvr2/README_zh.md">SeedVR2</a> · <a href="scripts/swiftvr/README_zh.md">SwiftVR</a> · <a href="scripts/relayvsr/README_zh.md">RelayVSR</a>
 </summary>
 
 | 模型 / 变体与权重 | 使用指南 / 脚本 |
 | --- | --- |
 | [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B) | [使用指南](scripts/seedvr2/README_zh.md) |
 | [SwiftVR](https://huggingface.co/H-oliday/SwiftVR) | [使用指南](scripts/swiftvr/README_zh.md) |
+| [RelayVSR](https://huggingface.co/kopper/RelayVSR) | [使用指南](scripts/relayvsr/README_zh.md) |
 
 </details>
 
