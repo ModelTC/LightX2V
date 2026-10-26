@@ -1149,6 +1149,15 @@ class MiniMaxH3Qwen3VLTextEncoder:
             raise RuntimeError(f"Qwen3-VL M-RoPE produced {result.shape[1]} positions for {input_ids.shape[0]} tokens")
         return result
 
+    def _create_mm_token_type_ids(self, processor, token_ids):
+        if hasattr(processor, "create_mm_token_type_ids"):
+            return torch.tensor(processor.create_mm_token_type_ids([token_ids])[0], dtype=torch.long)
+        input_ids = torch.tensor(token_ids, dtype=torch.long)
+        token_types = torch.zeros_like(input_ids)
+        token_types[input_ids == self.tokenizer.convert_tokens_to_ids("<|image_pad|>")] = 1
+        token_types[input_ids == self.tokenizer.convert_tokens_to_ids("<|video_pad|>")] = 2
+        return token_types
+
     def _prepare_keyframe_inputs(self, prompt, images):
         processor = self.load_processor()
         vision = processor.image_processor(images=images, return_tensors="pt")
@@ -1256,7 +1265,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 input_ids = torch.tensor(token_ids, dtype=torch.long)
                 token_tags = torch.tensor(tags, dtype=torch.long)
                 processor = self.load_processor()
-                mm_types = torch.tensor(processor.create_mm_token_type_ids([token_ids])[0], dtype=torch.long)
+                mm_types = self._create_mm_token_type_ids(processor, token_ids)
                 position_ids = self._get_rope_index(
                     input_ids,
                     mm_types,
