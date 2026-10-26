@@ -57,16 +57,6 @@ class DistributedManager:
             logger.error(f"Rank {self.rank} distributed environment initialization failed: {str(e)}")
             return False
 
-    def attach_initialized_process_group(self):
-        """Create the server task channel after a model initializes its own groups."""
-        if not dist.is_initialized():
-            raise RuntimeError("The model did not initialize its distributed process group")
-        self.rank = dist.get_rank()
-        self.world_size = dist.get_world_size()
-        self.device = f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu"
-        self.task_pg = dist.new_group(backend="gloo", timeout=timedelta(days=30))
-        self.is_initialized = True
-
     def cleanup(self, timeout: int = 2):
         self._shutting_down = True
         self.is_initialized = False
