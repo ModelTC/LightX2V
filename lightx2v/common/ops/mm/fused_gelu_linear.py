@@ -130,7 +130,7 @@ def prepare_convrot_gelu_fusion(device=None):
                     _extension.lightx2v_prepare_convrot_gelu.restype = ctypes.c_int
                     _extension.lightx2v_gelu_convrot_quant.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
                     _extension.lightx2v_gelu_convrot_quant.restype = ctypes.c_int
-                except (OSError, RuntimeError) as error:
+                except (OSError, RuntimeError, AttributeError) as error:
                     _extension_error = error
                     return False
             if index not in _prepared_devices:
