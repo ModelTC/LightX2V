@@ -9,24 +9,11 @@ tile and directly loads its rectangular KV neighborhood. No replicated
 KV windows or quadratic mask are materialized.
 """
 
-from dataclasses import dataclass
-
 import torch
 import triton
 import triton.language as tl
 
-
-@dataclass(frozen=True)
-class SpatialAttentionSpec:
-    frames: int
-    height: int
-    width: int
-    window_height: int
-    window_width: int
-    temporal_window: int
-    key_frames: int
-    query_frame_offset: int = 0
-    key_frame_offset: int = 0
+from .attention import SpatialAttentionSpec
 
 
 @torch.library.custom_op("lightx2v::relayvsr_wan_attention", mutates_args=(), device_types="cuda")

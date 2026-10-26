@@ -3,8 +3,8 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
+from .attention import get_local_attention_ops
 from .compile import RelayCompileMixin, mark_sequence_dynamic
-from .flash_attention import triton_local_attention
 from .rope import apply_rope
 
 
@@ -25,6 +25,7 @@ class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
     def __init__(self, config, parallel, deployment):
         self.config, self.parallel = config, parallel
         self.init_compile(deployment)
+        self.local_attention = get_local_attention_ops(deployment)[0]
 
     def run_block(self, block_idx, block, x, condition, past_key, past_value, q_rope, k_rope, windows, height, width):
         if self.use_compile:
@@ -55,7 +56,7 @@ class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
             # The attention leaf repeats the video window for the dynamic KV
             # length; Python history length does not specialize the block.
             windows = tuple(tuple(spatial[name]) for name in names)
-        attended = triton_local_attention(query, all_key, all_value, height, width, windows)
+        attended = self.local_attention(query, all_key, all_value, height, width, windows)
         attended = attended[0].transpose(0, 1)
         x = x + block.output.apply(self.parallel.to_sequence(attended))
         gate, up = block.gate_up.apply(block.feed_forward_norm.apply(x)).chunk(2, -1)

@@ -18,6 +18,7 @@ from loguru import logger
 
 import lightx2v.common.kvcache.relayvsr  # noqa: F401 - register frame-slot cache
 from lightx2v.common.kvcache.manager import KVCacheManager
+from lightx2v.models.networks.relayvsr.attention import resolve_local_attention_backend
 from lightx2v.models.networks.relayvsr.model import RelayVSRModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
@@ -53,9 +54,11 @@ class RelayVSRRunner(DefaultRunner):
         for key, value in (("infer_steps", 1), ("guidance_scale", 1.0), ("enable_cfg", False), ("fps", None)):
             config.setdefault(key, value)
         validate_config(config)
+        config["local_attention_backend"] = resolve_local_attention_backend(config)
+        logger.info("RelayVSR local attention backend: {}", config["local_attention_backend"])
         super().__init__(config)
-        if AI_DEVICE != "cuda" or not torch.cuda.is_available() or GET_DTYPE() not in (torch.bfloat16, torch.float16):
-            raise ValueError("RelayVSR local attention requires CUDA with BF16 or FP16")
+        if AI_DEVICE != "cuda" or not torch.get_device_module(torch.device(AI_DEVICE)).is_available() or GET_DTYPE() not in (torch.bfloat16, torch.float16):
+            raise ValueError("RelayVSR local attention requires a CUDA-compatible accelerator with BF16 or FP16")
         self.device = torch.device("cuda", torch.cuda.current_device())
         self.main_rank = not dist.is_initialized() or dist.get_rank() == 0
         self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p") if config.get("seq_parallel") else None

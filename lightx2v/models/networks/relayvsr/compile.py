@@ -51,3 +51,16 @@ def native_layer_norm(x: torch.Tensor, weight: torch.Tensor | None, bias: torch.
 @native_layer_norm.register_fake
 def _layer_norm_fake(x, weight, bias, eps):
     return torch.empty_like(x, dtype=torch.float32, memory_format=torch.contiguous_format)
+
+
+# Keep MUSA SDPA's static meta constraints outside the dynamic Wan block.
+@torch.library.custom_op("lightx2v::relayvsr_sdpa", mutates_args=(), device_types="cuda")
+def native_sdpa(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+    from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight
+
+    return TorchSDPAWeight().apply(query, key, value)
+
+
+@native_sdpa.register_fake
+def _sdpa_fake(query, key, value):
+    return query.new_empty((query.shape[0], query.shape[1] * query.shape[2]))
