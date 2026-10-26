@@ -30,5 +30,5 @@ class MiniMaxH3PreInferOutput:
 
 @dataclass
 class MiniMaxH3VelocityOutput:
-    video: torch.Tensor
-    audio: torch.Tensor
+    video: torch.Tensor | None
+    audio: torch.Tensor | None

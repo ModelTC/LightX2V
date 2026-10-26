@@ -636,6 +636,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.decode_parallel = False
         self.decode_group = None
         self.encode_parallel = False
+        self.stitch_preallocate = False
         self.infer_dtype = torch.float16
         self.sensitive_layer_dtype = sensitive_layer_dtype
         if use_compile:
@@ -1013,9 +1014,17 @@ class MiniMaxH3VideoVAE(nn.Module):
         for row_start in range(0, len(clip_tiles), num_columns):
             rows.append(clip_tiles[row_start : row_start + num_columns])
 
+        result = None
+        if self.stitch_preallocate:
+            output_height = sum(row[0].shape[-2] for row in rows) - sum(height_overlaps)
+            output_width = sum(tile.shape[-1] for tile in rows[0]) - sum(width_overlaps)
+            # Avoid retaining concatenated rows alongside the full-frame allocation.
+            result = clip_tiles[0].new_empty((*clip_tiles[0].shape[:-2], output_height, output_width))
         result_rows = []
+        y = 0
         for row_index, row in enumerate(rows):
             result_row = []
+            x = 0
             for column_index, tile in enumerate(row):
                 if row_index > 0:
                     tile = self._blend(
@@ -1026,13 +1035,18 @@ class MiniMaxH3VideoVAE(nn.Module):
                     )
                 if column_index > 0:
                     tile = self._blend(row[column_index - 1], tile, width_overlaps[column_index - 1], dim=-1)
-                if row_index < len(rows) - 1:
-                    tile = tile[..., : -height_overlaps[row_index], :]
-                if column_index < len(row) - 1:
-                    tile = tile[..., :, : -width_overlaps[column_index]]
-                result_row.append(tile)
-            result_rows.append(torch.cat(result_row, dim=-1))
-        return torch.cat(result_rows, dim=-2)
+                tile_height = tile.shape[-2] - (height_overlaps[row_index] if row_index < len(rows) - 1 else 0)
+                tile_width = tile.shape[-1] - (width_overlaps[column_index] if column_index < len(row) - 1 else 0)
+                tile = tile[..., :tile_height, :tile_width]
+                if result is None:
+                    result_row.append(tile)
+                else:
+                    result[..., y : y + tile_height, x : x + tile_width].copy_(tile)
+                x += tile_width
+            if result is None:
+                result_rows.append(torch.cat(result_row, dim=-1))
+            y += tile_height
+        return torch.cat(result_rows, dim=-2) if result is None else result
 
     def _spatial_tile_layout(self, latents: torch.Tensor) -> _SpatialTileLayout:
         """Return latent slices and output-space overlaps for this spatial shape."""
@@ -1374,7 +1388,9 @@ class MiniMaxH3VideoVAE(nn.Module):
             return self.execution_device
         if self.cpu_offload:
             self.to(self.execution_device)
-        return next(self.parameters()).device
+        # Causal inference can keep the encoder on CPU while decoding on GPU.
+        module = self.encoder if operation == "encode" else self.decoder
+        return next(module.parameters()).device
 
     def offload(self) -> None:
         sources = self._cpu_weight_sources

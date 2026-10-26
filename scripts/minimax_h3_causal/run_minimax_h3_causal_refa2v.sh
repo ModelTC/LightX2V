@@ -3,7 +3,8 @@ set -euo pipefail
 
 lightx2v_path="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/../models/H3/MiniMax-H3}"
-config_path="${CONFIG_PATH:-${lightx2v_path}/configs/minimax_h3_causal/realtime_768p_bf16_5090_sp8.json}"
+# The BF16 baseline uses TP8; CONFIG_PATH can select another preset.
+config_path="${CONFIG_PATH:-${lightx2v_path}/configs/minimax_h3_causal/5090/baseline_768p_bf16_tp8.json}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 
