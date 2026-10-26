@@ -137,9 +137,9 @@ def quantize_dit(source, output, linear_type, output_name, device, overwrite):
     name = output_name or f"{source.stem}-{linear_type}"
     if skip_checkpoint(output / f"{name}.safetensors", "head.head.weight", overwrite):
         if linear_type == "fp8-f16-accum":
-            from lightx2v.models.networks.wan.fp8_f16_accum_policy import validate_checkpoint
+            from lightx2v.utils.fp8_f16_accum_checkpoint import WAN_QUANTIZATION_PROFILE, validate_checkpoint
 
-            validate_checkpoint(output / f"{name}.safetensors")
+            validate_checkpoint(output / f"{name}.safetensors", profile=WAN_QUANTIZATION_PROFILE)
         return
     command = [
         sys.executable,

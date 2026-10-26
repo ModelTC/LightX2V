@@ -31,7 +31,7 @@ from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     TritonQuantLinearInt8,  # noqa E402,
     TritonQuantLinearFp8,  # noqa E402
 )
-from lightx2v.models.input_encoders.hf.wan.t5.fp8_f16_accum_policy import ACTIVATION_QMAX, validate_checkpoint  # noqa E402
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, T5_QUANTIZATION_PROFILE, validate_checkpoint  # noqa E402
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8  # noqa E402
 from lightx2v_platform.ops.mm.iluvatar_cuda.q_linear import IluvatarQuantLinearInt8  # noqa E402
 
@@ -843,7 +843,7 @@ class T5EncoderModel:
             self.checkpoint_path = checkpoint_path
         self.tokenizer_path = tokenizer_path
         if t5_quantized and quant_scheme == "fp8-f16-accum" and not dummy_model:
-            validate_checkpoint(self.checkpoint_path)
+            validate_checkpoint(self.checkpoint_path, profile=T5_QUANTIZATION_PROFILE)
 
         # sync cpu offload
         self.cpu_offload = cpu_offload

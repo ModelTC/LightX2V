@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from lightx2v.utils.fp8_f16_accum_checkpoint import H3_PROJECTION_SUFFIXES
+
 
 def _load_helper(relative_path):
     # These helpers intentionally have no dependency on the full pipeline or
@@ -27,10 +29,9 @@ FusedQKVStorage = _load_helper("weights/fused_qkv.py").FusedQKVStorage
 qkv_ops = _load_helper("infer/fused_qkv.py")
 
 
-def test_fused_projection_preserves_fp8_f16_accum_policy():
-    policy = _load_helper("fp8_f16_accum_policy.py")
+def test_fused_projection_preserves_fp8_f16_accum_suffixes():
     projections = ("to_q", "to_k", "to_v", "to_qkv")
-    assert all(f"transformer_blocks.0.attn.{name}".endswith(policy.FP8_F16_ACCUM_PROJECTION_SUFFIXES) for name in projections)
+    assert all(f"transformer_blocks.0.attn.{name}".endswith(H3_PROJECTION_SUFFIXES) for name in projections)
 
 
 @pytest.mark.parametrize("layout", ["default", "int8", "transposed_int8"])

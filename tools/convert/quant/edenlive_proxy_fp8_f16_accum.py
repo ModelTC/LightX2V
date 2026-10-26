@@ -2,7 +2,8 @@
 
 import torch
 
-from lightx2v.models.input_encoders.edenlive.fp8_f16_accum_policy import ACTIVATION_QMAX, QUANTIZATION_PROFILE, WEIGHT_QMAX
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, WEIGHT_QMAX
+from lightx2v.utils.fp8_f16_accum_checkpoint import EDENLIVE_PROXY_QUANTIZATION_PROFILE as QUANTIZATION_PROFILE
 
 
 class EdenLiveProxyFP8F16AccumQuantization:

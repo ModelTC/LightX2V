@@ -45,11 +45,6 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason
-from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
-    FP8_F16_ACCUM_WEIGHT_QMAX,
-    VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX,
-    validate_fp8_f16_accum_checkpoint,
-)
 from lightx2v.models.video_encoders.hf.minimax_h3.fp8_encoder_conv_policy import (
     FP8_ENCODER_CONV_MODES,
     FP8_ENCODER_CONV_UNQUANTIZED_MODULE_NAMES,
@@ -63,6 +58,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     inspect_fp8_encoder_conv_checkpoint,
     load_safetensors_subset,
 )
+from lightx2v.utils.fp8_f16_accum_checkpoint import H3_QUANTIZATION_PROFILE, H3_VIDEO_VAE_ACTIVATION_QMAX, WEIGHT_QMAX, validate_checkpoint
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -734,10 +730,10 @@ class MiniMaxH3VideoVAE(nn.Module):
     def _configure_fp8_f16_accum_linears(self) -> None:
         # Packed QKV, attention output, and FFN use the validated H3 shapes.
         for block in self.decoder.transformer_blocks:
-            block.attn.to_qkv.enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
-            block.attn.to_out[0].enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
-            block.ff.net[0].proj.enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
-            block.ff.net[2].enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
+            block.attn.to_qkv.enable_fp8_f16_accum(H3_VIDEO_VAE_ACTIVATION_QMAX)
+            block.attn.to_out[0].enable_fp8_f16_accum(H3_VIDEO_VAE_ACTIVATION_QMAX)
+            block.ff.net[0].proj.enable_fp8_f16_accum(H3_VIDEO_VAE_ACTIVATION_QMAX)
+            block.ff.net[2].enable_fp8_f16_accum(H3_VIDEO_VAE_ACTIVATION_QMAX)
 
     def _make_fp8_linear(self, linear: nn.Linear) -> nn.Module:
         if self.quant_scheme == "fp8-f16-accum":
@@ -850,13 +846,13 @@ class MiniMaxH3VideoVAE(nn.Module):
                 raise ValueError(f"FP8 Encoder Conv3D weights require encoder_conv_mode to be one of {sorted(FP8_ENCODER_CONV_MODES)}")
             encoder_conv_policy = None
         if quant_scheme == "fp8-f16-accum":
-            validate_fp8_f16_accum_checkpoint(weight_path)
+            validate_checkpoint(weight_path, profile=H3_QUANTIZATION_PROFILE)
             fallback_reason = fp8_f16_accum_mm_unavailable_reason()
             if fallback_reason is None:
                 logger.info(
                     "MiniMax-H3 Video VAE FP8-F16 accumulation enabled for packed QKV, attention output, and FFN projections (weight qmax={}, activation qmax={})",
-                    FP8_F16_ACCUM_WEIGHT_QMAX,
-                    VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX,
+                    WEIGHT_QMAX,
+                    H3_VIDEO_VAE_ACTIVATION_QMAX,
                 )
             else:
                 logger.warning("MiniMax-H3 Video VAE FP8-F16 accumulation requested but {}; falling back to FP8-SGL", fallback_reason)

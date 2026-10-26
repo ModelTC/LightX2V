@@ -4,7 +4,8 @@ import re
 
 import torch
 
-from lightx2v.models.input_encoders.hf.wan.t5.fp8_f16_accum_policy import ACTIVATION_QMAX, QUANTIZATION_PROFILE, WEIGHT_QMAX
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, WEIGHT_QMAX
+from lightx2v.utils.fp8_f16_accum_checkpoint import T5_QUANTIZATION_PROFILE as QUANTIZATION_PROFILE
 
 _LINEAR = re.compile(r"blocks\.(\d+)\.(attn\.[qkvo]|ffn\.(?:fc[12]|gate\.0))\.weight")
 _BLOCK_LINEARS = {"attn.q", "attn.k", "attn.v", "attn.o", "ffn.fc1", "ffn.fc2", "ffn.gate.0"}

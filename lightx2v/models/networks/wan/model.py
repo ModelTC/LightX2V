@@ -10,7 +10,6 @@ from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_re
 from lightx2v.common.ops.mm.mm_weight import MMWeightWfp8channelAfp8channelF16Accum, unwrap_tp_weight
 from lightx2v.common.ops.mm.optimized_linear import make_gelu_linear, make_projection_group
 from lightx2v.models.networks.base_model import BaseTransformerModel
-from lightx2v.models.networks.wan.fp8_f16_accum_policy import ACTIVATION_QMAX, validate_checkpoint
 from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import (
     WanTransformerInferAdaCaching,
     WanTransformerInferCustomCaching,
@@ -38,6 +37,7 @@ from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanTransformerWeights,
 )
 from lightx2v.utils.envs import *
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, WAN_QUANTIZATION_PROFILE, validate_checkpoint
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -57,7 +57,7 @@ class WanModel(BaseTransformerModel):
             if reason is not None:
                 raise RuntimeError(f"Wan fp8-f16-accum is unavailable: {reason}")
             if not config.get("dummy_model", False):
-                validate_checkpoint(config.get("dit_quantized_ckpt", model_path))
+                validate_checkpoint(config.get("dit_quantized_ckpt", model_path), profile=WAN_QUANTIZATION_PROFILE)
         super().__init__(model_path, config, device, model_type, lora_path, lora_strength)
         if self.lazy_load:
             self.remove_keys.extend(["blocks."])

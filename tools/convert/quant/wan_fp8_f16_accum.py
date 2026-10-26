@@ -2,7 +2,8 @@
 
 import torch
 
-from lightx2v.models.networks.wan.fp8_f16_accum_policy import QUANTIZATION_PROFILE, WEIGHT_QMAX
+from lightx2v.utils.fp8_f16_accum_checkpoint import WAN_QUANTIZATION_PROFILE as QUANTIZATION_PROFILE
+from lightx2v.utils.fp8_f16_accum_checkpoint import WEIGHT_QMAX
 
 
 class WanFP8F16AccumQuantization:

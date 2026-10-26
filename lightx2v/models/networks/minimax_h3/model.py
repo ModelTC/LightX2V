@@ -12,11 +12,6 @@ from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_re
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
 from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
-from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
-    DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
-    FP8_F16_ACCUM_WEIGHT_QMAX,
-    validate_fp8_f16_accum_checkpoint,
-)
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.offload.transformer_infer import validate_minimax_h3_residency_config
@@ -31,6 +26,7 @@ from lightx2v.models.networks.minimax_h3.weights import (
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, H3_QUANTIZATION_PROFILE, WEIGHT_QMAX, validate_checkpoint
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 H3_CHANNEL_QUANT_SCHEMES = {
@@ -95,15 +91,15 @@ class MiniMaxH3Model(BaseTransformerModel):
             if not config.get("dit_quantized_ckpt"):
                 raise ValueError("MiniMax-H3 quantized inference requires dit_quantized_ckpt")
             if quant_scheme == "fp8-f16-accum":
-                validate_fp8_f16_accum_checkpoint(config["dit_quantized_ckpt"])
+                validate_checkpoint(config["dit_quantized_ckpt"], profile=H3_QUANTIZATION_PROFILE)
                 fallback_reason = fp8_f16_accum_mm_unavailable_reason()
                 if fallback_reason is not None:
                     logger.warning("MiniMax-H3 DiT FP8-F16 accumulation requested but {}; falling back to FP8-SGL", fallback_reason)
                 else:
                     logger.info(
                         "MiniMax-H3 DiT FP8-F16 accumulation enabled for Q/K/V, attention output, and FFN projections (weight qmax={}, activation qmax={})",
-                        FP8_F16_ACCUM_WEIGHT_QMAX,
-                        DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
+                        WEIGHT_QMAX,
+                        ACTIVATION_QMAX,
                     )
         elif config.get("dit_quant_scheme", "Default") != "Default":
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")

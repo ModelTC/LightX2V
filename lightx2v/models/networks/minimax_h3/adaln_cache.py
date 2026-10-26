@@ -45,7 +45,7 @@ def _projection_contract(config):
         "version": 1,
         "scheme": scheme,
         **({"checkpoint_layout": "native_h3" if quantized else "streamrender_release"} if config["model_cls"] == "streamrender_h3" else {}),
-        # AdaLN is intentionally absent from FP8_F16_ACCUM_PROJECTION_SUFFIXES.
+        # AdaLN is intentionally absent from H3_PROJECTION_SUFFIXES.
         # Its FP8-F16 profile therefore uses this same SGL per-token backend.
         "adaln_backend": "sgl_fp8_scaled_mm" if quantized else "torch.addmm",
         "activation_quantization": "sgl_per_token_quant_fp8" if quantized else None,

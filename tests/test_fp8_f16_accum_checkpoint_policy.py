@@ -1,25 +1,28 @@
-"""Each model policy checks every shard after the shared FP8 metadata refactor."""
+"""Each model profile checks every FP8 checkpoint shard."""
 
 import pytest
 import torch
 from safetensors.torch import save_file
 
-from lightx2v.models.input_encoders.hf.wan.t5 import fp8_f16_accum_policy as t5
-from lightx2v.models.networks.minimax_h3 import fp8_f16_accum_policy as h3
-from lightx2v.models.networks.qwen_image_21 import fp8_f16_accum_policy as qwen
-from lightx2v.models.networks.wan import fp8_f16_accum_policy as wan
+from lightx2v.utils.fp8_f16_accum_checkpoint import (
+    H3_QUANTIZATION_PROFILE,
+    QWEN_IMAGE_21_QUANTIZATION_PROFILE,
+    T5_QUANTIZATION_PROFILE,
+    WAN_QUANTIZATION_PROFILE,
+    validate_checkpoint,
+)
 
 
 @pytest.mark.parametrize(
-    "validate,profile,extra",
+    "profile,extra",
     [
-        (wan.validate_checkpoint, wan.QUANTIZATION_PROFILE, {}),
-        (t5.validate_checkpoint, t5.QUANTIZATION_PROFILE, {"activation_qmax": "7"}),
-        (qwen.validate_checkpoint, qwen.QUANTIZATION_PROFILE, {}),
-        (h3.validate_fp8_f16_accum_checkpoint, h3.FP8_F16_ACCUM_QUANTIZATION_PROFILE, {}),
+        (WAN_QUANTIZATION_PROFILE, {}),
+        (T5_QUANTIZATION_PROFILE, {"activation_qmax": "7"}),
+        (QWEN_IMAGE_21_QUANTIZATION_PROFILE, {}),
+        (H3_QUANTIZATION_PROFILE, {}),
     ],
 )
-def test_fp8_checkpoint_policy_validates_every_shard(tmp_path, validate, profile, extra):
+def test_fp8_checkpoint_policy_validates_every_shard(tmp_path, profile, extra):
     checkpoint = tmp_path / "shards"
     checkpoint.mkdir()
     metadata = {"quantization_profile": profile, "weight_qmax": "14", **extra}
@@ -27,7 +30,7 @@ def test_fp8_checkpoint_policy_validates_every_shard(tmp_path, validate, profile
     save_file({"weight": torch.ones(1)}, checkpoint / "00002.safetensors", metadata={**metadata, "weight_qmax": "448"})
 
     with pytest.raises(ValueError, match="weight_qmax"):
-        validate(checkpoint)
+        validate_checkpoint(checkpoint, profile=profile)
 
     save_file({"weight": torch.ones(1)}, checkpoint / "00002.safetensors", metadata=metadata)
-    validate(checkpoint)
+    validate_checkpoint(checkpoint, profile=profile)
