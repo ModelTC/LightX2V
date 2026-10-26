@@ -64,7 +64,7 @@ class RelayWanTransformerInfer(RelayCompileMixin, WanOffloadTransformerInfer):
         }
         super().__init__(family_config)
         self.relay_config, self.parallel = config, parallel
-        self.local_attention = get_local_attention_ops(deployment)[1]
+        self.local_attention = get_local_attention_ops()[1]
         self.use_native_sdpa_leaf = PLATFORM == "musa" and self.use_compile and deployment.get("cross_attention_backend", "torch_sdpa") == "torch_sdpa"
         # Norms and modulation run in FP32, but residuals round to the inference
         # dtype after every sublayer, matching the official distilled checkpoint.

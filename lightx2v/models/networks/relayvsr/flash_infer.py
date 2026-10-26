@@ -25,7 +25,7 @@ class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
     def __init__(self, config, parallel, deployment):
         self.config, self.parallel = config, parallel
         self.init_compile(deployment)
-        self.local_attention = get_local_attention_ops(deployment)[0]
+        self.local_attention = get_local_attention_ops()[0]
 
     def run_block(self, block_idx, block, x, condition, past_key, past_value, q_rope, k_rope, windows, height, width):
         if self.use_compile:

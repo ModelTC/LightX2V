@@ -18,16 +18,8 @@ class SpatialAttentionSpec:
     key_frame_offset: int = 0
 
 
-def resolve_local_attention_backend(deployment):
-    backend = "torch_sdpa" if PLATFORM == "musa" else "triton"
-    requested = deployment.get("local_attention_backend", "auto")
-    if requested not in ("auto", backend):
-        raise ValueError(f"RelayVSR on {PLATFORM} requires local_attention_backend={backend!r}; got {requested!r}")
-    return backend
-
-
-def get_local_attention_ops(deployment):
-    if resolve_local_attention_backend(deployment) == "torch_sdpa":
+def get_local_attention_ops():
+    if PLATFORM == "musa":
         from .musa_attention import musa_flash_attention, musa_spatial_attention
 
         return musa_flash_attention, musa_spatial_attention
