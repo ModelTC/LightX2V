@@ -12,11 +12,6 @@ from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_re
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
 from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
-from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
-    DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
-    FP8_F16_ACCUM_WEIGHT_QMAX,
-    validate_fp8_f16_accum_checkpoint,
-)
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.offload.transformer_infer import validate_minimax_h3_residency_config
@@ -31,6 +26,7 @@ from lightx2v.models.networks.minimax_h3.weights import (
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, H3_QUANTIZATION_PROFILE, WEIGHT_QMAX, validate_checkpoint
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 H3_CHANNEL_QUANT_SCHEMES = {
@@ -62,12 +58,13 @@ class MiniMaxH3Model(BaseTransformerModel):
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         validate_minimax_h3_residency_config(config)
         self.lora_alpha = lora_alpha
+        config.setdefault("use_fused_qkv", bool(config.get("dit_quantized", False)))
         if config.get("cpu_offload_block_contiguous", False):
             for option in ("use_fused_qkv", "dit_release_block_offload_buffers", "dit_quantized"):
                 if config.get(option, False):
                     raise ValueError(f"MiniMax-H3 contiguous block offload does not support {option}")
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
-        if config.get("cpu_offload", False) and not self.use_adaln_cache:
+        if config.get("cpu_offload", False) and not (self.use_adaln_cache or config.get("allow_online_adaln_offload", False)):
             message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{ADALN_CACHE_GUIDE}"
             logger.error(message)
             raise ValueError(message)
@@ -94,17 +91,15 @@ class MiniMaxH3Model(BaseTransformerModel):
             if not config.get("dit_quantized_ckpt"):
                 raise ValueError("MiniMax-H3 quantized inference requires dit_quantized_ckpt")
             if quant_scheme == "fp8-f16-accum":
-                validate_fp8_f16_accum_checkpoint(config["dit_quantized_ckpt"])
+                validate_checkpoint(config["dit_quantized_ckpt"], profile=H3_QUANTIZATION_PROFILE)
                 fallback_reason = fp8_f16_accum_mm_unavailable_reason()
-                if config.get("tensor_parallel", False):
-                    logger.info("MiniMax-H3 DiT FP8-F16 accumulation falls back to FP8-SGL under tensor parallel")
-                elif fallback_reason is not None:
+                if fallback_reason is not None:
                     logger.warning("MiniMax-H3 DiT FP8-F16 accumulation requested but {}; falling back to FP8-SGL", fallback_reason)
                 else:
                     logger.info(
                         "MiniMax-H3 DiT FP8-F16 accumulation enabled for Q/K/V, attention output, and FFN projections (weight qmax={}, activation qmax={})",
-                        FP8_F16_ACCUM_WEIGHT_QMAX,
-                        DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
+                        WEIGHT_QMAX,
+                        ACTIVATION_QMAX,
                     )
         elif config.get("dit_quant_scheme", "Default") != "Default":
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")
@@ -420,8 +415,9 @@ class MiniMaxH3Model(BaseTransformerModel):
             details = ", ".join(f"{name}={value}" for name, value in invalid.items())
             raise ValueError(f"MiniMax-H3 TP size {self.tp_size} must divide {details}")
 
-    @staticmethod
-    def _tp_split_type(key):
+    def _tp_split_type(self, key):
+        if key.startswith("token_refiner.") and not self.config.get("text_refiner_tensor_parallel", True):
+            return None
         if ".attn.to_q." in key or ".attn.to_k." in key or ".attn.to_v." in key:
             return "col"
         if ".attn.to_out.0." in key:
@@ -514,8 +510,20 @@ class MiniMaxH3Model(BaseTransformerModel):
         finally:
             self.use_tp = use_tp
 
+    @staticmethod
+    def _fp8_f16_checkpoint_tensor(key, tensor, sensitive_layer):
+        # H3 causal's original .pt checkpoint stores every projection as FP32.
+        # Its BF16 loader keeps only the input/time/output projections in FP32;
+        # restore that same contract for unquantized tensors in the FP8 file.
+        if tensor.dtype != torch.float32 or key.endswith(".weight_scale") or ".lora_" in key:
+            return tensor
+        if key.split(".", 1)[0] in sensitive_layer:
+            return tensor
+        return tensor.to(torch.bfloat16)
+
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
-        if not self.use_tp:
+        fp8_f16_profile = self.config.get("dit_quant_scheme") == "fp8-f16-accum"
+        if not self.use_tp and not fp8_f16_profile:
             return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
         checkpoint_path = self.config["dit_quantized_ckpt"]
         files = sorted(glob.glob(os.path.join(checkpoint_path, "*.safetensors"))) if os.path.isdir(checkpoint_path) else [checkpoint_path]
@@ -525,10 +533,12 @@ class MiniMaxH3Model(BaseTransformerModel):
         logger.info(f"MiniMax-H3 rank {dist.get_rank() if dist.is_initialized() else 0} loading TP checkpoint shards on {load_device}")
         for file_path in files:
             with safe_open(file_path, framework="pt", device="cpu") as source:
+                self._record_checkpoint_metadata(source)
                 for key in source.keys():
                     if any(remove_key in key for remove_key in remove_keys):
                         continue
-                    weight_dict[key] = self._load_local_tensor(source, key, load_device)
+                    tensor = self._load_local_tensor(source, key, load_device)
+                    weight_dict[key] = self._fp8_f16_checkpoint_tensor(key, tensor, sensitive_layer) if fp8_f16_profile else tensor
         self._validate_checkpoint_devices(weight_dict, load_device)
         return weight_dict
 

@@ -9,6 +9,16 @@ import torch
 from loguru import logger
 
 
+def async_vae_decode_enabled(config: dict[str, Any]) -> bool:
+    """Read the shared top-level asynchronous decode switch."""
+    return bool(config.get("async_vae_decode", False))
+
+
+def normalize_async_vae_config(config: dict[str, Any]) -> None:
+    """Set the top-level decode switch to its explicit or default boolean."""
+    config["async_vae_decode"] = async_vae_decode_enabled(config)
+
+
 class AsyncVAEChunkDecoder:
     """Submit chunk VAE decodes on a side CUDA stream.
 
@@ -22,17 +32,18 @@ class AsyncVAEChunkDecoder:
       - Caller should use ``no_sync_profiling`` when measuring with profilers on.
     """
 
-    def __init__(self, enabled: bool, device: torch.device | str | None = None, on_chunk: Callable | None = None, dispatch_in_worker: bool = False) -> None:
+    def __init__(self, enabled: bool, device: torch.device | str | None = None, on_chunk: Callable | None = None, dispatch_in_worker: bool = False, collect_outputs: bool = True) -> None:
         self.enabled = bool(enabled) and torch.cuda.is_available()
         self._device = torch.device(device) if device is not None else None
         if self._device is not None and self._device.type != "cuda":
             self.enabled = False
         self._stream: torch.cuda.Stream | None = None
         self._prev_vae_done: torch.cuda.Event | None = None
-        self._chunks: list[torch.Tensor] = []
+        self._chunks: list[Any] = []
         self._decode_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
         self._num_submitted = 0
         self._sync_decode_ms = 0.0
+        self._async_decode_ms = 0.0
         self._submit_wait_ms = 0.0
         self._finish_wait_ms = 0.0
         self._logged_decode_events = 0
@@ -42,6 +53,7 @@ class AsyncVAEChunkDecoder:
         self._callback_executor = None
         self._callback_futures = []
         self._dispatch_in_worker = dispatch_in_worker
+        self._collect_outputs = collect_outputs
         self._decode_executor = None
         self._decode_futures = []
 
@@ -56,31 +68,32 @@ class AsyncVAEChunkDecoder:
         vae_decoder: Any | None = None,
         on_chunk: Callable | None = None,
         dispatch_in_worker: bool = False,
+        collect_outputs: bool = True,
     ) -> "AsyncVAEChunkDecoder":
-        ar_config = config.get("ar_config", {})
-        enabled = bool(
-            config.get(
-                "async_vae_decode",
-                ar_config.get("async_vae_decode", config.get("streaming_vae", False) and config.get("async_vae", False)),
-            )
-        )
-        decoder = cls(enabled=enabled, device=device, on_chunk=on_chunk, dispatch_in_worker=dispatch_in_worker)
+        enabled = async_vae_decode_enabled(config)
+        decoder = cls(enabled=enabled, device=device, on_chunk=on_chunk, dispatch_in_worker=dispatch_in_worker, collect_outputs=collect_outputs)
         if vae_decoder is not None:
             decoder.prepare_vae(vae_decoder)
         return decoder
 
     def prepare_vae(self, vae_decoder: Any) -> None:
-        """Pin VAE on GPU for async overlap when ``cpu_offload`` would block overlap."""
+        """Keep decoder weights on the GPU for this streaming decode session."""
         self._vae_decoder = vae_decoder
         if self.enabled:
             logger.info("[AsyncVAEChunkDecoder] async VAE decode enabled")
-        if not self.enabled or not getattr(vae_decoder, "cpu_offload", False):
+            if hasattr(vae_decoder, "enable_async_decode"):
+                vae_decoder.enable_async_decode()
+        if not getattr(vae_decoder, "cpu_offload", False) or not torch.cuda.is_available() or (self._device is not None and self._device.type != "cuda"):
             return
-        logger.info("[AsyncVAEChunkDecoder] async mode: VAE cpu_offload was True, forcing False and pinning VAE on GPU")
+        logger.info("[AsyncVAEChunkDecoder] keeping offloaded VAE weights on GPU until the decode session finishes")
         self._saved_vae_cpu_offload = True
         vae_decoder.cpu_offload = False
-        if hasattr(vae_decoder, "to_cuda"):
-            vae_decoder.to_cuda()
+        try:
+            if hasattr(vae_decoder, "to_cuda"):
+                vae_decoder.to_cuda()
+        except BaseException:
+            self._restore_vae()
+            raise
 
     def _restore_vae(self) -> None:
         vae_decoder = self._vae_decoder
@@ -118,12 +131,14 @@ class AsyncVAEChunkDecoder:
             return
         torch.cuda.synchronize(device)
 
-    def submit(self, decode_fn: Callable[..., torch.Tensor], *args: Any, **kwargs: Any) -> None:
+    def submit(self, decode_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         self._num_submitted += 1
         if not self.enabled:
             self._sync_if_cuda(args)
             t0 = time.perf_counter()
-            self._chunks.append(decode_fn(*args, **kwargs))
+            output = decode_fn(*args, **kwargs)
+            if self._collect_outputs:
+                self._chunks.append(output)
             self._sync_if_cuda(args)
             chunk_ms = (time.perf_counter() - t0) * 1000.0
             self._sync_decode_ms += chunk_ms
@@ -134,7 +149,7 @@ class AsyncVAEChunkDecoder:
                 chunk_ms / 1000.0,
             )
             if self._on_chunk is not None:
-                self._on_chunk(self._chunks[-1], self._num_submitted - 1)
+                self._on_chunk(output, self._num_submitted - 1)
             return
 
         device = self._resolve_device(args)
@@ -146,6 +161,8 @@ class AsyncVAEChunkDecoder:
             for value in list(args) + list(kwargs.values()):
                 if isinstance(value, torch.Tensor) and value.device.type == "cuda":
                     value.record_stream(stream)
+            if len(self._decode_futures) >= 2:
+                self._decode_futures.pop(0).result()
             if self._decode_executor is None:
                 self._decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vae-decode")
             self._decode_futures.append(self._decode_executor.submit(self._decode_chunk, decode_fn, args, kwargs, diffusion_done, self._num_submitted - 1))
@@ -168,7 +185,8 @@ class AsyncVAEChunkDecoder:
             decode_start.record(stream)
             output = decode_fn(*args, **kwargs)
             decode_end.record(stream)
-            self._chunks.append(output)
+            if self._collect_outputs:
+                self._chunks.append(output)
             self._decode_events.append((decode_start, decode_end))
             self._prev_vae_done = torch.cuda.Event()
             self._prev_vae_done.record(stream)
@@ -195,45 +213,81 @@ class AsyncVAEChunkDecoder:
             start.record(self._stream)
             output = decode_fn(*args, **kwargs)
             end.record(self._stream)
-            self._chunks.append(output)
-            self._decode_events.append((start, end))
+            if self._collect_outputs:
+                self._chunks.append(output)
+            if self._collect_outputs:
+                self._decode_events.append((start, end))
+            else:
+                end.synchronize()
+                self._async_decode_ms += start.elapsed_time(end)
             if self._on_chunk is not None:
                 end.synchronize()
                 self._on_chunk(output, index)
 
-    def finish(self) -> list[torch.Tensor]:
-        if self._decode_executor is not None:
-            t0 = time.perf_counter()
-            self._decode_executor.shutdown(wait=True)
-            self._decode_executor = None
-            self._finish_wait_ms += (time.perf_counter() - t0) * 1000.0
-        decode_futures, self._decode_futures = self._decode_futures, []
-        for future in decode_futures:
-            future.result()
+    def synchronize(self) -> None:
+        """Join queued chunks without ending the current causal decode request."""
+        first_error = None
+        pending, self._decode_futures = self._decode_futures, []
+        for future in pending:
+            try:
+                future.result()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
         if self._stream is not None:
-            t0 = time.perf_counter()
-            self._stream.synchronize()
-            wait_ms = (time.perf_counter() - t0) * 1000.0
-            self._finish_wait_ms += wait_ms
-            self._log_new_async_chunks(wait_ms, wait_kind="finish_wait")
-        if self._callback_executor is not None:
-            self._callback_executor.shutdown(wait=True)
+            try:
+                self._stream.synchronize()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        callbacks, self._callback_futures = self._callback_futures, []
+        for future in callbacks:
+            try:
+                future.result()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
+
+    def finish(self) -> list[Any]:
+        started = time.perf_counter()
+        first_error = None
+        try:
+            self.synchronize()
+            self._finish_wait_ms += (time.perf_counter() - started) * 1000.0
+            self._log_timing()
+            return self._chunks
+        except BaseException as error:
+            first_error = error
+            raise
+        finally:
+            cleanup_error = None
+            for executor in (self._decode_executor, self._callback_executor):
+                if executor is not None:
+                    try:
+                        executor.shutdown(wait=True)
+                    except BaseException as error:
+                        if cleanup_error is None:
+                            cleanup_error = error
+            self._decode_executor = None
             self._callback_executor = None
-        futures, self._callback_futures = self._callback_futures, []
-        for future in futures:
-            future.result()
-        self._log_timing()
-        chunks = self._chunks
-        self._chunks = []
-        self._prev_vae_done = None
-        self._decode_events = []
-        self._num_submitted = 0
-        self._sync_decode_ms = 0.0
-        self._submit_wait_ms = 0.0
-        self._finish_wait_ms = 0.0
-        self._logged_decode_events = 0
-        self._restore_vae()
-        return chunks
+            self._chunks = []
+            self._prev_vae_done = None
+            self._decode_events = []
+            self._num_submitted = 0
+            self._sync_decode_ms = 0.0
+            self._async_decode_ms = 0.0
+            self._submit_wait_ms = 0.0
+            self._finish_wait_ms = 0.0
+            self._logged_decode_events = 0
+            try:
+                self._restore_vae()
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+            if first_error is None and cleanup_error is not None:
+                raise cleanup_error
 
     def _log_new_async_chunks(self, exposed_wait_ms: float, wait_kind: str) -> None:
         if not self.enabled:
@@ -270,7 +324,7 @@ class AsyncVAEChunkDecoder:
             )
             return
 
-        decode_ms = 0.0
+        decode_ms = self._async_decode_ms
         for start, end in self._decode_events:
             decode_ms += start.elapsed_time(end)
         exposed_ms = self._submit_wait_ms + self._finish_wait_ms

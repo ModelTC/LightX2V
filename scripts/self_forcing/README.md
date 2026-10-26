@@ -1,93 +1,31 @@
-
 # Self-Forcing (Wan2.1-T2V-1.3B)
 
-This document shows how to run the Self-Forcing acceleration for `Wan2.1-T2V-1.3B` in LightX2V.
+This page shows how to run the Self-Forcing Wan2.1 1.3B text-to-video model in LightX2V.
 
-## Prepare the Environment
+## Prepare the model
 
-Please refer to [Quick Start](../../docs/EN/source/getting_started/quickstart.md)
+Follow the LightX2V [Quick Start](../../docs/EN/source/getting_started/quickstart.md). Download the original Wan2.1 1.3B weights and the Self-Forcing checkpoint:
 
-## Download
-
-### 1. BF16 original model (Wan2.1-T2V-1.3B)
-
-Download the original BF16 model from the Wan-AI Hugging Face repository:
-
-```
-huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B --local-dir-use-symlinks False --local-dir wan_models/Wan2.1-T2V-1.3B
+```bash
+hf download Wan-AI/Wan2.1-T2V-1.3B --local-dir ./wan_models/Wan2.1-T2V-1.3B
+hf download gdhe17/Self-Forcing checkpoints/self_forcing_dmd.pt --local-dir .
 ```
 
-### 2. Self-Forcing checkpoint
+The current RTX 5090 profiles use the same 81-frame, 480×832, 16 FPS request geometry and LightTAE decoder:
 
-Download the Self-Forcing checkpoint (`self_forcing_dmd.pt`):
+- [BF16 configuration](../../configs/self_forcing/wan_t2v_sf_bf16_lighttae_5090.json)
+- [FP8-FP16 configuration](../../configs/self_forcing/wan_t2v_sf_fp8_f16_accum_lighttae_5090.json)
 
-```
-huggingface-cli download gdhe17/Self-Forcing checkpoints/self_forcing_dmd.pt --local-dir .
-```
+The FP8 configuration uses converted DiT and T5 checkpoints. Adjust the absolute weight, tokenizer and decoder paths in a copied JSON before running it on another machine. Both profiles enable Sage, warmup, DiT compile/CUDA Graph, streaming LightTAE and top-level asynchronous decode. KV offload is disabled; `vae_use_compile` controls the decoder independently of `use_compile`.
 
-### 3. Quantized models (FP8 / NVFP4)
+## Run
 
-Download the quantized models from the LightX2V HuggingFace collection:
+Run from the repository root and point `MODEL_PATH` at the downloaded Wan weights. The launchers find the repository automatically and select the respective configurations above:
 
-https://huggingface.co/collections/lightx2v/ar-lightx2v
-
-## Start Running
-
-We provide three scripts:
-
-1. `scripts/self_forcing/run_wan_t2v_sf.sh`: BF16 original model + Self-Forcing checkpoint
-2. `scripts/self_forcing/run_wan_t2v_sf_fp8.sh`: FP8 quantized model
-3. `scripts/self_forcing/run_wan_t2v_sf_nvfp4.sh`: NVFP4 quantized model
-
-Before running any script below, you need to fill in the path variables in the script.
-
-### 1) BF16 + Self-Forcing checkpoint
-
-Edit and run:
-
-```
+```bash
+export MODEL_PATH="$PWD/wan_models/Wan2.1-T2V-1.3B"
 bash scripts/self_forcing/run_wan_t2v_sf.sh
-```
-
-Key fields in `run_wan_t2v_sf.sh`:
-
-- `lightx2v_path`: your LightX2V repo path
-- `model_path`: path to the original BF16 `Wan2.1-T2V-1.3B` directory
-- `dit_original_ckpt` in the config file: path to `self_forcing_dmd.pt` (downloaded from `gdhe17/Self-Forcing`)
-
-The script runs:
-
-- `python -m lightx2v.infer`
-- `--model_cls wan2.1_sf`: use the Wan2.1 Self-Forcing pipeline
-- `--task t2v`: text-to-video
-- `--config_json configs/self_forcing/wan_t2v_sf.json`: Self-Forcing runtime config
-
-Note: In `configs/self_forcing/wan_t2v_sf.json`, `enable_cfg` is set to `false` by default.
-
-### 2) FP8 quantized model
-
-Edit and run:
-
-```
 bash scripts/self_forcing/run_wan_t2v_sf_fp8.sh
 ```
 
-Additional notes for FP8:
-
-- The script uses `configs/self_forcing/wan_t2v_sf_fp8.json`.
-- You must change `dit_quantized_ckpt` in that config file to the **absolute path** of the downloaded FP8 weights (from the HuggingFace collection).
-- `dit_quant_scheme` is `fp8-vllm`.
-
-### 3) NVFP4 quantized model
-
-Edit and run:
-
-```
-bash scripts/self_forcing/run_wan_t2v_sf_nvfp4.sh
-```
-
-Additional notes for NVFP4:
-
-- The script uses `configs/self_forcing/wan_t2v_sf_nvfp4.json`.
-- You must change `dit_quantized_ckpt` in that config file to the **absolute path** of the downloaded NVFP4 weights (from the HuggingFace collection).
-- `dit_quant_scheme` is `nvfp4`.
+To select a copied JSON, set `CONFIG_PATH` when invoking either launcher. The source checkpoint path is the `dit_original_ckpt` field. Self-attention writes RoPE-rotated keys to a rolling ring; Sage stores encoded historical K/V and incrementally updates the newly written slots. See the [AR KV implementation map](../../lightx2v/common/kvcache/AR_IMPLEMENTATIONS.md) for the storage and FlashAttention paths.

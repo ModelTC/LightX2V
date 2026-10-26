@@ -929,8 +929,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
         backbone.to_cpu()
         return checkpoint_dtype
 
-    @staticmethod
-    def _load_quantized_weights(backbone, checkpoint_path):
+    @classmethod
+    def _load_quantized_weights(cls, backbone, checkpoint_path):
         text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
         modules = dict(backbone.named_weight_modules())
         tensor_names = {}

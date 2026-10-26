@@ -8,8 +8,10 @@ from lightx2v.models.networks.worldplay.ar_model import WorldPlayARModel
 from lightx2v.models.networks.worldplay.pose_utils import load_pose, pose_to_input
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner
 from lightx2v.models.schedulers.worldplay.ar_scheduler import WorldPlayARScheduler
+from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.input_info import WorldPlayI2VInputInfo, WorldPlayT2VInputInfo
-from lightx2v.utils.profiler import ProfilingContext4DebugL2
+from lightx2v.utils.profiler import ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -183,23 +185,35 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
-        """Override to use chunk-based AR generation instead of run_segment()."""
         self.init_run()
-        self.run_denoising_loop()
-        latents = self.scheduler.latents
-        if self.config.get("use_stream_vae", False):
-            frames = []
-            for frame_segment in self.run_vae_decoder_stream(latents):
-                frames.append(frame_segment)
-            self.gen_video = torch.cat(frames, dim=2)
-        else:
-            self.gen_video = self.run_vae_decoder(latents)
+        lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
+        if lazy_vae:
+            self.vae_decoder = self.load_vae_decoder()
+        decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder, dispatch_in_worker=True)
+        try:
+            with no_sync_profiling(enabled=decoder.is_async):
+                if self.sr_version:
+                    self.run_denoising_loop()
+                    latents = self.run_sr(self.scheduler.latents)
+                    chunks = latents.split(self.chunk_latent_frames, dim=2)
+                    for index, chunk in enumerate(chunks):
+                        decoder.submit(self.vae_decoder.cached_decode_withflag, chunk.to(GET_DTYPE()), index == 0, index == len(chunks) - 1)
+                else:
+                    self.run_denoising_loop(decoder)
+                self.gen_video = torch.cat(decoder.finish(), dim=2)
+        finally:
+            try:
+                decoder.finish()
+            finally:
+                self.vae_decoder.reset_decode_state()
+                if lazy_vae:
+                    del self.vae_decoder
         self.gen_video_final = self.gen_video
-        gen_video_final = self.process_images_after_vae_decoder()
+        result = self.process_images_after_vae_decoder()
         self.end_run()
-        return gen_video_final
+        return result
 
-    def run_denoising_loop(self):
+    def run_denoising_loop(self, vae_decoder=None):
         """
         Run autoregressive denoising loop with chunk-based generation.
 
@@ -267,6 +281,8 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
 
             # Update latents with generated chunk
             self.scheduler.update_chunk_latents(chunk_idx, chunk_output)
+            if vae_decoder is not None:
+                vae_decoder.submit(self.vae_decoder.cached_decode_withflag, chunk_output.to(GET_DTYPE()), chunk_idx == 0, chunk_idx == total_chunks - 1)
 
         # Restore full data
         self.scheduler.viewmats = full_viewmats

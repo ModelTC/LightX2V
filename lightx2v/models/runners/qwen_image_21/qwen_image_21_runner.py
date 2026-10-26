@@ -11,7 +11,6 @@ from loguru import logger
 
 from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason, validate_fp8_f16_accum_qmax
 from lightx2v.models.input_encoders.hf.qwen_image_21.qwen3vl import QwenImage21TextEncoder
-from lightx2v.models.networks.qwen_image_21.fp8_f16_accum_policy import ACTIVATION_QMAX, validate_checkpoint
 from lightx2v.models.networks.qwen_image_21.infer.offload.transformer_infer import QwenImage21OffloadTransformerInfer
 from lightx2v.models.networks.qwen_image_21.infer.pre_infer import build_token_layout
 from lightx2v.models.networks.qwen_image_21.input_utils import prepare_images
@@ -21,6 +20,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -168,7 +168,7 @@ class QwenImage21Runner(DefaultRunner):
             reason = fp8_f16_accum_mm_unavailable_reason()
             if reason is not None:
                 raise RuntimeError(f"qwen_image_21 fp8-f16-accum is unavailable: {reason}")
-            validate_checkpoint(self.config["dit_quantized_ckpt"])
+            validate_checkpoint(self.config["dit_quantized_ckpt"], profile=QWEN_IMAGE_21_QUANTIZATION_PROFILE)
         lora_kwargs = {}
         if self.config.get("lora_dynamic_apply", False):
             lora = self.config["lora_configs"][0]

@@ -1,0 +1,1 @@
+from .transformer_infer import WanAutoregressiveTransformerInfer

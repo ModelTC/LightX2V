@@ -45,11 +45,6 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason
-from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
-    FP8_F16_ACCUM_WEIGHT_QMAX,
-    VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX,
-    validate_fp8_f16_accum_checkpoint,
-)
 from lightx2v.models.video_encoders.hf.minimax_h3.fp8_encoder_conv_policy import (
     FP8_ENCODER_CONV_MODES,
     FP8_ENCODER_CONV_UNQUANTIZED_MODULE_NAMES,
@@ -63,6 +58,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     inspect_fp8_encoder_conv_checkpoint,
     load_safetensors_subset,
 )
+from lightx2v.utils.fp8_f16_accum_checkpoint import H3_QUANTIZATION_PROFILE, H3_VIDEO_VAE_ACTIVATION_QMAX, WEIGHT_QMAX, validate_checkpoint
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -638,6 +634,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.cpu_offload = cpu_offload
         self.quant_scheme = quant_scheme
         self.decode_parallel = False
+        self.decode_group = None
         self.encode_parallel = False
         self.infer_dtype = torch.float16
         self.sensitive_layer_dtype = sensitive_layer_dtype
@@ -733,10 +730,10 @@ class MiniMaxH3VideoVAE(nn.Module):
     def _configure_fp8_f16_accum_linears(self) -> None:
         # Packed QKV, attention output, and FFN use the validated H3 shapes.
         for block in self.decoder.transformer_blocks:
-            block.attn.to_qkv.enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
-            block.attn.to_out[0].enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
-            block.ff.net[0].proj.enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
-            block.ff.net[2].enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
+            block.attn.to_qkv.enable_fp8_f16_accum(H3_VIDEO_VAE_ACTIVATION_QMAX)
+            block.attn.to_out[0].enable_fp8_f16_accum(H3_VIDEO_VAE_ACTIVATION_QMAX)
+            block.ff.net[0].proj.enable_fp8_f16_accum(H3_VIDEO_VAE_ACTIVATION_QMAX)
+            block.ff.net[2].enable_fp8_f16_accum(H3_VIDEO_VAE_ACTIVATION_QMAX)
 
     def _make_fp8_linear(self, linear: nn.Linear) -> nn.Module:
         if self.quant_scheme == "fp8-f16-accum":
@@ -849,13 +846,13 @@ class MiniMaxH3VideoVAE(nn.Module):
                 raise ValueError(f"FP8 Encoder Conv3D weights require encoder_conv_mode to be one of {sorted(FP8_ENCODER_CONV_MODES)}")
             encoder_conv_policy = None
         if quant_scheme == "fp8-f16-accum":
-            validate_fp8_f16_accum_checkpoint(weight_path)
+            validate_checkpoint(weight_path, profile=H3_QUANTIZATION_PROFILE)
             fallback_reason = fp8_f16_accum_mm_unavailable_reason()
             if fallback_reason is None:
                 logger.info(
                     "MiniMax-H3 Video VAE FP8-F16 accumulation enabled for packed QKV, attention output, and FFN projections (weight qmax={}, activation qmax={})",
-                    FP8_F16_ACCUM_WEIGHT_QMAX,
-                    VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX,
+                    WEIGHT_QMAX,
+                    H3_VIDEO_VAE_ACTIVATION_QMAX,
                 )
             else:
                 logger.warning("MiniMax-H3 Video VAE FP8-F16 accumulation requested but {}; falling back to FP8-SGL", fallback_reason)
@@ -931,6 +928,15 @@ class MiniMaxH3VideoVAE(nn.Module):
             raise RuntimeError("MiniMax-H3 VAE parallel execution requires tiling")
         self.use_tiling = False
 
+    def to_cuda(self):
+        if self._cpu_weight_sources is None:
+            self.to(self.execution_device)
+        else:
+            self._activate()
+
+    def to_cpu(self):
+        self.offload()
+
     def enable_decode_parallel(self) -> None:
         """Enable tiled parallel decoding; must be called on every rank."""
         if not self.use_tiling:
@@ -938,7 +944,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         if not dist.is_initialized() or dist.get_world_size() <= 1:
             raise RuntimeError("MiniMax-H3 VAE decode parallel requires an initialized multi-rank process group")
         # Initialize the full-group communicator on the VAE device before subset P2P.
-        dist.all_reduce(torch.zeros(1, device=self.execution_device))
+        self.decode_group = dist.new_group()
+        dist.all_reduce(torch.zeros(1, device=self.execution_device), group=self.decode_group)
         self.decode_parallel = True
 
     def enable_encode_parallel(self) -> None:
@@ -1223,9 +1230,9 @@ class MiniMaxH3VideoVAE(nn.Module):
         return task_counts
 
     @staticmethod
-    def _gather_tiles(local_tiles: list[torch.Tensor], task_counts: list[int]) -> list[torch.Tensor] | None:
+    def _gather_tiles(local_tiles: list[torch.Tensor], task_counts: list[int], group=None) -> list[torch.Tensor] | None:
         """Collect tile results on rank 0 in global tile order."""
-        rank = dist.get_rank()
+        rank = dist.get_rank(group)
         # Each active worker sends once; idle ranks have no P2P operations.
         # Rank 0 always owns the first tile and keeps its local list.
         if rank != 0:
@@ -1233,7 +1240,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                 return None
             # Match the receive buffers even when tile outputs are channels-last.
             local_tile_batch = torch.stack(local_tiles).contiguous()
-            send_op = dist.P2POp(dist.isend, local_tile_batch, 0)
+            send_op = dist.P2POp(dist.isend, local_tile_batch, 0, group=group)
             for request in dist.batch_isend_irecv([send_op]):
                 request.wait()
             return None
@@ -1245,7 +1252,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                 continue
             receive_buffer = local_tiles[0].new_empty((task_count, *local_tiles[0].shape))
             receive_buffers.append(receive_buffer)
-            receive_ops.append(dist.P2POp(dist.irecv, receive_buffer, source_rank))
+            receive_ops.append(dist.P2POp(dist.irecv, receive_buffer, source_rank, group=group))
         if receive_ops:
             for request in dist.batch_isend_irecv(receive_ops):
                 request.wait()
@@ -1270,7 +1277,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         local_tiles = all_tiles[local_start:local_end]
         local_tiles = [self.decoder(self.post_quant_conv(tile)) for tile in local_tiles]
 
-        return self._gather_tiles(local_tiles, task_counts)
+        return self._gather_tiles(local_tiles, task_counts, self.decode_group)
 
     def _decode(self, latents: torch.Tensor) -> torch.Tensor | None:
         """Decode tiled latents and assemble the full video on rank 0.

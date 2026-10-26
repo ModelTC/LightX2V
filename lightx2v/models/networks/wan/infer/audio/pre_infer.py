@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import torch
 
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
@@ -207,6 +209,12 @@ class WanAudioPreInfer(WanPreInfer):
         )
 
 
+@dataclass
+class WanAudioARPreInferModuleOutput(WanPreInferModuleOutput):
+    seq_lens: torch.Tensor | None = None
+    freqs: torch.Tensor | None = None
+
+
 class WanAudioARPreInfer(WanSFPreInfer):
     @torch.no_grad()
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
@@ -299,7 +307,9 @@ class WanAudioARPreInfer(WanSFPreInfer):
         else:
             person_mask_latens = None
 
-        out = WanPreInferModuleOutput(
+        return WanAudioARPreInferModuleOutput(
+            seq_lens=seq_lens,
+            freqs=self.freqs,
             embed=embed,
             grid_sizes=grid_sizes,
             x=x.squeeze(0),
@@ -314,6 +324,3 @@ class WanAudioARPreInfer(WanSFPreInfer):
                 "is_ref_prefill": is_ref_prefill,
             },
         )
-        out.seq_lens = seq_lens
-        out.freqs = self.freqs
-        return out

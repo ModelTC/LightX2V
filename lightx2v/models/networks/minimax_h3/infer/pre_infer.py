@@ -26,7 +26,7 @@ class MiniMaxH3PreInfer:
     def __init__(self, config):
         self.config = config
         global_num_heads = int(config.get("num_attention_heads", 56))
-        if config.get("tensor_parallel", False):
+        if config.get("tensor_parallel", False) and config.get("text_refiner_tensor_parallel", True):
             tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
             tp_size = dist.get_world_size(tp_group)
         else:
@@ -73,6 +73,7 @@ class MiniMaxH3PreInfer:
             text_embeds = text_embeds + self._ff(block.ff, block.norm2.apply(text_embeds))
         return weights.refiner_final_norm.apply(text_embeds)
 
+    @torch.inference_mode(False)
     def _rotary_embedding(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         position_ids = position_ids.to(torch.float32)
         inv_freq = 1.0 / (
