@@ -136,32 +136,36 @@ def quantize_dit(source, output, linear_type, output_name, device, overwrite):
             raise ValueError("Quantization requires a converted native EdenLive DiT checkpoint")
     name = output_name or f"{source.stem}-{linear_type}"
     if skip_checkpoint(output / f"{name}.safetensors", "head.head.weight", overwrite):
+        if linear_type == "fp8-f16-accum":
+            from lightx2v.utils.fp8_f16_accum_checkpoint import WAN_QUANTIZATION_PROFILE, validate_checkpoint
+
+            validate_checkpoint(output / f"{name}.safetensors", profile=WAN_QUANTIZATION_PROFILE)
         return
-    subprocess.run(
-        [
-            sys.executable,
-            str(REPO_ROOT / "tools/convert/converter.py"),
-            "--source",
-            str(checkpoint),
-            "--output",
-            str(output),
-            "--output_name",
-            name,
-            "--model_type",
-            "wan_dit",
-            "--quantized",
-            "--linear_type",
-            linear_type,
-            "--non_linear_dtype",
-            "torch.bfloat16",
-            "--ignore-keys",
-            "none",
-            "--device",
-            device,
-            "--single_file",
-        ],
-        check=True,
-    )
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "tools/convert/converter.py"),
+        "--source",
+        str(checkpoint),
+        "--output",
+        str(output),
+        "--output_name",
+        name,
+        "--model_type",
+        "wan_dit",
+        "--quantized",
+        "--linear_type",
+        "fp8" if linear_type == "fp8-f16-accum" else linear_type,
+        "--non_linear_dtype",
+        "torch.bfloat16",
+        "--ignore-keys",
+        "none",
+        "--device",
+        device,
+        "--single_file",
+    ]
+    if linear_type == "fp8-f16-accum":
+        command.extend(["--quantization_profile", "wan-ar-fp8-f16-accum"])
+    subprocess.run(command, check=True)
 
 
 def main():
@@ -170,7 +174,7 @@ def main():
     parser.add_argument("--output", required=True)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--all", action="store_true", help="Convert a complete EdenLive release, including encoders and VAE assets")
-    mode.add_argument("--quantize", choices=["fp8", "int8-convrot"], help="Quantize a converted native DiT into one safetensors file")
+    mode.add_argument("--quantize", choices=["fp8", "fp8-f16-accum", "int8-convrot"], help="Quantize a converted native DiT into one safetensors file")
     parser.add_argument("--output_name", help="Quantized output filename, without .safetensors")
     parser.add_argument("--device", default="cuda", help="Device for quantization, e.g. cuda:0 or cpu")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing outputs; otherwise keep native checkpoints already present")

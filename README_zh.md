@@ -45,6 +45,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年10月26日：** 🚀 新增 [TaoMate-H3](scripts/taomate_h3/run_t2av_3step.sh)、[StreamRender-H3](scripts/streamrender_h3/run_refv2v_2step.sh)、[Matrix-Game-4](scripts/matrix_game4/run_matrix_game4.sh)、[LingBot-Fast](scripts/lingbot_fast/run_5090.sh) 和 [Realtime-Video](scripts/realtime_video/run_5090.sh) 的自回归推理支持。对应目录提供运行脚本及 BF16/FP8 配置。
+
 - **2026年10月18日：** 🚀 我们现已支持 [EdenLive](scripts/edenlive/README_zh.md)，结合文本提示词、首帧图像和 proxy 录屏控制视频生成，覆盖 Wan2.1 14B 与 Wan2.2 5B 的双向及 4 步自回归推理。提供 RTX 5090 与 H100/H200 实时配置，模型转换、量化及流式推理用法请参考[部署指南](scripts/edenlive/README_zh.md)。
 
 - **2026年10月13日：** 🎉 我们发布了 [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App)，支持在 MacBook 上本地运行 Qwen-Image-2.1 的 [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)、[PE-T2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0) 和 [PE-I2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0) 模型。
@@ -201,6 +203,8 @@ LightX2V 支持多种图像、视频与世界模型，并提供量化权重、�
 | 模型 / 变体与权重 | 使用指南 / 脚本 |
 | --- | --- |
 | [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)（Causal 分支支持 RefA2V，需专用权重） | [使用指南](scripts/minimax_h3/README_zh.md) · [Causal](scripts/minimax_h3_causal) |
+| TaoMate-H3（自回归 T2AV） | [推理脚本](scripts/taomate_h3/run_t2av_3step.sh) |
+| StreamRender-H3（自回归 RefV2V） | [推理脚本](scripts/streamrender_h3/run_refv2v_2step.sh) |
 | [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)（自回归分支需专用权重） / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5)（蒸馏版） | [使用指南](scripts/ltx2/README_zh.md) · [自回归示例](scripts/ltx2/ltx2_3/run_ltx2_3_ar_t2av.sh) |
 | [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) | [使用指南](scripts/hunyuan_video_15/README.md) |
 | [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/) | [Wan2.1](scripts/wan/README_zh.md) · [Wan2.2](scripts/wan22/README_zh.md) |
@@ -260,6 +264,9 @@ LightX2V 支持多种图像、视频与世界模型，并提供量化权重、�
 | [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super)（含 [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID)） | [推理脚本](scripts/cosmos3) |
 | [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast) | [推理脚本](scripts/lingbot) |
 | [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0) | [2.0](scripts/matrix_game2) · [3.0](scripts/matrix_game3) |
+| Matrix-Game-4（Wan2.2 5B Control，自回归视频重渲染） | [推理脚本](scripts/matrix_game4/run_matrix_game4.sh) |
+| LingBot-Fast（自回归 I2V） | [推理脚本](scripts/lingbot_fast/run_5090.sh) |
+| Realtime-Video（Wan2.1 自回归 T2V） | [推理脚本](scripts/realtime_video/run_5090.sh) |
 | [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay)（双向、自回归与蒸馏版） | [使用指南](scripts/worldplay/README.md) |
 | [EdenLive](https://huggingface.co/VAST-AI/EdenLive)（Wan2.1 14B / Wan2.2 5B，支持双向与四步自回归推理） | [使用指南](scripts/edenlive/README_zh.md) |
 | [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0)（三维重建） | [使用指南](scripts/worldmirror/README_zh.md) |

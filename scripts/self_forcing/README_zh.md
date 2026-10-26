@@ -1,93 +1,31 @@
-
 # Self-Forcing (Wan2.1-T2V-1.3B)
 
-本文档介绍如何在 LightX2V 中运行 `Wan2.1-T2V-1.3B` 的 Self-Forcing 加速。
+本文说明如何在 LightX2V 中运行 Self-Forcing Wan2.1 1.3B 文生视频模型。
 
-## 准备环境
+## 准备模型
 
-请参考[环境安装](../../docs/ZH_CN/source/getting_started/quickstart.md)
+按 LightX2V [快速开始](../../docs/ZH_CN/source/getting_started/quickstart.md)安装环境，下载 Wan2.1 1.3B 原始权重与 Self-Forcing checkpoint：
 
-## 下载
-
-### 1. BF16 原始模型 (Wan2.1-T2V-1.3B)
-
-从 Wan-AI 的 Hugging Face 仓库下载 BF16 原始模型：
-
-```
-huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B --local-dir-use-symlinks False --local-dir wan_models/Wan2.1-T2V-1.3B
+```bash
+hf download Wan-AI/Wan2.1-T2V-1.3B --local-dir ./wan_models/Wan2.1-T2V-1.3B
+hf download gdhe17/Self-Forcing checkpoints/self_forcing_dmd.pt --local-dir .
 ```
 
-### 2. Self-Forcing checkpoint
+当前 RTX 5090 的两份配置均使用 81 帧、480×832、16 FPS 的请求尺寸和 LightTAE 解码器：
 
-下载 Self-Forcing 的 checkpoint（`self_forcing_dmd.pt`）：
+- [BF16 配置](../../configs/self_forcing/wan_t2v_sf_bf16_lighttae_5090.json)
+- [FP8-FP16 配置](../../configs/self_forcing/wan_t2v_sf_fp8_f16_accum_lighttae_5090.json)
 
-```
-huggingface-cli download gdhe17/Self-Forcing checkpoints/self_forcing_dmd.pt --local-dir .
-```
+FP8 配置使用已转换的 DiT/T5 权重。迁移到其他机器时，应在复制后的 JSON 中修改权重、tokenizer 和解码器的绝对路径。两份配置都开启 Sage、warmup、DiT compile/CUDA Graph、流式 LightTAE 与顶层异步解码；KV offload 关闭。`vae_use_compile` 与 DiT 的 `use_compile` 分别控制解码器和 DiT 编译。
 
-### 3. 量化模型 (FP8 / NVFP4)
+## 运行
 
-从 LightX2V 的 HuggingFace Collection 下载量化模型：
+从仓库根目录运行，并用 `MODEL_PATH` 指向已下载的 Wan 权重。脚本会自动定位仓库，并分别选择 BF16、FP8 配置：
 
-https://huggingface.co/collections/lightx2v/ar-lightx2v
-
-## 开始运行
-
-我们提供三个脚本：
-
-1. `scripts/self_forcing/run_wan_t2v_sf.sh`：BF16 原始模型 + Self-Forcing checkpoint
-2. `scripts/self_forcing/run_wan_t2v_sf_fp8.sh`：FP8 量化模型
-3. `scripts/self_forcing/run_wan_t2v_sf_nvfp4.sh`：NVFP4 量化模型
-
-运行下面任意脚本之前，你需要先把脚本中的路径变量填好。
-
-### 1) BF16 + Self-Forcing checkpoint
-
-修改并运行：
-
-```
+```bash
+export MODEL_PATH="$PWD/wan_models/Wan2.1-T2V-1.3B"
 bash scripts/self_forcing/run_wan_t2v_sf.sh
-```
-
-`run_wan_t2v_sf.sh` 中关键字段：
-
-- `lightx2v_path`：你的 LightX2V 仓库路径
-- `model_path`：原始 BF16 `Wan2.1-T2V-1.3B` 模型目录路径
-- 配置文件中的 `dit_original_ckpt`：`self_forcing_dmd.pt` 的路径（从 `gdhe17/Self-Forcing` 下载）
-
-该脚本实际会执行：
-
-- `python -m lightx2v.infer`
-- `--model_cls wan2.1_sf`：使用 Wan2.1 的 Self-Forcing pipeline
-- `--task t2v`：文生视频
-- `--config_json configs/self_forcing/wan_t2v_sf.json`：Self-Forcing 的运行配置
-
-注意：`configs/self_forcing/wan_t2v_sf.json` 中默认 `enable_cfg=false`。
-
-### 2) FP8 量化模型
-
-修改并运行：
-
-```
 bash scripts/self_forcing/run_wan_t2v_sf_fp8.sh
 ```
 
-关于 FP8 的额外说明：
-
-- 该脚本使用 `configs/self_forcing/wan_t2v_sf_fp8.json`。
-- 你需要把该配置文件中的 `dit_quantized_ckpt` 修改为从 HuggingFace collection 下载的 FP8 权重文件的**绝对路径**。
-- `dit_quant_scheme` 为 `fp8-vllm`。
-
-### 3) NVFP4 量化模型
-
-修改并运行：
-
-```
-bash scripts/self_forcing/run_wan_t2v_sf_nvfp4.sh
-```
-
-关于 NVFP4 的额外说明：
-
-- 该脚本使用 `configs/self_forcing/wan_t2v_sf_nvfp4.json`。
-- 你需要把该配置文件中的 `dit_quantized_ckpt` 修改为从 HuggingFace collection 下载的 NVFP4 权重文件的**绝对路径**。
-- `dit_quant_scheme` 为 `nvfp4`。
+如需指定复制后的 JSON，在运行脚本时设置 `CONFIG_PATH`。原始 Self-Forcing checkpoint 路径对应 `dit_original_ckpt`。自注意力在写入 rolling ring 前完成 K 的 RoPE；Sage 仅保存历史编码 K/V，并增量更新新写入的 slot。缓存与 FlashAttention 的具体路径见 [AR KV 实现对照](../../lightx2v/common/kvcache/AR_IMPLEMENTATIONS.md)。

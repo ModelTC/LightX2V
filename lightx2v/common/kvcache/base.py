@@ -1,7 +1,18 @@
+from typing import NamedTuple
+
 import torch
 import torch.distributed as dist
 
 from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
+
+
+class KVCacheView(NamedTuple):
+    key: torch.Tensor
+    value: torch.Tensor
+
+    @property
+    def bindings(self) -> tuple[torch.Tensor, ...]:
+        return self.key, self.value
 
 
 class BaseKVCachePool:
@@ -20,32 +31,38 @@ class BaseKVCachePool:
         self._head_dim = head_dim
         self._device = device
         self._dtype = dtype
+        self._k_buffer = None
+        self._v_buffer = None
 
     def _init_kv_buffer(self):
-        self._k_buffer = torch.empty(
+        key_buffer = torch.empty(
             (self._num_layers, self._cache_size, self._num_heads, self._head_dim),
             dtype=self._dtype,
             device=self._device,
         )
-        self._v_buffer = torch.empty(
-            (self._num_layers, self._cache_size, self._num_heads, self._head_dim),
-            dtype=self._dtype,
-            device=self._device,
-        )
+        value_buffer = torch.empty_like(key_buffer)
+        self._k_buffer, self._v_buffer = key_buffer, value_buffer
 
     def k_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None) -> torch.Tensor:
+        self._ensure_kv_buffer()
         if attn_start is None and local_end is None:
             return self._k_buffer[layer_id]
         return self._k_buffer[layer_id][attn_start:local_end]
 
     def v_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None) -> torch.Tensor:
+        self._ensure_kv_buffer()
         if attn_start is None and local_end is None:
             return self._v_buffer[layer_id]
         return self._v_buffer[layer_id][attn_start:local_end]
 
     def store_kv(self, k: torch.Tensor, v: torch.Tensor, layer_id: int) -> None:
+        self._ensure_kv_buffer()
         self._k_buffer[layer_id, : k.shape[0]] = k
         self._v_buffer[layer_id, : v.shape[0]] = v
+
+    def _ensure_kv_buffer(self):
+        if self._k_buffer is None:
+            self._init_kv_buffer()
 
     def reset(self) -> None:
         pass
@@ -67,18 +84,13 @@ class BaseKVCachePool:
         Ulysses layout, attend against the already head-sharded KV cache, then
         convert the output back to sequence-sharded layout.
         """
-        if isinstance(k_cache, tuple) or isinstance(v_cache, tuple):
-            raise TypeError(f"{self.__class__.__name__} does not support tuple K/V in head-shard SP path.")
-
         world_size = dist.get_world_size(seq_p_group)
         shard_heads = num_heads // world_size
         q_heads = all2all_seq2head(q, group=seq_p_group)
         kv_len = int(k_cache.size(0))
 
-        q_lens = torch.tensor([q_heads.size(0)], dtype=torch.int32)
-        k_lens = torch.tensor([kv_len], dtype=torch.int32)
-        cu_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
-        cu_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
+        cu_q = torch.tensor([0, q_heads.size(0)], dtype=torch.int32)
+        cu_k = torch.tensor([0, kv_len], dtype=torch.int32)
 
         attn_out = attention_module.apply(
             q=q_heads,

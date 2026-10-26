@@ -16,13 +16,15 @@ from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.wan.dreamzero_model import DreamZeroModel
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
+from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.dreamzero.scheduler import DreamZeroFlowUniPCScheduler
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny
 from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -31,7 +33,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 @RUNNER_REGISTER("dreamzero")
-class WanDreamZeroRunner(WanRunner):
+class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
     supported_request_fields_by_task = {
         "i2va": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "save_action_path", "state_path"},
     }
@@ -185,7 +187,13 @@ class WanDreamZeroRunner(WanRunner):
             self._overlay_dreamzero_component(vae_encoder.model, "action_head.vae.model.", "vae", strict=True)
         return vae_encoder
 
+    def load_vae(self):
+        self.vae_encoder = self.load_vae_encoder()
+        return self.vae_encoder, self.load_vae_decoder()
+
     def load_vae_decoder(self):
+        if self.config.get("lightvae_path"):
+            return WanStreamingVAERunnerMixin.load_vae_decoder(self)
         if self.config["task"] not in ["i2va"]:
             return super().load_vae_decoder()
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
@@ -501,9 +509,6 @@ class WanDreamZeroRunner(WanRunner):
         return action_np.astype(np.float32)
 
     def init_run(self):
-        self.pred_latent_lst = []
-        self.pred_latent_segments = []
-        self._current_latent_segment = []
         self.pred_action_lst = []
         self.gen_video = None
         self.gen_video_final = None
@@ -642,48 +647,34 @@ class WanDreamZeroRunner(WanRunner):
         self.current_start_frame += self.num_frame_per_block
         return self._postprocess_action(self.action_scheduler.latents), latents
 
-    def run_vae_decoder(self, pred_latent):
-        decoded = self.vae_decoder.decode(pred_latent.squeeze(0).to(GET_DTYPE()))
-        return decoded[0].permute(1, 2, 3, 0).add(1.0).mul(0.5).clamp(0, 1)
-
-    def run_vae_decoder_segments(self, latent_segments):
-        decoded_segments = []
-        for segment in latent_segments:
-            if not segment:
-                continue
-            pred_latent = torch.cat(segment, dim=2)
-            decoded_segments.append(self.run_vae_decoder(pred_latent))
-        if not decoded_segments:
-            raise RuntimeError("DreamZero produced no latent segments to decode.")
-        return torch.cat(decoded_segments, dim=0)
+    def decode_policy_chunk(self, latents, first, last):
+        return self.vae_decoder.cached_decode_withflag(latents[0].to(GET_DTYPE()), first, last)[0].permute(1, 2, 3, 0).add(1).mul(0.5).clamp(0, 1)
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         self.init_run()
         schedule = self._frame_schedule()
-        for chunk_id, frame_indices in enumerate(schedule):
-            logger.info(f"DreamZero chunk {chunk_id + 1}/{len(schedule)} frames={frame_indices}")
-            with ProfilingContext4DebugL1(f"DreamZero chunk {chunk_id + 1}/{len(schedule)}"):
-                self.check_stop()
-                actions, latents = self.run_chunk(frame_indices)
-                self.pred_action_lst.append(torch.from_numpy(actions))
-                self.pred_latent_lst.append(latents)
-                if self.last_chunk_started_new_segment and self._current_latent_segment:
-                    self.pred_latent_segments.append(self._current_latent_segment)
-                    self._current_latent_segment = []
-                self._current_latent_segment.append(latents)
-
-        if self._current_latent_segment:
-            self.pred_latent_segments.append(self._current_latent_segment)
-            self._current_latent_segment = []
+        decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder, dispatch_in_worker=True)
+        try:
+            with no_sync_profiling(enabled=decoder.is_async):
+                for chunk_id, frame_indices in enumerate(schedule):
+                    logger.info(f"DreamZero chunk {chunk_id + 1}/{len(schedule)} frames={frame_indices}")
+                    with ProfilingContext4DebugL1(f"DreamZero chunk {chunk_id + 1}/{len(schedule)}"):
+                        self.check_stop()
+                        actions, latents = self.run_chunk(frame_indices)
+                        self.pred_action_lst.append(torch.from_numpy(actions))
+                    first = chunk_id == 0 or (self.config.get("decode_segments", False) and self.last_chunk_started_new_segment)
+                    decoder.submit(self.decode_policy_chunk, latents, first, chunk_id == len(schedule) - 1)
+                self.gen_video = torch.cat(decoder.finish(), dim=0)
+        finally:
+            try:
+                decoder.finish()
+            finally:
+                self.vae_decoder.reset_decode_state()
         self.pred_action = torch.cat(self.pred_action_lst, dim=0)
-        if self.config.get("decode_segments", False):
-            self.gen_video = self.run_vae_decoder_segments(self.pred_latent_segments)
-        else:
-            self.gen_video = self.run_vae_decoder(torch.cat(self.pred_latent_lst, dim=2))
-        gen_video_final = self.process_images_after_vae_decoder()
+        result = self.process_images_after_vae_decoder()
         self.end_run()
-        return gen_video_final
+        return result
 
     def process_images_after_vae_decoder(self):
         self.gen_video_final = self.gen_video

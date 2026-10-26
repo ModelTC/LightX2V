@@ -24,6 +24,12 @@ class WanLingbotFastPreInfer(WanLingbotPreInfer):
             ],
             dim=1,
         ).to(AI_DEVICE)
+        self.clear_condition_cache()
+
+    def clear_condition_cache(self):
+        self._camera_source = None
+        self._camera_key = None
+        self._camera_condition = None
 
     def time_embedding(self, weights, embed):
         embed = weights.time_embedding_0.apply(embed)
@@ -56,13 +62,23 @@ class WanLingbotFastPreInfer(WanLingbotPreInfer):
             (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_chunk,
             self.scheduler.num_output_frames,
         )
+        version = None if c2ws_plucker_emb.is_inference() else c2ws_plucker_emb._version
+        key = (id(weights), seg_start, seg_end, x_tokens.shape, x_tokens.dtype, x_tokens.device, version)
+        source = dit_cond_dict["c2ws_plucker_emb"]
+        if self._camera_source is source and self._camera_key == key:
+            # LingbotModel replaces dictionary values with SP-local slices.
+            # Keep the cached projection global and give each forward its own dict.
+            return dict(self._camera_condition)
         sliced = c2ws_plucker_emb[:, :, seg_start:seg_end, :, :]
 
         original = dit_cond_dict["c2ws_plucker_emb"]
         dit_cond_dict["c2ws_plucker_emb"] = sliced
-        result = super()._build_lingbot_conditional_dict(weights, inputs, x_tokens)
-        dit_cond_dict["c2ws_plucker_emb"] = original
-        return result
+        try:
+            result = super()._build_lingbot_conditional_dict(weights, inputs, x_tokens)
+        finally:
+            dit_cond_dict["c2ws_plucker_emb"] = original
+        self._camera_source, self._camera_key, self._camera_condition = source, key, result
+        return dict(result)
 
     @torch.no_grad()
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
@@ -134,7 +150,4 @@ class WanLingbotFastPreInfer(WanLingbotPreInfer):
         )
 
         result.conditional_dict = self._build_lingbot_conditional_dict(weights, inputs, result.x)
-        # print(result.conditional_dict)
-        # exit()
-
         return result

@@ -24,18 +24,20 @@ quant_path = str(Path(__file__).parent / "quant")
 if quant_path not in sys.path:
     sys.path.insert(0, quant_path)
 
-from h3_fp8_f16_accum import (  # noqa: E402
-    FP8_F16_ACCUM_QUANTIZATION_PROFILE,
-    create_h3_fp8_f16_accum_quantization,
-)
+from h3_fp8_f16_accum import create_h3_fp8_f16_accum_quantization  # noqa: E402
+from lingbot_fast_fp8_f16_accum import TARGET_KEYS as LINGBOT_FAST_TARGET_KEYS  # noqa: E402
+from lingbot_fast_fp8_f16_accum import LingbotFastFP8F16AccumQuantization  # noqa: E402
 from quant import *  # noqa: E402
-from qwen_image_21_fp8_f16_accum import (  # noqa: E402
-    QUANTIZATION_PROFILE as QWEN_IMAGE_21_FP8_F16_ACCUM_PROFILE,
-)
-from qwen_image_21_fp8_f16_accum import (  # noqa: E402
-    QwenImage21FP8F16AccumQuantization,
-)
+from qwen_image_21_fp8_f16_accum import QwenImage21FP8F16AccumQuantization  # noqa: E402
+from t5_fp8_f16_accum import T5FP8F16AccumQuantization  # noqa: E402
+from wan_fp8_f16_accum import WanFP8F16AccumQuantization  # noqa: E402
 
+from lightx2v.utils.fp8_f16_accum_checkpoint import (  # noqa: E402
+    H3_QUANTIZATION_PROFILE,
+    QWEN_IMAGE_21_QUANTIZATION_PROFILE,
+    T5_QUANTIZATION_PROFILE,
+    WAN_QUANTIZATION_PROFILE,
+)
 from lightx2v.utils.lora_loader import LoRALoader  # noqa: E402
 from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER  # noqa: E402
 from tools.convert.h3_video_vae_encoder import (  # noqa: E402
@@ -781,6 +783,7 @@ def main():
         "--model_type",
         choices=[
             "wan_dit",
+            "lingbot_fast",
             "h3",
             "h3_video_vae_decoder",
             "h3_video_vae_encoder",
@@ -832,7 +835,7 @@ def main():
     parser.add_argument("--comfyui_mode", action="store_true")
     parser.add_argument("--full_quantized", action="store_true")
     parser.add_argument("--quantized", action="store_true")
-    parser.add_argument("--quantization_profile", choices=[FP8_F16_ACCUM_QUANTIZATION_PROFILE, QWEN_IMAGE_21_FP8_F16_ACCUM_PROFILE])
+    parser.add_argument("--quantization_profile", choices=[H3_QUANTIZATION_PROFILE, QWEN_IMAGE_21_QUANTIZATION_PROFILE, WAN_QUANTIZATION_PROFILE, T5_QUANTIZATION_PROFILE])
     parser.add_argument("--bits", type=int, default=8, choices=[8], help="Quantization bit width")
     parser.add_argument("--vae_encoder_conv_mode", choices=FP8_ENCODER_CONV_MODES)
     parser.add_argument(
@@ -933,6 +936,12 @@ def main():
                 "target_keys": ["self_attn", "cross_attn", "ffn"],
                 "ignore_key": ["ca", "audio"],
             },
+            "lingbot_fast": {
+                "key_idx": 0,
+                "target_keys": list(LINGBOT_FAST_TARGET_KEYS),
+                "ignore_key": None,
+                "preserve_non_quant_dtype": True,
+            },
             "h3": {
                 "key_idx": 2,
                 "target_keys": ["attn", "ff", "adaln_proj"],
@@ -1029,8 +1038,14 @@ def main():
         if not args.quantized or args.linear_type != "fp8" or not args.single_file or args.output_ext != ".safetensors" or args.comfyui_mode:
             parser.error("FP8-F16 accumulation conversion requires --quantized --linear_type fp8 --output_ext .safetensors --single_file without --comfyui_mode")
         try:
-            if args.quantization_profile == QWEN_IMAGE_21_FP8_F16_ACCUM_PROFILE:
+            if args.quantization_profile == QWEN_IMAGE_21_QUANTIZATION_PROFILE:
                 args.quantization_policy = QwenImage21FP8F16AccumQuantization(args.model_type)
+            elif args.quantization_profile == WAN_QUANTIZATION_PROFILE:
+                args.quantization_policy = LingbotFastFP8F16AccumQuantization() if args.model_type == "lingbot_fast" else WanFP8F16AccumQuantization(args.model_type)
+                args.preserve_non_quant_dtype = True
+            elif args.quantization_profile == T5_QUANTIZATION_PROFILE:
+                args.quantization_policy = T5FP8F16AccumQuantization(args.model_type)
+                args.preserve_non_quant_dtype = True
             else:
                 args.quantization_policy = create_h3_fp8_f16_accum_quantization(args.quantization_profile, args.model_type)
         except ValueError as profile_error:

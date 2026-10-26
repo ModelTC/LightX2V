@@ -16,7 +16,6 @@ import torch.nn.functional as F
 from PIL import Image
 from loguru import logger
 
-import lightx2v.common.kvcache.relayvsr  # noqa: F401 - register frame-slot cache
 from lightx2v.common.kvcache.manager import KVCacheManager
 from lightx2v.models.networks.relayvsr.attention import resolve_local_attention_backend
 from lightx2v.models.networks.relayvsr.model import RelayVSRModel

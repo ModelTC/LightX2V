@@ -45,6 +45,8 @@ We thank the following community developers for their contributions to LightX2V:
 
 ## :fire: Latest News
 
+- **October 26, 2026:** 🚀 Added autoregressive inference for [TaoMate-H3](scripts/taomate_h3/run_t2av_3step.sh), [StreamRender-H3](scripts/streamrender_h3/run_refv2v_2step.sh), [Matrix-Game-4](scripts/matrix_game4/run_matrix_game4.sh), [LingBot-Fast](scripts/lingbot_fast/run_5090.sh), and [Realtime-Video](scripts/realtime_video/run_5090.sh). Model-specific scripts and BF16/FP8 profiles are available in the linked directories.
+
 - **October 18, 2026:** 🚀 We now support [EdenLive](scripts/edenlive/README.md) for video generation controlled by text, a first-frame image, and a proxy recording. Wan2.1 14B and Wan2.2 5B each support bidirectional and four-step autoregressive inference, with realtime profiles for RTX 5090 and H100/H200. See the [deployment guide](scripts/edenlive/README.md) for model conversion, quantization, and streaming inference.
 
 - **October 13, 2026:** 🎉 We released the [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App), which supports local inference on MacBook with Qwen-Image-2.1 [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo), [PE-T2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0), and [PE-I2I GGUF Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0) models.
@@ -201,6 +203,8 @@ LightX2V supports image, video, and world models and provides quantized weights,
 | Models / Variants and Weights | Guides / Scripts |
 | --- | --- |
 | [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) (causal RefA2V requires a separate checkpoint) | [Guide](scripts/minimax_h3/README.md) · [Causal](scripts/minimax_h3_causal) |
+| TaoMate-H3 (autoregressive T2AV) | [Run script](scripts/taomate_h3/run_t2av_3step.sh) |
+| StreamRender-H3 (autoregressive RefV2V) | [Run script](scripts/streamrender_h3/run_refv2v_2step.sh) |
 | [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) (autoregressive inference requires a separate checkpoint) / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) (distilled) | [Guide](scripts/ltx2/README.md) · [AR example](scripts/ltx2/ltx2_3/run_ltx2_3_ar_t2av.sh) |
 | [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) | [Guide](scripts/hunyuan_video_15/README.md) |
 | [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/) | [Wan2.1](scripts/wan/README.md) · [Wan2.2](scripts/wan22/README.md) |
@@ -260,6 +264,9 @@ LightX2V supports image, video, and world models and provides quantized weights,
 | [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super) (including [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID)) | [Scripts](scripts/cosmos3) |
 | [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast) | [Scripts](scripts/lingbot) |
 | [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0) | [2.0](scripts/matrix_game2) · [3.0](scripts/matrix_game3) |
+| Matrix-Game-4 (Wan2.2 5B Control; autoregressive video rerendering) | [Run script](scripts/matrix_game4/run_matrix_game4.sh) |
+| LingBot-Fast (autoregressive I2V) | [Run script](scripts/lingbot_fast/run_5090.sh) |
+| Realtime-Video (Wan2.1 autoregressive T2V) | [Run script](scripts/realtime_video/run_5090.sh) |
 | [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay) (bidirectional, autoregressive, and distilled) | [Guide](scripts/worldplay/README.md) |
 | [EdenLive](https://huggingface.co/VAST-AI/EdenLive) (Wan2.1 14B / Wan2.2 5B; bidirectional and four-step autoregressive) | [Guide](scripts/edenlive/README.md) |
 | [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (3D reconstruction) | [Guide](scripts/worldmirror/README.md) |

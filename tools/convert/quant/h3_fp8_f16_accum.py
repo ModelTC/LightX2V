@@ -2,11 +2,9 @@
 
 import torch
 
-from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
-    FP8_F16_ACCUM_PROJECTION_SUFFIXES,
-    FP8_F16_ACCUM_QUANTIZATION_PROFILE,
-    FP8_F16_ACCUM_WEIGHT_QMAX,
-)
+from lightx2v.utils.fp8_f16_accum_checkpoint import H3_PROJECTION_SUFFIXES as FP8_F16_ACCUM_PROJECTION_SUFFIXES
+from lightx2v.utils.fp8_f16_accum_checkpoint import H3_QUANTIZATION_PROFILE as FP8_F16_ACCUM_QUANTIZATION_PROFILE
+from lightx2v.utils.fp8_f16_accum_checkpoint import WEIGHT_QMAX as FP8_F16_ACCUM_WEIGHT_QMAX
 
 # DiT has 50 x (six main projections + AdaLN); VAE has 36 x six projections + proj_out.
 _EXPECTED_QUANTIZED_COUNTS = {

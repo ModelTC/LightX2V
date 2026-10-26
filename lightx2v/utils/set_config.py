@@ -7,6 +7,7 @@ import torch.distributed as dist
 from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
+from lightx2v.utils.async_vae import normalize_async_vae_config
 from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.lockable_dict import LockableDict
 from lightx2v.utils.utils import find_torch_model_path, is_main_process
@@ -82,7 +83,26 @@ def build_startup_config(config_data):
     config.update(model_config)
     config.update(deployment_config)
     normalize_startup_config(config, model_config)
+    configure_nccl_graph(config)
     return config
+
+
+def configure_nccl_graph(config):
+    """Configure Ulysses graph communication before creating process groups."""
+    parallel = config.get("parallel") or {}
+    if AI_DEVICE != "cuda" or not config.get("use_cuda_graph", False) or parallel.get("seq_p_size", 1) <= 1 or parallel.get("seq_p_attn_type", "ulysses") != "ulysses":
+        return
+
+    # Older NCCL reuses incomplete IPC mappings for cuMem-backed buffer views.
+    # https://github.com/pytorch/torchtitan/pull/5393
+    # https://github.com/NVIDIA/nccl/pull/2362
+    nccl_version = torch.cuda.nccl.version()
+    if nccl_version < (2, 32, 3) and os.environ.get("NCCL_GRAPH_REGISTER") != "0":
+        logger.warning(
+            f"NCCL {'.'.join(map(str, nccl_version))} has an IPC registration bug with Ulysses CUDA Graphs; "
+            "setting NCCL_GRAPH_REGISTER=0. Graph and compile remain enabled. NCCL 2.32.3 fixes this issue."
+        )
+        os.environ["NCCL_GRAPH_REGISTER"] = "0"
 
 
 def load_model_config(deployment_config):
@@ -126,7 +146,24 @@ def load_model_config(deployment_config):
 
     assert os.path.exists(model_path), f"Model path not found: {model_path}"
 
-    if model_cls in EDENLIVE_COMPONENT_FILES:
+    if model_cls == "matrix_game4":
+        with open(os.path.join(model_path, "release-config.json"), "r") as f:
+            release = json.load(f)
+        variant = deployment_config.get("model_variant", "castle")
+        if variant not in release["scenes"]:
+            raise ValueError(f"Unknown Matrix-Game-4 model_variant {variant!r}; choose from {tuple(release['scenes'])}")
+        model_config.update(release["architecture"]["dit_config"])
+        model_config.update(model_variant=variant, num_channels_latents=model_config["out_dim"], vae_stride=[4, 16, 16])
+        component_files = {
+            "dit_original_ckpt": f"models/{variant}/model.safetensors",
+            "t5_original_ckpt": "base/models_t5_umt5-xxl-enc-bf16.pth",
+            "t5_tokenizer_path": "base/google/umt5-xxl",
+            "vae_path": "base/Wan2.2_VAE.pth",
+            "tae_path": "base/taew2_2.pth",
+        }
+        for key, filename in component_files.items():
+            model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
+    elif model_cls in EDENLIVE_COMPONENT_FILES:
         component_files = {
             "t5_original_ckpt": "umt5/text_encoder/model.safetensors",
             "t5_tokenizer_path": "umt5/tokenizer",
@@ -156,17 +193,13 @@ def load_model_config(deployment_config):
         temporal_scale = vae_config.get("scale_factor_temporal", 2 ** sum(vae_config["temperal_downsample"]))
         spatial_scale = vae_config.get("scale_factor_spatial", 2 ** (len(vae_config["dim_mult"]) - 1) * vae_config.get("patch_size", 1))
         model_config["vae_stride"] = [temporal_scale, spatial_scale, spatial_scale]
-    elif model_cls == "wan2.1_sf_mtxg2":
-        config_path = os.path.join(model_path, deployment_config["sub_model_folder"], "config.json")
-        with open(config_path, "r") as f:
-            model_config.update(json.load(f))
     elif model_cls in {"hunyuan_video_1.5", "worldplay_distill", "worldplay_ar", "worldplay_bi"}:
         transformer_path = os.path.join(model_path, "transformer", deployment_config["transformer_model_name"])
         model_config["transformer_model_path"] = transformer_path
         if os.path.exists(os.path.join(transformer_path, "config.json")):
             with open(os.path.join(transformer_path, "config.json"), "r") as f:
                 model_config.update(json.load(f))
-    elif model_cls in {"hunyuan3d", "hidream_o1_image"}:
+    elif model_cls in {"hunyuan3d", "hidream_o1_image", "streamrender_h3"}:
         # These runners load their own model configuration.
         pass
     elif model_cls == "wan2.2_s2v":
@@ -210,7 +243,7 @@ def load_model_config(deployment_config):
         if os.path.exists(transformer_config_path):
             with open(transformer_config_path, "r") as f:
                 model_config.update(json.load(f))
-    elif model_cls in ("minimax_h3", "minimax_h3_causal"):
+    elif model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3"):
         causal = model_cls == "minimax_h3_causal"
         if causal:
             if deployment_config.get("task") != "refa2v":
@@ -222,6 +255,8 @@ def load_model_config(deployment_config):
             model_variant = deployment_config.get("model_variant")
             if model_variant not in ("fl2av", "ref2av"):
                 raise ValueError("MiniMax-H3 requires model_variant='fl2av' or 'ref2av'; set --model-variant when starting the model")
+            if model_cls == "taomate_h3" and model_variant != "fl2av":
+                raise ValueError("TaoMate-H3 Stage3 requires the FL2VA base partition")
             transformer_subfolder = "transformer_ref" if model_variant == "ref2av" else "transformer"
         transformer_path = os.path.join(model_path, transformer_subfolder)
         transformer_config_path = os.path.join(transformer_path, "config.json")
@@ -242,7 +277,7 @@ def load_model_config(deployment_config):
                 continue
             with open(config_path, "r") as f:
                 checkpoint_config = json.load(f)
-            if model_cls in {"ltx2", "ltx2_ar", "ltx2_5"} and subfolder in ("", "transformer"):
+            if model_cls in {"ltx2", "ltx2_5"} and subfolder in ("", "transformer"):
                 # LTX uses rope_type for the layout, while LightX2V uses it
                 # to select a registered RoPE implementation.
                 checkpoint_config.pop("rope_type", None)
@@ -285,7 +320,7 @@ def load_model_config(deployment_config):
             model_config["vae_scale_factor_temporal"] = int(vae_config.get("scale_factor_temporal", 4))
             model_config["vae_scale_factor"] = model_config["vae_scale_factor_spatial"]
 
-    if model_cls in ("minimax_h3", "minimax_h3_causal"):
+    if model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "streamrender_h3"):
         # The generic Diffusers-VAE heuristic above counts six encoder stages
         # and would incorrectly derive 32. H3 downsamples space by exactly 16.
         model_config["vae_spatial_scale_factor"] = 16
@@ -300,11 +335,7 @@ def load_model_config(deployment_config):
 
 def normalize_startup_config(config, model_config):
     """Normalize merged startup settings and validate inference constraints."""
-    if config["model_cls"] == "wan2.1_sf_mtxg2":
-        # A partial deployment action_config must retain checkpoint structure.
-        action_config = model_config["action_config"].copy()
-        action_config.update(config["action_config"])
-        config["action_config"] = action_config
+    normalize_async_vae_config(config)
     if config["model_cls"] == "dreamzero" and "out_dim" in config:
         config["num_channels_latents"] = config["out_dim"]
     if config["model_cls"] in {"cosmos3", "lingbot_video"}:
@@ -314,10 +345,12 @@ def normalize_startup_config(config, model_config):
         config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
         config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
         config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
-    if config["model_cls"] in ("minimax_h3", "minimax_h3_causal"):
-        if config["fps"] != 24:
+    if config["model_cls"] in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "streamrender_h3"):
+        if config.get("fps", 24) != 24:
             raise ValueError(f"MiniMax-H3 requires fps=24 to keep video and audio timing aligned; got {config['fps']!r}")
-        config.pop("model_variant" if config["model_cls"] == "minimax_h3_causal" else "task", None)
+        config.setdefault("fps", 24)
+        if config["model_cls"] in ("minimax_h3", "minimax_h3_causal", "taomate_h3"):
+            config.pop("model_variant" if config["model_cls"] == "minimax_h3_causal" else "task", None)
         if config.get("dit_quantized_ckpt"):
             config["dit_quantized"] = True
             config["dit_quant_scheme"] = {
@@ -348,11 +381,11 @@ def normalize_startup_config(config, model_config):
         config["num_frames"] = (latent_frames - 1) * temporal_stride + 1
         logger.info(f"Auto-set LingBot-VA num_frames={config['num_frames']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
 
-    if config["model_cls"] in ("ltx2", "ltx2_ar", "ltx2_5"):
+    if config["model_cls"] in ("ltx2", "ltx2_5"):
         config["vae_stride"] = config["vae_scale_factors"]
 
     if (
-        config["model_cls"] not in ("minimax_h3", "minimax_h3_causal")
+        config["model_cls"] not in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "streamrender_h3")
         and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]
         and config.get("num_frames") is not None
         and "vae_stride" in config

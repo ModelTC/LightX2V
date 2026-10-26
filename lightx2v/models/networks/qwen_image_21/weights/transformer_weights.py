@@ -4,7 +4,7 @@ import torch.distributed as dist
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.mm.mm_weight import MMWeightTemplate, unwrap_tp_weight
 from lightx2v.common.ops.utils import resolve_block_name
-from lightx2v.models.networks.qwen_image_21.fp8_f16_accum_policy import ACTIVATION_QMAX
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
