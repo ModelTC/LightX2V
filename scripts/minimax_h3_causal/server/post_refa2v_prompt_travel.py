@@ -80,7 +80,7 @@ N/A"""
         "seed": 42,
         "num_frames": 974,
         "size": [1376, 768],
-        "save_result_path": "./minimax_h3_causal_prompt_travel_meinv_01_ablation40_six_key.mp4",
+        "save_result_path": "./minimax_h3_causal_5090.mp4",
     }
 
     logger.info(f"Submitting refa2v request to {url}")

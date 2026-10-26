@@ -14,7 +14,7 @@ class MiniMaxH3PostInfer:
     def _project_audio(self, weights, hidden_states, pre_infer_out):
         return weights.audio_proj_out.apply(hidden_states).index_select(0, pre_infer_out.audio_indices)
 
-    def infer(self, weights, hidden_states, pre_infer_out):
+    def norm_out(self, weights, hidden_states, pre_infer_out):
         modulation = pre_infer_out.norm_out_modulation
         if modulation is None:
             # ADALN CACHE SYNC: The offline builder persists this exact
@@ -27,10 +27,12 @@ class MiniMaxH3PostInfer:
         hidden_states = weights.norm_out.apply(hidden_states)
         hidden_states = hidden_states * (1.0 + scale.index_select(0, indices))
         hidden_states = hidden_states + shift.index_select(0, indices)
+        return hidden_states.float()
 
+    def infer(self, weights, hidden_states, pre_infer_out):
         # Both released output heads are fp32 and run over all packed rows
         # before modality selection.
-        hidden_states = hidden_states.float()
+        hidden_states = self.norm_out(weights, hidden_states, pre_infer_out)
         video = weights.proj_out.apply(hidden_states).index_select(0, pre_infer_out.video_indices)
         audio = self._project_audio(weights, hidden_states, pre_infer_out)
         return MiniMaxH3VelocityOutput(video=video, audio=audio)
