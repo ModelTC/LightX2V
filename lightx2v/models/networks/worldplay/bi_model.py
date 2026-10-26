@@ -189,20 +189,10 @@ class WorldPlayBIModel(HunyuanVideo15Model):
         # Note: pose data (viewmats, Ks, action) should already be set in scheduler
         # by the runner before calling this method. Don't override here.
 
-        # Run pre-inference
-        infer_module_out = self.pre_infer.infer(self.pre_weight, inputs)
-
-        # If context inputs provided, merge them
         if context_inputs is not None:
-            infer_module_out = self._merge_context(infer_module_out, context_inputs)
-
-        # Run transformer inference
-        x = self.transformer_infer.infer(self.transformer_weights, infer_module_out)
-
-        # Run post-inference (needs weights and infer_module_out for grid_sizes)
-        output = self.post_infer.infer(x, infer_module_out)
-
-        return output
+            inputs = {**inputs, "context_inputs": context_inputs}
+        super().infer(inputs)
+        return self.scheduler.noise_pred.unsqueeze(0)
 
     def _merge_context(self, infer_module_out, context_inputs):
         """

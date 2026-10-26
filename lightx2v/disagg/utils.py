@@ -143,6 +143,7 @@ def load_wan_text_encoder(config: Dict[str, Any]):
         tokenizer_path=tokenizer_path,
         shard_fn=None,
         cpu_offload=t5_offload,
+        rms_norm_type=config.get("t5_rms_norm_type", "sgl-kernel"),
         t5_quantized=t5_quantized,
         t5_quantized_ckpt=t5_quantized_ckpt,
         quant_scheme=t5_quant_scheme,

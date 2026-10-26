@@ -60,7 +60,7 @@ class WanVAE_tiny(nn.Module):
             self.z_dim = 16
 
     @torch.no_grad()
-    def decode(self, latents):
+    def decode(self, latents, *, memory=None, first_chunk=True):
         latents = latents.unsqueeze(0)
 
         if self.need_scaled:
@@ -69,7 +69,16 @@ class WanVAE_tiny(nn.Module):
             latents = latents / latents_std + latents_mean
 
         # low-memory, set parallel=True for faster + higher memory
-        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False).transpose(1, 2).mul_(2).sub_(1)
+        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False, memory=memory, first_chunk=first_chunk).transpose(1, 2).mul_(2).sub_(1)
+
+    @torch.no_grad()
+    def cached_decode_withflag(self, latents, is_first_chunk, is_last_chunk):
+        if is_first_chunk:
+            self._decode_memory = [None] * len(self.taehv.decoder)
+        images = self.decode(latents, memory=self._decode_memory, first_chunk=is_first_chunk)
+        if is_last_chunk:
+            self._decode_memory = None
+        return images
 
     @torch.no_grad()
     def encode_video(self, vid):
@@ -193,7 +202,7 @@ class Wan2_2_VAE_tiny(nn.Module):
             self.z_dim = 48
 
     @torch.no_grad()
-    def decode(self, latents):
+    def decode(self, latents, *, memory=None, first_chunk=True):
         latents = latents.unsqueeze(0)
 
         if self.need_scaled:
@@ -202,7 +211,9 @@ class Wan2_2_VAE_tiny(nn.Module):
             latents = latents / latents_std + latents_mean
 
         # low-memory, set parallel=True for faster + higher memory
-        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False).transpose(1, 2).mul_(2).sub_(1)
+        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False, memory=memory, first_chunk=first_chunk).transpose(1, 2).mul_(2).sub_(1)
+
+    cached_decode_withflag = WanVAE_tiny.cached_decode_withflag
 
     @torch.no_grad()
     def encode_video(self, vid):

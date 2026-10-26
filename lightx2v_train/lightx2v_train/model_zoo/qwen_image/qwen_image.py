@@ -8,6 +8,8 @@ from lightx2v_train.model_capabilities import ConsistencyModelCapability, Distri
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyModelCapability
+from lightx2v_train.runtime.backend import get_backend
+from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
@@ -32,6 +34,8 @@ class QwenImageModel(BaseModel):
 
     pipeline_cls = QwenImagePipeline
     distribution_matching_capability_cls = GenericDistributionMatchingCapability
+    distribution_matching_uses_sample_context = False
+    consistency_model_capability_cls = QwenImageConsistencyModelCapability
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -48,11 +52,12 @@ class QwenImageModel(BaseModel):
                     temporal_size=1,
                 ),
                 guidance_in_denoiser_space=True,
+                uses_sample_context=self.distribution_matching_uses_sample_context,
             ),
         )
         self.capabilities.register(
             ConsistencyModelCapability,
-            QwenImageConsistencyModelCapability(self),
+            self.consistency_model_capability_cls(self),
         )
 
     def load_components(
@@ -77,18 +82,18 @@ class QwenImageModel(BaseModel):
             model_path,
             transformer=None,
             vae=None,
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.text_encoder_dtype,
         ).to(self.device)
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.text_pipeline.text_encoder.eval()
 
     def _load_vae(self, model_path):
-        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config.get("inference", {}).get("vae_cpu_offload", False)
+        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config["inference"].get("vae_cpu_offload", False)
         device = torch.device("cpu") if use_cpu else self.device
         self.vae = AutoencoderKLQwenImage.from_pretrained(
             model_path,
             subfolder="vae",
-            torch_dtype=self.running_dtype,
+            torch_dtype=self.vae_dtype,
         ).to(device)
         self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
@@ -110,10 +115,12 @@ class QwenImageModel(BaseModel):
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
-        return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
-
-    def load_full_weights_for_resume(self, resume_ckpt_path):
-        self.transformer = QwenImageTransformer2DModel.from_pretrained(resume_ckpt_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
+        return QwenImageTransformer2DModel.from_pretrained(
+            model_path,
+            subfolder="transformer",
+            torch_dtype=self.transformer_param_dtype,
+        ).to(device)
 
     def denoiser_module(self):
         return self.transformer
@@ -163,10 +170,10 @@ class QwenImageModel(BaseModel):
             image = image.unsqueeze(0)
         if image.ndim != 4:
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
-        image = image.to(device=self.device, dtype=self.running_dtype)
+        image = image.to(device=self.device, dtype=self.vae_dtype)
         pixel_values = image.unsqueeze(2)
         latent = getattr(self.vae.encode(pixel_values).latent_dist, mode)()  # (B, C, T, H, W)
-        return self._normalize_latents(latent)
+        return self._normalize_latents(latent.to(dtype=self.latent_dtype))
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
@@ -204,16 +211,17 @@ class QwenImageModel(BaseModel):
         )
 
     def denoise(self, denoiser_input, timestep_or_sigma, condition):
-        prediction = self.transformer(
-            hidden_states=denoiser_input.hidden_states,
-            timestep=timestep_or_sigma,  # timestep_or_sigma is in [0, 1] not [0, 1000]
-            guidance=None,
-            encoder_hidden_states_mask=condition["prompt_embed_mask"],
-            encoder_hidden_states=condition["prompt_embed"],
-            img_shapes=denoiser_input.img_shapes,
-            attention_kwargs={},
-            return_dict=False,
-        )[0]
+        with self.transformer_forward_context():
+            prediction = self.transformer(
+                hidden_states=denoiser_input.hidden_states.to(dtype=self.running_dtype),
+                timestep=timestep_or_sigma,  # timestep_or_sigma is in [0, 1] not [0, 1000]
+                guidance=None,
+                encoder_hidden_states_mask=condition["prompt_embed_mask"],
+                encoder_hidden_states=condition["prompt_embed"],
+                img_shapes=denoiser_input.img_shapes,
+                attention_kwargs={},
+                return_dict=False,
+            )[0]
         return prediction[:, : denoiser_input.target_token_length]
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
@@ -228,10 +236,10 @@ class QwenImageModel(BaseModel):
         latent_h = height // self.vae_scale_factor
         latent_w = width // self.vae_scale_factor
         shape = (1, self.latent_channels, 1, latent_h, latent_w)
-        return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
+        return torch.randn(shape, generator=generator, device=self.device, dtype=self.latent_dtype)
 
     def decode_latent(self, latent):
-        latent = self._denormalize_latents(latent)
+        latent = self._denormalize_latents(latent.to(dtype=self.latent_dtype)).to(dtype=self.vae_dtype)
         image = self.vae.decode(latent).sample  # (B, C, T, H, W)
         image = image[:, :, 0, :, :]  # drop temporal dim -> (B, C, H, W), T == 1
         return self.image_processor.postprocess(image, output_type="pil")

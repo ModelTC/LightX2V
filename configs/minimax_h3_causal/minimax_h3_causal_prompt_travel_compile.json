@@ -25,7 +25,7 @@
   "audio_sampling_rate": 32000,
   "audio_mono": true,
   "loop_audio": true,
-  "dit_original_ckpt": "/data/nvme1/zhangbilang/h3_v003.pt",
+  "dit_original_ckpt": "/path/to/h3_v003.pt",
   "action_prompt_travel": {
     "enabled": true,
     "naive_travel": true,
@@ -34,7 +34,6 @@
     "min_slice_rolling": true,
     "unit_transition": 1,
     "action_slot_len": 2560,
-    "hold_mode": "empty_rest",
     "hold_action_prompt": null,
     "rest_gap_seconds": 5.0,
     "max_actions": 4,

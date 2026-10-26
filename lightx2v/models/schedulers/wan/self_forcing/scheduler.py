@@ -8,17 +8,15 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 class WanSFScheduler(WanScheduler):
     def __init__(self, config):
-        super().__init__(config)
         self.dtype = torch.bfloat16
         ar = config.get("ar_config", {})
         self.num_frame_per_chunk = int(ar.get("num_frame_per_chunk", 3))
-        self.num_output_frames = int(config.get("num_output_frames", config.get("num_frames", 81)))
         self.context_noise = float(ar.get("context_noise", 0.0))
 
         if "denoising_step_list" in ar:
             self._mode = "denoise"
             self.denoising_step_list = [float(t) for t in ar["denoising_step_list"]]
-            self.infer_steps = len(self.denoising_step_list)
+            config["infer_steps"] = len(self.denoising_step_list)
             self.denoising_strength = float(ar.get("denoising_strength", 1.0))
             self.extra_one_step = bool(ar.get("extra_one_step", True))
             self.inverse_timesteps = bool(ar.get("inverse_timesteps", False))
@@ -26,7 +24,9 @@ class WanSFScheduler(WanScheduler):
         else:
             self._mode = "index"
             self.timesteps_index = ar["timesteps_index"]
-            self.infer_steps = len(self.timesteps_index)
+            config["infer_steps"] = len(self.timesteps_index)
+
+        super().__init__(config)
 
     def clear(self):
         super().clear()

@@ -2,9 +2,11 @@ import gc
 import json
 import math
 import os
+import random
 import shutil
 import subprocess
 import tempfile
+import wave
 
 import imageio_ffmpeg as ffmpeg
 import numpy as np
@@ -19,6 +21,7 @@ from lightx2v.models.networks.wan.infinitetalk_model import WanInfiniteTalkModel
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
+from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
@@ -103,6 +106,9 @@ def _is_video(path):
 
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
+    _WARMUP_SIZES = ((512, 512), (512, 896))
+    _WARMUP_STEP_COUNT = 2
+
     supported_request_fields_by_task = {
         "s2v": COMMON_REQUEST_FIELDS
         | PROMPT_FIELDS
@@ -137,6 +143,88 @@ class InfiniteTalkRunner(WanRunner):
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
+
+    @ProfilingContext4DebugL1("Warmup")
+    @torch.no_grad()
+    def run_warmup(self):
+        """Warm representative requests through the regular encoders and VAE."""
+        # Preserve this worker's RNG states across init_run()'s seeding.
+        numpy_rng, python_rng = np.random.get_state(), random.getstate()
+        model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model"
+        try:
+            with torch.random.fork_rng(devices=[torch.cuda.current_device()]), tempfile.TemporaryDirectory(prefix="infinitetalk_warmup_") as directory:
+                for height, width in self._WARMUP_SIZES:
+                    try:
+                        try:
+                            self._prepare_warmup_inputs(directory, height, width)
+                            logger.info(f"InfiniteTalk warmup: {self.target_h}x{self.target_w}x{self.input_info.num_frames}")
+                            self.inputs = self.run_input_encoder()
+                            self.init_run()
+                            self.init_run_segment(0)
+                            for step in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
+                                self.scheduler.step_pre(step)
+                                self.model.infer(self.dit_inputs)
+                                if not bool(torch.isfinite(self.scheduler.noise_pred).all()):
+                                    raise RuntimeError("InfiniteTalk warmup produced non-finite outputs")
+                                self.scheduler.step_post()
+                        finally:
+                            # Warmup can stop before infer() offloads at the last step.
+                            if model_offload:
+                                self.model.to_cpu()
+                        self.run_vae_decoder(self.scheduler.latents)
+                        torch_device_module.synchronize()
+                    finally:
+                        self.end_run()
+                        self.input_info = None
+        finally:
+            np.random.set_state(numpy_rng)
+            random.setstate(python_rng)
+        logger.info("InfiniteTalk warmup completed")
+        self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, directory, height, width):
+        # The regular loaders consume files; avoid duplicating their feature
+        # layouts here. The image aspect ratios select two resolution buckets.
+        image_path = os.path.join(directory, "image.png")
+        audio_path = os.path.join(directory, "audio.wav")
+        frames = self.config["num_frames"]
+        Image.new("RGB", (width, height), color=0).save(image_path)
+        # Leave one frame of audio margin before conversion to an integer length.
+        sample_count = math.ceil((frames + 1) * self.audio_sample_rate / self.target_fps)
+        with wave.open(audio_path, "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(self.audio_sample_rate)
+            audio.writeframes(b"\0\0" * sample_count)
+        # Inherit num_frames from config: sparse attention forbids overriding it.
+        self.input_info = self.prepare_request(
+            {
+                "seed": 0,
+                "prompt": "A person speaking naturally.",
+                "image_path": image_path,
+                "audio_path": audio_path,
+                "video_duration": frames / self.target_fps,
+                "return_result_tensor": True,
+            }
+        )
+        self.input_info.save_result_path = None
+        human_num = 2 if self.config.get("infinitetalk_mode", "single") == "multi" else 1
+        # Supply these files directly so configured media cannot replace them.
+        self._prepare_input_data(
+            {
+                "prompt": self.input_info.prompt,
+                "cond_video": image_path,
+                "cond_audio": {f"person{index + 1}": audio_path for index in range(human_num)},
+            }
+        )
+
+    def load_vae(self):
+        encoder, decoder = super().load_vae()
+        if self.config.get("vae_use_compile", False):
+            if not isinstance(encoder, WanVAE) or decoder is not encoder:
+                raise ValueError("InfiniteTalk vae_use_compile requires the native Wan 2.1 encoder and decoder")
+            encoder.compile()
+        return encoder, decoder
 
     def check_segment_reuse_support(self):
         pass
@@ -502,6 +590,7 @@ class InfiniteTalkRunner(WanRunner):
         logger.info(f"Converted AV1 cond_video to H.264: {output_video_path}")
         return output_video_path
 
+    @ProfilingContext4DebugL2("Run Audio Encoder")
     def _prepare_audio_embeddings(self, input_data):
         cond_audio = input_data["cond_audio"]
         audio_items = self._sorted_person_items(cond_audio)
@@ -807,8 +896,7 @@ class InfiniteTalkRunner(WanRunner):
         logger.info(f"InfiniteTalk ref_target_masks built: human_num={human_num}, mask_shape={tuple(masks.shape)}")
         return masks
 
-    def _prepare_input_data(self):
-        input_data = self._load_input_data()
+    def _prepare_input_data(self, input_data):
         if self.input_info.prompt:
             input_data["prompt"] = self.input_info.prompt
         self.input_info.prompt = input_data["prompt"]
@@ -835,6 +923,7 @@ class InfiniteTalkRunner(WanRunner):
             "human_num": len(full_audio_embs),
         }
 
+    @ProfilingContext4DebugL2("Slice segment audio embeddings")
     def _slice_audio_embeddings(self, full_audio_embs, audio_start_idx, audio_end_idx):
         indices = (torch.arange(2 * 2 + 1) - 2) * 1
         audio_embs = []
@@ -844,6 +933,7 @@ class InfiniteTalkRunner(WanRunner):
             audio_embs.append(full_audio_emb[center_indices][None])
         return torch.concat(audio_embs, dim=0).to(AI_DEVICE, GET_DTYPE())
 
+    @ProfilingContext4DebugL2("Run condition VAE Encoder")
     def _build_vae_encoder_out(self, cond_image, frame_num):
         video_frames = torch.zeros(1, cond_image.shape[1], frame_num - cond_image.shape[2], self.target_h, self.target_w, device=AI_DEVICE)
         padding_frames = torch.concat([cond_image, video_frames], dim=2)
@@ -858,7 +948,23 @@ class InfiniteTalkRunner(WanRunner):
         return torch.concat([msk, y], dim=0)
 
     def _build_clip_context(self, cond_image):
+        if not self.config.get("use_image_encoder", True):
+            return None
         return self.run_image_encoder(cond_image[:, :, -1])
+
+    def _get_segment_condition_encodings(self):
+        cache_enabled = self.config.get("cache_condition_encoders", False) and not _is_video(self.cond_file_path)
+        cached = getattr(self, "_condition_encoder_cache", None)
+        if cache_enabled and cached is not None:
+            logger.debug("Reusing request-local InfiniteTalk image condition encodings")
+            return cached
+        encodings = (
+            self._build_clip_context(self.cond_image),
+            self._build_vae_encoder_out(self.cond_image, self.frame_num),
+        )
+        if cache_enabled:
+            self._condition_encoder_cache = encodings
+        return encodings
 
     def _run_dit_clip(self, dit_inputs):
         infer_steps = self.scheduler.infer_steps
@@ -947,6 +1053,7 @@ class InfiniteTalkRunner(WanRunner):
         logger.info(f"InfiniteTalk expected_frames: {self.expected_frames}, fps: {self.target_fps}, duration: {self.expected_frames / self.target_fps:.3f}s")
 
         self.cond_image = self._prepare_cond_image(0)
+        self._condition_encoder_cache = None
         self.cond_frame = None
         self.gen_video_list = None if self.stream_save_video else []
 
@@ -972,8 +1079,7 @@ class InfiniteTalkRunner(WanRunner):
         self._ensure_audio_padding(self.audio_end_idx)
 
         audio_embs = self._slice_audio_embeddings(self.full_audio_embs, self.audio_start_idx, self.audio_end_idx)
-        clip_context = self._build_clip_context(self.cond_image)
-        vae_encoder_out = self._build_vae_encoder_out(self.cond_image, self.frame_num)
+        clip_context, vae_encoder_out = self._get_segment_condition_encodings()
         latent_h, latent_w = vae_encoder_out.shape[-2:]
         cur_motion_frames_latent_num = int(1 + (self.current_motion_frames_num - 1) // 4)
 
@@ -986,7 +1092,8 @@ class InfiniteTalkRunner(WanRunner):
                 if self.cond_frame is None:
                     raise RuntimeError("InfiniteTalk non-first segment requires previous decoded motion frames.")
                 latent_motion_input = self.cond_frame
-            latent_motion_frames = self.vae_encoder.encode(latent_motion_input.to(GET_DTYPE()))
+            with ProfilingContext4DebugL2("Run motion VAE Encoder"):
+                latent_motion_frames = self.vae_encoder.encode(latent_motion_input.to(GET_DTYPE()))
             if not self.is_first_segment:
                 self.save_motion_latent(segment_idx - 1, latent_motion_frames)
 
@@ -1009,6 +1116,7 @@ class InfiniteTalkRunner(WanRunner):
             "ref_target_masks": ref_target_masks,
         }
 
+    @ProfilingContext4DebugL1("Run segment DiT")
     def run_segment(self, segment_idx=0):
         self._run_dit_clip(self.dit_inputs)
         return self.scheduler.latents
@@ -1263,12 +1371,14 @@ class InfiniteTalkRunner(WanRunner):
             self.inputs = None
             self.dit_inputs = None
             self.cond_image = None
+            self._condition_encoder_cache = None
             self.cond_frame = None
             self.full_audio_embs = None
             self.gen_video_list = None
             self.gen_video = None
             self.gen_video_final = None
             self.scheduler.clear()
+            self.model.pre_infer.clear_request_rope_cache()
             torch.cuda.empty_cache()
             gc.collect()
 
@@ -1287,7 +1397,7 @@ class InfiniteTalkRunner(WanRunner):
 
         try:
             try:
-                self._prepare_input_data()
+                self._prepare_input_data(self._load_input_data())
                 self.inputs = self.load_reused_inputs() if self.reuse else self.run_input_encoder()
                 result = self.run_main()
             finally:

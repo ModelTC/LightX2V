@@ -18,7 +18,6 @@ class MotusTransformerInfer(BaseTransformerInfer):
     def __init__(self, model, config):
         self.model = model
         self.config = config
-        self.attention_type = config.get("attention_type", "flash_attn2")
         self.self_joint_attn_type = config.get("self_joint_attn_type", "flash_attn2")
         self.cross_attn_type = config.get("cross_attn_type", "flash_attn2")
         self.joint_self_attn = ATTN_WEIGHT_REGISTER[self.self_joint_attn_type]()

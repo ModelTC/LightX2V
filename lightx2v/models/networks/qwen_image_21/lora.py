@@ -22,7 +22,7 @@ def validate_lora_config(config):
 
 
 def prepare_lora_weights(model, path, weights):
-    weights = {key.replace(".default.weight", ".weight"): value for key, value in weights.items()}
+    weights = {key.replace(".default.weight", ".weight").replace(".lora.", ".lora_"): value for key, value in weights.items()}
     with safe_open(path, framework="pt", device="cpu") as source:
         metadata = json.loads((source.metadata() or {}).get("lora_adapter_metadata", "{}"))
     if any(metadata.get("transformer." + key) for key in ("use_rslora", "use_dora", "alpha_pattern")):

@@ -14,9 +14,9 @@ def expand_sigma(sigma, ndim):
 
 def euler_step(sample, velocity, sigma, sigma_next):
     """Advance a flow sample between two arbitrary sigma values."""
-    sigma = expand_sigma(sigma, sample.ndim)
-    sigma_next = expand_sigma(sigma_next, sample.ndim)
-    return (sample + (sigma_next - sigma) * velocity).to(sample.dtype)
+    sigma = expand_sigma(sigma.float(), sample.ndim)
+    sigma_next = expand_sigma(sigma_next.float(), sample.ndim)
+    return (sample.float() + (sigma_next - sigma) * velocity.float()).to(sample.dtype)
 
 
 def velocity_to_x0(sample, velocity, sigma):
@@ -31,6 +31,7 @@ def velocity_to_x0(sample, velocity, sigma):
 
 def do_cfg(cond_pred, uncond_pred, cfg_scale, cfg_norm):
     """Apply classifier-free guidance with the configured normalization."""
+    cond_pred, uncond_pred = cond_pred.float(), uncond_pred.float()
     pred = uncond_pred + cfg_scale * (cond_pred - uncond_pred)
     if cfg_norm in (None, "none"):
         return pred
@@ -55,6 +56,9 @@ def dmd_loss(
     norm_clip_min=None,
 ):
     """Compute the detached DMD regression objective."""
+    latents = latents.float()
+    x_pred_fake_flow = x_pred_fake_flow.float()
+    x_pred_teacher = x_pred_teacher.float()
     with torch.no_grad():
         grad = x_pred_fake_flow - x_pred_teacher
         dims = tuple(range(1, latents.ndim))

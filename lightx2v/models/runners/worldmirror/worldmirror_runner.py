@@ -261,8 +261,8 @@ class WorldMirrorRunner(BaseRunner):
             source_name = ckpt_path
             if ckpt_path.endswith(".safetensors"):
                 weights_file = ckpt_path
-            # Training-ckpt paths rely on torch.load even in lazy mode —
-            # safetensors mmap only works for the exported-model path.
+            # Safetensors support lazy loading; other checkpoints need
+            # an eager read.
             if not (want_true_lazy and weights_file is not None):
                 state = _load_checkpoint_state_dict(ckpt_path)
         else:
@@ -284,7 +284,13 @@ class WorldMirrorRunner(BaseRunner):
         # ``runtime_cfg`` is the LightX2V config (carries
         # ``dit_quant_scheme`` / ``ln_norm_type`` / ...), separate from the
         # HY-World architecture config.
-        model = WorldMirrorWeightModel(model_cfg, runtime_cfg=dict(self.config))
+        runtime_cfg = dict(self.config)
+        input_scale_file = runtime_cfg.get("input_scale_file")
+        if input_scale_file:
+            # Relative calibration paths are rooted at the LightX2V repository.
+            input_scale_file = str(Path(__file__).resolve().parents[4] / input_scale_file)
+            runtime_cfg["input_scale_file"] = input_scale_file
+        model = WorldMirrorWeightModel(model_cfg, runtime_cfg=runtime_cfg)
         model.inner_model.to(self.device)
 
         # True-lazy path (cpu_offload=true + lazy_load=true + safetensors
@@ -293,21 +299,14 @@ class WorldMirrorRunner(BaseRunner):
         # read, one by one, through the safetensors mmap. WM keys stay on
         # disk and are pulled per-block-forward by the cpu_offload hook.
         # Saves ~3 GB of resident RSS during inference.
-        use_true_lazy = bool(self.config.get("cpu_offload", False)) and bool(self.config.get("lazy_load", False)) and weights_file is not None and weights_file.endswith(".safetensors")
-        if use_true_lazy:
-            if config_path and ckpt_path:
-                # The training-ckpt path already pulled state via torch.load;
-                # we have no safetensors we can mmap in that case, so fall
-                # through to the legacy path.
-                use_true_lazy = False
-
+        use_true_lazy = want_true_lazy and weights_file is not None
         if use_true_lazy:
             # In true-lazy mode the calibration input_scale merge has no
             # natural path (we never build the flat state dict). Reject
             # the combination loudly — the auto-quant paths need the
             # calibration state before post_process anyway, so silently
             # dropping it would produce wrong numbers.
-            if self.config.get("input_scale_file", None):
+            if input_scale_file:
                 raise RuntimeError("lazy_load=true is not currently compatible with input_scale_file (fp8-pertensor calibration). Disable one of the two.")
             if self.config.get("weight_auto_quant", False):
                 raise RuntimeError("lazy_load=true is not currently compatible with weight_auto_quant (quant schemes materialize weights at load-time). Disable one of the two.")
@@ -325,7 +324,6 @@ class WorldMirrorRunner(BaseRunner):
             # fp8-pertensor auto-quant path consumes. Keys just pass through to
             # ``_device_view_for_wm`` and end up on the leaves before
             # ``post_process`` runs.
-            input_scale_file = self.config.get("input_scale_file", None)
             if input_scale_file:
                 if not os.path.isfile(input_scale_file):
                     raise FileNotFoundError(f"input_scale_file '{input_scale_file}' not found — run scripts/worldmirror/run_calibration.py first.")

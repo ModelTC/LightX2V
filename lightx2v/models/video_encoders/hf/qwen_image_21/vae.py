@@ -1,10 +1,3 @@
-"""Single-frame RGBA VAE, with the released Qwen-Image-2.1 weight names.
-
-The residual spatial shortcuts are shared with native Wan 2.2. Convolutions
-are the image specialization (2D checkpoint kernels); temporal resampler
-weights are loaded for compatibility but are unused for the first frame.
-"""
-
 import json
 from pathlib import Path
 
@@ -22,14 +15,60 @@ from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-class ImageConv(FP8Conv2d):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.image_padding = (self.padding[1], self.padding[1], self.padding[0], self.padding[0])
-        self.padding = (0, 0)
+def _tiled_forward(x, forward, tile_size, halo, input_scale=1, output_scale=1):
+    """Run local spatial layers on overlapping tiles and copy their valid cores.
 
+    Coordinates are aligned to ``input_scale``; ``output_scale`` expresses
+    the corresponding output spacing. Global attention stays outside this loop.
+    """
+    height, width = x.shape[-2:]
+    if height <= tile_size and width <= tile_size:
+        return forward(x)
+
+    def output_position(position):
+        return position // input_scale * output_scale
+
+    rows, columns = (height + tile_size - 1) // tile_size, (width + tile_size - 1) // tile_size
+    core_h = ((height // input_scale + rows - 1) // rows) * input_scale
+    core_w = ((width // input_scale + columns - 1) // columns) * input_scale
+    window_h, window_w = min(height, core_h + 2 * halo), min(width, core_w + 2 * halo)
+    event_factory = getattr(getattr(torch, x.device.type), "Event", None)
+    event = event_factory() if event_factory is not None else None
+    if event is not None:
+        event.record()
+    result = None
+    for top in range(0, height, core_h):
+        bottom = min(top + core_h, height)
+        for left in range(0, width, core_w):
+            right = min(left + core_w, width)
+            # Slide equally sized windows inside the image. This keeps real
+            # image-edge padding and lets all tiles reuse backend workspaces.
+            begin_h = min(max(0, top - halo), height - window_h)
+            begin_w = min(max(0, left - halo), width - window_w)
+            end_h, end_w = begin_h + window_h, begin_w + window_w
+            tile = forward(x[..., begin_h:end_h, begin_w:end_w])
+            if result is None:
+                layout = torch.channels_last_3d if tile.is_contiguous(memory_format=torch.channels_last_3d) else torch.contiguous_format
+                shape = (*tile.shape[:-2], output_position(height), output_position(width))
+                result = torch.empty(shape, dtype=tile.dtype, device=tile.device, memory_format=layout)
+            offset_h, offset_w = output_position(top - begin_h), output_position(left - begin_w)
+            valid_h, valid_w = output_position(bottom - top), output_position(right - left)
+            out_top, out_bottom = output_position(top), output_position(bottom)
+            out_left, out_right = output_position(left), output_position(right)
+            result[..., out_top:out_bottom, out_left:out_right].copy_(tile[..., offset_h : offset_h + valid_h, offset_w : offset_w + valid_w])
+            del tile
+            # Finish this tile before allocating the next one, so in-flight
+            # commands cannot retain multiple tiles' temporary buffers.
+            if event is not None:
+                event.record()
+                event.synchronize()
+    return result
+
+
+class ImageConv(FP8Conv2d):
+    @torch.no_grad()
     def forward(self, x):
-        return super().forward(F.pad(x.squeeze(2), self.image_padding)).unsqueeze(2)
+        return super().forward(x.squeeze(2)).unsqueeze(2)
 
 
 class ImageRMSNorm(nn.Module):
@@ -38,8 +77,44 @@ class ImageRMSNorm(nn.Module):
         self.gamma = nn.Parameter(torch.ones((channels,) + ((1, 1) if images else (1, 1, 1))))
         self.scale = channels**0.5
 
+    @torch.no_grad()
     def forward(self, x):
-        return F.normalize(x.float(), dim=1).to(x.dtype) * self.scale * self.gamma
+        if x.dtype not in (torch.float16, torch.bfloat16) or self.gamma.dtype != x.dtype:
+            return F.normalize(x.float(), dim=1).to(x.dtype) * self.scale * self.gamma
+        # Low-precision inputs give us a private FP32 buffer to reuse.
+        value = x.float()
+        norm = value.norm(2, dim=1, keepdim=True).clamp_min_(1e-12)
+        return value.div_(norm).to(x.dtype).mul_(self.scale).mul_(self.gamma)
+
+
+class ImageAvgDown3D(AvgDown3D):
+    @torch.no_grad()
+    def forward(self, x):
+        # Express temporal padding as 4D channel padding. MPSGraph's 5D
+        # constant padding can corrupt large spatial tensors (PyTorch #194922).
+        batch, channels, frames, height, width = x.shape
+        padding = (self.factor_t - frames % self.factor_t) % self.factor_t
+        if padding:
+            x = F.pad(x.reshape(batch * channels, frames, height, width), (0, 0, 0, 0, padding, 0))
+            x = x.reshape(batch, channels, frames + padding, height, width)
+        return super().forward(x)
+
+
+class ImageDupUp3D(DupUp3D):
+    @torch.no_grad()
+    def forward(self, x, first_chunk=False):
+        if not first_chunk or x.shape[2] != 1 or self.in_channels % self.out_channels:
+            return super().forward(x, first_chunk=first_chunk)
+        # Write only the retained frame, without expanded temporal buffers.
+        batch, _, _, height, width = x.shape
+        factor = self.factor_s
+        step = self.in_channels // self.out_channels
+        output = x.new_empty((batch, self.out_channels, 1, height * factor, width * factor))
+        for row in range(factor):
+            for column in range(factor):
+                offset = ((self.factor_t - 1) * factor * factor + row * factor + column) // self.repeats
+                output[..., row::factor, column::factor].copy_(x[:, offset::step])
+        return output
 
 
 class ResidualBlock(nn.Module):
@@ -51,9 +126,12 @@ class ResidualBlock(nn.Module):
         self.conv2 = ImageConv(out_dim, out_dim, 3, padding=1)
         self.conv_shortcut = ImageConv(in_dim, out_dim, 1) if in_dim != out_dim else nn.Identity()
 
+    @torch.no_grad()
     def forward(self, x):
-        h = self.conv1(F.silu(self.norm1(x)))
-        return self.conv2(F.silu(self.norm2(h))) + self.conv_shortcut(x)
+        h = self.conv1(F.silu(self.norm1(x), inplace=True))
+        h = self.norm2(h)
+        h = self.conv2(F.silu(h, inplace=True))
+        return h.add_(self.conv_shortcut(x))
 
 
 class AttentionBlock(nn.Module):
@@ -63,6 +141,7 @@ class AttentionBlock(nn.Module):
         self.to_qkv = nn.Conv2d(dim, dim * 3, 1)
         self.proj = nn.Conv2d(dim, dim, 1)
 
+    @torch.no_grad()
     def forward(self, x):
         b, c, _, h, w = x.shape
         value = x.permute(0, 2, 1, 3, 4).reshape(b, c, h, w)
@@ -78,11 +157,13 @@ class MidBlock(nn.Module):
         self.resnets = nn.ModuleList([ResidualBlock(dim, dim), ResidualBlock(dim, dim)])
         self.attentions = nn.ModuleList([AttentionBlock(dim)])
 
+    @torch.no_grad()
     def forward(self, x):
         return self.resnets[1](self.attentions[0](self.resnets[0](x)))
 
 
 class Upsample(nn.Module):
+    @torch.no_grad()
     def forward(self, x):
         return F.interpolate(x.float(), scale_factor=2, mode="nearest-exact").to(x.dtype)
 
@@ -97,6 +178,7 @@ class Resample(nn.Module):
         if temporal:
             self.time_conv = ImageConv(dim, dim * 2 if up else dim, 1)
 
+    @torch.no_grad()
     def forward(self, x):
         b, c, _, h, w = x.shape
         # Keep the reference's frame folding, including singleton-axis strides:
@@ -106,12 +188,13 @@ class Resample(nn.Module):
 
 
 class DownBlock(nn.Module):
-    def __init__(self, in_dim, out_dim, count, down, temporal):
+    def __init__(self, in_dim, out_dim, count, down, temporal, shortcut_cls=AvgDown3D):
         super().__init__()
         self.resnets = nn.ModuleList([ResidualBlock(in_dim if i == 0 else out_dim, out_dim) for i in range(count)])
         self.downsampler = Resample(out_dim, False, temporal) if down else None
-        self.avg_shortcut = AvgDown3D(in_dim, out_dim, 2 if temporal else 1, 2 if down else 1)
+        self.avg_shortcut = shortcut_cls(in_dim, out_dim, 2 if temporal else 1, 2 if down else 1)
 
+    @torch.no_grad()
     def forward(self, x):
         h = x
         for block in self.resnets:
@@ -126,8 +209,9 @@ class UpBlock(nn.Module):
         super().__init__()
         self.resnets = nn.ModuleList([ResidualBlock(in_dim if i == 0 else out_dim, out_dim) for i in range(count + 1)])
         self.upsampler = Resample(out_dim, True, temporal) if up else None
-        self.avg_shortcut = DupUp3D(in_dim, out_dim, 2 if temporal else 1, 2) if up else None
+        self.avg_shortcut = ImageDupUp3D(in_dim, out_dim, 2 if temporal else 1, 2) if up else None
 
+    @torch.no_grad()
     def forward(self, x):
         h = x
         for block in self.resnets:
@@ -139,12 +223,13 @@ class UpBlock(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, shortcut_cls=AvgDown3D):
         super().__init__()
         dims = [config["base_dim"] * m for m in [1] + config["dim_mult"]]
         self.conv_in = ImageConv(config["in_channels"], dims[0], 3, padding=1)
         self.down_blocks = nn.ModuleList(
-            DownBlock(a, b, config["num_res_blocks"], i < len(dims) - 2, config["temperal_downsample"][i] if i < len(dims) - 2 else False) for i, (a, b) in enumerate(zip(dims[:-1], dims[1:]))
+            DownBlock(a, b, config["num_res_blocks"], i < len(dims) - 2, config["temperal_downsample"][i] if i < len(dims) - 2 else False, shortcut_cls)
+            for i, (a, b) in enumerate(zip(dims[:-1], dims[1:]))
         )
         self.mid_block = MidBlock(dims[-1])
         self.norm_out = ImageRMSNorm(dims[-1])
@@ -172,6 +257,7 @@ class Encoder(nn.Module):
     def forward_mid(self, x):
         return self.conv_out(F.silu(self.norm_out(self.mid_block(x))))
 
+    @torch.no_grad()
     def forward(self, x):
         return self.forward_mid(self.forward_down(x))
 
@@ -188,14 +274,26 @@ class Decoder(nn.Module):
         self.norm_out = ImageRMSNorm(dims[-1])
         self.conv_out = ImageConv(dims[-1], config["out_channels"], 3, padding=1)
 
+    def spatial_halo(self):
+        """Latent-space context required by the local upsampling path."""
+        radius = 1  # Final 3x3 convolution.
+        for block in reversed(self.up_blocks):
+            if block.upsampler is not None:
+                # Reverse the 3x3 convolution and nearest-neighbor doubling.
+                radius = (radius + 2) // 2
+            radius += 2 * len(block.resnets)
+        return radius
+
     def forward_up(self, x):
         for block in self.up_blocks:
             x = block(x)
-        return self.conv_out(F.silu(self.norm_out(x)))
+        x = self.norm_out(x)
+        return self.conv_out(F.silu(x, inplace=True))
 
     def forward_mid(self, x):
         return self.mid_block(self.conv_in(x))
 
+    @torch.no_grad()
     def forward(self, x):
         return self.forward_up(self.forward_mid(x))
 
@@ -214,8 +312,13 @@ class QwenImage21VAE(nn.Module):
         if not cfg["is_residual"] or cfg.get("patch_size") is not None or cfg["attn_scales"]:
             raise ValueError("Expected the released residual, unpatched Qwen-Image-2.1 image VAE")
         self.scale_factor = config["vae_scale_factor"]
+        self.use_tiling_vae = config.get("use_tiling_vae", False)
+        self.vae_tile_size = config.get("vae_tile_size", 1024)
+        if self.use_tiling_vae:
+            if not isinstance(self.vae_tile_size, int) or isinstance(self.vae_tile_size, bool) or self.vae_tile_size <= 0 or self.vae_tile_size % self.scale_factor:
+                raise ValueError(f"vae_tile_size must be a positive integer divisible by vae_scale_factor ({self.scale_factor})")
         with torch.device("meta"):
-            self.encoder = Encoder(cfg)
+            self.encoder = Encoder(cfg, shortcut_cls=ImageAvgDown3D if self.use_tiling_vae else AvgDown3D)
             self.decoder = Decoder(cfg)
             self.quant_conv = ImageConv(cfg["z_dim"] * 2, cfg["z_dim"] * 2, 1)
             self.post_quant_conv = ImageConv(cfg["z_dim"], cfg["z_dim"], 1)
@@ -225,6 +328,8 @@ class QwenImage21VAE(nn.Module):
         quantized_ckpt = config.get("vae_quantized_ckpt")
         if (conv_mode != "torch") != bool(quantized_ckpt):
             raise ValueError("FP8 VAE requires both vae_decoder_conv_mode='cutlass_fp8_f16_accum' and vae_quantized_ckpt")
+        if self.use_tiling_vae and quantized_ckpt:
+            raise ValueError("VAE tiling requires unquantized VAE weights; FP8 activation scales depend on tile contents")
         if quantized_ckpt:
             state = self._load_fp8_state(quantized_ckpt)
         else:
@@ -232,13 +337,14 @@ class QwenImage21VAE(nn.Module):
             for shard in sorted(path.glob("*.safetensors")):
                 state.update(load_file(shard))
         self.load_state_dict(state, strict=True, assign=True)
-        self.register_buffer("latents_mean", torch.tensor(cfg["latents_mean"]).to(GET_DTYPE()).reshape(1, -1, 1, 1, 1), persistent=False)
-        self.register_buffer("latents_std", torch.tensor(cfg["latents_std"]).to(GET_DTYPE()).reshape(1, -1, 1, 1, 1), persistent=False)
         # FP8 weights and FP32 scales must retain their checkpoint dtypes.
         if quantized_ckpt:
             self.to(device=AI_DEVICE)
         else:
             self.to(dtype=GET_DTYPE(), device=AI_DEVICE)
+        latent_dtype = torch.float32 if config.get("latent_dtype", None) == "fp32" else GET_DTYPE()
+        self.register_buffer("latents_mean", torch.tensor(cfg["latents_mean"], dtype=latent_dtype, device=AI_DEVICE).reshape(1, -1, 1, 1, 1), persistent=False)
+        self.register_buffer("latents_std", torch.tensor(cfg["latents_std"], dtype=latent_dtype, device=AI_DEVICE).reshape(1, -1, 1, 1, 1), persistent=False)
         self.eval().requires_grad_(False)
         if config.get("vae_use_compile", False):
             logger.info("[Compile] Using torch.compile for Qwen-Image-2.1 VAE")
@@ -280,9 +386,28 @@ class QwenImage21VAE(nn.Module):
     def encode(self, image):
         image = image.to(device=AI_DEVICE, dtype=GET_DTYPE())
         use_parallel = self.vae_encode_parallel and dist.is_initialized() and dist.get_world_size() > 1
-        moments = self._encode_dist(image) if use_parallel else self.encoder(image)
-        mean = self.quant_conv(moments).chunk(2, dim=1)[0]
+        if use_parallel:
+            moments = self._encode_dist(image)
+        elif self.use_tiling_vae:
+            moments = self._encode_tiled(image)
+        else:
+            moments = self.encoder(image)
+        mean = self.quant_conv(moments).chunk(2, dim=1)[0].to(self.latents_mean.dtype)
         return ((mean - self.latents_mean) / self.latents_std).flatten(2).transpose(1, 2)
+
+    def _encode_tiled(self, image):
+        if any(size % self.scale_factor for size in image.shape[-2:]):
+            raise ValueError(f"Tiled VAE encode requires image dimensions divisible by {self.scale_factor}")
+        if max(image.shape[-2:]) <= self.vae_tile_size:
+            return self.encoder(image)
+        features = _tiled_forward(image, self.encoder.forward_down, self.vae_tile_size, self.encoder.spatial_halo(), input_scale=self.scale_factor)
+        return self.encoder.forward_mid(features)
+
+    def _decode_tiled(self, z):
+        if max(z.shape[-2:]) * self.scale_factor <= self.vae_tile_size:
+            return self.decoder(z)
+        features = self.decoder.forward_mid(z)
+        return _tiled_forward(features, self.decoder.forward_up, self.vae_tile_size // self.scale_factor, self.decoder.spatial_halo(), output_scale=self.scale_factor)
 
     def _encode_dist(self, image):
         """Shard local convolutions, then restore the full global attention input."""
@@ -385,8 +510,13 @@ class QwenImage21VAE(nn.Module):
     @torch.inference_mode()
     def decode(self, latents, size):
         h, w = size
-        z = latents.transpose(1, 2).reshape(1, self.config["z_dim"], 1, h // self.scale_factor, w // self.scale_factor).to(GET_DTYPE())
-        z = self.post_quant_conv(z * self.latents_std + self.latents_mean)
+        z = latents.transpose(1, 2).reshape(1, self.config["z_dim"], 1, h // self.scale_factor, w // self.scale_factor).to(self.latents_mean.dtype)
+        z = self.post_quant_conv((z * self.latents_std + self.latents_mean).to(GET_DTYPE()))
         use_parallel = self.vae_decode_parallel and dist.is_initialized() and dist.get_world_size() > 1
-        decoded = self._decode_dist(z) if use_parallel else self.decoder(z)
+        if use_parallel:
+            decoded = self._decode_dist(z)
+        elif self.use_tiling_vae:
+            decoded = self._decode_tiled(z)
+        else:
+            decoded = self.decoder(z)
         return decoded.clamp(-1, 1)[:, :, 0]

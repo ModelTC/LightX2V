@@ -1,15 +1,27 @@
 import torch
 
+from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.common.offload.resident import ResidentBlocks, uniform_resident_indices, validate_residency_config
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
+def validate_wan_residency_config(config):
+    if "offload_resident_blocks" not in config:
+        return
+    uniform_resident_indices(config["num_layers"], config["offload_resident_blocks"])
+    if config["model_cls"] != "wan2.1" or config["task"] not in ("t2v", "i2v"):
+        raise ValueError("Static Wan residency currently supports Wan2.1 t2v/i2v")
+    validate_residency_config(config)
+
+
 class WanOffloadTransformerInfer(WanTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
+        self.resident_blocks = None
         if self.config.get("cpu_offload", False):
             offload_granularity = self.config.get("offload_granularity", "block")
             if offload_granularity == "block":
@@ -32,45 +44,68 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.infer_func = self.infer_without_offload
 
             if offload_granularity != "model":
-                self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
+                if "offload_resident_blocks" in config:
+                    self.offload_manager = EventSlotWeightAsyncStreamManager(offload_granularity)
+                    self.resident_blocks = ResidentBlocks(config["offload_resident_blocks"])
+                else:
+                    self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
             self.lazy_load = self.config.get("lazy_load", False)
             if self.lazy_load:
                 self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 4))
 
     def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
-        current_stream = torch_device_module.current_stream()
-        self.offload_manager.compute_stream.wait_stream(current_stream)
-        for block_idx in range(len(blocks)):
-            self.block_idx = block_idx
-            if self.lazy_load:
-                next_prefetch = (block_idx + 1) % len(blocks)
-                self.offload_manager.start_prefetch_block(next_prefetch)
+        if self.resident_blocks is not None:
+            self.resident_blocks.prepare(blocks)
 
-            if self.offload_manager.need_init_first_buffer:
-                self.offload_manager.init_first_buffer(blocks)
+            def run_block(index, block, hidden):
+                self.block_idx = index
+                return self.run_block(index, block, hidden, pre_infer_out)
 
-            if self.lazy_load:
-                self.offload_manager.swap_cpu_buffers()
+            # Caller-owned inputs may die before work on the compute stream ends.
+            for tensor in (x, pre_infer_out.embed0, pre_infer_out.context):
+                tensor.record_stream(self.offload_manager.compute_stream)
+            try:
+                x = self.offload_manager.run_blocks(blocks, self.resident_blocks.indices, x, run_block)
+            except BaseException:
+                self.release_resident_blocks()
+                raise
+            x.record_stream(torch_device_module.current_stream())
+        else:
+            current_stream = torch_device_module.current_stream()
+            self.offload_manager.compute_stream.wait_stream(current_stream)
+            for block_idx in range(len(blocks)):
+                self.block_idx = block_idx
+                if self.lazy_load:
+                    next_prefetch = (block_idx + 1) % len(blocks)
+                    self.offload_manager.start_prefetch_block(next_prefetch)
 
-            self.offload_manager.prefetch_weights((block_idx + 1) % len(blocks), blocks)
-            if AI_DEVICE == "xpu":
-                # XPU streams do not guarantee cross-stream memory visibility even
-                # after a device-wide sync, so run compute on the default stream.
-                x = self.run_block(block_idx, self.offload_manager.cuda_buffers[0], x, pre_infer_out)
-            else:
-                with torch_device_module.stream(self.offload_manager.compute_stream):
+                if self.offload_manager.need_init_first_buffer:
+                    self.offload_manager.init_first_buffer(blocks)
+
+                if self.lazy_load:
+                    self.offload_manager.swap_cpu_buffers()
+
+                self.offload_manager.prefetch_weights((block_idx + 1) % len(blocks), blocks)
+                if AI_DEVICE == "xpu":
+                    # XPU streams do not guarantee cross-stream memory visibility even
+                    # after a device-wide sync, so run compute on the default stream.
                     x = self.run_block(block_idx, self.offload_manager.cuda_buffers[0], x, pre_infer_out)
+                else:
+                    with torch_device_module.stream(self.offload_manager.compute_stream):
+                        x = self.run_block(block_idx, self.offload_manager.cuda_buffers[0], x, pre_infer_out)
 
-            self.offload_manager.swap_blocks()
+                self.offload_manager.swap_blocks()
 
         if self.clean_cuda_cache:
-            del (
-                pre_infer_out.embed0,
-                pre_infer_out.context,
-            )
+            del pre_infer_out.embed0, pre_infer_out.context
             torch_device_module.empty_cache()
 
         return x
+
+    def release_resident_blocks(self):
+        if self.resident_blocks is not None:
+            self.resident_blocks.release()
+            self.offload_manager.reset_slots()
 
     def infer_with_phases_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):

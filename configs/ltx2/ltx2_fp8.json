@@ -11,7 +11,7 @@
     "fps": 24,
     "audio_mel_bins":16,
     "double_precision_rope": true,
-    "dit_quantized_ckpt": "Lightricks/LTX-2/LTX-2/ltx-2-19b-dev-fp8.safetensors",
+    "dit_quantized_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev-fp8.safetensors",
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-pertensor",
     "skip_fp8_block_index" : [0, 43, 44, 45, 46, 47]

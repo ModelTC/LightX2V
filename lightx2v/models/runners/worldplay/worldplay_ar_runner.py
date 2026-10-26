@@ -21,12 +21,6 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     """
     Runner for HY-WorldPlay AR (Autoregressive) model with action conditioning.
 
-    Key differences from WorldPlayDistillRunner:
-    - Uses causal attention for autoregressive generation
-    - Implements KV cache for efficient frame-by-frame generation
-    - Supports chunk-based training and inference
-    - No guidance embedding required
-
     Extends HunyuanVideo15Runner with:
     - Action conditioning support
     - ProPE (camera pose) conditioning
@@ -34,13 +28,13 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     - Memory window selection for long videos
     """
 
+    scheduler_class = WorldPlayARScheduler
     input_info_cls_by_task = {"t2v": WorldPlayT2VInputInfo, "i2v": WorldPlayI2VInputInfo}
     supported_request_fields_by_task = {task: request_fields | {"pose"} for task, request_fields in HunyuanVideo15Runner.supported_request_fields_by_task.items()}
 
     def __init__(self, config):
         # AR-specific parameters
         self.chunk_latent_frames = config.get("chunk_latent_frames", 4)
-        self.model_type = config.get("model_type", "ar")
         self.action_ckpt = config.get("action_ckpt", None)
         self.use_prope = config.get("use_prope", True)
 
@@ -73,7 +67,7 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
 
     def init_scheduler(self):
         """Initialize WorldPlay AR scheduler."""
-        self.scheduler = WorldPlayARScheduler(self.config)
+        self.scheduler = self.scheduler_class(self.config)
 
         if self.sr_version is not None:
             from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15SRScheduler

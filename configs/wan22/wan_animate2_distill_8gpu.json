@@ -57,8 +57,7 @@
     "vae_dtype": "torch.bfloat16",
     "parallel": {
         "seq_p_size": 8,
-        "seq_p_attn_type": "ulysses",
-        "vae_parallel": false
+        "seq_p_attn_type": "ulysses"
     },
     "dit_original_ckpt": "/path/to/wan_animate_2_bf16_distillation.safetensors",
     "t5_original_ckpt": "/path/to/models_t5_umt5-xxl-enc-bf16.pth",

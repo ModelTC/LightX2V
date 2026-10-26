@@ -2,12 +2,24 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
+## 近期工作：LightX2V APP（macOS）
+
+我们近期推出的 [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App) 是面向 Apple Silicon Mac 的原生 macOS 应用，适用于 macOS 14 及以上版本。APP 基于 LightX2V 在本地运行 [Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)，通过图形界面完成文生图和图像编辑。
+
+LightX2V APP 还提供可选提示词增强功能，支持配套的 [Qwen-Image-2.1-PE-T2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0) 和 [Qwen-Image-2.1-PE-I2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0) 模型。
+
 ## 1. 模型下载
 
 官方模型权重：[Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1)。下载命令：
 
 ```bash
 hf download Qwen/Qwen-Image-2.1 --local-dir Qwen/Qwen-Image-2.1
+```
+
+Turbo 模型权重：[Qwen/Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo)。下载命令：
+
+```bash
+hf download Qwen/Qwen-Image-2.1-Turbo --local-dir Qwen/Qwen-Image-2.1-Turbo
 ```
 
 ## 2. 环境安装
@@ -56,7 +68,25 @@ bash scripts/qwen_image_21/qwen_image_21_i2i.sh
 
 图生图可删除脚本中的 `--size` 参数，按参考图比例自动确定输出尺寸。总像素数约为配置中的 `resolution²`（`resolution` 默认为 `1024`），宽高就近对齐到 32 的倍数。
 
+传入 `--resolution 2048` 可仅为本次请求覆盖配置值，不传则使用配置。该值须为正整数，控制参考图缩放和自动输出尺寸；显式传入 `--size` 时，输出尺寸仍由 `--size` 决定。
+
 默认配置已经启用通用优化路径：FlashAttention3、FlashInfer RoPE、Triton LayerNorm 与 modulation、融合 QK RMSNorm、融合 Transformer block 算子、关闭 CFG 的推理路径及 OpenCV 结果保存。
+
+### Qwen-Image-2.1-Turbo
+
+Qwen-Image-2.1-Turbo 是 Qwen-Image-2.1 的官方加速版本，支持文生图和图像编辑，仅需 8 步去噪推理。
+
+先设置脚本中的 `lightx2v_path`、`model_path`（Qwen-Image-2.1-Turbo 模型目录）和 `CUDA_VISIBLE_DEVICES`，然后运行：
+
+```bash
+# 文生图
+bash scripts/qwen_image_21/qwen_image_21_turbo_t2i.sh
+
+# 图生图
+bash scripts/qwen_image_21/qwen_image_21_turbo_i2i.sh
+```
+
+图生图按需修改 `--image_path` 和 `--prompt`，默认参考图为模型目录下的 `assets/turbo-boat-input.png`。
 
 ### 3.2 RTX 5090 案例
 
@@ -134,3 +164,5 @@ python scripts/qwen_image_21/server/post_i2i.py
 直接修改代码中的 `url`、`message`、`output_path`；图生图还需设置 `image_path`。两个脚本已分别设置 `task: "t2i"` 和 `task: "i2i"`。
 
 服务请求使用相同的尺寸规则。图生图需自动确定尺寸时，删除 `message` 中的 `size` 字段。
+
+在 `message` 中设置 `"resolution": 2048` 可仅为本次请求覆盖启动配置；省略或传 `null` 则使用配置。图片表单接口以及 `/v1/images/generations`、`/v1/images/edits` 也支持 `resolution`。

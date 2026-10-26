@@ -9,6 +9,7 @@ from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage, StorageDescription
 
 try:
     import sgl_kernel
@@ -61,7 +62,7 @@ def rmsnorm_flashinfer_fake(
     return torch.empty_like(input_tensor)
 
 
-class RMSWeightTemplate(metaclass=ABCMeta):
+class RMSWeightTemplate(FloatingWeightStorage, metaclass=ABCMeta):
     def __init__(
         self,
         weight_name,
@@ -97,6 +98,11 @@ class RMSWeightTemplate(metaclass=ABCMeta):
             self.base_attrs.append((self.weight_name, "weight", False))
         else:
             self.weight = None
+
+    def describe_storage(self, metadata):
+        description = super().describe_storage(metadata)
+        auxiliary = (("weight_diff", self.weight_diff_name),) if self.weight_name is not None else ()
+        return StorageDescription(description.tensors, auxiliary)
 
     def _get_lora_attr_mapping(self):
         if self.weight_name is not None:
@@ -687,3 +693,11 @@ class RMSWeightDualNorm3DRope:
             sin_w,
             eps=self.eps,
         )
+
+
+def apply_projection_norm(norm, projected):
+    if torch.compiler.is_compiling() and type(norm) is RMSWeightSgl and not projected.is_contiguous() and norm.sensitive_layer_dtype == norm.infer_dtype and flashinfer_rmsnorm is not None:
+        # The compiled SGL path already uses this kernel. Its row-stride
+        # support avoids copying slices of the packed projection output.
+        return rmsnorm_flashinfer(projected, norm._get_actual_weight(), norm.eps, norm.enable_pdl)
+    return norm.apply(projected)

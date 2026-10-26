@@ -126,9 +126,10 @@ class FastWAMPolicy:
         if config is None:
             raise ValueError("FastWAM requires `config`.")
 
+        checkpoint_key = "dit_quantized_ckpt" if config.get("dit_quantized", False) else "adapter_model_path"
         paths = {
             "model_path": model_path,
-            "adapter_model_path": adapter_model_path,
+            checkpoint_key: config.get(checkpoint_key) if config.get("dit_quantized", False) else adapter_model_path,
             "dataset_stats_path": dataset_stats_path,
         }
         for name, value in paths.items():
@@ -142,7 +143,7 @@ class FastWAMPolicy:
             paths[name] = path.resolve()
 
         self.model_path = paths["model_path"]
-        self.adapter_model_path = paths["adapter_model_path"]
+        self.adapter_model_path = paths[checkpoint_key]
         self.dataset_stats_path = paths["dataset_stats_path"]
 
         self.camera_size = int(camera_size)
@@ -220,6 +221,7 @@ class FastWAMPolicy:
             checkpoint_path=t5_path,
             tokenizer_path=str(tokenizer_path),
             cpu_offload=self.t5_cpu_offload,
+            rms_norm_type=self.config.get("t5_rms_norm_type", "sgl-kernel"),
         )
 
     def _load_vae(self):

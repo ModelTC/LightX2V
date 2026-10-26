@@ -53,6 +53,7 @@ class _DmdRuntime(BaseTrainer):
         super().__init__(config)
         self.role_registry = DmdRoleRegistry(self)
         self.checkpoint_manager = DmdCheckpointManager(self)
+        self._checkpoint_process_group = None
         parsed = DmdConfig.from_mapping(
             config,
             default_negative_prompt=self.default_negative_prompt,
@@ -202,6 +203,7 @@ class _DmdRuntime(BaseTrainer):
 
         teacher_model_config = copy.deepcopy(self.config)
         teacher_model_config["model"] = copy.deepcopy(base_model_config)
+        teacher_model_config["model"]["transformer_param_dtype"] = self.model_config["running_dtype"]
         if "teacher" in self.model_config:
             if not isinstance(self.model_config["teacher"], dict):
                 raise ValueError("model.teacher must be a mapping.")

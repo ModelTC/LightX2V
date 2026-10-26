@@ -69,7 +69,7 @@ class LightX2VPipeline:
             "wan2.2_s2v",
         ]:
             self.startup_config["vae_stride"] = (4, 8, 8)
-            if model_cls.startswith("wan2.2") and model_cls != "wan2.2_animate2_distilled":
+            if model_cls in {"wan2.2_moe", "wan2.2_s2v"}:
                 self.startup_config["use_image_encoder"] = False
         elif model_cls in ["wan2.2", "wan2.2_matrix_game3"]:
             self.startup_config.update(vae_stride=(4, 16, 16), num_channels_latents=48)
@@ -85,7 +85,6 @@ class LightX2VPipeline:
             self.startup_config.update(
                 vae_spatial_scale_factor=16,
                 vae_scale_factor=16,
-                fps=24,
                 audio_sampling_rate=32000,
                 audio_flow_shift=3.0,
             )
@@ -113,7 +112,7 @@ class LightX2VPipeline:
         infer_steps=50,
         num_frames=81,
         size=(480, 832),
-        guidance_scale=5.0,
+        guidance_scale=None,
         sample_shift=5.0,
         fps=None,
         aspect_ratio="16:9",
@@ -130,6 +129,8 @@ class LightX2VPipeline:
             raise RuntimeError("Generator has already been created for this pipeline")
 
         if config_json is None:
+            if guidance_scale is None:
+                guidance_scale = 1.0 if self.model_cls in ("minimax_h3", "minimax_h3_causal") else 5.0
             self.set_infer_config(
                 attn_mode,
                 rope_type,
@@ -315,6 +316,7 @@ class LightX2VPipeline:
             "seko_talk",
             "seko_talk_ar",
             "wan2.2_moe",
+            "wan2.2_moe_vace",
             "wan2.2",
             "wan2.2_matrix_game3",
             "wan2.2_animate",

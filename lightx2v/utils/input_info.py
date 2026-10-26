@@ -51,6 +51,11 @@ class I2VInputInfo(InputInfo):
 
 
 @dataclass
+class EdenLiveInputInfo(I2VInputInfo):
+    video_path: str = ""
+
+
+@dataclass
 class ActionI2VInputInfo(I2VInputInfo):
     pose: Optional[str] = None
     action_path: str = ""
@@ -190,6 +195,7 @@ class T2IInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str | None = ""
     # shape related
+    resolution: Optional[int] = None
     size: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
@@ -233,6 +239,7 @@ class I2IInputInfo(InputInfo):
     image_path: str = ""
     i2i_denoise_strength: Optional[float] = None
     # shape related
+    resolution: Optional[int] = None
     size: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
@@ -273,6 +280,9 @@ class T2AVInputInfo(InputInfo):
     latent_shape: list = field(default_factory=list)
     size: list = field(default_factory=list)
     num_frames: Optional[int] = None
+    draft_steps: Optional[int] = None
+    resample_source_video: Optional[str] = None
+    resample_start_step: int | None = None
 
 
 @dataclass
@@ -290,6 +300,9 @@ class I2AVInputInfo(InputInfo):
     latent_shape: list = field(default_factory=list)
     size: list = field(default_factory=list)
     num_frames: Optional[int] = None
+    draft_steps: Optional[int] = None
+    resample_source_video: Optional[str] = None
+    resample_start_step: int | None = None
 
 
 @dataclass

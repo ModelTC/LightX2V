@@ -11,8 +11,6 @@
   "text_encoder_tensor_parallel": true,
   "vae_cpu_offload": false,
   "vae_decode_parallel": true,
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "mlu_flash_attn",
   "rms_type": "mlu_rms_norm",
   "rope_type": "torch_real_rope",

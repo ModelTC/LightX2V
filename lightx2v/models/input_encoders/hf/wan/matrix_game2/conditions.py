@@ -183,7 +183,7 @@ def Bench_actions_templerun(num_frames, num_samples_per_action=4):
 
 class MatrixGame2_Bench:
     def __init__(self):
-        self.deivce = torch.device("cuda")
+        self.device = torch.device("cuda")
         self.weight_dtype = torch.bfloat16
 
     def get_conditions(self, mode, num_frames):

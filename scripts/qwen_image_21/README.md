@@ -2,12 +2,24 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
+## Recent Work: LightX2V APP (macOS)
+
+Our recently released [LightX2V APP](https://github.com/ModelTC/LightX2V-Mac-App) is a native macOS app for Apple Silicon Macs running macOS 14 or later. It uses LightX2V to run [Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) locally, with a graphical interface for text-to-image generation and image editing.
+
+LightX2V APP also offers optional prompt enhancement with the accompanying [Qwen-Image-2.1-PE-T2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-T2I-GGUF-Q8_0) and [Qwen-Image-2.1-PE-I2I-GGUF-Q8_0](https://huggingface.co/lightx2v/Qwen-Image-2.1-PE-I2I-GGUF-Q8_0) models.
+
 ## 1. Model Download
 
 Download the official weights from [Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1):
 
 ```bash
 hf download Qwen/Qwen-Image-2.1 --local-dir Qwen/Qwen-Image-2.1
+```
+
+Download the Turbo weights from [Qwen/Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo):
+
+```bash
+hf download Qwen/Qwen-Image-2.1-Turbo --local-dir Qwen/Qwen-Image-2.1-Turbo
 ```
 
 ## 2. Environment Setup
@@ -56,7 +68,25 @@ Use `--size HEIGHT WIDTH`. Both dimensions must be at least 32; non-multiples of
 
 For image-to-image, remove the script's `--size` argument to determine the output size from the reference image's aspect ratio. The pixel count is approximately `resolution²` (`resolution` defaults to `1024` in the config), with each dimension rounded to the nearest multiple of 32.
 
+Pass `--resolution 2048` to override the config for one request; omit it to use the config. The value must be a positive integer. It controls reference-image resizing and automatic output sizing; an explicit `--size` still determines the output dimensions.
+
 The default config already enables the general optimization path: FlashAttention3, FlashInfer RoPE, Triton LayerNorm and modulation, fused QK RMSNorm, fused transformer-block operators, CFG-disabled inference, and OpenCV result saving.
+
+### Qwen-Image-2.1-Turbo
+
+Qwen-Image-2.1-Turbo is the official accelerated version of Qwen-Image-2.1. It supports text-to-image generation and image editing with 8 denoising steps.
+
+Set `lightx2v_path`, `model_path` (the Qwen-Image-2.1-Turbo directory), and `CUDA_VISIBLE_DEVICES` in the scripts, then run:
+
+```bash
+# Text-to-image
+bash scripts/qwen_image_21/qwen_image_21_turbo_t2i.sh
+
+# Image-to-image
+bash scripts/qwen_image_21/qwen_image_21_turbo_i2i.sh
+```
+
+For image-to-image, edit `--image_path` and `--prompt` as needed. The default input is the model's `assets/turbo-boat-input.png`.
 
 ### 3.2 RTX 5090 examples
 
@@ -134,3 +164,5 @@ python scripts/qwen_image_21/server/post_i2i.py
 Edit `url`, `message`, and `output_path` directly; for image-to-image, also set `image_path`. The scripts already specify `task: "t2i"` and `task: "i2i"`, respectively.
 
 Service requests follow the same size rules. For automatic image-to-image sizing, remove `size` from `message`.
+
+Set `"resolution": 2048` in `message` to override the startup config for that request; omit it or use `null` to keep the config. The image form endpoint and `/v1/images/generations` and `/v1/images/edits` also accept `resolution`.

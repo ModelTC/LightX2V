@@ -1,22 +1,20 @@
 #!/bin/bash
-# Run Matrix-Game-3.0 base model inference via LightX2V
-# Usage: ./run_matrix_game3_base.sh
-# Supply the official negative prompt explicitly to reproduce the base example.
 
-# Set model path (update this to your local Matrix-Game-3.0 model directory)
-MODEL_PATH="${MODEL_PATH:-/path/to/Matrix-Game-3.0}"
-CONFIG_JSON="configs/matrix_game3/matrix_game3_base.json"
-SAVE_PATH="${SAVE_PATH:-save_results/matrix_game3_base}"
-ACTION_PATH="${ACTION_PATH:-/path/to/action}"
+# Set paths.
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Matrix-Game-3.0
+
+export CUDA_VISIBLE_DEVICES=0
+source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \
     --model_cls wan2.2_matrix_game3 \
     --task i2v \
-    --model_path "${MODEL_PATH}" \
-    --config_json "${CONFIG_JSON}" \
+    --model_path $model_path \
+    --config_json ${lightx2v_path}/configs/matrix_game3/matrix_game3_base.json \
     --prompt "a city street scene with cars and pedestrians" \
     --negative_prompt "Vibrant colors, overexposure, static, blurred details, subtitles, style, artwork, painting, still image, overall grayness, worst quality, low quality, JPEG compression residue, ugly, mutilated, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, malformed limbs, fused fingers, still image, cluttered background, three legs, crowded background, walking backwards" \
-    --image_path "${IMAGE_PATH:-Matrix-Game-3/Matrix-Game-3/demo_images/001/image.png}" \
-    --action_path "${ACTION_PATH:-}" \
-    --save_result_path "${SAVE_PATH}" \
+    --image_path /path/to/image.png \
+    --action_path /path/to/action \
+    --save_result_path ${lightx2v_path}/save_results/matrix_game3_base.mp4 \
     --seed 42

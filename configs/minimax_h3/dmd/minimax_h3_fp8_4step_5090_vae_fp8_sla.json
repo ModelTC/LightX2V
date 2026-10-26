@@ -14,8 +14,6 @@
   "vae_cpu_offload": false,
   "vae_decode_parallel": true,
   "vae_sensitive_layer_dtype": "fp32",
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "dynamic_sparse_attn",
   "dynamic_sparse_attn_setting": {
     "sparsity_ratio": 0.85,
@@ -32,7 +30,6 @@
   "audio_flow_shift": 3.0,
   "h3_step_update": "training_euler",
   "vae_spatial_scale_factor": 16,
-  "audio_sampling_rate": 32000,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-f16-accum",
   "dit_quantized_ckpt": "/path/to/minimax_h3_dit_fp8_f16_accum.safetensors",

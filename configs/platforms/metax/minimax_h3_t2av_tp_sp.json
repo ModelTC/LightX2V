@@ -9,8 +9,6 @@
   "text_encoder_tensor_parallel": true,
   "vae_cpu_offload": false,
   "vae_decode_parallel": true,
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "metax_flash_attn2",
   "rms_type": "metax_rms_norm",
   "rope_type": "metax_rope",

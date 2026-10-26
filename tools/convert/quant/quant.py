@@ -11,7 +11,12 @@ except ImportError:
     TensorWiseINT8Layout = None
 
 try:
-    from lightx2v_kernel.gemm import scaled_mxfp4_quant, scaled_mxfp6_quant, scaled_mxfp8_quant, scaled_nvfp4_quant
+    try:
+        from lightx2v_kernel_nvidia.gemm import scaled_mxfp4_quant, scaled_mxfp6_quant, scaled_mxfp8_quant, scaled_nvfp4_quant
+    except ModuleNotFoundError as exc:
+        if exc.name != "lightx2v_kernel_nvidia":
+            raise
+        from lightx2v_kernel.gemm import scaled_mxfp4_quant, scaled_mxfp6_quant, scaled_mxfp8_quant, scaled_nvfp4_quant
 except ImportError:
     pass
 

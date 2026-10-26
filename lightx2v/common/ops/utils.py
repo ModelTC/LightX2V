@@ -6,9 +6,11 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.offload.block_layout import BlockLoadContext
 from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.ops.offload import copy_to_cpu, get_transposed_weight_copy
 
 
 def resolve_block_name(name, block_index, adapter_block_index=None, is_post_adapter=False):
@@ -136,6 +138,8 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
     Returns:
         dict: {attr_name: tensor, ...} Dictionary of tensors located on CUDA device
     """
+    if isinstance(weight_dict, BlockLoadContext):
+        return {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs}
     result = {}
     for name, attr_name, transpose in base_attrs:
         tensor = get_source_tensor(name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32)
@@ -183,6 +187,8 @@ def create_default_tensors(base_attrs, weight_dict):
         device_tensors_dict: {attr_name: tensor, ...} Tensors located on the original weight device
         pin_tensors_dict: {attr_name: tensor, ...} Tensors with pinned memory on CPU
     """
+    if isinstance(weight_dict, BlockLoadContext):
+        return {}, {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs}
     device_tensors = {}
     pin_tensors = {}
 
@@ -212,40 +218,33 @@ def create_default_tensors(base_attrs, weight_dict):
 
 
 def move_tensor_to_device(obj, attr_name, target_device, non_blocking=False, use_copy=False):
-    """Move the specified tensor attribute of an object to the target device,
-       with support for pinned memory tensors for faster transfer.
-
-    Args:
-        obj: Target object containing the tensor attribute
-        attr_name: Name of the tensor attribute to be moved
-        target_device: Target device to move the tensor to
-        non_blocking: Whether to perform non-blocking data transfer (optional)
-        use_copy: Whether to copy the tensor content before moving (optional)
-    """
-    pin_attr_name = f"pin_{attr_name}"
-    if hasattr(obj, pin_attr_name) and getattr(obj, pin_attr_name) is not None:
-        pin_tensor = getattr(obj, pin_attr_name)
-        if hasattr(obj, attr_name) and getattr(obj, attr_name) is not None and use_copy:
-            setattr(obj, attr_name, pin_tensor.copy_(getattr(obj, attr_name), non_blocking=non_blocking).to(target_device))
+    """Move an optional weight, copying back to its pinned storage when use_copy is set."""
+    pin_tensor = getattr(obj, f"pin_{attr_name}", None)
+    tensor = getattr(obj, attr_name, None)
+    if pin_tensor is not None:
+        if use_copy and tensor is not None:
+            tensor = copy_to_cpu(pin_tensor, tensor, non_blocking=non_blocking)
+            setattr(obj, attr_name, tensor.to(target_device))
         else:
             setattr(obj, attr_name, pin_tensor.to(target_device, non_blocking=non_blocking))
-    elif hasattr(obj, attr_name) and getattr(obj, attr_name) is not None:
-        setattr(obj, attr_name, getattr(obj, attr_name).to(target_device, non_blocking=non_blocking))
+    elif tensor is not None:
+        setattr(obj, attr_name, tensor.to(target_device, non_blocking=non_blocking))
 
 
 def _is_transposed_cpu_view(tensor):
     return isinstance(tensor, torch.Tensor) and tensor.device.type == "cpu" and tensor.dim() == 2 and not tensor.is_contiguous() and tensor.t().is_contiguous()
 
 
-def _move_transposed_cpu_tensor_to_device(tensor, device, non_blocking):
-    return tensor.t().to(device, non_blocking=non_blocking).t()
-
-
 def move_transposed_weight_module_to_device(module, non_blocking=True):
-    """Move a weight module, optimizing 2-D transposed CPU views on NPU."""
+    """Move a weight module with an optional platform transposed-copy override."""
+    copy_transposed = get_transposed_weight_copy()
+    if copy_transposed is None:
+        module.to_cuda(non_blocking=non_blocking)
+        return False
+
     base_attrs = getattr(module, "base_attrs", ())
     transposed_attrs = {attr_name for _, attr_name, transpose in base_attrs if transpose and _is_transposed_cpu_view(getattr(module, f"pin_{attr_name}", None))}
-    if AI_DEVICE != "npu" or not transposed_attrs:
+    if not transposed_attrs:
         module.to_cuda(non_blocking=non_blocking)
         return False
 
@@ -255,7 +254,7 @@ def move_transposed_weight_module_to_device(module, non_blocking=True):
             setattr(
                 module,
                 attr_name,
-                _move_transposed_cpu_tensor_to_device(pin_tensor, AI_DEVICE, non_blocking),
+                copy_transposed(pin_tensor, AI_DEVICE, non_blocking=non_blocking),
             )
         else:
             move_tensor_to_device(module, attr_name, AI_DEVICE, non_blocking=non_blocking)

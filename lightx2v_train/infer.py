@@ -10,6 +10,7 @@ from lightx2v_train.infer import build_inferencer
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
 from lightx2v_train.runtime.fsdp import apply_fsdp2, fsdp2_enabled
+from lightx2v_train.runtime.precision import configure_precision
 
 
 def parse_args():
@@ -56,7 +57,7 @@ def _load_full_checkpoint_for_infer(model, model_config):
 
 
 def _build_low_model_for_dual_infer(config, reference_model):
-    model_config = config.get("model", {})
+    model_config = config["model"]
     low_override = model_config.get("student_2")
     if not isinstance(low_override, dict):
         raise ValueError("wan_t2v_dual_infer requires model.student_2.")
@@ -69,6 +70,7 @@ def _build_low_model_for_dual_infer(config, reference_model):
         "teacher_2",
         "checkpoint_path",
         "checkpoint_strict",
+        "lora_path",
     }
     low_config = copy.deepcopy(config)
     low_config["model"] = {key: copy.deepcopy(value) for key, value in model_config.items() if key not in role_names}
@@ -84,6 +86,9 @@ def _build_low_model_for_dual_infer(config, reference_model):
         low_model,
         low_config["model"],
     )
+    low_lora_path = low_config["model"].get("lora_path")
+    if low_lora_path:
+        low_model.load_lora_for_infer(low_lora_path)
     apply_fsdp2(low_model, config)
     return low_model
 
@@ -91,24 +96,26 @@ def _build_low_model_for_dual_infer(config, reference_model):
 def main():
     args = parse_args()
     config = load_config(args.config)
+    configure_precision(config, section="inference")
     init_distributed(config)
     setup_logger(config)
 
     try:
         sample_processor = build_sample_processor(config)
         model = build_model(config)
+        uses_cache_dataset = config["data"]["val"].get("name") == "cache_dataset"
         model.load_components(
             load_transformer=True,
             load_vae=True,
-            load_condition_encoder=True,
+            load_condition_encoder=not uses_cache_dataset,
         )
         _load_full_checkpoint_for_infer(
             model,
-            config.get("model", {}),
+            config["model"],
         )
 
-        lora_config = config.get("inference", {}).get("lora_config", None)
-        lora_path = lora_config.get("path", None) if lora_config else None
+        lora_config = config["inference"].get("lora_config")
+        lora_path = lora_config.get("path") if lora_config else None
         if fsdp2_enabled(config) and lora_path:
             model.load_lora_for_infer(lora_path)
         apply_fsdp2(model, config)

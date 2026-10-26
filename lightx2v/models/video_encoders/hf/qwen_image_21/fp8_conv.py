@@ -27,7 +27,12 @@ class FP8Conv2d(nn.Conv2d):
     def _conv_forward(self, x, weight, bias):
         if weight.dtype != torch.float8_e4m3fn:
             return super()._conv_forward(x, weight, bias)
-        from lightx2v_kernel.conv3d import fp8_conv3d
+        try:
+            from lightx2v_kernel_nvidia.conv3d import fp8_conv3d
+        except ModuleNotFoundError as exc:
+            if exc.name != "lightx2v_kernel_nvidia":
+                raise
+            from lightx2v_kernel.conv3d import fp8_conv3d
 
         if any(self.padding):
             x = F.pad(x, (self.padding[1], self.padding[1], self.padding[0], self.padding[0]))

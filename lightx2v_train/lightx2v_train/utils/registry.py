@@ -84,6 +84,7 @@ _MODEL_MODULES = {
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.longcat_image_edit",
     "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_t2av",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.qwen_image",
+    "qwen_image_2_1": "lightx2v_train.model_zoo.qwen_image.qwen_image_2_1",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.qwen_image_edit",
     "wan_t2v": "lightx2v_train.model_zoo.wan.wan_t2v",
     "wan_t2v_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
@@ -92,6 +93,8 @@ _MODEL_MODULES = {
 }
 
 _TRAINER_MODULES = {
+    "video_cfg_distill": "lightx2v_train.trainers.cfg_distill.trainer",
+    "video_cfg_trajectory_distill": "lightx2v_train.trainers.cfg_trajectory_distill.trainer",
     "autoregressive_dmd": "lightx2v_train.trainers.dmd.autoregressive_dmd",
     "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",
@@ -122,6 +125,7 @@ _SAMPLE_PROCESSOR_MODULES = {
     "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.data_process",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.data_process",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.data_process",
+    "qwen_image_2_1": "lightx2v_train.model_zoo.qwen_image.data_process",
 }
 
 

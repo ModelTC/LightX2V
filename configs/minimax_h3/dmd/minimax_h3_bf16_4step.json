@@ -11,8 +11,6 @@
   "text_encoder_cpu_offload": true,
   "text_encoder_offload_granularity": "block",
   "vae_cpu_offload": true,
-  "lazy_load": false,
-  "unload_modules": false,
   "attn_type": "flash_attn3",
   "rms_type": "torch_native",
   "rope_type": "torch_real_rope",
@@ -22,7 +20,6 @@
   "audio_flow_shift": 3.0,
   "h3_step_update": "training_euler",
   "vae_spatial_scale_factor": 16,
-  "audio_sampling_rate": 32000,
   "lora_dynamic_apply": true,
   "lora_configs": [
     {

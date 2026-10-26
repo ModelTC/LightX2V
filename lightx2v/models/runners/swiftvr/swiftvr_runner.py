@@ -56,6 +56,8 @@ class SwiftVRRunner(DefaultRunner):
             raise ValueError(f"SwiftVR requires parallel.chunk_p_size ({self.chunk_p_size}) to match world_size ({world_size}).")
         if config.get("cpu_offload"):
             raise NotImplementedError("SwiftVR does not support CPU offload yet.")
+        if config.get("queue_size", 3) <= 0:
+            raise ValueError("SwiftVR queue_size must be positive.")
         normalize_swiftvr_config(config)
         super().__init__(config)
         self.chunk_p_group = dist.group.WORLD if self.chunk_p_size > 1 else None

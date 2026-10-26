@@ -185,10 +185,10 @@ class WanPreInfer:
             context_clip = weights.proj_3.apply(context_clip)
             context_clip = weights.proj_4.apply(context_clip)
             context = torch.concat([context_clip, context], dim=0)
+            if self.clean_cuda_cache:
+                del context_clip
 
         if self.clean_cuda_cache:
-            if self.config.get("use_image_encoder", True):
-                del context_clip
             torch.cuda.empty_cache()
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))

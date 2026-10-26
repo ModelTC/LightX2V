@@ -20,6 +20,8 @@ from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.wan.distill_model import WanDistillModel
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
+from lightx2v.models.networks.wan.infer.utils import image_latent_size
 from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -181,6 +183,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
                             scheduler.step_post()
                             previous_step_index = step_index
                     finally:
+                        self.release_resident_blocks()
                         if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
                             for model in filter(None, self.get_warmup_models()):
                                 model.to_cpu()
@@ -350,6 +353,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             tokenizer_path=tokenizer_path,
             shard_fn=None,
             cpu_offload=t5_offload,
+            rms_norm_type=self.config.get("t5_rms_norm_type", "sgl-kernel"),
             t5_quantized=t5_quantized,
             t5_quantized_ckpt=t5_quantized_ckpt,
             quant_scheme=t5_quant_scheme,
@@ -430,11 +434,17 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("vae_weight_dtype") is not None:
             vae_config["weight_dtype"] = self._resolve_vae_dtype(self.config["vae_weight_dtype"])
         if self.config.get("use_tae", False):
-            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
-            vae_decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+            vae_decoder = self.load_tiny_vae_decoder()
         else:
             vae_decoder = self.vae_cls(**vae_config)
         return vae_decoder
+
+    def load_tiny_vae_decoder(self):
+        tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
+        decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+        if self.config.get("vae_use_compile", self.config.get("use_compile", False)):
+            decoder.taehv.compile_decoder()
+        return decoder
 
     def load_vae(self):
         vae_encoder = self.load_vae_encoder()
@@ -511,6 +521,19 @@ class WanRunner(DisaggMixin, DefaultRunner):
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()
         return gen_video_final
+
+    def run_segment(self, segment_idx=0):
+        try:
+            return super().run_segment(segment_idx)
+        finally:
+            # Drop resident weights before VAE decode, including on cancellation.
+            self.release_resident_blocks()
+
+    def release_resident_blocks(self):
+        if self.config["model_cls"] == "wan2.1":
+            infer = self.model.transformer_infer
+            if isinstance(infer, WanOffloadTransformerInfer):
+                infer.release_resident_blocks()
 
     def reuse_key(self):
         reuse_key = {
@@ -826,13 +849,10 @@ class WanRunner(DisaggMixin, DefaultRunner):
     )
     def run_vae_encoder(self, first_frame, last_frame=None):
         h, w = first_frame.shape[2:]
-        aspect_ratio = h / w
         target_height, target_width = self.get_target_size()
-        max_area = target_height * target_width
 
         # Calculate initial latent dimensions
-        ori_latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
-        ori_latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
+        ori_latent_h, ori_latent_w = image_latent_size((h, w), (target_height, target_width), self.config["vae_stride"], self.config["patch_size"])
 
         # Adjust latent dimensions for optimal 2D grid splitting when using distributed processing
         if dist.is_initialized() and dist.get_world_size() > 1:
@@ -1186,7 +1206,11 @@ class Wan22DenseRunner(WanRunner):
             default_pruning_rate = 0.75
 
         decoder_path = self.config.get("vae_path") or find_torch_model_path(self.config, filename=decoder_filename)
-        teacher_encoder_path = self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
+        teacher_encoder_path = (
+            decoder_path
+            if resolved_vae_type == "wan2.2"
+            else self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
+        )
 
         return {
             "vae_path": decoder_path,
@@ -1221,8 +1245,7 @@ class Wan22DenseRunner(WanRunner):
     def load_vae_decoder(self):
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         if self.config.get("use_tae", False):
-            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
-            return self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+            return self.load_tiny_vae_decoder()
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
 
     def get_warmup_image_encoder_output(self, latent_shape):

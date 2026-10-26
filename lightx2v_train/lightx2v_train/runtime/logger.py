@@ -39,11 +39,11 @@ def setup_logger(config=None):
 
     log_dir = Path(os.path.expanduser(str(output_dir)))
     log_dir.mkdir(parents=True, exist_ok=True)
-    file_name = str(logging_config.get("file_name", "train.log"))
+    file_path = Path(os.path.expanduser(str(logging_config.get("file_name", "train.log"))))
     if not rank_zero_only and get_world_size() > 1:
-        file_path = Path(file_name)
-        file_name = f"{file_path.stem}.rank-{get_rank()}{file_path.suffix}"
-    log_path = log_dir / file_name
+        file_path = file_path.with_name(f"{file_path.stem}.rank-{get_rank()}{file_path.suffix}")
+    log_path = log_dir / file_path
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     logger.add(
         str(log_path),
         format=log_format,

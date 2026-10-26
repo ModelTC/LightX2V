@@ -24,12 +24,13 @@ class WanDistillModel(WanModel):
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         # For the old t2v distill model: https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill
         ckpt_path = os.path.join(self.model_path, "distill_model.pt")
-        if os.path.exists(ckpt_path):
-            logger.info(f"Loading weights from {ckpt_path}")
-            weight_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-            weight_dict = {
-                key: (weight_dict[key].to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else weight_dict[key].to(GET_SENSITIVE_DTYPE())).pin_memory().to(self.device)
-                for key in weight_dict.keys()
-            }
-            return weight_dict
-        return super()._load_ckpt(unified_dtype, sensitive_layer)
+        if self.config.get("dit_original_ckpt") or self.config.get("transformer_model_path") or not os.path.exists(ckpt_path):
+            return super()._load_ckpt(unified_dtype, sensitive_layer)
+
+        logger.info(f"Loading weights from {ckpt_path}")
+        weight_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        weight_dict = {
+            key: (weight_dict[key].to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else weight_dict[key].to(GET_SENSITIVE_DTYPE())).pin_memory().to(self.device)
+            for key in weight_dict.keys()
+        }
+        return weight_dict

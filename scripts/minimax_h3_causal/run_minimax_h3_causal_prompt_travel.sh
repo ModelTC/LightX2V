@@ -2,8 +2,8 @@
 set -eo pipefail
 
 # Set repository/model paths and dit_original_ckpt in the selected JSON config.
-lightx2v_path=/data/nvme1/zhangbilang/LightX2V
-model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
@@ -78,8 +78,8 @@ torchrun --standalone --nproc_per_node=8 -m lightx2v.infer \
   --model_path "${model_path}" \
   --config_json "${lightx2v_path}/configs/minimax_h3_causal/minimax_h3_causal_prompt_travel.json" \
   --prompt "${prompt}" \
-  --image_path "/data/nvme1/zhangbilang/zoe-diffusion-h3-prompttravel/configs/handoff/h3_six_key_action/images/meinv_01.png" \
-  --audio_path "/data/nvme1/zhangbilang/zoe-diffusion-h3-prompttravel/configs/handoff/h3_six_key_action/audio/female_qingdao_62s.mp3" \
+  --image_path "/path/to/meinv_01.png" \
+  --audio_path "/path/to/female_qingdao_62s.mp3" \
   --action_prompts "${action_prompts}" \
   --num_frames 974 \
   --size 1376 768 \

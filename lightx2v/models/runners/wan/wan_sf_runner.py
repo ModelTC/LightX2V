@@ -26,6 +26,8 @@ class WanSFRunner(WanRunner):
     }
 
     def __init__(self, config):
+        if config.get("enable_cfg", False):
+            raise ValueError("Self-Forcing requires enable_cfg=false")
         super().__init__(config)
 
     def load_transformer(self):
@@ -42,6 +44,11 @@ class WanSFRunner(WanRunner):
 
     @ProfilingContext4DebugL1("init kv cache manager")
     def init_kv_cache_manager(self):
+        num_frame_per_chunk = self.scheduler.num_frame_per_chunk
+        if num_frame_per_chunk <= 0:
+            raise ValueError("ar_config.num_frame_per_chunk must be positive")
+        if self.input_info.latent_shape[1] < num_frame_per_chunk:
+            raise ValueError(f"Self-Forcing requires at least {num_frame_per_chunk} latent frames per chunk, got {self.input_info.latent_shape[1]}")
         kv_mgr = getattr(self.model, "kv_cache_manager", None)
         if kv_mgr is None:
             kv_mgr = KVCacheManager(config=self.config, device=torch.device(AI_DEVICE), sp_group=self.model.seq_p_group)
@@ -51,7 +58,7 @@ class WanSFRunner(WanRunner):
         self.model.transformer_infer.kv_cache_manager = kv_mgr
         self.input_info.latent_shape = [self.input_info.latent_shape[0], kv_mgr.num_output_frames, self.input_info.latent_shape[2], self.input_info.latent_shape[3]]
         self.scheduler.num_output_frames = kv_mgr.num_output_frames
-        self.scheduler.num_chunks = kv_mgr.num_output_frames // self.config.get("ar_config", {}).get("num_frame_per_chunk", 3)
+        self.scheduler.num_chunks = kv_mgr.num_output_frames // num_frame_per_chunk
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             sp_group = getattr(self.model, "seq_p_group", None)
             if sp_group is not None or torch.distributed.get_world_size() > 1:

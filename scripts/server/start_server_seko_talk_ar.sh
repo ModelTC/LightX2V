@@ -2,8 +2,8 @@
 
 set -e
 
-lightx2v_path=${LIGHTX2V_PATH:-/mnt/devsft_afs_1/gushiqiao/LightX2V}
-model_path=${MODEL_PATH:-/models/seko_ar}
+lightx2v_path=${LIGHTX2V_PATH:-/path/to/LightX2V}
+model_path=${MODEL_PATH:-/path/to/seko_ar}
 config_json=${CONFIG_JSON:-${lightx2v_path}/configs/seko_talk/ar/seko_talk_ar_kv_dist.json}
 host=${HOST:-0.0.0.0}
 port=${PORT:-8000}

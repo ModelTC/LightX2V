@@ -37,7 +37,7 @@ class WanTeacherForcingCapability(BoundCapability, TeacherForcingCapability):
         broadcast = context.broadcast
 
         with torch.no_grad():
-            latent = self._latent(batch, context.running_dtype)
+            latent = self._latent(batch, self.model.latent_dtype)
             _, _, num_frames, _, _ = latent.shape
             parallel_size = get_sequence_parallel_world_size() if is_sequence_parallel_enabled() else 1
             frame_multiple = parallel_size * context.num_frame_per_chunk
@@ -47,12 +47,12 @@ class WanTeacherForcingCapability(BoundCapability, TeacherForcingCapability):
                 )
 
             latent = broadcast(latent)
-            noise = broadcast(torch.randn_like(latent, dtype=context.running_dtype))
+            noise = broadcast(torch.randn_like(latent, dtype=self.model.latent_dtype))
             sigmas, weights = context.scheduler.sample_chunkwise(
                 num_frames=num_frames,
                 num_frame_per_chunk=context.num_frame_per_chunk,
                 device=latent.device,
-                dtype=context.running_dtype,
+                dtype=self.model.latent_dtype,
             )
             sigmas = broadcast(sigmas)
             weights = broadcast(weights)
@@ -70,7 +70,7 @@ class WanTeacherForcingCapability(BoundCapability, TeacherForcingCapability):
                     num_frame_per_chunk=context.num_frame_per_chunk,
                     max_timestep=(context.noise_augmentation_max_timestep),
                     device=latent.device,
-                    dtype=context.running_dtype,
+                    dtype=self.model.latent_dtype,
                 )
                 augmentation_sigmas = broadcast(augmentation_sigmas)
                 clean_latent = context.scheduler.add_noise(

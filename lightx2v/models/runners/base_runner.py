@@ -85,7 +85,11 @@ class BaseRunner(ABC):
         return (task,)
 
     def create_input_info(self, request_data):
-        """Create the runtime context for one inference request."""
+        """Apply startup defaults, then explicit request values, to a fresh context.
+
+        Subclasses can validate merged values or resolve model-specific defaults
+        here. Internal warmup also uses this method, without task admission checks.
+        """
         task = request_data["task"]
         input_info_cls = self.input_info_cls_by_task.get(task) or INPUT_INFO_TYPES[task]
         input_info = input_info_cls()
@@ -109,7 +113,11 @@ class BaseRunner(ABC):
         return supported_request_fields
 
     def prepare_request(self, request_data):
-        """Build and validate the runtime context for one request."""
+        """Validate explicit fields before merging startup defaults.
+
+        None means omitted; false, zero and empty containers remain explicit.
+        A startup field need not be supported as a per-request override.
+        """
         request_data = {key: value for key, value in request_data.items() if value is not None}
         task = request_data.get("task")
         if task is None:

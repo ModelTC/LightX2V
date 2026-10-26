@@ -15,7 +15,7 @@
     "t5_cpu_offload": true,
     "t5_quantized": true,
     "t5_quantized_ckpt": "/path/to/models_t5_umt5-xxl-enc-fp8.pth",
-    "t5_quant_scheme": "fp8",
+    "t5_quant_scheme": "fp8-sgl",
     "clip_quantized": true,
     "clip_quantized_ckpt": "/path/to/clip-fp8.pth",
     "clip_quant_scheme": "fp8",

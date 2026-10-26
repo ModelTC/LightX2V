@@ -85,7 +85,7 @@ def usp_dit_forward(
 
     # time embeddings
     with amp.autocast(dtype=torch.float32):
-        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t).float())
+        e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t, self.positional_dtype).float())
         e0 = self.time_projection(e).unflatten(1, (6, self.dim))
         assert e.dtype == torch.float32 and e0.dtype == torch.float32
 

@@ -52,9 +52,9 @@ RUN git clone https://github.com/ModelTC/FlashVSR.git --depth 1
 
 RUN cd FlashVSR && pip install --no-cache-dir -v -e .
 
-COPY lightx2v_kernel /app/lightx2v_kernel
+COPY lightx2v_kernel/nvidia /app/lightx2v_kernel/nvidia
 
-RUN git clone https://github.com/NVIDIA/cutlass.git --depth 1 && cd /app/lightx2v_kernel && MAX_JOBS=32 && CMAKE_BUILD_PARALLEL_LEVEL=4 \
+RUN git clone https://github.com/NVIDIA/cutlass.git --depth 1 && cd /app/lightx2v_kernel/nvidia && MAX_JOBS=32 && CMAKE_BUILD_PARALLEL_LEVEL=4 \
     uv build --wheel \
         -Cbuild-dir=build . \
         -Ccmake.define.CUTLASS_PATH=/app/cutlass \

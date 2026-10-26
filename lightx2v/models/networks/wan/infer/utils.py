@@ -1,9 +1,21 @@
+import math
+
 import torch
 import torch.distributed as dist
 
 from lightx2v.common.ops.rope import RopeTemplate, TorchComplexRope
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import ROPE_REGISTER
+
+
+def image_latent_size(image_size, target_size, vae_stride, patch_size):
+    """Wan I2V preserves aspect ratio within the requested pixel area."""
+    height, width = image_size
+    area = target_size[0] * target_size[1]
+    aspect = height / width
+    latent_h = round(math.sqrt(area * aspect) // vae_stride[1] // patch_size[1] * patch_size[1])
+    latent_w = round(math.sqrt(area / aspect) // vae_stride[2] // patch_size[2] * patch_size[2])
+    return latent_h, latent_w
 
 
 @ROPE_REGISTER("wan_causal_rope")

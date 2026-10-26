@@ -627,24 +627,9 @@ class SeedVRRunner(DefaultRunner):
         """
         if self.text_encoder_output is not None:
             return self.text_encoder_output
-        # Load positive embeddings
-        if self.pos_emb_path:
-            try:
-                pos_emb = torch.load(self.pos_emb_path, map_location="cpu")
-                pos_emb = pos_emb.to(self.init_device)
-            except Exception as e:
-                logger.warning(f"[SeedVRRunner] Failed to load pos_emb: {e}")
-                pos_emb = None
-        else:
-            pos_emb = None
-
-        # Return text encoder output
-        text_encoder_output = {
-            "texts_pos": [pos_emb],
-        }
-        self.text_encoder_output = text_encoder_output
-
-        return text_encoder_output
+        pos_emb = torch.load(self.pos_emb_path, map_location="cpu").to(self.init_device)
+        self.text_encoder_output = {"texts_pos": [pos_emb]}
+        return self.text_encoder_output
 
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",

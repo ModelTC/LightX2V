@@ -12,6 +12,7 @@ _LAZY_EXPORTS = {
     "LongCatImageEditModel": (".longcat_image.longcat_image_edit", "LongCatImageEditModel"),
     "MiniMaxH3T2AVModel": (".minimax_h3.minimax_h3_t2av", "MiniMaxH3T2AVModel"),
     "QwenImageModel": (".qwen_image.qwen_image", "QwenImageModel"),
+    "QwenImage21Model": (".qwen_image.qwen_image_2_1", "QwenImage21Model"),
     "QwenImageEditModel": (".qwen_image.qwen_image_edit", "QwenImageEditModel"),
     "WanT2VModel": (".wan.wan_t2v", "WanT2VModel"),
 }
@@ -49,6 +50,7 @@ __all__ = [
     "build_model",
     "build_loaded_model",
     "QwenImageModel",
+    "QwenImage21Model",
     "QwenImageEditModel",
     "LongCatImageModel",
     "LongCatImageEditModel",

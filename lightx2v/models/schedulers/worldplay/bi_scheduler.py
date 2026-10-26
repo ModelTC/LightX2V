@@ -30,7 +30,6 @@ class WorldPlayBIScheduler(HunyuanVideo15Scheduler):
 
         # BI generation parameters
         self.chunk_latent_frames = config.get("chunk_latent_frames", 16)  # BI uses 16 by default
-        self.model_type = config.get("model_type", "bi")
 
         # Stabilization level for context frames (from HY-WorldPlay)
         self.stabilization_level = config.get("stabilization_level", 15)
@@ -42,6 +41,7 @@ class WorldPlayBIScheduler(HunyuanVideo15Scheduler):
 
         # Per-token vec flag
         self.vec_is_per_token = False
+        self.timestep_input = None
 
         # Chunk tracking
         self.chunk_idx = 0
@@ -219,6 +219,7 @@ class WorldPlayBIScheduler(HunyuanVideo15Scheduler):
         self.Ks = None
         self.action = None
         self.vec_is_per_token = False
+        self.timestep_input = None
         self.chunk_idx = 0
         self.total_chunks = 1
         self.generated_chunks = []

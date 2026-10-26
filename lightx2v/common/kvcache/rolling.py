@@ -16,6 +16,7 @@ class RollingKVCachePool(BaseKVCachePool):
     ``roll_window`` never copies the kept recent window. It only advances the
     recent ring head and shrinks recent_len. ``k_cache`` / ``v_cache`` return a
     contiguous logical tensor, concatenating at most two recent ring fragments.
+    With ``out=...``, fragments are copied directly into caller-owned storage.
 
     """
 
@@ -336,10 +337,14 @@ class RollingKVCachePool(BaseKVCachePool):
         if self._kv_offload:
             self._record_cpu_update(layer_id)
 
-    def _read_logical(self, layer_id: int, attn_start: int, local_end: int, which: str) -> torch.Tensor:
+    def _read_logical(self, layer_id: int, attn_start: int, local_end: int, which: str, out: torch.Tensor | None = None) -> torch.Tensor:
         self._check_layer_loaded(layer_id)
         base = self._k_layer(layer_id) if which == "k" else self._v_layer(layer_id)
         chunks = self._logical_chunks(layer_id, attn_start, local_end)
+        if out is not None:
+            for logical_s, physical_s, length in chunks:
+                out[logical_s - attn_start : logical_s - attn_start + length].copy_(base[physical_s : physical_s + length])
+            return out
         if not chunks:
             return torch.empty(0, self._num_heads, self._head_dim, device=self._device, dtype=self._dtype)
         parts = [base[p : p + n] for _, p, n in chunks]
@@ -350,20 +355,22 @@ class RollingKVCachePool(BaseKVCachePool):
         layer_id: int,
         attn_start: int | None = None,
         local_end: int | None = None,
+        out: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if attn_start is None and local_end is None:
             attn_start, local_end = 0, self.get_local_end(layer_id)
-        return self._read_logical(layer_id, int(attn_start), int(local_end), "k")
+        return self._read_logical(layer_id, int(attn_start), int(local_end), "k", out=out)
 
     def v_cache(
         self,
         layer_id: int,
         attn_start: int | None = None,
         local_end: int | None = None,
+        out: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if attn_start is None and local_end is None:
             attn_start, local_end = 0, self.get_local_end(layer_id)
-        return self._read_logical(layer_id, int(attn_start), int(local_end), "v")
+        return self._read_logical(layer_id, int(attn_start), int(local_end), "v", out=out)
 
     def get_global_end(self, layer_id: int) -> int:
         return int(self._global_end[layer_id].item())

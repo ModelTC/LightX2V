@@ -10,6 +10,11 @@ from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 @PLATFORM_DEVICE_REGISTER("musa")
 class MusaDevice(CudaDevice):
     name = "musa"
+    block_offload_backend = "lightx2v_platform.ops.offload.template.TorchBlockOffload"
+
+    @staticmethod
+    def init_device_env():
+        import torchada  # noqa: F401
 
     @staticmethod
     def init_parallel_env():

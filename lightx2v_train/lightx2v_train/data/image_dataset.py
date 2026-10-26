@@ -23,6 +23,7 @@ class ImageDataset(Dataset):
     ):
         self.prompt_dropout_rate = prompt_dropout_rate
         self.sample_processor = sample_processor
+        self.image_mode = getattr(sample_processor, "image_mode", "RGB")
         self.preserve_records = preserve_records
         self.unconditional_prompt = unconditional_prompt
         self.samples = []
@@ -59,9 +60,9 @@ class ImageDataset(Dataset):
     def load_sample(self, record, prompt=None):
         inputs = {}
         if record.get("target_image") is not None:
-            inputs["target_image"] = self.load_image(record["target_image"])
+            inputs["target_image"] = self.load_image(record["target_image"], mode=self.image_mode)
         if record.get("source_images"):
-            inputs["source_images"] = [self.load_image(path) for path in record["source_images"]]
+            inputs["source_images"] = [self.load_image(path, mode=self.image_mode) for path in record["source_images"]]
 
         meta = {}
         if record.get("target_image") is not None:
@@ -115,9 +116,9 @@ class ImageDataset(Dataset):
         return data_dir / path
 
     @staticmethod
-    def load_image(image_path):
+    def load_image(image_path, mode="RGB"):
         with Image.open(image_path) as image:
-            return image.convert("RGB").copy()
+            return image.convert(mode).copy()
 
 
 @DATA_REGISTER("image_dataset")

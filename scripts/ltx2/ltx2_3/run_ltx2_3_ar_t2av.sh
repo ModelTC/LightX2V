@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/data/nvme5/gushiqiao/codes/new/LightX2V
-model_path=/data/nvme0/gushiqiao/models/official_models/LTX-2/
+lightx2v_path=/path/to/LightX2V
+model_path=Lightricks/LTX-2
 
 export CUDA_VISIBLE_DEVICES=6
 

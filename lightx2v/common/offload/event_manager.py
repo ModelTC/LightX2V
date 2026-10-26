@@ -45,7 +45,12 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
         if len(self.cuda_buffers) < self.slot_count:
             raise RuntimeError(f"Event-slot weight offload requires {self.slot_count} device buffers")
 
-    def _load_block_to_buffer(self, target_buffer, block_idx, blocks, adapter_block_idx):
+    def copy_block_to_buffer(self, target_buffer, block_idx, blocks, adapter_block_idx=None):
+        if self.contiguous_transfer is not None:
+            if blocks is not self.contiguous_group.blocks:
+                raise ValueError("Expected the blocks registered with this offload manager")
+            self.contiguous_transfer.copy(block_idx, target_buffer)
+            return
         block_slab = getattr(self, "block_slabs", {}).get(block_idx)
         if block_slab is not None:
             copy_block_slab_(
@@ -78,7 +83,7 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
         with torch_device_module.stream(self.cuda_load_stream):
             if self._slot_free_recorded[slot_idx]:
                 self.cuda_load_stream.wait_event(self._free_events[slot_idx])
-            self._load_block_to_buffer(
+            self.copy_block_to_buffer(
                 self.cuda_buffers[slot_idx],
                 block_idx,
                 blocks,
@@ -114,6 +119,40 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
         self._slot_pending[slot_idx] = False
         self._slot_ready_waited[slot_idx] = False
         self._slot_free_recorded[slot_idx] = True
+
+    def run_blocks(self, blocks, resident_indices, state, run_block):
+        """Run one stack, reusing slots only after their consumers finish."""
+        caller = self.device_module.current_stream()
+        self.compute_stream.wait_stream(caller)
+        self.cuda_load_stream.wait_stream(caller)
+        residents = frozenset(resident_indices)
+        offloaded = iter(i for i in range(len(blocks)) if i not in residents)
+
+        def prefetch(slot):
+            index = next(offloaded, None)
+            if index is not None:
+                self.prefetch_to_slot(slot, index, blocks)
+
+        try:
+            for slot in range(self.slot_count):
+                prefetch(slot)
+            slot = 0
+            with self.device_module.stream(self.compute_stream):
+                for index, block in enumerate(blocks):
+                    if index in residents:
+                        state = run_block(index, block, state)
+                    else:
+                        state = run_block(index, self.wait_ready(slot), state)
+                        self.record_free(slot)
+                        prefetch(slot)
+                        slot = (slot + 1) % self.slot_count
+            caller.wait_stream(self.compute_stream)
+            return state
+        except BaseException:
+            self.compute_stream.synchronize()
+            self.cuda_load_stream.synchronize()
+            self.reset_slots()
+            raise
 
     def init_block_slabs(self, block_slabs, staging_raw=None):
         """Prepare the shared device buffer used for block-slab copies."""

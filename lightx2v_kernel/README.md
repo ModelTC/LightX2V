@@ -1,56 +1,13 @@
-# lightx2v_kernel
+# LightX2V Kernels
 
-### Preparation
-```
-# Install torch, at least version 2.7
+Kernel projects are organized by hardware backend. Build and install each project
+from its own directory:
 
-pip install scikit_build_core uv
-```
+| Backend | Source directory | Python package | Build instructions |
+| --- | --- | --- | --- |
+| NVIDIA CUDA | `nvidia/` | `lightx2v_kernel_nvidia` | [NVIDIA README](nvidia/README.md) |
+| Intel XPU | `intel_xpu/` | `sycl_kernels` | [Intel XPU README](intel_xpu/README.md) |
+| Apple Metal | `apple/` | `lightx2v_kernel_apple` | [Apple README](apple/README.md) |
 
-### Build whl
-
-```
-git clone https://github.com/NVIDIA/cutlass.git
-
-git clone https://github.com/ModelTC/LightX2V.git
-
-cd LightX2V/lightx2v_kernel
-
-# Set the /path/to/cutlass below to the absolute path of cutlass you download.
-
-MAX_JOBS=$(nproc) && CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) \
-uv build --wheel \
-    -Cbuild-dir=build . \
-    -Ccmake.define.CUTLASS_PATH=/path/to/cutlass \
-    --verbose \
-    --color=always \
-    --no-build-isolation
-```
-
-
-### Install whl
-```
-pip install dist/*whl --force-reinstall --no-deps
-```
-
-### Test
-
-##### cos and speed test, mm without bias
-```
-python test/nvfp4_nvfp4/test_bench2.py
-```
-
-##### cos and speed test, mm with bias
-```
-python test/nvfp4_nvfp4/test_bench3_bias.py
-```
-
-##### Bandwidth utilization test for quant
-```
-python test/nvfp4_nvfp4/test_quant_mem_utils.py
-```
-
-##### tflops test for mm
-```
-python test/nvfp4_nvfp4/test_mm_tflops.py
-```
+LightX2V prefers `lightx2v_kernel_nvidia` and falls back to the previously built
+`lightx2v_kernel` package when the new package is not installed.

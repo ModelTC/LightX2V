@@ -12,7 +12,10 @@ repos:
     rev: v4.5.0
     hooks:
       - id: trailing-whitespace
+        # Unified diffs use whitespace-only lines as significant context.
+        exclude: ^lightx2v_rl/patches/.*\.patch$
       - id: end-of-file-fixer
+        exclude: ^lightx2v_rl/patches/.*\.patch$
       - id: check-yaml
       - id: check-toml
       - id: check-json
