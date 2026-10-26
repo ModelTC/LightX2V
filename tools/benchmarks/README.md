@@ -269,7 +269,7 @@ python3 -m tools.benchmarks.operator_bench run \
 - `run_summary.json`：本次写入和状态计数；
 - `report.json`：完整性能、精度、覆盖与来源事实；`report.md`：CLI简短结果表。Agent按[固定模板](REPORT_TEMPLATE.md)生成面向开发者的最终`REPORT.md`。
 
-单卡报告只给事实：`measured_winner`是已测稳定候选中的最快项，`correctness.status=not_checked`明确未执行数值验证，`coverage_blockers`列未测、缺依赖与未接入；不生成`winner`或`quality_approved`。采用、质量取舍与补测由Agent/开发者据事实决定。缩小`--backend`仍可探索，但不能把subset称为全部后端最优。离线`report`传入本次`--backend-catalog`才能重建完整候选对账。
+报告只给事实：`measured_winner`是已测稳定候选中的最快项，`correctness.status=not_checked`明确未执行数值验证，`coverage_blockers`列未测、缺依赖与未接入；不生成`winner`或`quality_approved`。采用、质量取舍与补测由Agent/开发者据事实决定。缩小`--backend`仍可探索，但不能把subset称为全部后端最优。离线`report`传入本次`--backend-catalog`才能重建完整候选对账。SP另存最快配置的`measured_shapes`；完整执行配置仍在对应candidate。
 
 中断后以相同参数增加 `--append`。工具按 `(repeat, case, backend)` 跳过已有记录，并拒绝算子类型、shape、输入/后端精度、实际路由配置、replay/sparse、测量参数、seed、LightX2V commit、GPU 或 CUDA/PyTorch 环境漂移；标签、来源注释和call_count可更新；这些身份变化时应使用新目录。raw的`requested_input_dtype`保存suite请求，`precision`保存adapter声明；即使后端在support阶段拒绝，原请求身份也不会被声明精度覆盖。
 
@@ -314,7 +314,24 @@ GeneralSparse组合的descriptor使用`production_backend="general_sparse_attn"`
 
 ## Sequence-Parallel Attention
 
-SP候选名称与单卡registry同步；catalog保留leaf的硬件/依赖/接入事实，待验证的SP语义单独记录并使覆盖保持未完整。以下L1报告与诊断仍使用本节既有JSON和`--recommendation-report`入口。
+`diagnose --measurement-report`读取同一shape、precision、replay和稀疏配置下的measured稳定配置用于L2/L3诊断，也可显式`--candidate`。不稳定、失败、未测或身份不同的项不能自动进入诊断。默认继承报告的base seed；显式不同seed或缺seed的报告会被拒绝。run与diagnose均按`seed + repeat*1000`派生输入，只有相同repeat编号对应同一生成输入；诊断轮数不同不表示逐轮重演L1。该入口不作质量批准，开发者的采用决定另行保存。该参数取代旧`--recommendation-report`，不再依赖正式推荐字段。
+
+SP `run`生成结构化`report.json`和中文简表`report.md`；最终`REPORT.md`由Agent按[既有模板](REPORT_TEMPLATE.md)生成，保留最快完整配置摘要、覆盖明细和已确认版式。JSON保存测量参数、完整candidate、main/aux结构检查及已有数值证据、硬件/依赖/输入排除、接入缺口、未测与执行失败；性能排名和数值质量分别判断。主表耗时属于完整SP路径，不能当成纯attention kernel耗时。
+
+旧raw的`actual_tflops`按配置块密度估算，报告仅保留为`estimated_sparse_tflops`。新raw只有`actual_compute_count_available=true`才提供实际速率，未覆盖实际区域时留空。缺leaf inventory或尚待验证的相关SP leaf会使候选覆盖保持未完整；缺少数值参考只保留相应证据范围，不改写为质量批准。
+
+可在没有GPU、没有torchrun的环境从已归档raw重建：
+
+```bash
+python3 -m tools.benchmarks.sp_bench report \
+  --suite /path/to/sp_suite.json \
+  --raw /path/to/sp_run/raw.jsonl \
+  --candidate-catalog /path/to/sp_run/candidate_catalog.json \
+  --output-dir /path/to/sp_report \
+  --peaks /path/to/hardware_peaks.json --platform hardware_platform_id
+```
+
+`--peaks/--platform`可省略；提供时要求raw保存完整rank集合及其硬件身份，并逐一校验，JSON保留匹配的每卡名义计算峰值。Agent按模板用输入/计算精度及卡数解释SP峰值比例；L2/L3互联峰值仍由独立的`--interconnect-peaks`提供。`run`也接受这两个参数。历史raw和catalog不证明新接入路径已实测。
 
 当前 `sp_bench` 支持 Ulysses/Ring dense attention，以及使用真实 QKV replay 的 Ulysses sparse attention；不包含 `kv_all_gather`。Sparse leaf 若不提供 Ring 需要的分块输出和 LSE 合并合同，Ring 会明确记为不支持，不会被当作性能失败。Sparse SP 候选从通用 backend catalog 中筛选；当前已适配 H100 与 Blackwell 的 production sparse leaf，未来出现 eligible 但尚无 SP 合同的 adapter 时会记录为 `unmapped_sparse_sp_backends` 并阻止发布完整候选最优。`sage_attn2` 是低精度 dense attention，不代表稀疏计算。
 
@@ -345,13 +362,17 @@ SP benchmark 使用独立的 `sp_attention_benchmark_shape_suite_v1`。模型侧
 
 Sparse SP 的 suite 不直接保存某个 rank 的局部输入，而是引用同一份完整 `operator_benchmark_qkv_replay_v1` manifest。对于“复制最大 conditioner 前缀、剩余 main 序列不 padding 切分”的模型，可以从一份 replay 派生默认 `SP=2/4/8` 或指定卡数的 suite：
 
+SP derive/consumer要求provenance明确记录 `capture_boundary=global_pre_sp`，随后校验全局Q/K/V形状、分片覆盖及哈希。历史完整全局输入有该事实时可保留；未知采集边界和 `sp_replay_eligible=false` 均拒绝。后端leaf输入只适用于对应单卡重放，不能再次切分通信；`on_sparse_inputs`只提供同次输入/区域，完整全局采集边界仍由实际模型调用方保证。不得通过补一个标志冒充采集边界；需要重新采集或凭原始采集代码/拓扑核实完整全局输入，再生成新的带来源记录的manifest。
+
+SLA的`sla.flashinfer.general`、`sla.sage2.general`、`sla.triton.general`可作为SP leaf，与单卡GeneralSparse共用实例构造；grouped Ulysses仍以同一leaf和通信配置的bulk Ulysses作参考。当前SP稀疏路径要求Q/KV head数相等、BF16/FP16、非causal；head_dim由实际leaf校验，不设置统一64/128白名单。预查通过不证明native可执行，实际失败保留阶段和原因。其余General组合保留各自待验证原因，稀疏Ring仍不支持。接入不代表所有硬件/精度组合已验证，具体以probe、输入与本次参考结果为准。
+
 ```bash
 python3 -m tools.benchmarks.sp_bench derive-replay-suites \
   --manifest /path/to/full_qkv_replay.json \
   --output-dir /tmp/model_sparse_sp \
   --suite-id model_real_sparse_sp \
   --conditioner-tokens 89 \
-  --keep-ratio 0.15
+  --keep-ratio 0.2
 ```
 
 `--conditioner-tokens` 必须来自模型语义；工具会为每个 SP 度数重新计算 aux/main 边界，并在每个 rank 上只加载 replicated aux 与当前 local main 范围。需要非默认卡数时，可以重复传入 `--sp-size`。
@@ -368,7 +389,10 @@ python3 -m tools.benchmarks.sp_bench candidates \
 
 候选包含 Ulysses 的 pre/post、A2A、通信精度、tensor fusion、head pipeline，以及 Ring 的通信精度和 K/V fusion。Ulysses 启用 head pipeline 时会自动枚举 `1..local_heads` 的全部 `head_parallel_group_size`；group size 不要求整除 local head 数，尾组按实际剩余 head 计入候选 shape 和通信 payload。工具会按当前 production 约束排除无效组合，并记录原因；Ring 只接受原生提供 `apply_with_lse()` 的 dense backend。
 
-Aux Q/K/V 按 replicated 语义在各 rank 使用相同输入；raw 同时检查 main/aux output shape、finite 和 aux output 跨 rank 一致性。H100 上已用 dense reference 验证当前全部 Ulysses/Ring leaf 与合法选项，覆盖 BF16/FP16、无量化/FP8 communication、fusion、aux K/V only/完整 aux Q/K/V，以及 `aux_first` 两种顺序。精确 backend、近似 backend 和量化通信的门限由 `SP_REFERENCE_TOLERANCES` 显式声明，并随验证结果写入 correctness。
+Aux Q/K/V 按replicated语义在各rank使用相同输入。`run`仅在计时后核对main/aux形状和有限性，`correctness.checked=false`，不自动计算数学参考。数值验证用独立`validate-reference`；完整main/aux、各rank误差、strict_equal及显式准入容差保存在该产物，不回填或改写计时raw。容差通过不是产品质量批准。
+
+独立参考验证在本地准备和比较边界按相同顺序汇总各rank错误，再进入下一次通信；参考失效记录为执行错误，不当作候选数值失败。检查点只协调已包裹的本地边界；完整SP调用内部的单rank错误仍可能导致通信失配并依赖任务超时。已经损坏或超时的collective不由检查点恢复，须核实退出后另起任务。
+
 
 `not validated` 的含义是“代码可能支持，但本工具还没有足够证据把它放入候选”，不是性能落选，也不是可以长期忽略的状态。新模型、新硬件或新需求命中这类 exclusion 时，Agent 必须先补验证并更新准入矩阵；只有缺少目标硬件、依赖或真实输入等外部阻塞时才允许延期。
 
@@ -382,7 +406,7 @@ torchrun --standalone --nproc-per-node=4 \
   --output /tmp/model_sp_reference.json
 ```
 
-结果逐 case/candidate 记录 main/aux 最大绝对误差、显式 tolerance policy、各 rank shape/finite/allclose 状态和环境身份。尚未登记的新 backend 在探索验证中临时使用 `atol=rtol=0.10`，该值不是正式正确性合同；验证通过后仍需按实测误差更新 `SP_REFERENCE_TOLERANCES` 或对应候选门禁并补单测，才算正式解锁。FP4 communication 当前因依赖缺失未验证；新增 dense leaf 默认以 `not validated` 排除。
+结果逐case/candidate保存完整`case`和candidate，顶层保存seed与各rank环境；`correctness.rank_checks`记录完整main/aux的最大绝对误差、RMSE、参考RMS、NRMSE和严格一致性，另存显式tolerance policy及准入结果。尚未登记的新 backend 在探索验证中临时使用 `atol=rtol=0.10`，该值不是正式正确性合同；验证通过后仍需按实测误差更新 `SP_REFERENCE_TOLERANCES` 或对应候选门禁并补单测，才算正式解锁。FP4 communication 当前因依赖缺失未验证；新增 dense leaf 默认以 `not validated` 排除。
 
 Sparse replay 可用 `--sparse-backend` 限定 leaf。被测集合只包含 grouped Ulysses，bulk 仅作为 reference，不生成与自身比较的记录。输出中的 `reference_candidate` 明确记录用于对照的 bulk 配置；该验证只证明 grouped 与 bulk 路径在同一 sparse leaf 下的一致性，不把 sparse 近似本身声明为等价于 dense attention。
 
@@ -410,17 +434,23 @@ torchrun --standalone --nproc-per-node=4 \
   --repeat-runs 3 --warmup 10 --iterations 30
 ```
 
-Sparse raw/report 同时输出 `actual_tflops`、`dense_equivalent_tflops` 和实际 block density。两种 TFLOPS 都是参与 GPU 的聚合值；前者以实际选中 block 工作量为分子，后者以完整 dense attention 工作量为分子。
+Sparse SP在正式计时外调用一次实际生产路径，复用共用统计读取最终mask/ranges，收齐各rank和head组的叶子事实；不重复计组合父量，不直接乘卡数。`global_actual_sparse_work`为实际选中逻辑QK/PV量，`global_scheduled_tile_work`包含可证的tile padding，`block_density_actual`为实际选中tile比例。它们只描述这次计时外样本，不代表每个计时iteration的路由恒定。采样截断、缺少区域或缺rank事实时实际量/速率留空，`compute_sample_ranks`保留各rank的区域计算量和覆盖缺口，不保存QKV/mask。Report只将显式完整的新样本作为`actual_tflops`；旧配置估计另存为`estimated_sparse_tflops`。`dense_equivalent_tflops`按完整dense QK/PV量除以完整SP路径延迟计算，是参与GPU的聚合值；两种效率均包含通信/布局时间，不是纯leaf kernel效率。
 
 不指定 `--candidate` 时会运行所选算法的全部合法候选；可先从 `candidates` 输出中选择精确 candidate ID，以 `--candidate ID` 缩小实验。每次迭代取所有 rank 的最大 CUDA event 延迟，measured loop 内不插入 barrier 或同步；输出为 `candidate_catalog.json`、`raw.jsonl`、`run_summary.json` 和 `report.json`。
 
-中断后使用完全相同的测量参数增加 repeat，并传入 `--append`。工具按 `(repeat, case, candidate)` 跳过已有记录，同时拒绝 suite、候选 fingerprint、测量参数、LightX2V commit、GPU UUID/PCI 映射、CUDA/PyTorch/NCCL 或 NCCL 环境漂移。NCCL `ALGO`、`PROTO` 和 channel 数只记录、不自动 sweep；显式更换后应使用独立输出目录。每条 raw 在候选完成后立即 flush，已经完成的工作不会因后续候选失败而丢失。
+中断后使用相同测量参数增加 repeat，并传入 `--append`。工具按 `(repeat, case, candidate)` 跳过已有记录；shape、precision、sparse/replay、候选 fingerprint、测量参数、LightX2V commit、GPU UUID/PCI 映射、Python/CUDA/PyTorch/NCCL 或 NCCL 环境漂移会被拒绝。call_count、tags、source说明和observed_candidate可补充，不改写原raw。末行JSON完整但没有换行时先补分隔符；截断JSON在任何续写前拒绝，不能混同两种情况。NCCL `ALGO`、`PROTO` 和 channel 数只记录、不自动 sweep；显式更换后应使用独立输出目录。每条 raw 在候选完成后立即 flush，已经完成的工作不会因后续候选失败而丢失。
 
-报告区分 `measured_winner` 和 `winner`：前者只是已测集合中最快的稳定候选；后者要求底层 attention registry 没有适用但缺依赖或未映射的 backend，且候选目录中的每个合法组合都得到稳定结果或明确的不可用/正确性结论。少于三个 repeat、波动超门限、测量错误或候选未覆盖时，`coverage_complete=false` 且不发布 `winner`。
+已识别的fatal CUDA上下文错误立即终止本worker，不再用损坏的CUDA/NCCL组汇总错误或执行销毁通信；由torchrun处理同组退出，任务owner核实实际进程收尾。原始错误先写启动stderr，并尽可能追加CPU侧`fatal_rank_<rank>.jsonl`；此时不能保证产生完整分布式raw，不能补造其余rank状态。保留已有catalog/raw及fatal记录，在新进程恢复；历史rank错误中含fatal的候选按measurement_error处理，不算合法排除。
 
-正式 winner 发布时，workload 的 `recommendation` 直接携带完整候选配置、原始 workload case（包含 precision、sparse/replay 与 shape 身份）、延迟、逻辑 Q/K/V shape、每 rank attention shape，以及按通信量化/fusion/head-pipeline group 配置展开的逐调用 payload 和 scale shape。这是机器可读的完整推荐；aux/main 边界和吞吐指标用于后续解释。
 
-完整 production SP attention 是搜索配置的 L1 指标，也是推荐配置的唯一排序依据。对已选候选可进一步运行诊断层：
+`measured_winner` 仅表示已测集合中最快的有效稳定候选，不代表采用或质量批准。候选未测、重复不足、计时不稳定、测量执行错误（`measurement_error`）或底层 backend 的适用范围未覆盖时，`coverage_complete=false`；覆盖与数值事实分别保留，供 Agent 解释、开发者决定取舍。
+
+每个 workload 的 `candidates[ID].candidate` 保留完整配置，`shape/precision/sparse/replay` 保留输入身份；存在稳定最快项时，`measured_shapes` 描述其全局 Q/K/V、每 rank attention 以及通信 payload/scale shape。工具不输出自动质量批准或正式采用推荐。
+
+各candidate的`work_range`、`dense_equivalent_work_range`、`scheduled_tile_work_range`和`block_density_actual_range`保留有效轮次的原始计数范围；缺任何所需事实就留空，不用中位速率乘中位延迟反推。`compute_samples`按run保存采样scope、实际量可用性、各rank预期/已采组数及coverage gaps；历史配置估计不进入实际量范围。
+
+
+完整 production SP attention 是搜索配置的 L1 指标，也是计时排序依据。对已选候选可进一步运行诊断层：
 
 ```bash
 CUDA_VISIBLE_DEVICES=4,5,6,7 \
@@ -428,10 +458,10 @@ torchrun --standalone --nproc-per-node=4 \
   -m tools.benchmarks.sp_bench diagnose \
   --suite /tmp/model_sp.json \
   --output-dir /tmp/model_sp_h100_diagnostic \
-  --recommendation-report /tmp/model_sp_h100/report.json
+  --measurement-report /tmp/model_sp_h100/report.json
 ```
 
-`--recommendation-report` 会读取 L1 正式报告中的 winner，因此日常诊断不需要手写长 candidate ID；调试单个候选时仍可使用一个或多个 `--candidate`。CLI 摘要会返回 `diagnostic_report.md` 路径，它是默认的人类可读结果页；同目录的 JSON 保留完整机器可读结果。
+`--measurement-report` 读取 L1 报告的 `measured_winner` 及对应完整候选配置，并核对 suite、shape、precision、sparse/replay 和measurement seed身份；无稳定项或缺seed时明确拒绝；未指定seed时继承报告，显式冲突拒绝。独立`--candidate`诊断默认seed=42。性能诊断不要求先作质量批准，也不需要手写长 candidate ID；调试单个候选时仍可使用一个或多个 `--candidate`。CLI 摘要返回人读入口 `diagnostic_report.md`，同目录 JSON 保留完整事实。
 
 `diagnose` 输出以下互相独立的测量层：
 
@@ -439,7 +469,7 @@ torchrun --standalone --nproc-per-node=4 \
 - L3：只执行候选真实 payload 的 A2A、all-gather 或 Ring P2P，按通信分量报告每 rank 逻辑 payload、跨 GPU link 字节、整组聚合字节、algorithmic bandwidth 和 bus bandwidth；
 - overlap 诊断：另外测量 production L1 和 compute-only 路径。只有三个独立测量在容差内可加时才发布估算比例；存在未解释的组合开销或跨测量倒置时，`estimate_status` 给出原因，比例保持 `null`。
 
-诊断同样要求至少三个 repeat，并对 L2、L3 整体及各通信分量分别应用 spread 门禁。L2/L3 用于解释 L1，不参与候选排名。分量不稳定时保留带宽和带 `~` 的 observed efficiency，但正式 `bus_peak_efficiency` 保持 `null`。当前诊断要求 `head_parallel=false`，支持 dense suite 以及真实 replay 驱动的 sparse suite。Sparse 诊断会复用 L1 的真实 Q/K/V，不会重新生成随机输入。
+诊断同样要求至少三个 repeat，并对 L2、L3 整体及各通信分量分别应用 spread 门禁。L2/L3 用于解释 L1，不参与候选排名。分量不稳定时保留带宽和带 `~` 的 observed efficiency，但正式 `bus_peak_efficiency` 保持 `null`。这里的L2/L3按bulk串行分量构造，因此要求 `head_parallel=false`；head流水的分组异步通信/计算需要真实生产时间线，不能用bulk分量替代。该限制不影响head流水的L1测量和实际子调用计算量统计。支持 dense suite 以及真实 replay 驱动的 sparse suite。Sparse 诊断会复用 L1 的真实 Q/K/V，不会重新生成随机输入。
 
 Aux 按 production 语义拆分：Ulysses 的 replicated aux Q/K/V 不进入 main QKV A2A，aux output 使用 all-gather；Ring 的 replicated aux Q/K/V 不进入 main K/V rotation，只在本地 attention layout 中拼接。报告会同时列出 main 与 aux 通信分量各自独立实测的 latency、Bus bandwidth、稳定性和峰值效率。分量使用独立 Event-list 测量，不是按整体耗时比例摊分；因此各分量延迟之和不要求等于整体 L3 路径延迟。
 
@@ -555,7 +585,7 @@ profile 未收录会标记 `peak_variant_missing`。来源：
 
 - 默认至少 3 个 repeat；
 - 每轮先完成 warmup，再为各 iteration 记录 event pair，所有 kernel 入队后只同步最后一个 event；这避免逐 iteration 的 CPU/GPU 同步间隙；
-- 单算子返回Tensor。计时结束后检查末次输出的类型、有限性及声明shape；未声明shape时核对已验证的预检原始输出shape。失败记录阶段与原因，整次结果不进入有效计时排序。不逐iteration校验，不做数学参考；
+- 单算子返回Tensor。计时结束后检查末次输出的类型、有限性及声明shape；未声明shape时核对已验证的预检原始输出shape。失败记录阶段与原因，整次结果不进入有效计时排序。不逐iteration校验；单卡不做数学参考，SP计时后核查main/aux结构，数值参考另用validate-reference；
 - 对数微秒级 kernel，event pair 本身仍可能形成可观扰动；报告的是逐调用 event latency，不等同于整段循环摊销吞吐；
 - 跨轮 spread 同时超过 `5%` 和 `0.005 ms` 才判为不稳定；
 - capability/measurement error、显式 correctness failure、repeat 不足和不稳定结果不进入 `measured_winner`；

@@ -106,6 +106,8 @@ def sp_catalog(case: dict, *candidates: dict) -> dict:
         "kind": "sp_attention_benchmark_candidate_catalog_v1",
         "catalog_fingerprint": "catalog-1",
         "scope_complete": True,
+        "leaf_catalog": {"family": "sparse_attention" if case.get("replay") else "dense_attention",
+                         "candidates": [], "excluded_production_backends": {}, "integration_gaps": {}},
         "cases": [{"case_id": case["case_id"], "candidates": list(candidates), "exclusions": []}],
     }
 
@@ -1038,7 +1040,7 @@ def test_sp_replay_suite_derivation_uses_per_degree_aux_prefix(tmp_path: Path) -
         "schema_version": 1,
         "kind": "operator_benchmark_qkv_replay_v1",
         "layout": "BSHD",
-        "provenance": {"model": "minimax_h3"},
+        "provenance": {"model": "minimax_h3", "capture_boundary": "global_pre_sp"},
         "tensors": {
             name: {
                 "dtype": "bf16",
@@ -1107,7 +1109,7 @@ def test_sp_replay_loader_slices_aux_and_rank_main(tmp_path: Path) -> None:
                 }
             ],
         }
-    manifest = {"schema_version": 1, "kind": "operator_benchmark_qkv_replay_v1", "layout": "BSHD", "tensors": specs}
+    manifest = {"schema_version": 1, "kind": "operator_benchmark_qkv_replay_v1", "layout": "BSHD", "provenance": {"capture_boundary": "global_pre_sp"}, "tensors": specs}
     manifest_path = tmp_path / "replay.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     case = sp_case(
@@ -1185,10 +1187,10 @@ def test_sp_ring_aux_candidates_are_released_by_validated_matrix() -> None:
         ("fp8", False),
         ("fp8", True),
     }
-    assert sp_bench._result_correctness_tolerance(case, ring[0]) == 0.02
-    assert sp_bench._result_correctness_tolerance(fp16_case, fp16_ring[0]) == 0.01
-    assert sp_bench._result_correctness_tolerance(case, next(item for item in ring if item["quant_scheme"] == "fp8")) == 0.10
-    assert sp_bench._result_correctness_tolerance(case, {**ring[0], "dense_backend": "sage_attn2"}) == 0.10
+    assert sp_bench._result_correctness_policy(case, ring[0])["atol"] == 0.02
+    assert sp_bench._result_correctness_policy(fp16_case, fp16_ring[0])["atol"] == 0.01
+    assert sp_bench._result_correctness_policy(case, next(item for item in ring if item["quant_scheme"] == "fp8"))["atol"] == 0.10
+    assert sp_bench._result_correctness_policy(case, {**ring[0], "dense_backend": "sage_attn2"})["atol"] == 0.10
     assert sp_bench._result_correctness_policy(case, ring[0])["policy"].startswith("exact_dense")
     with pytest.raises(ValueError, match="missing SP correctness contract"):
         sp_bench._result_correctness_policy(case, {**ring[0], "dense_backend": "new_lse_backend"})
@@ -1331,16 +1333,16 @@ def test_sp_report_requires_repeated_runs() -> None:
         )
     for record in records:
         record["catalog_fingerprint"] = "catalog-1"
+        record["correctness"] = {"checked": True, "passed": True, "status": "strict_equal", "check": "complete_main_aux_numerical_reference_all_ranks_before_timing"}
     report = sp_bench.build_report(sp_suite(case), records, candidate_catalog=sp_catalog(case, candidate))
     workload = report["workloads"][0]
-    assert workload["winner"] == candidate["candidate_id"]
     assert workload["candidates"][candidate["candidate_id"]]["latency_ms"] == pytest.approx(2.0)
-    recommendation = workload["recommendation"]
-    assert recommendation["configuration"] == candidate
-    assert recommendation["workload"] == case
-    assert recommendation["latency_ms"] == pytest.approx(2.0)
-    assert recommendation["logical_attention"]["q_shape"] == [1, 1024, 8, 128]
-    assert recommendation["local_input"]["q_shape"] == [256, 8, 128]
+    assert workload["measured_winner"] == candidate["candidate_id"]
+    assert workload["measured_shapes"]["logical_attention"]["q_shape"] == [1, 1024, 8, 128]
+    assert workload["measured_shapes"]["local_input"]["q_shape"] == [256, 8, 128]
+    unchecked = [{**record, "correctness": {"checked": True, "passed": True, "check": "main_aux_shape_finite_and_replicated_aux_all_ranks"}} for record in records]
+    legacy = sp_bench.build_report(sp_suite(case), unchecked, candidate_catalog=sp_catalog(case, candidate))["workloads"][0]
+    assert legacy["measured_winner"] == candidate["candidate_id"]
     with pytest.raises(ValueError, match="duplicate raw identity"):
         sp_bench.build_report(sp_suite(case), [*records, records[0]])
 
@@ -1432,12 +1434,12 @@ def test_sp_prepare_forwards_group_size_only_to_ulysses(monkeypatch: pytest.Monk
         "tensor_fusion": False,
     }
     ulysses = {**base, "algorithm": "ulysses", "head_parallel": True, "head_parallel_group_size": 2}
-    ulysses_fn, _, _ = sp_bench._prepare_operation(sp_case(), ulysses, torch.device("cpu"), seed=1, rank=0)
+    ulysses_fn, _ = sp_bench._prepare_operation(sp_case(), ulysses, torch.device("cpu"), seed=1, rank=0)
     ulysses_fn()
     assert calls["ulysses"]["head_parallel_group_size"] == 2
 
     ring = {**base, "algorithm": "ring", "head_parallel": False, "head_parallel_group_size": 1}
-    ring_fn, _, _ = sp_bench._prepare_operation(sp_case(), ring, torch.device("cpu"), seed=1, rank=0)
+    ring_fn, _ = sp_bench._prepare_operation(sp_case(), ring, torch.device("cpu"), seed=1, rank=0)
     ring_fn()
     assert "head_parallel_group_size" not in calls["ring"]
 
@@ -1503,7 +1505,6 @@ def test_sp_report_does_not_publish_partial_or_unstable_winner() -> None:
         candidate_catalog=sp_catalog(case, *candidates),
     )
     workload = report["workloads"][0]
-    assert workload["winner"] is None
     assert workload["measured_winner"] is None
     assert workload["candidate_coverage_complete"] is False
     assert workload["candidates"][candidates[0]["candidate_id"]]["status"] == "unstable"
@@ -1527,7 +1528,6 @@ def test_sp_report_requires_catalog_for_formal_winner_and_rejects_mixed_environm
     ]
     report = sp_bench.build_report(sp_suite(case), records)
     assert report["workloads"][0]["measured_winner"] == candidate["candidate_id"]
-    assert report["workloads"][0]["winner"] is None
 
     records[-1]["environment"]["ranks"][0]["torch"] = "different"
     with pytest.raises(ValueError, match="mixed SP raw hardware or software environments"):
@@ -1751,6 +1751,210 @@ def test_sp_diagnostic_report_aggregates_repeats() -> None:
         )
 
 
+@pytest.mark.parametrize("fault", [None, "unstable", "wrong_shape", "wrong_replay", "missing_candidate"])
+def test_sp_diagnostics_can_use_stable_measured_configuration_without_quality_approval(tmp_path, sp_report_fixture, fault):
+    case, catalog, records = sp_report_fixture
+    for record in records:
+        record["correctness"].update(passed=None, status="pending_review")
+    report = sp_bench.build_report(sp_suite(case), records, candidate_catalog=catalog)
+    workload = report["workloads"][0]
+    chosen = workload["measured_winner"]
+    if fault == "unstable":
+        workload["candidates"][chosen]["status"] = "unstable"
+    elif fault == "wrong_shape":
+        workload["shape"] = {**workload["shape"], "sequence": 4096}
+    elif fault == "wrong_replay":
+        workload["replay"] = {"manifest": "another.json", "sha256": "0" * 64}
+    elif fault == "missing_candidate":
+        workload["candidates"][chosen].pop("candidate")
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    if fault:
+        with pytest.raises(ValueError):
+            sp_bench.diagnostic_configuration_from_report(path, sp_suite(case))
+    else:
+        assert sp_bench.diagnostic_configuration_from_report(path, sp_suite(case)) == ({case["case_id"]: chosen}, report["measurement"]["seed"])
+    assert path.read_text() == json.dumps(report)
+
+
+@pytest.mark.parametrize("aux_first", [False, True])
+@pytest.mark.parametrize("rank", [0, 1])
+def test_sp_dense_reference_matches_tiny_gqa_softmax_oracle(aux_first, rank):
+    import math
+
+    import torch
+
+    shape = {**sp_case()["shape"], "sequence": 4, "sp_size": 2, "heads": 4, "kv_heads": 2, "head_dim": 2,
+             "aux_tokens": 1, "aux_q": True, "aux_first": aux_first}
+    q = torch.arange(32, dtype=torch.float64).reshape(4, 4, 2) / 10
+    k = torch.arange(16, dtype=torch.float64).reshape(4, 2, 2) / 7
+    v = torch.arange(16, dtype=torch.float64).reshape(4, 2, 2) / 3
+    aux_q, aux_k, aux_v = q[:1] + 1, k[:1] - 1, v[:1] + 2
+    local = slice(rank * 2, (rank + 1) * 2)
+    inputs = (q[local], k[local], v[local], aux_q, aux_k, aux_v)
+    main, aux = sp_bench._dense_reference_from_global(shape, inputs, (q, k, v), rank)
+    # Independent per-head softmax; compute main/aux separately from the production concat/split.
+    full_k, full_v = torch.cat((k, aux_k)), torch.cat((v, aux_v))
+
+    def expected(queries):
+        return torch.stack([torch.softmax(queries[:, head] @ full_k[:, head // 2].T / math.sqrt(2), dim=-1) @ full_v[:, head // 2]
+                            for head in range(4)], dim=1).reshape(queries.shape[0], -1)
+
+    torch.testing.assert_close(main, expected(q)[local], rtol=1e-12, atol=1e-12)
+    torch.testing.assert_close(aux, expected(aux_q), rtol=1e-12, atol=1e-12)
+
+
+def _sp_legacy_reference_worker(rank, directory):
+    from datetime import timedelta
+
+    import torch
+    import torch.distributed as dist
+
+    dist.init_process_group("gloo", init_method="file://" + str(Path(directory) / "reference_store"), rank=rank, world_size=2, timeout=timedelta(seconds=8))
+    try:
+        case = sp_case()
+        candidate = {"dense_backend": "torch_sdpa", "quant_scheme": None}
+        main, aux = torch.ones(2, 8), torch.ones(2, 8)
+        for stage in ("success", "tail_difference", "invalid_reference", "actual_nonfinite", "shape_mismatch", "success"):
+            expected = main * float("nan") if rank == 0 and stage == "invalid_reference" else main
+            actual = main.clone()
+            if rank == 0 and stage == "tail_difference":
+                actual[-1, -1] += 0.01
+            if rank == 0 and stage == "actual_nonfinite":
+                actual.fill_(float("nan"))
+            if rank == 0 and stage == "shape_mismatch":
+                actual = actual[:1]
+            try:
+                result = sp_bench._reference_correctness(case, candidate, (actual, aux), (expected, aux), torch.device("cpu"))
+                error = None
+            except Exception as exc:
+                error = sp_bench._local_error(exc)
+            errors = sp_bench._gather_rank_errors(error)
+            if stage == "invalid_reference":
+                assert all(errors)
+            else:
+                assert not any(errors), errors
+                assert result["status"] == ("pending_review" if stage == "tail_difference" else "strict_equal" if stage == "success" else "failed")
+                assert len(result["rank_checks"]) == 2
+                if stage == "tail_difference":
+                    assert result["rank_checks"][0]["main"]["compared_elements"] == main.numel()
+                    assert result["main_max_abs_diff"] == pytest.approx(0.01, abs=1e-6)
+            dist.barrier()
+    finally:
+        dist.destroy_process_group()
+
+
+def _sp_sparse_work_worker(rank, directory):
+    from datetime import timedelta
+
+    import torch
+    import torch.distributed as dist
+
+    from lightx2v.common.ops.attn.template import AttnWeightTemplate
+    from lightx2v.common.ops.attn.ulysses_prepost import TorchUlyssesPrePost
+    from lightx2v.utils.workload_stats import WorkloadStats, enabled, record_sparse_attn
+
+    dist.init_process_group("gloo", init_method="file://" + str(Path(directory) / "sparse_store"), rank=rank, world_size=2, timeout=timedelta(seconds=8))
+    try:
+        # Real SP communication/layout and statistics; replace only the native sparse leaf.
+        class Leaf(AttnWeightTemplate):
+            def __init__(self):
+                pass
+
+            def apply(self, q, k, v, **kwargs):
+                mask = torch.ones(1, q.shape[1], 3, 3, dtype=torch.int32)
+                if rank == 1:
+                    mask.zero_()
+                    mask[:, :, 0, 0] = 1
+                if not (rank == 1 and coverage == "missing"):
+                    record_sparse_attn(q, k, v, mask, 2, 2, operator="test_sparse_leaf", layout="SHD")
+                    if coverage == "overflow":
+                        record_sparse_attn(q, k, v, mask, 2, 2, operator="test_sparse_leaf", layout="SHD")
+                return q
+
+        q = torch.ones(2, 8, 2)
+        aux = torch.ones(1, 8, 2)
+        case = sp_case(shape={**sp_case()["shape"], "sequence": 4, "sp_size": 2, "heads": 8, "kv_heads": 8,
+                              "head_dim": 2, "aux_tokens": 1, "aux_q": True})
+        leaf = Leaf()
+        original_factory, original_write, original_pack = sp_bench._sparse_attention_operator, WorkloadStats.write, TorchUlyssesPrePost.pack_attn
+        sp_bench._sparse_attention_operator = lambda *args: leaf
+        output_packs = []
+
+        def write(self, *args):
+            if rank == 0 and (coverage == "write_failure" or coverage == "tail_write_failure" and args[1]["shape"]["heads"] == 1):
+                raise OSError("injected sparse statistics write failure")
+            return original_write(self, *args)
+
+        def pack(*args, **kwargs):
+            output_packs.append(1)
+            return original_pack(*args, **kwargs)
+
+        WorkloadStats.write = write
+        TorchUlyssesPrePost.pack_attn = staticmethod(pack)
+        for pipeline in (False, True):
+            candidate = {"algorithm": "ulysses", "leaf_family": "sparse_attention", "attention_backend": "sla.triton.general",
+                         "prepost_backend": "torch", "a2a_backend": "torch", "quant_scheme": None, "tensor_fusion": True,
+                         "head_parallel": pipeline, "head_parallel_group_size": 3}
+            case["sparse"] = {"keep_ratio": 0.2}
+            target, work = sp_bench._prepare_operation(case, candidate, torch.device("cpu"), 42, rank,
+                                                               inputs=(q, q, q, aux, aux, aux))
+            assert work == 1600
+            stages = ("complete", "missing", "overflow", "write_failure")
+            if pipeline:
+                stages += ("tail_write_failure",)
+            for coverage in (*stages, "complete"):
+                output_packs.clear()
+                try:
+                    value = sp_bench._sparse_sp_work(target, case, candidate)
+                    error = None
+                except Exception as exc:
+                    error = sp_bench._local_error(exc)
+                errors = sp_bench._gather_rank_errors(error)
+                assert not enabled("attention")
+                if coverage.endswith("failure"):
+                    expected_packs = 1 if coverage == "tail_write_failure" else 0
+                    assert all(errors) and len(output_packs) == expected_packs, (coverage, errors, output_packs)
+                    continue
+                assert not any(errors), errors
+                assert value["actual_compute_count_available"] is (coverage == "complete")
+                assert value["global_actual_sparse_work"] == (928 if coverage == "complete" else None)
+                assert value["global_scheduled_tile_work"] == (1280 if coverage == "complete" else None)
+                if coverage == "complete":
+                    assert value["global_sampled_dense_equivalent_work"] == 1600
+                    assert value["block_density_actual"] == pytest.approx(5 / 9)
+                    for item in value["compute_sample_ranks"]:
+                        assert [row["shape"]["heads"] for row in item["routes"]] == ([3, 1] if pipeline else [4])
+                dist.barrier()
+        sp_bench._sparse_attention_operator, WorkloadStats.write = original_factory, original_write
+        TorchUlyssesPrePost.pack_attn = staticmethod(original_pack)
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.parametrize("worker", [_sp_legacy_reference_worker, _sp_sparse_work_worker],
+                         ids=["reference", "sparse_SP_compute_facts"])
+def test_sp_local_reference_failures_preserve_collective_order(tmp_path, worker):
+    import os
+    import subprocess
+
+    import torch.distributed as dist
+
+    if not dist.is_gloo_available():
+        pytest.skip("CPU Gloo unavailable")
+    root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(root), str(root / "tests")])}
+    program = (
+        "import sys, torch, torch.multiprocessing as mp\n"
+        f"from test_operator_bench import {worker.__name__} as worker\n"
+        "torch.set_num_threads(1)\n"
+        "mp.start_processes(worker, args=(sys.argv[1],), nprocs=2, join=True, start_method='fork')\n"
+    )
+    run = subprocess.run([sys.executable, "-B", "-c", program, str(tmp_path)], cwd=root, env=env,
+                         capture_output=True, text=True, timeout=45)
+    assert run.returncode == 0, run.stdout + run.stderr
+
+
 def test_report_suppresses_sparse_rates_without_actual_final_mask():
     case = sparse_attention_case()
     records = [raw_record(case, "mask_missing", repeat, 1.0, None, rate_metric="actual_tflops",
@@ -1775,8 +1979,6 @@ def test_report_int8_peak_unit_does_not_follow_missing_or_mismatched_rate(rate_m
     item = report["workloads"][0]["backends"]["int8"]
     assert item["peak_status"] == ("rate_unavailable" if rate_metric is None else "unit_mismatch" if rate_metric == "tflops" else "available")
     assert item["peak_family"] == "int8" and item["nominal_peak_rate"] == 1979.0
-
-
 
 
 def test_missing_sparse_regions_do_not_publish_density_estimate_as_actual_flops(monkeypatch):
@@ -1818,6 +2020,73 @@ def test_missing_sparse_regions_do_not_publish_density_estimate_as_actual_flops(
     assert report["workloads"][0]["backends"]["fixture"]["rate"] is None
 
 
+@pytest.mark.parametrize("fault", ["valid", "shape", "aux", "nonfinite", "fatal", "append_no_newline", "append_truncated"])
+def test_sp_run_preserves_structure_and_recovery_contracts(tmp_path, monkeypatch, fault):
+    """Guard run/raw/append and fatal boundaries; no CUDA/NCCL claim."""
+    import torch
+    import torch.distributed as dist
+
+    case = sp_case(shape={**sp_case()["shape"], "sequence": 4, "sp_size": 2, "heads": 2, "kv_heads": 2,
+                          "head_dim": 8, "aux_tokens": 1, "aux_q": True})
+    candidate = next(item for item in sp_bench.enumerate_candidates(case, ["torch_sdpa"])["candidates"]
+                     if item["algorithm"] == "ulysses" and item["prepost_backend"] == item["a2a_backend"] == "torch"
+                     and item["quant_scheme"] is None and not item["tensor_fusion"] and not item["head_parallel"])
+    catalog = {"catalog_fingerprint": "cpu-flow", "scope_complete": True, "leaf_catalog": {},
+               "cases": [{"case_id": case["case_id"], "candidates": [candidate]}]}
+    main, aux = torch.ones(2, 16), torch.ones(1, 16)
+    result = (main[:1], aux) if fault == "shape" else (main, None) if fault == "aux" else (main, aux)
+    environments = [{"rank": rank, "local_rank": rank, "world_size": 2, "gpu": None} for rank in range(2)]
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    teardown = []
+    for name in ("init_process_group", "broadcast_object_list", "all_reduce", "barrier"):
+        monkeypatch.setattr(dist, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(dist, "destroy_process_group", lambda: teardown.append(1))
+    monkeypatch.setattr(dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(dist, "get_world_size", lambda: 2)
+    monkeypatch.setattr(dist, "all_gather_object", lambda output, value: output.__setitem__(slice(None), [value, value]))
+    monkeypatch.setattr(torch.cuda, "set_device", lambda *args: None)
+    monkeypatch.setattr(sp_bench, "_discover_runtime", lambda *args: {"dense_backends": ["torch_sdpa"], "ring_lse_backends": set()})
+    monkeypatch.setattr(sp_bench, "build_candidate_catalog", lambda *args: catalog)
+    monkeypatch.setattr(sp_bench, "_selected_candidates", lambda *args: {case["case_id"]: [candidate]})
+    monkeypatch.setattr(sp_bench, "_distributed_environment", lambda *args: environments)
+    monkeypatch.setattr(sp_bench, "_prepare_operation", lambda *args, **kwargs: (lambda: (main, aux), 320))
+    monkeypatch.setattr(sp_bench, "_dense_reference_outputs", lambda *args: pytest.fail("timing must not recompute a reference"))
+    structural = sp_bench._check_output_structure
+    monkeypatch.setattr(sp_bench, "_check_output_structure", lambda case, output, device, finite: structural(case, output, torch.device("cpu"), finite))
+
+    def measure(*args):
+        if fault == "fatal":
+            raise RuntimeError("CUDA error: an illegal memory access was encountered")
+        return [1.0], [[1.0], [1.0]], result, 0, fault != "nonfinite"
+
+    monkeypatch.setattr(sp_bench, "_measure_distributed", measure)
+    options = dict(candidate_ids=set(), algorithms={"ulysses"}, dense_backends=[], sparse_backends=[],
+                   warmup=0, iterations=1, seed=42, required_runs=1, max_spread_pct=5, max_spread_ms=0.005)
+    output = tmp_path / "run"
+    if fault == "fatal":
+        with pytest.raises(sp_bench._FatalCUDAError):
+            sp_bench.run_suite(sp_suite(case), output, repeat_runs=1, append=False, **options)
+        assert teardown == [] and (output / "fatal_rank_0.jsonl").is_file()
+        return
+    sp_bench.run_suite(sp_suite(case), output, repeat_runs=1, append=False, **options)
+    raw = output / "raw.jsonl"
+    if fault.startswith("append_"):
+        original = raw.read_bytes().rstrip(b"\n")
+        raw.write_bytes(original if fault == "append_no_newline" else original[:-1])
+        if fault == "append_truncated":
+            with pytest.raises(ValueError):
+                sp_bench.run_suite(sp_suite(case), output, repeat_runs=2, append=True, **options)
+            assert raw.read_bytes() == original[:-1]
+        else:
+            sp_bench.run_suite(sp_suite(case), output, repeat_runs=2, append=True, **options)
+            assert len(sp_bench.load_raw_records(raw)) == 2 and raw.read_bytes().startswith(original + b"\n")
+    else:
+        row = json.loads(raw.read_text())
+        assert row["correctness"]["checked"] is False
+        assert (row["status"] == "ok") is (fault == "valid")
+    assert teardown
+
 
 def test_sparse_catalog_exposes_missing_combinations_instead_of_excluding_them():
     registry = load_registry()
@@ -1840,7 +2109,7 @@ def test_sparse_catalog_exposes_missing_combinations_instead_of_excluding_them()
     supported, exclusions, unmapped = sp_bench._sparse_sp_backend_scope(catalog)
     assert not unmapped
     assert set(supported) <= sp_bench.SPARSE_SP_BACKENDS.keys()
-    assert {name for name in eligible if name.endswith(".general")} <= sp_bench.SPARSE_SP_EXCLUSIONS.keys()
+    assert {name for name in eligible if name.endswith(".general")} <= sp_bench.SPARSE_SP_EXCLUSIONS.keys() | sp_bench.SPARSE_SP_BACKENDS.keys()
 
     registry.register(SimpleNamespace(descriptor=BackendDescriptor(
         "task_general", "sparse_attention", "test", ("bf16",), "metadata fixture",
@@ -1948,8 +2217,6 @@ def test_all_operator_reports_show_complete_coverage(family):
         assert row["excluded_production_backends"] == {"layout_path": "needs original model layout"}
 
 
-
-
 def test_sparse_execution_and_report_reject_dense_candidates(tmp_path):
     case = sparse_attention_case()
     with pytest.raises(ValueError, match="backend family mismatch"):
@@ -1963,6 +2230,113 @@ def test_sparse_execution_and_report_reject_dense_candidates(tmp_path):
     old_catalog["candidates"][0]["production_variant"] = "dense_replay_baseline"
     with pytest.raises(ValueError, match="retired dense controls"):
         core.build_recommendation_report(shape_suite(case), [], candidate_catalog=old_catalog)
+
+
+@pytest.fixture
+def sp_report_fixture():
+    case = sp_case()
+    choices = sp_bench.enumerate_candidates(case, ["flash_attn3"], ring_lse_backends={"flash_attn3"})["candidates"][:2]
+    catalog = sp_catalog(case, *choices)
+    catalog["cases"][0]["exclusions"] = [{"candidate_id": "ring__attn=unvalidated", "reason": "reference missing"}]
+    ranks = [{"rank": rank, "world_size": 4, "gpu": {"name": "NVIDIA H100 80GB HBM3", "major": 9, "minor": 0}} for rank in range(4)]
+    records = [{"kind": "sp_attention_benchmark_raw_v1", "run_id": f"repeat-{repeat:03d}", "status": "ok",
+                "case": case, "candidate": choices[0], "catalog_fingerprint": "catalog-1", "environment": {"ranks": [{**rank, "gpu": dict(rank["gpu"])} for rank in ranks]}, "run": {"seed": 42},
+                "metrics": {"latency_ms_mean": 1.0, "aggregate_effective_tflops": 4.294967296},
+                "correctness": {"checked": True, "passed": True, "status": "strict_equal", "check": "complete_main_aux_numerical_reference_all_ranks_before_timing"}}
+               for repeat in range(3)]
+    return case, catalog, records
+
+
+@pytest.mark.parametrize("change", ["metadata", "shape", "precision", "replay"])
+def test_SP_report_and_append_share_execution_identity(sp_report_fixture, change):
+    case, catalog, records = sp_report_fixture
+    current = {**case, "call_count": 7, "tags": ["reviewed"], "source": {"description": "new annotation"},
+               "observed_candidate": records[0]["candidate"]["candidate_id"]}
+    if change == "shape":
+        current["shape"] = {**case["shape"], "sequence": 2048}
+    elif change == "precision":
+        current["precision"] = {"input_dtype": "fp16"}
+    elif change == "replay":
+        current.update(replay={"manifest": "new.json", "sha256": "0" * 64}, sparse={"keep_ratio": 0.2})
+    suite = sp_suite(current)
+    args = (suite, catalog, records, records[0]["run"], records[0]["environment"]["ranks"], 3)
+    if change == "metadata":
+        report = sp_bench.build_report(suite, records, candidate_catalog=catalog)
+        assert report["workloads"][0]["source"] == current["source"] and "tags" not in records[0]["case"]
+        assert len(sp_bench.validate_existing_records(*args)) == 3
+    else:
+        with pytest.raises(ValueError, match="suite drift"):
+            sp_bench.build_report(suite, records, candidate_catalog=catalog)
+        with pytest.raises(ValueError, match="suite drift"):
+            sp_bench.validate_existing_records(*args)
+
+
+def test_SP_report_and_append_reject_changed_python(sp_report_fixture):
+    import copy
+
+    case, catalog, records = sp_report_fixture
+    for row in records:
+        for rank in row["environment"]["ranks"]:
+            rank["python"] = "3.12.3"
+    current = copy.deepcopy(records[0]["environment"]["ranks"])
+    current[0]["python"] = "3.13.0"
+    with pytest.raises(ValueError, match="environment differs"):
+        sp_bench.validate_existing_records(sp_suite(case), catalog, records, records[0]["run"], current, 3)
+    records[-1]["environment"]["ranks"] = current
+    with pytest.raises(ValueError, match="mixed SP raw hardware or software"):
+        sp_bench.build_report(sp_suite(case), records, candidate_catalog=catalog)
+
+
+def test_SP_sparse_report_preserves_estimate_and_pending_leaves():
+    case = sp_case(replay={"manifest": "/tmp/global_replay.json", "sha256": "0" * 64}, sparse={"keep_ratio": 0.2})
+    runtime = {
+        "catalog": {"catalog_fingerprint": "backend-catalog", "unmapped_attention_backends": [], "candidates": []},
+        "sparse_backends": ["sla.triton.dynamic"], "sparse_sp_exclusions": sp_bench.SPARSE_SP_EXCLUSIONS,
+        "a2a_backends": ["torch"], "fp4_available": False,
+    }
+    catalog = sp_bench.build_candidate_catalog(sp_suite(case), runtime)
+    assert catalog["scope_complete"] is False
+    assert catalog["backend_scope_blockers"]["pending_sparse_sp_backends"] == sorted(sp_bench.SPARSE_SP_EXCLUSIONS)
+    candidate = catalog["cases"][0]["candidates"][0]
+    records = [{"kind": "sp_attention_benchmark_raw_v1", "run_id": f"repeat-{index:03d}", "status": "ok",
+                "case": case, "candidate": candidate, "catalog_fingerprint": catalog["catalog_fingerprint"],
+                "metrics": {"latency_ms_mean": 1.0, "aggregate_effective_tflops": 50.0, "actual_tflops": 10.0, "dense_equivalent_tflops": 50.0}}
+               for index in range(3)]
+    # 旧catalog曾将pending字典视为完整；离线重建也必须保留缺口。
+    catalog["scope_complete"] = True
+    report = sp_bench.build_report(sp_suite(case), records, candidate_catalog=catalog)
+    workload = report["workloads"][0]
+    item = workload["candidates"][candidate["candidate_id"]]
+    assert item["actual_tflops"] is None and item["estimated_sparse_tflops"] == 10.0
+    assert records[0]["metrics"]["actual_tflops"] == 10.0
+    assert workload["candidate_coverage_complete"] is False
+    assert report["catalog_scope_complete"] is False
+    assert report["sparse_sp_exclusions"] == sp_bench.SPARSE_SP_EXCLUSIONS
+    text = sp_bench.markdown_report(report)
+    row = next(line for line in text.splitlines() if line.startswith("| " + candidate["candidate_id"] + " |"))
+    assert "— TFLOPS" in row and "50*" not in row
+    for index, record in enumerate(records):
+        work = (10 + index) * 10**9
+        record["metrics"].update(actual_compute_count_available=True, actual_tflops=10.0 + index,
+                                 global_actual_sparse_work=work, global_dense_work=50 * 10**9,
+                                 global_scheduled_tile_work=work + 2 * 10**9, block_density_actual=0.2 + index * 0.1,
+                                 compute_sample_scope="one untimed production SP call per rank",
+                                 compute_sample_ranks=[{"rank": rank, "expected_groups": 1, "coverage_gaps": {},
+                                                        "routes": [{"work": {"selected_logical_flops": work // 4}}]} for rank in range(4)])
+    current = sp_bench.build_report(sp_suite(case), records, candidate_catalog=catalog)
+    item = current["workloads"][0]["candidates"][candidate["candidate_id"]]
+    assert item["actual_tflops"] == 11.0 and item["estimated_sparse_tflops"] is None
+    assert item["work_range"] == [10 * 10**9, 12 * 10**9]
+    assert item["dense_equivalent_work_range"] == [50 * 10**9] * 2
+    assert item["scheduled_tile_work_range"] == [12 * 10**9, 14 * 10**9]
+    assert item["block_density_actual_range"] == pytest.approx([0.2, 0.4])
+    assert item["compute_samples"][0]["scope"] == "one untimed production SP call per rank"
+    records[-1]["metrics"].update(actual_compute_count_available=False, actual_tflops=None)
+    incomplete = sp_bench.build_report(sp_suite(case), records, candidate_catalog=catalog)
+    item = incomplete["workloads"][0]["candidates"][candidate["candidate_id"]]
+    assert item["actual_tflops"] is None and item["work_range"] is None and item["block_density_actual_range"] is None
+    assert item["dense_equivalent_work_range"] == [50 * 10**9] * 2
+    assert item["compute_samples"][-1]["actual_compute_count_available"] is False
 
 
 def test_convolution_coverage_retains_registry_native_and_legacy_gaps():
@@ -1996,6 +2370,31 @@ def test_report_rejects_mixing_default_and_tuned_MoE_records():
     rows[0]["metrics"]["autotune"] = {"mode": "current_shape", "tuning_buckets": [case["shape"]["tokens"]]}
     with pytest.raises(ValueError, match="mixed autotune contract"):
         core.build_recommendation_report(shape_suite(case), rows)
+
+
+@pytest.mark.parametrize("stage", ["prepare", "correctness", "fatal_prepare"])
+def test_SP_report_separates_unexecuted_and_failed_candidates(sp_report_fixture, stage):
+    case, catalog, rows = sp_report_fixture
+    for row in rows:
+        row["run"] = {"warmup": 50, "iterations": 100}
+    unexecuted = sp_bench.build_report(sp_suite(case), rows, candidate_catalog=catalog)
+    assert unexecuted["measurement"]["warmup"] == 50 and unexecuted["measurement"]["iterations"] == 100
+    pending_id = catalog["cases"][0]["candidates"][1]["candidate_id"]
+    assert unexecuted["workloads"][0]["candidates"][pending_id]["status"] == "not_measured"
+    error_stage = "prepare" if stage == "fatal_prepare" else stage
+    message = "CUDA error: device-side assert triggered" if stage == "fatal_prepare" else "allocation requires 8192 MiB\ntraceback detail"
+    failed = sp_bench._error_record(case, catalog["cases"][0]["candidates"][1], 0, rows[0]["environment"]["ranks"],
+                                    rows[0]["run"], catalog["catalog_fingerprint"],
+                                    [None, {"type": "OutOfMemoryError", "message": message}, None, None], error_stage)
+    report = sp_bench.build_report(sp_suite(case), [*rows, failed], candidate_catalog=catalog)
+    item = report["workloads"][0]["candidates"][pending_id]
+    assert item["latency_ms"] is None and item["status"] == ("unavailable" if stage == "prepare" else "measurement_error")
+    if stage != "prepare":
+        assert report["workloads"][0]["candidate_coverage_complete"] is False
+    error = item["errors"][0]
+    assert error["stage"] == error_stage and error["ranks"][1]["type"] == "OutOfMemoryError"
+    assert error["ranks"][1]["message"] == message
+    assert pending_id not in sp_bench.markdown_report(report)
 
 
 @pytest.mark.parametrize("change", ["precision", "routing", "metadata"])
@@ -2065,6 +2464,31 @@ def test_new_adapter_supersedes_historical_exclusion_and_hints_are_not_inventory
     assert "flash_attn3_paged" not in catalog["production_backends"]
 
 
+@pytest.mark.parametrize("explicit_seed", [None, 7, 42, "missing"])
+def test_sp_measured_diagnostics_preserve_input_seed(tmp_path, monkeypatch, sp_report_fixture, explicit_seed):
+    case, catalog, records = sp_report_fixture
+    for record in records:
+        record["run"]["seed"] = 7
+    report = sp_bench.build_report(sp_suite(case), records, candidate_catalog=catalog)
+    if explicit_seed == "missing":
+        report["measurement"].pop("seed")
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    if explicit_seed in (None, 7):
+        selection, seed = sp_bench.diagnostic_configuration_from_report(path, sp_suite(case), seed=explicit_seed)
+        assert selection == {case["case_id"]: report["workloads"][0]["measured_winner"]} and seed == 7
+        if explicit_seed is None:
+            suite_path = tmp_path / "suite.json"
+            suite_path.write_text(json.dumps(sp_suite(case)))
+            observed = []
+            monkeypatch.setattr(sp_bench, "run_diagnostics", lambda *a, **kw: observed.append(kw["seed"]))
+            assert sp_bench.main(["diagnose", "--suite", str(suite_path), "--output-dir", str(tmp_path / "diagnose"), "--measurement-report", str(path)]) == 0
+            assert observed == [7]  # 贯通实际parser→selector→诊断入口，不启动进程组。
+    else:
+        with pytest.raises(ValueError, match="measurement seed"):
+            sp_bench.diagnostic_configuration_from_report(path, sp_suite(case), seed=None if explicit_seed == "missing" else explicit_seed)
+
+
 def test_rejected_backend_keeps_requested_dtype_for_resume_and_report(tmp_path, monkeypatch):
     import torch
 
@@ -2082,38 +2506,6 @@ def test_rejected_backend_keeps_requested_dtype_for_resume_and_report(tmp_path, 
     assert resumed["skipped_existing"] == 1
     report = core.build_recommendation_report(value, [record], required_runs=1)
     assert report["summary"]["matched_record_count"] == 1 and report["summary"]["unmatched_record_count"] == 0
-
-
-def test_sp_diagnostics_can_load_formal_winners(tmp_path: Path) -> None:
-    report_path = tmp_path / "report.json"
-    report_path.write_text(
-        json.dumps(
-            {
-                "kind": "sp_attention_benchmark_report_v1",
-                "suite_id": "diagnostic-suite",
-                "workloads": [
-                    {"case_id": "case-a", "recommendation": {"candidate_id": "winner-a"}},
-                    {"case_id": "case-b", "recommendation": {"candidate_id": "winner-b"}},
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    suite = {"suite_id": "diagnostic-suite", "cases": [{"case_id": "case-a"}, {"case_id": "case-b"}]}
-    assert sp_bench.diagnostic_candidates_from_report(report_path, suite) == {"case-a": "winner-a", "case-b": "winner-b"}
-    args = sp_bench.build_parser().parse_args(
-        [
-            "diagnose",
-            "--suite",
-            "suite.json",
-            "--output-dir",
-            "results",
-            "--recommendation-report",
-            str(report_path),
-        ]
-    )
-    assert args.candidate == []
-    assert args.recommendation_report == report_path
 
 
 @pytest.mark.parametrize("ar,q_shape,k_shape,v_shape", [
@@ -2277,3 +2669,34 @@ def test_append_preserves_complete_unterminated_row_and_rejects_truncation(tmp_p
     with pytest.raises(json.JSONDecodeError):
         core.run_suite(value, output, {"gemm": ["fixture"]}, [], repeat_runs=2, append=True)
     assert output.read_bytes() == damaged and calls == []
+
+
+@pytest.mark.parametrize("command", ["run", "validate-reference", "diagnose"])
+def test_SP_fatal_entrypoints_save_local_evidence_without_cuda_teardown(tmp_path, monkeypatch, command):
+    import torch
+    import torch.distributed as dist
+
+    case = sp_case()
+    suite = tmp_path / "suite.json"
+    suite.write_text(json.dumps(sp_suite(case)))
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setattr(dist, "init_process_group", lambda **kwargs: None)
+    monkeypatch.setattr(dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(dist, "get_world_size", lambda: 4)
+    monkeypatch.setattr(dist, "destroy_process_group", lambda: pytest.fail("fatal CUDA must not destroy a damaged group"))
+    monkeypatch.setattr(torch.cuda, "set_device", lambda *args: None)
+
+    def discover(*args):
+        raise RuntimeError("CUDA error: device-side assert triggered")
+
+    monkeypatch.setattr(sp_bench, "_discover_runtime", discover)
+    output = tmp_path / "failed"
+    args = [command, "--suite", str(suite)]
+    args += ["--output", str(output / "reference.json")] if command == "validate-reference" else ["--output-dir", str(output)]
+    if command == "diagnose":
+        args += ["--candidate", "explicit-selection"]
+    with pytest.raises(sp_bench._FatalCUDAError, match="fresh process"):
+        sp_bench.main(args)
+    assert json.loads((output / "fatal_rank_0.jsonl").read_text())["error"]["type"] == "RuntimeError"
+    assert sp_bench._local_error(RuntimeError("CUDA out of memory"))["type"] == "RuntimeError"

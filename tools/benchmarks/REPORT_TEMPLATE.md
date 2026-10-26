@@ -67,7 +67,7 @@
 - 稀疏用`dense_equivalent_work_range`和`sparse.keep_ratio`列名义/理论量。`block_density_actual_range`给实际块稀疏率，不能据此反推有效token对。效率与峰值比例分别并列`rate / dense_equivalent_rate*`和`nominal_efficiency / dense_equivalent_peak_efficiency*`；实际量缺失时两项均留空，说明未观测最终区域。
 - 同一输入按延迟排序。至少两个`accepted`且有计算效率的项才对最大效率项加粗（后端、耗时、效率三格）；并列最大均高亮。不把不可执行、未知计算量或不稳定项标为最快。
 - 覆盖必须包含已知catalog、未测、硬件/依赖/输入拒绝、失败、`excluded_production_backends`、`coverage_blockers.unmapped_production_backends`及`integration_gaps`，保留具体原因；`production_mappings`注明共用生产路径。没有catalog不声称完整。support仅为错误阶段，不据此认定输入被拒绝；CUDA不可用先视为设备问题。失败行简述阶段/错误，不再追加“参考未覆盖”等无关噪音。
-- 单卡没有自动数值比较，数值列留“—”；历史JSON若已有correctness比较，在折叠明细保留原参考范围、误差与状态，注明是历史证据，不重算参考。不将finite/shape当数值正确。SP只呈现`correctness`已有比较及范围；推荐筛查和恢复判断遵循AGENTS。
-- SP章节先用`measured_winner`及其完整`candidate`总结本轮稳定项最快配置（算法、attention backend、通信精度、fusion、head组/尾组/prepost/A2A、耗时）；不把部分覆盖写成正式采用。SP主表用“并行方案 / attention实现”替换“后端说明”（共八列），只列有计时项，其余进完整覆盖表。Dense效率取`aggregate_effective_tflops`；sparse仅用已观测的`actual_tflops`，缺实际路由时实际/等价效率均留空，不用配置估计代替。峰值分母匹配设备数及attention输入/计算精度，不能因通信为FP8就换FP8分母；缺少对应事实留空。leaf、SP exclusions与blockers同样列入覆盖。详细JSON语义见README的SP章节。
+- 单卡没有自动数值比较，数值列留“—”；历史JSON若已有correctness比较，在折叠明细保留原参考范围、误差与状态，注明是历史证据，不重算参考。不将finite/shape当数值正确。SP按AGENTS核对独立reference的输入、配置、实际seed与环境后，单独注明已验证范围并引用其文件；无匹配记录留空，不把run的结构检查或旧容差写成数值通过。推荐筛查和恢复判断遵循AGENTS。
+- SP章节先用`measured_winner`及其完整`candidate`总结本轮稳定项最快配置（算法、attention backend、通信精度、fusion、head组/尾组/prepost/A2A、耗时）；不把部分覆盖写成正式采用。SP计算量/块密度读取candidate的`work_range/dense_equivalent_work_range/scheduled_tile_work_range/block_density_actual_range`，采样范围及缺口读取`compute_samples`；不能从速率和延迟中位数反算。SP主表用“并行方案 / attention实现”替换“后端说明”（共八列），只列有计时项，其余进完整覆盖表。Dense效率取`aggregate_effective_tflops`；sparse仅用已观测的`actual_tflops`，缺实际路由时实际/等价效率均留空，不用配置估计代替。峰值分母匹配设备数及attention输入/计算精度，不能因通信为FP8就换FP8分母；缺少对应事实留空。leaf、SP exclusions与blockers同样列入覆盖。详细JSON语义见README的SP章节。
 
 交付前逐行核对输入、后端、数值、单位、缺口与JSON，同时确认首张表前没有审计长文、数字简洁、单元格分层。报告只保留一个原始JSON入口；验收USAGE/过程留本地工作包。只改排版和解释，不改事实。独立复核有新疑点时补最小验证，不因重排报告重跑GPU。

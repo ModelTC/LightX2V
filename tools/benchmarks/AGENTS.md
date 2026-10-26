@@ -30,6 +30,8 @@
 
 换模型/硬件、backend或依赖升级、以及续跑前，核对当前源码/依赖身份和实际生产调用，重核精度、输入与架构假设，并检查未登记或延迟dispatch。同名实现变化不保证改变catalog指纹，指纹相同不能证明源码未变。变更影响输入、执行或计时合同时新开实验；确认无影响才记录依据复用已有证据，不静默混用旧raw。
 
+上游统计、adapter或执行协议更新后，沿生产事实、全部直接消费者到raw/report/模板逐项核对字段与语义；旧回归通过不等于继承完整。
+
 缺口的输入准备按当前生产实现核实，以下仅是诊断方向，不是永久拒绝规则：
 
 | 入口 | 优先核实的输入或语义 |
@@ -46,7 +48,7 @@ General新组合复用通用prepare，按[descriptor合同](README.md#backend)�
 ## 中断与原始记录恢复
 
 - 新运行先核进程/设备和既有产物；依[工具恢复边界](README.md)查catalog和失败raw。不得在同一损坏上下文续测；核失败原因后用新进程有界恢复。未知CUDA异常也先判断上下文可信度，不能把异常捕获当作安全证明。
-- `--append`跳过所有完整记录，包括错误行，不自动重试失败项。保留原始错误；需重测时另存新目录，按相同suite/参数及输入环境身份检查后只合并无重复键的有效记录。fatal行在报告中是measurement_error，不能记作合法排除或完整覆盖；历史进程中fatal之后的计时先作废，无法确定来源时不复用。
+- `--append`跳过所有完整记录，包括错误行，不自动重试失败项。保留原始错误；需重测时另存新目录，按相同suite/参数及输入环境身份检查后只合并无重复键的有效记录。SP发生fatal时还须检查各rank独立的fatal JSONL和启动stderr，不能以缺少完整分布式raw当作没有错误。fatal行在报告中是measurement_error，不能记作合法排除或完整覆盖；历史进程中fatal之后的计时先作废，无法确定来源时不复用。
 - raw解析失败先定位行与进程状态。只有确认最后一行被截断、其前各非空行均为完整JSON对象时，才可在新恢复目录复制完整前缀；保留原raw、被排除尾部原始字节、来源路径/哈希和恢复说明，再按原参数/身份append。完整错误行、受扰行不能借恢复删除；中间损坏、非法UTF-8或无法确认截断原因时停止并定位，不做自动修补。格式完整但末尾没有换行的JSON对象也不是截断行。
 
 ## 输入、计算量和数值
@@ -97,7 +99,9 @@ CPU wheel版本配对见[PyTorch官方安装表](https://pytorch.org/get-started
 
 ## 何时运行bench回归
 
-改变候选、回放、执行或报告逻辑后，按影响选择`test_operator_bench.py`、`test_moe_replay.py`、`test_bench_execution.py`；交付前集中运行这三组。SP显式比较由其所属SP功能单独验证，计算量采样/会话保障复用前节回归，不在bench重复建设。无自动CI，不因普通运行重跑全矩阵；CPU替身只证明Python合同，native路径改变另需实际后端验证。
+改变候选、回放、执行或报告逻辑后，按影响选择`test_operator_bench.py`、`test_moe_replay.py`、`test_bench_execution.py`；源码稳定后集中验证，已有证据按身份与受影响范围复用。SP显式比较由其所属SP功能单独验证，计算量采样/会话保障复用前节回归，不在bench重复建设。无自动CI，不因普通运行重跑全矩阵；CPU替身只证明Python合同，native路径改变另需实际后端验证。
+
+长期测试按未来失效风险保留：后续或上游可能改动、错误隐蔽、难凭指南临时重建的跨边界反例和独立oracle优先；很少改动只是参考，不能替代上游敏感性判断。直白接口/字段及一次性模型硬件验收先执行验证，脚本和证据可留任务包；不为全部新增分支自动增加永久测试，也不为减行删掉关键回归。正式功能和保留测试不得依赖本地材料。
 
 ## 硬件峰值与调优
 
@@ -109,31 +113,16 @@ FlashInfer MoE由adapter在计时外调当前token点，正式调用以False上�
 
 ## SP单算子
 
-
-- SP 使用独立 `sp_bench.py`、SP suite 和 `torchrun`；进程数必须等于 `sp_size`。
-- L1 production 端到端延迟是候选排序依据；L2 layout/communication 与 L3 collective 只用于解释 L1，不参与 winner 排名。
-- L2/L3 日常入口应优先读取 L1 `report.json` 的逐 case 正式 winner，不要求用户重新描述长 candidate ID；结果同时保存机器可读 JSON 和面向人的 `diagnostic_report.md`。
-- Ulysses `head_parallel=true` 时默认枚举 `1..local_heads` 的全部 `head_parallel_group_size`，并与 bulk 路径共同参与 L1 排名。group size 不必整除 local head 数；候选身份、推荐配置和 shape 描述必须记录尾组实际 head 数。
-- Aux 诊断必须遵循 production 通信语义：Ulysses 的 replicated aux Q/K/V 绕过 main QKV A2A，aux output 执行 all-gather；Ring 的 replicated aux Q/K/V 绕过 main K/V rotation。L3 必须拆分 main/aux 实际 payload，并把未通信的 aux 明确标为 bypass，不能用全量 dense tensor 估算替代。
-- L3 分量必须独立计时并分别报告 latency、Bus bandwidth、spread 和 peak efficiency，禁止按整体延迟或总字节比例反推。混合路径的整体效率与分量效率同时保留；`all_to_all`、`all_gather`、`ring_p2p` 分别匹配自己的 peak profile。
-- Ulysses 与 Ring 只在共同支持且已验证的 attention 语义上公平比较。Ring 的 GQA 必须排除；H100 当前 Ulysses/Ring aux 合法矩阵已验证 BF16/FP16、无量化/FP8 communication 和 fusion 开关，FP4 与新增 dense leaf 在专项验证完成前记录为 `not validated`，不能据此宣称 production 不支持。
-- `sp_bench` 已支持 dense leaf 与真实 QKV replay 驱动的 sparse adapter。Sparse 候选必须使用独立 `--sparse-backend` 合同，不能把 sparse backend 冒充 `--dense-backend`。
-- Sparse grouped Ulysses 必须使用同一 replay、同一 sparse leaf 和通信配置的 bulk Ulysses 做 reference 验证；bulk 只作为 reference，不能作为被测候选与自身比较。报告必须保留 `reference_candidate`，且不得把该结果解释为 sparse leaf 对 dense attention 的精度证明。
-- Sparse Ring 只有在 backend 满足分块输出、LSE 和跨 block 合并合同时才进入候选；否则记录 `not_supported` 或 `not_applicable`，不阻塞 Ulysses。
-- Sparse SP 候选必须从当前 backend catalog 派生。已知兼容 leaf 应进入 `SPARSE_SP_BACKENDS`；新出现的 eligible sparse adapter 若未完成 SP 合同分类，必须进入 `unmapped_sparse_sp_backends` 并阻断完整推荐，不能静默过滤。
-- 互联 peak 必须匹配 GPU、world size 和 topology fingerprint；缺失时仍报告延迟和带宽，但不发布通信效率。
-- NCCL `ALGO`、`PROTO` 和 channel 数只作为运行环境身份记录，不进入自动 sweep；需要比较时由用户显式设置环境并使用独立输出目录。
-- 当前算法范围只有 Ulysses 与 Ring，不加入 `kv_all_gather` 第三路径。
-- 每次新模型、新硬件或新需求开始时，必须主动审计相关候选的 exclusions，不能把 `not validated` 当作普通跳过项。这里的含义是“实现可能存在，但尚无足够证据进入推荐矩阵”。
-- 只要 `not validated` 组合会影响本次候选完整性，且预计 3–5 轮工作内可验证、没有外部阻塞，Agent 必须立即登记显式 correctness tolerance，使用 `sp_bench validate-reference` 补 dense reference，再同步更新准入代码、测试和文档；不得等待用户再次提醒。
-- “本次矩阵完整”指当前请求涉及的模型 shape、precision、硬件依赖和 backend 选项均有明确结论，不要求提前穷举未来所有交叉组合。结束任务时，不得静默遗留与本次推荐相关的 `not validated` exclusion。
-- 只有缺少目标硬件、必要依赖、真实输入或模型语义等外部条件时才允许延期。延期项必须记录未完成内容、阻塞原因、触发补齐的条件和下一步动作；条件在后续任务中满足时，Agent 应主动恢复验证。
-- Sparse SP 必须使用真实 replay，但采集拓扑不得与目标 SP 度数绑定。Artifact 必须描述原始 token 顺序下的全局完整、RoPE 后 Q/K/V；采集时可以使用单卡、模型并行或 sequence shards，benchmark 再按 production 模型语义切成用户指定的 SP 度数。
-- Sparse L2/L3 必须复用与 L1 相同的 replay 输入；禁止因诊断方便而退化为随机 Q/K/V。
-- 对“复制最大 conditioner 前缀、剩余 main 序列不 padding 切分”的模型，使用 `sp_bench derive-replay-suites`从同一完整 replay 派生每个目标 SP 的 suite；`conditioner_tokens` 必须来自模型语义，不能根据整除性猜测。
-- 用户未指定 SP 范围时默认搜索 `SP=2/4/8`，也接受指定卡数。每个 SP 度数必须独立派生 replicated aux 与 sharded main 边界、验证 head/sequence 合同并发布各自 winner；不得用一个 SP 的局部分片冒充完整输入，也不得沿用另一个 SP 的 aux 边界。
-- 整模采集显存不足时，先审计 transformer block 的结构、attention 合同和目标捕获点。可以删除目标层之后的层并在捕获后立即停止；若选择 block 0 等早期同构代表层，也可以构造缩层模型。不得删除目标层之前会改变其输入分布的计算后仍宣称是该层真实输入。缩层依据、保留层范围和代表性边界必须写入 provenance。
-- MiniMax-H3可作为包含production aux切分和dynamic sparse路径的输入捕获参考；实际目标模型仍由本次任务确定。Agent负责选代表block/step、生成replay/suite并执行，不将历史参考模型变成新任务默认。Sparse Ring leaf不满足分块LSE合同时记录不支持。
+- 使用独立SP suite及torchrun，进程数等于sp_size。L1完整路径用于排序；L2/L3只解释计算、布局与通信，不拿分量代替L1排名。层级TP/SP对比属于其他工具。
+- 用户未指定SP范围时可派生2/4/8；每个度数重新核head、sequence、aux/main及真实payload。完整配置包含algorithm、leaf、通信精度、fusion、pre/post、A2A和head流水；不能只给最优leaf。
+- 诊断可显式传`--candidate`，也可用`--measurement-report`读取measured配置和base seed；相同repeat编号才对应相同生成输入，性能诊断不需要质量批准。先核实际诊断支持边界：当前L2/L3构造仅覆盖bulk；head流水须沿实际分组异步时间线解释，不得静默换成bulk分量或相加预测重叠。此限制不影响head流水的L1/子调用算量。日常对话只给各SP度数最优延迟与完整报告入口，最终报告按既有模板列最快完整配置、并列情况和覆盖明细。
+- Sparse只从原始token顺序的全局、RoPE后、pre-SP QKV派生。采集卡数不绑定目标SP；leaf局部输入不能再次切分通信。未知采集边界不能靠补标志冒充，需核原采集代码/拓扑或重新采集。
+- 对replicated conditioner前缀使用derive-replay-suites，conditioner长度来自模型语义，不根据整除性猜。不能删除捕获点之前会改变输入的层后仍称真实输入；缩层/提前停止的代表性写入来源。
+- Aux遵循生产语义：Ulysses的aux绕过main QKV A2A、output all-gather；Ring的aux绕过main K/V rotation。head流水须记录尾组；只在双方已验证语义上公平比较。Ring需要原生分块输出/LSE，不支持的leaf明确说明。
+- 数值验证与性能分次组织：新leaf/通信路径或受影响输入先用`validate-reference`，可按准确candidate ID缩小范围；不在每次run/repeat重算完整参考。Dense同精度全局参考检查通信/重排；grouped sparse用同一replay、leaf和通信配置的bulk作参考，均不替代leaf对dense的质量证明。后续变化按影响补验，不把准入容差当产品质量授权。
+- 引用独立reference时，用共用`_input_identity(case)`、完整candidate、`_environment_identity`及实际seed逐项对账；计时第r轮seed为`run.seed + r*1000`，验证seed只覆盖对应输入。还须核对实际源码/依赖身份；catalog范围不同不靠同名case判等。未匹配、缺字段或其它seed只能标未验证，不能给整份计时raw套通过结论。报告分别引用原始性能与验证文件，数值状态、参考范围和采用决定分开保存。
+- L2/L3复用L1真实输入，逐分量独立计时；不按总耗时/总字节分摊。区分每rank发送link字节、逻辑量、main/aux和bypass；各模式分别报告带宽/波动/匹配peak，混合精度payload保留scale部分。
+- Sparse候选从当前catalog派生；未完成SP语义/参考的leaf保留具体gap。NCCL环境只记录，不自动sweep；当前算法为Ulysses/Ring，不扩第三路径。
 
 ## 报告与持久化
 
