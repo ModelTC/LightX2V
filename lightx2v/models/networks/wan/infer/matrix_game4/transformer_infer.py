@@ -22,6 +22,12 @@ class WanMatrixGame4TransformerInfer(WanCausalTransformerInfer):
     def finish_self_attn_cache(self, pool, layer_id, update):
         pool.finish_attention(layer_id, update, sink_tokens=update.sink_tokens)
 
+    def get_block_write_views(self, pool, layer_id, update, cache):
+        raw_sink = (cache.sink.raw_key,)
+        if cache.sink.rotated_key is not None:
+            raw_sink += (cache.sink.rotated_key,)
+        return (*super().get_block_write_views(pool, layer_id, update, cache.ring), *raw_sink)
+
     def get_kv_cache_update(self, token_count, is_ref_prefill=False, *, global_token_count=None):
         if global_token_count is None:
             global_token_count = self.num_frame_per_chunk * self.kv_cache_manager.frame_seq_length
@@ -72,7 +78,7 @@ class WanMatrixGame4TransformerInfer(WanCausalTransformerInfer):
             padded_tokens = query.shape[0]
             tokens = self.num_frame_per_chunk * self.kv_cache_manager.frame_seq_length
             query, raw_key, value = query[:tokens], raw_key[:tokens], value[:tokens]
-        self.sink_rope.update(raw_key, self_attn_cache.sink, self_attn_cache.ring.key, grid_sizes, freqs, start_frame)
+        self.sink_rope.update(raw_key, self_attn_cache.sink, self_attn_cache.ring, grid_sizes, freqs, start_frame)
         query, key = apply_dynamic_causal_rope(query, raw_key, grid_sizes, freqs, start_frame)
         output = self.self_attn_backend.apply(query, key, value, self_attn_cache.ring, phase.self_attn_1)
         if self.seq_parallel:
@@ -89,7 +95,7 @@ class WanMatrixGame4TransformerInfer(WanCausalTransformerInfer):
         if self.seq_parallel:
             tokens = self.num_frame_per_chunk * self.kv_cache_manager.frame_seq_length
             raw_key, value = (all2all_seq2head(tensor, group=self.seq_p_group)[:tokens] for tensor in (raw_key, value))
-        self.sink_rope.update(raw_key, self_attn_cache.sink, self_attn_cache.ring.key, pre_infer_out.grid_sizes.tensor, pre_infer_out.freqs, start_frame)
+        self.sink_rope.update(raw_key, self_attn_cache.sink, self_attn_cache.ring, pre_infer_out.grid_sizes.tensor, pre_infer_out.freqs, start_frame)
         return apply_dynamic_causal_rope_single(raw_key, pre_infer_out.grid_sizes.tensor, pre_infer_out.freqs, start_frame), value
 
     def infer_cache_commit(self, x, embed0, context, grid_sizes, start_frame, *conditional_inputs, block_idx, block, pre, cache, conditional_names):

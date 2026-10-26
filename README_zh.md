@@ -207,7 +207,7 @@ python scripts/minimax_h3/server/post_t2av.py
 - ✅ [InfiniteTalk](https://huggingface.co/MeiGen-AI/InfiniteTalk)
 - ✅ [Wan-Dancer](https://huggingface.co/Wan-AI/Wan-Dancer-14B)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
-- ✅ [Matrix-Game-4](scripts/matrix_game4/README_zh.md)（Wan2.2 5B Control，原生自回归视频重渲染）
+- ✅ [Matrix-Game-4](scripts/matrix_game4/run_matrix_game4.sh)（Wan2.2 5B Control，原生自回归视频重渲染）
 
 ### 图像生成与编辑
 

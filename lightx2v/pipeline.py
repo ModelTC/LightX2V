@@ -60,6 +60,7 @@ class LightX2VPipeline:
             "wan2.1",
             "wan2.1_vace",
             "wan2.1_sf",
+            "wan2.1_realtime",
             "seko_talk",
             "seko_talk_ar",
             "wan2.2_moe",
@@ -125,7 +126,7 @@ class LightX2VPipeline:
         if self.runner is not None:
             raise RuntimeError("Generator has already been created for this pipeline")
 
-        if config_json is None and self.model_cls not in ("taomate_h3", "taomate_h3_native", "streamrender_h3", "streamrender_h3_native"):
+        if config_json is None and self.model_cls not in ("taomate_h3", "streamrender_h3"):
             if guidance_scale is None:
                 guidance_scale = 1.0 if self.model_cls in ("minimax_h3", "minimax_h3_causal") else 5.0
             self.set_infer_config(
@@ -309,6 +310,7 @@ class LightX2VPipeline:
             "wan2.1",
             "wan2.1_vace",
             "wan2.1_sf",
+            "wan2.1_realtime",
             "seko_talk",
             "seko_talk_ar",
             "wan2.2_moe",

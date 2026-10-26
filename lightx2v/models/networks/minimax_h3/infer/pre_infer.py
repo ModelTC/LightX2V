@@ -73,6 +73,7 @@ class MiniMaxH3PreInfer:
             text_embeds = text_embeds + self._ff(block.ff, block.norm2.apply(text_embeds))
         return weights.refiner_final_norm.apply(text_embeds)
 
+    @torch.inference_mode(False)
     def _rotary_embedding(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         position_ids = position_ids.to(torch.float32)
         inv_freq = 1.0 / (

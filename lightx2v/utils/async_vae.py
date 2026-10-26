@@ -9,6 +9,16 @@ import torch
 from loguru import logger
 
 
+def async_vae_decode_enabled(config: dict[str, Any]) -> bool:
+    """Read the shared top-level asynchronous decode switch."""
+    return bool(config.get("async_vae_decode", False))
+
+
+def normalize_async_vae_config(config: dict[str, Any]) -> None:
+    """Set the top-level decode switch to its explicit or default boolean."""
+    config["async_vae_decode"] = async_vae_decode_enabled(config)
+
+
 class AsyncVAEChunkDecoder:
     """Submit chunk VAE decodes on a side CUDA stream.
 
@@ -60,13 +70,7 @@ class AsyncVAEChunkDecoder:
         dispatch_in_worker: bool = False,
         collect_outputs: bool = True,
     ) -> "AsyncVAEChunkDecoder":
-        ar_config = config.get("ar_config", {})
-        enabled = bool(
-            config.get(
-                "async_vae_decode",
-                ar_config.get("async_vae_decode", config.get("streaming_vae", False) and config.get("async_vae", False)),
-            )
-        )
+        enabled = async_vae_decode_enabled(config)
         decoder = cls(enabled=enabled, device=device, on_chunk=on_chunk, dispatch_in_worker=dispatch_in_worker, collect_outputs=collect_outputs)
         if vae_decoder is not None:
             decoder.prepare_vae(vae_decoder)
@@ -222,26 +226,50 @@ class AsyncVAEChunkDecoder:
 
     def synchronize(self) -> None:
         """Join queued chunks without ending the current causal decode request."""
+        first_error = None
         pending, self._decode_futures = self._decode_futures, []
         for future in pending:
-            future.result()
+            try:
+                future.result()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
         if self._stream is not None:
-            self._stream.synchronize()
+            try:
+                self._stream.synchronize()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
         callbacks, self._callback_futures = self._callback_futures, []
         for future in callbacks:
-            future.result()
+            try:
+                future.result()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     def finish(self) -> list[Any]:
         started = time.perf_counter()
+        first_error = None
         try:
             self.synchronize()
             self._finish_wait_ms += (time.perf_counter() - started) * 1000.0
             self._log_timing()
             return self._chunks
+        except BaseException as error:
+            first_error = error
+            raise
         finally:
+            cleanup_error = None
             for executor in (self._decode_executor, self._callback_executor):
                 if executor is not None:
-                    executor.shutdown(wait=True)
+                    try:
+                        executor.shutdown(wait=True)
+                    except BaseException as error:
+                        if cleanup_error is None:
+                            cleanup_error = error
             self._decode_executor = None
             self._callback_executor = None
             self._chunks = []
@@ -253,7 +281,13 @@ class AsyncVAEChunkDecoder:
             self._submit_wait_ms = 0.0
             self._finish_wait_ms = 0.0
             self._logged_decode_events = 0
-            self._restore_vae()
+            try:
+                self._restore_vae()
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+            if first_error is None and cleanup_error is not None:
+                raise cleanup_error
 
     def _log_new_async_chunks(self, exposed_wait_ms: float, wait_kind: str) -> None:
         if not self.enabled:

@@ -101,6 +101,13 @@ class WanAudioModel(WanModel):
 
 
 class WanAudioARModel(WanAudioModel, WanAutoregressiveModel):
+    @torch.no_grad()
+    def _seq_parallel_pre_process(self, pre_infer_out):
+        # Audio owns its mask-aware SP split, while the shared AR gather needs
+        # the true length to discard any padding after attention.
+        self._sequence_parallel_tokens = pre_infer_out.x.shape[0]
+        return super()._seq_parallel_pre_process(pre_infer_out)
+
     def _init_infer_class(self):
         super()._init_infer_class()
         self.pre_infer_class = WanAudioARPreInfer

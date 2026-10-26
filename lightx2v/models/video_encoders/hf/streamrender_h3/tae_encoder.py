@@ -49,7 +49,8 @@ class _WorkItem:
     block_index: int
 
 
-def _run_encoder(model: nn.Sequential, memory: list, frames: torch.Tensor) -> torch.Tensor | None:
+def _run_encoder(codec, memory: list, frames: torch.Tensor) -> torch.Tensor | None:
+    model = codec.encoder
     queue = deque(_WorkItem(frame, 0) for frame in frames.unbind(1))
     outputs = []
     while queue:
@@ -60,7 +61,7 @@ def _run_encoder(model: nn.Sequential, memory: list, frames: torch.Tensor) -> to
         block = model[item.block_index]
         if isinstance(block, _MemoryBlock):
             previous = item.tensor * 0 if memory[item.block_index] is None else memory[item.block_index]
-            result = block(item.tensor, previous)
+            result = codec._run_block(item.block_index, item.tensor, previous)
             memory[item.block_index] = item.tensor
             queue.appendleft(_WorkItem(result, item.block_index + 1))
         elif isinstance(block, _TemporalPool):
@@ -70,11 +71,11 @@ def _run_encoder(model: nn.Sequential, memory: list, frames: torch.Tensor) -> to
             pending.append(item.tensor)
             if len(pending) == block.stride:
                 batch, channels, height, width = item.tensor.shape
-                result = block(torch.cat(pending, dim=1).view(batch * block.stride, channels, height, width))
+                result = codec._run_block(item.block_index, torch.cat(pending, dim=1).view(batch * block.stride, channels, height, width))
                 memory[item.block_index] = []
                 queue.appendleft(_WorkItem(result, item.block_index + 1))
         else:
-            queue.appendleft(_WorkItem(block(item.tensor), item.block_index + 1))
+            queue.appendleft(_WorkItem(codec._run_block(item.block_index, item.tensor), item.block_index + 1))
     return torch.cat(outputs, dim=1) if outputs else None
 
 
@@ -94,8 +95,8 @@ class StreamRenderH3TAEEncodeStream:
         if self.frame_in_block == 0:
             self.memory = [None] * len(self.codec.encoder)
             prefix = frame.new_zeros((frame.shape[0], 3, 3, frame.shape[3], frame.shape[4]))
-            _run_encoder(self.codec.encoder, self.memory, F.pixel_unshuffle(prefix, 2))
-        latent = _run_encoder(self.codec.encoder, self.memory, F.pixel_unshuffle(frame, 2))
+            _run_encoder(self.codec, self.memory, F.pixel_unshuffle(prefix, 2))
+        latent = _run_encoder(self.codec, self.memory, F.pixel_unshuffle(frame, 2))
         self.frame_in_block = (self.frame_in_block + 1) % 17
         return latent
 
@@ -103,8 +104,10 @@ class StreamRenderH3TAEEncodeStream:
 class StreamRenderH3TAEEncoder(nn.Module):
     """Released TAE encoder weights, executed entirely by LightX2V modules."""
 
-    def __init__(self, checkpoint: str | Path, device: str | torch.device = "cuda"):
+    def __init__(self, checkpoint: str | Path, device: str | torch.device = "cuda", *, use_compile: bool = False):
         super().__init__()
+        self.use_compile = use_compile
+        self._compiled_blocks = {}
         self.encoder = nn.Sequential(
             _conv(12, 64),
             nn.ReLU(inplace=True),
@@ -128,6 +131,18 @@ class StreamRenderH3TAEEncoder(nn.Module):
         state = torch.load(checkpoint, map_location="cpu", weights_only=True)
         self.encoder.load_state_dict({key.removeprefix("encoder."): value for key, value in state.items() if key.startswith("encoder.")}, strict=True)
         self.to(device).eval()
+
+    def _run_block(self, index, *inputs):
+        block = self.encoder[index]
+        if not self.use_compile:
+            return block(*inputs)
+        compiled = self._compiled_blocks.get(index)
+        if compiled is None:
+            # Keep the original module types available to the causal queue;
+            # only pure per-block arithmetic is compiled, never stream state.
+            compiled = torch.compile(block.forward, dynamic=None, options={"emulate_precision_casts": True})
+            self._compiled_blocks[index] = compiled
+        return compiled(*inputs)
 
     def create_stream(self) -> StreamRenderH3TAEEncodeStream:
         return StreamRenderH3TAEEncodeStream(self)

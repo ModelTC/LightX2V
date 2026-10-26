@@ -6,7 +6,8 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from lightx2v.common.kvcache.attn.rope import RoPERingAttention
+from lightx2v.common.kvcache.attn.rope import PhysicalRoPERingAttention
+from lightx2v.common.kvcache.attn.sage_rope import SageRoPERingAttention
 from lightx2v.common.kvcache.layout import KVCacheUpdate
 from lightx2v.common.ops.norm.rms_norm_weight import apply_projection_norm
 from lightx2v.models.networks.wan.infer.autoregressive import WanAutoregressiveTransformerInfer
@@ -29,19 +30,20 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
     def infer(self, weights, pre_infer_out):
         self.current_pre = pre_infer_out
         frames, height, width = pre_infer_out.grid_sizes.tuple
-        freq_key = (self.get_attention_frames(frames), height, width, pre_infer_out.x.device)
+        freq_key = (self.get_rope_frames(frames), height, width, pre_infer_out.x.device)
         if freq_key not in self.freqs_cache:
             freqs = self.prepare_rope_freqs(*freq_key)
             if self.config["rope_type"] == "flashinfer_rope" and not self.config.get("rope_chunk", False) and not self.seq_parallel:
                 freqs = weights.blocks[0].compute_phases[0].rope.prepare_freqs(freqs)
             self.freqs_cache[freq_key] = freqs
         self.key_freqs = self.freqs_cache[freq_key]
-        self.query_freqs = self.key_freqs[-frames * height * width :]
+        visible_tokens = self.get_attention_frames(frames) * height * width
+        self.query_freqs = self.key_freqs[visible_tokens - frames * height * width : visible_tokens]
         if self.seq_parallel:
             tokens = frames * height * width
             start = pre_infer_out.adapter_args["seq_start"]
             padding = (-tokens) % dist.get_world_size(self.seq_p_group)
-            query_key = "query", freq_key, frames, start, pre_infer_out.x.shape[0]
+            query_key = "query", freq_key, frames, visible_tokens, start, pre_infer_out.x.shape[0]
             if query_key not in self.freqs_cache:
                 self.freqs_cache[query_key] = F.pad(self.query_freqs, (0, 0) * (self.query_freqs.ndim - 1) + (0, padding))[start : start + pre_infer_out.x.shape[0]]
             self.query_freqs = self.freqs_cache[query_key]
@@ -58,6 +60,9 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
 
     def get_attention_frames(self, frames):
         return frames
+
+    def get_rope_frames(self, frames):
+        return self.get_attention_frames(frames)
 
     def get_compile_block_key(self, block_idx, block):
         return id(block) if self.block_offload else block_idx
@@ -219,8 +224,14 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
 
     def __init__(self, config):
         super().__init__(config)
-        self.self_attn_backend = RoPERingAttention()
+        if config["self_attn_1_type"] in ("flash_attn2", "flash_attn3"):
+            self.self_attn_backend = PhysicalRoPERingAttention()
+        elif config["self_attn_1_type"] == "sage_attn2":
+            self.self_attn_backend = SageRoPERingAttention(profile="edenlive")
+        else:
+            raise ValueError("EdenLive AR requires SageAttention2 or FlashAttention2/3")
         self.cache_pools = {}
+        self.kv_cache_manager.key_only = isinstance(self.self_attn_backend, SageRoPERingAttention)
         self._cache_signature = None
         self._graph_cross_generation = 0
         self.cache_commit_enabled &= not config.get("enable_cfg", False)
@@ -230,19 +241,27 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
             self.cross_kv_compute = torch.compile(self.cross_kv_compute, dynamic=None, options=self.compile_options)
             self.image_cross_kv_compute = torch.compile(self.image_cross_kv_compute, dynamic=None, options=self.compile_options)
 
+    def get_rope_frames(self, frames):
+        # Growing windows use an unchanged prefix of this table. Keeping its
+        # storage/revision stable avoids invalidating historical quantized K
+        # solely because the visible window gained another chunk.
+        return self.config["ar_config"]["local_attn_size"]
+
     def initialize_kv_cache(self, latent_shape, ref_num_frames=None):
         ar = self.config["ar_config"]
         chunk, window, sink = ar["num_frame_per_chunk"], ar["local_attn_size"], ar["sink_size"]
         if not 0 <= sink <= window - chunk or window % chunk or sink % chunk:
             raise ValueError("EdenLive requires whole-chunk window and sink sizes with room for the current chunk")
         frame_tokens = math.prod(size // patch for size, patch in zip(latent_shape[2:], self.config["patch_size"][1:]))
-        signature = window * frame_tokens, self.kv_cache_manager.tensor_num_heads
         manager = self.kv_cache_manager
+        signature = window * frame_tokens, manager.tensor_num_heads, chunk * frame_tokens, sink * frame_tokens, manager.key_only, self.head_dim, manager.dtype, str(manager.device)
         if signature != self._cache_signature:
             self.reset_cuda_graph()
             manager.self_attn_kv_caches.clear()
             for branch in (True, False) if self.config["enable_cfg"] else (True,):
                 pool = manager.create_self_attn_kv_cache(branch, signature[0], num_heads=signature[1])
+                if manager.key_only:
+                    pool.configure_key_only(write_alignment=(chunk * frame_tokens,))
                 pool._init_kv_buffer()
             self._cache_signature = signature
         else:
@@ -250,6 +269,7 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
         self.cache_pools = dict(manager.self_attn_kv_caches)
         return latent_shape[1]
 
+    @torch.inference_mode(False)
     def prepare_rope_freqs(self, frames, height, width, device):
         freqs = super().prepare_rope_freqs(frames, height, width, device).squeeze(1)
         return torch.cat((freqs.real, freqs.imag), dim=-1).float().contiguous()
@@ -352,7 +372,15 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
             pool.end_layer(layer)
 
     def infer_self_attn_output(self, phase, q, k, v, grid_sizes, self_attn_cache):
-        return self.self_attn_backend.apply_rope_ring(q, k, v, self_attn_cache, attention=phase.self_attn_1, rope=phase.rope, query_freqs=self.query_freqs)
+        return self.self_attn_backend.apply_rope_ring(
+            q,
+            k,
+            v,
+            self_attn_cache,
+            attention=phase.self_attn_1,
+            rope=phase.rope,
+            query_freqs=self.query_freqs,
+        )
 
     def get_block_cross_kv(self, block, context, layer_id=None):
         text = context[self.image_context_len :] if self.has_image_context else context
@@ -422,6 +450,7 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
             tuple(pre_infer_out.embed0.shape),
             None if segments is None else tuple(segments),
             pre_infer_out.adapter_args.get("seq_start", 0),
+            tuple(getattr(cache, "graph_key", None) for cache in caches),
         )
         return self.cuda_graph_stack.run(
             (tuple(id(block) for block in blocks), layout, branch),
@@ -451,12 +480,12 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
             runner = partial(self.infer_cache_commit, block_idx=block_idx, block=block, pre_infer_out=pre_infer_out, cache=cache)
             if self.can_use_cuda_graph((block,), x, pre_infer_out):
                 x = self.cuda_graph_stack.run(
-                    (id(block), grid),
+                    (id(block), grid, getattr(cache, "graph_key", None)),
                     runner,
                     (x, pre_infer_out.embed0),
-                    bindings=(*cache.raw.bindings, *self.get_graph_weight_bindings((block,))),
+                    bindings=(*cache.bindings, *self.get_graph_weight_bindings((block,))),
                     mutated_buffers=self.self_attn_backend.write_views((branch, block_idx)),
-                    variant=(branch, "cache_kv", grid, self.get_attention_frames(grid[0])),
+                    variant=(branch, "cache_kv", grid, self.get_attention_frames(grid[0]), getattr(cache, "graph_key", None)),
                     memory_pool=self.get_cuda_graph_pool(x.device),
                 )
             else:

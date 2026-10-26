@@ -11,7 +11,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 class WanStreamingVAERunnerMixin:
     def load_vae(self):
         if self.config.get("lightvae_path"):
-            self.vae_encoder = self.load_vae_encoder()
+            self.vae_encoder = self._configure_vae_compile(self.load_vae_encoder(), components=("encoder",))
             return self.vae_encoder, self.load_vae_decoder()
         return super().load_vae()
 
@@ -28,7 +28,7 @@ class WanStreamingVAERunnerMixin:
             dtype = self._resolve_vae_dtype(self.config.get("vae_dtype"), GET_DTYPE())
             mean, _, inv_std = get_wan22_vae_scale(dtype, AI_DEVICE)
             scale = [mean, inv_std]
-        return WanLightVAEDecoder(
+        decoder = WanLightVAEDecoder(
             self.config["lightvae_path"],
             family=family,
             scale=scale,
@@ -36,6 +36,7 @@ class WanStreamingVAERunnerMixin:
             device=AI_DEVICE,
             cpu_offload=self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False)),
         )
+        return self._configure_vae_compile(decoder, components=("decoder",))
 
     def decode_segment_latents(self, segment_idx, segment_latents):
         return self.vae_decoder.cached_decode_withflag(segment_latents.to(GET_DTYPE()), segment_idx == 0, segment_idx == self.video_segment_num - 1)

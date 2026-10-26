@@ -26,6 +26,11 @@ class WanLightVAEDecoder(torch.nn.Module):
         self.to(device="cpu" if cpu_offload else self.device, dtype=dtype)
         self.eval().requires_grad_(False)
 
+    def compile_decoder(self):
+        if not getattr(self, "_decoder_compiled", False):
+            self.model = torch.compile(self.model, dynamic=None)
+            self._decoder_compiled = True
+
     def to_cpu(self):
         self.to("cpu")
 

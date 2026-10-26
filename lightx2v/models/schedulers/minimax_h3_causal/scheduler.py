@@ -1,8 +1,8 @@
 import torch
 
+from lightx2v.models.networks.minimax_h3.causal.streaming import MiniMaxH3StreamingPlan
 from lightx2v.models.networks.minimax_h3.packing import audio_latent_num_frames, build_row_timesteps, patchify_video_latents, video_latent_num_frames
 from lightx2v.models.networks.minimax_h3.packing_ref2av import build_ref2av_packed_sequence
-from lightx2v.models.networks.minimax_h3_causal.streaming import MiniMaxH3StreamingPlan
 from lightx2v.models.schedulers.minimax_h3.scheduler import MiniMaxH3Scheduler, _layout_to_device
 from lightx2v_platform.base.global_var import AI_DEVICE
 

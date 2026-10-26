@@ -149,11 +149,11 @@ class GeluLinear:
 class OffloadedF16GeluLinear:
     """Fuse GELU into the active FP8-F16 upload slot without retaining a block."""
 
-    def __init__(self, module):
+    def __init__(self, module, *, bias_after_reduce=False):
         self.module = module
         self.weight = module.weight_cuda_buffer
         self.scale = module.weight_scale_cuda_buffer
-        self.bias = getattr(module, "bias_cuda_buffer", None)
+        self.bias = None if bias_after_reduce else getattr(module, "bias_cuda_buffer", None)
         self.infer_dtype = module.infer_dtype
         self.activation_qmax = module.fp8_activation_qmax
 
@@ -204,7 +204,13 @@ def make_gelu_linear(module, *, enabled=True, offload_buffers=False):
     Unsupported cases always return a wrapper executing the original modules.
     """
     if type(module) is MMWeightTP:
-        return TensorParallelGeluLinear(module, make_gelu_linear(module._mm, enabled=enabled, offload_buffers=offload_buffers))
+        local = make_gelu_linear(module._mm, enabled=enabled, offload_buffers=offload_buffers)
+        if module.split_dim == "row" and isinstance(local, OffloadedF16GeluLinear):
+            # Row TP removes the local bias after each staging upload. The
+            # outer wrapper adds it once after all-reduce; retaining the upload
+            # buffer here would permanently fail the fusion identity guard.
+            local = OffloadedF16GeluLinear(module._mm, bias_after_reduce=True)
+        return TensorParallelGeluLinear(module, local)
     if offload_buffers:
         if enabled and type(module) is MMWeightWfp8channelAfp8channelF16Accum:
             group = FP8F16AccumProjectionGroup.from_modules((module,), offload_buffers=True)

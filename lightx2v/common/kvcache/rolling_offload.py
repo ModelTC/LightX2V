@@ -15,6 +15,8 @@ class OffloadedRollingKVCachePool(KVCacheOffloadMixin, RollingKVCachePool):
             self._init_kv_buffer()
 
     def _init_kv_buffer(self) -> None:
+        self._defer_raw_prefetch = False
+        self._quantized_attention_finishes = {}
         self._offload = RollingKVOffload(
             tuple(self.get_max_cache_shape(layer) for layer in range(self._num_layers)),
             self._metadata_shape(),
@@ -24,8 +26,35 @@ class OffloadedRollingKVCachePool(KVCacheOffloadMixin, RollingKVCachePool):
             self._device,
             self._metadata_index,
             self._visible_physical_spans,
+            key_only=self.key_only,
         )
         self._init_cache_metadata()
+
+    def prepare_attention(self, layer_id: int, update: KVCacheUpdate):
+        self._ensure_kv_buffer()
+        self._defer_raw_prefetch = False
+        self._quantized_attention_finishes.pop(self._metadata_index(layer_id), None)
+        return super().prepare_attention(layer_id, update)
+
+    def prepare_quantized_attention(self, layer_id: int, update: KVCacheUpdate, *, skip_raw_history: bool, on_finish):
+        """Delay raw prefetch until the quantized attention policy can decide."""
+        self._ensure_kv_buffer()
+        self._defer_raw_prefetch = True
+        self._quantized_attention_finishes[self._metadata_index(layer_id)] = on_finish
+        if skip_raw_history:
+            self._offload.begin_layer_without_history(layer_id)
+        return super().prepare_attention(layer_id, update)
+
+    def prefetch_initial(self, layer_ids: list[int]) -> None:
+        if not getattr(self, "_defer_raw_prefetch", False):
+            super().prefetch_initial(layer_ids)
+
+    def end_layer(self, layer_id: int, next_prefetch: int | None = None) -> None:
+        # The next layer's eligibility is only known in Sage.prepare. Eagerly
+        # staging it here would perform the H2D transfer before that decision.
+        if self._defer_raw_prefetch:
+            next_prefetch = self._num_layers
+        super().end_layer(layer_id, next_prefetch)
 
     def _visible_physical_spans(self, layer_id: int):
         """Prefetch live ring slots even when they lie above the logical length."""
@@ -38,6 +67,8 @@ class OffloadedRollingKVCachePool(KVCacheOffloadMixin, RollingKVCachePool):
         return self._offload.value_buffer[: self.get_max_cache_shape(layer_id)]
 
     def store_kv(self, k: torch.Tensor, v: torch.Tensor, start_idx: int, end_idx: int, layer_id: int) -> None:
+        if self.key_only:
+            raise RuntimeError("Raw-value writes are unavailable for a quantized-V cache; use its attention backend")
         if end_idx <= start_idx:
             return
         self._check_resident_layer(layer_id)
@@ -48,6 +79,9 @@ class OffloadedRollingKVCachePool(KVCacheOffloadMixin, RollingKVCachePool):
     def finish_attention(self, layer_id: int, update: KVCacheUpdate, *, sink_tokens: int = 0) -> None:
         layout = self._attention_layouts[self._metadata_index(layer_id)]
         self._offload.store_staging(layer_id, layout.spans(update.write_start, update.write_end), sink_tokens)
+        on_finish = self._quantized_attention_finishes.pop(self._metadata_index(layer_id), None)
+        if on_finish is not None:
+            on_finish()
         self.end_layer(layer_id)
 
     @property
@@ -57,6 +91,8 @@ class OffloadedRollingKVCachePool(KVCacheOffloadMixin, RollingKVCachePool):
     def reset(self) -> None:
         if self._offload is not None:
             self._offload.clear()
+            self._defer_raw_prefetch = False
+            self._quantized_attention_finishes.clear()
         super().reset()
 
 

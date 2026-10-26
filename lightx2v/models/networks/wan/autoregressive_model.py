@@ -1,4 +1,6 @@
 import torch
+import torch.distributed as dist
+import torch.nn.functional as F
 
 from lightx2v.models.networks.autoregressive_model import AutoregressiveModelMixin
 from lightx2v.models.networks.wan.model import WanModel
@@ -6,6 +8,28 @@ from lightx2v.models.networks.wan.model import WanModel
 
 class WanAutoregressiveModel(AutoregressiveModelMixin, WanModel):
     """Run a chunk and place its prediction in the scheduler's full sequence."""
+
+    @torch.no_grad()
+    def _seq_parallel_pre_process(self, pre_infer_out):
+        # Per-frame modulation reshapes each SP shard into [frames, tokens, dim].
+        # Align the global sequence to SP * frames, including any camera tokens.
+        tokens = pre_infer_out.x.shape[0]
+        frames = pre_infer_out.grid_sizes.tuple[0]
+        world_size = dist.get_world_size(self.seq_p_group)
+        padding = (-tokens) % (world_size * frames)
+        self._sequence_parallel_tokens = tokens
+        if padding:
+            pre_infer_out.x = F.pad(pre_infer_out.x, (0, 0, 0, padding))
+            conditions = getattr(pre_infer_out, "conditional_dict", {})
+            pre_infer_out.conditional_dict = {
+                name: F.pad(value, (0, 0) * (value.ndim - 1) + (0, padding)) if isinstance(value, torch.Tensor) and value.ndim and value.shape[0] == tokens else value
+                for name, value in conditions.items()
+            }
+        return super()._seq_parallel_pre_process(pre_infer_out)
+
+    @torch.no_grad()
+    def _seq_parallel_post_process(self, x):
+        return super()._seq_parallel_post_process(x)[: self._sequence_parallel_tokens]
 
     def _apply_weights(self, weight_dict=None):
         super()._apply_weights(weight_dict)

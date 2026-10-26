@@ -70,10 +70,14 @@ def _apply_rotary(tensor: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) ->
 
 
 class StreamRenderH3CausalDecoder(nn.Module):
-    """Checkpoint-compatible eager decoder; no upstream runtime imports."""
+    """Checkpoint-compatible causal decoder; no upstream runtime imports."""
 
-    def __init__(self, checkpoint: str | Path, config: dict, device: str | torch.device = "cuda"):
+    def __init__(self, checkpoint: str | Path, config: dict, device: str | torch.device = "cuda", *, linear_dtype: torch.dtype | None = None, use_compile: bool = False):
         super().__init__()
+        self.use_compile = use_compile
+        self._compiled_projection = None
+        self._compiled_finish = None
+        self._window_layouts = {}
         self.window = 16
         self.chunk = 2
         self.cache_latents = 4
@@ -93,19 +97,60 @@ class StreamRenderH3CausalDecoder(nn.Module):
         self.register_buffer("latents_mean", torch.tensor(config["latents_mean"], dtype=torch.float32), persistent=False)
         self.register_buffer("latents_std", torch.tensor(config["latents_std"], dtype=torch.float32), persistent=False)
         self.load_state_dict(load_file(str(checkpoint), device="cpu"), strict=True, assign=True)
+        if linear_dtype is not None:
+            if linear_dtype != torch.bfloat16:
+                raise ValueError("The StreamRender BF16 stream requires BF16 block linear weights")
+            # The stream already executes these projections in BF16 autocast.
+            # Store that same representation once, avoiding an unused FP32
+            # copy and repeated autocast copies for every two-latent decode.
+            # Norms, input embedding and output projection retain FP32 weights.
+            for module in self.blocks.modules():
+                if isinstance(module, nn.Linear):
+                    module.to(dtype=linear_dtype)
         self.to(device).eval()
 
     @classmethod
-    def from_model_path(cls, model_path: str | Path, device: str | torch.device = "cuda"):
+    def from_model_path(cls, model_path: str | Path, device: str | torch.device = "cuda", *, linear_dtype: torch.dtype | None = None, use_compile: bool = False):
         root = Path(model_path)
         runtime = json.loads((root / "configs/runtime.json").read_text())
         args = runtime["inference"]["models"]["video_decoder"]["args"]
         assets = json.loads((root / "assets.json").read_text())["assets"]
         checkpoint = root / assets["causal_decoder"]
-        return cls(checkpoint, args["decoder_config"], device)
+        return cls(checkpoint, args["decoder_config"], device, linear_dtype=linear_dtype, use_compile=use_compile)
 
     def create_stream(self):
         return StreamRenderH3DecodeStream(self)
+
+    def _project_block(self, block, hidden, suffix):
+        batch, count, height, width = hidden.shape[:4]
+        norm = block.norm1(hidden.float()).to(hidden.dtype)
+        norm_suffix = block.norm1(suffix.float()).to(suffix.dtype)
+        query, key, value = block.attn.to_qkv(norm).view(batch, count, height, width, self.heads, 3 * self.head_dim).chunk(3, dim=-1)
+        suffix_query, suffix_key, suffix_value = block.attn.to_qkv(norm_suffix).view(batch, suffix.shape[1], self.heads, 3 * self.head_dim).chunk(3, dim=-1)
+        query = block.attn.norm_q(query.float()).to(query.dtype)
+        suffix_query = block.attn.norm_q(suffix_query.float()).to(suffix_query.dtype)
+        key = block.attn.norm_k(key.float()).to(key.dtype)
+        suffix_key = block.attn.norm_k(suffix_key.float()).to(suffix_key.dtype)
+        return query, key, value, suffix_query, suffix_key, suffix_value
+
+    @staticmethod
+    def _finish_block(block, hidden, suffix, output, suffix_output):
+        hidden = hidden + block.attn.to_out(output) * block.scale1
+        suffix = suffix + block.attn.to_out(suffix_output) * block.scale1
+        hidden = hidden + block.ff(block.norm2(hidden.float()).to(hidden.dtype)) * block.scale2
+        suffix = suffix + block.ff(block.norm2(suffix.float()).to(suffix.dtype)) * block.scale2
+        return hidden, suffix
+
+    def _block_functions(self):
+        if not self.use_compile:
+            return self._project_block, self._finish_block
+        if self._compiled_projection is None:
+            # Mutable KV, window visibility, trimming and stream state remain
+            # outside these pure arithmetic regions. Preserve BF16 cast points.
+            options = {"emulate_precision_casts": True}
+            self._compiled_projection = torch.compile(self._project_block, dynamic=None, options=options)
+            self._compiled_finish = torch.compile(self._finish_block, dynamic=None, options=options)
+        return self._compiled_projection, self._compiled_finish
 
     def _ids(self, start: int, count: int, height: int, width: int, shift: int, device: torch.device):
         temporal = (torch.arange(start, start + count, device=device, dtype=torch.float32) + 0.5) / self.time_norm * 2 - 1
@@ -121,22 +166,53 @@ class StreamRenderH3CausalDecoder(nn.Module):
         grid[..., 0] = (start + 0.5) / self.time_norm * 2 - 1
         return self.pos_embed(grid)
 
-    def _partition(self, values: torch.Tensor, shift: int):
+    def _window_layout(self, values: torch.Tensor, shift: int):
         batch, frames, height, width = values.shape[:4]
         padded_height = ((height + shift + self.window - 1) // self.window) * self.window
         padded_width = ((width + shift + self.window - 1) // self.window) * self.window
-        tail = values.shape[4:]
-        padded = values.new_zeros(batch, frames, padded_height, padded_width, *tail)
-        padded[:, :, shift : shift + height, shift : shift + width] = values
-        valid = torch.zeros(padded_height, padded_width, dtype=torch.bool, device=values.device)
-        valid[shift : shift + height, shift : shift + width] = True
         windows_h, windows_w = padded_height // self.window, padded_width // self.window
-        windows = padded.view(batch, frames, windows_h, self.window, windows_w, self.window, *tail)
-        windows = windows.permute(0, 2, 4, 1, 3, 5, *range(6, 6 + len(tail)))
-        windows = windows.reshape(batch * windows_h * windows_w, frames * self.window**2, *tail)
-        valid = valid.view(windows_h, self.window, windows_w, self.window).permute(0, 2, 1, 3)
-        valid = valid.reshape(windows_h * windows_w, 1, self.window**2).expand(-1, frames, -1)
-        return windows, valid.reshape(windows_h * windows_w, frames * self.window**2), (batch, frames, height, width, padded_height, padded_width, windows_h, windows_w)
+        layout_key = batch, frames, height, width, shift, values.device
+        layout = self._window_layouts.get(layout_key)
+        if layout is None:
+            # Build the small row map once on CPU. Gather directly into the
+            # final window layout; padded KV plus a permuted copy would double
+            # the largest attention workspace at the decoder's memory peak.
+            window = torch.arange(windows_h * windows_w)[:, None]
+            token = torch.arange(frames * self.window**2)[None, :]
+            yy = window.div(windows_w, rounding_mode="floor") * self.window + (token % self.window**2).div(self.window, rounding_mode="floor") - shift
+            xx = (window % windows_w) * self.window + token % self.window - shift
+            valid = (yy >= 0) & (yy < height) & (xx >= 0) & (xx < width)
+            temporal = token.div(self.window**2, rounding_mode="floor")
+            local_index = (temporal * height + yy.clamp(0, height - 1)) * width + xx.clamp(0, width - 1)
+            index = torch.arange(batch)[:, None, None] * frames * height * width + local_index
+            layout = index.flatten().to(values.device), valid.to(values.device), local_index.to(values.device)
+            self._window_layouts[layout_key] = layout
+        return (batch, frames, height, width, padded_height, padded_width, windows_h, windows_w), layout
+
+    def _partition(self, values: torch.Tensor, shift: int):
+        shape, (index, valid, _) = self._window_layout(values, shift)
+        batch, frames, _, _, _, _, windows_h, windows_w = shape
+        tail = values.shape[4:]
+        windows = values.flatten(0, 3).index_select(0, index).view(batch * windows_h * windows_w, frames * self.window**2, *tail)
+        invalid = ~valid.repeat(batch, 1).view(batch * windows_h * windows_w, frames * self.window**2, *([1] * len(tail)))
+        windows.masked_fill_(invalid, 0)
+        return windows, valid, shape
+
+    def _window_kv(self, values, suffix, shift):
+        """Gather directly into KV storage with reserved register-token rows."""
+        shape, (_, valid, index) = self._window_layout(values, shift)
+        batch, frames, height, width, _, _, windows_h, windows_w = shape
+        windows = windows_h * windows_w
+        tokens, registers = frames * self.window**2, suffix.shape[1]
+        tail = values.shape[4:]
+        combined = values.new_empty((batch, windows, tokens + registers, *tail))
+        destination = combined[:, :, :tokens]
+        source = values.flatten(1, 3)[:, None].expand(batch, windows, frames * height * width, *tail)
+        gather_index = index.view(1, windows, tokens, *([1] * len(tail))).expand(batch, windows, tokens, *tail)
+        torch.gather(source, 2, gather_index, out=destination)
+        destination.masked_fill_(~valid.view(1, windows, tokens, *([1] * len(tail))), 0)
+        combined[:, :, tokens:].copy_(suffix[:, None])
+        return combined.flatten(0, 1), valid
 
     def _unpartition(self, windows: torch.Tensor, shape: tuple[int, ...], shift: int) -> torch.Tensor:
         batch, frames, height, width, padded_height, padded_width, windows_h, windows_w = shape
@@ -145,6 +221,26 @@ class StreamRenderH3CausalDecoder(nn.Module):
         values = values.permute(0, 3, 1, 4, 2, 5, *range(6, 6 + len(tail)))
         values = values.reshape(batch, frames, padded_height, padded_width, *tail)
         return values[:, :, shift : shift + height, shift : shift + width]
+
+    def _window_attention(self, query, keys, values, suffix_key, suffix_value, shift):
+        """Own padded/window KV only until the attention result is ready."""
+        batch = query.shape[0]
+        suffix_count = suffix_key.shape[1]
+        window_queries, _, shape = self._partition(query, shift)
+        all_keys, valid = self._window_kv(keys, suffix_key, shift)
+        all_values, _ = self._window_kv(values, suffix_value, shift)
+        windows_per_sample = window_queries.shape[0] // batch
+        mask = torch.cat((valid, torch.ones(windows_per_sample, suffix_count, dtype=torch.bool, device=query.device)), dim=1)
+        mask = mask.repeat(batch, 1)[:, None, None, :]
+        output = F.scaled_dot_product_attention(window_queries.transpose(1, 2), all_keys.transpose(1, 2), all_values.transpose(1, 2), attn_mask=mask).transpose(1, 2)
+        return output, shape
+
+    def _register_attention(self, query, keys, values, suffix_key, suffix_value):
+        """Own global-register KV independently of the window workspace."""
+        batch, frames, height, width = keys.shape[:4]
+        all_keys = torch.cat((keys.reshape(batch, frames * height * width, self.heads, self.head_dim), suffix_key), dim=1).transpose(1, 2)
+        all_values = torch.cat((values.reshape(batch, frames * height * width, self.heads, self.head_dim), suffix_value), dim=1).transpose(1, 2)
+        return F.scaled_dot_product_attention(query.transpose(1, 2), all_keys, all_values).transpose(1, 2).reshape(batch, query.shape[1], 2048)
 
     @torch.no_grad()
     def decode_chunk(self, latents: torch.Tensor, state: dict) -> torch.Tensor:
@@ -160,16 +256,10 @@ class StreamRenderH3CausalDecoder(nn.Module):
         suffix_count = self.register_tokens.shape[1] + 1
         suffix = torch.cat((self.register_tokens.expand(batch, -1, -1), hidden.new_zeros(batch, 1, 2048)), 1).to(compute_dtype)
         start = state["t"]
+        project_block, finish_block = self._block_functions()
         for layer_id, block in enumerate(self.blocks):
             shift = self.window // 2 if layer_id % 2 else 0
-            norm = block.norm1(hidden.float()).to(hidden.dtype)
-            norm_suffix = block.norm1(suffix.float()).to(suffix.dtype)
-            query, key, value = block.attn.to_qkv(norm).view(batch, count, height, width, self.heads, 3 * self.head_dim).chunk(3, dim=-1)
-            suffix_query, suffix_key, suffix_value = block.attn.to_qkv(norm_suffix).view(batch, suffix_count, self.heads, 3 * self.head_dim).chunk(3, dim=-1)
-            query = block.attn.norm_q(query.float()).to(query.dtype)
-            suffix_query = block.attn.norm_q(suffix_query.float()).to(suffix_query.dtype)
-            key = block.attn.norm_k(key.float()).to(key.dtype)
-            suffix_key = block.attn.norm_k(suffix_key.float()).to(suffix_key.dtype)
+            query, key, value, suffix_query, suffix_key, suffix_value = project_block(block, hidden, suffix)
             cos, sin = self._ids(start, count, height, width, shift, device)
             query = _apply_rotary(query.reshape(batch, count * height * width, self.heads, self.head_dim), cos, sin).view(batch, count, height, width, self.heads, self.head_dim)
             key = _apply_rotary(key.reshape(batch, count * height * width, self.heads, self.head_dim), cos, sin).view(batch, count, height, width, self.heads, self.head_dim)
@@ -178,32 +268,19 @@ class StreamRenderH3CausalDecoder(nn.Module):
             suffix_key = _apply_rotary(suffix_key, suffix_cos, suffix_sin)
             keys = key if state["keys"][layer_id] is None else torch.cat((state["keys"][layer_id], key), dim=1)
             values = value if state["values"][layer_id] is None else torch.cat((state["values"][layer_id], value), dim=1)
-            key_frames = keys.shape[1]
-            window_queries, _, shape = self._partition(query, shift)
-            window_keys, valid, _ = self._partition(keys, shift)
-            window_values, _, _ = self._partition(values, shift)
-            windows_per_sample = window_queries.shape[0] // batch
-            suffix_keys = (
-                suffix_key.unsqueeze(1).expand(batch, windows_per_sample, suffix_count, self.heads, self.head_dim).reshape(batch * windows_per_sample, suffix_count, self.heads, self.head_dim)
-            )
-            suffix_values = (
-                suffix_value.unsqueeze(1).expand(batch, windows_per_sample, suffix_count, self.heads, self.head_dim).reshape(batch * windows_per_sample, suffix_count, self.heads, self.head_dim)
-            )
-            all_keys = torch.cat((window_keys, suffix_keys), dim=1).transpose(1, 2)
-            all_values = torch.cat((window_values, suffix_values), dim=1).transpose(1, 2)
-            mask = torch.cat((valid, torch.ones(windows_per_sample, suffix_count, dtype=torch.bool, device=device)), dim=1)
-            mask = mask.repeat(batch, 1)[:, None, None, :]
-            window_output = F.scaled_dot_product_attention(window_queries.transpose(1, 2), all_keys, all_values, attn_mask=mask).transpose(1, 2)
+            del key, value
+            window_output, shape = self._window_attention(query, keys, values, suffix_key, suffix_value, shift)
+            del query
             output = self._unpartition(window_output, shape, shift).reshape(batch, count, height, width, 2048)
-            all_keys = torch.cat((keys.reshape(batch, key_frames * height * width, self.heads, self.head_dim), suffix_key), dim=1).transpose(1, 2)
-            all_values = torch.cat((values.reshape(batch, key_frames * height * width, self.heads, self.head_dim), suffix_value), dim=1).transpose(1, 2)
-            suffix_output = F.scaled_dot_product_attention(suffix_query.transpose(1, 2), all_keys, all_values).transpose(1, 2).reshape(batch, suffix_count, 2048)
-            hidden = hidden + block.attn.to_out(output) * block.scale1
-            suffix = suffix + block.attn.to_out(suffix_output) * block.scale1
-            hidden = hidden + block.ff(block.norm2(hidden.float()).to(hidden.dtype)) * block.scale2
-            suffix = suffix + block.ff(block.norm2(suffix.float()).to(suffix.dtype)) * block.scale2
-            state["keys"][layer_id] = keys[:, -self.cache_latents :]
-            state["values"][layer_id] = values[:, -self.cache_latents :]
+            del window_output
+            suffix_output = self._register_attention(suffix_query, keys, values, suffix_key, suffix_value)
+            del suffix_query, suffix_key, suffix_value
+            # A tail view retains the full six-latent concatenation (and a
+            # first value view can retain fused QKV). Own exactly four rows.
+            state["keys"][layer_id] = keys[:, -self.cache_latents :].clone(memory_format=torch.contiguous_format)
+            state["values"][layer_id] = values[:, -self.cache_latents :].clone(memory_format=torch.contiguous_format)
+            del keys, values
+            hidden, suffix = finish_block(block, hidden, suffix, output, suffix_output)
         hidden = self.norm_out(hidden)
         with torch.autocast("cuda", enabled=False):
             pixels = self.proj_out(hidden.float())

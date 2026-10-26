@@ -12,7 +12,19 @@ class EdenLivePreInfer(WanPreInfer):
     def __init__(self, config):
         super().__init__(config)
         self.is_wan21 = config["model_cls"] in ["wan21_edenlive", "wan21_edenlive_ar"]
+        self._grid_tensors = {}
         self.clear_projection_cache()
+
+    def _grid_output(self, grid, device):
+        # The host shape is constant over denoising steps. Recreating its tiny
+        # CUDA tensor adds a blocking H2D copy before every transformer call.
+        key = grid, device
+        tensor = self._grid_tensors.get(key)
+        if tensor is None:
+            if len(self._grid_tensors) >= 8:
+                self._grid_tensors.clear()
+            tensor = self._grid_tensors[key] = torch.tensor([grid], device=device, dtype=torch.int32)
+        return GridOutput(tensor, grid)
 
     def clear_request_state(self):
         self.clear_projection_cache()
@@ -191,7 +203,7 @@ class EdenLivePreInfer(WanPreInfer):
             embed0=embed0,
             x=x,
             context=context,
-            grid_sizes=GridOutput(torch.tensor([grid], device=x.device, dtype=torch.int32), grid),
+            grid_sizes=self._grid_output(grid, x.device),
             adapter_args={
                 "text_segments": inputs.get("text_segments"),
                 "context_id": context_id,

@@ -200,7 +200,7 @@ def main():
 
     runner = None
     try:
-        with no_sync_profiling(startup_config["model_cls"] in ("taomate_h3", "taomate_h3_native", "streamrender_h3", "streamrender_h3_native")), ProfilingContext4DebugL1("Total Cost"):
+        with no_sync_profiling(startup_config["model_cls"] in ("taomate_h3", "streamrender_h3")), ProfilingContext4DebugL1("Total Cost"):
             runner = build_runner(startup_config)
             input_info = runner.prepare_request(request_data)
             print_request(input_info, runner.get_supported_request_fields(input_info.task))

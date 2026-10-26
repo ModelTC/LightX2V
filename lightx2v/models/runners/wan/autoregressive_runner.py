@@ -1,43 +1,18 @@
 import gc
 import math
-import time
 
 import torch
 from loguru import logger
 
-from lightx2v.models.runners.lifecycle import RunnerLifecycleMixin
+from lightx2v.models.runners.autoregressive_runner import AutoregressiveRunnerMixin
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_RECORDER_MODE
 from lightx2v.utils.input_info import T2VInputInfo
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
-from lightx2v.utils.utils import get_rank_and_world_size
-from lightx2v.utils.video_recorder import VideoRecorder
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
-
-
-class AutoregressiveRunnerMixin(RunnerLifecycleMixin):
-    """Common lifecycle for autoregressive runners."""
-
-    def validate_warmup(self):
-        if not self.supports_generic_warmup() or self.config["task"] not in self._WARMUP_TASKS:
-            raise NotImplementedError(f"Autoregressive warmup is not supported for {type(self).__name__} {self.config['task']}")
-
-    @ProfilingContext4DebugL1("Warmup")
-    def run_warmup(self):
-        self.validate_warmup()
-        started = time.perf_counter()
-        try:
-            with torch.random.fork_rng(devices=[torch_device_module.current_device()], device_type=AI_DEVICE):
-                self._run_warmup()
-        finally:
-            self.clear_warmup_state()
-        self.warmup_time_seconds = time.perf_counter() - started
-        self._maybe_freeze_gc()
-        logger.info("[Warmup] {} completed in {:.3f}s", type(self).__name__, self.warmup_time_seconds)
 
 
 class WanAutoregressiveRunnerMixin(WanStreamingVAERunnerMixin, AutoregressiveRunnerMixin):
@@ -112,20 +87,6 @@ class WanAutoregressiveRunnerMixin(WanStreamingVAERunnerMixin, AutoregressiveRun
 
         return self.model.scheduler.stream_output
 
-    def init_video_recorder(self):
-        output_video_path = self.input_info.save_result_path
-        self.video_recorder = None
-        if isinstance(output_video_path, dict):
-            output_video_path = output_video_path["data"]
-        logger.info(f"init video_recorder with output_video_path: {output_video_path}")
-        rank, world_size = get_rank_and_world_size()
-        if output_video_path and rank == world_size - 1:
-            record_fps = self.config.get("fps", 16)
-            self.video_recorder = VideoRecorder(
-                livestream_url=output_video_path,
-                fps=record_fps,
-            )
-
     def run_cache_commit(self, segment_idx):
         with ProfilingContext4DebugL1("step_pre_in_rerun"):
             self.model.scheduler.step_pre(seg_index=segment_idx, step_index=self.model.scheduler.infer_steps - 1, is_rerun=True)
@@ -143,16 +104,14 @@ class WanAutoregressiveRunnerMixin(WanStreamingVAERunnerMixin, AutoregressiveRun
         lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
         if lazy_vae:
             self.vae_decoder = self.load_vae_decoder()
-        vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=torch.device(AI_DEVICE), vae_decoder=self.vae_decoder, dispatch_in_worker=self.vae_decode_in_worker)
-
-        with no_sync_profiling(enabled=vae_decoder.is_async):
-            with ProfilingContext4DebugL1(
-                f"AR chunk total {self.video_segment_num} chunks",
-                recorder_mode=GET_RECORDER_MODE(),
-                metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
-                metrics_labels=["DefaultRunner"],
-            ):
-                try:
+        try:
+            with self.streaming_decode(dispatch_in_worker=self.vae_decode_in_worker) as vae_decoder:
+                with ProfilingContext4DebugL1(
+                    f"AR chunk total {self.video_segment_num} chunks",
+                    recorder_mode=GET_RECORDER_MODE(),
+                    metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                    metrics_labels=["DefaultRunner"],
+                ):
                     for segment_idx in range(self.video_segment_num):
                         logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
                         with ProfilingContext4DebugL1(
@@ -170,16 +129,13 @@ class WanAutoregressiveRunnerMixin(WanStreamingVAERunnerMixin, AutoregressiveRun
                         vae_decoder.submit(self.decode_segment_latents, segment_idx, latents)
                         self.maybe_empty_cache()
                     decoded_chunks = vae_decoder.finish()
-                finally:
-                    try:
-                        vae_decoder.finish()
-                    finally:
-                        if lazy_vae:
-                            del self.vae_decoder
-                            torch_device_module.empty_cache()
-                            gc.collect()
+        finally:
+            if lazy_vae:
+                del self.vae_decoder
+                torch_device_module.empty_cache()
+                gc.collect()
 
-        self.gen_video = torch.cat(decoded_chunks, dim=2)
+        self.gen_video = None if self.streaming_video_only else torch.cat(decoded_chunks, dim=2)
         self.gen_video_final = self.gen_video
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()

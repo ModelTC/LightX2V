@@ -1,5 +1,8 @@
 """RGB preprocessing and independent streaming control encoding for MG4."""
 
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
+from pathlib import Path
 from typing import NamedTuple
 
 import imageio_ffmpeg
@@ -65,6 +68,77 @@ def create_streaming_encoder(vae):
     if isinstance(vae, MatrixGame4TAEVAE):
         return MatrixGame4TAEStreamingEncoder(vae)
     return MatrixGame4StreamingEncoder(vae)
+
+
+@lru_cache(maxsize=16)
+def _video_frame_count(path, size, mtime_ns):
+    # Count metadata once per unchanged file, without retaining decoded pixels.
+    return imageio_ffmpeg.count_frames_and_secs(path)[0]
+
+
+class MatrixGame4ControlStream:
+    """Prefetch one CPU RGB chunk; encode only the current GPU control latent."""
+
+    def __init__(self, vae, video_path, size, max_frames=None):
+        self.reader = imageio_ffmpeg.read_frames(str(video_path), pix_fmt="rgb24")
+        self.encoder = None
+        self.executor = None
+        self.pending = None
+        self.closed = False
+        try:
+            metadata = next(self.reader)
+            self.source_width, self.source_height = metadata["size"]
+            self.fps = float(metadata["fps"])
+            if not np.isfinite(self.fps) or self.fps <= 0:
+                raise ValueError("Matrix-Game-4 input video must have a positive finite FPS")
+            path = Path(video_path)
+            info = path.stat()
+            available = _video_frame_count(str(path.resolve()), info.st_size, info.st_mtime_ns)
+            self.frame_count = available if max_frames is None else min(available, max_frames)
+            if self.frame_count <= 0:
+                raise ValueError("Matrix-Game-4 input video contains no frames")
+            self.latent_frames = 1 + (self.frame_count + 2) // 4
+            self.size = size
+            self.read_frames = 0
+            self.encoded_chunks = 0
+            self.encoder = create_streaming_encoder(vae)
+            self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="matrix-game4-control")
+            self.pending = self.executor.submit(self._read_chunk, 1)
+        except BaseException:
+            self.close()
+            raise
+
+    def _read_chunk(self, count):
+        frames = []
+        needed = min(count, self.frame_count - self.read_frames)
+        for _ in range(needed):
+            data = next(self.reader, None)
+            if data is None:
+                raise ValueError("Matrix-Game-4 input ended before its declared frame count")
+            image = Image.fromarray(np.frombuffer(data, dtype=np.uint8).reshape(self.source_height, self.source_width, 3))
+            frames.append(crop_and_resize(image, *self.size))
+        self.read_frames += needed
+        frames.extend([frames[-1]] * (count - needed))
+        return frames_to_tensor(frames)
+
+    def next_latent(self):
+        if self.closed or self.pending is None:
+            raise StopIteration("Matrix-Game-4 control stream is exhausted")
+        frames = self.pending.result()
+        latent = self.encoder.encode(frames)
+        self.encoded_chunks += 1
+        self.pending = self.executor.submit(self._read_chunk, 4) if self.encoded_chunks < self.latent_frames else None
+        return latent
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        if self.executor is not None:
+            self.executor.shutdown(wait=True, cancel_futures=True)
+        self.reader.close()
+        if self.encoder is not None:
+            self.encoder.clear()
 
 
 @torch.no_grad()

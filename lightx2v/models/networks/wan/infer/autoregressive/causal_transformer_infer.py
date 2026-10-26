@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from lightx2v.common.kvcache.attn import RingAttention, SageRingAttention
 from lightx2v.common.kvcache.manager import KVCacheManager
-from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
+from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head, all2all_seq2head_qkv
 from lightx2v.models.networks.wan.infer.autoregressive import WanAutoregressiveTransformerInfer
 from lightx2v.models.networks.wan.infer.autoregressive.compile_ops import layer_norm
 from lightx2v.models.networks.wan.infer.autoregressive.rope import apply_dynamic_causal_rope, apply_dynamic_causal_rope_single
@@ -25,7 +25,11 @@ class WanCausalTransformerInfer(WanAutoregressiveTransformerInfer, WanOffloadTra
     def __init__(self, config):
         super().__init__(config)
         self.kv_cache_manager = KVCacheManager(config, device=torch.device(AI_DEVICE), sp_group=self.seq_p_group)
-        self.self_attn_backend = SageRingAttention() if config["self_attn_1_type"] == "sage_attn2" else RingAttention()
+        self.kv_cache_manager.quantized_only = (
+            config["self_attn_1_type"] == "sage_attn2" and not self.kv_cache_manager.key_only and not self._ar_kv_offload and config["ar_config"].get("kv_cache_scheme", "rolling") == "rolling"
+        )
+        reuse_offloaded_history = config.get("model_cls") in {"wan2.1_sf", "lingbot_world_fast"}
+        self.self_attn_backend = SageRingAttention(allow_offload_history_reuse=reuse_offloaded_history) if config["self_attn_1_type"] == "sage_attn2" else RingAttention()
 
         self.cleanup_after_infer = self.clean_cuda_cache
         self.clean_cuda_cache = False
@@ -229,6 +233,8 @@ class WanCausalTransformerInfer(WanAutoregressiveTransformerInfer, WanOffloadTra
         pool.finish_attention(layer_id, update)
 
     def get_block_write_views(self, pool, layer_id, update, cache):
+        if hasattr(cache, "write_views"):
+            return cache.write_views
         return pool.write_views(layer_id, update.write_start, update.write_end)
 
     def infer_prepared_block(self, x, embed0, context, grid_sizes, start_frame, *conditional_inputs, block_idx, block, pre, cache, cross_kv, conditional_names):
@@ -255,7 +261,16 @@ class WanCausalTransformerInfer(WanAutoregressiveTransformerInfer, WanOffloadTra
                 inputs,
                 bindings=(*cache.bindings, *cross_kv, pre.freqs, *self.get_graph_weight_bindings((block,))),
                 mutated_buffers=self.get_block_write_views(pool, block_idx, update, cache),
-                variant=("cached_block", block_idx, self.kv_cache_manager.current_step, reference, update.attention_start, update.write_end, tuple(tuple(tensor.shape) for tensor in inputs)),
+                variant=(
+                    "cached_block",
+                    block_idx,
+                    self.kv_cache_manager.current_step,
+                    reference,
+                    update.attention_start,
+                    update.write_end,
+                    getattr(cache, "graph_key", None),
+                    tuple(tuple(tensor.shape) for tensor in inputs),
+                ),
                 memory_pool=self.get_cuda_graph_pool(x.device),
             )
         else:
@@ -351,9 +366,7 @@ class WanCausalTransformerInfer(WanAutoregressiveTransformerInfer, WanOffloadTra
         if self_attn_cache is not None:
             padded_tokens = q.shape[0]
             if self.seq_parallel:
-                q = all2all_seq2head(q, group=self.seq_p_group)
-                k = all2all_seq2head(k, group=self.seq_p_group)
-                v = all2all_seq2head(v, group=self.seq_p_group)
+                q, k, v = all2all_seq2head_qkv(q, k, v, group=self.seq_p_group)
                 padded_tokens = q.shape[0]
                 q, k, v = q[: self._cache_token_count], k[: self._cache_token_count], v[: self._cache_token_count]
             q, k = apply_dynamic_causal_rope(q, k, grid_sizes, freqs, start_frame, complex128_math=self.seq_parallel and phase.causal_rope.compute_dtype == torch.float64)

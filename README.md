@@ -207,7 +207,7 @@ Models and variants are grouped by their primary use.
 - ✅ [InfiniteTalk](https://huggingface.co/MeiGen-AI/InfiniteTalk)
 - ✅ [Wan-Dancer](https://huggingface.co/Wan-AI/Wan-Dancer-14B)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
-- ✅ [Matrix-Game-4](scripts/matrix_game4/README.md) (Wan2.2 5B Control; native autoregressive video rerendering)
+- ✅ [Matrix-Game-4](scripts/matrix_game4/run_matrix_game4.sh) (Wan2.2 5B Control; native autoregressive video rerendering)
 
 ### Image Generation and Editing
 

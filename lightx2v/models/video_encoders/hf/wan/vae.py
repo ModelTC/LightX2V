@@ -1021,11 +1021,18 @@ class WanVAE:
             .to(self.weight_dtype)
         )
 
+    def compile_encoder(self):
+        if not isinstance(self.model.encoder, _CompiledVaeComponent):
+            self.model.encoder = _CompiledVaeComponent(self.model.encoder)
+
+    def compile_decoder(self):
+        if not isinstance(self.model.decoder, _CompiledVaeComponent):
+            self.model.decoder = _CompiledVaeComponent(self.model.decoder)
+
     def compile(self):
-        """Compile native chunks after loading, preserving the temporal cache owner."""
-        self.model.encoder = _CompiledVaeComponent(self.model.encoder)
-        self.model.decoder = _CompiledVaeComponent(self.model.decoder)
-        logger.info("[Compile] Wan VAE encoder/decoder enabled")
+        """Compile native chunks without replacing their temporal cache owner."""
+        self.compile_encoder()
+        self.compile_decoder()
 
     def calculate_2d_grid(self, latent_height, latent_width, world_size):
         if (latent_height, latent_width, world_size) in self.grid_table:

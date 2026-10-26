@@ -37,7 +37,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def _checkpoint_files(config) -> list[Path]:
-    checkpoint = Path(config["dit_original_ckpt"]).expanduser().resolve()
+    quantized = config["model_cls"] in ("taomate_h3", "streamrender_h3") and config.get("dit_quantized", False)
+    checkpoint = Path(config["dit_quantized_ckpt"] if quantized else config["dit_original_ckpt"]).expanduser().resolve()
     files = sorted(checkpoint.glob("*.safetensors")) if checkpoint.is_dir() else [checkpoint]
     if not files or any(not path.is_file() for path in files):
         raise FileNotFoundError(f"MiniMax-H3 checkpoint not found: {checkpoint}")
@@ -47,10 +48,15 @@ def _checkpoint_files(config) -> list[Path]:
 class _CheckpointTensors:
     """Read individual tensors without materializing the whole checkpoint."""
 
-    def __init__(self, files: list[Path]):
+    def __init__(self, files: list[Path], layout="native_h3"):
         self.files = files
         self.tensors = torch.load(files[0], mmap=True, weights_only=True, map_location="cpu") if len(files) == 1 and files[0].suffix == ".pt" else None
         self.locations = self._find_locations() if self.tensors is None else {}
+        self.layout = layout
+        if layout == "streamrender_release":
+            from lightx2v.models.networks.minimax_h3.streamrender.weights import native_weight_names
+
+            self.native_to_source = {native: source for source in self.locations for native in native_weight_names(source)}
 
     def _find_locations(self) -> dict[str, Path]:
         directory = self.files[0].parent
@@ -66,18 +72,38 @@ class _CheckpointTensors:
                 locations.update({name: path for name in source.keys()})
         return locations
 
-    def get(self, name: str) -> torch.Tensor:
+    def get(self, name: str, *, preserve_dtype=False) -> torch.Tensor:
         if self.tensors is not None:
             tensor = self.tensors[name]
         else:
-            path = self.locations.get(name)
+            source_name = self.native_to_source.get(name, name) if self.layout == "streamrender_release" else name
+            path = self.locations.get(source_name)
             if path is None:
                 raise KeyError(f"MiniMax-H3 checkpoint tensor is missing: {name}")
             with safe_open(path, framework="pt", device="cpu") as source:
-                tensor = source.get_tensor(name)
+                tensor = source.get_tensor(source_name)
+            if self.layout == "streamrender_release":
+                from lightx2v.models.networks.minimax_h3.streamrender.weights import remap_streamrender_weight
+
+                tensor = remap_streamrender_weight(source_name, tensor)[name]
         # Both H3 variants compute the time MLP in FP32 and modulation projections in BF16.
-        dtype = torch.float32 if name.startswith("time_embedder.") else torch.bfloat16
+        dtype = tensor.dtype if preserve_dtype else torch.float32 if name.startswith("time_embedder.") else torch.bfloat16
         return tensor.to(device=AI_DEVICE, dtype=dtype)
+
+
+def _quantized_projection(checkpoint, prefix, scheme):
+    """Use the online FP8 module, including its real activation quantizer."""
+    # Cache building also runs without the inference runner's module imports.
+    import lightx2v.common.ops.mm.mm_weight  # noqa: F401
+    from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
+
+    projection = MM_WEIGHT_REGISTER[scheme](f"{prefix}.weight", f"{prefix}.bias")
+    projection.set_config({"weight_auto_quant": False})
+    names = (f"{prefix}.weight", f"{prefix}.weight_scale", f"{prefix}.bias")
+    projection.load({name: checkpoint.get(name, preserve_dtype=True) for name in names})
+    # Do not enable F16 accumulation: the online AdaLN projection does not
+    # belong to that backend's QKV/output/FFN whitelist either.
+    return projection
 
 
 def _linear(
@@ -104,7 +130,7 @@ def _empty_device_cache() -> None:
 def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> None:
     stage_path = Path(tempfile.mkdtemp(prefix=".building-", dir=cache_path.parent))
     try:
-        checkpoint = _CheckpointTensors(checkpoint_files)
+        checkpoint = _CheckpointTensors(checkpoint_files, spec.get("projection_contract", {}).get("checkpoint_layout", "native_h3"))
         with torch.inference_mode():
             # ADALN CACHE SYNC: Keep activation placement and casts aligned with
             # the three online infer modules named in this file's contract.
@@ -142,13 +168,19 @@ def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> 
             # Only one full, unsharded block projection is resident at a time.
             for block_index in range(spec["num_layers"]):
                 prefix = f"transformer_blocks.{block_index}.adaln_proj.linear"
-                weight = checkpoint.get(f"{prefix}.weight")
-                bias = checkpoint.get(f"{prefix}.bias")
+                contract = spec.get("projection_contract", {})
+                quantized = contract.get("adaln_backend") == "sgl_fp8_scaled_mm"
+                projection = _quantized_projection(checkpoint, prefix, contract["scheme"]) if quantized else None
+                weight = None if quantized else checkpoint.get(f"{prefix}.weight")
+                bias = None if quantized else checkpoint.get(f"{prefix}.bias")
                 for entry in spec["entries"]:
-                    modulation = _linear(adaln_inputs[entry["name"]], weight, bias)
+                    # Keep each unique-timestep batch separate, exactly as
+                    # online step_pre/clean_commit prepares it (one or two
+                    # rows for Stage3), rather than pooling entries together.
+                    modulation = projection.apply(adaln_inputs[entry["name"]]) if quantized else _linear(adaln_inputs[entry["name"]], weight, bias)
                     table = modulation.view(*_expected_table_shape(spec, entry))
                     cache_tables[_block_key(block_index, entry)] = table.to("cpu").contiguous()
-                del weight, bias, modulation, table
+                del weight, bias, modulation, table, projection
                 _empty_device_cache()
                 logger.info(
                     "Built MiniMax-H3 AdaLN cache block {}/{}",

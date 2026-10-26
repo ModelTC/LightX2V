@@ -7,6 +7,7 @@ import torch.distributed as dist
 from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
+from lightx2v.utils.async_vae import normalize_async_vae_config
 from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.lockable_dict import LockableDict
 from lightx2v.utils.utils import find_torch_model_path, is_main_process
@@ -198,7 +199,7 @@ def load_model_config(deployment_config):
         if os.path.exists(os.path.join(transformer_path, "config.json")):
             with open(os.path.join(transformer_path, "config.json"), "r") as f:
                 model_config.update(json.load(f))
-    elif model_cls in {"hunyuan3d", "hidream_o1_image", "streamrender_h3", "streamrender_h3_native"}:
+    elif model_cls in {"hunyuan3d", "hidream_o1_image", "streamrender_h3"}:
         # These runners load their own model configuration.
         pass
     elif model_cls == "wan2.2_s2v":
@@ -242,7 +243,7 @@ def load_model_config(deployment_config):
         if os.path.exists(transformer_config_path):
             with open(transformer_config_path, "r") as f:
                 model_config.update(json.load(f))
-    elif model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "taomate_h3_native"):
+    elif model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3"):
         causal = model_cls == "minimax_h3_causal"
         if causal:
             if deployment_config.get("task") != "refa2v":
@@ -254,7 +255,7 @@ def load_model_config(deployment_config):
             model_variant = deployment_config.get("model_variant")
             if model_variant not in ("fl2av", "ref2av"):
                 raise ValueError("MiniMax-H3 requires model_variant='fl2av' or 'ref2av'; set --model-variant when starting the model")
-            if model_cls in ("taomate_h3", "taomate_h3_native") and model_variant != "fl2av":
+            if model_cls == "taomate_h3" and model_variant != "fl2av":
                 raise ValueError("TaoMate-H3 Stage3 requires the FL2VA base partition")
             transformer_subfolder = "transformer_ref" if model_variant == "ref2av" else "transformer"
         transformer_path = os.path.join(model_path, transformer_subfolder)
@@ -319,7 +320,7 @@ def load_model_config(deployment_config):
             model_config["vae_scale_factor_temporal"] = int(vae_config.get("scale_factor_temporal", 4))
             model_config["vae_scale_factor"] = model_config["vae_scale_factor_spatial"]
 
-    if model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "taomate_h3_native", "streamrender_h3", "streamrender_h3_native"):
+    if model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "streamrender_h3"):
         # The generic Diffusers-VAE heuristic above counts six encoder stages
         # and would incorrectly derive 32. H3 downsamples space by exactly 16.
         model_config["vae_spatial_scale_factor"] = 16
@@ -334,6 +335,7 @@ def load_model_config(deployment_config):
 
 def normalize_startup_config(config, model_config):
     """Normalize merged startup settings and validate inference constraints."""
+    normalize_async_vae_config(config)
     if config["model_cls"] == "dreamzero" and "out_dim" in config:
         config["num_channels_latents"] = config["out_dim"]
     if config["model_cls"] in {"cosmos3", "lingbot_video"}:
@@ -343,11 +345,11 @@ def normalize_startup_config(config, model_config):
         config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
         config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
         config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
-    if config["model_cls"] in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "taomate_h3_native", "streamrender_h3", "streamrender_h3_native"):
+    if config["model_cls"] in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "streamrender_h3"):
         if config.get("fps", 24) != 24:
             raise ValueError(f"MiniMax-H3 requires fps=24 to keep video and audio timing aligned; got {config['fps']!r}")
         config.setdefault("fps", 24)
-        if config["model_cls"] in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "taomate_h3_native"):
+        if config["model_cls"] in ("minimax_h3", "minimax_h3_causal", "taomate_h3"):
             config.pop("model_variant" if config["model_cls"] == "minimax_h3_causal" else "task", None)
         if config.get("dit_quantized_ckpt"):
             config["dit_quantized"] = True
@@ -383,7 +385,7 @@ def normalize_startup_config(config, model_config):
         config["vae_stride"] = config["vae_scale_factors"]
 
     if (
-        config["model_cls"] not in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "taomate_h3_native", "streamrender_h3", "streamrender_h3_native")
+        config["model_cls"] not in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "streamrender_h3")
         and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]
         and config.get("num_frames") is not None
         and "vae_stride" in config

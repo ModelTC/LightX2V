@@ -9,9 +9,11 @@ from PIL import Image
 from safetensors.torch import load_file
 
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason
 from lightx2v.common.ops.mm.optimized_linear import make_projection_group
 from lightx2v.common.ops.norm.l2_normalize import l2_normalize
 from lightx2v.common.ops.rope.rotary_qk import apply_rotary_qk
+from lightx2v.models.input_encoders.edenlive.fp8_f16_accum_policy import ACTIVATION_QMAX, validate_checkpoint
 from lightx2v.models.input_encoders.edenlive.proxy_cuda_graph import ProxyCUDAGraph
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV2D_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, TENSOR_REGISTER
@@ -53,6 +55,8 @@ class ProxyDINO(WeightModule):
         attention_type="torch_sdpa",
         *,
         quantized_ckpt=None,
+        quant_scheme=None,
+        fp8_activation_qmax=ACTIVATION_QMAX,
     ):
         super().__init__()
         root = Path(model_path) / "vision-encoder"
@@ -60,13 +64,27 @@ class ProxyDINO(WeightModule):
         self.resize_mode = resize_mode
         self.infer_dtype = GET_DTYPE()
         self.quantized = quantized_ckpt is not None
-        linear_type = "int8-convrot" if self.quantized else "Default"
+        self.quant_scheme = quant_scheme or ("int8-convrot" if self.quantized else None)
+        if self.quant_scheme not in (None, "int8-convrot", "fp8-f16-accum"):
+            raise ValueError(f"Unsupported ProxyDINO quant_scheme: {self.quant_scheme!r}")
+        if self.quant_scheme is not None and not self.quantized:
+            raise ValueError("ProxyDINO quant_scheme requires proxy_quantized_ckpt")
+        self.fp8_activation_qmax = float(fp8_activation_qmax)
+        self.fp8_f16_linear_count = 0
+        if self.quant_scheme == "fp8-f16-accum":
+            if self.fp8_activation_qmax != ACTIVATION_QMAX:
+                raise ValueError(f"ProxyDINO FP8-F16 requires activation qmax {ACTIVATION_QMAX}")
+            reason = fp8_f16_accum_mm_unavailable_reason()
+            if reason is not None:
+                raise RuntimeError(reason)
+            validate_checkpoint(quantized_ckpt)
+        linear_type = self.quant_scheme or "Default"
         self.heads = self.config["num_attention_heads"]
         self.head_dim = self.config["hidden_size"] // self.heads
         self.prefix = 1 + self.config["num_register_tokens"]
         state = load_file(str(quantized_ckpt or root / "projection.safetensors"))
         state = {k.removeprefix("model.module.encoder."): v.to(AI_DEVICE) for k, v in state.items()}
-        if self.quantized and (state["patch_projection.weight"].dtype != torch.int8 or "patch_projection.convrot_groupsize" not in state):
+        if self.quant_scheme == "int8-convrot" and (state["patch_projection.weight"].dtype != torch.int8 or "patch_projection.convrot_groupsize" not in state):
             raise ValueError("ProxyDINO quantized_ckpt must contain converted INT8 ConvRot weights")
         self.add_module("patch", CONV2D_WEIGHT_REGISTER["Default"]("backbone.embeddings.patch_embeddings.weight", "backbone.embeddings.patch_embeddings.bias", stride=self.config["patch_size"]))
         for name in ("cls_token", "register_tokens"):
@@ -125,9 +143,9 @@ class ProxyDINO(WeightModule):
 
     def _prepare_loaded_weights(self):
         # Floating weights, normalization, tokens and residuals share the model dtype.
-        # Preserve converted INT8 weights and their FP32 quantization scales.
+        # Preserve INT8/FP8 weights and their FP32 quantization scales.
         for module in (self.patch, self.projection, *(m for b in self.blocks for m in (b.q_proj, b.k_proj, b.v_proj, b.o_proj, b.up_proj, b.down_proj))):
-            if module.weight.dtype != torch.int8:
+            if module.weight.dtype not in (torch.int8, torch.float8_e4m3fn):
                 module.weight = module.weight.to(self.infer_dtype)
             if getattr(module, "bias", None) is not None:
                 module.bias = module.bias.to(self.infer_dtype)
@@ -136,6 +154,15 @@ class ProxyDINO(WeightModule):
         for norm in (self.final_norm, *(n for b in self.blocks for n in (b.norm1, b.norm2))):
             norm.weight = norm.weight.to(self.infer_dtype)
             norm.bias = norm.bias.to(self.infer_dtype)
+        self.fp8_f16_linear_count = 0
+        if self.quant_scheme == "fp8-f16-accum":
+            for module in (self.projection, *(m for b in self.blocks for m in (b.q_proj, b.k_proj, b.v_proj, b.o_proj, b.up_proj, b.down_proj))):
+                if module.weight.dtype != torch.float8_e4m3fn:
+                    raise ValueError(f"ProxyDINO FP8-F16 requires converted FP8 linear: {module.weight_name}")
+                module.enable_fp8_f16_accum(self.fp8_activation_qmax)
+                if module.fp8_activation_qmax != self.fp8_activation_qmax:
+                    raise RuntimeError("ProxyDINO FP8-F16 backend was not enabled")
+                self.fp8_f16_linear_count += 1
         for block in self.blocks:
             block.qkv_group = None
             if self.quantized:

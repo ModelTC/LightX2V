@@ -28,6 +28,33 @@ class RollingKVCachePool(BaseKVCachePool):
         self._write_metadata = None
         self._attention_views = {}
         self._attention_layouts = {}
+        self.key_only = False
+        self.quantized_only = False
+        self.value_write_alignment = ()
+
+    def configure_quantized_only(self, *, write_alignment=()) -> None:
+        """Keep ring positions only; the pre-RoPE attention owns encoded K/V."""
+        if self._k_buffer is not None or bool(getattr(self, "_k_buckets", None)) or getattr(self, "_offload", None) is not None:
+            raise RuntimeError("Configure encoded KV storage before allocating the cache")
+        self.configure_key_only(write_alignment=write_alignment)
+        self.quantized_only = True
+
+    def configure_key_only(self, *, write_alignment=()) -> None:
+        """Keep raw K only; the attention backend owns persistent encoded V."""
+        alignment = tuple(int(tokens) for tokens in write_alignment if tokens)
+        if any(tokens <= 0 for tokens in alignment):
+            raise ValueError("Quantized V write alignment must be positive")
+        allocated = self._k_buffer is not None or bool(getattr(self, "_k_buckets", None)) or getattr(self, "_offload", None) is not None
+        if self.key_only:
+            if alignment and self.value_write_alignment != alignment and (self.value_write_alignment or allocated):
+                raise ValueError("Cannot change quantized V geometry on an existing pool")
+            if alignment:
+                self.value_write_alignment = alignment
+            return
+        if allocated:
+            raise RuntimeError("Configure quantized V storage before allocating the cache")
+        self.key_only = True
+        self.value_write_alignment = alignment
 
     def _metadata_shape(self) -> tuple[int, ...]:
         return (self._num_layers,)
@@ -49,15 +76,19 @@ class RollingKVCachePool(BaseKVCachePool):
         return self._cache_size
 
     def _key_buffer(self, layer_id: int) -> torch.Tensor:
+        if self.quantized_only:
+            return self._k_buffer
         return self._k_buffer[self._metadata_index(layer_id)]
 
     def _value_buffer(self, layer_id: int) -> torch.Tensor:
+        if self.key_only:
+            return self._v_buffer
         return self._v_buffer[self._metadata_index(layer_id)]
 
     def _init_kv_buffer(self) -> None:
         shape = (*self._metadata_shape(), self._cache_size, self._num_heads, self._head_dim)
-        self._k_buffer = torch.empty(shape, dtype=self._dtype, device=self._device)
-        self._v_buffer = torch.empty_like(self._k_buffer)
+        self._k_buffer = torch.empty((0, self._num_heads, self._head_dim) if self.quantized_only else shape, dtype=self._dtype, device=self._device)
+        self._v_buffer = torch.empty(0, dtype=self._dtype, device=self._device) if self.key_only else torch.empty_like(self._k_buffer)
         self._init_cache_metadata()
 
     def _check_resident_layer(self, layer_id: int) -> None:
@@ -96,6 +127,8 @@ class RollingKVCachePool(BaseKVCachePool):
         return self.k_cache(layer_idx, start, end), self.v_cache(layer_idx, start, end)
 
     def store_kv(self, k: torch.Tensor, v: torch.Tensor, start_idx: int, end_idx: int, layer_id: int) -> None:
+        if self.key_only:
+            raise RuntimeError("Raw-value writes are unavailable for a quantized-V cache; use its attention backend")
         if end_idx <= start_idx:
             return
         self._check_resident_layer(layer_id)
@@ -144,9 +177,12 @@ class RollingKVCachePool(BaseKVCachePool):
 
     def write_views(self, layer_id: int, start: int, end: int) -> tuple[torch.Tensor, ...]:
         """Physical write destinations to preserve during graph capture."""
+        if self.quantized_only:
+            return ()
         self._check_resident_layer(layer_id)
         layout = self._attention_layouts.get(self._metadata_index(layer_id), self.ring_layout(layer_id))
-        return tuple(buffer[span.physical_start : span.physical_start + span.length] for span in layout.spans(start, end) for buffer in (self._key_buffer(layer_id), self._value_buffer(layer_id)))
+        buffers = (self._key_buffer(layer_id),) if self.key_only else (self._key_buffer(layer_id), self._value_buffer(layer_id))
+        return tuple(buffer[span.physical_start : span.physical_start + span.length] for span in layout.spans(start, end) for buffer in buffers)
 
     def _read_logical(self, buffer: torch.Tensor, layer_id: int, start: int | None, end: int | None, out: torch.Tensor | None) -> torch.Tensor:
         self._check_resident_layer(layer_id)
@@ -164,9 +200,13 @@ class RollingKVCachePool(BaseKVCachePool):
         return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
 
     def k_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None, out: torch.Tensor | None = None) -> torch.Tensor:
+        if self.quantized_only:
+            raise RuntimeError("K is encoded in the attention cache; no raw K cache exists")
         return self._read_logical(self._key_buffer(layer_id), layer_id, attn_start, local_end, out)
 
     def v_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None, out: torch.Tensor | None = None) -> torch.Tensor:
+        if self.key_only:
+            raise RuntimeError("V is encoded in the attention cache; no raw V cache exists")
         return self._read_logical(self._value_buffer(layer_id), layer_id, attn_start, local_end, out)
 
     def initialize_slot_metadata(self) -> None:
@@ -266,23 +306,35 @@ class HybridStepRollingKVCachePool(StepRollingKVCachePool):
         return self._layer_cache_sizes[layer_id]
 
     def _key_buffer(self, layer_id: int) -> torch.Tensor:
+        if self.quantized_only:
+            return self._k_buffer
         capacity, slot = self._layer_bucket_slots[layer_id]
         return self._k_buckets[capacity][self._current_step, slot]
 
     def _value_buffer(self, layer_id: int) -> torch.Tensor:
+        if self.key_only:
+            return self._v_buffer
         capacity, slot = self._layer_bucket_slots[layer_id]
         return self._v_buckets[capacity][self._current_step, slot]
 
     def _ensure_kv_buffer(self) -> None:
-        if not self._k_buckets:
+        allocated = self._k_buffer is not None if self.quantized_only else bool(self._k_buckets)
+        if not allocated:
             self._init_kv_buffer()
 
     def _allocate_buckets(self) -> dict[int, torch.Tensor]:
         return {capacity: torch.empty(self.num_steps, count, capacity, self._num_heads, self._head_dim, dtype=self._dtype, device=self._device) for capacity, count in self._bucket_counts.items()}
 
     def _init_kv_buffer(self) -> None:
+        if self.quantized_only:
+            self._k_buffer = torch.empty((0, self._num_heads, self._head_dim), dtype=self._dtype, device=self._device)
+            self._v_buffer = torch.empty_like(self._k_buffer)
+            self._init_cache_metadata()
+            return
         self._k_buckets = self._allocate_buckets()
-        self._v_buckets = self._allocate_buckets()
+        self._v_buckets = {} if self.key_only else self._allocate_buckets()
+        if self.key_only:
+            self._v_buffer = torch.empty(0, dtype=self._dtype, device=self._device)
         self._init_cache_metadata()
 
     @property

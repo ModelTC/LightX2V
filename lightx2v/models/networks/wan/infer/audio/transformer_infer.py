@@ -10,12 +10,29 @@ except ImportError:
     flash_attn_varlen_func = None
 
 from lightx2v.common.kvcache.attn.rope import PhysicalRoPERingAttention
-from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
+from lightx2v.common.kvcache.attn.sage_rope import SageRoPERingAttention
+from lightx2v.common.ops.attn.ulysses_attn import UlyssesAttnWeight
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import align_hidden_states_and_mask, calculate_n_query_tokens, get_qk_lens_audio_range
 from lightx2v.models.networks.wan.infer.autoregressive.causal_transformer_infer import WanCausalTransformerInfer
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+class _CachedAudioAttention:
+    """Adapt the physical cache to the shared Ulysses exchange interface."""
+
+    def __init__(self, backend, cache, attention, valid_tokens):
+        self.backend = backend
+        self.cache = cache
+        self.attention = attention
+        self.valid_tokens = valid_tokens
+
+    def apply(self, q, k, v, **kwargs):
+        tokens = self.valid_tokens
+        output = self.backend.apply(q[:tokens], k[:tokens], v[:tokens], self.cache, self.attention)
+        output = output.view(tokens, q.shape[1], q.shape[2])
+        return F.pad(output, (0, 0, 0, 0, 0, q.shape[0] - tokens))
 
 
 class WanAudioPostAdapterMixin:
@@ -138,11 +155,24 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanCausalTransformerI
     def __init__(self, config):
         super().__init__(config)
         self._setup_audio_post_adapter(config)
-        self.self_attn_backend = PhysicalRoPERingAttention()
+        ar_config = config.get("ar_config", {})
+        if config["self_attn_1_type"] == "sage_attn2":
+            self.self_attn_backend = SageRoPERingAttention(share_step_keys=ar_config.get("step_kv_cache", False))
+        else:
+            self.self_attn_backend = PhysicalRoPERingAttention()
+        self.kv_cache_manager.key_only = isinstance(self.self_attn_backend, SageRoPERingAttention)
+        if self.seq_parallel and self.seq_p_attn_type != "ulysses":
+            raise ValueError("Seko AR cached attention requires seq_p_attn_type='ulysses'.")
+        if self.seq_parallel and self.seq_p_head_parallel:
+            raise NotImplementedError(
+                "Seko AR cached attention does not support seq_p_head_parallel=True: "
+                "the physical post-RoPE cache requires all local heads together. "
+                "Use seq_p_head_parallel=False; Triton layout, tensor fusion and FP8 communication remain supported."
+            )
+        self.parallel_attention = UlyssesAttnWeight()
         self._rope_freq_buffers = {}
         self._current_pre = None
         self._post_adapter_signature = None
-        ar_config = config.get("ar_config", {})
         self.rope_position_mode = ar_config.get("rope_position_mode", "local")
         if self.rope_position_mode not in {"local", "global"}:
             raise ValueError("ar_config.rope_position_mode must be 'local' or 'global'.")
@@ -224,7 +254,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanCausalTransformerI
         generation = self.scheduler.seg_index, update.write_end, update.global_end, height, width
         cached = self._rope_freq_buffers.get(capacity)
         if cached is None or cached[1].device != pre.x.device:
-            cached = None, torch.empty(capacity, self.head_dim, device=pre.x.device, dtype=torch.float32)
+            with torch.inference_mode(False):
+                cached = None, torch.empty(capacity, self.head_dim, device=pre.x.device, dtype=torch.float32)
         previous_generation, storage = cached
         frequencies = storage[: update.write_end]
         if generation != previous_generation:
@@ -258,11 +289,12 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanCausalTransformerI
 
     def prepare_block_caches(self, blocks, x, pre_infer_out=None):
         caches, bindings, writes = super().prepare_block_caches(blocks, x, pre_infer_out)
-        scratch = {cache.key.data_ptr(): cache.key for cache in caches}
+        scratch = {cache.key.data_ptr(): cache.key for cache in caches if getattr(cache, "key", None) is not None}
         return caches, bindings, (*writes, *scratch.values())
 
     def get_block_write_views(self, pool, layer_id, update, cache):
-        return (*super().get_block_write_views(pool, layer_id, update, cache), cache.key)
+        scratch = getattr(cache, "key", None)
+        return (*super().get_block_write_views(pool, layer_id, update, cache), *((scratch,) if scratch is not None else ()))
 
     def get_kv_cache_update(self, token_count, is_ref_prefill=False, *, global_token_count=None):
         if global_token_count is None:
@@ -272,24 +304,35 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanCausalTransformerI
     def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa, is_ref_prefill=False, self_attn_cache=None, start_frame=None):
         normalized = self.apply_self_attn_norm(phase, x, shift_msa, scale_msa)
         query, key, value = self.project_self_attn_qkv(phase, normalized)
+        if self.seq_parallel and not is_ref_prefill:
+            # Grouped QKV projections return strided views; the shared Triton
+            # layout kernels consume contiguous current-chunk inputs.
+            if self.seq_p_prepost_backend == "triton":
+                query, key, value = (tensor.contiguous() for tensor in (query, key, value))
+            output, auxiliary = self.parallel_attention.apply(
+                q=query,
+                k=key,
+                v=value,
+                attention_module=_CachedAudioAttention(self.self_attn_backend, self_attn_cache, phase.self_attn_1, self._current_pre.valid_token_len),
+                seq_p_group=self.seq_p_group,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=False,
+            )
+            if auxiliary is not None:
+                raise RuntimeError("Seko AR self-attention has no auxiliary token output.")
+            return phase.self_attn_o.apply(output)
+
         if self.seq_parallel:
             world_size = dist.get_world_size(self.seq_p_group)
-            if is_ref_prefill:
-                rank = dist.get_rank(self.seq_p_group)
-                query, key, value = (tensor.chunk(world_size, dim=1)[rank].contiguous() for tensor in (query, key, value))
-            else:
-                query, key, value = (all2all_seq2head(tensor, group=self.seq_p_group, quant_scheme=self.seq_p_quant_scheme) for tensor in (query, key, value))
-                padded_tokens = query.shape[0]
-                tokens = self._current_pre.valid_token_len
-                query, key, value = query[:tokens], key[:tokens], value[:tokens]
+            rank = dist.get_rank(self.seq_p_group)
+            query, key, value = (tensor.chunk(world_size, dim=1)[rank].contiguous() for tensor in (query, key, value))
         output = self.self_attn_backend.apply(query, key, value, self_attn_cache, phase.self_attn_1)
         if self.seq_parallel:
             output = output.view(query.shape)
-            if is_ref_prefill:
-                gathered = torch.empty((world_size * output.shape[0], *output.shape[1:]), device=output.device, dtype=output.dtype)
-                dist.all_gather_into_tensor(gathered, output.contiguous(), group=self.seq_p_group)
-                output = gathered.view(world_size, *output.shape).permute(1, 0, 2, 3).flatten(1)
-            else:
-                output = F.pad(output, (0, 0, 0, 0, 0, padded_tokens - tokens))
-                output = all2all_head2seq(output, group=self.seq_p_group).flatten(1)
+            gathered = torch.empty((world_size * output.shape[0], *output.shape[1:]), device=output.device, dtype=output.dtype)
+            dist.all_gather_into_tensor(gathered, output.contiguous(), group=self.seq_p_group)
+            output = gathered.view(world_size, *output.shape).permute(1, 0, 2, 3).flatten(1)
         return phase.self_attn_o.apply(output)

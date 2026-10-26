@@ -1,4 +1,4 @@
-"""Convert EdenLive ProxyDINO linear weights into a native INT8 ConvRot file.
+"""Convert EdenLive ProxyDINO linears to INT8 ConvRot or reduced-range FP8-F16.
 
 The source's linear weights are rounded to BF16 before quantization, matching
 ProxyDINO's effective BF16 linear weights. All other tensors keep their original
@@ -11,12 +11,17 @@ import json
 import math
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 
 import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
+
+sys.path.append(str(Path(__file__).resolve().parents[2]))
+
+from tools.convert.quant.edenlive_proxy_fp8_f16_accum import EdenLiveProxyFP8F16AccumQuantization  # noqa: E402
 
 PREFIX = "model.module.encoder."
 LINEAR_PATTERN = re.compile(r"^(?:backbone\.layer\.\d+\.(?:attention\.[qkvo]_proj|mlp\.(?:up_proj|down_proj))|patch_projection)\.weight$")
@@ -81,14 +86,18 @@ def _validate_linear_names(names):
 
 
 @torch.no_grad()
-def convert_proxy_dino(source, output, device="cpu", group_size=256, overwrite=False, report_path=None):
-    """Save an independent checkpoint compatible with ``int8-convrot`` modules."""
-    from comfy_kitchen.tensor.int8 import TensorWiseINT8Layout
+def convert_proxy_dino(source, output, device="cpu", group_size=256, overwrite=False, report_path=None, *, quant_scheme="int8-convrot"):
+    """Save an independent checkpoint for the selected native linear backend."""
+    if quant_scheme not in ("int8-convrot", "fp8-f16-accum"):
+        raise ValueError(f"Unsupported ProxyDINO quant_scheme: {quant_scheme!r}")
+    policy = EdenLiveProxyFP8F16AccumQuantization() if quant_scheme == "fp8-f16-accum" else None
+    if policy is None:
+        from comfy_kitchen.tensor.int8 import TensorWiseINT8Layout
 
     source = Path(source).resolve()
     output = Path(output).resolve()
     report_path = Path(report_path).resolve() if report_path else output.with_suffix(".report.json")
-    if group_size not in (16, 64, 256):
+    if policy is None and group_size not in (16, 64, 256):
         raise ValueError("group_size must be 16, 64, or 256")
     if source == output or source == report_path or output == report_path:
         raise ValueError("Source, checkpoint output and report paths must be distinct")
@@ -111,23 +120,27 @@ def convert_proxy_dino(source, output, device="cpu", group_size=256, overwrite=F
             if name not in linear_names:
                 converted[name] = original.to(torch.bfloat16).contiguous() if name in linear_biases else original.contiguous()
                 continue
-            if original.ndim != 2 or not original.is_floating_point() or original.shape[1] % group_size:
-                raise ValueError(f"Invalid ProxyDINO ConvRot linear {name}: shape={tuple(original.shape)}, dtype={original.dtype}")
+            if original.ndim != 2 or original.dtype not in (torch.float16, torch.bfloat16, torch.float32, torch.float64) or (policy is None and original.shape[1] % group_size):
+                raise ValueError(f"Invalid ProxyDINO {quant_scheme} linear {name}: shape={tuple(original.shape)}, dtype={original.dtype}")
             effective = original.to(device=device, dtype=torch.bfloat16).contiguous()
             if not torch.isfinite(effective).all():
                 raise ValueError(f"Nonfinite values in ProxyDINO linear {name}")
-            quantized, params = TensorWiseINT8Layout.quantize(
-                effective,
-                is_weight=True,
-                per_channel=True,
-                convrot=True,
-                convrot_groupsize=group_size,
-                stochastic_rounding=0,
-            )
-            scale = params.scale.to(torch.float32).contiguous()
-            if quantized.dtype != torch.int8 or quantized.shape != effective.shape or scale.numel() != effective.shape[0] or not torch.isfinite(scale).all():
-                raise ValueError(f"Invalid ConvRot quantizer output for {name}")
-            reconstructed = TensorWiseINT8Layout.dequantize(quantized, params).float()
+            if policy is not None:
+                quantized, scale, _ = policy.quantize_weight(name, effective)
+                reconstructed = quantized.float() * scale
+            else:
+                quantized, params = TensorWiseINT8Layout.quantize(
+                    effective,
+                    is_weight=True,
+                    per_channel=True,
+                    convrot=True,
+                    convrot_groupsize=group_size,
+                    stochastic_rounding=0,
+                )
+                scale = params.scale.to(torch.float32).contiguous()
+                if quantized.dtype != torch.int8 or quantized.shape != effective.shape or scale.numel() != effective.shape[0] or not torch.isfinite(scale).all():
+                    raise ValueError(f"Invalid ConvRot quantizer output for {name}")
+                reconstructed = TensorWiseINT8Layout.dequantize(quantized, params).float()
             reference = effective.float()
             difference = reconstructed - reference
             squared_error = float(difference.square().sum())
@@ -148,7 +161,8 @@ def convert_proxy_dino(source, output, device="cpu", group_size=256, overwrite=F
             stem = name.removesuffix(".weight")
             converted[name] = quantized.cpu().contiguous()
             converted[stem + ".weight_scale"] = scale.cpu().reshape(original.shape[0], 1).contiguous()
-            converted[stem + ".convrot_groupsize"] = torch.tensor(group_size, dtype=torch.int32)
+            if policy is None:
+                converted[stem + ".convrot_groupsize"] = torch.tensor(group_size, dtype=torch.int32)
             print(f"Converted {name} {tuple(original.shape)} relative_rmse={error['relative_rmse']:.6f}", flush=True)
     elements = sum(error["elements"] for error in errors)
     squared_error = sum(error["squared_error"] for error in errors)
@@ -156,23 +170,27 @@ def convert_proxy_dino(source, output, device="cpu", group_size=256, overwrite=F
     source_sha256 = _source_digest(source)
     metadata = dict(source_metadata)
     metadata.update(
-        format="lightx2v-edenlive-proxy-int8-convrot-v1",
-        quant_scheme="int8-convrot",
+        format=f"lightx2v-edenlive-proxy-{quant_scheme}-v1",
+        quant_scheme=quant_scheme,
         source=str(source),
         source_sha256=source_sha256,
-        group_size=str(group_size),
         linear_count=str(len(errors)),
         effective_linear_dtype="torch.bfloat16",
         linear_bias_dtype="torch.bfloat16",
         other_tensors="original_dtype_and_contents",
         stochastic_rounding="0",
     )
+    if policy is not None:
+        policy.validate()
+        metadata.update(policy.metadata)
+    else:
+        metadata["group_size"] = str(group_size)
     report = {
         "source": str(source),
         "source_sha256": source_sha256,
         "output": str(output),
-        "scheme": "int8-convrot",
-        "group_size": group_size,
+        "scheme": quant_scheme,
+        "group_size": group_size if policy is None else None,
         "device": str(device),
         "linear_count": len(errors),
         "source_tensor_count": len(names),
@@ -183,22 +201,25 @@ def convert_proxy_dino(source, output, device="cpu", group_size=256, overwrite=F
         "max_absolute_error": max(error["max_absolute_error"] for error in errors),
         "linears": errors,
     }
+    if policy is not None:
+        report.update(policy.metadata)
     _atomic_checkpoint(converted, output, metadata, overwrite)
     _atomic_json(report, report_path, overwrite)
-    print(f"Saved {output} ({len(errors)} INT8 ConvRot linears); report: {report_path}", flush=True)
+    print(f"Saved {output} ({len(errors)} {quant_scheme} linears); report: {report_path}", flush=True)
     return report
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, help="Original vision-encoder/projection.safetensors")
-    parser.add_argument("--output", required=True, help="New standalone INT8 ConvRot safetensors path")
+    parser.add_argument("--output", required=True, help="New standalone quantized safetensors path")
+    parser.add_argument("--quant-scheme", choices=("int8-convrot", "fp8-f16-accum"), default="int8-convrot")
     parser.add_argument("--device", default="cpu", help="cpu or cuda:N")
     parser.add_argument("--group-size", type=int, choices=(16, 64, 256), default=256)
     parser.add_argument("--report", help="Optional JSON error report path")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing outputs; never replaces source")
     args = parser.parse_args()
-    convert_proxy_dino(args.source, args.output, args.device, args.group_size, args.overwrite, args.report)
+    convert_proxy_dino(args.source, args.output, args.device, args.group_size, args.overwrite, args.report, quant_scheme=args.quant_scheme)
 
 
 if __name__ == "__main__":

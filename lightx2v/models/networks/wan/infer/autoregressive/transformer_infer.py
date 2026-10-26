@@ -163,7 +163,7 @@ class WanAutoregressiveTransformerInfer(AutoregressiveTransformerInferMixin, Wan
             prepared = self.prepare_self_attn_cache(cache, block_idx, cache_update)
             self_attn_caches.append(prepared)
             bindings.extend(prepared.bindings)
-            write_views.extend(cache.write_views(block_idx, cache_update.write_start, cache_update.write_end))
+            write_views.extend(self.get_block_write_views(cache, block_idx, cache_update, prepared))
         cache.upload_write_metadata()
         return tuple(self_attn_caches), bindings, tuple(write_views)
 
@@ -207,6 +207,7 @@ class WanAutoregressiveTransformerInfer(AutoregressiveTransformerInferMixin, Wan
             mutated_buffers=write_views,
             variant=(
                 "cache_commit" if self.cache_update_only else "denoise",
+                tuple(getattr(cache, "graph_key", None) for cache in self_attn_caches),
                 self.kv_cache_manager.current_step,
                 getattr(pre_infer_out, "adapter_args", {}).get("is_ref_prefill", False),
                 tuple(self.kv_cache_manager.self_attn_kv_cache.get_valid_length(layer) for layer in range(len(blocks))),

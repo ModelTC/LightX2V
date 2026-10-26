@@ -60,6 +60,7 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        config.setdefault("use_fused_qkv", bool(config.get("dit_quantized", False)))
         if config.get("cpu_offload_layout") == "contiguous":
             for option in ("use_fused_qkv", "dit_release_block_offload_buffers", "dit_quantized"):
                 if config.get(option, False):

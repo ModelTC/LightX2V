@@ -3,7 +3,7 @@ from typing import NamedTuple
 import torch
 import triton
 
-from lightx2v.common.kvcache.attn.sage import SageRingAttentionState
+from lightx2v.common.kvcache.attn.sage import QuantizedRingAttentionState, SageRingAttentionState, encode_sage_current
 from lightx2v.common.kvcache.rolling import RingKVCacheView
 from lightx2v.common.ops.rope.kernels.causal_rope import causal_rope_kernel, update_sink_key_kernel
 
@@ -79,15 +79,21 @@ class SinkRoPEState(NamedTuple):
     valid: torch.Tensor | None
     window_frames: int
     segment_tokens: int
+    rotated_key: torch.Tensor | None = None
 
 
 class MatrixGame4AttentionState(NamedTuple):
-    ring: RingKVCacheView | SageRingAttentionState
+    ring: RingKVCacheView | SageRingAttentionState | QuantizedRingAttentionState
     sink: SinkRoPEState
 
     @property
     def bindings(self):
-        return *self.ring.bindings, self.sink.raw_key
+        scratch = () if self.sink.rotated_key is None else (self.sink.rotated_key,)
+        return *self.ring.bindings, self.sink.raw_key, *scratch
+
+    @property
+    def graph_key(self):
+        return getattr(self.ring, "graph_key", None)
 
 
 class SinkRoPE:
@@ -100,17 +106,23 @@ class SinkRoPE:
         self._sink_keys = {}
 
     def prepare(self, layer_id, ring, sink_tokens):
-        signature = ring.key.data_ptr(), ring.key.shape, ring.key.stride(), sink_tokens
+        encoded = isinstance(ring, QuantizedRingAttentionState)
+        prototype = ring.quantized.key_mean if encoded else ring.key
+        shape = (sink_tokens, *prototype.shape[-2:])
+        signature = prototype.data_ptr(), prototype.shape, prototype.stride(), sink_tokens
         cached = self._sink_keys.get(layer_id)
         if cached is None or cached[0] != signature:
-            cached = signature, ring.key.new_zeros((sink_tokens, *ring.key.shape[1:]))
+            cached = signature, prototype.new_zeros(shape), prototype.new_empty(shape) if encoded else None
             self._sink_keys[layer_id] = cached
         quantized = ring.quantized if self.quantized else None
         segment_tokens = quantized.key_int8.shape[1] if self.quantized else 1
         frame_tokens = sink_tokens // self.sink_frames
-        return SinkRoPEState(cached[1], quantized.valid if self.quantized else None, ring.key.shape[0] // frame_tokens, segment_tokens)
+        capacity = ring.capacity if encoded else ring.key.shape[0]
+        return SinkRoPEState(cached[1], quantized.key_valid if self.quantized else None, capacity // frame_tokens, segment_tokens, cached[2])
 
-    def update(self, raw_key, state, key_ring, grid_sizes, freqs, start_frame):
+    def update(self, raw_key, state, ring, grid_sizes, freqs, start_frame):
+        encoded = isinstance(ring, QuantizedRingAttentionState)
+        key_ring = state.rotated_key if encoded else ring.key
         _update_sink_key(
             raw_key,
             state.raw_key,
@@ -124,10 +136,25 @@ class SinkRoPE:
             self.fixed_sink,
             self.quantized,
         )
+        if encoded and self.fixed_sink:
+            # Only the small sink's RoPE anchor changes; recent encoded K/V
+            # stay resident and untouched. The device condition matches the
+            # source kernel, so graph replay does not read uninitialized scratch.
+            encode_sage_current(
+                state.rotated_key,
+                state.rotated_key[:0],
+                ring.slot_metadata,
+                ring.quantized,
+                ring.capacity,
+                cache_values=False,
+                physical_start=0,
+                position=start_frame,
+                enabled_after=state.window_frames,
+            )
 
     def reset(self, keep_storage=False):
         if keep_storage:
-            for _, raw_key in self._sink_keys.values():
+            for _, raw_key, _ in self._sink_keys.values():
                 raw_key.zero_()
         else:
             self._sink_keys.clear()

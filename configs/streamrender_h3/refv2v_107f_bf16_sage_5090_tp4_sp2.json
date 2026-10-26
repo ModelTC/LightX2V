@@ -1,0 +1,43 @@
+{
+  "model_cls": "streamrender_h3",
+  "task": "refv2v",
+  "model_path": "/mnt/devsft_afs_2/gushiqiao/ar/models/H3/StreamRender-H3",
+  "fps": 24,
+  "size": [
+    768,
+    1344
+  ],
+  "reference_size": [
+    480,
+    832
+  ],
+  "num_frames": 107,
+  "infer_steps": 2,
+  "attn_type": "sage_attn2",
+  "use_fused_qkv": true,
+  "cpu_offload": false,
+  "text_encoder_tensor_parallel": true,
+  "use_compile": true,
+  "compile_backend": "default",
+  "use_cuda_graph": true,
+  "warmup": true,
+  "parallel": {
+    "tensor_p_size": 4,
+    "seq_p_size": 2,
+    "cfg_p_size": 1,
+    "seq_p_tensor_fusion": true
+  },
+  "async_vae_decode": true,
+  "ar_config": {
+    "kv_offload": false
+  },
+  "dit_quantized": false,
+  "use_adaln_cache": true,
+  "adaln_cache_dir": "/mnt/devsft_afs_2/gushiqiao/ar/models/H3/StreamRender-H3-adaln/bf16",
+  "dit_original_ckpt": "/mnt/devsft_afs_2/gushiqiao/ar/models/H3/StreamRender-H3/backbone",
+  "video_flow_shift": 6.0,
+  "audio_flow_shift": 1.5,
+  "use_fused_qkv_norm_rope": true,
+  "qkv_norm_rope_type": "triton",
+  "vae_use_compile": true
+}

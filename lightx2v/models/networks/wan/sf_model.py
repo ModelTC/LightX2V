@@ -13,12 +13,15 @@ class WanSFModel(WanAutoregressiveModel):
         if file_path.endswith(".safetensors"):
             _weight_dict = super()._load_ckpt(unified_dtype, sensitive_layer)
         else:
-            _weight_dict = torch.load(file_path)
+            _weight_dict = torch.load(file_path, map_location="cpu")
             _weight_dict = _weight_dict.get("generator_ema", _weight_dict)
+        # TP weight leaves slice on the CPU before transferring their rank's
+        # shard; moving the full checkpoint here defeats that loading policy.
+        load_device = torch.device("cpu") if self.use_tp else self.device
         weight_dict = {}
         for k, v in _weight_dict.items():
             name = k[6:]
-            weight = v.to(GET_DTYPE()).to(self.device)
+            weight = v.to(dtype=GET_DTYPE(), device=load_device)
             weight_dict.update({name: weight})
         del _weight_dict
         return weight_dict

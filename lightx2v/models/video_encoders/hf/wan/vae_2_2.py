@@ -1275,6 +1275,23 @@ class Wan2_2_VAE:
         else:
             raise ValueError(f"Unsupported vae_type: {self.vae_type}")
 
+    def compile_encoder(self):
+        from .vae import _CompiledVaeComponent
+
+        owner = self.encoder_model if self.encoder_model is not None else self.model
+        if not isinstance(owner.encoder, _CompiledVaeComponent):
+            owner.encoder = _CompiledVaeComponent(owner.encoder)
+
+    def compile_decoder(self):
+        from .vae import _CompiledVaeComponent
+
+        if not isinstance(self.model.decoder, _CompiledVaeComponent):
+            self.model.decoder = _CompiledVaeComponent(self.model.decoder)
+
+    def compile(self):
+        self.compile_encoder()
+        self.compile_decoder()
+
     def to_cpu(self):
         if self.encoder_model is not None:
             self.encoder_model.encoder = self.encoder_model.encoder.to("cpu")

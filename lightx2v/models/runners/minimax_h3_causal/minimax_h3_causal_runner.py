@@ -11,9 +11,9 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.minimax_h3_causal import MiniMaxH3CausalQwen3VLTextEncoder
+from lightx2v.models.networks.minimax_h3.causal.model import MiniMaxH3CausalModel
 from lightx2v.models.networks.minimax_h3.packing import FPS, FRAMES_PER_CHUNK, align_num_frames, audio_latent_num_frames, unpack_audio_tokens, unpatchify_video_tokens
 from lightx2v.models.networks.minimax_h3.packing_ref2av import MAX_REFERENCE_IMAGES, MiniMaxH3PreparedReference, resolve_reference_image_size
-from lightx2v.models.networks.minimax_h3_causal.model import MiniMaxH3CausalModel
 from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRunnerMixin
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 from lightx2v.models.runners.minimax_h3_causal.action_prompt_travel import ActionPromptTravel, ActionPromptTravelConfig, coerce_action_prompts
@@ -31,6 +31,8 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 @RUNNER_REGISTER("minimax_h3_causal")
 class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
+    _WARMUP_SIZE = (256, 256)
+
     supported_request_fields_by_task = {
         "refa2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "audio_path", "prompt", "action_prompts"},
     }
@@ -92,44 +94,46 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
-        height, width = self.config["size"]
-        self.input_info = INPUT_INFO_TYPES["refa2v"](
-            task="refa2v",
-            seed=0,
-            prompt="A person speaks naturally into a microphone.",
-            image_path=Image.new("RGB", (width, height)),
-            size=[height, width],
-            num_frames=self.config["num_frames"],
-        )
-        transformer_offloaded = not self.config.get("cpu_offload", False)
-        try:
-            # Match the cuDNN settings installed by BaseRunner.run_request.
-            seed_all(self.input_info.seed)
-            self.scheduler.generator = None
-            # Exercise the normal audio reader too. Request preparation pads
-            # this short stereo PCM clip to the configured duration.
-            with io.BytesIO() as audio_file:
-                with wave.open(audio_file, "wb") as pcm:
-                    pcm.setnchannels(2)
-                    pcm.setsampwidth(2)
-                    pcm.setframerate(self.audio_vae.sampling_rate)
-                    pcm.writeframes(bytes(2 * 2 * self.audio_vae.hop_length))
-                audio_file.seek(0)
-                self.input_info.audio_path = audio_file
-                self.inputs = self._run_input_encoder_local_h3()
-            logger.info(f"Warmup refa2v: {self.request_height}x{self.request_width}x{self.request_num_frames}")
-            self.init_run()
-            video, audio_rows = self.run_segment()
-            self._offload_transformer()
-            transformer_offloaded = True
-            self.run_vae_decoder(video, audio_rows)
-            getattr(torch, AI_DEVICE).synchronize()
-            del video, audio_rows
-        finally:
-            if not transformer_offloaded:
-                with suppress(Exception):
+        sizes = dict.fromkeys((self._WARMUP_SIZE, tuple(self.config["size"])))
+        for height, width in sizes:
+            self.input_info = INPUT_INFO_TYPES["refa2v"](
+                task="refa2v",
+                seed=0,
+                prompt="A person speaks naturally into a microphone.",
+                image_path=Image.new("RGB", (width, height)),
+                size=[height, width],
+                num_frames=self.config["num_frames"],
+            )
+            transformer_offloaded = not self.config.get("cpu_offload", False)
+            try:
+                # Match the cuDNN settings installed by BaseRunner.run_request.
+                seed_all(self.input_info.seed)
+                self.scheduler.generator = None
+                # Request preparation pads this short stereo PCM clip to the
+                # configured duration before the normal streaming encoder.
+                with io.BytesIO() as audio_file:
+                    with wave.open(audio_file, "wb") as pcm:
+                        pcm.setnchannels(2)
+                        pcm.setsampwidth(2)
+                        pcm.setframerate(self.audio_vae.sampling_rate)
+                        pcm.writeframes(bytes(2 * 2 * self.audio_vae.hop_length))
+                    audio_file.seek(0)
+                    self.input_info.audio_path = audio_file
+                    self.inputs = self._run_input_encoder_local_h3()
+                logger.info(f"Warmup refa2v: {self.request_height}x{self.request_width}x{self.request_num_frames}")
+                self.init_run()
+                video, audio_rows = self.run_segment()
+                if self.config.get("cpu_offload", False):
                     self._offload_transformer()
-            self.end_run()
+                    transformer_offloaded = True
+                self.run_vae_decoder(video, audio_rows)
+                getattr(torch, AI_DEVICE).synchronize()
+                del video, audio_rows
+            finally:
+                if not transformer_offloaded:
+                    with suppress(Exception):
+                        self._offload_transformer()
+                self.end_run()
         self._maybe_freeze_gc()
 
     def _resolve_request_geometry(self, geometry_image=None):
@@ -213,7 +217,8 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         )
         left, right = [], []
         self._decoded_video_frames = 0
-        async_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.video_vae, dispatch_in_worker=True)
+        async_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.video_vae, dispatch_in_worker=True, collect_outputs=not self.streaming_video_only)
+        self.model.transformer_infer.before_graph_capture = async_decoder.synchronize if async_decoder.is_async else None
         chunks = self.scheduler.plan.chunks
         # Mono preprocessing creates identical channels; encode one and reuse
         # its latents while retaining the downstream left/right token layout.
@@ -252,7 +257,10 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                 async_decoder.submit(self.decode_video_chunk, decoder)
                 videos = [video for output in async_decoder.finish() for video in output]
         finally:
-            async_decoder.finish()
+            try:
+                async_decoder.finish()
+            finally:
+                self.model.transformer_infer.before_graph_capture = None
         return torch.cat(videos, dim=2) if videos else None, torch.cat((torch.cat(left), torch.cat(right)))
 
     def decode_video_chunk(self, decoder, video=None):
@@ -262,13 +270,17 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         else:
             frames = decoder.push(video)
         for pixels in frames:
+            self.record_video_chunk(pixels, value_range=(0, 1))
             if self.stream_callback is not None and (not dist.is_initialized() or dist.get_rank() == 0):
                 self.stream_callback(pixels, self._decoded_video_frames, video is None)
             self._decoded_video_frames += pixels.shape[2]
         return frames
 
     def run_vae_decoder(self, video, audio_rows):
-        audio = self.audio_vae.decode(unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)) if video is not None else None
+        audio_output = video is not None or (self.streaming_video_only and (not dist.is_initialized() or dist.get_rank() == 0))
+        audio = self.audio_vae.decode(unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)) if audio_output else None
+        if audio is not None:
+            self.set_stream_audio(audio, self.audio_vae.sampling_rate)
         return video, audio
 
     def end_run(self):

@@ -29,6 +29,9 @@ def build_self_attn_kv_cache(
     *,
     num_heads: int | None = None,
     layer_cache_sizes: tuple[int, ...] | None = None,
+    key_only: bool = False,
+    quantized_only: bool = False,
+    value_write_alignment: tuple[int, ...] = (),
 ):
     """Select storage policy without changing model or manager configuration."""
     kwargs = dict(
@@ -61,7 +64,16 @@ def build_self_attn_kv_cache(
         raise ValueError(f"Unsupported KV cache policy: scheme={scheme!r}, step_kv_cache={step_cache}.")
     if step_cache:
         kwargs["num_steps"] = config.get("infer_steps", ar_config.get("cache_step", 1))
-    return cache_cls(**kwargs)
+    cache = cache_cls(**kwargs)
+    if quantized_only:
+        if scheme != "rolling" or kv_offload:
+            raise ValueError("Encoded-only KV storage requires a resident rolling cache")
+        cache.configure_quantized_only(write_alignment=value_write_alignment)
+    elif key_only:
+        if scheme != "rolling":
+            raise ValueError("Quantized V storage requires the rolling cache")
+        cache.configure_key_only(write_alignment=value_write_alignment)
+    return cache
 
 
 class KVCacheManager:
@@ -78,6 +90,8 @@ class KVCacheManager:
         self.self_attn_kv_caches = {}
         self.cross_attn_kv_caches = {}
         self._buffer_signature = None
+        self.key_only = config.get("self_attn_1_type") == "sage_attn2" and config.get("model_cls") in {"wan21_edenlive_ar", "wan22_edenlive_ar", "seko_talk_ar"}
+        self.quantized_only = False
 
     @property
     def tensor_num_heads(self) -> int:
@@ -117,6 +131,8 @@ class KVCacheManager:
             self.dtype if dtype is None else dtype,
             self.device,
             num_heads=self.cache_num_heads if num_heads is None else num_heads,
+            key_only=self.key_only,
+            quantized_only=self.quantized_only,
         )
         cache.sp_head_sharded = self.sp_head_sharded_kv
         self.self_attn_kv_caches[cache_name] = cache
@@ -209,6 +225,13 @@ class KVCacheManager:
             self.config.get("infer_steps", self.ar_config.get("cache_step", 1)),
             self.ar_config.get("kv_offload", False),
             self.layer_kv_sizes,
+            self.key_only,
+            self.quantized_only,
+            self.ar_config.get("num_frame_per_chunk", 3),
+            self.ref_tokens,
+            self.sink_size,
+            self.max_attention_size,
+            self.layer_visible_frames,
         )
 
     def initialize(self, latent_shape, ref_num_frames: int | None = None, *, before_allocate=None):
@@ -233,6 +256,13 @@ class KVCacheManager:
             self.device,
             num_heads=self.cache_num_heads,
             layer_cache_sizes=self.layer_kv_sizes,
+            key_only=self.key_only,
+            quantized_only=self.quantized_only,
+            value_write_alignment=(
+                self.ar_config.get("num_frame_per_chunk", 3) * self.frame_seq_length,
+                self.ref_tokens,
+                *((self.max_attention_size,) if self.quantized_only else ()),
+            ),
         )
         self.self_attn_kv_cache.sp_head_sharded = self.sp_head_sharded_kv
         self.cross_attn_kv_cache = self.get_cross_attn_kv_cache()
