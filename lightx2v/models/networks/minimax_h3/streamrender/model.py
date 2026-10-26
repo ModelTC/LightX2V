@@ -162,6 +162,7 @@ class StreamRenderH3Model(H3AutoregressiveModel, MiniMaxH3Model):
                 device=torch.device(self.device),
                 offload=signature[-1],
                 sage=self.transformer_infer.use_sage_attention,
+                segment_candidates=(self.config.get("ar_config") or {}).get("sage_segment_candidates"),
                 raw_workspace=getattr(self, "_prefix_raw_workspace", None),
             )
             self._prefix_bank_pool[scheduler.prefix_bank_key] = bank

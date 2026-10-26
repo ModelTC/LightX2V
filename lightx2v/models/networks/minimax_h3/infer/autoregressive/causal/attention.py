@@ -24,8 +24,8 @@ class H3PhysicalRoPERingAttention(PhysicalRoPERingAttention):
 class H3SageRoPERingAttention(SageRingAttention):
     """Preserve H3's variable AV writes without one-token V-only segments."""
 
-    def __init__(self, *, rotary_dim=None, rope_layout="interleaved", rope_fma=True, segment_tokens=None, profile="minimax_h3", share_step_keys=True):
-        super().__init__(profile=profile)
+    def __init__(self, *, rotary_dim=None, rope_layout="interleaved", rope_fma=True, segment_tokens=None, segment_candidates=None, profile="minimax_h3", share_step_keys=True):
+        super().__init__(profile=profile, segment_candidates=segment_candidates)
         if rope_layout not in ("interleaved", "split_half"):
             raise ValueError("RoPE layout must be interleaved or split_half")
         if segment_tokens is not None and segment_tokens <= 0:

@@ -787,9 +787,14 @@ class QuantizedRingAttentionState(NamedTuple):
 class SageRingAttention(RingAttention):
     """Quantize written ring segments and merge their attention outputs."""
 
-    def __init__(self, allow_offload_history_reuse=False, *, profile="wan"):
+    def __init__(self, allow_offload_history_reuse=False, *, profile="wan", segment_candidates=None):
         super().__init__()
         self.profile = profile
+        if segment_candidates is not None:
+            from .sage_tuning import validate_segment_candidates
+
+            segment_candidates = validate_segment_candidates(segment_candidates)
+        self.segment_candidates = segment_candidates
         self.segment_layouts = {}
         self.quantized_layers = {}
         self.allow_offload_history_reuse = allow_offload_history_reuse
@@ -800,6 +805,10 @@ class SageRingAttention(RingAttention):
         from .sage_policy import select_segment_tokens
 
         selected = select_segment_tokens(key, profile=self.profile, **options)
+        if self.segment_candidates is not None:
+            from .sage_tuning import select_sage_segment_tokens
+
+            selected = select_sage_segment_tokens(key, self.segment_candidates, baseline=selected, **options).segment_tokens
         policy = tuple((name, value is not None if name == "freqs" else value) for name, value in options.items())
         self.segment_layouts[(tuple(key.shape), key.device, policy)] = selected
         return selected

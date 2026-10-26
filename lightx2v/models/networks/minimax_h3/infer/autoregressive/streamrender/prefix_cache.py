@@ -37,7 +37,7 @@ class StreamRenderSageCurrent(NamedTuple):
 
 
 class StreamRenderH3PrefixBank:
-    def __init__(self, num_layers, capacity, num_heads, head_dim, dtype, device, *, offload=False, sage=False, segment_tokens=None, raw_workspace=None):
+    def __init__(self, num_layers, capacity, num_heads, head_dim, dtype, device, *, offload=False, sage=False, segment_tokens=None, segment_candidates=None, raw_workspace=None):
         self.compact_sage = sage and not offload
         if raw_workspace is not None and not self.compact_sage:
             raise ValueError("Shared raw workspaces require resident Sage prefix storage")
@@ -59,7 +59,7 @@ class StreamRenderH3PrefixBank:
         if sage:
             from lightx2v.common.kvcache.attn.sage import SageRingAttention
 
-            self.sage_attention = SageRingAttention(profile="streamrender")
+            self.sage_attention = SageRingAttention(profile="streamrender", segment_candidates=segment_candidates)
 
     def _pool_layer(self, layer_id):
         return 0 if self.compact_sage else layer_id

@@ -19,7 +19,8 @@ class TaoMateH3TransformerInfer(H3AutoregressiveTransformerInferMixin, MiniMaxH3
     def set_clean_kv_cache(self, clean_cache):
         from lightx2v.models.networks.minimax_h3.infer.autoregressive.taomate.attention import TaoMateH3Attention
 
-        self.self_attn_backend = TaoMateH3Attention(clean_cache, sage=self.use_sage_attention)
+        candidates = (self.config.get("ar_config") or {}).get("sage_segment_candidates")
+        self.self_attn_backend = TaoMateH3Attention(clean_cache, sage=self.use_sage_attention, segment_candidates=candidates)
 
     def _run_prepared_block(
         self,

@@ -28,11 +28,11 @@ class TaoMateAttentionState(NamedTuple):
 
 
 class TaoMateH3Attention:
-    def __init__(self, cache, *, sage=False, segment_tokens=None):
+    def __init__(self, cache, *, sage=False, segment_tokens=None, segment_candidates=None):
         self.cache = cache
         self.sage = sage
         self.segment_tokens = segment_tokens
-        self.quantizer = SageRingAttention(profile="taomate") if sage else None
+        self.quantizer = SageRingAttention(profile="taomate", segment_candidates=segment_candidates) if sage else None
         self.flash_workspace = FlashAttentionWorkspace()
         self._history_generations = {}
         self._metadata = {}

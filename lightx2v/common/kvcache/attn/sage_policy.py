@@ -1,4 +1,4 @@
-"""Deterministic Sage cache layouts; runtime inference never benchmarks kernels.
+"""Deterministic Sage cache layouts when optional search is disabled.
 
 The SM120 Eden geometry has offline V-only measurements. Other profiles retain
 previous raw-KV choices or compatibility defaults; other architectures use a

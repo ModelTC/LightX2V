@@ -18,7 +18,8 @@ class MiniMaxH3CausalTransformerInfer(H3AutoregressiveTransformerInferMixin, Min
         super().__init__(config)
         rotary = dict(rotary_dim=int(config.get("rope_freq_dim", 16)) * 6, rope_layout="split_half", rope_fma=False)
         if self.use_sage_attention:
-            self.self_attn_backend = H3SageRoPERingAttention(**rotary)
+            candidates = (config.get("ar_config") or {}).get("sage_segment_candidates")
+            self.self_attn_backend = H3SageRoPERingAttention(**rotary, segment_candidates=candidates)
         else:
             self.self_attn_backend = H3PhysicalRoPERingAttention(**rotary)
 

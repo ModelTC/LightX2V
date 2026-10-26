@@ -19,7 +19,8 @@ class StreamRenderH3TransformerInfer(H3AutoregressiveTransformerInferMixin, Mini
     def __init__(self, config):
         super().__init__(config)
         self._current_sage = {}
-        self._current_sage_quantizer = SageRingAttention(profile="streamrender") if self.use_sage_attention else None
+        candidates = (config.get("ar_config") or {}).get("sage_segment_candidates")
+        self._current_sage_quantizer = SageRingAttention(profile="streamrender", segment_candidates=candidates) if self.use_sage_attention else None
 
     def prepare_current_sage(self, hidden_states, pre):
         from lightx2v.models.networks.minimax_h3.infer.autoregressive.streamrender.prefix_cache import StreamRenderSageCurrent
