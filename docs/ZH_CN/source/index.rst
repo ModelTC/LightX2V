@@ -70,3 +70,9 @@ HuggingFace: https://huggingface.co/lightx2v
    Diffusion Model 分离部署 <deploy_guides/disagg.md>
    Qwen Image 文本编码器部署 <deploy_guides/qwen_image_encoder.md>
    Qwen Image TensorRT VAE <deploy_guides/qwen_image_vae_tensorrt.md>
+
+.. toctree::
+   :maxdepth: 1
+   :caption: 开发指南
+
+   新增请求参数 <developer_guides/request_parameters.md>

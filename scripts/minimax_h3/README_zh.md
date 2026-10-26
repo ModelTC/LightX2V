@@ -106,6 +106,10 @@ python scripts/minimax_h3/inference/distill/minimax_h3_t2av_dmd.py
 
 生成器创建与配置优先级见 [Python API 指南](../../docs/ZH_CN/source/getting_started/python_api.md)。
 
+## 少步草片与 RGB 视频重生成
+
+低成本抽卡的草片筛选、高清重生成与启动脚本，参见 [MiniMax-H3 Roll 文档](../minimax_h3_roll/README_zh.md)。
+
 ## LoRA
 
 | DiT 权重 | `lora_dynamic_apply` | 行为 |

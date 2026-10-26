@@ -5,6 +5,13 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from ..utils.generate_task_id import generate_task_id
 
 
+def hide_request_defaults(schema, *, keep_defaults=()):
+    """Omitted overrides use runner defaults; retain documented protocol defaults."""
+    for name, field_schema in schema["properties"].items():
+        if name not in keep_defaults:
+            field_schema.pop("default", None)
+
+
 class UsageInputTokensDetails(BaseModel):
     image_tokens: int = 0
     text_tokens: int = 0
@@ -31,7 +38,13 @@ class TalkObject(BaseModel):
 
 
 class BaseTaskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """HTTP envelope. Only submitted fields become runner overrides.
+
+    Schema defaults initialize this envelope; inference defaults come from the
+    runner's startup config and InputInfo, not from omitted HTTP fields.
+    """
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra=lambda schema: hide_request_defaults(schema))
 
     task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
     task: Optional[str] = Field(None, description="Required for multi-task runners; single-task services use their only supported task")
@@ -58,6 +71,9 @@ class VideoTaskRequest(BaseTaskRequest):
         None,
         description="Number of output frames; defaults to the startup config",
     )
+    draft_steps: int | None = Field(None, gt=0, strict=True, description="MiniMax-H3 draft prefix length; omitted uses the configured full schedule")
+    resample_source_video: str | None = Field(None, description="Server-local MiniMax-H3 draft MP4 with audio; re-encoded at the requested size")
+    resample_start_step: int | None = Field(None, ge=0, strict=True, description="MiniMax-H3 zero-based regeneration start index; omitted uses the startup config or 1; 0 runs the full schedule")
     reuse_prefix_segments: int = Field(
         0,
         ge=0,
@@ -95,7 +111,7 @@ class ImageTaskRequest(BaseTaskRequest):
     # Sync image APIs return PNG bytes without requiring an output file.
     _prefer_memory_result: bool = PrivateAttr(default=False)
 
-    aspect_ratio: str = Field("16:9", description="Output aspect ratio")
+    aspect_ratio: str = Field("16:9", description="Output aspect ratio; when omitted, the runner uses its startup/default sizing rules")
     resolution: Optional[int] = Field(None, gt=0, description="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config")
     i2i_denoise_strength: Optional[float] = Field(None, description="Single-image I2I edit denoising strength in [0.0, 1.0]; omit to keep existing behavior")
     inpaint_blur_sigma: Optional[float] = Field(None, description="Flux2 inpainting mask blur sigma")

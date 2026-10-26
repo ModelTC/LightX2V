@@ -23,6 +23,7 @@ from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import
 )
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import (
     WanOffloadTransformerInfer,
+    validate_wan_residency_config,
 )
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
@@ -46,6 +47,7 @@ class WanModel(BaseTransformerModel):
     transformer_weight_class = WanTransformerWeights
 
     def __init__(self, model_path, config, device, model_type="wan2.1", lora_path=None, lora_strength=1.0):
+        validate_wan_residency_config(config)
         if config.get("dit_quant_scheme") == "fp8-f16-accum":
             activation_qmax = validate_fp8_f16_accum_qmax(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
             if activation_qmax > ACTIVATION_QMAX:
@@ -89,7 +91,7 @@ class WanModel(BaseTransformerModel):
         for index, block in enumerate(blocks):
             self._prepare_projection_phases(block.compute_phases, fuse_gelu=fuse_gelu, cache_kv=index == len(blocks) - 1)
 
-        if self.config.get("dit_quant_scheme") != "fp8-f16-accum" or self.config.get("cpu_offload_layout") == "contiguous":
+        if self.config.get("dit_quant_scheme") != "fp8-f16-accum" or self.config.get("cpu_offload_block_contiguous", False):
             return
         offload_blocks = getattr(self.transformer_weights, "offload_block_cuda_buffers", None)
         if offload_blocks is not None:

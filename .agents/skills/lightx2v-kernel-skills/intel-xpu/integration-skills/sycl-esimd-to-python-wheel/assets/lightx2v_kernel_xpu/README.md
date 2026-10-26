@@ -4,7 +4,7 @@
 > DLL → PyTorch extension → wheel example and its bundled binaries; it is not a
 > byte-for-byte copy of the maintained repository-root project. For current
 > LightX2V operators and Linux/CUTE support, use the
-> [maintained project](../../../../../../../../lightx2v_kernel_xpu/README.md) and
+> [maintained project](../../../../../../../../lightx2v_kernel/intel_xpu/README.md) and
 > [integration guide](../../SKILL.md).
 > The environment and measurements below belong to this older snapshot. Bundled
 > DLL/PYD/LIB/EXP files require matching runtime/ABI and GPU checks before reuse.

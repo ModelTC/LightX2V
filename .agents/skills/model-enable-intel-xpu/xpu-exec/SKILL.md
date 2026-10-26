@@ -18,7 +18,7 @@ description: 核对 LightX2V Intel XPU 环境、模型入口、配置、Python A
 python -c "import sys,torch; ok=torch.xpu.is_available(); print(sys.executable, torch.__version__, 'XPU:', ok); print(torch.xpu.get_device_properties(0) if ok else 'No XPU available')"
 ```
 
-`XPU: False` 时分别检查当前解释器、PyTorch XPU 构建和驱动；不能直接判定必须重装驱动。依赖与构建入口见 [XPU README](../../../../scripts/platforms/intel_xpu/README_zh.md)、[内核工程](../../../../lightx2v_kernel_xpu/README.md) 和 [主文构建说明](../references/model-integration.md#前置条件编译-sycl_kernels)。不要在本文件重复维护固定版本安装命令。
+`XPU: False` 时分别检查当前解释器、PyTorch XPU 构建和驱动；不能直接判定必须重装驱动。依赖与构建入口见 [XPU README](../../../../scripts/platforms/intel_xpu/README_zh.md)、[内核工程](../../../../lightx2v_kernel/intel_xpu/README.md) 和 [主文构建说明](../references/model-integration.md#前置条件编译-sycl_kernels)。不要在本文件重复维护固定版本安装命令。
 
 ---
 
@@ -233,7 +233,7 @@ Config 中的 `parallel` 部分：
 | `intel_xpu_cute_attn requires sycl-kernels built with CUTE FMHA` | CUTE 扩展未加载 | 核对 Linux 构建及依赖；换 backend 前验证形状与数值契约 |
 | 并行初始化失败，world size 不匹配 | 进程数与并行大小不匹配 | 调整 `--nproc_per_node` 或 config 中的 `parallel` 大小 |
 | `RuntimeError: mismatched dimensions` / TP 场景 `torch.addmm` 报错 | 列并行 layer 的 1-D bias/scale 未跟着权重一起切分 | 见主文 Case 7 |
-| `RuntimeError: sycl_kernels.sla_block_map/sparse_block_attention/sla_sparse_attention is unavailable` | `sycl_kernels` 编译时未打开 SLA/CUTE sparse attention 支持 | 重新编译 `lightx2v_kernel_xpu`（见步骤 1 的构建链接），或改用非 `dynamic_sparse_attn` 的普通 attn_type |
+| `RuntimeError: sycl_kernels.sla_block_map/sparse_block_attention/sla_sparse_attention is unavailable` | `sycl_kernels` 编译时未打开 SLA/CUTE sparse attention 支持 | 重新编译 `lightx2v_kernel/intel_xpu`（见步骤 1 的构建链接），或改用非 `dynamic_sparse_attn` 的普通 attn_type |
 | 多卡初始化卡住 | 进程数、设备数或并行大小不匹配，或 oneCCL 不兼容 | 确认设备数、检查 `ZE_AFFINITY_MASK`、验证进程数公式 |
 | All-to-all/all-reduce 卡住（SP/SP+TP） | oneCCL 设置不正确或驱动不兼容 | 从 2 卡验证，检查 oneCCL 环境变量是否设置，先验证纯 TP 和纯 SP |
 | 某个 rank 提前退出 | 不同进程状态不同步或配置不一致 | 设置 `PYTHONFAULTHANDLER=1` 查看所有 rank 的日志，确保配置和模型路径一致 |

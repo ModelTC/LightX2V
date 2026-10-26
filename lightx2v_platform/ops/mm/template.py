@@ -9,12 +9,22 @@ from lightx2v_platform.ops.offload import copy_to_cpu
 from lightx2v_platform.ops.offload.weight_storage import StorageDescription, WeightStorage, require_dtype
 
 try:
-    from lightx2v_kernel.gemm import (
-        scaled_mxfp4_quant,
-        scaled_mxfp6_quant,
-        scaled_mxfp8_quant,
-        scaled_nvfp4_quant,
-    )
+    try:
+        from lightx2v_kernel_nvidia.gemm import (
+            scaled_mxfp4_quant,
+            scaled_mxfp6_quant,
+            scaled_mxfp8_quant,
+            scaled_nvfp4_quant,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name != "lightx2v_kernel_nvidia":
+            raise
+        from lightx2v_kernel.gemm import (
+            scaled_mxfp4_quant,
+            scaled_mxfp6_quant,
+            scaled_mxfp8_quant,
+            scaled_nvfp4_quant,
+        )
 except ImportError:
     scaled_mxfp4_quant = None
     scaled_mxfp6_quant = None

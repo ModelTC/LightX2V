@@ -1,6 +1,6 @@
 ---
 name: support-contiguous-block-offload
-description: 为 LightX2V 模型接入、审查和调试 cpu_offload_layout=contiguous。覆盖公共 block 声明、算子存储契约、NVIDIA CUDA 与 Ascend NPU 平台隔离、baseline/contiguous 入口和正确性验证；用于持久连续 pinned 权重布局，不自动扩展到多进程共享权重或运行时打包。
+description: 为 LightX2V 模型接入、审查和调试 cpu_offload_block_contiguous=true。覆盖公共 block 声明、算子存储契约、NVIDIA CUDA 与 Ascend NPU 平台隔离、baseline/contiguous 入口和正确性验证；用于持久连续 pinned 权重布局，不自动扩展到多进程共享权重或运行时打包。
 ---
 
 # 连续 CPU Block Offload 接入
@@ -63,7 +63,7 @@ configs/<model>/layout/
   contiguous_npu.json
 ```
 
-同一平台的 baseline/contiguous 保持模型、checkpoint、精度、输入、seed、采样、组件 offload 和计算算子一致，尽量只增加 `"cpu_offload_layout": "contiguous"`。脚本和配置文件统一使用 `contiguous` 命名。
+同一平台的 baseline/contiguous 保持模型、checkpoint、精度、输入、seed、采样、组件 offload 和计算算子一致，将 `cpu_offload_block_contiguous` 从 baseline 的 `false` 改为 `true`。该字段只接受布尔值，省略时默认为 `false`，与常驻数量独立。脚本和配置文件统一使用 `contiguous` 命名。
 
 脚本保持简洁，明确模型路径、设备选择和结果路径；不把开发机绝对路径当成通用要求。文档给出实际命令和精度要求。计时工具、下载、提交或推送仅在用户要求时处理。
 

@@ -286,6 +286,9 @@ class T2AVInputInfo(InputInfo):
     latent_shape: list = field(default_factory=list)
     size: list = field(default_factory=list)
     num_frames: Optional[int] = None
+    draft_steps: Optional[int] = None
+    resample_source_video: Optional[str] = None
+    resample_start_step: int | None = None
 
 
 @dataclass
@@ -303,6 +306,9 @@ class I2AVInputInfo(InputInfo):
     latent_shape: list = field(default_factory=list)
     size: list = field(default_factory=list)
     num_frames: Optional[int] = None
+    draft_steps: Optional[int] = None
+    resample_source_video: Optional[str] = None
+    resample_start_step: int | None = None
 
 
 @dataclass

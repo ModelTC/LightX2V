@@ -12,6 +12,7 @@ from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 
 from .infer.offload import QwenImage21OffloadTransformerInfer
+from .infer.offload.transformer_infer import validate_qwen_image_21_residency_config
 from .infer.post_infer import QwenImage21PostInfer
 from .infer.pre_infer import QwenImage21PreInfer
 from .infer.transformer_infer import QwenImage21TransformerInfer
@@ -27,6 +28,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
     post_weight_class = QwenImage21PostWeights
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
+        validate_qwen_image_21_residency_config(config, lora_path)
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {
             "model",
             "block",
@@ -81,7 +83,8 @@ class QwenImage21TransformerModel(BaseTransformerModel):
 
         from .weights.transformer_weights import QwenImage21BlockWeights
 
-        checkpoint = SafetensorsCheckpoint(self.model_path)
+        checkpoint_path = self.config.get("dit_quantized_ckpt") or self.model_path
+        checkpoint = SafetensorsCheckpoint(checkpoint_path)
         if checkpoint.block_indices != tuple(range(self.config["num_layers"])):
             raise ValueError("Qwen-Image-2.1 disk-streaming checkpoint has unexpected block indices")
         self.transformer_weights = MpsStreamingBlockWeights(checkpoint, lambda: QwenImage21BlockWeights(0, self.config), self.config["num_layers"])

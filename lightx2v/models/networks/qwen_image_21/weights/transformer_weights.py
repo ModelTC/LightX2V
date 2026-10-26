@@ -111,4 +111,5 @@ class QwenImage21TransformerWeights(WeightModule):
             # allocation can use the checkpoint metadata.
             self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
             self.offload_phase_cuda_buffers = None
+            self.register_offload_group(blocks, self.offload_block_cuda_buffers, (f"transformer_blocks.{i}." for i in range(len(blocks))))
         self.add_module("blocks", blocks)

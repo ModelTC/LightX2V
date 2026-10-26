@@ -18,6 +18,7 @@
   "clip_quantized_ckpt": "/path/to/Wan2.1-I2V-14B-720P-Lightx2v/fp8/clip-fp8.pth",
   "cpu_offload": true,
   "offload_granularity": "block",
+  "cpu_offload_block_contiguous": false,
   "t5_cpu_offload": false,
   "vae_cpu_offload": false,
   "clip_cpu_offload": false

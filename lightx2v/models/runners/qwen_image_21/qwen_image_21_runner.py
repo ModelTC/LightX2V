@@ -1,4 +1,3 @@
-import math
 from contextlib import suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,7 +12,9 @@ from loguru import logger
 from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason, validate_fp8_f16_accum_qmax
 from lightx2v.models.input_encoders.hf.qwen_image_21.qwen3vl import QwenImage21TextEncoder
 from lightx2v.models.networks.qwen_image_21.fp8_f16_accum_policy import ACTIVATION_QMAX, validate_checkpoint
+from lightx2v.models.networks.qwen_image_21.infer.offload.transformer_infer import QwenImage21OffloadTransformerInfer
 from lightx2v.models.networks.qwen_image_21.infer.pre_infer import build_token_layout
+from lightx2v.models.networks.qwen_image_21.input_utils import prepare_images
 from lightx2v.models.networks.qwen_image_21.lora import QwenImage21LoraAdapter, validate_lora_config
 from lightx2v.models.networks.qwen_image_21.model import QwenImage21TransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -25,12 +26,6 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
-
-
-def image_dimensions(resolution, ratio):
-    width = math.sqrt(resolution * resolution * ratio)
-    height = width / ratio
-    return max(32, round(width / 32) * 32), max(32, round(height / 32) * 32)
 
 
 @RUNNER_REGISTER("qwen_image_21")
@@ -82,11 +77,12 @@ class QwenImage21Runner(DefaultRunner):
             if parallel.get("seq_p_quant_scheme") not in (None, "fp8", "fp4"):
                 raise ValueError("qwen_image_21 seq_p_quant_scheme supports only fp8 and fp4")
         if config.get("dit_quantized"):
-            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum", "fp8-rocm", "int8-rocm"):
-                raise ValueError("qwen_image_21 DiT quantization supports only fp8-sgl, fp8-f16-accum, fp8-rocm and int8-rocm")
+            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum", "fp8-rocm", "int8-rocm", "int8-metal"):
+                raise ValueError("qwen_image_21 DiT quantization supports fp8-sgl, fp8-f16-accum, fp8-rocm, int8-rocm and int8-metal")
             # fp8-rocm / int8-rocm quantize the released BF16 weights on load, no prequantized checkpoint.
-            if config["dit_quant_scheme"] not in ("fp8-rocm", "int8-rocm") and not config.get("dit_quantized_ckpt"):
-                raise ValueError("qwen_image_21 FP8 requires dit_quantized_ckpt")
+            # int8-metal loads prequantized weights from model_path/transformer by default.
+            if config["dit_quant_scheme"] not in ("fp8-rocm", "int8-rocm", "int8-metal") and not config.get("dit_quantized_ckpt"):
+                raise ValueError("qwen_image_21 quantization requires dit_quantized_ckpt")
             if config["dit_quant_scheme"] == "fp8-f16-accum":
                 validate_fp8_f16_accum_qmax(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
         elif config.get("dit_quant_scheme", "Default") != "Default":
@@ -109,7 +105,9 @@ class QwenImage21Runner(DefaultRunner):
             raise ValueError("Qwen-Image-2.1 MPS streaming requires cpu_offload=true and offload_granularity=block")
         if not config.get("dit_disk_streaming") or not config.get("text_encoder_disk_streaming") or not config.get("text_encoder_cpu_offload"):
             raise ValueError("Qwen-Image-2.1 MPS streaming requires both DiT/text encoder disk streaming and text_encoder_cpu_offload=true")
-        for key in ("warmup", "dit_quantized", "text_encoder_quantized", "tensor_parallel", "text_encoder_tensor_parallel", "seq_parallel", "shared_cpu_weights"):
+        if config.get("dit_quantized") and config.get("dit_quant_scheme") != "int8-metal":
+            raise ValueError("Qwen-Image-2.1 MPS streaming quantization requires int8-metal")
+        for key in ("warmup", "text_encoder_quantized", "tensor_parallel", "text_encoder_tensor_parallel", "seq_parallel", "shared_cpu_weights"):
             if config.get(key):
                 raise ValueError(f"Qwen-Image-2.1 MPS streaming does not support {key}")
 
@@ -199,34 +197,8 @@ class QwenImage21Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def run_input_encoder(self):
         info = self.input_info
-        resolution = info.resolution
-        if not isinstance(resolution, int) or isinstance(resolution, bool) or resolution <= 0:
-            raise ValueError("resolution must be a positive integer")
-        images = []
-        if info.task == "i2i":
-            if not info.image_path:
-                raise ValueError("Image editing requires --image_path (comma separated for multiple images)")
-            for path in info.image_path.split(","):
-                with Image.open(path.strip()) as image:
-                    image = image.convert("RGBA")
-                    dimensions = image_dimensions(resolution, image.width / image.height)
-                    images.append(image.resize(dimensions, Image.Resampling.LANCZOS))
-        if info.size:
-            height, width = info.size
-        elif info.aspect_ratio:
-            a, b = (float(s) for s in info.aspect_ratio.split(":"))
-            width, height = image_dimensions(resolution, a / b)
-        elif images:
-            width, height = images[-1].size
-        else:
-            height = width = max(32, resolution)
-        if height < 32 or width < 32:
-            raise ValueError("Output height and width must be at least 32")
-        if height % 32 or width % 32:
-            logger.warning(f"Output height and width ({height}, {width}) are not divisible by 32 and will be rounded down to multiples of 32")
-        height = height // 32 * 32
-        width = width // 32 * 32
-        info.size = [height, width]
+        images, info.size = prepare_images(info.task, info.resolution, info.size, info.aspect_ratio, info.image_path if info.task == "i2i" else None)
+        height, width = info.size
         scale = self.config["vae_scale_factor"]
         info.latent_shape = (1, 1, self.config["in_channels"], height // scale, width // scale)
         shapes = [(1, image.height // scale, image.width // scale) for image in images] + [(1, height // scale, width // scale)]
@@ -288,6 +260,9 @@ class QwenImage21Runner(DefaultRunner):
     def _offload_transformer(self):
         if not self.config.get("cpu_offload", False):
             return
+        if isinstance(self.model.transformer_infer, QwenImage21OffloadTransformerInfer):
+            # Drain prefill/denoise streams before dropping their KV buffers.
+            self.model.transformer_infer.release_resident_blocks()
         self.model.clear_condition_kv()
         if self.config.get("dit_disk_streaming", False):
             self.model.transformer_infer.compiled_blocks.clear()

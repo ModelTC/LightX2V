@@ -49,7 +49,7 @@
 - `--comfyui_mode`：ComfyUI 兼容模式（仅 int8、fp8）
 - `--full_quantized`：全量化模式（在 ComfyUI 模式下生效）
 
-> 对于 nvfp4、mxfp4、mxfp6、mxfp8，请按 `LightX2V/lightx2v_kernel/README.md` 安装算子。
+> 对于 nvfp4、mxfp4、mxfp6、mxfp8，请按 `LightX2V/lightx2v_kernel/nvidia/README.md` 安装算子。
 
 ### LoRA 参数
 - `--lora_path`：LoRA 路径（可多个，空格分隔）
@@ -445,4 +445,4 @@ python tools/convert/converter.py \
 
 该 profile 使用权重 qmax=14。`qwen_image_21_5090_1k.json` 选择 `fp8-f16-accum`，并通过 `dit_fp8_activation_qmax` 设置激活 qmax=7。设置该配置的 checkpoint 路径，以及 `qwen_image_21_t2i_5090_1k.sh` 的项目和原模型路径后运行。
 推荐配置还需设置 `text_encoder_quantized_ckpt`；QwenVL 转换命令见 [convert_qwen_image_21_text_encoder_fp8 的注释](converter.py)。
-需要 lightx2v-kernel 提供 SM120 FP16 累加算子；启动时拒绝普通 FP8 checkpoint 和不具备该算子的环境。增大激活 qmax 可能使 FP16 累加溢出，调整后需重新验证数值和画质。
+需要 lightx2v-kernel-nvidia（或兼容的旧版 lightx2v-kernel wheel）提供 SM120 FP16 累加算子；启动时拒绝普通 FP8 checkpoint 和不具备该算子的环境。增大激活 qmax 可能使 FP16 累加溢出，调整后需重新验证数值和画质。

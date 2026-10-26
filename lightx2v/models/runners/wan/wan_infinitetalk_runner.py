@@ -590,6 +590,7 @@ class InfiniteTalkRunner(WanRunner):
         logger.info(f"Converted AV1 cond_video to H.264: {output_video_path}")
         return output_video_path
 
+    @ProfilingContext4DebugL2("Run Audio Encoder")
     def _prepare_audio_embeddings(self, input_data):
         cond_audio = input_data["cond_audio"]
         audio_items = self._sorted_person_items(cond_audio)
@@ -922,6 +923,7 @@ class InfiniteTalkRunner(WanRunner):
             "human_num": len(full_audio_embs),
         }
 
+    @ProfilingContext4DebugL2("Slice segment audio embeddings")
     def _slice_audio_embeddings(self, full_audio_embs, audio_start_idx, audio_end_idx):
         indices = (torch.arange(2 * 2 + 1) - 2) * 1
         audio_embs = []
@@ -931,6 +933,7 @@ class InfiniteTalkRunner(WanRunner):
             audio_embs.append(full_audio_emb[center_indices][None])
         return torch.concat(audio_embs, dim=0).to(AI_DEVICE, GET_DTYPE())
 
+    @ProfilingContext4DebugL2("Run condition VAE Encoder")
     def _build_vae_encoder_out(self, cond_image, frame_num):
         video_frames = torch.zeros(1, cond_image.shape[1], frame_num - cond_image.shape[2], self.target_h, self.target_w, device=AI_DEVICE)
         padding_frames = torch.concat([cond_image, video_frames], dim=2)
@@ -948,6 +951,20 @@ class InfiniteTalkRunner(WanRunner):
         if not self.config.get("use_image_encoder", True):
             return None
         return self.run_image_encoder(cond_image[:, :, -1])
+
+    def _get_segment_condition_encodings(self):
+        cache_enabled = self.config.get("cache_condition_encoders", False) and not _is_video(self.cond_file_path)
+        cached = getattr(self, "_condition_encoder_cache", None)
+        if cache_enabled and cached is not None:
+            logger.debug("Reusing request-local InfiniteTalk image condition encodings")
+            return cached
+        encodings = (
+            self._build_clip_context(self.cond_image),
+            self._build_vae_encoder_out(self.cond_image, self.frame_num),
+        )
+        if cache_enabled:
+            self._condition_encoder_cache = encodings
+        return encodings
 
     def _run_dit_clip(self, dit_inputs):
         infer_steps = self.scheduler.infer_steps
@@ -1036,6 +1053,7 @@ class InfiniteTalkRunner(WanRunner):
         logger.info(f"InfiniteTalk expected_frames: {self.expected_frames}, fps: {self.target_fps}, duration: {self.expected_frames / self.target_fps:.3f}s")
 
         self.cond_image = self._prepare_cond_image(0)
+        self._condition_encoder_cache = None
         self.cond_frame = None
         self.gen_video_list = None if self.stream_save_video else []
 
@@ -1061,8 +1079,7 @@ class InfiniteTalkRunner(WanRunner):
         self._ensure_audio_padding(self.audio_end_idx)
 
         audio_embs = self._slice_audio_embeddings(self.full_audio_embs, self.audio_start_idx, self.audio_end_idx)
-        clip_context = self._build_clip_context(self.cond_image)
-        vae_encoder_out = self._build_vae_encoder_out(self.cond_image, self.frame_num)
+        clip_context, vae_encoder_out = self._get_segment_condition_encodings()
         latent_h, latent_w = vae_encoder_out.shape[-2:]
         cur_motion_frames_latent_num = int(1 + (self.current_motion_frames_num - 1) // 4)
 
@@ -1075,7 +1092,8 @@ class InfiniteTalkRunner(WanRunner):
                 if self.cond_frame is None:
                     raise RuntimeError("InfiniteTalk non-first segment requires previous decoded motion frames.")
                 latent_motion_input = self.cond_frame
-            latent_motion_frames = self.vae_encoder.encode(latent_motion_input.to(GET_DTYPE()))
+            with ProfilingContext4DebugL2("Run motion VAE Encoder"):
+                latent_motion_frames = self.vae_encoder.encode(latent_motion_input.to(GET_DTYPE()))
             if not self.is_first_segment:
                 self.save_motion_latent(segment_idx - 1, latent_motion_frames)
 
@@ -1098,6 +1116,7 @@ class InfiniteTalkRunner(WanRunner):
             "ref_target_masks": ref_target_masks,
         }
 
+    @ProfilingContext4DebugL1("Run segment DiT")
     def run_segment(self, segment_idx=0):
         self._run_dit_clip(self.dit_inputs)
         return self.scheduler.latents
@@ -1352,6 +1371,7 @@ class InfiniteTalkRunner(WanRunner):
             self.inputs = None
             self.dit_inputs = None
             self.cond_image = None
+            self._condition_encoder_cache = None
             self.cond_frame = None
             self.full_audio_embs = None
             self.gen_video_list = None

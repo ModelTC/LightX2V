@@ -3,7 +3,7 @@
 Read this when the normal Windows build fails during environment setup, tool
 discovery or invocation from Git Bash/MSYS2. These are historical failure modes,
 not requirements to replace a working environment. The current
-[build.bat](../../../../../../../lightx2v_kernel_xpu/build.bat) already discovers
+[build.bat](../../../../../../../lightx2v_kernel/intel_xpu/build.bat) already discovers
 MSVC and the real CMake executable, but still calls `setvars.bat` directly.
 
 ## oneAPI initialization and paths containing parentheses

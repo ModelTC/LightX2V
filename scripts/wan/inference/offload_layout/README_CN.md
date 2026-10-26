@@ -27,3 +27,5 @@ bash scripts/wan/inference/offload_layout/run_contiguous_npu.sh
 ```
 
 配置位于 `configs/wan/layout/`，输入图片在脚本的 `--image_path` 中设置。视频保存在 `save_results/wan_layout/`，重复运行会覆盖同名结果。
+
+`cpu_offload_block_contiguous` 在 baseline 配置中为 `false`，在 contiguous 配置中为 `true`。

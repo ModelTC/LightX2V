@@ -19,6 +19,7 @@ from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
 )
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
+from lightx2v.models.networks.minimax_h3.infer.offload.transformer_infer import validate_minimax_h3_residency_config
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import MiniMaxH3PreInfer
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
@@ -59,9 +60,10 @@ class MiniMaxH3Model(BaseTransformerModel):
     post_weight_class = MiniMaxH3PostWeights
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
+        validate_minimax_h3_residency_config(config)
         self.lora_alpha = lora_alpha
         config.setdefault("use_fused_qkv", bool(config.get("dit_quantized", False)))
-        if config.get("cpu_offload_layout") == "contiguous":
+        if config.get("cpu_offload_block_contiguous", False):
             for option in ("use_fused_qkv", "dit_release_block_offload_buffers", "dit_quantized"):
                 if config.get(option, False):
                     raise ValueError(f"MiniMax-H3 contiguous block offload does not support {option}")
@@ -183,10 +185,13 @@ class MiniMaxH3Model(BaseTransformerModel):
         if self.config.get("dit_disk_streaming", False):
             self.release_disk_streaming_buffer()
             return
+        self.transformer_infer.release_resident_blocks()
         getattr(torch, AI_DEVICE).synchronize()
         weights = self.transformer_weights
         weights.offload_block_cuda_buffers = None
         weights._modules.pop("offload_block_cuda_buffers", None)
+        if weights.offload_group is not None:
+            weights.offload_group.device_slots = ()
         self.transformer_infer.offload_manager = None
 
     def ensure_block_offload_buffers(self):
@@ -198,7 +203,6 @@ class MiniMaxH3Model(BaseTransformerModel):
         if self.transformer_infer.offload_manager is not None:
             return
         from lightx2v.common.modules.weight_module import WeightModuleList
-        from lightx2v.common.offload.manager import WeightAsyncStreamManager
         from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3TransformerBlockWeights
 
         buffers = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, self.config, create_cuda_buffer=True) for i in range(2)])
@@ -207,9 +211,12 @@ class MiniMaxH3Model(BaseTransformerModel):
             for weight in self._iter_weight_objects(buffer):
                 for name, attr, _ in getattr(weight, "base_attrs", ()):
                     tensor = source[name]
-                    setattr(weight, f"{attr}_cuda_buffer", torch.empty_strided(tensor.shape, tensor.stride(), dtype=tensor.dtype, device=self.device if str(self.device) != "cpu" else "cuda"))
+                    device = self.device if torch.device(self.device).type != "cpu" else AI_DEVICE
+                    setattr(weight, f"{attr}_cuda_buffer", torch.empty_strided(tensor.shape, tensor.stride(), dtype=tensor.dtype, device=device))
         self.transformer_weights.add_module("offload_block_cuda_buffers", buffers)
-        self.transformer_infer.offload_manager = WeightAsyncStreamManager("block")
+        if self.transformer_weights.offload_group is not None:
+            self.transformer_weights.offload_group.device_slots = buffers
+        self.transformer_infer.offload_manager = self.transformer_infer.create_offload_manager()
         self._init_offload_manager()
 
     @staticmethod
@@ -632,7 +639,7 @@ class MiniMaxH3Model(BaseTransformerModel):
     @torch.no_grad()
     def infer(self, inputs):
         prepost_offload = self.block_offload and not self.prepost_resident
-        if prepost_offload and self.scheduler.step_index == 0:
+        if prepost_offload and self.scheduler.step_index == getattr(self.scheduler, "start_step_index", 0):
             self.pre_weight.to_cuda()
             self.post_weight.to_cuda()
         output = self._infer_cond_uncond(inputs, infer_condition=True)

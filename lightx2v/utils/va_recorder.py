@@ -503,7 +503,9 @@ class VARecorder:
     def stop(self, wait=True):
         if wait and self.stoppable_t:
             t = self.stoppable_t - time.time()
-            # Local files drain through the queues and FFmpeg finalization below.
+            # Local files are drained by FIFO stop markers, worker joins and
+            # FFmpeg EOF/finalization below. Only realtime sinks need to wait
+            # for the media's wall-clock playback deadline.
             if self.realtime and t > 0:
                 logger.warning(f"Waiting for {t} seconds to stop ...")
                 time.sleep(t)

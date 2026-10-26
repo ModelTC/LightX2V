@@ -25,3 +25,5 @@ bash scripts/qwen_image/inference/offload_layout/run_contiguous_npu.sh
 ```
 
 Configs are in `configs/qwen_image/layout/`. Set the prompt through `--prompt` in each script. Images are saved to `save_results/qwen_layout/`; rerunning a script overwrites its output.
+
+`cpu_offload_block_contiguous` is `false` in baseline configs and `true` in contiguous configs.

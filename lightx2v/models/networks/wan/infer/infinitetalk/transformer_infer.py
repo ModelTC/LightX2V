@@ -232,6 +232,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         spatial_tokens = grid_h * grid_w
         frame_count = grid_t
         sharded = self.config["seq_parallel"] and self.audio_sp_mode == "full"
+        use_frame_slices = False
 
         if sharded:
             local_length = x.shape[0]
@@ -243,21 +244,42 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             frame_end = (token_start + valid_length + spatial_tokens - 1) // spatial_tokens
             frame_count = frame_end - frame_start
             query_padding = token_start % spatial_tokens
+            shard_starts_at_frame_boundary = query_padding == 0
+            shard_ends_at_frame_boundary = (token_start + valid_length) % spatial_tokens == 0
+            shard_covers_complete_frames = shard_starts_at_frame_boundary and shard_ends_at_frame_boundary
+            use_frame_slices = human_num == 1 and not shard_covers_complete_frames
+            output_padding = local_length - valid_length
             audio_embedding = audio_embedding[frame_start:frame_end]
             queries = x[:valid_length]
         else:
             queries = x
 
         q = phase.q_linear.apply(phase.norm_x.apply(queries)).view(-1, self.num_heads, self.head_dim)
-        if sharded:
+        if sharded and not shard_covers_complete_frames and not use_frame_slices:
             # A contiguous shard can start/end within a frame. Only queries are
             # padded; each frame still attends to its own complete audio KV.
             q = F.pad(q, (0, 0, 0, 0, query_padding, frame_count * spatial_tokens - query_padding - valid_length))
-        q = q.view(frame_count, spatial_tokens, self.num_heads, self.head_dim)
+        if not use_frame_slices:
+            q = q.view(frame_count, spatial_tokens, self.num_heads, self.head_dim)
 
         audio_tokens = audio_embedding.shape[1]
         kv = phase.kv_linear.apply(audio_embedding.reshape(frame_count * audio_tokens, -1)).view(frame_count, audio_tokens, 2, self.num_heads, self.head_dim)
         encoder_k, encoder_v = kv.unbind(dim=2)
+
+        if use_frame_slices:
+            pieces = []
+            for frame in range(frame_count):
+                start = max(0, frame * spatial_tokens - query_padding)
+                end = min(valid_length, (frame + 1) * spatial_tokens - query_padding)
+                pieces.append(
+                    phase.audio_attn.apply(
+                        q=q[start:end],
+                        k=encoder_k[frame],
+                        v=encoder_v[frame],
+                    )
+                )
+            output = phase.proj.apply(torch.cat(pieces, dim=0))
+            return F.pad(output, (0, 0, 0, output_padding)) if output_padding else output
 
         if human_num > 1:
             q, encoder_k = self._apply_multi_human_audio_rope(
@@ -288,7 +310,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         if sharded:
             attn_out = attn_out.reshape(-1, self.num_heads * self.head_dim)
             output = phase.proj.apply(attn_out[query_padding : query_padding + valid_length].contiguous())
-            return F.pad(output, (0, 0, 0, local_length - valid_length))
+            return F.pad(output, (0, 0, 0, output_padding)) if output_padding else output
         return phase.proj.apply(attn_out).view_as(x)
 
     def _multi_human_rope_ranges(self, human_num, dtype, device):
