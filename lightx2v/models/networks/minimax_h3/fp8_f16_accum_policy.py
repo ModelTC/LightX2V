@@ -1,4 +1,4 @@
-from lightx2v.common.fp8_f16_accum_checkpoint import validate_fp8_f16_accum_checkpoint as validate_checkpoint_metadata
+from lightx2v.utils.fp8_f16_accum_checkpoint import validate_fp8_f16_accum_checkpoint as validate_checkpoint_metadata
 
 FP8_F16_ACCUM_WEIGHT_QMAX = 14.0
 DIT_FP8_F16_ACCUM_ACTIVATION_QMAX = 7.0

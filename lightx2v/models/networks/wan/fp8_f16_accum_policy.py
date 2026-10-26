@@ -1,6 +1,6 @@
 """Reduced-range FP8 checkpoint contract for Wan FP16 accumulation."""
 
-from lightx2v.common.fp8_f16_accum_checkpoint import validate_fp8_f16_accum_checkpoint
+from lightx2v.utils.fp8_f16_accum_checkpoint import validate_fp8_f16_accum_checkpoint
 
 QUANTIZATION_PROFILE = "wan-ar-fp8-f16-accum"
 WEIGHT_QMAX = 14.0

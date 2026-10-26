@@ -2,7 +2,7 @@
 
 from safetensors import safe_open
 
-from lightx2v.common.fp8_f16_accum_checkpoint import validate_fp8_f16_accum_metadata
+from lightx2v.utils.fp8_f16_accum_checkpoint import validate_fp8_f16_accum_metadata
 
 QUANTIZATION_PROFILE = "edenlive-proxy-fp8-f16-accum"
 WEIGHT_QMAX = 14.0
