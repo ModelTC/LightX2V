@@ -46,6 +46,8 @@ class BaseTrainer:
         self.lora_alpha = lora_config.get("alpha", self.lora_rank)
         self.lora_target_modules = lora_config.get("target_modules")
         self.lora_param_dtype = lora_config.get("param_dtype")
+        self.lora_rank_pattern = lora_config.get("rank_pattern")
+        self.lora_alpha_pattern = lora_config.get("alpha_pattern")
 
         self.gradient_checkpointing = self.training_config.get("gradient_checkpointing", True)
 
@@ -122,6 +124,7 @@ class BaseTrainer:
 
     def _setup_trainable_model(self, model):
         capability = model.ensure_capabilities().require(TrainableModelCapability)
+        patterns = {name: getattr(self, f"lora_{name}") for name in ("rank_pattern", "alpha_pattern") if getattr(self, f"lora_{name}", None)}
         capability.configure(
             self.train_type,
             {
@@ -129,6 +132,7 @@ class BaseTrainer:
                 "alpha": self.lora_alpha,
                 "target_modules": self.lora_target_modules,
                 "param_dtype": self.lora_param_dtype,
+                **patterns,
             },
         )
 

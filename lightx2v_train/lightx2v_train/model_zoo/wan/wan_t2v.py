@@ -192,12 +192,14 @@ class WanT2VModel(BaseModel):
             return torch.autocast(device_type="cuda", dtype=self.running_dtype)
         return nullcontext()
 
-    def add_lora(self, rank, alpha, target_modules):
+    def add_lora(self, rank, alpha, target_modules, *, rank_pattern=None, alpha_pattern=None):
         lora_config = LoraConfig(
             r=rank,
             lora_alpha=alpha,
             init_lora_weights="gaussian",
             target_modules=target_modules,
+            rank_pattern=rank_pattern or {},
+            alpha_pattern=alpha_pattern or {},
         )
         self._inject_lora(lora_config)
 

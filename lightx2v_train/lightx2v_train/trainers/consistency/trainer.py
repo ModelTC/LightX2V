@@ -187,6 +187,7 @@ class ConsistencyTrainer(FlowMatchingTrainer):
                     "rank": self.lora_rank,
                     "alpha": self.lora_alpha,
                     "target_modules": self.lora_target_modules,
+                    **{name: getattr(self, f"lora_{name}") for name in ("rank_pattern", "alpha_pattern") if getattr(self, f"lora_{name}", None)},
                 },
             )
         self._load_initial_model_weights(reference_model, spec.checkpoint, role=spec.role)

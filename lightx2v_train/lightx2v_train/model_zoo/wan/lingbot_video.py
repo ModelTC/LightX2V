@@ -172,7 +172,7 @@ class LingBotVideoModel(BaseModel):
             return torch.autocast(device_type="cuda", dtype=self.running_dtype)
         return nullcontext()
 
-    def add_lora(self, rank, alpha, target_modules):
+    def add_lora(self, rank, alpha, target_modules, *, rank_pattern=None, alpha_pattern=None):
         if not target_modules:
             raise ValueError("LingBot-Video DMD LoRA requires training.student.lora.target_modules and training.fake.lora.target_modules.")
         lora_config = LoraConfig(
@@ -180,6 +180,8 @@ class LingBotVideoModel(BaseModel):
             lora_alpha=alpha,
             init_lora_weights="gaussian",
             target_modules=target_modules,
+            rank_pattern=rank_pattern or {},
+            alpha_pattern=alpha_pattern or {},
         )
         self._inject_lora(lora_config)
 

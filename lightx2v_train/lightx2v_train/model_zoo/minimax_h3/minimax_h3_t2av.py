@@ -306,7 +306,7 @@ class MiniMaxH3T2AVModel(BaseModel):
         official = self.config.get("training", {}).get("dmd", {}).get("official_pdmd", False)
         return True if official else "gaussian"
 
-    def add_lora(self, rank, alpha, target_modules):
+    def add_lora(self, rank, alpha, target_modules, *, rank_pattern=None, alpha_pattern=None):
         if not target_modules:
             target_modules = MiniMaxH3DistributionMatchingCapability._DEFAULT_LORA_TARGETS
         lora_config = LoraConfig(
@@ -314,6 +314,8 @@ class MiniMaxH3T2AVModel(BaseModel):
             lora_alpha=alpha,
             init_lora_weights=self._lora_init_weights(),
             target_modules=target_modules,
+            rank_pattern=rank_pattern or {},
+            alpha_pattern=alpha_pattern or {},
         )
         try:
             self.transformer = inject_adapter_in_model(

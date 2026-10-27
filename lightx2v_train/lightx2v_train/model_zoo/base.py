@@ -77,12 +77,14 @@ class BaseModel(CapabilityProvider):
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
 
-    def add_lora(self, rank, alpha, target_modules):
+    def add_lora(self, rank, alpha, target_modules, *, rank_pattern=None, alpha_pattern=None):
         lora_config = LoraConfig(
             r=rank,
             lora_alpha=alpha,
             init_lora_weights="gaussian",
             target_modules=target_modules,
+            rank_pattern=rank_pattern or {},
+            alpha_pattern=alpha_pattern or {},
         )
         self.denoiser_module().add_adapter(lora_config)
 
@@ -293,6 +295,12 @@ class BaseModel(CapabilityProvider):
             self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True)
         else:
             save_file(lora_state_dict, os.path.join(output_dir, "pytorch_lora_weights.safetensors"))
+        # Tensor shapes encode rank, but cannot recover per-layer alpha. Keep
+        # the PEFT configuration beside mixed-rank exports without changing
+        # raw A/B tensors or the legacy uniform-rank export format.
+        adapter_config = getattr(self.denoiser_module(), "peft_config", {}).get(adapter_name or "default")
+        if adapter_config is not None and (adapter_config.rank_pattern or adapter_config.alpha_pattern):
+            adapter_config.save_pretrained(output_dir)
         if auxiliary_state_dict:
             if not auxiliary_weights_name:
                 raise ValueError("auxiliary_weights_name is required when auxiliary parameters are saved.")
