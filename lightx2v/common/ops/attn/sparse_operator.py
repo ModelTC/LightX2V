@@ -396,8 +396,14 @@ class FlashinferOperator:
             q_sizes = [min(self.q_block_size, seqlen - start) for start in range(0, seqlen, self.q_block_size)]
             k_sizes = [min(self.k_block_size, kv_seqlen - start) for start in range(0, kv_seqlen, self.k_block_size)]
             workload_stats.record_sparse_attn(
-                q.transpose(0, 1), k.transpose(0, 1), v.transpose(0, 1), mask.unsqueeze(0), operator=type(self).__name__, layout="SHD",
-                q_block_sizes=[[q_sizes] * head_num], k_block_sizes=[[k_sizes] * head_num],
+                q.transpose(0, 1),
+                k.transpose(0, 1),
+                v.transpose(0, 1),
+                mask.unsqueeze(0),
+                operator=type(self).__name__,
+                layout="SHD",
+                q_block_sizes=[[q_sizes] * head_num],
+                k_block_sizes=[[k_sizes] * head_num],
             )
         out = out.transpose(0, 1)
 

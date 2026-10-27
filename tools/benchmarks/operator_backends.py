@@ -91,8 +91,15 @@ TORCH_DTYPES = ("bf16", "fp16", "fp32")
 ATTENTION_SCOPE_HINTS = {
     "dense_attention": ("torch_sdpa_mps", "sage_attn2_k_int8_v_fp8", "flash_attn3_paged"),
     "sparse_attention": (
-        "draft_attn", "flex_attn", "nbhd_attn", "nbhd_attn_flashinfer", "radial_attn",
-        "rainfusion_attn", "svg_attn", "svg2_attn", "sol_attn",
+        "draft_attn",
+        "flex_attn",
+        "nbhd_attn",
+        "nbhd_attn_flashinfer",
+        "radial_attn",
+        "rainfusion_attn",
+        "svg_attn",
+        "svg2_attn",
+        "sol_attn",
     ),
     "sp_attention": ("ring", "ulysses", "ulysses-4090"),
 }
@@ -319,8 +326,7 @@ def _moe_operands(case, device, options, torch):
         if not case.get("replay"):
             raise ValueError("Fixed MoE inputs require a replay identity in the suite")
         counts = torch.bincount(inputs["expert_ids"].reshape(-1).long(), minlength=case["shape"]["num_experts"])
-        metrics = {"expert_counts": counts.cpu().tolist(), "active_experts": int((counts > 0).sum()),
-                   "routing_distribution": "captured_inputs", "capture_provenance": case.get("source", {})}
+        metrics = {"expert_counts": counts.cpu().tolist(), "active_experts": int((counts > 0).sum()), "routing_distribution": "captured_inputs", "capture_provenance": case.get("source", {})}
         return inputs, metrics
     if case.get("replay"):
         raise ValueError("MoE replay requires a task-local plugin supplying options['moe_inputs']")
@@ -335,8 +341,7 @@ def _moe_operands(case, device, options, torch):
     b1 = torch.randn((experts, fc1_size), device=device, dtype=dtype) * 0.02 if shape["expert_bias"] else None
     b2 = torch.randn((experts, hidden), device=device, dtype=dtype) * 0.02 if shape["expert_bias"] else None
     selected, scales, metrics = _routing(case, device, options.get("moe_routing") or "balanced", torch)
-    return {"activation": x, "fc1": fc1, "fc2": fc2, "fc1_bias": b1, "fc2_bias": b2,
-            "expert_ids": selected, "scales": scales}, metrics
+    return {"activation": x, "fc1": fc1, "fc2": fc2, "fc1_bias": b1, "fc2_bias": b2, "expert_ids": selected, "scales": scales}, metrics
 
 
 def _moe_prepared(case, device, options, backend):
@@ -351,11 +356,12 @@ def _moe_prepared(case, device, options, backend):
     if backend == "flashinfer" and gate is not None:
         # FlashInfer生产factory接受packed SwiGLU：value在前，SiLU gate在后。
         fc1, gate = torch.cat((fc1, gate), dim=1), None
-    op = create_local_fused_moe(backend, fc1, inputs["fc2"], activation,
-                                fc1_bias=inputs.get("fc1_bias"), fc2_bias=inputs.get("fc2_bias"),
-                                fc1_gate_weight=gate)
+    op = create_local_fused_moe(backend, fc1, inputs["fc2"], activation, fc1_bias=inputs.get("fc1_bias"), fc2_bias=inputs.get("fc2_bias"), fc1_gate_weight=gate)
     x, expert_ids, scales = inputs["activation"], inputs["expert_ids"], inputs["scales"]
-    fn = lambda: op.apply(x, expert_ids, scales)
+
+    def fn():
+        return op.apply(x, expert_ids, scales)
+
     if backend == "flashinfer":
         from flashinfer import autotune
 
@@ -364,12 +370,12 @@ def _moe_prepared(case, device, options, backend):
         op.tune_max_num_tokens = tokens
         with autotune(tuning_buckets=(tokens,)):
             op.apply(x, expert_ids, scales)
+
         def fn():
             with autotune(False, tuning_buckets=(tokens,)):
                 return op.apply(x, expert_ids, scales)
 
-        metrics["autotune"] = {"mode": "current_shape", "tune_max_num_tokens": tokens,
-                               "tuning_buckets": [tokens], "inference_tuning_buckets": [tokens]}
+        metrics["autotune"] = {"mode": "current_shape", "tune_max_num_tokens": tokens, "tuning_buckets": [tokens], "inference_tuning_buckets": [tokens]}
     return PreparedOperation(
         fn=fn,
         work=routed_matmul_flops(expert_ids.numel(), op.route_matmul_shapes()),
@@ -403,11 +409,14 @@ class TorchExpertLoopAdapter:
 
 class FlashInferMoEAdapter:
     descriptor = BackendDescriptor(
-        name="flashinfer", family="moe", plugin="lightx2v_fused_moe_registry",
-        input_dtypes=("bf16", "fp16"), description="production FlashInfer CUTLASS MoE",
-        optional_dependencies=("flashinfer",), production_backend="flashinfer",
-        probe_symbols=("lightx2v.common.ops.moe.fused_moe:_flashinfer_cutlass_fused_moe",
-                       "lightx2v.common.ops.moe.fused_moe:_FlashInferActivationType"),
+        name="flashinfer",
+        family="moe",
+        plugin="lightx2v_fused_moe_registry",
+        input_dtypes=("bf16", "fp16"),
+        description="production FlashInfer CUTLASS MoE",
+        optional_dependencies=("flashinfer",),
+        production_backend="flashinfer",
+        probe_symbols=("lightx2v.common.ops.moe.fused_moe:_flashinfer_cutlass_fused_moe", "lightx2v.common.ops.moe.fused_moe:_FlashInferActivationType"),
     )
 
     def support_error(self, case):
@@ -797,13 +806,13 @@ def _prepare_general_sparse_replay(case, device, method, operator_name, backend_
     def fn():
         return operator.apply(q, k, v, max_seqlen_q=q.shape[0], max_seqlen_kv=k.shape[0])
 
-    metadata.update(routing_scope="included", sparse_algorithm=method,
-                    q_block_size=operator.operator.q_block_size, k_block_size=operator.operator.k_block_size)
+    metadata.update(routing_scope="included", sparse_algorithm=method, q_block_size=operator.operator.q_block_size, k_block_size=operator.operator.k_block_size)
     return _sparse_replay_prepared(case, fn, backend_name, metadata)
 
 
 def _prepare_flash2(case: dict[str, Any], device: str) -> PreparedOperation:
     import torch
+
     from lightx2v.common.ops.attn.flash_attn import FlashAttn2Weight
 
     q, k, v = _attention_tensors(case, device, torch)
@@ -812,9 +821,7 @@ def _prepare_flash2(case: dict[str, Any], device: str) -> PreparedOperation:
     cu_kv = torch.arange(k.shape[0] + 1, device=device, dtype=torch.int32) * k.shape[1]
 
     def fn() -> Any:
-        return operator.apply(q, k, v, cu_seqlens_q=cu_q, cu_seqlens_kv=cu_kv,
-                              max_seqlen_q=q.shape[1], max_seqlen_kv=k.shape[1],
-                              causal=bool(case["shape"]["causal"])).reshape(q.shape)
+        return operator.apply(q, k, v, cu_seqlens_q=cu_q, cu_seqlens_kv=cu_kv, max_seqlen_q=q.shape[1], max_seqlen_kv=k.shape[1], causal=bool(case["shape"]["causal"])).reshape(q.shape)
 
     return _attention_prepared(case, fn, "flash_attn2")
 
@@ -833,6 +840,7 @@ def _prepare_flash3(case: dict[str, Any], device: str) -> PreparedOperation:
 
 def _prepare_sage2(case: dict[str, Any], device: str) -> PreparedOperation:
     import torch
+
     from lightx2v.common.ops.attn.sage_attn import sageattn
 
     q, k, v = _attention_tensors(case, device, torch)
@@ -1011,14 +1019,12 @@ def build_backend_catalog_report(
     mapped_attention = {item["production_backend"] for item in descriptors if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]}
     mapped_mm = {item["production_backend"] for item in descriptors if item["family"] == "gemm" and item["production_backend"]}
     mm_exclusions = {name: reason for name, reason in PRODUCTION_MM_EXCLUSIONS.items() if name in production_mm and name not in mapped_mm}
-    general_variants = {part for item in descriptors if item["production_backend"] == "general_sparse_attn"
-                        for part in (item["production_variant"] or "").split(";")}
+    general_variants = {part for item in descriptors if item["production_backend"] == "general_sparse_attn" for part in (item["production_variant"] or "").split(";")}
     sparse_gaps = [f"general_sparse_attn/operator:{name}" for name in production_sparse_operators if f"operator={name}" not in general_variants]
     sparse_gaps += [f"general_sparse_attn/mask:{name}" for name in production_mask_generators if f"mask={name.removesuffix('_mask_generator')}" not in general_variants]
     unmapped_attention = sorted(set(production) - mapped_attention - set(ATTENTION_SCOPE_HINTS["sp_attention"])) + sparse_gaps
     attention_families = {name: family for family, names in ATTENTION_SCOPE_HINTS.items() for name in names}
-    attention_families.update({item["production_backend"]: item["family"] for item in descriptors
-                              if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]})
+    attention_families.update({item["production_backend"]: item["family"] for item in descriptors if item["family"] in {"dense_attention", "sparse_attention"} and item["production_backend"]})
     attention_families.update({name: "sparse_attention" for name in sparse_gaps})
     attention_scopes = {}
     for family in ("dense_attention", "sparse_attention", "sp_attention"):
@@ -1037,12 +1043,20 @@ def build_backend_catalog_report(
         mapped = {item["production_backend"]: item["name"] for item in descriptors if item["family"] == "convolution" and item["production_backend"]}
         if "Default" in names:
             mapped.setdefault("Default", "torch_convolution")
-        excluded = {"Default-ForceFp32": "forced FP32 conversion is outside the direct Torch adapter"} if subtype == "conv2d" and "Default-ForceFp32" in names and "Default-ForceFp32" not in mapped else {}
-        gaps = dict.fromkeys(sorted((set(names) | {"lightx2v_kernel.fp8_conv3d"}) - set(mapped) - set(excluded)), "production convolution has no benchmark adapter; inspect its input/precision contract")
-        convolution_scopes[subtype] = {"production_backends": names, "mapped_backends": mapped, "excluded_production_backends": excluded,
-                                       "unmapped_production_backends": sorted(gaps), "integration_gaps": gaps}
-    unmapped = sorted((*unmapped_attention, *unmapped_mm, *unmapped_moe,
-                       *(f"{subtype}/{name}" for subtype, scope in convolution_scopes.items() for name in scope["unmapped_production_backends"])))
+        excluded = (
+            {"Default-ForceFp32": "forced FP32 conversion is outside the direct Torch adapter"} if subtype == "conv2d" and "Default-ForceFp32" in names and "Default-ForceFp32" not in mapped else {}
+        )
+        gaps = dict.fromkeys(
+            sorted((set(names) | {"lightx2v_kernel.fp8_conv3d"}) - set(mapped) - set(excluded)), "production convolution has no benchmark adapter; inspect its input/precision contract"
+        )
+        convolution_scopes[subtype] = {
+            "production_backends": names,
+            "mapped_backends": mapped,
+            "excluded_production_backends": excluded,
+            "unmapped_production_backends": sorted(gaps),
+            "integration_gaps": gaps,
+        }
+    unmapped = sorted((*unmapped_attention, *unmapped_mm, *unmapped_moe, *(f"{subtype}/{name}" for subtype, scope in convolution_scopes.items() for name in scope["unmapped_production_backends"])))
     candidates = []
     for descriptor in descriptors:
         capabilities = descriptor["cuda_capabilities"]
@@ -1118,17 +1132,26 @@ def probe_backend_catalog(registry: BackendRegistry, device: str) -> dict[str, A
     unresolved_imports = set()
     with redirect_stdout(discovery_output):
         import lightx2v.common.ops.attn  # noqa: F401
+
         for module in ("flex_attn", "paged_flash_attn"):
             try:
                 importlib.import_module("lightx2v.common.ops.attn." + module)
             except ImportError as exc:
                 unresolved_imports.add("unresolved_import:" + module)
                 print(f"{module}: {type(exc).__name__}: {exc}")
-        import lightx2v.common.ops.moe.fused_moe  # noqa: F401
         import lightx2v.common.ops.conv.conv2d  # noqa: F401
         import lightx2v.common.ops.conv.conv3d  # noqa: F401
+        import lightx2v.common.ops.moe.fused_moe  # noqa: F401
         from lightx2v.common.ops.mm import mm_weight as _mm_weight  # noqa: F401
-        from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV2D_WEIGHT_REGISTER, CONV3D_WEIGHT_REGISTER, FUSED_MOE_REGISTER, MM_WEIGHT_REGISTER, SPARSE_MASK_GENERATOR_REGISTER, SPARSE_OPERATOR_REGISTER
+        from lightx2v.utils.registry_factory import (
+            ATTN_WEIGHT_REGISTER,
+            CONV2D_WEIGHT_REGISTER,
+            CONV3D_WEIGHT_REGISTER,
+            FUSED_MOE_REGISTER,
+            MM_WEIGHT_REGISTER,
+            SPARSE_MASK_GENERATOR_REGISTER,
+            SPARSE_OPERATOR_REGISTER,
+        )
 
     capability = None
     if torch.cuda.is_available():
@@ -1283,21 +1306,35 @@ ATTENTION_BACKEND_CONTRACTS = (
         probe_symbols=("lightx2v.common.ops.attn.flash_attn:flash_attn_func_v4",),
     ),
     AttentionBackendContract(
-        "sparge.sage2.specialized", "sparse_attention", "lightx2v_sparge_sage2", ("lightx2v", "spas_sage_attn"),
+        "sparge.sage2.specialized",
+        "sparse_attention",
+        "lightx2v_sparge_sage2",
+        ("lightx2v", "spas_sage_attn"),
         partial(_prepare_production_sparse_replay, class_name="SparseSageAttn2Weight", backend_name="sparge.sage2.specialized", sparse_mode="sparge_mode"),
-        "spas_sage_attn2", "sparse_mode=sparge_mode",
+        "spas_sage_attn2",
+        "sparse_mode=sparge_mode",
         probe_symbols=("lightx2v.common.ops.attn.utils.sparge_util:sage2_block_sparse_attn", *SAGE2_SPARSE_PROBES),
     ),
     AttentionBackendContract(
-        "sparge.sage3.specialized", "sparse_attention", "lightx2v_sparge_sage3", ("lightx2v", "sageattn3_sparse"),
+        "sparge.sage3.specialized",
+        "sparse_attention",
+        "lightx2v_sparge_sage3",
+        ("lightx2v", "sageattn3_sparse"),
         partial(_prepare_production_sparse_replay, class_name="SparseSageAttn3Weight", backend_name="sparge.sage3.specialized", sparse_mode="sparge_mode"),
-        "spas_sage_attn3", "sparse_mode=sparge_mode", BLACKWELL_CAPABILITIES,
+        "spas_sage_attn3",
+        "sparse_mode=sparge_mode",
+        BLACKWELL_CAPABILITIES,
         ("lightx2v.common.ops.attn.sage_attn:sage3_block_sparse_attn",),
     ),
     AttentionBackendContract(
-        "sparge.fa4.specialized", "sparse_attention", "lightx2v_sparge_fa4", ("lightx2v", "flash_attn.cute"),
+        "sparge.fa4.specialized",
+        "sparse_attention",
+        "lightx2v_sparge_fa4",
+        ("lightx2v", "flash_attn.cute"),
         partial(_prepare_production_sparse_replay, class_name="SparseFlashAttn4Weight", backend_name="sparge.fa4.specialized", sparse_mode="sparge_mode"),
-        "spas_flash_attn4", "sparse_mode=sparge_mode", BLACKWELL_CAPABILITIES,
+        "spas_flash_attn4",
+        "sparse_mode=sparge_mode",
+        BLACKWELL_CAPABILITIES,
         ("lightx2v.common.ops.attn.flash_attn:flash_attn_func_v4",),
     ),
 )
@@ -1305,9 +1342,14 @@ ATTENTION_BACKEND_CONTRACTS = (
 
 ATTENTION_BACKEND_CONTRACTS += tuple(
     AttentionBackendContract(
-        f"sla.{operator}.dynamic", "sparse_attention", "lightx2v_dynamic_sparse_" + operator, dependencies,
+        f"sla.{operator}.dynamic",
+        "sparse_attention",
+        "lightx2v_dynamic_sparse_" + operator,
+        dependencies,
         partial(_prepare_dynamic_sparse_replay, operator_name=operator, backend_name=f"sla.{operator}.dynamic"),
-        "dynamic_sparse_attn", "operator=" + operator, probe_symbols=symbols,
+        "dynamic_sparse_attn",
+        "operator=" + operator,
+        probe_symbols=symbols,
     )
     for operator, dependencies, symbols in (
         ("triton_ar", ("lightx2v", "triton"), ()),
@@ -1316,9 +1358,15 @@ ATTENTION_BACKEND_CONTRACTS += tuple(
 )
 ATTENTION_BACKEND_CONTRACTS += tuple(
     AttentionBackendContract(
-        f"{method}.{label}.general", "sparse_attention", f"lightx2v_general_{method}_{label}", ("lightx2v", "triton", *dependencies),
+        f"{method}.{label}.general",
+        "sparse_attention",
+        f"lightx2v_general_{method}_{label}",
+        ("lightx2v", "triton", *dependencies),
         partial(_prepare_general_sparse_replay, method=method, operator_name=operator, backend_name=f"{method}.{label}.general"),
-        "general_sparse_attn", f"mask={method};operator={operator}", capabilities, symbols,
+        "general_sparse_attn",
+        f"mask={method};operator={operator}",
+        capabilities,
+        symbols,
     )
     for method in ("sla", "sparge")
     for label, operator, dependencies, capabilities, symbols in GENERAL_SPARSE_OPERATORS

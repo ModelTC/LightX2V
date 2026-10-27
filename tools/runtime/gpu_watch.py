@@ -36,8 +36,14 @@ def sample(devices, timeout):
             if pid <= 0:
                 raise ValueError("GPU PID unavailable")
             processes.append({"pid": pid, "type": app.findtext("type"), "ancestors": lineage(pid)})
-        gpus.append({"uuid": gpu.findtext("uuid"), "memory_mib": int(gpu.findtext("fb_memory_usage/used").split()[0]),
-                     "utilization_pct": int(gpu.findtext("utilization/gpu_util").split()[0]), "processes": processes})
+        gpus.append(
+            {
+                "uuid": gpu.findtext("uuid"),
+                "memory_mib": int(gpu.findtext("fb_memory_usage/used").split()[0]),
+                "utilization_pct": int(gpu.findtext("utilization/gpu_util").split()[0]),
+                "processes": processes,
+            }
+        )
     if sorted(gpu["uuid"] for gpu in gpus) != sorted(devices):
         raise ValueError("GPU inventory mismatch")
     return gpus
@@ -53,16 +59,18 @@ def capture(args):
 
     signal.signal(signal.SIGTERM, interrupt)
     with (args.output / "samples.jsonl").open("x") as log:
+
         def observe():
             point = {"start": time.monotonic(), "boot_id": boot_id, "devices": args.devices}
             try:
-                remaining = max(.001, deadline - time.monotonic())
+                remaining = max(0.001, deadline - time.monotonic())
                 point["gpus"] = sample(args.devices, min(args.query_timeout, remaining))
             except (OSError, ValueError, TypeError, ET.ParseError, subprocess.SubprocessError) as error:
                 point["error"] = f"{type(error).__name__}: {error}"
             point["end"] = time.monotonic()
             log.write(json.dumps(point) + "\n")
             log.flush()
+
         try:
             while time.monotonic() < deadline:
                 observe()
@@ -78,9 +86,7 @@ def check(args):
     task = json.loads(args.task.read_text())
     start, end = task["start"], task["end"]
     root = [task["pid"], task["start_ticks"]]
-    if not all(
-        isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in [start, end]
-    ) or start >= end:
+    if not all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in [start, end]) or start >= end:
         raise ValueError("invalid task interval")
     if not all(type(x) is int and x > 0 for x in root):
         raise ValueError("invalid task identity")
@@ -88,19 +94,11 @@ def check(args):
     after = [i for i, row in enumerate(rows) if row["start"] >= end]
     if not before or not after:
         raise ValueError("task interval has no before/after sample")
-    window = rows[before[-1]:after[0] + 1]
+    window = rows[before[-1] : after[0] + 1]
     devices = task["devices"]
     if not devices or len(set(devices)) != len(devices):
         raise ValueError("invalid task devices")
-    if not window or any(
-        not all(
-            isinstance(row[key], (int, float))
-            and not isinstance(row[key], bool)
-            and math.isfinite(row[key])
-            for key in ("start", "end")
-        )
-        for row in window
-    ):
+    if not window or any(not all(isinstance(row[key], (int, float)) and not isinstance(row[key], bool) and math.isfinite(row[key]) for key in ("start", "end")) for row in window):
         raise ValueError("invalid sample times")
     for previous, point in zip(window, window[1:]):
         if point["start"] < previous["end"] or point["end"] - previous["end"] > args.max_gap:
@@ -123,13 +121,9 @@ def check(args):
                     raise ValueError("GPU process identity unavailable")
                 if root not in process["ancestors"]:
                     foreign.append({"uuid": gpu["uuid"], "pid": process["pid"]})
-    if any(
-        gpu["processes"] or gpu["utilization_pct"] or gpu["memory_mib"] > args.idle_memory
-        for gpu in window[0]["gpus"]
-    ):
+    if any(gpu["processes"] or gpu["utilization_pct"] or gpu["memory_mib"] > args.idle_memory for gpu in window[0]["gpus"]):
         return {"resources_clear": False, "reason": "devices_not_idle_before_start"}
-    return {"resources_clear": not foreign, "reason": "foreign_process" if foreign else "no_conflict_observed",
-            "foreign": foreign, "sample_count": len(window), "start": start, "end": end}
+    return {"resources_clear": not foreign, "reason": "foreign_process" if foreign else "no_conflict_observed", "foreign": foreign, "sample_count": len(window), "start": start, "end": end}
 
 
 def main():
@@ -148,16 +142,11 @@ def main():
     verify.add_argument("--idle-memory", type=int, default=256)
     args = parser.parse_args()
     if args.command == "capture":
-        if not all(
-            math.isfinite(x) and x > 0 for x in [args.seconds, args.interval, args.query_timeout]
-        ) or args.seconds > 3600:
+        if not all(math.isfinite(x) and x > 0 for x in [args.seconds, args.interval, args.query_timeout]) or args.seconds > 3600:
             parser.error("invalid recording budget")
         try:
             args.devices = [value[:4] + value[4:].lower() for value in args.devices]
-            if len(set(args.devices)) != len(args.devices) or any(
-                not value.startswith("GPU-") or str(uuid.UUID(value[4:])) != value[4:]
-                for value in args.devices
-            ):
+            if len(set(args.devices)) != len(args.devices) or any(not value.startswith("GPU-") or str(uuid.UUID(value[4:])) != value[4:] for value in args.devices):
                 raise ValueError("provide distinct full GPU UUIDs")
         except ValueError as error:
             parser.error(str(error))

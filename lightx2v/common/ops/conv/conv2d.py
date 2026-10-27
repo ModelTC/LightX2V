@@ -4,7 +4,6 @@ import torch
 
 from lightx2v.common.ops.compute_stats import convolution_flops
 from lightx2v.utils.core_op_stats import CoreOpStatistics
-
 from lightx2v.utils.registry_factory import CONV2D_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -16,8 +15,10 @@ class Conv2dWeightTemplate(CoreOpStatistics, metaclass=ABCMeta):
         x = arguments["input_tensor"]
         return {
             "shape": {"input": list(x.shape), "weight": list(self.weight.shape), "output": list(output.shape), "groups": self.groups},
-            "work": {"logical_flops": convolution_flops(output.numel(), self.weight.shape),
-                     "definition": "2*output_elements*weight_input_channels_per_group*kernel_volume; includes padded MACs; excludes bias"},
+            "work": {
+                "logical_flops": convolution_flops(output.numel(), self.weight.shape),
+                "definition": "2*output_elements*weight_input_channels_per_group*kernel_volume; includes padded MACs; excludes bias",
+            },
         }
 
     def __init__(self, weight_name, bias_name, stride, padding, dilation, groups):

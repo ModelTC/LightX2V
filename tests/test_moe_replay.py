@@ -39,14 +39,16 @@ def capture(tmp_path, activation="swiglu", split=True, dtype=torch.bfloat16, sca
         actual = op.apply(x, ids, scales)
         op.apply(x + 1, ids, scales)
     assert len(artifacts) == 1 and workload_stats._active is None
-    case = {"case_id": "actual", "operator_family": "moe",
-            "shape": {"tokens": 4, "hidden_size": 3, "intermediate_size": 4, "num_experts": 3,
-                      "top_k": 2, "activation": activation, "expert_bias": b1 is not None or b2 is not None},
-            "precision": {"input_dtype": {torch.float32: "fp32", torch.bfloat16: "bf16"}[dtype]},
-            "replay": artifacts[0], "source": {"origin": "synthetic_cpu_control_flow"}}
+    case = {
+        "case_id": "actual",
+        "operator_family": "moe",
+        "shape": {"tokens": 4, "hidden_size": 3, "intermediate_size": 4, "num_experts": 3, "top_k": 2, "activation": activation, "expert_bias": b1 is not None or b2 is not None},
+        "precision": {"input_dtype": {torch.float32: "fp32", torch.bfloat16: "bf16"}[dtype]},
+        "replay": artifacts[0],
+        "source": {"origin": "synthetic_cpu_control_flow"},
+    }
     validate_suite({"schema_version": 1, "kind": "operator_benchmark_shape_suite_v1", "suite_id": "actual", "cases": [case]})
-    return case, {"activation": x, "fc1": fc1, "fc2": fc2, "fc1_gate": gate, "fc1_bias": b1,
-                  "fc2_bias": b2, "expert_ids": ids, "scales": scales}, actual
+    return case, {"activation": x, "fc1": fc1, "fc2": fc2, "fc1_gate": gate, "fc1_bias": b1, "fc2_bias": b2, "expert_ids": ids, "scales": scales}, actual
 
 
 @pytest.mark.parametrize("activation,split", [("gelu", False), ("swiglu", False), ("swiglu", True)])
@@ -116,6 +118,7 @@ def test_unsupported_export_is_a_gap_not_a_changed_forward(tmp_path):
 def test_flashinfer_preparation_tunes_once_outside_timed_callable(tmp_path, monkeypatch, tuning_fails):
     from contextlib import contextmanager
     from types import SimpleNamespace
+
     from lightx2v.common.ops.moe import fused_moe
     from tools.benchmarks.operator_backends import FlashInferMoEAdapter
 

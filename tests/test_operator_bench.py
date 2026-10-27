@@ -106,8 +106,7 @@ def sp_catalog(case: dict, *candidates: dict) -> dict:
         "kind": "sp_attention_benchmark_candidate_catalog_v1",
         "catalog_fingerprint": "catalog-1",
         "scope_complete": True,
-        "leaf_catalog": {"family": "sparse_attention" if case.get("replay") else "dense_attention",
-                         "candidates": [], "excluded_production_backends": {}, "integration_gaps": {}},
+        "leaf_catalog": {"family": "sparse_attention" if case.get("replay") else "dense_attention", "candidates": [], "excluded_production_backends": {}, "integration_gaps": {}},
         "cases": [{"case_id": case["case_id"], "candidates": list(candidates), "exclusions": []}],
     }
 
@@ -361,18 +360,28 @@ def _dense_replay_fixture(tmp_path, batch=1):
     import torch
 
     shape = {"batch": batch, "seq_q": 4, "seq_kv": 4, "heads": 2, "kv_heads": 2, "head_dim": 64, "causal": False}
-    tensors = {name: (torch.arange(batch * 4 * 2 * 64).reshape(batch, 4, 2, 64) % 7).to(torch.bfloat16) / 17 + offset
-               for offset, name in enumerate(("q", "k", "v"))}
+    tensors = {name: (torch.arange(batch * 4 * 2 * 64).reshape(batch, 4, 2, 64) % 7).to(torch.bfloat16) / 17 + offset for offset, name in enumerate(("q", "k", "v"))}
     payload = tmp_path / "qkv.pt"
     torch.save(tensors, payload)
     digest = hashlib.sha256(payload.read_bytes()).hexdigest()
-    manifest = {"schema_version": 1, "kind": "operator_benchmark_qkv_replay_v1", "layout": "BSHD", "tensors": {
-        name: {"shape": list(value.shape), "dtype": "bf16", "shards": [{"path": payload.name, "sha256": digest,
-                "tensor_key": name, "sequence_start": 0, "sequence_end": 4}]} for name, value in tensors.items()}}
+    manifest = {
+        "schema_version": 1,
+        "kind": "operator_benchmark_qkv_replay_v1",
+        "layout": "BSHD",
+        "tensors": {
+            name: {"shape": list(value.shape), "dtype": "bf16", "shards": [{"path": payload.name, "sha256": digest, "tensor_key": name, "sequence_start": 0, "sequence_end": 4}]}
+            for name, value in tensors.items()
+        },
+    }
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(manifest))
-    case = {"case_id": "dense.replay", "operator_family": "dense_attention", "shape": shape, "precision": {"input_dtype": "bf16"},
-            "replay": {"manifest": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}}
+    case = {
+        "case_id": "dense.replay",
+        "operator_family": "dense_attention",
+        "shape": shape,
+        "precision": {"input_dtype": "bf16"},
+        "replay": {"manifest": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()},
+    }
     return case, tensors
 
 
@@ -408,6 +417,7 @@ def test_flash2_adapter_uses_production_dispatch(monkeypatch, batch, seq_kv, cau
 @pytest.mark.parametrize("backend", ["torch_sdpa", "flash_attn2", "sage_attn2"])
 def test_dense_replay_adapter_consumes_manifest_operands(tmp_path, monkeypatch, batch, backend):
     import torch
+
     from lightx2v.common.ops.attn import flash_attn
 
     case, tensors = _dense_replay_fixture(tmp_path, batch)
@@ -426,8 +436,7 @@ def test_dense_replay_adapter_consumes_manifest_operands(tmp_path, monkeypatch, 
     monkeypatch.setattr(flash_attn, "flash_attn_varlen_func_v2", attention)
     monkeypatch.setitem(sys.modules, "sageattention", SimpleNamespace(sageattn=wrong_dispatch))
     monkeypatch.setitem(sys.modules, "lightx2v.common.ops.attn.sage_attn", SimpleNamespace(sageattn=attention))
-    monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention",
-                        lambda q, k, v, **kwargs: attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2))
+    monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", lambda q, k, v, **kwargs: attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2))
     monkeypatch.setattr(torch, "randn", lambda *a, **k: pytest.fail("replay must not generate synthetic QKV"))
     prepared = load_registry().require(backend).prepare(case, "cpu", {})
     output = prepared.fn()
@@ -659,8 +668,7 @@ def test_direct_runner_writes_repeats_and_resumes(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr(core, "environment", lambda device: {"device": device})
 
     def fake_run(case: dict, adapter: FakeAdapter, run_id: str, env: dict, options: dict) -> dict:
-        return {"run_id": run_id, "case": core._runtime_case(case, adapter, options),
-                "environment": env, "status": "ok"}
+        return {"run_id": run_id, "case": core._runtime_case(case, adapter, options), "environment": env, "status": "ok"}
 
     monkeypatch.setattr(core, "run_case", fake_run)
     output = tmp_path / "raw.jsonl"
@@ -694,10 +702,12 @@ def test_runner_defaults_to_all_prechecked_backends_without_measuring_unavailabl
     registry = BackendRegistry()
     for name in ["a", "b", "missing"]:
         registry.register(FakeAdapter(name))
-    catalog = {"catalog_fingerprint": "fixture", "candidates": [
-        {"name": name, "family": "gemm", "status": "eligible" if name in (selection if selection is not None else ["a", "b"]) else "dependency_missing"}
-        for name in ["a", "b", "missing"]
-    ]}
+    catalog = {
+        "catalog_fingerprint": "fixture",
+        "candidates": [
+            {"name": name, "family": "gemm", "status": "eligible" if name in (selection if selection is not None else ["a", "b"]) else "dependency_missing"} for name in ["a", "b", "missing"]
+        ],
+    }
     monkeypatch.setattr(core, "load_registry", lambda plugins: registry)
     monkeypatch.setattr(core, "probe_backend_catalog", lambda registry, device: catalog)
     monkeypatch.setattr(core, "environment", lambda device: {"device": device})
@@ -1784,8 +1794,7 @@ def test_sp_dense_reference_matches_tiny_gqa_softmax_oracle(aux_first, rank):
 
     import torch
 
-    shape = {**sp_case()["shape"], "sequence": 4, "sp_size": 2, "heads": 4, "kv_heads": 2, "head_dim": 2,
-             "aux_tokens": 1, "aux_q": True, "aux_first": aux_first}
+    shape = {**sp_case()["shape"], "sequence": 4, "sp_size": 2, "heads": 4, "kv_heads": 2, "head_dim": 2, "aux_tokens": 1, "aux_q": True, "aux_first": aux_first}
     q = torch.arange(32, dtype=torch.float64).reshape(4, 4, 2) / 10
     k = torch.arange(16, dtype=torch.float64).reshape(4, 2, 2) / 7
     v = torch.arange(16, dtype=torch.float64).reshape(4, 2, 2) / 3
@@ -1797,8 +1806,7 @@ def test_sp_dense_reference_matches_tiny_gqa_softmax_oracle(aux_first, rank):
     full_k, full_v = torch.cat((k, aux_k)), torch.cat((v, aux_v))
 
     def expected(queries):
-        return torch.stack([torch.softmax(queries[:, head] @ full_k[:, head // 2].T / math.sqrt(2), dim=-1) @ full_v[:, head // 2]
-                            for head in range(4)], dim=1).reshape(queries.shape[0], -1)
+        return torch.stack([torch.softmax(queries[:, head] @ full_k[:, head // 2].T / math.sqrt(2), dim=-1) @ full_v[:, head // 2] for head in range(4)], dim=1).reshape(queries.shape[0], -1)
 
     torch.testing.assert_close(main, expected(q)[local], rtol=1e-12, atol=1e-12)
     torch.testing.assert_close(aux, expected(aux_q), rtol=1e-12, atol=1e-12)
@@ -1874,8 +1882,7 @@ def _sp_sparse_work_worker(rank, directory):
 
         q = torch.ones(2, 8, 2)
         aux = torch.ones(1, 8, 2)
-        case = sp_case(shape={**sp_case()["shape"], "sequence": 4, "sp_size": 2, "heads": 8, "kv_heads": 8,
-                              "head_dim": 2, "aux_tokens": 1, "aux_q": True})
+        case = sp_case(shape={**sp_case()["shape"], "sequence": 4, "sp_size": 2, "heads": 8, "kv_heads": 8, "head_dim": 2, "aux_tokens": 1, "aux_q": True})
         leaf = Leaf()
         original_factory, original_write, original_pack = sp_bench._sparse_attention_operator, WorkloadStats.write, TorchUlyssesPrePost.pack_attn
         sp_bench._sparse_attention_operator = lambda *args: leaf
@@ -1893,12 +1900,19 @@ def _sp_sparse_work_worker(rank, directory):
         WorkloadStats.write = write
         TorchUlyssesPrePost.pack_attn = staticmethod(pack)
         for pipeline in (False, True):
-            candidate = {"algorithm": "ulysses", "leaf_family": "sparse_attention", "attention_backend": "sla.triton.general",
-                         "prepost_backend": "torch", "a2a_backend": "torch", "quant_scheme": None, "tensor_fusion": True,
-                         "head_parallel": pipeline, "head_parallel_group_size": 3}
+            candidate = {
+                "algorithm": "ulysses",
+                "leaf_family": "sparse_attention",
+                "attention_backend": "sla.triton.general",
+                "prepost_backend": "torch",
+                "a2a_backend": "torch",
+                "quant_scheme": None,
+                "tensor_fusion": True,
+                "head_parallel": pipeline,
+                "head_parallel_group_size": 3,
+            }
             case["sparse"] = {"keep_ratio": 0.2}
-            target, work = sp_bench._prepare_operation(case, candidate, torch.device("cpu"), 42, rank,
-                                                               inputs=(q, q, q, aux, aux, aux))
+            target, work = sp_bench._prepare_operation(case, candidate, torch.device("cpu"), 42, rank, inputs=(q, q, q, aux, aux, aux))
             assert work == 1600
             stages = ("complete", "missing", "overflow", "write_failure")
             if pipeline:
@@ -1932,8 +1946,7 @@ def _sp_sparse_work_worker(rank, directory):
         dist.destroy_process_group()
 
 
-@pytest.mark.parametrize("worker", [_sp_legacy_reference_worker, _sp_sparse_work_worker],
-                         ids=["reference", "sparse_SP_compute_facts"])
+@pytest.mark.parametrize("worker", [_sp_legacy_reference_worker, _sp_sparse_work_worker], ids=["reference", "sparse_SP_compute_facts"])
 def test_sp_local_reference_failures_preserve_collective_order(tmp_path, worker):
     import os
     import subprocess
@@ -1950,16 +1963,16 @@ def test_sp_local_reference_failures_preserve_collective_order(tmp_path, worker)
         "torch.set_num_threads(1)\n"
         "mp.start_processes(worker, args=(sys.argv[1],), nprocs=2, join=True, start_method='fork')\n"
     )
-    run = subprocess.run([sys.executable, "-B", "-c", program, str(tmp_path)], cwd=root, env=env,
-                         capture_output=True, text=True, timeout=45)
+    run = subprocess.run([sys.executable, "-B", "-c", program, str(tmp_path)], cwd=root, env=env, capture_output=True, text=True, timeout=45)
     assert run.returncode == 0, run.stdout + run.stderr
 
 
 def test_report_suppresses_sparse_rates_without_actual_final_mask():
     case = sparse_attention_case()
-    records = [raw_record(case, "mask_missing", repeat, 1.0, None, rate_metric="actual_tflops",
-                          extra_metrics={"work": None, "actual_compute_count_available": False, "dense_equivalent_tflops": 123.0})
-               for repeat in range(3)]
+    records = [
+        raw_record(case, "mask_missing", repeat, 1.0, None, rate_metric="actual_tflops", extra_metrics={"work": None, "actual_compute_count_available": False, "dense_equivalent_tflops": 123.0})
+        for repeat in range(3)
+    ]
     report = core.build_recommendation_report(shape_suite(case), records)
     text = core.markdown_report(report)
     row = next(line for line in text.splitlines() if line.startswith("| mask_missing |"))
@@ -1987,9 +2000,7 @@ def test_missing_sparse_regions_do_not_publish_density_estimate_as_actual_flops(
     import torch
 
     actual = torch.ones(3, 2)
-    prepared = backends.PreparedOperation(lambda: actual, 999, "actual_tflops", "density_estimate",
-                                         dense_equivalent_work=72,
-                                         expected_output_shape=(3, 2))
+    prepared = backends.PreparedOperation(lambda: actual, 999, "actual_tflops", "density_estimate", dense_equivalent_work=72, expected_output_shape=(3, 2))
 
     class Adapter:
         descriptor = BackendDescriptor("fixture", "sparse_attention", "test", ("bf16",), "CPU flow fixture")
@@ -2008,9 +2019,17 @@ def test_missing_sparse_regions_do_not_publish_density_estimate_as_actual_flops(
     monkeypatch.setattr(torch.cuda, "synchronize", lambda *args: None)
     monkeypatch.setattr(torch.cuda, "manual_seed_all", lambda *args: None)
     monkeypatch.setattr(core, "_measure", lambda *args: ([1.0], actual))
-    options = {"measurement_seed": 42, "device": "cpu", "warmup": 0, "iterations": 1,
-               "prewarm_seconds": 0, "moe_routing": "balanced", "seed": 42,
-               "timing_mode": core.TIMING_MODE, "rate_schema": core.RATE_SCHEMA}
+    options = {
+        "measurement_seed": 42,
+        "device": "cpu",
+        "warmup": 0,
+        "iterations": 1,
+        "prewarm_seconds": 0,
+        "moe_routing": "balanced",
+        "seed": 42,
+        "timing_mode": core.TIMING_MODE,
+        "rate_schema": core.RATE_SCHEMA,
+    }
     case = sparse_attention_case()
     case["shape"] = {"batch": 1, "heads": 1, "kv_heads": 1, "seq_q": 3, "seq_kv": 3, "head_dim": 2, "causal": False}
     row = core.run_case(case, Adapter(), "repeat000", raw_record(case, "fixture", 0, 1, 1)["environment"], options)
@@ -2026,13 +2045,13 @@ def test_sp_run_preserves_structure_and_recovery_contracts(tmp_path, monkeypatch
     import torch
     import torch.distributed as dist
 
-    case = sp_case(shape={**sp_case()["shape"], "sequence": 4, "sp_size": 2, "heads": 2, "kv_heads": 2,
-                          "head_dim": 8, "aux_tokens": 1, "aux_q": True})
-    candidate = next(item for item in sp_bench.enumerate_candidates(case, ["torch_sdpa"])["candidates"]
-                     if item["algorithm"] == "ulysses" and item["prepost_backend"] == item["a2a_backend"] == "torch"
-                     and item["quant_scheme"] is None and not item["tensor_fusion"] and not item["head_parallel"])
-    catalog = {"catalog_fingerprint": "cpu-flow", "scope_complete": True, "leaf_catalog": {},
-               "cases": [{"case_id": case["case_id"], "candidates": [candidate]}]}
+    case = sp_case(shape={**sp_case()["shape"], "sequence": 4, "sp_size": 2, "heads": 2, "kv_heads": 2, "head_dim": 8, "aux_tokens": 1, "aux_q": True})
+    candidate = next(
+        item
+        for item in sp_bench.enumerate_candidates(case, ["torch_sdpa"])["candidates"]
+        if item["algorithm"] == "ulysses" and item["prepost_backend"] == item["a2a_backend"] == "torch" and item["quant_scheme"] is None and not item["tensor_fusion"] and not item["head_parallel"]
+    )
+    catalog = {"catalog_fingerprint": "cpu-flow", "scope_complete": True, "leaf_catalog": {}, "cases": [{"case_id": case["case_id"], "candidates": [candidate]}]}
     main, aux = torch.ones(2, 16), torch.ones(1, 16)
     result = (main[:1], aux) if fault == "shape" else (main, None) if fault == "aux" else (main, aux)
     environments = [{"rank": rank, "local_rank": rank, "world_size": 2, "gpu": None} for rank in range(2)]
@@ -2061,8 +2080,7 @@ def test_sp_run_preserves_structure_and_recovery_contracts(tmp_path, monkeypatch
         return [1.0], [[1.0], [1.0]], result, 0, fault != "nonfinite"
 
     monkeypatch.setattr(sp_bench, "_measure_distributed", measure)
-    options = dict(candidate_ids=set(), algorithms={"ulysses"}, dense_backends=[], sparse_backends=[],
-                   warmup=0, iterations=1, seed=42, required_runs=1, max_spread_pct=5, max_spread_ms=0.005)
+    options = dict(candidate_ids=set(), algorithms={"ulysses"}, dense_backends=[], sparse_backends=[], warmup=0, iterations=1, seed=42, required_runs=1, max_spread_pct=5, max_spread_ms=0.005)
     output = tmp_path / "run"
     if fault == "fatal":
         with pytest.raises(sp_bench._FatalCUDAError):
@@ -2092,15 +2110,22 @@ def test_sparse_catalog_exposes_missing_combinations_instead_of_excluding_them()
     registry = load_registry()
     operators = [item[1] for item in backends.GENERAL_SPARSE_OPERATORS]
     catalog = backends.build_backend_catalog_report(
-        registry, cuda_capability="9.0", production_backends=["general_sparse_attn", "svg2_attn", "sol_attn"],
+        registry,
+        cuda_capability="9.0",
+        production_backends=["general_sparse_attn", "svg2_attn", "sol_attn"],
         production_sparse_operators=iter([*operators, "new_operator"]),
         production_mask_generators=iter(["sla_mask_generator", "sparge_mask_generator", "nbhd_mask_generator", "svg_mask_generator", "new_mask"]),
-        symbol_probe=lambda _: None, dependency_probe=lambda _: None,
+        symbol_probe=lambda _: None,
+        dependency_probe=lambda _: None,
     )
     assert "general_sparse_attn" not in catalog["excluded_attention_backends"]
     assert set(catalog["unmapped_attention_backends"]) == {
-        "svg2_attn", "sol_attn", "general_sparse_attn/operator:new_operator",
-        "general_sparse_attn/mask:new_mask", "general_sparse_attn/mask:nbhd_mask_generator", "general_sparse_attn/mask:svg_mask_generator",
+        "svg2_attn",
+        "sol_attn",
+        "general_sparse_attn/operator:new_operator",
+        "general_sparse_attn/mask:new_mask",
+        "general_sparse_attn/mask:nbhd_mask_generator",
+        "general_sparse_attn/mask:svg_mask_generator",
     }
     assert not catalog["catalog_complete"]
     assert "new_operator" in catalog["production_sparse_operators"]
@@ -2111,19 +2136,29 @@ def test_sparse_catalog_exposes_missing_combinations_instead_of_excluding_them()
     assert set(supported) <= sp_bench.SPARSE_SP_BACKENDS.keys()
     assert {name for name in eligible if name.endswith(".general")} <= sp_bench.SPARSE_SP_EXCLUSIONS.keys() | sp_bench.SPARSE_SP_BACKENDS.keys()
 
-    registry.register(SimpleNamespace(descriptor=BackendDescriptor(
-        "task_general", "sparse_attention", "test", ("bf16",), "metadata fixture",
-        production_backend="general_sparse_attn", production_variant="mask=new_mask;operator=new_operator")))
+    registry.register(
+        SimpleNamespace(
+            descriptor=BackendDescriptor(
+                "task_general", "sparse_attention", "test", ("bf16",), "metadata fixture", production_backend="general_sparse_attn", production_variant="mask=new_mask;operator=new_operator"
+            )
+        )
+    )
     updated = backends.build_backend_catalog_report(
-        registry, cuda_capability="9.0", production_backends=["general_sparse_attn"],
-        production_sparse_operators=["new_operator"], production_mask_generators=["new_mask"],
-        symbol_probe=lambda _: None, dependency_probe=lambda _: None)
+        registry,
+        cuda_capability="9.0",
+        production_backends=["general_sparse_attn"],
+        production_sparse_operators=["new_operator"],
+        production_mask_generators=["new_mask"],
+        symbol_probe=lambda _: None,
+        dependency_probe=lambda _: None,
+    )
     assert updated["unmapped_attention_backends"] == []
 
 
 @pytest.mark.parametrize("method", ["sla", "sparge"])
 def test_general_sparse_replay_uses_production_composition_without_mutating_defaults(monkeypatch, method):
     import torch
+
     from lightx2v.common.ops.attn.general_sparse_attn import GeneralSparseAttnWeight
     from lightx2v.common.ops.attn.sparse_operator import SlaTritonOperator
     from lightx2v.utils.registry_factory import SPARSE_MASK_GENERATOR_REGISTER, SPARSE_OPERATOR_REGISTER
@@ -2188,24 +2223,33 @@ def test_sparse_only_prechecks_silent_causal_mismatch(changed):
 
 @pytest.mark.parametrize("family", ["gemm", "moe", "convolution", "dense_attention", "sparse_attention"])
 def test_all_operator_reports_show_complete_coverage(family):
-    cases = {"gemm": gemm_case(), "moe": moe_case(), "dense_attention": attention_case(),
-             "sparse_attention": sparse_attention_case(),
-             "convolution": {"case_id": "conv.1", "operator_family": "convolution", "precision": {"input_dtype": "bf16"},
-                             "shape": {"input": [1, 2, 4, 4], "weight": [3, 2, 3, 3], "groups": 1, "bias": False,
-                                       "stride": [1, 1], "padding": [0, 0], "dilation": [1, 1]}}}
+    cases = {
+        "gemm": gemm_case(),
+        "moe": moe_case(),
+        "dense_attention": attention_case(),
+        "sparse_attention": sparse_attention_case(),
+        "convolution": {
+            "case_id": "conv.1",
+            "operator_family": "convolution",
+            "precision": {"input_dtype": "bf16"},
+            "shape": {"input": [1, 2, 4, 4], "weight": [3, 2, 3, 3], "groups": 1, "bias": False, "stride": [1, 1], "padding": [0, 0], "dilation": [1, 1]},
+        },
+    }
     case = cases[family]
     catalog = operator_catalog(family, "measured", "not_measured", "architecture", "dependency", "new_path")
     for item, status in zip(catalog["candidates"][2:], ["unsupported_arch", "dependency_missing", "not_probed"]):
         item.update(status=status, reasons=[item["name"] + " specific reason"])
-    exclusion_key = {"gemm": "excluded_mm_backends", "moe": "excluded_moe_backends",
-                     "convolution": None}.get(family, "excluded_attention_backends")
+    exclusion_key = {"gemm": "excluded_mm_backends", "moe": "excluded_moe_backends", "convolution": None}.get(family, "excluded_attention_backends")
     if exclusion_key is not None:
         catalog[exclusion_key] = {"layout_path": "needs original model layout"}
     unmapped_key = {"gemm": "unmapped_mm_backends", "moe": "unmapped_moe_backends"}.get(family, "unmapped_attention_backends")
     if family != "convolution":
         catalog[unmapped_key] = ["not_adapted"]
-    records = [raw_record(case, "measured", 0, 1, 10, rate_metric="actual_tflops" if family == "sparse_attention" else "tflops",
-                          extra_metrics={"dense_equivalent_tflops": 20} if family == "sparse_attention" else {})]
+    records = [
+        raw_record(
+            case, "measured", 0, 1, 10, rate_metric="actual_tflops" if family == "sparse_attention" else "tflops", extra_metrics={"dense_equivalent_tflops": 20} if family == "sparse_attention" else {}
+        )
+    ]
     report = core.build_recommendation_report(shape_suite(case), records, candidate_catalog=catalog)
     row = report["workloads"][0]
     assert set(row["catalog_candidates"]) == {"measured", "not_measured", "architecture", "dependency", "new_path"}
@@ -2239,19 +2283,28 @@ def sp_report_fixture():
     catalog = sp_catalog(case, *choices)
     catalog["cases"][0]["exclusions"] = [{"candidate_id": "ring__attn=unvalidated", "reason": "reference missing"}]
     ranks = [{"rank": rank, "world_size": 4, "gpu": {"name": "NVIDIA H100 80GB HBM3", "major": 9, "minor": 0}} for rank in range(4)]
-    records = [{"kind": "sp_attention_benchmark_raw_v1", "run_id": f"repeat-{repeat:03d}", "status": "ok",
-                "case": case, "candidate": choices[0], "catalog_fingerprint": "catalog-1", "environment": {"ranks": [{**rank, "gpu": dict(rank["gpu"])} for rank in ranks]}, "run": {"seed": 42},
-                "metrics": {"latency_ms_mean": 1.0, "aggregate_effective_tflops": 4.294967296},
-                "correctness": {"checked": True, "passed": True, "status": "strict_equal", "check": "complete_main_aux_numerical_reference_all_ranks_before_timing"}}
-               for repeat in range(3)]
+    records = [
+        {
+            "kind": "sp_attention_benchmark_raw_v1",
+            "run_id": f"repeat-{repeat:03d}",
+            "status": "ok",
+            "case": case,
+            "candidate": choices[0],
+            "catalog_fingerprint": "catalog-1",
+            "environment": {"ranks": [{**rank, "gpu": dict(rank["gpu"])} for rank in ranks]},
+            "run": {"seed": 42},
+            "metrics": {"latency_ms_mean": 1.0, "aggregate_effective_tflops": 4.294967296},
+            "correctness": {"checked": True, "passed": True, "status": "strict_equal", "check": "complete_main_aux_numerical_reference_all_ranks_before_timing"},
+        }
+        for repeat in range(3)
+    ]
     return case, catalog, records
 
 
 @pytest.mark.parametrize("change", ["metadata", "shape", "precision", "replay"])
 def test_SP_report_and_append_share_execution_identity(sp_report_fixture, change):
     case, catalog, records = sp_report_fixture
-    current = {**case, "call_count": 7, "tags": ["reviewed"], "source": {"description": "new annotation"},
-               "observed_candidate": records[0]["candidate"]["candidate_id"]}
+    current = {**case, "call_count": 7, "tags": ["reviewed"], "source": {"description": "new annotation"}, "observed_candidate": records[0]["candidate"]["candidate_id"]}
     if change == "shape":
         current["shape"] = {**case["shape"], "sequence": 2048}
     elif change == "precision":
@@ -2291,17 +2344,27 @@ def test_SP_sparse_report_preserves_estimate_and_pending_leaves():
     case = sp_case(replay={"manifest": "/tmp/global_replay.json", "sha256": "0" * 64}, sparse={"keep_ratio": 0.2})
     runtime = {
         "catalog": {"catalog_fingerprint": "backend-catalog", "unmapped_attention_backends": [], "candidates": []},
-        "sparse_backends": ["sla.triton.dynamic"], "sparse_sp_exclusions": sp_bench.SPARSE_SP_EXCLUSIONS,
-        "a2a_backends": ["torch"], "fp4_available": False,
+        "sparse_backends": ["sla.triton.dynamic"],
+        "sparse_sp_exclusions": sp_bench.SPARSE_SP_EXCLUSIONS,
+        "a2a_backends": ["torch"],
+        "fp4_available": False,
     }
     catalog = sp_bench.build_candidate_catalog(sp_suite(case), runtime)
     assert catalog["scope_complete"] is False
     assert catalog["backend_scope_blockers"]["pending_sparse_sp_backends"] == sorted(sp_bench.SPARSE_SP_EXCLUSIONS)
     candidate = catalog["cases"][0]["candidates"][0]
-    records = [{"kind": "sp_attention_benchmark_raw_v1", "run_id": f"repeat-{index:03d}", "status": "ok",
-                "case": case, "candidate": candidate, "catalog_fingerprint": catalog["catalog_fingerprint"],
-                "metrics": {"latency_ms_mean": 1.0, "aggregate_effective_tflops": 50.0, "actual_tflops": 10.0, "dense_equivalent_tflops": 50.0}}
-               for index in range(3)]
+    records = [
+        {
+            "kind": "sp_attention_benchmark_raw_v1",
+            "run_id": f"repeat-{index:03d}",
+            "status": "ok",
+            "case": case,
+            "candidate": candidate,
+            "catalog_fingerprint": catalog["catalog_fingerprint"],
+            "metrics": {"latency_ms_mean": 1.0, "aggregate_effective_tflops": 50.0, "actual_tflops": 10.0, "dense_equivalent_tflops": 50.0},
+        }
+        for index in range(3)
+    ]
     # 旧catalog曾将pending字典视为完整；离线重建也必须保留缺口。
     catalog["scope_complete"] = True
     report = sp_bench.build_report(sp_suite(case), records, candidate_catalog=catalog)
@@ -2317,12 +2380,16 @@ def test_SP_sparse_report_preserves_estimate_and_pending_leaves():
     assert "— TFLOPS" in row and "50*" not in row
     for index, record in enumerate(records):
         work = (10 + index) * 10**9
-        record["metrics"].update(actual_compute_count_available=True, actual_tflops=10.0 + index,
-                                 global_actual_sparse_work=work, global_dense_work=50 * 10**9,
-                                 global_scheduled_tile_work=work + 2 * 10**9, block_density_actual=0.2 + index * 0.1,
-                                 compute_sample_scope="one untimed production SP call per rank",
-                                 compute_sample_ranks=[{"rank": rank, "expected_groups": 1, "coverage_gaps": {},
-                                                        "routes": [{"work": {"selected_logical_flops": work // 4}}]} for rank in range(4)])
+        record["metrics"].update(
+            actual_compute_count_available=True,
+            actual_tflops=10.0 + index,
+            global_actual_sparse_work=work,
+            global_dense_work=50 * 10**9,
+            global_scheduled_tile_work=work + 2 * 10**9,
+            block_density_actual=0.2 + index * 0.1,
+            compute_sample_scope="one untimed production SP call per rank",
+            compute_sample_ranks=[{"rank": rank, "expected_groups": 1, "coverage_gaps": {}, "routes": [{"work": {"selected_logical_flops": work // 4}}]} for rank in range(4)],
+        )
     current = sp_bench.build_report(sp_suite(case), records, candidate_catalog=catalog)
     item = current["workloads"][0]["candidates"][candidate["candidate_id"]]
     assert item["actual_tflops"] == 11.0 and item["estimated_sparse_tflops"] is None
@@ -2340,12 +2407,20 @@ def test_SP_sparse_report_preserves_estimate_and_pending_leaves():
 
 
 def test_convolution_coverage_retains_registry_native_and_legacy_gaps():
-    catalog = backends.build_backend_catalog_report(load_registry(), cuda_capability="9.0", production_backends=[],
-                production_conv_backends={"conv2d": ["Default", "Default-ForceFp32", "future_conv"], "conv3d": ["Default"]},
-                dependency_probe=lambda _: None, symbol_probe=lambda _: None)
-    case = {"case_id": "conv", "operator_family": "convolution",
-            "shape": {"input": [1, 2, 4, 4], "weight": [3, 2, 3, 3], "stride": [1, 1], "padding": [0, 0], "dilation": [1, 1], "groups": 1, "bias": False},
-            "precision": {"input_dtype": "bf16"}}
+    catalog = backends.build_backend_catalog_report(
+        load_registry(),
+        cuda_capability="9.0",
+        production_backends=[],
+        production_conv_backends={"conv2d": ["Default", "Default-ForceFp32", "future_conv"], "conv3d": ["Default"]},
+        dependency_probe=lambda _: None,
+        symbol_probe=lambda _: None,
+    )
+    case = {
+        "case_id": "conv",
+        "operator_family": "convolution",
+        "shape": {"input": [1, 2, 4, 4], "weight": [3, 2, 3, 3], "stride": [1, 1], "padding": [0, 0], "dilation": [1, 1], "groups": 1, "bias": False},
+        "precision": {"input_dtype": "bf16"},
+    }
     assert len(case["shape"]["input"]) == 4
     records = [raw_record(case, "torch_convolution", index, 1.0, 1.0) for index in range(3)]
     for record in records:
@@ -2383,9 +2458,16 @@ def test_SP_report_separates_unexecuted_and_failed_candidates(sp_report_fixture,
     assert unexecuted["workloads"][0]["candidates"][pending_id]["status"] == "not_measured"
     error_stage = "prepare" if stage == "fatal_prepare" else stage
     message = "CUDA error: device-side assert triggered" if stage == "fatal_prepare" else "allocation requires 8192 MiB\ntraceback detail"
-    failed = sp_bench._error_record(case, catalog["cases"][0]["candidates"][1], 0, rows[0]["environment"]["ranks"],
-                                    rows[0]["run"], catalog["catalog_fingerprint"],
-                                    [None, {"type": "OutOfMemoryError", "message": message}, None, None], error_stage)
+    failed = sp_bench._error_record(
+        case,
+        catalog["cases"][0]["candidates"][1],
+        0,
+        rows[0]["environment"]["ranks"],
+        rows[0]["run"],
+        catalog["catalog_fingerprint"],
+        [None, {"type": "OutOfMemoryError", "message": message}, None, None],
+        error_stage,
+    )
     report = sp_bench.build_report(sp_suite(case), [*rows, failed], candidate_catalog=catalog)
     item = report["workloads"][0]["candidates"][pending_id]
     assert item["latency_ms"] is None and item["status"] == ("unavailable" if stage == "prepare" else "measurement_error")
@@ -2400,6 +2482,7 @@ def test_SP_report_separates_unexecuted_and_failed_candidates(sp_report_fixture,
 @pytest.mark.parametrize("change", ["precision", "routing", "metadata"])
 def test_resume_and_report_share_real_input_identity(tmp_path, monkeypatch, change):
     import copy
+
     import torch
 
     case = moe_case() if change == "routing" else gemm_case()
@@ -2436,8 +2519,7 @@ def test_lazy_entries_and_unmapped_masks_reach_actual_reports():
     import sys
 
     script = "from tools.benchmarks.operator_backends import load_registry, probe_backend_catalog; import json; print(json.dumps(probe_backend_catalog(load_registry(), 'cpu')))"
-    result = subprocess.run([sys.executable, "-B", "-c", script], check=True, capture_output=True, text=True,
-                            env={**os.environ, "CUDA_VISIBLE_DEVICES": "", "SKIP_PLATFORM_CHECK": "1"}, timeout=60)
+    result = subprocess.run([sys.executable, "-B", "-c", script], check=True, capture_output=True, text=True, env={**os.environ, "CUDA_VISIBLE_DEVICES": "", "SKIP_PLATFORM_CHECK": "1"}, timeout=60)
     catalog = json.loads(result.stdout.splitlines()[-1])
     assert {"flex_attn", "flash_attn3_paged"} <= set(catalog["production_backends"])
     sparse = core.build_recommendation_report(shape_suite(sparse_attention_case()), [], candidate_catalog=catalog)["workloads"][0]
@@ -2452,12 +2534,15 @@ def test_lazy_entries_and_unmapped_masks_reach_actual_reports():
 @pytest.mark.parametrize("family,production", [("sparse_attention", "nbhd_attn"), ("dense_attention", "torch_sdpa_mps"), ("gemm", "nvfp4")])
 def test_new_adapter_supersedes_historical_exclusion_and_hints_are_not_inventory(family, production):
     registry = load_registry()
-    registry.register(SimpleNamespace(descriptor=BackendDescriptor(
-        "task_adapter", family, "test", ("bf16",), "metadata fixture", production_backend=production)))
+    registry.register(SimpleNamespace(descriptor=BackendDescriptor("task_adapter", family, "test", ("bf16",), "metadata fixture", production_backend=production)))
     catalog = backends.build_backend_catalog_report(
-        registry, cuda_capability="9.0", production_backends=[production] if family != "gemm" else [],
+        registry,
+        cuda_capability="9.0",
+        production_backends=[production] if family != "gemm" else [],
         production_mm_backends=[production] if family == "gemm" else [],
-        symbol_probe=lambda _: None, dependency_probe=lambda _: None)
+        symbol_probe=lambda _: None,
+        dependency_probe=lambda _: None,
+    )
     assert next(item for item in catalog["candidates"] if item["name"] == "task_adapter")["status"] == "eligible"
     assert catalog["unmapped_production_backends"] == []
     assert production not in catalog["excluded_production_backends"]
@@ -2508,13 +2593,17 @@ def test_rejected_backend_keeps_requested_dtype_for_resume_and_report(tmp_path, 
     assert report["summary"]["matched_record_count"] == 1 and report["summary"]["unmatched_record_count"] == 0
 
 
-@pytest.mark.parametrize("ar,q_shape,k_shape,v_shape", [
-    (False, (1, 2, 128, 64), (1, 1, 256, 64), (1, 1, 256, 64)),
-    (True, (1, 128, 2, 64), (1, 256, 1, 64), (1, 256, 1, 64)),
-    (True, (1, 128, 2, 64), (1, 256, 2, 64), (1, 128, 2, 64)),
-])
+@pytest.mark.parametrize(
+    "ar,q_shape,k_shape,v_shape",
+    [
+        (False, (1, 2, 128, 64), (1, 1, 256, 64), (1, 1, 256, 64)),
+        (True, (1, 128, 2, 64), (1, 256, 1, 64), (1, 256, 1, 64)),
+        (True, (1, 128, 2, 64), (1, 256, 2, 64), (1, 128, 2, 64)),
+    ],
+)
 def test_sla_kernel_rejects_unsafe_addressing_before_launch(ar, q_shape, k_shape, v_shape):
     import importlib
+
     import torch
 
     module = importlib.import_module("lightx2v.common.ops.attn.kernels.sla_kernel" + ("_ar" if ar else ""))
@@ -2525,7 +2614,9 @@ def test_sla_kernel_rejects_unsafe_addressing_before_launch(ar, q_shape, k_shape
 
 def test_sla_ar_preserves_unequal_sequence_contract(monkeypatch):
     from unittest.mock import MagicMock
+
     import torch
+
     from lightx2v.common.ops.attn.kernels import sla_kernel_ar
 
     launch = MagicMock()
@@ -2542,11 +2633,10 @@ def test_convolution_new_adapters_replace_legacy_mappings_and_gaps():
     registry = load_registry()
     names = ("Default", "Default-ForceFp32", "future_conv", "lightx2v_kernel.fp8_conv3d")
     for name in names:
-        registry.register(SimpleNamespace(descriptor=BackendDescriptor(
-            "task_" + name, "convolution", "test", ("bf16",), "metadata fixture", production_backend=name)))
+        registry.register(SimpleNamespace(descriptor=BackendDescriptor("task_" + name, "convolution", "test", ("bf16",), "metadata fixture", production_backend=name)))
     catalog = backends.build_backend_catalog_report(
-        registry, cuda_capability="9.0", production_backends=[], production_conv_backends={"conv2d": names},
-        symbol_probe=lambda _: None, dependency_probe=lambda _: None)
+        registry, cuda_capability="9.0", production_backends=[], production_conv_backends={"conv2d": names}, symbol_probe=lambda _: None, dependency_probe=lambda _: None
+    )
     scope = catalog["convolution_scopes"]["conv2d"]
     assert scope["mapped_backends"] == {name: "task_" + name for name in names}
     assert scope["excluded_production_backends"] == {} and scope["unmapped_production_backends"] == []
@@ -2567,18 +2657,22 @@ def test_lazy_dependency_failure_is_a_visible_discovery_gap(monkeypatch):
     assert any("paged_flash_attn" in reason and "triton" in reason for reason in catalog["discovery_warnings"])
 
 
-@pytest.mark.parametrize("message,fatal", [
-    ("CUDA error: an illegal memory access was encountered", True),
-    ("CUDA error: device-side assert triggered", True),
-    ("CUDA_ERROR_ASSERT", True),
-    ("CUDA error: misaligned address", True),
-    ("CUDA error: unspecified launch failure", True),
-    ("CUDA out of memory", False),
-    ("CUDA error: invalid configuration argument", False),
-    ("unsupported input shape", False),
-])
+@pytest.mark.parametrize(
+    "message,fatal",
+    [
+        ("CUDA error: an illegal memory access was encountered", True),
+        ("CUDA error: device-side assert triggered", True),
+        ("CUDA_ERROR_ASSERT", True),
+        ("CUDA error: misaligned address", True),
+        ("CUDA error: unspecified launch failure", True),
+        ("CUDA out of memory", False),
+        ("CUDA error: invalid configuration argument", False),
+        ("unsupported input shape", False),
+    ],
+)
 def test_cli_preserves_failure_and_catalog_before_fatal_stop(tmp_path, monkeypatch, message, fatal):
     from contextlib import nullcontext
+
     import torch
 
     case = gemm_case()
@@ -2608,8 +2702,7 @@ def test_cli_preserves_failure_and_catalog_before_fatal_stop(tmp_path, monkeypat
     monkeypatch.setattr(core, "_measure", lambda *args, **kwargs: ([1.0], actual))
     suite_path = tmp_path / "suite.json"
     suite_path.write_text(json.dumps(shape_suite(case)))
-    argv = ["run", "--suite", str(suite_path), "--output-dir", str(output_dir),
-            "--device", "cpu", "--repeat-runs", "1", "--warmup", "0", "--iterations", "1"]
+    argv = ["run", "--suite", str(suite_path), "--output-dir", str(output_dir), "--device", "cpu", "--repeat-runs", "1", "--warmup", "0", "--iterations", "1"]
     if fatal:
         with pytest.raises(SystemExit) as exit_info:
             core.main(argv)
@@ -2647,11 +2740,13 @@ def test_append_preserves_complete_unterminated_row_and_rejects_truncation(tmp_p
     monkeypatch.setattr(core, "run_case", run)
     output = tmp_path / "raw.jsonl"
     value = shape_suite(gemm_case(source={"note": note}))
+
     # Interrupt after one row of a two-repeat run, preserving its original contract.
     def interrupted(case, adapter, run_id, env, options):
         if run_id == "repeat-001":
             raise OSError("simulated interruption before writing")
         return run(case, adapter, run_id, env, options)
+
     monkeypatch.setattr(core, "run_case", interrupted)
     with pytest.raises(OSError):
         core.run_suite(value, output, {"gemm": ["fixture"]}, [], repeat_runs=2)

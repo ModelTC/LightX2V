@@ -10,8 +10,8 @@ import json
 import os
 import re
 import statistics
-import sys
 import subprocess
+import sys
 import traceback
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -56,9 +56,12 @@ SPARSE_SP_BACKENDS = {
     },
 }
 SPARSE_SP_EXCLUSIONS = {
-    **{f"{method}.{label}.general": "new GeneralSparse single-card path; SP semantics/reference validation pending"
-       for method in ("sla", "sparge") for label, *_ in GENERAL_SPARSE_OPERATORS
-       if f"{method}.{label}.general" not in SPARSE_SP_BACKENDS},
+    **{
+        f"{method}.{label}.general": "new GeneralSparse single-card path; SP semantics/reference validation pending"
+        for method in ("sla", "sparge")
+        for label, *_ in GENERAL_SPARSE_OPERATORS
+        if f"{method}.{label}.general" not in SPARSE_SP_BACKENDS
+    },
     "sla.triton_ar.dynamic": "new single-card AR path; SP semantics/reference validation pending",
     "sla.magi.dynamic": "new single-card Magi path; SP semantics/reference validation pending",
     "sparge.sage2.specialized": "new single-card Sparge candidate; SP semantics/reference validation pending",
@@ -661,10 +664,12 @@ def build_candidate_catalog(
     attention_scope = backend_catalog.get("attention_scopes", {}).get(leaf_family)
     unmapped_backends = sorted(attention_scope["unmapped_production_backends"] if attention_scope is not None else backend_catalog.get("unmapped_attention_backends", []))
     sparse_sp_unmapped = sorted(runtime.get("unmapped_sparse_sp_backends", [])) if sparse_mode else []
-    leaf_catalog = {"family": leaf_family,
-                    "candidates": [item for item in backend_catalog.get("candidates", []) if item.get("family") == leaf_family],
-                    "excluded_production_backends": (attention_scope or {}).get("excluded_production_backends", backend_catalog.get("excluded_attention_backends", {})),
-                    "integration_gaps": {name: backend_catalog.get("attention_integration_gaps", {}).get(name, "生产入口缺bench/SP合同；核对输入、依赖及参考后接入。") for name in unmapped_backends}}
+    leaf_catalog = {
+        "family": leaf_family,
+        "candidates": [item for item in backend_catalog.get("candidates", []) if item.get("family") == leaf_family],
+        "excluded_production_backends": (attention_scope or {}).get("excluded_production_backends", backend_catalog.get("excluded_attention_backends", {})),
+        "integration_gaps": {name: backend_catalog.get("attention_integration_gaps", {}).get(name, "生产入口缺bench/SP合同；核对输入、依赖及参考后接入。") for name in unmapped_backends},
+    }
     if sparse_mode:
         leaf_catalog["excluded_production_backends"] = {**leaf_catalog["excluded_production_backends"], **backend_catalog.get("mask_input_requirements", {})}
     pending_sparse = runtime.get("sparse_sp_exclusions", {}) if sparse_mode else {}
@@ -993,10 +998,16 @@ def _sparse_sp_work(fn, case, candidate):
     routes = []
     with ExitStack() as cleanup:
         directory = _checked_local(lambda: cleanup.enter_context(TemporaryDirectory(prefix="lightx2v-sp-stats-")))
-        stats = _checked_local(lambda: cleanup.enter_context(WorkloadStats(
-            Path(directory) / "stats", families=["attention"], max_calls=groups + 1,
-            on_sparse_inputs=lambda item: routes.append(item["facts"]),
-        )))
+        stats = _checked_local(
+            lambda: cleanup.enter_context(
+                WorkloadStats(
+                    Path(directory) / "stats",
+                    families=["attention"],
+                    max_calls=groups + 1,
+                    on_sparse_inputs=lambda item: routes.append(item["facts"]),
+                )
+            )
+        )
         _checked_local(fn, checked_leaf=True)
         _checked_local(cleanup.close)
     local = {"rank": dist.get_rank(), "expected_groups": groups, "routes": routes, "coverage_gaps": stats.gaps}
@@ -1013,8 +1024,7 @@ def _sparse_sp_work(fn, case, candidate):
         "global_actual_sparse_work": work,
         "global_scheduled_tile_work": sum(scheduled) if complete and all(value is not None for value in scheduled) else None,
         "global_sampled_dense_equivalent_work": sum(row["work"]["dense_equivalent_flops"] for row in facts) if complete else None,
-        "block_density_actual": sum(item["selected_tiles"] for item in tiles) / sum(item["total_tiles"] for item in tiles)
-        if complete and len(tiles) == len(facts) else None,
+        "block_density_actual": sum(item["selected_tiles"] for item in tiles) / sum(item["total_tiles"] for item in tiles) if complete and len(tiles) == len(facts) else None,
         "compute_sample_scope": "one untimed production SP call per rank; QK/PV only; not every timed iteration",
         "compute_sample_ranks": ranks,
     }
@@ -1104,9 +1114,14 @@ def _check_output_structure(case: dict[str, Any], result: Any, device: Any, fini
     valid = _checked_local(local_shape)
     dist.all_reduce(valid, op=dist.ReduceOp.MIN)
     shape_passed = _checked_local(lambda: bool(valid.item()))
-    return {"passed": finite and shape_passed, "finite": finite, "shape_passed": shape_passed,
-            "expected_main_output_shape": list(expected_main),
-            "expected_aux_output_shape": list(expected_aux) if expected_aux is not None else None}
+    return {
+        "passed": finite and shape_passed,
+        "finite": finite,
+        "shape_passed": shape_passed,
+        "expected_main_output_shape": list(expected_main),
+        "expected_aux_output_shape": list(expected_aux) if expected_aux is not None else None,
+    }
+
 
 def _checked_local(fn, *args, **kwargs):
     """Coordinate local failures before the next collective; failed collectives are not recovered."""
@@ -1175,8 +1190,13 @@ def _dense_reference_from_global(shape, inputs, global_inputs, rank):
 
 
 def _reference_correctness(
-    case: dict[str, Any], candidate: dict[str, Any], actual: Any, expected: tuple[Any, Any], device: Any,
-    *, check: str = "production_sp_attention_vs_torch_sdpa_dense_reference_all_ranks",
+    case: dict[str, Any],
+    candidate: dict[str, Any],
+    actual: Any,
+    expected: tuple[Any, Any],
+    device: Any,
+    *,
+    check: str = "production_sp_attention_vs_torch_sdpa_dense_reference_all_ranks",
 ) -> dict[str, Any]:
     import torch.distributed as dist
 
@@ -1186,10 +1206,12 @@ def _reference_correctness(
 
     def compare_local():
         outputs = actual if isinstance(actual, tuple) and len(actual) == 2 else (None, None)
-        checks = {name: compare_output(output, reference, scope=f"complete {name} output on this rank", tolerance=policy)
-                  for name, output, reference in zip(("main", "aux"), outputs, expected) if reference is not None}
-        return {"rank": dist.get_rank(), **checks,
-                "aux_presence_matches": (outputs[1] is None) == (expected[1] is None)}, [None] * dist.get_world_size()
+        checks = {
+            name: compare_output(output, reference, scope=f"complete {name} output on this rank", tolerance=policy)
+            for name, output, reference in zip(("main", "aux"), outputs, expected)
+            if reference is not None
+        }
+        return {"rank": dist.get_rank(), **checks, "aux_presence_matches": (outputs[1] is None) == (expected[1] is None)}, [None] * dist.get_world_size()
 
     local, ranks = _checked_local(compare_local)
     dist.all_gather_object(ranks, local)
@@ -1201,11 +1223,17 @@ def _reference_correctness(
         close = all(value["allclose_passed"] for value in checks)
         status = "failed" if not shape_ok or not finite else "strict_equal" if all(value["strict_equal"] for value in checks) else "pending_review"
         return {
-            "checked": True, "passed": shape_ok and finite and close, "check": check,
-            "status": status, "shape_passed": shape_ok, "finite": finite, "allclose_passed": close,
+            "checked": True,
+            "passed": shape_ok and finite and close,
+            "check": check,
+            "status": status,
+            "shape_passed": shape_ok,
+            "finite": finite,
+            "allclose_passed": close,
             "main_max_abs_diff": max(rank["main"].get("max_abs_error", float("inf")) for rank in ranks),
             "aux_max_abs_diff": max(rank["aux"].get("max_abs_error", float("inf")) for rank in ranks) if expected[1] is not None else None,
-            "tolerance_policy": policy, "rank_checks": ranks,
+            "tolerance_policy": policy,
+            "rank_checks": ranks,
         }
 
     return _checked_local(summarize)
@@ -2009,9 +2037,10 @@ def build_report(
         for record in records:
             ranks = record.get("environment", {}).get("ranks", [])
             size = record["case"]["shape"]["sp_size"]
-            require(len(ranks) == size and {rank.get("rank") for rank in ranks} == set(range(size))
-                    and all(rank.get("world_size") == size and rank.get("gpu") for rank in ranks),
-                    "SP compute peak requires complete rank GPU identities matching sp_size")
+            require(
+                len(ranks) == size and {rank.get("rank") for rank in ranks} == set(range(size)) and all(rank.get("world_size") == size and rank.get("gpu") for rank in ranks),
+                "SP compute peak requires complete rank GPU identities matching sp_size",
+            )
     gpu_records = [{"environment": {"gpu": rank.get("gpu")}} for record in records for rank in record.get("environment", {}).get("ranks", [])]
     platform_value = _hardware_platform(peaks, platform_id, gpu_records)
     ranks = records[0].get("environment", {}).get("ranks", []) if records else []
@@ -2054,10 +2083,12 @@ def build_report(
                 status = "accepted"
             sparse = _is_sparse_case(case)
             compute_ranges = {}
-            for field, raw_field in (("work_range", "global_actual_sparse_work" if sparse else "global_dense_work"),
-                                     ("dense_equivalent_work_range", "global_dense_work"),
-                                     ("scheduled_tile_work_range", "global_scheduled_tile_work"),
-                                     ("block_density_actual_range", "block_density_actual")):
+            for field, raw_field in (
+                ("work_range", "global_actual_sparse_work" if sparse else "global_dense_work"),
+                ("dense_equivalent_work_range", "global_dense_work"),
+                ("scheduled_tile_work_range", "global_scheduled_tile_work"),
+                ("block_density_actual_range", "block_density_actual"),
+            ):
                 counts = [item["metrics"].get(raw_field) for item in accepted_items]
                 if sparse and raw_field != "global_dense_work" and not all(item["metrics"].get("actual_compute_count_available") is True for item in accepted_items):
                     counts = []
@@ -2065,14 +2096,23 @@ def build_report(
             samples = []
             for item in accepted_items if sparse else []:
                 metrics = item["metrics"]
-                samples.append({
-                    "run_id": item["run_id"], "actual_compute_count_available": metrics.get("actual_compute_count_available"),
-                    "scope": metrics.get("compute_sample_scope"),
-                    "ranks": [{"rank": rank["rank"], "expected_groups": rank["expected_groups"],
-                               "captured_groups": len(rank["routes"]), "coverage_gaps": rank["coverage_gaps"],
-                               "missing_compute_groups": sum(route["work"].get("selected_logical_flops") is None for route in rank["routes"])}
-                              for rank in metrics.get("compute_sample_ranks", [])],
-                })
+                samples.append(
+                    {
+                        "run_id": item["run_id"],
+                        "actual_compute_count_available": metrics.get("actual_compute_count_available"),
+                        "scope": metrics.get("compute_sample_scope"),
+                        "ranks": [
+                            {
+                                "rank": rank["rank"],
+                                "expected_groups": rank["expected_groups"],
+                                "captured_groups": len(rank["routes"]),
+                                "coverage_gaps": rank["coverage_gaps"],
+                                "missing_compute_groups": sum(route["work"].get("selected_logical_flops") is None for route in rank["routes"]),
+                            }
+                            for rank in metrics.get("compute_sample_ranks", [])
+                        ],
+                    }
+                )
             candidates[candidate_id] = {
                 "status": status,
                 "correctness": [{"run_id": item.get("run_id"), **(item.get("correctness") or {"checked": False})} for item in items],
@@ -2082,11 +2122,16 @@ def build_report(
                 "spread_ms": spread_ms,
                 "aggregate_effective_tflops": statistics.median(item["metrics"]["aggregate_effective_tflops"] for item in accepted_items) if latencies else None,
                 "actual_tflops": statistics.median(item["metrics"]["actual_tflops"] for item in accepted_items)
-                if accepted_items and all(item["metrics"].get("actual_compute_count_available") is True and item["metrics"].get("actual_tflops") is not None for item in accepted_items) else None,
+                if accepted_items and all(item["metrics"].get("actual_compute_count_available") is True and item["metrics"].get("actual_tflops") is not None for item in accepted_items)
+                else None,
                 # Legacy configuration estimates remain separate from production-region facts.
-                "estimated_sparse_tflops": statistics.median(item["metrics"]["actual_tflops"] for item in accepted_items
-                                                           if item["metrics"].get("actual_compute_count_available") is not True and item["metrics"].get("actual_tflops") is not None)
-                if any(item["metrics"].get("actual_compute_count_available") is not True and item["metrics"].get("actual_tflops") is not None for item in accepted_items) else None,
+                "estimated_sparse_tflops": statistics.median(
+                    item["metrics"]["actual_tflops"]
+                    for item in accepted_items
+                    if item["metrics"].get("actual_compute_count_available") is not True and item["metrics"].get("actual_tflops") is not None
+                )
+                if any(item["metrics"].get("actual_compute_count_available") is not True and item["metrics"].get("actual_tflops") is not None for item in accepted_items)
+                else None,
                 "dense_equivalent_tflops": statistics.median(item["metrics"]["dense_equivalent_tflops"] for item in accepted_items if item["metrics"].get("dense_equivalent_tflops") is not None)
                 if any(item["metrics"].get("dense_equivalent_tflops") is not None for item in accepted_items)
                 else None,
@@ -2098,9 +2143,12 @@ def build_report(
         ranking = sorted((name for name, item in candidates.items() if item["status"] == "accepted"), key=lambda name: candidates[name]["latency_ms"])
         terminal_statuses = {"accepted", "unavailable", "correctness_failed"}
         coverage_complete = (
-            candidate_catalog is not None and candidate_catalog.get("scope_complete") is True and not (_is_sparse_case(case) and pending_sparse)
+            candidate_catalog is not None
+            and candidate_catalog.get("scope_complete") is True
+            and not (_is_sparse_case(case) and pending_sparse)
             and (candidate_catalog or {}).get("leaf_catalog") is not None
-            and bool(candidates) and all(item["status"] in terminal_statuses for item in candidates.values())
+            and bool(candidates)
+            and all(item["status"] in terminal_statuses for item in candidates.values())
         )
         measured_winner = ranking[0] if ranking else None
         observed = case.get("observed_candidate")
@@ -2168,8 +2216,7 @@ def _abort_if_fatal_cuda(directory, exc):
         _local_error(exc)
     except _FatalCUDAError as fatal:
         rank = os.environ.get("RANK", "unknown")
-        record = {"kind": "sp_attention_fatal_cuda_error_v1", "rank": rank,
-                  "created_at": datetime.now(timezone.utc).isoformat(), "error": fatal.error}
+        record = {"kind": "sp_attention_fatal_cuda_error_v1", "rank": rank, "created_at": datetime.now(timezone.utc).isoformat(), "error": fatal.error}
         line = json.dumps(record, sort_keys=True) + "\n"
         print(line, file=sys.stderr, end="", flush=True)
         try:
@@ -3068,10 +3115,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "report":
             require(args.raw.is_file(), f"SP raw result does not exist: {args.raw}")
             report = build_report(
-                suite, load_raw_records(args.raw),
+                suite,
+                load_raw_records(args.raw),
                 candidate_catalog=json.loads(args.candidate_catalog.read_text(encoding="utf-8")) if args.candidate_catalog else None,
-                required_runs=args.required_runs, max_spread_pct=args.max_spread_pct, max_spread_ms=args.max_spread_ms,
-                peaks=json.loads(args.peaks.read_text(encoding="utf-8")) if args.peaks else None, platform_id=args.platform,
+                required_runs=args.required_runs,
+                max_spread_pct=args.max_spread_pct,
+                max_spread_ms=args.max_spread_ms,
+                peaks=json.loads(args.peaks.read_text(encoding="utf-8")) if args.peaks else None,
+                platform_id=args.platform,
             )
             args.output_dir.mkdir(parents=True, exist_ok=True)
             write_json(args.output_dir / "report.json", report)

@@ -1,6 +1,5 @@
 """Reuse production formulas for offline benchmarks without LightX2V device/model initialization."""
 
-
 from pathlib import Path
 from runpy import run_path
 

@@ -421,12 +421,25 @@ def _error_record(
 def _fatal_cuda_error(error: dict[str, Any]) -> bool:
     """Recognize context-corrupting CUDA diagnostics, including historical raw rows."""
     message = re.sub(r"[^a-z]", "", str(error.get("message", "")).lower())
-    return "cuda" in message and any(token in message for token in (
-        "illegalmemoryaccess", "illegaladdress", "devicesideassert", "cudaerrorassert",
-        "illegalinstruction", "misalignedaddress", "invalidaddressspace", "invalidpc",
-        "hardwarestackerror", "unspecifiedlaunchfailure", "cudaerrorlaunchfailure",
-        "launchfailed", "launchtimedout", "cudaerrorlaunchtimeout",
-    ))
+    return "cuda" in message and any(
+        token in message
+        for token in (
+            "illegalmemoryaccess",
+            "illegaladdress",
+            "devicesideassert",
+            "cudaerrorassert",
+            "illegalinstruction",
+            "misalignedaddress",
+            "invalidaddressspace",
+            "invalidpc",
+            "hardwarestackerror",
+            "unspecifiedlaunchfailure",
+            "cudaerrorlaunchfailure",
+            "launchfailed",
+            "launchtimedout",
+            "cudaerrorlaunchtimeout",
+        )
+    )
 
 
 def _check_output(output, expected_shape=None):
@@ -659,10 +672,7 @@ def run_suite(
 def _matches(record: dict[str, Any], case: dict[str, Any]) -> bool:
     raw = record.get("case") if isinstance(record.get("case"), dict) else {}
     source = raw.get("source") if isinstance(raw.get("source"), dict) else {}
-    return (
-        source.get("canonical_case_id") == case["case_id"]
-        and _input_identity(raw) == _input_identity(case)
-    )
+    return source.get("canonical_case_id") == case["case_id"] and _input_identity(raw) == _input_identity(case)
 
 
 def _peak_family(precision: dict[str, Any]) -> str | None:
@@ -779,7 +789,10 @@ def build_recommendation_report(
         conv_scope = (candidate_catalog or {}).get("convolution_scopes", {}).get(f"conv{len(case['shape']['input']) - 2}d") if family == "convolution" else None
         catalog_candidates = {item["name"]: item for item in (candidate_catalog or {}).get("candidates", []) if item.get("family") == family}
         if family == "sparse_attention":
-            require(not any(item.get("production_variant") == "dense_replay_baseline" for item in catalog_candidates.values()), "sparse catalog contains retired dense controls; regenerate the backend catalog")
+            require(
+                not any(item.get("production_variant") == "dense_replay_baseline" for item in catalog_candidates.values()),
+                "sparse catalog contains retired dense controls; regenerate the backend catalog",
+            )
         expected_backends = {name for name, item in catalog_candidates.items() if item.get("status") == "eligible"}
         dependency_blockers = sorted(name for name, item in catalog_candidates.items() if item.get("status") in {"cuda_unavailable", "dependency_missing"})
         if family == "gemm":
@@ -856,9 +869,12 @@ def build_recommendation_report(
                 compute_ranges[field] = [min(counts), max(counts)] if counts and all(count is not None for count in counts) else None
             sparse = case["operator_family"] == "sparse_attention"
             if sparse and ok:
-                require(rate_metric == "actual_tflops" or rate_metric is None and all(
-                    "work" in item["metrics"] and item["metrics"]["work"] is None and item["metrics"].get("actual_compute_count_available") is False for item in ok),
-                        f"sparse raw lacks actual rate: {case['case_id']}.{backend}")
+                require(
+                    rate_metric == "actual_tflops"
+                    or rate_metric is None
+                    and all("work" in item["metrics"] and item["metrics"]["work"] is None and item["metrics"].get("actual_compute_count_available") is False for item in ok),
+                    f"sparse raw lacks actual rate: {case['case_id']}.{backend}",
+                )
                 require(
                     len(dense_equivalent_values) == len(ok),
                     f"sparse raw lacks dense-equivalent rate: {case['case_id']}.{backend}",
@@ -959,7 +975,13 @@ def build_recommendation_report(
                 },
                 "catalog_candidates": catalog_candidates,
                 "excluded_production_backends": case_exclusions,
-                "integration_gaps": {name: reason for name, reason in ((conv_scope or {}).get("integration_gaps", {}) if case["operator_family"] == "convolution" else (candidate_catalog or {}).get("attention_integration_gaps", {})).items() if name in unmapped},
+                "integration_gaps": {
+                    name: reason
+                    for name, reason in (
+                        (conv_scope or {}).get("integration_gaps", {}) if case["operator_family"] == "convolution" else (candidate_catalog or {}).get("attention_integration_gaps", {})
+                    ).items()
+                    if name in unmapped
+                },
                 "production_mappings": (conv_scope or {}).get("mapped_backends", {}),
                 "ranking": ranking,
                 "observed_backend": observed,
@@ -1021,11 +1043,17 @@ def markdown_report(value: dict[str, Any]) -> str:
     def cell(value):
         return str(value).replace("|", "\\|").replace("\n", " ")
 
-    lines = ["# Benchmark 简表", "", *hardware_markdown(value.get("hardware") or {}), "",
-             "本页仅供快速查看；完整事实见 [report.json](report.json)，最终中文报告由Agent按正式REPORT_TEMPLATE.md生成。"]
+    lines = ["# Benchmark 简表", "", *hardware_markdown(value.get("hardware") or {}), "", "本页仅供快速查看；完整事实见 [report.json](report.json)，最终中文报告由Agent按正式REPORT_TEMPLATE.md生成。"]
     for group in value["workloads"]:
-        lines += ["", "## " + cell(group["case_id"]), "", "输入：`" + json.dumps(group["shape"], ensure_ascii=False) + "`", "",
-                  "| 后端 / 配置 | 延迟/ms | 计算效率 | 轮间极差/ms | 状态 |", "|---|---:|---:|---:|---|"]
+        lines += [
+            "",
+            "## " + cell(group["case_id"]),
+            "",
+            "输入：`" + json.dumps(group["shape"], ensure_ascii=False) + "`",
+            "",
+            "| 后端 / 配置 | 延迟/ms | 计算效率 | 轮间极差/ms | 状态 |",
+            "|---|---:|---:|---:|---|",
+        ]
         items = group["candidates"] if sp else group["backends"]
         for name, item in sorted(items.items(), key=lambda row: (row[1]["latency_ms"] is None, row[1]["latency_ms"] or 0, row[0])):
             if sp and item["latency_ms"] is None:
@@ -1038,8 +1066,7 @@ def markdown_report(value: dict[str, Any]) -> str:
             if rate is None:
                 equivalent = None
             efficiency = number(rate) + (" / " + number(equivalent) + "*" if equivalent is not None else "")
-            lines.append("| " + " | ".join([cell(name), number(item["latency_ms"]), efficiency + " " + unit,
-                                           number(item.get("spread_ms")), cell(item["status"])]) + " |")
+            lines.append("| " + " | ".join([cell(name), number(item["latency_ms"]), efficiency + " " + unit, number(item.get("spread_ms")), cell(item["status"])]) + " |")
     lines += ["", "耗时为各轮均值的中位数；*为dense等价效率。状态、误差、覆盖与具体失败原因均保存在JSON；本表不作质量或采用决定。"]
     return "\n".join(lines) + "\n"
 

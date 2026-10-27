@@ -563,7 +563,13 @@ def markdown(report):
             lines.append(f"| GPU {device} · {labels[row['category']]} | {row['count']} | {_number(row['gpu_ms'])} | {share:.1%} |")
         if facts["other_or_unattributed_active_ms"]:
             lines += ["", f"GPU {device} 同期另有 {_number(facts['other_or_unattributed_active_ms'])} ms 的范围外/未归属活动；没有把它算成空隙。"]
-    lines += ["", "分类覆盖可能重叠，各行不能相加。分类使用实际native关联和kernel名称，不能据此发布FLOPs；未识别kernel归入辅助计算并注明；拷贝/填充按trace的memcpy/memset活动分类，kernel实现的布局或数据移动仍属辅助计算。", "", "## 核心计算", ""]
+    lines += [
+        "",
+        "分类覆盖可能重叠，各行不能相加。分类使用实际native关联和kernel名称，不能据此发布FLOPs；未识别kernel归入辅助计算并注明；拷贝/填充按trace的memcpy/memset活动分类，kernel实现的布局或数据移动仍属辅助计算。",
+        "",
+        "## 核心计算",
+        "",
+    ]
     if report["core_calls"] or report["unbound_core_groups"]:
         lines += ["| 主体 / kernel | 输入 shape | 计算量 GFLOPs | GPU覆盖 ms | 计算效率 TFLOPS | 名义峰值比例 | 计算 / 累加精度 |", "|---|---|---:|---:|---:|---:|---|"]
         for row in report["core_calls"]:

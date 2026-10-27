@@ -12,8 +12,8 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.utils import workload_stats
 from lightx2v.common.ops.compute_stats import routed_matmul_flops
+from lightx2v.utils import workload_stats
 from lightx2v.utils.core_op_stats import CoreOpStatistics
 from lightx2v.utils.registry_factory import FUSED_MOE_REGISTER
 
@@ -688,9 +688,16 @@ class _TorchFusedMoE(FusedMoETemplate):
             b1 = torch.stack(self.fc1_biases) if self.fc1_biases[0] is not None else None
             b2 = torch.stack(self.fc2_biases) if self.fc2_biases[0] is not None else None
         # Match production _normalize_inputs and preserve the FP32 routing weights actually used.
-        inputs = {"activation": arguments["input"], "expert_ids": arguments["token_selected_experts"],
-                  "scales": arguments["token_final_scales"].to(dtype=torch.float32).contiguous(), "fc1": fc1, "fc2": fc2,
-                  "fc1_gate": gate, "fc1_bias": b1, "fc2_bias": b2}
+        inputs = {
+            "activation": arguments["input"],
+            "expert_ids": arguments["token_selected_experts"],
+            "scales": arguments["token_final_scales"].to(dtype=torch.float32).contiguous(),
+            "fc1": fc1,
+            "fc2": fc2,
+            "fc1_gate": gate,
+            "fc1_bias": b1,
+            "fc2_bias": b2,
+        }
         output = arguments.get("output")
         if output is not None:
             # Production may reuse input storage; preserve pre-call values only for explicit export with shared storage.
