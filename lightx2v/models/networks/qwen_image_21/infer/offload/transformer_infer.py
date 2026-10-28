@@ -12,6 +12,14 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
+def _record_stream(value, stream):
+    if isinstance(value, tuple):
+        for item in value:
+            _record_stream(item, stream)
+    elif value is not None:
+        value.record_stream(stream)
+
+
 def validate_qwen_image_21_residency_config(config, lora_path=None):
     if "offload_resident_blocks" not in config:
         return
@@ -59,8 +67,7 @@ class QwenImage21OffloadTransformerInfer(QwenImage21TransformerInfer):
             # Called first by prefill, then reused by every denoising step.
             self.resident_blocks.prepare(blocks)
             for tensor in (hidden_states, *inputs):
-                if tensor is not None:
-                    tensor.record_stream(self.offload_manager.compute_stream)
+                _record_stream(tensor, self.offload_manager.compute_stream)
             try:
                 hidden_states = self.offload_manager.run_blocks(blocks, self.resident_blocks.indices, hidden_states, run_block)
             except BaseException:

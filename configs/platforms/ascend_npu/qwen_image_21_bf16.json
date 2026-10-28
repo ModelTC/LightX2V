@@ -1,0 +1,19 @@
+{
+    "infer_steps": 40,
+    "resolution": 1024,
+    "attn_type": "npu_flash_attn",
+    "rope_type": "qwen_image_21_npu_rope",
+    "rms_norm_type": "fp32_variance",
+    "layer_norm_type": "torch",
+    "modulate_type": "torch",
+    "fused_qk_rms_norm": false,
+    "fused_block_ops": false,
+    "enable_cfg": false,
+    "sample_guide_scale": 1.0,
+    "cpu_offload": false,
+    "text_encoder_cpu_offload": false,
+    "use_compile": false,
+    "warmup": false,
+    "feature_caching": "NoCaching",
+    "lora_configs": null
+}
