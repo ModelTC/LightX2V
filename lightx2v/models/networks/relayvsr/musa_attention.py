@@ -25,21 +25,33 @@ def clear_layout_cache():
     _layout_bytes = 0
 
 
-def _layout(height, width, windows, shifted, chunk, device):
+def _layout(height, width, windows, shifted, chunk, device, query_start=0, query_tokens=None):
     global _layout_bytes
-    cache_key = (height, width, windows, shifted, chunk, device.type, device.index)
+    query_tokens = height * width if query_tokens is None else query_tokens
+    cache_key = (height, width, windows, shifted, chunk, device.type, device.index, query_start, query_tokens)
     if cache_key in _layouts:
         _layouts.move_to_end(cache_key)
         return _layouts[cache_key][0]
 
-    tile_y, tile_x = torch.meshgrid(torch.arange(0, height, _TILE, device=device), torch.arange(0, width, _TILE, device=device), indexing="ij")
-    tile_y, tile_x = tile_y.flatten(), tile_x.flatten()
+    if query_start == 0 and query_tokens == height * width:
+        tile_y, tile_x = torch.meshgrid(torch.arange(0, height, _TILE, device=device), torch.arange(0, width, _TILE, device=device), indexing="ij")
+        tile_y, tile_x = tile_y.flatten(), tile_x.flatten()
+    else:
+        tiles = [
+            (y, x)
+            for y in range(0, height, _TILE)
+            for x in range(0, width, _TILE)
+            if any(max(row * width + x, query_start) < min(row * width + min(x + _TILE, width), query_start + query_tokens) for row in range(y, min(y + _TILE, height)))
+        ]
+        tile_y = torch.tensor([y for y, _ in tiles], device=device)
+        tile_x = torch.tensor([x for _, x in tiles], device=device)
     qr = torch.arange(_TILE * _TILE, device=device)
     parts, storage_bytes = [], 0
     for start in range(0, tile_y.numel(), chunk):
         y, x = tile_y[start : start + chunk, None], tile_x[start : start + chunk, None]
         qy, qx = y + qr[None] // _TILE, x + qr[None] % _TILE
-        qi = (qy * width + qx).clamp(0, height * width - 1).flatten()
+        local_query = qy * width + qx - query_start
+        qi = local_query.clamp(0, query_tokens - 1).flatten()
         keys, masks = [], []
         for frame, (wh, ww) in enumerate(windows):
             rows, cols = wh + _TILE - 1, ww + _TILE - 1
@@ -58,8 +70,8 @@ def _layout(height, width, windows, shifted, chunk, device):
         ki = torch.cat(keys, -1)
         mask = torch.cat(masks, -1)[:, None].contiguous()
         owner = destination = None
-        if height % _TILE or width % _TILE:
-            owner = ((qy < height) & (qx < width)).flatten().nonzero().flatten()
+        if height % _TILE or width % _TILE or query_start != 0 or query_tokens != height * width:
+            owner = ((qy < height) & (qx < width) & (local_query >= 0) & (local_query < query_tokens)).flatten().nonzero().flatten()
             destination = qi.index_select(0, owner)
         part = (qi, ki.flatten(), mask, destination, owner, qy.shape[0], ki.shape[1])
         parts.append(part)
@@ -75,10 +87,19 @@ def _layout(height, width, windows, shifted, chunk, device):
     return parts
 
 
-def _local_attention(query, key, value, height, width, windows, shifted):
+def _local_attention(query, key, value, height, width, windows, shifted, query_start=0):
     b, heads, tokens, dim = query.shape
     kv_heads = key.shape[1]
-    if tokens != height * width or key.shape != value.shape or key.shape[0] != b or key.shape[2] != len(windows) * tokens or key.shape[3] != dim or heads % kv_heads:
+    if (
+        query_start < 0
+        or tokens < 1
+        or query_start + tokens > height * width
+        or key.shape != value.shape
+        or key.shape[0] != b
+        or key.shape[2] != len(windows) * height * width
+        or key.shape[3] != dim
+        or heads % kv_heads
+    ):
         raise ValueError("Invalid RelayVSR local attention Q/K/V shape")
     if query.dtype != key.dtype or key.dtype != value.dtype or query.device != key.device or key.device != value.device:
         raise ValueError("RelayVSR local attention Q/K/V must share dtype and device")
@@ -86,7 +107,7 @@ def _local_attention(query, key, value, height, width, windows, shifted):
     bytes_per_tile = sum(lengths) * kv_heads * dim * key.element_size() * 2
     limit = max(1, min(128, _GATHER_BYTES // bytes_per_tile))
     chunk = 1 << (limit.bit_length() - 1)
-    parts = _layout(height, width, windows, shifted, chunk, query.device)
+    parts = _layout(height, width, windows, shifted, chunk, query.device, query_start, tokens)
     output = query.new_empty((b, tokens, heads, dim))
     for batch in range(b):
         # Sequence-major storage makes gathers and the native BSHD output cheap.
@@ -104,27 +125,27 @@ def _local_attention(query, key, value, height, width, windows, shifted):
 
 
 @torch.library.custom_op("lightx2v::relayvsr_musa_flash_attention", mutates_args=(), device_types="cuda")
-def _compiled_flash(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, height: int, width: int, windows: list[int]) -> torch.Tensor:
+def _compiled_flash(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, height: int, width: int, windows: list[int], query_start: int) -> torch.Tensor:
     windows = tuple(zip(windows[::2], windows[1::2]))
     if len(windows) > 1:
         frames = key.shape[2] // (height * width)
         windows = windows[:2] + (windows[2],) * (frames - 2)
-    return musa_flash_attention(query, key, value, height, width, windows)
+    return musa_flash_attention(query, key, value, height, width, windows, query_start)
 
 
 @_compiled_flash.register_fake
-def _compiled_flash_fake(query, key, value, height, width, windows):
+def _compiled_flash_fake(query, key, value, height, width, windows, query_start):
     b, heads, tokens, dim = query.shape
     return query.new_empty((b, tokens, heads, dim)).transpose(1, 2)
 
 
-def musa_flash_attention(query, key, value, height, width, windows):
+def musa_flash_attention(query, key, value, height, width, windows, query_start=0):
     if torch.compiler.is_compiling():
-        return _compiled_flash(query, key, value, height, width, [size for window in windows for size in window])
+        return _compiled_flash(query, key, value, height, width, [size for window in windows for size in window], query_start)
     windows = tuple(tuple(window) for window in windows)
     if any(size <= 0 or size % 2 for window in windows for size in window):
         raise ValueError("RelayVSR Flash requires positive even window dimensions")
-    return _local_attention(query, key, value, height, width, windows, shifted=False)
+    return _local_attention(query, key, value, height, width, windows, shifted=False, query_start=query_start)
 
 
 @torch.library.custom_op("lightx2v::relayvsr_musa_wan_attention", mutates_args=(), device_types="cuda")

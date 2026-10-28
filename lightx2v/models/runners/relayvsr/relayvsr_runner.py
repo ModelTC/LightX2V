@@ -146,7 +146,8 @@ class RelayVSRRunner(DefaultRunner):
             "wan", height // 8 * (width // 8) * wan["temporal_context_frames"], kv_cache_scheme="frame_ring", num_heads=wan["num_attention_heads"] // self.model.parallel.size
         )
         self.flash_cache_manager = KVCacheManager({"num_layers": 10, "num_heads": 2, "dim": 128}, device=self.device)
-        self.flash_history = self.flash_cache_manager.create_self_attn_kv_cache("flash_video", height // 4 * (width // 4), kv_cache_scheme="static", num_heads=2 // self.model.parallel.size)
+        flash_heads = 2 if self.model.flash_transformer.query_parallel else 2 // self.model.parallel.size
+        self.flash_history = self.flash_cache_manager.create_self_attn_kv_cache("flash_video", height // 4 * (width // 4), kv_cache_scheme="static", num_heads=flash_heads)
         self.reference_count = self.decode_count = 0
 
     def end_run(self):
