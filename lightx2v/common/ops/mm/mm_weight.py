@@ -1781,11 +1781,12 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        if self.bias is not None:
+        bias = self._get_actual_bias()
+        if bias is not None:
             output_tensor = self._gemm_bias(
                 input_tensor_quant,
                 self.weight,
-                self._get_actual_bias(),
+                bias,
                 input_tensor_scale,
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
@@ -1848,11 +1849,12 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        if self.bias is not None:
+        bias = self._get_actual_bias()
+        if bias is not None:
             output_tensor = self._gemm_bias(
                 input_tensor_quant,
                 self.weight,
-                self._get_actual_bias(),
+                bias,
                 input_tensor_scale,
                 self.weight_scale,
                 output_dtype=self.infer_dtype,
