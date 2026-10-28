@@ -39,6 +39,9 @@ class RingAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
 
+    def compute_stats(self, arguments, output):
+        return {"status": "composite", "note": "Ring组合边界不另计计算量；查看每轮实际apply_with_lse子调用，通信/LSE合并另算。"}
+
     def apply(
         self,
         q,

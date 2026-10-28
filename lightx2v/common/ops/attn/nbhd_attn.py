@@ -11,6 +11,7 @@ try:
 except ImportError:
     flashinfer = None
 
+from lightx2v.utils import workload_stats
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
@@ -122,6 +123,7 @@ class NbhdAttnWeight(AttnWeightTemplate):
         seqlen, head_num, head_dim = q.shape
         self.prepare_mask(seqlen=seqlen, head_num=head_num)
 
+        statistics_qkv = (q, k, v)
         q = q.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
         k = k.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
         v = v.permute(1, 0, 2).reshape(head_num * seqlen, 1, head_dim)
@@ -136,6 +138,8 @@ class NbhdAttnWeight(AttnWeightTemplate):
             auto_range_merge=True,
         )[0]
 
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(*statistics_qkv, ranges=(self.q_ranges, self.k_ranges), operator="nbhd_attn", layout="SHD")
         out = out.reshape(head_num, seqlen, head_dim).permute(1, 0, 2)
 
         return out.reshape(out.shape[0], -1)
@@ -143,6 +147,8 @@ class NbhdAttnWeight(AttnWeightTemplate):
 
 @ATTN_WEIGHT_REGISTER("nbhd_attn_flashinfer")
 class NbhdAttnWeightFlashInfer(AttnWeightTemplate):
+    sparse_compute_gap = "Flashinfer缓存plan未保留可读的最终区域，现有wrapper统计接口尚未接入。"
+
     block_size = 128
     seqlen = None
     attnmap_frame_num = None

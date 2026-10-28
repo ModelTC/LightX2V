@@ -1,0 +1,4 @@
+interface:
+  display_name: "模型模块性能分析"
+  short_description: "采集真实模型模块，解释计算、搬运、空隙与多 rank 通信成本"
+  default_prompt: "使用 $profile-model-module 分析指定真实模块的性能，按需准备可靠重放；采到 trace 时提供已核 TensorBoard 入口。"
