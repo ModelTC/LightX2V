@@ -1,4 +1,3 @@
-import gc
 import os
 import re
 
@@ -16,7 +15,7 @@ try:
 except ImportError:
     Qwen2VLProcessor = None
 
-from lightx2v.common.offload.module_adapter import PinnedModuleCPUWeights
+from lightx2v.common.offload.module_adapter import ModuleWeightOffload
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -25,8 +24,6 @@ from .system_messages import SYSTEM_PROMPT_EN, SYSTEM_PROMPT_ZH
 # Edit task prompt templates
 EDIT_PROMPT_TEMPLATE_PREFIX = "<|im_start|>system\nAs an image editing expert, first analyze the content and attributes of the input image(s). Then, based on the user's editing instructions, clearly and precisely determine how to modify the given image(s), ensuring that only the specified parts are altered and all other aspects remain consistent with the original(s).<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>"
 EDIT_PROMPT_TEMPLATE_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n"
-
-torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def get_prompt_language(text):
@@ -82,7 +79,6 @@ class LongCatImageTextEncoder:
         self.prompt_template_encode_suffix = config.get("prompt_template_encode_suffix", "<|im_end|>\n<|im_start|>assistant\n")
 
         self.cpu_offload = config.get("cpu_offload", False)
-        self._pinned_cpu_weights = None
         self.dtype = GET_DTYPE()
         self.enable_prompt_rewrite = config.get("enable_prompt_rewrite", False)
         self.load()
@@ -99,8 +95,8 @@ class LongCatImageTextEncoder:
         if not self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
 
-        if AI_DEVICE == "cuda" and self.cpu_offload and self.config.get("task", "t2i") == "t2i":
-            self._pinned_cpu_weights = PinnedModuleCPUWeights(self.text_encoder)
+        pin_memory = AI_DEVICE == "cuda" and self.cpu_offload and self.config.get("task", "t2i") == "t2i"
+        self._weight_offload = ModuleWeightOffload(self.text_encoder, cpu_offload=self.cpu_offload, pin_memory=pin_memory)
 
         # Load tokenizer
         self.tokenizer = Qwen2Tokenizer.from_pretrained(tokenizer_path)
@@ -139,19 +135,6 @@ class LongCatImageTextEncoder:
 
     @torch.no_grad()
     def rewrite_prompt(self, prompt, device=None):
-        """Rewrite prompts while retaining pinned CPU sources between calls."""
-        target_device = torch.device(device or AI_DEVICE)
-        if self._pinned_cpu_weights is None or target_device.type != "cuda":
-            return self._rewrite_prompt(prompt, device)
-        try:
-            self._pinned_cpu_weights.activate(target_device)
-            return self._rewrite_prompt(prompt, device)
-        finally:
-            self._pinned_cpu_weights.restore()
-            torch_device_module.empty_cache()
-            gc.collect()
-
-    def _rewrite_prompt(self, prompt, device=None):
         """Rewrite prompts using the LLM for better generation quality.
 
         Args:
@@ -161,56 +144,37 @@ class LongCatImageTextEncoder:
         Returns:
             List of rewritten prompts
         """
-        device = device or AI_DEVICE
-        prompt = [prompt] if isinstance(prompt, str) else prompt
+        with self._weight_offload.on_device(device or AI_DEVICE):
+            device = device or AI_DEVICE
+            prompt = [prompt] if isinstance(prompt, str) else prompt
 
-        all_text = []
-        for each_prompt in prompt:
-            language = get_prompt_language(each_prompt)
-            if language == "zh":
-                question = SYSTEM_PROMPT_ZH + f"\n用户输入为：{each_prompt}\n改写后的prompt为："
-            else:
-                question = SYSTEM_PROMPT_EN + f"\nUser Input: {each_prompt}\nRewritten prompt:"
+            all_text = []
+            for each_prompt in prompt:
+                language = get_prompt_language(each_prompt)
+                if language == "zh":
+                    question = SYSTEM_PROMPT_ZH + f"\n用户输入为：{each_prompt}\n改写后的prompt为："
+                else:
+                    question = SYSTEM_PROMPT_EN + f"\nUser Input: {each_prompt}\nRewritten prompt:"
 
-            message = [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": question}],
-                }
-            ]
-            text = self.processor.apply_chat_template(message, tokenize=False, add_generation_prompt=True)
-            all_text.append(text)
+                message = [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": question}],
+                    }
+                ]
+                text = self.processor.apply_chat_template(message, tokenize=False, add_generation_prompt=True)
+                all_text.append(text)
 
-        inputs = self.processor(text=all_text, padding=True, return_tensors="pt").to(device)
+            inputs = self.processor(text=all_text, padding=True, return_tensors="pt").to(device)
 
-        if self.cpu_offload and (self._pinned_cpu_weights is None or torch.device(device).type != "cuda"):
-            self.text_encoder.to(device)
+            generated_ids = self.text_encoder.generate(**inputs, max_new_tokens=self.tokenizer_max_length)
+            generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
+            output_text = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
-        generated_ids = self.text_encoder.generate(**inputs, max_new_tokens=self.tokenizer_max_length)
-        generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
-        output_text = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-
-        if self.cpu_offload and (self._pinned_cpu_weights is None or torch.device(device).type != "cuda"):
-            self.text_encoder.to("cpu")
-            torch_device_module.empty_cache()
-            gc.collect()
-
-        return output_text
+            return output_text
 
     @torch.no_grad()
     def infer(self, text, _image_list=None):
-        """Encode text prompts, restoring pinned sources after each call."""
-        if self._pinned_cpu_weights is None:
-            return self._infer(text, _image_list)
-        try:
-            self._pinned_cpu_weights.activate(AI_DEVICE)
-            return self._infer(text, _image_list)
-        finally:
-            self._pinned_cpu_weights.restore()
-            torch_device_module.empty_cache()
-            gc.collect()
-
-    def _infer(self, text, _image_list=None):
         """Encode text prompts to embeddings.
 
         Args:
@@ -220,71 +184,64 @@ class LongCatImageTextEncoder:
         Returns:
             Tuple of (prompt_embeds, prompt_embeds_mask, image_info)
         """
-        if self.cpu_offload and self._pinned_cpu_weights is None:
-            self.text_encoder.to(AI_DEVICE)
+        with self._weight_offload.on_device(AI_DEVICE):
+            # Encode with character-level tokenization for quoted text
+            batch_all_tokens = self._encode_prompt(text)
 
-        # Encode with character-level tokenization for quoted text
-        batch_all_tokens = self._encode_prompt(text)
+            # Pad token list to max_length
+            text_tokens_and_mask = self.tokenizer.pad(
+                {"input_ids": batch_all_tokens},
+                max_length=self.tokenizer_max_length,
+                padding="max_length",
+                return_attention_mask=True,
+                return_tensors="pt",
+            )
 
-        # Pad token list to max_length
-        text_tokens_and_mask = self.tokenizer.pad(
-            {"input_ids": batch_all_tokens},
-            max_length=self.tokenizer_max_length,
-            padding="max_length",
-            return_attention_mask=True,
-            return_tensors="pt",
-        )
+            # Tokenize prefix and suffix
+            prefix_tokens = self.tokenizer(self.prompt_template_encode_prefix, add_special_tokens=False)["input_ids"]
+            suffix_tokens = self.tokenizer(self.prompt_template_encode_suffix, add_special_tokens=False)["input_ids"]
+            prefix_len = len(prefix_tokens)
+            suffix_len = len(suffix_tokens)
 
-        # Tokenize prefix and suffix
-        prefix_tokens = self.tokenizer(self.prompt_template_encode_prefix, add_special_tokens=False)["input_ids"]
-        suffix_tokens = self.tokenizer(self.prompt_template_encode_suffix, add_special_tokens=False)["input_ids"]
-        prefix_len = len(prefix_tokens)
-        suffix_len = len(suffix_tokens)
+            # Create masks for prefix and suffix
+            prefix_tokens_mask = torch.tensor([1] * len(prefix_tokens), dtype=text_tokens_and_mask.attention_mask[0].dtype)
+            suffix_tokens_mask = torch.tensor([1] * len(suffix_tokens), dtype=text_tokens_and_mask.attention_mask[0].dtype)
 
-        # Create masks for prefix and suffix
-        prefix_tokens_mask = torch.tensor([1] * len(prefix_tokens), dtype=text_tokens_and_mask.attention_mask[0].dtype)
-        suffix_tokens_mask = torch.tensor([1] * len(suffix_tokens), dtype=text_tokens_and_mask.attention_mask[0].dtype)
+            prefix_tokens = torch.tensor(prefix_tokens, dtype=text_tokens_and_mask.input_ids.dtype)
+            suffix_tokens = torch.tensor(suffix_tokens, dtype=text_tokens_and_mask.input_ids.dtype)
 
-        prefix_tokens = torch.tensor(prefix_tokens, dtype=text_tokens_and_mask.input_ids.dtype)
-        suffix_tokens = torch.tensor(suffix_tokens, dtype=text_tokens_and_mask.input_ids.dtype)
+            batch_size = text_tokens_and_mask.input_ids.size(0)
 
-        batch_size = text_tokens_and_mask.input_ids.size(0)
+            # Expand prefix and suffix for batch
+            prefix_tokens_batch = prefix_tokens.unsqueeze(0).expand(batch_size, -1)
+            suffix_tokens_batch = suffix_tokens.unsqueeze(0).expand(batch_size, -1)
+            prefix_mask_batch = prefix_tokens_mask.unsqueeze(0).expand(batch_size, -1)
+            suffix_mask_batch = suffix_tokens_mask.unsqueeze(0).expand(batch_size, -1)
 
-        # Expand prefix and suffix for batch
-        prefix_tokens_batch = prefix_tokens.unsqueeze(0).expand(batch_size, -1)
-        suffix_tokens_batch = suffix_tokens.unsqueeze(0).expand(batch_size, -1)
-        prefix_mask_batch = prefix_tokens_mask.unsqueeze(0).expand(batch_size, -1)
-        suffix_mask_batch = suffix_tokens_mask.unsqueeze(0).expand(batch_size, -1)
+            # Concatenate: [prefix, content, suffix]
+            input_ids = torch.cat((prefix_tokens_batch, text_tokens_and_mask.input_ids, suffix_tokens_batch), dim=-1)
+            attention_mask = torch.cat((prefix_mask_batch, text_tokens_and_mask.attention_mask, suffix_mask_batch), dim=-1)
 
-        # Concatenate: [prefix, content, suffix]
-        input_ids = torch.cat((prefix_tokens_batch, text_tokens_and_mask.input_ids, suffix_tokens_batch), dim=-1)
-        attention_mask = torch.cat((prefix_mask_batch, text_tokens_and_mask.attention_mask, suffix_mask_batch), dim=-1)
+            input_ids = input_ids.to(AI_DEVICE)
+            attention_mask = attention_mask.to(AI_DEVICE)
 
-        input_ids = input_ids.to(AI_DEVICE)
-        attention_mask = attention_mask.to(AI_DEVICE)
+            # Get hidden states from text encoder
+            text_output = self.text_encoder(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
 
-        # Get hidden states from text encoder
-        text_output = self.text_encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True,
-        )
+            # Extract hidden states and remove prefix/suffix
+            prompt_embeds = text_output.hidden_states[-1].detach()
+            prompt_embeds = prompt_embeds[:, prefix_len:-suffix_len, :]
 
-        # Extract hidden states and remove prefix/suffix
-        prompt_embeds = text_output.hidden_states[-1].detach()
-        prompt_embeds = prompt_embeds[:, prefix_len:-suffix_len, :]
+            # Create mask for the content tokens (always tokenizer_max_length)
+            prompt_embeds_mask = text_tokens_and_mask.attention_mask.to(AI_DEVICE)
 
-        # Create mask for the content tokens (always tokenizer_max_length)
-        prompt_embeds_mask = text_tokens_and_mask.attention_mask.to(AI_DEVICE)
+            prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
 
-        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
-
-        if self.cpu_offload and self._pinned_cpu_weights is None:
-            self.text_encoder.to("cpu")
-            torch_device_module.empty_cache()
-            gc.collect()
-
-        return prompt_embeds, prompt_embeds_mask, {}
+            return prompt_embeds, prompt_embeds_mask, {}
 
     @torch.no_grad()
     def infer_with_image(self, text, image):
@@ -297,89 +254,82 @@ class LongCatImageTextEncoder:
         Returns:
             Tuple of (prompt_embeds, prompt_embeds_mask, image_info)
         """
-        if self.cpu_offload:
-            self.text_encoder.to(AI_DEVICE)
+        with self._weight_offload.on_device(AI_DEVICE):
+            # Load processor if not already loaded
+            if not hasattr(self, "processor") or self.processor is None:
+                processor_path = self.config.get("processor_path", os.path.join(self.config["model_path"], "text_processor"))
+                self.processor = Qwen2VLProcessor.from_pretrained(processor_path)
 
-        # Load processor if not already loaded
-        if not hasattr(self, "processor") or self.processor is None:
-            processor_path = self.config.get("processor_path", os.path.join(self.config["model_path"], "text_processor"))
-            self.processor = Qwen2VLProcessor.from_pretrained(processor_path)
+            # Process image using the VL processor's image processor
+            image_processor = self.processor.image_processor
+            raw_vl_input = image_processor(images=image, return_tensors="pt")
+            pixel_values = raw_vl_input["pixel_values"].to(AI_DEVICE, dtype=self.dtype)
+            image_grid_thw = raw_vl_input["image_grid_thw"].to(AI_DEVICE)
 
-        # Process image using the VL processor's image processor
-        image_processor = self.processor.image_processor
-        raw_vl_input = image_processor(images=image, return_tensors="pt")
-        pixel_values = raw_vl_input["pixel_values"].to(AI_DEVICE, dtype=self.dtype)
-        image_grid_thw = raw_vl_input["image_grid_thw"].to(AI_DEVICE)
+            # Encode prompts with character-level tokenization for quoted text
+            batch_all_tokens = self._encode_prompt(text)
 
-        # Encode prompts with character-level tokenization for quoted text
-        batch_all_tokens = self._encode_prompt(text)
+            # Pad token list to max_length
+            text_tokens_and_mask = self.tokenizer.pad(
+                {"input_ids": batch_all_tokens},
+                max_length=self.tokenizer_max_length,
+                padding="max_length",
+                return_attention_mask=True,
+                return_tensors="pt",
+            )
 
-        # Pad token list to max_length
-        text_tokens_and_mask = self.tokenizer.pad(
-            {"input_ids": batch_all_tokens},
-            max_length=self.tokenizer_max_length,
-            padding="max_length",
-            return_attention_mask=True,
-            return_tensors="pt",
-        )
+            # Build the edit prompt template with image placeholder
+            # Calculate number of image tokens
+            merge_length = image_processor.merge_size**2
+            num_image_tokens = image_grid_thw.prod() // merge_length
 
-        # Build the edit prompt template with image placeholder
-        # Calculate number of image tokens
-        merge_length = image_processor.merge_size**2
-        num_image_tokens = image_grid_thw.prod() // merge_length
+            # Replace <|image_pad|> with actual number of image tokens
+            prefix_text = EDIT_PROMPT_TEMPLATE_PREFIX
+            image_token = "<|image_pad|>"
+            prefix_text = prefix_text.replace(image_token, "<|placeholder|>" * num_image_tokens)
+            prefix_text = prefix_text.replace("<|placeholder|>", image_token)
 
-        # Replace <|image_pad|> with actual number of image tokens
-        prefix_text = EDIT_PROMPT_TEMPLATE_PREFIX
-        image_token = "<|image_pad|>"
-        prefix_text = prefix_text.replace(image_token, "<|placeholder|>" * num_image_tokens)
-        prefix_text = prefix_text.replace("<|placeholder|>", image_token)
+            # Tokenize prefix and suffix
+            prefix_tokens = self.tokenizer(prefix_text, add_special_tokens=False)["input_ids"]
+            suffix_tokens = self.tokenizer(EDIT_PROMPT_TEMPLATE_SUFFIX, add_special_tokens=False)["input_ids"]
 
-        # Tokenize prefix and suffix
-        prefix_tokens = self.tokenizer(prefix_text, add_special_tokens=False)["input_ids"]
-        suffix_tokens = self.tokenizer(EDIT_PROMPT_TEMPLATE_SUFFIX, add_special_tokens=False)["input_ids"]
+            # Find vision_start position to know where image tokens start
+            vision_start_token_id = self.tokenizer.convert_tokens_to_ids("<|vision_start|>")
+            prefix_len = prefix_tokens.index(vision_start_token_id)
+            suffix_len = len(suffix_tokens)
 
-        # Find vision_start position to know where image tokens start
-        vision_start_token_id = self.tokenizer.convert_tokens_to_ids("<|vision_start|>")
-        prefix_len = prefix_tokens.index(vision_start_token_id)
-        suffix_len = len(suffix_tokens)
+            # Create masks
+            prefix_tokens_mask = torch.tensor([1] * len(prefix_tokens), dtype=text_tokens_and_mask.attention_mask[0].dtype)
+            suffix_tokens_mask = torch.tensor([1] * len(suffix_tokens), dtype=text_tokens_and_mask.attention_mask[0].dtype)
 
-        # Create masks
-        prefix_tokens_mask = torch.tensor([1] * len(prefix_tokens), dtype=text_tokens_and_mask.attention_mask[0].dtype)
-        suffix_tokens_mask = torch.tensor([1] * len(suffix_tokens), dtype=text_tokens_and_mask.attention_mask[0].dtype)
+            prefix_tokens = torch.tensor(prefix_tokens, dtype=text_tokens_and_mask.input_ids.dtype)
+            suffix_tokens = torch.tensor(suffix_tokens, dtype=text_tokens_and_mask.input_ids.dtype)
 
-        prefix_tokens = torch.tensor(prefix_tokens, dtype=text_tokens_and_mask.input_ids.dtype)
-        suffix_tokens = torch.tensor(suffix_tokens, dtype=text_tokens_and_mask.input_ids.dtype)
+            # Concatenate: [prefix_with_image, content, suffix]
+            input_ids = torch.cat((prefix_tokens, text_tokens_and_mask.input_ids[0], suffix_tokens), dim=-1)
+            attention_mask = torch.cat((prefix_tokens_mask, text_tokens_and_mask.attention_mask[0], suffix_tokens_mask), dim=-1)
 
-        # Concatenate: [prefix_with_image, content, suffix]
-        input_ids = torch.cat((prefix_tokens, text_tokens_and_mask.input_ids[0], suffix_tokens), dim=-1)
-        attention_mask = torch.cat((prefix_tokens_mask, text_tokens_and_mask.attention_mask[0], suffix_tokens_mask), dim=-1)
+            input_ids = input_ids.unsqueeze(0).to(AI_DEVICE)
+            attention_mask = attention_mask.unsqueeze(0).to(AI_DEVICE)
 
-        input_ids = input_ids.unsqueeze(0).to(AI_DEVICE)
-        attention_mask = attention_mask.unsqueeze(0).to(AI_DEVICE)
+            # Get hidden states from text encoder with image
+            text_output = self.text_encoder(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pixel_values=pixel_values,
+                image_grid_thw=image_grid_thw,
+                output_hidden_states=True,
+            )
 
-        # Get hidden states from text encoder with image
-        text_output = self.text_encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            pixel_values=pixel_values,
-            image_grid_thw=image_grid_thw,
-            output_hidden_states=True,
-        )
+            # Extract hidden states and remove prefix/suffix
+            # Note: prefix_len is position before vision_start, we want to keep only the content part
+            prompt_embeds = text_output.hidden_states[-1].detach()
+            prompt_embeds = prompt_embeds[:, prefix_len:-suffix_len, :]
 
-        # Extract hidden states and remove prefix/suffix
-        # Note: prefix_len is position before vision_start, we want to keep only the content part
-        prompt_embeds = text_output.hidden_states[-1].detach()
-        prompt_embeds = prompt_embeds[:, prefix_len:-suffix_len, :]
+            # Create mask for the content tokens
+            prompt_embeds_mask = text_tokens_and_mask.attention_mask.to(AI_DEVICE)
 
-        # Create mask for the content tokens
-        prompt_embeds_mask = text_tokens_and_mask.attention_mask.to(AI_DEVICE)
+            prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
 
-        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
-
-        if self.cpu_offload:
-            self.text_encoder.to("cpu")
-            torch_device_module.empty_cache()
-            gc.collect()
-
-        logger.info(f"Edit prompt embeds shape: {prompt_embeds.shape}")
-        return prompt_embeds, prompt_embeds_mask, {}
+            logger.info(f"Edit prompt embeds shape: {prompt_embeds.shape}")
+            return prompt_embeds, prompt_embeds_mask, {}

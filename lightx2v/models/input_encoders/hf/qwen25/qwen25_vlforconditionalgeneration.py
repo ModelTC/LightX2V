@@ -1,4 +1,3 @@
-import gc
 import math
 import os
 
@@ -10,10 +9,8 @@ except ImportError:
     Qwen2Tokenizer = None
     Qwen2_5_VLForConditionalGeneration = None
 
-from lightx2v.common.offload.module_adapter import PinnedModuleCPUWeights
+from lightx2v.common.offload.module_adapter import ModuleWeightOffload
 from lightx2v_platform.base.global_var import AI_DEVICE
-
-torch_device_module = getattr(torch, AI_DEVICE)
 
 try:
     from diffusers.image_processor import VaeImageProcessor
@@ -72,7 +69,6 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             self.VAE_IMAGE_SIZE = self.resolution * self.resolution
 
         self.cpu_offload = config.get("qwen25vl_cpu_offload", config.get("cpu_offload", False))
-        self._pinned_cpu_weights = None
         self.dtype = torch.bfloat16
         self.load()
 
@@ -94,7 +90,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         if not self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
 
-        if (
+        pin_memory = (
             AI_DEVICE == "cuda"
             and self.cpu_offload
             and self.config.get("cpu_offload", False)
@@ -102,9 +98,9 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             and self.config["task"] == "t2i"
             and not self.is_layered
             and not self.config.get("qwen25vl_quantized", False)
-        ):
-            # DiT shared offload also enables rank-local pinned TE sources.
-            self._pinned_cpu_weights = PinnedModuleCPUWeights(self.text_encoder)
+        )
+        can_move_whole_model = self.cpu_offload and (not hasattr(self, "device_map") or self.device_map == AI_DEVICE)
+        self._weight_offload = ModuleWeightOffload(self.text_encoder, cpu_offload=can_move_whole_model, pin_memory=pin_memory)
 
         qwen25vl_tokenizer_path = self.config.get("qwen25vl_tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
         self.tokenizer = Qwen2Tokenizer.from_pretrained(qwen25vl_tokenizer_path)
@@ -149,132 +145,109 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
 
     @torch.no_grad()
     def get_image_caption(self, prompt_image):
-        if self.cpu_offload:
-            if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
-                self.text_encoder.to(AI_DEVICE)
-
-        if self.use_en_prompt:
-            prompt = self.image_caption_prompt_en
-        else:
-            prompt = self.image_caption_prompt_cn
-
-        model_inputs = self.vl_processor(
-            text=prompt,
-            images=prompt_image,
-            padding=True,
-            return_tensors="pt",
-        ).to(AI_DEVICE)
-
-        generated_ids = self.text_encoder.generate(**model_inputs, max_new_tokens=512)
-        generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
-        output_text = self.vl_processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-        return output_text.strip()
-
-    @torch.no_grad()
-    def infer(self, text, image_list=None):
-        if self._pinned_cpu_weights is None:
-            return self._infer(text, image_list)
-        try:
-            self._pinned_cpu_weights.activate(AI_DEVICE)
-            return self._infer(text, image_list)
-        finally:
-            self._pinned_cpu_weights.restore()
-            torch_device_module.empty_cache()
-            gc.collect()
-
-    def _infer(self, text, image_list=None):
-        if self.cpu_offload and self._pinned_cpu_weights is None:
-            if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
-                self.text_encoder.to(AI_DEVICE)
-
-        if image_list is not None:
-            condition_image_list = []
-            vae_image_list = []
-            condition_image_info_list = []
-            vae_image_info_list = []
-            if self.USE_IMAGE_ID_IN_PROMPT:
-                base_img_prompt = ""
-                img_prompt_template = "Picture {}: <|vision_start|><|image_pad|><|vision_end|>"
-                for i, image in enumerate(image_list):
-                    base_img_prompt += img_prompt_template.format(i + 1)
-                    condition_image, vae_image, condition_image_info, vae_image_info = self.preprocess_image(image)
-                    condition_image_list.append(condition_image)
-                    vae_image_list.append(vae_image)
-                    condition_image_info_list.append(condition_image_info)
-                    vae_image_info_list.append(vae_image_info)
+        with self._weight_offload.on_device(AI_DEVICE):
+            if self.use_en_prompt:
+                prompt = self.image_caption_prompt_en
             else:
-                base_img_prompt = "<|vision_start|><|image_pad|><|vision_end|>"
-                for i, image in enumerate(image_list):
-                    condition_image, vae_image, condition_image_info, vae_image_info = self.preprocess_image(image)
-                    condition_image_list.append(condition_image)
-                    vae_image_list.append(vae_image)
-                    condition_image_info_list.append(condition_image_info)
-                    vae_image_info_list.append(vae_image_info)
-            image_info = {
-                "vae_image_list": vae_image_list,
-                "vae_image_info_list": vae_image_info_list,
-            }
-        else:
-            image_info = {}
+                prompt = self.image_caption_prompt_cn
 
-        if self.config["task"] == "i2i" and not self.is_layered:
-            template = self.prompt_template_encode
-            drop_idx = self.prompt_template_encode_start_idx
-            txt = [template.format(base_img_prompt + e) for e in text]
-
-            model_inputs = self.processor(
-                text=txt,
-                images=condition_image_list,
+            model_inputs = self.vl_processor(
+                text=prompt,
+                images=prompt_image,
                 padding=True,
                 return_tensors="pt",
             ).to(AI_DEVICE)
 
-            encoder_hidden_states = self.text_encoder(
-                input_ids=model_inputs.input_ids,
-                attention_mask=model_inputs.attention_mask,
-                pixel_values=model_inputs.pixel_values,
-                image_grid_thw=model_inputs.image_grid_thw,
-                output_hidden_states=True,
-            )
-        else:
-            template = self.prompt_template_encode
-            drop_idx = self.prompt_template_encode_start_idx
-            txt = [template.format(e) for e in text]
+            generated_ids = self.text_encoder.generate(**model_inputs, max_new_tokens=512)
+            generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
+            output_text = self.vl_processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+            return output_text.strip()
 
-            token_lengths = [len(ids) for ids in self.tokenizer(txt, add_special_tokens=True)["input_ids"]]
-            max_token_len = max(token_lengths)
-            if max_token_len > self.tokenizer_max_length + drop_idx:
-                raise ValueError(f"Input text token length ({max_token_len - drop_idx}) exceeds ({self.tokenizer_max_length}). Please shorten the input text.")
-            model_inputs = self.tokenizer(txt, max_length=self.tokenizer_max_length + drop_idx, padding=True, truncation=True, return_tensors="pt").to(AI_DEVICE)
-            encoder_hidden_states = self.text_encoder(
-                input_ids=model_inputs.input_ids,
-                attention_mask=model_inputs.attention_mask,
-                output_hidden_states=True,
-            )
+    @torch.no_grad()
+    def infer(self, text, image_list=None):
+        with self._weight_offload.on_device(AI_DEVICE):
+            if image_list is not None:
+                condition_image_list = []
+                vae_image_list = []
+                condition_image_info_list = []
+                vae_image_info_list = []
+                if self.USE_IMAGE_ID_IN_PROMPT:
+                    base_img_prompt = ""
+                    img_prompt_template = "Picture {}: <|vision_start|><|image_pad|><|vision_end|>"
+                    for i, image in enumerate(image_list):
+                        base_img_prompt += img_prompt_template.format(i + 1)
+                        condition_image, vae_image, condition_image_info, vae_image_info = self.preprocess_image(image)
+                        condition_image_list.append(condition_image)
+                        vae_image_list.append(vae_image)
+                        condition_image_info_list.append(condition_image_info)
+                        vae_image_info_list.append(vae_image_info)
+                else:
+                    base_img_prompt = "<|vision_start|><|image_pad|><|vision_end|>"
+                    for i, image in enumerate(image_list):
+                        condition_image, vae_image, condition_image_info, vae_image_info = self.preprocess_image(image)
+                        condition_image_list.append(condition_image)
+                        vae_image_list.append(vae_image)
+                        condition_image_info_list.append(condition_image_info)
+                        vae_image_info_list.append(vae_image_info)
+                image_info = {
+                    "vae_image_list": vae_image_list,
+                    "vae_image_info_list": vae_image_info_list,
+                }
+            else:
+                image_info = {}
 
-        hidden_states = encoder_hidden_states.hidden_states[-1]
-        attention_mask = model_inputs.attention_mask
+            if self.config["task"] == "i2i" and not self.is_layered:
+                template = self.prompt_template_encode
+                drop_idx = self.prompt_template_encode_start_idx
+                txt = [template.format(base_img_prompt + e) for e in text]
 
-        split_hidden_states = self._extract_masked_hidden(hidden_states, attention_mask)
-        split_hidden_states = [e[drop_idx:] for e in split_hidden_states]
-        attn_mask_list = [torch.ones(e.size(0), dtype=torch.long, device=e.device) for e in split_hidden_states]
-        max_seq_len = max([e.size(0) for e in split_hidden_states])
-        prompt_embeds = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0), u.size(1))]) for u in split_hidden_states])
-        encoder_attention_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in attn_mask_list])
+                model_inputs = self.processor(
+                    text=txt,
+                    images=condition_image_list,
+                    padding=True,
+                    return_tensors="pt",
+                ).to(AI_DEVICE)
 
-        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
-        prompt_embeds_mask = encoder_attention_mask
+                encoder_hidden_states = self.text_encoder(
+                    input_ids=model_inputs.input_ids,
+                    attention_mask=model_inputs.attention_mask,
+                    pixel_values=model_inputs.pixel_values,
+                    image_grid_thw=model_inputs.image_grid_thw,
+                    output_hidden_states=True,
+                )
+            else:
+                template = self.prompt_template_encode
+                drop_idx = self.prompt_template_encode_start_idx
+                txt = [template.format(e) for e in text]
 
-        _, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, 1, 1)
-        prompt_embeds = prompt_embeds.view(1 * 1, seq_len, -1)
-        prompt_embeds_mask = prompt_embeds_mask.repeat(1, 1, 1)
-        prompt_embeds_mask = prompt_embeds_mask.view(1 * 1, seq_len)
+                token_lengths = [len(ids) for ids in self.tokenizer(txt, add_special_tokens=True)["input_ids"]]
+                max_token_len = max(token_lengths)
+                if max_token_len > self.tokenizer_max_length + drop_idx:
+                    raise ValueError(f"Input text token length ({max_token_len - drop_idx}) exceeds ({self.tokenizer_max_length}). Please shorten the input text.")
+                model_inputs = self.tokenizer(txt, max_length=self.tokenizer_max_length + drop_idx, padding=True, truncation=True, return_tensors="pt").to(AI_DEVICE)
+                encoder_hidden_states = self.text_encoder(
+                    input_ids=model_inputs.input_ids,
+                    attention_mask=model_inputs.attention_mask,
+                    output_hidden_states=True,
+                )
 
-        if self.cpu_offload and self._pinned_cpu_weights is None:
-            if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
-                self.text_encoder.to(torch.device("cpu"))
-            torch_device_module.empty_cache()
-            gc.collect()
+            hidden_states = encoder_hidden_states.hidden_states[-1]
+            attention_mask = model_inputs.attention_mask
 
-        return prompt_embeds, prompt_embeds_mask, image_info
+            split_hidden_states = self._extract_masked_hidden(hidden_states, attention_mask)
+            split_hidden_states = [e[drop_idx:] for e in split_hidden_states]
+            attn_mask_list = [torch.ones(e.size(0), dtype=torch.long, device=e.device) for e in split_hidden_states]
+            max_seq_len = max([e.size(0) for e in split_hidden_states])
+            prompt_embeds = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0), u.size(1))]) for u in split_hidden_states])
+            encoder_attention_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in attn_mask_list])
+
+            prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
+            prompt_embeds_mask = encoder_attention_mask
+
+            _, seq_len, _ = prompt_embeds.shape
+            prompt_embeds = prompt_embeds.repeat(1, 1, 1)
+            prompt_embeds = prompt_embeds.view(1 * 1, seq_len, -1)
+            prompt_embeds_mask = prompt_embeds_mask.repeat(1, 1, 1)
+            prompt_embeds_mask = prompt_embeds_mask.view(1 * 1, seq_len)
+
+            return prompt_embeds, prompt_embeds_mask, image_info

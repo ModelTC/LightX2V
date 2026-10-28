@@ -7,12 +7,17 @@ shared arena lifetime; restore/release only after outstanding device work ends.
 from __future__ import annotations
 
 import copy
+import gc
 import weakref
+from contextlib import ExitStack, contextmanager
 from itertools import chain
+from threading import Lock
 
 import torch
 from loguru import logger
 from torch import nn
+
+from .host_memory import create_pin_tensor
 
 
 def assign_module_tensor(module, name, tensor):
@@ -60,32 +65,39 @@ class ModuleCPUWeights:
             assign_module_tensor(module, name, source)
 
 
-class PinnedModuleCPUWeights:
-    """Pinned immutable parameters for an eval CPU module, without hooks.
+class ModuleWeightOffload:
+    """Scope a native module's residency, with optional immutable pinned weights.
 
-    ``activate`` uses the module's normal device transfer. ``restore`` waits for
-    that CUDA device, restores the original CPU Parameter objects and copies
-    current buffers back to CPU, including buffers registered during forward.
-    Call restore in a finally block, including when activation fails. Parameter
-    storage aliases/layout are retained on CPU; device layout follows Module.to.
+    Resident mode is a no-op; ordinary offload uses Module.to in both directions.
+    Pinned offload restores original CPU Parameter objects and copies current
+    buffers back after synchronizing CUDA. CPU aliases/layout are retained;
+    device layout follows Module.to. Nested/concurrent contexts are rejected.
     """
 
-    def __init__(self, module):
-        if module.training:
-            raise ValueError("PinnedModuleCPUWeights requires an evaluation-mode module")
+    def __init__(self, module, cpu_offload, pin_memory):
         self._module = weakref.ref(module)
+        self.cpu_offload = bool(cpu_offload)
+        self.pin_memory = self.cpu_offload and bool(pin_memory)
+        self._lock = Lock()
         self._device = None
         self._slots = []
         self._parameters = {}
         self.sources = {}
         self.parameter_bytes = self.pinned_parameter_bytes = 0
+        if self.pin_memory:
+            self._prepare_pinned_weights()
+
+    def _prepare_pinned_weights(self):
+        module = self.module
+        if module.training:
+            raise ValueError("Pinned module offload requires an evaluation-mode module")
         groups = {}
         for owner in module.modules():
             for name, parameter in owner._parameters.items():
                 if parameter is None:
                     continue
                 if parameter.device.type != "cpu" or parameter.layout != torch.strided or parameter.is_quantized:
-                    raise ValueError("PinnedModuleCPUWeights requires materialized, unquantized strided CPU parameters")
+                    raise ValueError("Pinned module offload requires materialized, unquantized strided CPU parameters")
                 self._slots.append((weakref.ref(owner), name, parameter))
                 key = id(parameter)
                 if key not in self._parameters:
@@ -97,11 +109,7 @@ class PinnedModuleCPUWeights:
                 storage = parameters[0].untyped_storage()
                 # Pin each storage once, preserving aliases, strides and offsets.
                 raw = torch.empty(0, dtype=torch.uint8, device="cpu").set_(storage, 0, (storage.nbytes(),), (1,))
-                try:
-                    pinned = raw if raw.is_pinned() else raw.pin_memory()
-                except Exception as error:
-                    logger.warning(f"Failed to allocate pinned module weights: {error}. Falling back to regular CPU memory.")
-                    pinned = raw
+                pinned = raw if raw.is_pinned() else create_pin_tensor(raw)
                 self.parameter_bytes += storage.nbytes()
                 if pinned.is_pinned():
                     self.pinned_parameter_bytes += storage.nbytes()
@@ -120,17 +128,7 @@ class PinnedModuleCPUWeights:
             raise RuntimeError("The native module has already been released")
         return module
 
-    def activate(self, device):
-        device = torch.device(device)
-        if device.type != "cuda":
-            raise ValueError("PinnedModuleCPUWeights only activates on CUDA")
-        if self._device is not None:
-            raise RuntimeError("Restore the CPU weights before activating again")
-        # Mark first: a failed Module.to may have already moved some parameters.
-        self._device = device
-        return self.module.to(device=device, non_blocking=all(source.is_pinned() for source in self.sources.values()))
-
-    def restore(self):
+    def _restore_pinned_weights(self):
         if self._device is not None:
             torch.cuda.synchronize(self._device)
         with torch.no_grad():
@@ -148,6 +146,43 @@ class PinnedModuleCPUWeights:
                             buffers[key] = buffer.to(device="cpu")
                         owner._buffers[name] = buffers[key]
         self._device = None
+
+    @contextmanager
+    def on_device(self, device):
+        """Yield the module and offload on exit, even after a partial upload."""
+        if not self._lock.acquire(blocking=False):
+            raise RuntimeError("ModuleWeightOffload does not support nested or concurrent contexts")
+        with ExitStack() as cleanup:
+            cleanup.callback(self._lock.release)
+            if not self.cpu_offload:
+                yield self.module
+                return
+            device = torch.device(device)
+            if self.pin_memory and device.type not in {"cpu", "cuda"}:
+                raise ValueError("Pinned module offload only supports CPU and CUDA")
+            # Callbacks run in reverse order, including when upload fails.
+            cleanup.callback(gc.collect)
+            cleanup.callback(self._empty_cache, device)
+            if self.pin_memory:
+                cleanup.callback(self._restore_pinned_weights)
+                self._device = device if device.type == "cuda" else None
+                if self._device is not None:
+                    self.module.to(device=device, non_blocking=all(source.is_pinned() for source in self.sources.values()))
+            else:
+                cleanup.callback(self.module.to, torch.device("cpu"))
+                self.module.to(device)
+            yield self.module
+
+    @staticmethod
+    def _empty_cache(device):
+        backend = getattr(torch, device.type)
+        empty_cache = getattr(backend, "empty_cache", None)
+        if empty_cache is not None:
+            if device.type == "cuda":
+                with backend.device(device):
+                    empty_cache()
+            else:
+                empty_cache()
 
 
 class NativeModuleBlockSlot:
