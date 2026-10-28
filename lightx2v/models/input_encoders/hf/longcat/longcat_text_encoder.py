@@ -16,6 +16,7 @@ try:
 except ImportError:
     Qwen2VLProcessor = None
 
+from lightx2v.common.offload.module_adapter import PinnedModuleCPUWeights
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -81,6 +82,7 @@ class LongCatImageTextEncoder:
         self.prompt_template_encode_suffix = config.get("prompt_template_encode_suffix", "<|im_end|>\n<|im_start|>assistant\n")
 
         self.cpu_offload = config.get("cpu_offload", False)
+        self._pinned_cpu_weights = None
         self.dtype = GET_DTYPE()
         self.enable_prompt_rewrite = config.get("enable_prompt_rewrite", False)
         self.load()
@@ -96,6 +98,9 @@ class LongCatImageTextEncoder:
 
         if not self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
+
+        if AI_DEVICE == "cuda" and self.cpu_offload and self.config.get("task", "t2i") == "t2i":
+            self._pinned_cpu_weights = PinnedModuleCPUWeights(self.text_encoder)
 
         # Load tokenizer
         self.tokenizer = Qwen2Tokenizer.from_pretrained(tokenizer_path)
@@ -134,6 +139,19 @@ class LongCatImageTextEncoder:
 
     @torch.no_grad()
     def rewrite_prompt(self, prompt, device=None):
+        """Rewrite prompts while retaining pinned CPU sources between calls."""
+        target_device = torch.device(device or AI_DEVICE)
+        if self._pinned_cpu_weights is None or target_device.type != "cuda":
+            return self._rewrite_prompt(prompt, device)
+        try:
+            self._pinned_cpu_weights.activate(target_device)
+            return self._rewrite_prompt(prompt, device)
+        finally:
+            self._pinned_cpu_weights.restore()
+            torch_device_module.empty_cache()
+            gc.collect()
+
+    def _rewrite_prompt(self, prompt, device=None):
         """Rewrite prompts using the LLM for better generation quality.
 
         Args:
@@ -165,14 +183,14 @@ class LongCatImageTextEncoder:
 
         inputs = self.processor(text=all_text, padding=True, return_tensors="pt").to(device)
 
-        if self.cpu_offload:
+        if self.cpu_offload and (self._pinned_cpu_weights is None or torch.device(device).type != "cuda"):
             self.text_encoder.to(device)
 
         generated_ids = self.text_encoder.generate(**inputs, max_new_tokens=self.tokenizer_max_length)
         generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
         output_text = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
-        if self.cpu_offload:
+        if self.cpu_offload and (self._pinned_cpu_weights is None or torch.device(device).type != "cuda"):
             self.text_encoder.to("cpu")
             torch_device_module.empty_cache()
             gc.collect()
@@ -181,6 +199,18 @@ class LongCatImageTextEncoder:
 
     @torch.no_grad()
     def infer(self, text, _image_list=None):
+        """Encode text prompts, restoring pinned sources after each call."""
+        if self._pinned_cpu_weights is None:
+            return self._infer(text, _image_list)
+        try:
+            self._pinned_cpu_weights.activate(AI_DEVICE)
+            return self._infer(text, _image_list)
+        finally:
+            self._pinned_cpu_weights.restore()
+            torch_device_module.empty_cache()
+            gc.collect()
+
+    def _infer(self, text, _image_list=None):
         """Encode text prompts to embeddings.
 
         Args:
@@ -190,7 +220,7 @@ class LongCatImageTextEncoder:
         Returns:
             Tuple of (prompt_embeds, prompt_embeds_mask, image_info)
         """
-        if self.cpu_offload:
+        if self.cpu_offload and self._pinned_cpu_weights is None:
             self.text_encoder.to(AI_DEVICE)
 
         # Encode with character-level tokenization for quoted text
@@ -249,7 +279,7 @@ class LongCatImageTextEncoder:
 
         prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
 
-        if self.cpu_offload:
+        if self.cpu_offload and self._pinned_cpu_weights is None:
             self.text_encoder.to("cpu")
             torch_device_module.empty_cache()
             gc.collect()
