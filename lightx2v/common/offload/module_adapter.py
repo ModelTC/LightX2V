@@ -11,6 +11,7 @@ import weakref
 from itertools import chain
 
 import torch
+from loguru import logger
 from torch import nn
 
 
@@ -57,6 +58,96 @@ class ModuleCPUWeights:
         module = self.module
         for name, source in self.sources.items():
             assign_module_tensor(module, name, source)
+
+
+class PinnedModuleCPUWeights:
+    """Pinned immutable parameters for an eval CPU module, without hooks.
+
+    ``activate`` uses the module's normal device transfer. ``restore`` waits for
+    that CUDA device, restores the original CPU Parameter objects and copies
+    current buffers back to CPU, including buffers registered during forward.
+    Call restore in a finally block, including when activation fails. Parameter
+    storage aliases/layout are retained on CPU; device layout follows Module.to.
+    """
+
+    def __init__(self, module):
+        if module.training:
+            raise ValueError("PinnedModuleCPUWeights requires an evaluation-mode module")
+        self._module = weakref.ref(module)
+        self._device = None
+        self._slots = []
+        self._parameters = {}
+        self.sources = {}
+        self.parameter_bytes = self.pinned_parameter_bytes = 0
+        groups = {}
+        for owner in module.modules():
+            for name, parameter in owner._parameters.items():
+                if parameter is None:
+                    continue
+                if parameter.device.type != "cpu" or parameter.layout != torch.strided or parameter.is_quantized:
+                    raise ValueError("PinnedModuleCPUWeights requires materialized, unquantized strided CPU parameters")
+                self._slots.append((weakref.ref(owner), name, parameter))
+                key = id(parameter)
+                if key not in self._parameters:
+                    self._parameters[key] = parameter
+                    groups.setdefault(parameter.untyped_storage()._cdata, []).append(parameter)
+
+        with torch.no_grad():
+            for parameters in groups.values():
+                storage = parameters[0].untyped_storage()
+                # Pin each storage once, preserving aliases, strides and offsets.
+                raw = torch.empty(0, dtype=torch.uint8, device="cpu").set_(storage, 0, (storage.nbytes(),), (1,))
+                try:
+                    pinned = raw if raw.is_pinned() else raw.pin_memory()
+                except Exception as error:
+                    logger.warning(f"Failed to allocate pinned module weights: {error}. Falling back to regular CPU memory.")
+                    pinned = raw
+                self.parameter_bytes += storage.nbytes()
+                if pinned.is_pinned():
+                    self.pinned_parameter_bytes += storage.nbytes()
+                for parameter in parameters:
+                    source = torch.empty(0, dtype=parameter.dtype, device="cpu").set_(pinned.untyped_storage(), parameter.storage_offset(), parameter.shape, parameter.stride())
+                    self.sources[id(parameter)] = source
+                    parameter.data = source
+                # Do not retain the old pageable checkpoint storage after pinning.
+                del storage, raw, pinned, source
+        logger.info("Module CPU weights: {:.2f}/{:.2f} GiB pinned (rank-local)", self.pinned_parameter_bytes / 2**30, self.parameter_bytes / 2**30)
+
+    @property
+    def module(self):
+        module = self._module()
+        if module is None:
+            raise RuntimeError("The native module has already been released")
+        return module
+
+    def activate(self, device):
+        device = torch.device(device)
+        if device.type != "cuda":
+            raise ValueError("PinnedModuleCPUWeights only activates on CUDA")
+        if self._device is not None:
+            raise RuntimeError("Restore the CPU weights before activating again")
+        # Mark first: a failed Module.to may have already moved some parameters.
+        self._device = device
+        return self.module.to(device=device, non_blocking=all(source.is_pinned() for source in self.sources.values()))
+
+    def restore(self):
+        if self._device is not None:
+            torch.cuda.synchronize(self._device)
+        with torch.no_grad():
+            for key, parameter in self._parameters.items():
+                parameter.data = self.sources[key]
+            for owner, name, parameter in self._slots:
+                owner()._parameters[name] = parameter
+            # Forward may replace/add buffers; never restore a stale snapshot.
+            buffers = {}
+            for owner in self.module.modules():
+                for name, buffer in owner._buffers.items():
+                    if buffer is not None:
+                        key = id(buffer)
+                        if key not in buffers:
+                            buffers[key] = buffer.to(device="cpu")
+                        owner._buffers[name] = buffers[key]
+        self._device = None
 
 
 class NativeModuleBlockSlot:

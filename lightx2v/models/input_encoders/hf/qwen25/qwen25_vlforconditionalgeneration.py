@@ -10,6 +10,7 @@ except ImportError:
     Qwen2Tokenizer = None
     Qwen2_5_VLForConditionalGeneration = None
 
+from lightx2v.common.offload.module_adapter import PinnedModuleCPUWeights
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -71,6 +72,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             self.VAE_IMAGE_SIZE = self.resolution * self.resolution
 
         self.cpu_offload = config.get("qwen25vl_cpu_offload", config.get("cpu_offload", False))
+        self._pinned_cpu_weights = None
         self.dtype = torch.bfloat16
         self.load()
 
@@ -91,6 +93,18 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
 
         if not self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
+
+        if (
+            AI_DEVICE == "cuda"
+            and self.cpu_offload
+            and self.config.get("cpu_offload", False)
+            and self.config.get("shared_cpu_weights", False)
+            and self.config["task"] == "t2i"
+            and not self.is_layered
+            and not self.config.get("qwen25vl_quantized", False)
+        ):
+            # DiT shared offload also enables rank-local pinned TE sources.
+            self._pinned_cpu_weights = PinnedModuleCPUWeights(self.text_encoder)
 
         qwen25vl_tokenizer_path = self.config.get("qwen25vl_tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
         self.tokenizer = Qwen2Tokenizer.from_pretrained(qwen25vl_tokenizer_path)
@@ -158,7 +172,18 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
 
     @torch.no_grad()
     def infer(self, text, image_list=None):
-        if self.cpu_offload:
+        if self._pinned_cpu_weights is None:
+            return self._infer(text, image_list)
+        try:
+            self._pinned_cpu_weights.activate(AI_DEVICE)
+            return self._infer(text, image_list)
+        finally:
+            self._pinned_cpu_weights.restore()
+            torch_device_module.empty_cache()
+            gc.collect()
+
+    def _infer(self, text, image_list=None):
+        if self.cpu_offload and self._pinned_cpu_weights is None:
             if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
                 self.text_encoder.to(AI_DEVICE)
 
@@ -246,7 +271,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         prompt_embeds_mask = prompt_embeds_mask.repeat(1, 1, 1)
         prompt_embeds_mask = prompt_embeds_mask.view(1 * 1, seq_len)
 
-        if self.cpu_offload:
+        if self.cpu_offload and self._pinned_cpu_weights is None:
             if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
                 self.text_encoder.to(torch.device("cpu"))
             torch_device_module.empty_cache()
