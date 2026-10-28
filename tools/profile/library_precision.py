@@ -55,8 +55,8 @@ def runtime_settings(torch, device_type):
     for name in names:
         try:
             flags[name] = getattr(matmul, name, None)
-        except RuntimeError as error:
-            # 新/旧精度API冲突时保留缺口，统计不能改变模型设置或执行结果。
+        except (AssertionError, RuntimeError) as error:
+            # Old PyTorch raises AssertionError for unknown flags; conflicting precision APIs may raise RuntimeError.
             flags[name] = None
             errors[name] = str(error)
     try:
@@ -65,12 +65,17 @@ def runtime_settings(torch, device_type):
         # backend使用新API时旧全局查询可能不可用；不能使已完成算子或日志收尾失败。
         flags["float32_matmul_precision"] = None
         errors["float32_matmul_precision"] = str(error)
+    try:
+        blas = str(torch.backends.cuda.preferred_blas_library())
+    except (AttributeError, RuntimeError) as error:
+        blas = None
+        errors["preferred_blas_library"] = str(error)
     return {
         "torch_version": str(torch.__version__),
         "cuda_build": torch.version.cuda,
         "device_type": device.type,
         "compute_capability": capability,
-        "preferred_blas_library": str(torch.backends.cuda.preferred_blas_library()),
+        "preferred_blas_library": blas,
         **flags,
         "setting_read_errors": errors,
         "nvidia_tf32_override": os.environ.get("NVIDIA_TF32_OVERRIDE"),
