@@ -139,6 +139,10 @@ def _ensure_registered(name, register, module_map):
 def _ensure_data_registered(data_name):
     if data_name in DATA_REGISTER:
         return
+    if data_name == "minimax_h3_turbo_cm_dataset":
+        import lightx2v_train.data.minimax_h3_turbo_cm_dataset  # noqa: F401
+
+        return
     if data_name == "image_dataset":
         import lightx2v_train.data.image_dataset  # noqa: F401
     elif data_name == "cache_dataset":

@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import timedelta
 
 import torch
@@ -83,8 +84,7 @@ def run_objectives(trainer, models, clean, condition):
     return results
 
 
-def run_joint_optimizer_and_ema(trainer, models, clean, condition):
-    """Exercise the real sync-false SCM / sync-true DMD optimizer loop."""
+def configure_optimizer_runtime(trainer, models, clean, condition):
     trainer.model, trainer.fake_model = models[:2]
     trainer.config = {"seed": 711}
     trainer.gradient_accumulation_iters = 1
@@ -103,7 +103,12 @@ def run_joint_optimizer_and_ema(trainer, models, clean, condition):
     trainer._latent_shape = lambda sample: clean.shape
     video = clean.video.reshape(1, 2, 2, 2, 2).permute(0, 4, 1, 2, 3).contiguous()
     audio = clean.audio.reshape(1, 2, 3, 2).permute(0, 1, 3, 2).contiguous()
-    sample = {"inputs": {"video_latents": video, "audio_latents": audio}}
+    return {"inputs": {"video_latents": video, "audio_latents": audio}}
+
+
+def run_joint_optimizer_and_ema(trainer, models, clean, condition):
+    """Exercise the real sync-false SCM / sync-true DMD optimizer loop."""
+    sample = configure_optimizer_runtime(trainer, models, clean, condition)
     samples = iter([sample, sample, sample])
     first = trainer._optimizer_step(samples, "student", "joint", 2)
     assert trainer.student_ema.num_updates == 1
@@ -118,6 +123,56 @@ def run_joint_optimizer_and_ema(trainer, models, clean, condition):
     assert all(bool(torch.isfinite(local_tensor(shadow)).all()) for shadow in trainer.student_ema.shadow.values())
     assert all(parameter.grad is None for parameter in models[2].transformer.parameters())
     return {"first_joint": first["loss"], "fake": fake["loss"], "second_joint": second["loss"], "ema_updates": trainer.student_ema.num_updates}
+
+
+def run_dual_joint_optimizer_and_ema(trainer, models, clean, condition):
+    """CM has paired AV; online DMD has a different condition and geometry."""
+    cm_sample = configure_optimizer_runtime(trainer, models, clean, condition)
+    cm_sample["stream"] = "cm"
+    online_sample = {"inputs": {}, "stream": "online"}
+    trainer.public_config = {"data": {"cm": {"name": "minimax_h3_turbo_cm_dataset"}}}
+    trainer.consumed_cm_microbatches = 0
+    trainer.cm_route_loss_scale = lambda _: 1.0
+    online_condition = {**condition, "prompt_embeds": condition["prompt_embeds"] + 3}
+    online_shape = replace(clean.shape, num_frames=39, latent_frames=3, audio_latents=4, video_tokens=(1, 12, 2), audio_tokens=(1, 8, 2))
+    trainer._encode_conditions = lambda sample: (condition if sample["stream"] == "cm" else online_condition, None)
+    trainer._latent_shape = lambda sample: clean.shape if sample["stream"] == "cm" else online_shape
+    original_extract = trainer.student.extract_turbo_latents
+    extracted = []
+
+    def extract(sample, shape):
+        assert sample["stream"] == "cm", "Online DMD/fake must not read a clean target."
+        extracted.append(shape)
+        return original_extract(sample, shape)
+
+    trainer.student.extract_turbo_latents = extract
+    seen = set()
+
+    def capture(module, args, kwargs):
+        del module, args
+        rows = kwargs["hidden_states"].shape[1]
+        expected = condition if rows == clean.shape.video_tokens[1] else online_condition
+        assert rows in {clean.shape.video_tokens[1], online_shape.video_tokens[1]}
+        torch.testing.assert_close(kwargs["encoder_hidden_states"], expected["prompt_embeds"], rtol=0, atol=0)
+        seen.add("cm" if rows == clean.shape.video_tokens[1] else "online")
+
+    handles = [model.transformer.register_forward_pre_hook(capture, with_kwargs=True) for model in models]
+    try:
+        samples, cm_samples = iter([online_sample] * 3), iter([cm_sample] * 2)
+        first = trainer._optimizer_step(samples, "student", "joint", 2, cm_samples=cm_samples)
+        fake = trainer._optimizer_step(samples, "fake", "joint", 2)
+        second = trainer._optimizer_step(samples, "student", "joint", 3, cm_samples=cm_samples)
+    finally:
+        trainer.student.extract_turbo_latents = original_extract
+        for handle in handles:
+            handle.remove()
+    assert seen == {"cm", "online"}
+    assert len(extracted) == 2
+    assert trainer.consumed_cm_microbatches == 2 and trainer.consumed_microbatches == 3
+    assert trainer.student_ema.num_updates == 2 and trainer.fake_updates == 1
+    assert all(torch.isfinite(torch.tensor(value)) for result in (first, fake, second) for value in result.values())
+    assert all(parameter.grad is None for parameter in models[2].transformer.parameters())
+    return {"cm_microbatches": 2, "online_microbatches": 3, "ema_updates": 2, "conditions_and_geometry": "independent", "online_clean_reads": 0}
 
 
 def fsdp_objective_worker(rank, init_file):
@@ -136,8 +191,10 @@ def fsdp_objective_worker(rank, init_file):
         with sdpa_kernel(SDPBackend.MATH):
             results = run_objectives(trainer, models, clean, condition)
             optimizer_results = run_joint_optimizer_and_ema(trainer, models, clean, condition)
+            dual_results = run_dual_joint_optimizer_and_ema(trainer, models, clean, condition)
         print(f"FSDP rank={rank} real Turbo objective losses={results}", flush=True)
         print(f"FSDP rank={rank} joint sync/backward/optimizer/EMA={optimizer_results}", flush=True)
+        print(f"FSDP rank={rank} dual-stream joint optimizer/EMA/cursors={dual_results}", flush=True)
     finally:
         dist.destroy_process_group()
 
@@ -156,6 +213,13 @@ class TurboObjectiveIntegrationTests(unittest.TestCase):
         with sdpa_kernel(SDPBackend.MATH):
             results = run_joint_optimizer_and_ema(trainer, models, clean, condition)
         self.assertEqual(results["ema_updates"], 2)
+
+    def test_real_h3_dual_stream_joint_conditions_geometry_cursors_and_ema(self):
+        torch.manual_seed(505)
+        trainer, models, clean, condition = setup_trainer()
+        with sdpa_kernel(SDPBackend.MATH):
+            results = run_dual_joint_optimizer_and_ema(trainer, models, clean, condition)
+        self.assertEqual(results["online_clean_reads"], 0)
 
     def test_real_h3_trig_jvp_matches_whole_pipeline_reverse_mode(self):
         torch.manual_seed(502)

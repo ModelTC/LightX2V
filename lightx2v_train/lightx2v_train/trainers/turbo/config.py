@@ -50,6 +50,14 @@ class TurboConfig:
     def consumed_microbatches(self, student_updates, accumulation=1):
         return (student_updates + self.fake_updates_before(student_updates)) * accumulation
 
+    def consumed_cm_microbatches(self, student_updates, accumulation=1):
+        self.fake_updates_before(student_updates)  # validate the shared cursor
+        return student_updates * accumulation
+
+    def consumed_dmd_microbatches(self, student_updates, accumulation=1):
+        joint = max(0, student_updates - self.dcm_steps - self.scm_steps)
+        return (joint + self.fake_updates_before(student_updates)) * accumulation
+
     def as_dict(self):
         return asdict(self)
 
@@ -113,6 +121,16 @@ class TurboConfig:
             raise ValueError("Turbo currently supports minimax_h3_t2av and minimax_h3_ref2av")
         if "dmd" in training:
             raise ValueError("Turbo reads training.turbo, not training.dmd; remove the old PDMD options")
+        cm = config.get("data", {}).get("cm")
+        if cm is not None:
+            if config["model"]["name"] != "minimax_h3_t2av":
+                raise ValueError("Separate T2AV CM data currently supports the H3 T2AV/I2AV/FL2AV wrapper")
+            if not isinstance(cm, dict) or cm.get("name") != "minimax_h3_turbo_cm_dataset":
+                raise ValueError("data.cm must use minimax_h3_turbo_cm_dataset")
+            if cm.get("batch_size", 1) != 1 or cm.get("tasks", ["t2av"]) != ["t2av"]:
+                raise ValueError("Separate CM data requires per-rank batch1 and tasks=[t2av]")
+            if cm.get("drop_last", False):
+                raise ValueError("Separate CM data uses continuous data epochs; data.cm.drop_last must be false")
         if training.get("teacher", {}).get("guidance_scale", 1.0) != 1.0:
             raise ValueError("H3 Turbo uses the direct conditional teacher: guidance_scale must be 1")
         if config.get("scheduler", {}).get("time_shift_settings", {}).get("do_time_shift", False):

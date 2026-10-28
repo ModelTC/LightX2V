@@ -10,18 +10,21 @@ TurboT2VA 仓库公开的 LTX-2 部分目前没有完整训练器。这里的目
 |---|---|---|
 | 配置 | `minimax_h3_ref2av_omni_imageonly_turbo8_shift12_3_r128_a128_adaln16_fsdp32.yaml` | `minimax_h3_fl2av_3task_turbo8_shift6_3_r128_a128_adaln16_fsdp32.yaml` |
 | 模型组件 | `transformer_ref/` | `transformer/` |
-| 任务 | Omni image-only Ref2AV | T2AV、I2AV、FL2AV |
+| CM 数据 | 同一份 Ref2AV clean AV cache | 独立 T2AV teacher clean AV，9424条 |
+| DMD/fake 数据 | 同一份 Ref2AV cache | 原 T2AV、I2AV、FL2AV condition view，59684条 |
 | video/audio shift | 12/3 | 6/3 |
 | 全局 batch | 32 | 32 |
 | 并行 | 4 节点 × 8 GPU，FSDP32，SP1 | 相同 |
 
 `max_train_iters: 7000` 统计 **student optimizer 更新**：2000 次 dCM、500 次 sCM、4500 次 sCM+DMD。前两个阶段不更新 fake；联合阶段每次 student 更新后做 **4 次 fake 更新**。公开代码的 `student_update_freq=5` 表示一组中 1 次 student 加 4 次 fake。
 
-因此默认完整训练是 7000 次 student、18000 次 fake，共 **25000 次 optimizer 更新**。每个角色更新均取新数据；`batch=1/rank`、累积1、32卡时，总计消费 **25000 个全局 microbatch，约80万样本条次**。这些是采样次数，不保证对应80万条不同视频。
+因此默认完整训练是 7000 次 student、18000 次 fake，共 **25000 次 optimizer 更新**。Ref 单数据源沿用每角色更新取一批的布局，共25000个全局 microbatch，32卡累积1时约80万样本条次。
 
-这与原 official PDMD 的计数不同：PDMD 的 `iter` 统计单个角色更新，5 fake 后1 student，且 student 复用 preceding critic 轨迹。Turbo 的 `iter` 统计 student 更新，student 与 fake 都取新 batch。日志同时报告 `student_updates`、`fake_updates`、`optimizer_updates` 和 `consumed_microbatches`。
+FL2V 双数据源下，所有7000次student更新都读取一批 T2AV clean AV 用于 dCM/sCM；联合阶段还分别读取一批三任务条件用于student DMD，以及4批三任务条件用于fake。因此 CM为7000批、online为4500×5=22500批，共 **29500个全局microbatch、94.4万样本条次**。这些是采样次数，不等于不同视频数量；CM与online分别保存数据cursor与fingerprint。
 
-Ref 仍使用 `count_random`：同一全局 batch 的参考图数量相同，按现有的1..6参考图桶平衡采样，横竖构图自然采样，余数轮转，不承诺每个 sampler epoch 完整覆盖数据。FL2V 仍让三任务数量以11/11/10轮转，按绝对 microbatch cursor 连续路由，并用 route loss weights 平衡任务。
+这与原 official PDMD 的计数不同：PDMD 的 `iter` 统计单个角色更新，5 fake 后1 student，且 student 复用 preceding critic 轨迹。Turbo 的 `iter` 统计student更新，联合阶段fake更新另计，数据消耗按具体的单源或双源布局分别统计。
+
+Ref 仍使用 `count_random`：同一全局 batch 的参考图数量相同，按现有的1..6参考图桶平衡采样，横竖构图自然采样，余数轮转，不承诺每个 sampler epoch 完整覆盖数据。FL2V 的online数据仍让三任务数量以11/11/10轮转，按绝对 microbatch cursor 连续路由，并用 route loss weights 平衡任务；独立CM loader只shuffle T2AV clean AV，不套三任务路由。CM使用连续shuffle数据流，`drop_last=false`：跨数据epoch的全局batch延续下一轮数据，不padding补齐、不丢弃尾部。
 
 ## 数值与模型设置
 
@@ -38,9 +41,18 @@ Ref 仍使用 `count_random`：同一全局 batch 的参考图数量相同，按
 
 ## 数据要求和只读预检
 
-Turbo 的 dCM/sCM 需要 **clean video latent 和 clean audio latent**。旧的 condition-only cache 不足以训练此方法。每条 metadata 必须包含有效的 `condition_path`、`video_latent_path`、`audio_latent_path`；相对路径按各 metadata 文件所在目录解析。
+Turbo 的 dCM/sCM 需要 **clean video latent 和 clean audio latent**；用于CM的每条metadata必须包含有效的 `condition_path`、`video_latent_path`、`audio_latent_path`。
 
-启动器只用 CPU 加载真正的 `TurboConfig` schema，不导入 Torch、不反序列化 latent。它检查全部 metadata 行的 payload 文件、124帧768p几何和任务约束。Ref 还要求与 manifest 匹配的 `.complete.json`：完成/失败/输入行计数、预处理 fingerprint 和 SHA256 全部有效；FL2V 要求每个任务有横竖两种构图且至少32条。
+当前FL2V配置使用两个独立数据源：`data.cm` 指向 `H3_CM_CACHE`，默认选择 `/mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_teacher_latents_5s/metadata.jsonl` 中的9424条T2AV；`data.train` 继续使用原三任务condition-only view。I2AV和FL2AV接受online DMD监督，没有对应的offline CM目标。
+
+CM manifest中原来的绝对cache路径通过 `data.cm.path_mapping` 从 `/data/nvme6/gushiqiao` 映射到 `/mnt/lm_data_afs/gushiqiao`。只映射condition和两类latent路径；相对路径仍按manifest目录解析，原始媒体provenance保持不动，不改写旧metadata。同步数据时需要：
+
+- `minimax_h3_teacher_latents_5s/metadata.jsonl` 及其 `video_latents/`、`audio_latents/`。
+- manifest引用的 `minimax_h3_dmd_cache_5s_768p/t2av/conditions/`。
+
+新机器上尚未搬齐这些文件时，先完成同步再运行预检。CM路径映射只解决路径位置，不会生成缺失latent。
+
+启动器只用CPU加载真正的 `TurboConfig` schema和共享CM manifest校验，不导入Torch、不反序列化latent。它检查CM全部行的3类payload、T2AV身份、124帧768p几何和可选的shape/normalized声明。FL2V online view只要求condition文件、三任务双方向及每任务至少32条，不要求clean AV。Ref旧单源配置继续检查clean AV与对应 `.complete.json` 的计数、fingerprint和SHA256。
 
 在下面任一命令末尾追加 `--dry-run`，只做预检并打印 torchrun 命令，不创建训练输出目录、不启动 GPU 进程。用 `H3_TURBO_CONFIG` 可选择自定义 Turbo YAML；旧 `H3_PDMD*` 配置或输出变量不会选择这条新方法。
 
@@ -74,15 +86,16 @@ H3_CODE_ROOT="$PWD" \
 H3_PYTHON="$VIRTUAL_ENV/bin/python" \
 H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3 \
 H3_FL2AV_CACHE=/mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_dmd_cache_5s_768p/task_aware_view_3task_portrait \
-H3_FL2AV_TURBO_OUTPUT=/mnt/lm_data_afs/gushiqiao/outputs/h3_fl2av_3task_turbo8_shift6_3_r128a128_adaln16_32gpu_20261028 \
-H3_RDZV_ID=h3_fl2av_3task_turbo8_shift6_3_r128a128_adaln16_32gpu_20261028 \
+H3_CM_CACHE=/mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_teacher_latents_5s/metadata.jsonl \
+H3_FL2AV_TURBO_OUTPUT=/mnt/lm_data_afs/gushiqiao/outputs/h3_fl2av_3task_turbo8_shift6_3_r128a128_adaln16_cm_t2av_9424_32gpu_20261028 \
+H3_RDZV_ID=h3_fl2av_3task_turbo8_shift6_3_r128a128_adaln16_cm_t2av_9424_32gpu_20261028 \
 KERNELS_CACHE=/mnt/lm_data_afs/gushiqiao/cache/kernels \
 bash lightx2v_train/scripts/run_minimax_h3_fl2av_turbo8_adaln16_fsdp32_32gpu_acp.sh
 ```
 
 ## 保存与续训
 
-默认每50次 student 更新保存一次，Ref保留5份、FL2V保留2份。使用全新的输出目录；PDMD checkpoint 缺少 Turbo 的课程和数据游标，不能直接续成 Turbo。
+默认每50次student更新保存一次，Ref保留5份、FL2V保留2份。FL双数据源输出名含 `cm_t2av_9424`，使用全新目录；PDMD及旧单数据源Turbo checkpoint缺少这套双游标语义，不能直接续成双数据源训练。
 
 `resume.auto_resume: true` 只选择带 `turbo.complete.json` 的完整 checkpoint，并验证 rank/world size、配置 recipe、student/fake计数和绝对数据 cursor。recipe 还保存按加载顺序排列的全部 metadata 记录及 base_dir 的稳定 SHA；同一路径换序或修改记录也会拒绝续训。Turbo 不允许 `resume.allow_distribution_matching_transition` 绕过一致性检查；关闭 auto-resume 时也要求没有既有 checkpoint，避免覆盖旧实验。
 

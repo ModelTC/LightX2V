@@ -35,12 +35,40 @@ class H3TurboLaunchTests(unittest.TestCase):
                 "H3_MODEL_PATH": "/model",
                 "H3_REF2AV_CACHE": "/ref-cache/metadata.jsonl",
                 "H3_FL2AV_CACHE": "/fl-cache",
+                "H3_CM_CACHE": "/cm-cache/metadata.jsonl",
                 "H3_REF2AV_TURBO_OUTPUT": "/ref-output",
                 "H3_FL2AV_TURBO_OUTPUT": "/fl-output",
                 **(environment or {}),
             },
         ):
             return _config.load_config(str(CONFIGS[task]))
+
+    @staticmethod
+    def cm_fixture(root):
+        cache = root / "cm"
+        cache.mkdir()
+        rows = []
+        for index in range(64):
+            height, width = (768, 1344) if index < 32 else (1344, 768)
+            row = {
+                "task": "t2av",
+                "source_id": index,
+                "cache_fingerprint": hashlib.sha256(str(index).encode()).hexdigest(),
+                "target_num_frames": 124,
+                "target_height": height,
+                "target_width": width,
+                "video_latent_shape": [24, 37, height // 16, width // 16],
+                "audio_latent_shape": [2, 32, 207],
+                "vae_normalized": True,
+            }
+            for key in ("condition_path", "video_latent_path", "audio_latent_path"):
+                path = cache / f"{key}_{index:05d}.pt"
+                path.write_bytes(b"metadata-only; never deserialize this fixture")
+                row[key] = path.name
+            rows.append(row)
+        manifest = cache / "metadata.jsonl"
+        manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        return manifest
 
     @staticmethod
     def fixture(root, task):
@@ -83,8 +111,7 @@ class H3TurboLaunchTests(unittest.TestCase):
                 for bucket, height, width in (("landscape", 768, 1344), ("portrait", 1344, 768)):
                     directory = cache / name / bucket
                     directory.mkdir(parents=True)
-                    for payload in ("condition.pt", "video.pt", "audio.pt"):
-                        (directory / payload).write_bytes(b"metadata-only; never deserialize this fixture")
+                    (directory / "condition.pt").write_bytes(b"metadata-only; never deserialize this fixture")
                     rows = [
                         {
                             "task": name,
@@ -92,8 +119,6 @@ class H3TurboLaunchTests(unittest.TestCase):
                             "target_width": width,
                             "target_num_frames": 124,
                             "condition_path": "condition.pt",
-                            "video_latent_path": "video.pt",
-                            "audio_latent_path": "audio.pt",
                         }
                         for _ in range(16)
                     ]
@@ -115,6 +140,8 @@ class H3TurboLaunchTests(unittest.TestCase):
             "H3_FL2AV_PDMD_OUTPUT": "/stale/fl-output",
             "PYTHONDONTWRITEBYTECODE": "1",
         }
+        if task == "fl2av":
+            environment["H3_CM_CACHE"] = str(H3TurboLaunchTests.cm_fixture(root))
         for name in ("H3_TURBO_CONFIG", "H3_KERNEL_SNAPSHOT", "KERNELS_CACHE", "LOCAL_KERNELS", "H3_RDZV_ID"):
             environment.pop(name, None)
         return cache, environment
@@ -131,7 +158,14 @@ class H3TurboLaunchTests(unittest.TestCase):
                 name = "ref2av_omni_imageonly" if task == "ref2av" else "fl2av_3task"
                 old = yaml.safe_load((TRAIN_ROOT / f"configs/train/dmd/minimax_h3_{name}_pdmd8_shift{shifts}_r128_a128_adaln16_fsdp32.yaml").read_text())
                 new = yaml.safe_load(CONFIGS[task].read_text())
-                self.assertEqual(new["data"], old["data"])
+                self.assertEqual(new["data"]["train"], old["data"]["train"])
+                if task == "ref2av":
+                    self.assertNotIn("cm", new["data"])
+                else:
+                    self.assertEqual(new["data"]["cm"]["tasks"], ["t2av"])
+                    self.assertEqual(new["data"]["cm"]["name"], "minimax_h3_turbo_cm_dataset")
+                    self.assertFalse(new["data"]["cm"]["drop_last"])
+                    self.assertEqual(new["data"]["cm"]["path_mapping"], {"/data/nvme6/gushiqiao": "/mnt/lm_data_afs/gushiqiao"})
                 self.assertEqual(new["distributed"], old["distributed"])
                 self.assertEqual(new["training"]["fake"]["train_type"], "full")
                 for role, learning_rate in (("student", 2e-5), ("fake", 4e-6)):
@@ -203,6 +237,9 @@ class H3TurboLaunchTests(unittest.TestCase):
                 else:
                     self.assertIn('"t2av": {"landscape": 16, "portrait": 16}', result.stdout)
                     self.assertIn("Student base=transformer/ BF16", result.stdout)
+                    self.assertIn("Verified CM cache: task=T2AV, rows=64", result.stdout)
+                    self.assertIn("CM=T2AV clean AV (7000 global batches)", result.stdout)
+                    self.assertIn("condition-only (22500 global batches)", result.stdout)
 
     def test_invalid_ref_receipts_fail_before_torchrun(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -273,7 +310,8 @@ class H3TurboLaunchTests(unittest.TestCase):
                 environment.pop(prefix + "_TURBO_OUTPUT")
                 result = self.dry_run(task, environment)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(f"--rdzv_id=h3_{task}_turbo8_adaln16_32gpu", result.stdout)
+                expected_rdzv = "h3_ref2av_turbo8_adaln16_32gpu" if task == "ref2av" else "h3_fl2av_turbo8_adaln16_cm_t2av_9424_32gpu"
+                self.assertIn(f"--rdzv_id={expected_rdzv}", result.stdout)
                 self.assertIn("outputs/h3_", result.stdout)
                 result = self.dry_run(task, {**environment, prefix + "_TURBO_OUTPUT": str(root / "custom"), "H3_RDZV_ID": "custom-turbo-job"})
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -302,7 +340,7 @@ class H3TurboLaunchTests(unittest.TestCase):
             with self.subTest(task=task), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 cache, environment = self.fixture(root, task)
-                manifest = cache if task == "ref2av" else cache / "fl2av/portrait/metadata.jsonl"
+                manifest = cache if task == "ref2av" else Path(environment["H3_CM_CACHE"])
                 original = [json.loads(line) for line in manifest.read_text().splitlines()]
                 for key in ("video_latent_path", "audio_latent_path"):
                     rows = copy.deepcopy(original)
@@ -315,16 +353,62 @@ class H3TurboLaunchTests(unittest.TestCase):
                         receipt_path.write_text(json.dumps(receipt))
                     result = self.dry_run(task, environment)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn(f"readable cached {key}", result.stderr)
+                    self.assertIn(key, result.stderr)
                     self.assertNotIn("--nnodes=4", result.stdout)
 
     def test_real_schema_preflight_does_not_import_torch(self):
+        for task in CONFIGS:
+            with self.subTest(task=task), tempfile.TemporaryDirectory() as directory:
+                _, environment = self.fixture(Path(directory), task)
+                script = TRAIN_ROOT / "scripts/minimax_h3_turbo_preflight.py"
+                source = f"import runpy,sys; sys.argv=[{str(script)!r}, {task!r}, {str(CONFIGS[task])!r}]; runpy.run_path({str(script)!r}, run_name='__main__'); assert 'torch' not in sys.modules"
+                result = subprocess.run([sys.executable, "-c", source], env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_cm_absolute_paths_remap_without_rewriting_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
-            _, environment = self.fixture(Path(directory), "ref2av")
-            script = TRAIN_ROOT / "scripts/minimax_h3_turbo_preflight.py"
-            source = f"import runpy,sys; sys.argv=[{str(script)!r}, 'ref2av', {str(CONFIGS['ref2av'])!r}]; runpy.run_path({str(script)!r}, run_name='__main__'); assert 'torch' not in sys.modules"
-            result = subprocess.run([sys.executable, "-c", source], env=environment, capture_output=True, text=True)
+            root = Path(directory)
+            _, environment = self.fixture(root, "fl2av")
+            manifest = Path(environment["H3_CM_CACHE"])
+            rows = [json.loads(line) for line in manifest.read_text().splitlines()]
+            old_prefix = Path("/old-machine/cm")
+            for row in rows:
+                for key in ("condition_path", "video_latent_path", "audio_latent_path"):
+                    row[key] = str(old_prefix / row[key])
+            manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            config = self.config("fl2av", environment)
+            config["data"]["cm"]["path_mapping"] = {str(old_prefix): str(manifest.parent)}
+            override = root / "mapped-cm.yaml"
+            override.write_text(yaml.safe_dump(config))
+            before = manifest.read_bytes()
+            result = self.dry_run("fl2av", {**environment, "H3_TURBO_CONFIG": str(override)})
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Verified CM cache: task=T2AV, rows=64", result.stdout)
+            self.assertEqual(manifest.read_bytes(), before)
+            self.assertFalse((root / "output").exists())
+
+    def test_real_cm_data_builder_accepts_recipe_and_rejects_dropping_rows(self):
+        from lightx2v_train.utils.registry import build_data
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, environment = self.fixture(root, "fl2av")
+            config = self.config("fl2av", environment)
+            loader = build_data(config, "cm")
+            self.assertEqual(len(loader.dataset), 64)
+            self.assertEqual(loader.batch_size, 1)
+            self.assertFalse(loader.drop_last)
+            loader.sampler.configure_from_microbatch_offset(start_microbatch=0)
+            self.assertEqual(sorted(loader.sampler), list(range(64)))
+            config["data"]["cm"]["drop_last"] = True
+            with self.assertRaisesRegex(ValueError, "drop_last must be false"):
+                build_data(config, "cm")
+            override = root / "invalid-drop-last.yaml"
+            override.write_text(yaml.safe_dump(config))
+            result = self.dry_run("fl2av", {**environment, "H3_TURBO_CONFIG": str(override)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("drop_last", result.stderr)
+            self.assertNotIn("--nnodes=4", result.stdout)
 
 
 if __name__ == "__main__":

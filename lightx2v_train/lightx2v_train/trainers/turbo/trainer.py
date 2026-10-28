@@ -51,8 +51,23 @@ class TurboTrainer(DmdTrainer):
         }
         super().__init__(internal)
         self.consumed_microbatches = 0
+        self.consumed_cm_microbatches = 0
         self.fake_updates = 0
         self.route_loss_scale = lambda _: 1.0
+        self.cm_route_loss_scale = lambda _: 1.0
+
+    @property
+    def separate_cm_data(self):
+        return "cm" in getattr(self, "public_config", {}).get("data", {})
+
+    def set_data(self, dataloader_train, dataloader_val=None):
+        super().set_data(dataloader_train, dataloader_val)
+        if self.separate_cm_data:
+            from lightx2v_train.data.utils import require_singleton_dataloader
+            from lightx2v_train.utils.registry import build_data
+
+            self.dataloader_cm = build_data(self.public_config, train_or_val="cm")
+            require_singleton_dataloader(self.dataloader_cm, "Turbo CM dataloader")
 
     def _recipe(self):
         training = {key: value for key, value in self.public_config["training"].items() if key not in {"output_dir", "save_every_iters", "save_total_limit"}}
@@ -67,20 +82,35 @@ class TurboTrainer(DmdTrainer):
             "distributed": self.public_config.get("distributed", {}),
             "dataset": self._dataset_fingerprint(),
         }
+        if self.separate_cm_data:
+            value["cm_data"] = {key: item for key, item in self.public_config["data"]["cm"].items() if key not in {"num_workers", "pin_memory"}}
+            value["cm_dataset"] = self._dataset_fingerprint("cm")
         # JSON normalizes tuple geometry and integer dictionary keys.
         return json.loads(json.dumps(value, sort_keys=True))
 
-    def _dataset_fingerprint(self):
-        if not hasattr(self, "_turbo_dataset_fingerprint"):
-            dataset = self.dataloader_train.dataset
+    def _dataset_fingerprint(self, stream="train"):
+        attribute = "_turbo_dataset_fingerprint" if stream == "train" else "_turbo_cm_dataset_fingerprint"
+        if not hasattr(self, attribute):
+            dataset = (self.dataloader_train if stream == "train" else self.dataloader_cm).dataset
             if not hasattr(dataset, "samples"):
                 raise ValueError("Turbo requires indexed H3 metadata samples for strict data resume")
             digest = hashlib.sha256()
             for record in dataset.samples:
                 digest.update(json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
                 digest.update(b"\n")
-            self._turbo_dataset_fingerprint = {"rows": len(dataset.samples), "sha256": digest.hexdigest()}
-        return self._turbo_dataset_fingerprint
+            setattr(self, attribute, {"rows": len(dataset.samples), "sha256": digest.hexdigest()})
+        return getattr(self, attribute)
+
+    def _expected_cursors(self, iteration):
+        if self.separate_cm_data:
+            return {
+                "consumed_microbatches": self.turbo.consumed_dmd_microbatches(iteration, self.gradient_accumulation_iters),
+                "consumed_cm_microbatches": self.turbo.consumed_cm_microbatches(iteration, self.gradient_accumulation_iters),
+            }
+        return {"consumed_microbatches": self.turbo.consumed_microbatches(iteration, self.gradient_accumulation_iters)}
+
+    def _checkpoint_common(self, iteration):
+        return {"version": 2 if self.separate_cm_data else self.checkpoint_version, "iteration": iteration, "world_size": get_world_size()}
 
     @staticmethod
     def _rank():
@@ -93,7 +123,7 @@ class TurboTrainer(DmdTrainer):
         marker = directory / "turbo.complete.json"
         if not marker.is_file():
             raise RuntimeError(f"Not a complete Turbo checkpoint: {directory}; use a fresh output directory")
-        expected = {"version": self.checkpoint_version, "iteration": iteration, "world_size": get_world_size()}
+        expected = self._checkpoint_common(iteration)
         if json.loads(marker.read_text()) != expected:
             raise RuntimeError(f"Turbo completion metadata mismatch: {directory}")
         path = directory / f"turbo.rank{self._rank():05d}.json"
@@ -102,12 +132,13 @@ class TurboTrainer(DmdTrainer):
             rank=self._rank(),
             recipe=self._recipe(),
             fake_updates=self.turbo.fake_updates_before(iteration),
-            consumed_microbatches=self.turbo.consumed_microbatches(iteration, self.gradient_accumulation_iters),
+            **self._expected_cursors(iteration),
         )
         if state != expected:
             raise RuntimeError(f"Turbo recipe, counters or data cursor mismatch: {path}")
         self.fake_updates = state["fake_updates"]
         self.consumed_microbatches = state["consumed_microbatches"]
+        self.consumed_cm_microbatches = state.get("consumed_cm_microbatches", 0)
 
     def _resolve_turbo_resume(self):
         directory = Path(self.output_train_dir)
@@ -146,12 +177,12 @@ class TurboTrainer(DmdTrainer):
         # The generic DMD marker is written before this method's strict cursor
         # receipt. Keep old recoverable Turbo checkpoints until the new receipt
         # and per-rank states have all completed.
-        if self.fake_updates != self.turbo.fake_updates_before(iteration) or self.consumed_microbatches != self.turbo.consumed_microbatches(iteration, self.gradient_accumulation_iters):
+        if self.fake_updates != self.turbo.fake_updates_before(iteration) or any(getattr(self, key) != value for key, value in self._expected_cursors(iteration).items()):
             raise RuntimeError("Cannot checkpoint an incomplete Turbo student/fake update group")
         super().save_checkpoint(iteration, None)
         directory = Path(self.output_train_dir) / f"checkpoint-{iteration:09d}"
-        common = {"version": self.checkpoint_version, "iteration": iteration, "world_size": get_world_size()}
-        state = dict(common, rank=self._rank(), recipe=self._recipe(), fake_updates=self.fake_updates, consumed_microbatches=self.consumed_microbatches)
+        common = self._checkpoint_common(iteration)
+        state = dict(common, rank=self._rank(), recipe=self._recipe(), fake_updates=self.fake_updates, **self._expected_cursors(iteration))
         target = directory / f"turbo.rank{self._rank():05d}.json"
         temporary = target.with_suffix(".tmp")
         temporary.write_text(json.dumps(state, sort_keys=True, indent=2) + "\n")
@@ -271,7 +302,67 @@ class TurboTrainer(DmdTrainer):
         losses = tuple(core.critic_loss(getattr(generated, name), prediction[i].x0, theta[i]) for i, name in enumerate(("video", "audio")))
         return self._weighted(losses), {"critic_video": losses[0].detach(), "critic_audio": losses[1].detach()}
 
-    def _optimizer_step(self, samples, role, stage, iteration, substep=0):
+    def _noise_reference(self, sample):
+        """Allocate only a geometry holder; DMD never needs a cached target."""
+        from lightx2v_train.model_zoo.minimax_h3.capability_adapters.common import MiniMaxH3JointLatents
+
+        shape = self._latent_shape(sample)
+        return MiniMaxH3JointLatents(
+            torch.empty(shape.video_tokens, device=self.student.device, dtype=torch.float32),
+            torch.empty(shape.audio_tokens, device=self.student.device, dtype=torch.float32),
+            shape,
+        )
+
+    def _micro_objectives(self, samples, cm_samples, role, stage, iteration, substep, micro):
+        """Yield closures so FSDP sync is configured BEFORE each forward.
+
+        In split mode the CM and online objectives use their own conditions,
+        geometry, deterministic random streams, cursor and route weight.
+        Keeping the legacy branch preserves existing single-stream recipes.
+        """
+        student = role == "student"
+        if not self.separate_cm_data:
+            sample = next(samples)
+            cursor = self.consumed_microbatches
+            self.consumed_microbatches += 1
+            scale = self.route_loss_scale(cursor) / self.gradient_accumulation_iters
+            with self._random_stream(role, iteration, substep, micro):
+                with torch.no_grad():
+                    condition, _ = self._encode_conditions(sample)
+                    clean = self.student.extract_turbo_latents(sample, self._latent_shape(sample))
+                if not student:
+                    yield lambda: self._critic_loss(clean, condition), scale
+                else:
+                    yield (lambda: self._dcm_loss(clean, condition)) if stage == "dcm" else (lambda: self._scm_loss(clean, condition, iteration)), scale
+                    if stage == "joint":
+                        yield lambda: self._dmd_loss(clean, condition), scale
+            return
+        if student:
+            if cm_samples is None:
+                raise ValueError("Separate Turbo CM data requires a CM sample iterator")
+            sample = next(cm_samples)
+            cursor = self.consumed_cm_microbatches
+            self.consumed_cm_microbatches += 1
+            scale = self.cm_route_loss_scale(cursor) / self.gradient_accumulation_iters
+            with self._random_stream("cm", iteration, 0, micro):
+                with torch.no_grad():
+                    condition, _ = self._encode_conditions(sample)
+                    clean = self.student.extract_turbo_latents(sample, self._latent_shape(sample))
+                yield (lambda: self._dcm_loss(clean, condition)) if stage == "dcm" else (lambda: self._scm_loss(clean, condition, iteration)), scale
+            # Release CM tensors before reading the independent online batch.
+            del clean, condition, sample
+        if not student or stage == "joint":
+            sample = next(samples)
+            cursor = self.consumed_microbatches
+            self.consumed_microbatches += 1
+            scale = self.route_loss_scale(cursor) / self.gradient_accumulation_iters
+            with self._random_stream("student_dmd" if student else "fake", iteration, substep, micro):
+                with torch.no_grad():
+                    condition, _ = self._encode_conditions(sample)
+                    reference = self._noise_reference(sample)
+                yield (lambda: self._dmd_loss(reference, condition)) if student else (lambda: self._critic_loss(reference, condition)), scale
+
+    def _optimizer_step(self, samples, role, stage, iteration, substep=0, cm_samples=None):
         student = role == "student"
         optimizer = self.optimizer if student else self.fake_optimizer
         scheduler = self.lr_scheduler if student else self.fake_lr_scheduler
@@ -281,24 +372,14 @@ class TurboTrainer(DmdTrainer):
         self.fake_optimizer.zero_grad(set_to_none=True)
         totals = {}
         for micro in range(self.gradient_accumulation_iters):
-            sample = next(samples)
-            cursor = self.consumed_microbatches
-            self.consumed_microbatches += 1
-            scale = self.route_loss_scale(cursor) / self.gradient_accumulation_iters
-            with self._random_stream(role, iteration, substep, micro):
-                with torch.no_grad():
-                    condition, _ = self._encode_conditions(sample)
-                    clean = self.student.extract_turbo_latents(sample, self._latent_shape(sample))
-                objectives = [self._critic_loss] if not student else [self._dcm_loss if stage == "dcm" else lambda x, c: self._scm_loss(x, c, iteration)]
-                if student and stage == "joint":
-                    objectives.append(self._dmd_loss)
-                for index, objective in enumerate(objectives):
-                    sync(micro == self.gradient_accumulation_iters - 1 and index == len(objectives) - 1)
-                    loss, metrics = objective(clean, condition)
-                    (loss * scale).backward()
-                    for key, value in {"loss": loss.detach(), **metrics}.items():
-                        totals[key] = totals.get(key, 0.0) + float(value) / self.gradient_accumulation_iters
-                    del loss
+            objective_count = 2 if student and stage == "joint" else 1
+            for index, (objective, scale) in enumerate(self._micro_objectives(samples, cm_samples, role, stage, iteration, substep, micro)):
+                sync(micro == self.gradient_accumulation_iters - 1 and index == objective_count - 1)
+                loss, metrics = objective()
+                (loss * scale).backward()
+                for key, value in {"loss": loss.detach(), **metrics}.items():
+                    totals[key] = totals.get(key, 0.0) + float(value) / self.gradient_accumulation_iters
+                del loss
         self._sync_sequence_parallel_grads(parameters)
         norm = torch.nn.utils.clip_grad_norm_(parameters, self.max_grad_norm)
         if hasattr(norm, "full_tensor"):
@@ -319,6 +400,15 @@ class TurboTrainer(DmdTrainer):
         totals["grad_norm"] = float(norm)
         return totals
 
+    def _iter_cm_samples(self):
+        epoch = 0
+        while True:
+            sampler = self.dataloader_cm.sampler
+            if hasattr(sampler, "set_epoch"):
+                sampler.set_epoch(epoch)
+            yield from self.dataloader_cm
+            epoch += 1
+
     def train(self):
         checkpoint, iteration = self._resolve_turbo_resume()
         self._resume_cursor(checkpoint, iteration)
@@ -329,10 +419,20 @@ class TurboTrainer(DmdTrainer):
             start_microbatch=self.consumed_microbatches,
             gradient_accumulation_iters=self.gradient_accumulation_iters,
             fake_update_ratio=self.fake_update_ratio,
-            data_consumption_mode="turbo_student_and_fake_fresh",
-            student_data_source="cached_clean_av",
+            data_consumption_mode="turbo_dmd_student_and_fake_fresh" if self.separate_cm_data else "turbo_student_and_fake_fresh",
+            student_data_source="condition_only_online_rollout" if self.separate_cm_data else "cached_clean_av",
         )
         self.route_loss_scale = getattr(sampler, "cursor_microbatch_loss_scale", self.route_loss_scale)
+        if self.separate_cm_data:
+            cm_sampler = self.dataloader_cm.sampler
+            if not hasattr(cm_sampler, "configure_from_microbatch_offset"):
+                raise ValueError("Turbo CM data requires an absolute microbatch cursor sampler")
+            cm_sampler.configure_from_microbatch_offset(
+                start_microbatch=self.consumed_cm_microbatches,
+                gradient_accumulation_iters=self.gradient_accumulation_iters,
+                fake_update_ratio=self.fake_update_ratio,
+            )
+            self.cm_route_loss_scale = getattr(cm_sampler, "cursor_microbatch_loss_scale", lambda _: 1.0)
         self.setup(resume_ckpt_path=checkpoint)
         if is_main_process():
             Path(self.output_train_dir).mkdir(parents=True, exist_ok=True)
@@ -352,11 +452,15 @@ class TurboTrainer(DmdTrainer):
             core.UPSTREAM_REVISION,
         )
         samples = self._iter_train_samples()
+        cm_samples = self._iter_cm_samples() if self.separate_cm_data else None
         last_saved = iteration if checkpoint else -1
         while iteration < self.max_train_iters:
             stage = self.turbo.stage_at(iteration)
             self.student.on_iteration_start(iteration)
-            metrics = self._optimizer_step(samples, "student", stage, iteration)
+            if self.separate_cm_data:
+                metrics = self._optimizer_step(samples, "student", stage, iteration, cm_samples=cm_samples)
+            else:
+                metrics = self._optimizer_step(samples, "student", stage, iteration)
             if stage == "joint":
                 for substep in range(self.turbo.fake_update_ratio):
                     fake_metrics = self._optimizer_step(samples, "fake", stage, iteration, substep)
@@ -377,6 +481,8 @@ class TurboTrainer(DmdTrainer):
                     metrics,
                 )
                 self.log_metrics({f"train/turbo_{key}": value for key, value in metrics.items()}, step=iteration)
+                if self.separate_cm_data:
+                    logger.info("[turbo][data] cm_microbatches={} online_dmd_microbatches={}", self.consumed_cm_microbatches, self.consumed_microbatches)
             if self.save_every_iters and iteration % self.save_every_iters == 0:
                 self.save_checkpoint(iteration, self.save_total_limit)
                 last_saved = iteration

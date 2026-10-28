@@ -48,6 +48,21 @@ distributed:
             cast_forward_inputs: false
 
 data:
+    # Offline dCM/sCM: real cached H3 teacher AV for 9424 T2AV samples only.
+    # Online DMD/fake continues to use all three tasks below.
+    cm:
+        name: minimax_h3_turbo_cm_dataset
+        data_path: ${oc.env:H3_CM_CACHE}
+        tasks: [t2av]
+        batch_size: 1
+        num_workers: 8
+        pin_memory: true
+        seed: 42
+        shuffle: true
+        drop_last: false
+        defer_latent_loading: true
+        path_mapping:
+            /data/nvme6/gushiqiao: /mnt/lm_data_afs/gushiqiao
     train:
         name: minimax_h3_cache_dataset
         data_path: ${oc.env:H3_FL2AV_CACHE}

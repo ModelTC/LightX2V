@@ -20,7 +20,9 @@ if [[ "$task" == ref2av ]]; then
 else
     default_config="minimax_h3_fl2av_3task_turbo8_shift6_3_r128_a128_adaln16_fsdp32.yaml"
     export H3_FL2AV_CACHE="${H3_FL2AV_CACHE:-${H3_MULTITASK_3TASK_PORTRAIT_VIEW:-/mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_dmd_cache_5s_768p/task_aware_view_3task_portrait}}"
-    export H3_FL2AV_TURBO_OUTPUT="${H3_FL2AV_TURBO_OUTPUT:-$H3_CODE_ROOT/outputs/h3_fl2av_3task_turbo8_shift6_3_r128a128_adaln16_32gpu}"
+    export H3_CM_CACHE="${H3_CM_CACHE:-/mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_teacher_latents_5s/metadata.jsonl}"
+    export H3_FL2AV_TURBO_OUTPUT="${H3_FL2AV_TURBO_OUTPUT:-$H3_CODE_ROOT/outputs/h3_fl2av_3task_turbo8_shift6_3_r128a128_adaln16_cm_t2av_9424_32gpu}"
+    default_rdzv="h3_fl2av_turbo8_adaln16_cm_t2av_9424_32gpu"
 fi
 config="${H3_TURBO_CONFIG:-$H3_CODE_ROOT/lightx2v_train/configs/train/turbo/$default_config}"
 command -v "$H3_PYTHON" >/dev/null
@@ -51,7 +53,7 @@ cd "$H3_CODE_ROOT/lightx2v_train"
 command=(
     "$H3_PYTHON" -u -m torch.distributed.run
     --nnodes=4 --nproc_per_node=8
-    "--rdzv_id=${H3_RDZV_ID:-h3_${task}_turbo8_adaln16_32gpu}"
+    "--rdzv_id=${H3_RDZV_ID:-${default_rdzv:-h3_${task}_turbo8_adaln16_32gpu}}"
     --rdzv_backend=c10d "--rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT"
     --max_restarts=0 train.py --config "$config"
 )

@@ -36,8 +36,8 @@ def load_turbo_config(config):
         raise SystemExit(f"Invalid H3 Turbo configuration: {error}") from error
 
 
-def check_payload_paths(row, manifest):
-    for key in ("condition_path", "video_latent_path", "audio_latent_path"):
+def check_payload_paths(row, manifest, keys=("condition_path", "video_latent_path", "audio_latent_path")):
+    for key in keys:
         value = row.get(key)
         require(isinstance(value, str) and bool(value.strip()), f"cached clean video/audio and conditioning: missing {key} in {manifest}")
         path = Path(value)
@@ -99,7 +99,7 @@ def check_ref_cache(data):
     print("Sampling: one reference image count per global batch; balanced counts 1..6, natural orientations, rotating subsets.")
 
 
-def check_fl2av_cache(data):
+def check_fl2av_cache(data, *, condition_only=False):
     tasks = ["t2av", "i2av", "fl2av"]
     require(
         data["name"] == "minimax_h3_cache_dataset"
@@ -136,7 +136,8 @@ def check_fl2av_cache(data):
                     row.get("task") == task and frames == 124 and [height, width] in [[768, 1344], [1344, 768]],
                     f"{task.upper()} 124-frame 768p cache rows: {manifest}",
                 )
-                check_payload_paths(row, manifest)
+                keys = ("condition_path",) if condition_only else ("condition_path", "video_latent_path", "audio_latent_path")
+                check_payload_paths(row, manifest, keys)
                 counts[(task, "landscape" if width > height else "portrait")] += 1
     summary = {task: {bucket: counts[(task, bucket)] for bucket in data["buckets"]} for task in tasks}
     require(
@@ -145,6 +146,33 @@ def check_fl2av_cache(data):
     )
     print(f"Verified three-task cache: {json.dumps(summary, sort_keys=True)}, total={sum(counts.values())}")
     print("Task rows rotate 11/11/10 across fresh batches; route loss weights balance T2AV/I2AV/FL2AV.")
+
+
+def check_cm_cache(data):
+    require(
+        data.get("name") == "minimax_h3_turbo_cm_dataset"
+        and data.get("tasks") == ["t2av"]
+        and data.get("batch_size") == 1
+        and data.get("shuffle") is True
+        and data.get("drop_last", False) is False
+        and data.get("defer_latent_loading") is True,
+        "an independent T2AV clean-AV CM dataset with shuffled per-rank batch1 and drop_last=false",
+    )
+    source = Path(__file__).resolve().parents[1] / "lightx2v_train/data/minimax_h3_turbo_paths.py"
+    spec = importlib.util.spec_from_file_location("_h3_turbo_cm_paths", source)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    try:
+        manifest, rows, fingerprint = module.load_cm_records(data["data_path"], path_mapping=data.get("path_mapping"), tasks=data["tasks"], check_files=True)
+    except (ValueError, TypeError, OSError) as error:
+        raise SystemExit(f"Invalid H3 Turbo CM cache: {error}") from error
+    require(Path(data["data_path"]).resolve() == Path(os.environ["H3_CM_CACHE"]).resolve(), "the CM config path to match H3_CM_CACHE")
+    require(len(rows) >= 32, "at least one full global batch of T2AV clean AV")
+    orientations = Counter("landscape" if int(row["target_width"]) > int(row["target_height"]) else "portrait" for row in rows)
+    print(f"Verified CM cache: task=T2AV, rows={len(rows)}, orientations={dict(orientations)}, fingerprint={fingerprint}")
+    print(f"CM metadata={manifest}; condition/video/audio paths mapped and checked for every row")
+    return rows
 
 
 def validate(task, config):
@@ -192,10 +220,21 @@ def validate(task, config):
     prefix = "H3_REF2AV" if task == "ref2av" else "H3_FL2AV"
     for variable, path in (("H3_MODEL_PATH", model_root), (prefix + "_CACHE", Path(data["data_path"])), (prefix + "_TURBO_OUTPUT", Path(training["output_dir"]))):
         require(path.resolve() == Path(os.environ[variable]).resolve(), f"the config path to match {variable}: {path}")
-    (check_ref_cache if task == "ref2av" else check_fl2av_cache)(data)
+    cm = config["data"].get("cm")
+    if task == "ref2av":
+        require(cm is None, "the existing single-dataset Ref recipe")
+        check_ref_cache(data)
+    else:
+        if cm is not None:
+            check_cm_cache(cm)
+        check_fl2av_cache(data, condition_only=cm is not None)
     print(f"H3 Turbo {task}: 4 x 8 GPUs, steps=8, global_batch=32")
     print(f"Student updates: dCM={stages[0]}, sCM={stages[1]}, joint={stages[2]}, total={sum(stages)}; joint fake_update_ratio={turbo.fake_update_ratio}")
     print("max_train_iters counts STUDENT optimizer updates; joint fake updates are counted separately.")
+    if cm is not None:
+        online_batches = turbo.joint_steps * (1 + turbo.fake_update_ratio)
+        print(f"Independent data streams: CM=T2AV clean AV ({sum(stages)} global batches); DMD/fake=T2AV/I2AV/FL2AV condition-only ({online_batches} global batches).")
+        print("CM and online streams have separate deterministic cursors; FL2AV and I2AV receive online DMD supervision, not offline CM targets.")
     print(f"Shifts: video={expected_shifts[0]}, audio={expected_shifts[1]}; direct conditional teacher, no CFG.")
     print("LoRA: regular rank=128 alpha=128; block/output AdaLN rank=16 alpha=16; all adapters FP32.")
     print(f"Student base={component}/ BF16; teacher BF16; fake full FP32; FSDP BF16 compute / FP32 reduction.")
