@@ -73,7 +73,14 @@ class WanModel(BaseTransformerModel):
         }
         self._init_infer_class()
         self._init_weights()
-        self._init_infer()
+        try:
+            self._init_infer()
+        except BaseException as error:
+            try:
+                self.close_numa_cpu_weights()
+            except BaseException as cleanup_error:
+                error.add_note(f"NUMA weight cleanup also failed: {cleanup_error!r}")
+            raise
 
     def _apply_weights(self, weight_dict=None):
         super()._apply_weights(weight_dict)

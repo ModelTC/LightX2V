@@ -99,6 +99,11 @@ class BaseTransformerModel(ABC):
         from lightx2v_platform.ops.offload import get_block_offload_backend
 
         validate_contiguous_config(self.config, lora_path)
+        from lightx2v.common.offload.numa_weights import validate_numa_config
+
+        validate_numa_config(self.config, lora_path)
+        if self.config.get("cpu_offload_numa", False) and AI_DEVICE != "cuda":
+            raise ValueError("cpu_offload_numa requires CUDA")
         self._checkpoint_metadata = None
         if self.cpu_offload and self.offload_granularity == "block":
             backend = get_block_offload_backend(required=False)
@@ -253,7 +258,14 @@ class BaseTransformerModel(ABC):
 
     def _init_weights(self, weight_dict=None):
         if not self.config.get("shared_cpu_weights", False):
-            self._init_weights_impl(weight_dict)
+            try:
+                self._init_weights_impl(weight_dict)
+            except BaseException as error:
+                try:
+                    self.close_numa_cpu_weights()
+                except BaseException as cleanup_error:
+                    error.add_note(f"NUMA weight cleanup also failed: {cleanup_error!r}")
+                raise
             return
 
         try:
@@ -344,6 +356,13 @@ class BaseTransformerModel(ABC):
         owner.close()
         del self._shared_cpu_weight_owner
 
+    def close_numa_cpu_weights(self):
+        """Release rank-local pinned weights after all transfers have stopped."""
+        owner = self.__dict__.get("_numa_cpu_weight_owner")
+        if owner is not None:
+            owner.close()
+            del self._numa_cpu_weight_owner
+
     @abstractmethod
     def _init_infer(self):
         """Initialize inference modules.
@@ -408,11 +427,29 @@ class BaseTransformerModel(ABC):
             elif group is not None and not self.lazy_load and not self.config.get("dummy_model"):
                 validate_group_checkpoints(group, self._checkpoint_metadata)
 
+        numa_map = None
+        if self.config.get("cpu_offload_numa", False):
+            from lightx2v.common.offload.numa_weights import materialize_numa_weights
+
+            if self.__dict__.get("_numa_cpu_weight_owner") is not None:
+                raise RuntimeError("NUMA offload weights are already initialized")
+            roots = [self.pre_weight, self.transformer_weights]
+            if hasattr(self, "post_weight"):
+                roots.append(self.post_weight)
+            numa_map = materialize_numa_weights(self.original_weight_dict, roots)
+            self._numa_cpu_weight_owner = numa_map.owner
+            self.original_weight_dict = numa_map
+
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
         if hasattr(self, "post_weight"):
             self.post_weight.load(self.original_weight_dict)
+
+        if numa_map is not None:
+            from lightx2v.common.offload.numa_weights import validate_numa_operator_views
+
+            validate_numa_operator_views(numa_map, roots)
 
         # Handle LoRA if needed
         if self.config.get("lora_dynamic_apply", False) and self.lora_path is not None:

@@ -1014,6 +1014,21 @@ class MultiModelStruct:
             self.boundary_timestep = self.boundary * num_train_timesteps
             logger.info(f"boundary: {self.boundary}, boundary_timestep: {self.boundary_timestep}")
 
+    def close_numa_cpu_weights(self):
+        error = None
+        for model in self.model:
+            if model is None:
+                continue
+            try:
+                model.close_numa_cpu_weights()
+            except BaseException as cleanup_error:
+                if error is None:
+                    error = cleanup_error
+                else:
+                    error.add_note(f"Another NUMA model cleanup also failed: {cleanup_error!r}")
+        if error is not None:
+            raise error
+
     def uses_high_noise_model(self):
         if self.distill_method == "dmd2":
             return self.scheduler.step_index < self.boundary_step_index
@@ -1157,15 +1172,23 @@ class Wan22MoeRunner(WanRunner):
                 "device": self.init_device,
                 "model_type": "wan2.2_moe_low_noise",
             }
-            if not lora_configs:
-                model_class = get_wan_model_class(self.distill_method)
-                high_noise_model = model_class(**high_model_kwargs)
-                low_noise_model = model_class(**low_model_kwargs)
-            else:
-                high_noise_model = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
-                low_noise_model = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
-
-            return MultiModelStruct([high_noise_model, low_noise_model], self.config)
+            model_struct = MultiModelStruct([None, None], self.config)
+            try:
+                if not lora_configs:
+                    model_class = get_wan_model_class(self.distill_method)
+                    model_struct.model[0] = model_class(**high_model_kwargs)
+                    model_struct.model[1] = model_class(**low_model_kwargs)
+                else:
+                    model_struct.model[0] = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
+                    model_struct.model[1] = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
+            except BaseException as error:
+                if self.config.get("cpu_offload_numa", False):
+                    try:
+                        model_struct.close_numa_cpu_weights()
+                    except BaseException as cleanup_error:
+                        error.add_note(f"NUMA model construction cleanup also failed: {cleanup_error!r}")
+                raise
+            return model_struct
         else:
             model_struct = MultiModelStruct([None, None], self.config)
             model_struct.low_noise_model_path = self.low_noise_model_path
@@ -1374,25 +1397,34 @@ class LingbotRunner(Wan22MoeRunner):
             "model_type": "wan2.2_moe_low_noise",
         }
         lora_configs = self.config.get("lora_configs")
-        if not lora_configs:
-            high_noise_model = WanLingbotModel(**high_model_kwargs)
-            low_noise_model = WanLingbotModel(**low_model_kwargs)
-        else:
-            high_noise_model = build_wan_model_with_lora(
-                WanLingbotModel,
-                self.config,
-                high_model_kwargs,
-                lora_configs,
-                model_type="high_noise_model",
-            )
-            low_noise_model = build_wan_model_with_lora(
-                WanLingbotModel,
-                self.config,
-                low_model_kwargs,
-                lora_configs,
-                model_type="low_noise_model",
-            )
-        return MultiModelStruct([high_noise_model, low_noise_model], self.config)
+        model_struct = MultiModelStruct([None, None], self.config)
+        try:
+            if not lora_configs:
+                model_struct.model[0] = WanLingbotModel(**high_model_kwargs)
+                model_struct.model[1] = WanLingbotModel(**low_model_kwargs)
+            else:
+                model_struct.model[0] = build_wan_model_with_lora(
+                    WanLingbotModel,
+                    self.config,
+                    high_model_kwargs,
+                    lora_configs,
+                    model_type="high_noise_model",
+                )
+                model_struct.model[1] = build_wan_model_with_lora(
+                    WanLingbotModel,
+                    self.config,
+                    low_model_kwargs,
+                    lora_configs,
+                    model_type="low_noise_model",
+                )
+        except BaseException as error:
+            if self.config.get("cpu_offload_numa", False):
+                try:
+                    model_struct.close_numa_cpu_weights()
+                except BaseException as cleanup_error:
+                    error.add_note(f"NUMA model construction cleanup also failed: {cleanup_error!r}")
+            raise
+        return model_struct
 
     @staticmethod
     def _se3_inverse(T: torch.Tensor) -> torch.Tensor:
