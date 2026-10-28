@@ -204,6 +204,14 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
     def generation_shape_dimensions(self) -> int:
         return 3
 
+    def validate_generation_shapes(self, generation_shapes) -> None:
+        # Metadata-driven H3 batches supply their own frame count and size.
+        # latent_shape validates each sample, including allowed resolutions.
+        # Keep configured geometry and explicit shape lists strictly checked.
+        if generation_shapes is None and self.options.geometry_from_metadata:
+            return
+        super().validate_generation_shapes(generation_shapes)
+
     def _metadata_geometry(self, batch, broadcast):
         metadata = batch.get("meta", {})
         condition = batch.get("conditioning", {}).get("positive", {})
