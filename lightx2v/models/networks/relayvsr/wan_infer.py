@@ -8,7 +8,6 @@ from lightx2v.models.networks.wan.infer.module_io import GridOutput, WanPreInfer
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.transformer_infer import modulate
-from lightx2v_platform.base.global_var import PLATFORM
 
 from .attention import SpatialAttentionSpec, get_local_attention_ops
 from .compile import RelayCompileMixin, mark_sequence_dynamic, native_sdpa
@@ -64,8 +63,9 @@ class RelayWanTransformerInfer(RelayCompileMixin, WanOffloadTransformerInfer):
         }
         super().__init__(family_config)
         self.relay_config, self.parallel = config, parallel
-        self.local_attention = get_local_attention_ops()[1]
-        self.use_native_sdpa_leaf = PLATFORM == "musa" and self.use_compile and deployment.get("cross_attention_backend", "torch_sdpa") == "torch_sdpa"
+        backend = deployment.get("attention_backend", "triton")
+        self.local_attention = get_local_attention_ops(backend)[1]
+        self.use_native_sdpa_leaf = backend == "torch_sdpa" and self.use_compile and deployment.get("cross_attention_backend", "torch_sdpa") == "torch_sdpa"
         # Norms and modulation run in FP32, but residuals round to the inference
         # dtype after every sublayer, matching the official distilled checkpoint.
         self.sensitive_layer_dtype = self.infer_dtype

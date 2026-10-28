@@ -1,4 +1,5 @@
 {
+  "attention_backend": "triton",
   "cross_attention_backend": "torch_sdpa",
   "cpu_offload": false,
   "clip_len": 16,
@@ -11,6 +12,6 @@
   "warmup": true,
   "parallel": {
     "seq_p_size": 2,
-    "cfg_p_size": 1
+    "seq_p_attn_type": "ulysses"
   }
 }

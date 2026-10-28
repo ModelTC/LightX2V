@@ -17,6 +17,7 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.common.kvcache.manager import KVCacheManager
+from lightx2v.models.networks.relayvsr.attention import LOCAL_ATTENTION_BACKENDS
 from lightx2v.models.networks.relayvsr.model import RelayVSRModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
@@ -30,11 +31,14 @@ from .video_io import AsyncVideoWriter, DeviceTimings, prefetch_frames
 
 
 def validate_config(config):
+    backend = config.get("attention_backend", "triton")
+    if backend not in LOCAL_ATTENTION_BACKENDS:
+        raise ValueError(f"RelayVSR attention_backend must be one of {LOCAL_ATTENTION_BACKENDS}, got {backend!r}")
     if config.get("cpu_offload") and config.get("offload_granularity", "block") != "block":
         raise ValueError("RelayVSR supports block weight offload only")
     parallel = config.get("parallel") or {}
     if parallel.get("seq_p_size", 1) not in (1, 2):
-        raise ValueError("RelayVSR Flash has two KV groups, so sequence parallelism supports 1 or 2 GPUs")
+        raise ValueError("RelayVSR sequence parallelism supports 1 or 2 GPUs")
     for key, default, minimum in (("clip_len", 16, 2), ("queue_size", 16, 1), ("encoder_threads", 16, 1)):
         if config.get(key, default) < minimum:
             raise ValueError(f"RelayVSR {key} must be >= {minimum}")
@@ -42,7 +46,7 @@ def validate_config(config):
 
 @RUNNER_REGISTER("relayvsr")
 class RelayVSRRunner(DefaultRunner):
-    """Official big RelayVSR: sparse Wan references + streaming Flash decode."""
+    """Official big RelayVSR: sparse Wan references + streaming Flash model decode."""
 
     supported_request_fields_by_task: ClassVar[dict] = {"sr": COMMON_REQUEST_FIELDS | {"video_path", "image_path", "sr_ratio", "size"}}
 
@@ -82,7 +86,7 @@ class RelayVSRRunner(DefaultRunner):
         if self.config.get("lazy_load", False):
             raise NotImplementedError("RelayVSR warmup does not support lazy loading")
         started = time.perf_counter()
-        # Fill the causal Wan cache and overwrite every slot once. Flash's
+        # Fill the causal Wan cache and overwrite every slot once. The Flash model's
         # condition, first-frame and history branches follow the normal stream.
         references = 2 * self.model.wan_config["temporal_context_frames"]
         frames = (references - 1) * (self.config.get("clip_len", 16) - 1) + 1
@@ -145,16 +149,16 @@ class RelayVSRRunner(DefaultRunner):
         self.wan_cache = self.wan_cache_manager.create_self_attn_kv_cache(
             "wan", height // 8 * (width // 8) * wan["temporal_context_frames"], kv_cache_scheme="frame_ring", num_heads=wan["num_attention_heads"] // self.model.parallel.size
         )
-        self.flash_cache_manager = KVCacheManager({"num_layers": 10, "num_heads": 2, "dim": 128}, device=self.device)
-        flash_heads = 2 if self.model.flash_transformer.query_parallel else 2 // self.model.parallel.size
-        self.flash_history = self.flash_cache_manager.create_self_attn_kv_cache("flash_video", height // 4 * (width // 4), kv_cache_scheme="static", num_heads=flash_heads)
-        self.reference_count = self.decode_count = 0
+        self.flash_model_cache_manager = KVCacheManager({"num_layers": 10, "num_heads": 2, "dim": 128}, device=self.device)
+        flash_model_heads = 2 if self.model.flash_model_transformer.query_parallel else 2 // self.model.parallel.size
+        self.flash_model_history = self.flash_model_cache_manager.create_self_attn_kv_cache("flash_model_video", height // 4 * (width // 4), kv_cache_scheme="static", num_heads=flash_model_heads)
+        self.reference_count = self.flash_model_decode_count = 0
 
     def end_run(self):
         self.scheduler.clear()
         self.model.clear()
-        self.wan_cache = self.flash_history = None
-        self.wan_cache_manager = self.flash_cache_manager = None
+        self.wan_cache = self.flash_model_history = None
+        self.wan_cache_manager = self.flash_model_cache_manager = None
 
     def reference(self, frame):
         lr = self.timings.call("preprocess", self.preprocess, frame)
@@ -164,7 +168,7 @@ class RelayVSRRunner(DefaultRunner):
         self.scheduler.step_post()
         self.reference_count += 1
         latent = self.scheduler.latents[:, :, 0].to(GET_DTYPE())
-        return self.timings.call("flash_condition", self.model.prepare_condition, latent)
+        return self.timings.call("flash_model_condition", self.model.flash_model_prepare_condition, latent)
 
     def restore_frames(self, source, seed):
         """Yield cropped native 4x predictions; overlapping endpoint is emitted once."""
@@ -189,12 +193,12 @@ class RelayVSRRunner(DefaultRunner):
                 self.check_stop()
                 end_condition = self.reference(window[-1]) if len(window) > 1 else start_condition
                 conditions = [(torch.cat((a[0], b[0]), 0), torch.cat((a[1], b[1]), 0)) for a, b in zip(start_condition, end_condition)]
-                self.flash_history.reset()
+                self.flash_model_history.reset()
                 for offset, frame in enumerate(window):
                     self.check_stop()
                     lr = self.timings.call("preprocess", self.preprocess, frame)
-                    output = self.timings.call("flash_decode", self.model.decode, lr, conditions, self.flash_history, offset)
-                    self.decode_count += 1
+                    output = self.timings.call("flash_model_decode", self.model.flash_model_decode, lr, conditions, self.flash_model_history, offset)
+                    self.flash_model_decode_count += 1
                     if first_window or offset > 0:
                         yield output[..., : height * 4, : width * 4]
                 first_window = False
@@ -289,7 +293,7 @@ class RelayVSRRunner(DefaultRunner):
                 "width": target[1],
                 "native_scale": 4,
                 "wan_references": self.reference_count,
-                "flash_decode_calls": self.decode_count,
+                "flash_model_decode_calls": self.flash_model_decode_count,
                 "load_seconds": self.load_seconds,
                 "cuda_stage_seconds": stages,
                 "decode_seconds": io_timing["decode_seconds"],

@@ -2,14 +2,13 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
-from lightx2v_platform.base.global_var import PLATFORM
 
 from .attention import get_local_attention_ops
 from .compile import RelayCompileMixin, mark_sequence_dynamic
 from .rope import apply_rope
 
 
-class FlashPreInfer:
+class FlashModelPreInfer:
     def frame(self, weights, lr):
         x = lr
         for i in (0, 2, 4):
@@ -22,12 +21,13 @@ class FlashPreInfer:
         return weights.condition_norm.apply(x) + weights.condition_type.tensor[0]
 
 
-class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
+class FlashModelTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
     def __init__(self, config, parallel, deployment):
         self.config, self.parallel = config, parallel
         self.init_compile(deployment)
-        self.local_attention = get_local_attention_ops()[0]
-        self.query_parallel = PLATFORM == "musa" and parallel.size > 1
+        backend = deployment.get("attention_backend", "triton")
+        self.local_attention = get_local_attention_ops(backend)[0]
+        self.query_parallel = backend == "torch_sdpa" and parallel.size > 1
 
     def run_block(self, block_idx, block, x, condition, past_key, past_value, q_rope, k_rope, windows, height, width):
         if self.use_compile:
@@ -109,7 +109,7 @@ class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
         return x
 
 
-class FlashPostInfer:
+class FlashModelPostInfer:
     def infer(self, weights, hidden, lr):
         height, width = lr.shape[-2] // 4, lr.shape[-1] // 4
         pixels = weights.projection.apply(F.silu(weights.head.apply(hidden)))

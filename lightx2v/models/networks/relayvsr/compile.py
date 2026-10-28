@@ -13,7 +13,7 @@ class RelayCompileMixin:
         if cached is not None and cached[0] is block:
             return cached[1]
 
-        # Compile the family method before binding the block so Wan and Flash
+        # Compile the family method before binding the block so Wan and the Flash model
         # do not share a wrapper's Dynamo cache and recompile limit.
         if self.compile_backend == "default":
             options = {"options": self.compile_options} if self.compile_options else {}
@@ -53,7 +53,7 @@ def _layer_norm_fake(x, weight, bias, eps):
     return torch.empty_like(x, dtype=torch.float32, memory_format=torch.contiguous_format)
 
 
-# Keep MUSA SDPA's static meta constraints outside the dynamic Wan block.
+# Keep native SDPA's static meta constraints outside the dynamic Wan block.
 @torch.library.custom_op("lightx2v::relayvsr_sdpa", mutates_args=(), device_types="cuda")
 def native_sdpa(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
     from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight
