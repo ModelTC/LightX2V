@@ -79,6 +79,9 @@ class BaseRunner(ABC):
 
     def close(self):
         """Release resources after the last request."""
+        close_weights = getattr(getattr(self, "model", None), "close_numa_cpu_weights", None)
+        if close_weights is not None:
+            close_weights()
 
     def get_supported_tasks(self):
         """Return tasks accepted by this initialized runner."""

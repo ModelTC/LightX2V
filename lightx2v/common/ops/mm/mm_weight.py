@@ -508,6 +508,14 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         self.load_quantized(weight_dict)
         self.post_process()
 
+    def cpu_storage_dtype(self, attr, loaded_dtype):
+        """Final host storage dtype, shared with the NUMA allocation planner."""
+        if attr == "bias":
+            return torch.float32 if self.bias_force_fp32 else self.infer_dtype
+        if attr == "weight_scale" and self.scale_force_fp32:
+            return torch.float32
+        return loaded_dtype
+
     def post_process(self):
         if self.weight_need_transpose:
             if hasattr(self, "weight") and self.weight is not None:
@@ -517,22 +525,16 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             if hasattr(self, "weight_cuda_buffer") and self.weight_cuda_buffer is not None:
                 self.weight_cuda_buffer = self.weight_cuda_buffer.t()
         if hasattr(self, "bias") and self.bias is not None:
-            if self.bias_force_fp32:
-                self.bias = self.bias.to(torch.float32)
-            else:
-                self.bias = self.bias.to(self.infer_dtype)
+            self.bias = self.bias.to(self.cpu_storage_dtype("bias", self.bias.dtype))
         if hasattr(self, "pin_bias") and self.pin_bias is not None:
-            if self.bias_force_fp32:
-                self.pin_bias = self.pin_bias.to(torch.float32)
-            else:
-                self.pin_bias = self.pin_bias.to(self.infer_dtype)
+            self.pin_bias = self.pin_bias.to(self.cpu_storage_dtype("bias", self.pin_bias.dtype))
         if self.bias_force_fp32 and hasattr(self, "bias_diff"):
             self.bias_diff = self.bias_diff.to(torch.float32)
         if self.scale_force_fp32:
             if hasattr(self, "weight_scale") and self.weight_scale is not None:
-                self.weight_scale = self.weight_scale.to(torch.float32)
+                self.weight_scale = self.weight_scale.to(self.cpu_storage_dtype("weight_scale", self.weight_scale.dtype))
             if hasattr(self, "pin_weight_scale") and self.pin_weight_scale is not None:
-                self.pin_weight_scale = self.pin_weight_scale.to(torch.float32)
+                self.pin_weight_scale = self.pin_weight_scale.to(self.cpu_storage_dtype("weight_scale", self.pin_weight_scale.dtype))
 
     def load_quantized(self, weight_dict):
         if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:

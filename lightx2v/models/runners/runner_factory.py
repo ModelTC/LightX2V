@@ -69,5 +69,13 @@ def build_runner(config):
 
     torch.set_grad_enabled(False)
     runner = RUNNER_REGISTER[model_cls](config)
-    runner.init_modules()
+    try:
+        runner.init_modules()
+    except BaseException as error:
+        if config.get("cpu_offload_numa", False):
+            try:
+                runner.close()
+            except BaseException as cleanup_error:
+                error.add_note(f"NUMA runner cleanup also failed: {cleanup_error!r}")
+        raise
     return runner

@@ -26,6 +26,7 @@
     "use_image_encoder": true,
     "feature_caching": "NoCaching",
     "cpu_offload": true,
+    "cpu_offload_numa": true,
     "offload_granularity": "block",
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,

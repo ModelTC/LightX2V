@@ -40,6 +40,7 @@ def get_default_config():
         {
             "do_mm_calib": False,
             "cpu_offload": False,
+            "cpu_offload_numa": False,
             "shared_cpu_weights": False,
             "shared_cpu_weight_scope": "auto",
             "shared_cpu_weight_strict_numa": True,
