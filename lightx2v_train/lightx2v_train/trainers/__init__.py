@@ -3,6 +3,7 @@ import importlib
 from lightx2v_train.utils.registry import build_trainer
 
 _LAZY_EXPORTS = {
+    "TurboTrainer": (".turbo.trainer", "TurboTrainer"),
     "AutoregressiveDmdTrainer": (
         ".dmd.autoregressive_dmd",
         "AutoregressiveDmdTrainer",

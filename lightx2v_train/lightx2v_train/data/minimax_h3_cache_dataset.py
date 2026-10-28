@@ -691,7 +691,9 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
             self.start_iteration * self.samples_per_outer_iteration,
         )
 
-    def configure_from_microbatch_offset(self, *, start_microbatch, gradient_accumulation_iters, fake_update_ratio):
+    def configure_from_microbatch_offset(
+        self, *, start_microbatch, gradient_accumulation_iters, fake_update_ratio, data_consumption_mode="optimizer_update_critic_only", student_data_source="reuse_preceding_critic_trajectory"
+    ):
         """Resume at an absolute global microbatch, not an outer iteration.
 
         The caller accounts for data consumption: critic updates draw
@@ -712,15 +714,19 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
             raise ValueError("fake_update_ratio must be positive.")
         self.start_iteration = 0
         self.start_microbatch = start_microbatch
+        self.data_consumption_mode = data_consumption_mode
+        self.student_data_source = student_data_source
         self.gradient_accumulation_iters = grad_accum
         self.fake_update_ratio = fake_ratio
         self.samples_per_outer_iteration = None
         self._epoch_batches.clear()
         logger.info(
-            "[data] configured Ref cost sampler absolute_microbatch_offset={} grad_accum={} fake_update_ratio={} data_consumption=optimizer_update_critic_only student_data=reuse_preceding_critic_trajectory",
+            "[data] configured Ref cost sampler absolute_microbatch_offset={} grad_accum={} fake_update_ratio={} data_consumption={} student_data={}",
             self.start_microbatch,
             self.gradient_accumulation_iters,
             self.fake_update_ratio,
+            self.data_consumption_mode,
+            self.student_data_source,
         )
 
     def _ordered_pool(self, records, data_epoch, salt):
@@ -1056,8 +1062,8 @@ class MiniMaxH3ReferenceCostSampler(Sampler):
         if self.start_microbatch is not None:
             metadata.update(
                 {
-                    "data_consumption_mode": "optimizer_update_critic_only",
-                    "student_data_source": "reuse_preceding_critic_trajectory",
+                    "data_consumption_mode": self.data_consumption_mode,
+                    "student_data_source": self.student_data_source,
                     "resume_cursor_unit": "absolute_global_microbatch",
                 }
             )
@@ -1393,7 +1399,9 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             [f"{task}/{bucket}" for task, bucket in (self.expected_group(index) for index in range(self.schedule_period))],
         )
 
-    def configure_from_microbatch_offset(self, *, start_microbatch, gradient_accumulation_iters=1, fake_update_ratio=5):
+    def configure_from_microbatch_offset(
+        self, *, start_microbatch, gradient_accumulation_iters=1, fake_update_ratio=5, data_consumption_mode="optimizer_update_critic_only", student_data_source="reuse_preceding_critic_trajectory"
+    ):
         """Official PDMD consumes new data only on critic updates.
 
         Use an absolute fresh-microbatch cursor instead of the legacy
@@ -1406,6 +1414,8 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             raise ValueError("start_microbatch must be non-negative")
         self.configure(start_iteration=0, gradient_accumulation_iters=gradient_accumulation_iters, fake_update_ratio=fake_update_ratio)
         self.start_microbatch = int(start_microbatch)
+        self.data_consumption_mode = data_consumption_mode
+        self.student_data_source = student_data_source
         self.epoch = 0
         self.microbatches_per_epoch = max(1, sum(map(len, self._pools.values())) // self.num_replicas)
 
@@ -1579,8 +1589,8 @@ class MiniMaxH3TaskCycleSampler(Sampler):
             metadata["balance_orientation"] = False
         if self.start_microbatch is not None:
             metadata.update(
-                data_consumption_mode="optimizer_update_critic_only",
-                student_data_source="reuse_preceding_critic_trajectory",
+                data_consumption_mode=self.data_consumption_mode,
+                student_data_source=self.student_data_source,
                 resume_cursor_unit="absolute_global_microbatch",
             )
         return metadata

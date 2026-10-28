@@ -93,6 +93,7 @@ _MODEL_MODULES = {
 }
 
 _TRAINER_MODULES = {
+    "turbo": "lightx2v_train.trainers.turbo.trainer",
     "autoregressive_dmd": "lightx2v_train.trainers.dmd.autoregressive_dmd",
     "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",

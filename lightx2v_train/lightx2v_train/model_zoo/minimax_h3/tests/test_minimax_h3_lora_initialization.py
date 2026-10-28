@@ -116,11 +116,28 @@ class MiniMaxH3LoRAInitializationTest(unittest.TestCase):
             self.assert_states_equal(model.state_dict(), initial)
         self.assertTrue(torch.equal(torch.get_rng_state(), before))
 
-    def test_only_official_flag_selects_kaiming(self):
+    def test_only_official_or_turbo_selects_kaiming(self):
         for config in ({}, {"training": {}}, {"training": {"dmd": {"official_pdmd": False}}}):
             with self.subTest(config=config):
                 self.assertEqual(self._wrapper(config)._lora_init_weights(), "gaussian")
         self.assertIs(self._wrapper({"training": {"dmd": {"official_pdmd": True}}})._lora_init_weights(), True)
+        self.assertIs(self._wrapper({"training": {"method": "turbo"}})._lora_init_weights(), True)
+
+    def test_turbo_uses_same_kaiming_for_peft_and_streamed_load(self):
+        wrapper = self._wrapper({"training": {"method": "turbo"}})
+        with patch.object(wrapper_module, "sync_sequence_parallel_parameters"):
+            wrapper.add_lora(7, 7, ["projection"])
+        adapter = wrapper.transformer.projection
+        self.assertIs(wrapper.transformer.peft_config["default"].init_lora_weights, True)
+        self.assertEqual(torch.count_nonzero(adapter.lora_B["default"].weight).item(), 0)
+        self.assertLessEqual(adapter.lora_A["default"].weight.abs().max().item(), 1 / math.sqrt(23))
+        wrapper.device = torch.device("cpu")
+        wrapper._stream_load_pending = True
+        wrapper._stream_load_transformer_dir = "/unused/transformer"
+        wrapper._stream_load_lora_seed = 17
+        with patch.object(wrapper_module, "stream_load_minimax_h3_transformer") as load:
+            wrapper.after_fsdp2_shard({})
+        self.assertIs(load.call_args.kwargs["init_lora_weights"], True)
 
     def test_peft_legacy_initialization_and_rng_match_previous_call_exactly(self):
         self._check_peft_initialization(official=False, expected_mode="gaussian")

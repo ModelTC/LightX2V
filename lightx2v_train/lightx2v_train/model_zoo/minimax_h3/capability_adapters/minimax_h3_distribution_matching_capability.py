@@ -160,7 +160,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         "ff.net.2",
     )
     _PROFILE = DistributionMatchingProfile(
-        supported_training_methods=frozenset({"dmd", "dmad"}),
+        supported_training_methods=frozenset({"dmd", "dmad", "turbo"}),
         supports_guidance=False,
         supports_ida=False,
         supports_diversity=False,
@@ -300,6 +300,51 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
     def predict_velocity(self, latents, sigma, condition):
         return self._predict_velocity(latents, sigma, condition, capture_features=False)
 
+    def predict_velocity_at_sigmas(self, latents, sigma_pair, condition):
+        """Predict using differentiable physical video/audio sigmas.
+
+        Turbo consistency training owns its TrigFlow-to-RF transformation and
+        modality schedules. Do not shift these physical sigmas a second time.
+        The legacy PDMD entry point remains unchanged.
+        """
+        return self._predict_velocity(latents, sigma_pair, condition, capture_features=False, physical_sigmas=True)
+
+    @torch.no_grad()
+    def predict_velocity_jvp(self, latents, sigma_pair, condition, latent_tangent, sigma_tangent):
+        """Return detached velocity and its exact joint latent/time JVP.
+
+        The student parameter-gradient forward is evaluated separately. This
+        target pass needs no backward graph or activation checkpointing.
+        """
+        from torch.autograd import forward_ad
+
+        from .turbo_jvp import exact_jvp_attention
+
+        if get_sequence_parallel_world_size() != 1:
+            raise ValueError("H3 Turbo JVP currently requires sequence_parallel.size=1.")
+        self._validate_latents(latent_tangent)
+        if latent_tangent.shape != latents.shape:
+            raise ValueError("H3 JVP tangent and primal latent geometry must match.")
+        sigma_pair = torch.as_tensor(sigma_pair, device=self.device, dtype=torch.float32)
+        sigma_tangent = torch.as_tensor(sigma_tangent, device=self.device, dtype=torch.float32)
+        if sigma_pair.shape != (2,) or sigma_tangent.shape != (2,):
+            raise ValueError("H3 JVP physical sigmas and tangents must have shape (2,).")
+        with exact_jvp_attention(self.model.denoiser_module()), forward_ad.dual_level():
+            dual_latents = MiniMaxH3JointLatents(
+                forward_ad.make_dual(latents.video.detach(), latent_tangent.video.detach()),
+                forward_ad.make_dual(latents.audio.detach(), latent_tangent.audio.detach()),
+                latents.shape,
+            )
+            dual_sigmas = forward_ad.make_dual(sigma_pair.detach(), sigma_tangent.detach())
+            prediction = self.predict_velocity_at_sigmas(dual_latents, dual_sigmas, condition)
+            video, video_tangent = forward_ad.unpack_dual(prediction.video)
+            audio, audio_tangent = forward_ad.unpack_dual(prediction.audio)
+            if video_tangent is None or audio_tangent is None:
+                raise RuntimeError("H3 JVP was lost in the model forward; no approximate fallback is allowed.")
+            primal = MiniMaxH3JointLatents(video.detach(), audio.detach(), latents.shape)
+            tangent = MiniMaxH3JointLatents(video_tangent.detach(), audio_tangent.detach(), latents.shape)
+        return primal, tangent
+
     def predict_dmad_features(self, latents, sigma, condition, feature_block=49):
         """Differentiable, target-only residual features for the DMAD critic.
 
@@ -328,15 +373,22 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         video, audio = self._modality_sigmas(sigma)
         return {"video": video, "audio": audio}
 
-    def _predict_velocity(self, latents, sigma, condition, *, capture_features, dmad_feature_block=None):
+    def _predict_velocity(self, latents, sigma, condition, *, capture_features, dmad_feature_block=None, physical_sigmas=False):
         self._validate_latents(latents)
-        video_sigma, audio_sigma = self._modality_sigmas(sigma)
+        if physical_sigmas:
+            sigma = torch.as_tensor(sigma, device=self.device, dtype=torch.float32)
+            if sigma.shape != (2,):
+                raise ValueError("H3 physical video/audio sigmas must have shape (2,).")
+            video_sigma, audio_sigma = sigma.unbind()
+        else:
+            video_sigma, audio_sigma = self._modality_sigmas(sigma)
         layout = self._layout(condition, latents.shape)
-        timesteps, timestep_indices = build_row_timesteps(
-            layout,
-            video_sigma,
-            audio_sigma,
-        )
+        if physical_sigmas:
+            from .turbo_jvp import differentiable_row_timesteps
+
+            timesteps, timestep_indices = differentiable_row_timesteps(layout, video_sigma, audio_sigma)
+        else:
+            timesteps, timestep_indices = build_row_timesteps(layout, video_sigma, audio_sigma)
         transformer_video = latents.video
         transformer_audio = latents.audio
         if layout.num_condition_video_rows:
@@ -725,6 +777,10 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         if tuple(audio_rows.shape) != latent_shape.audio_tokens:
             raise ValueError(f"H3 ADV packed audio shape {tuple(audio_rows.shape)} != {latent_shape.audio_tokens}.")
         return MiniMaxH3JointLatents(video_rows, audio_rows, latent_shape)
+
+    def extract_turbo_latents(self, sample, latent_shape):
+        """Load normalized cached clean AV rows with strict geometry checks."""
+        return self._load_real_av_latents(sample, latent_shape)
 
     def legacy_extra_checkpoint_metadata(self):
         metadata = self.extra_checkpoint_metadata()

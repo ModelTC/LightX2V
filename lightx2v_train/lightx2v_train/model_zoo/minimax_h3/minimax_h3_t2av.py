@@ -302,9 +302,10 @@ class MiniMaxH3T2AVModel(BaseModel):
 
     def _lora_init_weights(self):
         # PEFT's True means Kaiming-uniform A (a=sqrt(5)) and zero B,
-        # matching official PDMD. Keep every legacy run on Gaussian A.
-        official = self.config.get("training", {}).get("dmd", {}).get("official_pdmd", False)
-        return True if official else "gaussian"
+        # matching official PDMD and Turbo. Legacy recipes retain Gaussian A.
+        training = self.config.get("training", {})
+        official = training.get("dmd", {}).get("official_pdmd", False)
+        return True if official or training.get("method") == "turbo" else "gaussian"
 
     def add_lora(self, rank, alpha, target_modules, *, rank_pattern=None, alpha_pattern=None):
         if not target_modules:

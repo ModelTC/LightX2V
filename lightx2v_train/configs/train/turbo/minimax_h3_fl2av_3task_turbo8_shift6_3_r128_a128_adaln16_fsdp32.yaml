@@ -1,0 +1,145 @@
+# H3 adaptation of the TurboT2VA curriculum: dCM -> sCM -> sCM + DMD.
+# Target: 8-step generation, 4 ACP workers x 8 GPUs, FSDP32, no sequence parallel.
+# 7000 STUDENT updates: 2000 dCM + 500 sCM + 4500 joint.
+# Student LoRA: regular rank/alpha128, block AND output AdaLN rank/alpha16.
+# Q/K/V use independent adapters; Larry weights are not loaded.
+# Initialize from the H3 base and use a NEW output directory.
+seed: 42
+model:
+    name: minimax_h3_t2av
+    pretrained_model_name_or_path: ${oc.env:H3_MODEL_PATH}
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    local_files_only: true
+    patch_size: [1, 2, 2]
+    video_latent_channels: 24
+    audio_latent_channels: 32
+    text_dim: 5120
+    vae_spatial_scale_factor: 16
+    use_autocast: false
+    attention_backend: _flash_3_hub
+    fake:
+        transformer_param_dtype: fp32
+    teacher:
+        transformer_param_dtype: bf16
+    capabilities:
+        distribution_matching:
+            # Inference metadata; Turbo owns the training time-pair conversion.
+            video_flow_shift: 6.0
+            audio_flow_shift: 3.0
+            video_loss_weight: 0.8
+            audio_loss_weight: 0.8
+            geometry_from_metadata: true
+            allowed_resolutions: [[768, 1344], [1344, 768]]
+
+distributed:
+    backend: nccl
+    timeout_minutes: 180
+    sequence_parallel: {enabled: false, size: 1}
+    fsdp2:
+        enabled: true
+        size: 32
+        stream_load_pretrained: true
+        reshard_after_forward: {root_reshard: false, block_reshard: true}
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: minimax_h3_cache_dataset
+        data_path: ${oc.env:H3_FL2AV_CACHE}
+        defer_latent_loading: true
+        batch_size: 1
+        num_workers: 8
+        pin_memory: true
+        shuffle: false
+        drop_last: true
+        # Use every task in the legacy three-task view.
+        seed: 42
+        tasks: [t2av, i2av, fl2av]
+        buckets: [landscape, portrait]
+        task_order: [t2av, i2av, fl2av]
+        task_bucket_order:
+            t2av: [landscape, portrait]
+            i2av: [landscape, portrait]
+            fl2av: [landscape, portrait]
+        route_mode: stratified
+        balance_orientation: false
+        balance_route_loss: true
+        require_all_routes_per_optimizer_step: true
+        require_all_tasks: true
+        require_all_buckets: true
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_sigma: 0.0
+    max_sigma: 1.0
+    time_shift_settings: {do_time_shift: false}
+
+training:
+    method: turbo
+    # Student optimizer updates; joint fake updates are counted separately.
+    max_train_iters: 7000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 0
+    save_every_iters: 50
+    # Bound storage for full fake-model and optimizer checkpoints.
+    save_total_limit: 2
+    turbo:
+        num_inference_steps: 8
+        dcm_steps: 2000
+        scm_steps: 500
+        joint_steps: 4500
+        # Upstream student_update_freq=5: one student plus FOUR fake updates.
+        fake_update_ratio: 4
+        video_shift: 6.0
+        audio_shift: 3.0
+        dcm_total_steps: 48
+        dcm_skip_steps: 1
+        loss_scale: 100.0
+        loss_scale_dmd: 1.0
+        scm_normalizer_epsilon: 0.1
+        dmd_normalizer_floor: 0.00001
+        tangent_warmup_steps: 1000
+        generator_time_mean: -0.8
+        generator_time_std: 1.6
+        score_time_mean: 0.0
+        score_time_std: 1.6
+    student:
+        train_type: lora
+        ema: {enabled: true, decay: 0.999, use_for_inference: true}
+        lora:
+            rank: 128
+            alpha: 128
+            # Adapter-only master dtype; frozen base and FSDP compute stay BF16.
+            param_dtype: fp32
+            target_modules: [to_q, to_k, to_v, to_out.0, ff.net.0.proj, ff.net.2, adaln_proj.linear, norm_out.linear]
+            rank_pattern: {adaln_proj.linear: 16, norm_out.linear: 16}
+            alpha_pattern: {adaln_proj.linear: 16, norm_out.linear: 16}
+        optimizer:
+            learning_rate: 0.00002
+            adam_beta1: 0.0
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    fake:
+        train_type: full
+        optimizer:
+            learning_rate: 0.000004
+            adam_beta1: 0.0
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    teacher: {guidance_scale: 1.0, cfg_norm: none}
+    output_dir: ${oc.env:H3_FL2AV_TURBO_OUTPUT}
+
+inference: {method: none, infer_every_iters: null}
+logging: {rank_zero_only: true, train_log_every_iters: 1}
+resume: {auto_resume: true}
