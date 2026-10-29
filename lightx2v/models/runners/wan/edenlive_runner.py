@@ -357,7 +357,7 @@ class EdenLiveARRunner(EdenLiveRunner):
         self.inputs["proxy_features"] = self.proxy_encoder.infer(pixels).to(GET_DTYPE())
         return pixels
 
-    def _publish_live_frames(self, pixels, index, is_last):
+    def _publish_live_frames(self, pixels, index):
         frame = pixels[0].detach().float()
         images = ((frame + 1) / 2).clamp(0, 1).permute(1, 2, 3, 0).contiguous().clone()
         gen_video = images.permute(3, 0, 1, 2).unsqueeze(0)
@@ -379,7 +379,7 @@ class EdenLiveARRunner(EdenLiveRunner):
             ar, chunk, pools, decoder = self._prepare_ar_runtime(self._publish_live_frames)
             chunk_idx = 0
             start_frame = 0
-            fail_count, max_fail_count = 0, 10
+            fail_count, max_fail_count = 0, 20
 
             while True:
                 self.check_stop()

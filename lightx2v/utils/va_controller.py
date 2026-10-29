@@ -296,9 +296,11 @@ class VAController:
                 self.prev_tensor.copy_(video_tensor)
             else:
                 self.flag_tensor.fill_(0)
-        dist.broadcast(self.flag_tensor, src=self.target_recorder_rank)
+        if self.world_size > 1:
+            dist.broadcast(self.flag_tensor, src=self.target_recorder_rank)
         if self.flag_tensor.item() == 1:
-            dist.broadcast(self.prev_tensor, src=self.target_recorder_rank)
+            if self.world_size > 1:
+                dist.broadcast(self.prev_tensor, src=self.target_recorder_rank)
             return True
 
     def omni_reader_next_control(self):
@@ -311,8 +313,9 @@ class VAController:
             # get the length of stream buffer, broadcast to all ranks
             if self.rank == self.target_recorder_rank:
                 stream_buffer_length = self.recorder.get_buffer_stream_size()
-                self.len_tensor.copy_(stream_buffer_length)
-            dist.broadcast(self.len_tensor, src=self.target_recorder_rank)
+                self.len_tensor.fill_(int(stream_buffer_length))
+            if self.world_size > 1:
+                dist.broadcast(self.len_tensor, src=self.target_recorder_rank)
             buffer_length = self.len_tensor.item()
             # stream buffer is enough, skip infer
             if buffer_length >= self.min_stay_queue_num:
