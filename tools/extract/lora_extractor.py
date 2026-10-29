@@ -1,455 +1,255 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-LoRA Extractor Script
-Extract LoRA weights from the difference between two models
-"""
+"""Extract selected Linear weight deltas as SVD LoRAs using a JSON/YAML config."""
+
+from __future__ import annotations
 
 import argparse
+import fnmatch
+import json
+import math
 import os
-from typing import Dict, Optional
+import tempfile
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 
 import torch
-from safetensors import safe_open
-from safetensors import torch as st
+from safetensors.torch import save_file
 from tqdm import tqdm
 
+try:
+    from .export_student import ModelWeights, torch_dtype
+except ImportError:
+    from export_student import ModelWeights, torch_dtype
 
-def _get_torch_dtype(dtype_str: str) -> torch.dtype:
-    """
-    Convert string to torch data type
 
-    Args:
-        dtype_str: Data type string
+@dataclass
+class ExtractConfig:
+    source_model: str
+    target_model: str
+    output: str
+    layers: list[str]
+    rank: int = 32
+    alpha: float | None = None
+    dtype: str = "bf16"
+    device: str = "auto"
+    key_prefix: str = "auto"
 
-    Returns:
-        Torch data type
-    """
-    dtype_mapping = {
-        "float32": torch.float32,
-        "fp32": torch.float32,
-        "float16": torch.float16,
-        "fp16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "bf16": torch.bfloat16,
+    def __post_init__(self):
+        for name in ("source_model", "target_model", "output"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ValueError(f"{name} must be a non-empty path")
+            setattr(self, name, os.path.expandvars(os.path.expanduser(getattr(self, name))))
+        if not isinstance(self.layers, list) or not self.layers or any(not isinstance(layer, str) or not layer or layer.endswith(".weight") for layer in self.layers):
+            raise ValueError("layers must be a non-empty list of module names/glob patterns without .weight")
+        if type(self.rank) is not int or self.rank < 1:
+            raise ValueError("rank must be a positive integer")
+        self.alpha = float(self.rank if self.alpha is None else self.alpha)
+        if not math.isfinite(self.alpha) or self.alpha <= 0:
+            raise ValueError("alpha must be positive and finite")
+        torch_dtype(self.dtype)
+        if self.key_prefix not in ("auto", "transformer", "diffusion_model"):
+            raise ValueError("key_prefix must be auto, transformer or diffusion_model")
+        if not self.output.endswith(".safetensors"):
+            raise ValueError("output must end in .safetensors")
+
+
+def load_config(path, overrides=None):
+    path = Path(path)
+    if path.suffix.lower() == ".json":
+        values = json.loads(path.read_text())
+    else:
+        import yaml
+
+        values = yaml.safe_load(path.read_text())
+    if not isinstance(values, dict):
+        raise TypeError("Config must contain a mapping")
+    unknown = set(values) - {field.name for field in fields(ExtractConfig)}
+    if unknown:
+        raise ValueError(f"Unknown config fields: {sorted(unknown)}")
+    values.update({key: value for key, value in (overrides or {}).items() if value is not None})
+    return ExtractConfig(**values)
+
+
+def _wan_key(key):
+    """Map Diffusers Wan tensor names to the native Wan names used by LightX2V."""
+    if key == "scale_shift_table":
+        return "head.modulation"
+    replacements = (
+        ("condition_embedder.text_embedder.linear_1.", "text_embedding.0."),
+        ("condition_embedder.text_embedder.linear_2.", "text_embedding.2."),
+        ("condition_embedder.time_embedder.linear_1.", "time_embedding.0."),
+        ("condition_embedder.time_embedder.linear_2.", "time_embedding.2."),
+        ("condition_embedder.time_proj.", "time_projection.1."),
+        ("condition_embedder.image_embedder.norm1.", "img_emb.proj.0."),
+        ("condition_embedder.image_embedder.ff.net.0.proj.", "img_emb.proj.1."),
+        ("condition_embedder.image_embedder.ff.net.2.", "img_emb.proj.3."),
+        ("condition_embedder.image_embedder.norm2.", "img_emb.proj.4."),
+        ("proj_out.", "head.head."),
+        (".attn1.", ".self_attn."),
+        (".attn2.", ".cross_attn."),
+        (".to_q.", ".q."),
+        (".to_k.", ".k."),
+        (".to_v.", ".v."),
+        (".to_out.0.", ".o."),
+        (".add_k_proj.", ".k_img."),
+        (".add_v_proj.", ".v_img."),
+        (".norm_added_k.", ".norm_k_img."),
+        (".ffn.net.0.proj.", ".ffn.0."),
+        (".ffn.net.2.", ".ffn.2."),
+        (".scale_shift_table", ".modulation"),
+        (".norm2.", ".norm3."),
+    )
+    for before, after in replacements:
+        key = key.replace(before, after)
+    return key
+
+
+class ExtractionWeights(Mapping):
+    """Normalize Wan layouts and expose fused Qwen MLPs as two Linear weights."""
+
+    def __init__(self, source):
+        self.source = source
+        self.entries, self.shapes = {}, {}
+        wan_diffusers = any(key.startswith("condition_embedder.time_embedder.") for key in source)
+        for key in source:
+            name = _wan_key(key) if wan_diffusers else key
+            shape = source.shapes[key]
+            if name.endswith(".img_mlp.gate_up.weight"):
+                if len(shape) != 2 or shape[0] % 2:
+                    raise ValueError(f"Invalid fused Qwen MLP shape: {name}: {shape}")
+                half = shape[0] // 2
+                for part, start in (("gate_layer", 0), ("proj", half)):
+                    self._add(name.replace(".gate_up.", f".{part}."), (key, (start, half)), (half, shape[1]))
+            else:
+                self._add(name, (key, None), shape)
+
+    def _add(self, name, entry, shape):
+        if name in self.entries:
+            raise ValueError(f"Ambiguous model weight after normalization: {name}")
+        self.entries[name], self.shapes[name] = entry, shape
+
+    def __len__(self):
+        return len(self.entries)
+
+    def __iter__(self):
+        return iter(self.entries)
+
+    def __getitem__(self, key):
+        original, section = self.entries[key]
+        tensor = self.source[original]
+        return tensor if section is None else tensor.narrow(0, *section)
+
+
+def select_layers(source, target, config):
+    selected = set()
+    for pattern in config.layers:
+        matches = {key for key in source if key.endswith(".weight") and fnmatch.fnmatchcase(key[:-7], pattern) and len(source.shapes[key]) == 2}
+        if not matches:
+            raise ValueError(f"Layer pattern matches no Linear weights: {pattern}")
+        selected.update(matches)
+    for key in sorted(selected):
+        if key not in target:
+            raise ValueError(f"Selected target weight missing: {key}")
+        if source.shapes[key] != target.shapes[key]:
+            raise ValueError(f"Selected weight shape mismatch: {key}: {source.shapes[key]} vs {target.shapes[key]}")
+    return sorted(selected)
+
+
+def decompose_to_lora(diff, module, rank, alpha, prefix, device):
+    """Return factors satisfying (alpha / effective_rank) * up @ down = truncated SVD(delta)."""
+    effective_rank = min(rank, *diff.shape)
+    u, s, vh = torch.linalg.svd(diff.to(device=device, dtype=torch.float32), full_matrices=False)
+    root = (s[:effective_rank] * (effective_rank / alpha)).sqrt()
+    base = f"{prefix}.{module}"
+    return {
+        f"{base}.lora_up.weight": (u[:, :effective_rank] * root).cpu().contiguous(),
+        f"{base}.lora_down.weight": (root[:, None] * vh[:effective_rank]).cpu().contiguous(),
+        f"{base}.alpha": torch.tensor(alpha, dtype=torch.float32),
     }
 
-    if dtype_str not in dtype_mapping:
-        raise ValueError(f"Unsupported data type: {dtype_str}")
 
-    return dtype_mapping[dtype_str]
-
-
-def parse_args():
-    """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description="Extract LoRA weights from the difference between source and target models", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-    # Source model parameters
-    parser.add_argument("--source-model", type=str, required=True, help="Path to source model")
-    parser.add_argument("--source-type", type=str, choices=["safetensors", "pytorch"], default="safetensors", help="Source model format type")
-
-    # Target model parameters
-    parser.add_argument("--target-model", type=str, required=True, help="Path to target model (fine-tuned model)")
-    parser.add_argument("--target-type", type=str, choices=["safetensors", "pytorch"], default="safetensors", help="Target model format type")
-
-    # Output parameters
-    parser.add_argument("--output", type=str, required=True, help="Path to output LoRA model")
-    parser.add_argument("--output-format", type=str, choices=["safetensors", "pytorch"], default="safetensors", help="Output LoRA model format")
-
-    # LoRA related parameters
-    parser.add_argument("--rank", type=int, default=32, help="LoRA rank value")
-
-    parser.add_argument("--output-dtype", type=str, choices=["float32", "fp32", "float16", "fp16", "bfloat16", "bf16"], default="bf16", help="Output weight data type")
-    parser.add_argument("--diff-only", action="store_true", help="Save all weights as direct diff without LoRA decomposition")
-
-    return parser.parse_args()
-
-
-def load_model_weights(model_path: str, model_type: str) -> Dict[str, torch.Tensor]:
-    """
-    Load model weights (using fp32 precision)
-
-    Args:
-        model_path: Model file path or directory path
-        model_type: Model type ("safetensors" or "pytorch")
-
-    Returns:
-        Model weights dictionary (fp32 precision)
-    """
-    print(f"Loading model: {model_path} (type: {model_type}, precision: fp32)")
-
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model path does not exist: {model_path}")
-
-    weights = {}
-
-    if model_type == "safetensors":
-        if os.path.isdir(model_path):
-            # If it's a directory, load all .safetensors files in the directory
-            safetensors_files = []
-            for file in os.listdir(model_path):
-                if file.endswith(".safetensors"):
-                    safetensors_files.append(os.path.join(model_path, file))
-
-            if not safetensors_files:
-                raise ValueError(f"No .safetensors files found in directory: {model_path}")
-
-            print(f"Found {len(safetensors_files)} safetensors files")
-
-            # Load all files and merge weights
-            for file_path in sorted(safetensors_files):
-                print(f"  Loading file: {os.path.basename(file_path)}")
-                with safe_open(file_path, framework="pt", device="cpu") as f:
-                    for key in f.keys():
-                        if key in weights:
-                            print(f"Warning: weight key '{key}' is duplicated in multiple files, will be overwritten")
-                        weights[key] = f.get_tensor(key)
-
-        elif os.path.isfile(model_path):
-            # If it's a single file
-            if model_path.endswith(".safetensors"):
-                with safe_open(model_path, framework="pt", device="cpu") as f:
-                    for key in f.keys():
-                        weights[key] = f.get_tensor(key)
-            else:
-                raise ValueError(f"safetensors type file should end with .safetensors: {model_path}")
-        else:
-            raise ValueError(f"Invalid path type: {model_path}")
-
-    elif model_type == "pytorch":
-        # Load pytorch format (.pt, .pth)
-        if model_path.endswith((".pt", ".pth")):
-            checkpoint = torch.load(model_path, map_location="cpu")
-
-            # Handle possible nested structure
-            if isinstance(checkpoint, dict):
-                if "state_dict" in checkpoint:
-                    weights = checkpoint["state_dict"]
-                elif "model" in checkpoint:
-                    weights = checkpoint["model"]
-                else:
-                    weights = checkpoint
-            else:
-                weights = checkpoint
-        else:
-            raise ValueError(f"pytorch type file should end with .pt or .pth: {model_path}")
-    else:
-        raise ValueError(f"Unsupported model type: {model_type}")
-
-    # Convert all floating point weights to fp32 to ensure computational precision
-    print("Converting weights to fp32 to ensure computational precision...")
-
-    converted_weights = {}
-    for key, tensor in weights.items():
-        # Only convert floating point tensors, keep integer tensors unchanged
-        if tensor.dtype.is_floating_point:
-            converted_weights[key] = tensor.to(torch.float32)
-        else:
-            converted_weights[key] = tensor
-
-    print(f"Successfully loaded model with {len(converted_weights)} weight tensors")
-    return converted_weights
-
-
-def save_lora_weights(lora_weights: Dict[str, torch.Tensor], output_path: str, output_format: str, output_dtype: str = "bf16"):
-    """
-    Save LoRA weights
-
-    Args:
-        lora_weights: LoRA weights dictionary
-        output_path: Output path
-        output_format: Output format
-        output_dtype: Output data type
-    """
-    print(f"Saving LoRA weights to: {output_path} (format: {output_format}, data type: {output_dtype})")
-
-    # Ensure output directory exists
-    output_dir = os.path.dirname(output_path)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir, exist_ok=True)
-
-    # Convert data type
-    target_dtype = _get_torch_dtype(output_dtype)
-    print(f"Converting LoRA weights to {output_dtype} type...")
-
-    converted_weights = {}
-    with tqdm(lora_weights.items(), desc="Converting data type", unit="weights") as pbar:
-        for key, tensor in pbar:
-            # Only convert floating point tensors, keep integer tensors unchanged
-            if tensor.dtype.is_floating_point:
-                converted_weights[key] = tensor.to(target_dtype).contiguous()
-            else:
-                converted_weights[key] = tensor.contiguous()
-
-    if output_format == "safetensors":
-        # Save as safetensors format
-        if not output_path.endswith(".safetensors"):
-            output_path += ".safetensors"
-        st.save_file(converted_weights, output_path)
-
-    elif output_format == "pytorch":
-        # Save as pytorch format
-        if not output_path.endswith((".pt", ".pth")):
-            output_path += ".pt"
-        torch.save(converted_weights, output_path)
-    else:
-        raise ValueError(f"Unsupported output format: {output_format}")
-
-    print(f"LoRA weights saved to: {output_path}")
-
-
-def _compute_weight_diff(source_tensor: torch.Tensor, target_tensor: torch.Tensor, key: str) -> Optional[torch.Tensor]:
-    """
-    Compute the difference between two weight tensors
-
-    Args:
-        source_tensor: Source weight tensor
-        target_tensor: Target weight tensor
-        key: Weight key name (for logging)
-
-    Returns:
-        Difference tensor, returns None if no change
-    """
-    # Check if tensor shapes match
-    if source_tensor.shape != target_tensor.shape:
-        return None
-
-    # Check if tensor data types match
-    if source_tensor.dtype != target_tensor.dtype:
-        target_tensor = target_tensor.to(source_tensor.dtype)
-
-    # Compute difference
-    diff = target_tensor - source_tensor
-
-    # Check if there are actual changes
-    if torch.allclose(diff, torch.zeros_like(diff), atol=1e-8):
-        # No change
-        return None
-
-    return diff
-
-
-def _decompose_to_lora(diff: torch.Tensor, key: str, rank: int) -> Dict[str, torch.Tensor]:
-    """
-    Decompose weight difference into LoRA format
-
-    Args:
-        diff: Weight difference tensor
-        key: Original weight key name
-        rank: LoRA rank
-
-    Returns:
-        LoRA weights dictionary (containing lora_up and lora_down)
-    """
-    # Ensure it's a 2D tensor
-    if len(diff.shape) != 2:
-        raise ValueError(f"LoRA decomposition only supports 2D weights, but got {len(diff.shape)}D tensor: {key}")
-
-    a, b = diff.shape
-
-    # Check if rank is reasonable
-    max_rank = min(a, b)
-    if rank > max_rank:
-        rank = max_rank
-
-    # Choose compute device (prefer GPU, fallback to CPU)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    diff_device = diff.to(device)
-
-    # SVD decomposition
-    U, S, V = torch.linalg.svd(diff_device, full_matrices=False)
-
-    # Take the first rank components
-    U = U[:, :rank]  # (a, rank)
-    S = S[:rank]  # (rank,)
-    V = V[:rank, :]  # (rank, b)
-
-    # Distribute square root of singular values to both matrices
-    S_sqrt = S.sqrt()
-    lora_up = U * S_sqrt.unsqueeze(0)  # (a, rank) * (1, rank) = (a, rank)
-    lora_down = S_sqrt.unsqueeze(1) * V  # (rank, 1) * (rank, b) = (rank, b)
-
-    # Move back to CPU and convert to original data type, ensure contiguous
-    lora_up = lora_up.cpu().to(diff.dtype).contiguous()
-    lora_down = lora_down.cpu().to(diff.dtype).contiguous()
-
-    # Generate LoRA weight key names
-    base_key = key.replace(".weight", "")
-    lora_up_key = "diffusion_model." + f"{base_key}.lora_up.weight"
-    lora_down_key = "diffusion_model." + f"{base_key}.lora_down.weight"
-
-    # Return the decomposed weights
-    lora_weights = {lora_up_key: lora_up, lora_down_key: lora_down}
-
-    return lora_weights
-
-
-def extract_lora_from_diff(source_weights: Dict[str, torch.Tensor], target_weights: Dict[str, torch.Tensor], rank: int = 16, diff_only: bool = False) -> Dict[str, torch.Tensor]:
-    """
-    Extract LoRA weights from model difference
-
-    Args:
-        source_weights: Source model weights
-        target_weights: Target model weights
-        rank: LoRA rank
-        diff_only: If True, save all weights as direct diff without LoRA decomposition
-
-    Returns:
-        LoRA weights dictionary
-    """
-    print("Starting LoRA weight extraction...")
-    if diff_only:
-        print("Mode: Direct diff only (no LoRA decomposition)")
-    else:
-        print(f"Mode: Smart extraction - rank: {rank}")
-    print(f"Source model weight count: {len(source_weights)}")
-    print(f"Target model weight count: {len(target_weights)}")
-
-    lora_weights = {}
-    processed_count = 0
-    diff_count = 0
-    lora_count = 0
-    similar_count = 0
-    skipped_count = 0
-    fail_count = 0
-
-    # Find common keys between two models
-    common_keys = set(source_weights.keys()) & set(target_weights.keys())
-    source_only_keys = set(source_weights.keys()) - set(target_weights.keys())
-    target_only_keys = set(target_weights.keys()) - set(source_weights.keys())
-
-    if source_only_keys:
-        print(f"Warning: Source model exclusive weight keys ({len(source_only_keys)} keys): {list(source_only_keys)[:5]}...")
-    if target_only_keys:
-        print(f"Warning: Target model exclusive weight keys ({len(target_only_keys)} keys): {list(target_only_keys)[:5]}...")
-
-    print(f"Common weight keys count: {len(common_keys)}")
-
-    # Process common keys, extract LoRA weights
-    common_keys_sorted = sorted(common_keys)
-    pbar = tqdm(common_keys_sorted, desc="Extracting LoRA weights", unit="layer")
-
+@torch.no_grad()
+def extract_lora(config):
+    print("=" * 60)
+    print("LoRA Extractor Started")
+    print(json.dumps(asdict(config), indent=2))
+    device = ("cuda" if torch.cuda.is_available() else "cpu") if config.device == "auto" else config.device
+    device = torch.device(device)
+    print(f"SVD device: {device}; compute dtype: float32; output dtype: {config.dtype}")
+    source = ExtractionWeights(ModelWeights(config.source_model))
+    target = ExtractionWeights(ModelWeights(config.target_model))
+    keys = select_layers(source, target, config)
+    prefix = config.key_prefix
+    if prefix == "auto":
+        prefix = "transformer" if any(key.startswith("transformer_blocks.") for key in source) else "diffusion_model"
+    print(f"Selected {len(keys)} Linear layers; ignored {len(source) - len(keys)} source tensors; output prefix: {prefix}")
+    if set(source) != set(target):
+        print(f"Unselected schema differences: source-only={len(set(source) - set(target))}, target-only={len(set(target) - set(source))}")
+    dtype = torch_dtype(config.dtype)
+    weights, unchanged, clipped = {}, 0, 0
+    pbar = tqdm(keys, desc="Extracting LoRA weights", unit="layer")
     for key in pbar:
-        source_tensor = source_weights[key]
-        target_tensor = target_weights[key]
-
-        # Update progress bar description
-        short_key = key.split(".")[-2:] if "." in key else [key]
-        pbar.set_postfix_str(f"Processing: {'.'.join(short_key)}")
-
-        # Compute weight difference
-        diff = _compute_weight_diff(source_tensor, target_tensor, key)
-
-        if diff is None:
-            # No change or shape mismatch
-            if source_tensor.shape == target_tensor.shape:
-                similar_count += 1
-            else:
-                skipped_count += 1
+        pbar.set_postfix_str(key)
+        source_tensor, target_tensor = source[key], target[key]
+        if not source_tensor.is_floating_point() or not target_tensor.is_floating_point():
+            raise ValueError(f"Selected weight must be floating point: {key}")
+        diff = target_tensor.float() - source_tensor.float()
+        del source_tensor, target_tensor
+        if not torch.isfinite(diff).all():
+            raise ValueError(f"Non-finite weight delta: {key}")
+        if not torch.count_nonzero(diff):
+            unchanged += 1
             continue
-
-        # Calculate parameter count
-        param_count = source_tensor.numel()
-        is_1d = len(source_tensor.shape) == 1
-
-        # Decide whether to save diff directly or perform LoRA decomposition
-        if diff_only or is_1d or param_count < 1000000:
-            # Save diff directly
-            lora_key = _generate_lora_diff_key(key)
-            if lora_key == "skip":
-                skipped_count += 1
-                continue
-            lora_weights[lora_key] = diff
-            diff_count += 1
-
-        else:
-            # Perform LoRA decomposition
-            if len(diff.shape) == 2 and key.endswith(".weight"):
-                try:
-                    decomposed_weights = _decompose_to_lora(diff, key, rank)
-                    lora_weights.update(decomposed_weights)
-                    lora_count += 1
-                except Exception as e:
-                    print(f"Error: {e}")
-                    fail_count += 1
-
-            else:
-                print(f"Error: {key} is not a 2D weight tensor")
-                fail_count += 1
-
-        processed_count += 1
-
-    # Close progress bar
-    pbar.close()
-
-    print(f"\nExtraction statistics:")
-    print(f"  Processed weights: {processed_count}")
-    print(f"  Direct diff: {diff_count}")
-    print(f"  LoRA decomposition: {lora_count}")
-    print(f"  Skipped weights: {skipped_count}")
-    print(f"  Similar weights: {similar_count}")
-    print(f"  Failed weights: {fail_count}")
-    print(f"  Total extracted LoRA weights: {len(lora_weights)}")
-    print("LoRA weight extraction completed")
-
-    return lora_weights
-
-
-def _generate_lora_diff_key(original_key: str) -> str:
-    """
-    Generate LoRA weight key based on original weight key
-
-    Args:
-        original_key: Original weight key name
-
-    Returns:
-        LoRA weight key name
-    """
-    ret_key = "diffusion_model." + original_key
-    if original_key.endswith(".weight"):
-        return ret_key.replace(".weight", ".diff")
-    elif original_key.endswith(".bias"):
-        return ret_key.replace(".bias", ".diff_b")
-    elif original_key.endswith(".modulation"):
-        return ret_key.replace(".modulation", ".diff_m")
-    else:
-        # If no matching suffix, skip
-        return "skip"
+        if config.rank > min(diff.shape):
+            clipped += 1
+            tqdm.write(f"Rank capped for {key}: {config.rank} -> {min(diff.shape)}")
+        try:
+            factors = decompose_to_lora(diff, key[:-7], config.rank, config.alpha, prefix, device)
+        except RuntimeError as error:
+            raise RuntimeError(f"SVD failed for {key} on {device}; no partial LoRA will be saved") from error
+        for name, tensor in factors.items():
+            # Alpha is a scaling scalar, kept in FP32 independently of factor dtype.
+            tensor = tensor if name.endswith(".alpha") else tensor.to(dtype)
+            if not torch.isfinite(tensor).all():
+                raise ValueError(f"Output overflow in {name}; choose a wider dtype or a different alpha")
+            weights[name] = tensor.contiguous()
+        del diff, factors
+    if not weights:
+        raise ValueError("All selected layers are unchanged; no LoRA to save")
+    output = Path(config.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {"format": "pt", "extraction_config": json.dumps(asdict(config)), "linear_layers": str(len(keys) - unchanged)}
+    print(f"Saving LoRA weights to: {output} ({config.dtype}, alpha scalars in FP32)", flush=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{output.name}-", dir=str(output.parent))
+    os.close(fd)
+    try:
+        save_file(weights, temporary, metadata=metadata)
+        os.replace(temporary, output)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print(
+        f"\nExtraction statistics:\n  Selected: {len(keys)}\n  LoRA decomposition: {len(keys) - unchanged}\n  Unchanged: {unchanged}\n  Rank capped: {clipped}\n  Total saved tensors: {len(weights)}"
+    )
+    print(f"LoRA extraction completed: {output}")
+    return weights
 
 
 def main():
-    """Main function"""
-    args = parse_args()
-
-    print("=" * 50)
-    print("LoRA Extractor Started")
-    print("=" * 50)
-    print(f"Source model: {args.source_model} ({args.source_type})")
-    print(f"Target model: {args.target_model} ({args.target_type})")
-    print(f"Output path: {args.output} ({args.output_format})")
-    print(f"Output data type: {args.output_dtype}")
-    print(f"LoRA parameters: rank={args.rank}")
-    print(f"Diff only mode: {args.diff_only}")
-    print("=" * 50)
-
-    try:
-        # Load source and target models
-        source_weights = load_model_weights(args.source_model, args.source_type)
-        target_weights = load_model_weights(args.target_model, args.target_type)
-
-        # Extract LoRA weights
-        lora_weights = extract_lora_from_diff(source_weights, target_weights, rank=args.rank, diff_only=args.diff_only)
-
-        # Save LoRA weights
-        save_lora_weights(lora_weights, args.output, args.output_format, args.output_dtype)
-
-        print("=" * 50)
-        print("LoRA extraction completed!")
-        print("=" * 50)
-
-    except Exception as e:
-        print(f"Error: {e}")
-        raise
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, help="JSON or YAML extraction config; relative paths use the working directory")
+    parser.add_argument("--source-model", help="Override source_model")
+    parser.add_argument("--target-model", help="Override target_model")
+    parser.add_argument("--output", help="Override output")
+    parser.add_argument("--rank", type=int)
+    parser.add_argument("--alpha", type=float)
+    parser.add_argument("--dtype", "--output-dtype", dest="dtype")
+    parser.add_argument("--device", help="auto, cpu, cuda or cuda:N")
+    parser.add_argument("--layers", nargs="+", help="Override module name/glob patterns")
+    args = vars(parser.parse_args())
+    path = args.pop("config")
+    extract_lora(load_config(path, args))
 
 
 if __name__ == "__main__":
