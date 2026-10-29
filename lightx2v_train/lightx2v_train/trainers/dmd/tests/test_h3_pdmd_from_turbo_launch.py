@@ -95,9 +95,10 @@ class PdmdFromTurboLaunchTests(unittest.TestCase):
         for expected in (
             CONFIG.name,
             "--nnodes=4 --nproc_per_node=8",
-            "h3_fl2av_pdmd8_from_turbo_dcm1700_ema_32gpu_20261029",
-            "optimizer_updates=15000, student_updates=2500, critic_updates=12500",
-            "save_every_iters=300",
+            "h3_fl2av_pdmd8_from_turbo_dcm1700_ema_fake10_32gpu_20261029",
+            "optimizer_updates=27500, student_updates=2500, critic_updates=25000",
+            "save_every_iters=550",
+            "10 critic updates -> 1 student update",
             "LoRA tensors=6",
             "block AdaLN and norm_out.linear rank=16 alpha=16",
             "student=source EMA; frozen teacher=H3 base; fake=H3 base; optimizers start fresh",

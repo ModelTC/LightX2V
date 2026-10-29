@@ -100,7 +100,7 @@ dmd = training["dmd"]
 print(f"Training rollout shifts: video={dmd.get('official_rollout_video_shift', 1.0)}, audio={dmd.get('official_rollout_audio_shift', 1.0)}; inference shifts: video={matching['video_flow_shift']}, audio={matching['audio_flow_shift']}")
 print("Task rows rotate 11/11/10 across fresh batches; route loss weights give equal weight to T2AV/I2AV/FL2AV.")
 print(f"optimizer_updates={training['max_train_iters']}, save_every_iters={training['save_every_iters']}, save_total_limit={training['save_total_limit']}")
-print("5 critic updates -> 1 student update; student reuses the preceding critic trajectory, without reading a new batch.")
+print(f"{dmd['fake_update_ratio']} critic updates -> 1 student update; student reuses the preceding critic trajectory, without reading a new batch.")
 print("Precision: student base BF16 + LoRA FP32; teacher BF16; fake full FP32; FSDP BF16 compute / FP32 reduction.")
 print(f"config={sys.argv[1]}\ndata={root}\noutput={training['output_dir']}")
 print("Use a NEW output directory, not a FL2AV-only, Ref2AV, legacy DMD, or different-step/shift PDMD checkpoint directory.")

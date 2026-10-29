@@ -15,9 +15,9 @@ Recipe:
 - Turbo EMA initializes the live student. Official PDMD does not maintain a new
   student EMA. Frozen teacher and full trainable fake both load the H3 base.
 - Student LR 2e-5, fake LR 4e-6; PDMD Adam betas 0/0.9, weight decay 0.
-- 15000 role optimizer updates = 2500 student + 12500 fake updates. Five fake
+- 27500 role optimizer updates = 2500 student + 25000 fake updates. Ten fake
   updates precede each student update; student reuses the last fake trajectory.
-- Save every 300 role updates (50 student updates), retain two checkpoints.
+- Save every 550 role updates (50 student updates), retain two checkpoints.
 - Base/teacher BF16, student LoRA master weights FP32, full fake FP32;
   FSDP computation BF16, gradient reduction FP32.
 
@@ -49,8 +49,8 @@ H3_PYTHON="$VIRTUAL_ENV/bin/python" \
 H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3 \
 H3_STUDENT_INIT=/mnt/lm_data_afs/gushiqiao/outputs/h3_fl2av_dcm1700_ema_init \
 H3_FL2AV_CACHE=/mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_dmd_cache_5s_768p/task_aware_view_3task_portrait \
-H3_FL2AV_PDMD_OUTPUT=/mnt/lm_data_afs/gushiqiao/outputs/h3_fl2av_pdmd8_from_dcm1700_ema_32gpu_20261029 \
-H3_RDZV_ID=h3_fl2av_pdmd8_from_dcm1700_ema_32gpu_20261029 \
+H3_FL2AV_PDMD_OUTPUT=/mnt/lm_data_afs/gushiqiao/outputs/h3_fl2av_pdmd8_from_dcm1700_ema_fake10_32gpu_20261029 \
+H3_RDZV_ID=h3_fl2av_pdmd8_from_dcm1700_ema_fake10_32gpu_20261029 \
 KERNELS_CACHE=/mnt/lm_data_afs/gushiqiao/cache/kernels \
 bash lightx2v_train/scripts/run_minimax_h3_fl2av_pdmd8_from_turbo_ema_fsdp32_32gpu_acp.sh
 ```
