@@ -9,6 +9,6 @@
   "ffmpeg_preset": "ultrafast",
   "encoder_threads": 16,
   "queue_size": 16,
-  "use_compile": false,
-  "warmup": false
+  "use_compile": true,
+  "warmup": true
 }

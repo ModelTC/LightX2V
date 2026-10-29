@@ -34,18 +34,12 @@ class RelayVSRGeometry:
         return height + (-height) % alignment, width + (-width) % alignment
 
     def output_size(self, request, height, width):
-        target = (height * self.scale, width * self.scale)
-        if request.size:
-            if len(request.size) != 2 or any(isinstance(v, bool) or not isinstance(v, int) for v in request.size):
-                raise ValueError("RelayVSR size must be [height, width] with integer dimensions")
-            target = tuple(request.size)
         if self.scale == 2:
-            if request.sr_ratio != 2 or target != (height * 2, width * 2):
-                raise ValueError("relayvsr_x2 supports only sr_ratio=2 and an exact native 2x output size")
-        elif not request.size:
-            if request.sr_ratio not in (2, 4):
-                raise ValueError("relayvsr_x4 sr_ratio must be 2 or 4; 2x resizes the native 4x result")
-            target = (int(height * request.sr_ratio), int(width * request.sr_ratio))
-        if min(target) <= 0 or target[0] > height * self.scale or target[1] > width * self.scale:
-            raise ValueError(f"RelayVSR output dimensions must be positive and no larger than the native {self.scale}x result")
+            if request.sr_ratio != 2:
+                raise ValueError("relayvsr_x2 supports only sr_ratio=2")
+        elif request.sr_ratio not in (2, 4):
+            raise ValueError("relayvsr_x4 sr_ratio must be 2 or 4; 2x resizes the native 4x result")
+        target = (int(height * request.sr_ratio), int(width * request.sr_ratio))
+        if min(target) <= 0:
+            raise ValueError("RelayVSR output dimensions must be positive")
         return target

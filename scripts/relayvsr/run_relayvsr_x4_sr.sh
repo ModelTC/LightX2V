@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/path/to/LightX2V
-# https://huggingface.co/kopper/RelayVSR
-model_path=/path/to/RelayVSR
-video_path=/path/to/input.mp4
+lightx2v_path=
+model_path=
+video_path=
 
 export CUDA_VISIBLE_DEVICES=0
 

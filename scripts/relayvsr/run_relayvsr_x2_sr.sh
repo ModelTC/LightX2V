@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/path/to/LightX2V
-# Native 2x Wan + Flash inference checkpoints
-model_path=/path/to/weights_relayvsr_x2
-video_path=/path/to/input.mp4
+lightx2v_path=
+model_path=
+video_path=
 
 export CUDA_VISIBLE_DEVICES=0
 
