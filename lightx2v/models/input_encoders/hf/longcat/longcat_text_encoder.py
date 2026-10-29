@@ -99,7 +99,7 @@ class LongCatImageTextEncoder:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
 
         self.cpu_weights = {}
-        if AI_DEVICE == "cuda" and self.cpu_offload and self.config.get("task", "t2i") == "t2i":
+        if self.cpu_offload:
             for name, parameter in self.text_encoder.named_parameters():
                 parameter.data = create_pin_tensor(parameter.data)
                 self.cpu_weights[name] = parameter.data
@@ -181,8 +181,8 @@ class LongCatImageTextEncoder:
 
         if self.cpu_offload:
             if self.cpu_weights:
-                if torch.device(device).type == "cuda":
-                    torch_device_module.synchronize(device)
+                if torch.device(device).type != "cpu":
+                    getattr(torch, torch.device(device).type).synchronize(device)
                 for name, parameter in self.text_encoder.named_parameters():
                     parameter.data = self.cpu_weights[name]
             self.text_encoder.to("cpu")
@@ -263,7 +263,7 @@ class LongCatImageTextEncoder:
 
         if self.cpu_offload:
             if self.cpu_weights:
-                torch_device_module.synchronize(AI_DEVICE)
+                torch_device_module.synchronize()
                 for name, parameter in self.text_encoder.named_parameters():
                     parameter.data = self.cpu_weights[name]
             self.text_encoder.to("cpu")
@@ -284,7 +284,7 @@ class LongCatImageTextEncoder:
             Tuple of (prompt_embeds, prompt_embeds_mask, image_info)
         """
         if self.cpu_offload:
-            self.text_encoder.to(AI_DEVICE)
+            self.text_encoder.to(AI_DEVICE, non_blocking=bool(self.cpu_weights))
 
         # Load processor if not already loaded
         if not hasattr(self, "processor") or self.processor is None:
@@ -363,6 +363,10 @@ class LongCatImageTextEncoder:
         prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
 
         if self.cpu_offload:
+            if self.cpu_weights:
+                torch_device_module.synchronize()
+                for name, parameter in self.text_encoder.named_parameters():
+                    parameter.data = self.cpu_weights[name]
             self.text_encoder.to("cpu")
             torch_device_module.empty_cache()
             gc.collect()
