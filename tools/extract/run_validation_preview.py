@@ -8,6 +8,7 @@ Cluster-provided rank variables are normalized for this single-process preview.
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -15,6 +16,36 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TRAIN_ROOT = ROOT / "lightx2v_train"
 TASKS = ("t2i", "i2i_single", "i2i_multi")
+
+
+def resolve_inference_config(config, model_path):
+    """Pass saved target sampling nodes to the unmodified native scheduler."""
+    config = dict(config)
+    model_path = Path(model_path)
+    scheduler = config.get("scheduler_config") or {}
+    scheduler_path = model_path / "scheduler/scheduler_config.json"
+    if not scheduler and scheduler_path.is_file():
+        scheduler = json.loads(scheduler_path.read_text())
+        config["scheduler_config"] = scheduler
+    if config.get("sigmas") is not None or scheduler.get("use_dynamic_shifting") is not False:
+        return config
+    index_path = model_path / "model_index.json"
+    sigmas = json.loads(index_path.read_text()).get("sample_sigmas") if index_path.is_file() else None
+    if sigmas is None:
+        return config
+    if scheduler.get("shift", 1.0) != 1.0 or scheduler.get("shift_terminal") is not None:
+        raise ValueError("Saved Qwen-Image-2.1 sample_sigmas require shift=1 and shift_terminal=null")
+    if (
+        not isinstance(sigmas, list)
+        or len(sigmas) != config["infer_steps"]
+        or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 1 for value in sigmas)
+        or any(left <= right for left, right in zip(sigmas, sigmas[1:]))
+    ):
+        raise ValueError("Qwen-Image-2.1 sample_sigmas must contain infer_steps finite, strictly decreasing values in (0, 1]")
+    # These nodes already include shifting; explicit user sigmas above keep
+    # their original do_time_shift behavior.
+    config.update(sigmas=sigmas, do_time_shift=False)
+    return config
 
 
 def task_group(record):
@@ -87,7 +118,7 @@ def main():
     os.environ.update(RANK="0", LOCAL_RANK="0", WORLD_SIZE="1", LOCAL_WORLD_SIZE="1")
     for key in ("model_path", "config_json", "manifest", "output_dir"):
         setattr(args, key, getattr(args, key).expanduser().absolute())
-    config = json.loads(args.config_json.read_text())
+    config = resolve_inference_config(json.loads(args.config_json.read_text()), args.model_path)
     if config.get("parallel"):
         parser.error("This single-GPU preview requires parallel=false in --config-json.")
     if args.dump_trace and config.get("enable_cfg", False):
@@ -110,10 +141,13 @@ def main():
     from lightx2v.pipeline import LightX2VPipeline
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    effective_config = args.output_dir / "inference_config.json"
+    effective_config.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     run_info = {
         "model_path": str(args.model_path),
         "manifest": str(args.manifest),
         "config_json": str(args.config_json),
+        "effective_config_json": str(effective_config),
         "config": config,
         "dtype": os.environ["DTYPE"],
         "samples": jobs,
@@ -131,7 +165,7 @@ def main():
     (args.output_dir / "requests.json").write_text(json.dumps(run_info, ensure_ascii=False, indent=2) + "\n")
     # task=None allows one runner to serve both T2I and I2I requests.
     pipe = LightX2VPipeline(task=None, model_path=str(args.model_path), model_cls="qwen_image_21")
-    pipe.create_generator(config_json=str(args.config_json))
+    pipe.create_generator(config_json=str(effective_config))
     for position, job in enumerate(jobs, start=1):
         request = job["request"]
         print(f"[{position}/{len(jobs)}] validation={job['validation_index']} {job['group']} size={request['size']} seed={request['seed']}", flush=True)

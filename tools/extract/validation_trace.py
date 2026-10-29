@@ -6,6 +6,7 @@ use the native unpatched token layout [1, tokens, channels]. The condition mask
 contains only the text/reference prefix; consumers append target image slots.
 """
 
+import os
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
@@ -49,6 +50,7 @@ def capture_validation_trace(runner, job, model_path):
         "model_path": str(model_path),
         "group": str(job["group"]),
         "torch_version": str(torch.__version__),
+        "collection_dtype": os.environ.get("DTYPE", "BF16").lower(),
         "condition": {},
         "steps": [],
     }

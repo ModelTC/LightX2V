@@ -158,6 +158,9 @@ class ModelWeights(Mapping):
     def __iter__(self):
         return iter(self.entries)
 
+    def __contains__(self, key):
+        return key in self.entries
+
     def __getitem__(self, key):
         if self.kind == "dcp":
             return self.read_many([key])[key]

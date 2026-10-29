@@ -42,7 +42,7 @@ torchrun --standalone --nproc_per_node=8 tools/extract/lora_reconstructor.py \
 
 单卡时，将 `torchrun --standalone --nproc_per_node=8` 换成 `python`，并设置 `CUDA_VISIBLE_DEVICES=0`。切换算法只需更换配置文件路径。
 
-采集时每卡独立推理，使用 block CPU offload。重建时通过 DDP 同步当前单元的 LoRA 梯度，依次加载 teacher/student 单元，无需 FSDP。各进程需要共享模型、数据和输出目录；单卡仍需容纳当前单元及其激活。
+采集时每卡独立进行 BF16 推理，使用 block CPU offload；`compute_dtype` 仅控制重建精度。重放时间步先按轨迹记录的采集精度转换并除以 1000，再转为重建精度；未记录采集精度的旧轨迹按 BF16 处理。重建时通过 DDP 同步当前单元的 LoRA 梯度，依次加载 teacher/student 单元，无需 FSDP。各进程需要共享模型、数据和输出目录；单卡仍需容纳当前单元及其激活。
 
 ## 校准数据与参数
 
@@ -68,6 +68,8 @@ torchrun --standalone --nproc_per_node=8 tools/extract/lora_reconstructor.py \
 少于 8 卡时，梯度累积次数为 `batch_size / world_size`，必须整除。训练从缓存中随机抽样，按固定 iter 优化，不按完整 epoch 遍历。时间条件重建使用采集到的时间步，加上条件分支的 `t=0`。
 
 采集要求 `target_model` 是完整推理 pipeline。如果 target 只有导出的 transformer 权重，需要另行采集并提供轨迹。采集的推理时间步应匹配 target 模型。`calibration_selection.json` 记录选中的文件及完成状态；采集未完成时，重建会报错。
+
+采集工具会自动读取关闭动态 shifting 的 target 模型中 `model_index.json` 的 `sample_sigmas`，作为固定 `sigmas` 传给公共 scheduler，并关闭再次 shift；显式配置的 `sigmas` 优先。每个采集输出目录会保留实际使用的 `inference_config.json`，原配置文件不变。
 
 ## QDrop 输入混合
 

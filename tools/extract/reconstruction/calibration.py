@@ -104,7 +104,9 @@ def worker_environment(config, local_rank, distributed):
         if name.startswith("TORCHELASTIC_") or name in ("MASTER_ADDR", "MASTER_PORT", "GROUP_RANK", "GROUP_WORLD_SIZE", "ROLE_RANK", "ROLE_WORLD_SIZE", "NODE_RANK"):
             env.pop(name)
     env.update(RANK="0", LOCAL_RANK="0", WORLD_SIZE="1", LOCAL_WORLD_SIZE="1")
-    env["DTYPE"] = "BF16" if config.compute_dtype in ("bf16", "bfloat16") else "FP32"
+    # Native inference accepts BF16/FP16 only. Reconstruction precision is
+    # independent of the BF16 target trajectories used for calibration.
+    env["DTYPE"] = "BF16"
     return env
 
 
@@ -124,6 +126,7 @@ def _collection_plan(config, world, dry_run):
     for component in ("transformer", "text_encoder", "processor", "vae", "scheduler"):
         if not (model / component).is_dir():
             raise ValueError(f"Collection needs a full target inference pipeline; missing {model / component}")
+    inference_config = preview_module().resolve_inference_config(inference_config, model)
     selection = {
         "format_version": 1,
         "complete": False,
@@ -145,6 +148,8 @@ def _collection_plan(config, world, dry_run):
         "counts": config.calibration_counts,
         "requests": len(jobs),
         "inference_steps": inference_config["infer_steps"],
+        "sigmas": inference_config.get("sigmas"),
+        "do_time_shift": inference_config.get("do_time_shift", True),
         "reconstruction_samples": len(jobs) * inference_config["infer_steps"],
         "output": str(output),
         "dry_run": dry_run,

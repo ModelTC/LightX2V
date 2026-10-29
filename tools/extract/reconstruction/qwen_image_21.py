@@ -223,6 +223,8 @@ def trace_records(trace, step_indices, compute_dtype):
     if trace.get("format_version") != 1:
         raise ValueError("Expected native validation trace format_version=1")
     condition = trace["condition"]
+    # Older traces from this collector used BF16 without recording the dtype.
+    collection_dtype = torch_dtype(trace.get("collection_dtype", "bf16").lower())
     indices = step_indices if step_indices is not None else list(range(len(trace["steps"])))
     if not indices or max(indices) >= len(trace["steps"]):
         raise ValueError("step_indices outside the captured trace")
@@ -241,6 +243,7 @@ def trace_records(trace, step_indices, compute_dtype):
             "encoder_hidden_states_mask": condition.get("prompt_embed_mask"),
             "img_mask": torch.cat((condition["image_pad_mask"], torch.ones(1, latents.shape[1] // 4, dtype=torch.bool)), dim=1),
             "img_shapes": shapes,
-            # Match native inference's low-precision timestep cast before /1000.
-            "timestep": (trace["timesteps"][step["step_index"]].to(torch_dtype(compute_dtype)) / 1000).reshape(1),
+            # Preserve the collection-time rounding before changing precision
+            # for reconstruction, including when reconstructing in FP32.
+            "timestep": (trace["timesteps"][step["step_index"]].to(collection_dtype) / 1000).to(torch_dtype(compute_dtype)).reshape(1),
         }

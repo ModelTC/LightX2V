@@ -42,7 +42,7 @@ Append an option when needed:
 
 For one GPU, replace `torchrun --standalone --nproc_per_node=8` with `python` and set `CUDA_VISIBLE_DEVICES=0`. To switch algorithms, change the config path.
 
-Collection runs independent inference workers with block CPU offload. Reconstruction uses DDP for the current unit's LoRA parameters and loads teacher/student units sequentially; it does not require FSDP. Workers need shared access to models, data and output directories. Each active unit and its activations must fit on one GPU.
+Collection runs independent BF16 inference workers with block CPU offload; `compute_dtype` controls reconstruction only. Timestep replay casts to the recorded collection dtype and divides by 1000 before converting to reconstruction precision. Older traces without dtype metadata default to BF16. Reconstruction uses DDP for the current unit's LoRA parameters and loads teacher/student units sequentially; it does not require FSDP. Workers need shared access to models, data and output directories. Each active unit and its activations must fit on one GPU.
 
 ## Calibration data and settings
 
@@ -68,6 +68,8 @@ The configs collect **512 T2I + 256 single-reference + 256 multi-reference reque
 On fewer GPUs, gradient accumulation is `batch_size / world_size`, which must be an integer. Training samples cached records randomly rather than running fixed epochs. Time reconstruction uses the observed timesteps plus condition `t=0`.
 
 Collection requires `target_model` to be a complete inference pipeline. For a transformer-only exported target, supply traces collected separately. Match the collection schedule to the target model. `calibration_selection.json` records selected files and completion status; reconstruction rejects incomplete collections.
+
+For targets with dynamic shifting disabled, the collector reads `sample_sigmas` from `model_index.json` and passes them as fixed `sigmas` to the public scheduler with shifting disabled. Explicitly configured `sigmas` take precedence. Each collection output directory retains the effective `inference_config.json`; the source config is unchanged.
 
 ## QDrop input mixing
 
