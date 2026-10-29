@@ -94,15 +94,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
 
         self.cpu_weights = {}
-        if (
-            AI_DEVICE == "cuda"
-            and self.cpu_offload
-            and self.config.get("cpu_offload", False)
-            and self.config.get("shared_cpu_weights", False)
-            and self.config["task"] == "t2i"
-            and not self.is_layered
-            and not self.config.get("qwen25vl_quantized", False)
-        ):
+        if self.cpu_offload and not self.config.get("qwen25vl_quantized", False):
             for name, parameter in self.text_encoder.named_parameters():
                 parameter.data = create_pin_tensor(parameter.data)
                 self.cpu_weights[name] = parameter.data
@@ -152,7 +144,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
     def get_image_caption(self, prompt_image):
         if self.cpu_offload:
             if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
-                self.text_encoder.to(AI_DEVICE)
+                self.text_encoder.to(AI_DEVICE, non_blocking=bool(self.cpu_weights))
 
         if self.use_en_prompt:
             prompt = self.image_caption_prompt_en
@@ -264,7 +256,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         if self.cpu_offload:
             if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
                 if self.cpu_weights:
-                    torch_device_module.synchronize(AI_DEVICE)
+                    torch_device_module.synchronize()
                     for name, parameter in self.text_encoder.named_parameters():
                         parameter.data = self.cpu_weights[name]
                 self.text_encoder.to(torch.device("cpu"))
