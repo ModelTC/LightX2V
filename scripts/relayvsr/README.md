@@ -6,7 +6,10 @@
 
 [Official RelayVSR GitHub repository](https://github.com/kopperx/RelayVSR)
 
-[relayvsr_x4 on Hugging Face](https://huggingface.co/kopper/RelayVSR)
+- Original 4× model: [kopper/RelayVSR](https://huggingface.co/kopper/RelayVSR)
+- Native 2× model trained by LightX2V: [lightx2v/RelayVSR_X2](https://huggingface.co/lightx2v/RelayVSR_X2)
+
+Download both checkpoint files for the selected variant, listed below, into the same model directory.
 
 ## Model variants
 
