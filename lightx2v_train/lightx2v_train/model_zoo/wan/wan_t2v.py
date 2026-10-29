@@ -196,7 +196,7 @@ class WanT2VModel(BaseModel):
         lora_config = LoraConfig(
             r=rank,
             lora_alpha=alpha,
-            init_lora_weights="gaussian",
+            init_lora_weights=True if self.config.get("training", {}).get("method") == "turbo" else "gaussian",
             target_modules=target_modules,
             rank_pattern=rank_pattern or {},
             alpha_pattern=alpha_pattern or {},

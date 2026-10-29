@@ -42,6 +42,7 @@ from .residual_head_training import ResidualHeadTraining
 from .runtime import _DmdRuntime
 from .score_sampling import ScoreSigmaContext, build_score_sigma_sampler
 from .student_ema import StudentWeightEMA
+from .student_warmstart import load_student_adapter, student_adapter_path
 
 
 @TRAINER_REGISTER("dmd")
@@ -122,9 +123,16 @@ class DmdTrainer(_DmdRuntime):
             self.dmd_update_order = "fake_first"
 
     def setup(self, resume_ckpt_path=None):
+        adapter_path = None
         if resume_ckpt_path is None and self.student_checkpoint_path:
-            self._load_student_checkpoint(self.student_checkpoint_path, strict=self.student_checkpoint_strict)
+            adapter_path = student_adapter_path(self.student_checkpoint_path)
+            if adapter_path is None:
+                self._load_student_checkpoint(self.student_checkpoint_path, strict=self.student_checkpoint_strict)
         super().setup(resume_ckpt_path=None)
+        if adapter_path is not None:
+            if self.student_train_type != "lora":
+                raise ValueError("A student LoRA adapter checkpoint requires training.student.train_type=lora.")
+            load_student_adapter(self.model.denoiser_module(), adapter_path, strict=self.student_checkpoint_strict)
         self._setup_fake_real_resources()
         if self.residual_head_config.enabled:
             if hasattr(self.fake_model, "residual_head_feature_dims"):

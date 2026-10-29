@@ -17,14 +17,14 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, reduce_mean
+from lightx2v_train.runtime.distributed import barrier, get_data_parallel_rank, get_data_parallel_world_size, get_world_size, is_main_process, reduce_mean
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from ..dmd.official_pdmd_core import stream_seed
 from ..dmd.trainer import DmdTrainer
 from . import core
 from .config import TurboConfig
-from .sampler import joint_like, noise_like, predict_trig, sample_turbo_latents
+from .sampler import TurboCondition, component, joint_like, modality_names, noise_like, predict_trig, sample_turbo_latents
 
 
 @TRAINER_REGISTER("turbo")
@@ -49,6 +49,8 @@ class TurboTrainer(DmdTrainer):
             "latent_dtype": "fp32",
             "model_mode": "eval",
         }
+        if self.turbo.generation_shapes is not None:
+            internal["training"]["dmd"]["generation_shapes"] = self.turbo.generation_shapes
         super().__init__(internal)
         self.consumed_microbatches = 0
         self.consumed_cm_microbatches = 0
@@ -62,6 +64,27 @@ class TurboTrainer(DmdTrainer):
 
     def set_data(self, dataloader_train, dataloader_val=None):
         super().set_data(dataloader_train, dataloader_val)
+        if self.model_config["name"] == "wan_t2v" and not hasattr(dataloader_train.sampler, "configure_from_microbatch_offset"):
+            from torch.utils.data import DataLoader
+
+            from .cursor import TurboCursorSampler
+
+            split = self.public_config["data"]["train"]
+            sampler = TurboCursorSampler(
+                dataloader_train.dataset,
+                seed=self.config.get("seed", 42),
+                shuffle=split.get("shuffle", True),
+                num_replicas=get_data_parallel_world_size(),
+                rank=get_data_parallel_rank(),
+            )
+            self.dataloader_train = DataLoader(
+                dataloader_train.dataset,
+                batch_size=1,
+                sampler=sampler,
+                num_workers=dataloader_train.num_workers,
+                pin_memory=dataloader_train.pin_memory,
+                collate_fn=dataloader_train.collate_fn,
+            )
         if self.separate_cm_data:
             from lightx2v_train.data.utils import require_singleton_dataloader
             from lightx2v_train.utils.registry import build_data
@@ -93,10 +116,10 @@ class TurboTrainer(DmdTrainer):
         if not hasattr(self, attribute):
             dataset = (self.dataloader_train if stream == "train" else self.dataloader_cm).dataset
             if not hasattr(dataset, "samples"):
-                raise ValueError("Turbo requires indexed H3 metadata samples for strict data resume")
+                raise ValueError("Turbo requires indexed metadata samples for strict data resume")
             digest = hashlib.sha256()
             for record in dataset.samples:
-                digest.update(json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+                digest.update(json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
                 digest.update(b"\n")
             setattr(self, attribute, {"rows": len(dataset.samples), "sha256": digest.hexdigest()})
         return getattr(self, attribute)
@@ -170,6 +193,26 @@ class TurboTrainer(DmdTrainer):
             self._load_resume_state(resume_ckpt_path)
         for capability in (self.student, self.fake, self.teacher):
             capability.set_training(False)
+        if getattr(self, "model_config", {}).get("name") == "wan_t2v":
+            components = {name: role.denoiser() for name, role in (("student", self.student), ("fake", self.fake), ("teacher", self.teacher))}
+            for name, wrapper in (("vae", self.model.vae), ("t5", self.model.text_encoder)):
+                if wrapper is not None:
+                    components[name] = wrapper.model
+            for name, module in components.items():
+                parameters = list(module.parameters())
+                dtypes = {parameter.dtype for parameter in parameters if parameter.is_floating_point()}
+                devices = {parameter.device for parameter in parameters}
+                if dtypes != {torch.float32} or devices != {self.model.device}:
+                    raise ValueError(f"Wan Turbo requires resident FP32 {name}; got devices={devices}, dtypes={dtypes}")
+                logger.info("[turbo] resident component={} device={} dtype=fp32 parameters={}", name, self.model.device, sum(parameter.numel() for parameter in parameters))
+
+    def run_inference(self, current_iter):
+        try:
+            return super().run_inference(current_iter)
+        finally:
+            # The shared inference runtime restores trainable parameters and
+            # training mode. Turbo's deterministic targets use eval mode.
+            self.student.set_training(False)
 
     def save_checkpoint(self, iteration, save_total_limit):
         # Only save at completed student+fake groups: no half-finished joint
@@ -220,14 +263,37 @@ class TurboTrainer(DmdTrainer):
 
     def _corrupt(self, clean, theta):
         epsilon = noise_like(clean)
-        return joint_like(clean, core.trig_corrupt(clean.video, epsilon.video, theta[0]), core.trig_corrupt(clean.audio, epsilon.audio, theta[1]))
+        return joint_like(clean, *[core.trig_corrupt(component(clean, name), component(epsilon, name), theta[i]) for i, name in enumerate(modality_names(clean))])
 
     def _weighted(self, losses):
-        return self.turbo.video_weight * losses[0] + self.turbo.audio_weight * losses[1]
+        return self.turbo.video_weight * losses[0] + (self.turbo.audio_weight * losses[1] if len(losses) > 1 else 0)
+
+    def _training_condition(self, sample):
+        condition, negative = self._encode_conditions(sample)
+        if getattr(self, "guidance_scale", 1.0) > 1:
+            if negative is None:
+                raise ValueError("Turbo CFG teacher requires an unconditional condition")
+            return TurboCondition(condition, negative)
+        return condition
+
+    def _teacher_prediction(self, state, theta, condition):
+        prediction = predict_trig(self.teacher, state, theta, condition)
+        if not isinstance(condition, TurboCondition):
+            return prediction
+        unconditional = predict_trig(self.teacher, state, theta, condition.negative)
+        return tuple(core.TrigPrediction(*(u + self.guidance_scale * (c - u) for c, u in zip(conditional, uncond, strict=True))) for conditional, uncond in zip(prediction, unconditional, strict=True))
+
+    @staticmethod
+    def _loss_metrics(prefix, losses):
+        return {f"{prefix}_{name}": loss.detach() for name, loss in zip(("video", "audio"), losses)}
 
     def _dcm_loss(self, clean, condition):
+        names = modality_names(clean)
         draw = torch.rand((), device=self.student.device, dtype=torch.float64)
-        grids = tuple(core.dcm_schedule(draw, total_steps=self.turbo.dcm_total_steps, skip_steps=self.turbo.dcm_skip_steps, shift=shift) for shift in (self.turbo.video_shift, self.turbo.audio_shift))
+        grids = tuple(
+            core.dcm_schedule(draw, total_steps=self.turbo.dcm_total_steps, skip_steps=self.turbo.dcm_skip_steps, shift=shift)
+            for shift in (self.turbo.video_shift, self.turbo.audio_shift)[: len(names)]
+        )
         theta = tuple(grid[0] for grid in grids)
         state = self._corrupt(clean, theta)
         # Evaluate the detached target first, releasing all target activations
@@ -236,44 +302,48 @@ class TurboTrainer(DmdTrainer):
             target_state = state
             for index in range(self.turbo.dcm_skip_steps):
                 times = tuple(grid[index] for grid in grids)
-                teacher = predict_trig(self.teacher, target_state, times, condition)
-                target_state = joint_like(target_state, *[core.trig_euler_step(getattr(target_state, name), teacher[i].F, times[i], grids[i][index + 1]) for i, name in enumerate(("video", "audio"))])
+                teacher = self._teacher_prediction(target_state, times, condition)
+                target_state = joint_like(target_state, *[core.trig_euler_step(component(target_state, name), teacher[i].F, times[i], grids[i][index + 1]) for i, name in enumerate(names)])
             target = predict_trig(self.student, target_state, tuple(grid[-1] for grid in grids), condition)
         prediction = predict_trig(self.student, state, theta, condition)
-        losses = tuple(core.dcm_loss(prediction[i].x0, target[i].x0, scale=self.turbo.loss_scale) for i in range(2))
-        return self._weighted(losses), {"dcm_video": losses[0].detach(), "dcm_audio": losses[1].detach()}
+        losses = tuple(core.dcm_loss(prediction[i].x0, target[i].x0, scale=self.turbo.loss_scale) for i in range(len(names)))
+        return self._weighted(losses), self._loss_metrics("dcm", losses)
 
     @torch.no_grad()
     def _trig_jvp(self, state, theta, teacher, condition):
-        tangent = tuple(core.scm_tangent(getattr(state, name), teacher[i].F, theta[i]) for i, name in enumerate(("video", "audio")))
-        inputs = tuple(core.preprocess_trig_jvp(getattr(state, name), theta[i], tangent[i][0], tangent[i][1]) for i, name in enumerate(("video", "audio")))
+        names = modality_names(state)
+        tangent = tuple(core.scm_tangent(component(state, name), teacher[i].F, theta[i]) for i, name in enumerate(names))
+        inputs = tuple(core.preprocess_trig_jvp(component(state, name), theta[i], tangent[i][0], tangent[i][1]) for i, name in enumerate(names))
+        sigmas, sigma_tangent = torch.stack([item[1] for item in inputs]).float(), torch.stack([item[3] for item in inputs]).float()
+        if torch.is_tensor(state):
+            sigmas, sigma_tangent = sigmas[0], sigma_tangent[0]
         velocity, velocity_jvp = self.student.predict_velocity_jvp(
-            joint_like(state, inputs[0][0], inputs[1][0]),
-            torch.stack((inputs[0][1], inputs[1][1])).float(),
-            condition,
-            joint_like(state, inputs[0][2], inputs[1][2]),
-            torch.stack((inputs[0][3], inputs[1][3])).float(),
+            joint_like(state, *[item[0] for item in inputs]),
+            sigmas,
+            condition.positive if isinstance(condition, TurboCondition) else condition,
+            joint_like(state, *[item[2] for item in inputs]),
+            sigma_tangent,
         )
         return tuple(
-            core.postprocess_trig_jvp(getattr(state, name), theta[i], getattr(velocity, name), tangent[i][0], tangent[i][1], getattr(velocity_jvp, name))[1].F.detach()
-            for i, name in enumerate(("video", "audio"))
+            core.postprocess_trig_jvp(component(state, name), theta[i], component(velocity, name), tangent[i][0], tangent[i][1], component(velocity_jvp, name))[1].F.detach()
+            for i, name in enumerate(names)
         )
 
     def _scm_loss(self, clean, condition, iteration):
         theta = self._times()
         state = self._corrupt(clean, theta)
         with torch.no_grad():
-            teacher = predict_trig(self.teacher, state, theta, condition)
+            teacher = self._teacher_prediction(state, theta, condition)
             jvp = self._trig_jvp(state, theta, teacher, condition)
         prediction = predict_trig(self.student, state, theta, condition)
         elapsed = iteration - self.turbo.dcm_steps
         warmup = 1.0 if not self.turbo.tangent_warmup_steps else min(1.0, max(0, elapsed) / self.turbo.tangent_warmup_steps)
         directions = tuple(
-            core.scm_direction(getattr(state, name), prediction[i].F, teacher[i].F, jvp[i], theta[i], warmup_ratio=warmup, norm_offset=self.turbo.scm_normalizer_epsilon)
-            for i, name in enumerate(("video", "audio"))
+            core.scm_direction(component(state, name), prediction[i].F, teacher[i].F, jvp[i], theta[i], warmup_ratio=warmup, norm_offset=self.turbo.scm_normalizer_epsilon)
+            for i, name in enumerate(modality_names(state))
         )
-        losses = tuple(core.scm_loss(prediction[i].F, directions[i], scale=self.turbo.loss_scale) for i in range(2))
-        return self._weighted(losses), {"scm_video": losses[0].detach(), "scm_audio": losses[1].detach(), "tangent_warmup": losses[0].new_tensor(warmup)}
+        losses = tuple(core.scm_loss(prediction[i].F, directions[i], scale=self.turbo.loss_scale) for i in range(len(directions)))
+        return self._weighted(losses), {**self._loss_metrics("scm", losses), "tangent_warmup": losses[0].new_tensor(warmup)}
 
     def _generate(self, reference, condition, *, with_grad):
         return sample_turbo_latents(
@@ -286,12 +356,12 @@ class TurboTrainer(DmdTrainer):
         with torch.no_grad():
             query = self._corrupt(generated, theta)
             fake = predict_trig(self.fake, query, theta, condition)
-            teacher = predict_trig(self.teacher, query, theta, condition)
+            teacher = self._teacher_prediction(query, theta, condition)
         losses = tuple(
-            core.dmd_loss(getattr(generated, name), fake[i].x0, teacher[i].x0, scale=self.turbo.loss_scale_dmd, normalization_floor=self.turbo.dmd_normalizer_floor)
-            for i, name in enumerate(("video", "audio"))
+            core.dmd_loss(component(generated, name), fake[i].x0, teacher[i].x0, scale=self.turbo.loss_scale_dmd, normalization_floor=self.turbo.dmd_normalizer_floor)
+            for i, name in enumerate(modality_names(generated))
         )
-        return self._weighted(losses), {"dmd_video": losses[0].detach(), "dmd_audio": losses[1].detach()}
+        return self._weighted(losses), self._loss_metrics("dmd", losses)
 
     def _critic_loss(self, clean, condition):
         with torch.no_grad():
@@ -299,14 +369,16 @@ class TurboTrainer(DmdTrainer):
             theta = self._times(score=True)
             query = self._corrupt(generated, theta)
         prediction = predict_trig(self.fake, query, theta, condition)
-        losses = tuple(core.critic_loss(getattr(generated, name), prediction[i].x0, theta[i]) for i, name in enumerate(("video", "audio")))
-        return self._weighted(losses), {"critic_video": losses[0].detach(), "critic_audio": losses[1].detach()}
+        losses = tuple(core.critic_loss(component(generated, name), prediction[i].x0, theta[i]) for i, name in enumerate(modality_names(generated)))
+        return self._weighted(losses), self._loss_metrics("critic", losses)
 
     def _noise_reference(self, sample):
         """Allocate only a geometry holder; DMD never needs a cached target."""
         from lightx2v_train.model_zoo.minimax_h3.capability_adapters.common import MiniMaxH3JointLatents
 
         shape = self._latent_shape(sample)
+        if isinstance(shape, tuple):
+            return torch.empty(shape, device=self.student.device, dtype=torch.float32)
         return MiniMaxH3JointLatents(
             torch.empty(shape.video_tokens, device=self.student.device, dtype=torch.float32),
             torch.empty(shape.audio_tokens, device=self.student.device, dtype=torch.float32),
@@ -328,8 +400,11 @@ class TurboTrainer(DmdTrainer):
             scale = self.route_loss_scale(cursor) / self.gradient_accumulation_iters
             with self._random_stream(role, iteration, substep, micro):
                 with torch.no_grad():
-                    condition, _ = self._encode_conditions(sample)
-                    clean = self.student.extract_turbo_latents(sample, self._latent_shape(sample))
+                    condition = self._training_condition(sample)
+                    if not student and getattr(self, "model_config", {}).get("name") == "wan_t2v":
+                        clean = self._noise_reference(sample)
+                    else:
+                        clean = self.student.extract_turbo_latents(sample, self._latent_shape(sample))
                 if not student:
                     yield lambda: self._critic_loss(clean, condition), scale
                 else:
@@ -346,7 +421,7 @@ class TurboTrainer(DmdTrainer):
             scale = self.cm_route_loss_scale(cursor) / self.gradient_accumulation_iters
             with self._random_stream("cm", iteration, 0, micro):
                 with torch.no_grad():
-                    condition, _ = self._encode_conditions(sample)
+                    condition = self._training_condition(sample)
                     clean = self.student.extract_turbo_latents(sample, self._latent_shape(sample))
                 yield (lambda: self._dcm_loss(clean, condition)) if stage == "dcm" else (lambda: self._scm_loss(clean, condition, iteration)), scale
             # Release CM tensors before reading the independent online batch.
@@ -358,7 +433,7 @@ class TurboTrainer(DmdTrainer):
             scale = self.route_loss_scale(cursor) / self.gradient_accumulation_iters
             with self._random_stream("student_dmd" if student else "fake", iteration, substep, micro):
                 with torch.no_grad():
-                    condition, _ = self._encode_conditions(sample)
+                    condition = self._training_condition(sample)
                     reference = self._noise_reference(sample)
                 yield (lambda: self._dmd_loss(reference, condition)) if student else (lambda: self._critic_loss(reference, condition)), scale
 
@@ -434,6 +509,10 @@ class TurboTrainer(DmdTrainer):
             )
             self.cm_route_loss_scale = getattr(cm_sampler, "cursor_microbatch_loss_scale", lambda _: 1.0)
         self.setup(resume_ckpt_path=checkpoint)
+        if getattr(self, "infer_every_iters", None):
+            self.inferencer.set_data(self.dataloader_val)
+            if iteration == 0 and getattr(self, "infer_config", {}).get("run_at_start", True):
+                self.run_inference(0)
         if is_main_process():
             Path(self.output_train_dir).mkdir(parents=True, exist_ok=True)
         barrier()
@@ -486,5 +565,7 @@ class TurboTrainer(DmdTrainer):
             if self.save_every_iters and iteration % self.save_every_iters == 0:
                 self.save_checkpoint(iteration, self.save_total_limit)
                 last_saved = iteration
+            if getattr(self, "infer_every_iters", None) and iteration % self.infer_every_iters == 0:
+                self.run_inference(iteration)
         if iteration != last_saved:
             self.save_checkpoint(iteration, self.save_total_limit)

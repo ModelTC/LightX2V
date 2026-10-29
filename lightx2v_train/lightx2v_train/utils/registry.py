@@ -106,6 +106,7 @@ _TRAINER_MODULES = {
 }
 
 _INFERENCER_MODULES = {
+    "wan_turbo_infer": "lightx2v_train.infer.turbo_video",
     "image_infer": "lightx2v_train.infer.image",
     "lingbot_video_t2v_infer": "lightx2v_train.infer.video",
     "wan_t2v_infer": "lightx2v_train.infer.video",

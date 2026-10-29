@@ -27,6 +27,7 @@ class TurboConfig:
     score_time_std: float = 1.6
     video_weight: float = 1.0
     audio_weight: float = 1.0
+    generation_shapes: list | None = None
 
     @property
     def total_steps(self):
@@ -117,8 +118,15 @@ class TurboConfig:
             value = getattr(result, name)
             if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
                 raise ValueError(f"training.turbo.{name} must be finite")
-        if config["model"].get("name") not in {"minimax_h3_t2av", "minimax_h3_ref2av"}:
-            raise ValueError("Turbo currently supports minimax_h3_t2av and minimax_h3_ref2av")
+        model_name = config["model"].get("name")
+        if model_name not in {"minimax_h3_t2av", "minimax_h3_ref2av", "wan_t2v"}:
+            raise ValueError("Turbo supports minimax_h3_t2av, minimax_h3_ref2av and non-causal wan_t2v")
+        if result.generation_shapes is not None:
+            from lightx2v_train.utils.generation_shapes import parse_generation_shapes
+
+            parse_generation_shapes(result.generation_shapes, expected_dimensions=3, config_path="training.turbo.generation_shapes")
+        if model_name == "wan_t2v" and result.generation_shapes is None:
+            raise ValueError("Wan Turbo requires training.turbo.generation_shapes")
         if "dmd" in training:
             raise ValueError("Turbo reads training.turbo, not training.dmd; remove the old PDMD options")
         cm = config.get("data", {}).get("cm")
@@ -131,8 +139,14 @@ class TurboConfig:
                 raise ValueError("Separate CM data requires per-rank batch1 and tasks=[t2av]")
             if cm.get("drop_last", False):
                 raise ValueError("Separate CM data uses continuous data epochs; data.cm.drop_last must be false")
-        if training.get("teacher", {}).get("guidance_scale", 1.0) != 1.0:
+        if model_name != "wan_t2v" and training.get("teacher", {}).get("guidance_scale", 1.0) != 1.0:
             raise ValueError("H3 Turbo uses the direct conditional teacher: guidance_scale must be 1")
+        if model_name == "wan_t2v":
+            guidance = training.get("teacher", {}).get("guidance_scale", 1.0)
+            if not isinstance(guidance, Real) or not math.isfinite(guidance) or guidance < 1:
+                raise ValueError("Wan Turbo teacher guidance_scale must be finite and >= 1")
+            if training.get("teacher", {}).get("cfg_norm", "none") != "none":
+                raise ValueError("Wan Turbo currently supports teacher cfg_norm=none")
         if config.get("scheduler", {}).get("time_shift_settings", {}).get("do_time_shift", False):
             raise ValueError("Turbo owns modality shifts; scheduler.do_time_shift must be false")
         sp = config.get("distributed", {}).get("sequence_parallel", {})
