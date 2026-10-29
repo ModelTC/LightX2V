@@ -444,7 +444,11 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
                     self.fill_condition_cache(overwrite=True)
                     if self.va_controller.recorder is not None and hasattr(self.va_controller.recorder, "emit_prompt_update"):
                         self.va_controller.recorder.emit_prompt_update(prompt)
-                    if duration > 0:
+                    # 对于 -1 的 duration，在设置全局 prompt，后续的动作类 prompt 作用结束后会恢复成这个
+                    if duration == -1:
+                        origin_text_output = self.inputs["text_encoder_output"]
+                        logger.warning(f"reset global prompt to {prompt}")
+                    elif duration > 0:
                         restore_prompt_at = chunk_idx + max(1, math.ceil(duration * FPS / FRAMES_PER_CHUNK))
                     if dist.get_rank() == 0:
                         logger.info(f"H3 prompt switched before chunk {chunk_idx}: {prompt} duration={duration} restore_prompt_at={restore_prompt_at}")
