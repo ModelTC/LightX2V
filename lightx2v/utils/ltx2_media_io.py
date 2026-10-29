@@ -231,6 +231,8 @@ def encode_video(
     output_path: str,
     video_chunks_number: int,
     video_codec_options: Mapping[str, str] | None = None,
+    *,
+    show_progress: bool = True,
 ) -> None:
     if isinstance(video, torch.Tensor):
         video = iter([video])
@@ -240,36 +242,35 @@ def encode_video(
     _, height, width, _ = first_chunk.shape
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    container = av.open(output_path, mode="w")
-    stream = container.add_stream("libx264", rate=int(fps))
-    stream.width = width
-    stream.height = height
-    stream.pix_fmt = "yuv420p"
-    if video_codec_options:
-        stream.options = dict(video_codec_options)
+    with av.open(output_path, mode="w") as container:
+        stream = container.add_stream("libx264", rate=int(fps))
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        if video_codec_options:
+            stream.options = dict(video_codec_options)
 
-    if audio is not None:
-        audio_stream = _prepare_audio_stream(container, audio.sampling_rate)
+        if audio is not None:
+            audio_stream = _prepare_audio_stream(container, audio.sampling_rate)
 
-    def all_tiles(first_chunk: torch.Tensor, tiles_generator: Generator[tuple[torch.Tensor, int], None, None]) -> Generator[tuple[torch.Tensor, int], None, None]:
-        yield first_chunk
-        yield from tiles_generator
+        def all_tiles(first_chunk: torch.Tensor, tiles_generator: Generator[tuple[torch.Tensor, int], None, None]) -> Generator[tuple[torch.Tensor, int], None, None]:
+            yield first_chunk
+            yield from tiles_generator
 
-    for video_chunk in tqdm(all_tiles(first_chunk, video), total=video_chunks_number):
-        video_chunk_cpu = video_chunk.to("cpu").numpy()
-        for frame_array in video_chunk_cpu:
-            frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
-            for packet in stream.encode(frame):
-                container.mux(packet)
+        for video_chunk in tqdm(all_tiles(first_chunk, video), total=video_chunks_number, disable=not show_progress):
+            video_chunk_cpu = video_chunk.to("cpu").numpy()
+            for frame_array in video_chunk_cpu:
+                frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
+                for packet in stream.encode(frame):
+                    container.mux(packet)
 
-    # Flush encoder
-    for packet in stream.encode():
-        container.mux(packet)
+        # Flush encoder
+        for packet in stream.encode():
+            container.mux(packet)
 
-    if audio is not None:
-        _write_audio(container, audio_stream, audio)
+        if audio is not None:
+            _write_audio(container, audio_stream, audio)
 
-    container.close()
     logger.info(f"Video saved to {output_path}")
 
 

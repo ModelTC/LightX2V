@@ -73,8 +73,13 @@ def run_edit(client: Any, args: argparse.Namespace) -> Path:
             "size": args.size,
             "response_format": args.response_format,
         }
+        extra_body = {}
+        if args.seed is not None:
+            extra_body["seed"] = args.seed
         if args.i2i_denoise_strength is not None:
-            kwargs["extra_body"] = {"i2i_denoise_strength": args.i2i_denoise_strength}
+            extra_body["i2i_denoise_strength"] = args.i2i_denoise_strength
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         if args.mask:
             mask_path = Path(args.mask)
             if not mask_path.exists():

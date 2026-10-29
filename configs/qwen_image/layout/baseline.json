@@ -8,6 +8,7 @@
   "sample_guide_scale": 4.0,
   "cpu_offload": true,
   "offload_granularity": "block",
+  "cpu_offload_block_contiguous": false,
   "qwen25vl_cpu_offload": true,
   "vae_cpu_offload": true
 }

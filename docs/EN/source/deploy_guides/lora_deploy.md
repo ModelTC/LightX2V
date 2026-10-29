@@ -84,10 +84,10 @@ LightX2V supports multiple LoRA weight naming conventions:
 
 ```bash
 # T2V LoRA Inference
-bash scripts/wan/distill/run_wan_t2v_distill_lora_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_t2v_distill_lora.sh
 
 # I2V LoRA Inference
-bash scripts/wan/distill/run_wan_i2v_distill_lora_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_i2v_distill_lora.sh
 ```
 
 ### Using LoRA in API Service

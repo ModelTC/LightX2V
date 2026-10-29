@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -86,12 +87,12 @@ class QwenImage21PreInfer:
         text = weights.txt_out.apply(F.gelu(weights.txt_in.apply(weights.txt_norm.apply(prompt)), approximate="tanh"))
         hidden = text.repeat_interleave(layout.repeats[: len(prompt)], dim=0)
         if image_latents is not None:
-            hidden[layout.image_mask[: layout.prefix_len]] = weights.img_in.apply(image_latents)
+            hidden[layout.image_mask[: layout.prefix_len]] = weights.img_in.apply(image_latents.to(GET_DTYPE()))
         return self._prepare_output(weights, hidden, hidden.new_zeros(1), layout, layout.rotary[: layout.prefix_len])
 
     def infer_target(self, weights, latents, layout):
         """Prepare only the target image at the current denoising timestep."""
-        hidden = weights.img_in.apply(latents)
+        hidden = weights.img_in.apply(latents.to(GET_DTYPE()))
         timestep = self.scheduler.timesteps[self.scheduler.step_index].reshape(1)
         return self._prepare_output(weights, hidden, timestep, layout, layout.rotary[layout.prefix_len :])
 

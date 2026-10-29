@@ -37,6 +37,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         self.config = {}
         self.default_a2a_backend = a2a_backend
 
+    def compute_stats(self, arguments, output):
+        return {"status": "composite", "note": "Ulysses组合边界不另计计算量；查看通信后各组实际attention子调用，通信/布局转换另算。"}
+
     def apply(
         self,
         q,

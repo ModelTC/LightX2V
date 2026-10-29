@@ -9,7 +9,7 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.ltx2.duration_head import LTX25DurationPredictor
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX25TextEncoder
 from lightx2v.models.networks.ltx2.ltx25_model import LTX25Model
-from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner
+from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner, _ltx2_parse_image_paths, _ltx2_resolve_pixel_frame_indices
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.ltx2.ltx25_scheduler import LTX25Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX25AudioVAE, LTX25VideoVAE
@@ -58,9 +58,11 @@ class LTX25Runner(LTX2Runner):
     def init_scheduler(self):
         self.scheduler = LTX25Scheduler(self.config)
 
-    def load_model(self):
-        super().load_model()
-        self.duration_predictor = self.load_duration_predictor()
+    def create_input_info(self, request_data):
+        input_info = super().create_input_info(request_data)
+        # Keep an absent request distinct from the profile's fixed-length fallback.
+        input_info.num_frames = request_data.get("num_frames")
+        return input_info
 
     def _video_vae_extra_kwargs(self):
         return {"optimization": "chunked_eager"}
@@ -77,8 +79,8 @@ class LTX25Runner(LTX2Runner):
         )
 
     def _resolve_num_frames(self, text_encoder_output) -> int:
-        requested = int(self.input_info.num_frames or 0)
-        if requested > 0:
+        requested = self.input_info.num_frames
+        if requested is not None:
             num_frames = requested
             source = "request"
         elif self.config.get("auto_duration", True):
@@ -171,14 +173,9 @@ class LTX25Runner(LTX2Runner):
         self.prepare_stage1_size()
         text_encoder_output = self.run_text_encoder(self.input_info)
         num_frames = self._resolve_num_frames(text_encoder_output)
-        image_paths = [path.strip() for path in (self.input_info.image_path or "").split(",") if path.strip()]
-        frame_indices = self.input_info.image_frame_indices
-        if not frame_indices:
-            if len(image_paths) <= 1:
-                frame_indices = [0] * len(image_paths)
-            else:
-                frame_indices = [round(i * (num_frames - 1) / (len(image_paths) - 1)) for i in range(len(image_paths))]
-        guiding_keyframes = sum(int(frame_idx) != 0 for frame_idx in frame_indices)
+        image_paths = _ltx2_parse_image_paths(self.input_info.image_path or "")
+        frame_indices = _ltx2_resolve_pixel_frame_indices(self.input_info.image_frame_indices, len(image_paths), num_frames)
+        guiding_keyframes = sum(frame_idx != 0 for frame_idx in frame_indices)
         self._validate_sequence_parallel_shape(num_frames, guiding_keyframes)
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         self.video_denoise_mask, self.initial_video_latent = self.run_vae_encoder()

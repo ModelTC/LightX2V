@@ -54,11 +54,7 @@ class WanStepDistillScheduler(WanScheduler):
 
 
 class Wan21MeanFlowStepDistillScheduler(WanStepDistillScheduler):
-    def __init__(self, config):
-        super().__init__(config)
-
     def step_pre(self, step_index):
         super().step_pre(step_index)
-        self.timestep_input = torch.stack([self.timesteps[self.step_index]])
         t_next = self.timesteps[self.step_index + 1] if self.step_index < self.infer_steps - 1 else torch.zeros_like(self.timestep_input)
         self.timestep_input_r = torch.stack([t_next])

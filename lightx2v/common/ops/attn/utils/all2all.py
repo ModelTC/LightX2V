@@ -100,6 +100,30 @@ def all2all_seq2head(input, group=None, quant_scheme=None):
     return output  # 返回转换后的输出张量
 
 
+def all2all_seq2head_qkv(query, key, value, group=None):
+    """Exchange equal-shaped Q/K/V together, retaining contiguous outputs.
+
+    The payload groups heads by destination rank before grouping Q/K/V. A
+    plain concatenation of all query heads followed by key/value heads would
+    send different tensor kinds to different ranks.
+    """
+    if query.ndim != 3 or query.shape != key.shape or query.shape != value.shape:
+        raise ValueError("QKV exchange requires equal [tokens, heads, dim] shapes")
+    if query.dtype != key.dtype or query.dtype != value.dtype or query.device != key.device or query.device != value.device:
+        raise ValueError("QKV exchange requires matching dtypes and devices")
+    world_size = dist.get_world_size(group=group)
+    tokens, heads, dim = query.shape
+    if heads % world_size:
+        raise ValueError("Attention heads must be divisible by the sequence-parallel group size")
+    local_heads = heads // world_size
+    packed = torch.stack(tuple(tensor.reshape(tokens, world_size, local_heads, dim).transpose(0, 1) for tensor in (query, key, value)), dim=2)
+    received = torch.empty_like(packed)
+    dist.all_to_all_single(received, packed, group=group)
+    # [source rank, tokens, QKV, local heads, dim] -> three contiguous tensors.
+    unpacked = received.permute(2, 0, 1, 3, 4).contiguous().flatten(1, 2)
+    return tuple(unpacked.unbind(0))
+
+
 def all2all_head2seq(input, group=None):
     """
     将输入张量从 [seq_len, heads/N, hidden_dims] 转换为 [seq_len/N, heads, hidden_dims] 的格式。

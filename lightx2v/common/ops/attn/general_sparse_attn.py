@@ -13,8 +13,14 @@ class GeneralSparseAttnWeight(AttnWeightTemplate):
     operator_setting = {}
     attnmap_frame_num = None
 
-    def __init__(self):
+    def __init__(self, *, sparse_mask_generator=None, sparse_operator=None, sparse_setting=None):
         self.config = {}
+        if sparse_mask_generator is not None:
+            self.sparse_mask_generator = sparse_mask_generator
+        if sparse_operator is not None:
+            self.sparse_operator = sparse_operator
+        if sparse_setting is not None:
+            self.sparse_setting = sparse_setting
 
         self._setup_operator()
         self._setup_mask_generator()

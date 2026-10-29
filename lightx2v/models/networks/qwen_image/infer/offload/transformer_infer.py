@@ -1,6 +1,8 @@
 import torch
 
+from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.common.offload.resident import ResidentBlocks, uniform_resident_indices, validate_residency_config
 from lightx2v.models.networks.qwen_image.infer.transformer_infer import (
     QwenImageTransformerInfer,
 )
@@ -9,9 +11,21 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
+def validate_qwen_residency_config(config):
+    if "offload_resident_blocks" not in config:
+        return
+    uniform_resident_indices(config["num_layers"], config["offload_resident_blocks"])
+    if config["model_cls"] != "qwen_image" or config["task"] != "t2i" or config.get("layered", False):
+        raise ValueError("Static Qwen residency currently supports Qwen Image t2i")
+    validate_residency_config(config)
+    if config.get("use_magi_compile", False) or config.get("zero_cond_t", False) or config.get("use_layer3d_rope", False):
+        raise ValueError("Static Qwen residency requires eager execution with standard t2i conditioning and RoPE")
+
+
 class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
+        self.resident_blocks = None
         self.num_blocks = config["num_layers"]
         self.phases_num = 4
         if self.config.get("cpu_offload", False):
@@ -19,7 +33,11 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
             offload_granularity = self.config.get("offload_granularity", "block")
             if offload_granularity == "block":
                 self.infer_func = self.infer_with_blocks_offload
-                self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
+                if "offload_resident_blocks" in config:
+                    self.offload_manager = EventSlotWeightAsyncStreamManager(offload_granularity)
+                    self.resident_blocks = ResidentBlocks(config["offload_resident_blocks"])
+                else:
+                    self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
             elif offload_granularity == "phase":
                 self.infer_func = self.infer_with_phases_offload
                 self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
@@ -145,6 +163,25 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
         image_rotary_positions,
         modulate_index,
     ):
+        if self.resident_blocks is not None:
+            self.resident_blocks.prepare(blocks)
+
+            def run_block(index, block, state):
+                text, image = state
+                return self.run_block(index, block, image, text, temb_img_silu, temb_txt_silu, image_rotary_emb, image_rotary_positions, modulate_index)
+
+            # Keep caller-owned inputs alive until their compute-stream consumers finish.
+            for tensor in (hidden_states, encoder_hidden_states, temb_img_silu, temb_txt_silu, *image_rotary_emb, *image_rotary_positions, modulate_index):
+                if tensor is not None:
+                    tensor.record_stream(self.offload_manager.compute_stream)
+            try:
+                encoder_hidden_states, hidden_states = self.offload_manager.run_blocks(blocks, self.resident_blocks.indices, (encoder_hidden_states, hidden_states), run_block)
+            except BaseException:
+                self.release_resident_blocks()
+                raise
+            hidden_states.record_stream(torch_device_module.current_stream())
+            return hidden_states
+
         self.offload_manager.compute_stream.wait_stream(torch_device_module.current_stream())
         for block_idx in range(self.num_blocks):
             if self.lazy_load:
@@ -174,3 +211,8 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
             self.offload_manager.swap_blocks()
 
         return hidden_states
+
+    def release_resident_blocks(self):
+        if self.resident_blocks is not None:
+            self.resident_blocks.release()
+            self.offload_manager.reset_slots()

@@ -1,427 +1,259 @@
+from dataclasses import replace
+from itertools import product
+from typing import NamedTuple
+
 import torch
 
 from .base import BaseKVCachePool
-from .utils import _kvcache_dma_stream_priority
+from .layout import KVCacheUpdate, RingLayout
+from .slot import SlotMetadata
+
+
+class RingKVCacheView(NamedTuple):
+    key: torch.Tensor
+    value: torch.Tensor
+    slot_metadata: torch.Tensor
+    visible_tokens: int
+
+    @property
+    def bindings(self) -> tuple[torch.Tensor, ...]:
+        return self.key, self.value, self.slot_metadata
 
 
 class RollingKVCachePool(BaseKVCachePool):
-    """Rolling KV cache implemented as sink-fixed + recent-ring buffer.
+    """KV storage with a fixed sink and a ring of recent tokens."""
 
-    Logical layout exposed to callers is unchanged:
-        [0 : local_end) == [sink fixed][recent logical window]
-
-    Physical layout after the first roll becomes:
-        [sink fixed][recent ring]
-
-    ``roll_window`` never copies the kept recent window. It only advances the
-    recent ring head and shrinks recent_len. ``k_cache`` / ``v_cache`` return a
-    contiguous logical tensor, concatenating at most two recent ring fragments.
-
-    """
-
-    def __init__(
-        self,
-        num_layers: int,
-        cache_size: int,
-        num_heads: int,
-        head_dim: int,
-        dtype: torch.dtype,
-        device: torch.device,
-        *,
-        kv_offload: bool = False,
-    ) -> None:
-        self._kv_offload = kv_offload
+    def __init__(self, num_layers: int, cache_size: int, num_heads: int, head_dim: int, dtype: torch.dtype, device: torch.device) -> None:
         super().__init__(num_layers, cache_size, num_heads, head_dim, dtype, device)
+        self._write_metadata = None
+        self._attention_views = {}
+        self._attention_layouts = {}
+        self.key_only = False
+        self.quantized_only = False
+        self.value_write_alignment = ()
 
-    # ---------------------------------------------------------------------
-    # Ring metadata helpers
-    # ---------------------------------------------------------------------
-    def _ring_shape(self):
+    def configure_quantized_only(self, *, write_alignment=()) -> None:
+        """Keep ring positions only; the pre-RoPE attention owns encoded K/V."""
+        if self._k_buffer is not None or bool(getattr(self, "_k_buckets", None)) or getattr(self, "_offload", None) is not None:
+            raise RuntimeError("Configure encoded KV storage before allocating the cache")
+        self.configure_key_only(write_alignment=write_alignment)
+        self.quantized_only = True
+
+    def configure_key_only(self, *, write_alignment=()) -> None:
+        """Keep raw K only; the attention backend owns persistent encoded V."""
+        alignment = tuple(int(tokens) for tokens in write_alignment if tokens)
+        if any(tokens <= 0 for tokens in alignment):
+            raise ValueError("Quantized V write alignment must be positive")
+        allocated = self._k_buffer is not None or bool(getattr(self, "_k_buckets", None)) or getattr(self, "_offload", None) is not None
+        if self.key_only:
+            if alignment and self.value_write_alignment != alignment and (self.value_write_alignment or allocated):
+                raise ValueError("Cannot change quantized V geometry on an existing pool")
+            if alignment:
+                self.value_write_alignment = alignment
+            return
+        if allocated:
+            raise RuntimeError("Configure quantized V storage before allocating the cache")
+        self.key_only = True
+        self.value_write_alignment = alignment
+
+    def _metadata_shape(self) -> tuple[int, ...]:
         return (self._num_layers,)
 
-    def _meta_idx(self, layer_id: int):
-        return int(layer_id)
+    def _metadata_index(self, layer_id: int) -> tuple[int, ...]:
+        return (layer_id,)
 
-    def _init_ring_metadata(self) -> None:
-        shape = self._ring_shape()
-        self._ring_active = torch.zeros(shape, dtype=torch.bool, device="cpu")
-        self._ring_sink = torch.zeros(shape, dtype=torch.long, device="cpu")
-        self._ring_head = torch.zeros(shape, dtype=torch.long, device="cpu")
-        self._ring_recent_len = torch.zeros(shape, dtype=torch.long, device="cpu")
+    def _init_cache_metadata(self) -> None:
+        self._attention_layouts.clear()
+        shape = self._metadata_shape()
+        self._global_end = torch.zeros(shape, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(shape, dtype=torch.long, device="cpu")
+        self._ring_layouts = {index: RingLayout(self.get_max_cache_shape(index[-1])) for index in product(*(range(size) for size in shape))}
 
-    def _is_ring_active(self, layer_id: int) -> bool:
-        return bool(self._ring_active[self._meta_idx(layer_id)].item())
+    def ring_layout(self, layer_id: int) -> RingLayout:
+        return self._ring_layouts[self._metadata_index(layer_id)]
 
-    def _ring_get(self, layer_id: int) -> tuple[bool, int, int, int]:
-        idx = self._meta_idx(layer_id)
-        return (
-            bool(self._ring_active[idx].item()),
-            int(self._ring_sink[idx].item()),
-            int(self._ring_head[idx].item()),
-            int(self._ring_recent_len[idx].item()),
-        )
-
-    def _ring_set(self, layer_id: int, *, active: bool, sink: int, head: int, recent_len: int) -> None:
-        idx = self._meta_idx(layer_id)
-        self._ring_active[idx] = bool(active)
-        self._ring_sink[idx] = int(sink)
-        self._ring_head[idx] = int(head)
-        self._ring_recent_len[idx] = int(recent_len)
-
-    def cache_size_for_layer(self, layer_id: int) -> int:
+    def get_max_cache_shape(self, layer_id: int) -> int:
         return self._cache_size
 
-    def _ensure_ring_active(self, layer_id: int, sink_tokens: int) -> None:
-        active, sink, head, recent_len = self._ring_get(layer_id)
-        local_end = self.get_local_end(layer_id)
-        if active:
-            if sink != int(sink_tokens):
-                raise RuntimeError(f"ring sink changed for layer {layer_id}: old={sink}, new={sink_tokens}")
-            return
-        sink = int(sink_tokens)
-        cache_size = self.cache_size_for_layer(layer_id)
-        if sink < 0 or sink >= cache_size:
-            raise RuntimeError(f"invalid sink_tokens={sink}, cache_size={cache_size}")
-        recent_len = max(0, int(local_end) - sink)
-        if recent_len > cache_size - sink:
-            raise RuntimeError("recent_len exceeds recent ring capacity")
-        self._ring_set(layer_id, active=True, sink=sink, head=0, recent_len=recent_len)
+    def _key_buffer(self, layer_id: int) -> torch.Tensor:
+        if self.quantized_only:
+            return self._k_buffer
+        return self._k_buffer[self._metadata_index(layer_id)]
 
-    def _recent_capacity(self, sink: int) -> int:
-        cap = self._cache_size - int(sink)
-        if cap <= 0:
-            raise RuntimeError(f"invalid recent capacity: cache_size={self._cache_size}, sink={sink}")
-        return cap
+    def _value_buffer(self, layer_id: int) -> torch.Tensor:
+        if self.key_only:
+            return self._v_buffer
+        return self._v_buffer[self._metadata_index(layer_id)]
 
-    def _recent_capacity_for_layer(self, layer_id: int, sink: int) -> int:
-        cache_size = self.cache_size_for_layer(layer_id)
-        cap = cache_size - int(sink)
-        if cap <= 0:
-            raise RuntimeError(f"invalid recent capacity: cache_size={cache_size}, sink={sink}")
-        return cap
+    def _init_kv_buffer(self) -> None:
+        shape = (*self._metadata_shape(), self._cache_size, self._num_heads, self._head_dim)
+        self._k_buffer = torch.empty((0, self._num_heads, self._head_dim) if self.quantized_only else shape, dtype=self._dtype, device=self._device)
+        self._v_buffer = torch.empty(0, dtype=self._dtype, device=self._device) if self.key_only else torch.empty_like(self._k_buffer)
+        self._init_cache_metadata()
 
-    def _logical_chunks(self, layer_id: int, start: int, end: int) -> list[tuple[int, int, int]]:
-        """Return logical->physical chunks as ``(logical_start, physical_start, length)``.
-
-        Chunks are returned in logical order. They address the physical full CPU
-        cache layout, not the GPU offload window.
-        """
-        start, end = int(start), int(end)
-        if end <= start:
-            return []
-        active, sink, head, recent_len = self._ring_get(layer_id)
-        if not active:
-            return [(start, start, end - start)]
-
-        chunks: list[tuple[int, int, int]] = []
-        # Fixed sink part.
-        if start < sink:
-            s0, e0 = start, min(end, sink)
-            if e0 > s0:
-                chunks.append((s0, s0, e0 - s0))
-
-        # Recent ring part. Logical recent offset is compacted after rolling:
-        # logical token sink + off maps to physical sink + ((head + off) % cap).
-        r0 = max(start, sink)
-        r1 = end
-        if r1 > r0:
-            cap = self._recent_capacity_for_layer(layer_id, sink)
-            off = r0 - sink
-            length = r1 - r0
-            if off + length > cap:
-                raise RuntimeError(f"logical range [{start}, {end}) exceeds ring capacity; sink={sink}, cap={cap}")
-            pos = (head + off) % cap
-            first = min(length, cap - pos)
-            chunks.append((r0, sink + pos, first))
-            if first < length:
-                chunks.append((r0 + first, sink, length - first))
-        return chunks
-
-    # ---------------------------------------------------------------------
-    # Buffer accessors. Step/spatial variants override these.
-    # ---------------------------------------------------------------------
-    def _k_layer(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._k_gpu_buf
-        return self._k_buffer[layer_id]
-
-    def _v_layer(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._v_gpu_buf
-        return self._v_buffer[layer_id]
-
-    def _k_cpu_layer(self, layer_id: int) -> torch.Tensor:
-        return self._k_cpu[layer_id]
-
-    def _v_cpu_layer(self, layer_id: int) -> torch.Tensor:
-        return self._v_cpu[layer_id]
-
-    # ---------------------------------------------------------------------
-    # Init / offload setup
-    # ---------------------------------------------------------------------
-    def _init_kv_buffer(self):
-        if self._kv_offload:
-            self._init_kv_buffer_offload()
-            return
-        super()._init_kv_buffer()
-        self._global_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
-        self._local_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
-        self._init_ring_metadata()
-
-    def _init_kv_buffer_offload(self) -> None:
-        from loguru import logger
-
-        L, N, H, D = self._num_layers, self._cache_size, self._num_heads, self._head_dim
-        d = self._device
-
-        # CPU pinned buffers hold the authoritative per-layer physical ring; a
-        # single GPU staging buffer holds the layer currently being computed.
-        self._k_cpu = torch.empty(L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._v_cpu = torch.empty(L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._k_gpu_buf = torch.empty(N, H, D, dtype=self._dtype, device=d)
-        self._v_gpu_buf = torch.empty(N, H, D, dtype=self._dtype, device=d)
-
-        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
-        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
-        self._init_ring_metadata()
-        self._init_offload_state((L,))
-
-        gpu_mb = (self._k_gpu_buf.nbytes + self._v_gpu_buf.nbytes) / (1024 * 1024)
-        cpu_mb = (self._k_cpu.nbytes + self._v_cpu.nbytes) / (1024 * 1024)
-        logger.info(
-            "[{}+offload] GPU staging layer: {:.1f} MB, CPU pinned: {:.1f} MB",
-            self.__class__.__name__,
-            gpu_mb,
-            cpu_mb,
-        )
-
-    def _make_event_tree(self, shape: tuple[int, ...]):
-        if len(shape) == 1:
-            return [torch.cuda.Event() for _ in range(shape[0])]
-        return [self._make_event_tree(shape[1:]) for _ in range(shape[0])]
-
-    def _flatten_events(self, events) -> list[torch.cuda.Event]:
-        out: list[torch.cuda.Event] = []
-        for event in events:
-            if isinstance(event, torch.cuda.Event):
-                out.append(event)
-            else:
-                out.extend(self._flatten_events(event))
-        return out
-
-    def _offload_index(self, layer_id: int) -> tuple[int, ...]:
-        return (int(layer_id),)
-
-    def _cpu_update_event(self, layer_id: int) -> torch.cuda.Event:
-        event = self._cpu_update_done
-        for idx in self._offload_index(layer_id):
-            event = event[idx]
-        return event
-
-    def _offload_events(self) -> list[torch.cuda.Event]:
-        return [self._load_done, self._staging_free, *self._flatten_events(self._cpu_update_done)]
-
-    def _init_offload_state(self, event_shape: tuple[int, ...]) -> None:
-        pr = _kvcache_dma_stream_priority()
-        self._prefetch_stream = torch.cuda.Stream(device=self._device, priority=pr)
-        self._load_done = torch.cuda.Event()
-        # Single GPU staging buffer is shared across layers; this event marks
-        # that the compute stream has finished reading the currently-loaded
-        # layer, so the prefetch stream may safely overwrite the buffer.
-        self._staging_free = torch.cuda.Event()
-        self._cpu_update_done = self._make_event_tree(event_shape)
-        self._loaded_layer = -1
-        cur = torch.cuda.current_stream()
-        for event in self._offload_events():
-            event.record(cur)
-
-    def _reset_offload_state(self) -> None:
-        self._loaded_layer = -1
-        cur = torch.cuda.current_stream()
-        for event in self._offload_events():
-            event.record(cur)
-
-    def _record_cpu_update(self, layer_id: int) -> None:
-        self._cpu_update_event(layer_id).record(torch.cuda.current_stream())
-
-    def _copy_layer_to_gpu(self, layer_id: int) -> None:
-        self._k_gpu_buf.copy_(self._k_cpu_layer(layer_id), non_blocking=True)
-        self._v_gpu_buf.copy_(self._v_cpu_layer(layer_id), non_blocking=True)
-
-    def _prefetch_layer(self, layer_id: int) -> None:
-        if layer_id >= self._num_layers:
-            return
-        with torch.cuda.stream(self._prefetch_stream):
-            # CPU authoritative buffer for this layer must be up to date, and
-            # the compute stream must be done reading the staging buffer's
-            # previous contents before we overwrite the single shared buffer.
-            self._prefetch_stream.wait_event(self._cpu_update_event(layer_id))
-            self._prefetch_stream.wait_event(self._staging_free)
-            self._copy_layer_to_gpu(layer_id)
-            self._load_done.record(self._prefetch_stream)
-        self._loaded_layer = int(layer_id)
-
-    def _check_layer_loaded(self, layer_id: int) -> None:
-        if self._kv_offload and self._loaded_layer != int(layer_id):
-            raise RuntimeError(f"cache layer {layer_id} requested but GPU buffer holds layer {self._loaded_layer}")
+    def _check_resident_layer(self, layer_id: int) -> None:
+        pass
 
     def prefetch_initial(self, layer_ids: list[int]) -> None:
-        if not self._kv_offload:
-            return
-        first_layer = int(layer_ids[0]) if layer_ids else 0
-        self._prefetch_layer(first_layer)
+        pass
 
     def begin_layer(self, layer_id: int) -> None:
-        """Wait until the single GPU staging buffer holds ``layer_id``."""
-        if not self._kv_offload:
-            return
-        layer_id = int(layer_id)
-        if self._loaded_layer != layer_id:
-            self._prefetch_layer(layer_id)
-        torch.cuda.current_stream().wait_event(self._load_done)
+        pass
 
     def end_layer(self, layer_id: int, next_prefetch: int | None = None) -> None:
-        """CPU cache is updated directly by ``store_kv``; prefetch the next layer."""
-        if not self._kv_offload:
-            return
-        # All compute-stream work that reads the staging buffer for this layer
-        # (store + attention) is now enqueued; let the prefetch overwrite it.
-        self._staging_free.record(torch.cuda.current_stream())
-        next_layer = int(layer_id) + 1 if next_prefetch is None else int(next_prefetch)
-        self._prefetch_layer(next_layer)
+        pass
+
+    def finish_attention(self, layer_id: int, update: KVCacheUpdate, *, sink_tokens: int = 0) -> None:
+        """Persist writes made directly through a physical attention view."""
+        pass
 
     def sync_all(self) -> None:
-        if not self._kv_offload:
-            return
-        self._prefetch_stream.synchronize()
-        torch.cuda.current_stream().synchronize()
+        pass
 
-    # ---------------------------------------------------------------------
-    # Store / read / roll
-    # ---------------------------------------------------------------------
-    def _update_ring_len_after_store(self, layer_id: int, end_idx: int) -> None:
-        active, sink, head, recent_len = self._ring_get(layer_id)
-        if not active:
-            return
-        if end_idx > sink:
-            new_recent_len = max(recent_len, int(end_idx) - sink)
-            cap = self._recent_capacity_for_layer(layer_id, sink)
-            if new_recent_len > cap:
-                raise RuntimeError(f"recent ring overflow: recent_len={new_recent_len}, capacity={cap}")
-            self._ring_set(layer_id, active=True, sink=sink, head=head, recent_len=new_recent_len)
+    def update(self, key_states: torch.Tensor, value_states: torch.Tensor, layer_idx: int, cache_update: KVCacheUpdate) -> tuple[torch.Tensor, torch.Tensor]:
+        """Write a chunk, advance its positions, and return the visible attention KV."""
+        self.update_kv(key_states, value_states, layer_idx, cache_update)
+        return self.get_kv_cache(layer_idx, cache_update.attention_start, cache_update.write_end)
 
-    def store_kv(
-        self,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        start_idx: int,
-        end_idx: int,
-        layer_id: int,
-    ) -> None:
+    def update_kv(self, key_states: torch.Tensor, value_states: torch.Tensor, layer_idx: int, cache_update: KVCacheUpdate) -> None:
+        """Write a chunk and advance its positions without materializing a read."""
+        if cache_update.evicted_tokens:
+            self.roll_window(layer_idx, cache_update.sink_tokens, cache_update.evicted_tokens)
+        self.begin_layer(layer_idx)
+        self.store_kv(key_states, value_states, cache_update.write_start, cache_update.write_end, layer_idx)
+        self.set_ends(layer_idx, cache_update.global_end, cache_update.write_end)
+
+    def get_kv_cache(self, layer_idx: int, start: int, end: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.k_cache(layer_idx, start, end), self.v_cache(layer_idx, start, end)
+
+    def store_kv(self, k: torch.Tensor, v: torch.Tensor, start_idx: int, end_idx: int, layer_id: int) -> None:
+        if self.key_only:
+            raise RuntimeError("Raw-value writes are unavailable for a quantized-V cache; use its attention backend")
         if end_idx <= start_idx:
             return
-        self._check_layer_loaded(layer_id)
-        kb, vb = self._k_layer(layer_id), self._v_layer(layer_id)
-        kcpu = self._k_cpu_layer(layer_id) if self._kv_offload else None
-        vcpu = self._v_cpu_layer(layer_id) if self._kv_offload else None
-        for logical_s, phys_s, n in self._logical_chunks(layer_id, start_idx, end_idx):
-            ks = logical_s - start_idx
-            ke = ks + n
-            kb[phys_s : phys_s + n].copy_(k[ks:ke])
-            vb[phys_s : phys_s + n].copy_(v[ks:ke])
-            if self._kv_offload:
-                kcpu[phys_s : phys_s + n].copy_(k[ks:ke], non_blocking=True)
-                vcpu[phys_s : phys_s + n].copy_(v[ks:ke], non_blocking=True)
-        self._update_ring_len_after_store(layer_id, end_idx)
-        if self._kv_offload:
-            self._record_cpu_update(layer_id)
+        self._check_resident_layer(layer_id)
+        layout = self.ring_layout(layer_id)
+        spans = layout.spans(start_idx, end_idx)
+        for span in spans:
+            source_start = span.logical_start - start_idx
+            source_end = source_start + span.length
+            physical_end = span.physical_start + span.length
+            self._key_buffer(layer_id)[span.physical_start : physical_end].copy_(k[source_start:source_end])
+            self._value_buffer(layer_id)[span.physical_start : physical_end].copy_(v[source_start:source_end])
+        layout.record_write(end_idx)
 
-    def _read_logical(self, layer_id: int, attn_start: int, local_end: int, which: str) -> torch.Tensor:
-        self._check_layer_loaded(layer_id)
-        base = self._k_layer(layer_id) if which == "k" else self._v_layer(layer_id)
-        chunks = self._logical_chunks(layer_id, attn_start, local_end)
-        if not chunks:
-            return torch.empty(0, self._num_heads, self._head_dim, device=self._device, dtype=self._dtype)
-        parts = [base[p : p + n] for _, p, n in chunks]
+    def prepare_attention(self, layer_id: int, update: KVCacheUpdate) -> RingKVCacheView:
+        self._ensure_kv_buffer()
+        self.initialize_slot_metadata()
+        self.begin_layer(layer_id)
+        if update.evicted_tokens:
+            self.roll_window(layer_id, update.sink_tokens, update.evicted_tokens)
+        self.prepare_slot_write(layer_id, update.write_start, update.write_end)
+        self.set_ends(layer_id, update.global_end, update.write_end)
+        self._attention_layouts[self._metadata_index(layer_id)] = self.ring_layout(layer_id)
+        return self._attention_view(layer_id, update.write_end)
+
+    def prepare_pending_attention(self, layer_id: int, update: KVCacheUpdate) -> RingKVCacheView:
+        """Prepare a denoising write without committing the cache positions."""
+        self._ensure_kv_buffer()
+        self.initialize_slot_metadata()
+        self.begin_layer(layer_id)
+        layout = replace(self.ring_layout(layer_id))
+        layout.roll(update.sink_tokens, update.evicted_tokens, self.get_valid_length(layer_id))
+        index = self._metadata_index(layer_id)
+        self._write_metadata.prepare(index, update.write_start, layout.sink_tokens, layout.recent_head)
+        self._attention_layouts[index] = layout
+        return self._attention_view(layer_id, update.write_end)
+
+    def _attention_view(self, layer_id: int, visible_tokens: int) -> RingKVCacheView:
+        index = self._metadata_index(layer_id)
+        key, value = self._key_buffer(layer_id), self._value_buffer(layer_id)
+        cached = self._attention_views.get(index)
+        if cached is None or cached[0].data_ptr() != key.data_ptr() or cached[1].data_ptr() != value.data_ptr():
+            # Independent storage descriptors keep AOT mutation offsets local to the layer.
+            cached = torch.from_dlpack(key), torch.from_dlpack(value)
+            self._attention_views[index] = cached
+        return RingKVCacheView(*cached, self.slot_metadata[index], visible_tokens)
+
+    def write_views(self, layer_id: int, start: int, end: int) -> tuple[torch.Tensor, ...]:
+        """Physical write destinations to preserve during graph capture."""
+        if self.quantized_only:
+            return ()
+        self._check_resident_layer(layer_id)
+        layout = self._attention_layouts.get(self._metadata_index(layer_id), self.ring_layout(layer_id))
+        buffers = (self._key_buffer(layer_id),) if self.key_only else (self._key_buffer(layer_id), self._value_buffer(layer_id))
+        return tuple(buffer[span.physical_start : span.physical_start + span.length] for span in layout.spans(start, end) for buffer in buffers)
+
+    def _read_logical(self, buffer: torch.Tensor, layer_id: int, start: int | None, end: int | None, out: torch.Tensor | None) -> torch.Tensor:
+        self._check_resident_layer(layer_id)
+        if start is None and end is None:
+            start, end = 0, self.get_valid_length(layer_id)
+        spans = self.ring_layout(layer_id).spans(start, end)
+        if out is not None:
+            for span in spans:
+                offset = span.logical_start - start
+                out[offset : offset + span.length].copy_(buffer[span.physical_start : span.physical_start + span.length])
+            return out
+        if not spans:
+            return buffer[:0]
+        parts = [buffer[span.physical_start : span.physical_start + span.length] for span in spans]
         return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
 
-    def k_cache(
-        self,
-        layer_id: int,
-        attn_start: int | None = None,
-        local_end: int | None = None,
-    ) -> torch.Tensor:
-        if attn_start is None and local_end is None:
-            attn_start, local_end = 0, self.get_local_end(layer_id)
-        return self._read_logical(layer_id, int(attn_start), int(local_end), "k")
+    def k_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None, out: torch.Tensor | None = None) -> torch.Tensor:
+        if self.quantized_only:
+            raise RuntimeError("K is encoded in the attention cache; no raw K cache exists")
+        return self._read_logical(self._key_buffer(layer_id), layer_id, attn_start, local_end, out)
 
-    def v_cache(
-        self,
-        layer_id: int,
-        attn_start: int | None = None,
-        local_end: int | None = None,
-    ) -> torch.Tensor:
-        if attn_start is None and local_end is None:
-            attn_start, local_end = 0, self.get_local_end(layer_id)
-        return self._read_logical(layer_id, int(attn_start), int(local_end), "v")
+    def v_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None, out: torch.Tensor | None = None) -> torch.Tensor:
+        if self.key_only:
+            raise RuntimeError("V is encoded in the attention cache; no raw V cache exists")
+        return self._read_logical(self._value_buffer(layer_id), layer_id, attn_start, local_end, out)
 
-    def get_global_end(self, layer_id: int) -> int:
-        return int(self._global_end[layer_id].item())
+    def initialize_slot_metadata(self) -> None:
+        if self._write_metadata is None:
+            self._write_metadata = SlotMetadata(self._metadata_shape(), self._device)
 
-    def get_local_end(self, layer_id: int) -> int:
-        return int(self._local_end[layer_id].item())
+    def prepare_slot_write(self, layer_id: int, start: int, end: int) -> None:
+        layout = self.ring_layout(layer_id)
+        if not 0 <= start <= end <= layout.capacity:
+            raise ValueError(f"write [{start}, {end}) exceeds layer {layer_id} capacity")
+        self._write_metadata.prepare(self._metadata_index(layer_id), start, layout.sink_tokens, layout.recent_head)
+        layout.record_write(end)
+
+    def upload_write_metadata(self) -> None:
+        self._write_metadata.upload()
+
+    @property
+    def slot_metadata(self) -> torch.Tensor:
+        return self._write_metadata.metadata
+
+    def get_seq_length(self, layer_id: int) -> int:
+        """Cumulative processed tokens, including tokens evicted from the window."""
+        return int(self._global_end[self._metadata_index(layer_id)].item())
+
+    def get_valid_length(self, layer_id: int) -> int:
+        """Tokens currently stored in the bounded cache window."""
+        return int(self._local_end[self._metadata_index(layer_id)].item())
 
     def set_ends(self, layer_id: int, global_end: int, local_end: int) -> None:
-        self._global_end[layer_id] = int(global_end)
-        self._local_end[layer_id] = int(local_end)
+        index = self._metadata_index(layer_id)
+        self._global_end[index] = global_end
+        self._local_end[index] = local_end
 
     def roll_window(self, layer_id: int, sink_tokens: int, num_evicted: int) -> None:
-        if num_evicted <= 0:
-            return
-        self._ensure_ring_active(layer_id, sink_tokens)
-        active, sink, head, recent_len = self._ring_get(layer_id)
-        if num_evicted > recent_len:
-            raise RuntimeError(f"cannot evict {num_evicted} recent tokens, only {recent_len} available")
-        cap = self._recent_capacity_for_layer(layer_id, sink)
-        head = (head + int(num_evicted)) % cap
-        recent_len -= int(num_evicted)
-        self._ring_set(layer_id, active=True, sink=sink, head=head, recent_len=recent_len)
+        self.ring_layout(layer_id).roll(sink_tokens, num_evicted, self.get_valid_length(layer_id))
 
     def reset(self) -> None:
-        if self._kv_offload:
-            self.sync_all()
-            self._k_cpu.zero_()
-            self._v_cpu.zero_()
-            self._k_gpu_buf.zero_()
-            self._v_gpu_buf.zero_()
-            self._global_end.zero_()
-            self._local_end.zero_()
-            self._init_ring_metadata()
-            self._reset_offload_state()
-            return
-        self._global_end.zero_()
-        self._local_end.zero_()
-        self._init_ring_metadata()
+        self._init_cache_metadata()
 
 
 class StepRollingKVCachePool(RollingKVCachePool):
-    """Step-isolated FP rolling KV cache using per-step ring metadata."""
+    """An independent rolling cache for each denoising step."""
 
-    def __init__(
-        self,
-        num_steps: int,
-        num_layers: int,
-        cache_size: int,
-        num_heads: int,
-        head_dim: int,
-        dtype: torch.dtype,
-        device: torch.device,
-        *,
-        kv_offload: bool = False,
-    ) -> None:
-        self.num_steps = int(num_steps)
+    def __init__(self, num_steps: int, num_layers: int, cache_size: int, num_heads: int, head_dim: int, dtype: torch.dtype, device: torch.device) -> None:
+        self.num_steps = num_steps
         self._current_step = 0
-        super().__init__(num_layers, cache_size, num_heads, head_dim, dtype, device, kv_offload=kv_offload)
+        super().__init__(num_layers, cache_size, num_heads, head_dim, dtype, device)
 
     @property
     def current_step(self) -> int:
@@ -429,139 +261,38 @@ class StepRollingKVCachePool(RollingKVCachePool):
 
     @current_step.setter
     def current_step(self, value: int) -> None:
-        value = int(value)
         if value == self._current_step:
-            return
-        if self._kv_offload and hasattr(self, "_prefetch_stream"):
-            self.sync_all()
-            self._current_step = value
-            self._reset_offload_state()
             return
         self._current_step = value
 
-    def _step(self) -> int:
-        return int(self._current_step)
+    def _metadata_shape(self) -> tuple[int, ...]:
+        return self.num_steps, self._num_layers
 
-    def _ring_shape(self):
-        return (self.num_steps, self._num_layers)
-
-    def _meta_idx(self, layer_id: int):
-        return (self._step(), int(layer_id))
-
-    def _k_layer(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._k_gpu_buf
-        return self._k_buffer[self._step(), layer_id]
-
-    def _v_layer(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._v_gpu_buf
-        return self._v_buffer[self._step(), layer_id]
-
-    def _k_cpu_layer(self, layer_id: int) -> torch.Tensor:
-        return self._k_cpu[self._step(), layer_id]
-
-    def _v_cpu_layer(self, layer_id: int) -> torch.Tensor:
-        return self._v_cpu[self._step(), layer_id]
-
-    def _offload_index(self, layer_id: int) -> tuple[int, ...]:
-        return (self._step(), int(layer_id))
-
-    def _init_kv_buffer(self) -> None:
-        if self._kv_offload:
-            self._init_kv_buffer_offload()
-            return
-        S, L, N, H, D = self.num_steps, self._num_layers, self._cache_size, self._num_heads, self._head_dim
-        self._k_buffer = torch.empty(S, L, N, H, D, dtype=self._dtype, device=self._device)
-        self._v_buffer = torch.empty(S, L, N, H, D, dtype=self._dtype, device=self._device)
-        self._global_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
-        self._local_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
-        self._init_ring_metadata()
-
-    def _init_kv_buffer_offload(self) -> None:
-        from loguru import logger
-
-        S, L, N, H, D = self.num_steps, self._num_layers, self._cache_size, self._num_heads, self._head_dim
-        d = self._device
-
-        self._k_cpu = torch.empty(S, L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._v_cpu = torch.empty(S, L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._k_gpu_buf = torch.empty(N, H, D, dtype=self._dtype, device=d)
-        self._v_gpu_buf = torch.empty(N, H, D, dtype=self._dtype, device=d)
-
-        self._global_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
-        self._local_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
-        self._init_ring_metadata()
-        self._init_offload_state((S, L))
-
-        gpu_mb = (self._k_gpu_buf.nbytes + self._v_gpu_buf.nbytes) / (1024 * 1024)
-        cpu_mb = (self._k_cpu.nbytes + self._v_cpu.nbytes) / (1024 * 1024)
-        logger.info(
-            "[{}+offload] steps={}, GPU staging layer: {:.1f} MB, CPU pinned: {:.1f} MB",
-            self.__class__.__name__,
-            self.num_steps,
-            gpu_mb,
-            cpu_mb,
-        )
-
-    def get_global_end(self, layer_id: int) -> int:
-        return int(self._global_end[self._step(), layer_id].item())
-
-    def get_local_end(self, layer_id: int) -> int:
-        return int(self._local_end[self._step(), layer_id].item())
-
-    def set_ends(self, layer_id: int, global_end: int, local_end: int) -> None:
-        self._global_end[self._step(), layer_id] = int(global_end)
-        self._local_end[self._step(), layer_id] = int(local_end)
+    def _metadata_index(self, layer_id: int) -> tuple[int, ...]:
+        return self._current_step, layer_id
 
 
 class HybridStepRollingKVCachePool(StepRollingKVCachePool):
-    """Step-isolated rolling cache with a different token capacity per layer.
+    """Step caches grouped by per-layer capacity to avoid padding allocations."""
 
-    Layers with the same capacity share a contiguous allocation. This keeps the
-    existing rolling-cache API while avoiding a max-window allocation for every
-    transformer block.
-    """
-
-    def __init__(
-        self,
-        num_steps: int,
-        num_layers: int,
-        layer_cache_sizes: list[int] | tuple[int, ...],
-        num_heads: int,
-        head_dim: int,
-        dtype: torch.dtype,
-        device: torch.device,
-        *,
-        kv_offload: bool = False,
-    ) -> None:
-        if int(num_steps) <= 0:
+    def __init__(self, num_steps: int, num_layers: int, layer_cache_sizes: list[int] | tuple[int, ...], num_heads: int, head_dim: int, dtype: torch.dtype, device: torch.device) -> None:
+        if num_steps <= 0:
             raise ValueError("num_steps must be positive")
-        sizes = tuple(int(size) for size in layer_cache_sizes)
-        if len(sizes) != int(num_layers):
+        sizes = tuple(layer_cache_sizes)
+        if len(sizes) != num_layers:
             raise ValueError(f"layer_cache_sizes must contain {num_layers} entries, got {len(sizes)}")
         if not sizes or min(sizes) <= 0:
             raise ValueError("layer_cache_sizes must contain positive token capacities")
-
+        self._k_buckets = {}
+        self._v_buckets = {}
         self._layer_cache_sizes = sizes
-        self._layer_bucket_slots: list[tuple[int, int]] = []
-        bucket_counts: dict[int, int] = {}
+        self._layer_bucket_slots = []
+        self._bucket_counts = {}
         for size in sizes:
-            slot = bucket_counts.get(size, 0)
+            slot = self._bucket_counts.get(size, 0)
             self._layer_bucket_slots.append((size, slot))
-            bucket_counts[size] = slot + 1
-        self._bucket_counts = bucket_counts
-
-        super().__init__(
-            num_steps=num_steps,
-            num_layers=num_layers,
-            cache_size=max(sizes),
-            num_heads=num_heads,
-            head_dim=head_dim,
-            dtype=dtype,
-            device=device,
-            kv_offload=kv_offload,
-        )
+            self._bucket_counts[size] = slot + 1
+        super().__init__(num_steps, num_layers, max(sizes), num_heads, head_dim, dtype, device)
 
     @property
     def layer_cache_sizes(self) -> tuple[int, ...]:
@@ -571,183 +302,41 @@ class HybridStepRollingKVCachePool(StepRollingKVCachePool):
     def bucket_counts(self) -> dict[int, int]:
         return dict(self._bucket_counts)
 
-    def cache_size_for_layer(self, layer_id: int) -> int:
-        return self._layer_cache_sizes[int(layer_id)]
+    def get_max_cache_shape(self, layer_id: int) -> int:
+        return self._layer_cache_sizes[layer_id]
 
-    def _bucket_slot(self, layer_id: int) -> tuple[int, int]:
-        return self._layer_bucket_slots[int(layer_id)]
+    def _key_buffer(self, layer_id: int) -> torch.Tensor:
+        if self.quantized_only:
+            return self._k_buffer
+        capacity, slot = self._layer_bucket_slots[layer_id]
+        return self._k_buckets[capacity][self._current_step, slot]
 
-    def _k_layer(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._k_gpu_buf
-        size, slot = self._bucket_slot(layer_id)
-        return self._k_buckets[size][self._step(), slot]
+    def _value_buffer(self, layer_id: int) -> torch.Tensor:
+        if self.key_only:
+            return self._v_buffer
+        capacity, slot = self._layer_bucket_slots[layer_id]
+        return self._v_buckets[capacity][self._current_step, slot]
 
-    def _v_layer(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._v_gpu_buf
-        size, slot = self._bucket_slot(layer_id)
-        return self._v_buckets[size][self._step(), slot]
+    def _ensure_kv_buffer(self) -> None:
+        allocated = self._k_buffer is not None if self.quantized_only else bool(self._k_buckets)
+        if not allocated:
+            self._init_kv_buffer()
 
-    def _k_cpu_layer(self, layer_id: int) -> torch.Tensor:
-        size, slot = self._bucket_slot(layer_id)
-        return self._k_cpu_buckets[size][self._step(), slot]
-
-    def _v_cpu_layer(self, layer_id: int) -> torch.Tensor:
-        size, slot = self._bucket_slot(layer_id)
-        return self._v_cpu_buckets[size][self._step(), slot]
-
-    def _allocate_buckets(self, device: torch.device | str, *, pin_memory: bool = False):
-        buckets = {}
-        for size, count in self._bucket_counts.items():
-            tensor = torch.empty(
-                self.num_steps,
-                count,
-                size,
-                self._num_heads,
-                self._head_dim,
-                dtype=self._dtype,
-                device=device,
-            )
-            buckets[size] = tensor.pin_memory() if pin_memory else tensor
-        return buckets
+    def _allocate_buckets(self) -> dict[int, torch.Tensor]:
+        return {capacity: torch.empty(self.num_steps, count, capacity, self._num_heads, self._head_dim, dtype=self._dtype, device=self._device) for capacity, count in self._bucket_counts.items()}
 
     def _init_kv_buffer(self) -> None:
-        if self._kv_offload:
-            self._init_kv_buffer_offload()
+        if self.quantized_only:
+            self._k_buffer = torch.empty((0, self._num_heads, self._head_dim), dtype=self._dtype, device=self._device)
+            self._v_buffer = torch.empty_like(self._k_buffer)
+            self._init_cache_metadata()
             return
-        self._k_buckets = self._allocate_buckets(self._device)
-        self._v_buckets = self._allocate_buckets(self._device)
-        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
-        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
-        self._init_ring_metadata()
-
-    def _init_kv_buffer_offload(self) -> None:
-        from loguru import logger
-
-        self._k_cpu_buckets = self._allocate_buckets("cpu", pin_memory=True)
-        self._v_cpu_buckets = self._allocate_buckets("cpu", pin_memory=True)
-        self._k_gpu_buf = torch.empty(self._cache_size, self._num_heads, self._head_dim, dtype=self._dtype, device=self._device)
-        self._v_gpu_buf = torch.empty(self._cache_size, self._num_heads, self._head_dim, dtype=self._dtype, device=self._device)
-        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
-        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
-        self._init_ring_metadata()
-        self._init_offload_state((self.num_steps, self._num_layers))
-
-        gpu_mb = (self._k_gpu_buf.nbytes + self._v_gpu_buf.nbytes) / (1024 * 1024)
-        cpu_mb = self.allocated_bytes / (1024 * 1024)
-        logger.info(
-            "[{}+offload] steps={}, buckets={}, GPU staging layer: {:.1f} MB, CPU pinned: {:.1f} MB",
-            self.__class__.__name__,
-            self.num_steps,
-            dict(self._bucket_counts),
-            gpu_mb,
-            cpu_mb,
-        )
-
-    def _copy_layer_to_gpu(self, layer_id: int) -> None:
-        size = self.cache_size_for_layer(layer_id)
-        self._k_gpu_buf[:size].copy_(self._k_cpu_layer(layer_id), non_blocking=True)
-        self._v_gpu_buf[:size].copy_(self._v_cpu_layer(layer_id), non_blocking=True)
+        self._k_buckets = self._allocate_buckets()
+        self._v_buckets = {} if self.key_only else self._allocate_buckets()
+        if self.key_only:
+            self._v_buffer = torch.empty(0, dtype=self._dtype, device=self._device)
+        self._init_cache_metadata()
 
     @property
     def allocated_bytes(self) -> int:
-        if self._kv_offload:
-            buckets = (*self._k_cpu_buckets.values(), *self._v_cpu_buckets.values())
-        else:
-            buckets = (*self._k_buckets.values(), *self._v_buckets.values())
-        return sum(tensor.nbytes for tensor in buckets)
-
-    def reset(self) -> None:
-        if self._kv_offload:
-            self.sync_all()
-            for tensor in (*self._k_cpu_buckets.values(), *self._v_cpu_buckets.values()):
-                tensor.zero_()
-            self._k_gpu_buf.zero_()
-            self._v_gpu_buf.zero_()
-            self._global_end.zero_()
-            self._local_end.zero_()
-            self._init_ring_metadata()
-            self._reset_offload_state()
-            return
-        self._global_end.zero_()
-        self._local_end.zero_()
-        self._init_ring_metadata()
-
-
-class SpatialRollingKVCachePool(RollingKVCachePool):
-    """Spatial FP rolling KV cache with ring along token axis N.
-
-    Buffer shape is [L, S, N, H, D]. The ring metadata is still per layer and
-    applies to the N axis for every spatial row.
-    """
-
-    def __init__(
-        self,
-        spatial_len: int,
-        num_layers: int,
-        cache_size: int,
-        num_heads: int,
-        head_dim: int,
-        dtype: torch.dtype,
-        device: torch.device,
-        *,
-        kv_offload: bool = False,
-    ) -> None:
-        if kv_offload:
-            raise ValueError("SpatialRollingKVCachePool does not support kv_offload.")
-        self._spatial_len = int(spatial_len)
-        super().__init__(num_layers, cache_size, num_heads, head_dim, dtype, device, kv_offload=kv_offload)
-
-    @property
-    def spatial_len(self) -> int:
-        return self._spatial_len
-
-    def _init_kv_buffer(self) -> None:
-        L, S, N, H, D = self._num_layers, self._spatial_len, self._cache_size, self._num_heads, self._head_dim
-        self._k_buffer = torch.empty(L, S, N, H, D, dtype=self._dtype, device=self._device)
-        self._v_buffer = torch.empty(L, S, N, H, D, dtype=self._dtype, device=self._device)
-        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
-        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
-        self._init_ring_metadata()
-
-    def _k_layer(self, layer_id: int) -> torch.Tensor:
-        return self._k_buffer[layer_id]
-
-    def _v_layer(self, layer_id: int) -> torch.Tensor:
-        return self._v_buffer[layer_id]
-
-    def _k_cpu_layer(self, layer_id: int) -> torch.Tensor:
-        raise NotImplementedError("SpatialRollingKVCachePool does not support kv_offload.")
-
-    def _v_cpu_layer(self, layer_id: int) -> torch.Tensor:
-        raise NotImplementedError("SpatialRollingKVCachePool does not support kv_offload.")
-
-    def store_kv(self, k: torch.Tensor, v: torch.Tensor, start_idx: int, end_idx: int, layer_id: int) -> None:
-        if end_idx <= start_idx:
-            return
-        kb, vb = self._k_layer(layer_id), self._v_layer(layer_id)
-        for logical_s, phys_s, n in self._logical_chunks(layer_id, start_idx, end_idx):
-            ks = logical_s - start_idx
-            ke = ks + n
-            kb[:, phys_s : phys_s + n].copy_(k[:, ks:ke])
-            vb[:, phys_s : phys_s + n].copy_(v[:, ks:ke])
-        self._update_ring_len_after_store(layer_id, end_idx)
-
-    def _read_logical(self, layer_id: int, attn_start: int, local_end: int, which: str) -> torch.Tensor:
-        base = self._k_layer(layer_id) if which == "k" else self._v_layer(layer_id)
-        chunks = self._logical_chunks(layer_id, attn_start, local_end)
-        if not chunks:
-            return torch.empty(self._spatial_len, 0, self._num_heads, self._head_dim, device=self._device, dtype=self._dtype)
-        parts = [base[:, p : p + n] for _, p, n in chunks]
-        return parts[0] if len(parts) == 1 else torch.cat(parts, dim=1)
-
-    def k_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None) -> torch.Tensor:
-        if attn_start is None and local_end is None:
-            attn_start, local_end = 0, self.get_local_end(layer_id)
-        return self._read_logical(layer_id, int(attn_start), int(local_end), "k")
-
-    def v_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None) -> torch.Tensor:
-        if attn_start is None and local_end is None:
-            attn_start, local_end = 0, self.get_local_end(layer_id)
-        return self._read_logical(layer_id, int(attn_start), int(local_end), "v")
+        return sum(buffer.nbytes for buffer in (*self._k_buckets.values(), *self._v_buckets.values()))

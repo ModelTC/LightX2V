@@ -11,14 +11,16 @@ import os
 import re
 import statistics
 import subprocess
+import sys
 import traceback
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.benchmarks.operator_backends import load_registry, probe_backend_catalog
-from tools.benchmarks.operator_bench import environment, normalize_dtype, require, write_json
+from tools.benchmarks.operator_backends import GENERAL_SPARSE_OPERATORS, load_registry, probe_backend_catalog
+from tools.benchmarks.operator_bench import _fatal_cuda_error, _hardware_platform, _input_identity, environment, markdown_report, normalize_dtype, require, write_json
+from tools.compute_stats import attention_flops
 
 SUITE_KIND = "sp_attention_benchmark_shape_suite_v1"
 INPUT_DTYPES = {"bf16", "fp16"}
@@ -32,28 +34,39 @@ SP_REFERENCE_TOLERANCES = {
     "torch_sdpa": {"bf16": 0.02, "fp16": 0.01, "kind": "exact"},
 }
 SPARSE_SP_BACKENDS = {
-    "dynamic_sparse_triton_replay": {"factory": "dynamic", "operator": "triton"},
-    "dynamic_sparse_sage2_replay": {"factory": "dynamic", "operator": "sage2"},
-    "dynamic_sparse_sage3_replay": {"factory": "dynamic", "operator": "sage3"},
-    "dynamic_sparse_fa4_replay": {"factory": "dynamic", "operator": "fa4"},
-    "sparge_sage2_replay": {"factory": "sparge"},
-    "spas_sage2_replay": {
+    "sla.flashinfer.general": {"factory": "general", "operator": "flashinfer_operator"},
+    "sla.sage2.general": {"factory": "general", "operator": "spas_sage2_operator"},
+    "sla.triton.general": {"factory": "general", "operator": "sla_triton_operator"},
+    "sla.triton.dynamic": {"factory": "dynamic", "operator": "triton"},
+    "sla.sage2.dynamic": {"factory": "dynamic", "operator": "sage2"},
+    "sla.sage3.dynamic": {"factory": "dynamic", "operator": "sage3"},
+    "sla.fa4.dynamic": {"factory": "dynamic", "operator": "fa4"},
+    "sparge.sage2.library": {"factory": "sparge"},
+    "sla.sage2.specialized": {
         "factory": "class",
         "symbol": "lightx2v.common.ops.attn.sage_attn:SparseSageAttn2Weight",
     },
-    "spas_sage3_replay": {
+    "sla.sage3.specialized": {
         "factory": "class",
         "symbol": "lightx2v.common.ops.attn.sage_attn:SparseSageAttn3Weight",
     },
-    "spas_fa4_replay": {
+    "sla.fa4.specialized": {
         "factory": "class",
         "symbol": "lightx2v.common.ops.attn.flash_attn:SparseFlashAttn4Weight",
     },
 }
 SPARSE_SP_EXCLUSIONS = {
-    "flash_attn3_replay": "dense replay baseline; use a dense SP suite for distributed backend comparison",
-    "flash_attn4_replay": "dense replay baseline; use a dense SP suite for distributed backend comparison",
-    "sage_attn3_replay": "dense replay baseline; use a dense SP suite for distributed backend comparison",
+    **{
+        f"{method}.{label}.general": "new GeneralSparse single-card path; SP semantics/reference validation pending"
+        for method in ("sla", "sparge")
+        for label, *_ in GENERAL_SPARSE_OPERATORS
+        if f"{method}.{label}.general" not in SPARSE_SP_BACKENDS
+    },
+    "sla.triton_ar.dynamic": "new single-card AR path; SP semantics/reference validation pending",
+    "sla.magi.dynamic": "new single-card Magi path; SP semantics/reference validation pending",
+    "sparge.sage2.specialized": "new single-card Sparge candidate; SP semantics/reference validation pending",
+    "sparge.sage3.specialized": "new single-card Sparge candidate; SP semantics/reference validation pending",
+    "sparge.fa4.specialized": "new single-card Sparge candidate; SP semantics/reference validation pending",
 }
 NCCL_ENV_NAMES = (
     "NCCL_ALGO",
@@ -187,6 +200,15 @@ def derive_replicated_prefix_split(total_sequence: int, conditioner_tokens: int,
     return main_sequence, aux_tokens
 
 
+def _require_global_sp_replay(manifest):
+    """Only verified global inputs can be split and communicated again by SP."""
+    provenance = manifest.get("provenance") or {}
+    require(
+        manifest.get("sp_replay_eligible") is not False and provenance.get("capture_boundary") == "global_pre_sp" and provenance.get("capture_point") != "dynamic_sparse_sage2_inputs",
+        "SP replay requires verified global pre-SP input; post-SP leaf replay or unknown capture boundary cannot communicate again",
+    )
+
+
 def derive_replay_suites(
     manifest_path: Path,
     output_dir: Path,
@@ -200,6 +222,7 @@ def derive_replay_suites(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     require(manifest.get("schema_version") == 1 and manifest.get("kind") == "operator_benchmark_qkv_replay_v1", "unsupported SP replay manifest")
     require(manifest.get("layout") == "BSHD", "SP replay layout must be BSHD")
+    _require_global_sp_replay(manifest)
     tensors = manifest.get("tensors")
     require(isinstance(tensors, dict) and set(tensors) == {"q", "k", "v"}, "SP replay manifest requires exactly q/k/v tensors")
     q_shape = tensors["q"].get("shape")
@@ -443,6 +466,10 @@ def _support_error(
     algorithm = candidate["algorithm"]
     quant = candidate["quant_scheme"]
     backend = _candidate_backend(candidate)
+    # Sparse SP currently requires equal heads; native operators validate head dimensions.
+    if candidate.get("leaf_family") == "sparse_attention":
+        if shape["heads"] != shape["kv_heads"]:
+            return "sparse SP leaf implementations require equal Q/KV heads"
     if quant == "fp4" and not fp4_available:
         return "FP4 communication dependency is unavailable"
     if quant == "fp4" and shape["head_dim"] % 16:
@@ -634,13 +661,24 @@ def build_candidate_catalog(
     dependency_blockers = sorted(
         item["name"] for item in backend_catalog.get("candidates", []) if item.get("family") == leaf_family and item.get("status") in {"cuda_unavailable", "dependency_missing"}
     )
-    unmapped_backends = sorted(backend_catalog.get("unmapped_attention_backends", []))
+    attention_scope = backend_catalog.get("attention_scopes", {}).get(leaf_family)
+    unmapped_backends = sorted(attention_scope["unmapped_production_backends"] if attention_scope is not None else backend_catalog.get("unmapped_attention_backends", []))
     sparse_sp_unmapped = sorted(runtime.get("unmapped_sparse_sp_backends", [])) if sparse_mode else []
-    backend_scope_complete = not dependency_blockers and not unmapped_backends and not sparse_sp_unmapped
+    leaf_catalog = {
+        "family": leaf_family,
+        "candidates": [item for item in backend_catalog.get("candidates", []) if item.get("family") == leaf_family],
+        "excluded_production_backends": (attention_scope or {}).get("excluded_production_backends", backend_catalog.get("excluded_attention_backends", {})),
+        "integration_gaps": {name: backend_catalog.get("attention_integration_gaps", {}).get(name, "生产入口缺bench/SP合同；核对输入、依赖及参考后接入。") for name in unmapped_backends},
+    }
+    if sparse_mode:
+        leaf_catalog["excluded_production_backends"] = {**leaf_catalog["excluded_production_backends"], **backend_catalog.get("mask_input_requirements", {})}
+    pending_sparse = runtime.get("sparse_sp_exclusions", {}) if sparse_mode else {}
+    backend_scope_complete = not dependency_blockers and not unmapped_backends and not sparse_sp_unmapped and not pending_sparse
     backend_scope_blockers = {
         "dependency_missing": dependency_blockers,
         "unmapped_production_backends": unmapped_backends,
         "unmapped_sparse_sp_backends": sparse_sp_unmapped,
+        "pending_sparse_sp_backends": sorted(pending_sparse),
     }
     if sparse_mode:
         all_sparse_backends = list(runtime["sparse_backends"])
@@ -658,6 +696,7 @@ def build_candidate_catalog(
         identity = {
             "backend_catalog_fingerprint": runtime["catalog"]["catalog_fingerprint"],
             "leaf_family": leaf_family,
+            "leaf_catalog": leaf_catalog,
             "backend_scope_complete": backend_scope_complete,
             "backend_scope_blockers": backend_scope_blockers,
             "sparse_backends": sparse_backends,
@@ -691,6 +730,7 @@ def build_candidate_catalog(
     identity = {
         "backend_catalog_fingerprint": runtime["catalog"]["catalog_fingerprint"],
         "leaf_family": leaf_family,
+        "leaf_catalog": leaf_catalog,
         "backend_scope_complete": backend_scope_complete,
         "backend_scope_blockers": backend_scope_blockers,
         "dense_backends": dense_backends,
@@ -839,6 +879,7 @@ def _load_sp_replay_inputs(case: dict[str, Any], device: Any, rank: int) -> tupl
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     require(manifest.get("schema_version") == 1 and manifest.get("kind") == "operator_benchmark_qkv_replay_v1", f"unsupported SP replay manifest: {manifest_path}")
     require(manifest.get("layout") == "BSHD", "SP replay layout must be BSHD")
+    _require_global_sp_replay(manifest)
     specs = manifest.get("tensors")
     require(isinstance(specs, dict) and set(specs) == {"q", "k", "v"}, "SP replay manifest requires exactly q/k/v tensors")
 
@@ -866,6 +907,10 @@ def _load_sp_replay_inputs(case: dict[str, Any], device: Any, rank: int) -> tupl
 def _sparse_attention_operator(backend: str, keep_ratio: float) -> Any:
     spec = SPARSE_SP_BACKENDS.get(backend)
     require(spec is not None, f"unsupported sparse SP backend: {backend}")
+    if spec["factory"] == "general":
+        from tools.benchmarks.operator_backends import make_general_sparse_operator
+
+        return make_general_sparse_operator("sla", spec["operator"], keep_ratio)
     if spec["factory"] == "dynamic":
         from lightx2v.common.ops.attn.dynamic_sparse_attn import DynamicSparseAttnWeight
 
@@ -890,7 +935,10 @@ def _prepare_operation(
     seed: int,
     rank: int,
     inputs: tuple[Any, Any, Any, Any, Any, Any] | None = None,
-) -> tuple[Any, int, dict[str, Any] | None]:
+) -> tuple[Any, int]:
+    from functools import partial
+    from types import SimpleNamespace
+
     import lightx2v.common.ops.attn  # noqa: F401
     from lightx2v.common.ops.attn.ring_attn import RingAttnWeight
     from lightx2v.common.ops.attn.ulysses_attn import UlyssesAttnWeight
@@ -899,37 +947,17 @@ def _prepare_operation(
     shape = case["shape"]
     q, k, v, aux_q, aux_k, aux_v = inputs or (_load_sp_replay_inputs(case, device, rank) if _is_sparse_case(case) else _make_inputs(case, device, seed, rank))
 
-    operation_metrics = None
     if candidate.get("leaf_family") == "sparse_attention":
         dense_operator = _sparse_attention_operator(_candidate_backend(candidate), float(case["sparse"]["keep_ratio"]))
-        keep_ratio = float(case["sparse"]["keep_ratio"])
-        key_blocks = None
-        selected_key_blocks = None
-        block_k = getattr(dense_operator, "BLKK", None)
-        if block_k is not None:
-            key_blocks = (shape["sequence"] + shape["aux_tokens"] + block_k - 1) // block_k
-            selected_key_blocks = max(1, min(key_blocks, int(keep_ratio * key_blocks)))
-            block_density = selected_key_blocks / key_blocks
-            density_source = "fixed_topk_block_contract"
-        else:
-            block_density = keep_ratio
-            density_source = "backend_topk_contract"
-        operation_metrics = {
-            "keep_ratio": keep_ratio,
-            "block_density_actual": block_density,
-            "block_density_source": density_source,
-            "q_block_size": getattr(dense_operator, "BLKQ", None),
-            "k_block_size": block_k,
-            "key_blocks": key_blocks,
-            "selected_key_blocks_per_row": selected_key_blocks,
-        }
     else:
         dense_type = ATTN_WEIGHT_REGISTER.get(_candidate_backend(candidate))
         require(dense_type is not None, f"dense production backend is not registered: {_candidate_backend(candidate)}")
         dense_operator = dense_type()
     sp_operator = UlyssesAttnWeight() if candidate["algorithm"] == "ulysses" else RingAttnWeight()
 
-    def fn() -> Any:
+    def fn(*, checked_leaf=False) -> Any:
+        # Statistics can fail locally before the next SP collective; align every leaf first.
+        attention = SimpleNamespace(apply=partial(_checked_local, dense_operator.apply)) if checked_leaf else dense_operator
         return sp_operator.apply(
             q,
             k,
@@ -937,7 +965,7 @@ def _prepare_operation(
             aux_q=aux_q,
             aux_k=aux_k,
             aux_v=aux_v,
-            attention_module=dense_operator,
+            attention_module=attention,
             seq_p_group=None,
             prepost_backend=candidate["prepost_backend"],
             a2a_backend=candidate["a2a_backend"],
@@ -951,8 +979,55 @@ def _prepare_operation(
 
     query_tokens = shape["sequence"] + (shape["aux_tokens"] if shape["aux_q"] else 0)
     kv_tokens = shape["sequence"] + shape["aux_tokens"]
-    work = 4 * shape["heads"] * query_tokens * kv_tokens * shape["head_dim"]
-    return fn, work, operation_metrics
+    work = attention_flops(shape["heads"] * query_tokens * kv_tokens, shape["head_dim"], shape["head_dim"])
+    return fn, work
+
+
+def _sparse_sp_work(fn, case, candidate):
+    """Sample real leaf regions outside timing and sum all ranks, never composite parents."""
+    from contextlib import ExitStack
+    from tempfile import TemporaryDirectory
+
+    import torch.distributed as dist
+
+    from lightx2v.utils.workload_stats import WorkloadStats
+
+    local_heads = case["shape"]["heads"] // case["shape"]["sp_size"]
+    group_size = candidate["head_parallel_group_size"] if candidate["head_parallel"] else local_heads
+    groups = (local_heads + group_size - 1) // group_size
+    routes = []
+    with ExitStack() as cleanup:
+        directory = _checked_local(lambda: cleanup.enter_context(TemporaryDirectory(prefix="lightx2v-sp-stats-")))
+        stats = _checked_local(
+            lambda: cleanup.enter_context(
+                WorkloadStats(
+                    Path(directory) / "stats",
+                    families=["attention"],
+                    max_calls=groups + 1,
+                    on_sparse_inputs=lambda item: routes.append(item["facts"]),
+                )
+            )
+        )
+        _checked_local(fn, checked_leaf=True)
+        _checked_local(cleanup.close)
+    local = {"rank": dist.get_rank(), "expected_groups": groups, "routes": routes, "coverage_gaps": stats.gaps}
+    ranks = _checked_local(lambda: [None] * dist.get_world_size())
+    dist.all_gather_object(ranks, local)
+    complete = all(len(item["routes"]) == item["expected_groups"] and not item["coverage_gaps"] for item in ranks)
+    facts = [row for item in ranks for row in item["routes"]]
+    complete = complete and all(row["work"].get("selected_logical_flops") is not None for row in facts)
+    work = sum(row["work"]["selected_logical_flops"] for row in facts) if complete else None
+    scheduled = [row["work"].get("scheduled_tile_flops") for row in facts]
+    tiles = [row["routing"] for row in facts if row.get("routing", {}).get("total_tiles")]
+    return {
+        "actual_compute_count_available": complete,
+        "global_actual_sparse_work": work,
+        "global_scheduled_tile_work": sum(scheduled) if complete and all(value is not None for value in scheduled) else None,
+        "global_sampled_dense_equivalent_work": sum(row["work"]["dense_equivalent_flops"] for row in facts) if complete else None,
+        "block_density_actual": sum(item["selected_tiles"] for item in tiles) / sum(item["total_tiles"] for item in tiles) if complete and len(tiles) == len(facts) else None,
+        "compute_sample_scope": "one untimed production SP call per rank; QK/PV only; not every timed iteration",
+        "compute_sample_ranks": ranks,
+    }
 
 
 def _measure_distributed(
@@ -1022,77 +1097,69 @@ def _result_correctness_policy(case: dict[str, Any], candidate: dict[str, Any], 
     }
 
 
-def _result_correctness_tolerance(case: dict[str, Any], candidate: dict[str, Any]) -> float:
-    return _result_correctness_policy(case, candidate)["atol"]
-
-
-def _result_correctness(case: dict[str, Any], candidate: dict[str, Any], result: Any, device: Any, finite: bool) -> dict[str, Any]:
+def _check_output_structure(case: dict[str, Any], result: Any, device: Any, finite: bool) -> dict[str, Any]:
     import torch
     import torch.distributed as dist
 
     shape = case["shape"]
     expected_main = (shape["sequence"] // shape["sp_size"], shape["heads"] * shape["head_dim"])
     expected_aux = (shape["aux_tokens"], shape["heads"] * shape["head_dim"]) if shape["aux_q"] else None
-    main = result[0] if isinstance(result, tuple) and len(result) == 2 else None
-    aux = result[1] if isinstance(result, tuple) and len(result) == 2 else None
-    local_shape_ok = isinstance(main, torch.Tensor) and tuple(main.shape) == expected_main
-    local_shape_ok = local_shape_ok and ((aux is None) if expected_aux is None else isinstance(aux, torch.Tensor) and tuple(aux.shape) == expected_aux)
-    shape_ok = torch.tensor(int(local_shape_ok), device=device, dtype=torch.int32)
-    dist.all_reduce(shape_ok, op=dist.ReduceOp.MIN)
-    shape_passed = bool(shape_ok.item())
 
-    replicated_aux_checked = expected_aux is not None and shape_passed
-    replicated_aux_passed = None
-    replicated_aux_max_abs_diff = None
-    policy = _result_correctness_policy(case, candidate)
-    atol = policy["atol"]
-    rtol = policy["rtol"]
-    if replicated_aux_checked:
-        gathered = [torch.empty_like(aux) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered, aux)
-        reference = gathered[0].float()
-        replicated_aux_max_abs_diff = max(float((item.float() - reference).abs().max().item()) for item in gathered)
-        local_consistent = all(torch.allclose(item.float(), reference, atol=atol, rtol=rtol) for item in gathered)
-        consistent = torch.tensor(int(local_consistent), device=device, dtype=torch.int32)
-        dist.all_reduce(consistent, op=dist.ReduceOp.MIN)
-        replicated_aux_passed = bool(consistent.item())
+    def local_shape():
+        main, aux = result if isinstance(result, tuple) and len(result) == 2 else (None, None)
+        valid = isinstance(main, torch.Tensor) and tuple(main.shape) == expected_main
+        valid = valid and ((aux is None) if expected_aux is None else isinstance(aux, torch.Tensor) and tuple(aux.shape) == expected_aux)
+        return torch.tensor(int(valid), device=device, dtype=torch.int32)
 
-    passed = finite and shape_passed and replicated_aux_passed is not False
+    valid = _checked_local(local_shape)
+    dist.all_reduce(valid, op=dist.ReduceOp.MIN)
+    shape_passed = _checked_local(lambda: bool(valid.item()))
     return {
-        "checked": True,
-        "passed": passed,
-        "check": "main_aux_shape_finite_and_replicated_aux_all_ranks",
+        "passed": finite and shape_passed,
         "finite": finite,
         "shape_passed": shape_passed,
         "expected_main_output_shape": list(expected_main),
         "expected_aux_output_shape": list(expected_aux) if expected_aux is not None else None,
-        "replicated_aux_checked": replicated_aux_checked,
-        "replicated_aux_passed": replicated_aux_passed,
-        "replicated_aux_max_abs_diff": replicated_aux_max_abs_diff,
-        "replicated_aux_atol": atol if replicated_aux_checked else None,
-        "replicated_aux_rtol": rtol if replicated_aux_checked else None,
-        "tolerance_policy": policy,
     }
+
+
+def _checked_local(fn, *args, **kwargs):
+    """Coordinate local failures before the next collective; failed collectives are not recovered."""
+    value, error = None, None
+    try:
+        value = fn(*args, **kwargs)
+    except Exception as exc:
+        error = _local_error(exc)
+    errors = _gather_rank_errors(error)
+    require(not any(errors), f"SP local stage failed: {errors}")
+    return value
 
 
 def _gather_sequence(tensor: Any) -> Any:
     import torch
     import torch.distributed as dist
 
-    gathered = [torch.empty_like(tensor) for _ in range(dist.get_world_size())]
+    gathered = _checked_local(lambda: [torch.empty_like(tensor) for _ in range(dist.get_world_size())])
     dist.all_gather(gathered, tensor)
-    return torch.cat(gathered, dim=0)
+    return _checked_local(lambda: torch.cat(gathered, dim=0))
 
 
 def _dense_reference_outputs(case: dict[str, Any], device: Any, seed: int, rank: int) -> tuple[Any, Any]:
-    import torch
-    import torch.nn.functional as F
-
     shape = case["shape"]
-    q, k, v, aux_q, aux_k, aux_v = _make_inputs(case, device, seed, rank)
+    inputs = _checked_local(_make_inputs, case, device, seed, rank)
+    q, k, v = inputs[:3]
     global_q = _gather_sequence(q)
     global_k = _gather_sequence(k)
     global_v = _gather_sequence(v)
+    return _checked_local(_dense_reference_from_global, shape, inputs, (global_q, global_k, global_v), rank)
+
+
+def _dense_reference_from_global(shape, inputs, global_inputs, rank):
+    import torch
+    import torch.nn.functional as F
+
+    q, _k, _v, aux_q, aux_k, aux_v = inputs
+    global_q, global_k, global_v = global_inputs
     full_q = global_q if aux_q is None else torch.cat((aux_q, global_q), dim=0) if shape["aux_first"] else torch.cat((global_q, aux_q), dim=0)
     full_k = torch.cat((aux_k, global_k), dim=0) if shape["aux_first"] and aux_k is not None else global_k
     full_v = torch.cat((aux_v, global_v), dim=0) if shape["aux_first"] and aux_v is not None else global_v
@@ -1131,37 +1198,45 @@ def _reference_correctness(
     *,
     check: str = "production_sp_attention_vs_torch_sdpa_dense_reference_all_ranks",
 ) -> dict[str, Any]:
-    import torch
     import torch.distributed as dist
 
-    actual_main = actual[0] if isinstance(actual, tuple) and len(actual) == 2 else None
-    actual_aux = actual[1] if isinstance(actual, tuple) and len(actual) == 2 else None
-    expected_main, expected_aux = expected
-    local_shape = isinstance(actual_main, torch.Tensor) and tuple(actual_main.shape) == tuple(expected_main.shape)
-    local_shape = local_shape and ((actual_aux is None) if expected_aux is None else isinstance(actual_aux, torch.Tensor) and tuple(actual_aux.shape) == tuple(expected_aux.shape))
-    local_finite = local_shape and all(tensor.isfinite().all().item() for tensor in _output_tensors(actual))
-    main_max = float((actual_main.float() - expected_main.float()).abs().max().item()) if local_shape else float("inf")
-    aux_max = float((actual_aux.float() - expected_aux.float()).abs().max().item()) if expected_aux is not None and local_shape else None
-    policy = _result_correctness_policy(case, candidate, allow_missing=True)
-    local_close = local_shape and torch.allclose(actual_main.float(), expected_main.float(), atol=policy["atol"], rtol=policy["rtol"])
-    if expected_aux is not None and local_shape:
-        local_close = local_close and torch.allclose(actual_aux.float(), expected_aux.float(), atol=policy["atol"], rtol=policy["rtol"])
+    from tools.benchmarks.reference import compare_output
 
-    flags = torch.tensor((int(local_shape), int(local_finite), int(local_close)), device=device, dtype=torch.int32)
-    dist.all_reduce(flags, op=dist.ReduceOp.MIN)
-    maxima = torch.tensor((main_max, 0.0 if aux_max is None else aux_max), device=device, dtype=torch.float64)
-    dist.all_reduce(maxima, op=dist.ReduceOp.MAX)
-    return {
-        "checked": True,
-        "passed": bool(flags[0].item() and flags[1].item() and flags[2].item()),
-        "check": check,
-        "shape_passed": bool(flags[0].item()),
-        "finite": bool(flags[1].item()),
-        "allclose_passed": bool(flags[2].item()),
-        "main_max_abs_diff": float(maxima[0].item()),
-        "aux_max_abs_diff": None if expected_aux is None else float(maxima[1].item()),
-        "tolerance_policy": policy,
-    }
+    policy = _result_correctness_policy(case, candidate, allow_missing=True)
+
+    def compare_local():
+        outputs = actual if isinstance(actual, tuple) and len(actual) == 2 else (None, None)
+        checks = {
+            name: compare_output(output, reference, scope=f"complete {name} output on this rank", tolerance=policy)
+            for name, output, reference in zip(("main", "aux"), outputs, expected)
+            if reference is not None
+        }
+        return {"rank": dist.get_rank(), **checks, "aux_presence_matches": (outputs[1] is None) == (expected[1] is None)}, [None] * dist.get_world_size()
+
+    local, ranks = _checked_local(compare_local)
+    dist.all_gather_object(ranks, local)
+
+    def summarize():
+        checks = [value for rank in ranks for name, value in rank.items() if name in ("main", "aux")]
+        shape_ok = all(rank["aux_presence_matches"] for rank in ranks) and all(value["shape_passed"] for value in checks)
+        finite = all(value["finite"] for value in checks)
+        close = all(value["allclose_passed"] for value in checks)
+        status = "failed" if not shape_ok or not finite else "strict_equal" if all(value["strict_equal"] for value in checks) else "pending_review"
+        return {
+            "checked": True,
+            "passed": shape_ok and finite and close,
+            "check": check,
+            "status": status,
+            "shape_passed": shape_ok,
+            "finite": finite,
+            "allclose_passed": close,
+            "main_max_abs_diff": max(rank["main"].get("max_abs_error", float("inf")) for rank in ranks),
+            "aux_max_abs_diff": max(rank["aux"].get("max_abs_error", float("inf")) for rank in ranks) if expected[1] is not None else None,
+            "tolerance_policy": policy,
+            "rank_checks": ranks,
+        }
+
+    return _checked_local(summarize)
 
 
 def _bulk_reference_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -1242,11 +1317,11 @@ def validate_reference_suite(
                     try:
                         if inputs is not None:
                             reference_candidate = _bulk_reference_candidate(candidate)
-                            reference_fn, _, _ = _prepare_operation(case, reference_candidate, device, seed, rank, inputs=inputs)
-                            expected = reference_fn()
-                        fn, _, _ = _prepare_operation(case, candidate, device, seed, rank, inputs=inputs)
-                        actual = fn()
-                        torch.cuda.synchronize(device)
+                            reference_fn, _ = _checked_local(_prepare_operation, case, reference_candidate, device, seed, rank, inputs=inputs)
+                            expected = _checked_local(reference_fn)
+                        fn, _ = _checked_local(_prepare_operation, case, candidate, device, seed, rank, inputs=inputs)
+                        actual = _checked_local(fn)
+                        _checked_local(torch.cuda.synchronize, device)
                         correctness = _reference_correctness(
                             case,
                             candidate,
@@ -1267,6 +1342,7 @@ def validate_reference_suite(
                     records.append(
                         {
                             "case_id": case["case_id"],
+                            "case": case,
                             "candidate": candidate,
                             "reference_candidate": reference_candidate,
                             "status": "error" if any(error is not None for error in errors) else "ok",
@@ -1294,8 +1370,12 @@ def validate_reference_suite(
             print(json.dumps({"output": str(output), **value["summary"]}, ensure_ascii=False, sort_keys=True))
             return value
         return {"rank": rank, "record_count": 0}
+    except Exception as exc:
+        _abort_if_fatal_cuda(output.parent, exc)
+        raise
     finally:
-        dist.destroy_process_group()
+        if not isinstance(sys.exc_info()[1], _FatalCUDAError):
+            dist.destroy_process_group()
 
 
 def _tensor_bytes(value: Any) -> int:
@@ -1486,7 +1566,7 @@ def _ulysses_diagnostics(
         return dense_operator.apply(q=attn_q, k=attn_k, v=attn_v, **dense_kwargs)
 
     compute = _diagnostic_measure(compute_only, warmup, iterations, device)
-    full_fn, _, _ = _prepare_operation(case, candidate, device, seed, rank, inputs=(q, k, v, aux_q, aux_k, aux_v))
+    full_fn, _ = _prepare_operation(case, candidate, device, seed, rank, inputs=(q, k, v, aux_q, aux_k, aux_v))
     full = _diagnostic_measure(full_fn, warmup, iterations, device)
     qkv_bytes = _tensor_bytes(packed_qkv)
     output_bytes = _tensor_bytes(packed_output)
@@ -1655,7 +1735,7 @@ def _ring_diagnostics(
         return output
 
     compute = _diagnostic_measure(compute_only, warmup, iterations, device)
-    full_fn, _, _ = _prepare_operation(case, candidate, device, seed, rank, inputs=(q, k, v, aux_q, aux_k, aux_v))
+    full_fn, _ = _prepare_operation(case, candidate, device, seed, rank, inputs=(q, k, v, aux_q, aux_k, aux_v))
     full = _diagnostic_measure(full_fn, warmup, iterations, device)
     logical_bytes = _tensor_bytes(packed_kv) * (world_size - 1)
     components = {
@@ -1785,14 +1865,11 @@ def _raw_record(
         "aux_output_shape": list(aux_output.shape) if aux_output is not None else None,
     }
     if operation_metrics is not None:
-        density = float(operation_metrics["block_density_actual"])
+        actual_work = operation_metrics.get("global_actual_sparse_work")
+        metrics.update(operation_metrics)
         metrics.update(
-            {
-                "actual_tflops": work * density / (mean_ms / 1000) / 1e12,
-                "dense_equivalent_tflops": work / (mean_ms / 1000) / 1e12,
-                "global_actual_sparse_work": work * density,
-                **operation_metrics,
-            }
+            actual_tflops=actual_work / (mean_ms / 1000) / 1e12 if actual_work is not None else None,
+            dense_equivalent_tflops=work / (mean_ms / 1000) / 1e12,
         )
     return {
         "kind": "sp_attention_benchmark_raw_v1",
@@ -1837,7 +1914,7 @@ def load_raw_records(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     records = []
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         if not line.strip():
             continue
         record = json.loads(line)
@@ -1873,7 +1950,7 @@ def _validate_report_record_identities(
         require(key not in keys, f"duplicate raw identity: {key}")
         keys.add(key)
         _, case_id, candidate_id = key
-        require(case_id in cases and record["case"] == cases[case_id], f"raw suite drift: {case_id}")
+        require(case_id in cases and _input_identity(record["case"]) == _input_identity(cases[case_id]), f"raw suite drift: {case_id}")
         candidate_key = (case_id, candidate_id)
         candidate = record["candidate"]
         if candidate_key in catalog_candidates:
@@ -1898,6 +1975,7 @@ def _environment_identity(environments: list[dict[str, Any]]) -> list[dict[str, 
             "local_rank": value.get("local_rank"),
             "world_size": value.get("world_size"),
             "gpu": value.get("gpu"),
+            "python": value.get("python"),
             "torch": value.get("torch"),
             "cuda_runtime": value.get("cuda_runtime"),
             "cuda_visible_devices": value.get("cuda_visible_devices"),
@@ -1929,7 +2007,7 @@ def validate_existing_records(
         require(key not in keys, f"duplicate SP raw identity: {key}")
         run_id, case_id, candidate_id = key
         require(run_id.startswith("repeat-") and int(run_id.removeprefix("repeat-")) < repeat_runs, f"existing SP repeat is outside requested range: {run_id}")
-        require(case_id in cases and record["case"] == cases[case_id], f"existing SP suite drift: {case_id}")
+        require(case_id in cases and _input_identity(record["case"]) == _input_identity(cases[case_id]), f"existing SP suite drift: {case_id}")
         require((case_id, candidate_id) in candidates, f"existing SP candidate is no longer eligible: {case_id}.{candidate_id}")
         require(record["candidate"] == candidates[(case_id, candidate_id)], f"existing SP candidate contract drift: {candidate_id}")
         require(_environment_identity(record["environment"]["ranks"]) == expected_environment, "existing SP hardware or software environment differs")
@@ -1945,6 +2023,8 @@ def build_report(
     required_runs: int = 3,
     max_spread_pct: float = 5.0,
     max_spread_ms: float = 0.005,
+    peaks: dict[str, Any] | None = None,
+    platform_id: str | None = None,
 ) -> dict[str, Any]:
     validate_suite(suite)
     _validate_report_record_identities(
@@ -1953,10 +2033,22 @@ def build_report(
         expected_kind="sp_attention_benchmark_raw_v1",
         candidate_catalog=candidate_catalog,
     )
+    if peaks is not None:
+        for record in records:
+            ranks = record.get("environment", {}).get("ranks", [])
+            size = record["case"]["shape"]["sp_size"]
+            require(
+                len(ranks) == size and {rank.get("rank") for rank in ranks} == set(range(size)) and all(rank.get("world_size") == size and rank.get("gpu") for rank in ranks),
+                "SP compute peak requires complete rank GPU identities matching sp_size",
+            )
+    gpu_records = [{"environment": {"gpu": rank.get("gpu")}} for record in records for rank in record.get("environment", {}).get("ranks", [])]
+    platform_value = _hardware_platform(peaks, platform_id, gpu_records)
+    ranks = records[0].get("environment", {}).get("ranks", []) if records else []
     grouped: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         grouped[(record["case"]["case_id"], record["candidate"]["candidate_id"])].append(record)
     catalog_cases = {case["case_id"]: case for case in (candidate_catalog or {}).get("cases", [])}
+    pending_sparse = (candidate_catalog or {}).get("sparse_sp_exclusions", {})
     workloads = []
     for case in suite["cases"]:
         expected = {candidate["candidate_id"]: candidate for candidate in catalog_cases.get(case["case_id"], {}).get("candidates", [])}
@@ -1974,63 +2066,106 @@ def build_report(
             spread_pct = spread_ms / median * 100 if spread_ms is not None and median else None
             if not items:
                 status = "not_measured"
+            elif any(_fatal_cuda_error(error or {}) for item in errors for error in (item.get("error") or {}).get("ranks", [])):
+                status = "measurement_error"
+            elif correctness_failed:
+                status = "correctness_failed"
             elif errors and accepted_items:
                 status = "measurement_error"
             elif errors:
-                status = "unavailable" if all((item.get("error") or {}).get("stage") == "prepare" for item in errors) else "measurement_error"
-            elif correctness_failed:
-                status = "correctness_failed"
+                stages = {(item.get("error") or {}).get("stage") for item in errors}
+                status = "unavailable" if stages == {"prepare"} else "measurement_error"
             elif len(latencies) < required_runs:
                 status = "insufficient_runs"
             elif spread_pct is not None and spread_pct > max_spread_pct and spread_ms > max_spread_ms:
                 status = "unstable"
             else:
                 status = "accepted"
+            sparse = _is_sparse_case(case)
+            compute_ranges = {}
+            for field, raw_field in (
+                ("work_range", "global_actual_sparse_work" if sparse else "global_dense_work"),
+                ("dense_equivalent_work_range", "global_dense_work"),
+                ("scheduled_tile_work_range", "global_scheduled_tile_work"),
+                ("block_density_actual_range", "block_density_actual"),
+            ):
+                counts = [item["metrics"].get(raw_field) for item in accepted_items]
+                if sparse and raw_field != "global_dense_work" and not all(item["metrics"].get("actual_compute_count_available") is True for item in accepted_items):
+                    counts = []
+                compute_ranges[field] = [min(counts), max(counts)] if counts and all(value is not None for value in counts) else None
+            samples = []
+            for item in accepted_items if sparse else []:
+                metrics = item["metrics"]
+                samples.append(
+                    {
+                        "run_id": item["run_id"],
+                        "actual_compute_count_available": metrics.get("actual_compute_count_available"),
+                        "scope": metrics.get("compute_sample_scope"),
+                        "ranks": [
+                            {
+                                "rank": rank["rank"],
+                                "expected_groups": rank["expected_groups"],
+                                "captured_groups": len(rank["routes"]),
+                                "coverage_gaps": rank["coverage_gaps"],
+                                "missing_compute_groups": sum(route["work"].get("selected_logical_flops") is None for route in rank["routes"]),
+                            }
+                            for rank in metrics.get("compute_sample_ranks", [])
+                        ],
+                    }
+                )
             candidates[candidate_id] = {
                 "status": status,
+                "correctness": [{"run_id": item.get("run_id"), **(item.get("correctness") or {"checked": False})} for item in items],
                 "runs": len(latencies),
                 "latency_ms": median,
                 "spread_pct": spread_pct,
                 "spread_ms": spread_ms,
                 "aggregate_effective_tflops": statistics.median(item["metrics"]["aggregate_effective_tflops"] for item in accepted_items) if latencies else None,
-                "actual_tflops": statistics.median(item["metrics"]["actual_tflops"] for item in accepted_items if item["metrics"].get("actual_tflops") is not None)
-                if any(item["metrics"].get("actual_tflops") is not None for item in accepted_items)
+                "actual_tflops": statistics.median(item["metrics"]["actual_tflops"] for item in accepted_items)
+                if accepted_items and all(item["metrics"].get("actual_compute_count_available") is True and item["metrics"].get("actual_tflops") is not None for item in accepted_items)
+                else None,
+                # Legacy configuration estimates remain separate from production-region facts.
+                "estimated_sparse_tflops": statistics.median(
+                    item["metrics"]["actual_tflops"]
+                    for item in accepted_items
+                    if item["metrics"].get("actual_compute_count_available") is not True and item["metrics"].get("actual_tflops") is not None
+                )
+                if any(item["metrics"].get("actual_compute_count_available") is not True and item["metrics"].get("actual_tflops") is not None for item in accepted_items)
                 else None,
                 "dense_equivalent_tflops": statistics.median(item["metrics"]["dense_equivalent_tflops"] for item in accepted_items if item["metrics"].get("dense_equivalent_tflops") is not None)
                 if any(item["metrics"].get("dense_equivalent_tflops") is not None for item in accepted_items)
                 else None,
+                **compute_ranges,
+                "compute_samples": samples,
                 "candidate": candidate,
                 "errors": [item.get("error") for item in errors],
             }
         ranking = sorted((name for name, item in candidates.items() if item["status"] == "accepted"), key=lambda name: candidates[name]["latency_ms"])
         terminal_statuses = {"accepted", "unavailable", "correctness_failed"}
         coverage_complete = (
-            candidate_catalog is not None and candidate_catalog.get("scope_complete") is True and bool(candidates) and all(item["status"] in terminal_statuses for item in candidates.values())
+            candidate_catalog is not None
+            and candidate_catalog.get("scope_complete") is True
+            and not (_is_sparse_case(case) and pending_sparse)
+            and (candidate_catalog or {}).get("leaf_catalog") is not None
+            and bool(candidates)
+            and all(item["status"] in terminal_statuses for item in candidates.values())
         )
         measured_winner = ranking[0] if ranking else None
-        winner = measured_winner if coverage_complete else None
         observed = case.get("observed_candidate")
         observed_gap = None
         if measured_winner and observed in candidates and candidates[observed]["status"] == "accepted":
             observed_gap = candidates[observed]["latency_ms"] / candidates[measured_winner]["latency_ms"]
-        recommendation = None
-        if winner is not None:
-            winner_result = candidates[winner]
-            recommendation = {
-                "candidate_id": winner,
-                "configuration": winner_result["candidate"],
-                "workload": case,
-                "latency_ms": winner_result["latency_ms"],
-                "spread_pct": winner_result["spread_pct"],
-                "actual_tflops": winner_result["actual_tflops"],
-                "dense_equivalent_tflops": winner_result["dense_equivalent_tflops"],
-                **_sp_shape_description(case, winner_result["candidate"]),
-            }
         workloads.append(
             {
                 "case_id": case["case_id"],
-                "winner": winner,
-                "recommendation": recommendation,
+                "operator_family": "sp_attention",
+                "shape": case["shape"],
+                "precision": case["precision"],
+                "source": case.get("source"),
+                "replay": case.get("replay"),
+                "sparse": case.get("sparse"),
+                "exclusions": catalog_cases.get(case["case_id"], {}).get("exclusions", []),
+                "measured_shapes": _sp_shape_description(case, candidates[measured_winner]["candidate"]) if measured_winner else None,
                 "measured_winner": measured_winner,
                 "candidate_coverage_complete": coverage_complete,
                 "recommendation_scope": "complete_candidate_space" if coverage_complete else "measured_subset",
@@ -2042,22 +2177,55 @@ def build_report(
         )
     return {
         "kind": "sp_attention_benchmark_report_v1",
+        "hardware": {"platform_id": platform_id, "gpus": [rank["gpu"] for rank in ranks if rank.get("gpu")], "profile": platform_value},
         "suite_id": suite["suite_id"],
+        "measurement": records[0].get("run") if records else None,
         "catalog_fingerprint": (candidate_catalog or {}).get("catalog_fingerprint"),
-        "catalog_scope_complete": (candidate_catalog or {}).get("scope_complete", False),
+        "catalog_scope_complete": (candidate_catalog or {}).get("scope_complete", False) and not pending_sparse and (candidate_catalog or {}).get("leaf_catalog") is not None,
+        "sparse_sp_exclusions": pending_sparse,
+        "leaf_catalog": (candidate_catalog or {}).get("leaf_catalog"),
         "catalog_scope_blockers": (candidate_catalog or {}).get("backend_scope_blockers", {}),
         "policy": {"required_runs": required_runs, "max_spread_pct": max_spread_pct, "max_spread_ms": max_spread_ms},
         "summary": {
             "workload_count": len(workloads),
-            "recommended_count": sum(item["winner"] is not None for item in workloads),
+            "measured_winner_count": sum(item["measured_winner"] is not None for item in workloads),
             "coverage_complete": bool(workloads) and all(item["candidate_coverage_complete"] for item in workloads),
         },
         "workloads": workloads,
     }
 
 
+class _FatalCUDAError(RuntimeError):
+    def __init__(self, error):
+        self.error = error
+        super().__init__("fatal CUDA context error; stop this worker and restart in a fresh process: " + error["message"])
+
+
 def _local_error(exc: Exception) -> dict[str, Any]:
-    return {"type": type(exc).__name__, "message": str(exc), "traceback": traceback.format_exc(limit=8)}
+    if isinstance(exc, _FatalCUDAError):
+        raise exc
+    error = {"type": type(exc).__name__, "message": str(exc), "traceback": traceback.format_exc(limit=8)}
+    if _fatal_cuda_error(error):
+        raise _FatalCUDAError(error) from exc
+    return error
+
+
+def _abort_if_fatal_cuda(directory, exc):
+    """Classify native or wrapped errors before any damaged-group teardown."""
+    try:
+        _local_error(exc)
+    except _FatalCUDAError as fatal:
+        rank = os.environ.get("RANK", "unknown")
+        record = {"kind": "sp_attention_fatal_cuda_error_v1", "rank": rank, "created_at": datetime.now(timezone.utc).isoformat(), "error": fatal.error}
+        line = json.dumps(record, sort_keys=True) + "\n"
+        print(line, file=sys.stderr, end="", flush=True)
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            with (directory / f"fatal_rank_{rank}.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(line)
+        except OSError:
+            pass  # The launcher's stderr log still contains the original error.
+        raise
 
 
 def _gather_rank_errors(local_error: dict[str, Any] | None) -> list[dict[str, Any] | None]:
@@ -2084,11 +2252,14 @@ def run_suite(
     required_runs: int,
     max_spread_pct: float,
     max_spread_ms: float,
+    peaks: dict[str, Any] | None = None,
+    platform_id: str | None = None,
 ) -> dict[str, Any]:
     import torch
     import torch.distributed as dist
 
     validate_suite(suite)
+    require((peaks is None) == (platform_id is None), "peaks and platform must be provided together")
     require(repeat_runs > 0 and iterations > 0 and warmup >= 0, "repeat-runs and iterations must be positive; warmup must be non-negative")
     require("RANK" in os.environ and "LOCAL_RANK" in os.environ, "SP run must be launched with torchrun")
     raw_path = output_dir / "raw.jsonl"
@@ -2144,7 +2315,14 @@ def run_suite(
         if rank == 0:
             output_dir.mkdir(parents=True, exist_ok=True)
             write_json(output_dir / "candidate_catalog.json", candidate_catalog)
+            needs_separator = False
+            if append and raw_path.exists() and raw_path.stat().st_size:
+                with raw_path.open("rb") as previous:
+                    previous.seek(-1, os.SEEK_END)
+                    needs_separator = previous.read(1) not in (b"\n", b"\r")
             handle = raw_path.open("a", encoding="utf-8")
+            if needs_separator:
+                handle.write("\n")
         written = 0
         input_cache = {}
         for repeat in range(repeat_runs):
@@ -2158,7 +2336,7 @@ def run_suite(
                     try:
                         if _is_sparse_case(case) and case["case_id"] not in input_cache:
                             input_cache[case["case_id"]] = _load_sp_replay_inputs(case, device, rank)
-                        fn, work, operation_metrics = _prepare_operation(
+                        fn, work = _prepare_operation(
                             case,
                             candidate,
                             device,
@@ -2182,9 +2360,21 @@ def run_suite(
                             "prepare",
                         )
                     else:
+                        correctness = {"checked": False, "status": "not_checked"}
+                        operation_metrics = None
+                        stage = "compute_stats" if _is_sparse_case(case) else "measure"
                         try:
+                            if _is_sparse_case(case):
+                                stage = "compute_stats"
+                                operation_metrics = _checked_local(_sparse_sp_work, fn, case, candidate)
+                            stage = "measure"
                             latencies, per_rank, result, peak_memory, finite = _measure_distributed(fn, warmup, iterations, device)
-                            correctness = _result_correctness(case, candidate, result, device, finite)
+                            structural = _check_output_structure(case, result, device, finite)
+                            if not structural["passed"]:
+                                reason = "nonfinite_measured_output" if not finite else "measured_output_shape_mismatch"
+                                correctness["structural"] = structural
+                                raise ValueError(reason)
+                            correctness["structural"] = structural
                             local_error = None
                         except Exception as exc:
                             local_error = _local_error(exc)
@@ -2198,8 +2388,9 @@ def run_suite(
                                 run_contract,
                                 candidate_catalog["catalog_fingerprint"],
                                 errors,
-                                "measure",
+                                stage,
                             )
+                            record["correctness"] = correctness
                         else:
                             record = _raw_record(
                                 case,
@@ -2231,8 +2422,11 @@ def run_suite(
                 required_runs=required_runs,
                 max_spread_pct=max_spread_pct,
                 max_spread_ms=max_spread_ms,
+                peaks=peaks,
+                platform_id=platform_id,
             )
             write_json(output_dir / "report.json", report)
+            (output_dir / "report.md").write_text(markdown_report(report), encoding="utf-8")
             summary = {
                 "raw": str(raw_path),
                 "written": written,
@@ -2244,8 +2438,12 @@ def run_suite(
             print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
             return summary
         return {"rank": rank, "record_count": 0}
+    except Exception as exc:
+        _abort_if_fatal_cuda(output_dir, exc)
+        raise
     finally:
-        dist.destroy_process_group()
+        if not isinstance(sys.exc_info()[1], _FatalCUDAError):
+            dist.destroy_process_group()
 
 
 def _topology_fingerprint(records: list[dict[str, Any]]) -> str | None:
@@ -2516,6 +2714,8 @@ def render_diagnostic_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# SP Attention L2/L3 诊断报告",
         "",
+        "本页只解释所选配置的性能成本；诊断选择可来自尚未批准质量的已测稳定项，不表示数值质量已批准或建议采用。",
+        "",
         f"- Suite：`{report['suite_id']}`",
         f"- 接受结果：`{report['summary']['accepted_count']}/{report['summary']['result_count']}`",
         f"- 硬件 profile：`{report['hardware'].get('platform_id') or '未提供'}`",
@@ -2597,17 +2797,34 @@ def render_diagnostic_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def diagnostic_candidates_from_report(path: Path, suite: dict[str, Any]) -> dict[str, str]:
-    require(path.is_file(), f"recommendation report does not exist: {path}")
+def diagnostic_configuration_from_report(path: Path, suite: dict[str, Any], *, seed: int | None = None) -> tuple[dict[str, str], int]:
+    """Load a stable measured configuration and its matching base input seed."""
+    require(path.is_file(), f"measurement report does not exist: {path}")
     report = json.loads(path.read_text(encoding="utf-8"))
-    require(report.get("kind") == "sp_attention_benchmark_report_v1", "unsupported SP recommendation report")
-    require(report.get("suite_id") == suite["suite_id"], "SP recommendation report suite_id differs from diagnostic suite")
-    candidates = {
-        item["case_id"]: item["recommendation"]["candidate_id"] for item in report.get("workloads", []) if isinstance(item.get("recommendation"), dict) and item["recommendation"].get("candidate_id")
-    }
+    require(report.get("kind") == "sp_attention_benchmark_report_v1", "unsupported SP measurement report")
+    require(report.get("suite_id") == suite["suite_id"], "SP measurement report suite_id differs from diagnostic suite")
+    measured_seed = (report.get("measurement") or {}).get("seed")
+    require(type(measured_seed) is int, "SP measurement report lacks an integer measurement seed; use an explicit candidate for independent diagnostics")
+    require(seed is None or seed == measured_seed, f"diagnostic seed differs from measurement seed {measured_seed}")
+    cases = {case["case_id"]: case for case in suite["cases"]}
+    candidates = {}
+    for item in report.get("workloads", []):
+        case_id = item["case_id"]
+        if case_id not in cases:
+            continue
+        measured = item.get("measured_winner")
+        result = item.get("candidates", {}).get(measured, {})
+        candidate = result.get("candidate") or {}
+        if result.get("status") != "accepted" or candidate.get("candidate_id") != measured or not measured:
+            continue
+        case = cases[case_id]
+        require(isinstance(item.get("shape"), dict) and isinstance(item.get("precision"), dict), "measured diagnostic selection lacks input identity")
+        for field in ("shape", "precision", "sparse", "replay"):
+            require(item.get(field) == case.get(field), f"SP diagnostic report {field} differs for {case_id}")
+        candidates[case_id] = measured
     missing = sorted({case["case_id"] for case in suite["cases"]} - set(candidates))
-    require(not missing, f"SP recommendation report does not contain a formal winner for cases: {missing}")
-    return candidates
+    require(not missing, f"SP report does not contain a stable measured configuration for cases: {missing}")
+    return candidates, measured_seed
 
 
 def run_diagnostics(
@@ -2633,7 +2850,7 @@ def run_diagnostics(
     validate_suite(suite)
     recommended_candidate_ids = recommended_candidate_ids or {}
     requested_candidate_ids = candidate_ids | set(recommended_candidate_ids.values())
-    require(requested_candidate_ids, "diagnose requires --candidate or --recommendation-report")
+    require(requested_candidate_ids, "diagnose requires --candidate or --measurement-report")
     require(repeat_runs > 0 and iterations > 0 and warmup >= 0, "repeat-runs and iterations must be positive; warmup must be non-negative")
     require("RANK" in os.environ and "LOCAL_RANK" in os.environ, "SP diagnostics must be launched with torchrun")
     raw_path = output_dir / "diagnostic_raw.jsonl"
@@ -2746,8 +2963,12 @@ def run_diagnostics(
             print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
             return summary
         return {"rank": rank, "written": 0}
+    except Exception as exc:
+        _abort_if_fatal_cuda(output_dir, exc)
+        raise
     finally:
-        dist.destroy_process_group()
+        if not isinstance(sys.exc_info()[1], _FatalCUDAError):
+            dist.destroy_process_group()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2790,16 +3011,28 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--required-runs", type=int, default=3)
     run_parser.add_argument("--max-spread-pct", type=float, default=5.0)
     run_parser.add_argument("--max-spread-ms", type=float, default=0.005)
+    run_parser.add_argument("--peaks", type=Path)
+    run_parser.add_argument("--platform")
+    report_parser = commands.add_parser("report", help="Rebuild the independent SP benchmark report without starting CUDA or distributed ranks.")
+    report_parser.add_argument("--suite", type=Path, required=True)
+    report_parser.add_argument("--raw", type=Path, required=True)
+    report_parser.add_argument("--candidate-catalog", type=Path)
+    report_parser.add_argument("--output-dir", type=Path, required=True)
+    report_parser.add_argument("--required-runs", type=int, default=3)
+    report_parser.add_argument("--max-spread-pct", type=float, default=5.0)
+    report_parser.add_argument("--max-spread-ms", type=float, default=0.005)
+    report_parser.add_argument("--peaks", type=Path)
+    report_parser.add_argument("--platform")
     diagnose_parser = commands.add_parser("diagnose", help="Measure SP layout/communication and raw communication paths.")
     diagnose_parser.add_argument("--suite", type=Path, required=True)
     diagnose_parser.add_argument("--output-dir", type=Path, required=True)
     diagnose_parser.add_argument("--candidate", action="append", default=[])
-    diagnose_parser.add_argument("--recommendation-report", type=Path)
+    diagnose_parser.add_argument("--measurement-report", type=Path)
     diagnose_parser.add_argument("--dense-backend", action="append", default=[])
     diagnose_parser.add_argument("--repeat-runs", type=int, default=3)
     diagnose_parser.add_argument("--warmup", type=int, default=10)
     diagnose_parser.add_argument("--iterations", type=int, default=30)
-    diagnose_parser.add_argument("--seed", type=int, default=42)
+    diagnose_parser.add_argument("--seed", type=int, help="默认继承measurement report；显式candidate独立诊断默认42")
     diagnose_parser.add_argument("--required-runs", type=int, default=3)
     diagnose_parser.add_argument("--max-spread-pct", type=float, default=5.0)
     diagnose_parser.add_argument("--max-spread-ms", type=float, default=0.005)
@@ -2875,15 +3108,35 @@ def main(argv: list[str] | None = None) -> int:
                 required_runs=args.required_runs,
                 max_spread_pct=args.max_spread_pct,
                 max_spread_ms=args.max_spread_ms,
+                peaks=json.loads(args.peaks.read_text(encoding="utf-8")) if args.peaks else None,
+                platform_id=args.platform,
             )
+            return 0
+        if args.command == "report":
+            require(args.raw.is_file(), f"SP raw result does not exist: {args.raw}")
+            report = build_report(
+                suite,
+                load_raw_records(args.raw),
+                candidate_catalog=json.loads(args.candidate_catalog.read_text(encoding="utf-8")) if args.candidate_catalog else None,
+                required_runs=args.required_runs,
+                max_spread_pct=args.max_spread_pct,
+                max_spread_ms=args.max_spread_ms,
+                peaks=json.loads(args.peaks.read_text(encoding="utf-8")) if args.peaks else None,
+                platform_id=args.platform,
+            )
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+            write_json(args.output_dir / "report.json", report)
+            (args.output_dir / "report.md").write_text(markdown_report(report), encoding="utf-8")
+            print(json.dumps(report["summary"], ensure_ascii=False, sort_keys=True))
             return 0
         if args.command == "diagnose":
             require(bool(args.interconnect_peaks) == bool(args.platform), "--interconnect-peaks and --platform must be provided together")
             profiles = json.loads(args.interconnect_peaks.read_text(encoding="utf-8")) if args.interconnect_peaks else None
             candidate_ids = set(args.candidate)
             recommended_candidate_ids = {}
-            if args.recommendation_report:
-                recommended_candidate_ids = diagnostic_candidates_from_report(args.recommendation_report, suite)
+            seed = 42 if args.seed is None else args.seed
+            if args.measurement_report:
+                recommended_candidate_ids, seed = diagnostic_configuration_from_report(args.measurement_report, suite, seed=args.seed)
             run_diagnostics(
                 suite,
                 args.output_dir,
@@ -2893,7 +3146,7 @@ def main(argv: list[str] | None = None) -> int:
                 repeat_runs=args.repeat_runs,
                 warmup=args.warmup,
                 iterations=args.iterations,
-                seed=args.seed,
+                seed=seed,
                 required_runs=args.required_runs,
                 max_spread_pct=args.max_spread_pct,
                 max_spread_ms=args.max_spread_ms,

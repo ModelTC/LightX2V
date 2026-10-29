@@ -16,7 +16,7 @@
     "replace_flag": true,
     "lora_configs": [
         {
-        "path": "lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
+        "path": "/path/to/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
         "strength": 1.0
         }
     ]

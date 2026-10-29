@@ -21,6 +21,19 @@ __all__ = [
 CACHE_T = 2
 
 
+class _CompiledVaeComponent(nn.Module):
+    """Normalize chunk strides before entering the compiler's input guards."""
+
+    def __init__(self, module):
+        super().__init__()
+        self.compiled = torch.compile(module, dynamic=None)
+
+    def forward(self, x, *args, **kwargs):
+        # A one-frame view keeps the channel stride of its source video. Make
+        # 1/9/81-frame requests reuse the same first and cached chunk graphs.
+        return self.compiled(x.contiguous(), *args, **kwargs)
+
+
 class CausalConv3d(nn.Conv3d):
     """
     Causal 3d convolution.
@@ -129,7 +142,7 @@ class Resample(nn.Module):
                     feat_idx[0] += 1
                 else:
                     cache_x = x[:, :, -CACHE_T:, :, :].clone()
-                    if cache_x.shape[2] < 2 and feat_cache[idx] is not None and feat_cache[idx] != "Rep":
+                    if cache_x.shape[2] < 2 and torch.is_tensor(feat_cache[idx]):
                         # cache last frame of last two chunk
                         cache_x = torch.cat(
                             [
@@ -138,12 +151,12 @@ class Resample(nn.Module):
                             ],
                             dim=2,
                         )
-                    if cache_x.shape[2] < 2 and feat_cache[idx] is not None and feat_cache[idx] == "Rep":
+                    if cache_x.shape[2] < 2 and isinstance(feat_cache[idx], str):
                         cache_x = torch.cat(
                             [torch.zeros_like(cache_x).to(cache_x.device), cache_x],
                             dim=2,
                         )
-                    if feat_cache[idx] == "Rep":
+                    if isinstance(feat_cache[idx], str):
                         x = self.time_conv(x)
                     else:
                         x = self.time_conv(x, feat_cache[idx])
@@ -904,6 +917,7 @@ class WanVAE:
         self.weight_dtype = dtype if weight_dtype is None else weight_dtype
         self.device = device
         self.parallel = parallel
+        self.decode_group = None
         self.use_tiling = use_tiling
         self.cpu_offload = cpu_offload
         self.use_2d_split = use_2d_split
@@ -1006,6 +1020,19 @@ class WanVAE:
             .to(device)
             .to(self.weight_dtype)
         )
+
+    def compile_encoder(self):
+        if not isinstance(self.model.encoder, _CompiledVaeComponent):
+            self.model.encoder = _CompiledVaeComponent(self.model.encoder)
+
+    def compile_decoder(self):
+        if not isinstance(self.model.decoder, _CompiledVaeComponent):
+            self.model.decoder = _CompiledVaeComponent(self.model.decoder)
+
+    def compile(self):
+        """Compile native chunks without replacing their temporal cache owner."""
+        self.compile_encoder()
+        self.compile_decoder()
 
     def calculate_2d_grid(self, latent_height, latent_width, world_size):
         if (latent_height, latent_width, world_size) in self.grid_table:
@@ -1546,9 +1573,7 @@ class WanVAE:
         total_processes = world_size_h * world_size_w
         full_images = [torch.empty_like(images_chunk) for _ in range(total_processes)]
 
-        dist.all_gather(full_images, images_chunk)
-
-        self.device_synchronize()
+        dist.all_gather(full_images, images_chunk, group=self.decode_group)
 
         # Reconstruct the full image tensor
         image_rows = []
@@ -1595,6 +1620,20 @@ class WanVAE:
             self.to_cpu()
 
         return images
+
+    def enable_async_decode(self):
+        if self.parallel and self.decode_group is None:
+            self.decode_group = dist.new_group()
+            dist.all_reduce(torch.zeros(1, device=AI_DEVICE), group=self.decode_group)
+
+    def get_decode_state(self):
+        return torch.utils._pytree.tree_map_only(torch.Tensor, torch.clone, self.model._feat_map)
+
+    def set_decode_state(self, state):
+        self.model._feat_map = torch.utils._pytree.tree_map_only(torch.Tensor, torch.clone, state)
+
+    def reset_decode_state(self):
+        self.model.clear_decode_cache()
 
     def cached_decode_withflag(self, zs, is_first, is_last):
         if self.cpu_offload:

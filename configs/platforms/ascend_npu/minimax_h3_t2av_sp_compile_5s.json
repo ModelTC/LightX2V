@@ -12,8 +12,6 @@
     "text_encoder_tensor_parallel": false,
     "vae_cpu_offload": true,
     "vae_decode_parallel": true,
-    "lazy_load": false,
-    "unload_modules": false,
     "attn_type": "npu_flash_attn",
     "rms_type": "npu_rms_norm",
     "rope_type": "minimax_h3_npu_rope",

@@ -4,7 +4,7 @@ import torch.distributed as dist
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.mm.mm_weight import MMWeightTemplate, unwrap_tp_weight
 from lightx2v.common.ops.utils import resolve_block_name
-from lightx2v.models.networks.qwen_image_21.fp8_f16_accum_policy import ACTIVATION_QMAX
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
@@ -111,4 +111,5 @@ class QwenImage21TransformerWeights(WeightModule):
             # allocation can use the checkpoint metadata.
             self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
             self.offload_phase_cuda_buffers = None
+            self.register_offload_group(blocks, self.offload_block_cuda_buffers, (f"transformer_blocks.{i}." for i in range(len(blocks))))
         self.add_module("blocks", blocks)

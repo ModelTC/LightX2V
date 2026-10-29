@@ -8,6 +8,8 @@ from lightx2v_train.model_capabilities import ConsistencyModelCapability, Distri
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyModelCapability
+from lightx2v_train.runtime.backend import get_backend
+from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
@@ -32,6 +34,8 @@ class QwenImageModel(BaseModel):
 
     pipeline_cls = QwenImagePipeline
     distribution_matching_capability_cls = GenericDistributionMatchingCapability
+    distribution_matching_uses_sample_context = False
+    consistency_model_capability_cls = QwenImageConsistencyModelCapability
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -48,11 +52,12 @@ class QwenImageModel(BaseModel):
                     temporal_size=1,
                 ),
                 guidance_in_denoiser_space=True,
+                uses_sample_context=self.distribution_matching_uses_sample_context,
             ),
         )
         self.capabilities.register(
             ConsistencyModelCapability,
-            QwenImageConsistencyModelCapability(self),
+            self.consistency_model_capability_cls(self),
         )
 
     def load_components(
@@ -83,7 +88,7 @@ class QwenImageModel(BaseModel):
         self.text_pipeline.text_encoder.eval()
 
     def _load_vae(self, model_path):
-        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config.get("inference", {}).get("vae_cpu_offload", False)
+        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config["inference"].get("vae_cpu_offload", False)
         device = torch.device("cpu") if use_cpu else self.device
         self.vae = AutoencoderKLQwenImage.from_pretrained(
             model_path,
@@ -110,10 +115,12 @@ class QwenImageModel(BaseModel):
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
-        return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.transformer_param_dtype)
-
-    def load_full_weights_for_resume(self, resume_ckpt_path):
-        self.transformer = QwenImageTransformer2DModel.from_pretrained(resume_ckpt_path, subfolder="transformer").to(self.device, dtype=self.transformer_param_dtype)
+        device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
+        return QwenImageTransformer2DModel.from_pretrained(
+            model_path,
+            subfolder="transformer",
+            torch_dtype=self.transformer_param_dtype,
+        ).to(device)
 
     def denoiser_module(self):
         return self.transformer

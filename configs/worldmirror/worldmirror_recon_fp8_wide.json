@@ -1,5 +1,5 @@
 {
-    "_comment": "fp8 覆盖率 44%（ζ 高覆盖方案，T13/T19）。仅支持 单卡 / 多卡 SP / wm_extended_scope 三条路径。不兼容 cpu_offload（bbox_vol ~1.12%）和 enable_bf16（points ~1.94%）——如需 cpu_offload 或 bf16，改用 worldmirror_recon_fp8.json（25% 覆盖率，兼容全部路径）。lazy_load 由框架按设计 raise（calib 与 lazy 互斥）。详见 docs/worldmirror_runnable_modes.md §11 配置文件兼容矩阵。",
+    "_comment": "扩大 attn.proj 的 FP8 量化范围，每个主干分支末尾 6 个块的 attn.proj 保留 FP32，fc1 和 fc2 保留 FP32。使用 cpu_offload 或 BF16 时建议选择 worldmirror_recon_fp8.json。校准 FP8 不支持 lazy_load。",
     "model_cls": "worldmirror",
     "task": "recon",
     "subfolder": "HY-WorldMirror-2.0",
@@ -39,9 +39,6 @@
     "log_time": true,
     "cpu_offload": false,
     "lazy_load": false,
-    "feature_caching": "NoCaching",
-    "use_image_encoder": false,
-    "seq_parallel": false,
     "parallel": {},
     "dit_quant_scheme": "fp8-pertensor",
     "weight_auto_quant": true,

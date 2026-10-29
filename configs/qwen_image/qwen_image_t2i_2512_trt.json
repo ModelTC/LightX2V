@@ -9,6 +9,6 @@
     "vae_type": "tensorrt",
     "trt_vae_config": {
         "multi_profile": false,
-        "trt_engine_path": "lightx2v/Qwen-Image-2512-Lightning/vae_trt_t2i_static"
+        "trt_engine_path": "/path/to/vae_trt_t2i_static"
     }
 }

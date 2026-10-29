@@ -71,6 +71,20 @@ def apply_2d_rotary_pos_emb(
     return torch.cat((rotated_part_1, rotated_part_2), dim=-1)
 
 
+def conv_as_gemm(conv, windows):
+    """Apply a Conv2dWeight whose kernel equals its stride (no padding, dilation or groups) as a single GEMM.
+
+    windows: (L, C * kh * kw), one kernel window per row, flattened in (c, kh, kw) order like the weight.
+    Same result as F.conv2d, which on ROCm runs the patch embedding below as a per-sample loop (1x1 outputs)
+    and, with MIOpen, the channels_last merge with a naive NHWC kernel.
+    """
+    assert conv.padding == 0 and conv.dilation == 1 and conv.groups == 1 and conv.weight.shape[2:] == (conv.stride, conv.stride)
+    weight = conv.weight.flatten(1)
+    if conv.bias is None:
+        return windows @ weight.t()
+    return torch.addmm(conv.bias, windows, weight.t())
+
+
 class NeoppPreInfer:
     def __init__(self, config):
         self.config = config
@@ -79,6 +93,7 @@ class NeoppPreInfer:
         self.embed_dim = config["vision_config"]["hidden_size"]
         self.add_noise_scale_embedding = config.get("add_noise_scale_embedding", True)
         self.noise_scale_max_value = config.get("noise_scale_max_value", 8.0)
+        self.use_conv_as_gemm = config.get("use_conv_as_gemm", False)
         self.frequency_embedding_size = 256
         self.rope_dim_part = self.embed_dim // 2
         self.cos_cached_x, self.sin_cached_x = precompute_rope_freqs_sincos(
@@ -158,13 +173,12 @@ class NeoppPreInfer:
         return embeddings
 
     def extract_feature(self, weights, pixel_values: torch.FloatTensor, grid_hw=None) -> torch.Tensor:
-        pixel_values = pixel_values.view(  #
-            -1,
-            3,
-            self.patch_size,
-            self.patch_size,
-        )  #  [28072, 768] -> [28072, 3, 16, 16]
-        patch_embeds = F.gelu(weights.vision_model_mot_gen_patch_embedding.apply(pixel_values)).view(-1, self.embed_dim)
+        patch_embedding = weights.vision_model_mot_gen_patch_embedding
+        if self.use_conv_as_gemm:
+            patch_embeds = F.gelu(conv_as_gemm(patch_embedding, pixel_values.view(-1, patch_embedding.weight[0].numel())))  # [28072, 768] -> [28072, 1024]
+        else:
+            pixel_values = pixel_values.view(-1, 3, self.patch_size, self.patch_size)  # [28072, 768] -> [28072, 3, 16, 16]
+            patch_embeds = F.gelu(patch_embedding.apply(pixel_values)).view(-1, self.embed_dim)
         self.cos_cached_x = self.cos_cached_x.to(patch_embeds.device)
         self.sin_cached_x = self.sin_cached_x.to(patch_embeds.device)
         self.cos_cached_y = self.cos_cached_y.to(patch_embeds.device)
@@ -172,14 +186,21 @@ class NeoppPreInfer:
         patch_embeds = self._apply_2d_rotary_pos_emb(weights.rope, patch_embeds, grid_hw)  # [28072, 1024]
         assert (grid_hw[:, 0] * grid_hw[:, 1]).sum() == patch_embeds.shape[0]
 
+        dense_embedding = weights.vision_model_mot_gen_dense_embedding
+        m = dense_embedding.stride
         patches_list = []
         cur_position = 0
         for i in range(grid_hw.shape[0]):
-            h, w = grid_hw[i]
-            patches_per_img = patch_embeds[cur_position : cur_position + h * w].view(h, w, -1).unsqueeze(0)
-            patches_per_img = weights.vision_model_mot_gen_dense_embedding.apply(patches_per_img.permute(0, 3, 1, 2))
-            patches_per_img = patches_per_img.permute(0, 2, 3, 1)
-            patches_list.append(patches_per_img.view(-1, patches_per_img.shape[-1]))
+            h, w = grid_hw[i].tolist()
+            if self.use_conv_as_gemm:
+                assert h % m == 0 and w % m == 0
+                windows = patch_embeds[cur_position : cur_position + h * w].view(h // m, m, w // m, m, -1).permute(0, 2, 4, 1, 3)  # (h/m, w/m, C, m, m)
+                patches_list.append(conv_as_gemm(dense_embedding, windows.reshape(-1, dense_embedding.weight[0].numel())))
+            else:
+                patches_per_img = patch_embeds[cur_position : cur_position + h * w].view(h, w, -1).unsqueeze(0)
+                patches_per_img = dense_embedding.apply(patches_per_img.permute(0, 3, 1, 2))
+                patches_per_img = patches_per_img.permute(0, 2, 3, 1)
+                patches_list.append(patches_per_img.view(-1, patches_per_img.shape[-1]))
             cur_position += h * w
 
         embeddings = torch.cat(patches_list, dim=0)  # (N_total // downsample_factor**2, C)

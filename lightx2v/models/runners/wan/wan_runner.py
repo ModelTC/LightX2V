@@ -19,7 +19,10 @@ from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
+from lightx2v.models.networks.wan.conditioning import has_image_context
 from lightx2v.models.networks.wan.distill_model import WanDistillModel
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
+from lightx2v.models.networks.wan.infer.utils import image_latent_size
 from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -181,6 +184,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
                             scheduler.step_post()
                             previous_step_index = step_index
                     finally:
+                        self.release_resident_blocks()
                         if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
                             for model in filter(None, self.get_warmup_models()):
                                 model.to_cpu()
@@ -280,7 +284,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def load_image_encoder(self):
         image_encoder = None
-        if self.config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
+        if has_image_context(self.config):
             # offload config
             clip_offload = self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False))
             if clip_offload:
@@ -363,8 +367,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
         return text_encoders
 
     def get_vae_parallel(self):
-        if self.config.get("tensor_parallel", False):
-            return False
+        # VAE spatial collectives use WORLD independently of DiT TP/SP groups.
+        # Every inference rank enters encoding, including TP replicas.
         if isinstance(self.config.get("parallel", False), bool):
             return self.config.get("parallel", False)
         if isinstance(self.config.get("parallel", False), dict):
@@ -404,7 +408,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("vae_weight_dtype") is not None:
             vae_config["weight_dtype"] = self._resolve_vae_dtype(self.config["vae_weight_dtype"])
 
-        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
+        eden_video = self.config["task"] == "v2v" and "edenlive" in self.config.get("model_cls", "")
+        if not eden_video and self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
             return None
         else:
             return self.vae_cls(**vae_config)
@@ -431,11 +436,50 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("vae_weight_dtype") is not None:
             vae_config["weight_dtype"] = self._resolve_vae_dtype(self.config["vae_weight_dtype"])
         if self.config.get("use_tae", False):
-            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
-            vae_decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
+            vae_decoder = self.load_tiny_vae_decoder()
         else:
             vae_decoder = self.vae_cls(**vae_config)
-        return vae_decoder
+        return self._configure_vae_compile(vae_decoder, components=("decoder",))
+
+    def _configure_vae_compile(self, codec, *, components=("encoder", "decoder")):
+        """Compile selected codec components only when vae_use_compile is enabled."""
+        if codec is None or not self.config.get("vae_use_compile", False):
+            return codec
+        compiled = set(getattr(codec, "_lightx2v_compiled_components", ()))
+        requested = set(components) - compiled
+        if not requested:
+            return codec
+        methods = {name: getattr(codec, f"compile_{name}", None) for name in requested}
+        if not all(callable(method) for method in methods.values()):
+            raise NotImplementedError(f"{type(codec).__name__} does not support vae_use_compile=true for {sorted(requested)}")
+        for name in sorted(requested):
+            methods[name]()
+        compiled.update(requested)
+        codec._lightx2v_compiled_components = compiled
+        codec._lightx2v_vae_encoder_compiled = "encoder" in compiled
+        codec._lightx2v_vae_decoder_compiled = "decoder" in compiled
+        return codec
+
+    def load_tiny_vae_decoder(self, *, codec_cls=None):
+        """Load Wan-family TAE weights and optional compatible output decoder."""
+        tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
+        decoder = (codec_cls or self.tiny_vae_cls)(
+            vae_path=tae_path,
+            dtype=self._resolve_vae_dtype(self.config.get("tae_dtype"), torch.bfloat16),
+            device=self.init_device,
+            need_scaled=self.config.get("need_scaled", False),
+        ).to(AI_DEVICE)
+        decoder_path = self.config.get("tae_decoder_path")
+        if decoder_path:
+            if str(decoder_path).endswith(".safetensors"):
+                from safetensors.torch import load_file
+
+                state = load_file(str(decoder_path), device="cpu")
+            else:
+                state = torch.load(decoder_path, map_location="cpu", weights_only=True)
+            state = {key.removeprefix("decoder."): value for key, value in state.items() if key.startswith("decoder.")}
+            decoder.taehv.decoder.load_state_dict(state, strict=True)
+        return self._configure_vae_compile(decoder, components=("decoder",))
 
     def load_vae(self):
         vae_encoder = self.load_vae_encoder()
@@ -443,6 +487,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
             vae_decoder = self.load_vae_decoder()
         else:
             vae_decoder = vae_encoder
+        self._configure_vae_compile(vae_encoder, components=("encoder",))
+        self._configure_vae_compile(vae_decoder, components=("decoder",))
         return vae_encoder, vae_decoder
 
     def init_scheduler(self):
@@ -512,6 +558,19 @@ class WanRunner(DisaggMixin, DefaultRunner):
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()
         return gen_video_final
+
+    def run_segment(self, segment_idx=0):
+        try:
+            return super().run_segment(segment_idx)
+        finally:
+            # Drop resident weights before VAE decode, including on cancellation.
+            self.release_resident_blocks()
+
+    def release_resident_blocks(self):
+        if self.config["model_cls"] == "wan2.1":
+            infer = self.model.transformer_infer
+            if isinstance(infer, WanOffloadTransformerInfer):
+                infer.release_resident_blocks()
 
     def reuse_key(self):
         reuse_key = {
@@ -602,36 +661,32 @@ class WanRunner(DisaggMixin, DefaultRunner):
         metrics_labels=["WanRunner"],
     )
     def run_text_encoder(self, input_info):
+        return self.run_text_encoder_batch([input_info.prompt], [input_info.negative_prompt])
+
+    def _encode_text_contexts(self, prompts):
+        embeddings = self.text_encoders[0].infer(prompts)
+        return torch.stack([torch.cat([value, value.new_zeros(self.config["text_len"] - value.size(0), value.size(1))]) for value in embeddings])
+
+    def run_text_encoder_batch(self, prompts, negative_prompts=None):
+        """Encode a caller-selected prompt batch with the usual Wan padding."""
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_encoders = self.load_text_encoder()
 
-        prompt = input_info.prompt
         if GET_RECORDER_MODE():
-            monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
-        neg_prompt = input_info.negative_prompt
+            for prompt in prompts:
+                monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
 
         if self.config.get("enable_cfg", False) and self.config["cfg_parallel"]:
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
-                context = self.text_encoders[0].infer([prompt])
-                context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
-                text_encoder_output = {"context": context}
+                text_encoder_output = {"context": self._encode_text_contexts(prompts)}
             else:
-                context_null = self.text_encoders[0].infer([neg_prompt])
-                context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
-                text_encoder_output = {"context_null": context_null}
+                text_encoder_output = {"context_null": self._encode_text_contexts(negative_prompts)}
         else:
-            context = self.text_encoders[0].infer([prompt])
-            context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
-            if self.config.get("enable_cfg", False):
-                context_null = self.text_encoders[0].infer([neg_prompt])
-                context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
-            else:
-                context_null = None
             text_encoder_output = {
-                "context": context,
-                "context_null": context_null,
+                "context": self._encode_text_contexts(prompts),
+                "context_null": self._encode_text_contexts(negative_prompts) if self.config.get("enable_cfg", False) else None,
             }
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
@@ -827,13 +882,10 @@ class WanRunner(DisaggMixin, DefaultRunner):
     )
     def run_vae_encoder(self, first_frame, last_frame=None):
         h, w = first_frame.shape[2:]
-        aspect_ratio = h / w
         target_height, target_width = self.get_target_size()
-        max_area = target_height * target_width
 
         # Calculate initial latent dimensions
-        ori_latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
-        ori_latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
+        ori_latent_h, ori_latent_w = image_latent_size((h, w), (target_height, target_width), self.config["vae_stride"], self.config["patch_size"])
 
         # Adjust latent dimensions for optimal 2D grid splitting when using distributed processing
         if dist.is_initialized() and dist.get_world_size() > 1:
@@ -871,7 +923,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.vae_encoder = self.load_vae_encoder()
+            self.vae_encoder = self._configure_vae_compile(self.load_vae_encoder(), components=("encoder",))
 
         h = lat_h * self.config["vae_stride"][1]
         w = lat_w * self.config["vae_stride"][2]
@@ -961,6 +1013,21 @@ class MultiModelStruct:
             self.boundary = self.config["boundary"]
             self.boundary_timestep = self.boundary * num_train_timesteps
             logger.info(f"boundary: {self.boundary}, boundary_timestep: {self.boundary_timestep}")
+
+    def close_numa_cpu_weights(self):
+        error = None
+        for model in self.model:
+            if model is None:
+                continue
+            try:
+                model.close_numa_cpu_weights()
+            except BaseException as cleanup_error:
+                if error is None:
+                    error = cleanup_error
+                else:
+                    error.add_note(f"Another NUMA model cleanup also failed: {cleanup_error!r}")
+        if error is not None:
+            raise error
 
     def uses_high_noise_model(self):
         if self.distill_method == "dmd2":
@@ -1105,15 +1172,23 @@ class Wan22MoeRunner(WanRunner):
                 "device": self.init_device,
                 "model_type": "wan2.2_moe_low_noise",
             }
-            if not lora_configs:
-                model_class = get_wan_model_class(self.distill_method)
-                high_noise_model = model_class(**high_model_kwargs)
-                low_noise_model = model_class(**low_model_kwargs)
-            else:
-                high_noise_model = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
-                low_noise_model = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
-
-            return MultiModelStruct([high_noise_model, low_noise_model], self.config)
+            model_struct = MultiModelStruct([None, None], self.config)
+            try:
+                if not lora_configs:
+                    model_class = get_wan_model_class(self.distill_method)
+                    model_struct.model[0] = model_class(**high_model_kwargs)
+                    model_struct.model[1] = model_class(**low_model_kwargs)
+                else:
+                    model_struct.model[0] = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
+                    model_struct.model[1] = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
+            except BaseException as error:
+                if self.config.get("cpu_offload_numa", False):
+                    try:
+                        model_struct.close_numa_cpu_weights()
+                    except BaseException as cleanup_error:
+                        error.add_note(f"NUMA model construction cleanup also failed: {cleanup_error!r}")
+                raise
+            return model_struct
         else:
             model_struct = MultiModelStruct([None, None], self.config)
             model_struct.low_noise_model_path = self.low_noise_model_path
@@ -1169,11 +1244,11 @@ class Wan22DenseRunner(WanRunner):
         self.tiny_vae_name = "taew2_2.pth"
 
     def _resolve_wan22_vae_paths(self):
-        requested_vae_type = str(self.config.get("vae_type", "wan")).lower()
-        if requested_vae_type not in {"wan", "wan2.2", "mg_lightvae", "mg_lightvae_v2"}:
+        requested_vae_type = str(self.config.get("vae_type", "wan2.2")).lower()
+        if requested_vae_type not in {"wan2.2", "mg_lightvae", "mg_lightvae_v2"}:
             raise ValueError(f"Unsupported wan2.2 vae_type: {requested_vae_type}")
 
-        if requested_vae_type in {"wan", "wan2.2"}:
+        if requested_vae_type == "wan2.2":
             decoder_filename = "Wan2.2_VAE.pth"
             resolved_vae_type = "wan2.2"
             default_pruning_rate = None
@@ -1187,7 +1262,7 @@ class Wan22DenseRunner(WanRunner):
             default_pruning_rate = 0.75
 
         decoder_path = self.config.get("vae_path") or find_torch_model_path(self.config, filename=decoder_filename)
-        teacher_encoder_path = self.config.get("lightvae_encoder_vae_pth") or self.config.get("lightvae_encoder_path") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
+        teacher_encoder_path = decoder_path if resolved_vae_type == "wan2.2" else self.config.get("lightvae_encoder_vae_pth") or find_torch_model_path(self.config, filename="Wan2.2_VAE.pth")
 
         return {
             "vae_path": decoder_path,
@@ -1214,7 +1289,8 @@ class Wan22DenseRunner(WanRunner):
         }
 
     def load_vae_encoder(self):
-        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v", "i2va"]:
+        eden_video = self.config["task"] == "v2v" and "edenlive" in self.config.get("model_cls", "")
+        if not eden_video and self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v", "i2va"]:
             return None
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
@@ -1222,9 +1298,9 @@ class Wan22DenseRunner(WanRunner):
     def load_vae_decoder(self):
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         if self.config.get("use_tae", False):
-            tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
-            return self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
-        return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
+            return self.load_tiny_vae_decoder()
+        decoder = self.vae_cls(**self._build_wan22_vae_config(vae_offload))
+        return self._configure_vae_compile(decoder, components=("decoder",))
 
     def get_warmup_image_encoder_output(self, latent_shape):
         if self.config["task"] == "t2v":
@@ -1275,7 +1351,7 @@ class Wan22DenseRunner(WanRunner):
     def get_vae_encoder_output(self, img):
         transient = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
         if transient:
-            self.vae_encoder = self.load_vae_encoder()
+            self.vae_encoder = self._configure_vae_compile(self.load_vae_encoder(), components=("encoder",))
         try:
             return self.vae_encoder.encode(img.unsqueeze(0).to(device=AI_DEVICE, dtype=GET_DTYPE()))
         finally:
@@ -1321,25 +1397,34 @@ class LingbotRunner(Wan22MoeRunner):
             "model_type": "wan2.2_moe_low_noise",
         }
         lora_configs = self.config.get("lora_configs")
-        if not lora_configs:
-            high_noise_model = WanLingbotModel(**high_model_kwargs)
-            low_noise_model = WanLingbotModel(**low_model_kwargs)
-        else:
-            high_noise_model = build_wan_model_with_lora(
-                WanLingbotModel,
-                self.config,
-                high_model_kwargs,
-                lora_configs,
-                model_type="high_noise_model",
-            )
-            low_noise_model = build_wan_model_with_lora(
-                WanLingbotModel,
-                self.config,
-                low_model_kwargs,
-                lora_configs,
-                model_type="low_noise_model",
-            )
-        return MultiModelStruct([high_noise_model, low_noise_model], self.config)
+        model_struct = MultiModelStruct([None, None], self.config)
+        try:
+            if not lora_configs:
+                model_struct.model[0] = WanLingbotModel(**high_model_kwargs)
+                model_struct.model[1] = WanLingbotModel(**low_model_kwargs)
+            else:
+                model_struct.model[0] = build_wan_model_with_lora(
+                    WanLingbotModel,
+                    self.config,
+                    high_model_kwargs,
+                    lora_configs,
+                    model_type="high_noise_model",
+                )
+                model_struct.model[1] = build_wan_model_with_lora(
+                    WanLingbotModel,
+                    self.config,
+                    low_model_kwargs,
+                    lora_configs,
+                    model_type="low_noise_model",
+                )
+        except BaseException as error:
+            if self.config.get("cpu_offload_numa", False):
+                try:
+                    model_struct.close_numa_cpu_weights()
+                except BaseException as cleanup_error:
+                    error.add_note(f"NUMA model construction cleanup also failed: {cleanup_error!r}")
+            raise
+        return model_struct
 
     @staticmethod
     def _se3_inverse(T: torch.Tensor) -> torch.Tensor:

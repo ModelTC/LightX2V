@@ -8,7 +8,7 @@ export CUDA_VISIBLE_DEVICES=0,1
 source "${lightx2v_path}/scripts/base/base.sh"
 mkdir -p "${lightx2v_path}/save_results"
 
-torchrun --standalone --nproc_per_node=2 "${lightx2v_path}/examples/neopp/replay_kv.py" \
+torchrun --standalone --nproc_per_node=2 "${lightx2v_path}/scripts/neopp/replay_kv.py" \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/neopp/neopp_dense_parallel_cfg.json" \
     --task t2i \

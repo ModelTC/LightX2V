@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=
-model_path=
-lora_dir=
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Qwen-Image-Edit-2511
+lora_dir=/path/to/loras
 
 export CUDA_VISIBLE_DEVICES=0
 

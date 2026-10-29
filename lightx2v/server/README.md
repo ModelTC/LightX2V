@@ -6,6 +6,9 @@ The LightX2V server is a distributed video/image generation service built with F
 
 ## Directory Structure
 
+For request defaults, model/task capability checks, and adding fields across CLI,
+Python, JSON, forms and OpenAI, see [Adding Request Parameters](../../docs/EN/source/developer_guides/request_parameters.md).
+
 ```
 server/
 ├── __init__.py
@@ -18,6 +21,7 @@ server/
 │   ├── __init__.py
 │   ├── router.py            # Main router aggregation
 │   ├── deps.py              # Dependency injection container
+│   ├── request_parsing.py   # Schema-driven form decoding and documentation
 │   ├── server.py            # ApiServer class
 │   ├── files.py             # /v1/files/*
 │   ├── service_routes.py    # /v1/service/*
@@ -46,6 +50,39 @@ server/
 │   └── audio.py             # AudioHandler
 └── metrics/                 # Prometheus metrics
 ```
+
+## NUMA-local CPU offload weights
+
+On Linux CUDA hosts with known GPU NUMA topology, enable rank-local pinned
+weight placement in the model configuration:
+
+```json
+{
+  "cpu_offload": true,
+  "offload_granularity": "block",
+  "cpu_offload_numa": true
+}
+```
+
+The existing inference, server and Python pipeline entry points use the same
+loader. GPU topology is resolved through CUDA; no CPU affinity or launcher
+environment settings are required. Each rank owns one arena using the existing
+SysV/NUMA/CUDA-registration backend. Ordinary checkpoint and adapter loading and
+per-GPU H2D transfers are preserved. Compatibility follows the operator's CPU
+storage contract, including ordinary floating weights and common per-channel
+FP8/INT8 backends such as Q8F, vLLM, SGL and Triton. Operators must declare their
+CPU storage through `base_attrs` or `tensor_name` and any final dtype conversion
+through `cpu_storage_dtype`. The loader checks that final operator tensors still
+reference the registered arena and rejects undeclared CPU state. NVFP4, GGUF,
+Marlin and `fp8-pertensor` use specialized loading/storage paths that require
+separate adaptations and are rejected before checkpoint loading. Ordinary
+backend hardware and checkpoint requirements still apply. The
+option defaults to false and requires static CPU block offload;
+lazy loading, TP, LoRA, shared weights and contiguous offload are rejected.
+Call `runner.close()` after serving stops to retire transfers and release the arena.
+For the Python pipeline, call `pipeline.runner.close()` in a `finally` block.
+The InfiniteTalk/Wan model constructor and runner factory also release adopted
+NUMA weights if later inference-module, encoder or warmup initialization fails.
 
 ## Architecture
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-lightx2v_path=/path/to/Lightx2v
+lightx2v_path=/path/to/LightX2V
 model_path=/path/to/SekoTalk-Distill-int8
 
 

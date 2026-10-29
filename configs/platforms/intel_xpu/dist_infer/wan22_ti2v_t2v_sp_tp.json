@@ -11,7 +11,6 @@
     "vae_stride": [4, 16, 16],
     "self_attn_1_type": "torch_sdpa",
     "cross_attn_1_type": "torch_sdpa",
-    "cross_attn_2_type": "torch_sdpa",
     "tp_mm_type": "IntelTensorParallel",
     "tp_rms_norm_type": "IntelTensorParallelFP32",
     "sample_guide_scale": 5.0,

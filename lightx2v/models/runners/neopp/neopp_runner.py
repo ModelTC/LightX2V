@@ -298,8 +298,9 @@ class NeoppRunner(DefaultRunner):
         image = self._denorm(self.scheduler.image_prediction.float())
         image = (image.clamp(0, 1).permute(0, 2, 3, 1).cpu().numpy() * 255.0).round().astype(np.uint8)
         grid_image = Image.fromarray(image[0])
-        grid_image.save(self.input_info.save_result_path)
-        logger.info(f"✅ Image saved successfully to: {self.input_info.save_result_path} ✅")
+        if is_main_process():
+            grid_image.save(self.input_info.save_result_path)
+            logger.info(f"✅ Image saved successfully to: {self.input_info.save_result_path} ✅")
         return grid_image
 
     def _denorm(self, x: torch.Tensor, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]):

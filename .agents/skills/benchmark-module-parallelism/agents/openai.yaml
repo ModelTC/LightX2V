@@ -1,0 +1,4 @@
+interface:
+  display_name: "模块并行方案比较"
+  short_description: "比较同一模块的 TP/SP 完成延迟、显存增量和实际执行配置"
+  default_prompt: "使用 $benchmark-module-parallelism 比较固定全局输入与资源下的模块 TP/SP 方案。"

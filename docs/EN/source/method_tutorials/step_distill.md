@@ -129,13 +129,13 @@ Set `--model_path` to the original Wan model directory containing `config.json` 
 **T2V Complete Model:**
 
 ```bash
-bash scripts/wan/distill/run_wan_t2v_distill_model_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_t2v_distill_model.sh
 ```
 
 **I2V Complete Model:**
 
 ```bash
-bash scripts/wan/distill/run_wan_i2v_distill_model_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_i2v_distill_model.sh
 ```
 
 ### Step Distillation LoRA Inference Scripts
@@ -143,13 +143,13 @@ bash scripts/wan/distill/run_wan_i2v_distill_model_4step_cfg.sh
 **T2V LoRA:**
 
 ```bash
-bash scripts/wan/distill/run_wan_t2v_distill_lora_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_t2v_distill_lora.sh
 ```
 
 **I2V LoRA:**
 
 ```bash
-bash scripts/wan/distill/run_wan_i2v_distill_lora_4step_cfg.sh
+bash scripts/wan/inference/distill/run_wan_i2v_distill_lora.sh
 ```
 
 ## 🔧 Service Deployment

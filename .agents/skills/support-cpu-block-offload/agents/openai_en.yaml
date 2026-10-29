@@ -1,0 +1,8 @@
+# Optional English template; Codex reads openai.yaml, not this filename.
+interface:
+  display_name: "LightX2V CPU Block Offload and Weight Sharing"
+  short_description: "Integrate CPU block offload with host/NUMA shared weights"
+  default_prompt: "Use $support-cpu-block-offload to integrate CPU block offload and shared CPU weights for the target model, retaining its directory layout and requested parallelism, configuring host/NUMA in startup JSON, and providing launchers, bilingual guides, and validation results."
+
+policy:
+  allow_implicit_invocation: false

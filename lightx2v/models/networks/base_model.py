@@ -99,12 +99,17 @@ class BaseTransformerModel(ABC):
         from lightx2v_platform.ops.offload import get_block_offload_backend
 
         validate_contiguous_config(self.config, lora_path)
+        from lightx2v.common.offload.numa_weights import validate_numa_config
+
+        validate_numa_config(self.config, lora_path)
+        if self.config.get("cpu_offload_numa", False) and AI_DEVICE != "cuda":
+            raise ValueError("cpu_offload_numa requires CUDA")
         self._checkpoint_metadata = None
         if self.cpu_offload and self.offload_granularity == "block":
             backend = get_block_offload_backend(required=False)
             if backend is not None:
                 backend.prepare()
-            if self.config.get("cpu_offload_layout") == "contiguous" or (backend is not None and backend.validate_checkpoint):
+            if self.config.get("cpu_offload_block_contiguous", False) or (backend is not None and backend.validate_checkpoint):
                 self._checkpoint_metadata = {}
 
     def _init_tensor_parallel(self):
@@ -134,12 +139,14 @@ class BaseTransformerModel(ABC):
             "int8-triton",
             "fp8-vllm",
             "int8-vllm",
+            "int8-metal",
             "int8-vllm-hygon-dcu",
             "fp8-q8f",
             "int8-q8f",
             "int8-convrot",
             "fp8-b128-deepgemm",
             "fp8-f16-accum",
+            "fp8-f32-accum",
             "fp8-sgl",
             "int8-sgl",
             "int8-torchao",
@@ -252,7 +259,14 @@ class BaseTransformerModel(ABC):
 
     def _init_weights(self, weight_dict=None):
         if not self.config.get("shared_cpu_weights", False):
-            self._init_weights_impl(weight_dict)
+            try:
+                self._init_weights_impl(weight_dict)
+            except BaseException as error:
+                try:
+                    self.close_numa_cpu_weights()
+                except BaseException as cleanup_error:
+                    error.add_note(f"NUMA weight cleanup also failed: {cleanup_error!r}")
+                raise
             return
 
         try:
@@ -343,6 +357,13 @@ class BaseTransformerModel(ABC):
         owner.close()
         del self._shared_cpu_weight_owner
 
+    def close_numa_cpu_weights(self):
+        """Release rank-local pinned weights after all transfers have stopped."""
+        owner = self.__dict__.get("_numa_cpu_weight_owner")
+        if owner is not None:
+            owner.close()
+            del self._numa_cpu_weight_owner
+
     @abstractmethod
     def _init_infer(self):
         """Initialize inference modules.
@@ -355,7 +376,7 @@ class BaseTransformerModel(ABC):
         self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
         if self.lazy_load:
             self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
-        if self.config.get("cpu_offload_layout") == "contiguous":
+        if self.config.get("cpu_offload_block_contiguous", False):
             self.transformer_infer.offload_manager.init_contiguous_group(self.transformer_weights.offload_group)
 
     def _should_init_empty_model(self):
@@ -402,16 +423,34 @@ class BaseTransformerModel(ABC):
             from lightx2v.common.offload.block_loader import prepare_contiguous_group, validate_group_checkpoints
 
             group = self.transformer_weights.offload_group
-            if self.config.get("cpu_offload_layout") == "contiguous":
+            if self.config.get("cpu_offload_block_contiguous", False):
                 prepare_contiguous_group(group, self.original_weight_dict, self._checkpoint_metadata)
             elif group is not None and not self.lazy_load and not self.config.get("dummy_model"):
                 validate_group_checkpoints(group, self._checkpoint_metadata)
+
+        numa_map = None
+        if self.config.get("cpu_offload_numa", False):
+            from lightx2v.common.offload.numa_weights import materialize_numa_weights
+
+            if self.__dict__.get("_numa_cpu_weight_owner") is not None:
+                raise RuntimeError("NUMA offload weights are already initialized")
+            roots = [self.pre_weight, self.transformer_weights]
+            if hasattr(self, "post_weight"):
+                roots.append(self.post_weight)
+            numa_map = materialize_numa_weights(self.original_weight_dict, roots)
+            self._numa_cpu_weight_owner = numa_map.owner
+            self.original_weight_dict = numa_map
 
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
         if hasattr(self, "post_weight"):
             self.post_weight.load(self.original_weight_dict)
+
+        if numa_map is not None:
+            from lightx2v.common.offload.numa_weights import validate_numa_operator_views
+
+            validate_numa_operator_views(numa_map, roots)
 
         # Handle LoRA if needed
         if self.config.get("lora_dynamic_apply", False) and self.lora_path is not None:
@@ -608,10 +647,13 @@ class BaseTransformerModel(ABC):
 
         # Handle GGUF format
         if "gguf" in self.config.get("dit_quant_scheme", ""):
-            gguf_path = ""
             if os.path.isdir(safetensors_path):
                 gguf_type = self.config.get("dit_quant_scheme").replace("gguf-", "")
-                gguf_files = list(filter(lambda x: gguf_type in x, glob.glob(os.path.join(safetensors_path, "*.gguf"))))
+                gguf_files = [path for path in glob.glob(os.path.join(safetensors_path, "*.gguf")) if gguf_type in os.path.basename(path)]
+                if not gguf_files:
+                    raise FileNotFoundError(f"No GGUF file matching {gguf_type} in {safetensors_path}. Set dit_quantized_ckpt to the checkpoint file.")
+                if len(gguf_files) > 1:
+                    raise ValueError(f"Multiple GGUF files matching {gguf_type} in {safetensors_path}. Set dit_quantized_ckpt to the checkpoint file.")
                 gguf_path = gguf_files[0]
             else:
                 gguf_path = safetensors_path
@@ -644,7 +686,9 @@ class BaseTransformerModel(ABC):
                 for k in f.keys():
                     if any(remove_key in k for remove_key in remove_keys):
                         continue
-                    if f.get_tensor(k).dtype in [torch.float16, torch.bfloat16, torch.float]:
+                    if self.config.get("dit_quant_scheme") == "int8-metal" and k.endswith(".weight_scale"):
+                        weight_dict[k] = f.get_tensor(k).to(device=self.device, dtype=torch.float32)
+                    elif f.get_tensor(k).dtype in [torch.float16, torch.bfloat16, torch.float]:
                         if unified_dtype or all(s not in k for s in sensitive_layer):
                             weight_dict[k] = f.get_tensor(k).to(GET_DTYPE()).to(self.device)
                         else:

@@ -20,10 +20,10 @@ RUNNER_MODULES = {
     "lingbot_video": "lightx2v.models.runners.lingbot_video.lingbot_video_runner",
     "lingbot_world": "lightx2v.models.runners.wan.wan_runner",
     "lingbot_world_fast": "lightx2v.models.runners.wan.wan_lingbot_fast_runner",
+    "matrix_game4": "lightx2v.models.runners.wan.wan_matrix_game4_runner",
     "longcat_image": "lightx2v.models.runners.longcat_image.longcat_image_runner",
     "ltx2": "lightx2v.models.runners.ltx2.ltx2_runner",
     "ltx2_5": "lightx2v.models.runners.ltx2.ltx25_runner",
-    "ltx2_ar": "lightx2v.models.runners.ltx2.ltx2_runner",
     "minimax_h3": "lightx2v.models.runners.minimax_h3.minimax_h3_runner",
     "minimax_h3_causal": "lightx2v.models.runners.minimax_h3_causal.minimax_h3_causal_runner",
     "motus": "lightx2v.models.runners.motus.motus_runner",
@@ -31,21 +31,27 @@ RUNNER_MODULES = {
     "qwen_image": "lightx2v.models.runners.qwen_image.qwen_image_runner",
     "qwen_image_21": "lightx2v.models.runners.qwen_image_21.qwen_image_21_runner",
     "realtimewam": "lightx2v.models.runners.wan.realtimewam_runner",
+    "relayvsr": "lightx2v.models.runners.relayvsr.relayvsr_runner",
     "seedvr2": "lightx2v.models.runners.seedvr.seedvr_runner",
     "seko_talk": "lightx2v.models.runners.wan.wan_audio_runner",
     "seko_talk_ar": "lightx2v.models.runners.wan.wan_audio_runner",
+    "taomate_h3": "lightx2v.models.runners.taomate_h3.runner",
+    "streamrender_h3": "lightx2v.models.runners.streamrender_h3.runner",
     "swiftvr": "lightx2v.models.runners.swiftvr.swiftvr_runner",
     "wan2.1": "lightx2v.models.runners.wan.wan_runner",
     "wan2.1_sf": "lightx2v.models.runners.wan.wan_sf_runner",
-    "wan2.1_sf_mtxg2": "lightx2v.models.runners.wan.wan_matrix_game2_runner",
+    "wan2.1_realtime": "lightx2v.models.runners.wan.wan_realtime_video_runner",
     "wan2.1_vace": "lightx2v.models.runners.wan.wan_vace_runner",
     "wan2.2": "lightx2v.models.runners.wan.wan_runner",
     "wan2.2_animate": "lightx2v.models.runners.wan.wan_animate_runner",
     "wan2.2_animate2_distilled": "lightx2v.models.runners.wan.wan_animate2_runner",
-    "wan2.2_matrix_game3": "lightx2v.models.runners.wan.wan_matrix_game3_runner",
     "wan2.2_moe": "lightx2v.models.runners.wan.wan_runner",
     "wan2.2_moe_vace": "lightx2v.models.runners.wan.wan_vace_runner",
     "wan2.2_s2v": "lightx2v.models.runners.wan.wan_s2v_runner",
+    "wan21_edenlive": "lightx2v.models.runners.wan.edenlive_runner",
+    "wan21_edenlive_ar": "lightx2v.models.runners.wan.edenlive_runner",
+    "wan22_edenlive": "lightx2v.models.runners.wan.edenlive_runner",
+    "wan22_edenlive_ar": "lightx2v.models.runners.wan.edenlive_runner",
     "wan_dancer": "lightx2v.models.runners.wan.wan_dancer_runner",
     "worldmirror": "lightx2v.models.runners.worldmirror.worldmirror_runner",
     "worldplay_ar": "lightx2v.models.runners.worldplay.worldplay_ar_runner",
@@ -63,5 +69,13 @@ def build_runner(config):
 
     torch.set_grad_enabled(False)
     runner = RUNNER_REGISTER[model_cls](config)
-    runner.init_modules()
+    try:
+        runner.init_modules()
+    except BaseException as error:
+        if config.get("cpu_offload_numa", False):
+            try:
+                runner.close()
+            except BaseException as cleanup_error:
+                error.add_note(f"NUMA runner cleanup also failed: {cleanup_error!r}")
+        raise
     return runner

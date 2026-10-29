@@ -5,6 +5,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from loguru import logger
 
+from lightx2v.common.ops.mm.optimized_linear import apply_swiglu_linear
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
 from lightx2v.models.networks.minimax_h3.infer import fused_qkv  # noqa: F401 - registers the Triton backend
@@ -78,7 +79,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
     def _prepare_qkv(self, weights, hidden_states, rotary_emb):
         """Project QKV and return Q/K with normalization and RoPE applied."""
         if self.use_fused_qkv and weights.has_fused_qkv:
-            q, k, v = weights.to_qkv.apply(hidden_states).chunk(3, dim=-1)
+            q, k, v = weights.project_fused_qkv(hidden_states)
         else:
             if self.use_fused_qkv:
                 _warn_fused_qkv_fallback_once()
@@ -162,7 +163,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
     @staticmethod
     def _ff(weights, hidden_states):
         value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
-        return weights.out_proj.apply(value * F.silu(gate))
+        return apply_swiglu_linear(weights.out_proj, value, gate)
 
     def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None):
         # Keep the Python cache lookup outside the compiled block.

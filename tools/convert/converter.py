@@ -24,24 +24,27 @@ quant_path = str(Path(__file__).parent / "quant")
 if quant_path not in sys.path:
     sys.path.insert(0, quant_path)
 
-from h3_fp8_f16_accum import (  # noqa: E402
-    FP8_F16_ACCUM_QUANTIZATION_PROFILE,
-    create_h3_fp8_f16_accum_quantization,
-)
+from h3_fp8_f16_accum import create_h3_fp8_f16_accum_quantization  # noqa: E402
+from lingbot_fast_fp8_f16_accum import TARGET_KEYS as LINGBOT_FAST_TARGET_KEYS  # noqa: E402
+from lingbot_fast_fp8_f16_accum import LingbotFastFP8F16AccumQuantization  # noqa: E402
 from quant import *  # noqa: E402
-from qwen_image_21_fp8_f16_accum import (  # noqa: E402
-    QUANTIZATION_PROFILE as QWEN_IMAGE_21_FP8_F16_ACCUM_PROFILE,
-)
-from qwen_image_21_fp8_f16_accum import (  # noqa: E402
-    QwenImage21FP8F16AccumQuantization,
-)
+from qwen_image_21_fp8_f16_accum import QwenImage21FP8F16AccumQuantization  # noqa: E402
+from t5_fp8_f16_accum import T5FP8F16AccumQuantization  # noqa: E402
+from wan_fp8_f16_accum import WanFP8F16AccumQuantization  # noqa: E402
 
+from lightx2v.utils.fp8_f16_accum_checkpoint import (  # noqa: E402
+    H3_QUANTIZATION_PROFILE,
+    QWEN_IMAGE_21_QUANTIZATION_PROFILE,
+    T5_QUANTIZATION_PROFILE,
+    WAN_QUANTIZATION_PROFILE,
+)
 from lightx2v.utils.lora_loader import LoRALoader  # noqa: E402
 from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER  # noqa: E402
 from tools.convert.h3_video_vae_encoder import (  # noqa: E402
     FP8_ENCODER_CONV_MODES,
     convert_h3_video_vae_encoder_fp8,
 )
+from tools.convert.key_mapping import get_key_mapping_rules  # noqa: E402
 from tools.convert.qwen_image_21_vae_decoder import convert_qwen_image_21_vae_decoder_fp8  # noqa: E402
 
 dtype_mapping = {
@@ -49,288 +52,6 @@ dtype_mapping = {
     "int8-convrot": torch.int8,
     "fp8": torch.float8_e4m3fn,
 }
-
-
-def get_key_mapping_rules(direction, model_type):
-    if model_type == "wan_dit":
-        unified_rules = [
-            {
-                "forward": (r"^head\.head$", "proj_out"),
-                "backward": (r"^proj_out$", "head.head"),
-            },
-            {
-                "forward": (r"^head\.modulation$", "scale_shift_table"),
-                "backward": (r"^scale_shift_table$", "head.modulation"),
-            },
-            {
-                "forward": (
-                    r"^text_embedding\.0\.",
-                    "condition_embedder.text_embedder.linear_1.",
-                ),
-                "backward": (
-                    r"^condition_embedder.text_embedder.linear_1\.",
-                    "text_embedding.0.",
-                ),
-            },
-            {
-                "forward": (
-                    r"^text_embedding\.2\.",
-                    "condition_embedder.text_embedder.linear_2.",
-                ),
-                "backward": (
-                    r"^condition_embedder.text_embedder.linear_2\.",
-                    "text_embedding.2.",
-                ),
-            },
-            {
-                "forward": (
-                    r"^time_embedding\.0\.",
-                    "condition_embedder.time_embedder.linear_1.",
-                ),
-                "backward": (
-                    r"^condition_embedder.time_embedder.linear_1\.",
-                    "time_embedding.0.",
-                ),
-            },
-            {
-                "forward": (
-                    r"^time_embedding\.2\.",
-                    "condition_embedder.time_embedder.linear_2.",
-                ),
-                "backward": (
-                    r"^condition_embedder.time_embedder.linear_2\.",
-                    "time_embedding.2.",
-                ),
-            },
-            {
-                "forward": (r"^time_projection\.1\.", "condition_embedder.time_proj."),
-                "backward": (r"^condition_embedder.time_proj\.", "time_projection.1."),
-            },
-            {
-                "forward": (r"blocks\.(\d+)\.self_attn\.q\.", r"blocks.\1.attn1.to_q."),
-                "backward": (
-                    r"blocks\.(\d+)\.attn1\.to_q\.",
-                    r"blocks.\1.self_attn.q.",
-                ),
-            },
-            {
-                "forward": (r"blocks\.(\d+)\.self_attn\.k\.", r"blocks.\1.attn1.to_k."),
-                "backward": (
-                    r"blocks\.(\d+)\.attn1\.to_k\.",
-                    r"blocks.\1.self_attn.k.",
-                ),
-            },
-            {
-                "forward": (r"blocks\.(\d+)\.self_attn\.v\.", r"blocks.\1.attn1.to_v."),
-                "backward": (
-                    r"blocks\.(\d+)\.attn1\.to_v\.",
-                    r"blocks.\1.self_attn.v.",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.self_attn\.o\.",
-                    r"blocks.\1.attn1.to_out.0.",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn1\.to_out\.0\.",
-                    r"blocks.\1.self_attn.o.",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.cross_attn\.q\.",
-                    r"blocks.\1.attn2.to_q.",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn2\.to_q\.",
-                    r"blocks.\1.cross_attn.q.",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.cross_attn\.k\.",
-                    r"blocks.\1.attn2.to_k.",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn2\.to_k\.",
-                    r"blocks.\1.cross_attn.k.",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.cross_attn\.v\.",
-                    r"blocks.\1.attn2.to_v.",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn2\.to_v\.",
-                    r"blocks.\1.cross_attn.v.",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.cross_attn\.o\.",
-                    r"blocks.\1.attn2.to_out.0.",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn2\.to_out\.0\.",
-                    r"blocks.\1.cross_attn.o.",
-                ),
-            },
-            {
-                "forward": (r"blocks\.(\d+)\.norm3\.", r"blocks.\1.norm2."),
-                "backward": (r"blocks\.(\d+)\.norm2\.", r"blocks.\1.norm3."),
-            },
-            {
-                "forward": (r"blocks\.(\d+)\.ffn\.0\.", r"blocks.\1.ffn.net.0.proj."),
-                "backward": (
-                    r"blocks\.(\d+)\.ffn\.net\.0\.proj\.",
-                    r"blocks.\1.ffn.0.",
-                ),
-            },
-            {
-                "forward": (r"blocks\.(\d+)\.ffn\.2\.", r"blocks.\1.ffn.net.2."),
-                "backward": (r"blocks\.(\d+)\.ffn\.net\.2\.", r"blocks.\1.ffn.2."),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.modulation\.",
-                    r"blocks.\1.scale_shift_table.",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.scale_shift_table(?=\.|$)",
-                    r"blocks.\1.modulation",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.cross_attn\.k_img\.",
-                    r"blocks.\1.attn2.add_k_proj.",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn2\.add_k_proj\.",
-                    r"blocks.\1.cross_attn.k_img.",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.cross_attn\.v_img\.",
-                    r"blocks.\1.attn2.add_v_proj.",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn2\.add_v_proj\.",
-                    r"blocks.\1.cross_attn.v_img.",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.cross_attn\.norm_k_img\.weight",
-                    r"blocks.\1.attn2.norm_added_k.weight",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn2\.norm_added_k\.weight",
-                    r"blocks.\1.cross_attn.norm_k_img.weight",
-                ),
-            },
-            {
-                "forward": (
-                    r"img_emb\.proj\.0\.",
-                    r"condition_embedder.image_embedder.norm1.",
-                ),
-                "backward": (
-                    r"condition_embedder\.image_embedder\.norm1\.",
-                    r"img_emb.proj.0.",
-                ),
-            },
-            {
-                "forward": (
-                    r"img_emb\.proj\.1\.",
-                    r"condition_embedder.image_embedder.ff.net.0.proj.",
-                ),
-                "backward": (
-                    r"condition_embedder\.image_embedder\.ff\.net\.0\.proj\.",
-                    r"img_emb.proj.1.",
-                ),
-            },
-            {
-                "forward": (
-                    r"img_emb\.proj\.3\.",
-                    r"condition_embedder.image_embedder.ff.net.2.",
-                ),
-                "backward": (
-                    r"condition_embedder\.image_embedder\.ff\.net\.2\.",
-                    r"img_emb.proj.3.",
-                ),
-            },
-            {
-                "forward": (
-                    r"img_emb\.proj\.4\.",
-                    r"condition_embedder.image_embedder.norm2.",
-                ),
-                "backward": (
-                    r"condition_embedder\.image_embedder\.norm2\.",
-                    r"img_emb.proj.4.",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.self_attn\.norm_q\.weight",
-                    r"blocks.\1.attn1.norm_q.weight",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn1\.norm_q\.weight",
-                    r"blocks.\1.self_attn.norm_q.weight",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.self_attn\.norm_k\.weight",
-                    r"blocks.\1.attn1.norm_k.weight",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn1\.norm_k\.weight",
-                    r"blocks.\1.self_attn.norm_k.weight",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.cross_attn\.norm_q\.weight",
-                    r"blocks.\1.attn2.norm_q.weight",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn2\.norm_q\.weight",
-                    r"blocks.\1.cross_attn.norm_q.weight",
-                ),
-            },
-            {
-                "forward": (
-                    r"blocks\.(\d+)\.cross_attn\.norm_k\.weight",
-                    r"blocks.\1.attn2.norm_k.weight",
-                ),
-                "backward": (
-                    r"blocks\.(\d+)\.attn2\.norm_k\.weight",
-                    r"blocks.\1.cross_attn.norm_k.weight",
-                ),
-            },
-            # head projection mapping
-            {
-                "forward": (r"^head\.head\.", "proj_out."),
-                "backward": (r"^proj_out\.", "head.head."),
-            },
-        ]
-
-        if direction == "forward":
-            return [rule["forward"] for rule in unified_rules]
-        elif direction == "backward":
-            return [rule["backward"] for rule in unified_rules]
-        else:
-            raise ValueError(f"Invalid direction: {direction}")
-    elif model_type in {"h3", "h3_video_vae_decoder"}:
-        # MiniMax-H3 transformer and Video VAE decoder checkpoints already use
-        # LightX2V's runtime keys.
-        return []
-    else:
-        raise ValueError(f"Unsupported model type: {model_type}")
 
 
 def quantize_model(
@@ -1062,6 +783,7 @@ def main():
         "--model_type",
         choices=[
             "wan_dit",
+            "lingbot_fast",
             "h3",
             "h3_video_vae_decoder",
             "h3_video_vae_encoder",
@@ -1113,7 +835,7 @@ def main():
     parser.add_argument("--comfyui_mode", action="store_true")
     parser.add_argument("--full_quantized", action="store_true")
     parser.add_argument("--quantized", action="store_true")
-    parser.add_argument("--quantization_profile", choices=[FP8_F16_ACCUM_QUANTIZATION_PROFILE, QWEN_IMAGE_21_FP8_F16_ACCUM_PROFILE])
+    parser.add_argument("--quantization_profile", choices=[H3_QUANTIZATION_PROFILE, QWEN_IMAGE_21_QUANTIZATION_PROFILE, WAN_QUANTIZATION_PROFILE, T5_QUANTIZATION_PROFILE])
     parser.add_argument("--bits", type=int, default=8, choices=[8], help="Quantization bit width")
     parser.add_argument("--vae_encoder_conv_mode", choices=FP8_ENCODER_CONV_MODES)
     parser.add_argument(
@@ -1214,6 +936,12 @@ def main():
                 "target_keys": ["self_attn", "cross_attn", "ffn"],
                 "ignore_key": ["ca", "audio"],
             },
+            "lingbot_fast": {
+                "key_idx": 0,
+                "target_keys": list(LINGBOT_FAST_TARGET_KEYS),
+                "ignore_key": None,
+                "preserve_non_quant_dtype": True,
+            },
             "h3": {
                 "key_idx": 2,
                 "target_keys": ["attn", "ff", "adaln_proj"],
@@ -1310,8 +1038,14 @@ def main():
         if not args.quantized or args.linear_type != "fp8" or not args.single_file or args.output_ext != ".safetensors" or args.comfyui_mode:
             parser.error("FP8-F16 accumulation conversion requires --quantized --linear_type fp8 --output_ext .safetensors --single_file without --comfyui_mode")
         try:
-            if args.quantization_profile == QWEN_IMAGE_21_FP8_F16_ACCUM_PROFILE:
+            if args.quantization_profile == QWEN_IMAGE_21_QUANTIZATION_PROFILE:
                 args.quantization_policy = QwenImage21FP8F16AccumQuantization(args.model_type)
+            elif args.quantization_profile == WAN_QUANTIZATION_PROFILE:
+                args.quantization_policy = LingbotFastFP8F16AccumQuantization() if args.model_type == "lingbot_fast" else WanFP8F16AccumQuantization(args.model_type)
+                args.preserve_non_quant_dtype = True
+            elif args.quantization_profile == T5_QUANTIZATION_PROFILE:
+                args.quantization_policy = T5FP8F16AccumQuantization(args.model_type)
+                args.preserve_non_quant_dtype = True
             else:
                 args.quantization_policy = create_h3_fp8_f16_accum_quantization(args.quantization_profile, args.model_type)
         except ValueError as profile_error:

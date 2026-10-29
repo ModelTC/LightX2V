@@ -2,39 +2,18 @@ import argparse
 import json
 import os
 
-import torch
 import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import RUNNER_MODULES, build_runner
-from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import *
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v.utils.set_config import build_cli_inputs, init_parallel, print_config, print_request
 from lightx2v.utils.utils import validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
-def distributed_barrier():
-    import torch.distributed as dist
-
-    if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() <= 1:
-        return False
-
-    from lightx2v_platform.base.global_var import AI_DEVICE
-
-    if AI_DEVICE == "cuda" and torch.cuda.is_available():
-        torch.cuda.synchronize()
-        dist.barrier(device_ids=[torch.cuda.current_device()])
-    else:
-        dist.barrier()
-
-    from loguru import logger
-
-    logger.info(f"[Barrier] synchronized all ranks")
-    return True
-
-
-def main():
+def build_parser():
+    """Declare CLI options; request values are separated by build_cli_inputs."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=None, help="The seed for random generator")
     parser.add_argument(
@@ -43,7 +22,7 @@ def main():
         required=True,
         choices=RUNNER_MODULES,
     )
-    parser.add_argument("--model-variant", type=str, default=None, help="Model-specific startup weight variant; MiniMax-H3 uses fl2av or ref2av.")
+    parser.add_argument("--model-variant", type=str, default=None, help="Model-specific startup weight variant; MiniMax-H3: fl2av/ref2av; Matrix-Game-4: castle/ancient-egypt/racing.")
 
     parser.add_argument(
         "--task",
@@ -66,9 +45,11 @@ def main():
             "l2av",
             "fl2av",
             "ref2av",
+            "refv2v",
             "refa2v",
             "i2va",
             "v2av",
+            "v2v",
             "ltx2_s2v",
             "sr",
             "recon",
@@ -110,6 +91,19 @@ def main():
         help="Input source video path. Its role is determined by the selected task.",
     )
     parser.add_argument("--video_duration", type=float, default=None, help="Requested output duration in seconds for audio-driven video generation.")
+    parser.add_argument(
+        "--draft_steps",
+        type=int,
+        default=None,
+        help="MiniMax-H3: only a positive K smaller than configured infer_steps enables a draft prefix and final velocity projection. Omit or use K >= infer_steps for normal sampling.",
+    )
+    parser.add_argument("--resample_source_video", type=str, default=None, help="MiniMax-H3 source video with audio; RGB frames are resized to the target canvas before VAE encoding and regeneration.")
+    parser.add_argument(
+        "--resample_start_step",
+        type=int,
+        default=None,
+        help="MiniMax-H3 zero-based regeneration start index in [0,infer_steps]. Defaults to the startup config or 1; 0 runs all steps, infer_steps only decodes the VAE-encoded source.",
+    )
     parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config.")
     parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
     parser.add_argument("--image_strength", type=str, default=None, help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
@@ -142,7 +136,7 @@ def main():
         "--pose_video_path",
         type=str,
         default=None,
-        help="Pose driving video for Wan s2v / animate (e.g. examples/pose.mp4).",
+        help="Pose driving video for Wan s2v / animate (e.g. /path/to/pose.mp4).",
     )
     parser.add_argument(
         "--face_video_path",
@@ -207,7 +201,11 @@ def main():
     parser.add_argument("--reference_video_frame_cap", type=int, default=None, help="(v2av) Maximum number of frames to read from the reference/control video. Defaults to the full clip.")
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     startup_config, request_data = build_cli_inputs(args)
     if startup_config["parallel"]:
         platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
@@ -218,16 +216,21 @@ def main():
 
     validate_config_paths(startup_config)
 
-    with ProfilingContext4DebugL1("Total Cost"):
-        runner = build_runner(startup_config)
-        input_info = runner.prepare_request(request_data)
-        print_request(input_info, runner.get_supported_request_fields(input_info.task))
-        runner.run_request(input_info)
-
-    # Clean up distributed process group
-    if dist.is_initialized():
-        dist.destroy_process_group()
-        logger.info("Distributed process group cleaned up")
+    runner = None
+    try:
+        with no_sync_profiling(startup_config["model_cls"] in ("taomate_h3", "streamrender_h3")), ProfilingContext4DebugL1("Total Cost"):
+            runner = build_runner(startup_config)
+            input_info = runner.prepare_request(request_data)
+            print_request(input_info, runner.get_supported_request_fields(input_info.task))
+            runner.run_request(input_info)
+    finally:
+        try:
+            if runner is not None:
+                runner.close()
+        finally:
+            if dist.is_initialized():
+                dist.destroy_process_group()
+                logger.info("Distributed process group cleaned up")
 
 
 if __name__ == "__main__":

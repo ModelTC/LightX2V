@@ -2,8 +2,8 @@
 set -e
 
 # set path firstly
-lightx2v_path=/data/nvme0/gushiqiao/codes/LightX2V
-model_path=/data/nvme0/gushiqiao/models/LTX-2.5
+lightx2v_path=/path/to/LightX2V
+model_path=Lightricks/LTX-2.5
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 

@@ -3,7 +3,12 @@ import math
 import torch
 
 try:
-    from lightx2v_kernel.gemm import FP8_F16_ACCUM_MM_AVAILABLE, cutlass_scaled_fp8_mm_f16_accum
+    try:
+        from lightx2v_kernel_nvidia.gemm import FP8_F16_ACCUM_MM_AVAILABLE, cutlass_scaled_fp8_mm_f16_accum
+    except ModuleNotFoundError as exc:
+        if exc.name != "lightx2v_kernel_nvidia":
+            raise
+        from lightx2v_kernel.gemm import FP8_F16_ACCUM_MM_AVAILABLE, cutlass_scaled_fp8_mm_f16_accum
 
     if FP8_F16_ACCUM_MM_AVAILABLE:
         from lightx2v.common.ops.mm.triton_kernels import fp8_quantize_range_triton
@@ -12,14 +17,30 @@ except ImportError:
     cutlass_scaled_fp8_mm_f16_accum = None
 
 
+try:
+    from lightx2v_kernel_nvidia.gemm import FP8_F32_ACCUM_MM_AVAILABLE, cutlass_scaled_fp8_mm_f32_accum
+except ImportError:
+    FP8_F32_ACCUM_MM_AVAILABLE = False
+
+
+def fp8_accum_gemm(accum_dtype=torch.float16):
+    if accum_dtype == torch.float32:
+        if not FP8_F32_ACCUM_MM_AVAILABLE:
+            raise ImportError("FP8-F32 accumulation requires the Hopper lightx2v-kernel-nvidia extension")
+        return cutlass_scaled_fp8_mm_f32_accum
+    if accum_dtype != torch.float16:
+        raise ValueError(f"Unsupported FP8 accumulator dtype: {accum_dtype}")
+    return cutlass_scaled_fp8_mm_f16_accum if fp8_f16_accum_mm_available() else None
+
+
 def fp8_f16_accum_mm_unavailable_reason():
     if not FP8_F16_ACCUM_MM_AVAILABLE:
-        return "FP8-F16 accumulation requires the lightx2v-kernel extension with the FP8-F16 accumulation op and Triton"
+        return "FP8-F16 accumulation requires the lightx2v-kernel-nvidia extension (or a compatible legacy lightx2v-kernel wheel) with the FP8-F16 accumulation op and Triton"
     if not torch.cuda.is_available():
         return "CUDA is unavailable"
     capability = torch.cuda.get_device_capability()
-    if capability != (12, 0):
-        return f"SM120 is required, but the current CUDA capability is SM{capability[0]}{capability[1]}"
+    if capability not in ((9, 0), (12, 0)):
+        return f"SM90 or SM120 is required, but the current CUDA capability is SM{capability[0]}{capability[1]}"
     return None
 
 
@@ -35,11 +56,11 @@ def validate_fp8_f16_accum_qmax(activation_qmax):
     return activation_qmax
 
 
-def fp8_f16_accum_linear(input_tensor, weight, weight_scale, bias, activation_qmax):
+def fp8_f16_accum_linear(input_tensor, weight, weight_scale, bias, activation_qmax, gemm=cutlass_scaled_fp8_mm_f16_accum):
     input_shape = input_tensor.shape
     input_matrix = input_tensor.reshape(-1, input_shape[-1])
     quantized, activation_scale = fp8_quantize_range_triton(input_matrix, activation_qmax)
-    output = cutlass_scaled_fp8_mm_f16_accum(
+    output = gemm(
         quantized,
         weight,
         activation_scale,

@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/nb/LightX2V
-model_path=/data/nvme1/models/Tongyi-MAI/Z-Image-Turbo
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Z-Image-Turbo
 image_path=${lightx2v_path}/assets/inputs/imgs/img_0.jpg
 
 export CUDA_VISIBLE_DEVICES=0

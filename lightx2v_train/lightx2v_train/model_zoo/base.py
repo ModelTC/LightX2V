@@ -1,6 +1,7 @@
+import inspect
 import json
 import os
-from contextlib import nullcontext
+from contextlib import contextmanager
 
 import torch
 from diffusers.models.modeling_utils import SAFETENSORS_WEIGHTS_NAME, SAFE_WEIGHTS_INDEX_NAME
@@ -10,6 +11,7 @@ from huggingface_hub import split_torch_state_dict_into_shards
 from loguru import logger
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
+from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 
@@ -24,6 +26,7 @@ from lightx2v_train.model_zoo.capability_adapters.common import (
     CommonParallelCapability,
     CommonTrainableCapability,
 )
+from lightx2v_train.runtime.backend import get_backend, get_device
 from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import is_fsdp2_module
 from lightx2v_train.utils.utils import get_running_dtype
@@ -43,7 +46,7 @@ class BaseModel(CapabilityProvider):
         self.latent_dtype = get_running_dtype(model_config.get("latent_dtype", "fp32"))
         self.text_encoder_dtype = get_running_dtype(model_config.get("text_encoder_dtype", model_config["running_dtype"]))
         self.vae_dtype = get_running_dtype(model_config.get("vae_dtype", model_config["running_dtype"]))
-        self.device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
+        self.device = get_device()
         self.vae = None
         self.vae_config = None
         self.text_pipeline = None
@@ -51,9 +54,8 @@ class BaseModel(CapabilityProvider):
 
     def transformer_forward_context(self):
         # Autocast changes forward computation, not the optimizer's FP32 parameters.
-        if self.device.type in {"cpu", "cuda"} and self.running_dtype in {torch.float16, torch.bfloat16}:
-            return torch.autocast(device_type=self.device.type, dtype=self.running_dtype)
-        return nullcontext()
+        backend = get_backend()
+        return backend.autocast(dtype=self.running_dtype)
 
     def register_capabilities(self):
         self.capabilities.register(
@@ -146,6 +148,25 @@ class BaseModel(CapabilityProvider):
             logger.info("[model] vae structure:\n{}", self.vae)
         logger.info("[model] denoiser structure:\n{}", self.denoiser_module())
 
+    @contextmanager
+    def _active_vae(self):
+        """Run VAE encoding on the model device without changing its residency."""
+        vae = self.vae
+        original_device = vae.device
+        if original_device == self.device:
+            yield vae
+            return
+
+        backend = get_backend()
+        backend.synchronize()
+        backend.empty_cache()
+        try:
+            vae.to(self.device)
+            yield vae
+        finally:
+            vae.to(original_device)
+            backend.empty_cache()
+
     def encode_to_latent(self, sample):
         raise NotImplementedError
 
@@ -237,8 +258,49 @@ class BaseModel(CapabilityProvider):
         denoiser = self.denoiser_module()
         if adapter_name is None:
             adapter_name = get_adapter_name(denoiser)
-        denoiser.load_lora_adapter(lora_path, adapter_name=adapter_name)
+        weight_path = os.fspath(lora_path)
+        if os.path.isdir(weight_path):
+            weight_path = os.path.join(weight_path, "pytorch_lora_weights.safetensors")
+        raw = load_file(weight_path, device="cpu")
+        if not raw:
+            raise RuntimeError("Cannot load an empty LoRA checkpoint.")
+
+        prefixed = any(key.startswith("transformer.") for key in raw)
+        expected_state = {}
+        for key, value in raw.items():
+            if prefixed and not key.startswith("transformer."):
+                continue
+            if not torch.isfinite(value).all().item():
+                raise RuntimeError(f"LoRA checkpoint contains a non-finite tensor: {key}")
+            key = key.removeprefix("transformer.")
+            key = key.replace(".lora.down.weight", ".lora_A.weight").replace(".lora.up.weight", ".lora_B.weight")
+            if key in expected_state:
+                raise RuntimeError(f"Duplicate normalized LoRA key: {key}")
+            expected_state[key] = value
+        for key in expected_state:
+            paired_key = key.replace(".lora_A.weight", ".lora_B.weight") if key.endswith(".lora_A.weight") else key.replace(".lora_B.weight", ".lora_A.weight")
+            if paired_key not in expected_state:
+                raise RuntimeError(f"LoRA checkpoint is missing a paired tensor: {paired_key}")
+
+        with safe_open(weight_path, framework="pt", device="cpu") as weights:
+            raw_metadata = (weights.metadata() or {}).get("lora_adapter_metadata")
+        metadata = json.loads(raw_metadata) if raw_metadata else None
+        if prefixed and metadata is not None:
+            metadata = {key.removeprefix("transformer."): value for key, value in metadata.items() if key.startswith("transformer.")}
+        # Normalize mixed PEFT and Diffusers keys before Diffusers detects the format.
+        denoiser.load_lora_adapter(expected_state, adapter_name=adapter_name, prefix=None, metadata=metadata)
+        loaded_state = get_peft_model_state_dict(denoiser, adapter_name=adapter_name)
+        missing = expected_state.keys() - loaded_state.keys()
+        unexpected = loaded_state.keys() - expected_state.keys()
+        if missing or unexpected:
+            raise RuntimeError(f"Incomplete LoRA load: missing={sorted(missing)}, unexpected={sorted(unexpected)}")
+        for key, value in loaded_state.items():
+            actual = value.detach().cpu()
+            expected = expected_state[key].to(dtype=actual.dtype)
+            if not torch.equal(actual, expected):
+                raise RuntimeError(f"LoRA tensor was not loaded correctly: {key}")
         self._infer_lora_adapter_name = adapter_name
+        logger.info("Loaded inference LoRA from {} adapter={} tensors={}", weight_path, adapter_name, len(loaded_state))
 
     def unload_lora_for_infer(self):
         adapter_name = getattr(self, "_infer_lora_adapter_name", None)
@@ -266,7 +328,11 @@ class BaseModel(CapabilityProvider):
         os.makedirs(output_dir, exist_ok=True)
         lora_state_dict = convert_state_dict_to_diffusers(peft_state_dict)
         if hasattr(self.pipeline_cls, "save_lora_weights"):
-            self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True)
+            save_kwargs = {}
+            if "transformer_lora_adapter_metadata" in inspect.signature(self.pipeline_cls.save_lora_weights).parameters:
+                # Preserve alpha/rank scaling when loading the adapter.
+                save_kwargs["transformer_lora_adapter_metadata"] = self.denoiser_module().peft_config[adapter_name or "default"].to_dict()
+            self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True, **save_kwargs)
         else:
             save_file(lora_state_dict, os.path.join(output_dir, "pytorch_lora_weights.safetensors"))
         if auxiliary_state_dict:
@@ -293,7 +359,7 @@ class BaseModel(CapabilityProvider):
             options = StateDictOptions(
                 full_state_dict=True,
                 cpu_offload=True,
-                ignore_frozen_params=False,
+                ignore_frozen_params=True,
                 strict=False,
             )
             state_dict, _ = get_state_dict(denoiser, (), options=options)
@@ -301,6 +367,8 @@ class BaseModel(CapabilityProvider):
                 return {}, {}
 
         peft_state_dict = get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
+        if not peft_state_dict:
+            raise RuntimeError("LoRA state dict is empty; refusing to write an unusable checkpoint.")
         auxiliary_names = set(auxiliary_parameter_names)
         missing = auxiliary_names - state_dict.keys()
         if missing:
@@ -343,9 +411,6 @@ class BaseModel(CapabilityProvider):
             raise RuntimeError(f"Missing auxiliary keys in {path}: {missing}")
         if unexpected:
             logger.warning("Unexpected auxiliary keys in {}: {}", path, unexpected)
-
-    def load_full_weights_for_resume(self, resume_ckpt_path):
-        raise NotImplementedError(f"{self.__class__.__name__} must define load_full_weights_for_resume().")
 
     def prepare_consolidated_state_dict(self, state_dict):
         return state_dict

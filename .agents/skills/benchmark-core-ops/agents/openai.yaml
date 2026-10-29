@@ -1,0 +1,4 @@
+interface:
+  display_name: "核心算子性能比较"
+  short_description: "比较核心算子与 SP attention 的生产后端、执行配置和计算效率"
+  default_prompt: "使用 $benchmark-core-ops 比较指定输入下的生产算子后端与配置，并说明覆盖范围和性能结果。"

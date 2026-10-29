@@ -1,5 +1,5 @@
 {
-    "_comment": "生产 fp8 配置：25% 覆盖率，兼容全部已验证路径（单卡 / SP / cpu_offload / bf16 / ext_scope）。需要更高覆盖率 (44%) 且只在单卡 / SP / ext_scope 下用时，见 worldmirror_recon_fp8_wide.json。详见 docs/worldmirror_runnable_modes.md §11 配置文件兼容矩阵。",
+    "_comment": "QKV 使用 FP8 逐张量量化，attn.proj、fc1 和 fc2 保留 FP32。需要扩大 attn.proj 的量化范围时使用 worldmirror_recon_fp8_wide.json。校准 FP8 不支持 lazy_load。",
     "model_cls": "worldmirror",
     "task": "recon",
     "subfolder": "HY-WorldMirror-2.0",
@@ -48,9 +48,6 @@
 
     "cpu_offload": false,
     "lazy_load": false,
-    "feature_caching": "NoCaching",
-    "use_image_encoder": false,
-    "seq_parallel": false,
     "parallel": {},
 
     "dit_quant_scheme": "fp8-pertensor",

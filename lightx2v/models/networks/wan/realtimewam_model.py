@@ -37,6 +37,9 @@ class RealtimeWAM(FastWAMNativeModel):
                 raise ValueError(f"KV fusion logits do not match interval ending at layer {index}")
         return weights
 
+    def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        return self._load_ckpt(unified_dtype, sensitive_layer)
+
     def _init_weights(self, weight_dict=None):
         super()._init_weights(weight_dict)
         self.transformer_weights.pack_projections()

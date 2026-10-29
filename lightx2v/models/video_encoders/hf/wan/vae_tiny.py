@@ -10,13 +10,17 @@ class DotDict(dict):
 
 
 class WanVAE_tiny(nn.Module):
+    def compile_decoder(self):
+        self.taehv.compile_decoder()
+
     def __init__(self, vae_path="taew2_1.pth", dtype=torch.bfloat16, device="cuda", need_scaled=False):
         super().__init__()
         self.dtype = dtype
-        self.device = torch.device("cuda")
-        self.taehv = TAEHV(vae_path).to(self.dtype)
+        self.device = torch.device(device)
+        self.taehv = TAEHV(vae_path).to(device=self.device, dtype=self.dtype)
         self.temperal_downsample = [True, True, False]
         self.need_scaled = need_scaled
+        self._decode_memory = None
 
         if self.need_scaled:
             self.latents_mean = [
@@ -58,18 +62,39 @@ class WanVAE_tiny(nn.Module):
             ]
 
             self.z_dim = 16
+            self.register_buffer("_latents_mean", torch.tensor(self.latents_mean, dtype=self.dtype, device=self.device).view(1, self.z_dim, 1, 1, 1), persistent=False)
+            self.register_buffer("_latents_inv_std", 1.0 / torch.tensor(self.latents_std, dtype=self.dtype, device=self.device).view(1, self.z_dim, 1, 1, 1), persistent=False)
 
     @torch.no_grad()
-    def decode(self, latents):
-        latents = latents.unsqueeze(0)
+    def decode(self, latents, *, memory=None, first_chunk=True):
+        latents = latents.unsqueeze(0).to(self.dtype)
 
         if self.need_scaled:
-            latents_mean = torch.tensor(self.latents_mean).view(1, self.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-            latents_std = 1.0 / torch.tensor(self.latents_std).view(1, self.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-            latents = latents / latents_std + latents_mean
+            # Wan2.1 rounds the reciprocal standard deviation to the codec
+            # dtype before denormalization. Preserve that order, independently
+            # of the DiT/scheduler dtype (Lingbot keeps FP32 samples).
+            latents = latents / self._latents_inv_std.to(latents) + self._latents_mean.to(latents)
 
         # low-memory, set parallel=True for faster + higher memory
-        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False).transpose(1, 2).mul_(2).sub_(1)
+        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False, memory=memory, first_chunk=first_chunk).transpose(1, 2).mul_(2).sub_(1)
+
+    def get_decode_state(self):
+        return torch.utils._pytree.tree_map_only(torch.Tensor, torch.clone, getattr(self, "_decode_memory", None))
+
+    def set_decode_state(self, state):
+        self._decode_memory = torch.utils._pytree.tree_map_only(torch.Tensor, torch.clone, state)
+
+    def reset_decode_state(self):
+        self._decode_memory = None
+
+    @torch.no_grad()
+    def cached_decode_withflag(self, latents, is_first_chunk, is_last_chunk):
+        if is_first_chunk:
+            self._decode_memory = [None] * len(self.taehv.decoder)
+        images = self.decode(latents, memory=self._decode_memory, first_chunk=is_first_chunk)
+        if is_last_chunk:
+            self._decode_memory = None
+        return images
 
     @torch.no_grad()
     def encode_video(self, vid):
@@ -81,10 +106,13 @@ class WanVAE_tiny(nn.Module):
 
 
 class Wan2_2_VAE_tiny(nn.Module):
+    def compile_decoder(self):
+        self.taehv.compile_decoder()
+
     def __init__(self, vae_path="taew2_2.pth", dtype=torch.bfloat16, device="cuda", need_scaled=False):
         super().__init__()
         self.dtype = dtype
-        self.device = torch.device("cuda")
+        self.device = torch.device(device)
         self.taehv = TAEHV(vae_path, model_type="wan22").to(self.dtype)
         self.need_scaled = need_scaled
         if self.need_scaled:
@@ -191,18 +219,26 @@ class Wan2_2_VAE_tiny(nn.Module):
             ]
 
             self.z_dim = 48
+            self.register_buffer("_latents_mean", torch.tensor(self.latents_mean, dtype=self.dtype, device=self.device).view(1, self.z_dim, 1, 1, 1), persistent=False)
+            self.register_buffer("_latents_std", torch.tensor(self.latents_std, dtype=self.dtype, device=self.device).view(1, self.z_dim, 1, 1, 1), persistent=False)
 
     @torch.no_grad()
-    def decode(self, latents):
-        latents = latents.unsqueeze(0)
+    def decode(self, latents, *, memory=None, first_chunk=True):
+        latents = latents.unsqueeze(0).to(self.dtype)
 
         if self.need_scaled:
-            latents_mean = torch.tensor(self.latents_mean).view(1, self.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-            latents_std = 1.0 / torch.tensor(self.latents_std).view(1, self.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-            latents = latents / latents_std + latents_mean
+            latents_mean = self._latents_mean.to(device=latents.device, dtype=latents.dtype)
+            latents_std = self._latents_std.to(device=latents.device, dtype=latents.dtype)
+            # Match Wan2.2's z * std + mean without an extra BF16 reciprocal.
+            latents = latents * latents_std + latents_mean
 
         # low-memory, set parallel=True for faster + higher memory
-        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False).transpose(1, 2).mul_(2).sub_(1)
+        return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel=False, memory=memory, first_chunk=first_chunk).transpose(1, 2).mul_(2).sub_(1)
+
+    cached_decode_withflag = WanVAE_tiny.cached_decode_withflag
+    get_decode_state = WanVAE_tiny.get_decode_state
+    set_decode_state = WanVAE_tiny.set_decode_state
+    reset_decode_state = WanVAE_tiny.reset_decode_state
 
     @torch.no_grad()
     def encode_video(self, vid):

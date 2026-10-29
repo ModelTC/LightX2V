@@ -9,6 +9,8 @@ from loguru import logger
 from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
+from lightx2v.models.networks.qwen_image.infer.offload.transformer_infer import QwenImageOffloadTransformerInfer
+from lightx2v.models.networks.qwen_image.infer.utils import get_qwen_image_size
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
@@ -118,9 +120,12 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 t2i_text_cache = self._prepare_warmup_inputs(height, width, t2i_text_cache)
                 scheduler.generator = None
                 scheduler.prepare(self.input_info)
-                scheduler.step_pre(step_index=0)
-                self.model.infer(self.inputs)
-                scheduler.step_post()
+                try:
+                    scheduler.step_pre(step_index=0)
+                    self.model.infer(self.inputs)
+                    scheduler.step_post()
+                finally:
+                    self.release_resident_blocks()
                 self.run_vae_decoder(scheduler.latents)
                 torch_device_module.synchronize()
             finally:
@@ -263,7 +268,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         - "baseline" (default): HuggingFace baseline implementation
         """
         vae_type = self.config.get("vae_type", "baseline")
-        trt_vae_config = self.config.get("trt_vae_config", {})
 
         if vae_type == "tensorrt":
             try:
@@ -380,6 +384,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
         elif self.config["task"] == "i2i":
+            if self.is_layered and (text is None or not text.strip()):
+                text = self.text_encoders[0].get_image_caption(image_list[0])
             prompt_embeds, _, image_info = self.text_encoders[0].infer([text], image_list)
             self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
@@ -416,62 +422,38 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         return images
 
     def run(self, total_steps=None):
-        if total_steps is None:
-            total_steps = self.model.scheduler.infer_steps
-        for step_index in range(total_steps):
-            logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+        try:
+            if total_steps is None:
+                total_steps = self.model.scheduler.infer_steps
+            for step_index in range(total_steps):
+                logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
-            with ProfilingContext4DebugL1("step_pre"):
-                self.model.scheduler.step_pre(step_index=step_index)
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.model.scheduler.step_pre(step_index=step_index)
 
-            with ProfilingContext4DebugL1("🚀 infer_main"):
-                # Example of torch trace profile:
-                # with TorchTraceProfileContext() as profile:
-                #    profile.run(self.model.infer, self.inputs)
-                self.model.infer(self.inputs)
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    # Example of torch trace profile:
+                    # with TorchTraceProfileContext() as profile:
+                    #    profile.run(self.model.infer, self.inputs)
+                    self.model.infer(self.inputs)
 
-            with ProfilingContext4DebugL1("step_post"):
-                self.model.scheduler.step_post()
+                with ProfilingContext4DebugL1("step_post"):
+                    self.model.scheduler.step_post()
 
-            if self.progress_callback:
-                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+                if self.progress_callback:
+                    self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
 
-        return self.model.scheduler.latents, self.model.scheduler.generator
+            return self.model.scheduler.latents, self.model.scheduler.generator
+        finally:
+            self.release_resident_blocks()
+
+    def release_resident_blocks(self):
+        infer = self.model.transformer_infer
+        if isinstance(infer, QwenImageOffloadTransformerInfer):
+            infer.release_resident_blocks()
 
     def get_custom_shape(self):
-        default_aspect_ratios = {
-            "16:9": [1664, 928],
-            "9:16": [928, 1664],
-            "1:1": [1328, 1328],
-            "4:3": [1472, 1104],
-            "3:4": [1104, 1472],
-            "3:2": (1584, 1056),
-            "2:3": (1056, 1584),
-        }
-        as_maps = self.config.get("aspect_ratios", {})
-        as_maps.update(default_aspect_ratios)
-        max_size = self.config.get("max_custom_size", 1664)
-        min_size = self.config.get("min_custom_size", 256)
-
-        if len(self.input_info.size) == 2:
-            height, width = self.input_info.size
-            height, width = int(height), int(width)
-            if width > max_size or height > max_size:
-                scale = max_size / max(width, height)
-                width, height = int(width * scale), int(height * scale)
-                logger.warning(f"Custom shape is too large, scaled to {width}x{height}")
-            width, height = max(width, min_size), max(height, min_size)
-            logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
-            return (width, height)
-
-        aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
-        if aspect_ratio in as_maps:
-            logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
-            width, height = as_maps[aspect_ratio]
-            return (width, height)
-        logger.warning(f"Invalid aspect ratio: {aspect_ratio}, not in {as_maps.keys()}")
-
-        return None
+        return get_qwen_image_size(self.config, self.input_info.size, self.input_info.aspect_ratio)
 
     def set_latent_shape(self):
         # In disagg transformer mode, use the shape transmitted from encoder

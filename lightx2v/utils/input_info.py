@@ -38,6 +38,12 @@ class T2VInputInfo(InputInfo):
 
 
 @dataclass
+class MatrixGame4InputInfo(T2VInputInfo):
+    video_path: str = ""
+    image_path: str = ""
+
+
+@dataclass
 class I2VInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str = ""
@@ -48,6 +54,11 @@ class I2VInputInfo(InputInfo):
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     size: list = field(default_factory=list)
+
+
+@dataclass
+class EdenLiveInputInfo(I2VInputInfo):
+    video_path: str = ""
 
 
 @dataclass
@@ -275,6 +286,9 @@ class T2AVInputInfo(InputInfo):
     latent_shape: list = field(default_factory=list)
     size: list = field(default_factory=list)
     num_frames: Optional[int] = None
+    draft_steps: Optional[int] = None
+    resample_source_video: Optional[str] = None
+    resample_start_step: int | None = None
 
 
 @dataclass
@@ -292,6 +306,9 @@ class I2AVInputInfo(InputInfo):
     latent_shape: list = field(default_factory=list)
     size: list = field(default_factory=list)
     num_frames: Optional[int] = None
+    draft_steps: Optional[int] = None
+    resample_source_video: Optional[str] = None
+    resample_start_step: int | None = None
 
 
 @dataclass

@@ -1,5 +1,7 @@
 # LightX2V 快速入门指南
 
+环境安装完成后，继续[生成第一个视频](first_generation.md)，或使用 [Python API](python_api.md)。
+
 欢迎使用 LightX2V！本指南将帮助您快速搭建环境并开始使用 LightX2V 进行视频生成。
 
 ## 📋 目录
@@ -144,7 +146,7 @@ python setup.py install
 > 💡 **提示**:
 > - 如果不需要使用量化功能，可以跳过此步骤
 > - 量化模型可以从 [LightX2V HuggingFace](https://huggingface.co/lightx2v) 下载
-> - 更多量化相关信息请参考 [量化文档](method_tutorials/quantization.html)
+> - 更多量化相关信息请参考 [量化文档](../method_tutorials/quantization.md)
 
 #### 步骤 5: 验证安装
 ```python
@@ -275,7 +277,7 @@ python setup.py install
 > 💡 **提示**:
 > - 建议使用默认的 Triton kernel 进行推理
 > - 量化模型可以从 [LightX2V HuggingFace](https://huggingface.co/lightx2v) 下载
-> - 更多量化相关信息请参考 [量化文档](method_tutorials/quantization.html)
+> - 更多量化相关信息请参考 [量化文档](../method_tutorials/quantization.md)
 
 #### 步骤 8: 验证安装
 ```python

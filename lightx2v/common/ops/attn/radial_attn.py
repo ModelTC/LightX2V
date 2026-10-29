@@ -6,6 +6,7 @@ try:
 except ImportError:
     magi_ffa_func = None
 
+from lightx2v.utils import workload_stats
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
@@ -178,4 +179,6 @@ class RadialAttnWeight(AttnWeightTemplate):
             attn_type_map=self.attn_type_map,
             auto_range_merge=True,
         )[0]
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, ranges=(self.q_ranges, self.k_ranges), range_repeat=q.shape[1], operator="radial_attn", layout="SHD")
         return out.reshape(out.shape[0], -1)

@@ -12,15 +12,16 @@ class FastWAMSelfAttentionWeights(WeightModule):
             ROPE_REGISTER[config.get(rope_config_key, "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float64),
         )
         block = f"{prefix}.blocks.{block_index}"
+        mm_type = config["dit_quant_scheme"] if config.get("dit_quantized", False) else "Default"
         rms_type = config.get("rms_norm_type", "torch")
         eps = float(config.get("eps", 1e-6))
 
         self.add_module("modulation", TENSOR_REGISTER["Default"](f"{block}.modulation"))
         self.add_module("norm1", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](eps=eps))
-        self.add_module("q", MM_WEIGHT_REGISTER["Default"](f"{block}.self_attn.q.weight", f"{block}.self_attn.q.bias"))
-        self.add_module("k", MM_WEIGHT_REGISTER["Default"](f"{block}.self_attn.k.weight", f"{block}.self_attn.k.bias"))
-        self.add_module("v", MM_WEIGHT_REGISTER["Default"](f"{block}.self_attn.v.weight", f"{block}.self_attn.v.bias"))
-        self.add_module("o", MM_WEIGHT_REGISTER["Default"](f"{block}.self_attn.o.weight", f"{block}.self_attn.o.bias"))
+        self.add_module("q", MM_WEIGHT_REGISTER[mm_type](f"{block}.self_attn.q.weight", f"{block}.self_attn.q.bias"))
+        self.add_module("k", MM_WEIGHT_REGISTER[mm_type](f"{block}.self_attn.k.weight", f"{block}.self_attn.k.bias"))
+        self.add_module("v", MM_WEIGHT_REGISTER[mm_type](f"{block}.self_attn.v.weight", f"{block}.self_attn.v.bias"))
+        self.add_module("o", MM_WEIGHT_REGISTER[mm_type](f"{block}.self_attn.o.weight", f"{block}.self_attn.o.bias"))
         self.add_module("norm_q", RMS_WEIGHT_REGISTER[rms_type](f"{block}.self_attn.norm_q.weight", eps=eps))
         self.add_module("norm_k", RMS_WEIGHT_REGISTER[rms_type](f"{block}.self_attn.norm_k.weight", eps=eps))
         self.add_module("attn", ATTN_WEIGHT_REGISTER["torch_sdpa"]())
@@ -30,14 +31,15 @@ class FastWAMCrossAttentionWeights(WeightModule):
     def __init__(self, prefix, block_index, config):
         super().__init__()
         block = f"{prefix}.blocks.{block_index}"
+        mm_type = config["dit_quant_scheme"] if config.get("dit_quantized", False) else "Default"
         rms_type = config.get("rms_norm_type", "torch")
         eps = float(config.get("eps", 1e-6))
 
         self.add_module("norm3", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](f"{block}.norm3.weight", f"{block}.norm3.bias", eps=eps))
-        self.add_module("q", MM_WEIGHT_REGISTER["Default"](f"{block}.cross_attn.q.weight", f"{block}.cross_attn.q.bias"))
-        self.add_module("k", MM_WEIGHT_REGISTER["Default"](f"{block}.cross_attn.k.weight", f"{block}.cross_attn.k.bias"))
-        self.add_module("v", MM_WEIGHT_REGISTER["Default"](f"{block}.cross_attn.v.weight", f"{block}.cross_attn.v.bias"))
-        self.add_module("o", MM_WEIGHT_REGISTER["Default"](f"{block}.cross_attn.o.weight", f"{block}.cross_attn.o.bias"))
+        self.add_module("q", MM_WEIGHT_REGISTER[mm_type](f"{block}.cross_attn.q.weight", f"{block}.cross_attn.q.bias"))
+        self.add_module("k", MM_WEIGHT_REGISTER[mm_type](f"{block}.cross_attn.k.weight", f"{block}.cross_attn.k.bias"))
+        self.add_module("v", MM_WEIGHT_REGISTER[mm_type](f"{block}.cross_attn.v.weight", f"{block}.cross_attn.v.bias"))
+        self.add_module("o", MM_WEIGHT_REGISTER[mm_type](f"{block}.cross_attn.o.weight", f"{block}.cross_attn.o.bias"))
         self.add_module("norm_q", RMS_WEIGHT_REGISTER[rms_type](f"{block}.cross_attn.norm_q.weight", eps=eps))
         self.add_module("norm_k", RMS_WEIGHT_REGISTER[rms_type](f"{block}.cross_attn.norm_k.weight", eps=eps))
         self.add_module("attn", ATTN_WEIGHT_REGISTER["torch_sdpa"]())
@@ -47,11 +49,12 @@ class FastWAMFFNWeights(WeightModule):
     def __init__(self, prefix, block_index, config):
         super().__init__()
         block = f"{prefix}.blocks.{block_index}"
+        mm_type = config["dit_quant_scheme"] if config.get("dit_quantized", False) else "Default"
         eps = float(config.get("eps", 1e-6))
 
         self.add_module("norm2", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](eps=eps))
-        self.add_module("fc0", MM_WEIGHT_REGISTER["Default"](f"{block}.ffn.0.weight", f"{block}.ffn.0.bias"))
-        self.add_module("fc2", MM_WEIGHT_REGISTER["Default"](f"{block}.ffn.2.weight", f"{block}.ffn.2.bias"))
+        self.add_module("fc0", MM_WEIGHT_REGISTER[mm_type](f"{block}.ffn.0.weight", f"{block}.ffn.0.bias"))
+        self.add_module("fc2", MM_WEIGHT_REGISTER[mm_type](f"{block}.ffn.2.weight", f"{block}.ffn.2.bias"))
 
 
 class FastWAMBlockWeights(WeightModule):

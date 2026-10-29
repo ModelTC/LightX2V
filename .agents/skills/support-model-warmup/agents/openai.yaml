@@ -1,0 +1,7 @@
+interface:
+  display_name: "Support LightX2V Warmup"
+  short_description: "为 LightX2V 新模型适配并验证 warmup 流程"
+  default_prompt: "Use $support-model-warmup to audit normal, CPU-offload model/block/phase, and lazy-load block/phase support before adding and validating warmup for a LightX2V model."
+
+policy:
+  allow_implicit_invocation: false

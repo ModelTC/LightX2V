@@ -3,6 +3,7 @@ from functools import partial
 import torch
 from loguru import logger
 
+from lightx2v.utils import workload_stats
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
@@ -54,7 +55,10 @@ def dynamic_sparse_sage2(
 
     sparse_map, _, _ = get_block_map(q, k, topk_ratio=topk_ratio, BLKQ=block_q, BLKK=block_k)
     lut, valid_block_num = block_map_incremental_lut_triton(sparse_map)
-    return sage2_block_sparse_attn(q, k, v, lut, valid_block_num, block_q, block_k, arch)
+    out = sage2_block_sparse_attn(q, k, v, lut, valid_block_num, block_q, block_k, arch)
+    if workload_stats.enabled("attention"):
+        workload_stats.record_sparse_attn(q, k, v, sparse_map, block_q, block_k, topk_ratio, arch)
+    return out
 
 
 @dynamic_sparse_sage2.register_fake
@@ -75,6 +79,20 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
     sparsity_ratio = 0.8
     operator = "triton"
     per_block_mean = False
+
+    def compute_stats(self, arguments, output):
+        """SLA fixed top-k: shapes give scheduled work; tail-adjusted logical work may need the actual mask."""
+        if self.operator not in {"triton", "triton_ar", "sage2", "sage3", "fa4"}:
+            facts = super().compute_stats(arguments, output)
+            facts["sparse_schedule_gap"] = "this sparse backend has no audited SLA tile contract"
+            facts["note"] = "保留基类的稠密等价量；该backend的SLA精确调度量合同尚未核对。"
+            return facts
+        q, k, v = (arguments[name] for name in ("q", "k", "v"))
+        # Use the sparsity that initialized the production router; avoid a keep-to-sparsity-to-keep rounding cycle.
+        facts = self.compute_sparse_stats_from_sparsity(q, k, v, self.sparsity_ratio, self.BLKQ, self.BLKK, min_blocks=0 if self.operator == "triton_ar" else 1, layout="SHD")
+        facts["shape"] = {"q": list(q.shape), "k": list(k.shape), "v": list(v.shape), "layout": "SHD"}
+        facts["sparse"].update(method="SLA", backend=self.operator)
+        return facts
 
     def __init__(self, config=None):
         from .utils.sla_util import get_block_map, get_cuda_arch
@@ -177,6 +195,8 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         sparse_map, lut, real_topk = self._get_block_map(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
 
         out = self._attention.apply(q, k, v, sparse_map, lut, real_topk, self.BLKQ, self.BLKK)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, sparse_map, self.BLKQ, self.BLKK, self.topk, self.arch, operator="dynamic_sparse_triton")
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
 
         return out
@@ -200,6 +220,8 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         sparse_map, lut, real_topk = self._get_block_map_blhd(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
 
         out = self._attention_ar.apply(q, k, v, sparse_map, lut, real_topk, self.BLKQ, self.BLKK)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), sparse_map, self.BLKQ, self.BLKK, self.topk, self.arch, operator="dynamic_sparse_triton_ar")
         out = out.reshape(max_seqlen_q, -1)
 
         return out
@@ -243,6 +265,8 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         sparse_map, lut, real_topk = self._get_block_map(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
         lut, valid_block_num = self._block_map_ordinal_lut(sparse_map)
         out = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q, k, v, sparse_map, self.BLKQ, self.BLKK, self.topk, self.arch, operator="dynamic_sparse_sage3")
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
 
@@ -285,6 +309,8 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
             v=v,
             block_sparse_tensors=block_sparse_tensors,
         )
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), sparse_map, self.BLKQ, self.BLKK, self.topk, self.arch, operator="dynamic_sparse_fa4")
         out = out.reshape(max_seqlen_q, -1)
         return out
 
@@ -323,6 +349,11 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
             attn_type_map=attn_type_map,
             auto_range_merge=True,
         )[0]
+
+        if workload_stats.enabled("attention"):
+            # Recover views of consumed packed inputs after native success without retaining pre-reorder buffers.
+            statistics_qkv = (value.reshape(head_num, seqlen, head_dim).transpose(0, 1) for value in (q, k, v))
+            workload_stats.record_sparse_attn(*statistics_qkv, ranges=(q_ranges, k_ranges), operator="dynamic_sparse_magi", layout="SHD")
 
         out = out.reshape(head_num, seqlen, head_dim).permute(1, 0, 2)
 

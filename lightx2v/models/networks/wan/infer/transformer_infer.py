@@ -6,6 +6,7 @@ from loguru import logger
 
 from lightx2v.common.ops.attn.sol_attn import _morton3d_indices
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.models.networks.wan.conditioning import has_image_context
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -25,7 +26,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.config = config
         self.task = config["task"]
         self.seq_parallel = config["seq_parallel"]
-        self.has_image_context = self.task in {"i2v", "flf2v", "animate", "s2v", "rs2v"} and config.get("use_image_encoder", True)
+        self.has_image_context = has_image_context(config)
         self.blocks_num = config["num_layers"]
         self.phases_num = 3
         self.has_post_adapter = False
@@ -93,8 +94,9 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.self_attn_cu_seqlens_qkv = torch.tensor([0, query_len], dtype=torch.int32)
         self.cross_attn_cu_seqlens_q = torch.tensor([0, query_len], dtype=torch.int32)
         if self.has_image_context:
-            self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, 257], dtype=torch.int32)
-            context_len -= 257
+            self.image_context_len = context_len - self.config["text_len"]
+            self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, self.image_context_len], dtype=torch.int32)
+            context_len -= self.image_context_len
         self.cross_attn_cu_seqlens_kv = torch.tensor([0, context_len], dtype=torch.int32)
 
         if self.has_post_adapter:
@@ -353,8 +355,8 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         norm3_out = phase.norm3.apply(x)
         if self.has_image_context:
-            context_img = context[:257]
-            context = context[257:]
+            context_img = context[: self.image_context_len]
+            context = context[self.image_context_len :]
         else:
             context_img = None
 

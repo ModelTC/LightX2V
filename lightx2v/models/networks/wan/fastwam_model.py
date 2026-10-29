@@ -44,12 +44,13 @@ class FastWAMNativeModel(BaseTransformerModel):
         self.transformer_infer.set_scheduler(scheduler)
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
-        adapter_path = self.config.get("adapter_model_path")
+        checkpoint_key = "dit_quantized_ckpt" if self.dit_quantized else "adapter_model_path"
+        adapter_path = self.config.get(checkpoint_key)
         if not adapter_path:
-            raise ValueError("FastWAM requires `adapter_model_path`.")
+            raise ValueError(f"FastWAM requires `{checkpoint_key}`.")
         adapter_path = Path(str(adapter_path)).expanduser()
         if not adapter_path.is_absolute():
-            raise ValueError(f"FastWAM requires an absolute adapter model path, got: {adapter_path}")
+            raise ValueError(f"FastWAM requires an absolute `{checkpoint_key}`, got: {adapter_path}")
         adapter_path = adapter_path.resolve()
         if not adapter_path.exists():
             raise FileNotFoundError(str(adapter_path))
@@ -67,7 +68,9 @@ class FastWAMNativeModel(BaseTransformerModel):
         for key, tensor in state.items():
             if not isinstance(tensor, torch.Tensor):
                 continue
-            if tensor.is_floating_point():
+            if self.dit_quantized and (tensor.dtype == torch.float8_e4m3fn or key.endswith(".weight_scale")):
+                weight_dict[key] = tensor.to(device=self.device)
+            elif tensor.is_floating_point():
                 dtype = GET_DTYPE() if unified_dtype or all(s not in key for s in sensitive_layer) else GET_SENSITIVE_DTYPE()
                 weight_dict[key] = tensor.to(device=self.device, dtype=dtype)
             else:

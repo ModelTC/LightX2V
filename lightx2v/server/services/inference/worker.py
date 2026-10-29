@@ -208,4 +208,8 @@ class TorchrunInferenceWorker:
                 continue
 
     def cleanup(self):
-        self.dist_manager.cleanup()
+        try:
+            if self.runner is not None:
+                self.runner.close()
+        finally:
+            self.dist_manager.cleanup()

@@ -248,11 +248,6 @@ class MotusModel(BaseTransformerModel):
         for param in self.vlm_model.parameters():
             param.requires_grad = False
 
-        lat_t = 1 + self.config["num_video_frames"] // 4
-        lat_h = self.config["video_height"] // 32
-        lat_w = self.config["video_width"] // 32
-        batch_size = int(self.config.get("batch_size", 1))
-        self.grid_sizes = torch.tensor([lat_t, lat_h, lat_w], dtype=torch.long, device=self.device).unsqueeze(0).expand(batch_size, -1)
         self.scheduler = None
 
     @property
@@ -505,8 +500,6 @@ class MotusModel(BaseTransformerModel):
             image_np,
             (self.config.get("video_height", 384), self.config.get("video_width", 320)),
         )
-        if resized_np.dtype == np.uint8:
-            resized_np = resized_np.astype(np.float32) / 255.0
         return torch.from_numpy(resized_np).permute(2, 0, 1).unsqueeze(0).to(self.device)
 
     def prepare_state(self, state_value):
@@ -519,13 +512,7 @@ class MotusModel(BaseTransformerModel):
         return state.to(self.device)
 
     def build_instruction(self, prompt):
-        prefix = self.config.get(
-            "scene_prefix",
-            "The whole scene is in a realistic, industrial art style with three views: "
-            "a fixed rear camera, a movable left arm camera, and a movable right arm camera. "
-            "The aloha robot is currently performing the following task: ",
-        )
-        return f"{prefix}{prompt}"
+        return f"{self.config.get('scene_prefix', '')}{prompt}"
 
     def _tensor_to_pil(self, tensor):
         tensor = tensor.float().clamp(0, 1)

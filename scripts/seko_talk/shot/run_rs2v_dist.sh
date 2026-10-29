@@ -1,5 +1,5 @@
 #!/bin/bash
-lightx2v_path=
+lightx2v_path=/path/to/LightX2V
 
 export PYTHONPATH=${lightx2v_path}:$PYTHONPATH
 export TOKENIZERS_PARALLELISM=false

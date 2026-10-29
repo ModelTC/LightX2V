@@ -160,7 +160,7 @@ class WanVaceRunner(WanRunner):
 
             if refs is not None:
                 length = len(refs)
-                mask_pad = torch.zeros_like(mask[:, :length, :, :])
+                mask_pad = mask.new_zeros((mask.shape[0], length, *mask.shape[2:]))
                 mask = torch.cat((mask_pad, mask), dim=1)
             result_masks.append(mask)
 

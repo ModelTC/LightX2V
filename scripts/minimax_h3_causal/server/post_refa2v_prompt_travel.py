@@ -74,13 +74,13 @@ N/A"""
         "task": "refa2v",
         "prompt": prompt,
         # Encode client-local media so the server does not need these paths.
-        "image_path": file_to_base64("/data/nvme1/zhangbilang/zoe-diffusion-h3-prompttravel/configs/handoff/h3_six_key_action/images/meinv_01.png"),
-        "audio_path": file_to_base64("/data/nvme1/zhangbilang/zoe-diffusion-h3-prompttravel/configs/handoff/h3_six_key_action/audio/female_qingdao_62s.mp3"),
+        "image_path": file_to_base64("/path/to/meinv_01.png"),
+        "audio_path": file_to_base64("/path/to/female_qingdao_62s.mp3"),
         "action_prompts": action_prompts,
         "seed": 42,
         "num_frames": 974,
         "size": [1376, 768],
-        "save_result_path": "./minimax_h3_causal_prompt_travel_meinv_01_ablation40_six_key.mp4",
+        "save_result_path": "./minimax_h3_causal_5090.mp4",
     }
 
     logger.info(f"Submitting refa2v request to {url}")

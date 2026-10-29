@@ -10,6 +10,6 @@
     "vae_type": "tensorrt",
     "trt_vae_config": {
         "multi_profile": true,
-        "trt_engine_path": "vae_trt_extended_mp"
+        "trt_engine_path": "/path/to/vae_trt_extended_mp"
     }
 }

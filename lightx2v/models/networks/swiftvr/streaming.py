@@ -51,8 +51,8 @@ def padded_frame_count(frame_count: int) -> int:
 
 
 def build_video_chunks(frame_count: int, clip_length: int) -> list[VideoChunk]:
-    if clip_length % 4:
-        raise ValueError(f"SwiftVR clip_len must be a multiple of 4, got {clip_length}")
+    if clip_length <= 0 or clip_length % 4:
+        raise ValueError(f"SwiftVR clip_len must be a positive multiple of 4, got {clip_length}")
     if frame_count <= clip_length + 4:
         return [VideoChunk(ChunkType.LAST, 0, frame_count, 0)]
 

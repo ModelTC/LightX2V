@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
+from lightx2v.utils import workload_stats
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
@@ -298,6 +299,10 @@ class DraftAttnWeight(AttnWeightTemplate):
             auto_range_merge=True,
         )[0]
 
+        if workload_stats.enabled("attention"):
+            # Restore an SHD view in Magi-consumed bucket order, using the same coordinates as ranges.
+            statistics_qkv = (value.reshape(head_num, seqlen, head_dim).transpose(0, 1) for value in (q, k, v))
+            workload_stats.record_sparse_attn(*statistics_qkv, ranges=(q_ranges, k_ranges), operator="draft_attn", layout="SHD")
         out = out.reshape(head_num, seqlen, head_dim).permute(1, 0, 2)
 
         restore_idx = self.restore_idx_dict[(seqlen, frame_h, frame_w)]

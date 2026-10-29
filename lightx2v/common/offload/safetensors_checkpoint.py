@@ -46,7 +46,7 @@ class SafetensorsCheckpoint:
                 self._shard_headers[shard_name] = (8 + header_size, header)
         data_start, header = self._shard_headers[shard_name]
         entry = header[name]
-        dtypes = {"BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32}
+        dtypes = {"BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32, "I8": torch.int8}
         if entry["dtype"] not in dtypes:
             raise ValueError(f"Shared weight loading does not support dtype {entry['dtype']}: {name}")
         dtype, shape = dtypes[entry["dtype"]], tuple(entry["shape"])

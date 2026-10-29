@@ -1,0 +1,47 @@
+{
+    "size": [
+        704,
+        1280
+    ],
+    "fps": 24,
+    "infer_steps": 4,
+    "sample_shift": 5,
+    "sample_guide_scale": 1,
+    "enable_cfg": false,
+    "use_image_encoder": false,
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "rms_norm_type": "sgl-kernel",
+    "layer_norm_type": "Triton",
+    "rope_type": "flashinfer_rope",
+    "modulate_type": "triton",
+    "cpu_offload": false,
+    "ar_config": {
+        "num_frame_per_chunk": 3,
+        "local_attn_size": 18,
+        "sink_size": 6,
+        "kv_cache_scheme": "rolling",
+        "denoising_step_list": [
+            1000,
+            937.5,
+            833.3333333333,
+            625
+        ]
+    },
+    "use_compile": true,
+    "warmup": true,
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-sgl",
+    "dit_quantized_ckpt": "/path/to/EdenLive-x2v/quantized/dit-5b-fp8.safetensors",
+    "use_tae": true,
+    "tae_path": "/path/to/EdenLive-x2v/decoder-5b/lighttaew2_2.pth",
+    "need_scaled": true,
+    "streaming_vae": true,
+    "t5_cpu_offload": false,
+    "t5_quantized": true,
+    "t5_quant_scheme": "fp8-sgl",
+    "t5_rms_norm_type": "torch",
+    "t5_quantized_ckpt": "/path/to/EdenLive-x2v/quantized/t5-fp8.safetensors",
+    "use_cuda_graph": true
+}

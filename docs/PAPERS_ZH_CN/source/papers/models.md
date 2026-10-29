@@ -201,23 +201,6 @@
 
 ### World Models:
 
-- **Matrix-Game 2.0: An Open-Source, Real-Time, and Streaming Interactive World Model**, Technical Report 2025.
-
-  *Xianglong He, Chunli Peng, Zexiang Liu, Boyang Wang, Yifan Zhang, et al.*
-
-  [[Paper](https://arxiv.org/abs/2508.13009)] [[Code](https://matrix-game-v2.github.io/)] ![](https://img.shields.io/badge/keyboard-blue) ![](https://img.shields.io/badge/mouse-green) ![](https://img.shields.io/badge/DIT-brown)
-  <details> <summary>BibTex</summary>
-
-  ```text
-  @article{he2025matrix,
-    title={Matrix-Game 2.0: An Open-Source, Real-Time, and Streaming Interactive World Model},
-    author={He, Xianglong and Peng, Chunli and Liu, Zexiang and Wang, Boyang and Zhang, Yifan and Cui, Qi and Kang, Fei and Jiang, Biao and An, Mengyin and Ren, Yangyang and others},
-    journal={arXiv preprint arXiv:2508.13009},
-    year={2025}
-  }
-  ```
-  </details>
-
 - **HunyuanWorld 1.0: Generating Immersive, Explorable, and Interactive 3D Worlds from Words or Pixels**, Technical Report 2025.
 
   *HunyuanWorld Team, Zhenwei Wang, Yuhao Liu, Junta Wu, Zixiao Gu, Haoyuan Wang, et al.*

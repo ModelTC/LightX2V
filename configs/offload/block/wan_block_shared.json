@@ -28,7 +28,6 @@
   "shared_cpu_weight_backend": "sysv",
   "shared_cpu_weight_strict_numa": true,
   "shared_cpu_weight_register_chunk_mb": 128,
-  "lazy_load": false,
   "unload_modules": false,
   "t5_cpu_offload": false,
   "vae_cpu_offload": false,

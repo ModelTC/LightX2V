@@ -31,7 +31,6 @@ class NeoppMoeScheduler(BaseScheduler):
 
         noise_scale = self.noise_scale_init
         if self.noise_scale_mode in ("resolution", "dynamic", "dynamic_sqrt"):
-            noise_scale = math.sqrt((self.grid_h * self.grid_w) / (self.merge_size**2) / self.noise_scale_base_image_seq_len)
             base = float(self.noise_scale_base_image_seq_len)
             scale = math.sqrt((self.grid_h * self.grid_w) / (self.merge_size**2) / base)
             noise_scale = scale * float(self.noise_scale_init)

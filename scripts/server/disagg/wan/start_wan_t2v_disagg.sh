@@ -12,7 +12,7 @@
 set -e
 
 lightx2v_path=${LIGHTX2V_PATH:-/path/to/LightX2V}
-model_path=${WAN_T2V_MODEL_PATH:-/data/nvme0/models/Wan-AI/Wan2.1-T2V-14B}
+model_path=${WAN_T2V_MODEL_PATH:-/path/to/Wan-AI/Wan2.1-T2V-14B}
 
 GPU_ENCODER=${GPU_ENCODER:-1}
 GPU_TRANSFORMER=${GPU_TRANSFORMER:-6}
@@ -36,7 +36,8 @@ CUDA_VISIBLE_DEVICES=${GPU_DECODER} python -m lightx2v.server \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/disagg/wan/wan_t2v_disagg_decode.json" \
     --host 0.0.0.0 \
-    --port 8006 &
+    --port 8006 \
+    --metric_port 18006 &
 PID_DECODER=$!
 
 # 2. Start Transformer (Phase1 receiver + Phase2 sender)
@@ -47,7 +48,8 @@ CUDA_VISIBLE_DEVICES=${GPU_TRANSFORMER} python -m lightx2v.server \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/disagg/wan/wan_t2v_disagg_transformer.json" \
     --host 0.0.0.0 \
-    --port 8003 &
+    --port 8003 \
+    --metric_port 18003 &
 PID_TRANSFORMER=$!
 
 # 3. Start Encoder last (Phase1 sender, must start after Transformer is ready)
@@ -58,7 +60,8 @@ CUDA_VISIBLE_DEVICES=${GPU_ENCODER} python -m lightx2v.server \
     --model_path "${model_path}" \
     --config_json "${lightx2v_path}/configs/disagg/wan/wan_t2v_disagg_encoder.json" \
     --host 0.0.0.0 \
-    --port 8002 &
+    --port 8002 \
+    --metric_port 18002 &
 PID_ENCODER=$!
 
 echo ""
