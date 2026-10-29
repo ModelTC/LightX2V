@@ -15,8 +15,8 @@ except ImportError:
 
 from lightx2v.common.ops.compute_stats import gemm_flops
 from lightx2v.common.ops.mm.fp8_f16_accum import (
+    fp8_accum_gemm,
     fp8_f16_accum_linear,
-    fp8_f16_accum_mm_available,
     validate_fp8_f16_accum_qmax,
 )
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_per_token_quant, sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
@@ -2117,13 +2117,16 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
 
 @MM_WEIGHT_REGISTER("fp8-f16-accum")
 class MMWeightWfp8channelAfp8channelF16Accum(MMWeightWfp8channelAfp8channeldynamicSgl):
+    fp8_accum_dtype = torch.float16
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fp8_activation_qmax = None
 
     def enable_fp8_f16_accum(self, activation_qmax):
         activation_qmax = validate_fp8_f16_accum_qmax(activation_qmax)
-        if fp8_f16_accum_mm_available():
+        self.fp8_gemm = fp8_accum_gemm(self.fp8_accum_dtype)
+        if self.fp8_gemm is not None:
             self.fp8_activation_qmax = activation_qmax
 
     def apply(self, input_tensor):
@@ -2136,10 +2139,16 @@ class MMWeightWfp8channelAfp8channelF16Accum(MMWeightWfp8channelAfp8channeldynam
             self.weight_scale,
             self._get_actual_bias(),
             self.fp8_activation_qmax,
+            self.fp8_gemm,
         )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
         return output_tensor
+
+
+@MM_WEIGHT_REGISTER("fp8-f32-accum")
+class MMWeightWfp8channelAfp8channelF32Accum(MMWeightWfp8channelAfp8channelF16Accum):
+    fp8_accum_dtype = torch.float32
 
 
 @MM_WEIGHT_REGISTER("int8-sgl")

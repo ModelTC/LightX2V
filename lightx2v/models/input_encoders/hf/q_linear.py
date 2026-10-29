@@ -32,8 +32,8 @@ except ImportError:
     fp8_linear = None
 
 from lightx2v.common.ops.mm.fp8_f16_accum import (
+    fp8_accum_gemm,
     fp8_f16_accum_linear,
-    fp8_f16_accum_mm_available,
     validate_fp8_f16_accum_qmax,
 )
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm
@@ -316,13 +316,16 @@ class SglQuantLinearFp8(nn.Module):
 
 
 class F16AccumQuantLinearFp8(SglQuantLinearFp8):
+    fp8_accum_dtype = torch.float16
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fp8_activation_qmax = None
 
     def enable_fp8_f16_accum(self, activation_qmax):
         activation_qmax = validate_fp8_f16_accum_qmax(activation_qmax)
-        if fp8_f16_accum_mm_available():
+        self.fp8_gemm = fp8_accum_gemm(self.fp8_accum_dtype)
+        if self.fp8_gemm is not None:
             self.fp8_activation_qmax = activation_qmax
 
     def forward(self, input_tensor):
@@ -334,7 +337,12 @@ class F16AccumQuantLinearFp8(SglQuantLinearFp8):
             self.weight_scale,
             self.bias,
             self.fp8_activation_qmax,
+            self.fp8_gemm,
         )
+
+
+class F32AccumQuantLinearFp8(F16AccumQuantLinearFp8):
+    fp8_accum_dtype = torch.float32
 
 
 class MusaQuantLinearFp8(nn.Module):

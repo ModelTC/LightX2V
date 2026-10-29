@@ -26,6 +26,9 @@ class MiniMaxH3CausalTransformerInfer(H3AutoregressiveTransformerInferMixin, Min
         self.transposed_v = self.fused_kv_rope and config.get("attn_type") == "sage_attn2_sm120_cached"
         if self.fused_kv_rope and (config.get("ar_config", {}).get("kv_cache_scheme") != "fp8" or config.get("rope_type") != "torch_real_rope" or config.get("rope_compute_dtype", "fp32") != "fp32"):
             raise ValueError("fused_kv_rope requires FP8 KV and torch_real_rope with FP32 compute")
+        self.fused_qkv_cache = config.get("ar_config", {}).get("fused_qkv_cache", False)
+        if self.fused_qkv_cache and (not self.fused_kv_rope or self.transposed_v):
+            raise ValueError("fused_qkv_cache requires fused_kv_rope and a non-transposed V attention backend")
         self.fp8_kv = config.get("ar_config", {}).get("kv_cache_scheme") == "fp8"
         if self.fp8_kv and self.cuda_graph_stack is not None:
             raise ValueError("Causal H3 block CUDA Graph requires rolling KV; FP8 KV uses compiled tensor kernels")
@@ -95,7 +98,7 @@ class MiniMaxH3CausalTransformerInfer(H3AutoregressiveTransformerInferMixin, Min
         return output
 
     @torch.compiler.disable
-    def update_kv_cache(self, k, v, rotary_emb=None):
+    def update_kv_cache(self, q, k, v, query_freqs, key_freqs):
         # Ring metadata and step/layer selection belong outside the compiled
         # tensor graph. This also keeps block-offload graphs independent of
         # the logical layer currently occupying a staging buffer.
@@ -104,16 +107,21 @@ class MiniMaxH3CausalTransformerInfer(H3AutoregressiveTransformerInferMixin, Min
             cache.roll_window(self.block_idx, self.scheduler.plan.sink_rows, self.scheduler.evicted_rows)
         start = self.scheduler.cache_start
         end = start + k.shape[0]
-        cache.store_kv(k, v, start, end, self.block_idx)
+        if self.fused_qkv_cache:
+            output = cache.store_read_rope(q, k, v, start, self.block_idx, query_freqs, key_freqs)
+        else:
+            cache.store_kv(k, v, start, end, self.block_idx)
         # A prompt refresh attends only to the condition prefix. Its write
         # must leave the history length and ring metadata intact for the next chunk.
         if not self.scheduler.overwrite_condition:
             cache.set_ends(self.block_idx, end, end)
+        if self.fused_qkv_cache:
+            return output
         if self.fused_kv_rope:
-            k = cache.read_rope(self.block_idx, end, rotary_emb)
+            k = cache.read_rope(self.block_idx, end, key_freqs)
             v = cache.read_transposed(self.block_idx, end) if self.transposed_v else cache.v_cache(self.block_idx, 0, end)
-            return k, v
-        return cache.k_cache(self.block_idx, 0, end), cache.v_cache(self.block_idx, 0, end)
+            return q, k, v
+        return q, cache.k_cache(self.block_idx, 0, end), cache.v_cache(self.block_idx, 0, end)
 
     def _attention(self, weights, hidden_states, pre_infer_out):
         # Cache normalized keys before RoPE: older chunks move to bounded
@@ -129,8 +137,9 @@ class MiniMaxH3CausalTransformerInfer(H3AutoregressiveTransformerInferMixin, Min
         length = pre_infer_out.valid_sequence_length
         q, k, v = q[:length], k[:length], v[:length]
         if self.fp8_kv:
-            k, v = self.update_kv_cache(k, v, pre_infer_out.key_rotary_emb)
-            q = weights.rope.apply_single(q, pre_infer_out.rotary_emb, rotary_dim=pre_infer_out.rotary_emb[0].shape[-1])
+            q, k, v = self.update_kv_cache(q, k, v, pre_infer_out.rotary_emb, pre_infer_out.key_rotary_emb)
+            if not self.fused_qkv_cache:
+                q = weights.rope.apply_single(q, pre_infer_out.rotary_emb, rotary_dim=pre_infer_out.rotary_emb[0].shape[-1])
             if not self.fused_kv_rope:
                 k = weights.rope.apply_single(k, pre_infer_out.key_rotary_emb, rotary_dim=pre_infer_out.key_rotary_emb[0].shape[-1])
             if self.transposed_v:

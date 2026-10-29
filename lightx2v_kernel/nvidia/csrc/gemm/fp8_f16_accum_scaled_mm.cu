@@ -1,4 +1,4 @@
-// SM120 FP8 GEMM with FP16 accumulation.
+// FP8 GEMM with FP16 accumulation, plus FP32 accumulation on Hopper.
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAEvent.h>
@@ -29,16 +29,29 @@ using namespace cute;
 
 namespace {
 
+#if defined(LIGHTX2V_BUILD_SM90)
+using Arch = cutlass::arch::Sm90;
+using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecializedCooperative;
+using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8FastAccum;
+using TileK = _128;
+#else
+using Arch = cutlass::arch::Sm120;
+using EpilogueSchedule = cutlass::epilogue::collective::EpilogueScheduleAuto;
+using KernelSchedule = cutlass::gemm::collective::KernelScheduleAuto;
+using TileK = _64;
+#endif
+
 template <
     typename TileShape_,
     typename ElementD_ = cutlass::bfloat16_t,
-    bool FuseBias_ = false>
+    bool FuseBias_ = false,
+    typename ElementAccumulator_ = cutlass::half_t>
 struct GemmDefinition {
   using ElementA = cutlass::float_e4m3_t;
   using ElementB = cutlass::float_e4m3_t;
   using ElementD = ElementD_;
   using ElementC = void;
-  using ElementAccumulator = cutlass::half_t;
+  using ElementAccumulator = ElementAccumulator_;
   using TileShape = TileShape_;
   static constexpr bool FuseBias = FuseBias_;
   using ClusterShape = Shape<_1, _1, _1>;
@@ -98,7 +111,7 @@ struct GemmDefinition {
   using EpilogueEVT = std::conditional_t<FuseBias, OutputEVT, ScaledEVT>;
   using CollectiveEpilogue =
       typename cutlass::epilogue::collective::CollectiveBuilder<
-          cutlass::arch::Sm120,
+          Arch,
           cutlass::arch::OpClassTensorOp,
           TileShape,
           ClusterShape,
@@ -111,12 +124,12 @@ struct GemmDefinition {
           ElementD,
           LayoutD,
           AlignmentD,
-          cutlass::epilogue::collective::EpilogueScheduleAuto,
+          EpilogueSchedule,
           EpilogueEVT>::CollectiveOp;
 
   using CollectiveMainloop =
       typename cutlass::gemm::collective::CollectiveBuilder<
-          cutlass::arch::Sm120,
+          Arch,
           cutlass::arch::OpClassTensorOp,
           ElementA,
           LayoutA,
@@ -130,7 +143,7 @@ struct GemmDefinition {
           cutlass::gemm::collective::StageCountAutoCarveout<
               static_cast<int>(
                   sizeof(typename CollectiveEpilogue::SharedStorage))>,
-          cutlass::gemm::collective::KernelScheduleAuto>::CollectiveOp;
+          KernelSchedule>::CollectiveOp;
 
   using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
       Shape<int, int, int, int>,
@@ -167,19 +180,6 @@ struct GemmDefinition {
     }
   }
 };
-using NarrowGemm = GemmDefinition<Shape<_128, _128, _64>>;
-using WideGemm = GemmDefinition<Shape<_128, _256, _64>>;
-using NarrowGemmFp16 = GemmDefinition<Shape<_128, _128, _64>, cutlass::half_t>;
-using WideGemmFp16 = GemmDefinition<Shape<_128, _256, _64>, cutlass::half_t>;
-
-using NarrowGemmWithBias =
-    GemmDefinition<Shape<_128, _128, _64>, cutlass::bfloat16_t, true>;
-using WideGemmWithBias =
-    GemmDefinition<Shape<_128, _256, _64>, cutlass::bfloat16_t, true>;
-using NarrowGemmFp16WithBias =
-    GemmDefinition<Shape<_128, _128, _64>, cutlass::half_t, true>;
-using WideGemmFp16WithBias =
-    GemmDefinition<Shape<_128, _256, _64>, cutlass::half_t, true>;
 
 struct KernelConfig {
   bool wide_tile;
@@ -201,7 +201,7 @@ KernelConfig const& kernel_config(int64_t config_id) {
   TORCH_CHECK(
       config_id >= 0 &&
           config_id < static_cast<int64_t>(kKernelConfigs.size()),
-      "FP8-F16 GEMM config_id must be in [0, ",
+      "FP8 GEMM config_id must be in [0, ",
       kKernelConfigs.size(),
       "), got ",
       config_id);
@@ -215,11 +215,13 @@ struct AutotuneKey {
   int32_t k;
   torch::ScalarType output_dtype;
   bool has_bias;
+  bool fp32_accum;
 
   bool operator==(AutotuneKey const& other) const {
     return device_index == other.device_index && m == other.m &&
         n == other.n && k == other.k &&
-        output_dtype == other.output_dtype && has_bias == other.has_bias;
+        output_dtype == other.output_dtype && has_bias == other.has_bias &&
+        fp32_accum == other.fp32_accum;
   }
 };
 
@@ -230,7 +232,8 @@ struct AutotuneKeyHash {
     value = value * 31 + std::hash<int32_t>{}(key.n);
     value = value * 31 + std::hash<int32_t>{}(key.k);
     value = value * 31 + std::hash<int>{}(static_cast<int>(key.output_dtype));
-    return value * 31 + std::hash<bool>{}(key.has_bias);
+    value = value * 31 + std::hash<bool>{}(key.has_bias);
+    return value * 31 + std::hash<bool>{}(key.fp32_accum);
   }
 };
 
@@ -556,6 +559,7 @@ torch::Tensor run(
         k,
         output_dtype,
         bias.has_value(),
+        std::is_same_v<typename NarrowDefinition::ElementAccumulator, float>,
     };
     if (auto cached = cached_config_id(key)) {
       config_id = *cached;
@@ -597,6 +601,7 @@ torch::Tensor run(
   return output;
 }
 
+template <typename Accumulator = cutlass::half_t>
 torch::Tensor run_with_dtype(
     torch::Tensor activation,
     torch::Tensor weight,
@@ -607,10 +612,10 @@ torch::Tensor run_with_dtype(
     c10::optional<int64_t> config_id = c10::nullopt) {
   if (out_dtype == torch::kBFloat16) {
     return run<
-        NarrowGemm,
-        NarrowGemmWithBias,
-        WideGemm,
-        WideGemmWithBias>(
+        GemmDefinition<Shape<_128, _128, TileK>, cutlass::bfloat16_t, false, Accumulator>,
+        GemmDefinition<Shape<_128, _128, TileK>, cutlass::bfloat16_t, true, Accumulator>,
+        GemmDefinition<Shape<_128, _256, TileK>, cutlass::bfloat16_t, false, Accumulator>,
+        GemmDefinition<Shape<_128, _256, TileK>, cutlass::bfloat16_t, true, Accumulator>>(
         activation,
         weight,
         activation_scale,
@@ -623,10 +628,10 @@ torch::Tensor run_with_dtype(
       out_dtype == torch::kFloat16,
       "output dtype must be bfloat16 or float16");
   return run<
-      NarrowGemmFp16,
-      NarrowGemmFp16WithBias,
-      WideGemmFp16,
-      WideGemmFp16WithBias>(
+      GemmDefinition<Shape<_128, _128, TileK>, cutlass::half_t, false, Accumulator>,
+      GemmDefinition<Shape<_128, _128, TileK>, cutlass::half_t, true, Accumulator>,
+      GemmDefinition<Shape<_128, _256, TileK>, cutlass::half_t, false, Accumulator>,
+      GemmDefinition<Shape<_128, _256, TileK>, cutlass::half_t, true, Accumulator>>(
       activation,
       weight,
       activation_scale,
@@ -638,7 +643,20 @@ torch::Tensor run_with_dtype(
 
 }  // namespace
 
-torch::Tensor cutlass_scaled_fp8_mm_f16_accum_sm120(
+#if defined(LIGHTX2V_BUILD_SM90)
+torch::Tensor cutlass_scaled_fp8_mm_f32_accum(
+    torch::Tensor activation,
+    torch::Tensor weight,
+    torch::Tensor activation_scale,
+    torch::Tensor weight_scale,
+    torch::ScalarType out_dtype,
+    c10::optional<torch::Tensor> const& bias) {
+  return run_with_dtype<float>(
+      activation, weight, activation_scale, weight_scale, out_dtype, bias);
+}
+#endif
+
+torch::Tensor cutlass_scaled_fp8_mm_f16_accum(
     torch::Tensor activation,
     torch::Tensor weight,
     torch::Tensor activation_scale,
@@ -654,7 +672,7 @@ torch::Tensor cutlass_scaled_fp8_mm_f16_accum_sm120(
       bias);
 }
 
-torch::Tensor cutlass_scaled_fp8_mm_f16_accum_with_config_sm120(
+torch::Tensor cutlass_scaled_fp8_mm_f16_accum_with_config(
     torch::Tensor activation,
     torch::Tensor weight,
     torch::Tensor activation_scale,

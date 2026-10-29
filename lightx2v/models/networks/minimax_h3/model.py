@@ -8,7 +8,7 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason
+from lightx2v.common.ops.mm.fp8_f16_accum import fp8_accum_gemm, fp8_f16_accum_mm_unavailable_reason
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
 from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
@@ -32,6 +32,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 H3_CHANNEL_QUANT_SCHEMES = {
     "fp8-q8f",
     "fp8-f16-accum",
+    "fp8-f32-accum",
     "fp8-musa",
     "fp8-sgl",
     "fp8-torchao",
@@ -90,14 +91,17 @@ class MiniMaxH3Model(BaseTransformerModel):
                 raise NotImplementedError(f"MiniMax-H3 quantized inference requires a per-output-channel FP8/INT8 scheme; got {quant_scheme!r}. Supported schemes: {sorted(H3_CHANNEL_QUANT_SCHEMES)}")
             if not config.get("dit_quantized_ckpt"):
                 raise ValueError("MiniMax-H3 quantized inference requires dit_quantized_ckpt")
-            if quant_scheme == "fp8-f16-accum":
+            if quant_scheme in ("fp8-f16-accum", "fp8-f32-accum"):
                 validate_checkpoint(config["dit_quantized_ckpt"], profile=H3_QUANTIZATION_PROFILE)
+                if quant_scheme == "fp8-f32-accum":
+                    fp8_accum_gemm(torch.float32)
                 fallback_reason = fp8_f16_accum_mm_unavailable_reason()
                 if fallback_reason is not None:
                     logger.warning("MiniMax-H3 DiT FP8-F16 accumulation requested but {}; falling back to FP8-SGL", fallback_reason)
                 else:
                     logger.info(
-                        "MiniMax-H3 DiT FP8-F16 accumulation enabled for Q/K/V, attention output, and FFN projections (weight qmax={}, activation qmax={})",
+                        "MiniMax-H3 DiT {} enabled for Q/K/V, attention output, and FFN projections (weight qmax={}, activation qmax={})",
+                        quant_scheme,
                         WEIGHT_QMAX,
                         ACTIVATION_QMAX,
                     )
@@ -522,7 +526,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         return tensor.to(torch.bfloat16)
 
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
-        fp8_f16_profile = self.config.get("dit_quant_scheme") == "fp8-f16-accum"
+        fp8_f16_profile = self.config.get("dit_quant_scheme") in ("fp8-f16-accum", "fp8-f32-accum")
         if not self.use_tp and not fp8_f16_profile:
             return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
         checkpoint_path = self.config["dit_quantized_ckpt"]

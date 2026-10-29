@@ -111,6 +111,7 @@ PRODUCTION_MM_EXCLUSIONS = {
     "TensorParallel": "distributed tensor-parallel wrapper is outside the single-card scope",
     "fp8-b128-deepgemm": "block-scaled weight layout requires a separate synthetic weight contract",
     "fp8-f16-accum": "requires a model-provided activation qmax before the FP16-accumulation path is enabled",
+    "fp8-f32-accum": "requires a model-provided activation qmax and matching checkpoint weight/scale; use a model-specific adapter to enable the FP32-accumulation path",
     "fp8-pertensor": "checkpoint scale granularity requires a separate synthetic weight contract",
     "int4-g128-marlin": "groupwise INT4 packing requires a separate synthetic weight contract",
     "int8-convrot": "ConvRot requires checkpoint-provided rotation metadata",
