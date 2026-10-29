@@ -1,7 +1,6 @@
 """Frame-slot caches for RelayVSR's unrotated Wan and Flash keys/values."""
 
 from .base import BaseKVCachePool
-from .manager import register_self_attn_kv_cache
 
 
 class FrameRingKVCachePool(BaseKVCachePool):
@@ -21,6 +20,3 @@ class FrameRingKVCachePool(BaseKVCachePool):
         self._v_buffer[layer_id, start : start + span].copy_(v)
         visible = min(frame_index + 1, frames) * span
         return self.k_cache(layer_id, 0, visible), self.v_cache(layer_id, 0, visible)
-
-
-register_self_attn_kv_cache("frame_ring", FrameRingKVCachePool)

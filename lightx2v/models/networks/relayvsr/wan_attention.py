@@ -2,44 +2,42 @@
 # Adapted from kopperx/RelayVSR.
 # Copyright RelayVSR contributors.
 
-"""Exact boundary-preserving spatial attention for inference on CUDA.
+"""Wan spatial attention with exact rectangular windows and causal history.
 
-Q/K already carry spatial RoPE and their resolved temporal RoPE. Each program handles a 2-D query
-tile and directly loads its rectangular KV neighborhood. No replicated
-KV windows or quadratic mask are materialized.
+Triton directly loads each query tile's KV neighborhood. PyTorch SDPA uses
+shared window gathers and masks while preserving the same attention geometry.
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from functools import cache
 
 import torch
-import triton
-import triton.language as tl
 
-
-@dataclass(frozen=True)
-class SpatialAttentionSpec:
-    frames: int
-    height: int
-    width: int
-    window_height: int
-    window_width: int
-    temporal_window: int
-    key_frames: int
-    query_frame_offset: int = 0
-    key_frame_offset: int = 0
+from .attention import SpatialAttentionSpec, _local_attention
 
 
 @torch.library.custom_op("lightx2v::relayvsr_wan_attention", mutates_args=(), device_types="cuda")
-def _compiled_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, geometry: list[int]) -> torch.Tensor:
-    return spatial_attention(query, key, value, SpatialAttentionSpec(*geometry))
+def _compiled_triton_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, geometry: list[int]) -> torch.Tensor:
+    return wan_triton_attention(query, key, value, SpatialAttentionSpec(*geometry))
 
 
-@_compiled_attention.register_fake
-def _compiled_attention_fake(query, key, value, geometry):
+@_compiled_triton_attention.register_fake
+def _compiled_triton_attention_fake(query, key, value, geometry):
     return torch.empty_like(query, memory_format=torch.contiguous_format)
 
 
-@triton.jit
+@cache
+def _get_spatial_triton_kernel():
+    # Triton resolves kernel symbols from module globals. Load them only when
+    # the Triton backend executes so SDPA keeps no model-local Triton dependency.
+    global triton, tl
+    import triton
+    import triton.language as tl
+
+    return triton.jit(_spatial_forward)
+
+
 def _spatial_forward(
     Q,
     K,
@@ -134,11 +132,11 @@ def _spatial_forward(
     )
 
 
-def spatial_attention(query, key, value, spec: SpatialAttentionSpec):
+def wan_triton_attention(query, key, value, spec: SpatialAttentionSpec):
     """[B,T*H*W,heads,dim] -> same layout, exact shifted rectangular mask."""
     if torch.compiler.is_compiling():
         geometry = [spec.frames, spec.height, spec.width, spec.window_height, spec.window_width, spec.temporal_window, spec.key_frames, spec.query_frame_offset, spec.key_frame_offset]
-        return _compiled_attention(query, key, value, geometry)
+        return _compiled_triton_attention(query, key, value, geometry)
     if (
         key.shape != value.shape
         or query.shape[0] != key.shape[0]
@@ -163,12 +161,13 @@ def spatial_attention(query, key, value, spec: SpatialAttentionSpec):
     wh, ww = min(spec.window_height, spec.height), min(spec.window_width, spec.width)
     if min(wh, ww, spec.temporal_window) <= 0:
         raise ValueError("Spatial and temporal windows must be positive")
+    kernel = _get_spatial_triton_kernel()
     output = torch.empty_like(query, memory_format=torch.contiguous_format)
     bh, bw, bn = 4, 16, 64
     bm = bh * bw
     cols = triton.next_power_of_2(ww + bw - 1)
     rows = min(spec.height, wh + bh - 1)
-    _spatial_forward[
+    kernel[
         (
             spec.frames * triton.cdiv(spec.height, bh),
             triton.cdiv(spec.width, bw),
@@ -203,4 +202,34 @@ def spatial_attention(query, key, value, spec: SpatialAttentionSpec):
         num_warps=4,
         num_stages=2,
     )
+    return output
+
+
+@torch.library.custom_op("lightx2v::relayvsr_sdpa_wan_attention", mutates_args=())
+def _compiled_sdpa_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, geometry: list[int]) -> torch.Tensor:
+    return wan_sdpa_attention(query, key, value, SpatialAttentionSpec(*geometry))
+
+
+@_compiled_sdpa_attention.register_fake
+def _compiled_sdpa_attention_fake(query, key, value, geometry):
+    return torch.empty_like(query, memory_format=torch.contiguous_format)
+
+
+def wan_sdpa_attention(query, key, value, spec):
+    if torch.compiler.is_compiling():
+        geometry = [spec.frames, spec.height, spec.width, spec.window_height, spec.window_width, spec.temporal_window, spec.key_frames, spec.query_frame_offset, spec.key_frame_offset]
+        return _compiled_sdpa_attention(query, key, value, geometry)
+    n = spec.height * spec.width
+    first = spec.query_frame_offset - spec.key_frame_offset
+    wh, ww = min(spec.height, spec.window_height), min(spec.width, spec.window_width)
+    if min(wh, ww, spec.temporal_window) <= 0 or first < 0 or first + spec.frames > spec.key_frames or query.shape[1] != spec.frames * n or key.shape[1] != spec.key_frames * n:
+        raise ValueError("Invalid RelayVSR Wan spatial/temporal geometry")
+    output = torch.empty_like(query, memory_format=torch.contiguous_format)
+    for frame in range(spec.frames):
+        last = first + frame + 1
+        start = max(0, last - spec.temporal_window)
+        q = query[:, frame * n : (frame + 1) * n].transpose(1, 2)
+        k, v = (t[:, start * n : last * n].transpose(1, 2) for t in (key, value))
+        attended = _local_attention(q, k, v, spec.height, spec.width, ((wh, ww),) * (last - start), shifted=True)
+        output[:, frame * n : (frame + 1) * n].copy_(attended.transpose(1, 2))
     return output

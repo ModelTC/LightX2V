@@ -38,7 +38,10 @@ python -m lightx2v.infer \
 | `relayvsr.json` | 常驻显存，eager，关闭编译和预热 |
 | `relayvsr_compile.json` | Wan 和 Flash 的 Transformer block 都启用 `torch.compile`，启动时预热 |
 | `relayvsr_block_offload.json` | Wan 权重放在 CPU，用 LightX2V 双缓冲和预取逐块上卡；Flash 常驻 |
-| `relayvsr_sp.json` | 两卡序列并行；Wan 和 Flash 都复用 LightX2V 的 Ulysses all-to-all |
+| `relayvsr_sp.json` | 两卡序列并行；Wan 和 Flash 都使用 Ulysses all-to-all |
+| `musa/relayvsr.json` | PyTorch SDPA 局部注意力，eager 执行 |
+| `musa/relayvsr_compile.json` | SDPA，启用 block 编译和启动预热 |
+| `musa/relayvsr_sp.json` | SDPA 两卡编译/预热；Flash 按 query 分片，每个 block 合并执行一次 K/V all-gather |
 
 选择配置时修改脚本中的 `--config_json`，例如将其改为 `"${lightx2v_path}/configs/relayvsr/relayvsr_block_offload.json"`，即可启用 block 权重卸载。
 

@@ -3,12 +3,12 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
+from .attention import get_local_attention_ops
 from .compile import RelayCompileMixin, mark_sequence_dynamic
-from .flash_attention import triton_local_attention
 from .rope import apply_rope
 
 
-class FlashPreInfer:
+class FlashModelPreInfer:
     def frame(self, weights, lr):
         x = lr
         for i in (0, 2, 4):
@@ -21,10 +21,13 @@ class FlashPreInfer:
         return weights.condition_norm.apply(x) + weights.condition_type.tensor[0]
 
 
-class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
+class FlashModelTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
     def __init__(self, config, parallel, deployment):
         self.config, self.parallel = config, parallel
         self.init_compile(deployment)
+        backend = deployment.get("attention_backend", "triton")
+        self.local_attention = get_local_attention_ops(backend)[0]
+        self.query_parallel = backend == "torch_sdpa" and parallel.size > 1
 
     def run_block(self, block_idx, block, x, condition, past_key, past_value, q_rope, k_rope, windows, height, width):
         if self.use_compile:
@@ -41,9 +44,17 @@ class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
         value_op = block.condition_value if condition else block.value
         key = block.key_norm.apply(key_op.apply(normalized).view(-1, 2, 64))
         value = block.value_norm.apply(value_op.apply(normalized).view(-1, 2, 64))
-        query = self.parallel.to_heads(query, tokens)
-        key = self.parallel.to_heads(key, tokens)
-        value = self.parallel.to_heads(value, tokens)
+        if self.query_parallel:
+            # Keep queries local; exchange both KV tensors with one collective.
+            packed = self.parallel.gather(torch.stack((key, value), dim=1), tokens)
+            key, value = packed.permute(1, 0, 2, 3).contiguous().unbind(0)
+            query_start = self.parallel.rank * x.shape[0]
+            query = query[: min(x.shape[0], tokens - query_start)]
+            q_rope = tuple(part[query_start : query_start + query.shape[0]] for part in q_rope)
+        else:
+            query = self.parallel.to_heads(query, tokens)
+            key = self.parallel.to_heads(key, tokens)
+            value = self.parallel.to_heads(value, tokens)
         all_key = key if condition else torch.cat((past_key, key), dim=0)
         all_value = value if condition else torch.cat((past_value, value), dim=0)
         query = apply_rope(query, q_rope)
@@ -55,9 +66,14 @@ class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
             # The attention leaf repeats the video window for the dynamic KV
             # length; Python history length does not specialize the block.
             windows = tuple(tuple(spatial[name]) for name in names)
-        attended = triton_local_attention(query, all_key, all_value, height, width, windows)
-        attended = attended[0].transpose(0, 1)
-        x = x + block.output.apply(self.parallel.to_sequence(attended))
+        if self.query_parallel:
+            attended = self.local_attention(query, all_key, all_value, height, width, windows, query_start=query_start)
+            attended = attended[0].transpose(0, 1).flatten(1)
+            attended = F.pad(attended, (0, 0, 0, x.shape[0] - attended.shape[0]))
+        else:
+            attended = self.local_attention(query, all_key, all_value, height, width, windows)
+            attended = self.parallel.to_sequence(attended[0].transpose(0, 1))
+        x = x + block.output.apply(attended)
         gate, up = block.gate_up.apply(block.feed_forward_norm.apply(x)).chunk(2, -1)
         x = x + block.down.apply(F.silu(gate) * up)
         return x, key, value
@@ -93,7 +109,7 @@ class FlashTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
         return x
 
 
-class FlashPostInfer:
+class FlashModelPostInfer:
     def infer(self, weights, hidden, lr):
         height, width = lr.shape[-2] // 4, lr.shape[-1] // 4
         pixels = weights.projection.apply(F.silu(weights.head.apply(hidden)))

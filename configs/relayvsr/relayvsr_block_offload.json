@@ -1,4 +1,5 @@
 {
+  "attention_backend": "triton",
   "cross_attention_backend": "torch_sdpa",
   "cpu_offload": true,
   "offload_granularity": "block",

@@ -9,9 +9,9 @@ from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffl
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.transformer_infer import modulate
 
-from .compile import RelayCompileMixin, mark_sequence_dynamic
+from .attention import SpatialAttentionSpec, get_local_attention_ops
+from .compile import RelayCompileMixin, mark_sequence_dynamic, native_sdpa
 from .rope import apply_rope
-from .wan_attention import SpatialAttentionSpec, spatial_attention
 
 
 class RelayWanPreInfer:
@@ -63,6 +63,9 @@ class RelayWanTransformerInfer(RelayCompileMixin, WanOffloadTransformerInfer):
         }
         super().__init__(family_config)
         self.relay_config, self.parallel = config, parallel
+        backend = deployment.get("attention_backend", "triton")
+        self.local_attention = get_local_attention_ops(backend)[1]
+        self.use_native_sdpa_leaf = backend == "torch_sdpa" and self.use_compile and deployment.get("cross_attention_backend", "torch_sdpa") == "torch_sdpa"
         # Norms and modulation run in FP32, but residuals round to the inference
         # dtype after every sublayer, matching the official distilled checkpoint.
         self.sensitive_layer_dtype = self.infer_dtype
@@ -108,15 +111,18 @@ class RelayWanTransformerInfer(RelayCompileMixin, WanOffloadTransformerInfer):
         x.add_(y_out * gate_msa.squeeze())
         query = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(phase.norm3.apply(x))).view(-1, self.num_heads, self.head_dim)
         key, value = context
-        attended = phase.cross_attn_1.apply(
-            q=query,
-            k=key,
-            v=value,
-            cu_seqlens_q=self.cross_attn_cu_seqlens_q,
-            cu_seqlens_kv=self.cross_attn_cu_seqlens_kv,
-            max_seqlen_q=query.size(0),
-            max_seqlen_kv=key.size(0),
-        )
+        if self.use_native_sdpa_leaf:
+            attended = native_sdpa(query, key, value)
+        else:
+            attended = phase.cross_attn_1.apply(
+                q=query,
+                k=key,
+                v=value,
+                cu_seqlens_q=self.cross_attn_cu_seqlens_q,
+                cu_seqlens_kv=self.cross_attn_cu_seqlens_kv,
+                max_seqlen_q=query.size(0),
+                max_seqlen_kv=key.size(0),
+            )
         return x, phase.cross_attn_o.apply(attended)
 
     def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa=None):
@@ -147,7 +153,7 @@ class RelayWanTransformerInfer(RelayCompileMixin, WanOffloadTransformerInfer):
         wh, ww = self.relay_config["spatial_window_size"]
         if height > wh or width > ww:
             spec = SpatialAttentionSpec(1, height, width, wh, ww, self.relay_config["temporal_context_frames"], key_frames=visible, query_frame_offset=visible - 1)
-            attended = spatial_attention(query[None], key[None], value[None], spec)[0]
+            attended = self.local_attention(query[None], key[None], value[None], spec)[0]
         else:
             attended = phase.self_attn_1.apply(query, key, value).view(tokens, -1, self.head_dim)
         return phase.self_attn_o.apply(self.parallel.to_sequence(attended))

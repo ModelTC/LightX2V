@@ -40,7 +40,10 @@ For images, replace `--video_path` with `--image_path input.png` and save the ou
 | `relayvsr.json` | Weights remain on GPU, with eager execution; compilation and warmup are disabled |
 | `relayvsr_compile.json` | Enables `torch.compile` for both Wan and Flash Transformer blocks, with startup warmup |
 | `relayvsr_block_offload.json` | Wan weights stay on CPU and are loaded onto the GPU block by block using LightX2V double buffering and prefetch; Flash remains on GPU |
-| `relayvsr_sp.json` | Two-GPU sequence parallelism; both Wan and Flash reuse LightX2V Ulysses all-to-all |
+| `relayvsr_sp.json` | Two-GPU sequence parallelism; Wan and Flash use Ulysses all-to-all |
+| `musa/relayvsr.json` | Eager execution with the PyTorch SDPA local attention backend |
+| `musa/relayvsr_compile.json` | SDPA with block compilation and startup warmup |
+| `musa/relayvsr_sp.json` | Two-GPU SDPA with compilation/warmup; Flash shards queries and performs one combined K/V all-gather per block |
 
 Select a configuration by changing `--config_json` in the script. For example, set it to `"${lightx2v_path}/configs/relayvsr/relayvsr_block_offload.json"` to enable block weight offload.
 

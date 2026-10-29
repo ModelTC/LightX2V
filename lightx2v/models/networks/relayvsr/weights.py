@@ -109,7 +109,7 @@ class WanPostWeights(RelayWeights):
         self.linear("projection", "proj_out")
 
 
-class FlashPreWeights(RelayWeights):
+class FlashModelPreWeights(RelayWeights):
     def __init__(self, config):
         super().__init__()
         for i, stride, padding in ((0, 2, 1), (2, 2, 1), (4, 1, 1), (6, 1, 0)):
@@ -121,7 +121,7 @@ class FlashPreWeights(RelayWeights):
         self.tensor("condition_type", "condition_type_embedding")
 
 
-class FlashBlockWeights(RelayWeights):
+class FlashModelBlockWeights(RelayWeights):
     def __init__(self, index, config):
         super().__init__()
         prefix = f"backbone.blocks.{index}."
@@ -135,7 +135,7 @@ class FlashBlockWeights(RelayWeights):
         self.linear("down", prefix + "feed_forward.down", bias=False)
 
 
-class FlashPostWeights(RelayWeights):
+class FlashModelPostWeights(RelayWeights):
     def __init__(self):
         super().__init__()
         self.linear("head", "spatial_head.0")
@@ -185,12 +185,12 @@ class WanWeights(WeightModule):
                         self.offload_block_cuda_buffers.append(slot)
 
 
-class FlashWeights(WeightModule):
+class FlashModelWeights(WeightModule):
     def __init__(self, path, config):
         super().__init__()
-        self.add_module("pre", FlashPreWeights(config))
-        self.add_module("blocks", WeightModuleList([FlashBlockWeights(i, config) for i in range(10)]))
-        self.add_module("post", FlashPostWeights())
+        self.add_module("pre", FlashModelPreWeights(config))
+        self.add_module("blocks", WeightModuleList([FlashModelBlockWeights(i, config) for i in range(10)]))
+        self.add_module("post", FlashModelPostWeights())
         with safe_open(path, framework="pt", device="cpu") as handle:
             # condition_rgb_projection is an auxiliary training head, unused by decode.
             keys = [key for key in handle.keys() if not key.startswith("condition_rgb_projection.")]  # noqa: SIM118 - safe_open is not iterable

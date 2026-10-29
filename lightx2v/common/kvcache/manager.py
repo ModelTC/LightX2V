@@ -6,6 +6,7 @@ from lightx2v.utils.envs import GET_DTYPE
 
 from .base import BaseKVCachePool
 from .fifo import FIFOKVCachePool
+from .relayvsr import FrameRingKVCachePool
 from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, StepRollingKVCachePool
 from .rolling_offload import OffloadedHybridStepRollingKVCachePool, OffloadedRollingKVCachePool, OffloadedStepRollingKVCachePool
 from .static import StaticKVCachePool
@@ -56,6 +57,8 @@ def build_self_attn_kv_cache(
             cache_cls = OffloadedStepRollingKVCachePool if step_cache else OffloadedRollingKVCachePool
         else:
             cache_cls = StepRollingKVCachePool if step_cache else RollingKVCachePool
+    elif scheme == "frame_ring" and not step_cache:
+        cache_cls = FrameRingKVCachePool
     elif scheme == "fifo" and not step_cache:
         cache_cls = FIFOKVCachePool
     elif scheme == "static" and not step_cache:

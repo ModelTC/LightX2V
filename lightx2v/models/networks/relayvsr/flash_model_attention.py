@@ -2,29 +2,43 @@
 # Adapted from kopperx/RelayVSR.
 # Copyright RelayVSR contributors.
 
-"""Single-query-frame local attention over condition and video KV planes."""
+"""Flash model local attention with Triton and PyTorch SDPA backends."""
+
+from __future__ import annotations
+
+from functools import cache
 
 import torch
-import triton
-import triton.language as tl
+
+from .attention import _local_attention
 
 
-@torch.library.custom_op("lightx2v::relayvsr_flash_attention", mutates_args=(), device_types="cuda")
-def _compiled_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, height: int, width: int, windows: list[int]) -> torch.Tensor:
+@torch.library.custom_op("lightx2v::relayvsr_flash_model_triton_attention", mutates_args=(), device_types="cuda")
+def _flash_model_compiled_triton_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, height: int, width: int, windows: list[int]) -> torch.Tensor:
     windows = tuple(zip(windows[::2], windows[1::2]))
     if len(windows) > 1:
         frames = key.shape[2] // (height * width)
         windows = windows[:2] + (windows[2],) * (frames - 2)
-    return triton_local_attention(query, key, value, height, width, windows)
+    return flash_model_triton_attention(query, key, value, height, width, windows)
 
 
-@_compiled_attention.register_fake
-def _compiled_attention_fake(query, key, value, height, width, windows):
+@_flash_model_compiled_triton_attention.register_fake
+def _flash_model_compiled_triton_attention_fake(query, key, value, height, width, windows):
     return torch.empty_like(query, memory_format=torch.contiguous_format)
 
 
-@triton.jit
-def _forward(
+@cache
+def _get_flash_model_triton_kernel():
+    # Triton resolves kernel symbols from module globals. Load them only when
+    # the Triton backend executes so SDPA keeps no model-local Triton dependency.
+    global triton, tl
+    import triton
+    import triton.language as tl
+
+    return triton.jit(_flash_model_attention_forward)
+
+
+def _flash_model_attention_forward(
     Q,
     K,
     V,
@@ -100,9 +114,10 @@ def _forward(
 
 
 @torch.no_grad()
-def triton_local_attention(query, key, value, height, width, windows):
+def flash_model_triton_attention(query, key, value, height, width, windows):
     if torch.compiler.is_compiling():
-        return _compiled_attention(query, key, value, height, width, [size for window in windows for size in window])
+        return _flash_model_compiled_triton_attention(query, key, value, height, width, [size for window in windows for size in window])
+    kernel = _get_flash_model_triton_kernel()
     with torch.cuda.device(query.device):
         q, k, v = query.contiguous(), key.contiguous(), value.contiguous()
         b, hq, _, d = q.shape
@@ -111,7 +126,7 @@ def triton_local_attention(query, key, value, height, width, windows):
         whs, wws = tuple(w[0] for w in windows), tuple(w[1] for w in windows)
         bh, bw, bn, warps, stages = 4, 16, 64, 4, 2
         grid = (triton.cdiv(height, bh), triton.cdiv(width, bw), b * hq)
-        _forward[grid](
+        kernel[grid](
             q,
             k,
             v,
@@ -134,3 +149,27 @@ def triton_local_attention(query, key, value, height, width, windows):
             enable_fp_fusion=True,
         )
         return output
+
+
+@torch.library.custom_op("lightx2v::relayvsr_flash_model_sdpa_attention", mutates_args=())
+def _flash_model_compiled_sdpa_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, height: int, width: int, windows: list[int], query_start: int) -> torch.Tensor:
+    windows = tuple(zip(windows[::2], windows[1::2]))
+    if len(windows) > 1:
+        frames = key.shape[2] // (height * width)
+        windows = windows[:2] + (windows[2],) * (frames - 2)
+    return flash_model_sdpa_attention(query, key, value, height, width, windows, query_start)
+
+
+@_flash_model_compiled_sdpa_attention.register_fake
+def _flash_model_compiled_sdpa_attention_fake(query, key, value, height, width, windows, query_start):
+    b, heads, tokens, dim = query.shape
+    return query.new_empty((b, tokens, heads, dim)).transpose(1, 2)
+
+
+def flash_model_sdpa_attention(query, key, value, height, width, windows, query_start=0):
+    if torch.compiler.is_compiling():
+        return _flash_model_compiled_sdpa_attention(query, key, value, height, width, [size for window in windows for size in window], query_start)
+    windows = tuple(tuple(window) for window in windows)
+    if any(size <= 0 or size % 2 for window in windows for size in window):
+        raise ValueError("RelayVSR Flash model requires positive even window dimensions")
+    return _local_attention(query, key, value, height, width, windows, shifted=False, query_start=query_start)
