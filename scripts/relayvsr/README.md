@@ -1,13 +1,19 @@
 # RelayVSR video super-resolution
 
-[中文说明](README_zh.md)
+[English](README.md) | [简体中文](README_zh.md)
+
+## Model downloads
+
+[Official RelayVSR GitHub repository](https://github.com/kopperx/RelayVSR)
+
+[relayvsr_x4 on Hugging Face](https://huggingface.co/kopper/RelayVSR)
 
 ## Model variants
 
 | `model_cls` | Checkpoints | Output contract |
 | --- | --- | --- |
-| `relayvsr_x4` | Official `wan.safetensors`, `flash.safetensors` | Compute 4x; select 2x or 4x output with `sr_ratio=2/4` |
-| `relayvsr_x2` | Trained `wan_x2.safetensors`, `flash_x2.safetensors` | Compute 2x; require `sr_ratio=2` |
+| `relayvsr_x4` | RelayVSR HF `wan.safetensors`, `flash.safetensors` | Compute 4x; select 2x or 4x output with `sr_ratio=2/4` |
+| `relayvsr_x2` | LightX2V HF `wan_x2.safetensors`, `flash_x2.safetensors` | Compute 2x; require `sr_ratio=2` |
 
 Both entries validate checkpoint formats, scale and architecture, and reject mixed 2x/4x weights.
 Both entries reject `size`; output dimensions are determined by the input dimensions and `sr_ratio`.

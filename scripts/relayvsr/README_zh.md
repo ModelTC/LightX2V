@@ -1,11 +1,19 @@
 # RelayVSR 视频超分
 
+[English](README.md) | [简体中文](README_zh.md)
+
+## 模型下载
+
+[RelayVSR 官方 GitHub 仓库](https://github.com/kopperx/RelayVSR)
+
+[relayvsr_x4 Hugging Face 下载地址](https://huggingface.co/kopper/RelayVSR)
+
 ## 模型入口
 
 | `model_cls` | 权重 | 输出规则 |
 | --- | --- | --- |
-| `relayvsr_x4` | 官方 `wan.safetensors`、`flash.safetensors` | 计算 4×，通过 `sr_ratio=2/4` 选择 2× 或 4× 输出 |
-| `relayvsr_x2` | 训练后的 `wan_x2.safetensors`、`flash_x2.safetensors` | 计算 2×，只接受 `sr_ratio=2` |
+| `relayvsr_x4` | RelayVSR HF `wan.safetensors`、`flash.safetensors` | 计算 4×，通过 `sr_ratio=2/4` 选择 2× 或 4× 输出 |
+| `relayvsr_x2` | LightX2V HF `wan_x2.safetensors`、`flash_x2.safetensors` | 计算 2×，只接受 `sr_ratio=2` |
 
 两个入口会校验权重格式、倍率及关键结构，混用 2×/4× 权重会直接报错。
 两个入口均不接受 `size`；输出尺寸由输入尺寸和 `sr_ratio` 决定。
