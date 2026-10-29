@@ -14,13 +14,12 @@ from pathlib import Path
 import torch.distributed as dist
 
 SELECTION_FILE = "calibration_selection.json"
-PREVIEW_SCRIPT = Path(__file__).resolve().parents[3] / "scripts/qwen_image_21/run_validation_preview.py"
+PREVIEW_SCRIPT = Path(__file__).resolve().parents[1] / "run_validation_preview.py"
 
 
 @cache
 def preview_module():
-    # `scripts` is not a package in this repository and can collide with an
-    # installed package of that name. Load this specific local script instead.
+    # Load the same local entry point used by the collection subprocess.
     spec = importlib.util.spec_from_file_location("qwen_image21_calibration_preview", PREVIEW_SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

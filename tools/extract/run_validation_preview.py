@@ -120,7 +120,7 @@ def main():
         "noise_note": "Native LightX2V CPU noise; the same seed does not reproduce training's CUDA noise tensor.",
     }
     if args.dump_trace:
-        from validation_trace import FORMAT_VERSION, capture_validation_trace, save_validation_trace
+        from tools.extract.validation_trace import FORMAT_VERSION, capture_validation_trace, save_validation_trace
 
         run_info["trace"] = {
             "format_version": FORMAT_VERSION,
