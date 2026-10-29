@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 import time
@@ -18,16 +17,18 @@ from loguru import logger
 
 from lightx2v.common.kvcache.manager import KVCacheManager
 from lightx2v.models.networks.relayvsr.attention import LOCAL_ATTENTION_BACKENDS
+from lightx2v.models.networks.relayvsr.geometry import RelayVSRGeometry
 from lightx2v.models.networks.relayvsr.model import RelayVSRModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.relayvsr.scheduler import RelayVSRScheduler
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import mux_audio_from_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-from .video_io import AsyncVideoWriter, DeviceTimings, prefetch_frames
+from .video_io import AsyncVideoWriter, prefetch_frames
 
 
 def validate_config(config):
@@ -44,15 +45,17 @@ def validate_config(config):
             raise ValueError(f"RelayVSR {key} must be >= {minimum}")
 
 
-@RUNNER_REGISTER("relayvsr")
 class RelayVSRRunner(DefaultRunner):
-    """Official big RelayVSR: sparse Wan references + streaming Flash model decode."""
+    """Shared streaming lifecycle; registered subclasses fix the checkpoint geometry."""
 
-    supported_request_fields_by_task: ClassVar[dict] = {"sr": COMMON_REQUEST_FIELDS | {"video_path", "image_path", "sr_ratio", "size"}}
+    geometry: ClassVar[RelayVSRGeometry]
+    supported_request_fields_by_task: ClassVar[dict] = {"sr": COMMON_REQUEST_FIELDS | {"video_path", "image_path", "sr_ratio"}}
 
     WARMUP_RESOLUTIONS = ((768, 1024), (768, 1344))
 
     def __init__(self, config):
+        if config.get("native_scale", self.geometry.scale) != self.geometry.scale:
+            raise ValueError(f"{config['model_cls']} requires native_scale={self.geometry.scale}")
         for key, value in (("infer_steps", 1), ("guidance_scale", 1.0), ("enable_cfg", False), ("fps", None)):
             config.setdefault(key, value)
         validate_config(config)
@@ -67,21 +70,20 @@ class RelayVSRRunner(DefaultRunner):
             raise ValueError("RelayVSR world size must equal parallel.seq_p_size")
 
     def init_scheduler(self):
-        self.scheduler = RelayVSRScheduler(self.config)
+        self.scheduler = RelayVSRScheduler(self.config, self.geometry)
 
     @torch.no_grad()
     def init_modules(self):
         started = time.perf_counter()
-        self.model = RelayVSRModel(self.config, self.seq_p_group)
+        self.model = RelayVSRModel(self.config, self.geometry, self.seq_p_group)
         self.model.set_scheduler(self.scheduler)
         torch.cuda.synchronize()
-        self.load_seconds = time.perf_counter() - started
         self.config.lock()
-        logger.info("RelayVSR native 4x model loaded in {:.2f}s", self.load_seconds)
+        logger.info("{} native {}x model loaded in {:.2f}s", self.config["model_cls"], self.geometry.scale, time.perf_counter() - started)
 
     @torch.no_grad()
     def run_warmup(self):
-        if type(self) is not RelayVSRRunner or self.config["task"] != "sr":
+        if self.config["task"] != "sr":
             raise NotImplementedError("RelayVSR warmup supports the native SR runner only")
         if self.config.get("lazy_load", False):
             raise NotImplementedError("RelayVSR warmup does not support lazy loading")
@@ -97,37 +99,24 @@ class RelayVSRRunner(DefaultRunner):
                 frame = torch.zeros((3, height, width), dtype=torch.uint8, pin_memory=True)
                 with closing(self.restore_frames(repeat(frame, frames), 42)) as predictions:
                     for prediction in predictions:
-                        for scale in (2, 4):
+                        for scale in (2, 4) if self.geometry.scale == 4 else (2,):
                             pixels = self.postprocess(prediction, (height * scale, width * scale))
                 torch.cuda.synchronize()
             finally:
                 frame = prediction = pixels = None
-                self.timings = None
                 self.input_info = None
-        self.warmup_seconds = time.perf_counter() - started
-        logger.info("RelayVSR warmup completed in {:.2f}s", self.warmup_seconds)
+        logger.info("RelayVSR warmup cost {:.2f}s", time.perf_counter() - started)
         self._maybe_freeze_gc()
 
-    @staticmethod
-    def output_size(input_info, height, width):
-        if input_info.size:
-            size = input_info.size
-            if len(size) != 2 or any(isinstance(v, bool) or not isinstance(v, int) for v in size):
-                raise ValueError("RelayVSR size must be [height, width] with integer dimensions")
-            target = tuple(size)
-        else:
-            if input_info.sr_ratio not in (2, 4):
-                raise ValueError("RelayVSR sr_ratio must be 2 or 4; 2x resizes the native 4x result")
-            target = (int(height * input_info.sr_ratio), int(width * input_info.sr_ratio))
-        if min(target) <= 0 or target[0] > height * 4 or target[1] > width * 4:
-            raise ValueError("RelayVSR output dimensions must be positive and no larger than the native 4x result")
-        return target
+    def output_size(self, input_info, height, width):
+        return self.geometry.output_size(input_info, height, width)
 
     def preprocess(self, frame):
         height, width = frame.shape[-2:]
         x = frame[None].to(self.device, non_blocking=frame.is_pinned()).to(GET_DTYPE())
         x = x.div(127.5).sub(1.0)
-        return F.pad(x, (0, -width % 8, 0, -height % 8), mode="replicate")
+        padded_height, padded_width = self.geometry.padded_size(height, width)
+        return F.pad(x, (0, padded_width - width, 0, padded_height - height), mode="replicate")
 
     @staticmethod
     def postprocess(prediction, target):
@@ -147,12 +136,17 @@ class RelayVSRRunner(DefaultRunner):
             device=self.device,
         )
         self.wan_cache = self.wan_cache_manager.create_self_attn_kv_cache(
-            "wan", height // 8 * (width // 8) * wan["temporal_context_frames"], kv_cache_scheme="frame_ring", num_heads=wan["num_attention_heads"] // self.model.parallel.size
+            "wan",
+            (height // self.geometry.wan_stride) * (width // self.geometry.wan_stride) * wan["temporal_context_frames"],
+            kv_cache_scheme="frame_ring",
+            num_heads=wan["num_attention_heads"] // self.model.parallel.size,
         )
         self.flash_model_cache_manager = KVCacheManager({"num_layers": 10, "num_heads": 2, "dim": 128}, device=self.device)
         flash_model_heads = 2 if self.model.flash_model_transformer.query_parallel else 2 // self.model.parallel.size
-        self.flash_model_history = self.flash_model_cache_manager.create_self_attn_kv_cache("flash_model_video", height // 4 * (width // 4), kv_cache_scheme="static", num_heads=flash_model_heads)
-        self.reference_count = self.flash_model_decode_count = 0
+        self.flash_model_history = self.flash_model_cache_manager.create_self_attn_kv_cache(
+            "flash_model_video", (height // self.geometry.latent_stride) * (width // self.geometry.latent_stride), kv_cache_scheme="static", num_heads=flash_model_heads
+        )
+        self.reference_count = 0
 
     def end_run(self):
         self.scheduler.clear()
@@ -161,26 +155,26 @@ class RelayVSRRunner(DefaultRunner):
         self.wan_cache_manager = self.flash_model_cache_manager = None
 
     def reference(self, frame):
-        lr = self.timings.call("preprocess", self.preprocess, frame)
+        lr = self.preprocess(frame)
         self.scheduler.prepare_latents(*lr.shape[-2:], self.device)
         self.scheduler.step_pre(0)
-        self.timings.call("wan", self.model.infer, self.scheduler, lr, self.wan_cache, self.reference_count)
+        self.model.infer(self.scheduler, lr, self.wan_cache, self.reference_count)
         self.scheduler.step_post()
         self.reference_count += 1
         latent = self.scheduler.latents[:, :, 0].to(GET_DTYPE())
-        return self.timings.call("flash_model_condition", self.model.flash_model_prepare_condition, latent)
+        return self.model.flash_model_prepare_condition(latent)
 
     def restore_frames(self, source, seed):
-        """Yield cropped native 4x predictions; overlapping endpoint is emitted once."""
+        """Yield cropped native predictions; overlapping endpoints are emitted once."""
         iterator = iter(source)
         first = next(iterator, None)
         if first is None:
             raise ValueError("RelayVSR cannot restore an empty stream")
         shape = first.shape
         height, width = shape[-2:]
-        self.timings = DeviceTimings()
         try:
-            self.init_run(height + (-height) % 8, width + (-width) % 8, seed)
+            padded_height, padded_width = self.geometry.padded_size(height, width)
+            self.init_run(padded_height, padded_width, seed)
             start_condition = self.reference(first)
             first_window = True
             start = first
@@ -196,11 +190,10 @@ class RelayVSRRunner(DefaultRunner):
                 self.flash_model_history.reset()
                 for offset, frame in enumerate(window):
                     self.check_stop()
-                    lr = self.timings.call("preprocess", self.preprocess, frame)
-                    output = self.timings.call("flash_model_decode", self.model.flash_model_decode, lr, conditions, self.flash_model_history, offset)
-                    self.flash_model_decode_count += 1
+                    lr = self.preprocess(frame)
+                    output = self.model.flash_model_decode(lr, conditions, self.flash_model_history, offset)
                     if first_window or offset > 0:
-                        yield output[..., : height * 4, : width * 4]
+                        yield output[..., : height * self.geometry.scale, : width * self.geometry.scale]
                 first_window = False
                 start, start_condition = window[-1], end_condition
                 if len(window) < self.config.get("clip_len", 16):
@@ -209,6 +202,7 @@ class RelayVSRRunner(DefaultRunner):
             self.end_run()
 
     @torch.no_grad()
+    @ProfilingContext4DebugL1("🚀 RUN pipeline")
     def run_pipeline(self, input_info):
         if bool(input_info.image_path) == bool(input_info.video_path):
             raise ValueError("RelayVSR requires exactly one image_path or video_path")
@@ -222,7 +216,6 @@ class RelayVSRRunner(DefaultRunner):
         return self.run_image(input_info)
 
     def run_image(self, input_info):
-        started = time.perf_counter()
         with Image.open(input_info.image_path) as image:
             frame = torch.from_numpy(np.array(image.convert("RGB"))).permute(2, 0, 1).contiguous()
         target = self.output_size(input_info, *frame.shape[-2:])
@@ -232,14 +225,9 @@ class RelayVSRRunner(DefaultRunner):
             path = Path(input_info.save_result_path)
             path.parent.mkdir(parents=True, exist_ok=True)
             Image.fromarray(pixels.numpy()).save(path)
-        stats = self.timings.collect()
-        stats["total_seconds"] = time.perf_counter() - started
-        if self.progress_callback:
-            self.progress_callback(100, 100)
-        return {"images": pixels[None].float().div_(255) if input_info.return_result_tensor else None, "stats": stats}
+        return {"images": pixels[None].float().div_(255) if input_info.return_result_tensor else None}
 
     def run_video(self, input_info):
-        started = time.perf_counter()
         source, destination = Path(input_info.video_path), Path(input_info.save_result_path)
         if source.resolve() == destination.resolve():
             raise ValueError("RelayVSR output must differ from its source video")
@@ -247,8 +235,6 @@ class RelayVSRRunner(DefaultRunner):
         temporary = None
         writer = None
         output_frames = 0
-        io_timing = {"decode_seconds": 0.0}
-        torch.cuda.reset_peak_memory_stats()
         try:
             if self.main_rank:
                 fd, temporary = tempfile.mkstemp(prefix=".relayvsr-", suffix=destination.suffix or ".mp4", dir=destination.parent)
@@ -261,57 +247,30 @@ class RelayVSRRunner(DefaultRunner):
                 fps = Fraction(str(self.config["fps"])) if self.config.get("fps") is not None else stream.average_rate
                 if fps is None or fps <= 0:
                     raise ValueError("Cannot determine source FPS; set startup fps explicitly")
-                target = self.output_size(input_info, stream.height, stream.width)
+                input_height, input_width = stream.height, stream.width
+                target = self.output_size(input_info, input_height, input_width)
                 if target[0] % 2 or target[1] % 2:
                     raise ValueError("YUV420 video output requires even height and width")
                 input_info.output_fps = float(fps)
                 if self.main_rank:
                     writer = AsyncVideoWriter(temporary, fps, self.config)
-                with closing(prefetch_frames(container, self.config.get("clip_len", 16), io_timing)) as frames, closing(self.restore_frames(frames, input_info.seed)) as predictions:
+                with closing(prefetch_frames(container, self.config.get("clip_len", 16))) as frames, closing(self.restore_frames(frames, input_info.seed)) as predictions:
                     for prediction in predictions:
                         if self.main_rank:
-                            pixels = self.timings.call("postprocess", self.postprocess, prediction, target)
+                            pixels = self.postprocess(prediction, target)
                             writer.submit(pixels)
                         output_frames += 1
                         if self.main_rank and output_frames % 30 == 0:
                             logger.info("RelayVSR: {} frames written to encoder queue", output_frames)
             if writer is not None:
                 writer.close()
-            stages = self.timings.collect()
-            mux_seconds = 0.0
             if self.main_rank:
-                mux_start = time.perf_counter()
                 if mux_audio_from_video(str(source), temporary, prefer_copy=True, trim_to_shortest=False) is None:
                     raise RuntimeError("RelayVSR could not mux the source audio")
-                mux_seconds = time.perf_counter() - mux_start
                 os.replace(temporary, destination)
                 temporary = None
-            stats = {
-                "frames": output_frames,
-                "fps": str(fps),
-                "height": target[0],
-                "width": target[1],
-                "native_scale": 4,
-                "wan_references": self.reference_count,
-                "flash_model_decode_calls": self.flash_model_decode_count,
-                "load_seconds": self.load_seconds,
-                "cuda_stage_seconds": stages,
-                "decode_seconds": io_timing["decode_seconds"],
-                "output_copy_seconds": writer.copy_seconds if writer else 0,
-                "encoder_queue_wait_seconds": writer.queue_wait_seconds if writer else 0,
-                "encode_seconds": writer.encode_seconds if writer else 0,
-                "encoder_flush_seconds": writer.flush_seconds if writer else 0,
-                "audio_mux_seconds": mux_seconds,
-                "total_seconds": time.perf_counter() - started,
-                "peak_allocated_gib": torch.cuda.max_memory_allocated() / 2**30,
-                "peak_reserved_gib": torch.cuda.max_memory_reserved() / 2**30,
-            }
-            if self.main_rank:
                 logger.info("RelayVSR video saved to: {}", destination.resolve())
-                logger.info("RelayVSR completed: {}", json.dumps(stats, ensure_ascii=False))
-                if self.progress_callback:
-                    self.progress_callback(100, 100)
-            return {"video": None, "stats": stats}
+            return {"video": None}
         finally:
             if writer is not None and temporary is not None:
                 try:
@@ -320,3 +279,24 @@ class RelayVSRRunner(DefaultRunner):
                     logger.exception("RelayVSR encoder cleanup failed")
             if temporary is not None:
                 Path(temporary).unlink(missing_ok=True)
+
+
+@RUNNER_REGISTER("relayvsr_x4")
+class RelayVSRX4Runner(RelayVSRRunner):
+    """Native 4x inference, followed by the existing optional output resizing."""
+
+    geometry = RelayVSRGeometry(4)
+
+
+@RUNNER_REGISTER("relayvsr_x2")
+class RelayVSRX2Runner(RelayVSRRunner):
+    """Native 2x inference with an exact 2x output contract."""
+
+    geometry = RelayVSRGeometry(2)
+    WARMUP_RESOLUTIONS = ((768, 1024), (768, 1344))
+
+    def create_input_info(self, request_data):
+        info = super().create_input_info(request_data)
+        if info.sr_ratio != 2:
+            raise ValueError("relayvsr_x2 supports only sr_ratio=2")
+        return info

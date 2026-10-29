@@ -110,10 +110,11 @@ class WanPostWeights(RelayWeights):
 
 
 class FlashModelPreWeights(RelayWeights):
-    def __init__(self, config):
+    def __init__(self, config, geometry):
         super().__init__()
-        for i, stride, padding in ((0, 2, 1), (2, 2, 1), (4, 1, 1), (6, 1, 0)):
-            self.conv(f"conv{i}", f"lr_encoder.layers.{i}", stride=stride, padding=padding)
+        for i, stride in zip((0, 2, 4), geometry.encoder_strides):
+            self.conv(f"conv{i}", f"lr_encoder.layers.{i}", stride=stride, padding=1)
+        self.conv("conv6", "lr_encoder.layers.6")
         self.conv("condition", "condition_encoder.projection")
         self.rms("lr_norm", "lr_encoder.norm", eps=config["norm_eps"])
         self.rms("condition_norm", "condition_encoder.norm", eps=config["norm_eps"])
@@ -142,17 +143,31 @@ class FlashModelPostWeights(RelayWeights):
         self.linear("projection", "residual_projection")
 
 
-def checkpoint_config(path, component):
+def checkpoint_config(path, component, geometry):
     with safe_open(path, framework="pt", device="cpu") as handle:
         metadata = handle.metadata() or {}
-    if metadata.get("format") != f"refvsr-{component}-v1":
-        raise ValueError(f"Expected official RelayVSR {component} checkpoint with embedded config: {path}")
-    return json.loads(metadata["config"])
+        expected_format = f"relayvsr-{component}-x2-v1" if geometry.scale == 2 else f"refvsr-{component}-v1"
+        if metadata.get("format") != expected_format:
+            raise ValueError(f"Expected native {geometry.scale}x {component} checkpoint ({expected_format}): {path}")
+        config = json.loads(metadata["config"])
+        if component == "wan":
+            # Official 4x Wan metadata predates the explicit scale field.
+            if geometry.scale == 4:
+                config.setdefault("upscale_factor", 4)
+            unshuffle = 8 if geometry.scale == 2 else 16
+            expected = [config["lq_proj_hidden_dim1"], 3 * unshuffle**2, 1, 1]
+            if handle.get_slice("lq_proj.conv1.weight").get_shape() != expected:
+                raise ValueError(f"Wan input projection does not match native {geometry.scale}x geometry: {path}")
+        else:
+            # Native 2x export stores constructor overrides; recover the S defaults.
+            config = {"condition_channels": 48, "norm_eps": 1e-5, "rope_theta": 10000.0, "dim": 512, "depth": 10, "num_heads": 8, "num_kv_groups": 2, **config}
+    return config
 
 
-def resolve_checkpoints(config):
+def resolve_checkpoints(config, geometry):
     root = Path(config["model_path"])
-    return Path(config.get("dit_original_ckpt") or root / "wan.safetensors"), Path(config.get("vae_original_ckpt") or root / "flash.safetensors")
+    suffix = "_x2" if geometry.scale == 2 else ""
+    return Path(config.get("dit_original_ckpt") or root / f"wan{suffix}.safetensors"), Path(config.get("vae_original_ckpt") or root / f"flash{suffix}.safetensors")
 
 
 def load_container(container, handle, keys, device):
@@ -186,9 +201,9 @@ class WanWeights(WeightModule):
 
 
 class FlashModelWeights(WeightModule):
-    def __init__(self, path, config):
+    def __init__(self, path, config, geometry):
         super().__init__()
-        self.add_module("pre", FlashModelPreWeights(config))
+        self.add_module("pre", FlashModelPreWeights(config, geometry))
         self.add_module("blocks", WeightModuleList([FlashModelBlockWeights(i, config) for i in range(10)]))
         self.add_module("post", FlashModelPostWeights())
         with safe_open(path, framework="pt", device="cpu") as handle:

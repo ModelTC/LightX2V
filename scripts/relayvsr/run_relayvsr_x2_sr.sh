@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/path/to/LightX2V
-# https://huggingface.co/kopper/RelayVSR
-model_path=/path/to/RelayVSR
-video_path=/path/to/input.mp4
+lightx2v_path=
+model_path=
+video_path=
 
 export CUDA_VISIBLE_DEVICES=0
 
@@ -12,10 +11,10 @@ export CUDA_VISIBLE_DEVICES=0
 source "${lightx2v_path}/scripts/base/base.sh"
 
 python -m lightx2v.infer \
-  --model_cls relayvsr \
+  --model_cls relayvsr_x2 \
   --task sr \
   --model_path "${model_path}" \
-  --config_json "${lightx2v_path}/configs/relayvsr/relayvsr.json" \
+  --config_json "${lightx2v_path}/configs/relayvsr/relayvsr_x2.json" \
   --video_path "${video_path}" \
   --sr_ratio 2 \
   --save_result_path "${lightx2v_path}/save_results/relayvsr_x2.mp4" \
