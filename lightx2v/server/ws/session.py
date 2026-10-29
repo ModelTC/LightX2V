@@ -25,7 +25,12 @@ ASPECT_RATIOS = {
         "1:1": [480, 480],
         "16:9": [352, 640],
         "9:16": [640, 352],
-    }
+    },
+    "720p": {
+        "1:1": [704, 704],
+        "16:9": [704, 1280],
+        "9:16": [1280, 704],
+    },
 }
 DEFAULT_RESOLUTION = "480p"
 DEFAULT_ASPECT_RATIO = "16:9"
@@ -72,7 +77,7 @@ def parse_aspect_ratios(value: str) -> dict:
 
 DEFAULT_PROMPT = "The video features a person is saying something."
 DEFAULT_NEGATIVE_PROMPT = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
-OUTPUT_URL_PREFIXES = ("http://", "https://", "rtmp://")
+URL_PREFIXES = ("http://", "https://", "rtmp://")
 
 
 def resolve_aspect_ratio(value: str, resolution: Optional[str] = None) -> tuple[str, list[int]]:
@@ -86,11 +91,23 @@ def resolve_aspect_ratio(value: str, resolution: Optional[str] = None) -> tuple[
     return ar, list(ratios[ar])
 
 
-def parse_stream_config(config_json) -> dict:
+def uses_video_input(runner, task) -> bool:
+    fields = runner.get_supported_request_fields(task)
+    return "video_path" in fields and "audio_path" not in fields
+
+
+def uses_no_output_audio(runner) -> bool:
+    return "edenlive" in str(runner.config.get("model_cls", ""))
+
+
+def parse_stream_config(config_json, runner, task) -> dict:
     config = dict(config_json or {})
     output_url = config.get("output_url")
-    if output_url is not None and (not isinstance(output_url, str) or not output_url.startswith(OUTPUT_URL_PREFIXES)):
+    if output_url is not None and (not isinstance(output_url, str) or not output_url.startswith(URL_PREFIXES)):
         raise ValueError("config_json.output_url must start with http://, https://, or rtmp://")
+    input_url = config.get("input_url")
+    if input_url is not None and (not isinstance(input_url, str) or not input_url.startswith(URL_PREFIXES)):
+        raise ValueError("config_json.input_url must start with http:// or https://")
     if "resolution" in config:
         resolution = config["resolution"]
         if not isinstance(resolution, str) or not resolution.strip():
@@ -99,15 +116,53 @@ def parse_stream_config(config_json) -> dict:
         if resolution not in ASPECT_RATIOS:
             raise ValueError(f"invalid resolution {resolution!r}, valid: {list(ASPECT_RATIOS)}")
         config["resolution"] = resolution
+    config["video_input"] = uses_video_input(runner, task)
+    config["no_output_audio"] = uses_no_output_audio(runner)
+    if config["video_input"]:
+        if not config.get("input_url"):
+            raise ValueError("config_json.input_url is required")
+        if not config.get("output_url"):
+            raise ValueError("config_json.output_url is required")
     return config
 
 
-def apply_run_input(input_info, *, prompt, negative_prompt, image_path, size, audio_source=None, on_output=None, chunk_frames=8, stream_config=None):
+def apply_run_input(
+    input_info,
+    *,
+    prompt,
+    negative_prompt,
+    image_path,
+    size,
+    audio_source=None,
+    video_source=None,
+    on_output=None,
+    chunk_frames=8,
+    stream_config=None,
+):
     stream_config = dict(stream_config or {})
+
+    # 模型为视频输入
+    if stream_config.get("video_input"):
+        input_key = "video_path"
+        source = video_source
+    else:
+        input_key = "audio_path"
+        source = audio_source
+
+    # 输入是 stream url 时，使用 stream 类型
+    input_url = stream_config.get("input_url")
+    if input_url:
+        input_path = {"type": "stream", "data": input_url}
+    elif source:
+        input_path = {"type": "ws", "source": source}
+    else:
+        input_path = {"type": "ws"}
+
+    # 输出是 stream url 时，使用 stream 类型
     output_url = stream_config.get("output_url")
-    audio_path = {"type": "ws", "source": audio_source} if audio_source else {"type": "ws"}
     if output_url:
-        save_result_path = {"type": "stream", "data": output_url}
+        no_output_audio = bool(stream_config.get("no_output_audio", False))
+        save_result_path = {"type": "stream", "data": output_url, "no_output_audio": no_output_audio}
     elif on_output is not None:
         save_result_path = {
             "type": "ws",
@@ -116,6 +171,7 @@ def apply_run_input(input_info, *, prompt, negative_prompt, image_path, size, au
         }
     else:
         save_result_path = {"type": "ws"}
+
     # 设置 seed 会导致片段间有雪花点，因此暂不设置 seed
     input_info.update(
         {
@@ -123,7 +179,7 @@ def apply_run_input(input_info, *, prompt, negative_prompt, image_path, size, au
             "negative_prompt": negative_prompt,
             "size": size,
             "image_path": image_path,
-            "audio_path": audio_path,
+            input_key: input_path,
             "save_result_path": save_result_path,
             "action_prompts": {"0": [""]},
             "stream_config": stream_config,
@@ -208,6 +264,7 @@ class LiveSession:
         self.rank = rank
         self.loop = loop
         self.audio_source: Optional[WsAudioSource] = None
+        self.video_source = None
         self.video_queue: queue.Queue = queue.Queue()
         self.thread: Optional[RunnerThread] = None
         self.future: Optional[asyncio.Future] = None
@@ -215,6 +272,7 @@ class LiveSession:
         self.request_id = ""
         self.stream_config = {}
         self.busy = False
+        self.video_input = False
 
     def _on_output(self, item):
         self.video_queue.put(item)
@@ -225,7 +283,10 @@ class LiveSession:
         if not images or not images[0]:
             raise ValueError("Start.image_data is required")
 
-        self.stream_config = parse_stream_config(start.config_json)
+        self.audio_source = None
+        self.video_source = None
+        self.stream_config = parse_stream_config(start.config_json, self.runner, self.input_info.task)
+        self.video_input = self.stream_config["video_input"]
         logger.info(f"Rank {self.rank} stream_config: {self.stream_config}")
         self.request_id = start.request_id or "ws-session"
         self.tmp_dir = tempfile.TemporaryDirectory(prefix=f"lightx2v_ws_{self.request_id}_")
@@ -238,21 +299,22 @@ class LiveSession:
         seed = int(start.seed or 42)
         _, size = resolve_aspect_ratio(start.aspect_ratio, self.stream_config.get("resolution"))
 
-        seg_duration = 1.0
-        try:
-            fps = float(self.runner.config.get("target_fps", 16))
-            latent_per_chunk = int(self.runner.config.get("ar_config", {}).get("num_frame_per_chunk", 3))
-            look_ahead = float(self.runner.config.get("look_ahead", 0.0))
-            seg_duration = ((latent_per_chunk - 1) * 4 + 1) / fps + look_ahead
-        except Exception:
-            pass
+        if not self.video_input:
+            seg_duration = 1.0
+            try:
+                fps = float(self.runner.config.get("target_fps", 16))
+                latent_per_chunk = int(self.runner.config.get("ar_config", {}).get("num_frame_per_chunk", 3))
+                look_ahead = float(self.runner.config.get("look_ahead", 0.0))
+                seg_duration = ((latent_per_chunk - 1) * 4 + 1) / fps + look_ahead
+            except Exception:
+                pass
 
-        self.audio_source = WsAudioSource(
-            seg_duration=seg_duration,
-            sample_rate=int(self.runner.config.get("audio_sr", 16000)),
-            audio_format=start.audio_format or "pcm_s16le/16000/1",
-            model_runner=self.runner,
-        )
+            self.audio_source = WsAudioSource(
+                seg_duration=seg_duration,
+                sample_rate=int(self.runner.config.get("audio_sr", 16000)),
+                audio_format=start.audio_format or "pcm_s16le/16000/1",
+                model_runner=self.runner,
+            )
 
         apply_run_input(
             self.input_info,
@@ -261,6 +323,7 @@ class LiveSession:
             image_path=image_path,
             size=size,
             audio_source=self.audio_source,
+            video_source=self.video_source,
             on_output=self._on_output,
             chunk_frames=start.chunk_frames,
             stream_config=self.stream_config,
@@ -307,6 +370,8 @@ class LiveSession:
         self.runner.stop_signal = True
 
     async def wait_started(self, timeout: float = 120.0):
+        if self.video_input:
+            return
         if self.audio_source is None:
             raise RuntimeError("session not started")
         ok = await asyncio.to_thread(self.audio_source.started_event.wait, timeout)
@@ -351,3 +416,4 @@ class LiveSession:
                 pass
             self.tmp_dir = None
         self.audio_source = None
+        self.video_source = None

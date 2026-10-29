@@ -1,3 +1,4 @@
+import math
 import os
 import queue
 import socket
@@ -22,6 +23,8 @@ class VideoRecorder:
         self,
         livestream_url: str,
         fps: float = 16.0,
+        slice_frame: int = 1,
+        prev_frame: int = 1,
     ):
         self.livestream_url = livestream_url
         self.fps = fps
@@ -32,7 +35,7 @@ class VideoRecorder:
         self.width = None
         self.height = None
         self.stoppable_t = None
-        self.realtime = True
+        self.realtime = self.livestream_url.startswith("rtmp://") or self.livestream_url.startswith("http")
 
         # ffmpeg process for video data and push to livestream
         self.ffmpeg_process = None
@@ -44,6 +47,15 @@ class VideoRecorder:
 
         # queue for send data to ffmpeg process
         self.video_queue = queue.Queue()
+
+        # buffer for stream data
+        self.stream_buffer = []
+        self.stream_buffer_lock = threading.Lock()
+        self.stop_schedule = False
+        self.schedule_thread = None
+        self.slice_frame = slice_frame
+        self.prev_frame = prev_frame
+        assert self.slice_frame >= self.prev_frame, "Slice frame must be greater than previous frame"
 
     def init_sockets(self):
         # TCP socket for send and recv video data
@@ -78,7 +90,7 @@ class VideoRecorder:
                         except (BrokenPipeError, OSError, ConnectionResetError) as e:
                             logger.info(f"Video connection closed, stopping worker: {type(e).__name__}")
                             return
-                        if self.realtime:
+                        if self.realtime and i < data.shape[0] - 1:
                             time.sleep(max(0, packet_secs - (time.time() - t0)))
 
                     fail_time = 0
@@ -266,9 +278,11 @@ class VideoRecorder:
             self.start_ffmpeg_process_whip()
         else:
             self.start_ffmpeg_process_local()
-            self.realtime = False
         self.video_thread = threading.Thread(target=self.video_worker)
         self.video_thread.start()
+        if self.realtime:
+            self.schedule_thread = threading.Thread(target=self.schedule_stream_buffer)
+            self.schedule_thread.start()
 
     # Publish ComfyUI Image tensor to livestream
     def pub_video(self, images: torch.Tensor):
@@ -283,13 +297,94 @@ class VideoRecorder:
 
         self.stoppable_t = time.time() + N / self.fps + 3
 
+    def pub_livestream(self, images: torch.Tensor, audios: torch.Tensor = None):
+        self.pub_video(images)
+
+    def buffer_stream(self, images: torch.Tensor, audios: torch.Tensor = None, gen_video: torch.Tensor = None, valid_duration=1e9):
+        N, height, width, C = images.shape
+        assert N % self.slice_frame == 0, "Video frames must be divisible by slice_frame"
+        assert C == 3, "Input must be [N, H, W, C] with C=3"
+        self.set_video_size(width, height)
+        valid_frames = math.ceil(valid_duration * self.fps)
+
+        rets = []
+        for i in range(0, N, self.slice_frame):
+            end_frame = min(i + self.slice_frame, N)
+            can_truncate = valid_frames < end_frame
+            img = images[i:end_frame]
+            gen_start = max(0, end_frame - self.prev_frame)
+            gen = None if gen_video is None else gen_video[:, :, gen_start:end_frame]
+            rets.append([img, gen, can_truncate])
+
+        with self.stream_buffer_lock:
+            origin_size = len(self.stream_buffer)
+            self.stream_buffer.extend(rets)
+            logger.info(f"Buffered {origin_size} + {len(rets)} = {len(self.stream_buffer)} stream segments, valid_frames: {valid_frames}")
+
+    def get_buffer_stream_size(self):
+        return len(self.stream_buffer)
+
+    def truncate_stream_buffer(self, size: int, check_can_truncate: bool = True):
+        with self.stream_buffer_lock:
+            idx = len(self.stream_buffer) - 1
+            while check_can_truncate and idx >= size and idx >= 0:
+                if not self.stream_buffer[idx][2]:
+                    logger.warning(f"can not truncate frame: {idx}, trucecate size: {size} -> {idx + 1}")
+                    size = idx + 1
+                    break
+                idx -= 1
+            self.stream_buffer = self.stream_buffer[:size]
+            logger.info(f"Truncated stream buffer to {len(self.stream_buffer)} segments")
+            if len(self.stream_buffer) > 0:
+                self.stream_buffer[-1][2] = False
+                return self.stream_buffer[-1][1]
+            return None
+
+    def schedule_stream_buffer(self):
+        schedule_interval = self.slice_frame / self.fps
+        logger.info(f"Schedule stream buffer with interval: {schedule_interval} seconds")
+        t = None
+        fail_time = 0
+        while True:
+            try:
+                if self.stop_schedule:
+                    break
+                img = None
+                with self.stream_buffer_lock:
+                    if len(self.stream_buffer) > 0:
+                        img, gen, _ = self.stream_buffer.pop(0)
+                if t is not None:
+                    wait_secs = schedule_interval - (time.time() - t)
+                    if wait_secs > 0:
+                        time.sleep(wait_secs)
+                t = time.time()
+                if img is not None:
+                    fail_time = 0
+                    self.video_queue.put(img)
+                    del gen
+                    self.stoppable_t = time.time() + img.shape[0] / self.fps + 3
+                else:
+                    fail_time += 1
+                    if fail_time % 10 == 0:
+                        logger.warning(f"No stream buffer to schedule: {fail_time} times")
+            except Exception:
+                logger.error(f"Schedule stream buffer error: {traceback.format_exc()}")
+                break
+        logger.info("Schedule stream buffer thread stopped")
+
     def stop(self, wait=True):
         if wait and self.stoppable_t:
             t = self.stoppable_t - time.time()
-            if t > 0:
+            if self.realtime and t > 0:
                 logger.warning(f"Waiting for {t} seconds to stop ...")
                 time.sleep(t)
             self.stoppable_t = None
+
+        if self.schedule_thread:
+            self.stop_schedule = True
+            self.schedule_thread.join(timeout=5)
+            if self.schedule_thread.is_alive():
+                logger.error("Schedule thread did not stop after 5s")
 
         # Send stop signals to queues
         if self.video_queue:

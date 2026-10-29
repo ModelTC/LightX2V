@@ -39,10 +39,13 @@ class VAController:
     def init_base(self, config, input_info, has_vsr_model):
         self.stream_config = getattr(input_info, "stream_config", {})
         logger.info(f"VAController init base with stream config: {self.stream_config}")
-        self.audio_path = input_info.audio_path
+        self.audio_path = getattr(input_info, "audio_path", None)
+        self.video_path = getattr(input_info, "video_path", None)
         self.output_video_path = input_info.save_result_path
         self.ws_output = None
+        self.no_output_audio = False
         if isinstance(self.output_video_path, dict):
+            self.no_output_audio = bool(self.output_video_path.get("no_output_audio", False))
             if self.output_video_path.get("type") == "ws":
                 self.ws_output = self.output_video_path
                 self.output_video_path = "ws://session"
@@ -52,7 +55,7 @@ class VAController:
         self.audio_sr = config.get("audio_sr", 16000)
         self.target_fps = config.get("fps", 16)
         self.max_num_frames = config.get("num_frames", 81)
-        self.prev_frame_length = config.get("prev_frame_length", 5)
+        self.prev_frame_length = config.get("prev_frame_length", 1)
 
         self.record_fps = config.get("record_fps", self.target_fps)
 
@@ -124,6 +127,15 @@ class VAController:
                 slice_frame=self.slice_frame,
                 prev_frame=self.prev_frame_length,
             )
+        elif self.no_output_audio:
+            from lightx2v.utils.video_recorder import VideoRecorder
+
+            self.recorder = VideoRecorder(
+                livestream_url=self.output_video_path,
+                fps=self.record_fps,
+                slice_frame=self.slice_frame,
+                prev_frame=self.prev_frame_length,
+            )
         else:
             from lightx2v.utils.va_recorder import VARecorder
 
@@ -137,6 +149,23 @@ class VAController:
             )
 
     def init_reader(self, model_runner=None):
+        if isinstance(self.video_path, dict) and self.video_path.get("type") == "stream":
+            from lightx2v.utils.video_reader import VideoOnlyReader
+
+            stride = int(model_runner.config["vae_stride"][0])
+            per_chunk = int(model_runner.config["ar_config"]["num_frame_per_chunk"])
+            self.reader = VideoOnlyReader(
+                rank=self.rank,
+                world_size=self.world_size,
+                stream_url=self.video_path["data"],
+                fps=self.target_fps,
+                num_frame=stride * per_chunk,
+                height=self.tgt_h,
+                width=self.tgt_w,
+                target_rank=self.target_reader_rank,
+            )
+            return
+
         if not isinstance(self.audio_path, dict):
             return
         audio_type = self.audio_path.get("type")
@@ -232,8 +261,9 @@ class VAController:
 
     def next_control(self):
         from lightx2v.utils.va_reader_omni import OmniVAReader
+        from lightx2v.utils.video_reader import VideoOnlyReader
 
-        if isinstance(self.reader, OmniVAReader):
+        if isinstance(self.reader, (OmniVAReader, VideoOnlyReader)):
             action_control = self.omni_reader_action_control()
             if action_control is not None:
                 return action_control
@@ -245,8 +275,9 @@ class VAController:
 
     def before_control(self):
         from lightx2v.utils.va_reader_omni import OmniVAReader
+        from lightx2v.utils.video_reader import VideoOnlyReader
 
-        if isinstance(self.reader, OmniVAReader):
+        if isinstance(self.reader, (OmniVAReader, VideoOnlyReader)):
             self.len_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)
             self.flag_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)
             if self.is_seko_talk_ar or self.is_minimax_h3_causal:

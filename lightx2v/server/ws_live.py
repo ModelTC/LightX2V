@@ -166,8 +166,11 @@ async def run_websocket_server(args, runner, input_info):
                         session.future.add_done_callback(lambda fut: session.mark_pipeline_done(*(fut.result() if not fut.cancelled() else (False, "cancelled"))))
                     continue
 
-                if session is None or session.audio_source is None:
+                if session is None or (session.audio_source is None and not session.video_input):
                     await websocket.send_bytes(error_message("no_session", "send Start first", True))
+                    continue
+                if session.video_input:
+                    logger.info(f"Rank {RANK} ignore {which} during video input session")
                     continue
                 if which is None:
                     await websocket.send_bytes(error_message("invalid_message", "empty ClientMessage", False))
@@ -272,7 +275,8 @@ def main():
 
     print_config(config)
     runner = build_runner(config)
-    input_info = INPUT_INFO_TYPES[args.task]()
+    input_info_cls = runner.input_info_cls_by_task.get(args.task) or INPUT_INFO_TYPES[args.task]
+    input_info = input_info_cls()
     input_info.update({"task": args.task})
     init_task_group()
 

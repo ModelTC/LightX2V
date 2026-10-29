@@ -145,7 +145,7 @@ class WsVideoChunkRecorder:
             logger.error(f"on_output failed: {traceback.format_exc()}")
 
     def emit_prompt_update(self, prompt: str = ""):
-        prompt = str(prompt)[:100]
+        prompt = str(prompt)
         logger.info(f"PROMPT_UPDATE seq={self.sequence}: {prompt}")
         self._emit(("event", PROMPT_UPDATE, prompt))
 

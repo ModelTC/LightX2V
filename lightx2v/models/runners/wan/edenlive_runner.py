@@ -1,3 +1,4 @@
+import time
 from contextlib import nullcontext
 
 import torch
@@ -14,6 +15,7 @@ from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.input_info import EdenLiveInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.va_controller import VAController
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -261,6 +263,9 @@ class EdenLiveARRunner(EdenLiveRunner):
     scheduler_class = EdenLiveARScheduler
 
     def load_recording(self, height, width, fps):
+        # live video stream input, input_info.num_frames is -1, latent_shape could be (N, 0, H, W)
+        if isinstance(self.input_info.video_path, dict):
+            return None, prepare_cover(self.input_info.image_path, height, width), -1
         self.recording_reader = RecordingReader(self.input_info.video_path, height, width, fps, self.input_info.num_frames, self.config["ar_config"]["num_frame_per_chunk"])
         return None, prepare_cover(self.input_info.image_path, height, width), self.recording_reader.num_frames
 
@@ -285,8 +290,7 @@ class EdenLiveARRunner(EdenLiveRunner):
         text = self.prompts[index] if len(self.prompts) > 1 else self.prompts[0]
         self.inputs["text_encoder_output"] = self.prompt_embeddings[text]
 
-    def _run_diffusion(self, step_indices=None):
-        total = self.scheduler.latents.shape[1]
+    def _prepare_ar_runtime(self, on_chunk):
         ar = self.config["ar_config"]
         chunk = ar["num_frame_per_chunk"]
         if not 0 <= ar["sink_size"] <= ar["local_attn_size"] - chunk:
@@ -300,9 +304,29 @@ class EdenLiveARRunner(EdenLiveRunner):
             pool._init_kv_buffer()
             pools[branch] = pool
         self.model.transformer_infer.cache_pools = pools
-        num_chunks = (total + chunk - 1) // chunk
-        on_chunk = None if self.chunk_callback is None else lambda pixels, index: self.chunk_callback(pixels, index, index == num_chunks - 1)
         decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder, on_chunk=on_chunk, dispatch_in_worker=True)
+        return ar, chunk, pools, decoder
+
+    def _release_ar_runtime(self, ar, pools, decoder):
+        try:
+            decoder.finish()
+        finally:
+            try:
+                if ar.get("kv_offload", False):
+                    for pool in pools.values():
+                        pool.sync_all()
+            finally:
+                self.model.transformer_infer.cache_pools = {}
+                # The graph binds separate history storage. Release both
+                # request-local references before allocating the full video,
+                # including when decoding or offload synchronization fails.
+                pools.clear()
+
+    def _run_diffusion(self, step_indices=None):
+        total = self.scheduler.latents.shape[1]
+        num_chunks = (total + self.config["ar_config"]["num_frame_per_chunk"] - 1) // self.config["ar_config"]["num_frame_per_chunk"]
+        on_chunk = None if self.chunk_callback is None else lambda pixels, index: self.chunk_callback(pixels, index, index == num_chunks - 1)
+        ar, chunk, pools, decoder = self._prepare_ar_runtime(on_chunk)
         streaming = decoder.is_async or self.config.get("streaming_vae", False) or on_chunk is not None
         try:
             with no_sync_profiling(enabled=decoder.is_async):
@@ -322,21 +346,80 @@ class EdenLiveARRunner(EdenLiveRunner):
                             decoder.submit(self.vae_decoder.cached_decode_withflag, *decode_args)
                 decoded_chunks = decoder.finish()
         finally:
-            try:
-                decoder.finish()
-            finally:
-                try:
-                    if ar.get("kv_offload", False):
-                        for pool in pools.values():
-                            pool.sync_all()
-                finally:
-                    self.model.transformer_infer.cache_pools = {}
-                    # The graph binds separate history storage. Release both
-                    # request-local references before allocating the full video,
-                    # including when decoding or offload synchronization fails.
-                    pools.clear()
-                    pool = None
+            self._release_ar_runtime(ar, pools, decoder)
         return torch.cat(decoded_chunks, dim=2) if streaming else self.run_vae_decoder(self.scheduler.latents)
+
+    def _set_live_proxy(self, origin_video):
+        # (stride * chunk, H, W, 3) pixel frames -> one RGB frame per latent step.
+        stride = self.config["vae_stride"][0]
+        frames = torch.from_numpy(origin_video[::stride]).to(device=AI_DEVICE)
+        pixels = frames.permute(0, 3, 1, 2)
+        self.inputs["proxy_features"] = self.proxy_encoder.infer(pixels).to(GET_DTYPE())
+        return pixels
+
+    def _publish_live_frames(self, pixels, index, is_last):
+        frame = pixels[0].detach().float()
+        images = ((frame + 1) / 2).clamp(0, 1).permute(1, 2, 3, 0).contiguous().clone()
+        gen_video = images.permute(3, 0, 1, 2).unsqueeze(0)
+        self.va_controller.pub_livestream(images, None, gen_video)
+
+    def run_main(self):
+        try:
+            pools = None
+            self.va_controller = VAController(self)
+            self.init_run()
+            logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
+            if self.va_controller.reader is None:
+                return super().run_main()
+
+            self.va_controller.start()
+            logger.info("start ar edenlive generation")
+            self.va_controller.before_control()
+
+            ar, chunk, pools, decoder = self._prepare_ar_runtime(self._publish_live_frames)
+            chunk_idx = 0
+            start_frame = 0
+            fail_count, max_fail_count = 0, 10
+
+            while True:
+                self.check_stop()
+                control = self.va_controller.next_control()
+                if control.action == "wait":
+                    time.sleep(0.01)
+                    continue
+
+                origin_video = self.va_controller.reader.get_video_segment(timeout=1)
+                if origin_video is None:
+                    fail_count += 1
+                    logger.warning(f"Failed to get video chunk {fail_count} times")
+                    if fail_count > max_fail_count:
+                        raise Exception(f"Failed to get video chunk {fail_count} times, stop reader")
+                    continue
+
+                with ProfilingContext4DebugL1(f"live chunk {chunk_idx} end_to_end"):
+                    self.check_stop()
+                    pixels = self._set_live_proxy(origin_video)
+                    logger.info(f"EdenLive live chunk {chunk_idx}, video shape: {origin_video.shape} -> {pixels.shape}")
+
+                    self._run_steps(start_frame, chunk, start_frame + chunk)
+                    decode_args = (self.scheduler.latents[:, :chunk].clone(), start_frame == 0, False)
+                    decoder.submit(self.vae_decoder.cached_decode_withflag, *decode_args)
+
+                    with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                        self.scheduler.step_pre(self.scheduler.infer_steps - 1, chunk_start=start_frame, cache_update=True)
+                    with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
+                        self.model.infer(self.inputs)
+
+                    start_frame += chunk
+                    chunk_idx += 1
+                    fail_count = 0
+
+        finally:
+            if pools is not None:
+                self._release_ar_runtime(ar, pools, decoder)
+            if getattr(self, "va_controller", None) is not None:
+                self.va_controller.clear()
+                self.va_controller = None
 
 
 @RUNNER_REGISTER("wan21_edenlive")
