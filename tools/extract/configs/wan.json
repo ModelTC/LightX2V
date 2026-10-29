@@ -1,0 +1,28 @@
+{
+  "source_model": "lightx2v_train/models/Wan2.1-T2V-14B",
+  "target_model": "outputs/wan_student",
+  "output": "outputs/wan_lora.safetensors",
+  "rank": 32,
+  "alpha": 32,
+  "dtype": "bf16",
+  "device": "auto",
+  "key_prefix": "diffusion_model",
+  "layers": [
+    "blocks.*.self_attn.q",
+    "blocks.*.self_attn.k",
+    "blocks.*.self_attn.v",
+    "blocks.*.self_attn.o",
+    "blocks.*.cross_attn.q",
+    "blocks.*.cross_attn.k",
+    "blocks.*.cross_attn.v",
+    "blocks.*.cross_attn.o",
+    "blocks.*.ffn.0",
+    "blocks.*.ffn.2",
+    "text_embedding.0",
+    "text_embedding.2",
+    "time_embedding.0",
+    "time_embedding.2",
+    "time_projection.1",
+    "head.head"
+  ]
+}

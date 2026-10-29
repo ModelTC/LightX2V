@@ -1,0 +1,27 @@
+{
+  "source_model": "lightx2v_train/models/Qwen-Image-2.1",
+  "target_model": "lightx2v_train/models/Qwen-Image-2.1-Lightning-v2-base",
+  "output": "outputs/qwen_image_21_lightning_v2_base_lora.safetensors",
+  "rank": 64,
+  "alpha": 8,
+  "dtype": "fp32",
+  "device": "auto",
+  "key_prefix": "transformer",
+  "layers": [
+    "transformer_blocks.*.attn.to_q",
+    "transformer_blocks.*.attn.to_k",
+    "transformer_blocks.*.attn.to_v",
+    "transformer_blocks.*.attn.to_out.0",
+    "transformer_blocks.*.img_mlp.gate_layer",
+    "transformer_blocks.*.img_mlp.proj",
+    "transformer_blocks.*.img_mlp.out",
+    "time_text_embed.timestep_embedder.linear_1",
+    "time_text_embed.timestep_embedder.linear_2",
+    "modulation.1",
+    "norm_out.linear",
+    "img_in",
+    "txt_in.in_layer",
+    "txt_in.out_layer",
+    "proj_out"
+  ]
+}
