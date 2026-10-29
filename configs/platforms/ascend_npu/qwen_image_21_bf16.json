@@ -3,7 +3,7 @@
     "resolution": 1024,
     "attn_type": "npu_flash_attn",
     "rope_type": "qwen_image_21_npu_rope",
-    "rms_norm_type": "fp32_variance",
+    "rms_norm_type": "qwen_image_21_npu_rms_norm",
     "layer_norm_type": "torch",
     "modulate_type": "torch",
     "fused_qk_rms_norm": false,
