@@ -2,6 +2,7 @@ import os
 
 import torch
 
+from lightx2v.common.ops.utils import create_pin_tensor
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -40,12 +41,18 @@ class Flux2Klein_TextEncoder:
         else:
             self.text_encoder = Qwen3ForCausalLM.from_pretrained(text_encoder_path, torch_dtype=GET_DTYPE(), device_map=AI_DEVICE, **kwargs)
 
+        self.cpu_weights = {}
+        if self.cpu_offload:
+            for name, parameter in self.text_encoder.named_parameters():
+                parameter.data = create_pin_tensor(parameter.data)
+                self.cpu_weights[name] = parameter.data
+
         self.tokenizer = Qwen2TokenizerFast.from_pretrained(tokenizer_path, **tokenizer_kwargs)
 
     @torch.no_grad()
     def infer(self, prompt, image_list=None):
         if self.cpu_offload:
-            self.text_encoder.to(AI_DEVICE)
+            self.text_encoder.to(AI_DEVICE, non_blocking=bool(self.cpu_weights))
 
         if isinstance(prompt, str):
             prompt = [prompt]
@@ -89,6 +96,10 @@ class Flux2Klein_TextEncoder:
         prompt_embeds = out.permute(0, 2, 1, 3).reshape(batch_size, seq_len, num_channels * hidden_dim)
 
         if self.cpu_offload:
+            if self.cpu_weights:
+                torch_device_module.synchronize()
+                for name, parameter in self.text_encoder.named_parameters():
+                    parameter.data = self.cpu_weights[name]
             self.text_encoder.to(torch.device("cpu"))
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
