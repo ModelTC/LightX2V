@@ -1,5 +1,32 @@
 # RelayVSR 视频超分
 
+## 两个原生模型入口
+
+| `model_cls` | 权重 | 输出规则 |
+| --- | --- | --- |
+| `relayvsr_x4` | 官方 `wan.safetensors`、`flash.safetensors` | 原生计算 4×，保留 `sr_ratio=2/4` 和 `size` 缩小输出 |
+| `relayvsr_x2` | 训练后的 `wan_x2.safetensors`、`flash_x2.safetensors` | 原生计算 2×，只接受 `sr_ratio=2`；`size` 若指定必须为输入宽高各翻倍 |
+
+旧的 `relayvsr` 注册名已移除。两个入口会校验权重格式、倍率及关键结构，混用 2×/4× 权重会直接报错。
+2× 使用原始 LR 直接投影到 Wan token，Flash 编码步幅为 2/2/2；输入按 16 对齐后裁剪为精确 2×，整个路径只分配原生 2× 的 latent、token 和 KV cache。
+Flash 保持 S 模型的 10 层、512 维和 PixelShuffle16，无剪枝。权重中已合并 LoRA、包含 Wan prompt，推理不依赖 VAE 或文本编码器。
+
+原生 2× 示例：
+
+```bash
+python -m lightx2v.infer \
+  --model_cls relayvsr_x2 --task sr \
+  --model_path /models/weights_relayvsr_x2 \
+  --config_json configs/relayvsr/relayvsr_x2.json \
+  --video_path /videos/input.mp4 --sr_ratio 2 \
+  --save_result_path /videos/output_native_x2.mp4 --seed 42
+```
+
+也可使用 `run_relayvsr_x2_sr.sh`。`relayvsr_x2_compile.json`、`relayvsr_x2_block_offload.json`、`relayvsr_x2_sp.json` 分别对应编译/预热、block 卸载、双卡 SP；`musa/` 下也提供对应 SDPA 配置。
+4× 与 2× 的配置分别带 `_x4`、`_x2` 后缀，`native_scale` 必须与入口一致。日志中的 `native_scale` 表示模型原生倍率，`output_scale` 为最终高宽倍率；`relayvsr_x4 --sr_ratio 2` 仍会先计算 4× 再缩小。
+
+以下说明及官方权重下载针对原生 4× 入口。
+
 原生接入 [RelayVSR](https://github.com/kopperx/RelayVSR) 官方大模型：约 5.03B 参数的 Wan 生成稀疏参考帧，约 31.9M 参数的 Flash-S 解码全部视频帧。
 
 **模型内部始终计算 4×。** `--sr_ratio 4` 直接输出；`--sr_ratio 2` 将裁去 padding 的 4× 结果用 FP32、抗锯齿 bicubic 缩小，再编码。2× 不会省去 4× 模型计算，但可以降低输出搬运、编码和文件大小。
@@ -12,19 +39,19 @@
 hf download kopper/RelayVSR wan.safetensors flash.safetensors --local-dir /models/RelayVSR
 ```
 
-先修改 `scripts/relayvsr/run_relayvsr_sr.sh` 顶部的 `lightx2v_path`、`model_path` 和 `video_path`，然后运行：
+先修改 `scripts/relayvsr/run_relayvsr_x4_sr.sh` 顶部的 `lightx2v_path`、`model_path` 和 `video_path`，然后运行：
 
 ```bash
-bash scripts/relayvsr/run_relayvsr_sr.sh
+bash scripts/relayvsr/run_relayvsr_x4_sr.sh
 ```
 
 显卡和推理参数直接在脚本中设置，通过 `scripts/base/base.sh` 初始化环境。将 `--sr_ratio` 改为 `4` 可直接输出 4×，输出位置通过 `--save_result_path` 设置。也可以直接调用统一 CLI：
 
 ```bash
 python -m lightx2v.infer \
-  --model_cls relayvsr --task sr \
+  --model_cls relayvsr_x4 --task sr \
   --model_path /models/RelayVSR \
-  --config_json configs/relayvsr/relayvsr.json \
+  --config_json configs/relayvsr/relayvsr_x4.json \
   --video_path /videos/input.mp4 --sr_ratio 2 --seed 42 \
   --save_result_path /videos/output_x2.mp4
 ```
@@ -35,24 +62,24 @@ python -m lightx2v.infer \
 
 | 配置 | 行为 |
 | --- | --- |
-| `relayvsr.json` | 常驻显存，eager，关闭编译和预热 |
-| `relayvsr_compile.json` | Wan 和 Flash 的 Transformer block 都启用 `torch.compile`，启动时预热 |
-| `relayvsr_block_offload.json` | Wan 权重放在 CPU，用 LightX2V 双缓冲和预取逐块上卡；Flash 常驻 |
-| `relayvsr_sp.json` | 两卡序列并行；Wan 和 Flash 都使用 Ulysses all-to-all |
-| `musa/relayvsr.json` | PyTorch SDPA 局部注意力，eager 执行 |
-| `musa/relayvsr_compile.json` | SDPA，启用 block 编译和启动预热 |
-| `musa/relayvsr_sp.json` | SDPA 两卡编译/预热；Flash 按 query 分片，每个 block 合并执行一次 K/V all-gather |
+| `relayvsr_x4.json` | 常驻显存，eager，关闭编译和预热 |
+| `relayvsr_x4_compile.json` | Wan 和 Flash 的 Transformer block 都启用 `torch.compile`，启动时预热 |
+| `relayvsr_x4_block_offload.json` | Wan 权重放在 CPU，用 LightX2V 双缓冲和预取逐块上卡；Flash 常驻 |
+| `relayvsr_x4_sp.json` | 两卡序列并行；Wan 和 Flash 都使用 Ulysses all-to-all |
+| `musa/relayvsr_x4.json` | PyTorch SDPA 局部注意力，eager 执行 |
+| `musa/relayvsr_x4_compile.json` | SDPA，启用 block 编译和启动预热 |
+| `musa/relayvsr_x4_sp.json` | SDPA 两卡编译/预热；Flash 按 query 分片，每个 block 合并执行一次 K/V all-gather |
 
-选择配置时修改脚本中的 `--config_json`，例如将其改为 `"${lightx2v_path}/configs/relayvsr/relayvsr_block_offload.json"`，即可启用 block 权重卸载。
+选择配置时修改脚本中的 `--config_json`，例如将其改为 `"${lightx2v_path}/configs/relayvsr/relayvsr_x4_block_offload.json"`，即可启用 block 权重卸载。
 
-示例脚本默认使用 `relayvsr_compile.json`，同时开启编译和启动预热。`use_compile` 和 `warmup` 是启动 JSON 参数：两者都为 `true` 时，模型加载后自动在预热过程中触发编译；只开启 `warmup` 可预热 eager；只开启 `use_compile` 则在首次推理时触发编译。需要关闭两者时，将脚本的 `--config_json` 改回 `"${lightx2v_path}/configs/relayvsr/relayvsr.json"`。编译覆盖 Wan 的 30 个 block 和 Flash 的 10 个 block，包括 Flash 条件帧与视频帧两条路径；前后处理、权重搬运和视频读写不在编译图内。
+示例脚本默认使用 `relayvsr_x4.json`，关闭编译和预热；改用 `relayvsr_x4_compile.json` 可同时开启两者。`use_compile` 和 `warmup` 是启动 JSON 参数：两者都为 `true` 时，模型加载后自动在预热过程中触发编译；只开启 `warmup` 可预热 eager；只开启 `use_compile` 则在首次推理时触发编译。需要关闭两者时，将脚本的 `--config_json` 改回 `"${lightx2v_path}/configs/relayvsr/relayvsr_x4.json"`。编译覆盖 Wan 的 30 个 block 和 Flash 的 10 个 block，包括 Flash 条件帧与视频帧两条路径；前后处理、权重搬运和视频读写不在编译图内。
 
 双卡示例：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 -m lightx2v.infer \
-  --model_cls relayvsr --task sr --model_path /models/RelayVSR \
-  --config_json configs/relayvsr/relayvsr_sp.json \
+  --model_cls relayvsr_x4 --task sr --model_path /models/RelayVSR \
+  --config_json configs/relayvsr/relayvsr_x4_sp.json \
   --video_path /videos/input.mp4 --sr_ratio 2 --seed 42 \
   --save_result_path /videos/output_x2.mp4
 ```
@@ -73,9 +100,9 @@ export CUDA_VISIBLE_DEVICES=0
 source "${lightx2v_path}/scripts/base/base.sh"
 
 python -m lightx2v.server \
-  --model_cls relayvsr --task sr \
+  --model_cls relayvsr_x4 --task sr \
   --model_path "${model_path}" \
-  --config_json "${lightx2v_path}/configs/relayvsr/relayvsr_compile.json" \
+  --config_json "${lightx2v_path}/configs/relayvsr/relayvsr_x4_compile.json" \
   --host 0.0.0.0 --port 8000
 ```
 
