@@ -25,7 +25,7 @@ def _projection_contract(config):
     """Identify the actual modulation arithmetic and weight files."""
     quantized = bool(config.get("dit_quantized", False))
     scheme = config.get("dit_quant_scheme", "Default") if quantized else "Default"
-    if scheme not in ("Default", "fp8-sgl", "fp8-f16-accum"):
+    if scheme not in ("Default", "fp8-sgl", "fp8-f16-accum", "fp8-f32-accum"):
         raise NotImplementedError(f"H3 AdaLN cache does not support {scheme!r}")
     checkpoint = Path(config["dit_quantized_ckpt"] if quantized else config["dit_original_ckpt"]).expanduser().resolve()
     files = sorted(checkpoint.glob("*.safetensors")) if checkpoint.is_dir() else [checkpoint]
@@ -43,7 +43,8 @@ def _projection_contract(config):
         sgl_version = "unavailable"
     return {
         "version": 1,
-        "scheme": scheme,
+        # Both accumulation modes leave AdaLN on the same SGL path.
+        "scheme": "fp8-f16-accum" if scheme == "fp8-f32-accum" else scheme,
         **({"checkpoint_layout": "native_h3" if quantized else "streamrender_release"} if config["model_cls"] == "streamrender_h3" else {}),
         # AdaLN is intentionally absent from H3_PROJECTION_SUFFIXES.
         # Its FP8-F16 profile therefore uses this same SGL per-token backend.

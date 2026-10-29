@@ -28,7 +28,7 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
             create_cuda_buffer=create_cuda_buffer,
             lora_prefix=lora_prefix,
         )
-        if quant_scheme == "fp8-f16-accum" and name.endswith(H3_PROJECTION_SUFFIXES):
+        if quant_scheme in ("fp8-f16-accum", "fp8-f32-accum") and name.endswith(H3_PROJECTION_SUFFIXES):
             unwrap_tp_weight(linear).enable_fp8_f16_accum(ACTIVATION_QMAX)
         return linear
 
@@ -38,7 +38,7 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
         create_cuda_buffer=create_cuda_buffer,
         lora_prefix=lora_prefix,
     )
-    if quant_scheme == "fp8-f16-accum" and name.endswith(H3_PROJECTION_SUFFIXES):
+    if quant_scheme in ("fp8-f16-accum", "fp8-f32-accum") and name.endswith(H3_PROJECTION_SUFFIXES):
         linear.enable_fp8_f16_accum(ACTIVATION_QMAX)
     return linear
 

@@ -77,7 +77,7 @@ class MiniMaxH3CausalModel(H3AutoregressiveModel, MiniMaxH3Model):
                 self._record_checkpoint_metadata(source)
                 weights.update({key: source.get_tensor(key) for key in source.keys() if not any(part in key for part in self.remove_keys)})
 
-        if self.config.get("dit_quant_scheme") == "fp8-f16-accum":
+        if self.config.get("dit_quant_scheme") in ("fp8-f16-accum", "fp8-f32-accum"):
             weights = {key: self._fp8_f16_checkpoint_tensor(key, tensor, sensitive_layer) for key, tensor in weights.items()}
         # Storage layout must not change checkpoint values, including FP32 scales.
         load_device = self._checkpoint_load_device()

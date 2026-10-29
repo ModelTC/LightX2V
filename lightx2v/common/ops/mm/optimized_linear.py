@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from lightx2v.common.ops.mm.fp8_f16_accum import cutlass_scaled_fp8_mm_f16_accum
 from lightx2v.common.ops.mm.fused_gelu_linear import fused_gelu_int8_convrot_linear, fused_gelu_quant_fp8_f16_accum, fused_gelu_quant_fp8_sgl, prepare_convrot_gelu_fusion
 from lightx2v.common.ops.mm.fused_swiglu_linear import fused_swiglu_quant_fp8_f16_accum
-from lightx2v.common.ops.mm.mm_weight import MMWeightTP, MMWeightWfp8channelAfp8channelF16Accum, MMWeightWfp8channelAfp8channeldynamicSgl, MMWeightWint8ConvRot
+from lightx2v.common.ops.mm.mm_weight import MMWeightTP, MMWeightWfp8channelAfp8channelF16Accum, MMWeightWfp8channelAfp8channelF32Accum, MMWeightWfp8channelAfp8channeldynamicSgl, MMWeightWint8ConvRot
 from lightx2v.common.ops.mm.projection_group import ConvRotProjectionGroup, FP8F16AccumProjectionGroup, FP8ProjectionGroup, _backend_apis_available
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm
 
@@ -47,7 +47,7 @@ def make_projection_group(modules, *, packed=False, offload_buffers=False):
 
 
 def apply_swiglu_linear(module, value, gate):
-    """Fuse H3 SwiGLU with FP8-F16 quantization for an active local weight.
+    """Fuse H3 SwiGLU with range-limited FP8 quantization for an active local weight.
 
     The weight is read at each call, so block-offloaded weights and captured
     graph storage use the current CUDA buffer. Other backends and adapters
@@ -59,7 +59,7 @@ def apply_swiglu_linear(module, value, gate):
     scale = getattr(linear, "weight_scale", None)
     qmax = getattr(linear, "fp8_activation_qmax", None)
     if (
-        type(linear) is not MMWeightWfp8channelAfp8channelF16Accum
+        type(linear) not in (MMWeightWfp8channelAfp8channelF16Accum, MMWeightWfp8channelAfp8channelF32Accum)
         or qmax is None
         or linear.has_lora_branch
         or linear.has_diff
@@ -80,7 +80,7 @@ def apply_swiglu_linear(module, value, gate):
     ):
         return module.apply(value * F.silu(gate))
     quantized, input_scale = fused_swiglu_quant_fp8_f16_accum(value, gate, qmax)
-    output = cutlass_scaled_fp8_mm_f16_accum(quantized, weight, input_scale, scale, linear.infer_dtype, linear._get_actual_bias())
+    output = linear.fp8_gemm(quantized, weight, input_scale, scale, linear.infer_dtype, linear._get_actual_bias())
     if tp is not None and tp.reduce_output and tp.tp_size > 1 and tp.tp_group is not None:
         dist.all_reduce(output, op=dist.ReduceOp.SUM, group=tp.tp_group)
         if tp._row_split_bias is not None:

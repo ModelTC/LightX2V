@@ -44,7 +44,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
 
-from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason
+from lightx2v.common.ops.mm.fp8_f16_accum import fp8_accum_gemm, fp8_f16_accum_mm_unavailable_reason
 from lightx2v.models.video_encoders.hf.minimax_h3.fp8_encoder_conv_policy import (
     FP8_ENCODER_CONV_MODES,
     FP8_ENCODER_CONV_UNQUANTIZED_MODULE_NAMES,
@@ -625,10 +625,10 @@ class MiniMaxH3VideoVAE(nn.Module):
         attn_type: str = "torch_sdpa",
     ) -> None:
         super().__init__()
-        if quant_scheme not in {None, "fp8-f16-accum", "fp8-musa", "fp8-sgl"}:
+        if quant_scheme not in {None, "fp8-f16-accum", "fp8-f32-accum", "fp8-musa", "fp8-sgl"}:
             raise NotImplementedError(f"Unsupported MiniMax-H3 video VAE quantization scheme: {quant_scheme!r}")
-        if attn_type not in {"torch_sdpa", "sage_attn2", "minimax_h3_xpu_cute"}:
-            raise ValueError(f"Unsupported MiniMax-H3 video VAE attention type: {attn_type!r}; expected torch_sdpa, sage_attn2, or minimax_h3_xpu_cute")
+        if attn_type not in {"torch_sdpa", "sage_attn2", "flash_attn3", "minimax_h3_xpu_cute"}:
+            raise ValueError(f"Unsupported MiniMax-H3 video VAE attention type: {attn_type!r}; expected torch_sdpa, sage_attn2, flash_attn3, or minimax_h3_xpu_cute")
         self.config = dict(config)
         self.execution_device = torch.device(device or AI_DEVICE)
         self.cpu_offload = cpu_offload
@@ -737,7 +737,9 @@ class MiniMaxH3VideoVAE(nn.Module):
             block.ff.net[2].enable_fp8_f16_accum(H3_VIDEO_VAE_ACTIVATION_QMAX)
 
     def _make_fp8_linear(self, linear: nn.Linear) -> nn.Module:
-        if self.quant_scheme == "fp8-f16-accum":
+        if self.quant_scheme == "fp8-f32-accum":
+            from lightx2v.models.input_encoders.hf.q_linear import F32AccumQuantLinearFp8 as linear_cls
+        elif self.quant_scheme == "fp8-f16-accum":
             from lightx2v.models.input_encoders.hf.q_linear import F16AccumQuantLinearFp8 as linear_cls
         elif self.quant_scheme == "fp8-musa":
             from lightx2v.models.input_encoders.hf.q_linear import MusaQuantLinearFp8 as linear_cls
@@ -846,12 +848,15 @@ class MiniMaxH3VideoVAE(nn.Module):
             if encoder_conv_checkpoint_info is not None:
                 raise ValueError(f"FP8 Encoder Conv3D weights require encoder_conv_mode to be one of {sorted(FP8_ENCODER_CONV_MODES)}")
             encoder_conv_policy = None
-        if quant_scheme == "fp8-f16-accum":
+        if quant_scheme in ("fp8-f16-accum", "fp8-f32-accum"):
             validate_checkpoint(weight_path, profile=H3_QUANTIZATION_PROFILE)
+            if quant_scheme == "fp8-f32-accum":
+                fp8_accum_gemm(torch.float32)
             fallback_reason = fp8_f16_accum_mm_unavailable_reason()
             if fallback_reason is None:
                 logger.info(
-                    "MiniMax-H3 Video VAE FP8-F16 accumulation enabled for packed QKV, attention output, and FFN projections (weight qmax={}, activation qmax={})",
+                    "MiniMax-H3 Video VAE {} enabled for packed QKV, attention output, and FFN projections (weight qmax={}, activation qmax={})",
+                    quant_scheme,
                     WEIGHT_QMAX,
                     H3_VIDEO_VAE_ACTIVATION_QMAX,
                 )
@@ -882,7 +887,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         if quant_scheme is not None:
             # Pack only after loading the checkpoint's original Q/K/V keys.
             model._pack_decoder_fp8_qkv()
-        if quant_scheme == "fp8-f16-accum":
+        if quant_scheme in ("fp8-f16-accum", "fp8-f32-accum"):
             model._configure_fp8_f16_accum_linears()
         use_channels_last_encoder = encoder_conv_mode == "torch_channels_last"
         if shared_cpu_config is None:

@@ -18,6 +18,13 @@ pip install scikit_build_core uv
 
 ### Build whl
 
+The default target is `120a`; for H100, add `-Ccmake.define.LIGHTX2V_GPU_ARCH=90a` to the build command.
+
+The Hopper build also provides FP8 GEMM with FP32 fast accumulation. H3 can
+select it with `dit_quant_scheme` / `video_vae_quant_scheme: "fp8-f32-accum"`,
+reusing the `fp8-f16-accum` checkpoints, quantization ranges, and fused epilogue.
+The original `fp8-f16-accum` mode retains FP16 accumulation.
+
 ```
 git clone https://github.com/NVIDIA/cutlass.git
 

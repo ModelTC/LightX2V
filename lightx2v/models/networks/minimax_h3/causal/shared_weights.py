@@ -30,8 +30,8 @@ def load_shared_causal_weights(model, sensitive_layer):
             or config.get("lora_configs")
         ):
             raise ValueError("Causal H3 shared weights do not support TP, LoRA or lazy loading")
-        if model.dit_quantized and config.get("dit_quant_scheme") != "fp8-f16-accum":
-            raise ValueError("Causal H3 shared quantized weights require fp8-f16-accum")
+        if model.dit_quantized and config.get("dit_quant_scheme") not in ("fp8-f16-accum", "fp8-f32-accum"):
+            raise ValueError("Causal H3 shared quantized weights require fp8-f16-accum or fp8-f32-accum")
 
     def include(name):
         return not any(remove in name for remove in model.remove_keys)

@@ -12,10 +12,15 @@ from functools import lru_cache
 
 ATEN_GEMM = {"aten::mm", "aten::bmm", "aten::addmm", "aten::_scaled_mm", "aten::_grouped_mm"}
 SGL_GEMM = {"sgl_kernel::fp8_scaled_mm"}
-FP8_F16_GEMM = {"lightx2v_kernel::cutlass_scaled_fp8_mm_f16_accum_sm120", "lightx2v_kernel::cutlass_scaled_fp8_mm_f16_accum_with_config_sm120"}
+FP8_F16_GEMM = {
+    "lightx2v_kernel::cutlass_scaled_fp8_mm_f16_accum_sm90",
+    "lightx2v_kernel::cutlass_scaled_fp8_mm_f16_accum_sm120",
+    "lightx2v_kernel::cutlass_scaled_fp8_mm_f16_accum_with_config_sm120",
+}
+FP8_F32_GEMM = {"lightx2v_kernel::cutlass_scaled_fp8_mm_f32_accum_sm90"}
 PACKED_FP4_GEMM = {"lightx2v_kernel::cutlass_scaled_nvfp4_mm_sm120", "lightx2v_kernel::cutlass_scaled_mxfp4_mm_sm120"}
 CUSTOM_FP8_GEMM = {"lightx2v_kernel::cutlass_scaled_mxfp8_mm_sm120"}
-GEMM_OPERATORS = ATEN_GEMM | SGL_GEMM | FP8_F16_GEMM | PACKED_FP4_GEMM | CUSTOM_FP8_GEMM
+GEMM_OPERATORS = ATEN_GEMM | SGL_GEMM | FP8_F16_GEMM | FP8_F32_GEMM | PACKED_FP4_GEMM | CUSTOM_FP8_GEMM
 
 
 def normalize_dtype(value):
@@ -39,7 +44,16 @@ def demangle(name):
 def precision(name, kernel_names=()):
     """实际native名与kernel类型的源码合同；不由外层输入猜量化/累加类型。"""
     if name in FP8_F16_GEMM:
-        return {"input_dtype": "fp8", "accum_dtype": "fp16", "evidence": ["lightx2v_kernel/nvidia/csrc/gemm/fp8_f16_accum_scaled_mm_kernels_sm120.cu: ElementAccumulator=cutlass::half_t"]}
+        return {"input_dtype": "fp8", "accum_dtype": "fp16", "evidence": ["lightx2v_kernel/nvidia/csrc/gemm/fp8_f16_accum_scaled_mm.cu: ElementAccumulator=cutlass::half_t"]}
+    if name in FP8_F32_GEMM:
+        return {
+            "input_dtype": "fp8",
+            "accum_dtype": "fp32",
+            "evidence": [
+                "lightx2v_kernel/nvidia/csrc/gemm/fp8_f16_accum_scaled_mm.cu: run_with_dtype<float>, ElementAccumulator=float",
+                "FP8FastAccum schedule; fp32 accumulator type does not promise strict fp32 rounding throughout",
+            ],
+        }
     if name in PACKED_FP4_GEMM:
         return {"input_dtype": "fp4", "accum_dtype": "fp32", "evidence": ["lightx2v_kernel packed FP4 contract: two values per byte; ElementAccumulator=float"]}
     if name in CUSTOM_FP8_GEMM:

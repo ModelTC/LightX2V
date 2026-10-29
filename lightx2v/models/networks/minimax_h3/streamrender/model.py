@@ -71,8 +71,8 @@ class StreamRenderH3Model(H3AutoregressiveModel, MiniMaxH3Model):
                 or self.config.get("lora_configs")
             ):
                 raise ValueError("StreamRender shared weights do not support TP, LoRA or lazy loading")
-            if self.dit_quantized and self.config.get("dit_quant_scheme") != "fp8-f16-accum":
-                raise ValueError("StreamRender shared quantized weights require fp8-f16-accum")
+            if self.dit_quantized and self.config.get("dit_quant_scheme") not in ("fp8-f16-accum", "fp8-f32-accum"):
+                raise ValueError("StreamRender shared quantized weights require fp8-f16-accum or fp8-f32-accum")
 
         def transform(name, tensor):
             converted = {name: self._fp8_f16_checkpoint_tensor(name, tensor, sensitive_layer)} if self.dit_quantized else remap_streamrender_weight(name, tensor)
