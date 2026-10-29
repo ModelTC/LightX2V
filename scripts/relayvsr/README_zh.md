@@ -6,7 +6,10 @@
 
 [RelayVSR 官方 GitHub 仓库](https://github.com/kopperx/RelayVSR)
 
-[relayvsr_x4 Hugging Face 下载地址](https://huggingface.co/kopper/RelayVSR)
+- 原版 4× 模型：[kopper/RelayVSR](https://huggingface.co/kopper/RelayVSR)
+- LightX2V 训练的原生 2× 模型：[lightx2v/RelayVSR_X2](https://huggingface.co/lightx2v/RelayVSR_X2)
+
+根据所选模型版本，将下表中对应的两个权重文件下载到同一模型目录。
 
 ## 模型入口
 
