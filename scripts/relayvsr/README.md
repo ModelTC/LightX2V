@@ -79,4 +79,4 @@ curl -fsS -X POST http://127.0.0.1:8000/v1/tasks/video/ \
   }'
 ```
 
-Submit further requests to the resident server to reuse the loaded model, setting the input path, output path and `seed` for each request. Set `sr_ratio` to `2` for 2× output. 
+Submit further requests to the resident server to reuse the loaded model, setting the input path, output path and `seed` for each request. Set `sr_ratio` to `2` for 2× output.
