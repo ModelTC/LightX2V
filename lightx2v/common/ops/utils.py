@@ -3,10 +3,10 @@ import re
 from pathlib import Path
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.common.offload.block_layout import BlockLoadContext
-from lightx2v.common.offload.host_memory import create_pin_tensor
 from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -74,6 +74,31 @@ def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_i
         elif bias_force_fp32 and "bias" in source_name:
             return weight_dict[source_name].to(torch.float32)
         return weight_dict[source_name]
+
+
+def create_pin_tensor(tensor, transpose=False, dtype=None):
+    """Create a tensor with pinned memory for faster data transfer to GPU.
+
+    Args:
+        tensor: Source tensor to be converted to pinned memory
+        transpose: Whether to transpose the tensor after creating pinned memory (optional)
+        dtype: Target data type of the pinned tensor (optional, defaults to source tensor's dtype)
+
+    Returns:
+        Pinned memory tensor (on CPU) with optional transposition applied.
+        Falls back to regular CPU tensor if pinned memory allocation fails.
+    """
+    dtype = dtype or tensor.dtype
+    try:
+        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=dtype)
+    except Exception as e:
+        logger.warning(f"Failed to allocate pinned memory (shape={tensor.shape}, dtype={dtype}): {e}. Falling back to regular CPU memory.")
+        pin_tensor = torch.empty(tensor.shape, dtype=dtype)
+    pin_tensor = pin_tensor.copy_(tensor)
+    if transpose:
+        pin_tensor = pin_tensor.t()
+    del tensor
+    return pin_tensor
 
 
 def get_lazy_load_file_path(lazy_load_file, weight_name_for_block=None):
