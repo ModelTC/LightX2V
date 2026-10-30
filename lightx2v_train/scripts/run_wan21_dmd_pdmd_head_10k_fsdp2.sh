@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch three independent, fresh two-GPU runs. Never stop other GPU users.
+# Launch plain DMD and residual-head independent, fresh two-GPU runs. Never stop other GPU users.
 set -Eeuo pipefail
 
 usage() {
@@ -9,7 +9,7 @@ usage() {
         '  --preflight: verify inputs, training Python and idle GPUs; do not launch.' \
         'Environment: WAN_DMD_PYTHON (python), WAN_DMD_MODEL, WAN_DMD_PROMPTS,' \
         '  WAN_DMD_RUN_ROOT (new timestamp directory), DMD_GPUS (0,1),' \
-        '  PDMD_GPUS (2,3), HEAD_GPUS (5,6).' \
+        '  HEAD_GPUS (5,6); projection-only PDMD has been retired.' \
         'The 10k config disables auto-resume and keeps one checkpoint per group.'
 }
 mode=run
@@ -30,8 +30,8 @@ export WAN_DMD_PROMPTS="${WAN_DMD_PROMPTS:-/data/nvme4/gushiqiao/new/Causal-Forc
 export WAN_DMD_PYTHON="${WAN_DMD_PYTHON:-python}"
 # POSIX UTC+8 works even in minimal CUDA images without zoneinfo/tzdata.
 run_root="${WAN_DMD_RUN_ROOT:-$repo_root/outputs/wan21_dmd_pdmd_head_10k_acc4_calibrated_$(TZ=CST-8 date +%Y%m%d_%H%M%S)_$$}"
-groups=(dmd pdmd head)
-gpu_groups=("${DMD_GPUS:-0,1}" "${PDMD_GPUS:-2,3}" "${HEAD_GPUS:-5,6}")
+groups=(dmd head)
+gpu_groups=("${DMD_GPUS:-0,1}" "${HEAD_GPUS:-5,6}")
 declare -A selected_gpus=()
 for gpu_group in "${gpu_groups[@]}"; do
     if [[ ! "$gpu_group" =~ ^(0|[1-9][0-9]*),(0|[1-9][0-9]*)$ ]]; then
@@ -56,10 +56,10 @@ export PYTHONPATH="$train_root${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export TOKENIZERS_PARALLELISM=false HF_HUB_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID
-printf 'Fresh 10000-iteration comparison; head: 5 fresh fit batches, accumulation 4+1, calibrated/independent gate.\n'
+printf 'Fresh 10000-iteration DMD/head comparison (projection-only PDMD removed); head: 5 fresh fit batches, accumulation 4+1, calibrated/independent gate.\n'
 printf 'Run root: %s\n' "$run_root"
 printf 'Model: %s\nPrompts: %s\n' "$WAN_DMD_MODEL" "$WAN_DMD_PROMPTS"
-for index in 0 1 2; do
+for index in "${!groups[@]}"; do
     printf '%s: GPUs=%s log=%s/%s/launch.log\n' \
         "${groups[$index]}" "${gpu_groups[$index]}" "$run_root" "${groups[$index]}"
 done
@@ -85,7 +85,7 @@ import subprocess
 import sys
 
 config_path, run_root = Path(sys.argv[1]), Path(sys.argv[2])
-gpu_groups = dict(zip(("dmd", "pdmd", "head"), sys.argv[3:]))
+gpu_groups = dict(zip(("dmd", "head"), sys.argv[3:]))
 selected = {index for value in gpu_groups.values() for index in value.split(",")}
 
 def query(fields, kind="gpu"):
@@ -133,19 +133,19 @@ while not parent.exists():
     parent = parent.parent
 free_gib = shutil.disk_usage(parent).free / 2**30
 if free_gib < 80:
-    raise SystemExit("Need at least 80 GiB free for three checkpoint sets/previews; available %.1f GiB" % free_gib)
+    raise SystemExit("Need at least 80 GiB free for two checkpoint sets/previews; available %.1f GiB" % free_gib)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(sorted(selected, key=int))
 import torch
-if not torch.cuda.is_available() or torch.cuda.device_count() != 6:
-    raise SystemExit("Training Python cannot access all six selected CUDA GPUs")
+if not torch.cuda.is_available() or torch.cuda.device_count() != 4:
+    raise SystemExit("Training Python cannot access all four selected CUDA GPUs")
 from lightx2v_train.runtime.config import load_config
 from lightx2v_train.trainers.dmd.residual_head import ResidualHeadConfig
 
 configs = {}
 for group in gpu_groups:
     os.environ.update({"WAN_DMD_OUTPUT": str(run_root / group),
-                       "WAN_DMD_PROJECTED": str(group == "pdmd").lower(),
+                       "WAN_DMD_PROJECTED": "false",
                        "WAN_DMD_RESIDUAL_HEAD": str(group == "head").lower()})
     value = load_config(str(config_path))
     options = ResidualHeadConfig.from_mapping(value["training"]["dmd"]["residual_head"])
@@ -190,10 +190,9 @@ stop_children() {
 }
 trap stop_children TERM INT
 cd "$train_root"
-for index in 0 1 2; do
+for index in "${!groups[@]}"; do
     group="${groups[$index]}"
     projected=false; head=false
-    [[ "$group" == pdmd ]] && projected=true
     [[ "$group" == head ]] && head=true
     mkdir "$run_root/$group"
     setsid env CUDA_VISIBLE_DEVICES="${gpu_groups[$index]}" \
@@ -209,7 +208,7 @@ for index in 0 1 2; do
         "$group" "$pid" "${gpu_groups[$index]}" "$run_root" "$group"
 done
 result=0
-for index in 0 1 2; do
+for index in "${!groups[@]}"; do
     rc=0
     wait "${child_pids[$index]}" || rc=$?
     printf '%s\n' "$rc" > "$run_root/${groups[$index]}/exit_code"

@@ -32,7 +32,7 @@ class TinyH3Model:
 
 
 class H3TrainerIntegrationTest(unittest.TestCase):
-    def fixture(self, projected=False):
+    def fixture(self):
         shape = MiniMaxH3LatentShape(124, 37, 4, 6, 207, (1, 2, 3), (1, 3, 2))
         generated = MiniMaxH3JointLatents(
             torch.tensor([[[0.4, -0.8, 1.2], [2.0, 0.25, -1.5]]], requires_grad=True),
@@ -45,7 +45,6 @@ class H3TrainerIntegrationTest(unittest.TestCase):
             shape,
         )
         options = {
-            "projected_dmd": projected,
             "video_loss_weight": 2.0,
             "audio_loss_weight": 3.0,
             "audio_dmd_loss_weight": 0.7,
@@ -114,50 +113,25 @@ class H3TrainerIntegrationTest(unittest.TestCase):
         self.assertIsNone(trainer.teacher.model.transformer.weight.grad)
         trainer.student.student_regularization.assert_called_once()
 
-    def test_pdmd_changes_each_modality_direction_without_critic_gradients(self):
-        baseline, baseline_generated, _ = self.fixture()
-        baseline_result = baseline.forward_loss(baseline_generated.shape, ({}, None), "student")
-        baseline_gradients = torch.autograd.grad(baseline_result["loss"], (baseline_generated.video, baseline_generated.audio))
-        trainer, generated, noise = self.fixture(projected=True)
-        result = trainer.forward_loss(generated.shape, ({}, None), "student")
-        result["loss"].backward()
-        fake, _ = self.endpoints(trainer, generated, noise)
-        for gradient, baseline_gradient, estimate, student in zip(
-            (generated.video.grad, generated.audio.grad),
-            baseline_gradients,
-            (fake.video, fake.audio),
-            (generated.video, generated.audio),
-        ):
-            self.assertGreater((gradient - baseline_gradient).abs().max().item(), 1e-4)
-            torch.testing.assert_close((gradient * (estimate - student.detach())).sum(), torch.tensor(0.0), rtol=0, atol=1e-6)
-        self.assertIsNone(trainer.fake.model.transformer.weight.grad)
+    def test_fake_regression_preserves_plain_dmd_targets_and_gradients(self):
+        trainer, generated, noise = self.fixture()
+        actual = trainer.forward_loss(generated.shape, ({}, None), "fake")
+        sigma = trainer._sample_score_sigma.return_value
+        renoised = trainer.student.add_noise(trainer.scheduler, generated, noise, sigma)
+        prediction = trainer.fake.predict_velocity(renoised, sigma, {})
+        expected = 2.0 * F.mse_loss(prediction.video, generated.video - noise.video)
+        expected += 3.0 * F.mse_loss(prediction.audio, generated.audio - noise.audio)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        actual.backward()
+        self.assertIsNotNone(trainer.fake.model.transformer.weight.grad)
+        self.assertIsNone(generated.video.grad)
+        self.assertIsNone(generated.audio.grad)
         self.assertIsNone(trainer.teacher.model.transformer.weight.grad)
-        self.assertLess(result["loss"].item(), baseline_result["loss"].item())
-
-    def test_fake_regression_and_gradients_are_unchanged_by_pdmd(self):
-        losses, gradients = [], []
-        for projected in (False, True):
-            trainer, generated, noise = self.fixture(projected)
-            actual = trainer.forward_loss(generated.shape, ({}, None), "fake")
-            sigma = trainer._sample_score_sigma.return_value
-            renoised = trainer.student.add_noise(trainer.scheduler, generated, noise, sigma)
-            prediction = trainer.fake.predict_velocity(renoised, sigma, {})
-            expected = 2.0 * F.mse_loss(prediction.video, generated.video - noise.video)
-            expected += 3.0 * F.mse_loss(prediction.audio, generated.audio - noise.audio)
-            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-            actual.backward()
-            losses.append(actual.detach())
-            gradients.append(trainer.fake.model.transformer.weight.grad.clone())
-            self.assertIsNone(generated.video.grad)
-            self.assertIsNone(generated.audio.grad)
-            self.assertIsNone(trainer.teacher.model.transformer.weight.grad)
-            trainer.student.student_regularization.assert_not_called()
-            self.assertFalse(trainer.run_back_simulation.call_args.kwargs["grad_enabled"])
-        torch.testing.assert_close(losses[0], losses[1], rtol=0, atol=0)
-        torch.testing.assert_close(gradients[0], gradients[1], rtol=0, atol=0)
+        trainer.student.student_regularization.assert_not_called()
+        self.assertFalse(trainer.run_back_simulation.call_args.kwargs["grad_enabled"])
 
     def test_diagnostics_are_detached_and_refreshed_per_forward(self):
-        trainer, generated, _ = self.fixture(projected=True)
+        trainer, generated, _ = self.fixture()
         first = trainer.forward_loss(generated.shape, ({}, None), "student")
         names = {
             "dmd_video",

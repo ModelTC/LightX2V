@@ -1,5 +1,7 @@
 """Student-only adapter transfer across Turbo -> DMD/PDMD, including FSDP2."""
 
+import copy
+import json
 import tempfile
 import unittest
 from datetime import timedelta
@@ -20,7 +22,7 @@ from lightx2v_train.model_zoo.minimax_h3.tests.test_minimax_h3_mixed_rank_lora i
 from lightx2v_train.model_zoo.native.minimax_h3.modeling import init_empty_minimax_h3_transformer
 from lightx2v_train.model_zoo.native.minimax_h3.sharded_loading import stream_load_minimax_h3_transformer
 from lightx2v_train.trainers.dmd.runtime import _DmdRuntime
-from lightx2v_train.trainers.dmd.student_warmstart import load_student_adapter, student_adapter_path
+from lightx2v_train.trainers.dmd.student_warmstart import load_student_adapter, student_adapter_path, validate_student_adapter_preset
 from lightx2v_train.trainers.dmd.trainer import DmdTrainer
 
 
@@ -137,13 +139,127 @@ class StudentWarmstartTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "rank/alpha configuration mismatch"):
             load_student_adapter(target.transformer, self.export)
 
+    def _preset(self, *, model_name="minimax_h3_t2av"):
+        return {
+            "enabled": True,
+            "schema_version": 1,
+            "path": "/source-machine/model_for_comfy_dit.safetensors",
+            "sha256": "a" * 64,
+            "scale": 1.0,
+            "roles": ["student", "fake"],
+            "qkv_layout": "comfy",
+            "model_name": model_name,
+            "transformer_component": "transformer_ref" if model_name == "minimax_h3_ref2av" else "transformer",
+            "export_role": "student",
+            "export_semantics": "learned_lora_only_requires_preset",
+        }
+
+    def test_decfg_export_loads_matching_student_preset_after_machine_relocation(self):
+        source = self._preset()
+        (self.export / "training_adapter.json").write_text(json.dumps(source))
+        expected = {**source, "path": "/new-machine/models/renamed-preset.safetensors"}
+        target = _configured(_transformer())
+        load_student_adapter(target.transformer, self.export, expected_preset=expected, model_name="minimax_h3_t2av")
+        source_params = dict(self.source.transformer.named_parameters())
+        for name, parameter in target.transformer.named_parameters():
+            if ".lora_" in name:
+                torch.testing.assert_close(parameter, source_params[name], rtol=0, atol=0)
+
+    def test_decfg_mismatch_or_missing_sidecar_fails_before_changing_any_tensor(self):
+        source = self._preset()
+        target = _configured(_transformer())
+        before = {name: parameter.detach().clone() for name, parameter in target.transformer.named_parameters()}
+        sidecar = self.export / "training_adapter.json"
+        sidecar.unlink(missing_ok=True)
+        with self.assertRaisesRegex(RuntimeError, "requires training_adapter.json"):
+            load_student_adapter(target.transformer, self.export, expected_preset=source, model_name="minimax_h3_t2av")
+        sidecar.write_text(json.dumps(source))
+        for name, value in (("enabled", False), ("sha256", "b" * 64), ("scale", 0.5), ("roles", ["student"]), ("qkv_layout", "official")):
+            with self.subTest(field=name), self.assertRaisesRegex(RuntimeError, "preset differs"):
+                load_student_adapter(target.transformer, self.export, expected_preset={**source, name: value}, model_name="minimax_h3_t2av")
+        with self.assertRaisesRegex(RuntimeError, "preset differs"):
+            load_student_adapter(target.transformer, self.export)
+        for name, parameter in target.transformer.named_parameters():
+            torch.testing.assert_close(parameter, before[name], rtol=0, atol=0)
+
+    def test_decfg_task_and_export_role_must_match_student(self):
+        source = self._preset(model_name="minimax_h3_ref2av")
+        sidecar = self.export / "training_adapter.json"
+        sidecar.write_text(json.dumps(source))
+        with self.assertRaisesRegex(RuntimeError, "model/task mismatch"):
+            validate_student_adapter_preset(self.export, expected_preset=source, model_name="minimax_h3_t2av")
+        source["export_role"] = "fake"
+        sidecar.write_text(json.dumps(source))
+        with self.assertRaisesRegex(RuntimeError, "non-student"):
+            validate_student_adapter_preset(self.export, expected_preset=source, model_name="minimax_h3_ref2av")
+
+    def test_legacy_decfg_sidecar_infers_task_and_unmodified_student_keeps_compatibility(self):
+        source = self._preset()
+        for key in ("model_name", "transformer_component", "export_role"):
+            source.pop(key)
+        sidecar = self.export / "training_adapter.json"
+        sidecar.write_text(json.dumps(source))
+        validate_student_adapter_preset(self.export, expected_preset=source, model_name="minimax_h3_t2av")
+        sidecar.unlink()
+        self.assertIsNone(validate_student_adapter_preset(self.export, expected_preset={"enabled": False}))
+        fake_only = copy.deepcopy(source)
+        fake_only["roles"] = ["fake"]
+        self.assertIsNone(validate_student_adapter_preset(self.export, expected_preset=fake_only))
+
+    def test_score_only_decfg_export_loads_without_a_student_preset_dependency(self):
+        score = {**self._preset(), "roles": ["fake", "teacher"]}
+        source = {
+            "enabled": False,
+            "schema_version": 1,
+            "inference_requires_preset": False,
+            "model_name": "minimax_h3_t2av",
+            "export_role": "student",
+            "export_semantics": "learned_lora_only",
+            "score_training_adapter": score,
+        }
+        (self.export / "training_adapter.json").write_text(json.dumps(source))
+        target = _configured(_transformer())
+        before = {name: parameter.detach().clone() for name, parameter in target.transformer.named_parameters() if ".lora_" not in name}
+        expected = dict(self.source.transformer.named_parameters())
+        # Score initialization is not part of the exported generator function.
+        for preset in (None, score, {**score, "sha256": "b" * 64}):
+            load_student_adapter(target.transformer, self.export, expected_preset=preset, model_name="minimax_h3_t2av")
+            for name, parameter in target.transformer.named_parameters():
+                torch.testing.assert_close(parameter, expected[name] if ".lora_" in name else before[name], rtol=0, atol=0)
+
+    def test_unmodified_student_export_rejects_wrong_task_or_inference_dependency(self):
+        base = {"enabled": False, "schema_version": 1, "inference_requires_preset": False, "model_name": "minimax_h3_t2av", "export_role": "student", "export_semantics": "learned_lora_only"}
+        path = self.export / "training_adapter.json"
+        for field, value, message in (
+            ("model_name", "minimax_h3_ref2av", "model/task mismatch"),
+            ("export_role", "fake", "non-student"),
+            ("inference_requires_preset", True, "must not require"),
+            ("export_semantics", "learned_lora_only_requires_preset", "must not require"),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, message):
+                path.write_text(json.dumps({**base, field: value}))
+                validate_student_adapter_preset(self.export, model_name="minimax_h3_t2av")
+
+    def test_old_student_decfg_export_cannot_initialize_score_only_student(self):
+        source = self._preset()
+        (self.export / "training_adapter.json").write_text(json.dumps(source))
+        score = {**source, "roles": ["fake", "teacher"]}
+        target = _configured(_transformer())
+        before = {name: parameter.detach().clone() for name, parameter in target.transformer.named_parameters()}
+        with self.assertRaisesRegex(RuntimeError, "preset differs"):
+            load_student_adapter(target.transformer, self.export, expected_preset=score, model_name="minimax_h3_t2av")
+        for name, parameter in target.transformer.named_parameters():
+            torch.testing.assert_close(parameter, before[name], rtol=0, atol=0)
+
     def test_adapter_transfer_runs_after_parallel_setup_and_not_during_resume(self):
         for resume in (None, "existing_pdmd_checkpoint"):
             owner = object.__new__(DmdTrainer)
             owner.student_checkpoint_path = str(self.export)
             owner.student_checkpoint_strict = True
             owner.student_train_type = "lora"
-            owner.model = SimpleNamespace(denoiser_module=lambda: "sharded_student")
+            owner.model_config = {"name": "minimax_h3_t2av"}
+            preset = self._preset()
+            owner.model = SimpleNamespace(denoiser_module=lambda: "sharded_student", training_adapter_metadata=lambda: preset)
             owner._load_student_checkpoint = Mock()
             owner._setup_fake_real_resources = Mock(side_effect=RuntimeError("stop after transfer"))
             events = []
@@ -155,6 +271,9 @@ class StudentWarmstartTest(unittest.TestCase):
                     owner.setup(resume_ckpt_path=resume)
             self.assertEqual(events, ["parallel_ready", "adapter_loaded"] if resume is None else ["parallel_ready"])
             self.assertEqual(load.call_count, int(resume is None))
+            if resume is None:
+                self.assertEqual(load.call_args.kwargs["expected_preset"], preset)
+                self.assertEqual(load.call_args.kwargs["model_name"], "minimax_h3_t2av")
             owner._load_student_checkpoint.assert_not_called()
 
     def test_legacy_full_checkpoint_still_loads_before_parallel_setup(self):

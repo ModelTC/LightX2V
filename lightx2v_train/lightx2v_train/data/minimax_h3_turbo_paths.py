@@ -51,8 +51,8 @@ def resolve_cache_path(value, metadata_path, path_mapping=None):
     return path.resolve()
 
 
-def load_cm_records(metadata_path, path_mapping=None, tasks=None, check_files=True):
-    """Validate one T2AV full-target manifest and return resolved records.
+def load_cm_records(metadata_path, path_mapping=None, tasks=None, check_files=True, *, native_geometry=False):
+    """Validate one task's full-target manifest and return resolved records.
 
     Returns ``(manifest_path, rows, fingerprint)``. The SHA256 binds metadata
     bytes, resolved target/condition paths and path mapping; file stat times do
@@ -63,9 +63,12 @@ def load_cm_records(metadata_path, path_mapping=None, tasks=None, check_files=Tr
         manifest = manifest / "metadata.jsonl"
     if manifest.suffix.lower() != ".jsonl" or not manifest.is_file():
         raise FileNotFoundError(f"CM requires one metadata.jsonl file: {manifest}")
+    if type(native_geometry) is not bool:
+        raise ValueError("CM native_geometry must be boolean.")
     selected_tasks = ("t2av",) if tasks is None else tuple(str(task).lower() for task in tasks)
-    if selected_tasks != ("t2av",):
-        raise ValueError("The independent Turbo CM cache currently supports tasks=[t2av] only.")
+    if selected_tasks not in {("t2av",), ("ref2av",)}:
+        raise ValueError("Turbo CM requires exactly tasks=[t2av] or tasks=[ref2av].")
+    task = selected_tasks[0]
     mapping = normalize_path_mapping(path_mapping)
     raw = manifest.read_bytes()
     rows, source_ids, fingerprints, conditions = [], set(), set(), set()
@@ -77,8 +80,8 @@ def load_cm_records(metadata_path, path_mapping=None, tasks=None, check_files=Tr
         if not isinstance(row, dict):
             raise ValueError(f"CM metadata must contain JSON objects: {location}")
         row = dict(row)
-        if str(row.get("task", "")).lower() != "t2av":
-            raise ValueError(f"CM metadata requires task=t2av: {location}")
+        if str(row.get("task", "")).lower() != task:
+            raise ValueError(f"CM metadata requires task={task}: {location}")
         source_id = row.get("source_id")
         if isinstance(source_id, bool) or not isinstance(source_id, (str, int)) or not str(source_id).strip():
             raise ValueError(f"CM metadata requires an explicit source_id: {location}")
@@ -92,8 +95,13 @@ def load_cm_records(metadata_path, path_mapping=None, tasks=None, check_files=Tr
         fingerprints.add(fingerprint)
         height, width = int(row.get("target_height", 0)), int(row.get("target_width", 0))
         frames = int(row.get("target_num_frames", row.get("num_frames", 0)))
-        if frames != 124 or (height, width) not in {(768, 1344), (1344, 768)}:
-            raise ValueError(f"CM requires 124 frames and 768x1344 or 1344x768 geometry: {location}")
+        if frames != 124:
+            raise ValueError(f"CM requires 124 target frames: {location}")
+        if native_geometry:
+            if min(height, width) <= 0 or height % 32 or width % 32:
+                raise ValueError(f"CM native target geometry must be positive and 32-aligned: {location}")
+        elif (height, width) not in {(768, 1344), (1344, 768)}:
+            raise ValueError(f"CM requires 768x1344 or 1344x768 geometry unless native_geometry=true: {location}")
         expected = {"video_latent_shape": [24, 37, height // 16, width // 16], "audio_latent_shape": [2, 32, 207]}
         for key, shape in expected.items():
             if key in row and row[key] != shape:
@@ -110,12 +118,15 @@ def load_cm_records(metadata_path, path_mapping=None, tasks=None, check_files=Tr
         conditions.add(row["condition_path"])
         rows.append(row)
     if not rows:
-        raise ValueError(f"CM metadata has no complete T2AV rows: {manifest}")
+        raise ValueError(f"CM metadata has no complete {task.upper()} rows: {manifest}")
     identity = {
         "schema": "h3_turbo_cm_full_av_v1",
         "manifest_sha256": hashlib.sha256(raw).hexdigest(),
         "path_mapping": mapping,
         "resolved_cache_paths": [[row[key] for key in CM_CACHE_PATH_KEYS] for row in rows],
     }
+    if native_geometry or task != "t2av":
+        # Preserve the established default T2AV fingerprint for old resumes.
+        identity.update(task=task, native_geometry=native_geometry)
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return manifest, rows, fingerprint

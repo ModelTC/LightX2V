@@ -155,7 +155,7 @@ class H3ResidualHeadTrainingTest(unittest.TestCase):
     def test_rejects_projection_sequence_parallel_and_unsupported_trainer(self):
         trainer, runtime, _, _, _, _ = self.fixture()
         config = runtime.config
-        trainer.student = MiniMaxH3DistributionMatchingCapability(TinyH3Model(), {"projected_dmd": True})
+        trainer.student = MiniMaxH3DistributionMatchingCapability(TinyH3Model(), {"official_pdmd": True})
         with self.assertRaisesRegex(ValueError, "projected_dmd"):
             H3ResidualHeadTraining(trainer, config)
         trainer.student = MiniMaxH3DistributionMatchingCapability(TinyH3Model())

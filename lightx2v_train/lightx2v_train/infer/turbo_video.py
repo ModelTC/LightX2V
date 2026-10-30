@@ -17,16 +17,16 @@ from lightx2v_train.utils.registry import INFERENCER_REGISTER
 from .base import BaseInferencer
 
 
-def _write_gallery(directory, records):
+def _write_gallery(directory, records, title="Wan2.1 1.3B Turbo preview"):
     cards = []
     for record in records:
         caption = html.escape(record["prompt"])
         filename = html.escape(Path(record["video"]).name)
         cards.append(f'<article><video controls loop preload="metadata" src="{filename}"></video><p>seed={record["seed"]}</p><p>{caption}</p></article>')
     (directory / "index.html").write_text(
-        '<!doctype html><meta charset="utf-8"><title>Wan Turbo preview</title>'
+        '<!doctype html><meta charset="utf-8"><title>' + html.escape(title) + "</title>"
         "<style>body{font:16px system-ui;background:#161616;color:#eee;margin:24px}main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}video{width:100%}p{white-space:pre-wrap}</style>"
-        "<h1>Wan2.1 1.3B Turbo preview</h1><main>" + "".join(cards) + "</main>",
+        "<h1>" + html.escape(title) + "</h1><main>" + "".join(cards) + "</main>",
         encoding="utf-8",
     )
 
@@ -34,6 +34,19 @@ def _write_gallery(directory, records):
 @INFERENCER_REGISTER("wan_turbo_infer")
 class WanTurboInferencer(BaseInferencer):
     """Native FP32 Wan inference; trainer owns the EMA weight context."""
+
+    preview_title = "Wan2.1 1.3B Turbo preview"
+    sampler_name = "turbo_trigflow_stochastic_x0_renoise"
+    trained_weights = "student_ema"
+
+    def _shift(self):
+        return float(self.config["training"]["turbo"]["video_shift"])
+
+    def _sample(self, capability, initial, positive, steps, shift):
+        return sample_turbo_latents(capability, initial, positive, num_steps=steps, video_shift=shift, with_grad=False)
+
+    def _weight_label(self, directory):
+        return "base" if directory.name == "iter-000000000" else self.trained_weights
 
     @torch.no_grad()
     def _teacher_baseline(self, capability, noise, positive, negative, steps, shift):
@@ -57,7 +70,7 @@ class WanTurboInferencer(BaseInferencer):
         directory = Path(self.output_infer_dir)
         directory.mkdir(parents=True, exist_ok=True)
         steps = int(self.infer_config.get("num_inference_steps", 8))
-        shift = float(self.config["training"]["turbo"]["video_shift"])
+        shift = self._shift()
         height = int(self.infer_config.get("default_height", 480))
         width = int(self.infer_config.get("default_width", 832))
         fps = int(self.infer_config.get("fps", 16))
@@ -75,8 +88,17 @@ class WanTurboInferencer(BaseInferencer):
                     torch.cuda.default_generators[cuda_index].manual_seed(seed)
                 positive = self.model.encode_prompt_condition(prompt)
                 initial = self.model.prepare_infer_latents(height, width)
-                logger.info("[turbo-infer] sample={}/{} seed={} steps={} shift={} fp32 output={}", index + 1, len(self.dataloader_val.dataset.samples), seed, steps, shift, directory)
-                latent = sample_turbo_latents(capability, initial, positive, num_steps=steps, video_shift=shift, with_grad=False)
+                logger.info(
+                    "[wan-preview] sample={}/{} seed={} steps={} shift={} sampler={} fp32 output={}",
+                    index + 1,
+                    len(self.dataloader_val.dataset.samples),
+                    seed,
+                    steps,
+                    shift,
+                    self.sampler_name,
+                    directory,
+                )
+                latent = self._sample(capability, initial, positive, steps, shift)
                 # FSDP ranks execute every prompt and denoising call together.
                 # Decode locally on all ranks; only rank zero publishes files.
                 video = self.model.decode_latent(latent)[0]
@@ -95,9 +117,9 @@ class WanTurboInferencer(BaseInferencer):
                         "num_frames": int(self.infer_config.get("num_frames", 81)),
                         "height": height,
                         "width": width,
-                        "sampler": "turbo_trigflow_stochastic_x0_renoise",
+                        "sampler": self.sampler_name,
                         "guidance_scale": 1.0,
-                        "weights": "base" if directory.name == "iter-000000000" else "student_ema",
+                        "weights": self._weight_label(directory),
                         "model_dtype": "fp32",
                         "vae_dtype": "fp32",
                         "t5_dtype": "fp32",
@@ -117,6 +139,6 @@ class WanTurboInferencer(BaseInferencer):
                 del positive, initial, latent, video
         if is_main_process():
             (directory / "manifest.json").write_text(json.dumps(records, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-            _write_gallery(directory, records)
-        logger.info("[turbo-infer] finished saved={} gallery={}", len(saved_paths), directory / "index.html")
+            _write_gallery(directory, records, self.preview_title)
+        logger.info("[wan-preview] finished saved={} gallery={}", len(saved_paths), directory / "index.html")
         return saved_paths

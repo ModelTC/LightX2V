@@ -1,10 +1,11 @@
-"""H3 PDMD trajectory semantics, adapted to LightX2V's clean-ward velocity.
+"""Released PDMD trajectory semantics for H3 and Wan video models.
 
 Reference: ZeamoxWang/pdmd, commit 6b6e10635495a2d9b989fee393235d406d3840c4,
 src/pdmd/{engine,schedule}.py. This module does not import the external backend.
 Unlike that backend's v=noise-clean, our capability returns v=clean-noise.
-Every sigma passed to the capability is an explicit physical (video, audio)
-pair: training must not accidentally apply the inference shifts a second time.
+H3 uses explicit physical (video, audio) sigmas and clean-ward velocities.
+Wan uses one physical sigma and its native noise-minus-clean velocity.
+Neither path applies the inference shifts a second time.
 """
 
 import hashlib
@@ -37,10 +38,12 @@ def rollout_grid(steps, shift=1.0, device="cpu"):
     return (shift * base / (1 + (shift - 1) * base)).float()
 
 
-def critic_sigmas(generator, *, video_threshold=0.95, audio_floor=0.85, device="cpu"):
+def critic_sigmas(generator, *, video_threshold=0.95, audio_floor=0.85, device="cpu", video_only=False):
     if not 0 <= video_threshold <= 1 or not 0 <= audio_floor <= 1:
         raise ValueError("critic sigma threshold/floor must be in [0, 1]")
     # Draw on CPU as in the released training loop; the generator owns the RNG.
+    if video_only:
+        return torch.rand(1, generator=generator, dtype=torch.float64).to(device=device, dtype=torch.float32)
     draws = torch.rand(3, generator=generator, dtype=torch.float64)
     audio = torch.where(draws[0] > video_threshold, audio_floor + (1 - audio_floor) * draws[2], draws[1])
     return torch.stack((draws[0], audio)).to(device=device, dtype=torch.float32)
@@ -55,6 +58,8 @@ def interval_sigmas(video_grid, audio_grid, index, ratio):
 
 
 def joint_map(value, operation):
+    if torch.is_tensor(value):
+        return operation(value, 0)
     return type(value)(operation(value.video, 0), operation(value.audio, 1), value.shape)
 
 
@@ -70,15 +75,40 @@ class H3PdmdTrajectory:
     audio_grid: torch.Tensor
 
 
+@dataclass(frozen=True)
+class PdmdCondition:
+    """Positive student/critic conditioning and optional guided teacher branch."""
+
+    positive: object
+    negative: object
+    guidance_scale: float = 1.0
+    cfg_norm: str | None = None
+
+
+def positive_condition(condition):
+    return condition.positive if isinstance(condition, PdmdCondition) else condition
+
+
+def teacher_velocity(teacher, query, sigmas, condition):
+    if isinstance(condition, PdmdCondition):
+        return teacher.predict_guided_velocity(query, sigmas, condition.positive, condition.negative, condition.guidance_scale, condition.cfg_norm)
+    return teacher.predict_velocity(query, sigmas, condition)
+
+
 @torch.no_grad()
 def full_rollout(student, noise, condition, video_grid, audio_grid):
     """All N Euler steps, not the old DMD random early-exit endpoint."""
     student.set_training(False)
     states = [joint_map(noise, lambda tensor, _: tensor.detach().float())]
     for index in range(len(video_grid) - 1):
+        if torch.is_tensor(noise):
+            sigma = video_grid[index : index + 1]
+            velocity = student.predict_velocity(states[-1], sigma, positive_condition(condition))
+            states.append(states[-1].float() + (video_grid[index + 1] - video_grid[index]) * velocity.float())
+            continue
         sigmas = torch.stack((video_grid[index], audio_grid[index]))
         next_sigmas = torch.stack((video_grid[index + 1], audio_grid[index + 1]))
-        velocity = student.predict_velocity(states[-1], sigmas, condition)
+        velocity = student.predict_velocity(states[-1], sigmas, positive_condition(condition))
         state = states[-1]
         # Clean-ward velocity reverses the sign of the reference's Euler step.
         states.append(
@@ -96,7 +126,7 @@ def critic_objective(student, fake, trajectory, sigmas, noise):
     clean = trajectory.states[-1]
     query = student.add_noise(None, clean, noise, sigmas)
     fake.set_training(False)  # eval mode does not disable gradients
-    velocity = fake.predict_velocity(query, sigmas, trajectory.condition)
+    velocity = fake.predict_velocity(query, sigmas, positive_condition(trajectory.condition))
     target = student.training_target(clean, noise)
     return student.regression_loss(velocity, target)
 
@@ -104,9 +134,26 @@ def critic_objective(student, fake, trajectory, sigmas, noise):
 def student_objective(student, fake, teacher, trajectory, index, ratio):
     """One grad-enabled student call, with a query on its predicted trajectory."""
     start = trajectory.states[index]
+    if torch.is_tensor(start):
+        sigmas = trajectory.video_grid[index : index + 1]
+        student.set_training(False)
+        velocity = student.predict_velocity(start, sigmas, positive_condition(trajectory.condition))
+        clean = student.x0_from_velocity(start, velocity, sigmas)
+        query_sigmas = interval_sigmas(trajectory.video_grid, trajectory.video_grid, index, ratio)[0:1]
+        with torch.no_grad():
+            noise_hat = start.float() + (1 - sigmas) * velocity.float()
+            query = student.add_noise(None, student.detach(clean), noise_hat, query_sigmas)
+            fake.set_training(False)
+            teacher.set_training(False)
+            fake_prediction = fake.predict_velocity(query, query_sigmas, positive_condition(trajectory.condition))
+            teacher_prediction = teacher_velocity(teacher, query, query_sigmas, trajectory.condition)
+            fake_clean = student.x0_from_velocity(query, fake_prediction, query_sigmas)
+            teacher_clean = student.x0_from_velocity(query, teacher_prediction, query_sigmas)
+        loss = student.dmd_loss(clean, fake_clean, teacher_clean)
+        return loss, {**student.dmd_metrics(), "student_exit_index": float(index), "score_sigma_video": query_sigmas[0].detach()}
     sigmas = torch.stack((trajectory.video_grid[index], trajectory.audio_grid[index]))
     student.set_training(False)
-    velocity = student.predict_velocity(start, sigmas, trajectory.condition)
+    velocity = student.predict_velocity(start, sigmas, positive_condition(trajectory.condition))
     clean = student.x0_from_velocity(start, velocity, sigmas)
     query_sigmas = interval_sigmas(trajectory.video_grid, trajectory.audio_grid, index, ratio)
     with torch.no_grad():
@@ -118,10 +165,10 @@ def student_objective(student, fake, teacher, trajectory, index, ratio):
         query = student.add_noise(None, student.detach(clean), noise_hat, query_sigmas)
         fake.set_training(False)
         teacher.set_training(False)
-        fake_velocity = fake.predict_velocity(query, query_sigmas, trajectory.condition)
-        teacher_velocity = teacher.predict_velocity(query, query_sigmas, trajectory.condition)
+        fake_velocity = fake.predict_velocity(query, query_sigmas, positive_condition(trajectory.condition))
+        teacher_prediction = teacher_velocity(teacher, query, query_sigmas, trajectory.condition)
         fake_clean = student.x0_from_velocity(query, fake_velocity, query_sigmas)
-        teacher_clean = student.x0_from_velocity(query, teacher_velocity, query_sigmas)
+        teacher_clean = student.x0_from_velocity(query, teacher_prediction, query_sigmas)
     loss = student.dmd_loss(clean, fake_clean, teacher_clean)
     return loss, {
         **student.dmd_metrics(),

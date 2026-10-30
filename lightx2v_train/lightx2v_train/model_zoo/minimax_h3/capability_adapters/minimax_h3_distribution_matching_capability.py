@@ -104,6 +104,10 @@ class MiniMaxH3DistributionMatchingOptions:
             adaptive_video_regularization=config.get("adaptive_video_regularization"),
             memory_guard=config.get("memory_guard"),
         )
+        if options.projected_dmd and not options.official_pdmd:
+            raise ValueError(
+                "The legacy projected_dmd route has been removed. Use the official PDMD recipe with model.capabilities.distribution_matching.official_pdmd=true and training.dmd.official_pdmd=true, or set projected_dmd=false for plain DMD."
+            )
         if options.video_flow_shift <= 0 or options.audio_flow_shift <= 0:
             raise ValueError("MiniMax-H3 video_flow_shift and audio_flow_shift must be positive.")
         if options.video_loss_weight < 0 or options.audio_loss_weight < 0:
@@ -570,7 +574,6 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
             normalize=self.options.dmd_normalization,
             normalization_epsilon=self.options.dmd_normalization_epsilon,
             reduction=self.options.dmd_reduction,
-            projected=self.options.projected_dmd,
         )
         video_loss, video_normalizer, video_rms = dmd_loss_with_stats(
             latents.video,
@@ -618,6 +621,9 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         return self._last_dmd_metrics
 
     def prepare_role(self, role):
+        adapter_hook = getattr(self.model, "prepare_training_adapter_role", None)
+        if adapter_hook is not None:
+            adapter_hook(role)
         if role != "student" or not self.student_sla.enabled:
             return
         if get_sequence_parallel_world_size() > 1:
@@ -658,7 +664,9 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
             raise RuntimeError("H3 checkpoint contains adaptive video regression state but the option is disabled.")
 
     def extra_checkpoint_metadata(self):
+        adapter_metadata = getattr(self.model, "training_adapter_metadata", lambda: {"enabled": False})()
         metadata = {
+            "minimax_h3_training_adapter": adapter_metadata,
             "minimax_h3_legacy_numerics": self.options.legacy_numerics,
             "minimax_h3_distribution_matching": {
                 "transformer_component": self.model.transformer_component,
@@ -792,6 +800,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
 
     def legacy_extra_checkpoint_metadata(self):
         metadata = self.extra_checkpoint_metadata()
+        metadata["minimax_h3_training_adapter"] = {"enabled": False}
         # Checkpoints written before this option used Python-float condition
         # noise coefficients and inverse/forward-shifted score sigmas.
         metadata["minimax_h3_legacy_numerics"] = False

@@ -10,6 +10,7 @@ import torch
 from lightx2v_train.data.minimax_h3_turbo_cm_dataset import MiniMaxH3TurboCMDataset, MiniMaxH3TurboCMSampler, build_minimax_h3_turbo_cm_dataset
 from lightx2v_train.data.minimax_h3_turbo_paths import load_cm_records, normalize_path_mapping, resolve_cache_path
 from lightx2v_train.utils.registry import build_data
+from lightx2v_train.utils.utils import is_train_cache_dataset
 
 
 class _IndexDataset:
@@ -74,7 +75,42 @@ def collect_epochs(sampler, count):
     return result
 
 
+def make_native_manifest(root, task):
+    path, rows, mapping = make_manifest(root)
+    for index, (row, geometry) in enumerate(zip(rows, ((704, 1280), (1280, 704), (1024, 1024)), strict=True)):
+        height, width = geometry
+        row.update(task=task, target_height=height, target_width=width, target_num_frames=124, video_latent_shape=[24, 37, height // 16, width // 16])
+        payload_path = Path(mapping["/old/conditions"]) / f"{index}.pt"
+        payload = torch.load(payload_path, weights_only=True)
+        payload.update(task=task, cache_stage="complete")
+        positive = payload["conditioning"]["positive"]
+        positive.update(task=task, target_height=height, target_width=width, target_num_frames=124)
+        if task == "ref2av":
+            frames = 1 if index == 0 else 3
+            reference = {
+                "kind": "image" if index == 0 else "video",
+                "normalized": True,
+                "video_latents": torch.zeros(frames * 2, 96),
+                "num_latent_frames": frames,
+                "latent_height": 2,
+                "latent_width": 4,
+            }
+            if index == 2:
+                reference.update(audio_latents=torch.zeros(4, 32), num_audio_latents=2)
+            positive.update(text_token_tags=torch.tensor([0, 1]), references=[reference])
+            row.update(reference_image_count=int(index == 0), reference_video_count=int(index != 0), reference_audio_count=0)
+        torch.save(payload, payload_path)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return path, rows, mapping
+
+
 class TurboCMPathsAndDatasetTests(unittest.TestCase):
+    def test_cm_and_curriculum_cached_training_do_not_require_gpu_encoders(self):
+        for name in ("minimax_h3_turbo_cm_dataset", "minimax_h3_curriculum_cache_dataset"):
+            self.assertTrue(is_train_cache_dataset({"data": {"train": {"name": name}}}))
+        for name in ("video_dataset", "prompt_dataset"):
+            self.assertFalse(is_train_cache_dataset({"data": {"train": {"name": name}}}))
+
     def test_longest_component_prefix_and_relative_latents(self):
         mappings = {"/old": "/new", "/old/conditions": "/special"}
         self.assertEqual(normalize_path_mapping(mappings)[0], ("/old/conditions", "/special"))
@@ -142,6 +178,97 @@ class TurboCMPathsAndDatasetTests(unittest.TestCase):
         for config in ({"batch_size": 2}, {"drop_last": True}, {"dataset_repeat": 2}):
             with self.assertRaises(ValueError):
                 build_minimax_h3_turbo_cm_dataset({"data_path": "/unused", **config})
+
+    def test_native_t2av_preserves_every_geometry_and_default_stays_legacy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path, rows, mapping = make_native_manifest(Path(directory), "t2av")
+            with self.assertRaisesRegex(ValueError, "native_geometry=true"):
+                load_cm_records(path, mapping)
+            _, accepted, _ = load_cm_records(path, mapping, native_geometry=True)
+            self.assertEqual([(row["target_height"], row["target_width"]) for row in accepted], [(704, 1280), (1280, 704), (1024, 1024)])
+            dataset = MiniMaxH3TurboCMDataset(path, path_mapping=mapping, native_geometry=True)
+            self.assertEqual(len(dataset), len(rows))
+            for index in range(len(dataset)):
+                self.assertEqual(dataset[index]["meta"]["target_height"], rows[index]["target_height"])
+            rows[0]["target_height"] = 705
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            with self.assertRaisesRegex(ValueError, "32-aligned"):
+                load_cm_records(path, mapping, native_geometry=True)
+
+    def test_native_ref_image_video_and_av_conditions_are_all_retained(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path, rows, mapping = make_native_manifest(Path(directory), "ref2av")
+            with self.assertRaisesRegex(ValueError, "task=t2av"):
+                load_cm_records(path, mapping, native_geometry=True)
+            loader = build_data(
+                {
+                    "data": {
+                        "train": {
+                            "name": "minimax_h3_turbo_cm_dataset",
+                            "data_path": str(path),
+                            "path_mapping": mapping,
+                            "tasks": ["ref2av"],
+                            "native_geometry": True,
+                            "num_workers": 0,
+                            "shuffle": False,
+                        }
+                    }
+                },
+                "train",
+            )
+            self.assertEqual(len(loader.dataset), len(rows))
+            loader.sampler.configure_from_microbatch_offset(0)
+            samples = list(loader)
+            self.assertEqual([sample["conditioning"]["positive"]["references"][0]["kind"][0] for sample in samples], ["image", "video", "video"])
+            self.assertIn("audio_latents", samples[2]["conditioning"]["positive"]["references"][0])
+            self.assertEqual([sample["meta"]["source_id"].item() for sample in samples], [0, 1, 2])
+            self.assertTrue(all(sample["inputs"] == {} for sample in samples))
+
+    def test_ref_conditions_reject_wrong_geometry_reference_rows_and_count(self):
+        for corruption in ("target_geometry", "reference_rows", "reference_count", "cache_stage"):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as directory:
+                path, rows, mapping = make_native_manifest(Path(directory), "ref2av")
+                condition = Path(mapping["/old/conditions"]) / "0.pt"
+                payload = torch.load(condition, weights_only=True)
+                if corruption == "target_geometry":
+                    payload["conditioning"]["positive"]["target_height"] = 1024
+                elif corruption == "reference_rows":
+                    payload["conditioning"]["positive"]["references"][0]["video_latents"] = torch.zeros(3, 96)
+                elif corruption == "reference_count":
+                    rows[0]["reference_image_count"] = 0
+                    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+                else:
+                    payload["cache_stage"] = "text"
+                torch.save(payload, condition)
+                dataset = MiniMaxH3TurboCMDataset(path, path_mapping=mapping, tasks=["ref2av"], native_geometry=True)
+                with self.assertRaises(ValueError):
+                    dataset[0]
+
+    def test_one_row_reference_is_validated_before_singleton_batch_stripping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path, _, mapping = make_native_manifest(Path(directory), "ref2av")
+            condition = Path(mapping["/old/conditions"]) / "0.pt"
+            payload = torch.load(condition, weights_only=True)
+            reference = payload["conditioning"]["positive"]["references"][0]
+            reference.update(video_latents=torch.zeros(1, 96), latent_width=2)
+            torch.save(payload, condition)
+            dataset = MiniMaxH3TurboCMDataset(path, path_mapping=mapping, tasks=["ref2av"], native_geometry=True)
+            self.assertEqual(dataset[0]["conditioning"]["positive"]["references"][0]["kind"], "image")
+
+    def test_legacy_fingerprint_stays_compatible_and_native_policy_is_bound(self):
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as directory:
+            path, _, mapping = make_manifest(Path(directory))
+            _, resolved, fingerprint = load_cm_records(path, mapping)
+            old_identity = {
+                "schema": "h3_turbo_cm_full_av_v1",
+                "manifest_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "path_mapping": normalize_path_mapping(mapping),
+                "resolved_cache_paths": [[row[key] for key in ("condition_path", "video_latent_path", "audio_latent_path")] for row in resolved],
+            }
+            self.assertEqual(fingerprint, hashlib.sha256(json.dumps(old_identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+            self.assertNotEqual(fingerprint, load_cm_records(path, mapping, native_geometry=True)[2])
 
 
 class TurboCMSamplerTests(unittest.TestCase):

@@ -34,8 +34,8 @@ order = dmd.get("update_order", "student_first")
 ratio = int(dmd["fake_update_ratio"])
 if projected is not expected:
     raise SystemExit("H3_PDMD disagrees with the selected config's projected_dmd.")
-if expected and (order != "student_first" or ratio != 1):
-    raise SystemExit("H3 PDMD requires update_order=student_first and fake_update_ratio=1.")
+if expected:
+    raise SystemExit("H3_PDMD=true selected the removed projection-only recipe. Use an official_pdmd config and its dedicated launcher.")
 print(f"H3 T2AV: PDMD={str(projected).lower()}, update_order={order}, fake_update_ratio={ratio}, output={config['training']['output_dir']}")
 PY
 

@@ -22,6 +22,7 @@ from lightx2v_train.model_zoo.native.minimax_h3 import (
     resolve_transformer_dir,
     stream_load_minimax_h3_transformer,
 )
+from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.runtime.sequence_parallel import sync_sequence_parallel_parameters
 from lightx2v_train.utils.registry import MODEL_REGISTER
@@ -29,6 +30,7 @@ from lightx2v_train.utils.utils import get_running_dtype
 
 from ..base import BaseModel
 from .condition_encoder import MiniMaxH3ConditionEncoder
+from .training_adapter import AdapterOptions, merge_training_adapter, write_export_metadata
 
 
 @MODEL_REGISTER("minimax_h3_t2av")
@@ -75,6 +77,15 @@ class MiniMaxH3T2AVModel(BaseModel):
         load_condition_encoder,
     ):
         config = self.config["model"]
+        self._training_adapter_options = AdapterOptions.from_mapping(config.get("training_adapter"))
+        if self._training_adapter_options.enabled:
+            adapter_name = Path(self._training_adapter_options.path).name
+            if adapter_name in {"model.safetensors", "model_for_comfy_dit.safetensors", "model_ref2va.safetensors", "model_ref2va_for_comfy_dit.safetensors"}:
+                ref_adapter = adapter_name.startswith("model_ref2va")
+                if ref_adapter != (self.transformer_component == "transformer_ref"):
+                    raise ValueError(f"TrainingAdapter {adapter_name} does not match H3 partition {self.transformer_component}")
+        self._training_adapter_role = None
+        self._training_adapter_applied = False
         self.pretrained_model_path = config["pretrained_model_name_or_path"]
         self.transformer_param_dtype = get_running_dtype(config.get("transformer_param_dtype", "bf16"))
         self.latent_dtype = get_running_dtype(config.get("latent_dtype", "fp32"))
@@ -140,16 +151,57 @@ class MiniMaxH3T2AVModel(BaseModel):
     def after_fsdp2_shard(self, config):
         """Load checkpoint tensors only after FSDP owns rank-local shards."""
         del config
-        if not self._stream_load_pending:
+        if self._stream_load_pending:
+            stream_load_minimax_h3_transformer(
+                self.transformer,
+                self._stream_load_transformer_dir,
+                device=self.device,
+                lora_seed=self._stream_load_lora_seed,
+                init_lora_weights=self._lora_init_weights(),
+            )
+            self._stream_load_pending = False
+        self._apply_training_adapter_if_ready()
+
+    def prepare_training_adapter_role(self, role):
+        if getattr(self, "_training_adapter_applied", False) and role != self._training_adapter_role:
+            raise RuntimeError("Cannot change H3 model role after merging a TrainingAdapter")
+        self._training_adapter_role = role
+        self._apply_training_adapter_if_ready()
+        if role == "teacher":
+            self.transformer.requires_grad_(False)
+            self.transformer.eval()
+
+    def _apply_training_adapter_if_ready(self):
+        options = getattr(self, "_training_adapter_options", AdapterOptions())
+        if not options.enabled or self._training_adapter_role not in options.roles or self._training_adapter_applied:
             return
-        stream_load_minimax_h3_transformer(
-            self.transformer,
-            self._stream_load_transformer_dir,
-            device=self.device,
-            lora_seed=self._stream_load_lora_seed,
-            init_lora_weights=self._lora_init_weights(),
-        )
-        self._stream_load_pending = False
+        if getattr(self, "_stream_load_pending", False):
+            return
+        merge_training_adapter(self.transformer, options)
+        self._training_adapter_applied = True
+
+    def training_adapter_metadata(self):
+        return getattr(self, "_training_adapter_options", AdapterOptions()).metadata()
+
+    def save_lora_weights(self, save_dir, adapter_name=None, weights_subdir=None, **kwargs):
+        super().save_lora_weights(save_dir, adapter_name=adapter_name, weights_subdir=weights_subdir, **kwargs)
+        if is_main_process():
+            directory = Path(save_dir) / weights_subdir if weights_subdir else Path(save_dir)
+            configured = self.training_adapter_metadata()
+            applied = getattr(self, "_training_adapter_applied", False)
+            metadata = configured if applied else {"enabled": False, "schema_version": 1}
+            metadata = {**metadata, "inference_requires_preset": applied}
+            if configured.get("enabled") and not applied:
+                metadata["score_training_adapter"] = configured
+            write_export_metadata(
+                directory,
+                {
+                    **metadata,
+                    "model_name": self.config.get("model", {}).get("name", "minimax_h3_ref2av" if self.transformer_component == "transformer_ref" else "minimax_h3_t2av"),
+                    "transformer_component": self.transformer_component,
+                    "export_role": getattr(self, "_training_adapter_role", None) or "student",
+                },
+            )
 
     def _load_vaes(self, config):
         try:

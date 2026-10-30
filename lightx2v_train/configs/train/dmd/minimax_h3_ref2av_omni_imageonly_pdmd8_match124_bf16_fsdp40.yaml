@@ -1,3 +1,5 @@
+# RETIRED: historical projection-only PDMD; unsupported for training.
+# Kept only for historical configuration comparisons. Use an official_pdmd recipe.
 # Standalone 5-node / 40-GPU recipe; the original 32-GPU recipe is unchanged.
 # Conditions-only Omni R2V image caches: no target-video encoding is required.
 # BF16 caches, student parameters and FSDP compute; FP32 fake/teacher parameters.

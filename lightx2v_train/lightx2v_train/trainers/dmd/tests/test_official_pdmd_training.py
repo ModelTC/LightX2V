@@ -201,6 +201,45 @@ class OfficialPdmdTrainingTest(unittest.TestCase):
         self.assertIsNone(trainer.teacher.parameter.grad)
         self.assertIsNone(trainer.fake.parameter.grad)
 
+    def test_completed_resume_retries_failed_final_preview_without_updates(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner, trainer, encoded, _ = fixture(output=output)
+            trainer.dataloader_train = SimpleNamespace(sampler=SimpleNamespace(configure_from_microbatch_offset=Mock()))
+            trainer._resolve_resume = lambda: (None, 0)
+            trainer.setup = Mock()
+            trainer._iter_train_samples = lambda: itertools.count()
+            trainer.student.on_iteration_start = Mock()
+            trainer.student.on_iteration_end = Mock()
+            trainer.log_metrics = Mock()
+            trainer.train_log_every_iters = 1
+            trainer.max_train_iters = 6
+            trainer.save_every_iters = 6
+            trainer.infer_every_iters = 6
+            trainer.infer_config = {"run_at_start": False}
+            trainer.inferencer = SimpleNamespace(set_data=Mock())
+            trainer.dataloader_val = object()
+            trainer.run_inference = Mock(side_effect=RuntimeError("failed final preview"))
+            with self.assertRaisesRegex(RuntimeError, "failed final preview"):
+                runner.run()
+            trainer.run_inference.assert_called_once_with(6)
+            checkpoint = Path(output) / "checkpoint-000000006"
+            self.assertTrue((checkpoint / "official_pdmd.complete").is_file())
+            before = (trainer.student.parameter.detach().clone(), trainer.fake.parameter.detach().clone())
+            student_steps, fake_steps = trainer.lr_scheduler.last_epoch, trainer.fake_lr_scheduler.last_epoch
+            consumed = list(encoded)
+
+            trainer._resolve_resume = lambda: (str(checkpoint), 6)
+            trainer.run_inference = Mock()
+            resumed = OfficialH3PdmdTraining(trainer)
+            resumed._update = Mock(side_effect=AssertionError("completed resume must not update"))
+            resumed.run()
+            trainer.run_inference.assert_called_once_with(6)
+            resumed._update.assert_not_called()
+            self.assertEqual(encoded, consumed)
+            self.assertEqual((trainer.lr_scheduler.last_epoch, trainer.fake_lr_scheduler.last_epoch), (student_steps, fake_steps))
+            for actual, expected in zip((trainer.student.parameter, trainer.fake.parameter), before, strict=True):
+                torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
     def test_route_weight_cursor_reuses_preceding_critic_window(self):
         runner, _, _, _ = fixture(accum=2)
         offsets = []

@@ -50,18 +50,6 @@ def do_cfg(cond_pred, uncond_pred, cfg_scale, cfg_norm):
     raise ValueError(f"Unsupported cfg_norm: {cfg_norm}")
 
 
-@torch.no_grad()
-def project_dmd_direction(direction, residual):
-    """Remove each sample's residual-parallel component (PDMD, Eq. 4)."""
-    direction = direction.float()
-    residual = residual.float()
-    dims = tuple(range(1, direction.ndim))
-    numerator = (direction * residual).sum(dim=dims, keepdim=True)
-    denominator = residual.square().sum(dim=dims, keepdim=True)
-    denominator = torch.where(denominator > 0, denominator, torch.ones_like(denominator))
-    return direction - (numerator / denominator) * residual
-
-
 def dmd_loss_with_stats(
     latents,
     x_pred_fake_flow,
@@ -71,7 +59,6 @@ def dmd_loss_with_stats(
     normalize=True,
     normalization_epsilon=0.0,
     reduction="mean",
-    projected=False,
 ):
     """Return a detached DMD surrogate, normalizer, and normalized direction RMS.
 
@@ -86,9 +73,6 @@ def dmd_loss_with_stats(
 
     with torch.no_grad():
         grad = x_pred_fake_flow.float() - x_pred_teacher.float()
-        if projected:
-            residual = x_pred_fake_flow.float() - latents.float()
-            grad = project_dmd_direction(grad, residual)
         dims = tuple(range(1, latents.ndim))
         normalizer = torch.abs(latents.float() - x_pred_teacher.float()).mean(dim=dims, keepdim=True)
         if norm_clip_min is not None:
@@ -186,7 +170,6 @@ def dmd_loss(
     normalize=True,
     normalization_epsilon=0.0,
     reduction="mean",
-    projected=False,
 ):
     """Compute the detached DMD regression objective."""
     loss, _, _ = dmd_loss_with_stats(
@@ -197,7 +180,6 @@ def dmd_loss(
         normalize=normalize,
         normalization_epsilon=normalization_epsilon,
         reduction=reduction,
-        projected=projected,
     )
     return loss
 
@@ -212,7 +194,6 @@ def dmd_loss_pair(
     normalize=True,
     normalization_epsilon=0.0,
     reduction="mean",
-    projected=False,
 ):
     video_loss = dmd_loss(
         latents[0],
@@ -221,7 +202,6 @@ def dmd_loss_pair(
         normalize=normalize,
         normalization_epsilon=normalization_epsilon,
         reduction=reduction,
-        projected=projected,
     )
     audio_loss = dmd_loss(
         latents[1],
@@ -230,7 +210,6 @@ def dmd_loss_pair(
         normalize=normalize,
         normalization_epsilon=normalization_epsilon,
         reduction=reduction,
-        projected=projected,
     )
     return video_weight * video_loss + audio_weight * audio_loss
 

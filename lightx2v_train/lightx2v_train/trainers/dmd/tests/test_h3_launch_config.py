@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import torch
-import yaml
 from omegaconf.errors import InterpolationKeyError
 
 from lightx2v_train.runtime.config import load_config
@@ -145,39 +144,17 @@ class H3LaunchConfigTests(unittest.TestCase):
             environment.pop("KERNELS_CACHE", None)
             environment.pop("H3_KERNEL_SNAPSHOT", None)
             for launcher, config_path in ((LAUNCHER, CONFIG), (T2AV_LAUNCHER, T2AV_CONFIG)):
-                for projected, ratio in (("false", 5), ("true", 1)):
-                    with self.subTest(launcher=launcher, projected=projected):
-                        environment["H3_PDMD"] = projected
-                        result = subprocess.run(["bash", str(launcher), "--dry-run"], env=environment, capture_output=True, text=True, check=True)
-                        if launcher == LAUNCHER:
-                            self.assertIn("--nnodes=4 --nproc_per_node=8", result.stdout)
-                        self.assertIn(f"PDMD={projected}", result.stdout)
-                        self.assertIn("update_order=student_first", result.stdout)
-                        self.assertIn(f"fake_update_ratio={ratio}", result.stdout)
-                        self.assertNotIn("Traceback", result.stderr)
+                environment["H3_PDMD"] = "false"
+                result = subprocess.run(["bash", str(launcher), "--dry-run"], env=environment, capture_output=True, text=True, check=True)
+                if launcher == LAUNCHER:
+                    self.assertIn("--nnodes=4 --nproc_per_node=8", result.stdout)
+                self.assertIn("PDMD=false", result.stdout)
+                self.assertIn("fake_update_ratio=5", result.stdout)
+                self.assertNotIn("Traceback", result.stderr)
 
-                # H3_CONFIG_PATH must not silently retain the former 1:5 recipe.
-                custom = self.config("true", config_path)
-                custom["training"]["dmd"]["fake_update_ratio"] = 5
-                custom_path = root / "custom.yaml"
-                custom_path.write_text(yaml.safe_dump(custom))
-                override_environment = {**environment, "H3_CONFIG_PATH": str(custom_path), "H3_PDMD": "true"}
-                result = subprocess.run(["bash", str(launcher), "--dry-run"], env=override_environment, capture_output=True, text=True)
+                result = subprocess.run(["bash", str(launcher), "--dry-run"], env={**environment, "H3_PDMD": "true"}, capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("requires update_order=student_first and fake_update_ratio=1", result.stderr)
-
-                custom["training"]["dmd"]["fake_update_ratio"] = 1
-                custom["training"]["dmd"]["update_order"] = "fake_first"
-                custom_path.write_text(yaml.safe_dump(custom))
-                result = subprocess.run(["bash", str(launcher), "--dry-run"], env=override_environment, capture_output=True, text=True)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("requires update_order=student_first and fake_update_ratio=1", result.stderr)
-
-                custom["model"]["capabilities"]["distribution_matching"]["projected_dmd"] = False
-                custom_path.write_text(yaml.safe_dump(custom))
-                result = subprocess.run(["bash", str(launcher), "--dry-run"], env=override_environment, capture_output=True, text=True)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("disagrees with the selected config", result.stderr)
+                self.assertIn("removed projection-only recipe", result.stderr)
 
                 result = subprocess.run(["bash", str(launcher), "--dry-run"], env={**environment, "H3_PDMD": "yes"}, capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)

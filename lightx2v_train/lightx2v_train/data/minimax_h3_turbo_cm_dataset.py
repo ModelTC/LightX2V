@@ -1,4 +1,4 @@
-"""Independent full-target T2AV cache for H3 Turbo consistency objectives.
+"""Independent full-target T2AV/Ref2AV cache for H3 consistency objectives.
 
 CM has its own absolute global-microbatch cursor. The sampler concatenates
 deterministic shuffled data epochs without truncation or padding: a global
@@ -21,8 +21,9 @@ from lightx2v_train.utils.registry import DATA_REGISTER
 class MiniMaxH3TurboCMDataset(LatentDataset):
     """Reuse the existing full AV loader and map three cache paths in memory."""
 
-    def __init__(self, metadata_path, *, path_mapping=None, tasks=None, max_samples=None, defer_latent_loading=True):
-        self.metadata_path, self._cm_rows, self.metadata_fingerprint = load_cm_records(metadata_path, path_mapping, tasks, check_files=False)
+    def __init__(self, metadata_path, *, path_mapping=None, tasks=None, native_geometry=False, max_samples=None, defer_latent_loading=True):
+        self.native_geometry = native_geometry
+        self.metadata_path, self._cm_rows, self.metadata_fingerprint = load_cm_records(metadata_path, path_mapping, tasks, check_files=False, native_geometry=native_geometry)
         super().__init__(str(self.metadata_path), max_samples=max_samples, defer_latent_loading=defer_latent_loading)
 
     def _index_metadata(self, metadata_path):
@@ -32,14 +33,62 @@ class MiniMaxH3TurboCMDataset(LatentDataset):
     def _validate_condition_item(self, item, row, condition_path):
         if not isinstance(item, dict) or item.get("cache_fingerprint") != row["cache_fingerprint"]:
             raise ValueError(f"CM condition fingerprint differs from its target manifest: {condition_path}")
-        if str(item.get("source_id")) != str(row["source_id"]) or item.get("task") != "t2av":
+        task = str(row["task"]).lower()
+        if str(item.get("source_id")) != str(row["source_id"]) or item.get("task") != task:
             raise ValueError(f"CM condition identity/task differs from its target manifest: {condition_path}")
         positive = _condition_payload(item)
-        if not isinstance(positive, dict) or positive.get("task", "t2av") != "t2av":
-            raise ValueError(f"CM requires actual T2AV condition payloads: {condition_path}")
+        if not isinstance(positive, dict) or positive.get("task", "t2av") != task:
+            raise ValueError(f"CM requires actual {task.upper()} condition payloads: {condition_path}")
+        if self.native_geometry or task == "ref2av":
+            expected = {"target_height": int(row["target_height"]), "target_width": int(row["target_width"]), "target_num_frames": 124}
+            if item.get("cache_stage") != "complete" or any(positive.get(key) != value for key, value in expected.items()):
+                raise ValueError(f"CM condition is incomplete or differs from target geometry: {condition_path}")
         tags = positive.get("text_token_tags")
-        if not torch.is_tensor(tags) or not bool((tags == 1).all()):
+        if task == "ref2av":
+            # Inspect the saved row tensors before generic singleton stripping:
+            # a valid one-row reference must remain [1, 96] during validation.
+            raw_positive = item.get("conditioning", {}).get("positive", positive)
+            self._validate_reference_condition(raw_positive, row, condition_path)
+        elif not torch.is_tensor(tags) or not bool((tags == 1).all()):
             raise ValueError(f"CM T2AV condition must have text-only token tags: {condition_path}")
+
+    @staticmethod
+    def _validate_reference_condition(positive, row, condition_path):
+        """Validate already encoded references without opening original media."""
+        embeds, tags = positive.get("prompt_embeds"), positive.get("text_token_tags")
+        if not torch.is_tensor(embeds) or embeds.ndim not in (2, 3) or (embeds.ndim == 3 and embeds.shape[0] != 1) or not bool(torch.isfinite(embeds).all()):
+            raise ValueError(f"CM Ref2AV requires finite prompt embedding rows: {condition_path}")
+        if not torch.is_tensor(tags) or tags.dtype != torch.long or tags.shape != (embeds.shape[-2],) or not bool(((tags == 0) | (tags == 1)).all()):
+            raise ValueError(f"CM Ref2AV has invalid reference/text token tags: {condition_path}")
+        references = positive.get("references")
+        if not isinstance(references, list) or not references:
+            raise ValueError(f"CM Ref2AV requires encoded references: {condition_path}")
+        counts = {kind: 0 for kind in ("image", "video", "audio")}
+        for reference in references:
+            if not isinstance(reference, dict) or reference.get("kind") not in counts or reference.get("normalized") is not True:
+                raise ValueError(f"CM Ref2AV has invalid normalized reference identity: {condition_path}")
+            kind = reference["kind"]
+            counts[kind] += 1
+            video, audio = reference.get("video_latents"), reference.get("audio_latents")
+            if kind != "audio":
+                frames, height, width = (int(reference.get(key, 0)) for key in ("num_latent_frames", "latent_height", "latent_width"))
+                expected_rows = frames * (height // 2) * (width // 2)
+                if min(frames, height, width) <= 0 or height % 2 or width % 2 or (kind == "image" and frames != 1):
+                    raise ValueError(f"CM Ref2AV has invalid reference video geometry: {condition_path}")
+                if not torch.is_tensor(video) or tuple(video.shape) != (expected_rows, 96) or not bool(torch.isfinite(video).all()):
+                    raise ValueError(f"CM Ref2AV has invalid encoded reference video rows: {condition_path}")
+            elif video is not None:
+                raise ValueError(f"CM Ref2AV audio reference contains video rows: {condition_path}")
+            if audio is not None:
+                audio_frames = int(reference.get("num_audio_latents", 0))
+                if audio_frames <= 0 or not torch.is_tensor(audio) or tuple(audio.shape) != (audio_frames * 2, 32) or not bool(torch.isfinite(audio).all()):
+                    raise ValueError(f"CM Ref2AV has invalid encoded reference audio rows: {condition_path}")
+            if (kind == "audio" and audio is None) or (kind == "image" and audio is not None):
+                raise ValueError(f"CM Ref2AV reference kind/audio rows disagree: {condition_path}")
+        if (counts["image"] or counts["video"]) and not bool((tags == 0).any()):
+            raise ValueError(f"CM Ref2AV has no reference vision token tags: {condition_path}")
+        if any(key in row and int(row[key]) != counts[kind] for kind in counts for key in (f"reference_{kind}_count",)):
+            raise ValueError(f"CM Ref2AV reference counts differ from metadata: {condition_path}")
 
     def _load_metadata_sample(self, row, base_dir):
         sample = super()._load_metadata_sample(row, base_dir)
@@ -150,6 +199,7 @@ def build_minimax_h3_turbo_cm_dataset(data_config_split, train_or_val="cm"):
         paths,
         path_mapping=data_config_split.get("path_mapping"),
         tasks=data_config_split.get("tasks", ["t2av"]),
+        native_geometry=data_config_split.get("native_geometry", False),
         max_samples=max_samples,
         defer_latent_loading=bool(data_config_split.get("defer_latent_loading", True)),
     )

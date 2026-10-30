@@ -9,10 +9,10 @@ train_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export WAN_DMD_MODEL WAN_DMD_PROMPTS WAN_DMD_OUTPUT
 export WAN_DMD_PROJECTED="${WAN_DMD_PROJECTED:-false}"
 export WAN_DMD_RESIDUAL_HEAD="${WAN_DMD_RESIDUAL_HEAD:-false}"
-if [[ "$WAN_DMD_PROJECTED" == true && "$WAN_DMD_RESIDUAL_HEAD" == true ]]; then
-    printf 'Select projected DMD or residual-head DMD, not both.\n' >&2
-    exit 2
-fi
+case "$WAN_DMD_PROJECTED" in
+    false) ;;
+    *) printf '%s\n' 'The projection-only PDMD route was removed. Use an official PDMD launcher; this script supports plain DMD and residual-head DMD only.' >&2; exit 2 ;;
+esac
 export PYTHONPATH="$train_root${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"

@@ -177,8 +177,8 @@ class Ref2AVCapabilityTest(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertEqual(len(capability._layout_cache), 1)
 
-    def test_projected_loss_routes_modalities_and_excludes_teacher_gradients(self):
-        capability = self.capability(projected_dmd=True, dmd_normalization_epsilon=1e-6)
+    def test_dmd_loss_routes_modalities_and_excludes_teacher_gradients(self):
+        capability = self.capability(dmd_normalization_epsilon=1e-6)
         sample, condition = self.prepare(capability, reference_condition())
         shape = capability.latent_shape(sample, [], lambda x: x)
         generated = MiniMaxH3JointLatents(torch.randn(1, 2, 3, requires_grad=True), torch.randn(1, 2, 2, requires_grad=True), shape)
@@ -254,9 +254,9 @@ class Ref2AVCapabilityTest(unittest.TestCase):
         self.assertEqual(capability.adv_regularizer.regression_ema, [1.0])
 
     def test_metadata_and_legacy_default_normalization(self):
-        capability = self.capability(projected_dmd=True, dmd_reduction="sum", dmd_normalization_epsilon=1e-6)
+        capability = self.capability(dmd_reduction="sum", dmd_normalization_epsilon=1e-6)
         metadata = capability.extra_checkpoint_metadata()
-        self.assertTrue(metadata["minimax_h3_distribution_matching"]["projected_dmd"])
+        self.assertFalse(metadata["minimax_h3_distribution_matching"]["projected_dmd"])
         legacy = capability.legacy_extra_checkpoint_metadata()
         self.assertFalse(legacy["minimax_h3_distribution_matching"]["projected_dmd"])
         self.assertNotIn("minimax_h3_parallel_topology", legacy)

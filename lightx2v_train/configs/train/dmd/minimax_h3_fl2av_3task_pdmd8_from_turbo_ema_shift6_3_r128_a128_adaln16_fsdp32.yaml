@@ -1,8 +1,8 @@
 # H3 Turbo dCM EMA -> pure official PDMD, T2AV/I2AV/FL2AV, 32 GPUs.
 # Fresh stage: load only the exported student adapter, not Turbo optimizer/fake/cursors.
 # Exact Turbo LoRA architecture: regular128/128, block+output AdaLN16/16.
-# 27500 role optimizer updates = 2500 student + 25000 fake (10 fake -> 1 student).
-# Save every 550 role updates (= 50 student updates); use a NEW output directory.
+# 15000 role optimizer updates = 2500 student + 12500 fake (5 fake -> 1 student).
+# Save every 300 role updates (= 50 student updates); use a NEW output directory.
 seed: 42
 model:
     name: minimax_h3_t2av
@@ -91,20 +91,20 @@ scheduler:
 
 training:
     method: dmd
-    max_train_iters: 27500
+    max_train_iters: 15000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
     max_grad_norm: 1.0
     lr_scheduler: constant
     lr_warmup_iters: 0
-    save_every_iters: 550
+    save_every_iters: 300
     # Local storage policy: unlike LoRA-only upstream, our fake is full-size.
     save_total_limit: 2
     dmd:
         official_pdmd: true
         num_inference_steps: 8
         update_order: fake_first
-        fake_update_ratio: 10
+        fake_update_ratio: 5
         model_mode: eval
         latent_dtype: fp32
         official_rollout_video_shift: 6.0

@@ -36,6 +36,20 @@ class TinyCapability:
 
 
 class TurboConfigTests(unittest.TestCase):
+    def test_full_target_cm_train_supports_matching_native_t2av_and_ref_tasks(self):
+        for name, task in (("minimax_h3_t2av", "t2av"), ("minimax_h3_ref2av", "ref2av")):
+            with self.subTest(name=name):
+                config = recipe()
+                config["model"]["name"] = name
+                config["training"].update(max_train_iters=1500, turbo={"dcm_steps": 1500, "scm_steps": 0, "joint_steps": 0})
+                config["data"] = {"train": {"name": "minimax_h3_turbo_cm_dataset", "tasks": [task], "batch_size": 1, "drop_last": False, "native_geometry": True}}
+                parsed = TurboConfig.from_mapping(config)
+                self.assertEqual(parsed.stage_at(1499), "dcm")
+                self.assertEqual(parsed.fake_updates_before(1500), 0)
+                config["data"]["train"]["tasks"] = ["ref2av" if task == "t2av" else "t2av"]
+                with self.assertRaisesRegex(ValueError, "tasks="):
+                    TurboConfig.from_mapping(config)
+
     def test_default_curriculum_and_exact_data_accounting(self):
         config = TurboConfig.from_mapping(recipe())
         for step, stage in ((0, "dcm"), (1999, "dcm"), (2000, "scm"), (2499, "scm"), (2500, "joint"), (6999, "joint")):

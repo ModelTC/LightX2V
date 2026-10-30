@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run single-GPU FP32 Wan training with memory-efficient SDPA enforced."""
+"""Run FP32 Wan training with memory-efficient SDPA enforced on each rank."""
 
 import runpy
 from pathlib import Path

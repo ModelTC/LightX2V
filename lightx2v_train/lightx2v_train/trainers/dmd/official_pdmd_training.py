@@ -1,9 +1,11 @@
-"""Opt-in official H3 PDMD optimizer-update loop using existing model roles.
+"""Official PDMD optimizer-update loop using existing H3 or Wan model roles.
 
 The user's Ref cache, FSDP2 topology, full critic, LoRA scaling and role dtypes
 are intentional adaptations. Default DMD/head/DMAD training never enters here.
 """
 
+import hashlib
+import json
 import math
 import os
 from dataclasses import fields, is_dataclass, replace
@@ -13,9 +15,10 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, reduce_mean
+from lightx2v_train.runtime.distributed import barrier, get_data_parallel_rank, get_data_parallel_world_size, get_world_size, is_main_process, reduce_mean
 
 from .official_pdmd_core import (
+    PdmdCondition,
     critic_objective,
     critic_sigmas,
     critic_updates_before,
@@ -48,12 +51,17 @@ def validate_official_pdmd_config(config):
     training = config["training"]
     dmd = training.get("dmd", {})
     matching = config["model"].get("capabilities", {}).get("distribution_matching", {})
-    if training.get("method") != "dmd" or config["model"]["name"] not in {"minimax_h3_ref2av", "minimax_h3_t2av"}:
-        raise ValueError("official_pdmd requires an H3 DMD model (Ref2AV or base/keyframe tasks)")
+    model_name = config["model"]["name"]
+    if training.get("method") != "dmd" or model_name not in {"minimax_h3_ref2av", "minimax_h3_t2av", "wan_t2v"}:
+        raise ValueError("official_pdmd requires an H3 or Wan T2V DMD model")
     if config["model"]["name"] == "minimax_h3_t2av":
         data = config["data"]["train"]
-        if data.get("name") != "minimax_h3_cache_dataset" or data.get("route_mode") != "stratified":
-            raise ValueError("official_pdmd base/keyframe tasks require minimax_h3_cache_dataset with route_mode=stratified")
+        legacy = data.get("name") == "minimax_h3_cache_dataset" and data.get("route_mode") == "stratified"
+        curriculum = data.get("name") == "minimax_h3_curriculum_cache_dataset" and data.get("kind") == "fl2av"
+        if not (legacy or curriculum):
+            raise ValueError("official_pdmd base/keyframe tasks require a stratified H3 cache or an FL2AV new-then-old curriculum cache")
+    elif config["data"]["train"].get("name") == "minimax_h3_curriculum_cache_dataset" and config["data"]["train"].get("kind") != "ref2av":
+        raise ValueError("official_pdmd Ref2AV requires kind=ref2av for a curriculum cache")
     if not matching.get("official_pdmd", False):
         raise ValueError("training.dmd.official_pdmd requires model.capabilities.distribution_matching.official_pdmd=true")
     if dmd.get("update_order", "fake_first") != "fake_first":
@@ -65,8 +73,10 @@ def validate_official_pdmd_config(config):
             raise ValueError(f"official_pdmd cannot be combined with {feature}")
     if training.get("student", {}).get("ema", {}).get("enabled", False):
         raise ValueError("official_pdmd uses live student weights, not EMA")
-    if float(training.get("teacher", {}).get("guidance_scale", 1.0)) != 1.0:
+    if model_name != "wan_t2v" and float(training.get("teacher", {}).get("guidance_scale", 1.0)) != 1.0:
         raise ValueError("official H3 PDMD has no CFG branch; guidance_scale must be 1")
+    if model_name == "wan_t2v" and int(config["data"]["train"].get("batch_size", 1)) != 1:
+        raise ValueError("official Wan PDMD currently requires singleton per-rank batches")
     if (matching.get("adaptive_video_regularization") or {}).get("enabled", False):
         raise ValueError("official_pdmd does not add adaptive video regularization")
     sp = config.get("distributed", {}).get("sequence_parallel", {})
@@ -94,7 +104,15 @@ class OfficialH3PdmdTraining:
         config = self.trainer.config
         training = {key: value for key, value in config["training"].items() if key not in {"max_train_iters", "output_dir", "save_every_iters", "save_total_limit", "save_consolidated_weights"}}
         data = {key: value for key, value in config["data"]["train"].items() if key not in {"num_workers", "pin_memory"}}
-        return {"seed": self.seed, "model": config["model"], "training": training, "data": data, "scheduler": config["scheduler"], "distributed": config.get("distributed", {})}
+        recipe = {"seed": self.seed, "model": config["model"], "training": training, "data": data, "scheduler": config["scheduler"], "distributed": config.get("distributed", {})}
+        if config["model"]["name"] == "wan_t2v":
+            dataset = self.trainer.dataloader_train.dataset
+            digest = hashlib.sha256()
+            for record in dataset.samples:
+                digest.update(json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
+                digest.update(b"\n")
+            recipe["dataset"] = {"rows": len(dataset), "sha256": digest.hexdigest()}
+        return recipe
 
     @staticmethod
     def rank():
@@ -155,7 +173,9 @@ class OfficialH3PdmdTraining:
             torch.random.default_generator.manual_seed(seed)
             if cuda_devices:
                 torch.cuda.default_generators[cuda_devices[0]].manual_seed(seed)
-            condition, _ = t._encode_conditions(sample)
+            condition, negative = t._encode_conditions(sample)
+            if negative is not None:
+                condition = PdmdCondition(condition, negative, float(t.guidance_scale), t.cfg_norm)
             shape = t._latent_shape(sample)
             seed = stream_seed(self.seed, "noise", iteration, slot)
             torch.random.default_generator.manual_seed(seed)
@@ -193,11 +213,20 @@ class OfficialH3PdmdTraining:
                 ratio = float(torch.rand((), generator=draws))
                 loss, metrics = student_objective(t.student, t.fake, t.teacher, trajectory, index, ratio)
             else:
-                sigmas = critic_sigmas(draws, video_threshold=float(self.dmd.get("critic_video_threshold", 0.95)), audio_floor=float(self.dmd.get("critic_audio_floor", 0.85)), device=t.student.device)
+                video_only = torch.is_tensor(trajectory.states[-1])
+                sigmas = critic_sigmas(
+                    draws,
+                    video_threshold=float(self.dmd.get("critic_video_threshold", 0.95)),
+                    audio_floor=float(self.dmd.get("critic_audio_floor", 0.85)),
+                    device=t.student.device,
+                    video_only=video_only,
+                )
                 noise_generator = torch.Generator(device=t.student.device).manual_seed(stream_seed(self.seed, "renoise", iteration, slot))
                 fresh = joint_noise_like(trajectory.states[-1], noise_generator)
                 loss = critic_objective(t.student, t.fake, trajectory, sigmas, fresh)
-                metrics = {"score_sigma_video": sigmas[0], "score_sigma_audio": sigmas[1]}
+                metrics = {"score_sigma_video": sigmas[0]}
+                if not video_only:
+                    metrics["score_sigma_audio"] = sigmas[1]
                 if role_at(iteration + 1, self.critic_steps) == "student":
                     self.cached.append(trajectory)
             route_scale = self.route_loss_scale(batch_start + micro)
@@ -227,19 +256,66 @@ class OfficialH3PdmdTraining:
         totals["grad_norm"] = float(norm)
         return role, totals
 
+    def _prepare_wan_data(self):
+        """Install the same absolute DP cursor used by online Wan dCM training."""
+        t = self.trainer
+        if t.config["model"]["name"] != "wan_t2v" or hasattr(t.dataloader_train.sampler, "configure_from_microbatch_offset"):
+            return
+        from torch.utils.data import DataLoader
+
+        from ..turbo.cursor import TurboCursorSampler
+
+        loader = t.dataloader_train
+        sampler = TurboCursorSampler(loader.dataset, seed=self.seed, shuffle=t.config["data"]["train"].get("shuffle", True), num_replicas=get_data_parallel_world_size(), rank=get_data_parallel_rank())
+        t.dataloader_train = DataLoader(loader.dataset, batch_size=1, sampler=sampler, num_workers=loader.num_workers, pin_memory=loader.pin_memory, collate_fn=loader.collate_fn)
+
+    def _validate_wan_residency(self):
+        t = self.trainer
+        if t.config["model"]["name"] != "wan_t2v" or t.model.running_dtype != torch.float32:
+            return
+        components = {name: role.denoiser() for name, role in (("student", t.student), ("fake", t.fake), ("teacher", t.teacher))}
+        for name, wrapper in (("vae", t.model.vae), ("t5", t.model.text_encoder)):
+            if wrapper is not None:
+                components[name] = wrapper.model
+        for name, module in components.items():
+            parameters = list(module.parameters())
+            dtypes = {parameter.dtype for parameter in parameters if parameter.is_floating_point()}
+            devices = {parameter.device for parameter in parameters}
+            if dtypes != {torch.float32} or devices != {t.model.device}:
+                raise ValueError(f"Wan official PDMD requires resident FP32 {name}; got devices={devices}, dtypes={dtypes}")
+            logger.info("[pdmd_official] resident component={} device={} dtype=fp32 parameters={}", name, t.model.device, sum(parameter.numel() for parameter in parameters))
+
+    def _infer(self, iteration):
+        t = self.trainer
+        try:
+            t.run_inference(iteration)
+        finally:
+            # Shared inference restores train mode; the released recipe uses eval.
+            t.student.set_training(False)
+
     def run(self):
         t = self.trainer
+        self._prepare_wan_data()
         checkpoint, iteration = t._resolve_resume()
         self._load_cursor(checkpoint, iteration)
         sampler = t.dataloader_train.sampler
         if not hasattr(sampler, "configure_from_microbatch_offset"):
-            raise ValueError("official H3 PDMD requires a sampler with an explicit microbatch cursor")
+            raise ValueError("official PDMD requires a sampler with an explicit microbatch cursor")
         sampler.configure_from_microbatch_offset(start_microbatch=self.consumed_microbatches, gradient_accumulation_iters=self.accum, fake_update_ratio=self.critic_steps)
         self.route_loss_scale = getattr(sampler, "cursor_microbatch_loss_scale", self.route_loss_scale)
         t.setup(resume_ckpt_path=checkpoint)
+        self._validate_wan_residency()
         self.cached = move_tensors(self.cached, t.student.device)
         self.video_grid = rollout_grid(t.num_inference_steps, float(self.dmd.get("official_rollout_video_shift", 1.0)), t.student.device)
         self.audio_grid = rollout_grid(t.num_inference_steps, float(self.dmd.get("official_rollout_audio_shift", 1.0)), t.student.device)
+        if getattr(t, "infer_every_iters", None):
+            t.inferencer.set_data(t.dataloader_val)
+            if iteration == 0 and getattr(t, "infer_config", {}).get("run_at_start", False):
+                self._infer(0)
+            elif checkpoint is not None and iteration == t.max_train_iters and iteration % t.infer_every_iters == 0:
+                # The final model/cursor save can complete before its preview
+                # fails. Resume must retry that preview without another update.
+                self._infer(iteration)
         if is_main_process():
             os.makedirs(t.output_train_dir, exist_ok=True)
         barrier()
@@ -277,6 +353,8 @@ class OfficialH3PdmdTraining:
             if t.save_every_iters and iteration % t.save_every_iters == 0:
                 self._save(iteration)
                 last_saved = iteration
+            if getattr(t, "infer_every_iters", None) and iteration % t.infer_every_iters == 0:
+                self._infer(iteration)
         if iteration != last_saved:
             self._save(iteration)
         logger.info("[pdmd_official] finished optimizer_updates={}/{}", iteration, t.max_train_iters)

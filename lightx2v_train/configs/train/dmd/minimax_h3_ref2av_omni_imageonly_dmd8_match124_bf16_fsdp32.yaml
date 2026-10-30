@@ -1,3 +1,5 @@
+# RETIRED: historical projection-only PDMD; unsupported for training.
+# Kept only for historical configuration comparisons. Use an official_pdmd recipe.
 # Conditions-only Omni R2V image caches: no target-video encoding is required.
 # BF16 caches, student parameters and FSDP compute; FP32 fake/teacher parameters.
 # H3's designated FP32 modules retain their loader-defined precision.

@@ -61,41 +61,26 @@ conditions, ordered Ref2AV references, teacher AV latents, and manifest
 mixing/filtering/merging/rebasing. Their model, input, and output paths are
 explicit command-line arguments; use each tool's `--help` for its cache schema.
 
-## Optional projected DMD
+## Official PDMD
 
-[`PDMD`, Eq. 4 and Appendix C.2](https://arxiv.org/html/2609.35768) removes the
-component of the detached DMD direction parallel to the critic–student
-residual. Video and audio are projected separately in FP32, across all
-non-batch axes, before their existing normalizers. A zero residual leaves the
-direction unchanged. The critic regression objective is unchanged. The new
-PDMD cadence reduces critic optimizer updates from five to one per outer
-iteration; the eight-evaluation student denoising schedule is unchanged.
+The early projection-only DMD implementation has been removed. Setting
+`projected_dmd=true` without `official_pdmd=true` now fails explicitly. Plain
+DMD remains supported. The projection option is retained only inside the
+released official PDMD objective, whose normalizer floor, projection epsilon,
+unhalved capped MSE, rollout, critic/student reuse and optimizer cadence are
+implemented together.
 
-The option is
-`model.capabilities.distribution_matching.projected_dmd`; the provided config
-reads it from `H3_PDMD` and defaults to `false`. This is an application of the
-paper's projection to Ref2AV, not a reproduction of a published Ref2AV recipe.
-`H3_PDMD=true` also explicitly selects `training.dmd.update_order=student_first`
-and `training.dmd.fake_update_ratio=1`. The default `false` keeps the previous
-student-first, five-critic-update recipe. Learning rates, precision, modality
-shifts and the H3 teacher are unchanged; a Wan teacher is not compatible with
-H3. Use the literal environment values `true` or `false`.
+Use the official PDMD configurations and launchers described in
+[minimax_h3_ref2av_pdmd_official.md](minimax_h3_ref2av_pdmd_official.md), or the
+new data curriculum launcher. The old `H3_PDMD=true` comparison switch is
+retired; it does not select the official recipe. Existing official H3 configs
+with both `projected_dmd` and `official_pdmd` enabled remain valid. Their
+fake/student ratios are explicit experiment settings; no 1:1 cadence is
+implied by enabling projection.
 
-Both H3 YAML files resolve this cadence themselves: direct
-`train.py --config ...` launches with `H3_PDMD=true` also get the 1:1 recipe,
-without depending on shell-only overrides. The T2AV config and
-`scripts/run_minimax_h3_t2av_dmd.sh` support the same selector and `--dry-run`.
-Custom `H3_CONFIG_PATH` files are checked by both launchers: a PDMD config must
-explicitly resolve to student-first and one critic update, or launch fails.
-
-New checkpoints record the objective, modality normalization, geometry,
-parallel topology and sampler recipe. Incompatible resume settings fail
-explicitly. Start a fresh output directory when comparing DMD and PDMD;
-`resume.allow_distribution_matching_transition` is reserved for intentional
-objective changes rather than a controlled comparison.
-Do not reuse an older PDMD output directory for the new 1:1 cadence: changing
-the update ratio also requires a fresh run, even though the projected
-objective remains the same.
+New checkpoints record the objective and optimizer/sampler recipe. Start a
+fresh output directory when changing objectives or optimizer cadence; an old
+projection-only checkpoint cannot silently resume as official PDMD.
 
 Student-only sparse attention, adaptive video regularization, and memory
 guards are also available under `model.capabilities.distribution_matching`.

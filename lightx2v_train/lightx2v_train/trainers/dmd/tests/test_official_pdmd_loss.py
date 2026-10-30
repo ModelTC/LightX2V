@@ -81,8 +81,6 @@ class OfficialPDMDLossTest(unittest.TestCase):
         expected = released_reference(student, teacher, critic)
         torch.testing.assert_close(actual[0], expected[0], rtol=0, atol=0)
         self.assertGreater(actual[0].item(), 0.9)
-        legacy, _, _ = dmd_loss_with_stats(student, critic, teacher, projected=True)
-        self.assertLess(legacy.item(), 1e-10)
 
     def test_zero_residual_retains_direction_and_normalizer_is_a_floor(self):
         student = torch.zeros(1, 2, requires_grad=True)
@@ -164,14 +162,16 @@ class OfficialPDMDH3CapabilityTest(unittest.TestCase):
     def pair(video, audio):
         return MiniMaxH3JointLatents(video, audio, None)
 
-    def test_opt_in_defaults_and_legacy_loss_and_metadata_are_unchanged(self):
-        legacy = self.capability(projected_dmd=True)
+    def test_plain_dmd_defaults_remain_unchanged_and_legacy_pdmd_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "legacy projected_dmd route has been removed"):
+            self.capability(projected_dmd=True)
+        legacy = self.capability()
         self.assertFalse(legacy.options.official_pdmd)
         self.assertNotIn("minimax_h3_official_pdmd_loss", legacy.extra_checkpoint_metadata())
         student = self.pair(torch.tensor([[[0.0, 1.0]]]), torch.tensor([[[0.0, 2.0]]]))
         fake = self.pair(torch.tensor([[[1.0, 1.0]]]), torch.tensor([[[1.0, 2.0]]]))
         teacher = self.pair(torch.tensor([[[0.0, -1.0]]]), torch.zeros(1, 1, 2))
-        expected = dmd_loss_with_stats(student.video, fake.video, teacher.video, projected=True)[0] + dmd_loss_with_stats(student.audio, fake.audio, teacher.audio, projected=True)[0]
+        expected = dmd_loss_with_stats(student.video, fake.video, teacher.video)[0] + dmd_loss_with_stats(student.audio, fake.audio, teacher.audio)[0]
         torch.testing.assert_close(legacy.dmd_loss(student, fake, teacher), expected, rtol=0, atol=0)
         official = self.capability(official_pdmd=True)
         self.assertTrue(official.options.projected_dmd)

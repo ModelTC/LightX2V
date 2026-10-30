@@ -216,6 +216,15 @@ class DmdCheckpointManager:
     @staticmethod
     def _validate_h3_checkpoint_metadata(state, current, state_path, allow_transition):
         """Keep H3 topology strict and objective transitions explicit."""
+        key = "minimax_h3_training_adapter"
+        saved_adapter = state.get(key) or {"enabled": False}
+        current_adapter = current.get(key) or {"enabled": False}
+        if saved_adapter != current_adapter:
+            raise RuntimeError(f"Checkpoint {key} differs from the current frozen-base adapter: {state_path}; use a new output directory when changing its weights, scale, roles, or layout.")
+        key = "minimax_h3_route_sampling"
+        saved_sampler, current_sampler = state.get(key), current.get(key)
+        if any(isinstance(value, Mapping) and value.get("route_mode") == "new_then_old" for value in (saved_sampler, current_sampler)) and saved_sampler != current_sampler:
+            raise RuntimeError(f"Checkpoint H3 new-then-old curriculum or data fingerprint differs: {state_path}; use a new output directory when changing its datasets, ordering, or sampling policy.")
         topology = current.get("minimax_h3_parallel_topology")
         if topology is None:
             return

@@ -8,6 +8,11 @@ train_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 : "${CUDA_VISIBLE_DEVICES:?Select two GPUs}"
 export WAN_DMD_MODEL WAN_DMD_PROMPTS WAN_DMD_OUTPUT
 export WAN_DMD_PROJECTED="${WAN_DMD_PROJECTED:-false}"
+case "$WAN_DMD_PROJECTED" in
+    false) ;;
+    true) printf '%s\n' 'The projection-only PDMD route was removed. Use the official PDMD launcher; this script now supports plain DMD only.' >&2; exit 2 ;;
+    *) printf '%s\n' 'WAN_DMD_PROJECTED must be false; projection-only PDMD was removed.' >&2; exit 2 ;;
+esac
 export PYTHONPATH="$train_root${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"

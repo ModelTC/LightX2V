@@ -127,12 +127,26 @@ class DmdTrainer(_DmdRuntime):
         if resume_ckpt_path is None and self.student_checkpoint_path:
             adapter_path = student_adapter_path(self.student_checkpoint_path)
             if adapter_path is None:
+                preset_metadata = (
+                    self.model.training_adapter_metadata() if getattr(self, "student_train_type", None) == "lora" and hasattr(getattr(self, "model", None), "training_adapter_metadata") else None
+                )
+                if preset_metadata and preset_metadata.get("enabled") and "student" not in preset_metadata.get("roles", ()):
+                    raise ValueError(
+                        "Score-only DeCFG cannot warm-start a LoRA student from a full-model checkpoint; use an original-base learned student LoRA export (pytorch_lora_weights.safetensors) so the frozen student base remains unchanged."
+                    )
                 self._load_student_checkpoint(self.student_checkpoint_path, strict=self.student_checkpoint_strict)
         super().setup(resume_ckpt_path=None)
         if adapter_path is not None:
             if self.student_train_type != "lora":
                 raise ValueError("A student LoRA adapter checkpoint requires training.student.train_type=lora.")
-            load_student_adapter(self.model.denoiser_module(), adapter_path, strict=self.student_checkpoint_strict)
+            preset_metadata = self.model.training_adapter_metadata() if hasattr(self.model, "training_adapter_metadata") else None
+            load_student_adapter(
+                self.model.denoiser_module(),
+                adapter_path,
+                strict=self.student_checkpoint_strict,
+                expected_preset=preset_metadata,
+                model_name=getattr(self, "model_config", {}).get("name"),
+            )
         self._setup_fake_real_resources()
         if self.residual_head_config.enabled:
             if hasattr(self.fake_model, "residual_head_feature_dims"):

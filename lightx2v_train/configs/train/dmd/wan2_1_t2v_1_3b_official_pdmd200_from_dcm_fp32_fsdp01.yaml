@@ -1,0 +1,156 @@
+# Stage 2: official PDMD, 200 role updates = 167 fake + 33 student.
+# Fresh optimizer/critic; warm-start only stage-1 student EMA. Euler previews at role optimizer updates 0/100/200.
+seed: 42
+model:
+  name: wan_t2v
+  pretrained_model_name_or_path: ${oc.env:WAN_DCM_PDMD_MODEL,/data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B}
+  running_dtype: fp32
+  transformer_param_dtype: fp32
+  vae_dtype: fp32
+  t5_dtype: fp32
+  t5_cpu: false
+  attention_backend: sdpa
+  max_sequence_length: 512
+  sample_posterior: false
+  load_vae: true
+  load_text_encoder: true
+  load_transformer: true
+  fake:
+    running_dtype: fp32
+    transformer_param_dtype: fp32
+  teacher:
+    running_dtype: fp32
+    transformer_param_dtype: fp32
+  capabilities:
+    distribution_matching:
+      projected_dmd: true
+      official_pdmd: true
+      official_pdmd_normalizer_floor: 1.0e-05
+      official_pdmd_projection_epsilon: 1.0e-08
+      official_pdmd_loss_clamp: 5.0
+      video_loss_weight: 0.8
+distributed:
+  backend: nccl
+  timeout_minutes: 180
+  sequence_parallel:
+    enabled: false
+    size: 1
+  fsdp2:
+    enabled: true
+    size: 2
+    reshard_after_forward:
+      root_reshard: false
+      block_reshard: true
+    mixed_precision:
+      param_dtype: fp32
+      reduce_dtype: fp32
+      output_dtype: fp32
+      cast_forward_inputs: false
+data:
+  train:
+    name: prompt_dataset
+    data_path:
+    - ${oc.env:WAN_DCM_PDMD_DATA_ROOT,/data/nvme6/gushiqiao/outputs/wan21_1_3b_turbo8_fp32_gpu0_smoke_20261028}/selection/train.jsonl
+    num_workers: 0
+    pin_memory: false
+    shuffle: true
+    drop_last: false
+  val:
+    name: prompt_dataset
+    data_path:
+    - ${oc.env:WAN_DCM_PDMD_DATA_ROOT,/data/nvme6/gushiqiao/outputs/wan21_1_3b_turbo8_fp32_gpu0_smoke_20261028}/selection/val.jsonl
+    max_samples: 4
+    num_workers: 0
+    shuffle: false
+    drop_last: false
+scheduler:
+  num_train_timesteps: 1000
+  timestep_distribution: uniform
+  min_sigma: 0.0
+  max_sigma: 1.0
+  time_shift_settings:
+    do_time_shift: false
+training:
+  method: dmd
+  allow_tf32: false
+  max_train_iters: 200
+  gradient_accumulation_iters: 1
+  gradient_checkpointing: true
+  max_grad_norm: 1.0
+  lr_scheduler: constant
+  lr_warmup_iters: 0
+  save_every_iters: 100
+  save_total_limit: 2
+  student:
+    train_type: lora
+    ema:
+      enabled: false
+    lora:
+      rank: 128
+      alpha: 128
+      param_dtype: fp32
+      target_modules:
+      - q
+      - k
+      - v
+      - o
+      - ffn.0
+      - ffn.2
+    optimizer:
+      learning_rate: 5.0e-05
+      adam_beta1: 0.0
+      adam_beta2: 0.9
+      weight_decay: 0.0
+      adam_epsilon: 1.0e-08
+    checkpoint_path: ${oc.env:WAN_DCM_PDMD_ROOT,/data/nvme6/gushiqiao/outputs/wan21_1_3b_dcm100_official_pdmd200_fp32_fsdp01_20261030}/dcm/train/checkpoint-000000100/student_ema
+    checkpoint_strict: true
+  fake:
+    train_type: full
+    optimizer:
+      learning_rate: 1.0e-05
+      adam_beta1: 0.0
+      adam_beta2: 0.9
+      weight_decay: 0.0
+      adam_epsilon: 1.0e-08
+  teacher:
+    guidance_scale: 5.0
+    cfg_norm: none
+  output_dir: ${oc.env:WAN_DCM_PDMD_ROOT,/data/nvme6/gushiqiao/outputs/wan21_1_3b_dcm100_official_pdmd200_fp32_fsdp01_20261030}/pdmd/train
+  dmd:
+    official_pdmd: true
+    num_inference_steps: 8
+    update_order: fake_first
+    fake_update_ratio: 5
+    model_mode: eval
+    latent_dtype: fp32
+    official_rollout_video_shift: 5.0
+    official_rollout_audio_shift: 1.0
+    critic_video_threshold: 0.95
+    critic_audio_floor: 0.85
+    generation_shapes:
+    - value:
+      - 81
+      - 480
+      - 832
+    score_sampling:
+      type: continuous_uniform
+      min_sigma: 0.0
+      max_sigma: 1.0
+inference:
+  method: wan_official_pdmd_infer
+  default_height: 480
+  default_width: 832
+  num_frames: 81
+  num_inference_steps: 8
+  fps: 16
+  seed: 42
+  infer_every_iters: 100
+  teacher_baseline_at_zero: false
+  output_dir: ${oc.env:WAN_DCM_PDMD_ROOT,/data/nvme6/gushiqiao/outputs/wan21_1_3b_dcm100_official_pdmd200_fp32_fsdp01_20261030}/pdmd/infer
+  run_at_start: true
+logging:
+  rank_zero_only: true
+  train_log_every_iters: 1
+  infer_log_every_steps: 8
+resume:
+  auto_resume: true

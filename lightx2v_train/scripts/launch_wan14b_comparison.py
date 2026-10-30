@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Supervise three fresh Wan experiments with an explicit precision profile.
+"""Supervise plain DMD and residual-head Wan experiments with an explicit precision profile.
 
 Run the accompanying shell script. Environment: WAN_DMD_PYTHON, WAN_DMD_MODEL,
-WAN_DMD_TEACHER, WAN_DMD_PROMPTS, WAN_DMD_RUN_ROOT; DMD_GPUS/PDMD_GPUS/HEAD_GPUS.
+WAN_DMD_TEACHER, WAN_DMD_PROMPTS, WAN_DMD_RUN_ROOT; DMD_GPUS/HEAD_GPUS.
 WAN_DMD_GRAD_ACCUM defaults to 16 and controls student/fake and head fitting.
 WAN_DMD_STUDENT_TRAIN_TYPE defaults to full; lora uses rank 128, alpha 8 on
 q/k/v/o/ffn.0/ffn.2 while leaving the fake model fully trainable.
@@ -30,7 +30,7 @@ from unittest.mock import patch
 
 TRAIN_ROOT = Path(__file__).resolve().parents[1]
 CONFIG = TRAIN_ROOT / "configs/train/dmd/wan2_1_t2v_1_3b_teacher14b_full_acc16_fsdp2.yaml"
-GROUPS = ("dmd", "pdmd", "head")
+GROUPS = ("dmd", "head")
 OOM_PATTERN = re.compile(r"CUDA out of memory|CUDA error: out of memory", re.I)
 STOP_REQUESTED = False
 
@@ -77,6 +77,9 @@ def precision_description(dtype, paths):
 def resolved_config(group, dtype, output, paths):
     from lightx2v_train.runtime.config import load_config
 
+    if group not in GROUPS:
+        raise ValueError("The projection-only PDMD comparison was removed; use an official_pdmd config and launcher.")
+
     with patch.dict(os.environ, {**paths, "WAN_DMD_GROUP": group, "WAN_DMD_TEACHER_DTYPE": dtype, "WAN_DMD_OUTPUT": str(output)}):
         accumulation = gradient_accumulation()
         result = load_config(str(CONFIG))
@@ -114,8 +117,8 @@ def resolved_config(group, dtype, output, paths):
     else:
         assert model["teacher"]["transformer_param_dtype"] == "fp32"
         assert model["attention_backend"] == "flash_attention_3" and training["allow_tf32"]
-    assert training["dmd"]["update_order"] == ("student_first" if group == "pdmd" else "fake_first")
-    assert training["dmd"]["fake_update_ratio"] == (1 if group == "pdmd" else 5)
+    assert training["dmd"]["update_order"] == "fake_first"
+    assert training["dmd"]["fake_update_ratio"] == 5
     assert not result["resume"]["auto_resume"]
     return result
 
@@ -175,14 +178,14 @@ def preflight(root, gpu_groups, paths):
     while not parent.exists():
         parent = parent.parent
     free_gib = shutil.disk_usage(parent).free / 2**30
-    # Three 37-GiB full optimizer/EMA checkpoint sets + preserved OOM attempt.
+    # Two full optimizer/EMA checkpoint sets plus preserved OOM attempt.
     if free_gib < 240:
         raise ValueError(f"Need 240 GiB free disk incl. OOM-attempt reserve; {parent}: {free_gib:.1f} GiB")
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(sorted(selected, key=int))
     import torch
 
-    if not torch.cuda.is_available() or torch.cuda.device_count() != 6:
-        raise ValueError("Training Python cannot see all six selected CUDA GPUs")
+    if not torch.cuda.is_available() or torch.cuda.device_count() != 4:
+        raise ValueError("Training Python cannot see all four selected CUDA GPUs")
     mixed = precision_profile(paths) == "bf16_fa3"
     dtype = "bf16" if mixed else "fp32"
     fa3 = check_fa3(torch) if mixed else None
@@ -326,19 +329,19 @@ def main():
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     suffix = "_bf16_fa3" if profile == "bf16_fa3" else ""
     root = Path(os.getenv("WAN_DMD_RUN_ROOT", str(TRAIN_ROOT.parent / "outputs" / f"wan21_14b_{student_mode}_acc{accumulation}{suffix}_{stamp}_{os.getpid()}"))).resolve()
-    gpu_groups = dict(zip(GROUPS, (os.getenv("DMD_GPUS", "0,1"), os.getenv("PDMD_GPUS", "2,3"), os.getenv("HEAD_GPUS", "5,6"))))
+    gpu_groups = dict(zip(GROUPS, (os.getenv("DMD_GPUS", "0,1"), os.getenv("HEAD_GPUS", "5,6"))))
     selected = []
     for value in gpu_groups.values():
         if not re.fullmatch(r"(0|[1-9]\d*),(0|[1-9]\d*)", value):
             parser.error("Each GPU group must have exactly two numeric GPU indices")
         selected.extend(value.split(","))
-    if len(set(selected)) != 6:
+    if len(set(selected)) != 2 * len(GROUPS):
         parser.error("GPU groups must be disjoint")
     if root.exists():
         parser.error(f"Fresh output required, refusing existing run root: {root}")
     print(f"Run root: {root}\n10000 iterations; {student_mode} student/full fake; accumulation {accumulation}; teacher CFG5.", flush=True)
     print("Precision: " + json.dumps(precision_description(dtype, paths)), flush=True)
-    print(f"GPU groups: {gpu_groups}; PDMD student→critic 1:1; DMD/head critic→student 5:1", flush=True)
+    print(f"GPU groups: {gpu_groups}; DMD/head critic→student 5:1; projection-only PDMD retired", flush=True)
     if args.dry_run:
         for group in GROUPS:
             resolved_config(group, dtype, root / attempt_name(dtype, paths) / group, paths)

@@ -1,4 +1,4 @@
-"""Offline contracts for the fresh Wan 14B-teacher three-way comparison.
+"""Offline contracts for the fresh Wan 14B-teacher plain-DMD/head comparison.
 
 Subprocesses, GPU queries and process-group signals are always mocked here.
 """
@@ -28,7 +28,7 @@ PATHS = {
     "WAN_DMD_TEACHER": "/fixture/Wan2.1-T2V-14B",
     "WAN_DMD_PROMPTS": "/fixture/prompts.txt",
 }
-GPU_GROUPS = {"dmd": "0,1", "pdmd": "2,3", "head": "5,6"}
+GPU_GROUPS = {"dmd": "0,1", "head": "5,6"}
 
 
 class Wan14bConfigTest(unittest.TestCase):
@@ -77,8 +77,8 @@ class Wan14bConfigTest(unittest.TestCase):
                     self.assertNotIn("lora", training["fake"])
                     self.assertEqual(training["student"]["optimizer"]["learning_rate"], 5e-5)
                     self.assertEqual(training["student"]["ema"], {"enabled": True, "decay": 0.99, "use_for_inference": True})
-                    self.assertEqual(training["dmd"]["update_order"], "student_first" if group == "pdmd" else "fake_first")
-                    self.assertEqual(training["dmd"]["fake_update_ratio"], 1 if group == "pdmd" else 5)
+                    self.assertEqual(training["dmd"]["update_order"], "fake_first")
+                    self.assertEqual(training["dmd"]["fake_update_ratio"], 5)
                     training["student"]["train_type"] = "full"
                     # Exact equality protects precision, teacher CFG/path,
                     # fake optimizer, head fitting, sampling and EMA behavior.
@@ -106,11 +106,10 @@ class Wan14bConfigTest(unittest.TestCase):
                     head["fit_steps"] = head["fit_grad_accum_steps"] = 16
                     self.assertEqual(acc16, acc1)
 
-    def test_three_groups_have_requested_loss_and_cadence_only(self):
+    def test_dmd_and_head_keep_requested_loss_and_cadence(self):
         variants = []
         for group, projected, head, order, ratio in (
             ("dmd", False, False, "fake_first", 5),
-            ("pdmd", True, False, "student_first", 1),
             ("head", False, True, "fake_first", 5),
         ):
             with self.subTest(group=group):
@@ -122,7 +121,8 @@ class Wan14bConfigTest(unittest.TestCase):
                 self.assertEqual(dmd.pop("fake_update_ratio"), ratio)
                 variants.append(config)
         self.assertEqual(variants[0], variants[1])
-        self.assertEqual(variants[0], variants[2])
+        with self.assertRaisesRegex(ValueError, "projection-only PDMD comparison was removed"):
+            self.config("pdmd")
 
     def test_full_acc16_cfg5_and_matching_validation(self):
         for group in launcher.GROUPS:
@@ -244,9 +244,7 @@ class Wan14bLauncherTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "new_run"
-        self.env = dict(
-            PATHS, WAN_DMD_GRAD_ACCUM="16", WAN_DMD_PRECISION_PROFILE="fp32_sdpa", WAN_DMD_STUDENT_TRAIN_TYPE="full", WAN_DMD_RUN_ROOT=str(self.root), DMD_GPUS="0,1", PDMD_GPUS="2,3", HEAD_GPUS="5,6"
-        )
+        self.env = dict(PATHS, WAN_DMD_GRAD_ACCUM="16", WAN_DMD_PRECISION_PROFILE="fp32_sdpa", WAN_DMD_STUDENT_TRAIN_TYPE="full", WAN_DMD_RUN_ROOT=str(self.root), DMD_GPUS="0,1", HEAD_GPUS="5,6")
 
     def main_context(self, flags=()):
         stack = ExitStack()
@@ -341,7 +339,7 @@ class Wan14bLauncherTest(unittest.TestCase):
                 launcher.check_fa3(torch)
 
     def test_dry_run_rejects_overlapping_gpu_groups_and_existing_output(self):
-        self.env["HEAD_GPUS"] = "3,6"
+        self.env["HEAD_GPUS"] = "1,6"
         with self.main_context(["--dry-run"]), self.assertRaises(SystemExit) as raised:
             launcher.main()
         self.assertEqual(raised.exception.code, 2)
@@ -436,7 +434,7 @@ class Wan14bLauncherTest(unittest.TestCase):
             stop = stack.enter_context(patch.object(launcher, "stop_jobs"))
             stack.enter_context(redirect_stdout(io.StringIO()))
             self.assertEqual(launcher.run_attempt(self.root, "fp32", GPU_GROUPS, PATHS), "complete")
-        self.assertEqual(start.call_count, 3)
+        self.assertEqual(start.call_count, len(launcher.GROUPS))
         self.assertEqual(set(stop.call_args.args[0]), set(launcher.GROUPS))
         for group, entry in zip(launcher.GROUPS, start.call_args_list):
             argv, kwargs = entry.args[0], entry.kwargs

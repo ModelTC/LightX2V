@@ -1,9 +1,8 @@
-# Fresh three-way comparison; all DiT computations are FP32 (TF32 disabled).
+# Fresh plain-DMD/residual-head comparison; all DiT computations are FP32 (TF32 disabled).
 # Only an observed CUDA OOM allows the launcher to retry with a BF16 teacher.
 seed: 42
 comparison_recipes:
     dmd: {projected: false, head: false, order: fake_first, critic_steps: 5}
-    pdmd: {projected: true, head: false, order: student_first, critic_steps: 1}
     head: {projected: false, head: true, order: fake_first, critic_steps: 5}
 model:
     name: wan_t2v

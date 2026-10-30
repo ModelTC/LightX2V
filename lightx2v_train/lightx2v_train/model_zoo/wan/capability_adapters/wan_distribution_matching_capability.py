@@ -1,5 +1,7 @@
 """Distribution-matching capabilities for Wan-family video models."""
 
+import math
+
 import torch
 from torch.autograd import forward_ad
 
@@ -11,7 +13,7 @@ from lightx2v_train.model_zoo.capability_adapters.common import (
     _require_singleton_tensor,
 )
 from lightx2v_train.runtime.distributed import get_sequence_parallel_world_size
-from lightx2v_train.trainers.dmd.math import dmd_loss_with_stats
+from lightx2v_train.trainers.dmd.math import dmd_loss_with_stats, expand_sigma, official_pdmd_critic_loss, official_pdmd_loss_with_stats
 from lightx2v_train.utils.constants import (
     LINGBOT_VIDEO_NEGATIVE_PROMPT,
     WAN_NEGATIVE_PROMPT,
@@ -25,15 +27,41 @@ class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
     def __init__(self, model):
         super().__init__(model)
         options = model.config["model"].get("capabilities", {}).get("distribution_matching", {})
-        self.projected_dmd = bool(options.get("projected_dmd", False))
+        self.official_pdmd = bool(options.get("official_pdmd", False))
+        self.projected_dmd = bool(options.get("projected_dmd", self.official_pdmd))
+        if self.projected_dmd and not self.official_pdmd:
+            raise ValueError("The early projected_dmd recipe has been removed; use official_pdmd=true for the released PDMD recipe.")
+        self.official_pdmd_weight = float(options.get("video_loss_weight", 0.8))
+        self.official_pdmd_normalizer_floor = float(options.get("official_pdmd_normalizer_floor", 1e-5))
+        self.official_pdmd_projection_epsilon = float(options.get("official_pdmd_projection_epsilon", 1e-8))
+        self.official_pdmd_loss_clamp = float(options.get("official_pdmd_loss_clamp", 5.0))
+        if self.official_pdmd:
+            values = (self.official_pdmd_weight, self.official_pdmd_projection_epsilon, self.official_pdmd_loss_clamp)
+            if any(not math.isfinite(value) or value < 0 for value in values):
+                raise ValueError("Wan official PDMD weight, projection epsilon and loss clamp must be finite and non-negative.")
+            if not math.isfinite(self.official_pdmd_normalizer_floor) or self.official_pdmd_normalizer_floor <= 0:
+                raise ValueError("Wan official PDMD normalizer floor must be finite and positive.")
+            if getattr(model, "use_causal_transformer", False):
+                raise ValueError("Wan official PDMD supports the bidirectional T2V transformer.")
         self._last_dmd_metrics = {}
 
     def dmd_loss(self, latents, fake_x0, teacher_x0):
+        if self.official_pdmd:
+            loss, normalizer, direction_rms, nonfinite = official_pdmd_loss_with_stats(
+                latents,
+                fake_x0,
+                teacher_x0,
+                projected=self.projected_dmd,
+                normalizer_floor=self.official_pdmd_normalizer_floor,
+                projection_epsilon=self.official_pdmd_projection_epsilon,
+                clamp_max=self.official_pdmd_loss_clamp,
+            )
+            self._last_dmd_metrics = {"dmd_video": loss.detach(), "dmd_video_normalizer": normalizer, "dmd_video_direction_rms": direction_rms, "dmd_nonfinite_update": nonfinite}
+            return self.official_pdmd_weight * loss
         loss, normalizer, direction_rms = dmd_loss_with_stats(
             latents,
             fake_x0,
             teacher_x0,
-            projected=self.projected_dmd,
         )
         self._last_dmd_metrics = {
             "dmd_normalizer": normalizer,
@@ -43,6 +71,17 @@ class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
 
     def dmd_metrics(self):
         return self._last_dmd_metrics
+
+    def add_noise(self, scheduler, latents, noise, sigma):
+        if scheduler is None and self.official_pdmd:
+            scale = expand_sigma(torch.as_tensor(sigma, device=latents.device, dtype=torch.float32), latents.ndim)
+            return (1 - scale) * latents.float() + scale * noise.float()
+        return super().add_noise(scheduler, latents, noise, sigma)
+
+    def regression_loss(self, prediction, target):
+        if self.official_pdmd:
+            return self.official_pdmd_weight * official_pdmd_critic_loss(prediction, target, clamp_max=self.official_pdmd_loss_clamp)
+        return super().regression_loss(prediction, target)
 
     def _validate_turbo_model(self):
         if getattr(self.model, "use_causal_transformer", False) or get_sequence_parallel_world_size() != 1:
@@ -97,7 +136,19 @@ class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
             return primal.detach(), tangent.detach()
 
     def extra_checkpoint_metadata(self):
-        return {"wan_distribution_matching": {"projected_dmd": self.projected_dmd}}
+        metadata = {"wan_distribution_matching": {"projected_dmd": self.projected_dmd}}
+        if self.official_pdmd:
+            metadata["wan_official_pdmd_loss"] = {
+                "schema_version": 1,
+                "video_loss_weight": self.official_pdmd_weight,
+                "normalizer_floor": self.official_pdmd_normalizer_floor,
+                "projection_epsilon": self.official_pdmd_projection_epsilon,
+                "loss_clamp": self.official_pdmd_loss_clamp,
+                "mse_scale": 1.0,
+                "nonfinite_update": "zero",
+                "velocity_convention": "noise_minus_clean",
+            }
+        return metadata
 
     def legacy_extra_checkpoint_metadata(self):
         return {"wan_distribution_matching": {"projected_dmd": False}}

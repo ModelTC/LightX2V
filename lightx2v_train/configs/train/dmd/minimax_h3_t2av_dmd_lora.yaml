@@ -1,3 +1,4 @@
+# Legacy H3_PDMD=true is rejected; use the dedicated official PDMD recipe.
 # The selector is resolved by YAML even without the shell launcher.
 h3_update_recipes:
     "false": {update_order: student_first, fake_update_ratio: 5}

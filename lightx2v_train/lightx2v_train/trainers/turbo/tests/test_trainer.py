@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MethodType, SimpleNamespace
 from typing import NamedTuple
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import torch
 
@@ -337,6 +337,33 @@ class TurboTrainerTests(unittest.TestCase):
             (Path(output) / "checkpoint-000000001").mkdir()
             with self.assertRaisesRegex(RuntimeError, "No complete Turbo checkpoint"):
                 make_trainer(output, auto_resume=True)._resolve_turbo_resume()
+
+    def test_completed_resume_retries_failed_final_preview_without_updates(self):
+        with TemporaryDirectory() as output:
+            original = make_trainer(output)
+            original.infer_every_iters = original.max_train_iters
+            original.infer_config = {"run_at_start": False}
+            original.inferencer = SimpleNamespace(set_data=Mock())
+            original.dataloader_val = object()
+            original.run_inference = Mock(side_effect=RuntimeError("failed final preview"))
+            with self.assertRaisesRegex(RuntimeError, "failed final preview"):
+                original.train()
+            original.run_inference.assert_called_once_with(5)
+            self.assertTrue((Path(output) / "checkpoint-000000005/turbo.complete.json").is_file())
+            expected = state_snapshot(original)
+
+            resumed = make_trainer(output, auto_resume=True)
+            resumed.infer_every_iters = resumed.max_train_iters
+            resumed.infer_config = {"run_at_start": False}
+            resumed.inferencer = SimpleNamespace(set_data=Mock())
+            resumed.dataloader_val = object()
+            resumed.run_inference = Mock()
+            resumed._optimizer_step = Mock(side_effect=AssertionError("completed resume must not update"))
+            resumed.train()
+            resumed.run_inference.assert_called_once_with(5)
+            resumed._optimizer_step.assert_not_called()
+            self.assertEqual(resumed.read_ids, [])
+            self.assert_nested_equal(expected, state_snapshot(resumed))
 
     def test_checkpoint_rejects_incomplete_optimizer_group(self):
         with TemporaryDirectory() as output:

@@ -1,3 +1,4 @@
+# Legacy H3_PDMD=true is rejected; use the dedicated official PDMD recipe.
 # Select the complete update cadence in YAML, including direct train.py launches.
 # H3_PDMD must be the literal string true or false; the default preserves DMD.
 h3_update_recipes:

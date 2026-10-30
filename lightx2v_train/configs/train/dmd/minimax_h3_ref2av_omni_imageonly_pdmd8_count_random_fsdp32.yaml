@@ -1,3 +1,5 @@
+# RETIRED: historical projection-only PDMD; unsupported for training.
+# Kept only for historical configuration comparisons. Use an official_pdmd recipe.
 # Omni PDMD32: same optimization as the count-coverage PDMD recipe, with
 # BF16 teacher parameters to reduce memory (student BF16, fake FP32).
 # Sampling: one reference-image count per global 32-row microbatch;

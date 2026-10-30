@@ -106,6 +106,7 @@ _TRAINER_MODULES = {
 }
 
 _INFERENCER_MODULES = {
+    "wan_official_pdmd_infer": "lightx2v_train.infer.wan_official_pdmd",
     "wan_turbo_infer": "lightx2v_train.infer.turbo_video",
     "image_infer": "lightx2v_train.infer.image",
     "lingbot_video_t2v_infer": "lightx2v_train.infer.video",
@@ -142,6 +143,10 @@ def _ensure_data_registered(data_name):
         return
     if data_name == "minimax_h3_turbo_cm_dataset":
         import lightx2v_train.data.minimax_h3_turbo_cm_dataset  # noqa: F401
+
+        return
+    if data_name == "minimax_h3_curriculum_cache_dataset":
+        import lightx2v_train.data.minimax_h3_curriculum_cache_dataset  # noqa: F401
 
         return
     if data_name == "image_dataset":
@@ -215,6 +220,10 @@ def build_data(config, train_or_val, sample_processor=None):
         data_config_split["distributed_cache_build"] = True
         data_config_split.pop("max_samples", None)
     data_name = data_config_split.get("name", "image_dataset")
+    if data_name == "minimax_h3_curriculum_cache_dataset":
+        dmd = config.get("training", {}).get("dmd", {})
+        data_config_split["dmd_update_order"] = dmd.get("update_order", "student_first")
+        data_config_split["official_pdmd"] = bool(dmd.get("official_pdmd", False))
     if train_or_val == "train" and data_name in {"prompt_dataset", "cache_dataset"}:
         generation_shapes = config.get("training", {}).get("dmd", {}).get("generation_shapes")
         if generation_shapes is not None:

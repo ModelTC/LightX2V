@@ -130,15 +130,20 @@ class TurboConfig:
         if "dmd" in training:
             raise ValueError("Turbo reads training.turbo, not training.dmd; remove the old PDMD options")
         cm = config.get("data", {}).get("cm")
-        if cm is not None:
-            if config["model"]["name"] != "minimax_h3_t2av":
-                raise ValueError("Separate T2AV CM data currently supports the H3 T2AV/I2AV/FL2AV wrapper")
-            if not isinstance(cm, dict) or cm.get("name") != "minimax_h3_turbo_cm_dataset":
-                raise ValueError("data.cm must use minimax_h3_turbo_cm_dataset")
-            if cm.get("batch_size", 1) != 1 or cm.get("tasks", ["t2av"]) != ["t2av"]:
-                raise ValueError("Separate CM data requires per-rank batch1 and tasks=[t2av]")
-            if cm.get("drop_last", False):
-                raise ValueError("Separate CM data uses continuous data epochs; data.cm.drop_last must be false")
+        train = config.get("data", {}).get("train", {})
+        cm_splits = [("data.cm", cm)] if cm is not None else []
+        if train.get("name") == "minimax_h3_turbo_cm_dataset":
+            cm_splits.append(("data.train", train))
+        for split_name, split in cm_splits:
+            if model_name not in {"minimax_h3_t2av", "minimax_h3_ref2av"}:
+                raise ValueError(f"{split_name} full AV consistency data requires an H3 wrapper")
+            if not isinstance(split, dict) or split.get("name") != "minimax_h3_turbo_cm_dataset":
+                raise ValueError(f"{split_name} must use minimax_h3_turbo_cm_dataset")
+            expected_tasks = ["ref2av"] if model_name == "minimax_h3_ref2av" else ["t2av"]
+            if split.get("batch_size", 1) != 1 or split.get("tasks", ["t2av"]) != expected_tasks:
+                raise ValueError(f"{split_name} requires per-rank batch1 and tasks={expected_tasks}")
+            if split.get("drop_last", False):
+                raise ValueError(f"{split_name} uses continuous data epochs; drop_last must be false")
         if model_name != "wan_t2v" and training.get("teacher", {}).get("guidance_scale", 1.0) != 1.0:
             raise ValueError("H3 Turbo uses the direct conditional teacher: guidance_scale must be 1")
         if model_name == "wan_t2v":

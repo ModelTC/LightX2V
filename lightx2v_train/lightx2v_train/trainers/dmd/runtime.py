@@ -11,7 +11,7 @@ from lightx2v_train.model_capabilities import (
     TrainableModelCapability,
 )
 from lightx2v_train.model_zoo import build_loaded_model
-from lightx2v_train.runtime.distributed import is_distributed
+from lightx2v_train.runtime.distributed import is_distributed, is_main_process
 from lightx2v_train.runtime.sequence_parallel import (
     broadcast_sequence_parallel_value,
     sync_sequence_parallel_gradients,
@@ -375,12 +375,27 @@ class _DmdRuntime(BaseTrainer):
         )
 
     def _encode_conditions(self, sample):
+        self._record_curriculum_source(sample)
         return self.student.encode_conditions(
             sample,
             self.negative_prompt,
             self.guidance_scale,
             broadcast_sequence_parallel_value,
         )
+
+    def _record_curriculum_source(self, sample):
+        """Log consumed phase changes, independently of DataLoader prefetch."""
+        metadata = sample.get("meta", {}) if isinstance(sample, dict) else {}
+        if not isinstance(metadata, dict):
+            return
+        source = metadata.get("curriculum_source")
+        if isinstance(source, (list, tuple)):
+            source = source[0] if len(source) == 1 else None
+        if source not in {"new", "old"} or source == getattr(self, "_last_curriculum_source", None):
+            return
+        self._last_curriculum_source = source
+        if is_main_process():
+            logger.info("[data][curriculum] source={} order=new->old->repeat", source)
 
     @staticmethod
     def _predict_velocity(capability, latents, sigma, condition):

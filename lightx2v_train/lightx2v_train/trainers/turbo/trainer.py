@@ -513,6 +513,11 @@ class TurboTrainer(DmdTrainer):
             self.inferencer.set_data(self.dataloader_val)
             if iteration == 0 and getattr(self, "infer_config", {}).get("run_at_start", True):
                 self.run_inference(0)
+            elif checkpoint is not None and iteration == self.max_train_iters and iteration % self.infer_every_iters == 0:
+                # Saving precedes previews. A completed checkpoint can survive
+                # a failed final preview, so retry it before a staged launcher
+                # treats this resumed stage as successfully finished.
+                self.run_inference(iteration)
         if is_main_process():
             Path(self.output_train_dir).mkdir(parents=True, exist_ok=True)
         barrier()
