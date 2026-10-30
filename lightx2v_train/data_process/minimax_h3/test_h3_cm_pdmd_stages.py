@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -165,6 +166,90 @@ class StageTests(unittest.TestCase):
             STAGES.publish_once(path, {**value, "preset": "other"})
         self.assertEqual(json.loads(path.read_text()), value)
         self.assertEqual(list(self.root.glob(".plan.json.*")), [])
+
+    def test_ref_actual_launch_automatically_prepares_the_native_imageonly_view(self):
+        fixtures = STAGES.leaf(TRAIN_ROOT / "data_process/minimax_h3/test_h3_dcm_pdmd_launch.py", "_h3_imageonly_launch_fixtures")
+        fixture = fixtures.H3DcmPdmdLaunchTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        view = fixture.root / "new/ref2av_imageonly"
+        shutil.rmtree(view)
+        source = fixture.root / "new/ref2av/metadata.jsonl"
+        original = source.read_bytes()
+        output = fixture.root / "restart_ref"
+        environment = {
+            **fixture.environment,
+            "H3_CM_CACHE": str(view / "metadata.jsonl"),
+            "H3_NEW_CACHE": str(view / "condition_metadata.jsonl"),
+            "H3_CM_OUTPUT": str(output / "cm/train"),
+            "H3_PDMD_OUTPUT": str(output / "pdmd/train"),
+            "H3_STUDENT_INIT": str(output / "cm/train/checkpoint-000001500/student_ema"),
+            "H3_TRAINING_ADAPTER_PATH": str(fixture.root / "presets/model_ref2va_for_comfy_dit.safetensors"),
+            "H3_RDZV_ID": "restart_ref",
+        }
+        cm_path = TRAIN_ROOT / "configs/train/turbo/minimax_h3_ref2av_dcm1500_decfg8_fsdp32.yaml"
+        pdmd_path = TRAIN_ROOT / "configs/train/dmd/minimax_h3_ref2av_pdmd1500000_from_cm_decfg8_fsdp32.yaml"
+        with patch.dict(os.environ, environment), patch.object(STAGES.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "stop-before-GPU-training")) as run:
+            with self.assertRaisesRegex(RuntimeError, "image-only view is not prepared"):
+                STAGES.execute("ref2av", cm_path, pdmd_path, dry_run=True)
+            self.assertFalse(view.exists())
+            run.assert_not_called()
+            with self.assertRaises(subprocess.CalledProcessError):
+                STAGES.execute("ref2av", cm_path, pdmd_path)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[0][-1], str(cm_path))
+        rows = [json.loads(line) for line in (view / "metadata.jsonl").read_text().splitlines()]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row["reference_image_count"] > 0 and row["reference_video_count"] == row["reference_audio_count"] == 0 for row in rows))
+        self.assertIn((1184, 864), {(row["target_height"], row["target_width"]) for row in rows})
+        self.assertTrue(all(Path(row[key]).is_file() for row in rows for key in ("condition_path", "video_latent_path", "audio_latent_path")))
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_pdmd_only_uses_verified_existing_ema_and_preserves_the_original_plan(self):
+        for task in ("fl2av", "ref2av"):
+            with self.subTest(task=task):
+                cm_path, pdmd_path, cm, pdmd, summary = self.configs(task)
+                self.make_checkpoint(cm, summary)
+                directory = Path(summary["cm_output"]).parent.parent / "stages"
+                directory.mkdir(parents=True)
+                old_pdmd = copy.deepcopy(pdmd)
+                old_pdmd["training"]["student"]["optimizer"]["learning_rate"] = 5e-5
+                old_pdmd["training"]["fake"]["optimizer"]["learning_rate"] = 1e-5
+                old_plan = directory / "plan.json"
+                old_plan.write_text(json.dumps({"pdmd": old_pdmd, "started_before_lr_restore": True}))
+                original = old_plan.read_bytes()
+                helper = SimpleNamespace(load_config=lambda path: cm if Path(path) == cm_path else pdmd, validate=Mock(return_value=summary))
+                real_leaf = STAGES.leaf
+                with (
+                    patch.object(STAGES, "leaf", side_effect=lambda path, name: helper if Path(path).name == "minimax_h3_cm_pdmd_preflight.py" else real_leaf(path, name)),
+                    patch.object(STAGES.subprocess, "run") as run,
+                ):
+                    STAGES.execute(task, cm_path, pdmd_path, pdmd_only=True)
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_args.args[0][-1], str(pdmd_path))
+                self.assertIn("--rdzv_id=test_stages_pdmd", run.call_args.args[0])
+                self.assertEqual(old_plan.read_bytes(), original)
+                new_plan = json.loads((directory / "pdmd_only/plan.json").read_text())
+                self.assertEqual(new_plan["pdmd"]["training"]["student"]["optimizer"]["learning_rate"], 2e-5)
+                self.assertEqual(new_plan["pdmd"]["training"]["fake"]["optimizer"]["learning_rate"], 4e-6)
+                receipt = json.loads((directory / "pdmd_only/cm_handoff.complete.json").read_text())
+                self.assertEqual(receipt["student_init"], summary["student_init"])
+                self.assertEqual(receipt["plan_sha256"], new_plan["plan_sha256"])
+                self.assertFalse(receipt["inference_requires_preset"])
+
+    def test_pdmd_only_refuses_an_incomplete_cm_checkpoint_without_launching_training(self):
+        cm_path, pdmd_path, cm, pdmd, summary = self.configs()
+        checkpoint, _, _ = self.make_checkpoint(cm, summary)
+        (checkpoint / "turbo.rank00007.json").unlink()
+        helper = SimpleNamespace(load_config=lambda path: cm if Path(path) == cm_path else pdmd, validate=Mock(return_value=summary))
+        real_leaf = STAGES.leaf
+        with (
+            patch.object(STAGES, "leaf", side_effect=lambda path, name: helper if Path(path).name == "minimax_h3_cm_pdmd_preflight.py" else real_leaf(path, name)),
+            patch.object(STAGES.subprocess, "run") as run,
+        ):
+            with self.assertRaises(FileNotFoundError):
+                STAGES.execute("fl2av", cm_path, pdmd_path, pdmd_only=True)
+            run.assert_not_called()
 
     def test_stage_failure_never_starts_pdmd_and_completed_stage_is_skipped_on_resume(self):
         cm_path, pdmd_path, cm, pdmd, summary = self.configs()

@@ -74,6 +74,7 @@ minimax_h3_self_generated_latents_124_bf16/
 ├── t2av/metadata.jsonl               # all T2AV native resolutions
 ├── t2av_768p/metadata.jsonl           # same default CM-compatible view
 ├── ref2av/metadata.jsonl             # all reference types and native resolutions
+├── ref2av_imageonly/metadata.jsonl   # pure image references, all native resolutions
 ├── ref2av_imageonly_768p/metadata.jsonl
 ├── ref2av_imageonly_768p/metadata.complete.json
 ├── cache.complete.json               # verified counts and final completion
@@ -93,6 +94,12 @@ The Ref image-only view contains single-image references; a training sampler
 configured to require image counts 1 through 6 must be adjusted for this data.
 The download/encoding command itself does not change a training configuration
 or start training.
+
+The current dCM1500 -> PDMD32 Ref launcher selects `ref2av_imageonly/` for
+both the clean AV manifest and the new condition-only manifest. It automatically
+builds this native-resolution view from the completed `ref2av/` cache at launch,
+without re-encoding payloads. To create the view separately on an older merged
+cache, run `python lightx2v_train/data_process/minimax_h3/prepare_modelscope_h3_dataset.py imageonly-view --output-dir "$H3_SELFGEN_CACHE"`.
 
 ## Resume and a small verification run
 

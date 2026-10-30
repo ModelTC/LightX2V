@@ -104,7 +104,7 @@ training:
     train_type: lora
     ema:
       enabled: true
-      decay: 0.99
+      decay: 0.999
       use_for_inference: true
     lora:
       rank: 128

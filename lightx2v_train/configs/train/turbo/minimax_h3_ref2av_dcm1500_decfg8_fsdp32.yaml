@@ -1,4 +1,4 @@
-# H3 32-GPU dCM-only warm-up on the complete NEW full-target AV cache.
+# H3 32-GPU dCM-only warm-up on NEW image-only Ref conditioning and AV targets.
 # 1,500 student updates; no sCM/JVP, no joint DMD, no fake optimizer updates.
 # DeCFG is ON for fake/teacher scores; student and inference exclude it. Final student EMA initializes PDMD.
 seed: 42
@@ -104,7 +104,7 @@ training:
     train_type: lora
     ema:
       enabled: true
-      decay: 0.99
+      decay: 0.999
       use_for_inference: true
     lora:
       rank: 128

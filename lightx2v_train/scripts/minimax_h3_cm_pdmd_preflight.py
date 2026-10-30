@@ -57,6 +57,21 @@ def _identity(row, manifest):
     )
 
 
+def _require_image_only_ref(row, manifest, phase):
+    images = row.get("reference_image_count", row.get("ref_image_count", 0))
+    videos, audios = row.get("reference_video_count", 0), row.get("reference_audio_count", 0)
+    message = f"{phase} Ref cache must contain image-only references, with no video/audio references: {manifest}"
+    require(all(type(count) is int for count in (images, videos, audios)) and images > 0 and videos == audios == 0, message)
+    references = row.get("references")
+    if references is not None:
+        require(
+            isinstance(references, list)
+            and bool(references)
+            and all(isinstance(reference, dict) and str(reference.get("kind", reference.get("type", ""))).lower() == "image" for reference in references),
+            message,
+        )
+
+
 def _condition_source(source, task, phase):
     helper = _leaf("scripts/minimax_h3_curriculum_preflight.py", "_h3_staged_curriculum_paths")
     manifests = helper.manifest_paths(source["data_path"])
@@ -88,6 +103,8 @@ def _condition_source(source, task, phase):
                 require(isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost) and cost > 0, f"Ref cache needs a positive packed sequence cost: {manifest}")
                 if phase == "old":
                     require(images in source.get("image_counts", [1, 2, 3, 4, 5, 6]) and videos == audios == 0, f"Old Ref cache must use image-only counts 1..6: {manifest}")
+                else:
+                    _require_image_only_ref(row, manifest, "NEW")
             if phase == "new":
                 identities.add(_identity(row, manifest))
             counts[row_task] += 1
@@ -194,7 +211,10 @@ def validate(task, cm, pdmd, *, check_files=True, check_student_init=False):
         "PDMD must use eight steps, fake5->student1, eval, video12/audio3",
     )
     require(pdmd["training"]["max_train_iters"] == 1500000 and pdmd["training"]["save_every_iters"] == 6000, "PDMD counts 1500000 role updates and saves every 6000")
-    require(cm["training"]["student"]["ema"]["enabled"] is True and pdmd["training"]["student"]["ema"]["enabled"] is False, "Export CM EMA into the live PDMD student; PDMD has no new EMA")
+    require(
+        cm["training"]["student"]["ema"]["enabled"] is True and cm["training"]["student"]["ema"]["decay"] == 0.999 and pdmd["training"]["student"]["ema"]["enabled"] is False,
+        "Export CM EMA with decay=0.999 into the live PDMD student; PDMD has no new EMA",
+    )
     cm_output, pdmd_output = Path(cm["training"]["output_dir"]).resolve(), Path(pdmd["training"]["output_dir"]).resolve()
     require(cm_output != pdmd_output, "CM and PDMD must use separate outputs")
     student_init = cm_output / "checkpoint-000001500/student_ema"
@@ -215,6 +235,8 @@ def validate(task, cm, pdmd, *, check_files=True, check_student_init=False):
         "pdmd_fake_updates": 1250000,
         "video_shift": 12.0,
         "audio_shift": 3.0,
+        "cm_ema_decay": 0.999,
+        "ref_new_image_only": task == "ref2av",
         "decfg_enabled": True,
         "decfg_roles": ["fake", "teacher"],
         "student_uses_decfg": False,
@@ -228,6 +250,9 @@ def validate(task, cm, pdmd, *, check_files=True, check_student_init=False):
         paths = _leaf("lightx2v_train/data/minimax_h3_turbo_paths.py", "_h3_staged_cm_paths")
         manifest, rows, fingerprint = paths.load_cm_records(cm_data["data_path"], path_mapping=cm_data.get("path_mapping"), tasks=cm_data["tasks"], check_files=True, native_geometry=True)
         _receipt(manifest, len(rows))
+        if task == "ref2av":
+            for row in rows:
+                _require_image_only_ref(row, manifest, "CM NEW")
         new, new_identities, new_paths = _condition_source(pdmd_data["sources"]["new"], task, "new")
         old, _, old_paths = _condition_source(pdmd_data["sources"]["old"], task, "old")
         require(
@@ -237,6 +262,9 @@ def validate(task, cm, pdmd, *, check_files=True, check_student_init=False):
         summary.update(cm_rows=len(rows), cm_manifest=str(manifest), cm_fingerprint=fingerprint, pdmd_new_rows=new["rows"], pdmd_old_rows=old["rows"], pdmd_new=new, pdmd_old=old)
     print(f"H3 {task}: dCM1500 -> official PDMD1500000, 4 x 8 GPUs, 8 steps, shifts12/3, fake5->student1.")
     print(f"Data: dCM NEW full AV rows={summary['cm_rows']}; PDMD NEW={summary['pdmd_new_rows']} -> OLD={summary['pdmd_old_rows']} -> repeat; native geometry retained.")
+    if task == "ref2av":
+        print("Ref NEW data: image-only references for both dCM and PDMD; video/audio references excluded; full target AV latents retained.")
+    print("CM student EMA decay=0.999.")
     print("PDMD budget: student_updates=250000, fake_updates=1250000; checkpoint every6000 role updates (1000 student updates).")
     print(f"DeCFG ON: {cm['model']['training_adapter']['path']}; fake/teacher scores only; student rollout and inference exclude DeCFG.")
     print(f"Warm start after dCM: {student_init}; fresh PDMD optimizers/fake/data cursor.")

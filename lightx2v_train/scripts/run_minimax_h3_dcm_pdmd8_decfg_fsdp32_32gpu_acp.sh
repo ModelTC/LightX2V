@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # Run this same task command on each of the four ACP workers.
 set -Eeuo pipefail
-task="${1:?Pass fl2av or ref2av, optionally followed by --dry-run}"
+task="${1:?Pass fl2av or ref2av, optionally followed by --pdmd-only and/or --dry-run}"
 shift
-if [[ ! "$task" =~ ^(fl2av|ref2av)$ || $# -gt 1 || ( $# -eq 1 && "$1" != --dry-run ) ]]; then
-    echo "Usage: $0 {fl2av|ref2av} [--dry-run]" >&2
+if [[ ! "$task" =~ ^(fl2av|ref2av)$ || $# -gt 2 ]]; then
+    echo "Usage: $0 {fl2av|ref2av} [--pdmd-only] [--dry-run]" >&2
     exit 2
 fi
+for option in "$@"; do
+    case "$option" in
+        --pdmd-only|--dry-run) ;;
+        *) echo "Usage: $0 {fl2av|ref2av} [--pdmd-only] [--dry-run]" >&2; exit 2 ;;
+    esac
+done
 : "${MASTER_ADDR:?ACP must set a common MASTER_ADDR on all four workers}"
 : "${MASTER_PORT:?ACP must set a common MASTER_PORT on all four workers}"
 export H3_CODE_ROOT="${H3_CODE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -20,15 +26,17 @@ if [[ "$task" == fl2av ]]; then
     subset=t2av
     adapter_file=model_for_comfy_dit.safetensors
 else
-    subset=ref2av
+    subset=ref2av_imageonly
     adapter_file=model_ref2va_for_comfy_dit.safetensors
 fi
 export H3_CM_CACHE="${H3_CM_CACHE:-$H3_SELFGEN_CACHE/$subset/metadata.jsonl}"
 export H3_NEW_CACHE="${H3_NEW_CACHE:-$H3_SELFGEN_CACHE/$subset/condition_metadata.jsonl}"
 export H3_TRAINING_ADAPTER_PATH="${H3_TRAINING_ADAPTER_PATH:-$adapter_root/$adapter_file}"
 export H3_TRAINING_ADAPTER_SCALE="${H3_TRAINING_ADAPTER_SCALE:-1.0}"
-export H3_STAGED_OUTPUT="${H3_STAGED_OUTPUT:-/mnt/lm_data_afs/gushiqiao/outputs/h3_${task}_dcm1500_pdmd1500000_scoredecfg8_shift12_3_r128a128_adaln16_fake5_32gpu_20261030}"
-export H3_RDZV_ID="${H3_RDZV_ID:-h3_${task}_dcm1500_pdmd1500000_scoredecfg8_shift12_3_fake5_32gpu_20261030}"
+data_tag=""
+[[ "$task" != ref2av ]] || data_tag="_imgonly"
+export H3_STAGED_OUTPUT="${H3_STAGED_OUTPUT:-/mnt/lm_data_afs/gushiqiao/outputs/h3_${task}${data_tag}_dcm1500_pdmd1500000_scoredecfg8_shift12_3_r128a128_adaln16_fake5_ema999_lr2e5_4e6_32gpu_20261030}"
+export H3_RDZV_ID="${H3_RDZV_ID:-h3_${task}${data_tag}_dcm1500_pdmd1500000_scoredecfg8_shift12_3_fake5_ema999_lr2e5_4e6_32gpu_20261030}"
 export H3_CM_OUTPUT="$H3_STAGED_OUTPUT/cm/train"
 export H3_PDMD_OUTPUT="$H3_STAGED_OUTPUT/pdmd/train"
 expected_student_init="$H3_CM_OUTPUT/checkpoint-000001500/student_ema"

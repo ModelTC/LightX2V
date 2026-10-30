@@ -194,14 +194,38 @@ def verify_handoff(config, summary, preset):
     }
 
 
-def execute(task, cm_path, pdmd_path, *, dry_run=False):
+def prepare_ref_imageonly_view(task, cm, pdmd, *, dry_run):
+    """Publish the default Ref image-only view from the completed AV cache."""
+    if task != "ref2av":
+        return
+    cm_manifest = Path(cm["data"]["train"]["data_path"]).expanduser().resolve()
+    new_manifest = Path(pdmd["data"]["train"]["sources"]["new"]["data_path"]).expanduser().resolve()
+    if cm_manifest.parent.name != "ref2av_imageonly" or new_manifest.parent != cm_manifest.parent:
+        # Custom manifests must already satisfy the strict image-only preflight.
+        return
+    output = cm_manifest.parent.parent
+    if dry_run:
+        expected = (cm_manifest, new_manifest, cm_manifest.with_suffix(".complete.json"), new_manifest.with_suffix(".complete.json"))
+        require(
+            all(path.is_file() for path in expected),
+            f"Ref image-only view is not prepared for read-only dry-run. A normal launch creates it automatically, or run: {sys.executable} {SCRIPT_ROOT.parent / 'data_process/minimax_h3/prepare_modelscope_h3_dataset.py'} imageonly-view --output-dir {output}",
+        )
+        return
+    builder = leaf(SCRIPT_ROOT.parent / "data_process/minimax_h3/prepare_modelscope_h3_dataset.py", "_h3_staged_ref_imageonly")
+    builder.build_imageonly_view(output)
+
+
+def execute(task, cm_path, pdmd_path, *, dry_run=False, pdmd_only=False):
     helper = leaf(SCRIPT_ROOT / "minimax_h3_cm_pdmd_preflight.py", "_h3_stages_preflight")
     cm, pdmd = helper.load_config(cm_path), helper.load_config(pdmd_path)
+    prepare_ref_imageonly_view(task, cm, pdmd, dry_run=dry_run)
     summary = helper.validate(task, cm, pdmd)
     settings = rendezvous()
     commands = {phase: command(path, phase, settings) for phase, path in (("cm", cm_path), ("pdmd", pdmd_path))}
-    print(json.dumps({**summary, "rendezvous": settings}, indent=2), flush=True)
+    print(json.dumps({**summary, "rendezvous": settings, "pdmd_only": pdmd_only}, indent=2), flush=True)
     for phase, args in commands.items():
+        if pdmd_only and phase == "cm":
+            continue
         print(f"[h3-stages][{phase}] {shlex.join(args)}", flush=True)
     if dry_run:
         return summary
@@ -217,9 +241,16 @@ def execute(task, cm_path, pdmd_path, *, dry_run=False):
     plan_id = digest_value(plan)
     root = Path(cm["training"]["output_dir"]).resolve().parent.parent
     require(Path(pdmd["training"]["output_dir"]).resolve().parent.parent == root, "Both stage outputs must share one H3_STAGED_OUTPUT root")
-    publish_once(root / "stages/plan.json", {"plan_sha256": plan_id, **plan})
-    receipt = root / "stages/cm_handoff.complete.json"
-    if receipt.is_file():
+    # A new PDMD-only plan preserves the original two-stage experiment audit.
+    # The completed dCM checkpoint still has to match its exact CM recipe.
+    stage_directory = root / "stages"
+    if pdmd_only:
+        stage_directory = stage_directory / "pdmd_only"
+    publish_once(stage_directory / "plan.json", {"plan_sha256": plan_id, **plan})
+    receipt = stage_directory / "cm_handoff.complete.json"
+    if pdmd_only:
+        print("[h3-stages] PDMD-only: validating the completed dCM1500 EMA; dCM will not be launched", flush=True)
+    elif receipt.is_file():
         print("[h3-stages] verifying completed dCM EMA before resuming PDMD", flush=True)
     else:
         print(f"[h3-stages] worker={socket.gethostname()} starting dCM1500 on NEW full AV latents", flush=True)
@@ -241,8 +272,9 @@ def main():
     parser.add_argument("--cm-config", type=Path, required=True)
     parser.add_argument("--pdmd-config", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--pdmd-only", action="store_true", help="Start PDMD from a verified completed dCM1500 EMA without launching dCM; use a separate audited stage plan")
     args = parser.parse_args()
-    execute(args.task, args.cm_config, args.pdmd_config, dry_run=args.dry_run)
+    execute(args.task, args.cm_config, args.pdmd_config, dry_run=args.dry_run, pdmd_only=args.pdmd_only)
 
 
 if __name__ == "__main__":

@@ -158,7 +158,8 @@ training:
         adaln_proj.linear: 16
         norm_out.linear: 16
     optimizer:
-      learning_rate: 5.0e-05
+      # Preserve the original dCM-EMA -> PDMD continuation learning rate.
+      learning_rate: 2.0e-05
       adam_beta1: 0.0
       adam_beta2: 0.9
       weight_decay: 0.0
@@ -166,7 +167,7 @@ training:
   fake:
     train_type: full
     optimizer:
-      learning_rate: 1.0e-05
+      learning_rate: 4.0e-06
       adam_beta1: 0.0
       adam_beta2: 0.9
       weight_decay: 0.0

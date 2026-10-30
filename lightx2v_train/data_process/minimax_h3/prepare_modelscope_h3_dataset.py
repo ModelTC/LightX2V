@@ -13,6 +13,7 @@ import json
 import os
 import time
 from collections import Counter
+from contextlib import contextmanager
 from pathlib import Path
 
 DATASET_ID = "DiffSynth-Studio/MiniMax-H3-Self-Generated-Dataset"
@@ -266,7 +267,112 @@ def in_view(row, name):
         return True
     if name.startswith("t2av"):
         return row["task"] == "t2av" and (name == "t2av" or is_native_768p(row))
-    return row["task"] == "ref2av" and (name == "ref2av" or (is_native_768p(row) and is_image_only(row)))
+    return row["task"] == "ref2av" and (name == "ref2av" or (is_image_only(row) and (name == "ref2av_imageonly" or is_native_768p(row))))
+
+
+@contextmanager
+def _imageonly_view_lock(output):
+    """Serialize the four launchers using shared-directory atomic mkdir."""
+    reservation = output / ".ref2av_imageonly.publish-lock"
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            reservation.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Timed out waiting for image-only view publication: {reservation}")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        reservation.rmdir()
+
+
+def build_imageonly_view(output_dir):
+    """Publish pure-image Ref targets/conditions from an existing full AV cache.
+
+    This is a standard-library-only metadata operation. Target AV latents and
+    image conditioning are reused byte-for-byte, with every native geometry.
+    """
+    output = Path(output_dir).expanduser().resolve()
+    source = output / "ref2av/metadata.jsonl"
+    source_bytes = source.read_bytes()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    source_receipt = json.loads(source.with_suffix(".complete.json").read_text())
+    rows = [json.loads(line) for line in source_bytes.splitlines() if line.strip()]
+    if (
+        source_receipt.get("schema_version") != SCHEMA_VERSION
+        or source_receipt.get("manifest_sha256") != source_sha256
+        or source_receipt.get("completed_count") != len(rows)
+        or source_receipt.get("failed_count") != 0
+        or source_receipt.get("input_total_rows") != len(rows)
+        or not source_receipt.get("preprocess_fingerprint")
+    ):
+        raise ValueError(f"Ref source is not a fully verified complete cache: {source}")
+    identities = set()
+    selected = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("task") != "ref2av" or not row.get("source_id") or row["source_id"] in identities:
+            raise ValueError(f"Invalid or duplicate Ref source identity in {source}")
+        identities.add(row["source_id"])
+        counts = (row.get("reference_image_count", row.get("ref_image_count", 0)), row.get("reference_video_count", 0), row.get("reference_audio_count", 0))
+        if any(type(value) is not int or value < 0 for value in counts):
+            raise ValueError(f"Invalid Ref media counts: {row['source_id']}")
+        references = row.get("references")
+        if references is not None and (not isinstance(references, list) or not references or any(not isinstance(reference, dict) for reference in references)):
+            raise ValueError(f"Invalid Ref reference declarations: {row['source_id']}")
+        if counts[0] <= 0 or counts[1] != 0 or counts[2] != 0:
+            continue
+        kinds = [str(reference.get("kind", reference.get("type", ""))).lower() for reference in references or []]
+        if any(kind != "image" for kind in kinds):
+            raise ValueError(f"Image-only counts disagree with reference declarations: {row['source_id']}")
+        if int(row.get("reference_audio_rows", 0)) != 0:
+            raise ValueError(f"Image-only condition contains audio reference rows: {row['source_id']}")
+        height, width = row.get("target_height"), row.get("target_width")
+        frames = row.get("target_num_frames", row.get("num_frames"))
+        if frames != 124 or any(type(value) is not int or value <= 0 or value % 32 for value in (height, width)):
+            raise ValueError(f"Expected native 32-aligned 124-frame image-only target: {row['source_id']}")
+        for key in ("condition_path", "video_latent_path", "audio_latent_path"):
+            value = row.get(key)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"Missing image-only {key}: {row['source_id']}")
+            path = Path(value)
+            if not path.is_absolute() or not path.is_file() or path.stat().st_size == 0:
+                raise ValueError(f"Missing absolute image-only {key}: {value!r}")
+        selected.append(row)
+    if not selected:
+        raise ValueError(f"Ref source contains no pure-image examples: {source}")
+    fingerprint = hashlib.sha256(
+        json.dumps({"view": "ref2av_imageonly", "source_sha256": source_sha256, "source_fingerprint": source_receipt["preprocess_fingerprint"]}, sort_keys=True).encode()
+    ).hexdigest()
+    directory = output / "ref2av_imageonly"
+    publications = ((directory / "metadata.jsonl", selected), (directory / "condition_metadata.jsonl", [condition_row(row) for row in selected]))
+    with _imageonly_view_lock(output):
+        for path, records in publications:
+            content = jsonl_bytes(records)
+            receipt = {
+                "schema_version": SCHEMA_VERSION,
+                "prepared_sha256": source_receipt.get("prepared_sha256"),
+                "preprocess_fingerprint": fingerprint,
+                "manifest_sha256": hashlib.sha256(content).hexdigest(),
+                "completed_count": len(selected),
+                "failed_count": 0,
+                "input_total_rows": len(selected),
+                "source_manifest_sha256": source_sha256,
+                "source_total_rows": len(rows),
+                "excluded_non_image_rows": len(rows) - len(selected),
+                "reference_image_counts": dict(Counter(row.get("reference_image_count", row.get("ref_image_count", 0)) for row in selected)),
+            }
+            receipt_path = path.with_suffix(".complete.json")
+            if path.is_file() and path.read_bytes() == content and receipt_path.is_file() and json.loads(receipt_path.read_text()) == json.loads(json.dumps(receipt)):
+                continue
+            receipt_path.unlink(missing_ok=True)
+            atomic_jsonl(path, records)
+            atomic_json(receipt_path, receipt)
+    summary = {"input_rows": len(rows), "kept_rows": len(selected), "excluded_rows": len(rows) - len(selected), "resolution_policy": "native", "output_manifest": str(directory / "metadata.jsonl")}
+    print(f"[imageonly-view] {json.dumps(summary, ensure_ascii=False)}", flush=True)
+    return summary
 
 
 def merge_dataset(args):
@@ -317,7 +423,7 @@ def merge_dataset(args):
     if not successes:
         raise RuntimeError("Encoding produced no complete AV+condition samples")
     successes.sort(key=lambda row: row["source_index"])
-    views = {name: [row for row in successes if in_view(row, name)] for name in ("t2av", "t2av_768p", "ref2av", "ref2av_imageonly_768p")}
+    views = {name: [row for row in successes if in_view(row, name)] for name in ("t2av", "t2av_768p", "ref2av", "ref2av_imageonly", "ref2av_imageonly_768p")}
     t2av_768p = views["t2av_768p"]
     # Only publish a completion marker after every manifest has been replaced.
     (output / "cache.complete.json").unlink(missing_ok=True)
@@ -383,13 +489,18 @@ def main(argv=None):
     merge.add_argument("--output-dir", type=Path, required=True)
     merge.add_argument("--num-shards", type=int, default=4)
     merge.add_argument("--allow-failures", action="store_true")
+    imageonly = subparsers.add_parser("imageonly-view", help="Build native pure-image Ref views from an existing verified full AV cache, without encoding")
+    imageonly.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     for option in ("download_workers", "num_shards", "max_samples_per_subset"):
         value = getattr(args, option, None)
         if value is not None and value <= 0:
             parser.error(f"--{option.replace('_', '-')} must be positive")
     try:
-        {"download": download_dataset, "prepare": prepare_dataset, "merge": merge_dataset}[args.command](args)
+        if args.command == "imageonly-view":
+            build_imageonly_view(args.output_dir)
+        else:
+            {"download": download_dataset, "prepare": prepare_dataset, "merge": merge_dataset}[args.command](args)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
         parser.exit(1, f"H3 dataset {args.command} failed: {error}\n")
     return 0
