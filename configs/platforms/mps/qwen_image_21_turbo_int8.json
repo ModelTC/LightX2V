@@ -32,5 +32,9 @@
     "sample_guide_scale": 1,
     "warmup": false,
     "dit_quantized": true,
-    "dit_quant_scheme": "int8-metal"
+    "dit_quant_scheme": "int8-metal",
+    "int8_metal_manifest": "apple_silicon_metal/manifest.json",
+    "int8_metal_manifest_required": true,
+    "int8_metal_model_repo": "lightx2v/Qwen-Image-2.1-Turbo-INT8",
+    "int8_metal_model_revision": "b572c2d129f1f440c1643e1be730ac1336f2d5d5"
 }

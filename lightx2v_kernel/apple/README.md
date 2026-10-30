@@ -53,3 +53,5 @@ Use `dit_quantized=true` and `dit_quant_scheme="int8-metal"` in the model config
 bash scripts/platforms/mps/qwen_image_21_turbo_t2i_int8.sh
 bash scripts/platforms/mps/qwen_image_21_turbo_i2i_int8.sh
 ```
+
+For model-bound Qwen INT8 checkpoints, keep `apple_silicon_metal/manifest.json` beside the libraries. The Qwen runner validates the checkpoint's INT8 K/N coverage, model revision, library sizes, and SHA-256 values before loading the transformer. Set `LIGHTX2V_ALLOW_UNVERIFIED_METALLIB=1` only for an explicitly unverified custom library directory.
