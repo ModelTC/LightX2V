@@ -7,16 +7,26 @@ import torch.nn.functional as F
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+RotaryCache = torch.Tensor | tuple[torch.Tensor, torch.Tensor]
+
 
 @dataclass
 class TokenLayout:
     image_mask: torch.Tensor
     repeats: torch.Tensor
-    rotary: torch.Tensor
+    rotary: RotaryCache
     segments: list
     prefix_len: int
     target_len: int
     rotary_positions: torch.Tensor | None = None
+
+
+def _slice_rotary(rotary: RotaryCache, start: int, end: int | None, *, contiguous: bool = False) -> RotaryCache:
+    if isinstance(rotary, tuple):
+        sliced = tuple(item[start:end] for item in rotary)
+        return tuple(item.contiguous() for item in sliced) if contiguous else sliced
+    sliced = rotary[start:end]
+    return sliced.contiguous() if contiguous else sliced
 
 
 def build_token_layout(prompt_image_mask, image_shapes, axes_dims, rope=None):
@@ -56,7 +66,8 @@ def build_token_layout(prompt_image_mask, image_shapes, axes_dims, rope=None):
     rotary = torch.cat(frequencies, -1)
     rotary_positions = None
     if rope is not None:
-        # Keep cos/sin in one tensor so both streams can slice the token dimension directly.
+        # Prepare the request-level cache once. Backends may retain one tensor
+        # or return a (cos, sin) tuple; both representations are sliced below.
         rotary = torch.cat((rotary.real, rotary.imag), dim=-1).to(AI_DEVICE)
         rotary = rope.prepare_freqs(rotary, rotary_dim=sum(axes_dims))
         rotary_positions = rope.prepare_positions(rotary)
@@ -71,7 +82,7 @@ class QwenImage21PreOutput:
     temb: torch.Tensor
     modulation: torch.Tensor
     layout: TokenLayout
-    rotary: torch.Tensor
+    rotary: RotaryCache
     rotary_positions: torch.Tensor | None = None
 
 
@@ -88,13 +99,13 @@ class QwenImage21PreInfer:
         hidden = text.repeat_interleave(layout.repeats[: len(prompt)], dim=0)
         if image_latents is not None:
             hidden[layout.image_mask[: layout.prefix_len]] = weights.img_in.apply(image_latents.to(GET_DTYPE()))
-        return self._prepare_output(weights, hidden, hidden.new_zeros(1), layout, layout.rotary[: layout.prefix_len])
+        return self._prepare_output(weights, hidden, hidden.new_zeros(1), layout, _slice_rotary(layout.rotary, 0, layout.prefix_len))
 
     def infer_target(self, weights, latents, layout):
         """Prepare only the target image at the current denoising timestep."""
         hidden = weights.img_in.apply(latents.to(GET_DTYPE()))
         timestep = self.scheduler.timesteps[self.scheduler.step_index].reshape(1)
-        return self._prepare_output(weights, hidden, timestep, layout, layout.rotary[layout.prefix_len :])
+        return self._prepare_output(weights, hidden, timestep, layout, _slice_rotary(layout.rotary, layout.prefix_len, None))
 
     def _prepare_output(self, weights, hidden, timestep, layout, rotary):
         # Match the upstream BF16 timestep round-trip before the FP32 sinusoid.
