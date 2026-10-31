@@ -54,4 +54,6 @@ bash scripts/platforms/mps/qwen_image_21_turbo_t2i_int8.sh
 bash scripts/platforms/mps/qwen_image_21_turbo_i2i_int8.sh
 ```
 
-For model-bound Qwen INT8 checkpoints, keep `apple_silicon_metal/manifest.json` beside the libraries. The Qwen runner validates the checkpoint's INT8 K/N coverage, model revision, library sizes, and SHA-256 values before loading the transformer. Set `LIGHTX2V_ALLOW_UNVERIFIED_METALLIB=1` only for an explicitly unverified custom library directory.
+The Qwen runner checks the INT8 checkpoint headers and required K/N library files before loading the transformer. The official model and launch scripts work without a manifest.
+
+To opt into additional size/SHA-256 checks, set `int8_metal_manifest` (relative to `model_path` or absolute), or `LIGHTX2V_METALLIB_MANIFEST`, to a manifest you supply. An explicitly configured missing or invalid manifest fails validation. Its schema is `schema_version: 1`, with `required_shapes` entries (`k`, `n`, `weight_count`) and `libraries` entries (`k`, `n`, `file`, `size`, `sha256`). Optional `int8_metal_model_repo` and `int8_metal_model_revision` settings check the corresponding manifest metadata. These metadata checks do not hash the model weights. The repository does not require or generate this manifest when downloading official weights. `LIGHTX2V_ALLOW_UNVERIFIED_METALLIB=1` skips manifest checks for custom libraries while retaining K/N coverage checks.

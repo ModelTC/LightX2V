@@ -135,16 +135,16 @@ def _sha256(path):
 def _validate_unverified_coverage(metallib_dir, shape_counts):
     for k, n in shape_counts:
         path = metallib_dir / f"int8_k{k}_n{n}.metallib"
-        if not path.is_file():
+        if not path.is_file() or path.stat().st_size == 0:
             raise FileNotFoundError(f"Missing precompiled INT8 Metal kernel for K={k}, N={n}: {path}")
 
 
 def validate_int8_metal_binding(config):
-    """Validate checkpoint shape coverage and model-bound Metal library hashes."""
+    """Preflight K/N library coverage; validate hashes only with an explicit manifest."""
     metallib_dir_value = os.environ.get("LIGHTX2V_METALLIB_DIR")
     if not metallib_dir_value:
         raise RuntimeError("int8-metal requires LIGHTX2V_METALLIB_DIR pointing to precompiled .metallib files")
-    metallib_dir = Path(metallib_dir_value)
+    metallib_dir = Path(metallib_dir_value).expanduser()
     if not metallib_dir.is_dir():
         raise FileNotFoundError(f"INT8 Metal library directory not found: {metallib_dir}")
 
@@ -161,7 +161,7 @@ def validate_int8_metal_binding(config):
     if manifest_path is None:
         if manifest_required:
             raise RuntimeError("int8-metal requires a model-bound manifest; set int8_metal_manifest or use the explicit unverified override")
-        logger.warning("No INT8 Metal manifest configured; validating shape coverage without model/hash binding")
+        logger.info("[int8-metal] validating K/N library coverage without an optional manifest")
         _validate_unverified_coverage(metallib_dir, shape_counts)
         return {"verified": False, "shape_counts": shape_counts, "metallib_dir": str(metallib_dir)}
     if not manifest_path.is_file():
