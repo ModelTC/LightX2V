@@ -30,6 +30,7 @@ from lightx2v_train.utils.utils import get_running_dtype
 
 from ..base import BaseModel
 from .condition_encoder import MiniMaxH3ConditionEncoder
+from .premerged_decfg import validate_premerged_score_base, validate_premerged_score_role
 from .training_adapter import AdapterOptions, merge_training_adapter, write_export_metadata
 
 
@@ -87,6 +88,13 @@ class MiniMaxH3T2AVModel(BaseModel):
         self._training_adapter_role = None
         self._training_adapter_applied = False
         self.pretrained_model_path = config["pretrained_model_name_or_path"]
+        self._premerged_decfg_metadata = validate_premerged_score_base(
+            self.pretrained_model_path,
+            component_name=self.transformer_component,
+            model_name=config.get("name"),
+        )
+        if self._premerged_decfg_metadata is not None and self._training_adapter_options.enabled:
+            raise ValueError("A premerged DeCFG score base must set training_adapter.enabled=false; enabling it would merge DeCFG twice")
         self.transformer_param_dtype = get_running_dtype(config.get("transformer_param_dtype", "bf16"))
         self.latent_dtype = get_running_dtype(config.get("latent_dtype", "fp32"))
         self.patch_size = tuple(int(value) for value in config.get("patch_size", (1, 2, 2)))
@@ -163,6 +171,7 @@ class MiniMaxH3T2AVModel(BaseModel):
         self._apply_training_adapter_if_ready()
 
     def prepare_training_adapter_role(self, role):
+        validate_premerged_score_role(getattr(self, "_premerged_decfg_metadata", None), role)
         if getattr(self, "_training_adapter_applied", False) and role != self._training_adapter_role:
             raise RuntimeError("Cannot change H3 model role after merging a TrainingAdapter")
         self._training_adapter_role = role
