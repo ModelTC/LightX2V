@@ -94,21 +94,28 @@ Multiple configuration options are provided in the [configs/distill/](https://gi
 - Set `distill_method` to `"dmd2"` to use [WanStepDistillScheduler](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/models/schedulers/wan/step_distill/scheduler.py).
 - `infer_steps`, `denoising_step_list` and `sample_shift` are set to parameters matching those during training, and are generally not recommended for user modification.
 - Keep `enable_cfg` consistent with the selected model configuration. The Wan2.1 examples here use `false`.
-- Set the distilled LoRA path and strength in `lora_configs`; keep `distill_method` set to `"dmd2"`.
+- When using a distilled LoRA, set its path and strength in `lora_configs` while keeping `distill_method: "dmd2"`. Omit `lora_configs` when loading a complete distilled model without an additional LoRA.
+
+The following is a fragment to merge into the complete config for the selected weights. `infer_steps` is the inference step count, `denoising_step_list` lists the denoising timesteps, and `sample_shift` is the scheduler's timestep shift.
 
 ```json
 {
-  "distill_method": "dmd2",
-  "infer_steps": 4,                              // Inference steps
-  "denoising_step_list": [1000, 750, 500, 250],  // Denoising timestep list
-  "sample_shift": 5,                             // Scheduler timestep shift
-  "enable_cfg": false,                           // Disable CFG for speed improvement
-  "lora_configs": [                              // LoRA weights path (optional)
-    {
-      "path": "path/to/distill_lora.safetensors",
-      "strength": 1.0
-    }
-  ]
+    "distill_method": "dmd2",
+    "infer_steps": 4,
+    "denoising_step_list": [
+        1000,
+        750,
+        500,
+        250
+    ],
+    "sample_shift": 5,
+    "enable_cfg": false,
+    "lora_configs": [
+        {
+            "path": "path/to/distill_lora.safetensors",
+            "strength": 1.0
+        }
+    ]
 }
 ```
 
@@ -122,7 +129,7 @@ Set `--model_path` to the original Wan model directory containing `config.json` 
 **LoRA:**
 
 1. Place the downloaded LoRA in any location
-2. Modify the `lora_path` parameter in the configuration file to the LoRA storage path
+2. Modify the `lora_configs[].path` parameter in the configuration file to the LoRA storage path
 
 ### Inference Scripts
 
@@ -159,13 +166,12 @@ bash scripts/wan/inference/distill/run_wan_i2v_distill_lora.sh
 Modify the startup command in [scripts/server/start_server.sh](https://github.com/ModelTC/lightx2v/blob/main/scripts/server/start_server.sh):
 
 ```bash
-python -m lightx2v.api_server \
+python -m lightx2v.server \
   --model_cls wan2.1 \
   --task t2v \
   --model_path $model_path \
   --config_json ${lightx2v_path}/configs/distill/wan21/wan_t2v_distill_model_4step_cfg.json \
-  --port 8000 \
-  --nproc_per_node 1
+  --port 8000
 ```
 
 Run the service startup script:

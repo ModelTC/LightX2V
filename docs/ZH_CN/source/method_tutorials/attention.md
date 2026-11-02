@@ -39,14 +39,33 @@ tips: radial_attn因为稀疏算法原理的限制只能用在self attention
 
 ### 在 Wan2.1 上使用 Sol-Attn
 
-Sol-Attn 是仅前向、非因果的自注意力后端。官方 kernel 要求连续的 BF16 张量且 head dimension 为 128，与 Wan2.1 自注意力匹配。在 H100/H200（SM90）或 RTX 5090（SM120）上，先用 `scripts/install_sol_attn.sh` 安装对应架构固定且已验证的 Sol-Attn 和 CUTLASS DSL 版本，再运行：
+Sol-Attn 是仅支持前向计算的非因果 self-attention 后端，要求连续的 BF16 张量和 128 维 attention head。RTX 5090（SM120）可使用仓库提供的固定版本环境：
 
 ```bash
-MODEL_PATH=/path/to/Wan2.1-I2V-14B-480P \
-    bash scripts/wan/inference/run_wan_i2v_sol_attn.sh
+docker build -f dockerfiles/Dockerfile_5090_cu130_sol_attn -t lightx2v-sol-attn:sm120 .
 ```
 
-示例配置为 `configs/attentions/wan_i2v_sol_attn.json`。它启用了 Morton3D token 重排和 strict 模式，安装无效时会直接报错而不会静默回退到 dense SDPA。Wan 会在完整 Transformer block stack 外只执行一次 Morton 重排并同步 RoPE，不再在每层 attention 中搬运 Q/K/V/输出。按照论文的质量保护策略，40 步 I2V 配置的前 8 个去噪步骤和第 0 个 Transformer 层使用 FlashAttention 3，其余调用使用 Sol-Attn。考虑到论文未直接验证 I2V 纵向分辨率，示例使用较保守的 `tau=0.5`；增大 `tau` 会提高稀疏率和速度，但也可能降低画质。`sample_shift=3` 与标准 Wan2.1 I2V 配置保持一致，避免将采样噪声调度造成的颜色或曝光变化误判为注意力误差。`dense_steps` 和 `dense_layers` 可在 `sol_attn_setting` 中调整；`dense_layers` 同时支持 `[0, 1]` 和 `"0-1"` 两种形式，`dense_backend` 支持 `flash_attn3`、`sage_attn2` 和 `torch_sdpa`。RTX 5090 上应将 `dense_backend` 改为 `sage_attn2` 或 `torch_sdpa`，并将 Wan cross-attention 从 `flash_attn3` 改为 `flash_attn2` 等受支持实现。SM120 固定使用 `kv_splits=1`（`"auto"` 会自动解析为 1）。首次 Sol-Attn 调用会编译对应 shape 的 kernel，计时时应排除首次调用。
+按[快速入门](../getting_started/quickstart.md)启动容器，将镜像替换为 `lightx2v-sol-attn:sm120`。H100/H200（SM90）按 [Sol-Attn 上游说明](https://github.com/NVlabs/Sana/tree/sol-engine/techniques/sparse_backends)安装后端。
+
+运行前，修改 `scripts/wan/inference/run_wan_i2v_sol_attn.sh` 中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`。再编辑 `configs/attentions/wan_i2v_sol_attn.json`，按 GPU 选择后端：
+
+| GPU | `sol_attn_setting.dense_backend` | `cross_attn_1_type` / `cross_attn_2_type` |
+| --- | --- | --- |
+| H100/H200 | `flash_attn3`（默认） | `flash_attn3`（默认） |
+| RTX 5090 | 改为 `sage_attn2` 或 `torch_sdpa` | 改为 `flash_attn2` 等已安装且支持的实现 |
+
+```bash
+bash scripts/wan/inference/run_wan_i2v_sol_attn.sh
+```
+
+首次调用会编译对应 shape 的 kernel，性能计时应排除该次调用。
+
+#### 调整与实现说明
+
+- 默认 40 步配置中，前 8 步和第 0 个 Transformer 层使用 dense 后端，其余使用 Sol-Attn。通过 `dense_steps` 和 `dense_layers` 调整；后者支持 `[0, 1]` 或 `"0-1"`。
+- 示例使用 `tau=0.8`；减小该值可采用更保守的稀疏率，增大则可能降低画质。`sample_shift=3` 与标准 Wan2.1 I2V 配置一致。
+- Morton3D 重排在整个 Transformer block stack 外执行一次，并同步 RoPE；strict 模式下，安装无效会直接报错。
+- SM120 使用 `kv_splits=1`，`"auto"` 也会解析为 1。
 
 ### 在 MiniMax-H3 上使用 Sol-Attn
 

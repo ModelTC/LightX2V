@@ -205,7 +205,7 @@ LightX2V supports image, video, and world models and provides quantized weights,
 | [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) (causal RefA2V requires a separate checkpoint) | [Guide](scripts/minimax_h3/README.md) · [Causal](scripts/minimax_h3_causal) |
 | TaoMate-H3 (autoregressive T2AV) | [Run script](scripts/taomate_h3/run_t2av_3step.sh) |
 | StreamRender-H3 (autoregressive RefV2V) | [Run script](scripts/streamrender_h3/run_refv2v_2step.sh) |
-| [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) (autoregressive inference requires a separate checkpoint) / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) (distilled) | [Guide](scripts/ltx2/README.md) · [AR example](scripts/ltx2/ltx2_3/run_ltx2_3_ar_t2av.sh) |
+| [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) (distilled) | [Guide](scripts/ltx2/README.md) |
 | [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) | [Guide](scripts/hunyuan_video_15/README.md) |
 | [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/) | [Wan2.1](scripts/wan/README.md) · [Wan2.2](scripts/wan22/README.md) |
 | [Wan2.1-VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) / [Wan2.2-VACE-Fun-A14B](https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B) | [Wan2.1](scripts/wan/README.md) · [Wan2.2](scripts/wan22_moe_vace) |
@@ -256,14 +256,13 @@ LightX2V supports image, video, and world models and provides quantized weights,
 
 <details>
 <summary><strong>🌍 World Models, Robotics &amp; 3D</strong><br><br>
-<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game3">Matrix-Game</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README.md">EdenLive</a> · <a href="scripts/worldmirror/README.md">WorldMirror</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
+<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game4">Matrix-Game-4</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README.md">EdenLive</a> · <a href="scripts/worldmirror/README.md">WorldMirror</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
 </summary>
 
 | Models / Variants and Weights | Guides / Scripts |
 | --- | --- |
 | [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super) (including [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID)) | [Scripts](scripts/cosmos3) |
 | [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast) | [Scripts](scripts/lingbot) |
-| [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0) | [2.0](scripts/matrix_game2) · [3.0](scripts/matrix_game3) |
 | Matrix-Game-4 (Wan2.2 5B Control; autoregressive video rerendering) | [Run script](scripts/matrix_game4/run_matrix_game4.sh) |
 | LingBot-Fast (autoregressive I2V) | [Run script](scripts/lingbot_fast/run_5090.sh) |
 | Realtime-Video (Wan2.1 autoregressive T2V) | [Run script](scripts/realtime_video/run_5090.sh) |

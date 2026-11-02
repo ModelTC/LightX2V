@@ -27,13 +27,13 @@ LoRA (Low-Rank Adaptation) 是一种高效的模型微调技术，通过低秩�
 
 **配置参数说明：**
 
-- `lora_path`: LoRA 权重文件路径列表，支持多个 LoRA 同时加载
-- `strength_model`: LoRA 强度系数 (alpha)，控制 LoRA 对原模型的影响程度
+- `lora_configs[].path`: 每个 LoRA 条目的权重文件路径；静态合并支持多个条目
+- `lora_configs[].strength`: LoRA 强度系数，控制 LoRA 对原模型的影响程度
 - `lora_merge_force_fp32`: 默认为 `false`，保持原有合并精度。设为 `true` 时，以 FP32 加载 LoRA 权重、计算增量并与基础权重相加，随后转回各层原来的 dtype。仅影响静态合并；使用动态 LoRA（`lora_dynamic_apply=true`）时不生效。逐层合并需要额外的临时内存，多份 LoRA 按配置顺序分别合并并转回原 dtype。
 
 ### 命令行方式
 
-直接在命令行中指定 LoRA 路径（仅支持加载单个 LoRA）：
+先将上面的 `lora_configs` 字段合并到完整的 Wan 配置中，再通过 `--config_json` 启动。当前 CLI 不提供单独的 LoRA 路径或强度选项：
 
 ```bash
 python -m lightx2v.infer \
@@ -41,8 +41,6 @@ python -m lightx2v.infer \
   --task t2v \
   --model_path /path/to/model \
   --config_json /path/to/config.json \
-  --lora_path /path/to/your/lora.safetensors \
-  --lora_strength 0.8 \
   --prompt "Your prompt here"
 ```
 
@@ -62,6 +60,29 @@ python -m lightx2v.infer \
       "strength": 0.5
     }
   ]
+}
+```
+
+### Wan 的组合限制与 Wan2.2 命名
+
+本页 JSON 是配置片段，需合并到对应模型的完整配置中。Wan 默认采用静态合并，不支持同时启用 `dit_quantized` 或 `lazy_load`。启用 `lora_dynamic_apply=true` 时，每个子模型仅使用匹配列表中的第一个 LoRA 条目；不要把多条目示例当成动态叠加。
+
+Wan2.2 MoE 需要通过 `name` 将 LoRA 分配到高噪声和低噪声模型：
+
+```json
+{
+    "lora_configs": [
+        {
+            "name": "high_noise_model",
+            "path": "/path/to/high_noise_lora.safetensors",
+            "strength": 1.0
+        },
+        {
+            "name": "low_noise_model",
+            "path": "/path/to/low_noise_lora.safetensors",
+            "strength": 1.0
+        }
+    ]
 }
 ```
 
@@ -94,20 +115,19 @@ bash scripts/wan/inference/distill/run_wan_i2v_distill_lora.sh
 在 API 服务中通过 [config 文件](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json) 指定，对 [scripts/server/start_server.sh](https://github.com/ModelTC/lightx2v/blob/main/scripts/server/start_server.sh) 中的启动命令进行修改：
 
 ```bash
-python -m lightx2v.api_server \
+python -m lightx2v.server \
   --model_cls wan2.1 \
   --task t2v \
   --model_path $model_path \
   --config_json ${lightx2v_path}/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json \
-  --port 8000 \
-  --nproc_per_node 1
+  --port 8000
 ```
 
 ## 🔧 LoRA 提取工具
 
 使用 `tools/extract/lora_extractor.py`，按 JSON/YAML 配置对选定 Linear 的权重差做 FP32 SVD。运行以下命令前，先修改配置中的模型与输出路径。相对路径以运行命令的工作目录为准，支持 `~` 和环境变量。
 
-需要基于校准数据优化 Qwen-Image 2.1 LoRA 时，使用独立入口 `tools/extract/lora_reconstructor.py`。支持 Q-Diffusion 风格的逐块重建，以及 TFMQ 风格的时间通路联合重建后再逐块重建；支持单卡和 `torchrun` DDP。示例配置使用 rank=64、alpha=8，并单独保存 SVD 初始化 LoRA。校准数据采集、算法细节和运行命令见[重建说明](../../../../tools/extract/RECONSTRUCTION_zh.md)。
+需要基于校准数据优化 Qwen-Image 2.1 LoRA 时，使用独立入口 `tools/extract/lora_reconstructor.py`。支持 Q-Diffusion 风格的逐块重建，以及 TFMQ 风格的时间通路联合重建后再逐块重建；支持单卡和 `torchrun` DDP。示例配置使用 rank=64、alpha=8，并单独保存 SVD 初始化 LoRA。校准数据采集、算法细节和运行命令见[重建说明](https://github.com/ModelTC/LightX2V/blob/main/tools/extract/RECONSTRUCTION_zh.md)。
 
 ### 基本用法
 
