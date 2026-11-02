@@ -639,7 +639,10 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         way the host memory comes back. Returns the bytes released.
 
         to_cpu() still works afterwards: a module without a host copy is
-        copied back from the accelerator.
+        copied back from the accelerator. Pinned memory would not be returned
+        to the OS here (the host caching allocator keeps it), which is why a
+        resident text encoder is loaded pageable in the first place (see
+        _host_pinned).
         """
         released = 0
         for _, module in self.named_weight_modules():
@@ -649,9 +652,24 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
                 if attr.startswith("pin_") and isinstance(tensor, torch.Tensor):
                     if tensor.device.type == "cpu":
                         released += tensor.numel() * tensor.element_size()
-                    setattr(storage, attr, None)
+                    # Delete rather than set None: weight templates test hasattr(self, "pin_weight")
+                    # to decide whether a host copy exists (e.g. EmbeddingWeightTemplate.to_cpu).
+                    delattr(storage, attr)
         gc.collect()
         return released
+
+
+def _host_pinned(config):
+    """Whether the text encoder's host weights are pinned.
+
+    Pinning only pays off when the host copy is streamed to the device on every
+    request (text_encoder_cpu_offload). A resident text encoder copies its
+    weights once and then releases the host copy (release_host_weights); pinned,
+    that memory would stay in the host caching allocator instead of returning to
+    the OS, so a resident encoder always loads pageable.
+    """
+    offloaded = bool(config.get("text_encoder_cpu_offload", config.get("cpu_offload", False)))
+    return offloaded and bool(config.get("text_encoder_host_pinned", True))
 
 
 class MiniMaxH3Qwen3VLTextEncoder:
@@ -908,7 +926,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     @classmethod
     def _load_native_weights(cls, backbone, text_encoder_path, text_config):
-        text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
+        text_encoder_host_pinned = _host_pinned(backbone.config)
         modules = dict(backbone.named_weight_modules())
         root = Path(text_encoder_path)
         weight_map, checkpoint_dtype = cls._preflight_native_checkpoint(backbone, root, text_config)
@@ -958,7 +976,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     @classmethod
     def _load_quantized_weights(cls, backbone, checkpoint_path):
-        text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
+        text_encoder_host_pinned = _host_pinned(backbone.config)
         modules = dict(backbone.named_weight_modules())
         tensor_names = {}
         for primary_name, module in modules.items():
