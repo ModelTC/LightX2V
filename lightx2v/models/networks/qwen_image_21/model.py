@@ -240,6 +240,9 @@ class QwenImage21TransformerModel(BaseTransformerModel):
             }
 
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        if self.config.get("dit_quant_scheme") == "mxfp8-npu" and not self.config.get("dit_quantized_ckpt"):
+            # Online MXFP8 consumes BF16/FP16 weights, so honor original-checkpoint overrides.
+            return self._load_ckpt(unified_dtype, sensitive_layer)
         if not self.use_tp:
             return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
         checkpoint_path = self.config["dit_quantized_ckpt"]

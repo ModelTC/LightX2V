@@ -163,6 +163,7 @@ class BaseTransformerModel(ABC):
             "gguf-Q3_K_S",
             "gguf-Q3_K_M",
             "int8-npu",
+            "mxfp8-npu",
             "fp8-intel-xpu",
             "int8-intel-xpu",
             "int8-iluvatar",
