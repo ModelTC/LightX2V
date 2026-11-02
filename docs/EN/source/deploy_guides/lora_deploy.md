@@ -28,13 +28,13 @@ Specify LoRA path in configuration file:
 
 **Configuration Parameter Description:**
 
-- `lora_path`: LoRA weight file path list, supports loading multiple LoRAs simultaneously
-- `strength_model`: LoRA strength coefficient (alpha), controls LoRA's influence on the original model
+- `lora_configs[].path`: Weight file path in each LoRA entry; static merging supports multiple entries
+- `lora_configs[].strength`: LoRA strength coefficient, controls LoRA's influence on the original model
 - `lora_merge_force_fp32`: Defaults to `false`, preserving the existing merge precision. When `true`, load LoRA weights, compute deltas, and add them to base weights in FP32, then cast back to each layer's original dtype. This only affects static merging; dynamic LoRA (`lora_dynamic_apply=true`) is unchanged. Merging uses additional temporary memory per layer. Multiple LoRAs are merged and cast back individually in configuration order.
 
 ### Command Line Method
 
-Specify LoRA path directly in command line (supports loading single LoRA only):
+Merge the `lora_configs` field above into a complete Wan config, then pass it through `--config_json`. The CLI has no separate LoRA path or strength options:
 
 ```bash
 python -m lightx2v.infer \
@@ -42,8 +42,6 @@ python -m lightx2v.infer \
   --task t2v \
   --model_path /path/to/model \
   --config_json /path/to/config.json \
-  --lora_path /path/to/your/lora.safetensors \
-  --lora_strength 0.8 \
   --prompt "Your prompt here"
 ```
 
@@ -63,6 +61,29 @@ To use multiple LoRAs with different strengths, specify them in the config JSON 
       "strength": 0.5
     }
   ]
+}
+```
+
+### Wan compatibility and Wan2.2 names
+
+The JSON blocks on this page are fragments to merge into a complete model config. Wan defaults to static merging, which cannot be combined with `dit_quantized` or `lazy_load`. With `lora_dynamic_apply=true`, each submodel uses only the first matching LoRA entry; the multi-entry example does not imply dynamic stacking.
+
+Wan2.2 MoE requires `name` to assign LoRA weights to the high-noise and low-noise models:
+
+```json
+{
+    "lora_configs": [
+        {
+            "name": "high_noise_model",
+            "path": "/path/to/high_noise_lora.safetensors",
+            "strength": 1.0
+        },
+        {
+            "name": "low_noise_model",
+            "path": "/path/to/low_noise_lora.safetensors",
+            "strength": 1.0
+        }
+    ]
 }
 ```
 
@@ -95,20 +116,19 @@ bash scripts/wan/inference/distill/run_wan_i2v_distill_lora.sh
 Specify through the [config file](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json), then modify the startup command in [scripts/server/start_server.sh](https://github.com/ModelTC/lightx2v/blob/main/scripts/server/start_server.sh):
 
 ```bash
-python -m lightx2v.api_server \
+python -m lightx2v.server \
   --model_cls wan2.1 \
   --task t2v \
   --model_path $model_path \
   --config_json ${lightx2v_path}/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json \
-  --port 8000 \
-  --nproc_per_node 1
+  --port 8000
 ```
 
 ## 🔧 LoRA Extraction Tool
 
 Use `tools/extract/lora_extractor.py` to extract selected Linear weight deltas with FP32 SVD, configured through JSON or YAML. Edit the model/output paths before running. Relative paths use the command's working directory; `~` and environment variables are expanded.
 
-For calibration-based Qwen-Image 2.1 reconstruction, use the separate `tools/extract/lora_reconstructor.py` entry point. It supports Q-Diffusion-style block reconstruction and TFMQ-style temporal reconstruction followed by block reconstruction, with single-GPU or torchrun DDP execution. The supplied configs use rank 64 / alpha 8 and preserve a separate SVD initialization LoRA. See [the reconstruction guide](../../../../tools/extract/RECONSTRUCTION.md) for calibration collection, algorithm details and commands.
+For calibration-based Qwen-Image 2.1 reconstruction, use the separate `tools/extract/lora_reconstructor.py` entry point. It supports Q-Diffusion-style block reconstruction and TFMQ-style temporal reconstruction followed by block reconstruction, with single-GPU or torchrun DDP execution. The supplied configs use rank 64 / alpha 8 and preserve a separate SVD initialization LoRA. See [the reconstruction guide](https://github.com/ModelTC/LightX2V/blob/main/tools/extract/RECONSTRUCTION.md) for calibration collection, algorithm details and commands.
 
 ### Basic Usage
 

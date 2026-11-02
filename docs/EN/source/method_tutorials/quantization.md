@@ -35,7 +35,7 @@ Download pre-quantized DIT models from [Wan2.1-Distill-Models](https://huggingfa
 
 ```bash
 # Download DIT FP8 quantized model
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models \
     --include "wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors"
 ```
@@ -46,12 +46,12 @@ Download pre-quantized T5 and CLIP models from [Encoders-LightX2V](https://huggi
 
 ```bash
 # Download T5 FP8 quantized model
-huggingface-cli download lightx2v/Encoders-Lightx2v \
+hf download lightx2v/Encoders-Lightx2v \
     --local-dir ./models \
     --include "models_t5_umt5-xxl-enc-fp8.pth"
 
 # Download CLIP FP8 quantized model
-huggingface-cli download lightx2v/Encoders-Lightx2v \
+hf download lightx2v/Encoders-Lightx2v \
     --local-dir ./models \
     --include "models_clip_open-clip-xlm-roberta-large-vit-huge-14-fp8.pth"
 ```
@@ -76,7 +76,7 @@ DIT quantization modes (`dit_quant_scheme`) support: `fp8-vllm`, `int8-vllm`, `f
 {
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-sgl",
-    "dit_quantized_ckpt": "/path/to/dit_quantized_model"  // Optional
+    "dit_quantized_ckpt": "/path/to/dit_quantized_model"
 }
 ```
 
@@ -225,7 +225,7 @@ T5 quantization modes (`t5_quant_scheme`) support: `int8-vllm`, `fp8-sgl`, `int8
 {
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-sgl",
-    "t5_quantized_ckpt": "/path/to/t5_quantized_model"  // Optional
+    "t5_quantized_ckpt": "/path/to/t5_quantized_model"
 }
 ```
 
@@ -243,7 +243,7 @@ CLIP quantization modes (`clip_quant_scheme`) support: `int8-vllm`, `fp8-sgl`, `
 {
     "clip_quantized": true,
     "clip_quant_scheme": "fp8-sgl",
-    "clip_quantized_ckpt": "/path/to/clip_quantized_model"  // Optional
+    "clip_quantized_ckpt": "/path/to/clip_quantized_model"
 }
 ```
 

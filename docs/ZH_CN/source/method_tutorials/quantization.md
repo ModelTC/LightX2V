@@ -35,7 +35,7 @@ LightX2V 支持对 DIT、VAE、T5 和 CLIP 模型进行量化推理，通过降�
 
 ```bash
 # 下载 DIT FP8 量化模型
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models \
     --include "wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors"
 ```
@@ -46,12 +46,12 @@ huggingface-cli download lightx2v/Wan2.1-Distill-Models \
 
 ```bash
 # 下载 T5 FP8 量化模型
-huggingface-cli download lightx2v/Encoders-Lightx2v \
+hf download lightx2v/Encoders-Lightx2v \
     --local-dir ./models \
     --include "models_t5_umt5-xxl-enc-fp8.pth"
 
 # 下载 CLIP FP8 量化模型
-huggingface-cli download lightx2v/Encoders-Lightx2v \
+hf download lightx2v/Encoders-Lightx2v \
     --local-dir ./models \
     --include "models_clip_open-clip-xlm-roberta-large-vit-huge-14-fp8.pth"
 ```
@@ -76,7 +76,7 @@ DIT 量化模式（`dit_quant_scheme`）支持：`fp8-vllm`、`int8-vllm`、`fp8
 {
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-sgl",
-    "dit_quantized_ckpt": "/path/to/dit_quantized_model"  // 可选
+    "dit_quantized_ckpt": "/path/to/dit_quantized_model"
 }
 ```
 
@@ -217,7 +217,7 @@ T5 量化模式（`t5_quant_scheme`）支持：`int8-vllm`、`fp8-sgl`、`int8-q
 {
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-sgl",
-    "t5_quantized_ckpt": "/path/to/t5_quantized_model"  // 可选
+    "t5_quantized_ckpt": "/path/to/t5_quantized_model"
 }
 ```
 
@@ -235,7 +235,7 @@ CLIP 量化模式（`clip_quant_scheme`）支持：`int8-vllm`、`fp8-sgl`、`in
 {
     "clip_quantized": true,
     "clip_quant_scheme": "fp8-sgl",
-    "clip_quantized_ckpt": "/path/to/clip_quantized_model"  // 可选
+    "clip_quantized_ckpt": "/path/to/clip_quantized_model"
 }
 ```
 

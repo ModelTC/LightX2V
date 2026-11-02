@@ -1,18 +1,114 @@
-# Qwen Image VAE TensorRT 加速优化指南
+# Qwen Image VAE TensorRT 加速
 
-为了显著提升 Qwen Image 模型在不同场景下的推理速度，我们在 VAE 的 Encoder 和 Decoder 部分均引入了 TensorRT 优化。
+TensorRT 可加速 Qwen Image 的 VAE Encoder 和 Decoder。固定分辨率的 T2I 使用静态引擎；需要适配多种输入尺寸的 I2I 使用多 profile 引擎。
 
-针对文本生成图像 (T2I) 与图像生成图像/视频 (I2I) 等任务在输入 Shape 上的不同特点，我们设计了两种维度的加速策略：**静态 Shape 优化 (Static Shape)** 与 **动态 Shape 优化 (Multi-Profile)**。
+## 准备与启动
 
----
+1. 完成 [LightX2V 环境安装](../getting_started/quickstart.md)，准备对应的 Qwen Image 模型。
+2. 安装与当前 CUDA 环境及引擎构建版本匹配的 TensorRT，并准备预先构建的 `.trt` 文件。设置配置路径不会自动构建引擎。
+3. 选择下表中的完整配置，修改 `trt_vae_config.trt_engine_path`，并确认 `attn_type` 与 GPU 和已安装的后端匹配。引擎文件的目录结构见下文。
 
-## 1. T2I 场景：静态 Shape (Static Shape) 方案
+| 任务 | 完整配置 | 引擎模式 |
+| --- | --- | --- |
+| Qwen-Image-2512 T2I | [T2I TensorRT 配置](https://github.com/ModelTC/LightX2V/blob/main/configs/qwen_image/qwen_image_t2i_2512_trt.json) | 静态，`multi_profile=false` |
+| Qwen-Image-Edit-2511 I2I | [I2I TensorRT 配置](https://github.com/ModelTC/LightX2V/blob/main/configs/qwen_image/qwen_image_i2i_2511_trt.json) | 多 profile，`multi_profile=true` |
 
-在 T2I 任务中，生成的图像分辨率通常是固定的（如 16:9, 1:1, 4:3 等）。我们可以明确提前知道推理所用 Shape。因此，采用 **静态分辨率引擎 (Static Shape)** 是性能最佳的选择，因为它可以在底层完全消除动态 Shape 推导带来的开销。
+在推理环境中确认 TensorRT 可导入：
 
-### 1.1 核心优势与性能
-*   **极致性能**: VAE 组件独立测试中，Encoder 与 Decoder 平均可达 **~2.0x** 加速；端到端服务模式下 VAE Decoder 平均 **~1.8x** 加速。
-*   **按需加载 (Lazy Load)**: 引擎按分辨率按需加载，仅在当前分辨率首次请求时加载对应引擎对（~5GB 显存），切换分辨率时自动释放旧引擎、加载新引擎。相比全量加载（~25GB），大幅降低显存占用，兼容端到端推理场景。
+```bash
+python -c "import tensorrt; print(tensorrt.__version__)"
+```
+
+配置完成后，从仓库根目录启动 T2I：
+
+```bash
+python -m lightx2v.infer \
+  --model_cls qwen_image \
+  --task t2i \
+  --model_path /path/to/Qwen-Image-2512 \
+  --config_json configs/qwen_image/qwen_image_t2i_2512_trt.json \
+  --prompt "A cat sitting beside a window." \
+  --seed 42 \
+  --save_result_path save_results/qwen_trt.png
+```
+
+I2I 使用 `--task i2i`、对应的模型和 I2I 配置，并添加 `--image_path /path/to/input.png`。任务类型须通过启动参数指定。查看启动和推理日志，确认加载了 TensorRT 引擎，未回退到 PyTorch。
+
+## 静态引擎目录与配置
+
+目录树按 **宽×高** 标注。静态模式仅匹配预置尺寸，未匹配时回退到 PyTorch VAE。引擎按所用分辨率加载，切换分辨率时释放旧引擎。
+
+*   **引擎目录示例**：`path/to/vae_trt_t2i_static`
+*   **目录结构要求**：
+    按以下子目录名称存放对应分辨率的引擎文件：
+
+    ```text
+    vae_trt_t2i_static/
+    ├── 16_9/        # 对应尺寸 1664x928 (宽x高)
+    │   ├── vae_encoder.trt
+    │   └── vae_decoder.trt
+    ├── 9_16/        # 对应尺寸 928x1664
+    │   ├── vae_encoder.trt
+    │   └── vae_decoder.trt
+    ├── 1_1/         # 对应尺寸 1328x1328
+    │   ├── vae_encoder.trt
+    │   └── vae_decoder.trt
+    ├── 4_3/         # 对应尺寸 1472x1104
+    │   ├── vae_encoder.trt
+    │   └── vae_decoder.trt
+    └── 3_4/         # 对应尺寸 1104x1472
+        ├── vae_encoder.trt
+        └── vae_decoder.trt
+    ```
+
+### 配置片段
+将以下字段合并到完整 JSON 配置中，设置 `vae_type` 为 `tensorrt`，并配置对应存放各特定分辨率目录的根目录，且关闭 `multi_profile` 模式：
+
+```json
+{
+    "vae_type": "tensorrt",
+    "trt_vae_config": {
+        "trt_engine_path": "path/to/vae_trt_t2i_static",
+        "multi_profile": false
+    }
+}
+```
+
+## 多 profile 引擎目录与配置
+
+以下 profile 按 **高×宽** 标注，引擎的 profile 顺序须与列表一致。
+*   **引擎目录示例**：`path/to/vae_trt_extended_mp`
+*   **内置包含的 Optimization Profile 档位与尺寸**：
+    1.  `1_1_512` (512x512)
+    2.  `1_1_1024` (1024x1024)
+    3.  `16_9_480p` (480x848)
+    4.  `16_9_720p` (720x1280)
+    5.  `16_9_1080p` (1088x1920)
+    6.  `9_16_720p` (1280x720)
+    7.  `9_16_1080p` (1920x1088)
+    8.  `4_3_768p` (768x1024)
+    9.  `3_2_1080p` (1088x1620)
+
+*(最大支持图片的高/宽上限为 1920 像素)*
+
+### 配置片段
+`trt_engine_path` 必须指向包含 `vae_encoder_multi_profile.trt` 和 `vae_decoder_multi_profile.trt` 的目录，不能指向单个引擎文件；同时将 `multi_profile` 设为 `true`：
+
+```json
+{
+    "vae_type": "tensorrt",
+    "trt_vae_config": {
+        "trt_engine_path": "path/to/vae_trt_extended_mp",
+        "multi_profile": true
+    }
+}
+```
+
+## 历史性能数据
+
+以下数据未重新测量。静态表中的 4:3 `1472x1140` 和 3:4 `768x1024` 与当前引擎映射不同，不能用这些耗时代表当前对应尺寸的性能。
+
+### 静态引擎（T2I）
 
 #### VAE 独立测试性能 (H100, 纯 VAE 推理)
 
@@ -47,54 +143,7 @@
 2. **GPU 资源争抢**：端到端场景 Transformer (~30GB) + Text Encoder (~15GB) 常驻显存，L2 Cache 被大模型权重覆盖，VAE 推理时需重新从 HBM 读取，增加了显存访问延迟。
 3. **显存碎片化**：PyTorch 动态分配器与 TRT 固定 context 交替使用，PyTorch 侧受碎片影响更大（故其绝对差距更显著）。
 
-### 1.2 预置配置说明
-*   **引擎默认存储目录**：`path/to/vae_trt_t2i_static`
-*   **目录结构要求**：
-    引擎根目录下必须按照以下特定的子目录名称存放分辨率对应的 `.trt` 权重文件（底层代码加载逻辑硬依赖了这些预设的目录名称进行 Lazy Load 查找）：
-
-    ```text
-    vae_trt_t2i_static/
-    ├── 16_9/        # 对应尺寸 1664x928 (宽x高)
-    │   ├── vae_encoder.trt
-    │   └── vae_decoder.trt
-    ├── 9_16/        # 对应尺寸 928x1664
-    │   ├── vae_encoder.trt
-    │   └── vae_decoder.trt
-    ├── 1_1/         # 对应尺寸 1328x1328
-    │   ├── vae_encoder.trt
-    │   └── vae_decoder.trt
-    ├── 4_3/         # 对应尺寸 1472x1140
-    │   ├── vae_encoder.trt
-    │   └── vae_decoder.trt
-    └── 3_4/         # 对应尺寸 768x1024
-        ├── vae_encoder.trt
-        └── vae_decoder.trt
-    ```
-
-### 1.3 配置使用方法
-在对应的 JSON 配置文件中，设置 `vae_type` 为 `tensorrt`，并配置对应存放各特定分辨率目录的根目录，且关闭 `multi_profile` 模式：
-
-```json
-{
-    "task": "t2i",
-    "vae_type": "tensorrt",
-    "trt_vae_config": {
-        "trt_engine_path": "path/to/vae_trt_t2i_static",
-        "multi_profile": false
-    }
-}
-```
-
----
-
-## 2. I2I 场景：动态 Shape (Multi-Profile) 方案
-
-对于 I2I 等任务而言，用户的输入图像通常是任意尺寸、不受控的，因此 VAE 必须能够受理动态范围的 Shape 输入，不能采用纯静态的引擎。
-为兼顾速度与灵活性，我们采用了 **Multi-Profile 动态配置引擎**。构建时在同一个引擎文件中囊括多个优化的档位（Opt Shapes）。
-
-### 2.1 核心优势与性能
-*   **优秀的性能提升**: VAE 独立测试中 Encoder 和 Decoder 平均可达 **约 1.45x** 加速；端到端服务模式下 VAE Encoder 平均 **~1.66x** 加速，Decoder 平均 **~1.08x** 加速。
-*   **动态最优化适配**: 推理时在底层根据当前传入的图像尺寸，实时查找到距离最近的优化档位，以期获得最优显存排布与算子执行计划。
+### 多 profile 引擎（I2I）
 
 #### VAE 独立测试性能 (H100, 纯 VAE 推理, 10 轮平均)
 
@@ -160,42 +209,3 @@
 - 加一个恒定常数必然稀释加速比：以 1024x1024 为例，独立 PT=68ms / TRT=45ms → 1.52x；加 ~85ms 后 PT=153ms / TRT=130ms → 1.18x，与实测 1.15x 吻合。
 
 > **结论**：端到端 Decoder 加速比低不是 TRT 引擎变慢，而是端到端的 vae decoder 计时范围内包含了 TRT 无法加速的 CPU 后处理操作。若需精确衡量 TRT 内核加速效果，应参考独立测试数据。
-
-### 2.2 预置配置说明
-*   **引擎默认存储目录**：`path/to/vae_trt_extended_mp`
-*   **内置包含的 Optimization Profile 档位与尺寸**：
-    1.  `1_1_512` (512x512)
-    2.  `1_1_1024` (1024x1024)
-    3.  `16_9_480p` (480x848)
-    4.  `16_9_720p` (720x1280)
-    5.  `16_9_1080p` (1080x1920)
-    6.  `9_16_720p` (1280x720)
-    7.  `9_16_1080p` (1920x1080)
-    8.  `4_3_768p` (768x1024)
-    9.  `3_2_1080p` (1088x1620)
-
-*(最大支持图片的高/宽上限为 1920 像素)*
-
-### 2.3 配置使用方法
-由于引擎是一个融合了多个档位的单文件/文件夹（如包含 `vae_encoder_multi_profile.trt`），需要将 `multi_profile` 项配置为 true：
-
-```json
-{
-    "task": "i2i",
-    "vae_type": "tensorrt",
-    "trt_vae_config": {
-        "trt_engine_path": "path/to/vae_trt_extended_mp",
-        "multi_profile": true
-    }
-}
-```
-
----
-
-## 3. 部署准备
-
-在使用前请确保当前系统和镜像环境已安装了 TensorRT 最新依赖（这通常在我们的自定义镜像中已经完备）：
-
-```bash
-pip install tensorrt tensorrt-cu12-bindings tensorrt-cu12-libs
-```

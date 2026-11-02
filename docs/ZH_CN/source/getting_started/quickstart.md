@@ -6,23 +6,26 @@
 
 ## 📋 目录
 
-- [系统要求](#系统要求)
-- [Linux 系统环境搭建](#linux-系统环境搭建)
-  - [Docker 环境（推荐）](#docker-环境推荐)
-  - [Conda 环境搭建](#conda-环境搭建)
-- [Windows 系统环境搭建](#windows-系统环境搭建)
-- [推理使用](#推理使用)
+- [系统要求](#system-requirements)
+- [Linux 系统环境搭建](#linux-environment-setup)
+  - [Docker 环境（推荐）](#docker-environment-recommended)
+  - [Conda 环境搭建](#conda-environment-setup)
+- [Windows 系统环境搭建](#windows-environment-setup)
+- [推理使用](#inference-usage)
 
+(system-requirements)=
 ## 🚀 系统要求
 
 - **操作系统**: Linux (Ubuntu 18.04+) 或 Windows 10/11
 - **Python**: 3.10 或更高版本
-- **GPU**: NVIDIA GPU，支持 CUDA，至少 8GB 显存
-- **内存**: 建议 16GB 或更多
+- **GPU**: 支持 CUDA 的 NVIDIA GPU；显存需求取决于模型与配置
+- **内存**: 需容纳所选模型及 CPU offload 缓冲区
 - **存储**: 至少 50GB 可用空间
 
+(linux-environment-setup)=
 ## 🐧 Linux 系统环境搭建
 
+(docker-environment-recommended)=
 ### 🐳 Docker 环境（推荐）
 
 我们强烈推荐使用 Docker 环境，这是最简单快捷的安装方式。
@@ -42,11 +45,30 @@ docker pull lightx2v/lightx2v:26011201-cu128
 docker pull lightx2v/lightx2v:25101501-cu124
 ```
 
-#### 2. 运行容器
+#### 2. 启动并进入容器
+
+在宿主机下载仓库；已有仓库时直接进入其根目录：
 
 ```bash
-docker run --gpus all -itd --ipc=host --name [容器名] -v [挂载设置] --entrypoint /bin/bash [镜像id]
+git clone https://github.com/ModelTC/LightX2V.git
+cd LightX2V
 ```
+
+将仓库挂载到容器中，并直接进入该目录。使用其他镜像时，替换最后一行的镜像名称：
+
+```bash
+docker run --gpus all -it --ipc=host --name lightx2v \
+  -v "$PWD":/workspace/LightX2V -w /workspace/LightX2V \
+  --entrypoint /bin/bash lightx2v/lightx2v:26052801-cu130
+```
+
+在容器内安装当前仓库，然后继续[生成第一个视频](first_generation.md)：
+
+```bash
+pip install -v -e .
+```
+
+仓库目录中的模型和输出文件会保留在宿主机。退出容器后，可用 `docker start -ai lightx2v` 再次进入。
 
 #### 3. 中国镜像源（可选）
 
@@ -63,6 +85,7 @@ docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:26011201-cu128
 docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25101501-cu124
 ```
 
+(conda-environment-setup)=
 ### 🐍 Conda 环境搭建
 
 如果您希望使用 Conda 自行搭建环境，请按照以下步骤操作：
@@ -93,22 +116,23 @@ pip install -v -e .
 
 **选项 A: Flash Attention 2**
 ```bash
-git clone https://github.com/Dao-AILab/flash-attention.git --recursive
-cd flash-attention && python setup.py install
+test -d flash-attention || git clone https://github.com/Dao-AILab/flash-attention.git --recursive
+(cd flash-attention && python setup.py install)
 ```
 
 **选项 B: Flash Attention 3（用于 Hopper 架构显卡）**
 ```bash
-cd flash-attention/hopper && python setup.py install
+test -d flash-attention || git clone https://github.com/Dao-AILab/flash-attention.git --recursive
+(cd flash-attention/hopper && python setup.py install)
 ```
 
 **选项 C: SageAttention 2（推荐）**
 ```bash
 git clone https://github.com/thu-ml/SageAttention.git
-cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -v -e .
+(cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -v -e .)
 ```
 
-#### 步骤 4: 安装量化算子（可选）
+#### 步骤 5: 安装量化算子（可选）
 
 量化算子用于支持模型量化功能，可以显著降低显存占用并加速推理。根据您的需求选择合适的量化算子：
 
@@ -123,12 +147,11 @@ pip install vllm
 
 ```bash
 git clone https://github.com/vllm-project/vllm.git
-cd vllm
-uv pip install -e .
+(cd vllm && pip install -e .)
 ```
 
 **选项 B: SGL Kernels**
-适用于 SGL 量化方案，需要 torch == 2.8.0。
+适用于 SGL 量化方案。请选择与当前 PyTorch、CUDA 匹配的版本；不同 sgl-kernel 版本的依赖要求不同，详见 [SGL Kernel 安装说明](https://github.com/sgl-project/sglang/tree/main/sgl-kernel)。
 
 ```bash
 pip install sgl-kernel --upgrade
@@ -139,8 +162,7 @@ pip install sgl-kernel --upgrade
 
 ```bash
 git clone https://github.com/KONAKONA666/q8_kernels.git
-cd q8_kernels && git submodule init && git submodule update
-python setup.py install
+(cd q8_kernels && git submodule update --init --recursive && python setup.py install)
 ```
 
 > 💡 **提示**:
@@ -148,12 +170,13 @@ python setup.py install
 > - 量化模型可以从 [LightX2V HuggingFace](https://huggingface.co/lightx2v) 下载
 > - 更多量化相关信息请参考 [量化文档](../method_tutorials/quantization.md)
 
-#### 步骤 5: 验证安装
+#### 步骤 6: 验证安装
 ```python
 import lightx2v
 print(f"LightX2V 版本: {lightx2v.__version__}")
 ```
 
+(windows-environment-setup)=
 ## 🪟 Windows 系统环境搭建
 
 Windows 系统仅支持 Conda 环境搭建方式，请按照以下步骤操作：
@@ -164,19 +187,19 @@ Windows 系统仅支持 Conda 环境搭建方式，请按照以下步骤操作�
 
 首先确认您的 GPU 驱动和 CUDA 版本：
 
-```cmd
+```bat
 nvidia-smi
 ```
 
-记录输出中的 **CUDA Version** 信息，后续安装时需要保持版本一致。
+`nvidia-smi` 中的 **CUDA Version** 表示驱动支持的最高 CUDA 版本，不一定是本机安装的 Toolkit 版本。用 `nvcc --version` 查看本地 Toolkit，用 `python -c "import torch; print(torch.version.cuda)"` 查看 PyTorch 使用的 CUDA 版本。选择相互兼容的包即可，不要求这三个值完全一致，详见 [NVIDIA 定义](https://docs.nvidia.com/deploy/nvidia-smi/index.html#cuda-umd-version)。
 
 #### 步骤 2: 创建 Python 环境
 
-```cmd
-# 创建新环境（推荐 Python 3.12）
+```bat
+REM 创建新环境（推荐 Python 3.12）
 conda create -n lightx2v python=3.12 -y
 
-# 激活环境
+REM 激活环境
 conda activate lightx2v
 ```
 
@@ -194,29 +217,29 @@ conda activate lightx2v
 
 **示例（Python 3.12 + PyTorch 2.6 + CUDA 12.4）：**
 
-```cmd
-# 下载并安装 PyTorch
+```bat
+REM 下载并安装 PyTorch
 pip install torch-2.6.0+cu124-cp312-cp312-win_amd64.whl
 
-# 安装配套包
+REM 安装配套包
 pip install torchvision==0.21.0 torchaudio==2.6.0
 ```
 
 **方法二：使用 pip 直接安装**
 
-```cmd
-# CUDA 12.4 版本示例
+```bat
+REM CUDA 12.4 版本示例
 pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 torchaudio==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
 ```
 
 #### 步骤 4: 克隆项目并安装依赖
 
-```cmd
-# 克隆项目代码
+```bat
+REM 克隆项目代码
 git clone https://github.com/ModelTC/LightX2V.git
 cd LightX2V
 
-# 安装 Windows 专用依赖
+REM 安装 Windows 专用依赖
 pip install -r requirements_win.txt
 pip install -v -e .
 ```
@@ -225,7 +248,7 @@ pip install -v -e .
 
 **选项 A: Flash Attention 2**
 
-```cmd
+```bat
 pip install flash-attn==2.7.2.post1
 ```
 
@@ -235,8 +258,8 @@ pip install flash-attn==2.7.2.post1
 - [Windows 专用版本 1](https://github.com/woct0rdho/SageAttention/releases)
 - [Windows 专用版本 2](https://github.com/sdbds/SageAttention-for-windows/releases)
 
-```cmd
-# 安装 SageAttention（请根据实际文件名调整）
+```bat
+REM 安装 SageAttention（请根据实际文件名调整）
 pip install sageattention-2.1.1+cu126torch2.6.0-cp312-cp312-win_amd64.whl
 ```
 
@@ -257,8 +280,8 @@ pip install sageattention-2.1.1+cu126torch2.6.0-cp312-cp312-win_amd64.whl
 - PyTorch 版本匹配
 - CUDA 版本匹配
 
-```cmd
-# 安装 vLLM（请根据实际文件名调整）
+```bat
+REM 安装 vLLM（请根据实际文件名调整）
 pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
 ```
 
@@ -266,10 +289,12 @@ pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
 
 对于 RTX 40 系显卡，推荐安装 `q8_kernel==0.1.0`：
 
-```bash
+```bat
 git clone https://github.com/KONAKONA666/q8_kernels.git
-cd q8_kernels && git submodule init && git submodule update
+pushd q8_kernels
+git submodule update --init --recursive
 python setup.py install
+popd
 ```
 
 对于其他显卡，推荐安装 `q8_kernel==0.5.0`，请参考 [LTX-Video-Q8-Kernels](https://github.com/Lightricks/LTX-Video-Q8-Kernels)。
@@ -279,12 +304,13 @@ python setup.py install
 > - 量化模型可以从 [LightX2V HuggingFace](https://huggingface.co/lightx2v) 下载
 > - 更多量化相关信息请参考 [量化文档](../method_tutorials/quantization.md)
 
-#### 步骤 8: 验证安装
+#### 步骤 7: 验证安装
 ```python
 import lightx2v
 print(f"LightX2V 版本: {lightx2v.__version__}")
 ```
 
+(inference-usage)=
 ## 🎯 推理使用
 
 ### 📥 模型准备
@@ -312,8 +338,8 @@ bash scripts/wan/run_wan_t2v.sh
 
 #### Windows 环境
 
-```cmd
-# 使用 Windows 批处理脚本
+```bat
+REM 使用 Windows 批处理脚本
 scripts\win\run_wan_t2v.bat
 ```
 #### Python脚本启动
