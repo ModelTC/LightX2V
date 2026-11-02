@@ -626,6 +626,33 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         super().to_cuda(non_blocking=non_blocking)
         return self
 
+    def release_host_weights(self):
+        """Drop the host copies of weights that now live on the accelerator.
+
+        A resident text encoder (no CPU offload) never reads its host copies
+        again, but they still hold the whole backbone in host memory. Pinned
+        (the default) they are unswappable; pageable
+        (text_encoder_host_pinned=false) they are a private mapping of the
+        checkpoint that the host-to-device copy dirties page by page, so they
+        end up as unreclaimable anonymous memory all the same (measured on
+        MUSA: ~47 GiB Private_Dirty per process). Releasing them is the only
+        way the host memory comes back. Returns the bytes released.
+
+        to_cpu() still works afterwards: a module without a host copy is
+        copied back from the accelerator.
+        """
+        released = 0
+        for _, module in self.named_weight_modules():
+            storage = unwrap_tp_linear(module)
+            for attr in list(vars(storage)):
+                tensor = getattr(storage, attr)
+                if attr.startswith("pin_") and isinstance(tensor, torch.Tensor):
+                    if tensor.device.type == "cpu":
+                        released += tensor.numel() * tensor.element_size()
+                    setattr(storage, attr, None)
+        gc.collect()
+        return released
+
 
 class MiniMaxH3Qwen3VLTextEncoder:
     """Encode with the native first 50 Qwen3-VL layers.
@@ -1033,6 +1060,9 @@ class MiniMaxH3Qwen3VLTextEncoder:
             text_encoder.init_block_offload()
         elif not self.cpu_offload:
             text_encoder.to_cuda()
+            # Resident on the accelerator: the host copies are never read again.
+            released = text_encoder.release_host_weights()
+            logger.info("Released {:.1f} GiB of host text-encoder weights now resident on the device", released / 1024**3)
         self.text_encoder = text_encoder
         return self.text_encoder
 
