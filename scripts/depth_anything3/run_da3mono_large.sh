@@ -8,6 +8,8 @@ fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 lightx2v_path="$(cd -- "${script_dir}/../.." && pwd)"
+config_path="${CONFIG_PATH:-${lightx2v_path}/configs/depth_anything3/da3mono_large.json}"
+python_bin="${PYTHON_BIN:-python}"
 model_path="$1"
 input_path="$2"
 output_path="$3"
@@ -26,12 +28,12 @@ case "${output_path,,}" in
 esac
 
 export PYTHONPATH="${lightx2v_path}${PYTHONPATH:+:${PYTHONPATH}}"
-exec python -B -m lightx2v.infer \
+exec "${python_bin}" -B -m lightx2v.infer \
     --model_cls depth_anything3 \
     --model-variant mono_large \
     --task depth \
     --model_path "${model_path}" \
-    --config_json "${lightx2v_path}/configs/depth_anything3/da3mono_large.json" \
+    --config_json "${config_path}" \
     "${input_flag}" "${input_path}" \
     --save_result_path "${output_path}" \
     "${optional_args[@]}"

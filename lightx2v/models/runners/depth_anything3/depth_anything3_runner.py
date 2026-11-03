@@ -10,20 +10,21 @@ from threading import Lock
 
 import numpy as np
 import torch
+from PIL import Image
 from safetensors.torch import load_file as load_safetensors
 
 from lightx2v.models.networks.depth_anything3.mono import DepthAnything3Mono
-from lightx2v.models.networks.depth_anything3.output import (
+from lightx2v.models.networks.depth_anything3.postprocess import postprocess_mono_sky
+from lightx2v.models.networks.depth_anything3.preprocess import preprocess_rgb
+from lightx2v.models.runners.base_runner import BaseRunner
+from lightx2v.models.runners.depth_anything3.checkpoint import normalize_checkpoint_weights, resolve_checkpoint
+from lightx2v.models.runners.depth_anything3.output import (
     StreamingNpzWriter,
-    postprocess_mono_sky,
     render_relative_depth_preview,
     save_float_depth,
     save_relative_depth_preview,
     save_sky_mask,
 )
-from lightx2v.models.networks.depth_anything3.preprocess import preprocess_image, preprocess_rgb
-from lightx2v.models.runners.base_runner import BaseRunner
-from lightx2v.models.runners.depth_anything3.checkpoint import normalize_checkpoint_weights, resolve_checkpoint
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.utils.input_info import InputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -101,8 +102,10 @@ class DepthAnything3Runner(BaseRunner):
             return self._run_video(input_info.video_path, destination, depth_path=depth_path, sky_mask_path=sky_mask_path)
         if destination.suffix.lower() != ".png":
             raise ValueError("Depth Anything 3 save_result_path must end in .png")
-        image, original_size = preprocess_image(
-            input_info.image_path,
+        with Image.open(input_info.image_path) as source:
+            rgb = np.asarray(source.convert("RGB"))
+        image, original_size = preprocess_rgb(
+            rgb,
             process_res=int(self.config.get("process_res", 504)),
             process_res_method=self.config.get("process_res_method", "upper_bound_resize"),
         )

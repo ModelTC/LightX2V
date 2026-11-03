@@ -4,21 +4,11 @@ Follows the Apache-2.0 Depth Anything 3 InputProcessor's resolution methods,
 patch alignment, and ImageNet normalization for one RGB image.
 """
 
-from pathlib import Path
-
 import cv2
 import numpy as np
 import torch
-from PIL import Image
 
 PROCESS_RES_METHODS = frozenset({"upper_bound_resize", "lower_bound_resize", "upper_bound_crop", "lower_bound_crop"})
-
-
-def preprocess_image(path: str | Path, *, process_res: int = 504, process_res_method: str = "upper_bound_resize") -> tuple[torch.Tensor, tuple[int, int]]:
-    """Return normalized (1, 3, H, W) input and original (width, height)."""
-    with Image.open(path) as image:
-        rgb = np.asarray(image.convert("RGB"))
-    return preprocess_rgb(rgb, process_res=process_res, process_res_method=process_res_method)
 
 
 def preprocess_rgb(rgb: np.ndarray, *, process_res: int = 504, process_res_method: str = "upper_bound_resize") -> tuple[torch.Tensor, tuple[int, int]]:

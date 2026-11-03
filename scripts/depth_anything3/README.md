@@ -24,9 +24,14 @@ bash /path/to/LightX2V/scripts/depth_anything3/run_da3mono_large.sh \
 
 The first argument may point directly to either safetensors file or to its parent
 directory. If both filenames are present, pass the desired file explicitly.
-The script uses the active `python` and the repository's
-[`da3mono_large.json`](../../configs/depth_anything3/da3mono_large.json).
-Set `process_res` (default `504`) and `process_res_method` in that config to
+The script selects `model_cls=depth_anything3`, `model_variant=mono_large`, and
+`task=depth`; the [`da3mono_large.json`](../../configs/depth_anything3/da3mono_large.json)
+file contains only model-specific startup settings. The `.png` or `.mp4` output
+suffix selects `--image_path` or `--video_path` for the input, respectively.
+The script uses the active `python`. Set `PYTHON_BIN` to use another interpreter
+or `CONFIG_PATH` to use a custom JSON without editing the repository config.
+
+Set `process_res` (default `504`) and `process_res_method` in the config to
 control the internal inference size. The four methods match the official DA3
 input processor:
 
