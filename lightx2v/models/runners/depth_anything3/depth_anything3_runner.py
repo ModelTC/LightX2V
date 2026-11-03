@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -12,7 +13,14 @@ import torch
 from safetensors.torch import load_file as load_safetensors
 
 from lightx2v.models.networks.depth_anything3.mono import DepthAnything3Mono
-from lightx2v.models.networks.depth_anything3.output import postprocess_mono_sky, render_relative_depth_preview, save_float_depth, save_relative_depth_preview, save_sky_mask
+from lightx2v.models.networks.depth_anything3.output import (
+    StreamingNpzWriter,
+    postprocess_mono_sky,
+    render_relative_depth_preview,
+    save_float_depth,
+    save_relative_depth_preview,
+    save_sky_mask,
+)
 from lightx2v.models.networks.depth_anything3.preprocess import preprocess_image, preprocess_rgb
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.depth_anything3.checkpoint import normalize_checkpoint_weights, resolve_checkpoint
@@ -109,17 +117,20 @@ class DepthAnything3Runner(BaseRunner):
     def _optional_output_paths(self, input_info, destination):
         depth_path = Path(input_info.save_depth_path).expanduser() if input_info.save_depth_path else None
         sky_mask_path = Path(input_info.save_sky_mask_path).expanduser() if input_info.save_sky_mask_path else None
+        if input_info.video_path:
+            depth_path = depth_path.resolve() if depth_path is not None else None
+            sky_mask_path = sky_mask_path.resolve() if sky_mask_path is not None else None
         outputs = [destination, *(path for path in (depth_path, sky_mask_path) if path is not None)]
         resolved = [path.expanduser().resolve() for path in outputs]
         source = Path(input_info.video_path or input_info.image_path).expanduser().resolve()
-        if len(set(resolved)) != len(resolved) or source in resolved:
+        if source in resolved or resolved[0] in resolved[1:] or (not input_info.video_path and len(set(resolved)) != len(resolved)):
             raise ValueError("Depth Anything 3 input and output paths must be distinct")
         if input_info.video_path:
             if destination.suffix.lower() != ".mp4":
                 raise ValueError("Depth Anything 3 video save_result_path must end in .mp4")
             for path in (depth_path, sky_mask_path):
-                if path is not None and path.exists() and (not path.is_dir() or any(path.iterdir())):
-                    raise ValueError(f"Video sidecar output must be a new or empty directory: {path}")
+                if path is not None and (path.suffix.lower() != ".npz" or path.is_dir()):
+                    raise ValueError(f"Video sidecar output must be an .npz file: {path}")
         else:
             if depth_path is not None and depth_path.suffix.lower() != ".npy":
                 raise ValueError("Image save_depth_path must end in .npy")
@@ -180,30 +191,38 @@ class DepthAnything3Runner(BaseRunner):
             if fps is None or fps <= 0:
                 raise ValueError(f"Cannot determine input video frame rate: {source}")
             has_audio = bool(container.streams.audio)
-            writer = StreamingVideoWriter(destination, fps=fps)
-            try:
-                for frame_index, frame in enumerate(container.decode(video=0)):
-                    image, original_size = preprocess_rgb(
-                        frame.to_ndarray(format="rgb24"),
-                        process_res=int(self.config.get("process_res", 504)),
-                        process_res_method=self.config.get("process_res_method", "upper_bound_resize"),
-                    )
-                    depth, sky = self._infer(image, use_cuda_graph=self.config.get("use_cuda_graph", False))
-                    preview = render_relative_depth_preview(depth, sky, size=original_size)
-                    if preview.shape[0] % 2 or preview.shape[1] % 2:
-                        preview = np.pad(preview, ((0, preview.shape[0] % 2), (0, preview.shape[1] % 2)), mode="edge")
-                    rgb = np.repeat(preview[:, :, None], 3, axis=2)
-                    writer.submit(torch.from_numpy(rgb[None]))
-                    if depth_path is not None:
-                        save_float_depth(depth, depth_path / f"{frame_index:06d}.npy")
-                    if sky_mask_path is not None:
-                        save_sky_mask(sky, sky_mask_path / f"{frame_index:06d}.png")
-                if not writer.frames:
-                    raise ValueError(f"Input video has no decodable frames: {source}")
-                writer.close()
-            except BaseException:
-                writer.abort()
-                raise
+            with ExitStack() as archives:
+                depth_archive = archives.enter_context(StreamingNpzWriter(depth_path)) if depth_path is not None else None
+                if sky_mask_path is None:
+                    sky_archive = None
+                elif sky_mask_path == depth_path:
+                    sky_archive = depth_archive
+                else:
+                    sky_archive = archives.enter_context(StreamingNpzWriter(sky_mask_path))
+                writer = StreamingVideoWriter(destination, fps=fps)
+                try:
+                    for frame_index, frame in enumerate(container.decode(video=0)):
+                        image, original_size = preprocess_rgb(
+                            frame.to_ndarray(format="rgb24"),
+                            process_res=int(self.config.get("process_res", 504)),
+                            process_res_method=self.config.get("process_res_method", "upper_bound_resize"),
+                        )
+                        depth, sky = self._infer(image, use_cuda_graph=self.config.get("use_cuda_graph", False))
+                        preview = render_relative_depth_preview(depth, sky, size=original_size)
+                        if preview.shape[0] % 2 or preview.shape[1] % 2:
+                            preview = np.pad(preview, ((0, preview.shape[0] % 2), (0, preview.shape[1] % 2)), mode="edge")
+                        rgb = np.repeat(preview[:, :, None], 3, axis=2)
+                        writer.submit(torch.from_numpy(rgb[None]))
+                        if depth_archive is not None:
+                            depth_archive.write_frame(f"depth_{frame_index:06d}", depth)
+                        if sky_archive is not None:
+                            sky_archive.write_frame(f"sky_mask_{frame_index:06d}", (sky >= 0.5).astype(np.uint8) * 255)
+                    if not writer.frames:
+                        raise ValueError(f"Input video has no decodable frames: {source}")
+                    writer.close()
+                except BaseException:
+                    writer.abort()
+                    raise
         if has_audio and mux_audio_from_video(str(source), str(destination), trim_to_shortest=False) is None:
             raise RuntimeError(f"Depth video was written but its source audio could not be muxed: {destination}")
         return destination

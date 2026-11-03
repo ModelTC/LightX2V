@@ -82,15 +82,35 @@ bash /path/to/LightX2V/scripts/depth_anything3/run_da3mono_large.sh \
   /path/to/depth.npy /path/to/sky_mask.png
 ```
 
-For videos, provide directories instead of files. Frames are written as
-`000000.npy`, `000001.npy`, ... and `000000.png`, `000001.png`, ... while the
-MP4 is encoded. A directory must be new or empty so a shorter rerun cannot
-leave stale frames. Pass an empty fourth argument to save only the mask.
+For videos, use `.npz` paths. The fourth and fifth arguments may be the same
+path to put depth and sky masks into **one** archive:
+
+```bash
+bash /path/to/LightX2V/scripts/depth_anything3/run_da3mono_large.sh \
+  /path/to/geometry_estimation /path/to/input.mp4 /path/to/depth.mp4 \
+  /path/to/data.npz /path/to/data.npz
+```
+
+Frames are streamed as `depth_000000`, `sky_mask_000000`, ... NPY members;
+the archive is published only after the video frame loop completes. No
+per-frame files or in-memory video array are created. ZIP64 supports outputs
+larger than 4 GiB. Pass an empty fourth argument to save only the mask.
+Read one frame without materializing the whole video:
+
+```python
+import numpy as np
+
+with np.load("/path/to/data.npz", allow_pickle=False) as data:
+    depth = data["depth_000000"]  # float32, [processed_height, processed_width]
+    sky_mask = data["sky_mask_000000"]  # uint8, 0 or 255
+```
+
 The NPY holds non-normalized float32 relative depth at the internal inference
 resolution, after the mono sky-depth correction; it is not metric depth.
-The mask PNG uses 255 for sky (`sky >= 0.5`) and 0 otherwise, also at the
-internal inference resolution. The official mono sky-depth correction uses a
-different threshold (`sky >= 0.3`): sky pixels receive the 99th percentile
+The image mask PNG and video mask arrays use 255 for sky (`sky >= 0.5`) and 0
+otherwise, also at the internal inference resolution. The official mono
+sky-depth correction uses a different threshold (`sky >= 0.3`): sky pixels
+receive the 99th percentile
 of non-sky depth when both regions have more than ten pixels. This runner
 computes the percentile over all non-sky pixels for deterministic results;
 the official implementation randomly samples 100,000 pixels for larger images.

@@ -1,5 +1,8 @@
-"""Human-viewable relative-depth previews for Depth Anything 3."""
+"""Relative-depth previews and optional numeric outputs for Depth Anything 3."""
 
+import os
+import tempfile
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +43,46 @@ def save_sky_mask(sky: np.ndarray, path: str | Path) -> Path:
     mask = (np.asarray(sky, dtype=np.float32) >= 0.5).astype(np.uint8) * 255
     Image.fromarray(mask).save(output, format="PNG")
     return output
+
+
+class StreamingNpzWriter:
+    """Write per-frame NPY members into one ZIP64 archive without holding frames."""
+
+    def __init__(self, path: str | Path):
+        self.output = Path(path)
+        self.temporary = None
+        self.archive = None
+
+    def __enter__(self):
+        self.output.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=f".{self.output.name}.", suffix=".part", dir=self.output.parent)
+        os.close(fd)
+        self.temporary = Path(temporary)
+        try:
+            self.archive = zipfile.ZipFile(self.temporary, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True)
+        except BaseException:
+            self.temporary.unlink(missing_ok=True)
+            raise
+        return self
+
+    def write_frame(self, key: str, array: np.ndarray) -> None:
+        """Write one array as a named NPY member."""
+        with self.archive.open(f"{key}.npy", mode="w", force_zip64=True) as member:
+            np.lib.format.write_array(member, np.asarray(array), allow_pickle=False)
+
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            if exc_type is None:
+                self.archive.close()
+                os.replace(self.temporary, self.output)
+            else:
+                try:
+                    self.archive.close()
+                except Exception:
+                    pass  # Preserve the inference error; the partial archive is removed.
+        finally:
+            self.temporary.unlink(missing_ok=True)
+        return False
 
 
 def save_relative_depth_preview(depth: np.ndarray, sky: np.ndarray | None, path: str | Path, *, size: tuple[int, int]) -> Path:

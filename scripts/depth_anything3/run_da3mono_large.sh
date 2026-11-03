@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 3 || $# -gt 5 ]]; then
-    echo "Usage: $0 MODEL_PATH INPUT_IMAGE_OR_VIDEO OUTPUT_PNG_OR_MP4 [DEPTH_NPY_OR_DIR] [SKY_MASK_PNG_OR_DIR]" >&2
+    echo "Usage: $0 MODEL_PATH INPUT_IMAGE_OR_VIDEO OUTPUT_PNG_OR_MP4 [DEPTH_NPY_OR_NPZ] [SKY_MASK_PNG_OR_NPZ]" >&2
     exit 2
 fi
 
