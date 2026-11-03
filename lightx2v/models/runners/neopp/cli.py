@@ -1,4 +1,4 @@
-from lightx2v.models.runners.request_args import COMMON, fields, without
+from lightx2v.models.runners.request_args import COMMON, without
 from lightx2v.utils.request_spec import Argument, MultiTaskSpec
 
 
@@ -21,8 +21,8 @@ class NeoppSpec(MultiTaskSpec):
 SPECS = {
     "neopp": NeoppSpec(
         {
-            "t2i": without(COMMON, "return_result_tensor") | fields("size"),
-            "i2i": without(COMMON, "return_result_tensor") | fields("size"),
+            "t2i": without(COMMON, "return_result_tensor") | {"size": Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH")},
+            "i2i": without(COMMON, "return_result_tensor") | {"size": Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH")},
         },
     ),
 }

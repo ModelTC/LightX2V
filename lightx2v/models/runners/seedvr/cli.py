@@ -1,5 +1,7 @@
-from lightx2v.models.runners.request_args import COMMON, fields
-from lightx2v.utils.request_spec import RequestSpec
+import argparse
+
+from lightx2v.models.runners.request_args import COMMON
+from lightx2v.utils.request_spec import Argument, RequestSpec
 
 
 class SeedVRSpec(RequestSpec):
@@ -11,5 +13,16 @@ class SeedVRSpec(RequestSpec):
 
 
 SPECS = {
-    "seedvr2": SeedVRSpec({"sr": COMMON | fields("image_path", "match_target_size", "size", "sr_ratio", "video_path")}),
+    "seedvr2": SeedVRSpec(
+        {
+            "sr": COMMON
+            | {
+                "image_path": Argument(help="Input image path."),
+                "match_target_size": Argument(action=argparse.BooleanOptionalAction, help="(SeedVR sr) Crop or resize decoded output to size; defaults to the startup config."),
+                "size": Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+                "sr_ratio": Argument(type=float, help="super resolution ratio for sr task"),
+                "video_path": Argument(help="Input video path."),
+            }
+        }
+    ),
 }
