@@ -9,6 +9,7 @@ part of the mono-large checkpoint.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from importlib import import_module
 
 import torch
@@ -16,6 +17,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+
+
+def _is_compiling() -> bool:
+    return getattr(torch.compiler, "is_compiling", torch._utils.is_compiling)()
 
 
 class PatchEmbeddings(nn.Module):
@@ -28,12 +33,19 @@ class PatchEmbeddings(nn.Module):
 
 
 class Embeddings(nn.Module):
+    _MAX_POSITION_CACHE_ENTRIES = 4
+
     def __init__(self, hidden_size: int, image_size: int = 518):
         super().__init__()
         self.cls_token = nn.Parameter(torch.empty(1, 1, hidden_size))
         patches = (image_size // 14) ** 2
         self.position_embeddings = nn.Parameter(torch.empty(1, patches + 1, hidden_size))
         self.patch_embeddings = PatchEmbeddings(hidden_size)
+        self._position_cache = OrderedDict()
+
+    def _apply(self, fn):
+        self._position_cache.clear()
+        return super()._apply(fn)
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         batch, _, height, width = image.shape
@@ -43,16 +55,27 @@ class Embeddings(nn.Module):
         pos = self.position_embeddings
         original_side = math.isqrt(pos.shape[1] - 1)
         if patch_h != original_side or patch_w != original_side:
-            patch_pos = pos[:, 1:].float().reshape(1, original_side, original_side, -1).permute(0, 3, 1, 2)
-            patch_pos = F.interpolate(
-                patch_pos,
-                scale_factor=((patch_h + 0.1) / original_side, (patch_w + 0.1) / original_side),
-                mode="bicubic",
-                antialias=False,
-            )
-            if patch_pos.shape[-2:] != (patch_h, patch_w):
-                raise ValueError(f"DA3 positional embedding size mismatch: {patch_pos.shape[-2:]} vs {(patch_h, patch_w)}")
-            pos = torch.cat((pos[:, :1].float(), patch_pos.flatten(2).transpose(1, 2)), dim=1).to(tokens.dtype)
+            # The weights are fixed during inference; pointer/version changes invalidate cached positions.
+            cacheable = not self.training and torch.is_inference_mode_enabled() and not _is_compiling()
+            cache_key = (patch_h, patch_w, pos.device, pos.dtype, tokens.dtype, pos.data_ptr(), pos._version) if cacheable else None
+            if cacheable and cache_key in self._position_cache:
+                pos = self._position_cache[cache_key]
+                self._position_cache.move_to_end(cache_key)
+            else:
+                patch_pos = pos[:, 1:].float().reshape(1, original_side, original_side, -1).permute(0, 3, 1, 2)
+                patch_pos = F.interpolate(
+                    patch_pos,
+                    scale_factor=((patch_h + 0.1) / original_side, (patch_w + 0.1) / original_side),
+                    mode="bicubic",
+                    antialias=False,
+                )
+                if patch_pos.shape[-2:] != (patch_h, patch_w):
+                    raise ValueError(f"DA3 positional embedding size mismatch: {patch_pos.shape[-2:]} vs {(patch_h, patch_w)}")
+                pos = torch.cat((pos[:, :1].float(), patch_pos.flatten(2).transpose(1, 2)), dim=1).to(tokens.dtype)
+                if cacheable:
+                    self._position_cache[cache_key] = pos
+                    if len(self._position_cache) > self._MAX_POSITION_CACHE_ENTRIES:
+                        self._position_cache.popitem(last=False)
         return tokens + pos
 
 
