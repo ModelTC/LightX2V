@@ -1,6 +1,8 @@
 # Depth Anything 3 MONO-LARGE
 
-Use the ComfyUI-format `depth_anything_3_mono_large.safetensors` checkpoint with
+Use either the official DA3MONO-LARGE `model.safetensors` checkpoint from
+[`depth-anything/DA3MONO-LARGE`](https://huggingface.co/depth-anything/DA3MONO-LARGE),
+or the ComfyUI-format `depth_anything_3_mono_large.safetensors` checkpoint with
 LightX2V's native depth runner. Set up the LightX2V Python
 environment first, then run from any directory:
 
@@ -20,8 +22,9 @@ bash /path/to/LightX2V/scripts/depth_anything3/run_da3mono_large.sh \
   /path/to/depth.mp4
 ```
 
-The first argument may point directly to the safetensors file or to its parent
-directory. The script uses the active `python` and the repository's
+The first argument may point directly to either safetensors file or to its parent
+directory. If both filenames are present, pass the desired file explicitly.
+The script uses the active `python` and the repository's
 [`da3mono_large.json`](../../configs/depth_anything3/da3mono_large.json).
 Set `attn_type` in that config to select a LightX2V dense-attention backend.
 `torch_sdpa` is the default; `flash_attn2`, `flash_attn3` and `sage_attn2`

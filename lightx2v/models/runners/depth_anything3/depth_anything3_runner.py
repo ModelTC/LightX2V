@@ -14,6 +14,7 @@ from lightx2v.models.networks.depth_anything3.mono import DepthAnything3Mono
 from lightx2v.models.networks.depth_anything3.output import render_relative_depth_preview, save_relative_depth_preview
 from lightx2v.models.networks.depth_anything3.preprocess import preprocess_image, preprocess_rgb
 from lightx2v.models.runners.base_runner import BaseRunner
+from lightx2v.models.runners.depth_anything3.checkpoint import normalize_checkpoint_weights, resolve_checkpoint
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.utils.input_info import InputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -30,7 +31,7 @@ class DepthInputInfo(InputInfo):
 
 @RUNNER_REGISTER("depth_anything3")
 class DepthAnything3Runner(BaseRunner):
-    """Load a ComfyUI-format checkpoint once and reuse it across requests."""
+    """Load an official or ComfyUI-format checkpoint once and reuse it across requests."""
 
     input_info_cls_by_task = {"depth": DepthInputInfo}
     supported_request_fields_by_task = {"depth": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"image_path", "video_path"}}
@@ -47,18 +48,12 @@ class DepthAnything3Runner(BaseRunner):
         mm_type = self.config.get("mm_type", "Default")
         if mm_type != "Default":
             raise ValueError(f"Depth Anything 3 does not yet support mm_type={mm_type!r}; quantized linear weights require a DA3 weight/scale loader")
-        model_path = Path(self.config["model_path"])
-        checkpoint = model_path / "depth_anything_3_mono_large.safetensors" if model_path.is_dir() else model_path
-        if not checkpoint.is_file() or checkpoint.suffix != ".safetensors":
-            raise FileNotFoundError(f"DA3MONO-LARGE safetensors checkpoint not found: {checkpoint}")
+        checkpoint = resolve_checkpoint(Path(self.config["model_path"]))
 
         with torch.device("meta"):
             model = DepthAnything3Mono(attn_type=self.config.get("attn_type", "torch_sdpa"))
         weights = load_safetensors(str(checkpoint), device="cpu")
-        prefix = "model."
-        state = {key[len(prefix) :] if key.startswith(prefix) else key: value for key, value in weights.items()}
-        if len(state) != len(weights):
-            raise ValueError("Duplicate DA3 checkpoint keys after removing the 'model.' prefix")
+        state = normalize_checkpoint_weights(weights)
         model.load_state_dict(state, strict=True, assign=True)
         del weights, state
         self.model = model.to(self.device).eval()
