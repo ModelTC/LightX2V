@@ -132,6 +132,63 @@ class PremergedLaunchTests(unittest.TestCase):
                 LAUNCH.execute("fl2av", path)
             self.assertEqual(run.call_count, 2)
 
+    def test_fake10_ref_shell_override_uses_actual_config_and_only_launches_pdmd(self):
+        config, _, environment, _ = self.prepare("ref2av")
+        path = TRAIN_ROOT / "configs/train/dmd/minimax_h3_ref2av_pdmd1500000_from_cm_premerged_decfg8_shift12_3_fake10_save100_fsdp32.yaml"
+        environment["H3_PDMD_CONFIG"] = str(path)
+        before = {str(item): item.read_bytes() for item in self.root.rglob("*") if item.is_file()}
+        result = subprocess.run(
+            ["bash", str(TRAIN_ROOT / "scripts/run_minimax_h3_pdmd_from_cm_premerged_fsdp32_32gpu_acp.sh"), "ref2av", "--dry-run"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report, _ = json.JSONDecoder().raw_decode(result.stdout)
+        self.assertEqual(report["task"], "ref2av")
+        self.assertEqual(report["fake_update_ratio"], 10)
+        self.assertEqual((report["video_shift"], report["audio_shift"]), (12.0, 3.0))
+        self.assertEqual(report["save_every_role_updates"], 100)
+        self.assertEqual(report["save_total_limit"], 2)
+        self.assertEqual(report["pdmd_total_iters"], 1500000)
+        self.assertEqual(report["pdmd_student_updates"], 136363)
+        self.assertEqual(report["pdmd_fake_updates"], 1363637)
+        self.assertEqual((report["new_rows"], report["old_rows"]), (2, 2))
+        self.assertFalse(report["student_uses_decfg"])
+        self.assertFalse(report["online_decfg_merge"])
+        self.assertIn("--nnodes=4 --nproc_per_node=8", result.stdout)
+        self.assertIn(str(path), result.stdout)
+        self.assertNotIn("[h3-stages][cm]", result.stdout)
+        self.assertEqual(before, {str(item): item.read_bytes() for item in self.root.rglob("*") if item.is_file()})
+        self.assertFalse(Path(config["training"]["output_dir"]).exists())
+
+    def test_rejects_zero_fake_ratio_and_mismatched_inference_rollout_shifts(self):
+        config, _, _, _ = self.prepare("ref2av")
+        bad = copy.deepcopy(config)
+        bad["training"]["dmd"]["fake_update_ratio"] = 0
+        with self.assertRaisesRegex(RuntimeError, "positive|fake|critic"):
+            LAUNCH.validate(bad, "ref2av")
+        for modality in ("video", "audio"):
+            with self.subTest(modality=modality):
+                bad = copy.deepcopy(config)
+                bad["training"]["dmd"][f"official_rollout_{modality}_shift"] = 1.0
+                with self.assertRaisesRegex(RuntimeError, "shift"):
+                    LAUNCH.validate(bad, "ref2av")
+
+    def test_fake10_ref_cannot_reuse_default_recipe_handoff(self):
+        config, _, environment, default_path = self.prepare("ref2av")
+        fake10_path = TRAIN_ROOT / "configs/train/dmd/minimax_h3_ref2av_pdmd1500000_from_cm_premerged_decfg8_shift12_3_fake10_save100_fsdp32.yaml"
+        with patch.dict(os.environ, environment), patch.object(LAUNCH.subprocess, "run") as run:
+            LAUNCH.execute("ref2av", default_path)
+            self.assertEqual(run.call_count, 1)
+            receipt = Path(config["training"]["output_dir"]) / "cm_premerged_handoff.json"
+            original = receipt.read_bytes()
+            with self.assertRaisesRegex(RuntimeError, "recipe differs"):
+                LAUNCH.execute("ref2av", fake10_path)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(receipt.read_bytes(), original)
+
     def test_rejects_incomplete_cm_wrong_task_student_decfg_and_double_merge(self):
         config, export, _, _ = self.prepare("ref2av")
         rank = export.parent / "turbo.rank00017.json"

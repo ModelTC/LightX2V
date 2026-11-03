@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import os
 import shlex
 import subprocess
@@ -78,14 +79,19 @@ def validate(config, task):
     )
     dmd = training["dmd"]
     require(
-        training["method"] == "dmd" and (dmd["official_pdmd"], dmd["num_inference_steps"], dmd["fake_update_ratio"], dmd["update_order"]) == (True, 8, 5, "fake_first"),
-        "Use official PDMD8, fake5 -> student1",
+        training["method"] == "dmd" and (dmd["official_pdmd"], dmd["num_inference_steps"], dmd["update_order"]) == (True, 8, "fake_first"),
+        "Use official PDMD8 with fake-first updates",
     )
+    require(type(dmd["fake_update_ratio"]) is int and dmd["fake_update_ratio"] > 0, "fake_update_ratio must be a positive integer")
     require(
         model["capabilities"]["distribution_matching"]["official_pdmd"] is True and model["capabilities"]["distribution_matching"]["projected_dmd"] is True, "Use the official projected DMD objective"
     )
-    require((dmd["official_rollout_video_shift"], dmd["official_rollout_audio_shift"]) == (12.0, 3.0), "Preserve rollout shifts12/3")
-    require(training["max_train_iters"] == 1500000 and training["save_every_iters"] == 100 and training["save_total_limit"] == 2, "PDMD uses 1500000 role updates; save every100, retain2")
+    rollout_shifts = (dmd["official_rollout_video_shift"], dmd["official_rollout_audio_shift"])
+    require(all(type(shift) in (int, float) and math.isfinite(shift) and shift > 0 for shift in rollout_shifts), "Rollout shifts must be finite and positive")
+    metadata = model["capabilities"]["distribution_matching"]
+    require((metadata["video_flow_shift"], metadata["audio_flow_shift"]) == rollout_shifts, "Inference metadata must match rollout shifts")
+    require(training["max_train_iters"] == 1500000 and training["save_total_limit"] == 2, "PDMD uses 1500000 role updates and retains2 checkpoints")
+    require(type(training["save_every_iters"]) is int and training["save_every_iters"] > 0, "save_every_iters must be a positive integer")
     require(
         training["student"]["train_type"] == "lora" and training["fake"]["train_type"] == "full" and training["student"]["ema"] == {"enabled": False},
         "Continue the CM LoRA as the live student and initialize a fresh full fake",
@@ -144,8 +150,14 @@ def execute(task, config_path, *, dry_run=False):
                 "pdmd_output": config["training"]["output_dir"],
                 "new_rows": plan["new"]["rows"],
                 "old_rows": plan["old"]["rows"],
-                "save_every_role_updates": 100,
-                "save_total_limit": 2,
+                "fake_update_ratio": config["training"]["dmd"]["fake_update_ratio"],
+                "video_shift": config["training"]["dmd"]["official_rollout_video_shift"],
+                "audio_shift": config["training"]["dmd"]["official_rollout_audio_shift"],
+                "pdmd_total_iters": config["training"]["max_train_iters"],
+                "pdmd_student_updates": config["training"]["max_train_iters"] // (config["training"]["dmd"]["fake_update_ratio"] + 1),
+                "pdmd_fake_updates": config["training"]["max_train_iters"] - config["training"]["max_train_iters"] // (config["training"]["dmd"]["fake_update_ratio"] + 1),
+                "save_every_role_updates": config["training"]["save_every_iters"],
+                "save_total_limit": config["training"]["save_total_limit"],
                 "student_uses_decfg": False,
                 "online_decfg_merge": False,
             },

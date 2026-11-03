@@ -112,3 +112,42 @@ changing any of these on a subsequent launch requires another output directory.
 An output containing earlier PDMD checkpoints without this identity is rejected.
 
 Logs are under each `H3_PDMD_OUTPUT/train.log`.
+
+
+## Ref CM1500 continuation with fake10, shifts12/3
+
+This variant retains the completed Ref CM1500 EMA and image-only NEW -> OLD ->
+repeat curriculum and its video/audio shifts12/3. It aligns optimizer settings
+with the historical FL2AV run: fake10 -> student1, student/fake LR2e-5/4e-6, Adam betas0/0.9,
+weight decay0, epsilon1e-8, clipping1, gradient accumulation1, and8 rollout steps.
+Regular LoRA stays128/128 and block/output AdaLN stays16/16. Student uses the
+original Ref base; teacher/fake use the already-merged DeCFG score base.
+
+The budget is1500000 role updates (136363 student and1363637 fake). Save every100
+role updates and retain2 checkpoints; each interval contains9 or10 student
+updates. Use a fresh output for this different recipe. The default fake5 configs
+remain unchanged. Run this same command on all four ACP workers:
+
+```bash
+cd /mnt/lm_data_afs/gushiqiao/codes/news/LightX2V
+source /mnt/lm_data_afs/gushiqiao/envs/lightx2v_h3/bin/activate
+
+H3_CODE_ROOT="$PWD" \
+H3_PYTHON="$VIRTUAL_ENV/bin/python" \
+H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3 \
+H3_SCORE_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3-DeCFG-score \
+H3_STUDENT_INIT=/mnt/lm_data_afs/gushiqiao/outputs/h3_ref2av_imgonly_dcm1500_pdmd1500000_restart_ema999_lr2e5_4e6_20261030/cm/train/checkpoint-000001500/student_ema \
+H3_NEW_CACHE=/mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_self_generated_latents_124_bf16/ref2av_imageonly/condition_metadata.jsonl \
+H3_REF2AV_CACHE=/mnt/lm_data_afs/gushiqiao/datasets/omni_r2v_image_only_100k_20261004/latent_match124_bf16/metadata.jsonl \
+H3_PDMD_CONFIG="$PWD/lightx2v_train/configs/train/dmd/minimax_h3_ref2av_pdmd1500000_from_cm_premerged_decfg8_shift12_3_fake10_save100_fsdp32.yaml" \
+H3_PDMD_OUTPUT=/mnt/devsft_afs_2/gushiqiao/outputs/h3_ref2av_pdmd8_from_cm1500_decfg_shift12_3_fake10_save100_32gpu_20261103/train \
+H3_RDZV_ID=h3_ref2av_pdmd8_from_cm1500_decfg_shift12_3_fake10_save100_32gpu_20261103 \
+KERNELS_CACHE=/mnt/lm_data_afs/gushiqiao/cache/kernels \
+bash lightx2v_train/scripts/run_minimax_h3_pdmd_from_cm_premerged_fsdp32_32gpu_acp.sh ref2av
+```
+
+`H3_STUDENT_INIT` above is the previously recorded Ref CM1500 output path; if the
+completed export lives elsewhere, point it at that Ref `student_ema` directory.
+The launcher checks all32 recorded CM ranks and the matching DeCFG provenance
+before launching training. `H3_PDMD_CONFIG` can also be a path relative to
+`H3_CODE_ROOT`. Append `--dry-run` for read-only preflight checks.

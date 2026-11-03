@@ -40,6 +40,7 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"
 export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC="${TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC:-1800}"
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 export PYTHONDONTWRITEBYTECODE=1
-config="$H3_CODE_ROOT/lightx2v_train/configs/train/dmd/minimax_h3_${task}_pdmd1500000_from_cm_premerged_decfg8_save100_fsdp32.yaml"
+config="${H3_PDMD_CONFIG:-$H3_CODE_ROOT/lightx2v_train/configs/train/dmd/minimax_h3_${task}_pdmd1500000_from_cm_premerged_decfg8_save100_fsdp32.yaml}"
+[[ "$config" == /* ]] || config="$H3_CODE_ROOT/$config"
 cd "$H3_CODE_ROOT/lightx2v_train"
 exec "$H3_PYTHON" -u scripts/run_minimax_h3_pdmd_from_cm_premerged.py --task "$task" --config "$config" "$@"
