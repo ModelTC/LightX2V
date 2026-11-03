@@ -30,6 +30,18 @@ Set `attn_type` in that config to select a LightX2V dense-attention backend.
 `torch_sdpa` is the default; `flash_attn2`, `flash_attn3` and `sage_attn2`
 also work when their optional packages are installed. Flash and Sage can
 produce slightly different depth values from the default backend.
+`backbone_dtype` defaults to `auto`: the ViT backbone uses BF16 on CUDA and
+FP32 elsewhere, while the depth head stays in FP32. Set it to `fp32` to
+retain the original checkpoint precision. BF16 can alter preview pixels,
+especially at the sky mask boundary; explicit `bf16` requires CUDA.
+`norm_type` can be `torch` (default) or `Triton`; the latter uses LightX2V's
+2D LayerNorm kernel on flattened token rows and requires Triton. It is an
+optional platform choice, not a faster default on H100.
+For long, fixed-size videos, set `use_cuda_graph` to `true` to capture the
+model once and replay it for subsequent frames. Capture adds startup time and
+holds extra GPU memory; single-image requests always use eager execution.
+Only one input shape is captured per runner. Frames of another size use eager
+execution, and `runner.close()` releases the graph with the model.
 The supplied checkpoint still uses unquantized linear weights. FP8
 `mm_type` selection needs a DA3-specific quantized checkpoint and weight/scale
 loader; it is not enabled by changing `attn_type`.

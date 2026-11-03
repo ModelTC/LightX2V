@@ -2,5 +2,8 @@
     "model_cls": "depth_anything3",
     "model_variant": "mono_large",
     "attn_type": "torch_sdpa",
+    "norm_type": "torch",
+    "backbone_dtype": "auto",
+    "use_cuda_graph": false,
     "process_res": 504
 }

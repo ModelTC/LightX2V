@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
 import numpy as np
 import torch
@@ -40,6 +41,10 @@ class DepthAnything3Runner(BaseRunner):
         super().__init__(config)
         self.model = None
         self.device = torch.device(AI_DEVICE if AI_DEVICE != "cuda" or torch.cuda.is_available() else "cpu")
+        self._cuda_graph = None
+        self._graph_input = None
+        self._graph_output = None
+        self._graph_lock = Lock()
 
     def init_modules(self):
         variant = self.config.get("model_variant", "mono_large")
@@ -48,14 +53,30 @@ class DepthAnything3Runner(BaseRunner):
         mm_type = self.config.get("mm_type", "Default")
         if mm_type != "Default":
             raise ValueError(f"Depth Anything 3 does not yet support mm_type={mm_type!r}; quantized linear weights require a DA3 weight/scale loader")
+        backbone_dtype = self.config.get("backbone_dtype", "auto")
+        if backbone_dtype not in {"auto", "fp32", "bf16"}:
+            raise ValueError(f"Unknown DA3 backbone_dtype: {backbone_dtype!r}")
+        if backbone_dtype == "auto":
+            backbone_dtype = "bf16" if self.device.type == "cuda" else "fp32"
+        if backbone_dtype == "bf16" and self.device.type != "cuda":
+            raise ValueError("DA3 backbone_dtype='bf16' requires a CUDA device")
+        use_cuda_graph = self.config.get("use_cuda_graph", False)
+        if not isinstance(use_cuda_graph, bool):
+            raise ValueError("DA3 use_cuda_graph must be a boolean")
+        if use_cuda_graph and self.device.type != "cuda":
+            raise ValueError("DA3 use_cuda_graph requires a CUDA device")
+        if self.config.get("norm_type", "torch") == "Triton" and self.device.type != "cuda":
+            raise ValueError("DA3 norm_type='Triton' requires a CUDA device")
         checkpoint = resolve_checkpoint(Path(self.config["model_path"]))
 
         with torch.device("meta"):
-            model = DepthAnything3Mono(attn_type=self.config.get("attn_type", "torch_sdpa"))
+            model = DepthAnything3Mono(attn_type=self.config.get("attn_type", "torch_sdpa"), norm_type=self.config.get("norm_type", "torch"))
         weights = load_safetensors(str(checkpoint), device="cpu")
         state = normalize_checkpoint_weights(weights)
         model.load_state_dict(state, strict=True, assign=True)
         del weights, state
+        if backbone_dtype == "bf16":
+            model.backbone.to(dtype=torch.bfloat16)
         self.model = model.to(self.device).eval()
         self.config.lock()
 
@@ -73,10 +94,39 @@ class DepthAnything3Runner(BaseRunner):
         depth, sky = self._infer(image)
         return save_relative_depth_preview(depth, sky, destination, size=original_size)
 
-    def _infer(self, image):
+    def _capture_cuda_graph(self, image):
+        self._graph_input = image.clone()
+        for _ in range(3):
+            self.model(self._graph_input)
+        torch.cuda.synchronize(self.device)
+        graph = torch.cuda.CUDAGraph()
+        try:
+            with torch.cuda.graph(graph):
+                self._graph_output = self.model(self._graph_input)
+        except BaseException:
+            self._graph_input = None
+            self._graph_output = None
+            graph.reset()
+            raise
+        self._cuda_graph = graph
+
+    def _infer(self, image, *, use_cuda_graph=False):
         with torch.inference_mode():
-            depth, sky = self.model(image.to(self.device))
-        return depth[0].float().cpu().numpy(), sky[0].float().cpu().numpy()
+            image = image.to(self.device)
+            if use_cuda_graph:
+                with self._graph_lock:
+                    if self._cuda_graph is None:
+                        self._capture_cuda_graph(image)
+                    if image.shape == self._graph_input.shape and image.dtype == self._graph_input.dtype:
+                        self._graph_input.copy_(image)
+                        self._cuda_graph.replay()
+                        depth, sky = self._graph_output
+                    else:
+                        # One graph per runner bounds captured allocations for variable-size video.
+                        depth, sky = self.model(image)
+                    return depth[0].float().cpu().numpy(), sky[0].float().cpu().numpy()
+            depth, sky = self.model(image)
+            return depth[0].float().cpu().numpy(), sky[0].float().cpu().numpy()
 
     def _run_video(self, video_path, destination):
         if destination.suffix.lower() != ".mp4":
@@ -99,7 +149,7 @@ class DepthAnything3Runner(BaseRunner):
             try:
                 for frame in container.decode(video=0):
                     image, original_size = preprocess_rgb(frame.to_ndarray(format="rgb24"), process_res=int(self.config.get("process_res", 504)))
-                    depth, sky = self._infer(image)
+                    depth, sky = self._infer(image, use_cuda_graph=self.config.get("use_cuda_graph", False))
                     preview = render_relative_depth_preview(depth, sky, size=original_size)
                     if preview.shape[0] % 2 or preview.shape[1] % 2:
                         preview = np.pad(preview, ((0, preview.shape[0] % 2), (0, preview.shape[1] % 2)), mode="edge")
@@ -116,7 +166,16 @@ class DepthAnything3Runner(BaseRunner):
         return destination
 
     def close(self):
-        self.model = None
+        with self._graph_lock:
+            graph = self._cuda_graph
+            self._graph_output = None
+            self._graph_input = None
+            self._cuda_graph = None
+            if graph is not None:
+                torch.cuda.synchronize(self.device)
+                graph.reset()
+                del graph
+            self.model = None
         gc.collect()
         if self.device.type == "cuda":
             torch.cuda.empty_cache()

@@ -18,6 +18,13 @@ import torch.nn.functional as F
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
+try:
+    from lightx2v.common.ops.norm.triton_ops import norm_infer as _triton_norm_infer
+except ImportError:
+    _triton_norm_infer = None
+
+import_module("lightx2v.common.ops.attn")
+
 
 def _is_compiling() -> bool:
     return getattr(torch.compiler, "is_compiling", torch._utils.is_compiling)()
@@ -127,13 +134,26 @@ class FeedForward(nn.Module):
         return self.fc2(F.gelu(self.fc1(x)))
 
 
+class DA3LayerNorm(nn.LayerNorm):
+    """Keep checkpoint-compatible parameters while selecting LightX2V's Triton kernel."""
+
+    def __init__(self, hidden_size: int):
+        super().__init__(hidden_size, eps=1e-6)
+        self.use_triton = False
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.use_triton or x.device.type != "cuda":
+            return super().forward(x)
+        return _triton_norm_infer(x.reshape(-1, x.shape[-1]), self.weight, self.bias, self.eps).reshape(x.shape)
+
+
 class EncoderLayer(nn.Module):
     def __init__(self, hidden_size: int, heads: int):
         super().__init__()
-        self.norm1 = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.norm1 = DA3LayerNorm(hidden_size)
         self.attention = Attention(hidden_size, heads)
         self.layer_scale1 = LayerScale(hidden_size)
-        self.norm2 = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.norm2 = DA3LayerNorm(hidden_size)
         self.mlp = FeedForward(hidden_size)
         self.layer_scale2 = LayerScale(hidden_size)
 
@@ -153,7 +173,7 @@ class MonoBackbone(nn.Module):
         super().__init__()
         self.embeddings = Embeddings(hidden_size)
         self.encoder = Encoder(hidden_size, heads, depth)
-        self.layernorm = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.layernorm = DA3LayerNorm(hidden_size)
         self.out_layers = out_layers
 
     def forward(self, image: torch.Tensor) -> list[torch.Tensor]:
@@ -242,9 +262,12 @@ class DPTHead(nn.Module):
 class DepthAnything3Mono(nn.Module):
     """DA3MONO-LARGE with checkpoint names matching the provided safetensors."""
 
-    def __init__(self, attn_type: str = "torch_sdpa"):
+    def __init__(self, attn_type: str = "torch_sdpa", norm_type: str = "torch"):
         super().__init__()
-        import_module("lightx2v.common.ops.attn")
+        if norm_type not in {"torch", "Triton"}:
+            raise ValueError(f"Unknown DA3 normalization backend: {norm_type!r}")
+        if norm_type == "Triton" and _triton_norm_infer is None:
+            raise ImportError("DA3 norm_type='Triton' requires the LightX2V Triton LayerNorm kernel")
         backend_type = ATTN_WEIGHT_REGISTER.get(attn_type)
         if backend_type is None:
             raise ValueError(f"Unknown DA3 attention backend: {attn_type!r}")
@@ -263,6 +286,8 @@ class DepthAnything3Mono(nn.Module):
         for module in self.backbone.modules():
             if isinstance(module, AttentionCore):
                 module.backend = backend_type()
+            elif isinstance(module, DA3LayerNorm):
+                module.use_triton = norm_type == "Triton"
 
     def forward(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         height, width = image.shape[-2:]
