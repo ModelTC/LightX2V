@@ -90,7 +90,11 @@ class DepthAnything3Runner(BaseRunner):
             return self._run_video(input_info.video_path, destination)
         if destination.suffix.lower() != ".png":
             raise ValueError("Depth Anything 3 save_result_path must end in .png")
-        image, original_size = preprocess_image(input_info.image_path, process_res=int(self.config.get("process_res", 504)))
+        image, original_size = preprocess_image(
+            input_info.image_path,
+            process_res=int(self.config.get("process_res", 504)),
+            process_res_method=self.config.get("process_res_method", "upper_bound_resize"),
+        )
         depth, sky = self._infer(image)
         return save_relative_depth_preview(depth, sky, destination, size=original_size)
 
@@ -148,7 +152,11 @@ class DepthAnything3Runner(BaseRunner):
             writer = StreamingVideoWriter(destination, fps=fps)
             try:
                 for frame in container.decode(video=0):
-                    image, original_size = preprocess_rgb(frame.to_ndarray(format="rgb24"), process_res=int(self.config.get("process_res", 504)))
+                    image, original_size = preprocess_rgb(
+                        frame.to_ndarray(format="rgb24"),
+                        process_res=int(self.config.get("process_res", 504)),
+                        process_res_method=self.config.get("process_res_method", "upper_bound_resize"),
+                    )
                     depth, sky = self._infer(image, use_cuda_graph=self.config.get("use_cuda_graph", False))
                     preview = render_relative_depth_preview(depth, sky, size=original_size)
                     if preview.shape[0] % 2 or preview.shape[1] % 2:

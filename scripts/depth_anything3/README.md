@@ -26,6 +26,22 @@ The first argument may point directly to either safetensors file or to its paren
 directory. If both filenames are present, pass the desired file explicitly.
 The script uses the active `python` and the repository's
 [`da3mono_large.json`](../../configs/depth_anything3/da3mono_large.json).
+Set `process_res` (default `504`) and `process_res_method` in that config to
+control the internal inference size. The four methods match the official DA3
+input processor:
+
+| Method | First resize | Align width and height to multiples of 14 |
+| --- | --- | --- |
+| `upper_bound_resize` (default) | Longest side to `process_res` | Resize to nearest multiple |
+| `lower_bound_resize` | Shortest side to `process_res` | Resize to nearest multiple |
+| `upper_bound_crop` | Longest side to `process_res` | Center crop down to multiple |
+| `lower_bound_crop` | Shortest side to `process_res` | Center crop down to multiple |
+
+For example, a 640×360 input at `process_res=504` becomes 504×280 internally
+with `upper_bound_resize`, or 896×504 with `lower_bound_resize`. The preview
+is still resized back to the original input size. `lower_bound` may use much
+more GPU memory for wide or tall images; CUDA Graph capture follows the
+processed frame size.
 Set `attn_type` in that config to select a LightX2V dense-attention backend.
 `torch_sdpa` is the default; `flash_attn2`, `flash_attn3` and `sage_attn2`
 also work when their optional packages are installed. Flash and Sage can
