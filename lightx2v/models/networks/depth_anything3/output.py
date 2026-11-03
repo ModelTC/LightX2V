@@ -12,6 +12,15 @@ def save_relative_depth_preview(depth: np.ndarray, sky: np.ndarray | None, path:
     ``size`` is the original input image size in (width, height) order.
     Percentiles exclude sky so a large sky region does not flatten the scene.
     """
+    preview = Image.fromarray(render_relative_depth_preview(depth, sky, size=size))
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    preview.save(output, format="PNG")
+    return output
+
+
+def render_relative_depth_preview(depth: np.ndarray, sky: np.ndarray | None, *, size: tuple[int, int]) -> np.ndarray:
+    """Render one relative-depth preview as uint8 grayscale [height,width]."""
     depth = np.asarray(depth, dtype=np.float32)
     if depth.ndim != 2 or not np.isfinite(depth).all():
         raise ValueError("Depth prediction must be a finite two-dimensional array")
@@ -29,7 +38,4 @@ def save_relative_depth_preview(depth: np.ndarray, sky: np.ndarray | None, path:
     preview = Image.fromarray(np.rint(normalized * 255).astype(np.uint8))
     if preview.size != size:
         preview = preview.resize(size, Image.Resampling.BILINEAR)
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    preview.save(output, format="PNG")
-    return output
+    return np.asarray(preview)

@@ -1,4 +1,4 @@
-"""Single-image preprocessing for DA3MONO-LARGE.
+"""RGB frame preprocessing for DA3MONO-LARGE.
 
 Follows the Apache-2.0 Depth Anything 3 InputProcessor's upper-bound resize,
 patch alignment, and ImageNet normalization for one RGB image.
@@ -14,10 +14,17 @@ from PIL import Image
 
 def preprocess_image(path: str | Path, *, process_res: int = 504) -> tuple[torch.Tensor, tuple[int, int]]:
     """Return normalized (1, 3, H, W) input and original (width, height)."""
-    if process_res < 14:
-        raise ValueError("process_res must be at least one DA3 patch (14 pixels)")
     with Image.open(path) as image:
         rgb = np.asarray(image.convert("RGB"))
+    return preprocess_rgb(rgb, process_res=process_res)
+
+
+def preprocess_rgb(rgb: np.ndarray, *, process_res: int = 504) -> tuple[torch.Tensor, tuple[int, int]]:
+    """Preprocess one uint8 RGB frame without writing it to disk."""
+    if process_res < 14:
+        raise ValueError("process_res must be at least one DA3 patch (14 pixels)")
+    if rgb.ndim != 3 or rgb.shape[2] != 3 or rgb.dtype != np.uint8 or not rgb.shape[0] or not rgb.shape[1]:
+        raise ValueError("DA3 input frame must be nonempty uint8 RGB [height,width,3]")
     height, width = rgb.shape[:2]
     original_size = (width, height)
     scale = process_res / max(height, width)

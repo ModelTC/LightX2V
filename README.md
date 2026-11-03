@@ -269,7 +269,7 @@ LightX2V supports image, video, and world models and provides quantized weights,
 | [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay) (bidirectional, autoregressive, and distilled) | [Guide](scripts/worldplay/README.md) |
 | [EdenLive](https://huggingface.co/VAST-AI/EdenLive) (Wan2.1 14B / Wan2.2 5B; bidirectional and four-step autoregressive) | [Guide](scripts/edenlive/README.md) |
 | [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (3D reconstruction) | [Guide](scripts/worldmirror/README.md) |
-| [Depth Anything 3 MONO-LARGE](https://github.com/ByteDance-Seed/Depth-Anything-3) (single-image relative depth) | [Guide and run script](scripts/depth_anything3/README.md) |
+| [Depth Anything 3 MONO-LARGE](https://github.com/ByteDance-Seed/Depth-Anything-3) (image/video relative depth) | [Guide and run script](scripts/depth_anything3/README.md) |
 | [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) | [Scripts](scripts/dreamzero) |
 | [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base) | [Scripts](scripts/lingbot_va) |
 | [Motus](https://huggingface.co/motus-robotics/Motus) | [Scripts](scripts/motus) |
