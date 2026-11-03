@@ -44,13 +44,16 @@ class DepthAnything3Runner(BaseRunner):
         variant = self.config.get("model_variant", "mono_large")
         if variant != "mono_large":
             raise ValueError(f"Depth Anything 3 supports only model_variant='mono_large'; got {variant!r}")
+        mm_type = self.config.get("mm_type", "Default")
+        if mm_type != "Default":
+            raise ValueError(f"Depth Anything 3 does not yet support mm_type={mm_type!r}; quantized linear weights require a DA3 weight/scale loader")
         model_path = Path(self.config["model_path"])
         checkpoint = model_path / "depth_anything_3_mono_large.safetensors" if model_path.is_dir() else model_path
         if not checkpoint.is_file() or checkpoint.suffix != ".safetensors":
             raise FileNotFoundError(f"DA3MONO-LARGE safetensors checkpoint not found: {checkpoint}")
 
         with torch.device("meta"):
-            model = DepthAnything3Mono()
+            model = DepthAnything3Mono(attn_type=self.config.get("attn_type", "torch_sdpa"))
         weights = load_safetensors(str(checkpoint), device="cpu")
         prefix = "model."
         state = {key[len(prefix) :] if key.startswith(prefix) else key: value for key, value in weights.items()}

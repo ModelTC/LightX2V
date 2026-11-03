@@ -9,10 +9,13 @@ part of the mono-large checkpoint.
 from __future__ import annotations
 
 import math
+from importlib import import_module
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 
 class PatchEmbeddings(nn.Module):
@@ -66,10 +69,9 @@ class AttentionCore(nn.Module):
         head_size = hidden_size // self.heads
 
         def split(linear: nn.Linear) -> torch.Tensor:
-            return linear(x).reshape(batch, tokens, self.heads, head_size).transpose(1, 2)
+            return linear(x).reshape(batch, tokens, self.heads, head_size)
 
-        result = F.scaled_dot_product_attention(split(self.query), split(self.key), split(self.value))
-        return result.transpose(1, 2).reshape(batch, tokens, hidden_size)
+        return self.backend.apply(split(self.query), split(self.key), split(self.value)).reshape(batch, tokens, hidden_size)
 
 
 class Attention(nn.Module):
@@ -217,10 +219,27 @@ class DPTHead(nn.Module):
 class DepthAnything3Mono(nn.Module):
     """DA3MONO-LARGE with checkpoint names matching the provided safetensors."""
 
-    def __init__(self):
+    def __init__(self, attn_type: str = "torch_sdpa"):
         super().__init__()
+        import_module("lightx2v.common.ops.attn")
+        backend_type = ATTN_WEIGHT_REGISTER.get(attn_type)
+        if backend_type is None:
+            raise ValueError(f"Unknown DA3 attention backend: {attn_type!r}")
+        required_kernel = {
+            "flash_attn2": ("flash_attn", "flash_attn_varlen_func_v2"),
+            "flash_attn3": ("flash_attn", "flash_attn_func_v3"),
+            "sage_attn2": ("sage_attn", "sageattn"),
+        }.get(attn_type)
+        if required_kernel is not None:
+            module_name, function_name = required_kernel
+            backend_module = import_module(f"lightx2v.common.ops.attn.{module_name}")
+            if getattr(backend_module, function_name) is None:
+                raise ImportError(f"DA3 attention backend {attn_type!r} is unavailable; install its optional kernel package")
         self.backbone = MonoBackbone()
         self.head = DPTHead()
+        for module in self.backbone.modules():
+            if isinstance(module, AttentionCore):
+                module.backend = backend_type()
 
     def forward(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         height, width = image.shape[-2:]

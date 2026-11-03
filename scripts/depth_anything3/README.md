@@ -23,6 +23,13 @@ bash /path/to/LightX2V/scripts/depth_anything3/run_da3mono_large.sh \
 The first argument may point directly to the safetensors file or to its parent
 directory. The script uses the active `python` and the repository's
 [`da3mono_large.json`](../../configs/depth_anything3/da3mono_large.json).
+Set `attn_type` in that config to select a LightX2V dense-attention backend.
+`torch_sdpa` is the default; `flash_attn2`, `flash_attn3` and `sage_attn2`
+also work when their optional packages are installed. Flash and Sage can
+produce slightly different depth values from the default backend.
+The supplied checkpoint still uses unquantized linear weights. FP8
+`mm_type` selection needs a DA3-specific quantized checkpoint and weight/scale
+loader; it is not enabled by changing `attn_type`.
 
 The output is an 8-bit grayscale PNG at the input image size. Near regions are
 bright, far regions are dark, and detected sky is black. It is a relative-depth
