@@ -23,7 +23,6 @@ from lightx2v.models.schedulers.taomate_h3.geometry import request_plan
 from lightx2v.models.schedulers.taomate_h3.scheduler import TaoMateH3Scheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
-from lightx2v.utils.profiler import no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -325,17 +324,16 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             # epoch before the next Stage3 phase, including warmed replays.
             self.model.transformer_infer.before_graph_capture = async_decoder.synchronize if async_decoder is not None and async_decoder.is_async else None
             audio_chunks = []
-            with no_sync_profiling(enabled=async_decoder is not None and async_decoder.is_async):
-                for request_index, current in enumerate(milestones):
-                    self.inputs = self._segment_inputs[request_index]
-                    self._prepare_stage3_request(current, request_index=request_index)
-                    _, audio_rows = self._run_stage3(request_index=request_index, video_decoder=video_decoder, async_decoder=async_decoder)
-                    audio_chunks.append(audio_rows.reshape(2, self.scheduler.plan.audio_latents, 32))
-                if async_decoder is not None:
-                    async_decoder.submit(self._finish_video_decode, video_decoder)
-                    video_chunks = [frames for output in async_decoder.finish() for frames in output]
-                    if publication is not None:
-                        publication.finish()
+            for request_index, current in enumerate(milestones):
+                self.inputs = self._segment_inputs[request_index]
+                self._prepare_stage3_request(current, request_index=request_index)
+                _, audio_rows = self._run_stage3(request_index=request_index, video_decoder=video_decoder, async_decoder=async_decoder)
+                audio_chunks.append(audio_rows.reshape(2, self.scheduler.plan.audio_latents, 32))
+            if async_decoder is not None:
+                async_decoder.submit(self._finish_video_decode, video_decoder)
+                video_chunks = [frames for output in async_decoder.finish() for frames in output]
+                if publication is not None:
+                    publication.finish()
             async_decoder = None
             self._log_cuda_graph()
             if self.config.get("cpu_offload", False):

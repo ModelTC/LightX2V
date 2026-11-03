@@ -26,6 +26,7 @@ from lightx2v.models.video_encoders.hf.streamrender_h3 import (
     prepare_picture,
 )
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
+from lightx2v.utils.profiler import no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -82,6 +83,7 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         )
         self.text_encoder = MiniMaxH3Qwen3VLTextEncoder(text_config)
 
+    @no_sync_profiling()
     @torch.no_grad()
     def warmup(self):
         if not self.config.get("warmup", False):
