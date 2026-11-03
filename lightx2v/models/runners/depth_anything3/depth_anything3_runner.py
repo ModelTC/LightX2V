@@ -12,7 +12,7 @@ import torch
 from safetensors.torch import load_file as load_safetensors
 
 from lightx2v.models.networks.depth_anything3.mono import DepthAnything3Mono
-from lightx2v.models.networks.depth_anything3.output import render_relative_depth_preview, save_relative_depth_preview
+from lightx2v.models.networks.depth_anything3.output import postprocess_mono_sky, render_relative_depth_preview, save_float_depth, save_relative_depth_preview, save_sky_mask
 from lightx2v.models.networks.depth_anything3.preprocess import preprocess_image, preprocess_rgb
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.depth_anything3.checkpoint import normalize_checkpoint_weights, resolve_checkpoint
@@ -28,6 +28,8 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 class DepthInputInfo(InputInfo):
     image_path: str = ""
     video_path: str = ""
+    save_depth_path: str = ""
+    save_sky_mask_path: str = ""
 
 
 @RUNNER_REGISTER("depth_anything3")
@@ -35,7 +37,7 @@ class DepthAnything3Runner(BaseRunner):
     """Load an official or ComfyUI-format checkpoint once and reuse it across requests."""
 
     input_info_cls_by_task = {"depth": DepthInputInfo}
-    supported_request_fields_by_task = {"depth": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"image_path", "video_path"}}
+    supported_request_fields_by_task = {"depth": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"image_path", "video_path", "save_depth_path", "save_sky_mask_path"}}
 
     def __init__(self, config):
         super().__init__(config)
@@ -85,9 +87,10 @@ class DepthAnything3Runner(BaseRunner):
             raise ValueError("Depth Anything 3 requires exactly one of image_path or video_path")
         if not input_info.save_result_path:
             raise ValueError("Depth Anything 3 requires save_result_path")
-        destination = Path(input_info.save_result_path)
+        destination = Path(input_info.save_result_path).expanduser()
+        depth_path, sky_mask_path = self._optional_output_paths(input_info, destination)
         if input_info.video_path:
-            return self._run_video(input_info.video_path, destination)
+            return self._run_video(input_info.video_path, destination, depth_path=depth_path, sky_mask_path=sky_mask_path)
         if destination.suffix.lower() != ".png":
             raise ValueError("Depth Anything 3 save_result_path must end in .png")
         image, original_size = preprocess_image(
@@ -96,7 +99,33 @@ class DepthAnything3Runner(BaseRunner):
             process_res_method=self.config.get("process_res_method", "upper_bound_resize"),
         )
         depth, sky = self._infer(image)
-        return save_relative_depth_preview(depth, sky, destination, size=original_size)
+        result = save_relative_depth_preview(depth, sky, destination, size=original_size)
+        if depth_path is not None:
+            save_float_depth(depth, depth_path)
+        if sky_mask_path is not None:
+            save_sky_mask(sky, sky_mask_path)
+        return result
+
+    def _optional_output_paths(self, input_info, destination):
+        depth_path = Path(input_info.save_depth_path).expanduser() if input_info.save_depth_path else None
+        sky_mask_path = Path(input_info.save_sky_mask_path).expanduser() if input_info.save_sky_mask_path else None
+        outputs = [destination, *(path for path in (depth_path, sky_mask_path) if path is not None)]
+        resolved = [path.expanduser().resolve() for path in outputs]
+        source = Path(input_info.video_path or input_info.image_path).expanduser().resolve()
+        if len(set(resolved)) != len(resolved) or source in resolved:
+            raise ValueError("Depth Anything 3 input and output paths must be distinct")
+        if input_info.video_path:
+            if destination.suffix.lower() != ".mp4":
+                raise ValueError("Depth Anything 3 video save_result_path must end in .mp4")
+            for path in (depth_path, sky_mask_path):
+                if path is not None and path.exists() and (not path.is_dir() or any(path.iterdir())):
+                    raise ValueError(f"Video sidecar output must be a new or empty directory: {path}")
+        else:
+            if depth_path is not None and depth_path.suffix.lower() != ".npy":
+                raise ValueError("Image save_depth_path must end in .npy")
+            if sky_mask_path is not None and sky_mask_path.suffix.lower() != ".png":
+                raise ValueError("Image save_sky_mask_path must end in .png")
+        return depth_path, sky_mask_path
 
     def _capture_cuda_graph(self, image):
         self._graph_input = image.clone()
@@ -128,11 +157,13 @@ class DepthAnything3Runner(BaseRunner):
                     else:
                         # One graph per runner bounds captured allocations for variable-size video.
                         depth, sky = self.model(image)
-                    return depth[0].float().cpu().numpy(), sky[0].float().cpu().numpy()
-            depth, sky = self.model(image)
-            return depth[0].float().cpu().numpy(), sky[0].float().cpu().numpy()
+                    depth, sky = depth[0].float().cpu().numpy(), sky[0].float().cpu().numpy()
+            else:
+                depth, sky = self.model(image)
+                depth, sky = depth[0].float().cpu().numpy(), sky[0].float().cpu().numpy()
+            return postprocess_mono_sky(depth, sky), sky
 
-    def _run_video(self, video_path, destination):
+    def _run_video(self, video_path, destination, *, depth_path=None, sky_mask_path=None):
         if destination.suffix.lower() != ".mp4":
             raise ValueError("Depth Anything 3 video save_result_path must end in .mp4")
         source = Path(video_path).expanduser().resolve()
@@ -151,7 +182,7 @@ class DepthAnything3Runner(BaseRunner):
             has_audio = bool(container.streams.audio)
             writer = StreamingVideoWriter(destination, fps=fps)
             try:
-                for frame in container.decode(video=0):
+                for frame_index, frame in enumerate(container.decode(video=0)):
                     image, original_size = preprocess_rgb(
                         frame.to_ndarray(format="rgb24"),
                         process_res=int(self.config.get("process_res", 504)),
@@ -163,6 +194,10 @@ class DepthAnything3Runner(BaseRunner):
                         preview = np.pad(preview, ((0, preview.shape[0] % 2), (0, preview.shape[1] % 2)), mode="edge")
                     rgb = np.repeat(preview[:, :, None], 3, axis=2)
                     writer.submit(torch.from_numpy(rgb[None]))
+                    if depth_path is not None:
+                        save_float_depth(depth, depth_path / f"{frame_index:06d}.npy")
+                    if sky_mask_path is not None:
+                        save_sky_mask(sky, sky_mask_path / f"{frame_index:06d}.png")
                 if not writer.frames:
                     raise ValueError(f"Input video has no decodable frames: {source}")
                 writer.close()

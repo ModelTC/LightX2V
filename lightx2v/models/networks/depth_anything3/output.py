@@ -6,6 +6,42 @@ import numpy as np
 from PIL import Image
 
 
+def postprocess_mono_sky(depth: np.ndarray, sky: np.ndarray) -> np.ndarray:
+    """Set sky depth to the 99th percentile of non-sky depth, as in DA3 mono.
+
+    Use all non-sky pixels for a deterministic percentile instead of the
+    official implementation's random 100k-pixel sample for large images.
+    """
+    depth = np.asarray(depth, dtype=np.float32)
+    sky = np.asarray(sky, dtype=np.float32)
+    if depth.ndim != 2 or sky.shape != depth.shape or not np.isfinite(depth).all() or not np.isfinite(sky).all():
+        raise ValueError("Depth and sky predictions must be finite two-dimensional arrays of the same shape")
+    non_sky = sky < 0.3
+    if np.count_nonzero(non_sky) <= 10 or np.count_nonzero(~non_sky) <= 10:
+        return depth
+    result = depth.copy()
+    result[~non_sky] = np.float32(np.quantile(depth[non_sky], 0.99))
+    return result
+
+
+def save_float_depth(depth: np.ndarray, path: str | Path) -> Path:
+    """Save non-normalized, sky-corrected model-resolution depth as float32 NPY."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("wb") as file:
+        np.save(file, np.asarray(depth, dtype=np.float32))
+    return output
+
+
+def save_sky_mask(sky: np.ndarray, path: str | Path) -> Path:
+    """Save the official Prediction.sky threshold (>= 0.5) as a binary PNG."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    mask = (np.asarray(sky, dtype=np.float32) >= 0.5).astype(np.uint8) * 255
+    Image.fromarray(mask).save(output, format="PNG")
+    return output
+
+
 def save_relative_depth_preview(depth: np.ndarray, sky: np.ndarray | None, path: str | Path, *, size: tuple[int, int]) -> Path:
     """Save an 8-bit grayscale PNG; near is bright and sky is black.
 

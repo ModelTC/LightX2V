@@ -72,3 +72,25 @@ inputs become constant-rate), with per-frame contrast normalization. H.264
 requires even dimensions, so an odd input width or height gains one repeated
 edge pixel in the output. Only the `mono_large` variant is supported.
 Video encoding and audio muxing require `ffmpeg` on `PATH`.
+
+The optional fourth and fifth script arguments save numeric outputs alongside
+the preview:
+
+```bash
+bash /path/to/LightX2V/scripts/depth_anything3/run_da3mono_large.sh \
+  /path/to/geometry_estimation /path/to/input.png /path/to/depth.png \
+  /path/to/depth.npy /path/to/sky_mask.png
+```
+
+For videos, provide directories instead of files. Frames are written as
+`000000.npy`, `000001.npy`, ... and `000000.png`, `000001.png`, ... while the
+MP4 is encoded. A directory must be new or empty so a shorter rerun cannot
+leave stale frames. Pass an empty fourth argument to save only the mask.
+The NPY holds non-normalized float32 relative depth at the internal inference
+resolution, after the mono sky-depth correction; it is not metric depth.
+The mask PNG uses 255 for sky (`sky >= 0.5`) and 0 otherwise, also at the
+internal inference resolution. The official mono sky-depth correction uses a
+different threshold (`sky >= 0.3`): sky pixels receive the 99th percentile
+of non-sky depth when both regions have more than ten pixels. This runner
+computes the percentile over all non-sky pixels for deterministic results;
+the official implementation randomly samples 100,000 pixels for larger images.
