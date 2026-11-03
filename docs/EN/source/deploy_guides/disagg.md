@@ -19,41 +19,97 @@ LightX2V provides a native **Disaggregation Mode** that splits the inference pip
 
 ## Quick Start
 
-### Wan2.1-T2V-14B (50 steps, 480×832, 81 frames)
+These examples launch three stages on one machine. Choose one model at a time. Use the LightX2V environment and repository root in both terminals.
+
+### Shared setup
+
+In **terminal 1**, install Mooncake and set the repository path and GPUs:
 
 ```bash
-# Optional: set GPU for each stage
-# GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+pip install mooncake-transfer-engine
+export LIGHTX2V_PATH="$PWD"
+export GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+```
 
-# Start three-stage disagg services
-bash scripts/server/disagg/wan/start_wan_t2v_disagg.sh
+This places Encoder and Decoder on GPU 0 and Transformer on GPU 1. Adjust IDs and placement for available memory. Prepare the DiT, encoder, and VAE weights required by your model.
 
-# After services are up, run test
+Stage configs are under `configs/disagg/wan/` or `configs/disagg/qwen/`. Install their selected backends: Wan uses `sage_attn2`; Qwen Encoder uses `lightllm_kernel` and `flash_attn3`, while the T2I/I2I Transformer examples use `flash_attn2`/`flash_attn3` respectively. When changing a backend, update the config and verify model and GPU support.
+
+The launcher stays running. Wait until all three services are ready, then send requests from **terminal 2**. Pressing `Ctrl+C` in terminal 1 stops the entire group.
+
+### Wan2.1-T2V-14B (50 steps, 480×832, 81 frames)
+
+Terminal 1: replace the absolute model path and start the services.
+
+```bash
+WAN_T2V_MODEL_PATH="/absolute/path/to/Wan2.1-T2V-14B" \
+  bash scripts/server/disagg/wan/start_wan_t2v_disagg.sh
+```
+
+Terminal 2:
+
+```bash
 python scripts/server/disagg/wan/post_wan_t2v.py
 ```
 
 ### Wan2.1-I2V-14B-480P (40 steps, 480×832, 81 frames)
 
+Terminal 1:
+
 ```bash
-bash scripts/server/disagg/wan/start_wan_i2v_disagg.sh
+WAN_I2V_MODEL_PATH="/absolute/path/to/Wan2.1-I2V-14B-480P" \
+  bash scripts/server/disagg/wan/start_wan_i2v_disagg.sh
+```
+
+Terminal 2: set `IMAGE_PATH` in the request script to a local image before running.
+
+```bash
 python scripts/server/disagg/wan/post_wan_i2v.py
 ```
 
+(qwen-t2i-disagg-quickstart)=
 ### Qwen Image (T2I)
 
+First edit `configs/disagg/qwen/qwen_image_t2i_disagg_transformer.json`: set `dit_original_ckpt` to an existing DiT checkpoint matching your model and inference config. This field takes precedence over the model directory; changing only `QWEN_IMAGE_MODEL_PATH` does not override it.
+
+Terminal 1:
+
 ```bash
-bash scripts/server/disagg/qwen/start_qwen_t2i_disagg.sh
+QWEN_IMAGE_MODEL_PATH="/absolute/path/to/qwen-model" \
+  bash scripts/server/disagg/qwen/start_qwen_t2i_disagg.sh
+```
+
+Terminal 2:
+
+```bash
 python scripts/server/disagg/qwen/post_qwen_t2i.py
 ```
 
-### Qwen Image (I2I)
+### Qwen Image Edit 2511 (I2I)
+
+Terminal 1:
 
 ```bash
-bash scripts/server/disagg/qwen/start_qwen_i2i_disagg.sh
+QWEN_IMAGE_MODEL_PATH="/absolute/path/to/Qwen-Image-Edit-2511" \
+  bash scripts/server/disagg/qwen/start_qwen_i2i_disagg.sh
+```
+
+Terminal 2: set `IMAGE_PATH` in the request script to a local image before running.
+
+```bash
 python scripts/server/disagg/qwen/post_qwen_i2i.py
 ```
 
----
+### Addresses and ports
+
+| Example | API ports (Encoder / Transformer / Decoder) | Metrics ports |
+| --- | --- | --- |
+| Wan T2V | 8002 / 8003 / 8006 | 18002 / 18003 / 18006 |
+| Wan I2V | 8004 / 8005 / 8007 | 18004 / 18005 / 18007 |
+| Qwen T2I | 8002 / 8003 / 8008 | 18002 / 18003 / 18008 |
+| Qwen I2I | 8012 / 8013 / 8014 | 18012 / 18013 / 18014 |
+
+If you change API addresses or ports, update `ENCODER_URL`, `TRANSFORMER_URL`, and `DECODER_URL` in the request script. When running multiple groups, avoid conflicts in both API and metrics ports.
 
 ## Benchmark (summary)
 
@@ -193,11 +249,13 @@ Use `lightx2v.server` to start the HTTP API. For **three-stage** disagg:
 
 ### 3.1 Wan T2V/I2V
 
-Scripts: `scripts/server/disagg/wan/`. Start Decoder (e.g. port 8004), then Transformer (8003), then Encoder (8002). Use `/v1/tasks/video/`. Request order: POST Decoder → POST Transformer → POST Encoder → poll Decoder.
+Scripts: `scripts/server/disagg/wan/`. Start Decoder, then Transformer, then Encoder. When launching stages manually, assign nonconflicting API and metrics ports, for example Decoder `--port 8004 --metric_port 18004`, Transformer `--port 8003 --metric_port 18003`, and Encoder `--port 8002 --metric_port 18002`. Metrics start by default for each independent service. Use `/v1/tasks/video/` and match the request URLs to the API ports. Request order: POST Decoder → POST Transformer → POST Encoder → poll Decoder.
 
 ### 3.2 Qwen Image T2I/I2I
 
 Scripts: `scripts/server/disagg/qwen/`. Use `/v1/tasks/image/`. Same start order (Decoder → Transformer → Encoder). Example: `post_qwen_t2i.py`, `post_qwen_i2i.py` (they send to Decoder first, then Transformer, then Encoder, then poll Decoder). Set `IMAGE_PATH` in the script for I2I.
+
+For T2I, first complete the model directory, JSON checkpoint path, and GPU settings in the [Qwen Image T2I quick start](#qwen-t2i-disagg-quickstart). Its API ports are Encoder `8002`, Transformer `8003`, and Decoder `8008`; the I2I scripts use `8012`, `8013`, and `8014`, respectively.
 
 ### 3.3 API summary
 
@@ -208,267 +266,66 @@ Scripts: `scripts/server/disagg/qwen/`. Use `/v1/tasks/image/`. Same start order
 
 ---
 
-## 4. Decentralized Queue Mode
+## 4. Decentralized queues: implementation and entry points
 
-### 4.1 Overview
+The repository retains RDMA queues, the Controller's ring service, Runner queue communication methods, and Qwen configs. Qwen queue mode cannot currently run end to end because its standalone pull-worker module is missing.
 
-In the standard three-stage deployment, the client must send requests to Decoder → Transformer → Encoder in order, which makes the caller logic relatively complex. The decentralized queue mode simplifies this to:
+### 4.1 Components and data flow
 
-- **Controller** only maintains RDMA metadata ring buffers (request ring / phase1 ring / phase2 ring) and does not participate in inference computation;
-- **Encoder** receives client requests via HTTP API (`lightx2v.server`), runs inference, and writes phase1 metadata into the RDMA ring for the matching Transformer worker to pull;
-- **Transformer** and **Decoder** run as pull-based workers (`qwen_t2i_queue_workers.py`), consuming dispatch packets from the RDMA ring in a loop without exposing any HTTP endpoints;
-- **Multiple Transformer workers** can be deployed on different GPUs. The client request includes `disagg_phase1_receiver_engine_rank` to specify which Transformer handles the request, enabling multi-worker concurrency.
+The queue design separates dispatch from inference: Encoder writes task metadata to the Phase1 ring, Transformer consumes tasks and writes the next stage's metadata to the Phase2 ring, and Decoder consumes it for decoding. Controller maintains the rings and handshake services.
 
 ```text
-┌──────────┐  HTTP POST   ┌──────────┐ Phase1 RDMA ┌─────────────┐ Phase2 RDMA ┌──────────┐
-│  Client  │ ──────────→  │ Encoder  │ ──────────→ │ Transformer │ ──────────→ │ Decoder  │
-└──────────┘              │ (GPU 0)  │             │ (GPU 1/2/3) │             │ (GPU 0)  │
-                          └──────────┘             └─────────────┘             └──────────┘
-                                ↑                        ↑                          ↑
-                          lightx2v.server          pull worker ×N              pull worker
-                          HTTP port 8002           (qwen_t2i_queue_workers)    (qwen_t2i_queue_workers)
-                                │
-                          ┌──────────┐
-                          │Controller│  ← RDMA metadata ring buffer (always-on)
-                          └──────────┘
+Encoder → Phase1 RDMA ring → Transformer → Phase2 RDMA ring → Decoder
+                   ↑                              ↑
+                   └──── Controller ring service ─┘
 ```
 
-**Comparison with the standard three-stage mode:**
+| Component | Current implementation and role |
+|-----------|---------------------------------|
+| RDMA ring | [RDMABuffer](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/rdma_buffer.py) provides metadata buffers |
+| Controller | `serve_rdma_dispatch_only()` in [ControllerService](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/services/controller.py) serves request, Phase1, and Phase2 rings |
+| Runner communication | [DisaggMixin](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/disagg_mixin.py) implements queue connections, request snapshots, and Transformer/Decoder dispatch preparation |
 
-| Aspect              | Standard three-stage                                    | Decentralized queue                                            |
-| ------------------- | ------------------------------------------------------- | -------------------------------------------------------------- |
-| **Client calls**    | Must POST to Decoder → Transformer → Encoder separately | Single POST to **Encoder HTTP**                                |
-| **Transformer**     | HTTP server, processes one request at a time             | Pull worker, multiple instances consume in parallel            |
-| **Decoder**         | HTTP server                                             | Pull worker, auto-consumes Phase2                              |
-| **Request routing** | Client explicitly specifies                             | Encoder writes RDMA ring, workers pull by rank                 |
-| **Result retrieval**| Poll Decoder HTTP status                                | Poll **Encoder HTTP** `/v1/tasks/{task_id}/status`             |
+The `DisaggMixin` source also documents a multi-consumer ordering limitation: the current FAA implementation is not a true remote atomic operation across processes. Correctness with concurrent workers needs separate validation; distinct ranks alone do not establish it.
 
-### 4.2 Configuration
+### 4.2 Configuration reference
 
-Decentralized mode configs are in `configs/disagg/qwen/`. The key difference is that each component's `disagg_config` must set `"decentralized_queue": true` along with RDMA ring handshake ports.
+These configs remain in the current repository. Adjust model paths and backends for the actual environment:
 
-#### Controller (`qwen_image_t2i_disagg_controller.json`)
+| Role | Configuration file |
+|------|--------------------|
+| Controller | [qwen_image_t2i_disagg_controller.json](https://github.com/ModelTC/LightX2V/blob/main/configs/disagg/qwen/qwen_image_t2i_disagg_controller.json) |
+| Encoder | [qwen_image_t2i_disagg_encoder_decentralized.json](https://github.com/ModelTC/LightX2V/blob/main/configs/disagg/qwen/qwen_image_t2i_disagg_encoder_decentralized.json) |
+| Transformer | [qwen_image_t2i_disagg_transformer_decentralized.json](https://github.com/ModelTC/LightX2V/blob/main/configs/disagg/qwen/qwen_image_t2i_disagg_transformer_decentralized.json) |
+| Decoder | [qwen_image_t2i_disagg_decode_decentralized.json](https://github.com/ModelTC/LightX2V/blob/main/configs/disagg/qwen/qwen_image_t2i_disagg_decode_decentralized.json) |
 
-The controller does not load any model; it only initializes three RDMA ring buffers:
+Encoder, Transformer, and Decoder select queue communication with `decentralized_queue: true` in `disagg_config`; the Controller config defines the ring service. Key fields are:
 
-```json
-{
-  "task": "t2i",
-  "model_cls": "qwen_image",
-  "disagg_mode": "controller",
-  "disagg_config": {
-    "bootstrap_addr": "127.0.0.1",
-    "bootstrap_room": 0,
-    "encoder_engine_rank": 0,
-    "transformer_engine_rank": 1,
-    "decoder_engine_rank": 4,
-    "rdma_buffer_slots": 128,
-    "rdma_buffer_slot_size": 4096,
-    "rdma_request_handshake_port": 5566,
-    "rdma_phase1_handshake_port": 5567,
-    "rdma_phase2_handshake_port": 5568
-  }
-}
-```
+| Field | Meaning |
+|-------|---------|
+| `rdma_request_handshake_port` | Controller request-ring handshake port; 5566 in the example |
+| `rdma_phase1_handshake_port` | Phase1 handshake port shared by the relevant components; 5567 in the example |
+| `rdma_phase2_handshake_port` | Phase2 handshake port shared by the relevant components; 5568 in the example |
+| `rdma_phase1_host` / `rdma_phase2_host` | Handshake host for the corresponding ring |
+| `rdma_buffer_slots` / `rdma_buffer_slot_size` | Metadata-ring slot count and bytes per slot; 128 and 4096 in the examples |
+| `receiver_engine_rank` / `transformer_engine_rank` | Transformer's receiving and execution ranks; keep role assignments consistent and use different ranks for different workers |
+| `decoder_engine_rank` | Decoder rank, shared consistently by the relevant components |
 
-#### Encoder (`qwen_image_t2i_disagg_encoder_decentralized.json`)
+### 4.3 Current entry points
 
-The Encoder runs as an HTTP service, loads the Text Encoder, and writes features and metadata into the Phase1 RDMA ring after inference:
+| Use case | Existing entry point and scope |
+|----------|--------------------------------|
+| Qwen Image three-stage HTTP services | Use the launch and request scripts in the [T2I quick start](#qwen-t2i-disagg-quickstart), after configuring the model directory, DiT checkpoint, GPUs, and dependencies |
+| Dynamic Wan disaggregation | See the [Disagg guide](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/README.md) and [run_dynamic.sh](https://github.com/ModelTC/LightX2V/blob/main/scripts/disagg/run_dynamic.sh); configure paths, devices, and networking for the topology. The launcher cleans up old services |
+| Individual Wan service roles | [run_service.py](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/examples/run_service.py) accepts `--service encoder/transformer/decoder/controller`; the service implementations currently load Wan components |
 
-```json
-{
-  "disagg_mode": "encoder",
-  "text_encoder_type": "lightllm_kernel",
-  "disagg_config": {
-    "decentralized_queue": true,
-    "rdma_phase1_host": "127.0.0.1",
-    "rdma_phase1_handshake_port": 5567,
-    "rdma_buffer_slots": 128,
-    "rdma_buffer_slot_size": 4096,
-    "bootstrap_addr": "127.0.0.1",
-    "bootstrap_room": 0,
-    "sender_engine_rank": 0,
-    "receiver_engine_rank": 1
-  }
-}
-```
+`run_service.py` supports Wan services; it cannot replace the Qwen pull-worker.
 
-#### Transformer (`qwen_image_t2i_disagg_transformer_decentralized.json`)
+### 4.4 Request and dispatch field boundaries
 
-The Transformer runs as a pull worker, consuming tasks from the Phase1 ring and writing results to the Phase2 ring. Each worker's `receiver_engine_rank` and `transformer_engine_rank` must correspond to a different rank:
+The internal request snapshot in `DisaggMixin` uses `data_bootstrap_room` to identify a transfer room and can carry `disagg_phase1_receiver_engine_rank` to select a Transformer rank; `save_result_path` specifies the output path. These are internal configuration/dispatch fields, not automatically HTTP request fields.
 
-```json
-{
-  "disagg_mode": "transformer",
-  "disagg_config": {
-    "decentralized_queue": true,
-    "encoder_engine_rank": 0,
-    "transformer_engine_rank": 1,
-    "decoder_engine_rank": 4,
-    "decoder_bootstrap_room": 0,
-    "rdma_phase1_host": "127.0.0.1",
-    "rdma_phase1_handshake_port": 5567,
-    "rdma_phase2_host": "127.0.0.1",
-    "rdma_phase2_handshake_port": 5568,
-    "rdma_buffer_slots": 128,
-    "rdma_buffer_slot_size": 4096,
-    "bootstrap_addr": "127.0.0.1",
-    "bootstrap_room": 0,
-    "sender_engine_rank": 0,
-    "receiver_engine_rank": 1
-  }
-}
-```
-
-> When deploying multiple Transformer workers, generate a separate config for each worker with `receiver_engine_rank` and `transformer_engine_rank` set to the worker's rank (e.g. 1, 2, 3). The startup script generates these automatically.
-
-#### Decoder (`qwen_image_t2i_disagg_decode_decentralized.json`)
-
-The Decoder runs as a pull worker, consuming tasks from the Phase2 ring, performing VAE decode, and saving results:
-
-```json
-{
-  "disagg_mode": "decode",
-  "disagg_config": {
-    "decentralized_queue": true,
-    "encoder_engine_rank": 0,
-    "transformer_engine_rank": 1,
-    "decoder_engine_rank": 4,
-    "rdma_phase2_host": "127.0.0.1",
-    "rdma_phase2_handshake_port": 5568,
-    "rdma_buffer_slots": 128,
-    "rdma_buffer_slot_size": 4096,
-    "bootstrap_addr": "127.0.0.1",
-    "bootstrap_room": 0,
-    "sender_engine_rank": 1,
-    "receiver_engine_rank": 4
-  }
-}
-```
-
-#### Parameter reference
-
-| Parameter                       | Description                                                                              |
-| ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `decentralized_queue`           | Set to `true` to enable decentralized queue mode                                         |
-| `rdma_request_handshake_port`   | RDMA handshake port for the controller request ring (controller only)                    |
-| `rdma_phase1_handshake_port`    | RDMA handshake port for the Phase1 ring; must be consistent across Encoder / Transformer / Controller |
-| `rdma_phase2_handshake_port`    | RDMA handshake port for the Phase2 ring; must be consistent across Transformer / Decoder / Controller |
-| `rdma_buffer_slots`             | Number of slots in the RDMA ring buffer                                                  |
-| `rdma_buffer_slot_size`         | Byte size of each slot                                                                   |
-| `receiver_engine_rank`          | Rank of the Transformer worker; must differ across workers                                |
-| `transformer_engine_rank`       | Same as `receiver_engine_rank`; keep consistent                                           |
-| `decoder_engine_rank`           | Rank of the Decoder; must be consistent across all component configs                      |
-
-### 4.3 Starting the services
-
-Example: Qwen Image T2I on 4 GPUs (GPU 0: Controller + Encoder + Decoder; GPU 1/2/3: one Transformer worker each):
-
-```bash
-bash scripts/server/disagg/qwen/start_qwen_t2i_decentralized.sh
-```
-
-**Service startup order (handled automatically by the script):**
-
-1. **Controller** (RDMA ring buffer, always-on process):
-
-```bash
-# Controller only initializes RDMA ring buffers, no model loading
-python3 -c "
-import json
-from lightx2v.disagg.services.controller import ControllerService
-with open('configs/disagg/qwen/qwen_image_t2i_disagg_controller.json') as f:
-    cfg = json.load(f)
-dc = cfg.get('disagg_config', {})
-cfg['data_bootstrap_addr'] = dc.get('bootstrap_addr', '127.0.0.1')
-ControllerService().serve_rdma_dispatch_only(cfg)
-"
-```
-
-2. **Encoder HTTP service** (GPU 0, port 8002):
-
-```bash
-CUDA_VISIBLE_DEVICES=0 python3 -m lightx2v.server \
-  --model_cls qwen_image \
-  --task t2i \
-  --model_path /path/to/qwen-2512/ \
-  --config_json configs/disagg/qwen/qwen_image_t2i_disagg_encoder_decentralized.json \
-  --host 0.0.0.0 \
-  --port 8002
-```
-
-3. **Decoder pull worker** (GPU 0, shared with Encoder):
-
-```bash
-CUDA_VISIBLE_DEVICES=0 python3 -m lightx2v.disagg.examples.qwen_t2i_queue_workers \
-  --role decoder \
-  --model_path /path/to/qwen-2512/ \
-  --config_json configs/disagg/qwen/qwen_image_t2i_disagg_decode_decentralized.json
-```
-
-4. **Transformer pull workers ×3** (GPU 1, 2, 3, each with its own rank config):
-
-```bash
-# Each worker's config has a different receiver_engine_rank / transformer_engine_rank
-CUDA_VISIBLE_DEVICES=1 python3 -m lightx2v.disagg.examples.qwen_t2i_queue_workers \
-  --role transformer \
-  --model_path /path/to/qwen-2512/ \
-  --config_json /tmp/qwen_t2i_decentralized_cfg/transformer_r1.json
-
-CUDA_VISIBLE_DEVICES=2 python3 -m lightx2v.disagg.examples.qwen_t2i_queue_workers \
-  --role transformer \
-  --model_path /path/to/qwen-2512/ \
-  --config_json /tmp/qwen_t2i_decentralized_cfg/transformer_r2.json
-
-CUDA_VISIBLE_DEVICES=3 python3 -m lightx2v.disagg.examples.qwen_t2i_queue_workers \
-  --role transformer \
-  --model_path /path/to/qwen-2512/ \
-  --config_json /tmp/qwen_t2i_decentralized_cfg/transformer_r3.json
-```
-
-> The startup script automatically generates `transformer_r1.json` / `transformer_r2.json` / `transformer_r3.json` from the template config, setting `receiver_engine_rank` to 1, 2, 3 respectively.
-
-### 4.4 Sending requests
-
-In decentralized mode, the client **only needs to send a single request to the Encoder HTTP endpoint**. The request uses `disagg_phase1_receiver_engine_rank` to specify the target Transformer rank:
-
-```python
-import requests
-
-ENCODER_URL = "http://127.0.0.1:8002"
-
-resp = requests.post(f"{ENCODER_URL}/v1/tasks/image/", json={
-    "prompt": "A cute cat on a table, cinematic lighting.",
-    "negative_prompt": "blurry, low quality",
-    "seed": 42,
-    "aspect_ratio": "16:9",
-    "save_result_path": "/tmp/output.png",
-    "data_bootstrap_room": 100,                       # unique room ID for this request
-    "disagg_phase1_receiver_engine_rank": 1,           # target Transformer rank (1/2/3)
-})
-task_id = resp.json()["task_id"]
-
-# Poll Encoder for completion status (Decoder saves the file asynchronously)
-import time
-while True:
-    st = requests.get(f"{ENCODER_URL}/v1/tasks/{task_id}/status").json()
-    if st["status"] == "completed":
-        print(f"Done: {st.get('save_result_path')}")
-        break
-    if st["status"] == "failed":
-        raise RuntimeError(st)
-    time.sleep(2)
-```
-
-**Request parameters:**
-
-| Parameter                            | Description                                                                         |
-| ------------------------------------ | ----------------------------------------------------------------------------------- |
-| `data_bootstrap_room`               | Unique room ID per request, used for Mooncake data transfer channel matching         |
-| `disagg_phase1_receiver_engine_rank` | Target Transformer rank; must be within the range of running worker ranks (e.g. 1, 2, 3) |
-| `save_result_path`                   | Output file path; the Decoder worker saves the final result to this path             |
-
----
+The current [HTTP schema](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/server/schema.py) forbids extra fields, and `ImageTaskRequest` does not declare the room and rank fields above. For HTTP, use the existing request scripts in section 3. Queue-mode completion reporting, polling endpoints, and Decoder result delivery still need validation with a complete worker implementation.
 
 ## 5. RDMA vs TCP
 

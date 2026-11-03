@@ -26,7 +26,7 @@
 
 在某些情况下，VAE部分耗时会比较大，可以使用轻量级VAE进行加速，同时也可以降低一部分显存。
 
-```python
+```json
 {
     "use_tae": true,
     "tae_path": "/path to taew2_1.pth"

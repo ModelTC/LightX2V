@@ -52,18 +52,17 @@ Wan2.1-I2V-14B-720P/
 
 #### 使用方法
 
+在仓库根目录下载完整模型：
+
 ```bash
-# 下载模型
-huggingface-cli download Wan-AI/Wan2.1-I2V-14B-720P \
+hf download Wan-AI/Wan2.1-I2V-14B-720P \
     --local-dir ./models/Wan2.1-I2V-14B-720P
+```
 
-# 配置启动脚本
-model_path=./models/Wan2.1-I2V-14B-720P
-lightx2v_path=/path/to/LightX2V
+在 `scripts/wan/run_wan_i2v.sh` 中，将 `model_path` 设为刚下载的目录，修改 `lightx2v_path`，并把默认的 `--size 480 832` 改为与该 720P 示例匹配的 `--size 720 1280`，再从仓库根目录运行：
 
-# 运行推理
-cd LightX2V/scripts
-bash wan/run_wan_i2v.sh
+```bash
+bash scripts/wan/run_wan_i2v.sh
 ```
 
 ### Wan2.2 官方模型
@@ -96,18 +95,17 @@ Wan2.2-I2V-A14B/
 
 #### 使用方法
 
+在仓库根目录下载完整模型：
+
 ```bash
-# 下载模型
-huggingface-cli download Wan-AI/Wan2.2-I2V-A14B \
+hf download Wan-AI/Wan2.2-I2V-A14B \
     --local-dir ./models/Wan2.2-I2V-A14B
+```
 
-# 配置启动脚本
-model_path=./models/Wan2.2-I2V-A14B
-lightx2v_path=/path/to/LightX2V
+先修改 `scripts/wan22/run_wan22_moe_i2v.sh` 内的 `model_path` 和 `lightx2v_path`，再从仓库根目录运行：
 
-# 运行推理
-cd LightX2V/scripts
-bash wan22/run_wan22_moe_i2v.sh
+```bash
+bash scripts/wan22/run_wan22_moe_i2v.sh
 ```
 
 ### 可用模型列表
@@ -165,6 +163,8 @@ bash wan22/run_wan22_moe_i2v.sh
 
 ### Wan2.1 单文件模型
 
+本页 Wan2.1 单文件示例下载的是 720P 权重；请将脚本中的 `--size 480 832` 改为 `--size 720 1280`，或移除该参数并在 JSON 中设置 `[720, 1280]`。命令行尺寸优先于 JSON。
+
 #### 场景 A：下载单个模型文件
 
 **步骤 1：选择并下载模型**
@@ -173,8 +173,8 @@ bash wan22/run_wan22_moe_i2v.sh
 # 创建模型目录
 mkdir -p ./models/wan2.1_i2v_720p
 
-# 下载 720P 图生视频 FP8 量化模型
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+# 下载 720P 图生视频原始精度蒸馏模型
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models/wan2.1_i2v_720p \
     --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
 ```
@@ -190,14 +190,10 @@ wan2.1_i2v_720p/
 
 **步骤 3：配置启动脚本**
 
-```bash
-# 在启动脚本中设置（指向包含模型文件的目录）
-model_path=./models/wan2.1_i2v_720p
-lightx2v_path=/path/to/LightX2V
+先修改 `scripts/wan/inference/distill/run_wan_i2v_distill_single_file.sh` 内的 `model_path` 和 `lightx2v_path`，再从仓库根目录运行：
 
-# 运行脚本
-cd LightX2V/scripts
-bash wan/inference/distill/run_wan_i2v_distill_single_file.sh
+```bash
+bash scripts/wan/inference/distill/run_wan_i2v_distill_single_file.sh
 ```
 
 > 💡 **提示**：当目录下只有一个模型文件时，LightX2V 会自动加载该文件。
@@ -213,17 +209,17 @@ bash wan/inference/distill/run_wan_i2v_distill_single_file.sh
 mkdir -p ./models/wan2.1_i2v_720p_multi
 
 # 下载原始精度模型
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models/wan2.1_i2v_720p_multi \
     --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
 
 # 下载 FP8 量化模型
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models/wan2.1_i2v_720p_multi \
     --include "wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors"
 
 # 下载 INT8 量化模型
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models/wan2.1_i2v_720p_multi \
     --include "wan2.1_i2v_720p_int8_lightx2v_4step.safetensors"
 ```
@@ -244,22 +240,34 @@ wan2.1_i2v_720p_multi/
 
 编辑配置文件（如 `configs/distill/wan_i2v_distill_4step_cfg.json`）：
 
+以下三种配置选一，将字段合并到所选模型的完整配置中：
+
+原始精度:
+
 ```json
 {
-    // 使用原始精度模型
-    "dit_original_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_lightx2v_4step.safetensors",
+    "dit_quantized": false,
+    "dit_original_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_lightx2v_4step.safetensors"
+}
+```
 
-    // 或使用 FP8 量化模型
-    // "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors",
-    // "dit_quantized": true,
-    // "dit_quant_scheme": "fp8-vllm",
+FP8:
 
-    // 或使用 INT8 量化模型
-    // "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_int8_lightx2v_4step.safetensors",
-    // "dit_quantized": true,
-    // "dit_quant_scheme": "int8-vllm",
+```json
+{
+    "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-vllm"
+}
+```
 
-    // 其他配置...
+INT8:
+
+```json
+{
+    "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_int8_lightx2v_4step.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-vllm"
 }
 ```
 ### 使用提示
@@ -270,9 +278,10 @@ wan2.1_i2v_720p_multi/
 
 **步骤 4：启动推理**
 
+先修改 `scripts/wan/inference/distill/run_wan_i2v_distill_single_file.sh` 内的 `model_path` 和 `lightx2v_path`，再从仓库根目录运行：
+
 ```bash
-cd LightX2V/scripts
-bash wan/inference/distill/run_wan_i2v_distill_single_file.sh
+bash scripts/wan/inference/distill/run_wan_i2v_distill_single_file.sh
 ```
 
 ### Wan2.2 单文件模型
@@ -292,31 +301,29 @@ wan2.2_models/
 
 #### 场景 A：每个目录下只有一个模型文件
 
+下载与上方目录结构匹配的原始精度蒸馏权重：
+
 ```bash
-# 创建必需的子目录
-mkdir -p ./models/wan2.2_models/high_noise_model
-mkdir -p ./models/wan2.2_models/low_noise_model
-
-# 下载高噪声模型到对应目录
-huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+mkdir -p ./models/wan2.2_models/high_noise_model ./models/wan2.2_models/low_noise_model
+hf download lightx2v/Wan2.2-Distill-Models \
     --local-dir ./models/wan2.2_models/high_noise_model \
-    --include "wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors"
-
-# 下载低噪声模型到对应目录
-huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --include "wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors"
+hf download lightx2v/Wan2.2-Distill-Models \
     --local-dir ./models/wan2.2_models/low_noise_model \
-    --include "wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors"
-
-# 配置启动脚本（指向父目录）
-model_path=./models/wan2.2_models
-lightx2v_path=/path/to/LightX2V
-
-# 运行脚本
-cd LightX2V/scripts
-bash wan22/inference/distill/run_wan22_moe_i2v_distill.sh
+    --include "wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors"
 ```
 
-> 💡 **提示**：在脚本中将 `--config_json` 设为 `${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_quant.json`，并将该 JSON 中的 `high_noise_quantized_ckpt` 和 `low_noise_quantized_ckpt` 设置为上面下载的两个文件。
+上述下载只包含 DiT。还需按官方模型目录结构准备 T5、VAE、tokenizer 和配置文件，并将 `model_path` 指向完整模型目录。
+
+保留脚本使用的 `configs/distill/wan22/wan_moe_i2v_distill_model.json`，将其中的 `high_noise_original_ckpt`、`low_noise_original_ckpt` 分别设为下载的两个文件路径。
+
+先修改 `scripts/wan22/inference/distill/run_wan22_moe_i2v_distill.sh` 内的 `model_path` 和 `lightx2v_path`，再从仓库根目录运行：
+
+```bash
+bash scripts/wan22/inference/distill/run_wan22_moe_i2v_distill.sh
+```
+
+> 💡 **提示**：使用量化权重时，改用 `configs/distill/wan22/wan_moe_i2v_distill_quant.json`，设置对应的量化路径、后端和 T5 权重；不要将原始精度文件填入量化路径。
 
 #### 场景 B：每个目录下有多个模型文件
 
@@ -328,12 +335,12 @@ mkdir -p ./models/wan2.2_models_multi/high_noise_model
 mkdir -p ./models/wan2.2_models_multi/low_noise_model
 
 # 下载高噪声模型的多个版本
-huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+hf download lightx2v/Wan2.2-Distill-Models \
     --local-dir ./models/wan2.2_models_multi/high_noise_model \
     --include "wan2.2_i2v_A14b_high_noise_*.safetensors"
 
 # 下载低噪声模型的多个版本
-huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+hf download lightx2v/Wan2.2-Distill-Models \
     --local-dir ./models/wan2.2_models_multi/low_noise_model \
     --include "wan2.2_i2v_A14b_low_noise_*.safetensors"
 ```
@@ -344,34 +351,48 @@ huggingface-cli download lightx2v/Wan2.2-Distill-Models \
 wan2.2_models_multi/
 ├── high_noise_model/
 │   ├── wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors        # 原始精度
-│   ├── wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors    # FP8 量化
+│   ├── wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors    # FP8 量化
 │   └── wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors   # INT8 量化
 └── low_noise_model/
 │    ├── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors         # 原始精度
-│    ├── wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors     # FP8 量化
+│    ├── wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors     # FP8 量化
 │    └── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors    # INT8 量化
 └── t5/vae/config.json/xlm-roberta-large/google等其他组件       # 需要手动组织
 ```
 
 **配置文件设置**：
 
+以下三种配置选一，将字段合并到所选模型的完整配置中：
+
+原始精度:
+
 ```json
 {
-    // 使用原始精度模型
+    "dit_quantized": false,
     "high_noise_original_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors",
-    "low_noise_original_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors",
+    "low_noise_original_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors"
+}
+```
 
-    // 或使用 FP8 量化模型
-    // "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors",
-    // "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors",
-    // "dit_quantized": true,
-    // "dit_quant_scheme": "fp8-vllm"
+FP8:
 
-    // 或使用 INT8 量化模型
-    // "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
-    // "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
-    // "dit_quantized": true,
-    // "dit_quant_scheme": "int8-vllm"
+```json
+{
+    "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors",
+    "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-vllm"
+}
+```
+
+INT8:
+
+```json
+{
+    "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
+    "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-vllm"
 }
 ```
 
@@ -438,99 +459,9 @@ LoRA（Low-Rank Adaptation）模型提供了一种轻量级的模型微调方案
 
 ### 使用方式
 
-#### 方式一：离线合并
+LoRA 文件需与基础模型配套，不能独立运行。通过 `lora_configs` 指定权重路径与强度；Wan2.2 MoE 还需用 `name` 区分高噪声和低噪声模型。
 
-将 LoRA 权重离线合并到基础模型中，生成新的完整模型文件。
-
-**操作步骤**：
-
-参考 [模型转换文档](https://github.com/ModelTC/lightx2v/tree/main/tools/convert/readme_zh.md) 进行离线合并。
-
-**优点**：
-- ✅ 推理时无需额外加载 LoRA
-- ✅ 性能更优
-
-**缺点**：
-- ❌ 需要额外存储空间
-- ❌ 切换不同 LoRA 需要重新合并
-
-#### 方式二：在线加载
-
-在推理时动态加载 LoRA 权重，无需修改基础模型。
-
-**LoRA 应用原理**：
-
-```python
-# LoRA 权重应用公式
-# lora_scale = (alpha / rank)
-# W' = W + lora_scale * B @ A
-# 其中：B = up_proj (out_features, rank)
-#      A = down_proj (rank, in_features)
-
-if weights_dict["alpha"] is not None:
-    lora_scale = weights_dict["alpha"] / lora_down.shape[0]
-elif alpha is not None:
-    lora_scale = alpha / lora_down.shape[0]
-else:
-    lora_scale = 1.0
-```
-
-**配置方法**：
-
-**Wan2.1 LoRA 配置**：
-
-```json
-{
-  "lora_configs": [
-    {
-      "path": "wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
-      "strength": 1.0,
-      "alpha": null
-    }
-  ]
-}
-```
-
-**Wan2.2 LoRA 配置**：
-
-由于 Wan2.2 采用双模型架构（高噪声/低噪声），需要分别为两个模型配置 LoRA：
-
-```json
-{
-  "lora_configs": [
-    {
-      "name": "low_noise_model",
-      "path": "wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step.safetensors",
-      "strength": 1.0,
-      "alpha": null
-    },
-    {
-      "name": "high_noise_model",
-      "path": "wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step.safetensors",
-      "strength": 1.0,
-      "alpha": null
-    }
-  ]
-}
-```
-
-**参数说明**：
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `path` | LoRA 模型文件路径 | 必填 |
-| `strength` | LoRA 强度系数，范围 [0.0, 1.0] | 1.0 |
-| `alpha` | LoRA 缩放因子，`null` 时使用模型内置值 | null |
-| `name` | （仅 Wan2.2）指定应用到哪个模型 | 必填 |
-
-**优点**：
-- ✅ 灵活切换不同 LoRA
-- ✅ 节省存储空间
-- ✅ 可动态调整 LoRA 强度
-
-**缺点**：
-- ❌ 推理时需额外加载时间
-- ❌ 略微增加显存占用
+配置示例、静态合并与动态加载的区别，以及组合限制，统一见 [LoRA 部署指南](../deploy_guides/lora_deploy.md#配置文件方式)。需要生成合并后的模型文件时，参考[模型转换说明](https://github.com/ModelTC/LightX2V/blob/main/tools/convert/readme_zh.md)。
 
 ---
 

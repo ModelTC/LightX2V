@@ -129,17 +129,16 @@ class TorchTraceProfiler:
     def ran(self) -> bool:
         return self._ran
 
-    def try_claim(self, label: str) -> bool:
-        if self._session_done:
+    @classmethod
+    def try_claim(cls, label: str) -> bool:
+        if cls._session_done:
             return False
-        if self._profile_owner is None:
-            self._profile_owner = label
+        if cls._profile_owner is None:
+            cls._profile_owner = label
             return True
-        if self._profile_owner == label:
-            return True
-        if label not in self._warned_skipped:
-            logger.warning(f"[Profile] Skip torch trace for '{label}': already profiling '{self._profile_owner}' (one call site per process)")
-            self._warned_skipped.add(label)
+        if label not in cls._warned_skipped:
+            logger.warning(f"[Profile] Skip torch trace for '{label}': already profiling '{cls._profile_owner}' (one call site per process)")
+            cls._warned_skipped.add(label)
         return False
 
     def run(self, step_fn: Callable[[], T]) -> T:
@@ -167,7 +166,7 @@ class TorchTraceProfiler:
                 prof.step()
 
         self._ran = True
-        self._session_done = True
+        type(self)._session_done = True
         log_profile_done(cfg)
         return result
 

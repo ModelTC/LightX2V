@@ -52,18 +52,17 @@ Wan2.1-I2V-14B-720P/
 
 #### Usage
 
+Download the complete model from the repository root:
+
 ```bash
-# Download model
-huggingface-cli download Wan-AI/Wan2.1-I2V-14B-720P \
+hf download Wan-AI/Wan2.1-I2V-14B-720P \
     --local-dir ./models/Wan2.1-I2V-14B-720P
+```
 
-# Configure launch script
-model_path=./models/Wan2.1-I2V-14B-720P
-lightx2v_path=/path/to/LightX2V
+In `scripts/wan/run_wan_i2v.sh`, point `model_path` to the downloaded directory, set `lightx2v_path`, and change the default `--size 480 832` to `--size 720 1280` for this 720P example. Then run from the repository root:
 
-# Run inference
-cd LightX2V/scripts
-bash wan/run_wan_i2v.sh
+```bash
+bash scripts/wan/run_wan_i2v.sh
 ```
 
 ### Wan2.2 Official Models
@@ -96,18 +95,17 @@ Wan2.2-I2V-A14B/
 
 #### Usage
 
+Download the complete model from the repository root:
+
 ```bash
-# Download model
-huggingface-cli download Wan-AI/Wan2.2-I2V-A14B \
+hf download Wan-AI/Wan2.2-I2V-A14B \
     --local-dir ./models/Wan2.2-I2V-A14B
+```
 
-# Configure launch script
-model_path=./models/Wan2.2-I2V-A14B
-lightx2v_path=/path/to/LightX2V
+Set `model_path` and `lightx2v_path` inside `scripts/wan22/run_wan22_moe_i2v.sh`, then run from the repository root:
 
-# Run inference
-cd LightX2V/scripts
-bash wan22/run_wan22_moe_i2v.sh
+```bash
+bash scripts/wan22/run_wan22_moe_i2v.sh
 ```
 
 ### Available Model List
@@ -165,6 +163,8 @@ bash wan22/run_wan22_moe_i2v.sh
 
 ### Wan2.1 Single-File Models
 
+The Wan2.1 single-file examples here download 720P weights. Change the script's `--size 480 832` to `--size 720 1280`, or remove that argument and set `[720, 1280]` in JSON. The CLI size takes precedence over JSON.
+
 #### Scenario A: Download Single Model File
 
 **Step 1: Select and Download Model**
@@ -173,8 +173,8 @@ bash wan22/run_wan22_moe_i2v.sh
 # Create model directory
 mkdir -p ./models/wan2.1_i2v_720p
 
-# Download 720P I2V FP8 quantized model
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+# Download the 720P I2V original-precision distilled model
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models/wan2.1_i2v_720p \
     --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
 ```
@@ -190,14 +190,10 @@ wan2.1_i2v_720p/
 
 **Step 3: Configure Launch Script**
 
-```bash
-# Set in launch script (point to directory containing model file)
-model_path=./models/wan2.1_i2v_720p
-lightx2v_path=/path/to/LightX2V
+Set `model_path` and `lightx2v_path` inside `scripts/wan/inference/distill/run_wan_i2v_distill_single_file.sh`, then run from the repository root:
 
-# Run script
-cd LightX2V/scripts
-bash wan/inference/distill/run_wan_i2v_distill_single_file.sh
+```bash
+bash scripts/wan/inference/distill/run_wan_i2v_distill_single_file.sh
 ```
 
 > 💡 **Tip**: When there's only one model file in the directory, LightX2V will automatically load it.
@@ -213,17 +209,17 @@ When you download multiple models with different precisions to the same director
 mkdir -p ./models/wan2.1_i2v_720p_multi
 
 # Download original precision model
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models/wan2.1_i2v_720p_multi \
     --include "wan2.1_i2v_720p_lightx2v_4step.safetensors"
 
 # Download FP8 quantized model
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models/wan2.1_i2v_720p_multi \
     --include "wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors"
 
 # Download INT8 quantized model
-huggingface-cli download lightx2v/Wan2.1-Distill-Models \
+hf download lightx2v/Wan2.1-Distill-Models \
     --local-dir ./models/wan2.1_i2v_720p_multi \
     --include "wan2.1_i2v_720p_int8_lightx2v_4step.safetensors"
 ```
@@ -244,22 +240,34 @@ wan2.1_i2v_720p_multi/
 
 Edit configuration file (e.g., `configs/distill/wan_i2v_distill_4step_cfg.json`):
 
+Choose one of these three alternatives and merge its fields into the complete model config:
+
+Original precision:
+
 ```json
 {
-    // Use original precision model
-    "dit_original_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_lightx2v_4step.safetensors",
+    "dit_quantized": false,
+    "dit_original_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_lightx2v_4step.safetensors"
+}
+```
 
-    // Or use FP8 quantized model
-    // "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors",
-    // "dit_quantized": true,
-    // "dit_quant_scheme": "fp8-vllm",
+FP8:
 
-    // Or use INT8 quantized model
-    // "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_int8_lightx2v_4step.safetensors",
-    // "dit_quantized": true,
-    // "dit_quant_scheme": "int8-vllm",
+```json
+{
+    "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_scaled_fp8_e4m3_lightx2v_4step.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-vllm"
+}
+```
 
-    // Other configurations...
+INT8:
+
+```json
+{
+    "dit_quantized_ckpt": "./models/wan2.1_i2v_720p_multi/wan2.1_i2v_720p_int8_lightx2v_4step.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-vllm"
 }
 ```
 ### Usage Tips
@@ -270,9 +278,10 @@ Edit configuration file (e.g., `configs/distill/wan_i2v_distill_4step_cfg.json`)
 
 **Step 4: Start Inference**
 
+Set `model_path` and `lightx2v_path` inside `scripts/wan/inference/distill/run_wan_i2v_distill_single_file.sh`, then run from the repository root:
+
 ```bash
-cd LightX2V/scripts
-bash wan/inference/distill/run_wan_i2v_distill_single_file.sh
+bash scripts/wan/inference/distill/run_wan_i2v_distill_single_file.sh
 ```
 
 > 💡 **Tip**: Other components (T5, CLIP, VAE, tokenizer, etc.) need to be manually organized into the model directory
@@ -294,31 +303,29 @@ wan2.2_models/
 
 #### Scenario A: Only One Model File Per Directory
 
+Download the original-precision distilled weights matching the directory layout above:
+
 ```bash
-# Create required subdirectories
-mkdir -p ./models/wan2.2_models/high_noise_model
-mkdir -p ./models/wan2.2_models/low_noise_model
-
-# Download high-noise model to corresponding directory
-huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+mkdir -p ./models/wan2.2_models/high_noise_model ./models/wan2.2_models/low_noise_model
+hf download lightx2v/Wan2.2-Distill-Models \
     --local-dir ./models/wan2.2_models/high_noise_model \
-    --include "wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors"
-
-# Download low-noise model to corresponding directory
-huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+    --include "wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors"
+hf download lightx2v/Wan2.2-Distill-Models \
     --local-dir ./models/wan2.2_models/low_noise_model \
-    --include "wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors"
-
-# Configure launch script (point to parent directory)
-model_path=./models/wan2.2_models
-lightx2v_path=/path/to/LightX2V
-
-# Run script
-cd LightX2V/scripts
-bash wan22/inference/distill/run_wan22_moe_i2v_distill.sh
+    --include "wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors"
 ```
 
-> 💡 **Tip**: Set the script's `--config_json` to `${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_quant.json`, then set `high_noise_quantized_ckpt` and `low_noise_quantized_ckpt` in that JSON to the two downloaded files.
+These downloads contain only DiT weights. Also prepare T5, VAE, tokenizer, and configuration files following the official model layout, and point `model_path` to the complete model directory.
+
+Keep the script's `configs/distill/wan22/wan_moe_i2v_distill_model.json` and set its `high_noise_original_ckpt` and `low_noise_original_ckpt` to the two downloaded files.
+
+Set `model_path` and `lightx2v_path` inside `scripts/wan22/inference/distill/run_wan22_moe_i2v_distill.sh`, then run from the repository root:
+
+```bash
+bash scripts/wan22/inference/distill/run_wan22_moe_i2v_distill.sh
+```
+
+> 💡 **Tip**: For quantized weights, use `configs/distill/wan22/wan_moe_i2v_distill_quant.json` and configure the matching quantized paths, backend, and T5 weights; do not use original-precision files as quantized checkpoints.
 
 #### Scenario B: Multiple Model Files Per Directory
 
@@ -330,12 +337,12 @@ mkdir -p ./models/wan2.2_models_multi/high_noise_model
 mkdir -p ./models/wan2.2_models_multi/low_noise_model
 
 # Download multiple versions of high-noise model
-huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+hf download lightx2v/Wan2.2-Distill-Models \
     --local-dir ./models/wan2.2_models_multi/high_noise_model \
     --include "wan2.2_i2v_A14b_high_noise_*.safetensors"
 
 # Download multiple versions of low-noise model
-huggingface-cli download lightx2v/Wan2.2-Distill-Models \
+hf download lightx2v/Wan2.2-Distill-Models \
     --local-dir ./models/wan2.2_models_multi/low_noise_model \
     --include "wan2.2_i2v_A14b_low_noise_*.safetensors"
 ```
@@ -346,34 +353,48 @@ huggingface-cli download lightx2v/Wan2.2-Distill-Models \
 wan2.2_models_multi/
 ├── high_noise_model/
 │   ├── wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors        # Original precision
-│   ├── wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors    # FP8 quantization
+│   ├── wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors    # FP8 quantization
 │   └── wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors   # INT8 quantization
 └── low_noise_model/
 │    ├── wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors         # Original precision
-│    ├── wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors     # FP8 quantization
+│    ├── wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors     # FP8 quantization
 │    └── wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors    # INT8 quantization
 └── t5/vae/config.json/xlm-roberta-large/google and other components       # Need manual organization
 ```
 
 **Configuration File Settings**:
 
+Choose one of these three alternatives and merge its fields into the complete model config:
+
+Original precision:
+
 ```json
 {
-    // Use original precision model
+    "dit_quantized": false,
     "high_noise_original_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors",
-    "low_noise_original_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors",
+    "low_noise_original_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors"
+}
+```
 
-    // Or use FP8 quantized model
-    // "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_fp8_e4m3_lightx2v_4step.safetensors",
-    // "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_fp8_e4m3_lightx2v_4step.safetensors",
-    // "dit_quantized": true,
-    // "dit_quant_scheme": "fp8-vllm"
+FP8:
 
-    // Or use INT8 quantized model
-    // "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
-    // "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
-    // "dit_quantized": true,
-    // "dit_quant_scheme": "int8-vllm"
+```json
+{
+    "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors",
+    "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_scaled_fp8_e4m3_lightx2v_4step.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "fp8-vllm"
+}
+```
+
+INT8:
+
+```json
+{
+    "high_noise_quantized_ckpt": "./models/wan2.2_models_multi/high_noise_model/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
+    "low_noise_quantized_ckpt": "./models/wan2.2_models_multi/low_noise_model/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-vllm"
 }
 ```
 
@@ -438,101 +459,11 @@ LoRA (Low-Rank Adaptation) models provide a lightweight model fine-tuning soluti
 - **Wan2.1 LoRA Models**: [lightx2v/Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
 - **Wan2.2 LoRA Models**: [lightx2v/Wan2.2-Distill-Loras](https://huggingface.co/lightx2v/Wan2.2-Distill-Loras)
 
-### Usage Methods
+### Usage
 
-#### Method 1: Offline Merging
+LoRA files require a matching base model and cannot run independently. Set the weight path and strength through `lora_configs`; Wan2.2 MoE also needs `name` to select the high-noise or low-noise model.
 
-Merge LoRA weights offline into the base model to generate a new complete model file.
-
-**Steps**:
-
-Refer to the [Model Conversion Documentation](https://github.com/ModelTC/lightx2v/tree/main/tools/convert/readme_zh.md) for offline merging.
-
-**Advantages**:
-- ✅ No need to load LoRA during inference
-- ✅ Better performance
-
-**Disadvantages**:
-- ❌ Requires additional storage space
-- ❌ Switching different LoRAs requires re-merging
-
-#### Method 2: Online Loading
-
-Dynamically load LoRA weights during inference without modifying the base model.
-
-**LoRA Application Principle**:
-
-```python
-# LoRA weight application formula
-# lora_scale = (alpha / rank)
-# W' = W + lora_scale * B @ A
-# Where: B = up_proj (out_features, rank)
-#        A = down_proj (rank, in_features)
-
-if weights_dict["alpha"] is not None:
-    lora_scale = weights_dict["alpha"] / lora_down.shape[0]
-elif alpha is not None:
-    lora_scale = alpha / lora_down.shape[0]
-else:
-    lora_scale = 1.0
-```
-
-**Configuration Method**:
-
-**Wan2.1 LoRA Configuration**:
-
-```json
-{
-  "lora_configs": [
-    {
-      "path": "wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
-      "strength": 1.0,
-      "alpha": null
-    }
-  ]
-}
-```
-
-**Wan2.2 LoRA Configuration**:
-
-Since Wan2.2 uses a dual-model architecture (high-noise/low-noise), LoRA needs to be configured separately for both models:
-
-```json
-{
-  "lora_configs": [
-    {
-      "name": "low_noise_model",
-      "path": "wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step.safetensors",
-      "strength": 1.0,
-      "alpha": null
-    },
-    {
-      "name": "high_noise_model",
-      "path": "wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step.safetensors",
-      "strength": 1.0,
-      "alpha": null
-    }
-  ]
-}
-```
-
-**Parameter Description**:
-
-| Parameter | Description | Default |
-|------|------|--------|
-| `path` | LoRA model file path | Required |
-| `strength` | LoRA strength coefficient, range [0.0, 1.0] | 1.0 |
-| `alpha` | LoRA scaling factor, uses model's built-in value when `null` | null |
-| `name` | (Wan2.2 only) Specifies which model to apply to | Required |
-
-**Advantages**:
-- ✅ Flexible switching between different LoRAs
-- ✅ Saves storage space
-- ✅ Can dynamically adjust LoRA strength
-
-**Disadvantages**:
-- ❌ Additional loading time during inference
-- ❌ Slightly increases memory usage
+See the [LoRA deployment guide](../deploy_guides/lora_deploy.md#configuration-file-method) for configuration examples, static merging versus dynamic loading, and supported combinations. To produce a merged model file, use the [conversion guide](https://github.com/ModelTC/LightX2V/blob/main/tools/convert/readme.md).
 
 ---
 

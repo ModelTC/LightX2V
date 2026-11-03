@@ -21,62 +21,97 @@ LightX2V 提供了原生的 **Disaggregation Mode（分离部署模式）**，�
 
 ## Quick Start
 
+以下是单机三段式示例，每次选择一种模型运行。两个终端均使用已安装 LightX2V 的环境，并进入仓库根目录。
+
+### 公共准备
+
+在**终端一**安装 Mooncake，设置仓库路径和 GPU：
+
 ```bash
-# 安装mooncake engine
 pip install mooncake-transfer-engine
+export LIGHTX2V_PATH="$PWD"
+export GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
 ```
 
-### Wan2.1-T2V-14B（50 Steps, 480×832, 81 帧）
+示例将 Encoder 和 Decoder 放在 GPU 0、Transformer 放在 GPU 1；按实际显卡编号和可用显存调整。模型目录需包含相应的 DiT、编码器和 VAE 权重。
+
+各阶段配置位于 `configs/disagg/wan/` 或 `configs/disagg/qwen/`。安装其中指定的后端：Wan 示例使用 `sage_attn2`；Qwen Encoder 使用 `lightllm_kernel` 和 `flash_attn3`，Transformer 的 T2I/I2I 示例分别使用 `flash_attn2`/`flash_attn3`。如需替换后端，同步修改配置并确认模型和 GPU 支持。
+
+启动脚本会保持运行。等待三个服务均就绪后，在**终端二**发送请求；在终端一按 `Ctrl+C` 会停止整组服务。
+
+### Wan2.1-T2V-14B（50 步、480×832、81 帧）
+
+终端一：替换模型绝对路径并启动。
 
 ```bash
-# 指定各阶段部署的卡
-# GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+WAN_T2V_MODEL_PATH="/absolute/path/to/Wan2.1-T2V-14B" \
+  bash scripts/server/disagg/wan/start_wan_t2v_disagg.sh
+```
 
-# 启动三段式分离部署服务
-bash scripts/server/disagg/wan/start_wan_t2v_disagg.sh
+终端二：
 
-# 成功启动后测试
+```bash
 python scripts/server/disagg/wan/post_wan_t2v.py
 ```
 
-### Wan2.1-I2V-14B-480P（40 Steps, 480×832, 81 帧）
+### Wan2.1-I2V-14B-480P（40 步、480×832、81 帧）
+
+终端一：
 
 ```bash
-# 指定各阶段部署的卡
-# GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+WAN_I2V_MODEL_PATH="/absolute/path/to/Wan2.1-I2V-14B-480P" \
+  bash scripts/server/disagg/wan/start_wan_i2v_disagg.sh
+```
 
-# 启动三段式分离部署服务
-bash scripts/server/disagg/wan/start_wan_i2v_disagg.sh
+终端二：先将请求脚本中的 `IMAGE_PATH` 改为本地图片路径，再运行。
 
-# 成功启动后测试
+```bash
 python scripts/server/disagg/wan/post_wan_i2v.py
 ```
 
-### qwen-image-edit-release-251130（t2i）
+(qwen-t2i-disagg-quickstart)=
+### Qwen Image（T2I）
+
+先编辑 `configs/disagg/qwen/qwen_image_t2i_disagg_transformer.json`，将 `dit_original_ckpt` 替换为与模型和推理配置匹配的 DiT 权重文件。该字段优先于模型目录，只修改 `QWEN_IMAGE_MODEL_PATH` 不会覆盖它。
+
+终端一：
 
 ```bash
-# 指定各阶段部署的卡
-# GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+QWEN_IMAGE_MODEL_PATH="/absolute/path/to/qwen-model" \
+  bash scripts/server/disagg/qwen/start_qwen_t2i_disagg.sh
+```
 
-# 启动三段式分离部署服务
-bash scripts/server/disagg/qwen/start_qwen_t2i_disagg.sh
+终端二：
 
-# 成功启动后测试
+```bash
 python scripts/server/disagg/qwen/post_qwen_t2i.py
 ```
 
-### qwen-image-edit-release-251130（i2i）
+### Qwen Image Edit 2511（I2I）
+
+终端一：
 
 ```bash
-# 指定各阶段部署的卡
-# GPU_ENCODER=0 GPU_TRANSFORMER=1 GPU_DECODER=0
+QWEN_IMAGE_MODEL_PATH="/absolute/path/to/Qwen-Image-Edit-2511" \
+  bash scripts/server/disagg/qwen/start_qwen_i2i_disagg.sh
+```
 
-# 启动三段式分离部署服务
-bash scripts/server/disagg/qwen/start_qwen_i2i_disagg.sh
+终端二：先将请求脚本中的 `IMAGE_PATH` 改为本地图片路径，再运行。
 
-# 成功启动后测试
+```bash
 python scripts/server/disagg/qwen/post_qwen_i2i.py
 ```
+
+### 地址与端口
+
+| 示例 | API 端口（Encoder / Transformer / Decoder） | 指标端口 |
+| --- | --- | --- |
+| Wan T2V | 8002 / 8003 / 8006 | 18002 / 18003 / 18006 |
+| Wan I2V | 8004 / 8005 / 8007 | 18004 / 18005 / 18007 |
+| Qwen T2I | 8002 / 8003 / 8008 | 18002 / 18003 / 18008 |
+| Qwen I2I | 8012 / 8013 / 8014 | 18012 / 18013 / 18014 |
+
+修改 API 地址或端口时，同步修改请求脚本中的 `ENCODER_URL`、`TRANSFORMER_URL`、`DECODER_URL`。同时运行多组服务时，API 和指标端口都必须避免冲突。
 
 ## 性能实测 Benchmark
 
@@ -407,10 +442,11 @@ python -m lightx2v.server \
     --model_path $model_path \
     --config_json ${lightx2v_path}/configs/disagg/wan/wan_t2v_disagg_decode.json \
     --host 0.0.0.0 \
-    --port 8004
+    --port 8004 \
+    --metric_port 18004
 ```
 
-再启动 Transformer（例如 port 8003）、最后启动 Encoder（例如 port 8002）。
+再启动 Transformer（例如 `--port 8003 --metric_port 18003`）、最后启动 Encoder（例如 `--port 8002 --metric_port 18002`）。各阶段是独立服务，API 与默认启动的指标服务均需使用互不冲突的端口。
 
 发起请求时，Wan 的 T2V / I2V 走视频任务接口 `/v1/tasks/video/`。**三段式请求顺序**：先 POST Decoder → 再 POST Transformer → 再 POST Encoder → 轮询 Decoder 状态：
 
@@ -453,11 +489,11 @@ while True:
 
 参考脚本：`scripts/server/disagg/qwen`。Qwen Image 的 T2I / I2I 均支持 Encoder + Transformer + Decoder 三段式，走图片任务接口 `/v1/tasks/image/`（与 Wan 的 `/v1/tasks/video/` 不同）。
 
-**启动顺序：** 先 Decoder → 再 Transformer → 再 Encoder。端口示例：Encoder 8012、Transformer 8013、Decoder 8014。
+**启动顺序：** 先 Decoder → 再 Transformer → 再 Encoder。T2I 脚本的 API 端口为 Encoder 8002、Transformer 8003、Decoder 8008；I2I 脚本为 Encoder 8012、Transformer 8013、Decoder 8014。
 
 #### Qwen T2I 三段式
 
-依次启动 Decoder、Transformer、Encoder（使用 `qwen_image_t2i_disagg_decode.json`、`qwen_image_t2i_disagg_transformer.json`、`qwen_image_t2i_disagg_encoder.json`）。请求顺序：先 POST Decoder 拿 `task_id` → 再 POST Transformer → 再 POST Encoder → 轮询 **Decoder** 的 `task_id` 状态，结果图在 Decoder 节点保存。
+先按 [Qwen Image T2I 快速开始](#qwen-t2i-disagg-quickstart) 配置模型目录、JSON 中的 DiT 权重路径和 GPU 编号，再依次启动 Decoder、Transformer、Encoder（使用 `qwen_image_t2i_disagg_decode.json`、`qwen_image_t2i_disagg_transformer.json`、`qwen_image_t2i_disagg_encoder.json`）。请求顺序：先 POST Decoder 拿 `task_id` → 再 POST Transformer → 再 POST Encoder → 轮询 **Decoder** 的 `task_id` 状态，结果图在 Decoder 节点保存。
 
 ```bash
 # 启动三端后再执行（脚本内已配置 ENCODER_URL / TRANSFORMER_URL / DECODER_URL 与 ENDPOINT）
@@ -492,273 +528,66 @@ INFO:     Application startup complete.
 
 ---
 
-## 4. 去中心化调度模式（Decentralized Queue）
+## 4. 去中心化队列：现有实现与入口
 
-### 4.1 概述
+当前保留 RDMA 队列、Controller 的 ring 服务、Runner 的队列通信接口和 Qwen 配置，但缺少 Qwen 独立 pull-worker 模块，因此 Qwen 队列模式暂不能完整启动。
 
-在标准三段式部署中，客户端需依次向 Decoder → Transformer → Encoder 发送请求，调用方逻辑较复杂。去中心化调度模式改为：
+### 4.1 组件与数据流
 
-- **Controller** 仅维护 RDMA 元数据环形缓冲区（request ring / phase1 ring / phase2 ring），不参与推理计算；
-- **Encoder** 通过 HTTP API（`lightx2v.server`）直接接收客户端请求，推理完成后将 phase1 元数据写入 RDMA ring，由匹配 rank 的 Transformer worker 自行拉取；
-- **Transformer** 和 **Decoder** 以 pull-based worker 运行（`qwen_t2i_queue_workers.py`），循环消费 RDMA ring 中的 dispatch 包，不需要对外暴露 HTTP 端口；
-- **多 Transformer worker** 可部署在不同 GPU 上，客户端请求中携带 `disagg_phase1_receiver_engine_rank` 指定由哪个 Transformer 处理，实现多 worker 并发。
+队列设计将请求派发与推理分离：Encoder 将任务元数据写入 Phase1 ring，Transformer 消费任务并将下一阶段元数据写入 Phase2 ring，Decoder 消费后完成解码。Controller 维护 ring 和握手服务。
 
 ```text
-┌──────────┐  HTTP POST   ┌──────────┐ Phase1 RDMA ┌─────────────┐ Phase2 RDMA ┌──────────┐
-│  Client  │ ──────────→  │ Encoder  │ ──────────→ │ Transformer │ ──────────→ │ Decoder  │
-└──────────┘              │ (GPU 0)  │             │ (GPU 1/2/3) │             │ (GPU 0)  │
-                          └──────────┘             └─────────────┘             └──────────┘
-                                ↑                        ↑                          ↑
-                          lightx2v.server          pull worker ×N              pull worker
-                          HTTP port 8002           (qwen_t2i_queue_workers)    (qwen_t2i_queue_workers)
-                                │
-                          ┌──────────┐
-                          │Controller│  ← RDMA 元数据 ring buffer（后台常驻）
-                          └──────────┘
+Encoder → Phase1 RDMA ring → Transformer → Phase2 RDMA ring → Decoder
+                   ↑                              ↑
+                   └──── Controller ring 服务 ────┘
 ```
 
-**与标准三段式对比：**
+| 组件 | 当前实现与作用 |
+|------|----------------|
+| RDMA ring | [RDMABuffer](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/rdma_buffer.py) 提供元数据缓冲区 |
+| Controller | [ControllerService](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/services/controller.py) 的 `serve_rdma_dispatch_only()` 提供 request、Phase1、Phase2 ring 服务 |
+| Runner 通信 | [DisaggMixin](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/disagg_mixin.py) 实现队列连接、请求快照及 Transformer/Decoder 的 dispatch 准备 |
 
+`DisaggMixin` 的源码还注明多消费者排序限制：当前 FAA 实现不是跨进程的真正远端原子操作。多 worker 并发的正确性需要单独验证，不能仅依据 rank 配置推断。
 
-| 特性              | 标准三段式                                    | 去中心化调度                                           |
-| --------------- | ---------------------------------------- | ------------------------------------------------ |
-| **客户端调用**       | 需分别向 Decoder → Transformer → Encoder 发请求 | 仅向 **Encoder HTTP** 发一次请求                        |
-| **Transformer** | HTTP 服务，每次只处理一个请求                        | Pull worker，可部署多实例并行消费                           |
-| **Decoder**     | HTTP 服务                                  | Pull worker，自动消费 Phase2                          |
-| **请求分发**        | 客户端显式指定                                  | Encoder 写 RDMA ring，Worker 按 rank 自动拉取           |
-| **结果获取**        | 轮询 Decoder HTTP status                   | 轮询 **Encoder HTTP** `/v1/tasks/{task_id}/status` |
+### 4.2 配置参考
 
+以下配置仍位于当前仓库，模型路径和后端需按实际环境调整：
 
-### 4.2 配置文件
+| 角色 | 配置文件 |
+|------|----------|
+| Controller | [qwen_image_t2i_disagg_controller.json](https://github.com/ModelTC/LightX2V/blob/main/configs/disagg/qwen/qwen_image_t2i_disagg_controller.json) |
+| Encoder | [qwen_image_t2i_disagg_encoder_decentralized.json](https://github.com/ModelTC/LightX2V/blob/main/configs/disagg/qwen/qwen_image_t2i_disagg_encoder_decentralized.json) |
+| Transformer | [qwen_image_t2i_disagg_transformer_decentralized.json](https://github.com/ModelTC/LightX2V/blob/main/configs/disagg/qwen/qwen_image_t2i_disagg_transformer_decentralized.json) |
+| Decoder | [qwen_image_t2i_disagg_decode_decentralized.json](https://github.com/ModelTC/LightX2V/blob/main/configs/disagg/qwen/qwen_image_t2i_disagg_decode_decentralized.json) |
 
-去中心化模式的配置位于 `configs/disagg/qwen/` 下，关键区别是各组件的 `disagg_config` 中需设置 `"decentralized_queue": true` 以及 RDMA ring 握手端口。
+Encoder、Transformer、Decoder 的 `disagg_config` 使用 `decentralized_queue: true` 选择队列通信；Controller 配置定义 ring 服务。主要字段如下：
 
-#### Controller 配置（`qwen_image_t2i_disagg_controller.json`）
+| 字段 | 含义 |
+|------|------|
+| `rdma_request_handshake_port` | Controller request ring 握手端口，示例为 5566 |
+| `rdma_phase1_handshake_port` | Phase1 ring 握手端口，相关组件需保持一致，示例为 5567 |
+| `rdma_phase2_handshake_port` | Phase2 ring 握手端口，相关组件需保持一致，示例为 5568 |
+| `rdma_phase1_host` / `rdma_phase2_host` | 对应 ring 的握手主机地址 |
+| `rdma_buffer_slots` / `rdma_buffer_slot_size` | 元数据 ring 的槽数和每槽字节数，示例为 128 和 4096 |
+| `receiver_engine_rank` / `transformer_engine_rank` | Transformer 的接收与执行 rank，按角色保持一致；不同 worker 使用不同 rank |
+| `decoder_engine_rank` | Decoder 的 rank，相关组件使用相同值 |
 
-Controller 不加载模型，仅初始化三组 RDMA ring buffer：
+### 4.3 当前可选入口
 
-```json
-{
-  "task": "t2i",
-  "model_cls": "qwen_image",
-  "disagg_mode": "controller",
-  "disagg_config": {
-    "bootstrap_addr": "127.0.0.1",
-    "bootstrap_room": 0,
-    "encoder_engine_rank": 0,
-    "transformer_engine_rank": 1,
-    "decoder_engine_rank": 4,
-    "rdma_buffer_slots": 128,
-    "rdma_buffer_slot_size": 4096,
-    "rdma_request_handshake_port": 5566,
-    "rdma_phase1_handshake_port": 5567,
-    "rdma_phase2_handshake_port": 5568
-  }
-}
-```
+| 使用场景 | 现有入口与适用范围 |
+|----------|------------------|
+| Qwen Image 三阶段 HTTP 服务 | 使用 [T2I 快速开始](#qwen-t2i-disagg-quickstart)中的启动和请求脚本，先配置模型目录、DiT 权重、GPU 和依赖 |
+| Wan 动态分离调度 | 参阅 [Disagg 使用说明](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/README.md)和 [run_dynamic.sh](https://github.com/ModelTC/LightX2V/blob/main/scripts/disagg/run_dynamic.sh)，按拓扑配置路径、设备与网络；启动脚本会清理旧服务 |
+| 单独启动 Wan 服务角色 | [run_service.py](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/disagg/examples/run_service.py) 接收 `--service encoder/transformer/decoder/controller`；当前服务实现加载 Wan 组件 |
 
-#### Encoder 配置（`qwen_image_t2i_disagg_encoder_decentralized.json`）
+`run_service.py` 仅适用于 Wan，不能替代 Qwen 的 pull-worker。
 
-Encoder 以 HTTP 服务方式运行，加载 Text Encoder，推理完成后将特征及元数据写入 Phase1 RDMA ring：
+### 4.4 请求与分发字段的边界
 
-```json
-{
-  "disagg_mode": "encoder",
-  "text_encoder_type": "lightllm_kernel",
-  "disagg_config": {
-    "decentralized_queue": true,
-    "rdma_phase1_host": "127.0.0.1",
-    "rdma_phase1_handshake_port": 5567,
-    "rdma_buffer_slots": 128,
-    "rdma_buffer_slot_size": 4096,
-    "bootstrap_addr": "127.0.0.1",
-    "bootstrap_room": 0,
-    "sender_engine_rank": 0,
-    "receiver_engine_rank": 1
-  }
-}
-```
+`DisaggMixin` 的内部请求快照使用 `data_bootstrap_room` 标识传输 room，并可携带 `disagg_phase1_receiver_engine_rank` 选择 Transformer rank；`save_result_path` 表示输出路径。这些是内部配置/分发字段，不能直接视为 HTTP 请求字段。
 
-#### Transformer 配置（`qwen_image_t2i_disagg_transformer_decentralized.json`）
-
-Transformer 作为 pull worker，从 Phase1 ring 消费任务，推理后写入 Phase2 ring。每个 worker 的 `receiver_engine_rank` 和 `transformer_engine_rank` 对应不同 rank：
-
-```json
-{
-  "disagg_mode": "transformer",
-  "disagg_config": {
-    "decentralized_queue": true,
-    "encoder_engine_rank": 0,
-    "transformer_engine_rank": 1,
-    "decoder_engine_rank": 4,
-    "decoder_bootstrap_room": 0,
-    "rdma_phase1_host": "127.0.0.1",
-    "rdma_phase1_handshake_port": 5567,
-    "rdma_phase2_host": "127.0.0.1",
-    "rdma_phase2_handshake_port": 5568,
-    "rdma_buffer_slots": 128,
-    "rdma_buffer_slot_size": 4096,
-    "bootstrap_addr": "127.0.0.1",
-    "bootstrap_room": 0,
-    "sender_engine_rank": 0,
-    "receiver_engine_rank": 1
-  }
-}
-```
-
-> 部署多个 Transformer worker 时，需为每个 worker 生成独立配置，将 `receiver_engine_rank` 和 `transformer_engine_rank` 设为该 worker 的 rank（如 1、2、3）。启动脚本会自动生成。
-
-#### Decoder 配置（`qwen_image_t2i_disagg_decode_decentralized.json`）
-
-Decoder 作为 pull worker，从 Phase2 ring 消费任务，执行 VAE 解码并保存结果：
-
-```json
-{
-  "disagg_mode": "decode",
-  "disagg_config": {
-    "decentralized_queue": true,
-    "encoder_engine_rank": 0,
-    "transformer_engine_rank": 1,
-    "decoder_engine_rank": 4,
-    "rdma_phase2_host": "127.0.0.1",
-    "rdma_phase2_handshake_port": 5568,
-    "rdma_buffer_slots": 128,
-    "rdma_buffer_slot_size": 4096,
-    "bootstrap_addr": "127.0.0.1",
-    "bootstrap_room": 0,
-    "sender_engine_rank": 1,
-    "receiver_engine_rank": 4
-  }
-}
-```
-
-#### 关键参数说明
-
-
-| 参数                            | 说明                                                                |
-| ----------------------------- | ----------------------------------------------------------------- |
-| `decentralized_queue`         | 设为 `true` 启用去中心化调度模式                                              |
-| `rdma_request_handshake_port` | Controller request ring 的 RDMA 握手端口（仅 Controller 需要）              |
-| `rdma_phase1_handshake_port`  | Phase1 ring 的 RDMA 握手端口，Encoder / Transformer / Controller 三方必须一致 |
-| `rdma_phase2_handshake_port`  | Phase2 ring 的 RDMA 握手端口，Transformer / Decoder / Controller 三方必须一致 |
-| `rdma_buffer_slots`           | RDMA ring buffer 的槽位数量                                            |
-| `rdma_buffer_slot_size`       | 每个槽位的字节大小                                                         |
-| `receiver_engine_rank`        | Transformer worker 的 rank，多 worker 需不同值                           |
-| `transformer_engine_rank`     | 同 `receiver_engine_rank`，保持一致                                     |
-| `decoder_engine_rank`         | Decoder 的 rank，所有组件配置中需一致                                         |
-
-
-### 4.3 启动服务
-
-以 Qwen Image T2I 4 GPU 为例（GPU 0: Controller + Encoder + Decoder，GPU 1/2/3: 各一个 Transformer worker）：
-
-```bash
-bash scripts/server/disagg/qwen/start_qwen_t2i_decentralized.sh
-```
-
-**服务启动顺序（脚本自动完成）：**
-
-1. **Controller**（RDMA ring buffer 常驻进程）：
-
-```bash
-# Controller 仅初始化 RDMA 环形缓冲区，不加载模型
-python3 -c "
-import json
-from lightx2v.disagg.services.controller import ControllerService
-with open('configs/disagg/qwen/qwen_image_t2i_disagg_controller.json') as f:
-    cfg = json.load(f)
-dc = cfg.get('disagg_config', {})
-cfg['data_bootstrap_addr'] = dc.get('bootstrap_addr', '127.0.0.1')
-ControllerService().serve_rdma_dispatch_only(cfg)
-"
-```
-
-1. **Encoder HTTP 服务**（GPU 0，端口 8002）：
-
-```bash
-CUDA_VISIBLE_DEVICES=0 python3 -m lightx2v.server \
-  --model_cls qwen_image \
-  --task t2i \
-  --model_path /path/to/qwen-2512/ \
-  --config_json configs/disagg/qwen/qwen_image_t2i_disagg_encoder_decentralized.json \
-  --host 0.0.0.0 \
-  --port 8002
-```
-
-1. **Decoder pull worker**（GPU 0，与 Encoder 共享）：
-
-```bash
-CUDA_VISIBLE_DEVICES=0 python3 -m lightx2v.disagg.examples.qwen_t2i_queue_workers \
-  --role decoder \
-  --model_path /path/to/qwen-2512/ \
-  --config_json configs/disagg/qwen/qwen_image_t2i_disagg_decode_decentralized.json
-```
-
-1. **Transformer pull worker ×3**（GPU 1, 2, 3，每个 worker 使用独立的 rank 配置）：
-
-```bash
-# 每个 worker 的配置中 receiver_engine_rank / transformer_engine_rank 需对应不同 rank
-CUDA_VISIBLE_DEVICES=1 python3 -m lightx2v.disagg.examples.qwen_t2i_queue_workers \
-  --role transformer \
-  --model_path /path/to/qwen-2512/ \
-  --config_json /tmp/qwen_t2i_decentralized_cfg/transformer_r1.json
-
-CUDA_VISIBLE_DEVICES=2 python3 -m lightx2v.disagg.examples.qwen_t2i_queue_workers \
-  --role transformer \
-  --model_path /path/to/qwen-2512/ \
-  --config_json /tmp/qwen_t2i_decentralized_cfg/transformer_r2.json
-
-CUDA_VISIBLE_DEVICES=3 python3 -m lightx2v.disagg.examples.qwen_t2i_queue_workers \
-  --role transformer \
-  --model_path /path/to/qwen-2512/ \
-  --config_json /tmp/qwen_t2i_decentralized_cfg/transformer_r3.json
-```
-
-> 启动脚本会从模板配置自动生成 `transformer_r1.json` / `transformer_r2.json` / `transformer_r3.json`，将 `receiver_engine_rank` 分别设为 1、2、3。
-
-### 4.4 发送请求
-
-去中心化模式下，客户端**仅需向 Encoder HTTP 发送一次请求**。请求中通过 `disagg_phase1_receiver_engine_rank` 指定目标 Transformer 的 rank：
-
-```python
-import requests
-
-ENCODER_URL = "http://127.0.0.1:8002"
-
-resp = requests.post(f"{ENCODER_URL}/v1/tasks/image/", json={
-    "prompt": "A cute cat on a table, cinematic lighting.",
-    "negative_prompt": "blurry, low quality",
-    "seed": 42,
-    "aspect_ratio": "16:9",
-    "save_result_path": "/tmp/output.png",
-    "data_bootstrap_room": 100,                       # 唯一 room 号，标识本次请求
-    "disagg_phase1_receiver_engine_rank": 1,           # 目标 Transformer rank (1/2/3)
-})
-task_id = resp.json()["task_id"]
-
-# 轮询 Encoder 获取完成状态（Decoder 异步保存文件）
-import time
-while True:
-    st = requests.get(f"{ENCODER_URL}/v1/tasks/{task_id}/status").json()
-    if st["status"] == "completed":
-        print(f"Done: {st.get('save_result_path')}")
-        break
-    if st["status"] == "failed":
-        raise RuntimeError(st)
-    time.sleep(2)
-```
-
-**请求参数说明：**
-
-
-| 参数                                   | 说明                                                    |
-| ------------------------------------ | ----------------------------------------------------- |
-| `data_bootstrap_room`                | 每个请求的唯一标识 room 号，用于 Mooncake 数据传输通道匹配                 |
-| `disagg_phase1_receiver_engine_rank` | 目标 Transformer 的 rank，需在已启动的 worker rank 范围内（如 1、2、3） |
-| `save_result_path`                   | 输出文件路径，Decoder worker 最终会将结果保存到此路径                    |
-
-
----
+当前 [HTTP schema](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/server/schema.py) 禁止额外字段，`ImageTaskRequest` 未声明上述 room 和 rank 字段。HTTP 使用第 3 节的现有请求脚本；队列模式的任务完成回传、轮询端点和 Decoder 结果交付仍需随完整 worker 实现验证。
 
 ## 5. RDMA vs TCP 协议选择
 
