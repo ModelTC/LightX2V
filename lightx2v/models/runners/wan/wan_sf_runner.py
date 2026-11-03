@@ -1,6 +1,5 @@
 from lightx2v.models.networks.wan.sf_model import WanSFModel
 from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin
-from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.self_forcing.scheduler import WanSFScheduler
 from lightx2v.utils.input_info import T2VInputInfo
@@ -11,8 +10,6 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 class WanSFRunner(WanAutoregressiveRunnerMixin, WanRunner):
     _SUPPORTS_AUTOREGRESSIVE_WARMUP = True
     _WARMUP_TASKS = ("t2v",)
-
-    supported_request_fields_by_task = SPECS["wan2.1_sf"].fields_by_task
 
     def __init__(self, config):
         super().__init__(config)

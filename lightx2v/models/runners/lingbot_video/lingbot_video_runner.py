@@ -12,7 +12,6 @@ from lightx2v.models.input_encoders.hf.lingbot_video.qwen3vl import LingBotVideo
 from lightx2v.models.networks.lingbot_video.model import LingBotVideoTransformerModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.lingbot_video.cli import SPECS
 from lightx2v.models.schedulers.lingbot_video.scheduler import LingBotVideoScheduler
 from lightx2v.models.video_encoders.hf.lingbot_video.vae import LingBotVideoWanVAE
 from lightx2v.utils.input_info import I2VInputInfo, T2IInputInfo, T2VInputInfo
@@ -77,8 +76,6 @@ def smart_resize(height, width, factor, min_pixels=None, max_pixels=None):
 
 @RUNNER_REGISTER("lingbot_video")
 class LingBotVideoRunner(DefaultRunner):
-    supported_request_fields_by_task = SPECS["lingbot_video"].fields_by_task
-
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _WARMUP_RESOLUTIONS = ((480, 480), (320, 832))
 

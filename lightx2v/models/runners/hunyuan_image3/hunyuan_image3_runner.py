@@ -17,7 +17,6 @@ from transformers import GenerationConfig
 from lightx2v.models.networks.hunyuan_image3.infer.kv_cache import HunyuanImage3StaticKVCache
 from lightx2v.models.networks.hunyuan_image3.model import HunyuanImage3Model
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.hunyuan_image3.cli import SPECS
 from lightx2v.models.runners.hunyuan_image3.cuda_graph import HunyuanImage3ARCudaGraphController
 from lightx2v.models.runners.hunyuan_image3.flashinfer_autotune import (
     DistributedAutotuneContext,
@@ -39,7 +38,6 @@ class HunyuanImage3TextGenerationPlan:
 class HunyuanImage3Runner(DefaultRunner):
     model_cpu_offload_seq = "transformer"
     input_info_cls_by_task = {"i2i": TI2IInputInfo}
-    supported_request_fields_by_task = SPECS["hunyuan_image3"].fields_by_task
 
     def __init__(self, config):
         super().__init__(config)

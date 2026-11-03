@@ -7,7 +7,6 @@ from PIL import Image
 
 from lightx2v.models.input_encoders.hf.vace.vace_processor import VaceVideoProcessor
 from lightx2v.models.networks.wan.vace_model import WanVaceModel
-from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, WanRunner, build_wan_model_with_lora
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
@@ -17,8 +16,6 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 @RUNNER_REGISTER("wan2.1_vace")
 class WanVaceRunner(WanRunner):
-    supported_request_fields_by_task = SPECS["wan2.1_vace"].fields_by_task
-
     def __init__(self, config):
         super().__init__(config)
         self.vid_proc = VaceVideoProcessor(

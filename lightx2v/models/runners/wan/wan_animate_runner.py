@@ -17,7 +17,6 @@ except ImportError:
 from lightx2v.models.input_encoders.hf.animate.face_encoder import FaceEncoder
 from lightx2v.models.input_encoders.hf.animate.motion_encoder import Generator
 from lightx2v.models.networks.wan.animate_model import WanAnimateModel
-from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
@@ -29,8 +28,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 @RUNNER_REGISTER("wan2.2_animate")
 class WanAnimateRunner(WanRunner):
-    supported_request_fields_by_task = SPECS["wan2.2_animate"].fields_by_task
-
     def __init__(self, config):
         super().__init__(config)
         assert self.config["task"] == "animate"

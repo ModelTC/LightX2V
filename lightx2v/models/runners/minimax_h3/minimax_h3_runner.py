@@ -41,7 +41,6 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     trim_reference_num_frames,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.minimax_h3.cli import SPECS
 from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
 from lightx2v.models.schedulers.minimax_h3.resampling import validate_draft_steps, validate_resample_start_step
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
@@ -101,7 +100,6 @@ class MiniMaxH3Runner(DefaultRunner):
         (544, 960, 124),
     )
     _WARMUP_STEP_COUNT = 2
-    supported_request_fields_by_task = SPECS["minimax_h3"].fields_by_task
 
     def __init__(self, config):
         if config.get("lazy_load", False) or config.get("unload_modules", False):

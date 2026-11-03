@@ -16,16 +16,26 @@ Qwen-Image-2.1 的 `t2i`、`i2i` 分别使用 `T2IInputInfo`、`I2IInputInfo`，
 
 ## 2. 声明支持范围
 
-在目标 runner 的 `supported_request_fields_by_task` 中，为需要支持的任务加入字段，保留原有字段。Qwen-Image-2.1 的声明位于 `lightx2v/models/runners/qwen_image_21/qwen_image_21_runner.py`：
+在模型自己的 `cli.py` 中，为需要支持的任务声明 `Argument`，保留原有字段。Qwen-Image-2.1 的声明位于 `lightx2v/models/runners/qwen_image_21/cli.py`：
 
 ```python
-supported_request_fields_by_task = {
-    "t2i": IMAGE_REQUEST_FIELDS | {"resolution"},
-    "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "resolution"},
+from lightx2v.models.runners.request_args import IMAGE
+from lightx2v.utils.request_spec import Argument
+
+SPECS = {
+    "qwen_image_21": QwenImage21Spec(
+        {
+            "t2i": IMAGE | {"resolution": Argument(type=int, help="Output resolution.")},
+            "i2i": IMAGE | {
+                "image_path": Argument(help="Input image path."),
+                "resolution": Argument(type=int, help="Output resolution."),
+            },
+        }
+    ),
 }
 ```
 
-该声明允许对应任务覆盖 `resolution`；当前实例实际接受的任务和字段还受启动任务及模型配置限制。涉及模型初始化的参数，需要先确认模型支持在运行时修改。
+CLI 根据这份 Spec 生成参数和帮助，`BaseRunner` 也从同一份 Spec 校验任务与请求字段。模型专属参数直接定义在自己的 `cli.py` 中，无需修改公共参数表或在 runner 中重复声明。当前实例实际接受的任务和字段还受启动任务及模型配置限制。涉及模型初始化的参数，需要先确认模型支持在运行时修改。
 
 ## 3. 在推理中使用参数
 
@@ -53,15 +63,11 @@ runner 合并参数时保留 `0`、`False`、`""`、`[]`。它们是否有效由
 | 入口 | 修改位置 |
 |---|---|
 | Python | 通常无需修改；`generate(resolution=768)` 会通过 `**task_inputs` 转发新字段。 |
-| CLI | 在 `lightx2v/infer.py` 的 `build_parser()` 中声明选项。 |
+| CLI | 第 2 步中的 `Argument` 自动生成选项，无需修改 `infer.py`。 |
 | 原生 HTTP JSON / 表单 | 在 `lightx2v/server/schema.py` 的 `ImageTaskRequest` 或 `VideoTaskRequest` 中声明字段。 |
 | OpenAI 图片接口 | 在 `lightx2v/server/api/openai_images.py` 的请求类中声明字段，并确保 `ImageTaskRequest` 也接受它。 |
 
-CLI 使用 `default=None`，让未传参数保留启动值：
-
-```python
-parser.add_argument("--resolution", type=int, default=None)
-```
+`Argument` 自动为 CLI 选项设置 `default=None`，让未传参数保留启动值。
 
 HTTP 请求类的字段声明示例：
 

@@ -17,7 +17,6 @@ from transformers import AutoTokenizer
 
 from lightx2v.models.audio_encoders.hf.cosmos3.sound_tokenizer import Cosmos3SoundTokenizer
 from lightx2v.models.networks.cosmos3.model import Cosmos3TransformerModel
-from lightx2v.models.runners.cosmos3.cli import SPECS
 from lightx2v.models.runners.cosmos3.policy_runtime import (
     PolicySeedSequence,
     build_json_policy_prompt,
@@ -131,7 +130,6 @@ def compose_droid_policy_image(images):
 @RUNNER_REGISTER("cosmos3")
 class Cosmos3Runner(DefaultRunner):
     input_info_cls_by_task = {task: Cosmos3InputInfo for task in ("t2i", "t2v", "i2v", "t2av", "i2av", "i2va", "v2av")}
-    supported_request_fields_by_task = SPECS["cosmos3"].fields_by_task
 
     model_cpu_offload_seq = "transformer->vae->sound_tokenizer"
     _callback_tensor_inputs = ["latents"]

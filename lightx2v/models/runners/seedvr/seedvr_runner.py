@@ -23,7 +23,6 @@ from loguru import logger
 from torch import Tensor
 
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.seedvr.cli import SPECS
 from lightx2v.models.schedulers.seedvr.scheduler import SeedVRScheduler
 from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
 from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstruction
@@ -144,7 +143,6 @@ class SeedVRRunner(DefaultRunner):
     """Runner for SeedVR video super-resolution model."""
 
     input_info_cls_by_task = {"sr": SeedVRInputInfo}
-    supported_request_fields_by_task = SPECS["seedvr2"].fields_by_task
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)

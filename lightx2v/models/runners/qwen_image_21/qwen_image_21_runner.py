@@ -17,7 +17,6 @@ from lightx2v.models.networks.qwen_image_21.input_utils import prepare_images
 from lightx2v.models.networks.qwen_image_21.lora import QwenImage21LoraAdapter, validate_lora_config
 from lightx2v.models.networks.qwen_image_21.model import QwenImage21TransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.qwen_image_21.cli import SPECS
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
@@ -31,7 +30,6 @@ torch_device_module = getattr(torch, AI_DEVICE)
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
     _WARMUP_RESOLUTIONS = ((1024, 1024), (768, 960))
-    supported_request_fields_by_task = SPECS["qwen_image_21"].fields_by_task
 
     def __init__(self, config):
         unsupported = (

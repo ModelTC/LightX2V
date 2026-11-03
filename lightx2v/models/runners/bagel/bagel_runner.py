@@ -6,7 +6,6 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.networks.bagel.model import BagelModel
-from lightx2v.models.runners.bagel.cli import SPECS
 from lightx2v.models.runners.bagel.i2i_utils import load_bagel_i2i_input_image, resize_pil_to_shape, resolve_bagel_i2i_image_shape
 from lightx2v.models.runners.bagel.t2i_utils import get_bagel_latent_downsample, resolve_bagel_t2i_image_shape
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -27,8 +26,6 @@ def _has_save_path(input_info):
 
 @RUNNER_REGISTER("bagel")
 class BagelRunner(DefaultRunner):
-    supported_request_fields_by_task = SPECS["bagel"].fields_by_task
-
     def __init__(self, config):
         super().__init__(config)
 

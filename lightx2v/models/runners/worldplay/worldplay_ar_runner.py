@@ -7,7 +7,6 @@ from loguru import logger
 from lightx2v.models.networks.worldplay.ar_model import WorldPlayARModel
 from lightx2v.models.networks.worldplay.pose_utils import load_pose, pose_to_input
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner
-from lightx2v.models.runners.worldplay.cli import SPECS
 from lightx2v.models.schedulers.worldplay.ar_scheduler import WorldPlayARScheduler
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE
@@ -33,7 +32,6 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
 
     scheduler_class = WorldPlayARScheduler
     input_info_cls_by_task = {"t2v": WorldPlayT2VInputInfo, "i2v": WorldPlayI2VInputInfo}
-    supported_request_fields_by_task = SPECS["worldplay_distill"].fields_by_task
 
     def __init__(self, config):
         # AR-specific parameters

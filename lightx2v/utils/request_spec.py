@@ -14,10 +14,6 @@ class RequestSpec:
     def __init__(self, tasks: dict[str, dict[str, Argument]]):
         self.tasks = tasks
 
-    @property
-    def fields_by_task(self):
-        return {task: frozenset(arguments) for task, arguments in self.tasks.items()}
-
     def get_tasks(self, config):
         task = config.get("task", None)
         if task is None:

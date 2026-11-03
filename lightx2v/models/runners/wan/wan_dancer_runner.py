@@ -11,7 +11,6 @@ from torchvision.transforms import InterpolationMode
 
 from lightx2v.models.input_encoders.hf.wan.wan_dancer.wan_dancer import extract_music_features, split_music_features
 from lightx2v.models.networks.wan.dancer_model import WanDancerModel
-from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.dancer import WanDancerScheduler, WanDancerStepDistillScheduler
 from lightx2v.models.video_encoders.hf.wan.dancer_vae import WanDancerVAE
@@ -28,8 +27,6 @@ def _barrier():
 
 @RUNNER_REGISTER("wan_dancer")
 class WanDancerRunner(WanRunner):
-    supported_request_fields_by_task = SPECS["wan_dancer"].fields_by_task
-
     def __init__(self, config):
         config.setdefault("fps", 30 if config.get("dancer_stage") == "local" else 8)
         if config.get("dancer_stage") == "local" and config["fps"] != 30:

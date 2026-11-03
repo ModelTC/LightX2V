@@ -22,7 +22,6 @@ from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdap
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioARModel, WanAudioModel
 from lightx2v.models.runners.autoregressive_runner import AutoregressiveRunnerMixin
-from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler, WanAudioARScheduler
@@ -281,7 +280,6 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 @RUNNER_REGISTER("seko_talk")
 class WanAudioRunner(WanRunner):  # type:ignore
     input_info_cls_by_task = {"s2v": SekoTalkS2VInputInfo, "rs2v": SekoTalkRS2VInputInfo}
-    supported_request_fields_by_task = SPECS["seko_talk"].fields_by_task
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
@@ -905,8 +903,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
 @RUNNER_REGISTER("seko_talk_ar")
 class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, WanAudioRunner):
-    supported_request_fields_by_task = SPECS["seko_talk_ar"].fields_by_task
-
     _WARMUP_RESOLUTIONS = ()
 
     def get_stream_output_path(self, input_info):

@@ -9,7 +9,6 @@ from PIL import Image
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.neopp.cli import SPECS
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
 from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import NeoppInputInfo
@@ -40,7 +39,6 @@ def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs
 @RUNNER_REGISTER("neopp")
 class NeoppRunner(DefaultRunner):
     input_info_cls_by_task = {"t2i": NeoppInputInfo, "i2i": NeoppInputInfo}
-    supported_request_fields_by_task = SPECS["neopp"].fields_by_task
 
     def resolve_request_seed(self, request_data):
         # Preserve LightLLM's session RNG unless a seed is supplied.

@@ -6,7 +6,6 @@ from lightx2v.models.input_encoders.matrix_game4 import MatrixGame4ControlStream
 from lightx2v.models.networks.wan.matrix_game4_model import WanMatrixGame4Model
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin
-from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.matrix_game4 import WanMatrixGame4Scheduler
@@ -26,7 +25,6 @@ class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
     # Short MG4 chunks dispatch faster when VAE kernel launches share the caller thread.
     vae_decode_in_worker = False
     input_info_cls_by_task = {"v2v": MatrixGame4InputInfo}
-    supported_request_fields_by_task = SPECS["matrix_game4"].fields_by_task
 
     def __init__(self, config):
         if not config.get("ar_config"):

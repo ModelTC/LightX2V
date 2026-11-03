@@ -9,7 +9,6 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.ernie_image.mistral3_model import ErnieImageTextEncoder
 from lightx2v.models.networks.ernie_image.model import ErnieImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.ernie_image.cli import SPECS
 from lightx2v.models.schedulers.ernie_image.scheduler import ErnieImageScheduler
 from lightx2v.models.video_encoders.hf.ernie_image.vae import ErnieImageVAE
 from lightx2v.utils.envs import GET_DTYPE
@@ -32,7 +31,6 @@ def calculate_dimensions(target_area, ratio, multiple_of):
 class ErnieImageRunner(DefaultRunner):
     model_cpu_offload_seq = "pe->text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-    supported_request_fields_by_task = SPECS["ernie_image"].fields_by_task
 
     def __init__(self, config):
         super().__init__(config)

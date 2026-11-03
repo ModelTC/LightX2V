@@ -18,7 +18,6 @@ from lightx2v.models.networks.minimax_h3.taomate.model import TaoMateH3NativeMod
 from lightx2v.models.networks.minimax_h3.taomate.publication import TaoMateVideoPublication
 from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRunnerMixin
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
-from lightx2v.models.runners.taomate_h3.cli import SPECS
 from lightx2v.models.schedulers.taomate_h3.geometry import request_plan
 from lightx2v.models.schedulers.taomate_h3.scheduler import TaoMateH3Scheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
@@ -33,7 +32,6 @@ _VIDEO_NOISE_REQUEST_STRIDE = 1_000_003
 class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     """Generate Base10 audio guides, then Stage3 video and audio in LightX2V."""
 
-    supported_request_fields_by_task = SPECS["taomate_h3"].fields_by_task
     frames_per_request = 120
     max_continuous_requests = 12
 

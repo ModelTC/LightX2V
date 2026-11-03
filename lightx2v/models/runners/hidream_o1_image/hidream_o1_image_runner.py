@@ -8,7 +8,6 @@ from transformers import AutoProcessor
 
 from lightx2v.models.networks.hidream_o1_image.model import HidreamO1ImageModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.hidream_o1_image.cli import SPECS
 from lightx2v.models.schedulers.hidream_o1_image.scheduler import HidreamO1ImageScheduler
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
@@ -38,7 +37,6 @@ class HidreamO1ImageRunner(DefaultRunner):
     """LightX2V runner for HiDream-O1-Image t2i / i2i."""
 
     input_info_cls_by_task = {"i2i": HidreamI2IInputInfo}
-    supported_request_fields_by_task = SPECS["hidream_o1_image"].fields_by_task
 
     def __init__(self, config):
         super().__init__(config)

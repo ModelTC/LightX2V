@@ -20,12 +20,11 @@ class BaseRunner(ABC):
     """
 
     input_info_cls_by_task: dict[str, type[InputInfo]] = {}
-    supported_request_fields_by_task: dict[str, frozenset[str]] = {}
 
     def __init__(self, config):
         self.config = config
         task = config.get("task")
-        if task is not None and task not in self.supported_request_fields_by_task:
+        if task is not None and task not in get_model_spec(config["model_cls"]).tasks:
             raise ValueError(f"{type(self).__name__} does not support task {task!r}")
         self.supported_tasks = self.get_supported_tasks()
         self.vae_encoder_need_img_original = False
