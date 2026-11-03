@@ -1,0 +1,5 @@
+{
+    "model_cls": "depth_anything3",
+    "model_variant": "mono_large",
+    "process_res": 504
+}

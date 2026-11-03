@@ -54,6 +54,7 @@ def build_parser():
             "sr",
             "recon",
             "i23d",
+            "depth",
         ],
         default=None,
     )
