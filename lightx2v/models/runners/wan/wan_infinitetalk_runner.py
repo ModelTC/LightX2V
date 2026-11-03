@@ -18,7 +18,7 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.infinitetalk.audio_encoder import InfiniteTalkAudioEncoder
 from lightx2v.models.networks.wan.infinitetalk_model import WanInfiniteTalkModel
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
+from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
@@ -109,17 +109,7 @@ class InfiniteTalkRunner(WanRunner):
     _WARMUP_SIZES = ((512, 512), (512, 896))
     _WARMUP_STEP_COUNT = 2
 
-    supported_request_fields_by_task = {
-        "s2v": COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "audio_path",
-            "image_path",
-            "num_frames",
-            "video_duration",
-            "video_path",
-        },
-    }
+    supported_request_fields_by_task = SPECS["infinitetalk"].fields_by_task
 
     def __init__(self, config):
         super().__init__(config)

@@ -17,6 +17,7 @@ from transformers import AutoTokenizer
 
 from lightx2v.models.audio_encoders.hf.cosmos3.sound_tokenizer import Cosmos3SoundTokenizer
 from lightx2v.models.networks.cosmos3.model import Cosmos3TransformerModel
+from lightx2v.models.runners.cosmos3.cli import SPECS
 from lightx2v.models.runners.cosmos3.policy_runtime import (
     PolicySeedSequence,
     build_json_policy_prompt,
@@ -24,7 +25,6 @@ from lightx2v.models.runners.cosmos3.policy_runtime import (
     normalize_policy_prompt_format,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS, VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.cosmos3.scheduler import Cosmos3Scheduler
 from lightx2v.models.video_encoders.hf.cosmos3.vae import Cosmos3WanVAE
 from lightx2v.utils.envs import *
@@ -131,40 +131,7 @@ def compose_droid_policy_image(images):
 @RUNNER_REGISTER("cosmos3")
 class Cosmos3Runner(DefaultRunner):
     input_info_cls_by_task = {task: Cosmos3InputInfo for task in ("t2i", "t2v", "i2v", "t2av", "i2av", "i2va", "v2av")}
-    supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"size"},
-        "t2v": VIDEO_REQUEST_FIELDS,
-        "i2v": VIDEO_REQUEST_FIELDS | {"image_path"},
-        "t2av": VIDEO_REQUEST_FIELDS,
-        "i2av": VIDEO_REQUEST_FIELDS | {"image_path"},
-        "i2va": COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "action_mode",
-            "action_path",
-            "domain_name",
-            "image_path",
-            "policy_image",
-            "policy_state",
-            "save_action_path",
-            "state_path",
-            "size",
-            "video_path",
-            "view_point",
-        },
-        "v2av": COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "action_mode",
-            "action_path",
-            "domain_name",
-            "image_path",
-            "save_action_path",
-            "size",
-            "video_path",
-            "view_point",
-        },
-    }
+    supported_request_fields_by_task = SPECS["cosmos3"].fields_by_task
 
     model_cpu_offload_seq = "transformer->vae->sound_tokenizer"
     _callback_tensor_inputs = ["latents"]

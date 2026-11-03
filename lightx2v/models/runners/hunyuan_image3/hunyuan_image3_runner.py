@@ -17,12 +17,12 @@ from transformers import GenerationConfig
 from lightx2v.models.networks.hunyuan_image3.infer.kv_cache import HunyuanImage3StaticKVCache
 from lightx2v.models.networks.hunyuan_image3.model import HunyuanImage3Model
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.hunyuan_image3.cli import SPECS
 from lightx2v.models.runners.hunyuan_image3.cuda_graph import HunyuanImage3ARCudaGraphController
 from lightx2v.models.runners.hunyuan_image3.flashinfer_autotune import (
     DistributedAutotuneContext,
     FlashInferAutotuneController,
 )
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.hunyuan_image3.scheduler import HunyuanImage3Scheduler
 from lightx2v.utils.input_info import TI2IInputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -38,21 +38,8 @@ class HunyuanImage3TextGenerationPlan:
 @RUNNER_REGISTER("hunyuan_image3")
 class HunyuanImage3Runner(DefaultRunner):
     model_cpu_offload_seq = "transformer"
-    TEXT_REQUEST_FIELDS = COMMON_REQUEST_FIELDS | {"bot_task", "max_new_tokens", "prompt", "stream_callback", "system_prompt", "text_do_sample", "text_temperature", "text_top_k", "text_top_p"}
     input_info_cls_by_task = {"i2i": TI2IInputInfo}
-    supported_request_fields_by_task = {
-        "t2t": TEXT_REQUEST_FIELDS,
-        "ti2t": TEXT_REQUEST_FIELDS | {"image_path", "align_image_size"},
-        "t2i": COMMON_REQUEST_FIELDS | {"prompt", "size"},
-        "ti2i": COMMON_REQUEST_FIELDS | {"image_path", "align_image_size", "prompt", "size"},
-        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "align_image_size", "prompt", "size"},
-    }
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("image_size"):
-            supported_request_fields -= {"size"}
-        return supported_request_fields
+    supported_request_fields_by_task = SPECS["hunyuan_image3"].fields_by_task
 
     def __init__(self, config):
         super().__init__(config)

@@ -10,7 +10,7 @@ from lightx2v.models.input_encoders.edenlive.recording import RecordingReader, f
 from lightx2v.models.networks.wan.edenlive_model import EdenLiveARModel, EdenLiveModel
 from lightx2v.models.runners.autoregressive_runner import AutoregressiveRunnerMixin
 from lightx2v.models.runners.lifecycle import RunnerLifecycleMixin
-from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
+from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, WanRunner
 from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler, EdenLiveScheduler
@@ -29,7 +29,7 @@ class EdenLiveRunner(RunnerLifecycleMixin):
     _WARMUP_TASKS = ("v2v",)
     _WARMUP_RESOLUTIONS = ((480, 480), (480, 832))
     input_info_cls_by_task = {"v2v": EdenLiveInputInfo}
-    supported_request_fields_by_task = {"v2v": VIDEO_REQUEST_FIELDS | {"image_path", "video_path"}}
+    supported_request_fields_by_task = SPECS["wan21_edenlive"].fields_by_task
 
     def __init__(self, config):
         config.setdefault("proxy_resize_mode", "bilinear")

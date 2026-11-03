@@ -20,7 +20,7 @@ from lightx2v.models.networks.relayvsr.attention import LOCAL_ATTENTION_BACKENDS
 from lightx2v.models.networks.relayvsr.geometry import RelayVSRGeometry
 from lightx2v.models.networks.relayvsr.model import RelayVSRModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
+from lightx2v.models.runners.relayvsr.cli import SPECS
 from lightx2v.models.schedulers.relayvsr.scheduler import RelayVSRScheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
@@ -49,7 +49,7 @@ class RelayVSRRunner(DefaultRunner):
     """Shared streaming lifecycle; registered subclasses fix the checkpoint geometry."""
 
     geometry: ClassVar[RelayVSRGeometry]
-    supported_request_fields_by_task: ClassVar[dict] = {"sr": COMMON_REQUEST_FIELDS | {"video_path", "image_path", "sr_ratio"}}
+    supported_request_fields_by_task = SPECS["relayvsr_x4"].fields_by_task
 
     WARMUP_RESOLUTIONS = ((768, 1024), (768, 1344))
 

@@ -151,7 +151,7 @@ python setup.py install
 #### 步骤 5: 验证安装
 ```python
 import lightx2v
-print(f"LightX2V 版本: {lightx2v.__version__}")
+print("LightX2V 导入成功")
 ```
 
 ## 🪟 Windows 系统环境搭建
@@ -282,7 +282,7 @@ python setup.py install
 #### 步骤 8: 验证安装
 ```python
 import lightx2v
-print(f"LightX2V 版本: {lightx2v.__version__}")
+print("LightX2V 导入成功")
 ```
 
 ## 🎯 推理使用

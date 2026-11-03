@@ -27,7 +27,7 @@ from lightx2v.models.networks.swiftvr import (
     padded_frame_count,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
+from lightx2v.models.runners.swiftvr.cli import SPECS
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
@@ -39,9 +39,7 @@ from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_
 class SwiftVRRunner(DefaultRunner):
     """Native LightX2V runner for SwiftVR image and video restoration."""
 
-    supported_request_fields_by_task = {
-        "sr": COMMON_REQUEST_FIELDS | {"image_path", "sr_ratio", "size", "video_path"},
-    }
+    supported_request_fields_by_task = SPECS["swiftvr"].fields_by_task
 
     # Two spatial shapes trigger dynamic compilation before serving requests.
     WARMUP_RESOLUTIONS = ((720, 1280), (2048, 1536))

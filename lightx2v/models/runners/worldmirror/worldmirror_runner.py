@@ -48,7 +48,7 @@ from lightx2v.models.networks.worldmirror.utils.inference_utils import (
 )
 from lightx2v.models.networks.worldmirror.utils.render_utils import render_interpolated_video
 from lightx2v.models.runners.base_runner import BaseRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
+from lightx2v.models.runners.worldmirror.cli import SPECS
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -133,18 +133,7 @@ def _broadcast_string(s, rank, src=0):
 class WorldMirrorRunner(BaseRunner):
     """Runner for HY-WorldMirror-2.0 3D reconstruction model."""
 
-    supported_request_fields_by_task = {
-        "recon": COMMON_REQUEST_FIELDS
-        | {
-            "input_path",
-            "prior_cam_path",
-            "prior_depth_path",
-            "render_depth",
-            "render_interp_per_pair",
-            "save_rendered",
-            "strict_output_path",
-        },
-    }
+    supported_request_fields_by_task = SPECS["worldmirror"].fields_by_task
 
     def __init__(self, config):
         super().__init__(config)

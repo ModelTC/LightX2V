@@ -16,7 +16,7 @@ from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl import MiniMaxH3Qwen3V
 from lightx2v.models.networks.minimax_h3.streamrender.model import StreamRenderH3Model
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRunnerMixin
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
+from lightx2v.models.runners.streamrender_h3.cli import SPECS
 from lightx2v.models.runners.streamrender_h3.output import StreamRenderVideoOutput
 from lightx2v.models.runners.streamrender_h3.request import StreamRenderH3InputInfo
 from lightx2v.models.schedulers.streamrender_h3 import StreamRenderH3Scheduler
@@ -43,9 +43,7 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
     """Run the released two-step H3 student with native LightX2V modules."""
 
     input_info_cls_by_task = {"refv2v": StreamRenderH3InputInfo}
-    supported_request_fields_by_task = {
-        "refv2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt", "image_path", "video_path"},
-    }
+    supported_request_fields_by_task = SPECS["streamrender_h3"].fields_by_task
     _WARMUP_SIZE = (256, 256)
 
     def __init__(self, config):
@@ -58,9 +56,6 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         super().close()
         if self.text_encoder is not None:
             self.text_encoder.unload()
-
-    def get_supported_tasks(self):
-        return ("refv2v",)
 
     def init_modules(self):
         root = Path(self.config["model_path"])

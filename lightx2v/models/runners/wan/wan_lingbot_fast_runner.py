@@ -6,6 +6,7 @@ import torch
 from lightx2v.models.input_encoders.lingbot_fast import pack_camera_embedding
 from lightx2v.models.networks.wan.lingbot_fast_model import WanLingbotFastModel
 from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin
+from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.wan_runner import LingbotRunner, WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.lingbot_fast.scheduler import WanLingbotFastScheduler
 from lightx2v.utils.envs import GET_DTYPE
@@ -20,9 +21,7 @@ class LingbotFastRunner(WanAutoregressiveRunnerMixin, LingbotRunner):
 
     _SUPPORTS_AUTOREGRESSIVE_WARMUP = True
     _WARMUP_TASKS = ("i2v",)
-    supported_request_fields_by_task = {
-        "i2v": LingbotRunner.supported_request_fields_by_task["i2v"] - {"num_frames"},
-    }
+    supported_request_fields_by_task = SPECS["lingbot_world_fast"].fields_by_task
 
     def __init__(self, config):
         WanRunner.__init__(self, config)

@@ -9,8 +9,8 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.ltx2.duration_head import LTX25DurationPredictor
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX25TextEncoder
 from lightx2v.models.networks.ltx2.ltx25_model import LTX25Model
+from lightx2v.models.runners.ltx2.cli import SPECS
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner, _ltx2_parse_image_paths, _ltx2_resolve_pixel_frame_indices
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.ltx2.ltx25_scheduler import LTX25Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX25AudioVAE, LTX25VideoVAE
 from lightx2v.utils.envs import GET_DTYPE
@@ -37,10 +37,7 @@ class LTX25Runner(LTX2Runner):
     text_encoder_root_key = "text_encoder_original_ckpt"
     video_vae_checkpoint_key = "video_vae_original_ckpt"
     audio_vae_checkpoint_key = "audio_vae_original_ckpt"
-    supported_request_fields_by_task = {
-        "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"},
-        "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_frame_indices", "image_path", "image_strength", "prompt"},
-    }
+    supported_request_fields_by_task = SPECS["ltx2_5"].fields_by_task
 
     def __init__(self, config):
         if config.get("enable_cfg", False) or float(config.get("sample_guide_scale", 1.0)) != 1.0:

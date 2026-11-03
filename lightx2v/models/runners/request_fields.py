@@ -1,9 +1,10 @@
-"""Reusable request field groups; each runner declares its task-specific fields."""
+"""Compatibility names for field groups defined by the shared arguments."""
 
-COMMON_REQUEST_FIELDS = frozenset({"return_result_tensor", "save_result_path", "seed", "task"})
-PROMPT_FIELDS = frozenset({"negative_prompt", "prompt"})
-VIDEO_OUTPUT_FIELDS = frozenset({"size", "num_frames"})
-RESAMPLING_FIELDS = frozenset({"draft_steps", "resample_source_video", "resample_start_step"})
+from lightx2v.models.runners.request_args import COMMON, IMAGE, PROMPT, RESAMPLING, VIDEO, VIDEO_OUTPUT
 
-IMAGE_REQUEST_FIELDS = COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"aspect_ratio", "size"}
-VIDEO_REQUEST_FIELDS = COMMON_REQUEST_FIELDS | PROMPT_FIELDS | VIDEO_OUTPUT_FIELDS
+COMMON_REQUEST_FIELDS = frozenset(COMMON)
+PROMPT_FIELDS = frozenset(PROMPT)
+VIDEO_OUTPUT_FIELDS = frozenset(VIDEO_OUTPUT)
+RESAMPLING_FIELDS = frozenset(RESAMPLING)
+IMAGE_REQUEST_FIELDS = frozenset(IMAGE)
+VIDEO_REQUEST_FIELDS = frozenset(VIDEO)

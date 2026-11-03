@@ -152,7 +152,7 @@ python setup.py install
 
 ```python
 import lightx2v
-print(f"LightX2V Version: {lightx2v.__version__}")
+print("LightX2V imported successfully")
 ```
 
 ## 🪟 Windows Environment Setup

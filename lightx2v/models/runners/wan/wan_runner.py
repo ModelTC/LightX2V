@@ -26,7 +26,7 @@ from lightx2v.models.networks.wan.infer.utils import image_latent_size
 from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
+from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler, get_wan_distill_method
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
@@ -67,18 +67,7 @@ def get_wan_model_class(distill_method):
 
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
-    supported_request_fields_by_task = {
-        "t2v": VIDEO_REQUEST_FIELDS,
-        "i2v": VIDEO_REQUEST_FIELDS | {"image_path"},
-        "flf2v": VIDEO_REQUEST_FIELDS | {"image_path", "last_frame_path"},
-    }
-    FIXED_FRAME_ATTENTION_TYPES = {
-        "svg_attn",
-        "radial_attn",
-        "nbhd_attn",
-        "nbhd_attn_flashinfer",
-        "general_sparse_attn",
-    }
+    supported_request_fields_by_task = SPECS["wan2.1"].fields_by_task
     _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
     _WARMUP_TASKS = ("t2v", "i2v", "flf2v")
     _SUPPORTS_GENERIC_WARMUP = True
@@ -90,12 +79,6 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.tiny_vae_cls = WanVAE_tiny
         self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("self_attn_1_type") in self.FIXED_FRAME_ATTENTION_TYPES:
-            supported_request_fields -= {"num_frames"}
-        return supported_request_fields
 
     def prepare_request(self, request_data):
         input_info = super().prepare_request(request_data)
@@ -1232,7 +1215,7 @@ class Wan22MoeRunner(WanRunner):
 
 @RUNNER_REGISTER("wan2.2")
 class Wan22DenseRunner(WanRunner):
-    supported_request_fields_by_task = {task: WanRunner.supported_request_fields_by_task[task] for task in ("t2v", "i2v")}
+    supported_request_fields_by_task = SPECS["wan2.2"].fields_by_task
     _SUPPORTS_GENERIC_WARMUP = True
 
     def __init__(self, config):
@@ -1363,9 +1346,7 @@ class Wan22DenseRunner(WanRunner):
 @RUNNER_REGISTER("lingbot_world")
 class LingbotRunner(Wan22MoeRunner):
     input_info_cls_by_task = {"i2v": ActionI2VInputInfo}
-    supported_request_fields_by_task = {
-        "i2v": WanRunner.supported_request_fields_by_task["i2v"] | {"action_path", "pose"},
-    }
+    supported_request_fields_by_task = SPECS["lingbot_world"].fields_by_task
 
     def __init__(self, config):
         super().__init__(config)

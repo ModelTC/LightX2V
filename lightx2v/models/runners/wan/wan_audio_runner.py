@@ -22,7 +22,7 @@ from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdap
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioARModel, WanAudioModel
 from lightx2v.models.runners.autoregressive_runner import AutoregressiveRunnerMixin
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
+from lightx2v.models.runners.wan.cli import SPECS
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler, WanAudioARScheduler
@@ -281,20 +281,7 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 @RUNNER_REGISTER("seko_talk")
 class WanAudioRunner(WanRunner):  # type:ignore
     input_info_cls_by_task = {"s2v": SekoTalkS2VInputInfo, "rs2v": SekoTalkRS2VInputInfo}
-    supported_request_fields_by_task = {
-        task: COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "audio_path",
-            "image_path",
-            "num_frames",
-            "video_duration",
-            "resize_mode",
-            "fixed_area",
-            "size",
-        }
-        for task in ("s2v", "rs2v")
-    }
+    supported_request_fields_by_task = SPECS["seko_talk"].fields_by_task
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
@@ -918,9 +905,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
 @RUNNER_REGISTER("seko_talk_ar")
 class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, WanAudioRunner):
-    supported_request_fields_by_task = {
-        "rs2v": WanAudioRunner.supported_request_fields_by_task["rs2v"] - {"num_frames", "resize_mode", "fixed_area"},
-    }
+    supported_request_fields_by_task = SPECS["seko_talk_ar"].fields_by_task
 
     _WARMUP_RESOLUTIONS = ()
 
@@ -975,12 +960,6 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
         self.model.transformer_infer.reset_kv_cache()
         self.input_info = None
         self.inputs = {}
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("prompt_travel"):
-            supported_request_fields -= {"prompt"}
-        return supported_request_fields
 
     @dataclass(frozen=True)
     class PromptTravelSegment:

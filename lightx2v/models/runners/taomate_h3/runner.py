@@ -18,7 +18,7 @@ from lightx2v.models.networks.minimax_h3.taomate.model import TaoMateH3NativeMod
 from lightx2v.models.networks.minimax_h3.taomate.publication import TaoMateVideoPublication
 from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRunnerMixin
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
+from lightx2v.models.runners.taomate_h3.cli import SPECS
 from lightx2v.models.schedulers.taomate_h3.geometry import request_plan
 from lightx2v.models.schedulers.taomate_h3.scheduler import TaoMateH3Scheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
@@ -34,7 +34,7 @@ _VIDEO_NOISE_REQUEST_STRIDE = 1_000_003
 class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     """Generate Base10 audio guides, then Stage3 video and audio in LightX2V."""
 
-    supported_request_fields_by_task = {"t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"}}
+    supported_request_fields_by_task = SPECS["taomate_h3"].fields_by_task
     frames_per_request = 120
     max_continuous_requests = 12
 
@@ -60,9 +60,6 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self.parallel_vae_epoch_wait_seconds = 0.0
         super().__init__(config)
         self.request_count = 1
-
-    def get_supported_tasks(self):
-        return ("t2av",)
 
     def init_scheduler(self):
         self.scheduler = TaoMateH3Scheduler(self.config)

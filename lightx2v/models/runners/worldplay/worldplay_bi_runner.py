@@ -10,6 +10,7 @@ from lightx2v.models.input_encoders.hf.hunyuan15.byt5.model import (
 from lightx2v.models.networks.worldplay.bi_model import WorldPlayBIModel
 from lightx2v.models.networks.worldplay.pose_utils import pose_to_input
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner
+from lightx2v.models.runners.worldplay.cli import SPECS
 from lightx2v.models.schedulers.worldplay.bi_scheduler import WorldPlayBIScheduler
 from lightx2v.utils.input_info import WorldPlayI2VInputInfo, WorldPlayT2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL2
@@ -113,7 +114,7 @@ class WorldPlayBIRunner(HunyuanVideo15Runner):
     """
 
     input_info_cls_by_task = {"t2v": WorldPlayT2VInputInfo, "i2v": WorldPlayI2VInputInfo}
-    supported_request_fields_by_task = {task: request_fields | {"pose"} for task, request_fields in HunyuanVideo15Runner.supported_request_fields_by_task.items()}
+    supported_request_fields_by_task = SPECS["worldplay_bi"].fields_by_task
 
     def __init__(self, config):
         # BI-specific parameters

@@ -7,6 +7,7 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
+from lightx2v.models.runners.registry import get_model_spec
 from lightx2v.utils.input_info import INPUT_INFO_TYPES, InputInfo
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -85,10 +86,7 @@ class BaseRunner(ABC):
 
     def get_supported_tasks(self):
         """Return tasks accepted by this initialized runner."""
-        task = self.config.get("task")
-        if task is None:
-            raise ValueError("task must be set when the runner is created")
-        return (task,)
+        return get_model_spec(self.config["model_cls"]).get_tasks(self.config)
 
     def create_input_info(self, request_data):
         """Apply startup defaults, then explicit request values, to a fresh context.
@@ -113,10 +111,7 @@ class BaseRunner(ABC):
 
     def get_supported_request_fields(self, task):
         """Return supported request fields for the given task."""
-        supported_request_fields = self.supported_request_fields_by_task[task]
-        if not self.config.get("enable_cfg", False):
-            supported_request_fields = supported_request_fields - {"negative_prompt"}
-        return supported_request_fields
+        return get_model_spec(self.config["model_cls"]).get_fields(self.config, task)
 
     def prepare_request(self, request_data):
         """Validate explicit fields before merging startup defaults.

@@ -17,7 +17,7 @@ from lightx2v.models.networks.qwen_image_21.input_utils import prepare_images
 from lightx2v.models.networks.qwen_image_21.lora import QwenImage21LoraAdapter, validate_lora_config
 from lightx2v.models.networks.qwen_image_21.model import QwenImage21TransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
+from lightx2v.models.runners.qwen_image_21.cli import SPECS
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
@@ -31,7 +31,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
     _WARMUP_RESOLUTIONS = ((1024, 1024), (768, 960))
-    supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS | {"resolution"}, "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "resolution"}}
+    supported_request_fields_by_task = SPECS["qwen_image_21"].fields_by_task
 
     def __init__(self, config):
         unsupported = (
@@ -110,11 +110,6 @@ class QwenImage21Runner(DefaultRunner):
         for key in ("warmup", "text_encoder_quantized", "tensor_parallel", "text_encoder_tensor_parallel", "seq_parallel", "shared_cpu_weights"):
             if config.get(key):
                 raise ValueError(f"Qwen-Image-2.1 MPS streaming does not support {key}")
-
-    def get_supported_tasks(self):
-        if self.config.get("task") is not None:
-            return super().get_supported_tasks()
-        return ("t2i", "i2i")
 
     @torch.inference_mode()
     @ProfilingContext4DebugL1("Warmup")

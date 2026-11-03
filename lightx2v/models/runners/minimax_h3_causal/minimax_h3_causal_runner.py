@@ -19,8 +19,8 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import MAX_REFERENCE_IMA
 from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRunnerMixin
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 from lightx2v.models.runners.minimax_h3_causal.action_prompt_travel import ActionPromptTravel, ActionPromptTravelConfig, coerce_action_prompts
+from lightx2v.models.runners.minimax_h3_causal.cli import SPECS
 from lightx2v.models.runners.minimax_h3_causal.reference_cache import MiniMaxH3ReferenceCache
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3_causal.scheduler import MiniMaxH3CausalScheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
@@ -39,9 +39,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     _WARMUP_SIZE = (256, 256)
 
-    supported_request_fields_by_task = {
-        "refa2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "audio_path", "prompt", "action_prompts"},
-    }
+    supported_request_fields_by_task = SPECS["minimax_h3_causal"].fields_by_task
 
     def __init__(self, config):
         ar_config = config.get("ar_config", {})
@@ -63,9 +61,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         super().__init__(config)
         # Called on rank 0 with (RGB [1,3,F,H,W], start_frame, is_final).
         self.stream_callback = None
-
-    def get_supported_tasks(self):
-        return ("refa2v",)
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
