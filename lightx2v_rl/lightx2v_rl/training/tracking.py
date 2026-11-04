@@ -39,18 +39,30 @@ TRAIN_METRICS = {
     "timing_s/save_checkpoint": "time/checkpoint_s",
 }
 
-# One unweighted value per reward, rather than raw/calibrated/weighted copies.
-# The raw per-axis scores and weighted contributions remain in metrics JSONL.
+# One unweighted value per reward and its bounded scoring axes.
+# Unclipped per-axis scores and weighted contributions remain in metrics JSONL.
 REWARD_METRICS = {
     "unifiedreward_normalized": "unifiedreward",
+    "unifiedreward_alignment": "ur_alignment",
+    "unifiedreward_coherence": "ur_coherence",
+    "unifiedreward_style": "ur_style",
+    "unifiedreward_edit_success": "ur_edit_success",
+    "unifiedreward_preservation": "ur_preservation",
     "hpsv3_general_raw": "hpsv3_raw",
     "hpsv3_percentile_raw": "hpsv3_percentile",
     "videoalign_ta_raw": "videoalign_ta",
     "videoalign_mq_raw": "videoalign_mq",
     "videoalign_vq_raw": "videoalign_vq",
     "unifiedreward_range_clipped": "ur_clipped_fraction",
+    "unifiedreward_format_error": "ur_format_error_fraction",
 }
 VAL_METRIC = re.compile(r"^val-(?:core|aux)/(.+)/([^/]+)/mean@(\d+)$")
+VAL_TOTAL_REWARD = re.compile(r"^val-(?:core|aux)/.+/reward/")
+
+
+def without_total_reward(data):
+    """Keep aggregate scores in local diagnostics, not in tracking dashboards."""
+    return {key: value for key, value in data.items() if key not in {"critic/rewards/mean", "critic/rewards/max", "critic/rewards/min", "critic/rewards/std_mean"} and not VAL_TOTAL_REWARD.match(key)}
 
 
 def compact_metrics(data):
@@ -58,8 +70,11 @@ def compact_metrics(data):
     result = {target: data[source] for source, target in TRAIN_METRICS.items() if source in data}
     task_flag = data.get("critic/task_is_i2i/mean")
     task = {0: "t2i", 1: "i2i"}.get(task_flag, "mixed" if task_flag is not None else None)
+    multi_flag = data.get("critic/task_is_i2i_multi/mean")
+    if task == "i2i" and multi_flag is not None:
+        task = {0: "i2i_single", 1: "i2i_multi"}.get(multi_flag, "i2i_mixed")
     prefix = f"train_{task}" if task else "train"
-    for source, target in {"rewards": "reward", **REWARD_METRICS}.items():
+    for source, target in REWARD_METRICS.items():
         key = f"critic/{source}/mean"
         if key in data:
             result[f"{prefix}/{target}"] = data[key]
@@ -75,10 +90,10 @@ def compact_metrics(data):
         if not match:
             continue
         source, metric, _ = match.groups()
-        target = {"reward": "reward", **REWARD_METRICS}.get(metric)
+        target = REWARD_METRICS.get(metric)
         if target is None:
             continue
-        if source in ("opengpt4o/t2i", "opengpt4o/i2i"):
+        if source in ("opengpt4o/t2i", "opengpt4o/i2i", "opengpt4o/i2i_single", "opengpt4o/i2i_multi"):
             group = "eval_" + source.rsplit("/", 1)[1]
         else:
             group = "eval/" + source
@@ -145,7 +160,7 @@ class FewStepTracking:
             record = {"step": step, "metrics": data}
             with self.raw_path.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(_json_value(record), ensure_ascii=False, allow_nan=False) + "\n")
-        payload = compact_metrics(data) if self.mode == "compact" else data
+        payload = compact_metrics(data) if self.mode == "compact" else without_total_reward(data)
         self._backend.log(data=payload, step=step, backend=backend)
 
     def finish(self, exit_code=0):

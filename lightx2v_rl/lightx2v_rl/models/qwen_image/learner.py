@@ -10,7 +10,7 @@ from verl_omni.pipelines.model_base import DiffusionModelBase
 
 from lightx2v_rl.algorithms.fewstep import bridge_step
 from lightx2v_rl.backends.verl_omni.config import get_fewstep_config
-from lightx2v_rl.models.qwen_image.rollout import validate_turbo_schedule
+from lightx2v_rl.models.qwen_image.rollout import validate_checkpoint_schedule
 
 
 def _module_dtype(module) -> torch.dtype:
@@ -30,16 +30,33 @@ def _shared_length(batch, key, default):
     return length
 
 
-def prepare_qwen_replay_inputs(module, batch, prompt_embeds=None, prompt_embeds_mask=None):
+def _qwen_transition_latents(batch, step):
+    """Read explicit pairs; accept the old two-latent single-step payload too."""
+    latents = batch["all_latents"]
+    timesteps = batch["all_timesteps"]
+    if latents.ndim != 4 or timesteps.ndim != 2 or latents.shape[0] != timesteps.shape[0]:
+        raise ValueError("Qwen replay requires [B, K, tokens, channels] latents and [B, K] timesteps.")
+    count = timesteps.shape[1]
+    if not 0 <= step < count:
+        raise ValueError(f"Qwen replay step {step} is outside its {count} recorded transitions.")
+    next_latents = batch.get("all_next_latents")
+    if next_latents is None:
+        if count != 1 or latents.shape[1] != 2:
+            raise ValueError("Multi-transition Qwen replay requires explicit all_next_latents.")
+        return latents[:, 0], latents[:, 1], count
+    if latents.shape[1] != count or next_latents.shape != latents.shape:
+        raise ValueError("Qwen all_latents and all_next_latents must share shape [B, K, tokens, channels].")
+    return latents[:, step], next_latents[:, step], count
+
+
+def prepare_qwen_replay_inputs(module, batch, prompt_embeds=None, prompt_embeds_mask=None, *, step=0):
     """Restore exactly the full-prefix inputs recorded at the sampled step.
 
     Batch size one is the general case. Larger microbatches are valid only when
     their prompt image-slot layout and reference shapes coincide; the official
     transformer itself reads that layout from row zero.
     """
-    latents = batch["all_latents"]
-    if latents.ndim != 4 or latents.shape[1] != 2:
-        raise ValueError("Qwen FewStep all_latents must have shape [B, 2, tokens, channels].")
+    latents, _, count = _qwen_transition_latents(batch, step)
     batch_size = latents.shape[0]
     dtype = _module_dtype(module)
     device = latents.device
@@ -63,7 +80,7 @@ def prepare_qwen_replay_inputs(module, batch, prompt_embeds=None, prompt_embeds_
     reference_tokens = int(shapes[0, :-1].prod(dim=-1).sum())
     if _shared_length(batch, "qwen_reference_lengths", reference_tokens) != reference_tokens:
         raise ValueError("Recorded reference token count does not agree with image shapes.")
-    if target_tokens != latents.shape[2]:
+    if target_tokens != latents.shape[1]:
         raise ValueError("Recorded target image shape does not match the sampled latent tokens.")
     image_latents = batch["qwen_image_latents"][:, :reference_tokens].to(device=device, dtype=dtype)
     if image_latents.shape != (batch_size, reference_tokens, latents.shape[-1]):
@@ -82,11 +99,11 @@ def prepare_qwen_replay_inputs(module, batch, prompt_embeds=None, prompt_embeds_
         if bool(prompt_embeds_mask.all()):
             prompt_embeds_mask = None
     timestep = batch["qwen_model_timesteps"]
-    if timestep.shape != (batch_size, 1):
-        raise ValueError("qwen_model_timesteps must have shape [B, 1].")
+    if timestep.shape != (batch_size, count):
+        raise ValueError("qwen_model_timesteps must have shape [B, K].")
     return {
-        "hidden_states": torch.cat((image_latents, latents[:, 0].to(dtype=dtype)), dim=1),
-        "timestep": timestep[:, 0].to(device=device, dtype=dtype),
+        "hidden_states": torch.cat((image_latents, latents.to(dtype=dtype)), dim=1),
+        "timestep": timestep[:, step].to(device=device, dtype=dtype),
         "encoder_hidden_states": prompt_embeds,
         "encoder_hidden_states_mask": prompt_embeds_mask,
         "img_shapes": [[tuple(shape) for shape in row] for row in shapes.tolist()],
@@ -116,7 +133,10 @@ class FewStepQwenImage21Model(DiffusionModelBase):
 
     @classmethod
     def cast_forward_inputs(cls):
-        return False
+        # FP32 master parameters are cast to BF16 by FSDP for computation.
+        # Recorded model timesteps already contain the official BF16 rounding,
+        # so casting their replay inputs back to BF16 preserves those values.
+        return True
 
     @classmethod
     def build_module(cls, model_config, torch_dtype):
@@ -149,9 +169,9 @@ class FewStepQwenImage21Model(DiffusionModelBase):
     def set_timesteps(cls, scheduler, model_config, device):
         from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_shift
 
-        with (Path(model_config.local_path) / "model_index.json").open() as stream:
-            sigmas = validate_turbo_schedule(json.load(stream).get("sample_sigmas"))
         pipeline = model_config.pipeline
+        with (Path(model_config.local_path) / "model_index.json").open() as stream:
+            sigmas = validate_checkpoint_schedule(json.load(stream).get("sample_sigmas"), num_steps=pipeline.num_inference_steps)
         image_seq_len = (pipeline.height // 16) * (pipeline.width // 16)
         mu = calculate_shift(
             image_seq_len,
@@ -176,16 +196,16 @@ class FewStepQwenImage21Model(DiffusionModelBase):
         micro_batch,
         step,
     ):
-        if step != 0 or timesteps.shape != (latents.shape[0], 1):
-            raise ValueError("Qwen FewStep batches contain one sampled transition per candidate.")
+        if timesteps.ndim != 2 or timesteps.shape[0] != latents.shape[0] or not 0 <= step < timesteps.shape[1]:
+            raise ValueError("Qwen FewStep batches require [B, K] timesteps and a valid replay index.")
         if model_config.pipeline.true_cfg_scale != 1:
-            raise ValueError("Qwen-Image-2.1-Turbo replay requires official CFG=1.")
-        return prepare_qwen_replay_inputs(module, micro_batch, prompt_embeds, prompt_embeds_mask), None
+            raise ValueError("Qwen-Image-2.1 few-step replay requires CFG=1.")
+        return prepare_qwen_replay_inputs(module, micro_batch, prompt_embeds, prompt_embeds_mask, step=step), None
 
     @classmethod
     def forward(cls, module, model_config, model_inputs, negative_model_inputs=None):
         if negative_model_inputs is not None:
-            raise ValueError("Turbo replay does not use negative-prompt guidance.")
+            raise ValueError("Qwen few-step replay does not use negative-prompt guidance.")
         return qwen_target_prediction(module, model_inputs)
 
     @classmethod
@@ -199,19 +219,22 @@ class FewStepQwenImage21Model(DiffusionModelBase):
         scheduler_inputs,
         step,
     ):
-        if step != 0 or scheduler_inputs is None:
+        if scheduler_inputs is None:
             raise ValueError("Qwen FewStep replay requires the sampled transition batch.")
-        latents = scheduler_inputs["all_latents"]
+        latents, next_latents, count = _qwen_transition_latents(scheduler_inputs, step)
+        for key in ("qwen_sigmas", "qwen_next_sigmas"):
+            if scheduler_inputs[key].shape != (latents.shape[0], count):
+                raise ValueError(f"{key} must have shape [B, K].")
         prediction = cls.forward(module, model_config, model_inputs, negative_model_inputs)
         transition = bridge_step(
             prediction.float(),
-            latents[:, 0].float(),
+            latents.float(),
             # Retain scheduler sigmas verbatim: a t=1000*sigma round-trip can
             # change float32 values, and the BF16 model timestep is different.
-            scheduler_inputs["qwen_sigmas"][:, 0].float(),
-            scheduler_inputs["qwen_next_sigmas"][:, 0].float(),
+            scheduler_inputs["qwen_sigmas"][:, step].float(),
+            scheduler_inputs["qwen_next_sigmas"][:, step].float(),
             config=get_fewstep_config(model_config),
-            next_sample=latents[:, 1].float(),
+            next_sample=next_latents.float(),
         )
         return {
             "log_probs": transition.log_prob,

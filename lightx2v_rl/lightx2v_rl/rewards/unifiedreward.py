@@ -1,4 +1,4 @@
-"""Task-aware UnifiedReward-Edit inference through its official vLLM API."""
+"""Task-aware UnifiedReward-Edit inference, including canvas-first multi-ref edits."""
 
 import asyncio
 import base64
@@ -13,10 +13,31 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from lightx2v_rl.rewards._vendor.unifiedreward.prompts import I2I_PROMPT, T2I_PROMPT
-from lightx2v_rl.rewards.client import RemoteRewardError
+from lightx2v_rl.rewards.client import RemoteRewardError, RemoteRewardFormatError
+from lightx2v_rl.rewards.prompts import multiref_edit_prompt
 
 _NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 LOGGER = logging.getLogger(__name__)
+
+
+def _editing_response_format():
+    """Constrain decoding, not just the prompt, to the official two-score shape."""
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "unifiedreward_edit_scores",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "reasoning": {"type": "string"},
+                    "score": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                },
+                "required": ["reasoning", "score"],
+                "additionalProperties": False,
+            },
+        },
+    }
 
 
 def image_to_rgb(image, layout="CHW"):
@@ -62,20 +83,35 @@ def encode_image(image):
 
 
 def build_request(task_type, prompt, image, source_images=(), *, model="UnifiedReward", max_tokens=4096):
+    """Keep all sources in dataset order, followed by the single candidate.
+
+    One I2I source uses the official rubric; multiple sources use the local
+    canvas-first rubric (canvas, donor references, candidate). Both use the
+    same server-enforced JSON schema, in training and scoring preflight.
+    """
     if task_type not in {"t2i", "i2i"}:
         raise ValueError("task_type must be t2i or i2i")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("Reward prompt must be a nonempty string")
+    if isinstance(source_images, (str, bytes)) or source_images is None:
+        raise ValueError("source_images must be a sequence of images")
     source_images = list(source_images)
-    if (task_type == "t2i" and source_images) or (task_type == "i2i" and len(source_images) != 1):
-        raise ValueError("Official UnifiedReward templates require zero T2I or exactly one I2I source image")
+    if (task_type == "t2i" and source_images) or (task_type == "i2i" and not source_images):
+        raise ValueError("UnifiedReward requires zero T2I or at least one I2I source image")
     if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens <= 0:
         raise ValueError("max_tokens must be a positive integer")
     images = [*source_images, image]
-    template = T2I_PROMPT if task_type == "t2i" else I2I_PROMPT
+    if task_type == "i2i" and len(source_images) > 1:
+        problem = multiref_edit_prompt(prompt, len(source_images))
+    else:
+        template = T2I_PROMPT if task_type == "t2i" else I2I_PROMPT
+        problem = template.replace("{prompt}", prompt)
     content = [{"type": "image_url", "image_url": {"url": encode_image(value)}} for value in images]
-    content.append({"type": "text", "text": template.replace("{prompt}", prompt)})
-    return {"model": model, "messages": [{"role": "user", "content": content}], "temperature": 0.0, "max_tokens": max_tokens, "chat_template_kwargs": {"enable_thinking": False}}
+    content.append({"type": "text", "text": problem})
+    payload = {"model": model, "messages": [{"role": "user", "content": content}], "temperature": 0.0, "max_tokens": max_tokens, "chat_template_kwargs": {"enable_thinking": False}}
+    if task_type == "i2i":
+        payload["response_format"] = _editing_response_format()
+    return payload
 
 
 def parse_response(text, task_type):
@@ -83,17 +119,33 @@ def parse_response(text, task_type):
 
     The generative judge can emit finite values outside its requested scale
     (e.g. T2I style=0.7684). Such values saturate at the rubric boundary before
-    normalization. Missing/ambiguous scores and nonfinite values still fail.
+    normalization. T2I labels may omit the redundant '(1-5)' range annotation
+    or put the value in parentheses instead of after a colon. A parenthesized
+    value may omit its closing delimiter only at a line boundary; the complete
+    numeric token must still be present. Missing/ambiguous scores and nonfinite
+    values still fail. The completion wrapper separately rejects token-limit
+    truncation, including responses whose scores already look complete.
     """
     if not isinstance(text, str):
         raise RemoteRewardError("UnifiedReward response content is not text")
     if task_type == "t2i":
         scores = {}
         for axis in ("alignment", "coherence", "style"):
-            matches = re.findall(rf"{axis}\s+Score\s*\(1\s*-\s*5\)\s*:\s*({_NUMBER})", text, re.I)
-            if len(matches) != 1:
+            # Count labels separately so an invalid/duplicate score cannot be
+            # hidden by another occurrence with valid formatting or a number.
+            labels = list(re.finditer(rf"\b{axis}\s+Score\b", text, re.IGNORECASE))
+            if len(labels) != 1:
                 raise RemoteRewardError(f"UnifiedReward output must contain exactly one {axis} score")
-            scores[axis] = float(matches[0])
+            value_text = text[labels[0].end() :]
+            match = re.match(rf"\s*(?:\(1\s*-\s*5\)\s*)?:\s*({_NUMBER})(?![\w.])", value_text)
+            if match is None:
+                # Some naturally stopped completions emit `Score (3.1)` or
+                # `Score (3.1\n`. Only accept a single numeric value on that
+                # line, never a range, list, incomplete exponent or prose.
+                match = re.match(rf"[^\S\r\n]*\([^\S\r\n]*({_NUMBER})[^\S\r\n]*\)?[^\S\r\n]*(?=\r?$)", value_text, re.MULTILINE)
+            if match is None:
+                raise RemoteRewardError(f"UnifiedReward output must contain exactly one numeric {axis} score in a supported format")
+            scores[axis] = float(match[1])
         lower, upper = 1.0, 5.0
     elif task_type == "i2i":
         matches = re.findall(r'"score"\s*:\s*(\[[^\[\]]*\])', text)
@@ -124,19 +176,77 @@ def parse_response(text, task_type):
     return scores
 
 
-def _parse_completion(result, task_type):
+def _validate_edit_completion(text):
+    """Reject a server ignoring the schema; never repair or invent a score.
+
+    parse_response still accepts historical snippets for offline diagnostics.
+    Live HTTP completions must be one complete JSON object matching the schema.
+    """
+
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate field {key!r}")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(text, object_pairs_hook=unique_fields)
+    except (ValueError, TypeError) as exc:
+        raise RemoteRewardError(f"UnifiedReward editing output must be one complete JSON object: {exc}") from exc
+    if not isinstance(value, dict) or set(value) != {"reasoning", "score"}:
+        raise RemoteRewardError("UnifiedReward editing output must contain only reasoning and score fields")
+    if not isinstance(value["reasoning"], str):
+        raise RemoteRewardError("UnifiedReward editing reasoning must be a string")
+    values = value["score"]
+    if not isinstance(values, list) or len(values) != 2 or any(isinstance(item, bool) or not isinstance(item, (float, int)) for item in values):
+        raise RemoteRewardError("UnifiedReward editing score must contain two numbers")
+
+
+def _parse_completion_strict(result, task_type):
     try:
         choice = result["choices"][0]
         content = choice["message"]["content"]
         try:
             if choice.get("finish_reason") != "stop":
                 raise RemoteRewardError(f"UnifiedReward generation did not finish: {choice.get('finish_reason')!r}")
+            if task_type == "i2i":
+                _validate_edit_completion(content)
             return parse_response(content, task_type)
         except RemoteRewardError as exc:
             # Include a bounded, escaped excerpt, never the image request body.
             raise RemoteRewardError(f"{exc}; task={task_type}; request_id={str(result.get('id', 'unknown'))[:128]!r}; response_excerpt={str(content)[:2048]!r}") from exc
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise RemoteRewardError(f"UnifiedReward invalid completion: {exc}") from exc
+
+
+def _format_fallback(task_type, error):
+    """Use rubric midpoints for malformed outputs, with an explicit audit flag."""
+    if task_type == "t2i":
+        axes = dict.fromkeys(("alignment", "coherence", "style"), 3.0)
+    elif task_type == "i2i":
+        axes = dict.fromkeys(("edit_success", "preservation"), 12.5)
+    else:
+        raise ValueError("task_type must be t2i or i2i")
+    LOGGER.warning("UnifiedReward format fallback: task=%s normalized=0.5 error=%s", task_type, str(error)[:2500])
+    return {
+        **axes,
+        **{key + "_raw": value for key, value in axes.items()},
+        "normalized": 0.5,
+        "range_clipped": 0.0,
+        "range_clip_max_abs": 0.0,
+        "format_error": 1.0,
+    }
+
+
+def _parse_completion(result, task_type):
+    if task_type not in {"t2i", "i2i"}:
+        raise ValueError("task_type must be t2i or i2i")
+    try:
+        return {**_parse_completion_strict(result, task_type), "format_error": 0.0}
+    except (RemoteRewardError, ValueError, KeyError, IndexError, TypeError, AttributeError, OverflowError) as exc:
+        return _format_fallback(task_type, exc)
 
 
 def score_image(task_type, prompt, image, source_images=(), *, endpoint="http://127.0.0.1:8792", model="UnifiedReward", timeout_seconds=1800.0, max_tokens=4096):
@@ -150,7 +260,13 @@ def score_image(task_type, prompt, image, source_images=(), *, endpoint="http://
     request = Request(endpoint.rstrip("/") + "/v1/chat/completions", data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
-            result = json.loads(response.read(1024 * 1024))
+            body = response.read(1024 * 1024 + 1)
+        if len(body) > 1024 * 1024:
+            raise RemoteRewardError("UnifiedReward response exceeds 1 MiB")
+        try:
+            result = json.loads(body)
+        except (ValueError, UnicodeError) as exc:
+            return _format_fallback(task_type, f"endpoint={endpoint}: invalid response JSON: {exc}")
         return _parse_completion(result, task_type)
     except HTTPError as exc:
         detail = exc.read(4096).decode("utf-8", errors="replace")
@@ -167,5 +283,8 @@ async def score_image_async(task_type, prompt, image, source_images=(), *, sessi
         return json.dumps(build_request(task_type, prompt, image, source_images, model=model, max_tokens=max_tokens)).encode("utf-8")
 
     payload = await asyncio.to_thread(encode_payload)
-    result = await post_json(session, endpoint, "/v1/chat/completions", payload=payload, content_type="application/json", timeout_seconds=timeout_seconds)
+    try:
+        result = await post_json(session, endpoint, "/v1/chat/completions", payload=payload, content_type="application/json", timeout_seconds=timeout_seconds)
+    except RemoteRewardFormatError as exc:
+        return _format_fallback(task_type, exc)
     return _parse_completion(result, task_type)

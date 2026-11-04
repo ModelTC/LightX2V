@@ -1,0 +1,43 @@
+# Four training nodes + three reward nodes: 7+1, 7+1, 6+2 (UR 27B + HPSv3).
+# Launch via train_qwen21_4step_7nodes.sh to load the 27B service profile.
+# Historical recipe/output names remain compatible with existing runs.
+# The current HPSv3 weights are 0.5 for T2I and 0.2 for I2I.
+inherits: base
+reward:
+  num_workers: 20
+  custom_reward_function:
+    reward_kwargs:
+      # At most 40 samples in flight. The server profile controls active requests.
+      max_concurrent_samples: 2
+      # The inherited advantage weights reference these task-specific weights.
+      hps_weight: 0.5
+      hps_weight_i2i: 0.2
+      unifiedreward_endpoint:
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8792
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8793
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8794
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8795
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8796
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8797
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8798
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8792
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8793
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8794
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8795
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8796
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8797
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8798
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8792
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8793
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8794
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8795
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8796
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8797
+      hps_endpoint:
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8791
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8791
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8791
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8798
+trainer:
+  experiment_name: qwen_image21_4step_geo_pe_v2_56gpu_uredit27b_hps02
+  default_local_dir: lightx2v_rl/outputs/qwen_image21_4step_geo_pe_v2_56gpu_uredit27b_hps02

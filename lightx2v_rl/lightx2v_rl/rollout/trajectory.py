@@ -54,6 +54,8 @@ def sample_trajectory(
     """
     if latents.ndim < 2 or latents.shape[0] == 0:
         raise ValueError("latents must have a nonempty batch dimension and at least one feature dimension")
+    if config.num_train_timesteps != 1:
+        raise ValueError("The Wan trajectory sampler currently requires num_train_timesteps=1.")
     if paths is None:
         paths = build_timestep_paths(config, latents.shape[0], cycle_index, device=latents.device, generator=generator)
     expected = (latents.shape[0], paths.num_steps)

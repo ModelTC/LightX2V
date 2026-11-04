@@ -21,7 +21,9 @@ from urllib.parse import quote
 REPOSITORIES = {
     "qwen": ("Qwen/Qwen-Image-2.1-Turbo", "Qwen-Image-2.1-Turbo", "fc13ba1986fcb905854dc8de2f52eee395f49b5b"),
     "unifiedreward": ("CodeGoat24/UnifiedReward-Edit-qwen35-9b", "rewards/UnifiedReward-Edit-qwen35-9b", "31acd924c34fa3afdd31e787803a589a0f40c384"),
+    "unifiedreward27b": ("CodeGoat24/UnifiedReward-Edit-qwen35-27b", "rewards/UnifiedReward-Edit-qwen35-27b", "6dde7ade3dbe8a70cc7b758829b60926d5b920b4"),
 }
+DEFAULT_MODELS = ("qwen", "unifiedreward")
 PRINT_LOCK = threading.Lock()
 CURL_RESOLVE = []
 RANGE_CHUNK_SIZE = 64 * 1024 * 1024
@@ -234,7 +236,7 @@ def snapshot(key, models_root, endpoint, workers, connections):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models-root", type=Path, default=Path(__file__).resolve().parents[2] / "models")
-    parser.add_argument("--models", nargs="+", choices=tuple(REPOSITORIES), default=list(REPOSITORIES))
+    parser.add_argument("--models", nargs="+", choices=tuple(REPOSITORIES), default=list(DEFAULT_MODELS))
     parser.add_argument("--endpoint", default="https://huggingface.co")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--connections", type=int, default=1, help="Parallel ranges per large file")

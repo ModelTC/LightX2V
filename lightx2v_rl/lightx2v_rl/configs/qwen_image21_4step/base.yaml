@@ -1,0 +1,54 @@
+# Shared four-step Geo recipe for four eight-GPU training nodes.
+# Deployment recipes add dedicated reward nodes and their HTTP endpoints.
+inherits: qwen_image21_turbo/base
+actor_rollout_ref:
+  model:
+    # Supply a full Diffusers export with its own four-step sample_sigmas.
+    path: ${oc.env:LIGHTX2V_QWEN_4STEP_MODEL,lightx2v_rl/models/Qwen-Image-2.1-Lightning-v2-base}
+    fewstep:
+      bridge: geo
+      min_steps: 4
+      max_steps: 4
+      num_train_timesteps: 1
+      cycle_train_idx: false
+  actor:
+    ppo_mini_batch_size: 32
+    ppo_epochs: 1
+  rollout:
+    agent:
+      num_workers: 32
+    pipeline:
+      height: 1024
+      width: 1024
+      num_inference_steps: 4
+      output_resolution: 1024
+      max_reference_images: 2
+      # Two resized references can exceed 8192 latent tokens.
+      max_reference_tokens: 16384
+    val_kwargs:
+      pipeline:
+        num_inference_steps: 4
+data:
+  train_files:
+  - ${oc.env:LIGHTX2V_RL_DATA_DIR,lightx2v_rl/data/opengpt4o_multiref}/train.jsonl
+  val_files:
+  - ${oc.env:LIGHTX2V_RL_DATA_DIR,lightx2v_rl/data/opengpt4o_multiref}/val.jsonl
+  task_cycle: [t2i, i2i_single, t2i, i2i_multi]
+  # 64 prompts x 8 candidates = 512 trajectories, two optimizer updates per iter.
+  train_batch_size: 64
+  gen_batch_size: 64
+  val_batch_size: 32
+trainer:
+  nnodes: 4
+  n_gpus_per_node: 8
+  validation_data_dir: ${trainer.default_local_dir}/validation
+  # Visualize these IDs; val.jsonl supplies the complete validation metrics.
+  validation_preview_file: ${oc.env:LIGHTX2V_RL_DATA_DIR,lightx2v_rl/data/opengpt4o_multiref}/val_preview.jsonl
+ray_kwargs:
+  ray_init:
+    address: auto
+    runtime_env:
+      env_vars:
+        HF_HUB_OFFLINE: '1'
+        TRANSFORMERS_OFFLINE: '1'
+        TOKENIZERS_PARALLELISM: 'false'

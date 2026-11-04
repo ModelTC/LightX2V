@@ -1,8 +1,10 @@
-"""Joint T2I/I2I reward: task-aware UnifiedReward-Edit + 0.5 * HPSv3."""
+"""Task-aware image reward: UnifiedReward, with optional HPSv3 per task."""
 
 import asyncio
+import logging
 import math
 from collections.abc import Mapping
+from numbers import Real
 
 import aiohttp
 
@@ -10,6 +12,8 @@ from lightx2v_rl.rewards import client as video_client
 from lightx2v_rl.rewards import unifiedreward
 from lightx2v_rl.rewards.async_http import gather_scores, scoring_limiter, validate_timeout
 from lightx2v_rl.rewards.endpoint_pool import normalize_endpoints, select_endpoint
+
+LOGGER = logging.getLogger(__name__)
 
 
 async def compute_score(
@@ -22,9 +26,10 @@ async def compute_score(
     hps_endpoint="http://127.0.0.1:8791",
     unifiedreward_weight=1.0,
     hps_weight=0.5,
+    hps_weight_i2i=0.0,
     hps_offset=0.0,
     hps_scale=1.0,
-    timeout_seconds=1800.0,
+    timeout_seconds=600.0,
     image_layout="CHW",
     max_tokens=4096,
     max_concurrent_samples=8,
@@ -33,7 +38,10 @@ async def compute_score(
 
     T2I UR = (mean(alignment, coherence, style)-1)/4.
     I2I UR = mean(edit_success, preservation)/25.
-    Total = unifiedreward_weight * UR + hps_weight * (HPS_mu-hps_offset)/hps_scale.
+    I2I source_images are ordered: canvas first, then optional donor references.
+    Multiple sources automatically select the local multi-reference rubric.
+    HPS weight is hps_weight for T2I and hps_weight_i2i for I2I.
+    Total = unifiedreward_weight * UR + task HPS weight * (HPS_mu-hps_offset)/hps_scale.
     HPS_mu is unbounded: weight 0.5 does not imply half the effective influence.
     Reference paths are resolved by the dataset/runtime before calling this hook.
     Each endpoint accepts one URL or a nonempty list of equivalent replicas;
@@ -50,15 +58,19 @@ async def compute_score(
     sources = extra_info.get("source_images", [])
     if task_type not in {"t2i", "i2i"}:
         raise ValueError("Image reward requires task_type t2i or i2i")
-    if isinstance(sources, (str, bytes)):
-        raise ValueError("source_images must be a list, not a string")
+    sample_id = extra_info.get("sample_id", "unknown")
+    if isinstance(sources, (str, bytes)) or sources is None:
+        raise ValueError("source_images must be a sequence of images, not a string or null")
     sources = list(sources)
-    if (task_type == "t2i" and sources) or (task_type == "i2i" and len(sources) != 1):
-        raise ValueError("The default image reward supports zero T2I / one I2I reference")
-    parameters = (unifiedreward_weight, hps_weight, hps_offset, hps_scale)
-    if any(not math.isfinite(value) for value in parameters) or hps_scale <= 0:
+    if (task_type == "t2i" and sources) or (task_type == "i2i" and not sources):
+        raise ValueError("The default image reward requires zero T2I / at least one I2I source image")
+    parameters = (unifiedreward_weight, hps_weight, hps_weight_i2i, hps_offset, hps_scale)
+    if any(isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) for value in parameters) or hps_scale <= 0:
         raise ValueError("Reward weights/calibration must be finite and hps_scale positive")
-    if unifiedreward_weight < 0 or hps_weight < 0 or unifiedreward_weight + hps_weight <= 0:
+    if unifiedreward_weight < 0 or hps_weight < 0 or hps_weight_i2i < 0:
+        raise ValueError("Reward weights must be nonnegative with at least one active reward")
+    hps_weight = hps_weight_i2i if task_type == "i2i" else hps_weight
+    if unifiedreward_weight + hps_weight <= 0:
         raise ValueError("Reward weights must be nonnegative with at least one active reward")
     if not isinstance(ground_truth, str) or not ground_truth.strip():
         raise ValueError("ground_truth must contain the original generation/edit instruction")
@@ -88,7 +100,9 @@ async def compute_score(
                 max_tokens=max_tokens,
             )
         except video_client.RemoteRewardError as exc:
-            raise video_client.RemoteRewardError(f"UnifiedReward replica {endpoint} failed: {exc}") from exc
+            raise video_client.RemoteRewardError(f"UnifiedReward task={task_type} sample={sample_id} replica={endpoint} failed: {exc}") from exc
+        if scores.get("format_error"):
+            LOGGER.warning("UnifiedReward midpoint applied: task=%s sample=%s replica=%s", task_type, sample_id, endpoint)
         return {**{"unifiedreward_" + key: value for key, value in scores.items()}, "unifiedreward": unifiedreward_weight * scores["normalized"]}
 
     async def score_hps(session, video):
@@ -106,7 +120,7 @@ async def compute_score(
                 timeout_seconds=timeout_seconds,
             )
         except video_client.RemoteRewardError as exc:
-            raise video_client.RemoteRewardError(f"HPSv3 replica {endpoint} failed: {exc}") from exc
+            raise video_client.RemoteRewardError(f"HPSv3 task={task_type} sample={sample_id} replica={endpoint} failed: {exc}") from exc
         raw = scores["hpsv3_general_raw"]
         calibrated = (raw - hps_offset) / hps_scale
         return {"hpsv3_general_raw": raw, "hpsv3_general_calibrated": calibrated, "hpsv3_general": hps_weight * calibrated}
@@ -124,9 +138,10 @@ async def compute_score(
             parts = await gather_scores(*requests)
     result = {key: value for part in parts for key, value in part.items()}
     result["score"] = result.get("unifiedreward", 0.0) + result.get("hpsv3_general", 0.0)
-    # Observability only: label the actual scored task, including HPS-only runs.
-    # The trainer consumes `score`; this flag travels as reward_extra_info.
+    # Keep the actual task in reward_extra_info for logging and task-specific
+    # advantage weights, including paths that do not retain dataset metadata.
     result["task_is_i2i"] = float(task_type == "i2i")
+    result["task_is_i2i_multi"] = float(task_type == "i2i" and len(sources) > 1)
     if any(not math.isfinite(value) for value in result.values()):
         raise video_client.RemoteRewardError("Image reward produced nonfinite weighted scores")
     return result

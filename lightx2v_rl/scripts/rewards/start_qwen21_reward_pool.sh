@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
-# Own and supervise the eight reward processes on the dedicated reward node.
+# Own and supervise eight reward processes on one dedicated reward node.
 set -euo pipefail
 
 usage() {
     cat <<'EOF'
 Usage: bash lightx2v_rl/scripts/rewards/start_qwen21_reward_pool.sh
 
-Run on the dedicated eight-GPU reward node. Required environment:
-  LIGHTX2V_REWARD_HOST   Node address reachable from every training node.
+Run on each dedicated eight-GPU reward node. Required environment:
+  LIGHTX2V_REWARD_HOST   First reward node address reachable from training nodes.
+  LIGHTX2V_REWARD_POOL_HOST  This reward node's address (defaults to REWARD_HOST).
 
-GPU 0..5: UnifiedReward, ports 8792..8797; GPU 6..7: HPSv3, ports 8791/8798.
+LIGHTX2V_REWARD_POOL_LAYOUT=6+2 (default): GPU 0..5 UR ports 8792..8797;
+  GPU 6..7 HPSv3 ports 8791/8798.
+LIGHTX2V_REWARD_POOL_LAYOUT=7+1: GPU 0..6 UR ports 8792..8798;
+  GPU 7 HPSv3 port 8791. This optional layout requires matching client endpoints;
+  the seven-node platform recipe uses 7+1 on ranks 4/5 and 6+2 on rank 6.
+  Four/five/six-node platform recipes use 6+2.
+LIGHTX2V_REWARD_POOL_LAYOUT=8+0: GPU 0..6 UR ports 8792..8798;
+  GPU 7 UR port 8791. No HPSv3 environment or services are needed.
 All servers bind 0.0.0.0. This foreground supervisor waits for all eight servers
 and stops its own children if a child fails or the supervisor receives a signal.
 Logs and PID files: lightx2v_rl/outputs/reward_pool/<run-id>/
@@ -20,6 +28,13 @@ EOF
 if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then usage; exit 0; fi
 if (( $# )); then usage >&2; exit 2; fi
 : "${LIGHTX2V_REWARD_HOST:?Set LIGHTX2V_REWARD_HOST to the reward node address reachable by every training node}"
+export LIGHTX2V_REWARD_POOL_HOST="${LIGHTX2V_REWARD_POOL_HOST:-$LIGHTX2V_REWARD_HOST}"
+case "${LIGHTX2V_REWARD_POOL_LAYOUT:-6+2}" in
+    6+2) RL_UR_COUNT=6 ;;
+    7+1) RL_UR_COUNT=7 ;;
+    8+0) RL_UR_COUNT=8 ;;
+    *) printf 'LIGHTX2V_REWARD_POOL_LAYOUT must be 6+2, 7+1 or 8+0.\n' >&2; exit 2 ;;
+esac
 
 RL_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 RL_MODULE_DIR="$(cd -- "$RL_SCRIPT_DIR/../.." && pwd)"
@@ -34,7 +49,9 @@ RL_STARTUP_TIMEOUT="${LIGHTX2V_REWARD_STARTUP_TIMEOUT:-1800}"
 if [[ ! "$RL_STARTUP_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     printf 'LIGHTX2V_REWARD_STARTUP_TIMEOUT must be a positive integer.\n' >&2; exit 2
 fi
-for RL_EXECUTABLE in "$RL_UR_PYTHON" "$RL_HPS_PYTHON"; do
+RL_REQUIRED_PYTHONS=("$RL_UR_PYTHON")
+if (( RL_UR_COUNT < 8 )); then RL_REQUIRED_PYTHONS+=("$RL_HPS_PYTHON"); fi
+for RL_EXECUTABLE in "${RL_REQUIRED_PYTHONS[@]}"; do
     if [[ ! -x "$RL_EXECUTABLE" ]]; then
         printf 'Reward interpreter unavailable: %s\n' "$RL_EXECUTABLE" >&2
         if [[ "$RL_EXECUTABLE" == "$RL_UR_PYTHON" ]]; then
@@ -55,9 +72,9 @@ import os
 import socket
 import torch
 
-host = os.environ['LIGHTX2V_REWARD_HOST']
+host = os.environ['LIGHTX2V_REWARD_POOL_HOST']
 if host in {'localhost', '0.0.0.0', '::', '::1'} or host.startswith('127.') or '://' in host:
-    raise SystemExit('LIGHTX2V_REWARD_HOST must be a node-routable hostname or IP, without a URL scheme.')
+    raise SystemExit('LIGHTX2V_REWARD_POOL_HOST must be a node-routable hostname or IP, without a URL scheme.')
 socket.getaddrinfo(host, None)
 if not torch.cuda.is_available() or torch.cuda.device_count() != 8:
     raise SystemExit('The reward pool requires exactly eight visible CUDA GPUs.')
@@ -73,7 +90,8 @@ finally:
         sock.close()
 PY
 
-RL_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+RL_LOG_HOST="${LIGHTX2V_REWARD_POOL_HOST//[^a-zA-Z0-9_.-]/_}"
+RL_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${RL_LOG_HOST:0:80}-$$"
 RL_LOG_DIR="$RL_MODULE_DIR/outputs/reward_pool/$RL_RUN_ID"
 mkdir -p "$RL_LOG_DIR"
 printf '%s\n' "$$" > "$RL_LOG_DIR/supervisor.pid"
@@ -103,8 +121,10 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for RL_GPU in 0 1 2 3 4 5; do
+for ((RL_GPU=0; RL_GPU<RL_UR_COUNT; RL_GPU++)); do
     RL_PORT=$((8792 + RL_GPU))
+    # Reuse the existing eight-port readiness range for the UR-only layout.
+    if (( RL_GPU == 7 )); then RL_PORT=8791; fi
     RL_NAME="unifiedreward-gpu${RL_GPU}-port${RL_PORT}"
     setsid env CUDA_VISIBLE_DEVICES="$RL_GPU" \
         LIGHTX2V_UNIFIEDREWARD_HOST=0.0.0.0 LIGHTX2V_UNIFIEDREWARD_PORT="$RL_PORT" \
@@ -115,9 +135,9 @@ for RL_GPU in 0 1 2 3 4 5; do
     RL_HEALTH_URLS+=("http://127.0.0.1:$RL_PORT/health")
     printf '%s\n' "$!" > "$RL_LOG_DIR/$RL_NAME.pid"
 done
-for RL_GPU in 6 7; do
+for ((RL_GPU=RL_UR_COUNT; RL_GPU<8; RL_GPU++)); do
     RL_PORT=8791
-    if (( RL_GPU == 7 )); then RL_PORT=8798; fi
+    if (( RL_GPU > RL_UR_COUNT )); then RL_PORT=8798; fi
     RL_NAME="hpsv3-gpu${RL_GPU}-port${RL_PORT}"
     setsid env CUDA_VISIBLE_DEVICES="$RL_GPU" LIGHTX2V_REWARD_PYTHON="$RL_HPS_PYTHON" \
         bash "$RL_SCRIPT_DIR/start_reward_server.sh" --host 0.0.0.0 --port "$RL_PORT" \
@@ -142,24 +162,18 @@ check_children() {
     done
 }
 RL_DEADLINE=$((SECONDS + RL_STARTUP_TIMEOUT))
+RL_NEXT_HEALTH_REPORT=0
 printf 'Waiting for eight reward servers. Logs: %s\n' "$RL_LOG_DIR"
 while true; do
     check_children
-    if "$RL_UR_PYTHON" - "${RL_HEALTH_URLS[@]}" <<'PY'
-import concurrent.futures
-import sys
-import urllib.request
-
-def ready(url):
-    try:
-        with urllib.request.urlopen(url, timeout=1) as response:
-            return response.status == 200
-    except Exception:
-        return False
-
-with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-    raise SystemExit(0 if all(pool.map(ready, sys.argv[1:])) else 1)
-PY
+    RL_HEALTH_ARGS=()
+    if (( SECONDS >= RL_NEXT_HEALTH_REPORT )); then
+        RL_HEALTH_ARGS+=(--report)
+        RL_NEXT_HEALTH_REPORT=$((SECONDS + 30))
+    fi
+    # Internal endpoints must bypass HTTP proxies, just like async scoring.
+    if "$RL_UR_PYTHON" -m lightx2v_rl.deployment.health \
+        "${RL_HEALTH_ARGS[@]}" "${RL_HEALTH_URLS[@]}"
     then
         check_children
         break
@@ -169,6 +183,6 @@ PY
     fi
     sleep 2
 done
-printf 'READY: UnifiedReward http://%s:8792..8797; HPSv3 http://%s:8791 and :8798\n' \
-    "$LIGHTX2V_REWARD_HOST" "$LIGHTX2V_REWARD_HOST"
+printf 'READY: %s UnifiedReward + %s HPSv3 services on %s; logs=%s\n' \
+    "$RL_UR_COUNT" "$((8 - RL_UR_COUNT))" "$LIGHTX2V_REWARD_POOL_HOST" "$RL_LOG_DIR"
 while true; do check_children; sleep 1; done

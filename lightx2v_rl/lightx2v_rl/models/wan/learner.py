@@ -63,10 +63,13 @@ class FewStepWanModel(DiffusionModelBase):
             raise ValueError("FewStep all_latents must have shape [B, 2, C, F, H, W].")
         if timesteps.shape != (latents.shape[0], 1) or step != 0:
             raise ValueError("FewStep batches contain exactly one sampled transition per video.")
-        # The initial recipes use BF16 storage and compute on both actor and
-        # reference modules. Read the actual module dtype so unsharded models
-        # and CPU test models work as well; do not cast the stored trajectory.
-        module_dtype = getattr(module, "dtype", None)
+        # Use FSDP's compute dtype, which can differ from FP32 master weights.
+        # Keep fractional timesteps in FP32 instead of casting every input.
+        fsdp_state = getattr(module, "_get_fsdp_state", None)
+        precision = fsdp_state()._mp_policy if callable(fsdp_state) else getattr(module, "mixed_precision", None)
+        module_dtype = getattr(precision, "param_dtype", None)
+        if module_dtype is None:
+            module_dtype = getattr(module, "dtype", None)
         if not isinstance(module_dtype, torch.dtype):
             module_dtype = next(module.parameters()).dtype
         prompt_embeds = prompt_embeds.to(dtype=module_dtype)
