@@ -49,10 +49,20 @@ class Embeddings(nn.Module):
         self.position_embeddings = nn.Parameter(torch.empty(1, patches + 1, hidden_size))
         self.patch_embeddings = PatchEmbeddings(hidden_size)
         self._position_cache = OrderedDict()
+        self.register_load_state_dict_post_hook(self._clear_cache_after_load)
+
+    @staticmethod
+    def _clear_cache_after_load(module, _incompatible_keys):
+        module._position_cache.clear()
 
     def _apply(self, fn):
         self._position_cache.clear()
         return super()._apply(fn)
+
+    def train(self, mode: bool = True):
+        if mode:
+            self._position_cache.clear()
+        return super().train(mode)
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         batch, _, height, width = image.shape
@@ -62,9 +72,20 @@ class Embeddings(nn.Module):
         pos = self.position_embeddings
         original_side = math.isqrt(pos.shape[1] - 1)
         if patch_h != original_side or patch_w != original_side:
-            # The weights are fixed during inference; pointer/version changes invalidate cached positions.
+            # The weights are fixed during inference. Weight loads, moves, and
+            # training transitions clear the cache; replacement changes the pointer.
             cacheable = not self.training and torch.is_inference_mode_enabled() and not _is_compiling()
-            cache_key = (patch_h, patch_w, pos.device, pos.dtype, tokens.dtype, pos.data_ptr(), pos._version) if cacheable else None
+            if cacheable:
+                cache_key = (
+                    patch_h,
+                    patch_w,
+                    pos.device,
+                    pos.dtype,
+                    tokens.dtype,
+                    pos.data_ptr(),
+                )
+            else:
+                cache_key = None
             if cacheable and cache_key in self._position_cache:
                 pos = self._position_cache[cache_key]
                 self._position_cache.move_to_end(cache_key)

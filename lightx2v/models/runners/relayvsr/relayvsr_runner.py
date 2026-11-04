@@ -106,6 +106,11 @@ class RelayVSRRunner(DefaultRunner):
         logger.info("RelayVSR warmup cost {:.2f}s", time.perf_counter() - started)
         self._maybe_freeze_gc()
 
+    def create_input_info(self, request_data):
+        info = super().create_input_info(request_data)
+        self.geometry.validate_sr_ratio(info.sr_ratio)
+        return info
+
     def output_size(self, input_info, height, width):
         return self.geometry.output_size(input_info, height, width)
 
@@ -247,8 +252,8 @@ class RelayVSRRunner(DefaultRunner):
                     raise ValueError("Cannot determine source FPS; set startup fps explicitly")
                 input_height, input_width = stream.height, stream.width
                 target = self.output_size(input_info, input_height, input_width)
-                if target[0] % 2 or target[1] % 2:
-                    raise ValueError("YUV420 video output requires even height and width")
+                # Fractional ratios may produce odd dimensions; YUV420 needs even sizes.
+                target = tuple(max(2, size // 2 * 2) for size in target)
                 input_info.output_fps = float(fps)
                 if self.main_rank:
                     writer = AsyncVideoWriter(temporary, fps, self.config)
@@ -288,13 +293,7 @@ class RelayVSRX4Runner(RelayVSRRunner):
 
 @RUNNER_REGISTER("relayvsr_x2")
 class RelayVSRX2Runner(RelayVSRRunner):
-    """Native 2x inference with an exact 2x output contract."""
+    """Native 2x inference, followed by optional output resizing."""
 
     geometry = RelayVSRGeometry(2)
     WARMUP_RESOLUTIONS = ((768, 1024), (768, 1344))
-
-    def create_input_info(self, request_data):
-        info = super().create_input_info(request_data)
-        if info.sr_ratio != 2:
-            raise ValueError("relayvsr_x2 supports only sr_ratio=2")
-        return info
