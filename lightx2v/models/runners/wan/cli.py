@@ -43,8 +43,7 @@ FAST_WAM = RequestSpec(
 WAN_AUDIO = RequestSpec(
     {
         task: dict(
-            COMMON,
-            **PROMPT,
+            COMMON | PROMPT,
             audio_path=Argument(help="Driving audio path."),
             image_path=Argument(help="Input image path."),
             num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
@@ -99,8 +98,7 @@ SPECS = {
     "dreamzero": RequestSpec(
         {
             "i2va": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 image_path=Argument(help="Input image path."),
                 save_action_path=Argument(help="Output action file path."),
                 state_path=Argument(help="Input robot state file."),
@@ -111,8 +109,7 @@ SPECS = {
     "infinitetalk": RequestSpec(
         {
             "s2v": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 audio_path=Argument(help="Driving audio path."),
                 image_path=Argument(help="Input image path."),
                 num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
@@ -124,8 +121,7 @@ SPECS = {
     "lingbot_va": RequestSpec(
         {
             "i2va": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 image_path=Argument(help="Input image path."),
             )
         }
@@ -152,8 +148,7 @@ SPECS = {
     "wan2.2_animate": WanAnimateSpec(
         {
             "animate": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 face_video_path=Argument(help="Face input path."),
                 pose_video_path=Argument(help="Pose driving video path."),
                 ref_image_paths=Argument(help="Reference image paths, separated by commas."),
@@ -178,8 +173,7 @@ SPECS = {
     "wan2.2_s2v": RequestSpec(
         {
             "s2v": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 audio_path=Argument(help="Driving audio path."),
                 image_path=Argument(help="Input image path."),
                 pose_video_path=Argument(help="Pose driving video path."),
@@ -193,8 +187,7 @@ SPECS = {
     "wan_dancer": WanDancerSpec(
         {
             "s2v": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 audio_path=Argument(help="Driving audio path."),
                 image_path=Argument(help="Input image path."),
             )

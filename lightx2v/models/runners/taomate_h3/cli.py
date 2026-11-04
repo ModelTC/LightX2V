@@ -5,8 +5,7 @@ SPECS = {
     "taomate_h3": MultiTaskSpec(
         {
             "t2av": dict(
-                COMMON,
-                **VIDEO_OUTPUT,
+                COMMON | VIDEO_OUTPUT,
                 prompt=Argument(help="Text prompt."),
             )
         }

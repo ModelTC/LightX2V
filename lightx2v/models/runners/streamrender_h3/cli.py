@@ -5,8 +5,7 @@ SPECS = {
     "streamrender_h3": MultiTaskSpec(
         {
             "refv2v": dict(
-                COMMON,
-                **VIDEO_OUTPUT,
+                COMMON | VIDEO_OUTPUT,
                 prompt=Argument(help="Text prompt."),
                 image_path=Argument(help="Input image path."),
                 video_path=Argument(help="Input video path."),

@@ -5,8 +5,7 @@ SPECS = {
     "lingbot_video": RequestSpec(
         {
             "t2i": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
             ),
             "t2v": VIDEO,

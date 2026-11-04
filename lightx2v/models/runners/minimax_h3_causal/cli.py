@@ -7,8 +7,7 @@ SPECS = {
     "minimax_h3_causal": MultiTaskSpec(
         {
             "refa2v": dict(
-                COMMON,
-                **VIDEO_OUTPUT,
+                COMMON | VIDEO_OUTPUT,
                 image_path=Argument(help="Input image path."),
                 audio_path=Argument(help="Driving audio path."),
                 prompt=Argument(help="Text prompt."),

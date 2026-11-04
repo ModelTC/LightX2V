@@ -17,8 +17,7 @@ VIDEO_OUTPUT = {
 }
 
 IMAGE = dict(
-    COMMON,
-    **PROMPT,
+    COMMON | PROMPT,
     aspect_ratio=Argument(help="Output aspect ratio."),
     size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
 )

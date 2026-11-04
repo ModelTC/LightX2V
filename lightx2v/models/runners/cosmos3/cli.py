@@ -5,8 +5,7 @@ SPECS = {
     "cosmos3": RequestSpec(
         {
             "t2i": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
             ),
             "t2v": VIDEO,
@@ -20,8 +19,7 @@ SPECS = {
                 image_path=Argument(help="Input image path."),
             ),
             "i2va": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 action_mode=Argument(choices=["forward_dynamics", "inverse_dynamics", "policy"], help="Cosmos3 action mode."),
                 action_path=Argument(help="Input action path."),
                 domain_name=Argument(help="Cosmos3 action embodiment domain name."),
@@ -35,8 +33,7 @@ SPECS = {
                 view_point=Argument(help="Cosmos3 action viewpoint label."),
             ),
             "v2av": dict(
-                COMMON,
-                **PROMPT,
+                COMMON | PROMPT,
                 action_mode=Argument(choices=["forward_dynamics", "inverse_dynamics", "policy"], help="Cosmos3 action mode."),
                 action_path=Argument(help="Input action path."),
                 domain_name=Argument(help="Cosmos3 action embodiment domain name."),
