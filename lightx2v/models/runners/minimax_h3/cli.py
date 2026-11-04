@@ -1,7 +1,7 @@
 from lightx2v.models.runners.request_args import COMMON, VIDEO_OUTPUT
 from lightx2v.utils.request_spec import Argument, MultiTaskSpec
 
-RESAMPLING = {
+REGENERATION = {
     "draft_steps": Argument(
         type=int, help="MiniMax-H3: only a positive K smaller than configured infer_steps enables a draft prefix and final velocity projection. Omit or use K >= infer_steps for normal sampling."
     ),
@@ -10,7 +10,7 @@ RESAMPLING = {
         type=int, help="MiniMax-H3 zero-based regeneration start index in [0,infer_steps]. Defaults to the startup config or 1; 0 runs all steps, infer_steps only decodes the VAE-encoded source."
     ),
 }
-REQUEST = COMMON | VIDEO_OUTPUT | RESAMPLING
+REQUEST = COMMON | VIDEO_OUTPUT | REGENERATION
 
 
 SPECS = {
