@@ -290,9 +290,6 @@ class LTX2TransformerInfer(BaseTransformerInfer):
         k = k.view(-1, num_heads_effective, head_dim)
         v = v.view(-1, num_heads_effective, head_dim)
 
-        if is_self_attn:
-            k, v = self._prepare_self_attention_kv(attn_phase, k, v, is_audio=is_audio)
-
         seq_len = q.size(0)
         # For video self-attention with sequence parallel (non-TP only)
         if is_self_attn and not is_audio and self.seq_parallel and not use_tp:
@@ -321,7 +318,7 @@ class LTX2TransformerInfer(BaseTransformerInfer):
                     self.a_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0])
 
                 cu_seqlens_q = self.v_attn_cu_seqlens_qkv if not is_audio else self.a_attn_cu_seqlens_qkv
-                cu_seqlens_kv = cu_seqlens_q if q.shape[0] == k.shape[0] else self._create_cu_seqlens(k.shape[0])
+                cu_seqlens_kv = cu_seqlens_q
             else:
                 # For cross-attention, always create cu_seqlens dynamically
                 # because k length varies by context type (text, audio, video)
@@ -345,10 +342,6 @@ class LTX2TransformerInfer(BaseTransformerInfer):
             out = out * gates.unsqueeze(-1)
             out = out.reshape(seq_len, num_heads_effective * head_dim)
         return attn_phase.to_out.apply(out)
-
-    def _prepare_self_attention_kv(self, attn_phase, k: torch.Tensor, v: torch.Tensor, *, is_audio: bool):
-        """Hook for causal inference. The regular LTX2 path keeps current-sequence K/V unchanged."""
-        return k, v
 
     def _infer_ffn(self, ffn_phase, x: torch.Tensor) -> torch.Tensor:
         """

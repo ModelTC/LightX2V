@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -11,14 +12,15 @@ from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.common.offload.checkpoint_metadata import checkpoint_content_digest, read_checkpoint_json, read_safetensors_header
-from lightx2v.common.offload.shared_pinned_arena import SharedWeightManifest
+from lightx2v.common.offload.shared_pinned_arena import SharedWeightManifest, TensorSpec
 from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error, materialize_shared_weight_arena, validate_shared_weight_config
 from lightx2v.common.offload.shared_weight_map import SharedWeightViewMap
 
-_DTYPES = {"BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32}
+_DTYPES = {"BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32, "F8_E4M3": torch.float8_e4m3fn}
+_QKV = re.compile(r"^(.*\.attn)\.to_([qkv])\.(weight(?:_scale)?)$")
 
 
-def load_h3_shared_weights(path, config, component, *, expected=None, runtime_dtypes=None, include=None, shared=None, validate=None):
+def load_h3_shared_weights(path, config, component, *, expected=None, runtime_dtypes=None, include=None, shared=None, validate=None, transform=None, fused_qkv=False):
     """All ranks preflight; only replica leaders materialize shared tensors.
 
     Content fingerprinting can scan shard bytes when the cached HF digest is
@@ -27,6 +29,9 @@ def load_h3_shared_weights(path, config, component, *, expected=None, runtime_dt
     expected maps exact required names to (shape, checkpoint dtype). include
     filters unused checkpoint tensors; shared separates shared/private weights.
     runtime_dtypes controls conversion directly into the final shared storage.
+    transform maps one source tensor to native named tensors, on both meta and
+    CPU devices. Include/expected refer to source names; shared refers to native
+    names. Fused QKV projections keep adjacent arena storage without a copy.
     """
     error = None
     try:
@@ -36,7 +41,11 @@ def load_h3_shared_weights(path, config, component, *, expected=None, runtime_dt
         validate_shared_weight_config(config)
         chunk_mb = config.get("shared_cpu_weight_register_chunk_mb", 128)
         root = Path(path).resolve()
-        files = [root] if root.is_file() else sorted(root.glob("*.safetensors"))
+        indexes = [] if root.is_file() else sorted(root.glob("*.safetensors.index.json"))
+        if len(indexes) > 1:
+            raise ValueError(f"Ambiguous H3 checkpoint indexes under {root}")
+        index_map = read_checkpoint_json(indexes[0])["weight_map"] if indexes else None
+        files = [root] if root.is_file() else [root / name for name in sorted(set(index_map.values()))] if index_map else sorted(root.glob("*.safetensors"))
         if not files:
             raise FileNotFoundError(f"No H3 checkpoint shards under {root}")
         entries, signatures, indexed = {}, [], {}
@@ -62,34 +71,45 @@ def load_h3_shared_weights(path, config, component, *, expected=None, runtime_dt
                 if spec["data_offsets"][1] - spec["data_offsets"][0] != math.prod(shape) * dtype.itemsize:
                     raise ValueError(f"Invalid checkpoint tensor byte extent: {name}")
                 entries[name] = (file, shape, dtype)
-        if root.is_dir():
-            for index in root.glob("*.safetensors.index.json"):
-                if read_checkpoint_json(index).get("weight_map") != indexed:
-                    raise ValueError(f"Checkpoint index/header mismatch: {index}")
+        if index_map is not None and index_map != indexed:
+            raise ValueError(f"Checkpoint index/header mismatch: {indexes[0]}")
         if expected is not None and entries.keys() != expected.keys():
             raise ValueError(f"Missing H3 checkpoint tensors: {sorted(expected.keys() - entries.keys())}")
-        shared_entries = {n: e for n, e in entries.items() if shared is None or shared(n)}
-        if not shared_entries:
+        convert = transform or (lambda name, tensor: {name: tensor})
+        native_metadata = {}
+        for name, (_, shape, dtype) in entries.items():
+            for native_name, tensor in convert(name, torch.empty(shape, dtype=dtype, device="meta")).items():
+                if native_name in native_metadata:
+                    raise ValueError(f"Duplicate native H3 tensor: {native_name}")
+                native_metadata[native_name] = tensor
+        shared_names = {name for name in native_metadata if shared is None or shared(name)}
+        if not shared_names:
             raise ValueError("Empty H3 shared checkpoint selection")
         runtime_dtypes = runtime_dtypes or {}
-        metadata = {n: torch.empty(e[1], device="meta", dtype=runtime_dtypes.get(n, e[2])) for n, e in shared_entries.items()}
+        metadata = {n: torch.empty(native_metadata[n].shape, device="meta", dtype=runtime_dtypes.get(n, native_metadata[n].dtype)) for n in shared_names}
         signature = hashlib.sha256(
             json.dumps(
                 {"format": "h3-shared-v1", "component": component, "files": signatures, "tensors": [(n, list(t.shape), str(t.dtype)) for n, t in sorted(metadata.items())]}, sort_keys=True
             ).encode()
         ).hexdigest()
-        manifest = SharedWeightManifest.from_tensors(metadata, weight_signature=signature, alignment=4096)
+        manifest = _qkv_manifest(metadata, signature) if fused_qkv else SharedWeightManifest.from_tensors(metadata, weight_signature=signature, alignment=4096)
         private = {}
-        for name, tensor in _read_entries({n: e for n, e in entries.items() if n not in shared_entries}):
-            private[name] = tensor.clone()
+        private_sources = {n: e for n, e in entries.items() if any(name not in shared_names for name in convert(n, torch.empty(e[1], dtype=e[2], device="meta")))}
+        for name, tensor in _read_entries(private_sources):
+            for native_name, native_tensor in convert(name, tensor).items():
+                if native_name not in shared_names:
+                    private[native_name] = native_tensor.clone()
     except Exception as exc:
         error = exc
     coordinate_rank_local_error(f"H3 {component} checkpoint preflight", error)
     logger.info("H3 {}: materializing {:.3f} GiB shared CPU weights", component, manifest.nbytes / 1024**3)
 
     def populate(views):
-        for name, tensor in _read_entries(shared_entries):
-            views[name].copy_(tensor)
+        shared_sources = {n: e for n, e in entries.items() if any(name in shared_names for name in convert(n, torch.empty(e[1], dtype=e[2], device="meta")))}
+        for name, tensor in _read_entries(shared_sources):
+            for native_name, native_tensor in convert(name, tensor).items():
+                if native_name in shared_names:
+                    views[native_name].copy_(native_tensor)
 
     allocation = materialize_shared_weight_arena(
         manifest,
@@ -99,6 +119,32 @@ def load_h3_shared_weights(path, config, component, *, expected=None, runtime_dt
         register_chunk_bytes=chunk_mb * 1024 * 1024,
     )
     return SharedWeightViewMap(private, allocation.tensor_views(), owner=allocation)
+
+
+def _qkv_manifest(tensors, signature):
+    """Make Q/K/V groups adjacent even when scale tensors have page padding.
+
+    FusedQKVStorage recognizes views of one allocation only in Q,K,V order.
+    Page alignment applies to the group; individual projections need only
+    dtype alignment. All names remain ordinary independently validated views.
+    """
+
+    def key(name):
+        match = _QKV.fullmatch(name)
+        return (match[1] + ".to_qkv", match[3], "qkv".index(match[2])) if match else (name, "", 0)
+
+    offset, specs, previous_group = 0, [], None
+    for name in sorted(tensors, key=key):
+        tensor = tensors[name]
+        match = _QKV.fullmatch(name)
+        group = (match[1], match[3]) if match else None
+        alignment = tensor.element_size() if group is not None and group == previous_group else 4096
+        offset = (offset + alignment - 1) // alignment * alignment
+        spec = SharedWeightManifest.from_tensors({name: tensor}, signature, alignment=1).tensors[0]
+        specs.append(TensorSpec(name=name, offset=offset, nbytes=spec.nbytes, dtype=spec.dtype, storage_shape=spec.storage_shape))
+        offset += spec.nbytes
+        previous_group = group
+    return SharedWeightManifest(nbytes=(offset + 4095) // 4096 * 4096, tensors=tuple(specs), weight_signature=signature, alignment=4096)
 
 
 def _read_entries(entries):
@@ -128,7 +174,7 @@ def load_shared_dit(model):
         ):
             raise ValueError("H3 shared DiT supports original weights without TP, quantization, LoRA or lazy loading")
 
-    return load_h3_shared_weights(
+    weights = load_h3_shared_weights(
         model.model_path,
         config,
         "dit",
@@ -136,3 +182,5 @@ def load_shared_dit(model):
         shared=lambda name: name.startswith("transformer_blocks."),
         validate=validate,
     )
+    model._record_checkpoint_metadata(weights)
+    return weights

@@ -38,6 +38,12 @@ class T2VInputInfo(InputInfo):
 
 
 @dataclass
+class MatrixGame4InputInfo(T2VInputInfo):
+    video_path: str = ""
+    image_path: str = ""
+
+
+@dataclass
 class I2VInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str = ""

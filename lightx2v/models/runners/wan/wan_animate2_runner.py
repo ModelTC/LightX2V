@@ -570,12 +570,7 @@ class WanAnimate2Runner(WanRunner):
             raise ValueError(f"Wan-Animate-2 attention heads after TP ({model_heads}) must be divisible by SP size ({sp_size}).")
         cache_heads = model_heads // sp_size
 
-        # KVCacheManager temporarily overrides ar_config while constructing a
-        # named cache.  Runtime config is locked after module initialization, so
-        # give the manager an isolated mutable view.
-        cache_config = dict(self.config)
-        cache_config["ar_config"] = dict(self.config.get("ar_config", {}))
-        manager = KVCacheManager(cache_config, device=torch.device(AI_DEVICE), sp_group=seq_group)
+        manager = KVCacheManager(self.config, device=torch.device(AI_DEVICE), sp_group=seq_group)
         cache = manager.create_self_attn_kv_cache(
             "animate2_reference",
             cache_size,

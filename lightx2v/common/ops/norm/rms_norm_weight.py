@@ -11,6 +11,8 @@ from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage, StorageDescription
 
+from .compile_ops import mean_square, rms_norm_from_sum, sum_square
+
 try:
     import sgl_kernel
     from sgl_kernel.utils import is_arch_support_pdl
@@ -242,6 +244,16 @@ class RMSWeight(RMSWeightTemplate):
         return output if weight is None else output * weight
 
 
+@RMS_WEIGHT_REGISTER("torch_opaque")
+class RMSWeightOpaque(RMSWeight):
+    """Preserve PyTorch's variance reduction during compilation."""
+
+    def _norm(self, x):
+        if torch.compiler.is_compiling():
+            return x * torch.rsqrt(mean_square(x) + self.eps)
+        return super()._norm(x)
+
+
 @RMS_WEIGHT_REGISTER("torch_native")
 class RMSWeightNative(RMSWeight):
     def apply(self, input_tensor):
@@ -315,21 +327,32 @@ class RMSWeightTP(RMSWeightTemplate):
 class RMSWeightTPFP32(RMSWeightTP):
     """Tensor-parallel RMSNorm with FP32 accumulation and computation."""
 
-    def apply(self, input_tensor):
-        input_dtype = input_tensor.dtype
+    def _norm(self, input_tensor, native_reduction=False):
         input_fp32 = input_tensor.float()
-        local_sum = input_fp32.square().sum(dim=-1, keepdim=True)
-
+        local_sum = sum_square(input_fp32) if native_reduction and torch.compiler.is_compiling() else input_fp32.square().sum(dim=-1, keepdim=True)
         if self.tp_size > 1 and self.tp_group is not None:
             dist.all_reduce(local_sum, op=dist.ReduceOp.SUM, group=self.tp_group)
-
         global_hidden_dim = input_tensor.shape[-1] * self.tp_size
-        output = input_fp32 * torch.rsqrt(local_sum / global_hidden_dim + self.eps)
+        if native_reduction and torch.compiler.is_compiling():
+            return rms_norm_from_sum(input_fp32, local_sum, global_hidden_dim, self.eps)
+        return input_fp32 * torch.rsqrt(local_sum / global_hidden_dim + self.eps)
 
+    def apply(self, input_tensor):
+        output = self._norm(input_tensor)
         weight = self._get_actual_weight()
         if weight is not None:
             output = output * weight.float()
-        return output.to(input_dtype)
+        return output.to(input_tensor.dtype)
+
+
+@RMS_WEIGHT_REGISTER("TensorParallelTorch")
+class RMSWeightTPTorch(RMSWeightTPFP32):
+    """Match Torch RMSNorm's cast before applying the learned weight."""
+
+    def apply(self, input_tensor, native_reduction=False):
+        output = self._norm(input_tensor, native_reduction).to(input_tensor.dtype)
+        weight = self._get_actual_weight()
+        return output if weight is None else output * weight
 
 
 @RMS_WEIGHT_REGISTER("sgl-kernel")

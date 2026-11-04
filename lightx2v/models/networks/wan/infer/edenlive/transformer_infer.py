@@ -1,14 +1,18 @@
 import math
+from dataclasses import replace
+from functools import partial
 
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from lightx2v.common.ops.attn.sage_sm90_fused import make_transposed_v, update_transposed_v
+from lightx2v.common.kvcache.attn.rope import PhysicalRoPERingAttention
+from lightx2v.common.kvcache.attn.sage_rope import SageRoPERingAttention
+from lightx2v.common.kvcache.layout import KVCacheUpdate
 from lightx2v.common.ops.norm.rms_norm_weight import apply_projection_norm
-from lightx2v.models.networks.wan.infer.edenlive.cuda_graph import EdenLiveARGraphMixin, EdenLiveCUDAGraphStack
+from lightx2v.models.networks.wan.infer.autoregressive import WanAutoregressiveTransformerInfer
+from lightx2v.models.networks.wan.infer.autoregressive.causal_transformer_infer import WanCausalTransformerInfer
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 
 class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
@@ -19,28 +23,46 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
         self.text_len = config["text_len"]
         self.freqs_cache = {}
         self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block"
+        self.infer_func = self.infer_with_blocks_offload if self.block_offload else self.infer_without_offload
         if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "phase":
             raise NotImplementedError("EdenLive supports block or model offload")
 
     def infer(self, weights, pre_infer_out):
         self.current_pre = pre_infer_out
         frames, height, width = pre_infer_out.grid_sizes.tuple
-        freq_key = (self._visible_frames(frames), height, width, pre_infer_out.x.device)
+        freq_key = (self.get_rope_frames(frames), height, width, pre_infer_out.x.device)
         if freq_key not in self.freqs_cache:
-            freqs = self._freqs(*freq_key)
+            freqs = self.prepare_rope_freqs(*freq_key)
             if self.config["rope_type"] == "flashinfer_rope" and not self.config.get("rope_chunk", False) and not self.seq_parallel:
                 freqs = weights.blocks[0].compute_phases[0].rope.prepare_freqs(freqs)
             self.freqs_cache[freq_key] = freqs
         self.key_freqs = self.freqs_cache[freq_key]
-        self.query_freqs = self.key_freqs[-frames * height * width :]
+        visible_tokens = self.get_attention_frames(frames) * height * width
+        self.query_freqs = self.key_freqs[visible_tokens - frames * height * width : visible_tokens]
         if self.seq_parallel:
             tokens = frames * height * width
             start = pre_infer_out.adapter_args["seq_start"]
-            self.query_freqs = F.pad(self.query_freqs, (0, 0, 0, 0, 0, (-tokens) % dist.get_world_size(self.seq_p_group)))[start : start + pre_infer_out.x.shape[0]]
+            padding = (-tokens) % dist.get_world_size(self.seq_p_group)
+            query_key = "query", freq_key, frames, visible_tokens, start, pre_infer_out.x.shape[0]
+            if query_key not in self.freqs_cache:
+                self.freqs_cache[query_key] = F.pad(self.query_freqs, (0, 0) * (self.query_freqs.ndim - 1) + (0, padding))[start : start + pre_infer_out.x.shape[0]]
+            self.query_freqs = self.freqs_cache[query_key]
         return super().infer(weights, pre_infer_out)
 
-    def _visible_frames(self, frames):
+    def reset_infer_states(self, x, context):
+        super().reset_infer_states(x, context)
+        if self.has_image_context:
+            segments = self.current_pre.adapter_args.get("text_segments")
+            text_tokens = self.text_len * (len(segments) if segments is not None else 1)
+            self.image_context_len = context.shape[0] - text_tokens
+            self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, self.image_context_len], dtype=torch.int32)
+            self.cross_attn_cu_seqlens_kv = torch.tensor([0, text_tokens], dtype=torch.int32)
+
+    def get_attention_frames(self, frames):
         return frames
+
+    def get_rope_frames(self, frames):
+        return self.get_attention_frames(frames)
 
     def get_compile_block_key(self, block_idx, block):
         return id(block) if self.block_offload else block_idx
@@ -55,8 +77,6 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
         # The timestep embedding is shared by every block.
         shift, scale, gate, ff_shift, ff_scale, ff_gate = pre_infer_out.embed0.add(block.compute_phases[0].modulation.tensor).chunk(6, dim=1)
         y = self.infer_self_attn(block.compute_phases[0], x, shift, scale, pre_infer_out.grid_sizes.tuple, self_attn_cache=self_attn_cache)
-        if self_attn_cache is not None:
-            y, raw_k, raw_v = y
         x.add_(y.mul_(gate.squeeze(1)))
         attention = self.infer_cross_attn_output(block.compute_phases[1], x, pre_infer_out.context, cross_kv)
         x.add_(attention)
@@ -66,7 +86,7 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
         ffn = getattr(phase, "ffn_gelu", None)
         y = ffn.apply(hidden) if ffn is not None else phase.ffn_2.apply(F.gelu(hidden, approximate="tanh"))
         x.add_(y.mul_(ff_gate.squeeze(1)))
-        return x if self_attn_cache is None else (x, raw_k, raw_v)
+        return x
 
     def infer_non_blocks(self, weights, x, embed):
         shift, scale = embed.unsqueeze(1).add(weights.head_modulation.tensor).unbind(1)
@@ -80,22 +100,17 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
             context = context[self.image_context_len :]
         normalized = phase.norm3.apply(x)
         q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(normalized)).view(-1, self.num_heads, self.head_dim)
-        prepared_kv = cross_kv if cross_kv is not None and len(cross_kv) == 4 else None
-        if prepared_kv is None:
-            k, v = self.get_cross_kv(phase, context) if cross_kv is None else cross_kv
+        k, v = self.get_cross_kv(phase, context) if cross_kv is None else cross_kv[:2]
         if segments is None:
-            if prepared_kv is not None:
-                attention = phase.cross_attn_1.apply_prepared(q, prepared_kv)
-            else:
-                attention = phase.cross_attn_1.apply(
-                    q=q,
-                    k=k,
-                    v=v,
-                    cu_seqlens_q=self.cross_attn_cu_seqlens_q,
-                    cu_seqlens_kv=self.cross_attn_cu_seqlens_kv,
-                    max_seqlen_q=q.shape[0],
-                    max_seqlen_kv=k.shape[0],
-                )
+            attention = phase.cross_attn_1.apply(
+                q=q,
+                k=k,
+                v=v,
+                cu_seqlens_q=self.cross_attn_cu_seqlens_q,
+                cu_seqlens_kv=self.cross_attn_cu_seqlens_kv,
+                max_seqlen_q=q.shape[0],
+                max_seqlen_kv=k.shape[0],
+            )
         else:
             tokens_per_frame = math.prod(self.current_pre.grid_sizes.tuple[1:])
             local_start = self.current_pre.adapter_args.get("seq_start", 0)
@@ -120,8 +135,7 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
                 cursor = end
             attention = attention.flatten(1)
         if self.has_image_context:
-            k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, self.num_heads, self.head_dim)
-            v_img = phase.cross_attn_v_img.apply(context_img).view_as(k_img)
+            k_img, v_img = self.get_image_cross_kv(phase, context_img) if cross_kv is None else cross_kv[2:]
             image_attention = phase.cross_attn_2.apply(
                 q=q,
                 k=k_img,
@@ -134,6 +148,10 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
             attention.add_(image_attention)
         return phase.cross_attn_o.apply(attention)
 
+    def get_image_cross_kv(self, phase, context):
+        key = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context)).view(-1, self.num_heads, self.head_dim)
+        return key, phase.cross_attn_v_img.apply(context).view_as(key)
+
     def get_cross_kv(self, phase, context):
         group = getattr(phase, "cross_kv_projection_group", None)
         if group is None:
@@ -144,7 +162,7 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
         v = v.view_as(k)
         return k, v
 
-    def _freqs(self, frames, height, width, device):
+    def prepare_rope_freqs(self, frames, height, width, device):
         half = self.head_dim // 2
         widths = (half - 2 * (half // 3), half // 3, half // 3)
         axes = []
@@ -167,26 +185,29 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
             q = apply_projection_norm(phase.self_attn_norm_q, q).view(-1, self.num_heads, self.head_dim)
             k = apply_projection_norm(phase.self_attn_norm_k, k).view_as(q)
             v = v.view_as(q)
-        current_tokens = math.prod(grid_sizes)
-        if self.seq_parallel:
-            gathered_k = [torch.empty_like(k) for _ in range(dist.get_world_size(self.seq_p_group))]
-            gathered_v = [torch.empty_like(v) for _ in gathered_k]
-            dist.all_gather(gathered_k, k, self.seq_p_group)
-            dist.all_gather(gathered_v, v, self.seq_p_group)
-            k, v = torch.cat(gathered_k)[:current_tokens], torch.cat(gathered_v)[:current_tokens]
-        attention = self._self_attention(phase, q, k, v, grid_sizes, self_attn_cache)
-        output = phase.self_attn_o.apply(attention)
-        return output if self_attn_cache is None else (output, k, v)
+        k, v = self.gather_self_attn_kv(k, v, math.prod(grid_sizes))
+        attention = self.infer_self_attn_output(phase, q, k, v, grid_sizes, self_attn_cache)
+        return phase.self_attn_o.apply(attention)
 
-    def _self_attention(self, phase, q, k, v, grid_sizes, self_attn_cache=None):
+    def gather_self_attn_kv(self, key, value, token_count):
+        if not self.seq_parallel:
+            return key, value
+        world_size = dist.get_world_size(self.seq_p_group)
+        shape = (world_size * key.shape[0], *key.shape[1:])
+        gathered_key, gathered_value = key.new_empty(shape), value.new_empty(shape)
+        dist.all_gather_into_tensor(gathered_key, key.contiguous(), group=self.seq_p_group)
+        dist.all_gather_into_tensor(gathered_value, value.contiguous(), group=self.seq_p_group)
+        return gathered_key[:token_count], gathered_value[:token_count]
+
+    def infer_self_attn_output(self, phase, q, k, v, grid_sizes, self_attn_cache=None):
         if q.shape[0] == k.shape[0]:
             q, k = phase.rope.apply(q, k, self.key_freqs)
         else:
             q = phase.rope.apply_single(q, self.query_freqs)
             k = phase.rope.apply_single(k, self.key_freqs)
-        return self._attention(phase, q, k, v)
+        return self.apply_self_attention(phase, q, k, v)
 
-    def _attention(self, phase, q, k, v):
+    def apply_self_attention(self, phase, q, k, v):
         return phase.self_attn_1.apply(
             q=q,
             k=k,
@@ -198,70 +219,77 @@ class EdenLiveTransformerInfer(WanOffloadTransformerInfer):
         )
 
 
-class EdenLiveARTransformerInfer(EdenLiveARGraphMixin, EdenLiveTransformerInfer):
+class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerInfer):
+    """Cache raw K in ring slots and re-anchor RoPE for each visible window."""
+
     def __init__(self, config):
         super().__init__(config)
+        if config["self_attn_1_type"] in ("flash_attn2", "flash_attn3"):
+            self.self_attn_backend = PhysicalRoPERingAttention()
+        elif config["self_attn_1_type"] == "sage_attn2":
+            self.self_attn_backend = SageRoPERingAttention(profile="edenlive")
+        else:
+            raise ValueError("EdenLive AR requires SageAttention2 or FlashAttention2/3")
         self.cache_pools = {}
-        self.history_cache = {}
-        ar = config["ar_config"]
-        self.reuse_history = not config.get("cpu_offload", False) and not ar.get("kv_offload", False) and not ar.get("kv_quant") and ar.get("kv_cache_scheme", "fp") == "fp"
-        self.transposed_v_cache = hasattr(ATTN_WEIGHT_REGISTER[config["self_attn_1_type"]], "apply_pretransposed")
-        self.cross_kv_cache = {}
-        self.cuda_graph_stack = EdenLiveCUDAGraphStack() if config.get("use_cuda_graph", False) else None
-        self._graph_weight_key = None
+        self.kv_cache_manager.key_only = isinstance(self.self_attn_backend, SageRoPERingAttention)
+        self._cache_signature = None
         self._graph_cross_generation = 0
-        self._commit_weight_key = None
-        self._commit_kv_only_active = False
-        self._commit_kv_only_done = False
-        self._cache_update_kv_functions = {}
-        self.reuse_cross_kv = self.reuse_history and self.compile_backend == "default"
-        self.reuse_quantized_cross_kv = self.reuse_cross_kv and not self.seq_parallel and hasattr(ATTN_WEIGHT_REGISTER[config["cross_attn_1_type"]], "prepare_kv")
+        self.cache_commit_enabled &= not config.get("enable_cfg", False)
         self.cross_kv_compute = super().get_cross_kv
-        if self.use_compile and self.reuse_cross_kv:
+        self.image_cross_kv_compute = super().get_image_cross_kv
+        if self.use_compile and self.compile_backend == "default":
             self.cross_kv_compute = torch.compile(self.cross_kv_compute, dynamic=None, options=self.compile_options)
+            self.image_cross_kv_compute = torch.compile(self.image_cross_kv_compute, dynamic=None, options=self.compile_options)
+
+    def get_rope_frames(self, frames):
+        # Growing windows use an unchanged prefix of this table. Keeping its
+        # storage/revision stable avoids invalidating historical quantized K
+        # solely because the visible window gained another chunk.
+        return self.config["ar_config"]["local_attn_size"]
+
+    def initialize_kv_cache(self, latent_shape, ref_num_frames=None):
+        ar = self.config["ar_config"]
+        chunk, window, sink = ar["num_frame_per_chunk"], ar["local_attn_size"], ar["sink_size"]
+        if not 0 <= sink <= window - chunk or window % chunk or sink % chunk:
+            raise ValueError("EdenLive requires whole-chunk window and sink sizes with room for the current chunk")
+        frame_tokens = math.prod(size // patch for size, patch in zip(latent_shape[2:], self.config["patch_size"][1:]))
+        manager = self.kv_cache_manager
+        signature = window * frame_tokens, manager.tensor_num_heads, chunk * frame_tokens, sink * frame_tokens, manager.key_only, self.head_dim, manager.dtype, str(manager.device)
+        if signature != self._cache_signature:
+            self.reset_cuda_graph()
+            manager.self_attn_kv_caches.clear()
+            for branch in (True, False) if self.config["enable_cfg"] else (True,):
+                pool = manager.create_self_attn_kv_cache(branch, signature[0], num_heads=signature[1])
+                if manager.key_only:
+                    pool.configure_key_only(write_alignment=(chunk * frame_tokens,))
+                pool._init_kv_buffer()
+            self._cache_signature = signature
+        else:
+            manager.reset()
+        self.cache_pools = dict(manager.self_attn_kv_caches)
+        return latent_shape[1]
+
+    @torch.inference_mode(False)
+    def prepare_rope_freqs(self, frames, height, width, device):
+        freqs = super().prepare_rope_freqs(frames, height, width, device).squeeze(1)
+        return torch.cat((freqs.real, freqs.imag), dim=-1).float().contiguous()
 
     def infer(self, weights, pre_infer_out):
-        self._commit_kv_only_active = False
-        self._commit_kv_only_done = False
-        if self.reuse_cross_kv:
-            self.prepare_cross_kv(weights, pre_infer_out)
+        self.cache_update_done = False
+        self.current_pre = pre_infer_out
+        self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
+        self.prepare_condition_cache(weights, pre_infer_out)
         return super().infer(weights, pre_infer_out)
 
     def infer_non_blocks(self, weights, x, embed):
-        if getattr(self, "_commit_kv_only_done", False) and self.scheduler.cache_update:
-            # The AR model's commit-only path consumes only the updated cache.
+        if self.cache_update_done and self.scheduler.cache_update:
             return None
         return super().infer_non_blocks(weights, x, embed)
 
-    def _can_commit_kv_only(self, blocks, pre):
-        if (
-            not blocks
-            or len(blocks) != self.blocks_num
-            or self.config.get("cpu_offload", False)
-            or self.config.get("lazy_load", False)
-            or self.seq_parallel
-            or self.config.get("tensor_parallel", False)
-            or self.config.get("enable_cfg", False)
-            or self.config.get("cfg_parallel", False)
-            or self.config.get("lora_configs")
-            or self.config.get("lora_dynamic_apply", False)
-            or getattr(self, "has_post_adapter", False)
-            or self.has_image_context
-            or not self.reuse_history
-            or self.compile_backend != "default"
-            or pre.adapter_args.get("text_segments") is not None
-        ):
-            return False
-        key = tuple(id(block) for block in blocks)
-        if getattr(self, "_commit_weight_key", None) != key:
-            leaves = [leaf for block in blocks for _, leaf in block.named_weight_leaves()]
-            if any(getattr(leaf, "has_lora_branch", False) or getattr(leaf, "has_diff", False) or hasattr(leaf, "weight_diff") or hasattr(leaf, "bias_diff") for leaf in leaves):
-                return False
-            self._commit_weight_key = key
-        return True
+    def can_use_kv_only(self, blocks, pre_infer_out):
+        return self.scheduler.cache_update and WanAutoregressiveTransformerInfer.can_use_kv_only(self, blocks, pre_infer_out)
 
-    def infer_cache_update_kv(self, block, x, pre_infer_out):
-        """Produce the final layer's raw commit K/V without its unused suffix."""
+    def infer_kv_block(self, block, x, pre_infer_out):
         phase = block.compute_phases[0]
         shift, scale, _, _, _, _ = pre_infer_out.embed0.add(phase.modulation.tensor).chunk(6, dim=1)
         normalized = self.modulate_func(phase.norm1.apply(x), scale=scale, shift=shift).reshape_as(x)
@@ -272,186 +300,214 @@ class EdenLiveARTransformerInfer(EdenLiveARGraphMixin, EdenLiveTransformerInfer)
         else:
             k, v = group.apply(normalized)
             k = apply_projection_norm(phase.self_attn_norm_k, k)
-        return k.view(-1, self.num_heads, self.head_dim), v.view(-1, self.num_heads, self.head_dim)
+        key, value = k.view(-1, self.num_heads, self.head_dim), v.view(-1, self.num_heads, self.head_dim)
+        return self.gather_self_attn_kv(key, value, math.prod(pre_infer_out.grid_sizes.tuple))
 
-    def get_compiled_cache_update_kv(self, block_idx, block):
-        functions = getattr(self, "_cache_update_kv_functions", None)
-        if functions is None:
-            functions = self._cache_update_kv_functions = {}
-        cached = functions.get(block_idx)
-        if cached is not None and cached[0] is block:
-            return cached[1]
-
-        def compute(x, pre):
-            return self.infer_cache_update_kv(block, x, pre)
-
-        options = {"options": self.compile_options} if self.compile_options else {}
-        compiled = torch.compile(compute, dynamic=None, **options)
-        functions[block_idx] = (block, compiled)
-        return compiled
-
-    def prepare_cross_kv(self, weights, pre_infer_out):
+    def prepare_condition_cache(self, weights, pre_infer_out):
         branch = self.scheduler.infer_condition
-        context_id = pre_infer_out.adapter_args["context_id"]
-        # Segmented prompts must retain independent K means and V scales.
-        prepare_quantized = self.reuse_quantized_cross_kv and pre_infer_out.adapter_args.get("text_segments") is None
-        cache_key = (context_id, prepare_quantized)
-        cached = self.cross_kv_cache.get(branch)
-        if cached is None or cached[0] != cache_key:
-            context = pre_infer_out.context[-self.text_len :] if self.has_image_context else pre_infer_out.context
-            values = []
-            for block in weights.blocks:
-                phase = block.compute_phases[1]
-                kv = self.cross_kv_compute(phase, context)
-                values.append(phase.cross_attn_1.prepare_kv(*kv) if prepare_quantized else kv)
-            self.cross_kv_cache[branch] = (cache_key, values)
-            self._graph_cross_generation = getattr(self, "_graph_cross_generation", 0) + 1
+        name = branch, "text"
+        source = pre_infer_out.adapter_args["context_source"]
+        changed = self.cross_attn_kv_cache.set_context(name, source, cache_key=pre_infer_out.adapter_args["context_id"])
+        if self.has_image_context:
+            image_source = pre_infer_out.adapter_args["image_context_source"]
+            changed = self.cross_attn_kv_cache.set_context((branch, "image"), image_source) or changed
+        if changed:
+            self._graph_cross_generation += 1
+        if self.block_offload or not self.cross_attn_kv_cache.enabled or source.is_inference():
+            return
+        context = pre_infer_out.context[self.image_context_len :] if self.has_image_context else pre_infer_out.context
+        for layer_id, block in enumerate(weights.blocks):
+            if self.cross_attn_kv_cache.get(name, layer_id) is None:
+                self.cross_attn_kv_cache.store(name, layer_id, self.cross_kv_compute(block.compute_phases[1], context))
+            if self.has_image_context and self.cross_attn_kv_cache.get((branch, "image"), layer_id) is None:
+                image = pre_infer_out.context[: self.image_context_len]
+                kv = self.image_cross_kv_compute(block.compute_phases[1], image)
+                self.cross_attn_kv_cache.store((branch, "image"), layer_id, kv)
 
-    def run_block(self, block_idx, block, x, pre_infer_out):
+    def get_cross_kv(self, phase, context, layer_id=None):
+        layer_id = self.block_idx if layer_id is None else layer_id
+        name = self.scheduler.infer_condition, "text"
+        kv = self.cross_attn_kv_cache.get(name, layer_id)
+        if kv is None:
+            kv = self.cross_attn_kv_cache.store(name, layer_id, self.cross_kv_compute(phase, context))
+        return kv
+
+    def get_image_cross_kv(self, phase, context):
+        name = self.scheduler.infer_condition, "image"
+        kv = self.cross_attn_kv_cache.get(name, self.block_idx)
+        if kv is None:
+            kv = self.cross_attn_kv_cache.store(name, self.block_idx, self.image_cross_kv_compute(phase, context))
+        return kv
+
+    def prepare_rope_cache(self, phase, x, grid_sizes, layer):
+        ar = self.config["ar_config"]
+        frames, height, width = grid_sizes
+        frame_tokens = height * width
         pool = self.cache_pools[self.scheduler.infer_condition]
-        if getattr(self, "_commit_kv_only_active", False) and self.scheduler.cache_update and block_idx == self.blocks_num - 1:
-            compute = self.get_compiled_cache_update_kv(block_idx, block) if self.use_compile else lambda value, pre: self.infer_cache_update_kv(block, value, pre)
-            raw_k, raw_v = compute(x, pre_infer_out)
-            self.commit_kv(pool, block_idx, raw_k, raw_v, pre_infer_out.grid_sizes.tuple)
-            self._commit_kv_only_done = True
+        state = self.self_attn_backend.prepare_rope_ring(
+            pool,
+            layer,
+            cache_key=(self.scheduler.infer_condition, layer),
+            current_tokens=frames * frame_tokens,
+            visible_tokens=self.get_attention_frames(frames) * frame_tokens,
+            sink_tokens=ar["sink_size"] * frame_tokens,
+            freqs=self.key_freqs,
+            generation=self.scheduler.chunk_start,
+        )
+        return state
+
+    def finish_rope_cache(self, pool, layer, grid_sizes):
+        frames, height, width = grid_sizes
+        frame_tokens = height * width
+        end = pool.get_valid_length(layer)
+        visible_end = self.get_attention_frames(frames) * frame_tokens
+        evicted = max(0, end + frames * frame_tokens - visible_end)
+        update = KVCacheUpdate(visible_end - frames * frame_tokens, visible_end, 0, (self.scheduler.chunk_start + frames) * frame_tokens, self.config["ar_config"]["sink_size"] * frame_tokens, evicted)
+        if self.scheduler.cache_update:
+            pool.finish_attention(layer, update)
+            pool.roll_window(layer, update.sink_tokens, evicted)
+            pool.ring_layout(layer).record_write(visible_end)
+            pool.set_ends(layer, update.global_end, visible_end)
+        else:
+            pool.end_layer(layer)
+
+    def infer_self_attn_output(self, phase, q, k, v, grid_sizes, self_attn_cache):
+        return self.self_attn_backend.apply_rope_ring(
+            q,
+            k,
+            v,
+            self_attn_cache,
+            attention=phase.self_attn_1,
+            rope=phase.rope,
+            query_freqs=self.query_freqs,
+        )
+
+    def get_block_cross_kv(self, block, context, layer_id=None):
+        text = context[self.image_context_len :] if self.has_image_context else context
+        kv = self.get_cross_kv(block.compute_phases[1], text, layer_id)
+        if self.has_image_context:
+            self.block_idx = layer_id
+            kv += self.get_image_cross_kv(block.compute_phases[1], context[: self.image_context_len])
+        return kv
+
+    def infer_blocks(self, x, embed0, *cross_inputs, pre_infer_out, functions, caches):
+        pre = replace(pre_infer_out, x=x, embed0=embed0)
+        previous = self.current_pre
+        self.current_pre = pre
+        cross_count = 4 if self.has_image_context else 2
+        try:
+            for index, (function, cache) in enumerate(zip(functions, caches)):
+                x = function(x, pre, cross_inputs[cross_count * index : cross_count * (index + 1)], cache)
             return x
-        if self.config["ar_config"].get("kv_offload", False):
-            pool.begin_layer(block_idx)
-        grid_sizes = pre_infer_out.grid_sizes.tuple
-        cache = self.prepare_self_attn_cache(block.compute_phases[0], x, grid_sizes, block_idx)
-        cross_kv = self.cross_kv_cache[self.scheduler.infer_condition][1][block_idx] if self.reuse_cross_kv else None
-        x, raw_k, raw_v = super().run_block(block_idx, block, x, pre_infer_out, cross_kv, cache)
-        self.commit_kv(pool, block_idx, raw_k, raw_v, grid_sizes)
-        if self.config["ar_config"].get("kv_offload", False):
-            pool.end_layer(block_idx, next_prefetch=None)
+        finally:
+            self.current_pre = previous
+
+    def can_use_cuda_graph(self, blocks, x, pre_infer_out):
+        return self.cuda_graph_stack is not None and x.is_cuda
+
+    def infer_without_offload(self, blocks, x, pre_infer_out):
+        if self._ar_kv_offload:
+            for index, block in enumerate(blocks):
+                x = self.run_block(index, block, x, pre_infer_out)
+            return x
+        graph_blocks = blocks[:-1] if self.cache_update_only else blocks
+        if graph_blocks:
+            grid = pre_infer_out.grid_sizes.tuple
+            pool = self.cache_pools[self.scheduler.infer_condition]
+            caches = tuple(self.prepare_rope_cache(block.compute_phases[0], x, grid, index) for index, block in enumerate(graph_blocks))
+            pool.upload_write_metadata()
+            cross_kv = tuple(self.get_block_cross_kv(block, pre_infer_out.context, index) for index, block in enumerate(graph_blocks))
+            x = self.run_prepared_blocks(graph_blocks, x, pre_infer_out, caches, cross_kv, tuple(range(len(graph_blocks))), variant="cache_commit" if self.cache_update_only else "denoise")
+            for index in range(len(graph_blocks)):
+                self.finish_rope_cache(pool, index, grid)
+        if self.cache_update_only:
+            last = len(blocks) - 1
+            x = self.run_block(last, blocks[last], x, pre_infer_out)
         return x
 
-    def _visible_frames(self, frames):
+    def run_prepared_blocks(self, blocks, x, pre_infer_out, caches, cross_kv, layer_ids, *, variant):
+        functions = tuple(self.get_compiled_block(layer, block) if self.use_compile else partial(self.infer_block, block) for layer, block in zip(layer_ids, blocks))
+        runner = partial(self.infer_blocks, pre_infer_out=pre_infer_out, functions=functions, caches=caches)
+        inputs = x, pre_infer_out.embed0, *(tensor for cross in cross_kv for tensor in cross)
+        if not self.can_use_cuda_graph(blocks, x, pre_infer_out):
+            return runner(*inputs)
+        branch = self.scheduler.infer_condition
+        bindings = (*(tensor for cache in caches for tensor in cache.bindings), self.query_freqs, *self.get_graph_weight_bindings(blocks))
+        mutated = tuple(tensor for layer in layer_ids for tensor in self.self_attn_backend.write_views((branch, layer)))
+        cross_version = branch, self.cross_attn_kv_cache.generation, self._graph_cross_generation
+        kinds = ("text", "image") if self.has_image_context else ("text",)
+        cross_versions = []
+        for layer in layer_ids:
+            for kind in kinds:
+                cached = kind == "text" and self.cross_attn_kv_cache.get((branch, kind), layer) is not None
+                for projection in range(2):
+                    # Offloaded layers can reuse a source buffer; image context can change in place.
+                    cross_versions.append((*cross_version, layer, kind, projection) if cached else None)
+        segments = pre_infer_out.adapter_args.get("text_segments")
+        layout = (
+            pre_infer_out.grid_sizes.tuple,
+            self.get_attention_frames(pre_infer_out.grid_sizes.tuple[0]),
+            tuple(pre_infer_out.embed0.shape),
+            None if segments is None else tuple(segments),
+            pre_infer_out.adapter_args.get("seq_start", 0),
+            tuple(getattr(cache, "graph_key", None) for cache in caches),
+        )
+        return self.cuda_graph_stack.run(
+            (tuple(id(block) for block in blocks), layout, branch),
+            runner,
+            inputs,
+            bindings=bindings,
+            mutated_buffers=mutated,
+            input_versions=(None, None, *cross_versions),
+            variant=(branch, variant, layout),
+            memory_pool=self.get_cuda_graph_pool(x.device),
+        )
+
+    def infer_cache_commit(self, x, embed0, *, block_idx, block, pre_infer_out, cache):
+        pre = replace(pre_infer_out, x=x, embed0=embed0)
+        key, value = self.run_kv_block(block_idx, block, x, pre)
+        self.self_attn_backend.update_rope_ring(key, value, cache)
+        return x
+
+    def run_block(self, block_idx, block, x, pre_infer_out):
+        self.block_idx = block_idx
+        branch = self.scheduler.infer_condition
+        pool = self.cache_pools[branch]
+        grid = pre_infer_out.grid_sizes.tuple
+        cache = self.prepare_rope_cache(block.compute_phases[0], x, grid, block_idx)
+        pool.upload_write_metadata()
+        if self.cache_update_only and block_idx == self.blocks_num - 1:
+            runner = partial(self.infer_cache_commit, block_idx=block_idx, block=block, pre_infer_out=pre_infer_out, cache=cache)
+            if self.can_use_cuda_graph((block,), x, pre_infer_out):
+                x = self.cuda_graph_stack.run(
+                    (id(block), grid, getattr(cache, "graph_key", None)),
+                    runner,
+                    (x, pre_infer_out.embed0),
+                    bindings=(*cache.bindings, *self.get_graph_weight_bindings((block,))),
+                    mutated_buffers=self.self_attn_backend.write_views((branch, block_idx)),
+                    variant=(branch, "cache_kv", grid, self.get_attention_frames(grid[0]), getattr(cache, "graph_key", None)),
+                    memory_pool=self.get_cuda_graph_pool(x.device),
+                )
+            else:
+                x = runner(x, pre_infer_out.embed0)
+            self.cache_update_done = True
+        else:
+            cross_kv = self.get_block_cross_kv(block, pre_infer_out.context, block_idx)
+            x = self.run_prepared_blocks((block,), x, pre_infer_out, (cache,), (cross_kv,), (block_idx,), variant=("block", block_idx))
+        self.finish_rope_cache(pool, block_idx, grid)
+        return x
+
+    def get_attention_frames(self, frames):
         ar = self.config["ar_config"]
         return min(self.scheduler.chunk_start, ar["local_attn_size"] - ar["num_frame_per_chunk"]) + frames
 
-    def get_compile_block_key(self, block_idx, block):
-        return block_idx
-
     def clear_request_state(self):
-        # A graph binds history and RoPE storage. Reset their validity, while
-        # retaining the allocations across requests; text KV is staged by the
-        # graph helper and refreshed from the next request's cache.
-        graph = getattr(self, "cuda_graph_stack", None)
-        history = self.history_cache if graph is not None else {}
-        freqs = self.freqs_cache if graph is not None else {}
-        super().clear_request_state()
-        self.cache_pools = {}
-        self.history_cache = {key: (-1, keys, values) for key, (_, keys, values) in history.items()}
+        freqs = self.freqs_cache
+        EdenLiveTransformerInfer.clear_request_state(self)
+        WanCausalTransformerInfer.clear_request_state(self)
         self.freqs_cache = freqs
-        self.cross_kv_cache = {}
-        self._graph_weight_key = None
-        self._commit_weight_key = None
-        self._commit_kv_only_active = False
-        self._commit_kv_only_done = False
+        self.cache_pools = {}
 
-    def invalidate_cuda_graph(self):
-        if self.cuda_graph_stack is not None:
-            self.cuda_graph_stack.clear()
-        self._graph_weight_key = None
-        self._commit_weight_key = None
-        self._commit_kv_only_done = False
-        if hasattr(self, "_cache_update_kv_functions"):
-            self._cache_update_kv_functions.clear()
-
-    def prepare_self_attn_cache(self, phase, x, grid_sizes, layer):
-        frames, height, width = grid_sizes
-        current_tokens = math.prod(grid_sizes)
-        pool = self.cache_pools[self.scheduler.infer_condition]
-        end = pool.get_local_end(layer)
-        sink = self.config["ar_config"]["sink_size"] * height * width
-        capacity = self.config["ar_config"]["local_attn_size"] * height * width
-        query_start = min(self.scheduler.chunk_start, self.config["ar_config"]["local_attn_size"] - self.config["ar_config"]["num_frame_per_chunk"])
-        visible_capacity = (query_start + frames) * height * width
-        visible_evict = max(0, end + current_tokens - visible_capacity)
-        history_key = (self.scheduler.infer_condition, layer)
-        cached = self.history_cache.get(history_key) if self.reuse_history else None
-        if self.reuse_history:
-            if cached is not None and cached[1].shape[0] != capacity:
-                # Warmup may visit a different resolution before the target.
-                self.invalidate_cuda_graph()
-                cached = None
-            if cached is None:
-                key_storage = x.new_empty(capacity, self.num_heads, self.head_dim)
-                value_storage = make_transposed_v(key_storage[:0].unsqueeze(0), capacity) if self.transposed_v_cache else torch.empty_like(key_storage)
-                cached = (-1, key_storage, value_storage)
-            _, key_storage, value_storage = cached
-            keys = key_storage[:visible_capacity]
-            if self.transposed_v_cache:
-                padded = (visible_capacity + 127) // 128 * 128
-                values = value_storage.view(-1)[: self.num_heads * self.head_dim * padded].view(1, self.head_dim, self.num_heads, padded)
-            else:
-                values = value_storage[:visible_capacity]
-            if cached[0] != self.scheduler.chunk_start:
-                if self.transposed_v_cache:
-                    # Clear the partial block before writing its valid permuted rows.
-                    values[..., visible_capacity // 128 * 128 :].zero_()
-                ranges = ((0, sink), (sink + visible_evict, end)) if visible_evict else ((0, end),)
-                offset = 0
-                for left, right in ranges:
-                    target_k = keys[offset : offset + right - left]
-                    target_v = target_k if self.transposed_v_cache else values[offset : offset + right - left]
-                    pool.v_cache(layer, left, right, out=target_v)
-                    if self.transposed_v_cache:
-                        # K storage is scratch for V until the ordered copy below.
-                        update_transposed_v(target_v.unsqueeze(0), values, offset)
-                    pool.k_cache(layer, left, right, out=target_k)
-                    offset += right - left
-                if offset:
-                    keys[:offset].copy_(phase.rope.apply_single(keys[:offset], self.key_freqs[:offset]))
-                self.history_cache[history_key] = (self.scheduler.chunk_start, key_storage, value_storage)
-        else:
-            history_k = pool.k_cache(layer, 0, end)
-            history_v = pool.v_cache(layer, 0, end)
-            if visible_evict:
-                history_k = torch.cat((history_k[:sink], history_k[sink + visible_evict :]))
-                history_v = torch.cat((history_v[:sink], history_v[sink + visible_evict :]))
-            keys = x.new_empty(visible_capacity, self.num_heads, self.head_dim)
-            values = torch.empty_like(keys)
-            keys[: history_k.shape[0]].copy_(history_k)
-            values[: history_v.shape[0]].copy_(history_v)
-        return keys, values
-
-    def commit_kv(self, pool, layer, k, v, grid_sizes):
-        if self.scheduler.cache_update:
-            frames, height, width = grid_sizes
-            current_tokens = math.prod(grid_sizes)
-            end = pool.get_local_end(layer)
-            capacity = self.config["ar_config"]["local_attn_size"] * height * width
-            evict = max(0, end + current_tokens - capacity)
-            if pool.get_global_end(layer) != self.scheduler.chunk_start * height * width:
-                raise RuntimeError("EdenLive cache commit cursor does not match the chunk")
-            if evict:
-                sink = self.config["ar_config"]["sink_size"] * height * width
-                pool.roll_window(layer, sink, evict)
-            end -= evict
-            pool.store_kv(k, v, end, end + current_tokens, layer)
-            pool.set_ends(layer, (self.scheduler.chunk_start + frames) * height * width, end + current_tokens)
-
-    def _self_attention(self, phase, q, k, v, grid_sizes, self_attn_cache):
-        keys, values = self_attn_cache
-        current_tokens = k.shape[0]
-        if self.reuse_history:
-            # FlashInfer rotates in place; retain raw K for the graph-external commit.
-            rotated_k = k.clone()
-            if q.shape[0] == k.shape[0]:
-                q, rotated_k = phase.rope.apply(q, rotated_k, self.query_freqs)
-            else:
-                q = phase.rope.apply_single(q, self.query_freqs)
-                rotated_k = phase.rope.apply_single(rotated_k, self.key_freqs[-current_tokens:])
-            keys[-current_tokens:].copy_(rotated_k)
-            if self.transposed_v_cache:
-                update_transposed_v(v.unsqueeze(0), values, keys.shape[0] - current_tokens)
-                return phase.self_attn_1.apply_pretransposed(q, keys, values)
-            else:
-                values[-current_tokens:].copy_(v)
-                return self._attention(phase, q, keys, values)
-        else:
-            keys[-current_tokens:].copy_(k)
-            values[-current_tokens:].copy_(v)
-            return super()._self_attention(phase, q, keys, values, grid_sizes)
+    def reset_cuda_graph(self):
+        super().reset_cuda_graph()
+        self.cache_update_done = False

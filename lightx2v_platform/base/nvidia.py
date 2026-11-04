@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.distributed as dist
 
@@ -34,7 +36,10 @@ class CudaDevice:
     def init_parallel_env():
         if ProcessGroupNCCL is None:
             raise RuntimeError("ProcessGroupNCCL is not available. Please check your runtime environment.")
+        rank = dist.get_rank() if dist.is_initialized() else int(os.environ.get("RANK", "0"))
+        torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", rank)))
+        if dist.is_initialized():
+            return
         pg_options = ProcessGroupNCCL.Options()
         pg_options.is_high_priority_stream = True
         dist.init_process_group(backend="nccl", pg_options=pg_options)
-        torch.cuda.set_device(dist.get_rank())

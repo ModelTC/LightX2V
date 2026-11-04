@@ -60,7 +60,7 @@ torch::Tensor fp8_conv3d_f32_accum_sm120(
 /*
  * From csrc/gemm
  */
-torch::Tensor cutlass_scaled_fp8_mm_f16_accum_sm120(
+torch::Tensor cutlass_scaled_fp8_mm_f32_accum(
     torch::Tensor activation,
     torch::Tensor weight,
     torch::Tensor activation_scale,
@@ -68,7 +68,15 @@ torch::Tensor cutlass_scaled_fp8_mm_f16_accum_sm120(
     torch::ScalarType out_dtype,
     c10::optional<torch::Tensor> const& bias = c10::nullopt);
 
-torch::Tensor cutlass_scaled_fp8_mm_f16_accum_with_config_sm120(
+torch::Tensor cutlass_scaled_fp8_mm_f16_accum(
+    torch::Tensor activation,
+    torch::Tensor weight,
+    torch::Tensor activation_scale,
+    torch::Tensor weight_scale,
+    torch::ScalarType out_dtype,
+    c10::optional<torch::Tensor> const& bias = c10::nullopt);
+
+torch::Tensor cutlass_scaled_fp8_mm_f16_accum_with_config(
     torch::Tensor activation,
     torch::Tensor weight,
     torch::Tensor activation_scale,

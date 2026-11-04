@@ -7,7 +7,7 @@ LightX2V 提供 `lightx2v.utils.torch_trace_profiler` 模块，基于 PyTorch Pr
 - **TensorBoard** 格式（`.pt.trace.json`，在 TensorBoard 的 **PYTORCH PROFILER** 页查看）
 - **Chrome Trace** 格式（`.json`，可用 Perfetto 或 Chrome Tracing 查看）
 
-在目标函数的**调用处**使用 `TorchTraceProfileContext` 即可采集；未包裹的调用不受影响。每个进程全局只允许 profile **一个**调用点（首次执行者生效）。
+在目标函数的**调用处**使用 `TorchTraceProfileContext` 即可采集；未包裹的调用不受影响。每个进程在一轮采集会话中，仅采集**首次执行的调用点**；采集完成后，后续调用正常执行。需要再次采集时，调用 `TorchTraceProfiler.reset_session()`。
 
 ---
 
@@ -17,7 +17,7 @@ LightX2V 提供 `lightx2v.utils.torch_trace_profiler` 模块，基于 PyTorch Pr
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `name` | `None` | 调用点标签，用于日志与全局唯一性识别；省略时使用被调用函数的 qualified name |
+| `name` | `None` | 调用点标签，用于日志与调用点识别；省略时使用被调用函数的 qualified name |
 | `profile_format` | `tensorboard` | `tensorboard` 或 `chrome` |
 | `tb_dir` | `{cwd}/save_results/torch_profile` | TensorBoard logdir |
 | `chrome_path` | `{cwd}/save_results/trace.json` | Chrome trace 输出路径（`profile_format=chrome` 时生效） |
@@ -42,7 +42,7 @@ LightX2V 提供 `lightx2v.utils.torch_trace_profiler` 模块，基于 PyTorch Pr
 
 ### 1. 采集 trace
 
-以 Qwen Image 为例，在 `qwen_image_runner.py` 顶部取消注释 import，并在 `run()` 的 `infer_main` 调用处取消注释 profile 代码（可按需修改参数），然后正常运行推理（如 `scripts/qwen_image/qwen_image_i2i_2511.sh`）：
+以 Qwen Image 为例，在 `lightx2v/models/runners/qwen_image/qwen_image_runner.py` 顶部导入 `TorchTraceProfileContext`，并在 `run()` 的 `infer_main` 调用处，用以下代码替换 `self.model.infer(self.inputs)`，保留调度器和进度更新逻辑：
 
 ```python
 from lightx2v.utils.torch_trace_profiler import TorchTraceProfileContext
@@ -56,7 +56,9 @@ with TorchTraceProfileContext(
     profile.run(self.model.infer, self.inputs)
 ```
 
-推理结束后日志会打印 trace 路径及查看命令。
+首次采集会在同一个去噪步骤内重复执行 `model.infer`，默认 **5 次**；选择调用点时需考虑可变状态和副作用。后续步骤即使新建 context，也只正常执行一次目标函数。
+
+然后正常运行推理（如 `scripts/qwen_image/qwen_image_i2i_2511.sh`），采集结束后日志会打印 trace 路径及查看命令。
 
 ### 2. 查看 TensorBoard
 
@@ -71,7 +73,7 @@ pip install tensorboard torch-tb-profiler
 在 **trace 文件所在的环境** 启动 TensorBoard（logdir 与构造参数 tb_dir 一致）：
 
 ```bash
-tensorboard --logdir save_results/torch_profile --port 16006 --bind_all
+tensorboard --logdir save_results/torch_profile --port 16006 --host 127.0.0.1
 ```
 
 浏览器打开：
@@ -86,28 +88,24 @@ http://127.0.0.1:16006/#pytorch_profiler
 
 只要 TensorBoard 跑在远程机器上，而浏览器在本地，就需要把远程端口转到本地。
 
-在 IDE **Ports** 面板转发远程的 `16006`（或你指定的 `TENSORBOARD_PORT`），再在本地浏览器打开 `http://127.0.0.1:16006/#pytorch_profiler`。
+在 IDE **Ports** 面板转发远程的 `16006`（或启动 TensorBoard 时指定的端口），再在本地浏览器打开 `http://127.0.0.1:16006/#pytorch_profiler`。
 
 #### 推理在 Docker 内
 
-trace 写在容器文件系统里，宿主机上直接 `tensorboard --logdir ...` 读不到容器内的 logdir；且容器内 TensorBoard 监听的是容器网络地址，宿主机 `127.0.0.1:16006` 默认也访问不到。
-
-推荐使用 bridge 脚本（需显式指定容器名与 logdir，示例见脚本头部注释）：
+若 trace 输出到宿主机挂载目录，可直接在宿主机读取。否则先复制到宿主机，再启动 TensorBoard。下例需替换容器名和容器内的绝对路径：
 
 ```bash
-TENSORBOARD_CONTAINER=wyr_lightx2v_h100_202605 \
-TORCH_PROFILE_TB_DIR=/data/nvme0/wangyingrui/LightX2V/save_results/torch_profile \
-bash /data/nvme0/wangyingrui/wyr_scripts/run_tensorboard_docker_bridge.sh
+docker cp lightx2v-container:/workspace/LightX2V/save_results/torch_profile ./torch_profile
+tensorboard --logdir ./torch_profile --port 16006 --host 127.0.0.1
 ```
 
-若代码里使用 `tb_dir="save_results/torch_profile"` 且在 LightX2V repo 根目录运行推理，则 `TORCH_PROFILE_TB_DIR` 通常为 `{LightX2V}/save_results/torch_profile` 的**容器内绝对路径**。
+若代码使用 `tb_dir="save_results/torch_profile"` 且在仓库根目录运行推理，容器内路径就是 `{LightX2V}/save_results/torch_profile`。
 
-脚本会：
+也可以在容器内运行 TensorBoard：
 
-1. 在推理同一容器内启动 TensorBoard（`--logdir` 为 `TORCH_PROFILE_TB_DIR`）
-2. 在宿主机启动 TCP 代理，把 `0.0.0.0:16006` 转发到容器内 TB 端口
-
-若 logdir 下没有 `*.pt.trace.json`，脚本会打印 WARNING。
+1. 创建容器时映射端口，例如 `-p 127.0.0.1:16006:16006`。
+2. 在容器内启动 TensorBoard，使用容器内的 logdir，并将 `--host 127.0.0.1` 替换为 `--bind_all`，两者不能同时使用。
+3. 宿主机为远程机器时，再按上面的 Remote SSH 步骤转发端口。
 
 ### 3. 查看 Chrome trace
 
@@ -144,24 +142,23 @@ with TorchTraceProfileContext(
     profile.run(my_forward, arg1, arg2)
 ```
 
-首次执行该调用点时，会按 schedule **重复调用**目标函数（默认 5 次：wait=1 / warmup=3 / active=1），每轮末尾 `prof.step()`，并在 active 阶段导出 trace。
+每轮采集会话中，首次执行 `.run()` 时，会按 schedule **重复调用**目标函数（默认 5 次：wait=1 / warmup=3 / active=1），每轮末尾 `prof.step()`，并在 active 阶段导出 trace。
 
 要点：
 
 - **开关在调用处**：想 profile 哪段逻辑，就在哪行调用外包一层；评测完删除或注释即可
-- **全局唯一**：每个进程只允许 profile 一个调用点；若多处写了 context，仅**首次执行**的那个会采集，其余打 log 并正常执行
-- 采集完成后，后续调用恢复为单次正常执行
-- 需要再次采集：`TorchTraceProfiler.reset_session()`
+- **进程级会话**：每轮只采集首次执行的调用点；其他调用点及采集完成后的调用正常执行一次，新建 context 不会重新采集
+- 需要再次采集：在上一次采集结束后调用 `TorchTraceProfiler.reset_session()`；随后首次执行的调用点开启新一轮采集，已有 context 也可复用
 - 需要 Python 调用栈：构造时设 `with_stack=True`
 - 子区间分析：在代码里用 `torch.profiler.record_function("my_region")` 包裹目标代码
 
-Qwen Image 参考实现：`lightx2v/models/runners/qwen_image/qwen_image_runner.py` 的 `run()` 中 `infer_main` 调用处（见注释示例）。
+Qwen Image 接入位置：`lightx2v/models/runners/qwen_image/qwen_image_runner.py` 的 `run()` 中 `infer_main` 调用处，见快速开始示例。
 
 ---
 
 ## Schedule 说明
 
-默认 schedule 为 **wait=1 / warmup=3 / active=1**（共 5 步）：
+默认 schedule 为 **wait=1 / warmup=3 / active=1**。下图的 step 表示目标函数的重复调用次数：
 
 ```
 step 1        : wait    — 不采集
@@ -189,12 +186,12 @@ step 5        : active  — 采集并导出 trace
 
 ### Remote SSH 下 localhost 无响应
 
-TensorBoard 已在远程（或容器已桥接到宿主机）监听 `--bind_all` 后，在 IDE **Ports** 转发对应端口；与是否在 Docker 内无关。
+确认 TensorBoard 已在远程宿主机监听，然后在 IDE **Ports** 转发对应端口。若 TensorBoard 在 Docker 内，先确认容器端口已映射到宿主机。
 
 ### Docker 内 TB 打不开 / logdir 为空
 
-- 确认 TB 与推理在**同一容器**，且 `--logdir` 为容器内路径
-- 确认宿主机已 `-p` 映射或存在到容器 IP 的 TCP 代理
+- 在宿主机查看时，确认 trace 已复制出来或通过挂载目录可见
+- 在容器内运行 TensorBoard 时，确认 `--logdir` 为容器内路径，且端口已映射到宿主机
 
 ### Trace 里点 GPU kernel 只有 C++ 栈、没有 Python 栈
 
@@ -203,7 +200,7 @@ TensorBoard 已在远程（或容器已桥接到宿主机）监听 `--bind_all` 
 
 ### 共用机器端口冲突
 
-为每位使用者指定不同 `tensorboard_port`（如 `16006`、`26006`）。
+为每位使用者在 TensorBoard 启动命令中指定不同的 `--port`（如 `16006`、`26006`），并同步修改端口映射或转发。构造参数 `tensorboard_port` 只影响日志中的提示。
 
 ---
 
@@ -212,4 +209,4 @@ TensorBoard 已在远程（或容器已桥接到宿主机）监听 `--bind_all` 
 | 文件 | 说明 |
 |------|------|
 | `lightx2v/utils/torch_trace_profiler.py` | 核心模块 |
-| `lightx2v/models/runners/qwen_image/qwen_image_runner.py` | Qwen Image 调用处注释示例 |
+| `lightx2v/models/runners/qwen_image/qwen_image_runner.py` | Qwen Image 接入位置 |

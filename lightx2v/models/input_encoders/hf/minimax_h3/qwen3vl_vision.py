@@ -173,7 +173,8 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
         position_ids = _vision_position_ids(grid_thw, self.spatial_merge_size)
         cu_seqlens = _vision_cu_seqlens(grid_thw)
         hidden_states = self.patch_embed(pixels)
-        pos_embed = (self.pos_embed(indices) * weights[:, :, None]).sum(0)
+        weighted_positions = self.pos_embed(indices) * weights.to(self.pos_embed.weight.dtype)[:, :, None]
+        pos_embed = weighted_positions[0] + weighted_positions[1] + weighted_positions[2] + weighted_positions[3]
         hidden_states = hidden_states + pos_embed.to(hidden_states.dtype)
         rotary = (position_ids.unsqueeze(-1) * self.rotary_inv_freq.to(position_ids.device)).flatten(1)
         rotary = torch.cat((rotary, rotary), dim=-1)

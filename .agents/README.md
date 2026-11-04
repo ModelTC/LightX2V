@@ -1,6 +1,6 @@
 # Codex skills
 
-`skills/` 包含上游的 8 个顶层分组和本地新增的静态 block 常驻权重 skill，共 9 个顶层分组、25 个可调用 skill 入口。Intel XPU 的两个子入口和内核 skills 保持嵌套组织；每个可调用入口的目录名与 frontmatter 的 `name` 一致。详细流程、示例和历史资产保留在各 skill 的 `references/`、`assets/` 中，按任务需要读取。
+`skills/` 共 12 个顶层分组、28 个可调用 skill 入口，包括模型接入、性能工具流程与 Intel GPU 内核。Intel XPU 的两个子入口和内核 skills 保持嵌套组织；每个可调用入口的目录名与 frontmatter 的 `name` 一致。详细流程、示例和历史资产保留在各 skill 的 `references/`、`assets/` 中，按任务需要读取。
 
 ```text
 skills/
@@ -12,12 +12,25 @@ skills/
 ├── support-contiguous-block-offload/
 ├── support-cpu-block-offload/
 ├── support-static-block-residency/
+├── benchmark-core-ops/
+├── profile-model-module/
+├── benchmark-module-parallelism/
 └── support-model-compile/
 ```
 
-上游的 24 个 skill 入口沿用 `policy.allow_implicit_invocation: false`，通过 `$skill-name` 显式调用。新增的 `support-static-block-residency` 保留原有自动选择设置，也支持显式调用。
+上游的 24 个 skill 入口沿用 `policy.allow_implicit_invocation: false`，通过 `$skill-name` 显式调用。`support-static-block-residency` 和三个性能工具 skill 保留默认自动选择，也支持显式调用。
 
 在 LightX2V 仓库根目录或子目录启动 Codex，通过 `/skills` 查看，或用 `$skill-name` 指定入口。Codex 的仓库 skill 搜索从当前工作目录向上至仓库根目录；在 LightX2V 的父目录启动不会因此自动发现子仓库的 skills。发现更新未显示时重启 Codex。规则见 [官方 skill 文档](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)。
+
+## 性能工具
+
+| 任务 | 入口 |
+|---|---|
+| 核心算子后端比较，含独立 SP attention 调优 | [benchmark-core-ops](skills/benchmark-core-ops/SKILL.md) |
+| 真实函数/模块性能采集与分析，含多 rank | [profile-model-module](skills/profile-model-module/SKILL.md) |
+| 同一完整模块的 TP/SP 执行方案比较 | [benchmark-module-parallelism](skills/benchmark-module-parallelism/SKILL.md) |
+
+任务按比较对象选择入口；模块并行比较按需复用 SP 算子筛选和模块分析。三个入口沿用 [tools 正式导航](../tools/AGENTS.md)及已有报告模板；模型特有输入与状态接线由当前任务补齐。
 
 ## 模型与推理
 

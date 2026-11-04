@@ -796,6 +796,9 @@ def _norm_infer_kernel(
     HAS_BIAS: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
+    # Dynamo lifts Python floats as FP64 scalars. Keep the reduction and
+    # normalization in FP32 even when eps arrives through a compiled graph.
+    eps = tl.cast(eps, tl.float32)
     row = tl.program_id(0)
     X += row * stride_x_row
     Y += row * stride_y_row

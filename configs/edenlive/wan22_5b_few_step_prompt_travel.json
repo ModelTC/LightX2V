@@ -26,7 +26,7 @@
         "num_frame_per_chunk": 3,
         "local_attn_size": 18,
         "sink_size": 6,
-        "kv_cache_scheme": "fp",
+        "kv_cache_scheme": "rolling",
         "step_kv_cache": false,
         "denoising_step_list": [
             1000,

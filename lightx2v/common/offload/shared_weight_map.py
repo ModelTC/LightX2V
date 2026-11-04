@@ -17,8 +17,12 @@ from typing import Generic, TypeVar
 _ValueT = TypeVar("_ValueT")
 
 
-class SharedWeightViewMap(Mapping[str, _ValueT], Generic[_ValueT]):
-    """Combine consumable private values with persistent shared tensor views."""
+class PinnedWeightViewMap(Mapping[str, _ValueT], Generic[_ValueT]):
+    """Combine ordinary values with persistent pinned arena views.
+
+    The arena may be rank-local or shared across processes. Existing shared
+    loaders retain the same constructor and consumption contract.
+    """
 
     def __init__(
         self,
@@ -69,6 +73,10 @@ class SharedWeightViewMap(Mapping[str, _ValueT], Generic[_ValueT]):
 
     def __len__(self) -> int:
         return len(self._private) + len(self._shared)
+
+
+# Preserve the public name used by the existing shared checkpoint adapters.
+SharedWeightViewMap = PinnedWeightViewMap
 
 
 def consume_weight(

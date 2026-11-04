@@ -71,32 +71,35 @@ set(LIGHTX2V_KERNEL_CUDA_FLAGS
 )
 
 
-list(APPEND LIGHTX2V_KERNEL_CUDA_FLAGS
-    # "-gencode=arch=compute_90,code=sm_90"
-    # "-gencode=arch=compute_90a,code=sm_90a"
-    # "-gencode=arch=compute_100,code=sm_100"
-    # "-gencode=arch=compute_100a,code=sm_100a"
-    # "-gencode=arch=compute_120,code=sm_120"
-    "-gencode=arch=compute_120a,code=sm_120a"
-)
-
+set(LIGHTX2V_GPU_ARCH "120a" CACHE STRING "Kernel target: 90a (Hopper) or 120a (Blackwell)")
+set_property(CACHE LIGHTX2V_GPU_ARCH PROPERTY STRINGS "90a" "120a")
+list(APPEND LIGHTX2V_KERNEL_CUDA_FLAGS "-gencode=arch=compute_${LIGHTX2V_GPU_ARCH},code=sm_${LIGHTX2V_GPU_ARCH}")
 
 set(SOURCES
-    "csrc/conv/fp8_conv3d_kernels_sm120.cu"
-    "csrc/gemm/fp8_f16_accum_scaled_mm_kernels_sm120.cu"
-    "csrc/gemm/nvfp4_scaled_mm_kernels_sm120.cu"
-    "csrc/gemm/nvfp4_quant_kernels_sm120.cu"
-    "csrc/gemm/mxfp4_quant_kernels_sm120.cu"
-    "csrc/gemm/mxfp8_quant_kernels_sm120.cu"
-    "csrc/gemm/mxfp6_quant_kernels_sm120.cu"
-    "csrc/gemm/mxfp4_scaled_mm_kernels_sm120.cu"
-    "csrc/gemm/mxfp6_mxfp8_scaled_mm_kernels_sm120.cu"
-    "csrc/gemm/mxfp8_scaled_mm_kernels_sm120.cu"
+    "csrc/gemm/fp8_f16_accum_scaled_mm.cu"
     "csrc/kvcache/kv_dequant_cuda.cu"
     "csrc/common_extension.cc"
 )
 
 Python_add_library(common_ops MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
+
+if(LIGHTX2V_GPU_ARCH STREQUAL "90a")
+    target_compile_definitions(common_ops PRIVATE LIGHTX2V_BUILD_SM90=1)
+elseif(LIGHTX2V_GPU_ARCH STREQUAL "120a")
+    target_sources(common_ops PRIVATE
+        "csrc/conv/fp8_conv3d_kernels_sm120.cu"
+        "csrc/gemm/nvfp4_scaled_mm_kernels_sm120.cu"
+        "csrc/gemm/nvfp4_quant_kernels_sm120.cu"
+        "csrc/gemm/mxfp4_quant_kernels_sm120.cu"
+        "csrc/gemm/mxfp8_quant_kernels_sm120.cu"
+        "csrc/gemm/mxfp6_quant_kernels_sm120.cu"
+        "csrc/gemm/mxfp4_scaled_mm_kernels_sm120.cu"
+        "csrc/gemm/mxfp6_mxfp8_scaled_mm_kernels_sm120.cu"
+        "csrc/gemm/mxfp8_scaled_mm_kernels_sm120.cu"
+    )
+else()
+    message(FATAL_ERROR "LIGHTX2V_GPU_ARCH must be 90a or 120a")
+endif()
 
 message(STATUS "LIGHTX2V_KERNEL_CUDA_FLAGS: ${LIGHTX2V_KERNEL_CUDA_FLAGS}")
 

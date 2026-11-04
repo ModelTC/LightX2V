@@ -8,6 +8,7 @@ except ImportError:
 
 import torch
 
+from lightx2v.utils import workload_stats
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
@@ -220,6 +221,16 @@ class Svg2AttnWeight(AttnWeightTemplate):
         v = v.reshape(B * H, S, D)
         o = wrapper.run(q, k, v)  # [num_qo_heads, qo_len, head_dim]
         o = o.reshape(B, H, S, D)
+        if workload_stats.enabled("attention"):
+            workload_stats.record_sparse_attn(
+                q.reshape(B, H, S, D),
+                k.reshape(B, H, S, D),
+                v.reshape(B, H, S, D),
+                block_mask_map.reshape(B, H, qc_num, kc_num),
+                operator="svg2_attn",
+                q_block_sizes=block_row_sz.reshape(B, H, qc_num),
+                k_block_sizes=block_col_sz.reshape(B, H, kc_num),
+            )
         return o
 
     def semantic_aware_permutation(self, query, key, value):

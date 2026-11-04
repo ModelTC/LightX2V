@@ -77,6 +77,12 @@ class BaseRunner(ABC):
         if self.config.get("warmup", False):
             raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
 
+    def close(self):
+        """Release resources after the last request."""
+        close_weights = getattr(getattr(self, "model", None), "close_numa_cpu_weights", None)
+        if close_weights is not None:
+            close_weights()
+
     def get_supported_tasks(self):
         """Return tasks accepted by this initialized runner."""
         task = self.config.get("task")

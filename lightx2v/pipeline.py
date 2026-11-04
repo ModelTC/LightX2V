@@ -60,7 +60,7 @@ class LightX2VPipeline:
             "wan2.1",
             "wan2.1_vace",
             "wan2.1_sf",
-            "wan2.1_sf_mtxg2",
+            "wan2.1_realtime",
             "seko_talk",
             "seko_talk_ar",
             "wan2.2_moe",
@@ -71,17 +71,15 @@ class LightX2VPipeline:
             self.startup_config["vae_stride"] = (4, 8, 8)
             if model_cls in {"wan2.2_moe", "wan2.2_s2v"}:
                 self.startup_config["use_image_encoder"] = False
-        elif model_cls in ["wan2.2", "wan2.2_matrix_game3"]:
+        elif model_cls == "wan2.2":
             self.startup_config.update(vae_stride=(4, 16, 16), num_channels_latents=48)
-            if model_cls == "wan2.2_matrix_game3":
-                self.startup_config["use_image_encoder"] = False
         elif model_cls == "hunyuan_video_1.5":
             self.startup_config.update(vae_stride=(4, 16, 16), num_channels_latents=32)
         elif model_cls in ["ltx2", "ltx2_5"]:
             self.startup_config.update(num_channels_latents=128, audio_mel_bins=16)
         elif model_cls == "cosmos3":
             self.startup_config.update(vae_stride=(4, 16, 16), num_channels_latents=48)
-        elif model_cls in ("minimax_h3", "minimax_h3_causal"):
+        elif model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3"):
             self.startup_config.update(
                 vae_spatial_scale_factor=16,
                 vae_scale_factor=16,
@@ -128,7 +126,7 @@ class LightX2VPipeline:
         if self.runner is not None:
             raise RuntimeError("Generator has already been created for this pipeline")
 
-        if config_json is None:
+        if config_json is None and self.model_cls not in ("taomate_h3", "streamrender_h3"):
             if guidance_scale is None:
                 guidance_scale = 1.0 if self.model_cls in ("minimax_h3", "minimax_h3_causal") else 5.0
             self.set_infer_config(
@@ -312,13 +310,12 @@ class LightX2VPipeline:
             "wan2.1",
             "wan2.1_vace",
             "wan2.1_sf",
-            "wan2.1_sf_mtxg2",
+            "wan2.1_realtime",
             "seko_talk",
             "seko_talk_ar",
             "wan2.2_moe",
             "wan2.2_moe_vace",
             "wan2.2",
-            "wan2.2_matrix_game3",
             "wan2.2_animate",
             "wan2.2_animate2_distilled",
             "wan2.2_s2v",

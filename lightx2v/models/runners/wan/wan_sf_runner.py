@@ -1,33 +1,21 @@
-import gc
-
-import torch
-from loguru import logger
-
-from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.sf_model import WanSFModel
+from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.self_forcing.scheduler import WanSFScheduler
-from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
-from lightx2v.utils.envs import *
-from lightx2v.utils.profiler import *
+from lightx2v.utils.input_info import T2VInputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import get_rank_and_world_size
-from lightx2v.utils.video_recorder import VideoRecorder
-from lightx2v_platform.base.global_var import AI_DEVICE
-
-torch_device_module = getattr(torch, AI_DEVICE)
 
 
 @RUNNER_REGISTER("wan2.1_sf")
-class WanSFRunner(WanRunner):
+class WanSFRunner(WanAutoregressiveRunnerMixin, WanRunner):
+    _SUPPORTS_AUTOREGRESSIVE_WARMUP = True
+    _WARMUP_TASKS = ("t2v",)
+
     supported_request_fields_by_task = {
         "t2v": WanRunner.supported_request_fields_by_task["t2v"] - {"num_frames"},
     }
 
     def __init__(self, config):
-        if config.get("enable_cfg", False):
-            raise ValueError("Self-Forcing requires enable_cfg=false")
         super().__init__(config)
 
     def load_transformer(self):
@@ -42,149 +30,7 @@ class WanSFRunner(WanRunner):
     def init_scheduler(self):
         self.scheduler = WanSFScheduler(self.config)
 
-    @ProfilingContext4DebugL1("init kv cache manager")
-    def init_kv_cache_manager(self):
-        num_frame_per_chunk = self.scheduler.num_frame_per_chunk
-        if num_frame_per_chunk <= 0:
-            raise ValueError("ar_config.num_frame_per_chunk must be positive")
-        if self.input_info.latent_shape[1] < num_frame_per_chunk:
-            raise ValueError(f"Self-Forcing requires at least {num_frame_per_chunk} latent frames per chunk, got {self.input_info.latent_shape[1]}")
-        kv_mgr = getattr(self.model, "kv_cache_manager", None)
-        if kv_mgr is None:
-            kv_mgr = KVCacheManager(config=self.config, device=torch.device(AI_DEVICE), sp_group=self.model.seq_p_group)
-            self.model.kv_cache_manager = kv_mgr
-        kv_mgr.ar_config = dict(self.config.get("ar_config", {}))
-        kv_mgr._create_kv_caches(self.input_info.latent_shape)
-        self.model.transformer_infer.kv_cache_manager = kv_mgr
-        self.input_info.latent_shape = [self.input_info.latent_shape[0], kv_mgr.num_output_frames, self.input_info.latent_shape[2], self.input_info.latent_shape[3]]
-        self.scheduler.num_output_frames = kv_mgr.num_output_frames
-        self.scheduler.num_chunks = kv_mgr.num_output_frames // num_frame_per_chunk
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            sp_group = getattr(self.model, "seq_p_group", None)
-            if sp_group is not None or torch.distributed.get_world_size() > 1:
-                torch.distributed.barrier(group=sp_group)
-
-    def get_video_segment_num(self):
-        self.video_segment_num = self.scheduler.num_chunks
-
-    @ProfilingContext4DebugL1("Run VAE Decoder")
-    def run_vae_decoder(self, latents):
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.vae_decoder = self.load_vae_decoder()
-        images = self.vae_decoder.decode(latents.to(GET_DTYPE()), use_cache=True)
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            del self.vae_decoder
-            torch_device_module.empty_cache()
-            gc.collect()
-        return images
-
-    def init_run(self):
-        self.init_kv_cache_manager()
-        super().init_run()
-
-    def run_segment(self, segment_idx=0):
-        infer_steps = self.model.scheduler.infer_steps
-        for step_index in range(infer_steps):
-            # only for single segment, check stop signal every step
-            if self.video_segment_num == 1:
-                self.check_stop()
-            logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
-
-            self.model.kv_cache_manager.current_step = step_index
-
-            with ProfilingContext4DebugL1("step_pre"):
-                self.model.scheduler.step_pre(seg_index=segment_idx, step_index=step_index, is_rerun=False)
-
-            with ProfilingContext4DebugL1("🚀 infer_main"):
-                self.model.infer(self.inputs)
-
-            with ProfilingContext4DebugL1("step_post"):
-                self.model.scheduler.step_post()
-
-            if self.progress_callback:
-                current_step = segment_idx * infer_steps + step_index + 1
-                total_all_steps = self.video_segment_num * infer_steps
-                self.progress_callback((current_step / total_all_steps) * 100, 100)
-
-        return self.model.scheduler.stream_output
-
-    def decode_segment_latents(self, segment_idx: int, segment_latents: torch.Tensor) -> torch.Tensor:
-        is_first = segment_idx == 0
-        is_last = segment_idx == self.video_segment_num - 1
-        return self.vae_decoder.cached_decode_withflag(segment_latents.to(GET_DTYPE()), is_first, is_last)
-
-    def init_video_recorder(self):
-        output_video_path = self.input_info.save_result_path
-        self.video_recorder = None
-        if isinstance(output_video_path, dict):
-            output_video_path = output_video_path["data"]
-        logger.info(f"init video_recorder with output_video_path: {output_video_path}")
-        rank, world_size = get_rank_and_world_size()
-        if output_video_path and rank == world_size - 1:
-            record_fps = self.config.get("fps", 16)
-            self.video_recorder = VideoRecorder(
-                livestream_url=output_video_path,
-                fps=record_fps,
-            )
-
-    @ProfilingContext4DebugL1("End run segment")
-    def end_run_segment(self, segment_idx=None):
-        with ProfilingContext4DebugL1("step_pre_in_rerun"):
-            self.model.scheduler.step_pre(seg_index=segment_idx, step_index=self.model.scheduler.infer_steps - 1, is_rerun=True)
-        with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
-            self.model.infer(self.inputs)
-        torch_device_module.empty_cache()
-
-    @ProfilingContext4DebugL2("Run DiT")
-    def run_main(self, total_steps=None):
-        self.init_run()
-        lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
-        if lazy_vae:
-            self.vae_decoder = self.load_vae_decoder()
-        vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=torch.device(AI_DEVICE), vae_decoder=self.vae_decoder)
-
-        with no_sync_profiling(enabled=vae_decoder.is_async):
-            with ProfilingContext4DebugL1(
-                f"AR chunk total {self.video_segment_num} chunks",
-                recorder_mode=GET_RECORDER_MODE(),
-                metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
-                metrics_labels=["DefaultRunner"],
-            ):
-                try:
-                    for segment_idx in range(self.video_segment_num):
-                        logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
-                        with ProfilingContext4DebugL1(
-                            f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
-                            recorder_mode=GET_RECORDER_MODE(),
-                            metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
-                            metrics_labels=["DefaultRunner"],
-                        ):
-                            self.check_stop()
-                            self.init_run_segment(segment_idx)
-                            latents = self.run_segment(segment_idx)
-
-                            with ProfilingContext4DebugL1("step_pre_in_rerun"):
-                                self.model.scheduler.step_pre(
-                                    seg_index=segment_idx,
-                                    step_index=self.model.scheduler.infer_steps - 1,
-                                    is_rerun=True,
-                                )
-                            with ProfilingContext4DebugL1("infer_main_in_rerun"):
-                                self.model.infer(self.inputs)
-
-                        vae_decoder.submit(self.decode_segment_latents, segment_idx, latents)
-                        torch_device_module.empty_cache()
-                    decoded_chunks = vae_decoder.finish()
-                finally:
-                    if "vae_decoder" in locals():
-                        vae_decoder.finish()
-                    if lazy_vae:
-                        del self.vae_decoder
-                        torch_device_module.empty_cache()
-                        gc.collect()
-
-        self.gen_video = torch.cat(decoded_chunks, dim=2)
-        self.gen_video_final = self.gen_video
-        gen_video_final = self.process_images_after_vae_decoder()
-        self.end_run()
-        return gen_video_final
+    def prepare_warmup_inputs(self, height, width, latent_shape, text_output):
+        self.input_info = T2VInputInfo(task="t2v", prompt="warmup", size=[height, width])
+        self.input_info.latent_shape = latent_shape
+        self.inputs = {"text_encoder_output": text_output, "image_encoder_output": None}

@@ -4,7 +4,10 @@
     "video_duration": 360,
     "audio_sr": 16000,
     "num_frames": 81,
-    "size": [832, 480],
+    "size": [
+        832,
+        480
+    ],
     "ref_state": 1,
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
@@ -28,7 +31,6 @@
     "look_ahead": 0.0,
     "audio_feat_window_neighbor_frame": 0,
     "audio_feat_fps": 50,
-    "causal_rope_type": "triton",
     "ar_config": {
         "num_frame_per_chunk": 1,
         "step_kv_cache": true,
@@ -38,5 +40,8 @@
         "rope_max_frames": 40,
         "kv_offload": false,
         "async_vae_decode": false
-    }
+    },
+    "use_compile": true,
+    "use_cuda_graph": true,
+    "warmup": true
 }

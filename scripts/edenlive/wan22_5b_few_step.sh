@@ -1,26 +1,28 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-model_path="${MODEL_PATH:-/path/to/EdenLive-x2v}"
-image_path="${IMAGE_PATH:-/path/to/cover.png}"
-video_path="${VIDEO_PATH:-/path/to/recording.mp4}"
-prompt="${PROMPT:-A cinematic scene with detailed, realistic lighting.}"
-config_json="${CONFIG_JSON:-$repo_dir/configs/edenlive/wan22_5b_few_step.json}"
-output_path="${SAVE_RESULT_PATH:-$repo_dir/save_results/edenlive_5b_few_step.mp4}"
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/EdenLive-x2v
+: "${IMAGE_PATH:?Set IMAGE_PATH to the input image}"
+: "${VIDEO_PATH:?Set VIDEO_PATH to the input video}"
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
-export PYTHONPATH="$repo_dir${PYTHONPATH:+:$PYTHONPATH}"
-export DTYPE=BF16 SENSITIVE_LAYER_DTYPE=BF16 TOKENIZERS_PARALLELISM=false
-export PROFILING_DEBUG_LEVEL="${PROFILING_DEBUG_LEVEL:-0}"
-export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-16}"
+export CUDA_VISIBLE_DEVICES=5
+source "${lightx2v_path}/scripts/base/base.sh"
 
+export DTYPE=BF16
+export SENSITIVE_LAYER_DTYPE=BF16
+export PROFILING_DEBUG_LEVEL=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
 
-cd "$repo_dir"
+cd "${lightx2v_path}"
+
 python -m lightx2v.infer \
-  --model_cls wan22_edenlive_ar --task i2v \
-  --model_path "$model_path" --config_json "$config_json" \
-  --prompt "$prompt" \
-  --image_path "$image_path" --video_path "$video_path" \
-  --seed 2026092901 --save_result_path "$output_path" "$@"
+  --model_cls wan22_edenlive_ar \
+  --task i2v \
+  --model_path "${model_path}" \
+  --config_json "${lightx2v_path}/configs/edenlive/wan22_5b_few_step.json" \
+  --prompt 'Cinematic photorealism. A vast volcanic cavern dominated by a churning, incandescent molten lava lake, dark basalt formations, and jagged stalactites. Dynamic heat haze and glowing orange embers fill the air. Seen from a first-person viewpoint, a heavy industrial cryo-blaster with frosted metallic plating and cyan energy vents is held ready. Projectiles flash-freeze bubbling magma into dense slabs of hissing glacial ice. Dramatic lighting balances intense fiery magma radiance against cool cyan cryo luminescence.' \
+  --image_path "${IMAGE_PATH}" \
+  --video_path "${VIDEO_PATH}" \
+  --seed 2026092901 \
+  --save_result_path "${lightx2v_path}/save_results/edenlive_5b_few_step_optimized.mp4"

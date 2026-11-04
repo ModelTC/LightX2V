@@ -32,6 +32,11 @@ class WanSFScheduler(WanScheduler):
         super().clear()
         self.latents_input = None
         self.stream_output = None
+        self.selected_timesteps = None
+        self.timesteps_sf = None
+        self.sigmas_sf = None
+        self.seg_index = 0
+        self.is_rerun = False
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.latents = torch.randn(latent_shape, device=AI_DEVICE, dtype=self.dtype)

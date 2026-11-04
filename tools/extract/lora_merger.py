@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 LoRA Merger Script
 Merge a source model with LoRA weights to create a new model
 """
 
+from __future__ import annotations
+
 import argparse
 import os
-from typing import Dict, Optional
 
 import torch
 from safetensors import safe_open
 from safetensors import torch as st
 from tqdm import tqdm
+
+try:
+    from .export_student import resolve_model_path
+except ImportError:
+    from export_student import resolve_model_path
 
 
 def _get_torch_dtype(dtype_str: str) -> torch.dtype:
@@ -63,7 +68,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_model_weights(model_path: str, model_type: str) -> Dict[str, torch.Tensor]:
+def load_model_weights(model_path: str, model_type: str) -> dict[str, torch.Tensor]:
     """
     Load model weights (using fp32 precision)
 
@@ -74,6 +79,7 @@ def load_model_weights(model_path: str, model_type: str) -> Dict[str, torch.Tens
     Returns:
         Model weights dictionary (fp32 precision)
     """
+    model_path = str(resolve_model_path(model_path))
     print(f"Loading model: {model_path} (type: {model_type}, precision: fp32)")
 
     if not os.path.exists(model_path):
@@ -98,7 +104,8 @@ def load_model_weights(model_path: str, model_type: str) -> Dict[str, torch.Tens
             for file_path in sorted(safetensors_files):
                 print(f"  Loading file: {os.path.basename(file_path)}")
                 with safe_open(file_path, framework="pt", device="cpu") as f:
-                    for key in f.keys():
+                    keys = f.keys()
+                    for key in keys:
                         if key in weights:
                             print(f"Warning: weight key '{key}' is duplicated in multiple files, will be overwritten")
                         weights[key] = f.get_tensor(key)
@@ -107,7 +114,8 @@ def load_model_weights(model_path: str, model_type: str) -> Dict[str, torch.Tens
             # If it's a single file
             if model_path.endswith(".safetensors"):
                 with safe_open(model_path, framework="pt", device="cpu") as f:
-                    for key in f.keys():
+                    keys = f.keys()
+                    for key in keys:
                         weights[key] = f.get_tensor(key)
             else:
                 raise ValueError(f"safetensors type file should end with .safetensors: {model_path}")
@@ -149,7 +157,7 @@ def load_model_weights(model_path: str, model_type: str) -> Dict[str, torch.Tens
     return converted_weights
 
 
-def save_model_weights(model_weights: Dict[str, torch.Tensor], output_path: str, output_format: str, output_dtype: str = "bf16"):
+def save_model_weights(model_weights: dict[str, torch.Tensor], output_path: str, output_format: str, output_dtype: str = "bf16"):
     """
     Save model weights
 
@@ -196,7 +204,7 @@ def save_model_weights(model_weights: Dict[str, torch.Tensor], output_path: str,
     print(f"Merged model saved to: {output_path}")
 
 
-def merge_lora_weights(source_weights: Dict[str, torch.Tensor], lora_weights: Dict[str, torch.Tensor], alpha: float = 1.0) -> Dict[str, torch.Tensor]:
+def merge_lora_weights(source_weights: dict[str, torch.Tensor], lora_weights: dict[str, torch.Tensor], alpha: float = 1.0) -> dict[str, torch.Tensor]:
     """
     Merge source model with LoRA weights
 
@@ -237,6 +245,9 @@ def merge_lora_weights(source_weights: Dict[str, torch.Tensor], lora_weights: Di
             if base_key not in lora_pairs:
                 lora_pairs[base_key] = {}
             lora_pairs[base_key]["down"] = lora_tensor
+        elif lora_key.endswith(".alpha"):
+            base_key = lora_key[:-6]
+            lora_pairs.setdefault(base_key, {})["alpha"] = lora_tensor
         elif lora_key.endswith((".diff", ".diff_b", ".diff_m")):
             diff_weights[lora_key] = lora_tensor
 
@@ -252,19 +263,42 @@ def merge_lora_weights(source_weights: Dict[str, torch.Tensor], lora_weights: Di
             if "up" in lora_pair and "down" in lora_pair:
                 # Find corresponding source weight
                 source_key = _find_source_key(base_key, source_weights)
+                section = None
+                if source_key is None:
+                    for part, half_index in (("gate_layer", 0), ("proj", 1)):
+                        suffix = f".img_mlp.{part}"
+                        if base_key.endswith(suffix):
+                            source_key = _find_source_key(base_key[: -len(suffix)] + ".img_mlp.gate_up", source_weights)
+                            if source_key is not None:
+                                rows = source_weights[source_key].shape[0]
+                                if rows % 2:
+                                    raise ValueError(f"Invalid fused MLP shape: {source_key}")
+                                section = (half_index * (rows // 2), rows // 2)
+                            break
                 if source_key:
-                    if source_weights[source_key].shape != (lora_pair["up"].shape[0], lora_pair["down"].shape[1]):
+                    source_tensor = source_weights[source_key] if section is None else source_weights[source_key].narrow(0, *section)
+                    if source_tensor.shape != (lora_pair["up"].shape[0], lora_pair["down"].shape[1]):
                         skipped_source_count += 1
                         skipped_source_keys.append(source_key)
                         continue
                     lora_up = lora_pair["up"]
                     lora_down = lora_pair["down"]
 
-                    # Compute LoRA delta: alpha * (lora_up @ lora_down)
-                    lora_delta = alpha * (lora_up @ lora_down)
+                    # CLI alpha is merge strength; file alpha / rank is adapter scaling.
+                    rank = lora_down.shape[0]
+                    if lora_up.shape[1] != rank or rank < 1:
+                        raise ValueError(f"Invalid LoRA rank for {base_key}")
+                    adapter_alpha = lora_pair.get("alpha")
+                    scale = float(adapter_alpha.item()) / rank if adapter_alpha is not None else 1.0
+                    lora_delta = alpha * scale * (lora_up.float() @ lora_down.float())
 
                     # Apply to source weight
-                    merged_weights[source_key] = source_weights[source_key] + lora_delta
+                    if section is None:
+                        merged_weights[source_key] = merged_weights[source_key] + lora_delta
+                    else:
+                        merged = merged_weights[source_key].float().clone()
+                        merged.narrow(0, *section).add_(lora_delta)
+                        merged_weights[source_key] = merged
                     lora_merged_count += 1
                     pbar.set_postfix_str(f"LoRA: {source_key.split('.')[-1]}")
                 else:
@@ -315,7 +349,7 @@ def merge_lora_weights(source_weights: Dict[str, torch.Tensor], lora_weights: Di
     return merged_weights
 
 
-def _find_source_key(lora_base_key: str, source_weights: Dict[str, torch.Tensor]) -> Optional[str]:
+def _find_source_key(lora_base_key: str, source_weights: dict[str, torch.Tensor]) -> str | None:
     """
     Find corresponding source weight key for LoRA base key
 
@@ -326,28 +360,18 @@ def _find_source_key(lora_base_key: str, source_weights: Dict[str, torch.Tensor]
     Returns:
         Corresponding source key or None
     """
-    # Remove diffusion_model prefix if present
-    if lora_base_key.startswith("diffusion_model."):
-        source_key = lora_base_key[16:] + ".weight"  # Remove "diffusion_model." and add ".weight"
-    else:
-        source_key = lora_base_key + ".weight"
-
-    if source_key in source_weights:
-        return source_key
-
-    # Try without adding .weight (in case it's already included)
-    if lora_base_key.startswith("diffusion_model."):
-        source_key_alt = lora_base_key[16:]
-    else:
-        source_key_alt = lora_base_key
-
-    if source_key_alt in source_weights:
-        return source_key_alt
-
+    candidates = [lora_base_key]
+    for prefix in ("diffusion_model.", "transformer."):
+        if lora_base_key.startswith(prefix):
+            candidates.append(lora_base_key[len(prefix) :])
+    for candidate in candidates:
+        for key in (candidate + ".weight", candidate):
+            if key in source_weights:
+                return key
     return None
 
 
-def _find_source_key_from_diff(diff_key: str, source_weights: Dict[str, torch.Tensor]) -> Optional[str]:
+def _find_source_key_from_diff(diff_key: str, source_weights: dict[str, torch.Tensor]) -> str | None:
     """
     Find corresponding source weight key for diff key
 

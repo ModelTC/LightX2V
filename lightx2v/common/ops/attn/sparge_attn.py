@@ -14,6 +14,8 @@ from .template import AttnWeightTemplate
 
 @ATTN_WEIGHT_REGISTER("sparge_attn")
 class SpargeAttnWeight(AttnWeightTemplate):
+    sparse_compute_gap = "外部Sparge库没有暴露本次最终区域，不能由名义topk推断。"
+
     sparsity_ratio = 0.8
 
     def __init__(self):

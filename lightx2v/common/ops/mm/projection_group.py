@@ -1,4 +1,4 @@
-"""Share input quantization across resident FP8-SGL or INT8 ConvRot projections.
+"""Share input quantization across resident FP8 and INT8 ConvRot projections.
 
 Each backend retains its original quantizer, GEMM and rounding boundaries.
 Optional packing shares weight storage with the original modules; unsupported
@@ -7,8 +7,10 @@ inputs, adapters or reloaded weights use those original module operations.
 
 import torch
 
-from lightx2v.common.ops.mm.mm_weight import MMWeightWfp8channelAfp8channeldynamicSgl, MMWeightWint8ConvRot
+from lightx2v.common.ops.mm.fp8_f16_accum import cutlass_scaled_fp8_mm_f16_accum, fp8_f16_accum_mm_available
+from lightx2v.common.ops.mm.mm_weight import MMWeightWfp8channelAfp8channelF16Accum, MMWeightWfp8channelAfp8channeldynamicSgl, MMWeightWint8ConvRot
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_per_token_quant, sgl_fp8_scaled_mm, sgl_kernel
+from lightx2v.common.ops.mm.triton_kernels import fp8_quantize_range_triton
 
 try:
     import comfy_kitchen
@@ -195,7 +197,7 @@ class ConvRotProjectionGroup:
 
 
 class FP8ProjectionGroup:
-    """Resident-only FP8-SGL projections, optionally combined into one GEMM.
+    """Share FP8 input quantization, optionally combining projections into one GEMM.
 
     Packed outputs are views of one allocation. Consumers must respect their
     row stride instead of copying them back to contiguous tensors. Original
@@ -204,23 +206,32 @@ class FP8ProjectionGroup:
 
     @classmethod
     def from_modules(cls, modules, packed=False):
+        if sgl_kernel is None:
+            return None
+        return cls._from_modules(modules, packed, MMWeightWfp8channelAfp8channeldynamicSgl)
+
+    @classmethod
+    def _from_modules(cls, modules, packed, weight_type, offload_buffers=False):
         modules = tuple(modules)
-        if sgl_kernel is None or not modules or any(type(module) is not MMWeightWfp8channelAfp8channeldynamicSgl for module in modules):
+        if not modules or any(type(module) is not weight_type for module in modules):
             return None
         first = modules[0]
-        first_weight = getattr(first, "weight", None)
+        weight_attr = "weight_cuda_buffer" if offload_buffers else "weight"
+        scale_attr = "weight_scale_cuda_buffer" if offload_buffers else "weight_scale"
+        bias_attr = "bias_cuda_buffer" if offload_buffers else "bias"
+        first_weight = getattr(first, weight_attr, None)
         if not isinstance(first_weight, torch.Tensor) or first_weight.ndim != 2 or first_weight.device.type != "cuda":
             return None
         device, input_dim, infer_dtype = first_weight.device, first_weight.shape[0], first.infer_dtype
         if infer_dtype not in (torch.bfloat16, torch.float16):
             return None
-        has_bias = getattr(first, "bias", None) is not None
+        has_bias = getattr(first, bias_attr, None) is not None
         for module in modules:
             if module.has_lora_branch or module.has_diff or hasattr(module, "weight_diff") or hasattr(module, "bias_diff"):
                 return None
-            if module.lazy_load or module.create_cuda_buffer or module.create_cpu_buffer:
+            if module.lazy_load or module.create_cpu_buffer or module.create_cuda_buffer != offload_buffers:
                 return None
-            weight, scale, bias = getattr(module, "weight", None), getattr(module, "weight_scale", None), getattr(module, "bias", None)
+            weight, scale, bias = getattr(module, weight_attr, None), getattr(module, scale_attr, None), getattr(module, bias_attr, None)
             if not isinstance(weight, torch.Tensor) or weight.ndim != 2 or weight.device != device or weight.dtype != torch.float8_e4m3fn:
                 return None
             if weight.shape[0] != input_dim or weight.stride() != (1, input_dim) or module.infer_dtype != infer_dtype:
@@ -234,18 +245,23 @@ class FP8ProjectionGroup:
                 return None
             if bias is not None and (not isinstance(bias, torch.Tensor) or bias.shape != (output_dim,) or bias.device != device or bias.dtype != infer_dtype or not bias.is_contiguous()):
                 return None
-        return cls(modules, packed=packed)
+        return cls(modules, packed=packed, offload_buffers=offload_buffers)
 
-    def __init__(self, modules, packed=False):
+    def __init__(self, modules, packed=False, offload_buffers=False):
         self.modules = tuple(modules)
-        self.weights = tuple(module.weight for module in modules)
-        self.scales = tuple(module.weight_scale for module in modules)
-        self.biases = tuple(getattr(module, "bias", None) for module in modules)
+        self.offload_buffers = offload_buffers
+        weight_attr = "weight_cuda_buffer" if offload_buffers else "weight"
+        scale_attr = "weight_scale_cuda_buffer" if offload_buffers else "weight_scale"
+        bias_attr = "bias_cuda_buffer" if offload_buffers else "bias"
+        self.weights = tuple(getattr(module, weight_attr) for module in modules)
+        self.scales = tuple(getattr(module, scale_attr) for module in modules)
+        self.biases = tuple(getattr(module, bias_attr, None) for module in modules)
         self.infer_dtype = modules[0].infer_dtype
         self.device = self.weights[0].device
         self.input_dim = self.weights[0].shape[0]
         self.output_dims = tuple(weight.shape[1] for weight in self.weights)
         self.packed = packed
+        self.activation_qmax = None
         if packed:
             # FP8 cat is not available on every supported PyTorch version.
             # Reinterpret bytes to preserve the original FP8 encodings exactly.
@@ -257,14 +273,19 @@ class FP8ProjectionGroup:
             scales = self.packed_scale.split(self.output_dims, dim=0)
             biases = self.packed_bias.split(self.output_dims, dim=0) if self.packed_bias is not None else (None,) * len(self.modules)
             for module, weight, scale, bias, original_scale in zip(self.modules, weights, scales, biases, self.scales):
-                module.weight = weight
-                module.weight_scale = scale.view(original_scale.shape)
-                module.bias = bias
-            # Keep the original module fallbacks, but let them share the packed
-            # storage. Releasing the previous tuples avoids a second weight copy.
-            self.weights = tuple(module.weight for module in self.modules)
-            self.scales = tuple(module.weight_scale for module in self.modules)
-            self.biases = tuple(module.bias for module in self.modules)
+                setattr(module, weight_attr, weight)
+                setattr(module, scale_attr, scale.view(original_scale.shape))
+                if bias is not None:
+                    setattr(module, bias_attr, bias)
+                if not offload_buffers:
+                    module.weight = weight
+                    module.weight_scale = getattr(module, scale_attr)
+                    module.bias = bias
+            # The original linear modules still point to the packed views after
+            # their next offload upload; retaining old buffers would waste memory.
+            self.weights = tuple(getattr(module, weight_attr) for module in self.modules)
+            self.scales = tuple(getattr(module, scale_attr) for module in self.modules)
+            self.biases = tuple(getattr(module, bias_attr, None) for module in self.modules)
 
     def apply(self, x):
         # Identity checks prevent using a stale packed copy after model reloads.
@@ -279,15 +300,49 @@ class FP8ProjectionGroup:
                 or module.weight_scale is not scale
                 or getattr(module, "bias", None) is not bias
                 or module.infer_dtype != self.infer_dtype
+                or (self.activation_qmax is not None and module.fp8_activation_qmax != self.activation_qmax)
                 or module.lazy_load
-                or module.create_cuda_buffer
+                or module.create_cuda_buffer != self.offload_buffers
                 or module.create_cpu_buffer
             ):
                 return tuple(module.apply(x) for module in self.modules)
         if x.ndim != 2 or x.device != self.device or x.dtype != self.infer_dtype or x.shape[1] != self.input_dim or not x.is_contiguous():
             return tuple(module.apply(x) for module in self.modules)
-        quantized, input_scale = sgl_fp8_per_token_quant(x)
+        quantized, input_scale = self.quantize(x)
         if self.packed:
-            output = sgl_fp8_scaled_mm(quantized, self.packed_weight, input_scale, self.packed_scale, self.infer_dtype, self.packed_bias)
+            output = self.matmul(quantized, self.packed_weight, input_scale, self.packed_scale, self.packed_bias)
             return output.split(self.output_dims, dim=-1)
-        return tuple(sgl_fp8_scaled_mm(quantized, weight, input_scale, scale, self.infer_dtype, bias) for weight, scale, bias in zip(self.weights, self.scales, self.biases))
+        return tuple(self.matmul(quantized, weight, input_scale, scale, bias) for weight, scale, bias in zip(self.weights, self.scales, self.biases))
+
+    def quantize(self, x):
+        return sgl_fp8_per_token_quant(x)
+
+    def matmul(self, quantized, weight, input_scale, weight_scale, bias):
+        return sgl_fp8_scaled_mm(quantized, weight, input_scale, weight_scale, self.infer_dtype, bias)
+
+
+class FP8F16AccumProjectionGroup(FP8ProjectionGroup):
+    """Pack FP8 projections while retaining reduced-range FP16 accumulation."""
+
+    @classmethod
+    def from_modules(cls, modules, packed=False, offload_buffers=False):
+        modules = tuple(modules)
+        if not modules or not fp8_f16_accum_mm_available():
+            return None
+        weight = getattr(modules[0], "weight_cuda_buffer" if offload_buffers else "weight", None)
+        if not isinstance(weight, torch.Tensor) or weight.device.type != "cuda" or torch.cuda.get_device_capability(weight.device) != (12, 0):
+            return None
+        qmax = getattr(modules[0], "fp8_activation_qmax", None)
+        if qmax is None or any(getattr(module, "fp8_activation_qmax", None) != qmax for module in modules):
+            return None
+        return cls._from_modules(modules, packed, MMWeightWfp8channelAfp8channelF16Accum, offload_buffers=offload_buffers)
+
+    def __init__(self, modules, packed=False, offload_buffers=False):
+        super().__init__(modules, packed=packed, offload_buffers=offload_buffers)
+        self.activation_qmax = modules[0].fp8_activation_qmax
+
+    def quantize(self, x):
+        return fp8_quantize_range_triton(x, self.activation_qmax)
+
+    def matmul(self, quantized, weight, input_scale, weight_scale, bias):
+        return cutlass_scaled_fp8_mm_f16_accum(quantized, weight, input_scale, weight_scale, self.infer_dtype, bias)

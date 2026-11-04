@@ -1,0 +1,49 @@
+{
+  "model_variant": "fl2av",
+  "infer_steps": 3,
+  "num_frames": 240,
+  "size": [
+    1376,
+    768
+  ],
+  "fps": 24,
+  "enable_cfg": false,
+  "cpu_offload": true,
+  "text_encoder_cpu_offload": true,
+  "text_encoder_tensor_parallel": true,
+  "vae_cpu_offload": true,
+  "video_vae_offload_granularity": "model",
+  "async_vae_decode": true,
+  "use_adaln_cache": true,
+  "attn_type": "sage_attn2",
+  "rms_type": "torch",
+  "rope_type": "minimax_h3_triton_rope",
+  "use_compile": true,
+  "compile_backend": "default",
+  "use_cuda_graph": true,
+  "warmup": true,
+  "parallel": {
+    "tensor_p_size": 2,
+    "seq_p_size": 4,
+    "cfg_p_size": 1
+  },
+  "ar_config": {
+    "kv_cache_scheme": "rolling",
+    "kv_offload": false
+  },
+  "adapter_path": "/path/to/models/H3/TaoMate-H3",
+  "offload_granularity": "block",
+  "text_encoder_offload_granularity": "block",
+  "text_encoder_release_block_offload_buffers": true,
+  "allow_online_adaln_offload": true,
+  "prompt_json": "configs/taomate_h3/official_prompts_10s.json",
+  "base10_attn_type": "sage_attn2",
+  "adaln_cache_dir": "/path/to/LightX2V/save_results/source_aligned_5090_20261024/taomate/adaln/bf16",
+  "vae_decode_parallel": true,
+  "vae_use_compile": true,
+  "use_fused_qkv": true,
+  "text_refiner_tensor_parallel": false,
+  "base10_adaln_cache_dir": "/path/to/LightX2V/save_results/taomate_streamrender_20261025/taomate/adaln/bf16",
+  "base10_share_weights": false,
+  "shared_cpu_weights": false
+}

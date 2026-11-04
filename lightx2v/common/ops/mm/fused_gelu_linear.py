@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Precision-preserving GELU/activation quantization for FP8-SGL and ConvRot.
+"""Precision-preserving GELU/activation quantization for FP8 and ConvRot.
 
-Both backends preserve the compiled GELU(tanh) BF16 rounding boundary and
-reuse their original quantization/GEMM arithmetic. FP8-SGL uses a Triton
-quantizer; INT8 ConvRot lazily compiles its SM120 CUDA quantizer before capture.
-Unsupported ConvRot shapes/backends retain the original GELU + linear path.
+Each backend retains its compiled GELU(tanh) rounding boundary and original
+quantization/GEMM arithmetic. FP8 uses Triton quantizers; INT8 ConvRot lazily
+compiles its SM120 CUDA quantizer before capture. Unsupported shapes or
+backends retain the original GELU + linear path.
 """
 
 import ctypes
@@ -17,6 +17,7 @@ import triton
 import triton.language as tl
 from triton.language.extra.cuda import libdevice
 
+from lightx2v.common.ops.mm.fp8_f16_accum import validate_fp8_f16_accum_qmax
 from lightx2v.common.ops.mm.projection_group import _backend_apis_available, convrot_projection_mm
 
 try:
@@ -87,6 +88,60 @@ def _fused_gelu_quant_fp8_sgl_fake(input_tensor):
         input_tensor.new_empty(input_tensor.shape, dtype=torch.float8_e4m3fn),
         input_tensor.new_empty((input_tensor.shape[0], 1), dtype=torch.float32),
     )
+
+
+@triton.jit
+def _gelu_quant_fp8_f16_accum_kernel(input_ptr, quantized_ptr, scale_ptr, width: tl.constexpr, qmax: tl.constexpr, activation_dtype: tl.constexpr, block: tl.constexpr):
+    row = tl.program_id(0)
+    columns = tl.arange(0, block)
+    x = tl.load(input_ptr + row * width + columns, columns < width, 0.0).to(tl.float32)
+
+    # Match compiled GELU's output rounding boundary before the original
+    # fp8_quantize_range_triton scale/clamp sequence.
+    half_x = x * 0.5
+    cubic = (x * x) * x
+    argument = (x + cubic * 0.044715) * 0.7978845608028654
+    activated = (half_x * (1.0 + libdevice.tanh(argument))).to(activation_dtype).to(tl.float32)
+    absmax = tl.max(tl.where(columns < width, tl.abs(activated), 0.0), 0)
+    scale = tl.maximum(absmax, 1e-8) / qmax
+    values = tl.clamp(activated / scale, -qmax, qmax)
+    tl.store(quantized_ptr + row * width + columns, values, columns < width)
+    tl.store(scale_ptr + row, scale)
+
+
+def _validate_fp8_f16_input(input_tensor):
+    if input_tensor.ndim != 2 or input_tensor.dtype not in (torch.bfloat16, torch.float16) or input_tensor.shape[1] == 0:
+        raise ValueError("fused_gelu_quant_fp8_f16_accum requires a nonempty two-dimensional BF16 or FP16 input")
+
+
+@torch.library.custom_op("lightx2v::fused_gelu_quant_fp8_f16_accum", mutates_args=(), device_types="cuda")
+def fused_gelu_quant_fp8_f16_accum(input_tensor: torch.Tensor, qmax: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """Combine GELU(tanh) and reduced-range FP8 activation quantization."""
+    _validate_fp8_f16_input(input_tensor)
+    qmax = validate_fp8_f16_accum_qmax(qmax)
+    input_tensor = input_tensor.contiguous()
+    quantized = torch.empty(input_tensor.shape, device=input_tensor.device, dtype=torch.float8_e4m3fn)
+    scales = torch.empty(input_tensor.shape[0], device=input_tensor.device, dtype=torch.float32)
+    if input_tensor.shape[0]:
+        _gelu_quant_fp8_f16_accum_kernel[(input_tensor.shape[0],)](
+            input_tensor,
+            quantized,
+            scales,
+            input_tensor.shape[1],
+            qmax,
+            tl.bfloat16 if input_tensor.dtype == torch.bfloat16 else tl.float16,
+            triton.next_power_of_2(input_tensor.shape[1]),
+            num_warps=8,
+            enable_fp_fusion=False,
+        )
+    return quantized, scales
+
+
+@fused_gelu_quant_fp8_f16_accum.register_fake
+def _fused_gelu_quant_fp8_f16_accum_fake(input_tensor, qmax):
+    _validate_fp8_f16_input(input_tensor)
+    validate_fp8_f16_accum_qmax(qmax)
+    return input_tensor.new_empty(input_tensor.shape, dtype=torch.float8_e4m3fn), input_tensor.new_empty((input_tensor.shape[0],), dtype=torch.float32)
 
 
 _extension = None

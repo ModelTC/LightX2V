@@ -1,20 +1,23 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-lightx2v_path=/path/to/LightX2V
-model_path=/path/to/SekoTalk-Distill-AR-0703
+lightx2v_path="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+model_path="${MODEL_PATH:?Set MODEL_PATH to SekoTalk-Distill-AR-0703}"
+config_path="${CONFIG_PATH:-${lightx2v_path}/configs/seko_talk/ar/seko_talk_ar_fp8_sgl_480p_5090_tp2_sp4.json}"
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 
 # set environment variables
-source ${lightx2v_path}/scripts/base/base.sh
+source "${lightx2v_path}/scripts/base/base.sh"
 
-torchrun --nproc-per-node 4 -m lightx2v.infer \
+torchrun --standalone --nproc-per-node 8 -m lightx2v.infer \
 --model_cls seko_talk_ar \
 --task rs2v \
---model_path $model_path \
---config_json ${lightx2v_path}/configs/seko_talk/ar/seko_talk_ar_kv_dist.json \
---prompt  "In a high-fidelity realistic lifestyle aesthetic, a young woman is captured lounging comfortably on a plush beige sectional sofa within a bright, minimalist interior defined by clean white walls and soft, diffused natural lighting. The subject has shoulder-length chestnut brown hair, striking blue eyes, and is dressed in a cozy, loose-fitting beige knit sweater paired with black pants. She wears a single white wireless earbud in her right ear and a ring on her left hand. Beside her on the sofa cushion lies a closed dark-colored laptop or tablet and a white earbud charging case. Throughout the scene, she leans back in a relaxed posture, her left elbow resting on the top of the sofa cushion with her hand gently supporting her head, while her right hand rests on her drawn-up knee. She is actively speaking, displaying a natural and engaging expression with rhythmic lip movements and subtle facial animations that suggest a casual conversation or vlog recording. Her movements are fluid and grounded; she occasionally shifts her weight slightly against the cushions and uses small, nuanced hand gestures with her right hand, lifting it briefly from her knee to emphasize her words before settling it back down. The camera maintains a fixed, static medium shot, framing her centrally to capture her upper body and the immediate cozy environment, creating an intimate and serene atmosphere without any camera movement or shifts in focus." \
---image_path /path/to/input.png \
---audio_path /path/to/input.mp3 \
---save_result_path ${lightx2v_path}/save_results/output_lightx2v_seko_talk_ar_sp4.mp4 \
---seed 0
+--model_path "${model_path}" \
+--config_json "${config_path}" \
+--prompt "${PROMPT:-The video features a male speaking to the camera with arms spread out, a slightly furrowed brow, and a focused gaze.}" \
+--image_path "${IMAGE_PATH:-${lightx2v_path}/assets/inputs/audio/seko_input.png}" \
+--audio_path "${AUDIO_PATH:-${lightx2v_path}/assets/inputs/audio/seko_input.mp3}" \
+--save_result_path "${OUTPUT_PATH:-${lightx2v_path}/save_results/seko_talk_ar_480p.mp4}" \
+--video_duration "${VIDEO_DURATION:-15.0}" \
+--seed "${SEED:-0}"

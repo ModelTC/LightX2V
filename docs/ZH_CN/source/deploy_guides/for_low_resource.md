@@ -1,218 +1,61 @@
-# Lightx2v 低资源部署指南
+# Wan 低资源部署
 
-## 📋 概述
+本页介绍 Wan2.1 的量化、CPU/磁盘卸载与 VAE 优化。先完成[环境安装](../getting_started/quickstart.md)，再选择与模型、GPU 后端匹配的配置。显存和主机内存需求取决于权重、尺寸、帧数及算子；8GB 显存、16/32GB 内存不能作为所有配置的运行保证。
 
-本指南专门针对硬件资源受限的环境，特别是**8GB显存 + 16/32GB内存**的配置，详细说明如何成功运行Lightx2v 14B模型进行480p和720p视频生成。
+## 选择配置
 
-Lightx2v是一个强大的视频生成模型，但在资源受限的环境下需要精心优化才能流畅运行。本指南将为您提供从硬件选择到软件配置的完整解决方案，确保您能够在有限的硬件条件下获得最佳的视频生成体验。
+| 模型与任务 | 配置 | 模板默认值 | 启动方式 |
+| --- | --- | --- | --- |
+| 14B I2V 480P | [480P 磁盘卸载](https://github.com/ModelTC/LightX2V/blob/main/configs/offload/disk/wan_i2v_phase_lazy_load_480p.json) | 40 步、CFG 开启、`[480, 832]` | 使用下方 CLI 示例 |
+| 14B I2V 720P | [720P 磁盘卸载](https://github.com/ModelTC/LightX2V/blob/main/configs/offload/disk/wan_i2v_phase_lazy_load_720p.json) | 40 步、CFG 关闭、`[1280, 720]` | [720P 启动脚本](https://github.com/ModelTC/LightX2V/blob/main/scripts/wan/inference/run_wan_i2v_lazy_load.sh) |
+| 1.3B T2V 480P | [1.3B 配置](https://github.com/ModelTC/LightX2V/blob/main/configs/offload/block/wan_t2v_1_3b.json) | 4 步、CFG 开启、`[480, 832]` | CLI 使用 `--task t2v`，替换模型和配置，移除 `--image_path` |
 
-## 🎯 目标硬件配置详解
+尺寸均按 `[高, 宽]` 表示，720P 模板默认为竖屏。采样步数和 CFG 必须与权重匹配：4 步模板需配套蒸馏权重；使用原始权重时，应采用对应的采样配置。720P 脚本还固定了 FP16 和 `--size 1280 720`，切换模型或尺寸时需修改脚本，不能只替换 JSON。
 
-### 推荐硬件规格
+## 运行 480P I2V
 
-**GPU要求**:
-- **显存**: 8GB (RTX 3060/3070/4060/4060Ti 等)
-- **架构**: 支持CUDA的NVIDIA显卡
+1. 准备完整的 Wan2.1-I2V-14B-480P 模型目录，以及配置要求的量化 DiT、T5、CLIP 和 Tiny VAE 权重。
+2. 编辑上述 480P JSON，将 `dit_quantized_ckpt`、`t5_quantized_ckpt`、`clip_quantized_ckpt`、`tae_path` 替换为实际路径。`lazy_load=true` 需要按 block 保存的 DiT 权重目录，转换方法见[模型转换说明](https://github.com/ModelTC/LightX2V/blob/main/tools/convert/readme_zh.md)中的 `--save_by_block`。
+3. 安装配置使用的 `sage_attn2` 和 `fp8-vllm` 等后端；若不支持当前 GPU，按[注意力](../method_tutorials/attention.md)和[量化指南](../method_tutorials/quantization.md)选择匹配的后端与权重。
 
-**系统内存**:
-- **最低要求**: 16GB DDR4
-- **推荐配置**: 32GB DDR4/DDR5
-- **内存速度**: 建议3200MHz及以上
-
-**存储要求**:
-- **类型**: 强烈推荐NVMe SSD
-- **容量**: 至少50GB可用空间
-- **速度**: 读取速度建议3000MB/s以上
-
-**CPU要求**:
-- **核心数**: 建议8核心及以上
-- **频率**: 建议3.0GHz及以上
-- **架构**: 支持AVX2指令集
-
-## ⚙️ 核心优化策略详解
-
-### 1. 环境优化
-
-在运行Lightx2v之前，建议设置以下环境变量以优化性能：
+在仓库根目录运行，将模型路径和 GPU 编号替换为实际值：
 
 ```bash
-# CUDA内存分配优化
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+lightx2v_path="$PWD"
+model_path="/path/to/Wan2.1-I2V-14B-480P"
+export CUDA_VISIBLE_DEVICES=0
+source scripts/base/base.sh
 
-# 使用BF16精度推理，减少显存占用
-export DTYPE=BF16
+python -m lightx2v.infer \
+  --model_cls wan2.1 \
+  --task i2v \
+  --model_path "$model_path" \
+  --config_json configs/offload/disk/wan_i2v_phase_lazy_load_480p.json \
+  --prompt "A white cat relaxing on a sunny beach." \
+  --image_path assets/inputs/imgs/img_0.jpg \
+  --save_result_path save_results/low_resource.mp4
 ```
 
-**优化说明**:
-- `expandable_segments:True`: 允许CUDA内存段动态扩展，减少内存碎片
-- `DTYPE=BF16`: 使用BF16精度，在保持质量的同时减少显存占用
+尺寸和帧数沿用 JSON。推理完成后查看 `save_results/low_resource.mp4`。首次运行先检查峰值显存和主机内存，再增加尺寸或帧数。
 
-### 2. 量化策略
+## 按需调整
 
-量化是低资源环境下的关键优化技术，通过降低模型精度来减少内存占用。
+在完整 JSON 中修改以下字段；量化和卸载的详细配置以链接中的说明为准。
 
-#### 量化方案对比
+| 需求 | 设置与条件 |
+| --- | --- |
+| 降低权重占用 | 启用 `dit_quantized`、`t5_quantized` 或 `clip_quantized`，同时设置相应 scheme 和权重路径；仅设置 scheme 不会启用量化 |
+| 降低 GPU 显存 | `cpu_offload=true`、`t5_cpu_offload=true`；主机内存需容纳卸载权重和缓冲区 |
+| 降低 DiT 主机内存 | `lazy_load=true`，使用按 block 保存的权重和 SSD；结合磁盘吞吐量调整 `num_disk_workers` |
+| 细化 DiT 卸载 | `offload_granularity="phase"`，按每个 block 内的 self-attention、cross-attention、FFN 阶段卸载 |
+| 降低中间张量占用 | 按需启用 `clean_cuda_cache`、`rope_chunk` 并调整 `rope_chunk_size` |
+| 降低 VAE 显存 | `use_tiling_vae=true`；或启用 `use_tae` 并设置 `tae_path`，Tiny VAE 需权衡画质 |
+| 减少推理步数 | 使用匹配的[蒸馏权重与配置](../method_tutorials/step_distill.md)，不要仅降低原始模型的 `infer_steps` |
 
-**FP8量化** (推荐用于RTX 40系列):
-```python
-# 适用于支持FP8的GPU，提供更好的精度
-dit_quant_scheme = "fp8"      # DIT模型量化
-t5_quant_scheme = "fp8"       # T5文本编码器量化
-clip_quant_scheme = "fp8"     # CLIP视觉编码器量化
-```
+Tiny VAE 的 Wan2.1 权重见 [taew2_1.pth](https://github.com/madebyollin/taehv/raw/refs/heads/main/taew2_1.pth)。磁盘空间应覆盖基础模型、量化/蒸馏权重和输出文件。
 
-**INT8量化** (通用方案):
-```python
-# 适用于所有GPU，内存占用最小
-dit_quant_scheme = "int8"     # 8位整数量化
-t5_quant_scheme = "int8"      # 文本编码器量化
-clip_quant_scheme = "int8"    # 视觉编码器量化
-```
-### 3. 高效算子选择指南
+## 继续阅读
 
-选择合适的算子可以显著提升推理速度和减少内存占用。
-
-#### 注意力算子选择
-
-**推荐优先级**:
-1. **[Sage Attention](https://github.com/thu-ml/SageAttention)** (最高优先级)
-
-2. **[Flash Attention](https://github.com/Dao-AILab/flash-attention)** (通用方案)
-
-
-#### 矩阵乘算子选择
-
-**ADA架构显卡** (RTX 40系列):
-
-推荐优先级:
-1. **[q8-kernel](https://github.com/KONAKONA666/q8_kernels)** (最高性能，仅支持ADA架构)
-2. **[sglang-kernel](https://github.com/sgl-project/sglang/tree/main/sgl-kernel)** (平衡方案)
-3. **[vllm-kernel](https://github.com/vllm-project/vllm)** (通用方案)
-
-**其他架构显卡**:
-1. **[sglang-kernel](https://github.com/sgl-project/sglang/tree/main/sgl-kernel)** (推荐)
-2. **[vllm-kernel](https://github.com/vllm-project/vllm)** (备选)
-
-### 4. 参数卸载策略详解
-
-参数卸载技术允许模型在CPU和磁盘之间动态调度参数，突破显存限制。
-
-#### 三级卸载架构
-
-```python
-# 磁盘-CPU-GPU三级卸载配置
-cpu_offload=True             # 启用CPU卸载
-t5_cpu_offload=True          # 启用T5编码器CPU卸载
-offload_granularity=phase    # DIT模型细粒度卸载
-lazy_load = True             # 启用延迟加载机制
-num_disk_workers = 2         # 磁盘I/O工作线程数
-```
-
-#### 卸载策略详解
-
-**延迟加载机制**:
-- 模型参数按需从磁盘加载到CPU
-- 减少运行时内存占用
-- 支持大模型在有限内存下运行
-
-**磁盘存储优化**:
-- 使用高速SSD存储模型参数
-- 按照block分组存储模型文件
-- 参考转换脚本[文档](https://github.com/ModelTC/lightx2v/tree/main/tools/convert/readme_zh.md)，转换时指定`--save_by_block`参数
-
-### 5. 显存优化技术详解
-
-针对720p视频生成的显存优化策略。
-
-#### CUDA内存管理
-
-```python
-# CUDA内存清理配置
-clean_cuda_cache = True        # 及时清理GPU缓存
-rope_chunk = True              # 旋转位置编码分块计算
-rope_chunk_size = 100          # 分块大小，可根据显存调整
-```
-
-#### 分块计算策略
-
-**旋转位置编码分块**:
-- 将长序列分成小块处理
-- 减少峰值显存占用
-- 保持计算精度
-
-### 6. VAE优化详解
-
-VAE (变分自编码器) 是视频生成的关键组件，优化VAE可以显著提升性能。
-
-#### VAE分块推理
-
-```python
-# VAE优化配置
-use_tiling_vae = True          # 启用VAE分块推理
-```
-
-#### 轻量级VAE
-
-```python
-# VAE优化配置
-use_tae = True
-tae_path = "/path to taew2_1.pth"
-```
-taew2_1.pth 权重可以从[这里](https://github.com/madebyollin/taehv/raw/refs/heads/main/taew2_1.pth)下载
-
-**VAE优化效果**:
-- 标准VAE: 基准性能，100%质量保持
-- 标准VAE分块: 降低显存，增加推理时间，100%质量保持
-- 轻量VAE: 极低显存，视频质量有损
-
-
-### 7. 模型选择策略
-
-选择合适的模型版本对低资源环境至关重要。
-
-#### 推荐模型对比
-
-**蒸馏模型** (强烈推荐):
-- ✅ **[Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v)**
-
-- ✅ **[Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v)**
-
-
-#### 性能优化建议
-
-使用上述蒸馏模型时，可以进一步优化性能：
-- 关闭CFG: `"enable_cfg": false`
-- 减少推理步数: `infer_step: 4`
-- 参考配置文件: [config](https://github.com/ModelTC/LightX2V/tree/main/configs/distill)
-
-## 🚀 完整配置示例
-
-### 预配置模板
-
-- **[14B模型480p视频生成配置](https://github.com/ModelTC/lightx2v/tree/main/configs/offload/disk/wan_i2v_phase_lazy_load_480p.json)**
-
-- **[14B模型720p视频生成配置](https://github.com/ModelTC/lightx2v/tree/main/configs/offload/disk/wan_i2v_phase_lazy_load_720p.json)**
-
-- **[1.3B模型480p视频生成配置](https://github.com/ModelTC/LightX2V/tree/main/configs/offload/block/wan_t2v_1_3b.json)**
-  - 1.3B模型推理瓶颈是T5 encoder，配置文件专门针对T5进行优化
-
-**[启动脚本](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/inference/run_wan_i2v_lazy_load.sh)**
-
-
-## 📚 参考资源
-
-- [参数卸载机制文档](../method_tutorials/offload.md) - 深入了解卸载技术原理
-- [量化技术指南](../method_tutorials/quantization.md) - 量化技术详细说明
-- [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) - 独立Gradio应用与部署说明
-
-## ⚠️ 重要注意事项
-
-1. **硬件要求**: 确保您的硬件满足最低配置要求
-2. **驱动版本**: 建议使用最新的NVIDIA驱动 (535+)
-3. **CUDA版本**: 确保CUDA版本与PyTorch兼容 (建议CUDA 11.8+)
-4. **存储空间**: 预留足够的磁盘空间用于模型缓存 (至少50GB)
-5. **网络环境**: 首次下载模型需要稳定的网络连接
-6. **环境变量**: 务必设置推荐的环境变量以优化性能
-
-
-**技术支持**: 如遇到问题，请提交Issue到项目仓库。
+- [参数卸载](../method_tutorials/offload.md)：CPU、磁盘卸载配置。
+- [量化](../method_tutorials/quantization.md)：权重格式、scheme 和后端依赖。
+- [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v)：独立图形界面与部署说明。

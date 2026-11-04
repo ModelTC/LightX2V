@@ -7,13 +7,20 @@ import torch.nn.functional as F
 
 
 class RelayCompileMixin:
+    def init_compile(self, config):
+        if config.get("use_compile", False):
+            # Aspect ratios and causal ring slots need more than eight guarded
+            # graphs. Retain them after warmup instead of falling back to eager.
+            torch._dynamo.config.recompile_limit = max(torch._dynamo.config.recompile_limit, 32)
+        super().init_compile(config)
+
     def get_compiled_block(self, block_idx, block):
         key = self.get_compile_block_key(block_idx, block)
         cached = self.compiled_blocks.get(key)
         if cached is not None and cached[0] is block:
             return cached[1]
 
-        # Compile the family method before binding the block so Wan and Flash
+        # Compile the family method before binding the block so Wan and the Flash model
         # do not share a wrapper's Dynamo cache and recompile limit.
         if self.compile_backend == "default":
             options = {"options": self.compile_options} if self.compile_options else {}
@@ -33,14 +40,18 @@ def mark_sequence_dynamic(*tensors):
 
 # Preserve the checkpoint's native reductions and low-precision rounding while
 # Inductor fuses the surrounding projections, modulation and residuals.
-@torch.library.custom_op("lightx2v::relayvsr_rms_norm", mutates_args=(), device_types="cuda")
+# A new operator name also prevents reuse of Inductor artifacts compiled with
+# the old, incorrect contiguous-only output contract.
+@torch.library.custom_op("lightx2v::relayvsr_native_rms_norm", mutates_args=(), device_types="cuda")
 def native_rms_norm(x: torch.Tensor, weight: torch.Tensor | None, eps: float) -> torch.Tensor:
     return F.rms_norm(x, (x.shape[-1],), weight, eps)
 
 
 @native_rms_norm.register_fake
 def _rms_norm_fake(x, weight, eps):
-    return torch.empty_like(x, memory_format=torch.contiguous_format)
+    # Native RMSNorm preserves a dense transpose (Flash condition tokens use
+    # that layout); claiming contiguous output breaks Inductor's stride guards.
+    return torch.empty_like(x)
 
 
 @torch.library.custom_op("lightx2v::relayvsr_layer_norm", mutates_args=(), device_types="cuda")
@@ -51,3 +62,16 @@ def native_layer_norm(x: torch.Tensor, weight: torch.Tensor | None, bias: torch.
 @native_layer_norm.register_fake
 def _layer_norm_fake(x, weight, bias, eps):
     return torch.empty_like(x, dtype=torch.float32, memory_format=torch.contiguous_format)
+
+
+# Keep native SDPA's static meta constraints outside the dynamic Wan block.
+@torch.library.custom_op("lightx2v::relayvsr_sdpa", mutates_args=(), device_types="cuda")
+def native_sdpa(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+    from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight
+
+    return TorchSDPAWeight().apply(query, key, value)
+
+
+@native_sdpa.register_fake
+def _sdpa_fake(query, key, value):
+    return query.new_empty((query.shape[0], query.shape[1] * query.shape[2]))

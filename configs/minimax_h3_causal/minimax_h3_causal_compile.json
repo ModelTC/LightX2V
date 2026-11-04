@@ -1,7 +1,10 @@
 {
   "infer_steps": 4,
   "num_frames": 124,
-  "size": [544, 960],
+  "size": [
+    544,
+    960
+  ],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": false,
@@ -23,7 +26,7 @@
   "audio_flow_shift": 3.0,
   "h3_step_update": "training_euler",
   "audio_sampling_rate": 32000,
-  "dit_original_ckpt": "/path/to/gen-base_dit.pt",
+  "dit_original_ckpt": "/path/to/h3_v003.pt",
   "ar_config": {
     "num_frame_per_chunk": 5,
     "sink_chunk_num": 1,
@@ -32,5 +35,6 @@
   },
   "parallel": {
     "tensor_p_size": 8
-  }
+  },
+  "use_cuda_graph": true
 }

@@ -13,16 +13,19 @@ Welcome to LightX2V! This guide will help you quickly set up the environment and
 - [Windows Environment Setup](#windows-environment-setup)
 - [Inference Usage](#inference-usage)
 
+(system-requirements)=
 ## 🚀 System Requirements
 
 - **Operating System**: Linux (Ubuntu 18.04+) or Windows 10/11
 - **Python**: 3.10 or higher
-- **GPU**: NVIDIA GPU with CUDA support, at least 8GB VRAM
-- **Memory**: 16GB or more recommended
+- **GPU**: NVIDIA GPU with CUDA support; required VRAM depends on the model and configuration
+- **Memory**: Enough host RAM for the selected model, including CPU offload buffers
 - **Storage**: At least 50GB available space
 
+(linux-environment-setup)=
 ## 🐧 Linux Environment Setup
 
+(docker-environment-recommended)=
 ### 🐳 Docker Environment (Recommended)
 
 We strongly recommend using the Docker environment, which is the simplest and fastest installation method.
@@ -42,11 +45,30 @@ docker pull lightx2v/lightx2v:26011201-cu128
 docker pull lightx2v/lightx2v:25101501-cu124
 ```
 
-#### 2. Run Container
+#### 2. Start and enter the container
+
+Clone the repository on the host, or enter its root directory if it already exists:
 
 ```bash
-docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings] --entrypoint /bin/bash [image_id]
+git clone https://github.com/ModelTC/LightX2V.git
+cd LightX2V
 ```
+
+Mount the repository and open a shell in its directory. Replace the image name on the last line if you selected another image:
+
+```bash
+docker run --gpus all -it --ipc=host --name lightx2v \
+  -v "$PWD":/workspace/LightX2V -w /workspace/LightX2V \
+  --entrypoint /bin/bash lightx2v/lightx2v:26052801-cu130
+```
+
+Inside the container, install the current checkout, then continue with [Generate Your First Video](first_generation.md):
+
+```bash
+pip install -v -e .
+```
+
+Models and outputs stored in the repository directory persist on the host. After exiting, use `docker start -ai lightx2v` to enter the container again.
 
 #### 3. China Mirror Source (Optional)
 
@@ -63,6 +85,7 @@ docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:26011201-cu128
 docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/lightx2v:25101501-cu124
 ```
 
+(conda-environment-setup)=
 ### 🐍 Conda Environment Setup
 
 If you prefer to set up the environment yourself using Conda, please follow these steps:
@@ -93,22 +116,23 @@ pip install -v -e .
 
 **Option A: Flash Attention 2**
 ```bash
-git clone https://github.com/Dao-AILab/flash-attention.git --recursive
-cd flash-attention && python setup.py install
+test -d flash-attention || git clone https://github.com/Dao-AILab/flash-attention.git --recursive
+(cd flash-attention && python setup.py install)
 ```
 
 **Option B: Flash Attention 3 (for Hopper architecture GPUs)**
 ```bash
-cd flash-attention/hopper && python setup.py install
+test -d flash-attention || git clone https://github.com/Dao-AILab/flash-attention.git --recursive
+(cd flash-attention/hopper && python setup.py install)
 ```
 
 **Option C: SageAttention 2 (Recommended)**
 ```bash
 git clone https://github.com/thu-ml/SageAttention.git
-cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -v -e .
+(cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -v -e .)
 ```
 
-#### Step 4: Install Quantization Operators (Optional)
+#### Step 5: Install Quantization Operators (Optional)
 
 Quantization operators are used to support model quantization, which can significantly reduce memory usage and accelerate inference. Choose the appropriate quantization operator based on your needs:
 
@@ -123,12 +147,11 @@ Or install from source for the latest features:
 
 ```bash
 git clone https://github.com/vllm-project/vllm.git
-cd vllm
-uv pip install -e .
+(cd vllm && pip install -e .)
 ```
 
 **Option B: SGL Kernels**
-Suitable for SGL quantization scheme, requires torch == 2.8.0.
+For SGL quantization, choose a release compatible with your PyTorch and CUDA versions; requirements vary by sgl-kernel release. See the [SGL Kernel installation guide](https://github.com/sgl-project/sglang/tree/main/sgl-kernel).
 
 ```bash
 pip install sgl-kernel --upgrade
@@ -139,8 +162,7 @@ Suitable for Ada architecture GPUs (such as RTX 4090, L40S, etc.).
 
 ```bash
 git clone https://github.com/KONAKONA666/q8_kernels.git
-cd q8_kernels && git submodule init && git submodule update
-python setup.py install
+(cd q8_kernels && git submodule update --init --recursive && python setup.py install)
 ```
 
 > 💡 **Note**:
@@ -148,13 +170,14 @@ python setup.py install
 > - Quantized models can be downloaded from [LightX2V HuggingFace](https://huggingface.co/lightx2v)
 > - For more quantization information, please refer to the [Quantization Documentation](../method_tutorials/quantization.md)
 
-#### Step 5: Verify Installation
+#### Step 6: Verify Installation
 
 ```python
 import lightx2v
 print(f"LightX2V Version: {lightx2v.__version__}")
 ```
 
+(windows-environment-setup)=
 ## 🪟 Windows Environment Setup
 
 Windows systems only support Conda environment setup. Please follow these steps:
@@ -165,19 +188,19 @@ Windows systems only support Conda environment setup. Please follow these steps:
 
 First, confirm your GPU driver and CUDA version:
 
-```cmd
+```bat
 nvidia-smi
 ```
 
-Record the **CUDA Version** information in the output, which needs to be consistent in subsequent installations.
+The **CUDA Version** shown by `nvidia-smi` is the maximum CUDA version supported by the driver, not necessarily the installed toolkit. Use `nvcc --version` for the local toolkit and `python -c "import torch; print(torch.version.cuda)"` for the CUDA version used by PyTorch. Select compatible packages rather than requiring all three values to be identical. See [NVIDIA's definition](https://docs.nvidia.com/deploy/nvidia-smi/index.html#cuda-umd-version).
 
 #### Step 2: Create Python Environment
 
-```cmd
-# Create new environment (Python 3.12 recommended)
+```bat
+REM Create new environment (Python 3.12 recommended)
 conda create -n lightx2v python=3.12 -y
 
-# Activate environment
+REM Activate environment
 conda activate lightx2v
 ```
 
@@ -195,40 +218,38 @@ conda activate lightx2v
 
 **Example (Python 3.12 + PyTorch 2.6 + CUDA 12.4):**
 
-```cmd
-# Download and install PyTorch
+```bat
+REM Download and install PyTorch
 pip install torch-2.6.0+cu124-cp312-cp312-win_amd64.whl
 
-# Install supporting packages
+REM Install supporting packages
 pip install torchvision==0.21.0 torchaudio==2.6.0
 ```
 
 **Method 2: Direct Installation via pip**
 
-```cmd
-# CUDA 12.4 version example
+```bat
+REM CUDA 12.4 version example
 pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 torchaudio==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
 ```
 
-#### Step 4: Install Windows Version vLLM
+#### Step 4: Clone Repository and Install Dependencies
 
-Download the corresponding wheel package from [vllm-windows releases](https://github.com/SystemPanic/vllm-windows/releases).
+```bat
+REM Clone project code
+git clone https://github.com/ModelTC/LightX2V.git
+cd LightX2V
 
-**Version Matching Requirements:**
-- Python version matching
-- PyTorch version matching
-- CUDA version matching
-
-```cmd
-# Install vLLM (please adjust according to actual filename)
-pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
+REM Install Windows-specific dependencies
+pip install -r requirements_win.txt
+pip install -v -e .
 ```
 
 #### Step 5: Install Attention Mechanism Operators
 
 **Option A: Flash Attention 2**
 
-```cmd
+```bat
 pip install flash-attn==2.7.2.post1
 ```
 
@@ -238,26 +259,14 @@ pip install flash-attn==2.7.2.post1
 - [Windows Special Version 1](https://github.com/woct0rdho/SageAttention/releases)
 - [Windows Special Version 2](https://github.com/sdbds/SageAttention-for-windows/releases)
 
-```cmd
-# Install SageAttention (please adjust according to actual filename)
+```bat
+REM Install SageAttention (please adjust according to actual filename)
 pip install sageattention-2.1.1+cu126torch2.6.0-cp312-cp312-win_amd64.whl
 ```
 
 > ⚠️ **Note**: SageAttention's CUDA version doesn't need to be strictly aligned, but Python and PyTorch versions must match.
 
-#### Step 6: Clone Repository
-
-```cmd
-# Clone project code
-git clone https://github.com/ModelTC/LightX2V.git
-cd LightX2V
-
-# Install Windows-specific dependencies
-pip install -r requirements_win.txt
-pip install -v -e .
-```
-
-#### Step 7: Install Quantization Operators (Optional)
+#### Step 6: Install Quantization Operators (Optional)
 
 By default, LightX2V uses Triton kernel for quantization inference, which is efficient and requires no additional dependencies. Just ensure that `triton-windows` is installed.
 
@@ -272,8 +281,8 @@ Download the corresponding wheel package from [vllm-windows releases](https://gi
 - PyTorch version match
 - CUDA version match
 
-```cmd
-# Install vLLM (please adjust according to actual filename)
+```bat
+REM Install vLLM (please adjust according to actual filename)
 pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
 ```
 
@@ -281,10 +290,12 @@ pip install vllm-0.9.1+cu124-cp312-cp312-win_amd64.whl
 
 For RTX 40 series GPUs, it is recommended to install `q8_kernel==0.1.0`:
 
-```bash
+```bat
 git clone https://github.com/KONAKONA666/q8_kernels.git
-cd q8_kernels && git submodule init && git submodule update
+pushd q8_kernels
+git submodule update --init --recursive
 python setup.py install
+popd
 ```
 
 For other GPUs, it is recommended to install `q8_kernel==0.5.0`. Please refer to [LTX-Video-Q8-Kernels](https://github.com/Lightricks/LTX-Video-Q8-Kernels).
@@ -294,6 +305,14 @@ For other GPUs, it is recommended to install `q8_kernel==0.5.0`. Please refer to
 > - Quantized models can be downloaded from [LightX2V HuggingFace](https://huggingface.co/lightx2v)
 > - For more quantization information, please refer to the [Quantization Documentation](../method_tutorials/quantization.md)
 
+#### Step 7: Verify Installation
+
+```python
+import lightx2v
+print(f"LightX2V Version: {lightx2v.__version__}")
+```
+
+(inference-usage)=
 ## 🎯 Inference Usage
 
 ### 📥 Model Preparation
@@ -321,8 +340,8 @@ bash scripts/wan/run_wan_t2v.sh
 
 #### Windows Environment
 
-```cmd
-# Use Windows batch script
+```bat
+REM Use Windows batch script
 scripts\win\run_wan_t2v.bat
 ```
 

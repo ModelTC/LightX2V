@@ -34,7 +34,10 @@ class RecordingReader:
         with av.open(self.video_path) as container:
             stream = container.streams.video[0]
             stream.thread_type = "AUTO"
-            stream.codec_context.thread_count = 16
+            # Frame threading buffers that many future frames before yielding
+            # the first picture. Two threads suffice for a chunk-prefetcher and
+            # leave CPU time available for the current cover/text preparation.
+            stream.codec_context.thread_count = 2
             source_width, source_height = stream.width, stream.height
             crop_width = min(source_width, round(source_height * self.width / self.height))
             crop_height = min(source_height, round(source_width * self.height / self.width))
@@ -91,7 +94,9 @@ class RecordingReader:
 def prepare_cover(image_path, height, width):
     cover = torch.from_numpy(np.array(Image.open(image_path).convert("RGB"))).permute(2, 0, 1).float()
     scale = max(height / cover.shape[1], width / cover.shape[2])
-    cover = F.interpolate(cover[None], size=(math.ceil(cover.shape[1] * scale), math.ceil(cover.shape[2] * scale)), mode="bilinear", align_corners=False)[0]
+    size = (math.ceil(cover.shape[1] * scale), math.ceil(cover.shape[2] * scale))
+    if tuple(cover.shape[1:]) != size:
+        cover = F.interpolate(cover[None], size=size, mode="bilinear", align_corners=False)[0]
     top, left = (cover.shape[1] - height) // 2, (cover.shape[2] - width) // 2
     cover = cover[:, top : top + height, left : left + width].contiguous() / 127.5 - 1
     return cover

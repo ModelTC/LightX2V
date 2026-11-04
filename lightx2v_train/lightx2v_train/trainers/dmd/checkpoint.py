@@ -98,6 +98,8 @@ class DmdCheckpointManager:
         return self._checkpoint_process_group
 
     def _validate_checkpoint_state(self, state, state_path, resume_ckpt_path):
+        if state.get("quant") != self.quant_config:
+            raise RuntimeError(f"Checkpoint QAT configuration {state.get('quant')!r} does not match current quant={self.quant_config!r}: {state_path}")
         self._validate_checkpoint_metadata(state, state_path, resume_ckpt_path)
         expected = {self.checkpoint_version_key: self.checkpoint_version}
         for role, runtime in self._active_role_runtimes():
@@ -238,6 +240,7 @@ class DmdCheckpointManager:
 
         training_state = {
             "iteration": iteration,
+            "quant": self.quant_config,
             "world_size": get_world_size(),
             "dmd_checkpoint_version": 2,
             "student_train_type": self.student_train_type,
@@ -282,6 +285,7 @@ class DmdCheckpointManager:
         dist_state_path = os.path.join(save_dir, "dist_state")
         trainer_state = {
             "iteration": iteration,
+            "quant": self.quant_config,
             "world_size": get_world_size(),
             "dmd_checkpoint_version": 2,
             "student_train_type": self.student_train_type,

@@ -75,30 +75,6 @@
                         "outputs": ["output_video"]
                     }
                 }
-            },
-            "matrix-game2-gta-drive": {
-                "single_stage": {
-                    "pipeline": {
-                        "inputs": ["input_image"],
-                        "outputs": ["output_video"]
-                    }
-                }
-            },
-            "matrix-game2-universal": {
-                "single_stage": {
-                    "pipeline": {
-                        "inputs": ["input_image"],
-                        "outputs": ["output_video"]
-                    }
-                }
-            },
-            "matrix-game2-templerun": {
-                "single_stage": {
-                    "pipeline": {
-                        "inputs": ["input_image"],
-                        "outputs": ["output_video"]
-                    }
-                }
             }
         },
         "i2i": {

@@ -15,3 +15,16 @@ class LightTaeHy15(nn.Module):
     def decode(self, latents, parallel=True, show_progress_bar=True, skip_trim=False):
         latents = latents / self.scaling_factor
         return self.taehv.decode_video(latents.transpose(1, 2).to(self.dtype), parallel, show_progress_bar).transpose(1, 2)
+
+    @torch.no_grad()
+    def cached_decode_withflag(self, latents, first, last):
+        if first:
+            self._decode_memory = [None] * len(self.taehv.decoder)
+        z = (latents / self.scaling_factor).transpose(1, 2).to(self.dtype)
+        pixels = self.taehv.decode_video(z, parallel=False, show_progress_bar=False, memory=self._decode_memory, first_chunk=first).transpose(1, 2)
+        if last:
+            self.reset_decode_state()
+        return pixels
+
+    def reset_decode_state(self):
+        self._decode_memory = None

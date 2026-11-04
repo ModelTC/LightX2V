@@ -6,17 +6,34 @@ def _fp8_f16_accum_meta(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=None):
     return torch.empty((mat_a.shape[0], mat_b.shape[1]), dtype=out_dtype, device=mat_a.device)
 
 
-FP8_F16_ACCUM_MM_AVAILABLE = hasattr(torch.ops.lightx2v_kernel, "cutlass_scaled_fp8_mm_f16_accum_sm120")
+_fp8_f16_accum_name = "cutlass_scaled_fp8_mm_f16_accum_sm90"
+if not hasattr(torch.ops.lightx2v_kernel, _fp8_f16_accum_name):
+    _fp8_f16_accum_name = "cutlass_scaled_fp8_mm_f16_accum_sm120"
+
+FP8_F16_ACCUM_MM_AVAILABLE = hasattr(torch.ops.lightx2v_kernel, _fp8_f16_accum_name)
 if FP8_F16_ACCUM_MM_AVAILABLE:
-    _fp8_f16_accum_op = torch.ops.lightx2v_kernel.cutlass_scaled_fp8_mm_f16_accum_sm120.default
+    _fp8_f16_accum_op = getattr(torch.ops.lightx2v_kernel, _fp8_f16_accum_name).default
     if not _fp8_f16_accum_op.has_kernel_for_dispatch_key("Meta"):
         torch.library.register_fake(_fp8_f16_accum_op, _fp8_f16_accum_meta)
 
 
 def cutlass_scaled_fp8_mm_f16_accum(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=None):
     if not FP8_F16_ACCUM_MM_AVAILABLE:
-        raise ImportError("lightx2v-kernel-nvidia was built without the SM120 FP8 GEMM with FP16 accumulation")
+        raise ImportError("lightx2v-kernel-nvidia was built without FP8 GEMM with FP16 accumulation")
     return _fp8_f16_accum_op(mat_a, mat_b, scales_a, scales_b, out_dtype, bias)
+
+
+FP8_F32_ACCUM_MM_AVAILABLE = hasattr(torch.ops.lightx2v_kernel, "cutlass_scaled_fp8_mm_f32_accum_sm90")
+if FP8_F32_ACCUM_MM_AVAILABLE:
+    _fp8_f32_accum_op = torch.ops.lightx2v_kernel.cutlass_scaled_fp8_mm_f32_accum_sm90.default
+    if not _fp8_f32_accum_op.has_kernel_for_dispatch_key("Meta"):
+        torch.library.register_fake(_fp8_f32_accum_op, _fp8_f16_accum_meta)
+
+
+def cutlass_scaled_fp8_mm_f32_accum(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=None):
+    if not FP8_F32_ACCUM_MM_AVAILABLE:
+        raise ImportError("lightx2v-kernel-nvidia was built without Hopper FP8 GEMM with FP32 accumulation")
+    return _fp8_f32_accum_op(mat_a, mat_b, scales_a, scales_b, out_dtype, bias)
 
 
 def cutlass_scaled_nvfp4_mm(mat_a, mat_b, scales_a, scales_b, alpha, bias=None):
@@ -186,7 +203,5 @@ def cutlass_scaled_mxfp8_mm_residual_gate(mat_a, mat_b, scales_a, scales_b, alph
     the GEMM accumulator before the final BF16 store. A 2D gate is a fallback
     compatibility path and may differ by BF16 rounding at the GEMM boundary.
     """
-    torch.ops.lightx2v_kernel.cutlass_scaled_mxfp8_mm_residual_gate_sm120.default(
-        residual, mat_a, mat_b, scales_a, scales_b, alpha, bias, gate.contiguous()
-    )
+    torch.ops.lightx2v_kernel.cutlass_scaled_mxfp8_mm_residual_gate_sm120.default(residual, mat_a, mat_b, scales_a, scales_b, alpha, bias, gate.contiguous())
     return residual

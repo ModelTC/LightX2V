@@ -1,7 +1,6 @@
 #!/bin/bash
 set -eo pipefail
 
-# Set repository/model paths and dit_original_ckpt in the selected JSON config.
 lightx2v_path=/path/to/LightX2V
 model_path=/path/to/MiniMax-H3
 

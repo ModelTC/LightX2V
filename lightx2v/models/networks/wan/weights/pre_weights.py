@@ -1,4 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.models.networks.wan.conditioning import has_image_context
 from lightx2v.utils.registry_factory import CONV3D_WEIGHT_REGISTER, EMBEDDING_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, TENSOR_REGISTER
 
 
@@ -97,7 +98,7 @@ class WanPreWeights(WeightModule):
             ),
         )
 
-        if config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and config.get("use_image_encoder", True):
+        if has_image_context(config):
             # Wan-Animate-2's MLPProj uses nn.LayerNorm's default epsilon.
             # Preserve the established epsilon for all other Wan variants.
             image_proj_norm_eps = 1e-5 if config["model_cls"] == "wan2.2_animate2_distilled" else 1e-6

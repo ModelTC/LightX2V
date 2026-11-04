@@ -1,214 +1,61 @@
-# Lightx2v Low-Resource Deployment Guide
+# Low-resource Wan deployment
 
-## 📋 Overview
+This guide covers quantization, CPU/disk offloading, and VAE options for Wan2.1. Complete [environment setup](../getting_started/quickstart.md), then select a config compatible with your model and GPU backends. VRAM and host RAM requirements depend on weights, dimensions, frame count, and kernels; 8GB VRAM and 16/32GB RAM do not guarantee that every config will run.
 
-This guide is specifically designed for hardware resource-constrained environments, particularly configurations with **8GB VRAM + 16/32GB RAM**, providing detailed instructions on how to successfully run Lightx2v 14B models for 480p and 720p video generation.
+## Choose a configuration
 
-Lightx2v is a powerful video generation model, but it requires careful optimization to run smoothly in resource-constrained environments. This guide provides a complete solution from hardware selection to software configuration, ensuring you can achieve the best video generation experience under limited hardware conditions.
+| Model and task | Configuration | Template defaults | Entry point |
+| --- | --- | --- | --- |
+| 14B I2V 480P | [480P disk offload](https://github.com/ModelTC/LightX2V/blob/main/configs/offload/disk/wan_i2v_phase_lazy_load_480p.json) | 40 steps, CFG on, `[480, 832]` | CLI example below |
+| 14B I2V 720P | [720P disk offload](https://github.com/ModelTC/LightX2V/blob/main/configs/offload/disk/wan_i2v_phase_lazy_load_720p.json) | 40 steps, CFG off, `[1280, 720]` | [720P launcher](https://github.com/ModelTC/LightX2V/blob/main/scripts/wan/inference/run_wan_i2v_lazy_load.sh) |
+| 1.3B T2V 480P | [1.3B config](https://github.com/ModelTC/LightX2V/blob/main/configs/offload/block/wan_t2v_1_3b.json) | 4 steps, CFG on, `[480, 832]` | Use `--task t2v`, change the model and config, and omit `--image_path` |
 
-## 🎯 Target Hardware Configuration
+Dimensions use `[height, width]`; the 720P template is portrait. Match sampling steps and CFG to the weights: the 4-step template needs matching distilled weights; original weights need their corresponding sampling config. The 720P launcher also fixes FP16 and `--size 1280 720`. Update the script when changing models or dimensions; changing only the JSON does not override these settings.
 
-### Recommended Hardware Specifications
+## Run 480P I2V
 
-**GPU Requirements**:
-- **VRAM**: 8GB (RTX 3060/3070/4060/4060Ti, etc.)
-- **Architecture**: NVIDIA graphics cards with CUDA support
+1. Prepare a complete Wan2.1-I2V-14B-480P model directory and the quantized DiT, T5, CLIP, and Tiny VAE weights required by the config.
+2. Edit the 480P JSON above, replacing `dit_quantized_ckpt`, `t5_quantized_ckpt`, `clip_quantized_ckpt`, and `tae_path` with real paths. `lazy_load=true` requires a directory of DiT weights saved by block; see `--save_by_block` in the [conversion guide](https://github.com/ModelTC/LightX2V/blob/main/tools/convert/readme.md).
+3. Install the configured backends, including `sage_attn2` and `fp8-vllm`. If your GPU does not support them, choose matching backends and weights using the [attention](../method_tutorials/attention.md) and [quantization](../method_tutorials/quantization.md) guides.
 
-**System Memory**:
-- **Minimum**: 16GB DDR4
-- **Recommended**: 32GB DDR4/DDR5
-- **Memory Speed**: 3200MHz or higher recommended
-
-**Storage Requirements**:
-- **Type**: NVMe SSD strongly recommended
-- **Capacity**: At least 50GB available space
-- **Speed**: Read speed of 3000MB/s or higher recommended
-
-**CPU Requirements**:
-- **Cores**: 8 cores or more recommended
-- **Frequency**: 3.0GHz or higher recommended
-- **Architecture**: Support for AVX2 instruction set
-
-## ⚙️ Core Optimization Strategies
-
-### 1. Environment Optimization
-
-Before running Lightx2v, it's recommended to set the following environment variables to optimize performance:
+From the repository root, replace the model path and GPU ID, then run:
 
 ```bash
-# CUDA memory allocation optimization
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+lightx2v_path="$PWD"
+model_path="/path/to/Wan2.1-I2V-14B-480P"
+export CUDA_VISIBLE_DEVICES=0
+source scripts/base/base.sh
 
-# Use BF16 precision for inference to reduce VRAM usage
-export DTYPE=BF16
+python -m lightx2v.infer \
+  --model_cls wan2.1 \
+  --task i2v \
+  --model_path "$model_path" \
+  --config_json configs/offload/disk/wan_i2v_phase_lazy_load_480p.json \
+  --prompt "A white cat relaxing on a sunny beach." \
+  --image_path assets/inputs/imgs/img_0.jpg \
+  --save_result_path save_results/low_resource.mp4
 ```
 
-**Optimization Details**:
-- `expandable_segments:True`: Allows dynamic expansion of CUDA memory segments, reducing memory fragmentation
-- `DTYPE=BF16`: Uses BF16 precision to reduce VRAM usage while maintaining quality
+Dimensions and frame count come from the JSON. View `save_results/low_resource.mp4` after inference. Check peak VRAM and host RAM before increasing dimensions or frame count.
 
-### 2. Quantization Strategy
+## Optional adjustments
 
-Quantization is a key optimization technique in low-resource environments, reducing memory usage by lowering model precision.
+Edit these fields in the complete JSON. Follow the linked guides for detailed quantization and offload settings.
 
-#### Quantization Scheme Comparison
+| Goal | Settings and requirements |
+| --- | --- |
+| Reduce weight memory | Enable `dit_quantized`, `t5_quantized`, or `clip_quantized` with the matching scheme and weight path; a scheme alone does not enable quantization |
+| Reduce VRAM | Set `cpu_offload=true` and `t5_cpu_offload=true`; host RAM must hold offloaded weights and buffers |
+| Reduce DiT host RAM | Set `lazy_load=true`, use weights saved by block on an SSD, and tune `num_disk_workers` for disk throughput |
+| Finer DiT offloading | Set `offload_granularity="phase"` to offload self-attention, cross-attention, and FFN phases within each block |
+| Reduce intermediate memory | Enable `clean_cuda_cache` or `rope_chunk` and adjust `rope_chunk_size` as needed |
+| Reduce VAE memory | Set `use_tiling_vae=true`; alternatively enable `use_tae` with `tae_path`, accounting for Tiny VAE's quality tradeoff |
+| Reduce sampling steps | Use matching [distilled weights and configs](../method_tutorials/step_distill.md), rather than only reducing an original model's `infer_steps` |
 
-**FP8 Quantization** (Recommended for RTX 40 series):
-```python
-# Suitable for GPUs supporting FP8, providing better precision
-dit_quant_scheme = "fp8"      # DIT model quantization
-t5_quant_scheme = "fp8"       # T5 text encoder quantization
-clip_quant_scheme = "fp8"     # CLIP visual encoder quantization
-```
+Wan2.1 Tiny VAE weights are available as [taew2_1.pth](https://github.com/madebyollin/taehv/raw/refs/heads/main/taew2_1.pth). Allow disk space for base weights, quantized/distilled weights, and output files.
 
-**INT8 Quantization** (Universal solution):
-```python
-# Suitable for all GPUs, minimal memory usage
-dit_quant_scheme = "int8"     # 8-bit integer quantization
-t5_quant_scheme = "int8"      # Text encoder quantization
-clip_quant_scheme = "int8"    # Visual encoder quantization
-```
+## Further reading
 
-### 3. Efficient Operator Selection Guide
-
-Choosing the right operators can significantly improve inference speed and reduce memory usage.
-
-#### Attention Operator Selection
-
-**Recommended Priority**:
-1. **[Sage Attention](https://github.com/thu-ml/SageAttention)** (Highest priority)
-
-2. **[Flash Attention](https://github.com/Dao-AILab/flash-attention)** (Universal solution)
-
-#### Matrix Multiplication Operator Selection
-
-**ADA Architecture GPUs** (RTX 40 series):
-
-Recommended priority:
-1. **[q8-kernel](https://github.com/KONAKONA666/q8_kernels)** (Highest performance, ADA architecture only)
-2. **[sglang-kernel](https://github.com/sgl-project/sglang/tree/main/sgl-kernel)** (Balanced solution)
-3. **[vllm-kernel](https://github.com/vllm-project/vllm)** (Universal solution)
-
-**Other Architecture GPUs**:
-1. **[sglang-kernel](https://github.com/sgl-project/sglang/tree/main/sgl-kernel)** (Recommended)
-2. **[vllm-kernel](https://github.com/vllm-project/vllm)** (Alternative)
-
-### 4. Parameter Offloading Strategy
-
-Parameter offloading technology allows models to dynamically schedule parameters between CPU and disk, breaking through VRAM limitations.
-
-#### Three-Level Offloading Architecture
-
-```python
-# Disk-CPU-GPU three-level offloading configuration
-cpu_offload=True             # Enable CPU offloading
-t5_cpu_offload=True          # Enable T5 encoder CPU offloading
-offload_granularity=phase    # DIT model fine-grained offloading
-lazy_load = True             # Enable lazy loading mechanism
-num_disk_workers = 2         # Disk I/O worker threads
-```
-
-#### Offloading Strategy Details
-
-**Lazy Loading Mechanism**:
-- Model parameters are loaded from disk to CPU on demand
-- Reduces runtime memory usage
-- Supports large models running with limited memory
-
-**Disk Storage Optimization**:
-- Use high-speed SSD to store model parameters
-- Store model files grouped by blocks
-- Refer to conversion script [documentation](https://github.com/ModelTC/lightx2v/tree/main/tools/convert/readme.md), specify `--save_by_block` parameter during conversion
-
-### 5. VRAM Optimization Techniques
-
-VRAM optimization strategies for 720p video generation.
-
-#### CUDA Memory Management
-
-```python
-# CUDA memory cleanup configuration
-clean_cuda_cache = True        # Timely cleanup of GPU cache
-rope_chunk = True              # Rotary position encoding chunked computation
-rope_chunk_size = 100          # Chunk size, adjustable based on VRAM
-```
-
-#### Chunked Computation Strategy
-
-**Rotary Position Encoding Chunking**:
-- Process long sequences in small chunks
-- Reduce peak VRAM usage
-- Maintain computational precision
-
-### 6. VAE Optimization
-
-VAE (Variational Autoencoder) is a key component in video generation, and optimizing VAE can significantly improve performance.
-
-#### VAE Chunked Inference
-
-```python
-# VAE optimization configuration
-use_tiling_vae = True          # Enable VAE chunked inference
-```
-
-#### Lightweight VAE
-
-```python
-# VAE optimization configuration
-use_tae = True            # Use lightweight VAE
-tae_path = "/path to taew2_1.pth"
-```
-You can download taew2_1.pth [here](https://github.com/madebyollin/taehv/blob/main/taew2_1.pth)
-
-**VAE Optimization Effects**:
-- Standard VAE: Baseline performance, 100% quality retention
-- Standard VAE chunked: Reduces VRAM usage, increases inference time, 100% quality retention
-- Lightweight VAE: Extremely low VRAM usage, video quality loss
-
-### 7. Model Selection Strategy
-
-Choosing the right model version is crucial for low-resource environments.
-
-#### Recommended Model Comparison
-
-**Distilled Models** (Strongly recommended):
-- ✅ **[Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v)**
-
-- ✅ **[Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-720P-StepDistill-CfgDistill-Lightx2v)**
-
-#### Performance Optimization Suggestions
-
-When using the above distilled models, you can further optimize performance:
-- Disable CFG: `"enable_cfg": false`
-- Reduce inference steps: `infer_step: 4`
-- Reference configuration files: [config](https://github.com/ModelTC/LightX2V/tree/main/configs/distill)
-
-## 🚀 Complete Configuration Examples
-
-### Pre-configured Templates
-
-- **[14B Model 480p Video Generation Configuration](https://github.com/ModelTC/lightx2v/tree/main/configs/offload/disk/wan_i2v_phase_lazy_load_480p.json)**
-
-- **[14B Model 720p Video Generation Configuration](https://github.com/ModelTC/lightx2v/tree/main/configs/offload/disk/wan_i2v_phase_lazy_load_720p.json)**
-
-- **[1.3B Model 480p Video Generation Configuration](https://github.com/ModelTC/LightX2V/tree/main/configs/offload/block/wan_t2v_1_3b.json)**
-  - The inference bottleneck for 1.3B models is the T5 encoder, so the configuration file specifically optimizes for T5
-
-**[Launch Script](https://github.com/ModelTC/LightX2V/tree/main/scripts/wan/inference/run_wan_i2v_lazy_load.sh)**
-
-## 📚 Reference Resources
-
-- [Parameter Offloading Mechanism Documentation](../method_tutorials/offload.md) - In-depth understanding of offloading technology principles
-- [Quantization Technology Guide](../method_tutorials/quantization.md) - Detailed explanation of quantization technology
-- [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) - Separate Gradio application and deployment instructions
-
-## ⚠️ Important Notes
-
-1. **Hardware Requirements**: Ensure your hardware meets minimum configuration requirements
-2. **Driver Version**: Recommend using the latest NVIDIA drivers (535+)
-3. **CUDA Version**: Ensure CUDA version is compatible with PyTorch (recommend CUDA 11.8+)
-4. **Storage Space**: Reserve sufficient disk space for model caching (at least 50GB)
-5. **Network Environment**: Stable network connection required for initial model download
-6. **Environment Variables**: Be sure to set the recommended environment variables to optimize performance
-
-**Technical Support**: If you encounter issues, please submit an Issue to the project repository.
+- [Offloading](../method_tutorials/offload.md): CPU and disk offload settings.
+- [Quantization](../method_tutorials/quantization.md): weight formats, schemes, and backend dependencies.
+- [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v): standalone graphical interface and deployment instructions.

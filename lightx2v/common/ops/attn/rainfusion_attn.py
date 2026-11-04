@@ -3,6 +3,7 @@ import math
 import torch
 from einops import rearrange
 
+from lightx2v.utils import workload_stats
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, SPARSE_OPERATOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -367,7 +368,8 @@ class RainfusionAttnWeight(AttnWeightTemplate):
 
             block_mask = cls._base_blockmask
             select_idx, select_num_idx = cls.get_select_indices(block_mask)
-            out = cls._get_operator().sparse_attention(
+            operator = cls._get_operator()
+            out = operator.sparse_attention(
                 q_4d,
                 k_4d,
                 v_4d,
@@ -380,6 +382,9 @@ class RainfusionAttnWeight(AttnWeightTemplate):
                 actual_seq_lengths=[q_seqlen for _ in range(batch)],
                 actual_seq_lengths_kv=[kv_seqlen for _ in range(batch)],
             )
+            # Shared consumers record internally; record paths outside CudaRainfusionSparseOperator here.
+            if not isinstance(operator, CudaRainfusionSparseOperator) and workload_stats.enabled("attention"):
+                workload_stats.record_sparse_attn(q_4d, k_4d, v_4d, block_mask, self.pool_size, self.pool_size, operator="rainfusion_attn", layout="BSHD")
             out = self.do_tensor_inv_rearrange(out, h_res_len, w_res_len)
 
         out = out.squeeze(0).reshape(out.shape[1], -1)

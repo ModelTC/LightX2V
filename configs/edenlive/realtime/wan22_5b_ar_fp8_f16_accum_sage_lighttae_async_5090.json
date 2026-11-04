@@ -1,0 +1,82 @@
+{
+  "size": [
+    704,
+    1280
+  ],
+  "fps": 24,
+  "num_frames": 717,
+  "infer_steps": 4,
+  "sample_shift": 5.0,
+  "sample_guide_scale": 1.0,
+  "enable_cfg": false,
+  "use_image_encoder": false,
+  "proxy_resize_mode": "bilinear",
+  "proxy_condition_rmsnorm": false,
+  "proxy_unconditional_control": "same",
+  "self_attn_1_type": "sage_attn2",
+  "cross_attn_1_type": "sage_attn2",
+  "cross_attn_2_type": "sage_attn2",
+  "rms_norm_type": "sgl-kernel",
+  "layer_norm_type": "Triton",
+  "rope_type": "flashinfer_rope",
+  "modulate_type": "triton",
+  "cpu_offload": false,
+  "mxfp8_fuse_enable": false,
+  "ar_config": {
+    "num_frame_per_chunk": 3,
+    "local_attn_size": 18,
+    "sink_size": 6,
+    "kv_cache_scheme": "rolling",
+    "step_kv_cache": false,
+    "denoising_step_list": [
+      1000,
+      937.5,
+      833.3333333333,
+      625
+    ],
+    "kv_offload": false
+  },
+  "use_compile": true,
+  "use_cuda_graph": true,
+  "warmup": true,
+  "need_scaled": true,
+  "use_tae": true,
+  "tae_path": "/path/to/lighttaew2_2.safetensors",
+  "streaming_vae": true,
+  "t5_cpu_offload": false,
+  "t5_quantized": true,
+  "t5_rms_norm_type": "torch",
+  "dit_quantized": true,
+  "prompt_travel": {
+    "prompt_travel_text": [
+      "Cinematic photorealism. A vast volcanic cavern dominated by a churning, incandescent molten lava lake, dark basalt formations, and jagged stalactites. Dynamic heat haze and glowing orange embers fill the air. Seen from a first-person viewpoint, a heavy industrial cryo-blaster with frosted metallic plating and cyan energy vents is held ready. Projectiles flash-freeze bubbling magma into dense slabs of hissing glacial ice. Dramatic lighting balances intense fiery magma radiance against cool cyan cryo luminescence. The player fires a cryogenic beam into the molten lava, flash-freezing a thick ice platform with billowing steam, then steps onto it.",
+      "Cinematic photorealism. A vast volcanic cavern dominated by a churning, incandescent molten lava lake, dark basalt formations, and jagged stalactites. Dynamic heat haze and glowing orange embers fill the air. Seen from a first-person viewpoint, a heavy industrial cryo-blaster with frosted metallic plating and cyan energy vents is held ready. Projectiles flash-freeze bubbling magma into dense slabs of hissing glacial ice. Dramatic lighting balances intense fiery magma radiance against cool cyan cryo luminescence. Aiming further ahead across the lava lake, the player shoots another cryo burst, creates a fresh ice platform, and jumps forward.",
+      "Cinematic photorealism. A vast volcanic cavern dominated by a churning, incandescent molten lava lake, dark basalt formations, and jagged stalactites. Dynamic heat haze and glowing orange embers fill the air. Seen from a first-person viewpoint, a heavy industrial cryo-blaster with frosted metallic plating and cyan energy vents is held ready. Projectiles flash-freeze bubbling magma into dense slabs of hissing glacial ice. Dramatic lighting balances intense fiery magma radiance against cool cyan cryo luminescence. Traversing the steaming ice slab, the player fires the cryo-blaster forward to solidify another stepping stone across the boiling magma.",
+      "Cinematic photorealism. A vast volcanic cavern dominated by a churning, incandescent molten lava lake, dark basalt formations, and jagged stalactites. Dynamic heat haze and glowing orange embers fill the air. Seen from a first-person viewpoint, a heavy industrial cryo-blaster with frosted metallic plating and cyan energy vents is held ready. Projectiles flash-freeze bubbling magma into dense slabs of hissing glacial ice. Dramatic lighting balances intense fiery magma radiance against cool cyan cryo luminescence. The player shoots successive freezing bursts onto the magma, leaping swiftly across the sizzling, temporary ice platforms toward the distant arch.",
+      "Cinematic photorealism. A vast volcanic cavern dominated by a churning, incandescent molten lava lake, dark basalt formations, and jagged stalactites. Dynamic heat haze and glowing orange embers fill the air. Seen from a first-person viewpoint, a heavy industrial cryo-blaster with frosted metallic plating and cyan energy vents is held ready. Projectiles flash-freeze bubbling magma into dense slabs of hissing glacial ice. Dramatic lighting balances intense fiery magma radiance against cool cyan cryo luminescence. Nearing the monolithic stone portal, the player freezes a final ice pad on the lava surface and leaps toward the entryway.",
+      "Cinematic photorealism. A vast volcanic cavern dominated by a churning, incandescent molten lava lake, dark basalt formations, and jagged stalactites. Dynamic heat haze and glowing orange embers fill the air. Seen from a first-person viewpoint, a heavy industrial cryo-blaster with frosted metallic plating and cyan energy vents is held ready. Projectiles flash-freeze bubbling magma into dense slabs of hissing glacial ice. Dramatic lighting balances intense fiery magma radiance against cool cyan cryo luminescence. The player steps onto the solid stone threshold under the archway, passes through, and turns 180 degrees back toward the magma lake.",
+      "Cinematic photorealism. A vast volcanic cavern dominated by a churning, incandescent molten lava lake, dark basalt formations, and jagged stalactites. Dynamic heat haze and glowing orange embers fill the air. Seen from a first-person viewpoint, a heavy industrial cryo-blaster with frosted metallic plating and cyan energy vents is held ready. Projectiles flash-freeze bubbling magma into dense slabs of hissing glacial ice. Dramatic lighting balances intense fiery magma radiance against cool cyan cryo luminescence. Facing the cavern again, the player fires a cryo projectile onto the lava, forming a new hissing ice platform amidst thick steam."
+    ],
+    "prompt_travel_start_frames": [
+      0,
+      60,
+      156,
+      264,
+      408,
+      528,
+      636
+    ]
+  },
+  "compile_backend": "default",
+  "async_vae_decode": true,
+  "dit_quant_scheme": "fp8-f16-accum",
+  "dit_quantized_ckpt": "/path/to/EdenLive-x2v/quantized/dit-5b-fp8-f16-accum-qmax14.safetensors",
+  "dit_fp8_activation_qmax": 7.0,
+  "t5_quant_scheme": "fp8-f16-accum",
+  "t5_quantized_ckpt": "/path/to/EdenLive-x2v/quantized/t5-fp8-f16-accum-qmax14.safetensors",
+  "t5_original_ckpt": "/path/to/EdenLive-x2v/umt5/text_encoder/model.safetensors",
+  "t5_tokenizer_path": "/path/to/EdenLive-x2v/umt5/tokenizer",
+  "proxy_quant_scheme": "int8-convrot",
+  "proxy_quantized_ckpt": "/path/to/EdenLive-x2v/quantized/proxy-dino-int8-convrot.safetensors",
+  "vae_use_compile": true
+}

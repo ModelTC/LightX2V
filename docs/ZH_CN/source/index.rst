@@ -1,5 +1,5 @@
 欢迎了解 Lightx2v!
-==================
+================================================================================
 
 .. figure:: ../../../assets/img_lightx2v.png
   :width: 80%
@@ -76,3 +76,9 @@ HuggingFace: https://huggingface.co/lightx2v
    :caption: 开发指南
 
    新增请求参数 <developer_guides/request_parameters.md>
+
+.. toctree::
+   :hidden:
+
+   getting_started/benchmark_source.md
+   method_tutorials/cache_source.md

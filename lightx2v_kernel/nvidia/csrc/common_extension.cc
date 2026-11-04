@@ -6,6 +6,16 @@
 
 TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
 
+#if defined(LIGHTX2V_BUILD_SM90)
+  m.def(
+      "cutlass_scaled_fp8_mm_f16_accum_sm90(Tensor activation, Tensor weight, Tensor activation_scale, "
+      "Tensor weight_scale, ScalarType out_dtype, Tensor? bias=None) -> Tensor");
+  m.impl("cutlass_scaled_fp8_mm_f16_accum_sm90", torch::kCUDA, &cutlass_scaled_fp8_mm_f16_accum);
+  m.def(
+      "cutlass_scaled_fp8_mm_f32_accum_sm90(Tensor activation, Tensor weight, Tensor activation_scale, "
+      "Tensor weight_scale, ScalarType out_dtype, Tensor? bias=None) -> Tensor");
+  m.impl("cutlass_scaled_fp8_mm_f32_accum_sm90", torch::kCUDA, &cutlass_scaled_fp8_mm_f32_accum);
+#else
   // FP8 Conv3D
   m.def(
       "fp8_conv3d_f16_accum_sm120(Tensor input, Tensor weight, int stride_d, int stride_h, int stride_w) -> Tensor");
@@ -25,7 +35,7 @@ TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
   m.impl(
       "cutlass_scaled_fp8_mm_f16_accum_sm120",
       torch::kCUDA,
-      &cutlass_scaled_fp8_mm_f16_accum_sm120);
+      &cutlass_scaled_fp8_mm_f16_accum);
 
   m.def(
       "cutlass_scaled_fp8_mm_f16_accum_with_config_sm120(Tensor activation, Tensor weight, "
@@ -33,7 +43,7 @@ TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
   m.impl(
       "cutlass_scaled_fp8_mm_f16_accum_with_config_sm120",
       torch::kCUDA,
-      &cutlass_scaled_fp8_mm_f16_accum_with_config_sm120);
+      &cutlass_scaled_fp8_mm_f16_accum_with_config);
 
 
   m.def(
@@ -90,6 +100,7 @@ TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
       "cutlass_scaled_mxfp8_mm_residual_gate_sm120(Tensor! residual, Tensor mat_a, Tensor mat_b, Tensor scales_a, "
       "Tensor scales_b, Tensor alpha, Tensor? bias, Tensor gate) -> ()");
   m.impl("cutlass_scaled_mxfp8_mm_residual_gate_sm120", torch::kCUDA, &cutlass_scaled_mxfp8_mm_residual_gate_sm120);
+#endif
 
   m.def(
       "dequantize_kv_cache_fp4(Tensor[] values, Tensor[] scale_factors, Tensor[] amax, "

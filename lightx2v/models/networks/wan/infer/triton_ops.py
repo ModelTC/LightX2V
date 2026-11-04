@@ -1043,6 +1043,9 @@ def _causal_rope_apply_kernel(
     start_frame: tl.constexpr,
     conjugate: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    start_frame_ptr=None,
+    dynamic_start: tl.constexpr = False,
+    complex128_math: tl.constexpr = False,
 ):
     row_idx = tl.program_id(0)
     batch_idx = row_idx // (seq_stride * num_heads)
@@ -1071,7 +1074,11 @@ def _causal_rope_apply_kernel(
     y = rem // w
     z = rem - y * w
 
-    freq_row = tl.where(col_offsets < t_dim, start_frame + t, tl.where(col_offsets < t_dim + h_dim, y, z))
+    if dynamic_start:
+        frame_offset = tl.load(start_frame_ptr)
+    else:
+        frame_offset = start_frame
+    freq_row = tl.where(col_offsets < t_dim, frame_offset + t, tl.where(col_offsets < t_dim + h_dim, y, z))
     freq_offset = (freq_row * half_head_dim + col_offsets) * 2
     load_mask = mask & is_valid
     cos_vals = tl.load(freqs_real_ptr + freq_offset, mask=load_mask, other=1.0)
@@ -1079,8 +1086,17 @@ def _causal_rope_apply_kernel(
     if conjugate:
         sin_vals = -sin_vals
 
-    rotated_real = x_real.to(tl.float32) * cos_vals.to(tl.float32) - x_imag.to(tl.float32) * sin_vals.to(tl.float32)
-    rotated_imag = x_real.to(tl.float32) * sin_vals.to(tl.float32) + x_imag.to(tl.float32) * cos_vals.to(tl.float32)
+    if complex128_math:
+        # Match TorchComplexRope: complex64 frequencies, FP64 math, then FP32 before BF16.
+        cos = cos_vals.to(tl.float32).to(tl.float64)
+        sin = sin_vals.to(tl.float32).to(tl.float64)
+        real = x_real.to(tl.float64)
+        imag = x_imag.to(tl.float64)
+        rotated_real = (real * cos - imag * sin).to(tl.float32)
+        rotated_imag = (real * sin + imag * cos).to(tl.float32)
+    else:
+        rotated_real = x_real.to(tl.float32) * cos_vals.to(tl.float32) - x_imag.to(tl.float32) * sin_vals.to(tl.float32)
+        rotated_imag = x_real.to(tl.float32) * sin_vals.to(tl.float32) + x_imag.to(tl.float32) * cos_vals.to(tl.float32)
     out_real = tl.where(is_valid, rotated_real, x_real)
     out_imag = tl.where(is_valid, rotated_imag, x_imag)
 

@@ -23,6 +23,7 @@ from lightx2v_train.tricks import (
     IdaStepContext,
     ImplicitDistributionAlignmentTrick,
 )
+from lightx2v_train.utils.quantization import QATLinear, replace_blocks_linear, validate_training_quantization
 
 from ..base import BaseTrainer
 from .checkpoint import DmdCheckpointManager
@@ -50,6 +51,7 @@ class _DmdRuntime(BaseTrainer):
         return None
 
     def __init__(self, config):
+        self.quant_config = validate_training_quantization(config)
         super().__init__(config)
         self.role_registry = DmdRoleRegistry(self)
         self.checkpoint_manager = DmdCheckpointManager(self)
@@ -143,6 +145,9 @@ class _DmdRuntime(BaseTrainer):
         else:
             raise ValueError(f"Unsupported DMD model role: {role}")
         model.ensure_capabilities().require(TrainableModelCapability).configure(train_type, lora_config or {})
+        if role == "student" and self.quant_config is not None:
+            count = replace_blocks_linear(model.denoiser_module(), self.quant_config)
+            logger.info("[qat] role={} replaced={} config={}", role, count, self.quant_config)
 
     def _restore_trainable_model(self, model, role="student"):
         if role == "student":
@@ -220,6 +225,12 @@ class _DmdRuntime(BaseTrainer):
         self.teacher.set_training(False)
         self.teacher_model.capabilities.require(ParallelCapability).apply(self.config)
         self.teacher.set_training(False)
+        if self.quant_config is not None:
+            for role, denoiser in (("student", self.student.denoiser()), ("fake", self.fake.denoiser()), ("teacher", self.teacher.denoiser())):
+                count = sum(isinstance(module, QATLinear) for module in denoiser.modules())
+                if (role == "student" and count == 0) or (role != "student" and count != 0):
+                    raise RuntimeError(f"Invalid generator-only QAT replacement: role={role}, count={count}.")
+                logger.info("[qat] role={} linear_count={}", role, count)
 
         self.fake_trainable_params = list(self.fake_model.capabilities.require(TrainableModelCapability).parameters())
         self.fake_optimizer = self._build_optimizer(

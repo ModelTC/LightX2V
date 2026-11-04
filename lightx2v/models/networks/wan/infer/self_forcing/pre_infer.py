@@ -59,6 +59,7 @@ class WanSFPreInferModuleOutput:
 class WanSFPreInfer(WanPreInfer):
     def __init__(self, config):
         super().__init__(config)
+        self._grid_output = None
         d = config["dim"] // config["num_heads"]
         self.freqs = torch.cat(
             [
@@ -68,6 +69,13 @@ class WanSFPreInfer(WanPreInfer):
             ],
             dim=1,
         ).to(AI_DEVICE)
+
+    def prepare_grid_output(self, grid, device):
+        """Keep immutable geometry on-device across steps and requests."""
+        cached = self._grid_output
+        if cached is None or cached.tuple != grid or cached.tensor.device != device:
+            cached = self._grid_output = GridOutput(tensor=torch.tensor([grid], dtype=torch.int32, device=device), tuple=grid)
+        return cached
 
     def time_embedding(self, weights, embed):
         embed = weights.time_embedding_0.apply(embed)
@@ -112,7 +120,7 @@ class WanSFPreInfer(WanPreInfer):
             del out
             _empty_device_cache()
 
-        grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
+        grid_sizes = self.prepare_grid_output((grid_sizes_t, grid_sizes_h, grid_sizes_w), x.device)
 
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
             freqs = self.freqs.clone()  # self.freqs init param can not be changed

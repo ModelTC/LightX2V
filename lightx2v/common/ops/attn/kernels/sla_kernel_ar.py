@@ -290,7 +290,9 @@ def _attn_bwd_dkdv(
 class _attention_ar(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v, k_block_id, lut, topk, BLOCK_M, BLOCK_N, qk_scale=None):
-        # q, k, v: (B, L, H, D)
+        # q, k, v: (B, L, H, D); only the sequence lengths may differ.
+        if k.shape != v.shape or q.shape[0] != k.shape[0] or q.shape[2:] != k.shape[2:]:
+            raise ValueError("SLA Triton AR requires matching Q/K/V batch, heads and head_dim, and matching K/V lengths")
 
         B, LQ, H, D = q.shape
         _, LK, _, Dk = k.shape
