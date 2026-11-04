@@ -111,7 +111,35 @@ class WsAudioSource:
             return
         logger.debug(f"WsAudioSource action prompt change: {prompt} duration={duration}")
         with self._lock:
-            self.action_switch = {"prompt": prompt, "duration": duration}
+            old = self.action_switch if isinstance(self.action_switch, dict) else {}
+            action = {"prompt": prompt, "duration": duration}
+            # 对于上一个会被覆盖掉的 -1 的 prompt，记录下来，动作结束后应当恢复的是这个 prompt
+            if duration != -1:
+                if old.get("duration") == -1 and old.get("prompt"):
+                    action["superseded_prompt"] = old["prompt"]
+                elif old.get("superseded_prompt"):
+                    action["superseded_prompt"] = old["superseded_prompt"]
+            self.action_switch = action
+            if action.get("superseded_prompt"):
+                logger.warning(f"WsAudioSource keep overwritten global prompt: {action['superseded_prompt']}")
+
+    def take_immediate_switch(self):
+        with self._lock:
+            value = self.immediate_switch
+            self.immediate_switch = 0
+            return value
+
+    def take_image_switch(self):
+        with self._lock:
+            value = self.image_switch
+            self.image_switch = ""
+            return value
+
+    def take_action_switch(self):
+        with self._lock:
+            value = self.action_switch
+            self.action_switch = ""
+            return value
 
     def has_voice(self, duration) -> bool:
         if self.audio_info is None or self.audio_buffer is None or self.audio_buffer.current_size == 0:
