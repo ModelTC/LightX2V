@@ -543,12 +543,14 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         # 更新全局 prompt
         if duration == -1:
             origin_text_output = (self.inputs["text_encoder_output"], prompt)
-            logger.warning(f"reset global prompt to {prompt}")
+            if dist.get_rank() == 0:
+                logger.warning(f"reset global prompt to {prompt}")
         # 若前一个 -1 的 prompt 被后到的动作盖掉，还没编码，标记为 pending，待恢复时再算。
         # 若在恢复之前后续的 -1 的 prompt 又到了，origin_text_output 会被覆盖成最新的 prompt，恢复时也恢复的最新的
         elif duration > 0 and superseded_prompt:
             origin_text_output = ("pending", superseded_prompt)
-            logger.warning(f"global prompt {superseded_prompt} was overwritten before it applied")
+            if dist.get_rank() == 0:
+                logger.warning(f"global prompt {superseded_prompt} was overwritten before it applied")
         return origin_text_output
 
     def _update_restore_prompt_at(self, duration, chunk_idx):
