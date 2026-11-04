@@ -33,12 +33,12 @@ class RelayVSRGeometry:
         alignment = self.wan_stride
         return height + (-height) % alignment, width + (-width) % alignment
 
+    def validate_sr_ratio(self, sr_ratio):
+        if not 1 <= sr_ratio <= self.scale:
+            raise ValueError(f"relayvsr_x{self.scale} sr_ratio must be between 1 and {self.scale}, got {sr_ratio}")
+
     def output_size(self, request, height, width):
-        if self.scale == 2:
-            if request.sr_ratio != 2:
-                raise ValueError("relayvsr_x2 supports only sr_ratio=2")
-        elif request.sr_ratio not in (2, 4):
-            raise ValueError("relayvsr_x4 sr_ratio must be 2 or 4; 2x resizes the native 4x result")
+        self.validate_sr_ratio(request.sr_ratio)
         target = (int(height * request.sr_ratio), int(width * request.sr_ratio))
         if min(target) <= 0:
             raise ValueError("RelayVSR output dimensions must be positive")
