@@ -128,7 +128,7 @@ python -m lightx2v.server \
 
 Use `tools/extract/lora_extractor.py` to extract selected Linear weight deltas with FP32 SVD, configured through JSON or YAML. Edit the model/output paths before running. Relative paths use the command's working directory; `~` and environment variables are expanded.
 
-For calibration-based Qwen-Image 2.1 reconstruction, use the separate `tools/extract/lora_reconstructor.py` entry point. It supports Q-Diffusion-style block reconstruction and TFMQ-style temporal reconstruction followed by block reconstruction, with single-GPU or torchrun DDP execution. The supplied configs use rank 64 / alpha 8 and preserve a separate SVD initialization LoRA. See [the reconstruction guide](https://github.com/ModelTC/LightX2V/blob/main/tools/extract/RECONSTRUCTION.md) for calibration collection, algorithm details and commands.
+For calibration-based Qwen-Image 2.1 reconstruction, use the separate `tools/extract/lora_reconstructor.py` entry point. It supports TFMQ-style temporal reconstruction followed by block reconstruction, with single-GPU or torchrun DDP execution. The supplied configs use rank 64 / alpha 8 and preserve a separate SVD initialization LoRA. See [the reconstruction guide](https://github.com/ModelTC/LightX2V/blob/main/tools/extract/RECONSTRUCTION.md) for calibration collection, algorithm details and commands.
 
 ### Basic Usage
 

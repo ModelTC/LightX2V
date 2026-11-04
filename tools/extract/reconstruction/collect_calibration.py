@@ -1,9 +1,7 @@
-"""Run training validation samples through the native LightX2V Qwen-Image-2.1 runner.
+"""Single-GPU calibration worker invoked by lora_reconstructor.py.
 
-Defaults to the first three T2I, single-reference I2I and multi-reference I2I
-samples. Model/config/manifest/output defaults are relative to this repository,
-independent of the working directory. Use python on one GPU, not torchrun.
-Cluster-provided rank variables are normalized for this single-process preview.
+Run target inference and save every request's denoising trajectory for TFMQ.
+The coordinator supplies model/config paths and selected manifest indices.
 """
 
 import argparse
@@ -13,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 TRAIN_ROOT = ROOT / "lightx2v_train"
 TASKS = ("t2i", "i2i_single", "i2i_multi")
 
@@ -66,7 +64,7 @@ def build_requests(manifest, output_dir, per_task, indices, seed):
         if any(count < per_task for count in counts.values()):
             raise ValueError(f"Requested {per_task} per task, but found {counts}; use --indices for explicit selection.")
     if any(index < 0 or index >= len(records) for index in indices):
-        raise ValueError(f"Validation indices must be in [0, {len(records) - 1}].")
+        raise ValueError(f"Manifest indices must be in [0, {len(records) - 1}].")
 
     jobs = []
     for index in dict.fromkeys(indices):
@@ -99,19 +97,16 @@ def build_requests(manifest, output_dir, per_task, indices, seed):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-path", type=Path, default=TRAIN_ROOT / "models/Qwen-Image-2.1")
-    parser.add_argument("--config-json", type=Path, default=ROOT / "configs/qwen_image_21/qwen_image_21_validation.json")
-    parser.add_argument("--manifest", type=Path, default=TRAIN_ROOT / "data/opengpt4o_qwen_image21/val_preview.jsonl")
-    parser.add_argument("--output-dir", type=Path, default=TRAIN_ROOT / "output_infer/qwen_image21_lightx2v_teacher40_preview")
-    selection = parser.add_mutually_exclusive_group()
-    selection.add_argument("--per-task", type=int, default=3)
-    selection.add_argument("--indices", type=int, nargs="+", help="Zero-based validation indices, e.g. 0 2 7 32 40 64 70.")
-    parser.add_argument("--seed", type=int, default=42, help="Actual seed is this base plus the validation index.")
+    parser.add_argument("--model-path", type=Path, required=True)
+    parser.add_argument("--config-json", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--indices", type=int, nargs="+", required=True, help="Zero-based manifest indices selected by the calibration coordinator.")
+    parser.add_argument("--seed", type=int, default=42, help="Actual seed is this base plus the manifest index.")
     parser.add_argument("--dry-run", action="store_true", help="Check paths and print requests without importing models or using a GPU.")
-    parser.add_argument("--dump-trace", action="store_true", help="Save CPU conditioning/latent/velocity tensors beside each PNG for exact replay debugging; adds CPU copies.")
     args = parser.parse_args()
-    if args.per_task <= 0 or args.seed < 0:
-        parser.error("--per-task must be positive and --seed must be non-negative.")
+    if args.seed < 0:
+        parser.error("--seed must be non-negative.")
     # Cluster shells can export training ranks even for a plain python process.
     # This entry point is explicitly single-process; normalize before importing
     # LightX2V so inherited LOCAL_RANK cannot select an invisible GPU either.
@@ -120,15 +115,15 @@ def main():
         setattr(args, key, getattr(args, key).expanduser().absolute())
     config = resolve_inference_config(json.loads(args.config_json.read_text()), args.model_path)
     if config.get("parallel"):
-        parser.error("This single-GPU preview requires parallel=false in --config-json.")
-    if args.dump_trace and config.get("enable_cfg", False):
-        parser.error("--dump-trace currently requires enable_cfg=false in --config-json.")
+        parser.error("Calibration collection requires parallel=false in --config-json.")
+    if config.get("enable_cfg", False):
+        parser.error("Calibration collection requires enable_cfg=false in --config-json.")
     for component in ("transformer", "text_encoder", "processor", "vae", "scheduler"):
         if not (args.model_path / component).is_dir():
             parser.error(f"Missing model component: {args.model_path / component}")
-    jobs = build_requests(args.manifest, args.output_dir, args.per_task, args.indices, args.seed)
+    jobs = build_requests(args.manifest, args.output_dir, per_task=1, indices=args.indices, seed=args.seed)
     if args.dry_run:
-        print(json.dumps({"model_path": str(args.model_path), "config": config, "samples": jobs, "dump_trace": args.dump_trace}, ensure_ascii=False, indent=2))
+        print(json.dumps({"model_path": str(args.model_path), "config": config, "samples": jobs}, ensure_ascii=False, indent=2))
         return
 
     # Match the native inference launch environment before importing LightX2V.
@@ -153,31 +148,27 @@ def main():
         "samples": jobs,
         "noise_note": "Native LightX2V CPU noise; the same seed does not reproduce training's CUDA noise tensor.",
     }
-    if args.dump_trace:
-        from tools.extract.validation_trace import FORMAT_VERSION, capture_validation_trace, save_validation_trace
+    from tools.extract.reconstruction.calibration_trace import FORMAT_VERSION, capture_calibration_trace, save_calibration_trace
 
-        run_info["trace"] = {
-            "format_version": FORMAT_VERSION,
-            "file_pattern": "<PNG stem>.pt",
-            "tensor_layout": "latents/velocity [1, tokens, channels]; condition masks contain the prefix only",
-            "loading": "torch.load(path, map_location='cpu', weights_only=True)",
-        }
+    run_info["trace"] = {
+        "format_version": FORMAT_VERSION,
+        "file_pattern": "<PNG stem>.pt",
+        "tensor_layout": "latents/velocity [1, tokens, channels]; condition masks contain the prefix only",
+        "loading": "torch.load(path, map_location='cpu', weights_only=True)",
+    }
     (args.output_dir / "requests.json").write_text(json.dumps(run_info, ensure_ascii=False, indent=2) + "\n")
     # task=None allows one runner to serve both T2I and I2I requests.
     pipe = LightX2VPipeline(task=None, model_path=str(args.model_path), model_cls="qwen_image_21")
     pipe.create_generator(config_json=str(effective_config))
     for position, job in enumerate(jobs, start=1):
         request = job["request"]
-        print(f"[{position}/{len(jobs)}] validation={job['validation_index']} {job['group']} size={request['size']} seed={request['seed']}", flush=True)
-        if args.dump_trace:
-            with capture_validation_trace(pipe.runner, job, args.model_path) as trace:
-                pipe.generate(**request)
-            save_validation_trace(trace, Path(request["save_result_path"]).with_suffix(".pt"))
-        else:
+        print(f"[{position}/{len(jobs)}] sample={job['validation_index']} {job['group']} size={request['size']} seed={request['seed']}", flush=True)
+        with capture_calibration_trace(pipe.runner, job, args.model_path) as trace:
             pipe.generate(**request)
+        save_calibration_trace(trace, Path(request["save_result_path"]).with_suffix(".pt"))
         if not Path(request["save_result_path"]).is_file():
             raise RuntimeError(f"Native runner did not save {request['save_result_path']}")
-    print(f"Saved {len(jobs)} images to {args.output_dir}", flush=True)
+    print(f"Saved {len(jobs)} calibration traces and images to {args.output_dir}", flush=True)
 
 
 if __name__ == "__main__":
