@@ -77,14 +77,16 @@ class QwenImage21Runner(DefaultRunner):
             if parallel.get("seq_p_quant_scheme") not in (None, "fp8", "fp4"):
                 raise ValueError("qwen_image_21 seq_p_quant_scheme supports only fp8 and fp4")
         if config.get("dit_quantized"):
-            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum", "fp8-rocm", "int8-rocm", "int8-metal"):
-                raise ValueError("qwen_image_21 DiT quantization supports fp8-sgl, fp8-f16-accum, fp8-rocm, int8-rocm and int8-metal")
-            # fp8-rocm / int8-rocm quantize the released BF16 weights on load, no prequantized checkpoint.
+            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum", "fp8-rocm", "int8-rocm", "int8-metal", "mxfp8-npu"):
+                raise ValueError("qwen_image_21 DiT quantization supports fp8-sgl, fp8-f16-accum, fp8-rocm, int8-rocm, int8-metal and mxfp8-npu")
+            # fp8-rocm / int8-rocm / mxfp8-npu quantize BF16 weights on load, no prequantized checkpoint.
             # int8-metal loads prequantized weights from model_path/transformer by default.
-            if config["dit_quant_scheme"] not in ("fp8-rocm", "int8-rocm", "int8-metal") and not config.get("dit_quantized_ckpt"):
+            if config["dit_quant_scheme"] not in ("fp8-rocm", "int8-rocm", "int8-metal", "mxfp8-npu") and not config.get("dit_quantized_ckpt"):
                 raise ValueError("qwen_image_21 quantization requires dit_quantized_ckpt")
             if config["dit_quant_scheme"] == "fp8-f16-accum":
                 validate_fp8_f16_accum_qmax(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
+            elif config["dit_quant_scheme"] == "mxfp8-npu":
+                self._validate_mxfp8_npu_config(config)
         elif config.get("dit_quant_scheme", "Default") != "Default":
             raise ValueError("dit_quant_scheme requires dit_quantized=true")
         if config.get("feature_caching", "NoCaching") != "NoCaching":
@@ -98,6 +100,18 @@ class QwenImage21Runner(DefaultRunner):
         if config.get("dit_disk_streaming") or config.get("text_encoder_disk_streaming"):
             self._validate_mps_streaming_config(config)
         super().__init__(config)
+
+    @staticmethod
+    def _validate_mxfp8_npu_config(config):
+        if AI_DEVICE != "npu":
+            raise ValueError("qwen_image_21 mxfp8-npu requires an Ascend NPU device")
+        for key in ("cpu_offload", "tensor_parallel", "seq_parallel", "shared_cpu_weights", "dit_disk_streaming"):
+            if config.get(key):
+                raise ValueError(f"qwen_image_21 mxfp8-npu does not support {key}")
+        if config.get("lora_configs"):
+            raise ValueError("qwen_image_21 mxfp8-npu does not support LoRA")
+        if config.get("attn_type") == "npu_quant_flash_attn":
+            raise ValueError("qwen_image_21 mxfp8-npu must be evaluated independently of quantized attention")
 
     @staticmethod
     def _validate_mps_streaming_config(config):
