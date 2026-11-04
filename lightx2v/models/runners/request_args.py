@@ -16,7 +16,12 @@ VIDEO_OUTPUT = {
     "num_frames": Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
 }
 
-IMAGE = COMMON | PROMPT | {"aspect_ratio": Argument(help="Output aspect ratio."), "size": Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH")}
+IMAGE = dict(
+    COMMON,
+    **PROMPT,
+    aspect_ratio=Argument(help="Output aspect ratio."),
+    size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+)
 VIDEO = COMMON | PROMPT | VIDEO_OUTPUT
 
 

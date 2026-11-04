@@ -13,13 +13,17 @@ class HunyuanVideoSpec(RequestSpec):
 
 HUNYUAN_VIDEO15 = HunyuanVideoSpec(
     {
-        "t2v": COMMON | PROMPT | {"num_frames": Argument(type=int, help="Requested output frame count. Model-specific length constraints apply.")},
-        "i2v": COMMON
-        | PROMPT
-        | {
-            "image_path": Argument(help="Input image path."),
-            "num_frames": Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
-        },
+        "t2v": dict(
+            COMMON,
+            **PROMPT,
+            num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
+        ),
+        "i2v": dict(
+            COMMON,
+            **PROMPT,
+            image_path=Argument(help="Input image path."),
+            num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
+        ),
     }
 )
 

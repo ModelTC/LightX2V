@@ -15,13 +15,17 @@ class Flux2Spec(RequestSpec):
 SPECS = {
     "flux2": Flux2Spec(
         {
-            "t2i": COMMON
-            | {"aspect_ratio": Argument(help="Output aspect ratio."), "prompt": Argument(help="Text prompt."), "size": Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH")},
-            "i2i": COMMON
-            | {
-                "image_path": Argument(help="Input image path."),
-                "prompt": Argument(help="Text prompt."),
-            },
+            "t2i": dict(
+                COMMON,
+                aspect_ratio=Argument(help="Output aspect ratio."),
+                prompt=Argument(help="Text prompt."),
+                size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+            ),
+            "i2i": dict(
+                COMMON,
+                image_path=Argument(help="Input image path."),
+                prompt=Argument(help="Text prompt."),
+            ),
         },
     ),
 }

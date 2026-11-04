@@ -16,26 +16,33 @@ REQUEST = COMMON | VIDEO_OUTPUT | REGENERATION
 SPECS = {
     "minimax_h3": MultiTaskSpec(
         {
-            "t2av": REQUEST | {"prompt": Argument(help="Text prompt.")},
-            "i2av": REQUEST
-            | {
-                "image_path": Argument(help="Input image path; ref2av accepts comma-separated reference images."),
-                "prompt": Argument(help="Text prompt."),
-            },
-            "l2av": REQUEST | {"last_frame_path": Argument(help="Last-frame image path."), "prompt": Argument(help="Text prompt.")},
-            "fl2av": REQUEST
-            | {
-                "image_path": Argument(help="Input image path; ref2av accepts comma-separated reference images."),
-                "last_frame_path": Argument(help="Last-frame image path."),
-                "prompt": Argument(help="Text prompt."),
-            },
-            "ref2av": REQUEST
-            | {
-                "audio_path": Argument(help="Reference audio paths, separated by commas."),
-                "image_path": Argument(help="Input image path; ref2av accepts comma-separated reference images."),
-                "prompt": Argument(help="Text prompt."),
-                "video_path": Argument(help="Reference video paths, separated by commas."),
-            },
+            "t2av": dict(
+                REQUEST,
+                prompt=Argument(help="Text prompt."),
+            ),
+            "i2av": dict(
+                REQUEST,
+                image_path=Argument(help="Input image path; ref2av accepts comma-separated reference images."),
+                prompt=Argument(help="Text prompt."),
+            ),
+            "l2av": dict(
+                REQUEST,
+                last_frame_path=Argument(help="Last-frame image path."),
+                prompt=Argument(help="Text prompt."),
+            ),
+            "fl2av": dict(
+                REQUEST,
+                image_path=Argument(help="Input image path; ref2av accepts comma-separated reference images."),
+                last_frame_path=Argument(help="Last-frame image path."),
+                prompt=Argument(help="Text prompt."),
+            ),
+            "ref2av": dict(
+                REQUEST,
+                audio_path=Argument(help="Reference audio paths, separated by commas."),
+                image_path=Argument(help="Input image path; ref2av accepts comma-separated reference images."),
+                prompt=Argument(help="Text prompt."),
+                video_path=Argument(help="Reference video paths, separated by commas."),
+            ),
         },
     ),
 }

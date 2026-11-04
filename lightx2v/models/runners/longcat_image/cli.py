@@ -5,7 +5,11 @@ SPECS = {
     "longcat_image": RequestSpec(
         {
             "t2i": IMAGE,
-            "i2i": COMMON | PROMPT | {"image_path": Argument(help="Input image path.")},
+            "i2i": dict(
+                COMMON,
+                **PROMPT,
+                image_path=Argument(help="Input image path."),
+            ),
         },
     ),
 }

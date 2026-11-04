@@ -25,11 +25,15 @@ from lightx2v.utils.request_spec import Argument
 SPECS = {
     "qwen_image_21": QwenImage21Spec(
         {
-            "t2i": IMAGE | {"resolution": Argument(type=int, help="Output resolution.")},
-            "i2i": IMAGE | {
-                "image_path": Argument(help="Input image path."),
-                "resolution": Argument(type=int, help="Output resolution."),
-            },
+            "t2i": dict(
+                IMAGE,
+                resolution=Argument(type=int, help="Output resolution."),
+            ),
+            "i2i": dict(
+                IMAGE,
+                image_path=Argument(help="Input image path."),
+                resolution=Argument(type=int, help="Output resolution."),
+            ),
         }
     ),
 }
