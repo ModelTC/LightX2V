@@ -256,7 +256,7 @@ LightX2V supports image, video, and world models and provides quantized weights,
 
 <details>
 <summary><strong>🌍 World Models, Robotics &amp; 3D</strong><br><br>
-<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game4">Matrix-Game-4</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README.md">EdenLive</a> · <a href="scripts/worldmirror/README.md">WorldMirror</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
+<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game4">Matrix-Game-4</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README.md">EdenLive</a> · <a href="scripts/worldmirror/README.md">WorldMirror</a> · <a href="scripts/depth_anything3/README.md">Depth Anything 3</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
 </summary>
 
 | Models / Variants and Weights | Guides / Scripts |
@@ -269,6 +269,7 @@ LightX2V supports image, video, and world models and provides quantized weights,
 | [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay) (bidirectional, autoregressive, and distilled) | [Guide](scripts/worldplay/README.md) |
 | [EdenLive](https://huggingface.co/VAST-AI/EdenLive) (Wan2.1 14B / Wan2.2 5B; bidirectional and four-step autoregressive) | [Guide](scripts/edenlive/README.md) |
 | [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (3D reconstruction) | [Guide](scripts/worldmirror/README.md) |
+| [Depth Anything 3 MONO-LARGE](https://github.com/ByteDance-Seed/Depth-Anything-3) (image/video relative depth) | [Guide and run script](scripts/depth_anything3/README.md) |
 | [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) | [Scripts](scripts/dreamzero) |
 | [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base) | [Scripts](scripts/lingbot_va) |
 | [Motus](https://huggingface.co/motus-robotics/Motus) | [Scripts](scripts/motus) |
