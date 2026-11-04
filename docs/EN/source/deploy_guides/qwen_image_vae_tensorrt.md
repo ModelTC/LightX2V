@@ -1,18 +1,114 @@
-# Qwen Image VAE TensorRT Acceleration Guide
+# Qwen Image VAE TensorRT acceleration
 
-To significantly improve the inference speed of the Qwen Image model, we have introduced TensorRT optimizations for both the VAE Encoder and Decoder.
+TensorRT accelerates Qwen Image's VAE Encoder and Decoder. Use static engines for fixed-resolution T2I and multi-profile engines for I2I with varying input dimensions.
 
-Given the different input shape characteristics of Text-to-Image (T2I) and Image-to-Image (I2I) tasks, we have designed two acceleration strategies: **Static Shape Optimization** and **Dynamic Shape Optimization (Multi-Profile)**.
+## Prepare and run
 
----
+1. Complete [LightX2V environment setup](../getting_started/quickstart.md) and prepare the matching Qwen Image model.
+2. Install TensorRT matching your CUDA environment and engine build version, and prepare prebuilt `.trt` files. Setting a config path does not build engines automatically.
+3. Choose a complete config below, set `trt_vae_config.trt_engine_path`, and check that `attn_type` matches your GPU and installed backend. Engine layouts are described below.
 
-## 1. T2I: Static Shape Approach
+| Task | Complete config | Engine mode |
+| --- | --- | --- |
+| Qwen-Image-2512 T2I | [T2I TensorRT config](https://github.com/ModelTC/LightX2V/blob/main/configs/qwen_image/qwen_image_t2i_2512_trt.json) | Static, `multi_profile=false` |
+| Qwen-Image-Edit-2511 I2I | [I2I TensorRT config](https://github.com/ModelTC/LightX2V/blob/main/configs/qwen_image/qwen_image_i2i_2511_trt.json) | Multi-profile, `multi_profile=true` |
 
-In T2I tasks, the output image resolution is typically fixed (e.g., 16:9, 1:1, 4:3, etc.), meaning the inference shape is known in advance. Therefore, **Static Shape engines** are the optimal choice, as they completely eliminate the overhead of dynamic shape inference at the underlying level.
+Check that TensorRT imports in your inference environment:
 
-### 1.1 Key Advantages & Performance
-*   **Peak Performance**: In standalone VAE-only testing, Encoder and Decoder achieve an average **~2.0x** speedup; in end-to-end service mode, VAE Decoder averages **~1.8x** speedup.
-*   **On-Demand Loading (Lazy Load)**: Engines are loaded per-resolution on first request (~5GB VRAM per engine pair). When the resolution changes, old engines are automatically released before loading new ones. Compared to eager loading all engines (~25GB), this significantly reduces VRAM usage and is compatible with end-to-end inference scenarios.
+```bash
+python -c "import tensorrt; print(tensorrt.__version__)"
+```
+
+After configuring the engine path, run T2I from the repository root:
+
+```bash
+python -m lightx2v.infer \
+  --model_cls qwen_image \
+  --task t2i \
+  --model_path /path/to/Qwen-Image-2512 \
+  --config_json configs/qwen_image/qwen_image_t2i_2512_trt.json \
+  --prompt "A cat sitting beside a window." \
+  --seed 42 \
+  --save_result_path save_results/qwen_trt.png
+```
+
+For I2I, use `--task i2i`, the matching model and I2I config, and add `--image_path /path/to/input.png`. Specify the task through the startup argument. Check startup and inference logs to confirm that TensorRT engines load without falling back to PyTorch.
+
+## Static engine layout and configuration
+
+The directory tree uses **width × height**. Static mode matches preset sizes and falls back to PyTorch VAE otherwise. Engines load for the requested resolution; switching resolutions releases the previous engines.
+
+*   **Example engine directory**: `path/to/vae_trt_t2i_static`
+*   **Directory structure requirements**:
+    The root engine directory must contain sub-directories named exactly as follows, each holding the corresponding `.trt` engine files (the loading logic relies on these preset directory names for Lazy Load discovery):
+
+    ```text
+    vae_trt_t2i_static/
+    ├── 16_9/        # Resolution 1664x928 (WxH)
+    │   ├── vae_encoder.trt
+    │   └── vae_decoder.trt
+    ├── 9_16/        # Resolution 928x1664
+    │   ├── vae_encoder.trt
+    │   └── vae_decoder.trt
+    ├── 1_1/         # Resolution 1328x1328
+    │   ├── vae_encoder.trt
+    │   └── vae_decoder.trt
+    ├── 4_3/         # Resolution 1472x1104
+    │   ├── vae_encoder.trt
+    │   └── vae_decoder.trt
+    └── 3_4/         # Resolution 1104x1472
+        ├── vae_encoder.trt
+        └── vae_decoder.trt
+    ```
+
+### Configuration fragment
+Merge these fields into the complete JSON config. Set `vae_type` to `tensorrt`, point `trt_engine_path` to the root directory containing the resolution sub-folders, and set `multi_profile` to `false`:
+
+```json
+{
+    "vae_type": "tensorrt",
+    "trt_vae_config": {
+        "trt_engine_path": "path/to/vae_trt_t2i_static",
+        "multi_profile": false
+    }
+}
+```
+
+## Multi-profile engine layout and configuration
+
+The profiles below use **height × width**. Their order must match the engine profiles.
+*   **Example engine directory**: `path/to/vae_trt_extended_mp`
+*   **Built-in Optimization Profiles**:
+    1.  `1_1_512` (512x512)
+    2.  `1_1_1024` (1024x1024)
+    3.  `16_9_480p` (480x848)
+    4.  `16_9_720p` (720x1280)
+    5.  `16_9_1080p` (1088x1920)
+    6.  `9_16_720p` (1280x720)
+    7.  `9_16_1080p` (1920x1088)
+    8.  `4_3_768p` (768x1024)
+    9.  `3_2_1080p` (1088x1620)
+
+*(Maximum supported height/width is 1920 pixels)*
+
+### Configuration fragment
+Set `trt_engine_path` to the directory containing `vae_encoder_multi_profile.trt` and `vae_decoder_multi_profile.trt`, not an individual engine file, and set `multi_profile` to `true`:
+
+```json
+{
+    "vae_type": "tensorrt",
+    "trt_vae_config": {
+        "trt_engine_path": "path/to/vae_trt_extended_mp",
+        "multi_profile": true
+    }
+}
+```
+
+## Historical benchmarks
+
+These measurements have not been rerun. The static tables' 4:3 `1472x1140` and 3:4 `768x1024` rows differ from the current engine mapping; their timings do not establish performance for the corresponding current sizes.
+
+### Static engines (T2I)
 
 #### Standalone VAE-Only Benchmark (H100, Pure VAE Inference)
 
@@ -47,54 +143,7 @@ The higher absolute latency in E2E mode is due to:
 2. **GPU resource contention**: In E2E, the Transformer (~30GB) + Text Encoder (~15GB) remain resident in VRAM. L2 cache is populated by the large model weights after DiT inference, forcing VAE to re-fetch from HBM.
 3. **Memory fragmentation**: PyTorch's dynamic allocator and TRT's fixed execution context alternate CUDA memory usage. PyTorch is more affected by fragmentation (hence its larger absolute gap).
 
-### 1.2 Engine Configuration
-*   **Default engine directory**: `path/to/vae_trt_t2i_static`
-*   **Directory structure requirements**:
-    The root engine directory must contain sub-directories named exactly as follows, each holding the corresponding `.trt` engine files (the loading logic relies on these preset directory names for Lazy Load discovery):
-
-    ```text
-    vae_trt_t2i_static/
-    ├── 16_9/        # Resolution 1664x928 (WxH)
-    │   ├── vae_encoder.trt
-    │   └── vae_decoder.trt
-    ├── 9_16/        # Resolution 928x1664
-    │   ├── vae_encoder.trt
-    │   └── vae_decoder.trt
-    ├── 1_1/         # Resolution 1328x1328
-    │   ├── vae_encoder.trt
-    │   └── vae_decoder.trt
-    ├── 4_3/         # Resolution 1472x1140
-    │   ├── vae_encoder.trt
-    │   └── vae_decoder.trt
-    └── 3_4/         # Resolution 768x1024
-        ├── vae_encoder.trt
-        └── vae_decoder.trt
-    ```
-
-### 1.3 Usage
-In the corresponding JSON config file, set `vae_type` to `tensorrt`, point `trt_engine_path` to the root directory containing the resolution sub-folders, and set `multi_profile` to `false`:
-
-```json
-{
-    "task": "t2i",
-    "vae_type": "tensorrt",
-    "trt_vae_config": {
-        "trt_engine_path": "path/to/vae_trt_t2i_static",
-        "multi_profile": false
-    }
-}
-```
-
----
-
-## 2. I2I: Dynamic Shape (Multi-Profile) Approach
-
-For I2I tasks, input images can have arbitrary dimensions, so the VAE must handle a dynamic range of input shapes. A purely static engine is insufficient.
-To balance speed and flexibility, we use a **Multi-Profile engine** that bundles multiple optimization profiles (Opt Shapes) into a single engine file.
-
-### 2.1 Key Advantages & Performance
-*   **Strong Performance Gains**: In standalone VAE-only testing, Encoder and Decoder achieve an average **~1.45x** speedup. In end-to-end service mode, VAE Encoder averages **~1.66x** speedup, Decoder averages **~1.08x** speedup.
-*   **Dynamic Optimal Matching**: At runtime, the engine automatically selects the closest optimization profile to the current input dimensions for the best memory layout and kernel execution plan.
+### Multi-profile engines (I2I)
 
 #### Standalone VAE-Only Benchmark (H100, Pure VAE Inference, 10-iter avg)
 
@@ -160,42 +209,3 @@ To balance speed and flexibility, we use a **Multi-Profile engine** that bundles
 - Adding a constant overhead inevitably dilutes the speedup ratio: e.g., for 1024x1024, standalone PT=68ms / TRT=45ms → 1.52x; adding ~85ms gives PT=153ms / TRT=130ms → 1.18x, matching the actual E2E measurement of 1.15x.
 
 > **Conclusion**: The lower E2E Decoder speedup does not mean TRT is slower — it means the profiling scope includes CPU post-processing that TRT cannot optimize. For accurate TRT kernel speedup measurements, refer to the standalone benchmark data.
-
-### 2.2 Engine Configuration
-*   **Default engine directory**: `path/to/vae_trt_extended_mp`
-*   **Built-in Optimization Profiles**:
-    1.  `1_1_512` (512x512)
-    2.  `1_1_1024` (1024x1024)
-    3.  `16_9_480p` (480x848)
-    4.  `16_9_720p` (720x1280)
-    5.  `16_9_1080p` (1080x1920)
-    6.  `9_16_720p` (1280x720)
-    7.  `9_16_1080p` (1920x1080)
-    8.  `4_3_768p` (768x1024)
-    9.  `3_2_1080p` (1088x1620)
-
-*(Maximum supported height/width is 1920 pixels)*
-
-### 2.3 Usage
-Since the engine is a single file containing multiple profiles (e.g., `vae_encoder_multi_profile.trt`), set `multi_profile` to `true`:
-
-```json
-{
-    "task": "i2i",
-    "vae_type": "tensorrt",
-    "trt_vae_config": {
-        "trt_engine_path": "path/to/vae_trt_extended_mp",
-        "multi_profile": true
-    }
-}
-```
-
----
-
-## 3. Deployment Prerequisites
-
-Ensure that TensorRT dependencies are installed in your environment (these are typically pre-installed in our custom Docker images):
-
-```bash
-pip install tensorrt tensorrt-cu12-bindings tensorrt-cu12-libs
-```

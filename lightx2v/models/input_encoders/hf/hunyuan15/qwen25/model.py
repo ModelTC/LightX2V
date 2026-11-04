@@ -25,6 +25,7 @@ project_root = current_dir.parent.parent.parent.parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+from lightx2v.common.ops.utils import create_pin_tensor  # noqa E402
 from lightx2v.models.input_encoders.hf.q_linear import (  # noqa E402
     Q8FQuantLinearFp8,  # noqa E402
     Q8FQuantLinearInt8,  # noqa E402
@@ -587,12 +588,33 @@ class Qwen25VL_TextEncoder:
             qwen25vl_quant_ckpt=qwen25vl_quant_ckpt,
         )
 
+        self.cpu_weights = {}
+        self.cpu_buffers = []
+        if self.cpu_offload:
+            for name, parameter in self.text_encoder.named_parameters():
+                parameter.data = create_pin_tensor(parameter.data)
+                self.cpu_weights[name] = parameter.data
+            if self.qwen25vl_quantized:
+                # Quantized linear weights and scales are registered buffers.
+                for module in self.text_encoder.modules():
+                    if isinstance(module, (VllmQuantLinearInt8, SglQuantLinearFp8, TorchaoQuantLinearInt8, TorchaoQuantLinearFp8, Q8FQuantLinearInt8, Q8FQuantLinearFp8)):
+                        for name, buffer in module.named_buffers(recurse=False):
+                            pinned_buffer = create_pin_tensor(buffer)
+                            setattr(module, name, pinned_buffer)
+                            self.cpu_buffers.append((module, name, pinned_buffer))
+
     def infer(self, texts):
         if self.cpu_offload:
-            self.text_encoder = self.text_encoder.to(AI_DEVICE)
+            self.text_encoder = self.text_encoder.to(AI_DEVICE, non_blocking=bool(self.cpu_weights or self.cpu_buffers))
         text_inputs = self.text_encoder.text2tokens(texts, data_type="video", max_length=self.text_len)
         prompt_outputs = self.text_encoder.encode(text_inputs, data_type="video", device=AI_DEVICE)
         if self.cpu_offload:
+            if self.cpu_weights or self.cpu_buffers:
+                torch_device_module.synchronize()
+                for name, parameter in self.text_encoder.named_parameters():
+                    parameter.data = self.cpu_weights[name]
+                for module, name, buffer in self.cpu_buffers:
+                    setattr(module, name, buffer)
             self.text_encoder = self.text_encoder.to("cpu")
         prompt_embeds = prompt_outputs.hidden_state
         attention_mask = prompt_outputs.attention_mask

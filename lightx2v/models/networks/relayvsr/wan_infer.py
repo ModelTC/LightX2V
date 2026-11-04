@@ -15,8 +15,17 @@ from .rope import apply_rope
 
 
 class RelayWanPreInfer:
-    def __init__(self, config):
+    def __init__(self, config, geometry):
         self.config = config
+        self.prepare_lr = self.native_x2_input if geometry.scale == 2 else self.native_x4_input
+
+    @staticmethod
+    def native_x2_input(lr):
+        return F.pixel_unshuffle(lr, 8)
+
+    @staticmethod
+    def native_x4_input(lr):
+        return F.pixel_unshuffle(F.interpolate(lr, scale_factor=4, mode="bilinear", align_corners=False), 16)
 
     def conditioning(self, weights):
         dim = self.config["freq_dim"]
@@ -30,8 +39,7 @@ class RelayWanPreInfer:
 
     def infer(self, weights, latents, lr):
         hidden = weights.patch.apply(latents).flatten(2).transpose(1, 2)[0]
-        upscaled = F.interpolate(lr, scale_factor=4, mode="bilinear", align_corners=False)
-        lq = F.pixel_unshuffle(upscaled, 16)
+        lq = self.prepare_lr(lr)
         lq = F.silu(weights.lq_norm1.apply(weights.lq_conv1.apply(lq)))
         lq = F.silu(weights.lq_norm2.apply(weights.lq_conv2.apply(lq)))
         # Flattening also preserves nn.Linear's leading stride for one token.
@@ -52,7 +60,6 @@ class RelayWanTransformerInfer(RelayCompileMixin, WanOffloadTransformerInfer):
         family_config = {
             **deployment,
             "task": "sr",
-            "model_cls": "relayvsr",
             "seq_parallel": parallel.size > 1,
             "num_layers": config["num_layers"],
             "num_heads": config["num_attention_heads"],
@@ -128,7 +135,7 @@ class RelayWanTransformerInfer(RelayCompileMixin, WanOffloadTransformerInfer):
     def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa=None):
         if x.shape[0] != 1:
             return super().infer_ffn(phase, x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
-        # A padded 8x8 LR image has a single Wan token. The base FFN squeezes
+        # A minimal padded LR image has a single Wan token. The base FFN squeezes
         # away that axis; handle only this boundary case in the specialization.
         x.add_(attn_out)
         normalized = self.modulate_func(phase.norm2.apply(x), scale=c_scale_msa, shift=c_shift_msa).reshape(1, -1)

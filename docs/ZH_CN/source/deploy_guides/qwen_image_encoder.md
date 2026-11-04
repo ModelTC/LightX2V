@@ -1,5 +1,7 @@
 # Text Encoder 分离部署/优化指南 (Advanced Guide)
 
+配置示例为字段片段，请合并到所选 Qwen 模型的完整配置中，不要直接替换整个 JSON 文件。
+
 对于大规模模型推理，Text Encoder 往往占据显存且计算相对独立。LightX2V 提供了两种先进的 Text Encoder 优化方案：**Service Mode (分离部署)** 和 **Kernel Mode (内核优化)**。
 
 这两种方案目前针对 **Qwen-Image** 系列模型的 Text Encoder 进行过深度优化，显著降低了显存占用并提升了推理吞吐量。
@@ -102,8 +104,7 @@ bash start_encoder_service.sh
         "service_timeout": 30,
         "service_retry": 3,
         "use_shm": true
-    },
-    // ... 其他参数 (infer_steps, prompt_template 等) ...
+    }
 }
 ```
 
@@ -152,8 +153,7 @@ Kernel Mode 适合单机高性能推理场景。它不在后台启动独立服�
     "lightllm_config": {
         "use_flash_attention_kernel": true,
         "use_rmsnorm_kernel": true
-    },
-    // ... 其他参数 ...
+    }
 }
 ```
 

@@ -7,6 +7,7 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 RUNNER_MODULES = {
     "bagel": "lightx2v.models.runners.bagel.bagel_runner",
     "cosmos3": "lightx2v.models.runners.cosmos3.cosmos3_runner",
+    "depth_anything3": "lightx2v.models.runners.depth_anything3.depth_anything3_runner",
     "dreamzero": "lightx2v.models.runners.wan.wan_dreamzero_runner",
     "ernie_image": "lightx2v.models.runners.ernie_image.ernie_image_runner",
     "fastwam": "lightx2v.models.runners.wan.fastwam_runner",
@@ -31,7 +32,8 @@ RUNNER_MODULES = {
     "qwen_image": "lightx2v.models.runners.qwen_image.qwen_image_runner",
     "qwen_image_21": "lightx2v.models.runners.qwen_image_21.qwen_image_21_runner",
     "realtimewam": "lightx2v.models.runners.wan.realtimewam_runner",
-    "relayvsr": "lightx2v.models.runners.relayvsr.relayvsr_runner",
+    "relayvsr_x2": "lightx2v.models.runners.relayvsr.relayvsr_runner",
+    "relayvsr_x4": "lightx2v.models.runners.relayvsr.relayvsr_runner",
     "seedvr2": "lightx2v.models.runners.seedvr.seedvr_runner",
     "seko_talk": "lightx2v.models.runners.wan.wan_audio_runner",
     "seko_talk_ar": "lightx2v.models.runners.wan.wan_audio_runner",
@@ -64,7 +66,8 @@ RUNNER_MODULES = {
 def build_runner(config):
     """Instantiate a runner and initialize its model modules."""
     model_cls = config["model_cls"]
-    import_module("lightx2v.common.ops")
+    if model_cls != "depth_anything3":
+        import_module("lightx2v.common.ops")
     import_module(RUNNER_MODULES[model_cls])
 
     torch.set_grad_enabled(False)

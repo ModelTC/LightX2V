@@ -10,6 +10,7 @@ except ImportError:
     Qwen2Tokenizer = None
     Qwen2_5_VLForConditionalGeneration = None
 
+from lightx2v.common.ops.utils import create_pin_tensor
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -92,6 +93,12 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         if not self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
 
+        self.cpu_weights = {}
+        if self.cpu_offload and not self.config.get("qwen25vl_quantized", False):
+            for name, parameter in self.text_encoder.named_parameters():
+                parameter.data = create_pin_tensor(parameter.data)
+                self.cpu_weights[name] = parameter.data
+
         qwen25vl_tokenizer_path = self.config.get("qwen25vl_tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
         self.tokenizer = Qwen2Tokenizer.from_pretrained(qwen25vl_tokenizer_path)
         if self.config["task"] == "i2i":
@@ -137,7 +144,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
     def get_image_caption(self, prompt_image):
         if self.cpu_offload:
             if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
-                self.text_encoder.to(AI_DEVICE)
+                self.text_encoder.to(AI_DEVICE, non_blocking=bool(self.cpu_weights))
 
         if self.use_en_prompt:
             prompt = self.image_caption_prompt_en
@@ -160,7 +167,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
     def infer(self, text, image_list=None):
         if self.cpu_offload:
             if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
-                self.text_encoder.to(AI_DEVICE)
+                self.text_encoder.to(AI_DEVICE, non_blocking=bool(self.cpu_weights))
 
         if image_list is not None:
             condition_image_list = []
@@ -248,6 +255,10 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
 
         if self.cpu_offload:
             if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
+                if self.cpu_weights:
+                    torch_device_module.synchronize()
+                    for name, parameter in self.text_encoder.named_parameters():
+                        parameter.data = self.cpu_weights[name]
                 self.text_encoder.to(torch.device("cpu"))
             torch_device_module.empty_cache()
             gc.collect()

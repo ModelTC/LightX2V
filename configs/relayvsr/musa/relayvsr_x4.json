@@ -1,5 +1,6 @@
 {
-  "attention_backend": "triton",
+  "native_scale": 4,
+  "attention_backend": "torch_sdpa",
   "cross_attention_backend": "torch_sdpa",
   "cpu_offload": false,
   "clip_len": 16,

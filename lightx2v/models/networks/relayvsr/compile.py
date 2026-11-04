@@ -7,6 +7,13 @@ import torch.nn.functional as F
 
 
 class RelayCompileMixin:
+    def init_compile(self, config):
+        if config.get("use_compile", False):
+            # Aspect ratios and causal ring slots need more than eight guarded
+            # graphs. Retain them after warmup instead of falling back to eager.
+            torch._dynamo.config.recompile_limit = max(torch._dynamo.config.recompile_limit, 32)
+        super().init_compile(config)
+
     def get_compiled_block(self, block_idx, block):
         key = self.get_compile_block_key(block_idx, block)
         cached = self.compiled_blocks.get(key)
@@ -33,14 +40,18 @@ def mark_sequence_dynamic(*tensors):
 
 # Preserve the checkpoint's native reductions and low-precision rounding while
 # Inductor fuses the surrounding projections, modulation and residuals.
-@torch.library.custom_op("lightx2v::relayvsr_rms_norm", mutates_args=(), device_types="cuda")
+# A new operator name also prevents reuse of Inductor artifacts compiled with
+# the old, incorrect contiguous-only output contract.
+@torch.library.custom_op("lightx2v::relayvsr_native_rms_norm", mutates_args=(), device_types="cuda")
 def native_rms_norm(x: torch.Tensor, weight: torch.Tensor | None, eps: float) -> torch.Tensor:
     return F.rms_norm(x, (x.shape[-1],), weight, eps)
 
 
 @native_rms_norm.register_fake
 def _rms_norm_fake(x, weight, eps):
-    return torch.empty_like(x, memory_format=torch.contiguous_format)
+    # Native RMSNorm preserves a dense transpose (Flash condition tokens use
+    # that layout); claiming contiguous output breaks Inductor's stride guards.
+    return torch.empty_like(x)
 
 
 @torch.library.custom_op("lightx2v::relayvsr_layer_norm", mutates_args=(), device_types="cuda")

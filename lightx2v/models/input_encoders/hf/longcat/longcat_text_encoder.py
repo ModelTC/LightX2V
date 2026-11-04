@@ -16,6 +16,7 @@ try:
 except ImportError:
     Qwen2VLProcessor = None
 
+from lightx2v.common.ops.utils import create_pin_tensor
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -97,6 +98,12 @@ class LongCatImageTextEncoder:
         if not self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
 
+        self.cpu_weights = {}
+        if self.cpu_offload:
+            for name, parameter in self.text_encoder.named_parameters():
+                parameter.data = create_pin_tensor(parameter.data)
+                self.cpu_weights[name] = parameter.data
+
         # Load tokenizer
         self.tokenizer = Qwen2Tokenizer.from_pretrained(tokenizer_path)
 
@@ -166,13 +173,18 @@ class LongCatImageTextEncoder:
         inputs = self.processor(text=all_text, padding=True, return_tensors="pt").to(device)
 
         if self.cpu_offload:
-            self.text_encoder.to(device)
+            self.text_encoder.to(device, non_blocking=bool(self.cpu_weights))
 
         generated_ids = self.text_encoder.generate(**inputs, max_new_tokens=self.tokenizer_max_length)
         generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
         output_text = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
         if self.cpu_offload:
+            if self.cpu_weights:
+                if torch.device(device).type != "cpu":
+                    getattr(torch, torch.device(device).type).synchronize(device)
+                for name, parameter in self.text_encoder.named_parameters():
+                    parameter.data = self.cpu_weights[name]
             self.text_encoder.to("cpu")
             torch_device_module.empty_cache()
             gc.collect()
@@ -191,7 +203,7 @@ class LongCatImageTextEncoder:
             Tuple of (prompt_embeds, prompt_embeds_mask, image_info)
         """
         if self.cpu_offload:
-            self.text_encoder.to(AI_DEVICE)
+            self.text_encoder.to(AI_DEVICE, non_blocking=bool(self.cpu_weights))
 
         # Encode with character-level tokenization for quoted text
         batch_all_tokens = self._encode_prompt(text)
@@ -250,6 +262,10 @@ class LongCatImageTextEncoder:
         prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
 
         if self.cpu_offload:
+            if self.cpu_weights:
+                torch_device_module.synchronize()
+                for name, parameter in self.text_encoder.named_parameters():
+                    parameter.data = self.cpu_weights[name]
             self.text_encoder.to("cpu")
             torch_device_module.empty_cache()
             gc.collect()
@@ -268,7 +284,7 @@ class LongCatImageTextEncoder:
             Tuple of (prompt_embeds, prompt_embeds_mask, image_info)
         """
         if self.cpu_offload:
-            self.text_encoder.to(AI_DEVICE)
+            self.text_encoder.to(AI_DEVICE, non_blocking=bool(self.cpu_weights))
 
         # Load processor if not already loaded
         if not hasattr(self, "processor") or self.processor is None:
@@ -347,6 +363,10 @@ class LongCatImageTextEncoder:
         prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
 
         if self.cpu_offload:
+            if self.cpu_weights:
+                torch_device_module.synchronize()
+                for name, parameter in self.text_encoder.named_parameters():
+                    parameter.data = self.cpu_weights[name]
             self.text_encoder.to("cpu")
             torch_device_module.empty_cache()
             gc.collect()

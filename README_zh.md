@@ -205,7 +205,7 @@ LightX2V 支持多种图像、视频与世界模型，并提供量化权重、�
 | [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)（Causal 分支支持 RefA2V，需专用权重） | [使用指南](scripts/minimax_h3/README_zh.md) · [Causal](scripts/minimax_h3_causal) |
 | TaoMate-H3（自回归 T2AV） | [推理脚本](scripts/taomate_h3/run_t2av_3step.sh) |
 | StreamRender-H3（自回归 RefV2V） | [推理脚本](scripts/streamrender_h3/run_refv2v_2step.sh) |
-| [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)（自回归分支需专用权重） / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5)（蒸馏版） | [使用指南](scripts/ltx2/README_zh.md) · [自回归示例](scripts/ltx2/ltx2_3/run_ltx2_3_ar_t2av.sh) |
+| [LTX-2](https://huggingface.co/Lightricks/LTX-2) / [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) / [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5)（蒸馏版） | [使用指南](scripts/ltx2/README_zh.md) |
 | [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5) | [使用指南](scripts/hunyuan_video_15/README.md) |
 | [Wan2.1 / Wan2.2](https://huggingface.co/Wan-AI/) | [Wan2.1](scripts/wan/README_zh.md) · [Wan2.2](scripts/wan22/README_zh.md) |
 | [Wan2.1-VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) / [Wan2.2-VACE-Fun-A14B](https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B) | [Wan2.1](scripts/wan/README_zh.md) · [Wan2.2](scripts/wan22_moe_vace) |
@@ -256,20 +256,20 @@ LightX2V 支持多种图像、视频与世界模型，并提供量化权重、�
 
 <details>
 <summary><strong>🌍 世界模型、机器人与三维</strong><br><br>
-<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game3">Matrix-Game</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README_zh.md">EdenLive</a> · <a href="scripts/worldmirror/README_zh.md">WorldMirror</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
+<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game4">Matrix-Game-4</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README_zh.md">EdenLive</a> · <a href="scripts/worldmirror/README_zh.md">WorldMirror</a> · <a href="scripts/depth_anything3/README.md">Depth Anything 3</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
 </summary>
 
 | 模型 / 变体与权重 | 使用指南 / 脚本 |
 | --- | --- |
 | [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) / [Super](https://huggingface.co/nvidia/Cosmos3-Super)（含 [Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID)） | [推理脚本](scripts/cosmos3) |
 | [LingBot-World](https://huggingface.co/robbyant/lingbot-world-base-act-preview) / [Fast](https://huggingface.co/robbyant/lingbot-world-fast) | [推理脚本](scripts/lingbot) |
-| [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0) / [3.0](https://huggingface.co/Skywork/Matrix-Game-3.0) | [2.0](scripts/matrix_game2) · [3.0](scripts/matrix_game3) |
 | Matrix-Game-4（Wan2.2 5B Control，自回归视频重渲染） | [推理脚本](scripts/matrix_game4/run_matrix_game4.sh) |
 | LingBot-Fast（自回归 I2V） | [推理脚本](scripts/lingbot_fast/run_5090.sh) |
 | Realtime-Video（Wan2.1 自回归 T2V） | [推理脚本](scripts/realtime_video/run_5090.sh) |
 | [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay)（双向、自回归与蒸馏版） | [使用指南](scripts/worldplay/README.md) |
 | [EdenLive](https://huggingface.co/VAST-AI/EdenLive)（Wan2.1 14B / Wan2.2 5B，支持双向与四步自回归推理） | [使用指南](scripts/edenlive/README_zh.md) |
 | [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0)（三维重建） | [使用指南](scripts/worldmirror/README_zh.md) |
+| [Depth Anything 3 MONO-LARGE](https://github.com/ByteDance-Seed/Depth-Anything-3)（图片/视频相对深度） | [使用指南与脚本](scripts/depth_anything3/README.md) |
 | [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) | [推理脚本](scripts/dreamzero) |
 | [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base) | [推理脚本](scripts/lingbot_va) |
 | [Motus](https://huggingface.co/motus-robotics/Motus) | [推理脚本](scripts/motus) |

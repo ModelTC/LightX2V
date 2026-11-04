@@ -1,5 +1,7 @@
 # Text Encoder Separation/Optimization Guide (Advanced Guide)
 
+Configuration examples are fragments: merge them into the complete config for the selected Qwen model instead of replacing the entire JSON file.
+
 For large-scale model inference, the Text Encoder often consumes significant memory and its computation is relatively independent. LightX2V offers two advanced Text Encoder optimization schemes: **Service Mode** and **Kernel Mode**.
 
 These schemes have been deeply optimized for the **Qwen-Image** series Text Encoder, significantly reducing memory usage and improving inference throughput.
@@ -102,8 +104,7 @@ On the LightX2V side, simply modify the `config_json` to enable Service Mode.
         "service_timeout": 30,
         "service_retry": 3,
         "use_shm": true
-    },
-    // ... other parameters (infer_steps, prompt_template, etc.) ...
+    }
 }
 ```
 
@@ -152,8 +153,7 @@ Simply modify `config_json` to enable Kernel Mode.
     "lightllm_config": {
         "use_flash_attention_kernel": true,
         "use_rmsnorm_kernel": true
-    },
-    // ... other parameters ...
+    }
 }
 ```
 

@@ -1,5 +1,5 @@
 Welcome to Lightx2v!
-==================
+================================================================================
 
 .. figure:: ../../../assets/img_lightx2v.png
   :width: 80%
@@ -53,6 +53,7 @@ Documentation
    Parallel Inference <method_tutorials/parallel.md>
    Changing Resolution Inference <method_tutorials/changing_resolution.md>
    Step Distill <method_tutorials/step_distill.md>
+   PyTorch Trace Profiling <method_tutorials/torch_profiling.md>
 
 .. toctree::
    :maxdepth: 1
@@ -74,3 +75,9 @@ Documentation
    :caption: Developer Guides
 
    Adding Request Parameters <developer_guides/request_parameters.md>
+
+.. toctree::
+   :hidden:
+
+   getting_started/benchmark_source.md
+   method_tutorials/cache_source.md

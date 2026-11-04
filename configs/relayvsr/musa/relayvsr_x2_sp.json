@@ -1,5 +1,6 @@
 {
-  "attention_backend": "triton",
+  "native_scale": 2,
+  "attention_backend": "torch_sdpa",
   "cross_attention_backend": "torch_sdpa",
   "cpu_offload": false,
   "clip_len": 16,
@@ -8,6 +9,10 @@
   "ffmpeg_preset": "ultrafast",
   "encoder_threads": 16,
   "queue_size": 16,
-  "use_compile": false,
-  "warmup": false
+  "use_compile": true,
+  "warmup": true,
+  "parallel": {
+    "seq_p_size": 2,
+    "seq_p_attn_type": "ulysses"
+  }
 }

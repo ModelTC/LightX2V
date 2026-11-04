@@ -110,8 +110,11 @@ class FlashModelTransformerInfer(RelayCompileMixin, BaseTransformerInfer):
 
 
 class FlashModelPostInfer:
+    def __init__(self, geometry):
+        self.geometry = geometry
+
     def infer(self, weights, hidden, lr):
-        height, width = lr.shape[-2] // 4, lr.shape[-1] // 4
+        height, width = self.geometry.latent_grid(*lr.shape[-2:])
         pixels = weights.projection.apply(F.silu(weights.head.apply(hidden)))
         residual = F.pixel_shuffle(pixels.t().reshape(1, 768, height, width), 16)
-        return F.interpolate(lr, scale_factor=4, mode="bicubic", align_corners=False) + residual
+        return F.interpolate(lr, scale_factor=self.geometry.scale, mode="bicubic", align_corners=False) + residual

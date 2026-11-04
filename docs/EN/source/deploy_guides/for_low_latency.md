@@ -26,7 +26,7 @@ For the original model without step distillation, we can use the following solut
 
 In some cases, the VAE component can be time-consuming. You can use a lightweight VAE for acceleration, which can also reduce some GPU memory usage.
 
-```python
+```json
 {
     "use_tae": true,
     "tae_path": "/path to taew2_1.pth"

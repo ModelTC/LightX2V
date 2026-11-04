@@ -94,21 +94,28 @@ Self-Forcing 针对 1.3B 的自回归模型进行步数蒸馏、CFG蒸馏。Ligh
 - 设置 `distill_method: "dmd2"`，使用 [WanStepDistillScheduler](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/models/schedulers/wan/step_distill/scheduler.py)。
 - `infer_steps`, `denoising_step_list` 和 `sample_shift` 设置为与训练时相匹配的参数，一般不建议用户修改。
 - `enable_cfg` 沿用所选模型配置；本文 Wan2.1 示例使用 `false`。
-- 在 `lora_configs` 中设置蒸馏 LoRA 的路径和强度，同时保留 `distill_method: "dmd2"`。
+- 使用蒸馏 LoRA 时，在 `lora_configs` 中设置路径和强度，同时保留 `distill_method: "dmd2"`。加载完整蒸馏模型且不叠加 LoRA 时，省略 `lora_configs`。
+
+下面是字段片段，需合并到与所选权重匹配的完整配置中。`infer_steps` 表示推理步数，`denoising_step_list` 表示去噪时间步列表，`sample_shift` 表示调度器的 timestep shift。
 
 ```json
 {
-  "distill_method": "dmd2",
-  "infer_steps": 4,                              // 推理步数
-  "denoising_step_list": [1000, 750, 500, 250],  // 去噪时间步列表
-  "sample_shift": 5,                             // 调度器 timestep shift
-  "enable_cfg": false,                           // 关闭CFG以提升速度
-  "lora_configs": [                              // LoRA权重路径（可选）
-    {
-      "path": "path/to/distill_lora.safetensors",
-      "strength": 1.0
-    }
-  ]
+    "distill_method": "dmd2",
+    "infer_steps": 4,
+    "denoising_step_list": [
+        1000,
+        750,
+        500,
+        250
+    ],
+    "sample_shift": 5,
+    "enable_cfg": false,
+    "lora_configs": [
+        {
+            "path": "path/to/distill_lora.safetensors",
+            "strength": 1.0
+        }
+    ]
 }
 ```
 
@@ -122,7 +129,7 @@ Self-Forcing 针对 1.3B 的自回归模型进行步数蒸馏、CFG蒸馏。Ligh
 **LoRA：**
 
 1. 将下载好的 LoRA 放到任意位置
-2. 修改配置文件中的 `lora_path` 参数为 LoRA 存放路径即可
+2. 修改配置文件中的 `lora_configs[].path` 参数为 LoRA 存放路径即可
 
 ### 推理脚本
 
@@ -159,13 +166,12 @@ bash scripts/wan/inference/distill/run_wan_i2v_distill_lora.sh
 对 [scripts/server/start_server.sh](https://github.com/ModelTC/lightx2v/blob/main/scripts/server/start_server.sh) 中的启动命令进行修改：
 
 ```bash
-python -m lightx2v.api_server \
+python -m lightx2v.server \
   --model_cls wan2.1 \
   --task t2v \
   --model_path $model_path \
   --config_json ${lightx2v_path}/configs/distill/wan21/wan_t2v_distill_model_4step_cfg.json \
-  --port 8000 \
-  --nproc_per_node 1
+  --port 8000
 ```
 
 运行服务启动脚本：
