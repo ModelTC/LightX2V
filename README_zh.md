@@ -256,7 +256,7 @@ LightX2V 支持多种图像、视频与世界模型，并提供量化权重、�
 
 <details>
 <summary><strong>🌍 世界模型、机器人与三维</strong><br><br>
-<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game4">Matrix-Game-4</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README_zh.md">EdenLive</a> · <a href="scripts/worldmirror/README_zh.md">WorldMirror</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
+<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game4">Matrix-Game-4</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README_zh.md">EdenLive</a> · <a href="scripts/worldmirror/README_zh.md">WorldMirror</a> · <a href="scripts/depth_anything3/README.md">Depth Anything 3</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
 </summary>
 
 | 模型 / 变体与权重 | 使用指南 / 脚本 |
@@ -269,6 +269,7 @@ LightX2V 支持多种图像、视频与世界模型，并提供量化权重、�
 | [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay)（双向、自回归与蒸馏版） | [使用指南](scripts/worldplay/README.md) |
 | [EdenLive](https://huggingface.co/VAST-AI/EdenLive)（Wan2.1 14B / Wan2.2 5B，支持双向与四步自回归推理） | [使用指南](scripts/edenlive/README_zh.md) |
 | [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0)（三维重建） | [使用指南](scripts/worldmirror/README_zh.md) |
+| [Depth Anything 3 MONO-LARGE](https://github.com/ByteDance-Seed/Depth-Anything-3)（图片/视频相对深度） | [使用指南与脚本](scripts/depth_anything3/README.md) |
 | [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) | [推理脚本](scripts/dreamzero) |
 | [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base) | [推理脚本](scripts/lingbot_va) |
 | [Motus](https://huggingface.co/motus-robotics/Motus) | [推理脚本](scripts/motus) |

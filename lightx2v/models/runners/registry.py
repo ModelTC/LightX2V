@@ -5,6 +5,7 @@ from importlib import import_module
 RUNNER_MODULES = {
     "bagel": "lightx2v.models.runners.bagel.bagel_runner",
     "cosmos3": "lightx2v.models.runners.cosmos3.cosmos3_runner",
+    "depth_anything3": "lightx2v.models.runners.depth_anything3.depth_anything3_runner",
     "dreamzero": "lightx2v.models.runners.wan.wan_dreamzero_runner",
     "ernie_image": "lightx2v.models.runners.ernie_image.ernie_image_runner",
     "fastwam": "lightx2v.models.runners.wan.fastwam_runner",

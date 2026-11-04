@@ -1,5 +1,5 @@
 from lightx2v.models.runners.request_args import COMMON, VIDEO_OUTPUT
-from lightx2v.utils.request_spec import Argument, RequestSpec
+from lightx2v.utils.request_spec import Argument, MultiTaskSpec
 
 RESAMPLING = {
     "draft_steps": Argument(
@@ -13,17 +13,8 @@ RESAMPLING = {
 REQUEST = COMMON | VIDEO_OUTPUT | RESAMPLING
 
 
-class MiniMaxH3Spec(RequestSpec):
-    def get_tasks(self, config):
-        if config.get("text_encoder_disk_streaming", False):
-            return ("t2av",)
-        if config["model_variant"] == "ref2av":
-            return ("ref2av",)
-        return tuple(self.tasks)
-
-
 SPECS = {
-    "minimax_h3": MiniMaxH3Spec(
+    "minimax_h3": MultiTaskSpec(
         {
             "t2av": REQUEST | {"prompt": Argument(help="Text prompt.")},
             "i2av": REQUEST

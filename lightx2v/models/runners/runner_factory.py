@@ -9,7 +9,8 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 def build_runner(config):
     """Instantiate a runner and initialize its model modules."""
     model_cls = config["model_cls"]
-    import_module("lightx2v.common.ops")
+    if model_cls != "depth_anything3":
+        import_module("lightx2v.common.ops")
     import_module(RUNNER_MODULES[model_cls])
 
     torch.set_grad_enabled(False)
