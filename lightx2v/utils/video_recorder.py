@@ -284,6 +284,11 @@ class VideoRecorder:
             self.schedule_thread = threading.Thread(target=self.schedule_stream_buffer)
             self.schedule_thread.start()
 
+    def _images_for_worker(self, images: torch.Tensor):
+        # Background threads must not touch CUDA tensors. A delayed conversion
+        # can overlap the next model CUDA-graph capture.
+        return images.cpu() if images.is_cuda else images
+
     # Publish ComfyUI Image tensor to livestream
     def pub_video(self, images: torch.Tensor):
         N, height, width, C = images.shape
@@ -292,7 +297,7 @@ class VideoRecorder:
         logger.info(f"Publishing video [{N}x{width}x{height}]")
 
         self.set_video_size(width, height)
-        self.video_queue.put(images)
+        self.video_queue.put(self._images_for_worker(images))
         logger.info(f"Published {N} frames")
 
         self.stoppable_t = time.time() + N / self.fps + 3
@@ -305,6 +310,7 @@ class VideoRecorder:
         assert N % self.slice_frame == 0, "Video frames must be divisible by slice_frame"
         assert C == 3, "Input must be [N, H, W, C] with C=3"
         self.set_video_size(width, height)
+        images = self._images_for_worker(images)
         valid_frames = math.ceil(valid_duration * self.fps)
 
         rets = []
