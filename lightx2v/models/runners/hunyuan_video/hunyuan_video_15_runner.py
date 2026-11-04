@@ -59,6 +59,10 @@ class HunyuanVideo15Runner(DefaultRunner):
         self.vae_cls = HunyuanVideo15VAE
         self.tae_cls = LightTaeHy15
 
+    def supports_negative_prompt(self):
+        sr = self.config.get("video_super_resolution", {})
+        return super().supports_negative_prompt() or (sr.get("sr_version") is not None and sr.get("enable_cfg", self.config.get("enable_cfg", False)))
+
     def init_scheduler(self):
         distill_method = self.config.get("distill_method")
         feature_caching = self.config["feature_caching"]

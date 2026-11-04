@@ -66,6 +66,7 @@ def get_wan_model_class(distill_method):
 
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
+    FIXED_FRAME_ATTENTION_TYPES = {"svg_attn", "radial_attn", "nbhd_attn", "nbhd_attn_flashinfer", "general_sparse_attn"}
     _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
     _WARMUP_TASKS = ("t2v", "i2v", "flf2v")
     _SUPPORTS_GENERIC_WARMUP = True
@@ -78,10 +79,17 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
 
+    def check_num_frames_override(self, request_data):
+        attention_type = self.config.get("self_attn_1_type")
+        if attention_type in self.FIXED_FRAME_ATTENTION_TYPES and request_data.get("num_frames") is not None:
+            raise ValueError(f"Wan num_frames cannot be overridden with self_attn_1_type={attention_type!r}; set num_frames in the startup config or choose another attention backend.")
+
     def prepare_request(self, request_data):
         input_info = super().prepare_request(request_data)
+        self.check_num_frames_override(request_data)
+        fixed_frames = self.config.get("self_attn_1_type") in self.FIXED_FRAME_ATTENTION_TYPES
         num_frames = getattr(input_info, "num_frames", None)
-        if "num_frames" in self.get_supported_request_fields(input_info.task) and num_frames is not None:
+        if not fixed_frames and "num_frames" in self.get_supported_request_fields(input_info.task) and num_frames is not None:
             if num_frames < 1:
                 raise ValueError(f"num_frames must be positive, got {num_frames}")
             temporal_stride = int(self.config["vae_stride"][0])

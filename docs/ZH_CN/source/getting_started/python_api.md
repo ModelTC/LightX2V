@@ -107,7 +107,7 @@ torchrun --standalone --nproc_per_node=4 your_script.py
 
 ## 模型示例
 
-运行前修改所选 Python 文件中的模型、输入和输出路径。与 Shell 入口比较结果时，同时核对模型、权重、采样参数和注意力实现。关闭 CFG 的请求不传 `negative_prompt`，包括空字符串。
+运行前修改所选 Python 文件中的模型、输入和输出路径。与 Shell 入口比较结果时，同时核对模型、权重、采样参数和注意力实现。关闭 CFG 时，显式传入的 `negative_prompt`（包括空字符串）会被忽略，并记录警告。
 
 | 模型或任务 | 入口 |
 | --- | --- |

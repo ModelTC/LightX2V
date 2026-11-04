@@ -1,7 +1,7 @@
-from lightx2v.models.runners.hunyuan_video.cli import HUNYUAN_VIDEO15, HunyuanVideoSpec
-from lightx2v.utils.request_spec import Argument
+from lightx2v.models.runners.hunyuan_video.cli import HUNYUAN_VIDEO15
+from lightx2v.utils.request_spec import Argument, RequestSpec
 
-WORLDPLAY = HunyuanVideoSpec(
+WORLDPLAY = RequestSpec(
     {
         task: dict(
             request_fields,

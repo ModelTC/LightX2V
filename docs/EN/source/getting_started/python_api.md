@@ -107,7 +107,7 @@ The process count must match the selected parallel configuration. See [parallel 
 
 ## Model examples
 
-Edit the selected Python file's model/input/output paths before running it. Keep the model, checkpoint, sampling parameters and attention implementation together when comparing results with a Shell launcher. For CFG-disabled requests, omit `negative_prompt`, including the empty string.
+Edit the selected Python file's model/input/output paths before running it. Keep the model, checkpoint, sampling parameters and attention implementation together when comparing results with a Shell launcher. For CFG-disabled requests, explicitly supplied `negative_prompt` values, including the empty string, are ignored with a warning.
 
 | Model or task | Entry |
 | --- | --- |

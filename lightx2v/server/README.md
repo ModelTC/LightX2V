@@ -377,7 +377,7 @@ class BaseTaskRequest(BaseModel):
 
 To download an asynchronous task's file result, provide `save_result_path` in the request. Omitting it or passing null skips file saving. Synchronous image APIs return the image from memory.
 
-Omitted or null `negative_prompt` defaults to `""`. Explicit strings, including `""`, require model support. Empty text can still use model templates and does not disable CFG.
+Omitted or null `negative_prompt` uses startup/default values. The field must be supported by the selected model/task. When CFG is disabled, explicitly supplied values, including `""`, are ignored with a warning. With CFG enabled, empty text can still use model templates and does not disable CFG.
 
 Single-task services use the task selected by `--task` at startup, so POST requests can omit `task`. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively.
 

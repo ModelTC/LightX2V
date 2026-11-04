@@ -905,6 +905,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
 class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, WanAudioRunner):
     _WARMUP_RESOLUTIONS = ()
 
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if self.config.get("prompt_travel") and request_data.get("prompt") is not None:
+            raise ValueError("SekoTalk AR prompt cannot be overridden while prompt_travel is configured; edit prompt_travel_text or remove prompt_travel to use a single prompt.")
+        return input_info
+
     def get_stream_output_path(self, input_info):
         # Live audio uses VAController's editable publication buffer for
         # interrupt/rollback. Fixed audio uses the common append-only writer.

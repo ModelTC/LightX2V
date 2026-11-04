@@ -75,6 +75,12 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
 
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if self.config.get("layered", False) and request_data.get("i2i_denoise_strength") is not None:
+            raise ValueError("Qwen-Image i2i_denoise_strength is not supported with layered=true; omit it or disable layered generation.")
+        return input_info
+
     def check_reuse_support(self):
         pass
 

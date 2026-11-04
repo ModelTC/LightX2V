@@ -108,6 +108,9 @@ class BaseRunner(ABC):
     def resolve_request_seed(self, request_data):
         return request_data.get("seed", 42)
 
+    def supports_negative_prompt(self):
+        return self.config.get("enable_cfg", False)
+
     def get_supported_request_fields(self, task):
         """Return supported request fields for the given task."""
         return get_model_spec(self.config["model_cls"]).get_fields(self.config, task)
@@ -131,6 +134,9 @@ class BaseRunner(ABC):
         unsupported_fields = set(request_data) - self.get_supported_request_fields(task)
         if unsupported_fields:
             raise ValueError(f"{type(self).__name__} ({task}) does not support request fields: {', '.join(sorted(unsupported_fields))}")
+        if "negative_prompt" in request_data and not self.supports_negative_prompt():
+            logger.warning(f"{type(self).__name__}: ignoring negative_prompt because CFG is disabled.")
+            request_data.pop("negative_prompt")
         return self.create_input_info(request_data)
 
     def run_request(self, input_info):

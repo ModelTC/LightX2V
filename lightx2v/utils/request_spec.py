@@ -21,10 +21,7 @@ class RequestSpec:
         return (task,)
 
     def get_arguments(self, config, task):
-        arguments = dict(self.tasks[task])
-        if not config.get("enable_cfg", False):
-            arguments.pop("negative_prompt", None)
-        return arguments
+        return dict(self.tasks[task])
 
     def get_fields(self, config, task):
         return frozenset(self.get_arguments(config, task))

@@ -2,17 +2,7 @@ from lightx2v.models.runners.request_args import COMMON, PROMPT, VIDEO, without
 from lightx2v.utils.request_spec import Argument, RequestSpec
 
 
-class WanSpec(RequestSpec):
-    FIXED_FRAME_ATTENTION_TYPES = {"svg_attn", "radial_attn", "nbhd_attn", "nbhd_attn_flashinfer", "general_sparse_attn"}
-
-    def get_arguments(self, config, task):
-        arguments = super().get_arguments(config, task)
-        if config.get("self_attn_1_type", None) in self.FIXED_FRAME_ATTENTION_TYPES:
-            arguments.pop("num_frames", None)
-        return arguments
-
-
-class WanAnimateSpec(WanSpec):
+class WanAnimateSpec(RequestSpec):
     def get_arguments(self, config, task):
         arguments = super().get_arguments(config, task)
         if config.get("replace_flag", False):
@@ -20,7 +10,7 @@ class WanAnimateSpec(WanSpec):
         return arguments
 
 
-class WanDancerSpec(WanSpec):
+class WanDancerSpec(RequestSpec):
     def get_arguments(self, config, task):
         arguments = super().get_arguments(config, task)
         if config.get("dancer_stage", None) == "local":
@@ -28,15 +18,7 @@ class WanDancerSpec(WanSpec):
         return arguments
 
 
-class WanAudioARSpec(WanSpec):
-    def get_arguments(self, config, task):
-        arguments = super().get_arguments(config, task)
-        if config.get("prompt_travel", None):
-            arguments.pop("prompt", None)
-        return arguments
-
-
-EDEN_LIVE = WanSpec(
+EDEN_LIVE = RequestSpec(
     {
         "v2v": dict(
             VIDEO,
@@ -58,7 +40,7 @@ FAST_WAM = RequestSpec(
     }
 )
 
-WAN_AUDIO = WanSpec(
+WAN_AUDIO = RequestSpec(
     {
         task: dict(
             COMMON,
@@ -75,7 +57,7 @@ WAN_AUDIO = WanSpec(
     }
 )
 
-WAN = WanSpec(
+WAN = RequestSpec(
     {
         "t2v": VIDEO,
         "i2v": dict(
@@ -90,7 +72,7 @@ WAN = WanSpec(
     }
 )
 
-LINGBOT = WanSpec(
+LINGBOT = RequestSpec(
     {
         "i2v": dict(
             WAN.tasks["i2v"],
@@ -100,9 +82,9 @@ LINGBOT = WanSpec(
     }
 )
 
-WAN_SF = WanSpec({"t2v": without(WAN.tasks["t2v"], "num_frames")})
+WAN_SF = RequestSpec({"t2v": without(WAN.tasks["t2v"], "num_frames")})
 
-WAN_VACE = WanSpec(
+WAN_VACE = RequestSpec(
     {
         "vace": dict(
             VIDEO,
@@ -114,7 +96,7 @@ WAN_VACE = WanSpec(
 )
 
 SPECS = {
-    "dreamzero": WanSpec(
+    "dreamzero": RequestSpec(
         {
             "i2va": dict(
                 COMMON,
@@ -126,7 +108,7 @@ SPECS = {
         }
     ),
     "fastwam": FAST_WAM,
-    "infinitetalk": WanSpec(
+    "infinitetalk": RequestSpec(
         {
             "s2v": dict(
                 COMMON,
@@ -139,7 +121,7 @@ SPECS = {
             )
         }
     ),
-    "lingbot_va": WanSpec(
+    "lingbot_va": RequestSpec(
         {
             "i2va": dict(
                 COMMON,
@@ -149,8 +131,8 @@ SPECS = {
         }
     ),
     "lingbot_world": LINGBOT,
-    "lingbot_world_fast": WanSpec({"i2v": without(LINGBOT.tasks["i2v"], "num_frames")}),
-    "matrix_game4": WanSpec(
+    "lingbot_world_fast": RequestSpec({"i2v": without(LINGBOT.tasks["i2v"], "num_frames")}),
+    "matrix_game4": RequestSpec(
         {
             "v2v": dict(
                 VIDEO,
@@ -161,12 +143,12 @@ SPECS = {
     ),
     "realtimewam": FAST_WAM,
     "seko_talk": WAN_AUDIO,
-    "seko_talk_ar": WanAudioARSpec({"rs2v": without(WAN_AUDIO.tasks["rs2v"], "num_frames", "resize_mode", "fixed_area")}),
+    "seko_talk_ar": RequestSpec({"rs2v": without(WAN_AUDIO.tasks["rs2v"], "num_frames", "resize_mode", "fixed_area")}),
     "wan2.1": WAN,
     "wan2.1_sf": WAN_SF,
     "wan2.1_realtime": WAN_SF,
     "wan2.1_vace": WAN_VACE,
-    "wan2.2": WanSpec({task: WAN.tasks[task] for task in ("t2v", "i2v")}),
+    "wan2.2": RequestSpec({task: WAN.tasks[task] for task in ("t2v", "i2v")}),
     "wan2.2_animate": WanAnimateSpec(
         {
             "animate": dict(
@@ -179,7 +161,7 @@ SPECS = {
             )
         }
     ),
-    "wan2.2_animate2_distilled": WanSpec(
+    "wan2.2_animate2_distilled": RequestSpec(
         {
             "animate": dict(
                 VIDEO,
@@ -193,7 +175,7 @@ SPECS = {
     ),
     "wan2.2_moe": WAN,
     "wan2.2_moe_vace": WAN_VACE,
-    "wan2.2_s2v": WanSpec(
+    "wan2.2_s2v": RequestSpec(
         {
             "s2v": dict(
                 COMMON,

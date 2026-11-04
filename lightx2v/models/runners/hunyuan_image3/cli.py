@@ -3,15 +3,6 @@ import argparse
 from lightx2v.models.runners.request_args import COMMON
 from lightx2v.utils.request_spec import Argument, RequestSpec
 
-
-class HunyuanImage3Spec(RequestSpec):
-    def get_arguments(self, config, task):
-        arguments = super().get_arguments(config, task)
-        if config.get("image_size", None):
-            arguments.pop("size", None)
-        return arguments
-
-
 TEXT = dict(
     COMMON,
     bot_task=Argument(help="HunyuanImage3 text generation mode."),
@@ -31,7 +22,7 @@ REFERENCE_IMAGE = {
 IMAGE_OUTPUT = {"prompt": Argument(help="Text prompt."), "size": Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH")}
 
 SPECS = {
-    "hunyuan_image3": HunyuanImage3Spec(
+    "hunyuan_image3": RequestSpec(
         {
             "t2t": TEXT,
             "ti2t": TEXT | REFERENCE_IMAGE,

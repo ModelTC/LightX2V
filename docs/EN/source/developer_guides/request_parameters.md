@@ -41,6 +41,10 @@ SPECS = {
 
 The CLI builds options and help from this Spec, and `BaseRunner` uses the same Spec to validate tasks and request fields. Define model-specific arguments locally without changing a global argument table or repeating declarations in the runner. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
 
+Keep declared arguments in the Spec when a startup setting makes them unusable. Validate incompatible combinations in the runner's request preparation or inference path, with an error explaining the conflicting setting and how to resolve it. Do not conditionally remove these fields from the Spec.
+
+For a supported `negative_prompt` supplied while CFG is disabled, log a warning and ignore the request value instead of raising an error.
+
 ## 3. Use the parameter during inference
 
 Read the request value where computation uses it:

@@ -777,7 +777,7 @@ class SeedVRRunner(DefaultRunner):
 
         video_path = self.input_info.video_path
         if self._seedvr_sp_size > 1 and not video_path:
-            raise ValueError("SeedVR VAE sequence parallel currently supports video SR input only")
+            raise ValueError("SeedVR sequence parallelism requires video_path; use a video input or set parallel.seq_p_size=1 for image SR.")
         seg_len, overlap = self._get_sr_segment_params()
         if not video_path or seg_len is None:
             self.inputs = self.run_input_encoder()

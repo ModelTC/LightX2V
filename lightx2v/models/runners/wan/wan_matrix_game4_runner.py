@@ -93,6 +93,7 @@ class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
 
     def prepare_request(self, request_data):
         input_info = BaseRunner.prepare_request(self, request_data)
+        self.check_num_frames_override(request_data)
         if not input_info.video_path:
             raise ValueError("Matrix-Game-4 v2v requires video_path")
         if not input_info.image_path:

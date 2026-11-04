@@ -43,6 +43,12 @@ class HunyuanImage3Runner(DefaultRunner):
         super().__init__(config)
         self._close_after_run = self._is_offline_infer_entrypoint() and not self._is_multi_run_benchmark(config)
 
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if self.config.get("image_size") and request_data.get("size") is not None:
+            raise ValueError("HunyuanImage3 size conflicts with the startup image_size setting; remove image_size from the config to use request size, or omit size.")
+        return input_info
+
     @staticmethod
     def _is_offline_infer_entrypoint():
         main_module = sys.modules.get("__main__")
