@@ -29,9 +29,8 @@ from lightx2v.server.ws.protocol import (
 )
 
 DEFAULT_GLOBAL_PROMPT = "保持状态，不要乱晃。"
-DEFAULT_ACTION_PROMPT = (
-    "<Subject 1> crosses both wrists in front of her chest into a clear X and holds the crossed wrists toward the camera. Her elbows stay bent and her feet stay planted. The feet stay planted and the torso does not shift, lean, or walk."
-)
+DEFAULT_ACTION_PROMPT = "<Subject 1> crosses both wrists in front of her chest into a clear X and holds the crossed wrists toward the camera. Her elbows stay bent and her feet stay planted. The feet stay planted and the torso does not shift, lean, or walk."
+
 
 def read_wav_pcm16_mono(path: str, target_sr: int = 16000) -> bytes:
     with wave.open(path, "rb") as wf:
@@ -68,9 +67,7 @@ def _try_recv(ws, chunks, size, timeout=0.01):
         size[1] = msg.video_start.video_height
         print(f"video_start {size[0]}x{size[1]}")
     elif which == "event":
-        name = {ServerEvent.START_SPEAKING: "START_SPEAKING", ServerEvent.STOP_SPEAKING: "STOP_SPEAKING", ServerEvent.PROMPT_UPDATE: "PROMPT_UPDATE"}.get(
-            msg.event.type, str(msg.event.type)
-        )
+        name = {ServerEvent.START_SPEAKING: "START_SPEAKING", ServerEvent.STOP_SPEAKING: "STOP_SPEAKING", ServerEvent.PROMPT_UPDATE: "PROMPT_UPDATE"}.get(msg.event.type, str(msg.event.type))
         print(f"event {name} {msg.event.message}")
         if msg.event.type == ServerEvent.STOP_SPEAKING:
             return "stop_speaking"
