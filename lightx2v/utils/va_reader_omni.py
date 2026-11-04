@@ -148,6 +148,7 @@ class ChatAdapter:
         self.immediate_switch = 0
         self.image_switch = ""
         self.action_switch = ""
+        self._lock = threading.Lock()
         self.model_runner = model_runner
 
     def launch_chat_server(self):
@@ -178,9 +179,10 @@ class ChatAdapter:
     # immediate switch to status, discard prev_bytes, set immediate_switch to 1
     def immediate_switch_to(self, status):
         logger.warning(f"VA reader immediate switch to {status}")
-        self.reset_prev = True
-        self.status = status
-        self.immediate_switch = 1
+        with self._lock:
+            self.reset_prev = True
+            self.status = status
+            self.immediate_switch = 1
         # only no action switch can be paused immediately
         if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
@@ -188,7 +190,8 @@ class ChatAdapter:
 
     def set_image_switch(self, image_path):
         logger.warning(f"Setting image switch: {image_path}")
-        self.image_switch = image_path
+        with self._lock:
+            self.image_switch = image_path
         # only blank status and no action switch can be paused immediately
         if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
@@ -196,11 +199,30 @@ class ChatAdapter:
 
     def set_action_switch(self, prompt):
         logger.warning(f"Setting action switch: {prompt}")
-        self.action_switch = prompt
+        with self._lock:
+            self.action_switch = prompt
         # only blank status can be paused immediately
         if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
             logger.warning(f"Model runner set pause signal for action switch & blank status")
+
+    def take_immediate_switch(self):
+        with self._lock:
+            value = self.immediate_switch
+            self.immediate_switch = 0
+            return value
+
+    def take_image_switch(self):
+        with self._lock:
+            value = self.image_switch
+            self.image_switch = ""
+            return value
+
+    def take_action_switch(self):
+        with self._lock:
+            value = self.action_switch
+            self.action_switch = ""
+            return value
 
     def recv_loop(self):
         while True:
@@ -504,31 +526,23 @@ class OmniVAReader:
 
     def get_immediate_switch(self):
         if self.rank == self.target_rank:
-            if self.chat_adapter is not None and self.chat_adapter.immediate_switch == 1:
-                self.immediate_switch_tensor.fill_(1)
-                # reset immediate switch
-                self.chat_adapter.immediate_switch = 0
-            else:
-                self.immediate_switch_tensor.fill_(0)
+            switched = self.chat_adapter.take_immediate_switch() if self.chat_adapter is not None else 0
+            self.immediate_switch_tensor.fill_(1 if switched == 1 else 0)
         if self.world_size > 1:
             dist.broadcast(self.immediate_switch_tensor, src=self.target_rank)
         return self.immediate_switch_tensor.item()
 
     def get_image_switch(self):
-        data = "" if self.chat_adapter is None else self.chat_adapter.image_switch
-        image_switch = self.broadcast_data(data)
-        # reset image switch
-        if self.chat_adapter is not None:
-            self.chat_adapter.image_switch = ""
-        return image_switch
+        data = ""
+        if self.rank == self.target_rank and self.chat_adapter is not None:
+            data = self.chat_adapter.take_image_switch()
+        return self.broadcast_data(data)
 
     def get_action_switch(self):
-        data = "" if self.chat_adapter is None else self.chat_adapter.action_switch
-        action_switch = self.broadcast_data(data)
-        # reset action switch
-        if self.chat_adapter is not None:
-            self.chat_adapter.action_switch = ""
-        return action_switch
+        data = ""
+        if self.rank == self.target_rank and self.chat_adapter is not None:
+            data = self.chat_adapter.take_action_switch()
+        return self.broadcast_data(data)
 
     def broadcast_data(self, data):
         if self.world_size <= 1:

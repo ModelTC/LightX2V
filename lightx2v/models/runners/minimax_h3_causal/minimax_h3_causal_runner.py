@@ -409,6 +409,32 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
         gen_video = torch.full((1, 1, n_frames), int(chunk_idx), dtype=torch.int64, device=AI_DEVICE)
         self.va_controller.pub_livestream(video_seg, audio_seg, gen_video, valid_duration=valid_duration)
 
+    def _commit_text_output(self, text_output, emit=False, prompt=None):
+        self.inputs["text_encoder_output"] = text_output
+        self.fill_condition_cache(overwrite=True)
+        if not emit:
+            return
+        recorder = self.va_controller.recorder if self.va_controller is not None else None
+        if recorder is not None and hasattr(recorder, "emit_prompt_update"):
+            recorder.emit_prompt_update(prompt)
+
+    def _update_origin_text_output(self, prompt, duration, superseded_prompt, origin_text_output):
+        # 更新全局 prompt
+        if duration == -1:
+            origin_text_output = (self.inputs["text_encoder_output"], prompt)
+            logger.warning(f"reset global prompt to {prompt}")
+        # 若前一个 -1 的 prompt 被后到的动作盖掉，还没编码，标记为 pending，待恢复时再算。
+        # 若在恢复之前后续的 -1 的 prompt 又到了，origin_text_output 会被覆盖成最新的 prompt，恢复时也恢复的最新的
+        elif duration > 0 and superseded_prompt:
+            origin_text_output = ("pending", superseded_prompt)
+            logger.warning(f"global prompt {superseded_prompt} was overwritten before it applied")
+        return origin_text_output
+
+    def _update_restore_prompt_at(self, duration, chunk_idx):
+        if duration > 0:
+            return chunk_idx + max(1, math.ceil(duration * FPS / FRAMES_PER_CHUNK))
+        return -1
+
     def run_main(self):
         try:
             self.init_run()
@@ -432,7 +458,7 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
             last_chunk_idx = 0
             last_valid_duration = 0
             self.last_rest_audio = None
-            origin_text_output = self.inputs["text_encoder_output"]
+            origin_text_output = (self.inputs["text_encoder_output"], self.action_travel.prompt)
             restore_prompt_at = -1
 
             while True:
@@ -440,16 +466,10 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
 
                 if control.action == "perform_action":
                     prompt, duration = control.data["prompt"], control.data["duration"]
-                    self.inputs["text_encoder_output"] = self.encode_action_prompt(prompt)
-                    self.fill_condition_cache(overwrite=True)
-                    if self.va_controller.recorder is not None and hasattr(self.va_controller.recorder, "emit_prompt_update"):
-                        self.va_controller.recorder.emit_prompt_update(prompt)
-                    # 对于 -1 的 duration，在设置全局 prompt，后续的动作类 prompt 作用结束后会恢复成这个
-                    if duration == -1:
-                        origin_text_output = self.inputs["text_encoder_output"]
-                        logger.warning(f"reset global prompt to {prompt}")
-                    elif duration > 0:
-                        restore_prompt_at = chunk_idx + max(1, math.ceil(duration * FPS / FRAMES_PER_CHUNK))
+                    text_output = self.encode_action_prompt(prompt)
+                    self._commit_text_output(text_output, emit=True, prompt=prompt)
+                    origin_text_output = self._update_origin_text_output(prompt, duration, control.data.get("superseded_prompt"), origin_text_output)
+                    restore_prompt_at = self._update_restore_prompt_at(duration, chunk_idx)
                     if dist.get_rank() == 0:
                         logger.info(f"H3 prompt switched before chunk {chunk_idx}: {prompt} duration={duration} restore_prompt_at={restore_prompt_at}")
                     continue
@@ -503,11 +523,15 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
 
                     # restore the origin prompt
                     if restore_prompt_at >= 0 and chunk_idx >= restore_prompt_at:
-                        self.inputs["text_encoder_output"] = origin_text_output
-                        self.fill_condition_cache(overwrite=True)
+                        text_output, restored_prompt = origin_text_output
+                        is_pending = isinstance(text_output, str) and text_output == "pending"
+                        if is_pending:
+                            text_output = self.encode_action_prompt(restored_prompt)
+                            origin_text_output = (text_output, restored_prompt)
+                        self._commit_text_output(text_output, emit=is_pending, prompt=restored_prompt)
                         restore_prompt_at = -1
                         if dist.get_rank() == 0:
-                            logger.info(f"H3 prompt restored to origin before chunk {chunk_idx}: {self.action_travel.prompt}")
+                            logger.info(f"H3 prompt restored to origin before chunk {chunk_idx}: {restored_prompt}")
 
         finally:
             if hasattr(self.model, "inputs"):
