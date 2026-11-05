@@ -1,6 +1,7 @@
 from .draft_attn import DraftAttnWeight
 from .dynamic_sparse_attn import DynamicSparseAttnWeight
 from .flash_attn import (
+    FlashAttn2VarlenWeight,
     FlashAttn2Weight,
     FlashAttn3Weight,
     FlashAttn4Weight,
@@ -21,4 +22,5 @@ from .svg2_attn import Svg2AttnWeight
 from .svg_attn import SvgAttnWeight
 from .torch_sdpa import TorchSDPAWeight
 from .torch_sdpa_mps import TorchSDPAMPSWeight
+from .torch_sdpa_varlen import TorchSDPAVarlenWeight
 from .ulysses_attn import UlyssesAttnWeight

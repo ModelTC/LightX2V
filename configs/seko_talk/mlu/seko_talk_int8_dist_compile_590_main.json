@@ -1,0 +1,13 @@
+{
+    "lightx2v_path": "",
+    "clip_configs": [
+        {
+            "name": "rs2v_clip",
+            "path": "configs/seko_talk/mlu/seko_talk_int8_dist_compile_590.json"
+        }
+    ],
+    "parallel": {
+        "seq_p_size": 8,
+        "seq_p_attn_type": "ulysses"
+    }
+}

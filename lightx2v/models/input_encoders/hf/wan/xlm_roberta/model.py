@@ -11,6 +11,7 @@ from loguru import logger
 # from lightx2v.attentions import attention
 from lightx2v.common.ops.attn import TorchSDPAWeight
 from lightx2v.models.input_encoders.hf.q_linear import (
+    MusaQuantLinearFp8,
     Q8FQuantLinearFp8,
     Q8FQuantLinearInt8,
     SglQuantLinearFp8,
@@ -95,6 +96,8 @@ class SelfAttention(nn.Module):
                 linear_cls = VllmQuantLinearInt8
             elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
+            elif quant_scheme == "fp8-musa":
+                linear_cls = MusaQuantLinearFp8
             elif quant_scheme == "fp8-vllm":
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
@@ -111,8 +114,16 @@ class SelfAttention(nn.Module):
                 linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
+            elif quant_scheme == "int8-npu":
+                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
+
+                linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
+            elif quant_scheme == "int8-metax":
+                from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8
+
+                linear_cls = MetaxQuantLinearInt8
             else:
                 raise NotImplementedError(f"Unsupported CLip quant scheme: {quant_scheme}")
         else:
@@ -193,6 +204,8 @@ class AttentionBlock(nn.Module):
                 linear_cls = VllmQuantLinearInt8
             elif quant_scheme in ["fp8", "fp8-sgl"]:
                 linear_cls = SglQuantLinearFp8
+            elif quant_scheme == "fp8-musa":
+                linear_cls = MusaQuantLinearFp8
             elif quant_scheme == "fp8-vllm":
                 linear_cls = VllmQuantLinearFp8
             elif quant_scheme == "int8-torchao":
@@ -209,8 +222,16 @@ class AttentionBlock(nn.Module):
                 linear_cls = TritonQuantLinearFp8
             elif quant_scheme == "int8-tmo":
                 linear_cls = MluQuantLinearInt8
+            elif quant_scheme == "int8-npu":
+                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
+
+                linear_cls = NpuQuantLinearInt8
             elif quant_scheme == "int8-iluvatar":
                 linear_cls = IluvatarQuantLinearInt8
+            elif quant_scheme == "int8-metax":
+                from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8
+
+                linear_cls = MetaxQuantLinearInt8
             else:
                 raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
         else:

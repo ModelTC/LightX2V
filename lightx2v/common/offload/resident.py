@@ -30,7 +30,6 @@ def validate_residency_config(config):
         "lora_dynamic_apply",
         "adapter_model_path",
         "changing_resolution",
-        "use_compile",
         "enable_cuda_graph",
     )
     if any(config.get(key, False) for key in incompatible) or config.get("feature_caching", "NoCaching") != "NoCaching":

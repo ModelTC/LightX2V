@@ -1,5 +1,7 @@
 import math
 
+import torch
+
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
@@ -95,3 +97,12 @@ class NpuFlashAttnWeight(AttnWeightTemplate):
         x = x[0]
         x = x.reshape(q_token_count, -1)
         return x
+
+
+@PLATFORM_ATTN_WEIGHT_REGISTER("npu_flash_attn_eager")
+class NpuFlashAttnEagerWeight(NpuFlashAttnWeight):
+    cu_seqlens_on_device = False
+
+    @torch.compiler.disable
+    def apply(self, *args, **kwargs):
+        return super().apply(*args, **kwargs)
