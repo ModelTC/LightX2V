@@ -1,0 +1,4 @@
+# Copyright (c) Microsoft Corporation.
+# See lightx2v/models/networks/trellis2/LICENSE.
+
+from .modulated import ModulatedSparseTransformerCrossBlockWeights

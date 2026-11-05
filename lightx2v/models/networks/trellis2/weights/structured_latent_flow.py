@@ -1,19 +1,20 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License; see lightx2v/models/networks/trellis2/LICENSE.
 
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Literal, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 import lightx2v.common.ops.sparse as sp
-from lightx2v.models.networks.trellis2.layers.sparse_transformer import ModulatedSparseTransformerCrossBlock
-from lightx2v.models.networks.trellis2.layers.transformer import AbsolutePositionEmbedder
-from lightx2v.models.networks.trellis2.sparse_structure_flow import TimestepEmbedder
+from lightx2v.models.networks.trellis2.weights.layers.sparse_transformer import ModulatedSparseTransformerCrossBlockWeights
+from lightx2v.models.networks.trellis2.weights.layers.transformer import AbsolutePositionEmbedderWeights
+from lightx2v.models.networks.trellis2.weights.sparse_structure_flow import TimestepEmbedderWeights
 
 
-class SLatFlowModel(nn.Module):
+class SLatFlowModelWeights(nn.Module):
+    _inference_type = ("lightx2v.models.networks.trellis2.infer.structured_latent_flow", "SLatFlowModelInfer")
+
     def __init__(
         self,
         resolution: int,
@@ -45,15 +46,15 @@ class SLatFlowModel(nn.Module):
         self.qk_rms_norm = qk_rms_norm
         self.qk_rms_norm_cross = qk_rms_norm_cross
         self.dtype = torch.bfloat16
-        self.t_embedder = TimestepEmbedder(model_channels)
+        self.t_embedder = TimestepEmbedderWeights(model_channels)
         if share_mod:
             self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(model_channels, 6 * model_channels, bias=True))
         if pe_mode == "ape":
-            self.pos_embedder = AbsolutePositionEmbedder(model_channels)
+            self.pos_embedder = AbsolutePositionEmbedderWeights(model_channels)
         self.input_layer = sp.SparseLinear(in_channels, model_channels)
         self.blocks = nn.ModuleList(
             [
-                ModulatedSparseTransformerCrossBlock(
+                ModulatedSparseTransformerCrossBlockWeights(
                     model_channels,
                     cond_channels,
                     num_heads=self.num_heads,
@@ -70,29 +71,7 @@ class SLatFlowModel(nn.Module):
         )
         self.out_layer = sp.SparseLinear(model_channels, out_channels)
 
-    @property
-    def device(self) -> torch.device:
-        """Return the device of the model."""
-        return next(self.parameters()).device
+    def forward(self, *args, **kwargs):
+        from lightx2v.models.networks.trellis2.infer.structured_latent_flow import SLatFlowModelInfer
 
-    def forward(self, x: sp.SparseTensor, t: torch.Tensor, cond: Union[torch.Tensor, List[torch.Tensor]], concat_cond: Optional[sp.SparseTensor] = None, **kwargs) -> sp.SparseTensor:
-        if concat_cond is not None:
-            x = sp.sparse_cat([x, concat_cond], dim=-1)
-        if isinstance(cond, list):
-            cond = sp.VarLenTensor.from_tensor_list(cond)
-        h = self.input_layer(x)
-        h = h.to(dtype=self.dtype)
-        t_emb = self.t_embedder(t)
-        if self.share_mod:
-            t_emb = self.adaLN_modulation(t_emb)
-        t_emb = t_emb.to(dtype=self.dtype)
-        cond = cond.to(dtype=self.dtype)
-        if self.pe_mode == "ape":
-            pe = self.pos_embedder(h.coords[:, 1:])
-            h = h + pe.to(dtype=self.dtype)
-        for block in self.blocks:
-            h = block(h, t_emb, cond)
-        h = h.to(dtype=x.dtype)
-        h = h.replace(F.layer_norm(h.feats, h.feats.shape[-1:]))
-        h = self.out_layer(h)
-        return h
+        return SLatFlowModelInfer(self).infer(*args, **kwargs)

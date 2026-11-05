@@ -5,23 +5,27 @@ from typing import Literal, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from lightx2v.common.ops.sparse.attention.packed import PackedAttention
-from lightx2v.models.networks.trellis2.layers.attention.rope import RotaryPositionEmbedder
 
 
-class MultiHeadRMSNorm(nn.Module):
+class MultiHeadRMSNormWeights(nn.Module):
+    _inference_type = ("lightx2v.models.networks.trellis2.infer.layers.attention.modules", "MultiHeadRMSNormInfer")
+
     def __init__(self, dim: int, heads: int):
         super().__init__()
         self.scale = dim**0.5
         self.gamma = nn.Parameter(torch.ones(heads, dim))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return (F.normalize(x.float(), dim=-1) * self.gamma * self.scale).to(x.dtype)
+    def forward(self, *args, **kwargs):
+        from lightx2v.models.networks.trellis2.infer.layers.attention.modules import MultiHeadRMSNormInfer
+
+        return MultiHeadRMSNormInfer(self).infer(*args, **kwargs)
 
 
-class MultiHeadAttention(nn.Module):
+class MultiHeadAttentionWeights(nn.Module):
+    _inference_type = ("lightx2v.models.networks.trellis2.infer.layers.attention.modules", "MultiHeadAttentionInfer")
+
     def __init__(
         self,
         channels: int,
@@ -60,40 +64,11 @@ class MultiHeadAttention(nn.Module):
             self.to_q = nn.Linear(channels, channels, bias=qkv_bias)
             self.to_kv = nn.Linear(self.ctx_channels, channels * 2, bias=qkv_bias)
         if self.qk_rms_norm:
-            self.q_rms_norm = MultiHeadRMSNorm(self.head_dim, num_heads)
-            self.k_rms_norm = MultiHeadRMSNorm(self.head_dim, num_heads)
+            self.q_rms_norm = MultiHeadRMSNormWeights(self.head_dim, num_heads)
+            self.k_rms_norm = MultiHeadRMSNormWeights(self.head_dim, num_heads)
         self.to_out = nn.Linear(channels, channels)
 
-    def forward(self, x: torch.Tensor, context: Optional[torch.Tensor] = None, phases: Optional[torch.Tensor] = None) -> torch.Tensor:
-        (B, L, C) = x.shape
-        if self._type == "self":
-            qkv = self.to_qkv(x)
-            qkv = qkv.reshape(B, L, 3, self.num_heads, -1)
-            if self.qk_rms_norm or self.use_rope:
-                (q, k, v) = qkv.unbind(dim=2)
-                if self.qk_rms_norm:
-                    q = self.q_rms_norm(q)
-                    k = self.k_rms_norm(k)
-                if self.use_rope:
-                    assert phases is not None, "Phases must be provided for RoPE"
-                    q = RotaryPositionEmbedder.apply_rotary_embedding(q, phases)
-                    k = RotaryPositionEmbedder.apply_rotary_embedding(k, phases)
-                h = self.attention(q, k, v)
-            else:
-                h = self.attention(qkv)
-        else:
-            Lkv = context.shape[1]
-            q = self.to_q(x)
-            kv = self.to_kv(context)
-            q = q.reshape(B, L, self.num_heads, -1)
-            kv = kv.reshape(B, Lkv, 2, self.num_heads, -1)
-            if self.qk_rms_norm:
-                q = self.q_rms_norm(q)
-                (k, v) = kv.unbind(dim=2)
-                k = self.k_rms_norm(k)
-                h = self.attention(q, k, v)
-            else:
-                h = self.attention(q, kv)
-        h = h.reshape(B, L, -1)
-        h = self.to_out(h)
-        return h
+    def forward(self, *args, **kwargs):
+        from lightx2v.models.networks.trellis2.infer.layers.attention.modules import MultiHeadAttentionInfer
+
+        return MultiHeadAttentionInfer(self).infer(*args, **kwargs)

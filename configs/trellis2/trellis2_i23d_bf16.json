@@ -3,7 +3,9 @@
     "task": "i23d",
     "pipeline_type": "512",
     "attn_type": "torch_sdpa",
-    "linear_backend": "Default",
     "deform_conv_backend": "torch_deform_bf16",
-    "neighbor_map": "sorted"
+    "neighbor_map": "sorted",
+    "ln_norm_type": "torch",
+    "conv_type": "Default",
+    "dit_quant_scheme": "Default"
 }

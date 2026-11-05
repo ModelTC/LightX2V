@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV2D_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER
 
 
 def validate_bf16_graph_config(config):
@@ -60,3 +60,52 @@ def cast_matrix_weights(module, dtype=torch.bfloat16, extra_types=()):
     for child in module.modules():
         if isinstance(child, matrix_types):
             child.to(dtype=dtype)
+
+
+class InferenceLayerNorm(nn.Module):
+    """Use the existing LN registry with the source module's dtype boundary."""
+
+    def __init__(self, layer, name, backend="torch", fp32=False):
+        super().__init__()
+        self.fp32 = fp32
+        weight_name = f"{name}.weight" if layer.weight is not None else None
+        bias_name = f"{name}.bias" if layer.bias is not None else None
+        self.op = LN_WEIGHT_REGISTER[backend](weight_name, bias_name, eps=layer.eps)
+        state = {}
+        if weight_name is not None:
+            state[weight_name] = layer.weight.detach()
+        if bias_name is not None:
+            state[bias_name] = layer.bias.detach()
+        self.op.load(state)
+
+    def forward(self, x):
+        dtype = x.dtype
+        values = x.float() if self.fp32 else x
+        # Preserve the original graph's per-layer policy, independent of the
+        # global sensitive-layer setting used by other model families.
+        self.op.infer_dtype = values.dtype
+        self.op.sensitive_layer_dtype = values.dtype
+        return self.op.apply(values).to(dtype)
+
+
+class InferenceConv2d(nn.Module):
+    def __init__(self, layer, name, backend="Default"):
+        super().__init__()
+        weight_name = f"{name}.weight"
+        bias_name = f"{name}.bias" if layer.bias is not None else None
+        self.op = CONV2D_WEIGHT_REGISTER[backend](weight_name, bias_name, stride=layer.stride, padding=layer.padding, dilation=layer.dilation, groups=layer.groups)
+        state = {weight_name: layer.weight.detach()}
+        if bias_name is not None:
+            state[bias_name] = layer.bias.detach()
+        self.op.load(state)
+
+    def forward(self, x):
+        return self.op.apply(x)
+
+
+def bind_spatial_operators(module, norm_backend="torch", conv_backend="Default", fp32_norm_types=()):
+    for name, child in list(module.named_modules()):
+        if type(child) is nn.LayerNorm or type(child) in fp32_norm_types:
+            module.set_submodule(name, InferenceLayerNorm(child, name, norm_backend, fp32=type(child) in fp32_norm_types))
+        elif type(child) is nn.Conv2d and child.padding_mode == "zeros":
+            module.set_submodule(name, InferenceConv2d(child, name, conv_backend))

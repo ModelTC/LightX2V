@@ -7,14 +7,16 @@ import torch
 import torch.nn as nn
 
 from lightx2v.common.ops.module_norm import LayerNorm32
-from lightx2v.models.networks.trellis2.layers.attention import MultiHeadAttention
-from lightx2v.models.networks.trellis2.layers.transformer.blocks import FeedForwardNet
+from lightx2v.models.networks.trellis2.weights.layers.attention import MultiHeadAttentionWeights
+from lightx2v.models.networks.trellis2.weights.layers.transformer.blocks import FeedForwardNetWeights
 
 
-class ModulatedTransformerCrossBlock(nn.Module):
+class ModulatedTransformerCrossBlockWeights(nn.Module):
     """
     Transformer cross-attention block (MSA + MCA + FFN) with adaptive layer norm conditioning.
     """
+
+    _inference_type = ("lightx2v.models.networks.trellis2.infer.layers.transformer.modulated", "ModulatedTransformerCrossBlockInfer")
 
     def __init__(
         self,
@@ -37,7 +39,7 @@ class ModulatedTransformerCrossBlock(nn.Module):
         self.norm1 = LayerNorm32(channels, elementwise_affine=False, eps=1e-06)
         self.norm2 = LayerNorm32(channels, elementwise_affine=True, eps=1e-06)
         self.norm3 = LayerNorm32(channels, elementwise_affine=False, eps=1e-06)
-        self.self_attn = MultiHeadAttention(
+        self.self_attn = MultiHeadAttentionWeights(
             channels,
             num_heads=num_heads,
             type="self",
@@ -49,29 +51,14 @@ class ModulatedTransformerCrossBlock(nn.Module):
             rope_freq=rope_freq,
             qk_rms_norm=qk_rms_norm,
         )
-        self.cross_attn = MultiHeadAttention(channels, ctx_channels=ctx_channels, num_heads=num_heads, type="cross", attn_mode="full", qkv_bias=qkv_bias, qk_rms_norm=qk_rms_norm_cross)
-        self.mlp = FeedForwardNet(channels, mlp_ratio=mlp_ratio)
+        self.cross_attn = MultiHeadAttentionWeights(channels, ctx_channels=ctx_channels, num_heads=num_heads, type="cross", attn_mode="full", qkv_bias=qkv_bias, qk_rms_norm=qk_rms_norm_cross)
+        self.mlp = FeedForwardNetWeights(channels, mlp_ratio=mlp_ratio)
         if not share_mod:
             self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(channels, 6 * channels, bias=True))
         else:
             self.modulation = nn.Parameter(torch.randn(6 * channels) / channels**0.5)
 
-    def forward(self, x: torch.Tensor, mod: torch.Tensor, context: torch.Tensor, phases: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if self.share_mod:
-            (shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp) = (self.modulation + mod).type(mod.dtype).chunk(6, dim=1)
-        else:
-            (shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp) = self.adaLN_modulation(mod).chunk(6, dim=1)
-        h = self.norm1(x)
-        h = h * (1 + scale_msa.unsqueeze(1)) + shift_msa.unsqueeze(1)
-        h = self.self_attn(h, phases=phases)
-        h = h * gate_msa.unsqueeze(1)
-        x = x + h
-        h = self.norm2(x)
-        h = self.cross_attn(h, context)
-        x = x + h
-        h = self.norm3(x)
-        h = h * (1 + scale_mlp.unsqueeze(1)) + shift_mlp.unsqueeze(1)
-        h = self.mlp(h)
-        h = h * gate_mlp.unsqueeze(1)
-        x = x + h
-        return x
+    def forward(self, *args, **kwargs):
+        from lightx2v.models.networks.trellis2.infer.layers.transformer.modulated import ModulatedTransformerCrossBlockInfer
+
+        return ModulatedTransformerCrossBlockInfer(self).infer(*args, **kwargs)

@@ -2,22 +2,11 @@
 # Licensed under the MIT License; see lightx2v/models/networks/trellis2/LICENSE.
 
 import torch
-import torch.nn as nn
+
+from lightx2v.common.transformer_infer.module_infer import ModuleInfer
 
 
-class AbsolutePositionEmbedder(nn.Module):
-    """
-    Embeds spatial positions into vector representations.
-    """
-
-    def __init__(self, channels: int, in_channels: int = 3):
-        super().__init__()
-        self.channels = channels
-        self.in_channels = in_channels
-        self.freq_dim = channels // in_channels // 2
-        self.freqs = torch.arange(self.freq_dim, dtype=torch.float32) / self.freq_dim
-        self.freqs = 1.0 / 10000**self.freqs
-
+class AbsolutePositionEmbedderInfer(ModuleInfer):
     def _sin_cos_embedding(self, x: torch.Tensor) -> torch.Tensor:
         """Create sinusoidal position embeddings."""
         self.freqs = self.freqs.to(x.device)
@@ -25,7 +14,7 @@ class AbsolutePositionEmbedder(nn.Module):
         out = torch.cat([torch.sin(out), torch.cos(out)], dim=-1)
         return out
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def infer(self, x: torch.Tensor) -> torch.Tensor:
         """Args:
         x (torch.Tensor): (N, D) tensor of spatial positions"""
         (N, D) = x.shape
@@ -37,10 +26,6 @@ class AbsolutePositionEmbedder(nn.Module):
         return embed
 
 
-class FeedForwardNet(nn.Module):
-    def __init__(self, channels: int, mlp_ratio: float = 4.0):
-        super().__init__()
-        self.mlp = nn.Sequential(nn.Linear(channels, int(channels * mlp_ratio)), nn.GELU(approximate="tanh"), nn.Linear(int(channels * mlp_ratio), channels))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+class FeedForwardNetInfer(ModuleInfer):
+    def infer(self, x: torch.Tensor) -> torch.Tensor:
         return self.mlp(x)

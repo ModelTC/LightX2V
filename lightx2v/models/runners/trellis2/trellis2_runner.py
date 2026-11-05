@@ -35,12 +35,20 @@ class Trellis2Runner(BaseRunner):
             relative = self.pipeline_config["models"][name]
             prefix = "microsoft/TRELLIS-image-large/"
             path = Path(self.config.get("base_model_path", root / "base")) / relative[len(prefix) :] if relative.startswith(prefix) else root / relative
-            self.models[name] = load_component(path, self.device, self.config.get("neighbor_map", "sorted"), self.config.get("attn_type", "torch_sdpa"), self.config.get("linear_backend", "Default"))
+            self.models[name] = load_component(
+                path,
+                self.device,
+                self.config.get("neighbor_map", "sorted"),
+                self.config.get("attn_type", "torch_sdpa"),
+                self.config.get("dit_quant_scheme", "Default"),
+                self.config.get("ln_norm_type", "torch"),
+                self.config.get("conv_type", "Default"),
+            )
         self.encoder = TrellisImageEncoder(
             self.config.get("dino_model_path", root / "dinov3"),
             self.config.get("rembg_model_path", root / "rembg"),
             self.device,
-            self.config.get("linear_backend", "Default"),
+            self.config.get("dit_quant_scheme", "Default"),
             self.config.get("deform_conv_backend", "torch_deform_bf16"),
         )
         self.samplers = {stage: FlowEulerSampler(**self.pipeline_config[f"{stage}_sampler"]["args"]) for stage in ("sparse_structure", "shape_slat", "tex_slat")}
