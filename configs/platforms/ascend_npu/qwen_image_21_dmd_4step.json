@@ -6,7 +6,7 @@
     "latent_dtype": "fp32",
     "resolution": 1024,
     "attn_type": "npu_flash_attn",
-    "rope_type": "torch_real_rope",
+    "rope_type": "qwen_image_21_npu_rope",
     "rms_norm_type": "fp32_variance",
     "layer_norm_type": "torch",
     "modulate_type": "torch",
