@@ -474,6 +474,18 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
                         logger.info(f"H3 prompt switched before chunk {chunk_idx}: {prompt} duration={duration} restore_prompt_at={restore_prompt_at}")
                     continue
 
+                elif restore_prompt_at >= 0 and chunk_idx >= restore_prompt_at:
+                    text_output, restored_prompt = origin_text_output
+                    is_pending = isinstance(text_output, str) and text_output == "pending"
+                    if is_pending:
+                        text_output = self.encode_action_prompt(restored_prompt)
+                        origin_text_output = (text_output, restored_prompt)
+                    self._commit_text_output(text_output, emit=is_pending, prompt=restored_prompt)
+                    restore_prompt_at = -1
+                    if dist.get_rank() == 0:
+                        logger.info(f"H3 prompt restored to origin before chunk {chunk_idx}: {restored_prompt}")
+                    continue
+
                 elif control.action == "wait":
                     time.sleep(0.01)
                     continue
@@ -520,18 +532,6 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
                     last_valid_duration = valid_duration
                     chunk_idx += 1
                     fail_count = 0
-
-                    # restore the origin prompt
-                    if restore_prompt_at >= 0 and chunk_idx >= restore_prompt_at:
-                        text_output, restored_prompt = origin_text_output
-                        is_pending = isinstance(text_output, str) and text_output == "pending"
-                        if is_pending:
-                            text_output = self.encode_action_prompt(restored_prompt)
-                            origin_text_output = (text_output, restored_prompt)
-                        self._commit_text_output(text_output, emit=is_pending, prompt=restored_prompt)
-                        restore_prompt_at = -1
-                        if dist.get_rank() == 0:
-                            logger.info(f"H3 prompt restored to origin before chunk {chunk_idx}: {restored_prompt}")
 
         finally:
             if hasattr(self.model, "inputs"):
