@@ -239,19 +239,22 @@ class VAReader:
         self.stop()
 
 
-if __name__ == "__main__":
-    WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
-    RANK = int(os.environ.get("RANK", 0))
-    if WORLD_SIZE > 1:
+def _init_dist():
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    rank = int(os.environ.get("RANK", 0))
+    if world_size > 1:
         dist.init_process_group(backend="nccl")
         torch.cuda.set_device(dist.get_rank())
-        logger.info(f"Distributed initialized: rank={RANK}, world_size={WORLD_SIZE}")
+        logger.info(f"Distributed initialized: rank={rank}, world_size={world_size}")
+    return rank, world_size
 
+
+def run_va_reader():
+    rank, world_size = _init_dist()
     reader = VAReader(
-        RANK,
-        WORLD_SIZE,
-        # "rtmp://localhost/live/test_audio",
-        "https://reverse.st-oc-01.chielo.org/10.5.64.49:8000/rtc/v1/whep/?app=live&stream=ll_test_audio&eip=10.120.114.76:8000",
+        rank,
+        world_size,
+        "rtmp://localhost/live/test_audio",
         segment_duration=1.0,
         sample_rate=16000,
         audio_channels=1,
@@ -276,3 +279,7 @@ if __name__ == "__main__":
             time.sleep(0.95)
     finally:
         reader.stop()
+
+
+if __name__ == "__main__":
+    run_va_reader()

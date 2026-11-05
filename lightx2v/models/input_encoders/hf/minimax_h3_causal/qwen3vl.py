@@ -104,7 +104,7 @@ class MiniMaxH3CausalQwen3VLTextEncoder(MiniMaxH3Qwen3VLTextEncoder):
                 input_ids = torch.tensor(token_ids, dtype=torch.long)
                 token_tags = torch.tensor(tags, dtype=torch.long)
                 processor = self.load_processor()
-                mm_types = torch.tensor(processor.create_mm_token_type_ids([token_ids])[0], dtype=torch.long)
+                mm_types = self._create_mm_token_type_ids(processor, token_ids)
                 position_ids = self._get_rope_index(
                     input_ids,
                     mm_types,
