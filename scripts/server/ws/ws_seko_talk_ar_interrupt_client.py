@@ -163,6 +163,7 @@ def parse_args():
     parser.add_argument("--negative_prompt", type=str, default="")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--aspect_ratio", type=str, default="16:9", choices=["1:1", "16:9", "9:16"])
+    parser.add_argument("--resolution", type=str, default="", help="output resolution key, e.g. 480p or 720p")
     parser.add_argument("--chunk_frames", type=int, default=8)
     parser.add_argument("--action_prompt", type=str, default=DEFAULT_ACTION_PROMPT)
     parser.add_argument("--action_duration", type=float, default=0.0, help="SetPrompt duration seconds; 0 omit (server default 3), -1 hold, or >0")
@@ -184,6 +185,9 @@ def main():
     pcm = read_wav_pcm16_mono(args.audio)
     ext = os.path.splitext(args.image)[1].lstrip(".") or "jpg"
     audio_secs = len(pcm) / 16000.0 / 2
+    stream_config = {}
+    if args.resolution:
+        stream_config["resolution"] = args.resolution
 
     start = Start(
         request_id=args.request_id,
@@ -195,6 +199,7 @@ def main():
         seed=args.seed,
         aspect_ratio=args.aspect_ratio,
         chunk_frames=args.chunk_frames,
+        config_json=stream_config,
     )
 
     chunks = []
