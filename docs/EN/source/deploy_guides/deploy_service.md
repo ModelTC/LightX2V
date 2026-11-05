@@ -24,7 +24,7 @@ curl -X POST http://localhost:8000/v1/tasks/video/ \
 
 The response includes `task_id`, `task_status: "pending"`, and `save_result_path`. Keep the returned task ID for polling. For I2V, start the service with a matching I2V model/config and provide `image_path` or use the multipart form endpoint. Local input paths refer to the server filesystem.
 
-Optional generation fields inherit the startup defaults when omitted or set to `null`; fields must still be supported by the selected model/task. In particular, omit `negative_prompt` when CFG is disabled, including an empty string. A JSON `size` uses `[height, width]`.
+Optional generation fields inherit the startup defaults when omitted or set to `null`; fields must still be supported by the selected model/task. When CFG is disabled, an explicitly supplied `negative_prompt`, including an empty string, is ignored with a warning. A JSON `size` uses `[height, width]`.
 
 ## Poll, download, and cancel
 

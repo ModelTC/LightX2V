@@ -11,7 +11,6 @@ from loguru import logger
 
 from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.lingbot_va_model import WanLingbotVAModel
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.lingbot_va.scheduler import LingbotVAFlowMatchScheduler
@@ -67,10 +66,6 @@ class _StreamingVAEEncoder:
 
 @RUNNER_REGISTER("lingbot_va")
 class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
-    supported_request_fields_by_task = {
-        "i2va": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path"},
-    }
-
     def __init__(self, config):
         config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)
         config["enable_action_cfg"] = config.get("enable_action_cfg", config.get("action_sample_guide_scale", 1.0) > 1)

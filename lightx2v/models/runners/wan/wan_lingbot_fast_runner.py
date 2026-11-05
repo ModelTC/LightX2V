@@ -20,9 +20,6 @@ class LingbotFastRunner(WanAutoregressiveRunnerMixin, LingbotRunner):
 
     _SUPPORTS_AUTOREGRESSIVE_WARMUP = True
     _WARMUP_TASKS = ("i2v",)
-    supported_request_fields_by_task = {
-        "i2v": LingbotRunner.supported_request_fields_by_task["i2v"] - {"num_frames"},
-    }
 
     def __init__(self, config):
         WanRunner.__init__(self, config)

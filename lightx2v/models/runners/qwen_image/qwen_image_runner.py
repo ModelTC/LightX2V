@@ -13,7 +13,6 @@ from lightx2v.models.networks.qwen_image.infer.offload.transformer_infer import 
 from lightx2v.models.networks.qwen_image.infer.utils import get_qwen_image_size
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
 from lightx2v.server.metrics import monitor_cli
@@ -62,16 +61,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     _WARMUP_RESOLUTIONS = ((480, 480), (832, 1248))
     _WARMUP_TASKS = ("t2i", "i2i")
-    supported_request_fields_by_task = {
-        "t2i": IMAGE_REQUEST_FIELDS,
-        "i2i": IMAGE_REQUEST_FIELDS | {"i2i_denoise_strength", "image_path"},
-    }
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if task == "i2i" and self.config.get("layered", False):
-            supported_request_fields -= {"i2i_denoise_strength"}
-        return supported_request_fields
 
     def __init__(self, config):
         super().__init__(config)
@@ -85,6 +74,12 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
+
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if self.config.get("layered", False) and request_data.get("i2i_denoise_strength") is not None:
+            raise ValueError("Qwen-Image i2i_denoise_strength is not supported with layered=true; omit it or disable layered generation.")
+        return input_info
 
     def check_reuse_support(self):
         pass

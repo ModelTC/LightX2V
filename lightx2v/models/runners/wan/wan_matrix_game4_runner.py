@@ -5,7 +5,6 @@ import torch
 from lightx2v.models.input_encoders.matrix_game4 import MatrixGame4ControlStream, create_streaming_encoder, encode_reference_image
 from lightx2v.models.networks.wan.matrix_game4_model import WanMatrixGame4Model
 from lightx2v.models.runners.base_runner import BaseRunner
-from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
@@ -26,7 +25,6 @@ class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
     # Short MG4 chunks dispatch faster when VAE kernel launches share the caller thread.
     vae_decode_in_worker = False
     input_info_cls_by_task = {"v2v": MatrixGame4InputInfo}
-    supported_request_fields_by_task = {"v2v": VIDEO_REQUEST_FIELDS | {"video_path", "image_path"}}
 
     def __init__(self, config):
         if not config.get("ar_config"):
@@ -95,6 +93,7 @@ class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
 
     def prepare_request(self, request_data):
         input_info = BaseRunner.prepare_request(self, request_data)
+        self.check_num_frames_override(request_data)
         if not input_info.video_path:
             raise ValueError("Matrix-Game-4 v2v requires video_path")
         if not input_info.image_path:

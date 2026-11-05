@@ -1,217 +1,24 @@
-import argparse
-import json
 import os
 
-import torch.distributed as dist
-from loguru import logger
-
-from lightx2v.models.runners.runner_factory import RUNNER_MODULES, build_runner
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
-from lightx2v.utils.set_config import build_cli_inputs, init_parallel, print_config, print_request
-from lightx2v.utils.utils import validate_config_paths
-from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
-
-
-def build_parser():
-    """Declare CLI options; request values are separated by build_cli_inputs."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=None, help="The seed for random generator")
-    parser.add_argument(
-        "--model_cls",
-        type=str,
-        required=True,
-        choices=RUNNER_MODULES,
-    )
-    parser.add_argument("--model-variant", type=str, default=None, help="Model-specific startup weight variant; MiniMax-H3: fl2av/ref2av; Matrix-Game-4: castle/ancient-egypt/racing.")
-
-    parser.add_argument(
-        "--task",
-        type=str,
-        choices=[
-            "t2v",
-            "i2v",
-            "t2t",
-            "t2i",
-            "ti2t",
-            "ti2i",
-            "i2i",
-            "flf2v",
-            "vace",
-            "animate",
-            "s2v",
-            "rs2v",
-            "t2av",
-            "i2av",
-            "l2av",
-            "fl2av",
-            "ref2av",
-            "refv2v",
-            "refa2v",
-            "i2va",
-            "v2av",
-            "v2v",
-            "ltx2_s2v",
-            "sr",
-            "recon",
-            "i23d",
-            "depth",
-        ],
-        default=None,
-    )
-    parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--config_json", type=str, required=True)
-    parser.add_argument("--prompt", type=str, default=None, help="The input prompt for text-to-video generation")
-    parser.add_argument("--action_prompts", type=json.loads, default=None, help="MiniMax-H3 causal timed actions as a JSON object or list")
-    parser.add_argument("--ref_video_prompt", type=str, default=None, help="Reference/driving-video prompt for Wan-Animate-2.")
-    parser.add_argument("--negative_prompt", type=str, default=None)
-    parser.add_argument("--bot_task", type=str, default=None, help="HunyuanImage3 text generation mode.")
-    parser.add_argument("--max_new_tokens", type=int, default=None, help="Maximum number of generated text tokens.")
-    parser.add_argument("--system_prompt", type=str, default=None, help="System prompt for text generation.")
-    parser.add_argument("--text_do_sample", action=argparse.BooleanOptionalAction, default=None, help="Enable sampling during text generation.")
-    parser.add_argument("--text_temperature", type=float, default=None, help="Text sampling temperature.")
-    parser.add_argument("--text_top_k", type=int, default=None, help="Top-k text sampling limit.")
-    parser.add_argument("--text_top_p", type=float, default=None, help="Top-p text sampling threshold.")
-    parser.add_argument(
-        "--image_path",
-        type=str,
-        default=None,
-        help="The path to input image file(s), including HunyuanImage3 ti2t/ti2i and MiniMax-H3 ref2av reference images. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
-    )
-    parser.add_argument("--state_path", type=str, default=None, help="The path to input robot state file for robot i2v/i2va inference.")
-    parser.add_argument("--last_frame_path", type=str, default=None, help="The path to last frame file for first-last-frame-to-video (flf2v) task")
-    parser.add_argument(
-        "--audio_path",
-        type=str,
-        default=None,
-        help="Input audio path: driving audio for s2v / rs2v / ltx2_s2v / refa2v, or reference audio for MiniMax-H3 ref2av.",
-    )
-    parser.add_argument(
-        "--video_path",
-        type=str,
-        default=None,
-        help="Input source video path. Its role is determined by the selected task.",
-    )
-    parser.add_argument("--video_duration", type=float, default=None, help="Requested output duration in seconds for audio-driven video generation.")
-    parser.add_argument(
-        "--draft_steps",
-        type=int,
-        default=None,
-        help="MiniMax-H3: only a positive K smaller than configured infer_steps enables a draft prefix and final velocity projection. Omit or use K >= infer_steps for normal sampling.",
-    )
-    parser.add_argument("--resample_source_video", type=str, default=None, help="MiniMax-H3 source video with audio; RGB frames are resized to the target canvas before VAE encoding and regeneration.")
-    parser.add_argument(
-        "--resample_start_step",
-        type=int,
-        default=None,
-        help="MiniMax-H3 zero-based regeneration start index in [0,infer_steps]. Defaults to the startup config or 1; 0 runs all steps, infer_steps only decodes the VAE-encoded source.",
-    )
-    parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config.")
-    parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
-    parser.add_argument("--image_strength", type=str, default=None, help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
-    parser.add_argument(
-        "--num_frames",
-        type=int,
-        default=None,
-        help="Requested output frame count. Model-specific length constraints apply.",
-    )
-    parser.add_argument(
-        "--i2i_denoise_strength",
-        type=float,
-        default=None,
-        help="(i2i) Single-image edit denoising strength in [0.0, 1.0]. 0.0 preserves the source image most; 1.0 redraws most. Omit to keep the model's existing behavior.",
-    )
-    parser.add_argument("--inpaint_blur_sigma", type=float, default=None, help="Flux2 inpainting mask blur sigma.")
-    parser.add_argument("--inpaint_blur_size", type=int, default=None, help="Flux2 inpainting mask blur kernel size.")
-    parser.add_argument(
-        "--image_frame_indices", type=str, default=None, help="i2av: comma-separated pixel frame indices (one per image). Omit or empty to evenly space frames in [0, num_frames-1]. Example: 0,40,80"
-    )
-    # [Warning] For vace task, need refactor.
-    parser.add_argument(
-        "--ref_image_paths",
-        type=str,
-        default=None,
-        help="The file list of the source reference images. Separated by ','. Default None.",
-    )
-    parser.add_argument("--mask_path", type=str, default=None, help="Input mask path.")
-    parser.add_argument(
-        "--pose_video_path",
-        type=str,
-        default=None,
-        help="Pose driving video for Wan s2v / animate (e.g. /path/to/pose.mp4).",
-    )
-    parser.add_argument(
-        "--face_video_path",
-        type=str,
-        default=None,
-        help="The file of the source face. Default None.",
-    )
-    parser.add_argument(
-        "--background_video_path",
-        type=str,
-        default=None,
-        help="The file of the source background. Default None.",
-    )
-    parser.add_argument(
-        "--pose",
-        type=str,
-        default=None,
-        help="Pose string (e.g., 'w-3, right-0.5') or JSON file path for WorldPlay models.",
-    )
-    parser.add_argument(
-        "--action_path",
-        type=str,
-        default=None,
-        help="Directory path for lingbot camera/action control files (poses.npy, intrinsics.npy, optional action.npy).",
-    )
-    parser.add_argument("--action_mode", type=str, default=None, choices=["forward_dynamics", "inverse_dynamics", "policy"], help="Cosmos3 action mode.")
-    parser.add_argument("--domain_name", type=str, default=None, help="Cosmos3 action embodiment domain name.")
-    parser.add_argument("--view_point", type=str, default=None, help="Cosmos3 action viewpoint label.")
-    # WorldMirror (3D reconstruction) specific
-    parser.add_argument("--input_path", type=str, default=None, help="(worldmirror/recon) Path to a directory of images, a video file, or a single image.")
-    parser.add_argument("--strict_output_path", type=str, default=None, help="(worldmirror/recon) If set, write outputs directly here instead of under save_result_path/<subdir>/<timestamp>/.")
-    parser.add_argument("--prior_cam_path", type=str, default=None, help="(worldmirror/recon) Optional camera prior JSON (extrinsics + intrinsics).")
-    parser.add_argument("--prior_depth_path", type=str, default=None, help="(worldmirror/recon) Optional depth prior directory (one .npy/.png per image).")
-    parser.add_argument("--save_rendered", action=argparse.BooleanOptionalAction, default=None, help="(worldmirror/recon) Render an interpolated fly-through video from Gaussian splats.")
-    parser.add_argument("--render_interp_per_pair", type=int, default=None, help="(worldmirror/recon) Interpolated frames per camera pair for --save_rendered.")
-    parser.add_argument("--render_depth", action=argparse.BooleanOptionalAction, default=None, help="(worldmirror/recon) Also render a depth video with --save_rendered.")
-
-    parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
-    parser.add_argument("--save_depth_path", type=str, default=None, help="(DA3 depth) Optional float32 NPY for an image, or streaming NPZ for a video.")
-    parser.add_argument("--save_sky_mask_path", type=str, default=None, help="(DA3 depth) Optional binary PNG for an image, or streaming NPZ for a video; may share the depth NPZ path.")
-    parser.add_argument("--return_result_tensor", action="store_true", default=None, help="Whether to return result tensor. (Useful for comfyui)")
-    parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
-    parser.add_argument("--size", type=int, nargs="+", default=None, help="Output size in pixels: HEIGHT WIDTH")
-    parser.add_argument("--resolution", type=int, default=None, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config")
-    parser.add_argument("--aspect_ratio", type=str, default=None)
-    parser.add_argument("--align_image_size", action=argparse.BooleanOptionalAction, default=None, help="Align HunyuanImage3 reference image sizes during inference.")
-    parser.add_argument(
-        "--keep_aspect_ratio",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="(i2i) When exactly one reference image is provided, preserve its aspect ratio with max_size=2048.",
-    )
-    parser.add_argument(
-        "--layout_bboxes",
-        type=str,
-        default=None,
-        help="(i2i) Layout boxes as a JSON string or JSON file path for HiDream layout-conditioned editing.",
-    )
-    parser.add_argument("--sr_ratio", type=float, default=None, help="super resolution ratio for sr task")
-    parser.add_argument("--match_target_size", action=argparse.BooleanOptionalAction, default=None, help="(SeedVR sr) Crop or resize decoded output to size; defaults to the startup config.")
-    parser.add_argument(
-        "--reference_video_strength", type=float, default=None, help="(v2av) IC-LoRA reference-video conditioning strength in [0.0, 1.0]. 1.0 = full adherence to the control signal, 0.0 = ignore it."
-    )
-    parser.add_argument("--reference_video_frame_cap", type=int, default=None, help="(v2av) Maximum number of frames to read from the reference/control video. Defaults to the full clip.")
-    parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
-
-    return parser
+from lightx2v.models.runners.registry import get_model_spec
+from lightx2v.utils.cli import parse_cli_inputs
 
 
 def main():
-    args = build_parser().parse_args()
-    startup_config, request_data = build_cli_inputs(args)
+    args, startup_config, request_data = parse_cli_inputs()
+
+    import torch.distributed as dist
+    from loguru import logger
+
+    from lightx2v.models.runners.runner_factory import build_runner
+    from lightx2v.utils.profiler import ProfilingContext4DebugL1
+    from lightx2v.utils.set_config import configure_nccl_graph, init_parallel, print_config, print_request
+    from lightx2v.utils.utils import validate_config_paths
+    from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
+
+    configure_nccl_graph(startup_config)
     if startup_config["parallel"]:
-        platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
+        platform_device = PLATFORM_DEVICE_REGISTER[os.getenv("PLATFORM", "cuda")]
         platform_device.init_parallel_env()
         init_parallel(startup_config)
 
@@ -221,8 +28,9 @@ def main():
 
     runner = None
     try:
-        with no_sync_profiling(startup_config["model_cls"] in ("taomate_h3", "streamrender_h3")), ProfilingContext4DebugL1("Total Cost"):
+        with ProfilingContext4DebugL1("Total Cost"):
             runner = build_runner(startup_config)
+            get_model_spec(startup_config["model_cls"]).prepare_runner(runner, args)
             input_info = runner.prepare_request(request_data)
             print_request(input_info, runner.get_supported_request_fields(input_info.task))
             runner.run_request(input_info)

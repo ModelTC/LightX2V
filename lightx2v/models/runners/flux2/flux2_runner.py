@@ -7,7 +7,6 @@ from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.flux2.feature_caching.scheduler import Flux2DevSchedulerCaching, Flux2SchedulerCaching
 from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2Scheduler
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
@@ -25,16 +24,6 @@ class Flux2Runner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     input_info_cls_by_task = {"i2i": Flux2I2IInputInfo}
-    supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "size"},
-        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt"},
-    }
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if task == "i2i" and self.config.get("inpaint_mask_enabled", False):
-            supported_request_fields |= {"inpaint_blur_sigma", "inpaint_blur_size"}
-        return supported_request_fields
 
     def __init__(self, config):
         self.model_variant = config["model_variant"]

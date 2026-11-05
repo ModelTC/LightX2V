@@ -10,7 +10,6 @@ from lightx2v.models.input_encoders.hf.z_image.qwen3_model import Qwen3Model_Tex
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.z_image.model import ZImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.z_image.scheduler import ZImageScheduler
 from lightx2v.models.video_encoders.hf.z_image.vae import AutoencoderKLZImageVAE
 from lightx2v.server.metrics import monitor_cli
@@ -45,10 +44,6 @@ def build_z_image_model_with_lora(z_image_module, config, model_kwargs, lora_con
 class ZImageRunner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-    supported_request_fields_by_task = {
-        "t2i": IMAGE_REQUEST_FIELDS,
-        "i2i": IMAGE_REQUEST_FIELDS | {"i2i_denoise_strength", "image_path"},
-    }
 
     def load_transformer(self):
         z_image_model_kwargs = {

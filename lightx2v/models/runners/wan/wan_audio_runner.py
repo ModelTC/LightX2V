@@ -23,7 +23,6 @@ from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdap
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioARModel, WanAudioModel
 from lightx2v.models.runners.autoregressive_runner import AutoregressiveRunnerMixin
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler, WanAudioARScheduler
@@ -285,20 +284,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
     _WARMUP_STEP_COUNT = 2
 
     input_info_cls_by_task = {"s2v": SekoTalkS2VInputInfo, "rs2v": SekoTalkRS2VInputInfo}
-    supported_request_fields_by_task = {
-        task: COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "audio_path",
-            "image_path",
-            "num_frames",
-            "video_duration",
-            "resize_mode",
-            "fixed_area",
-            "size",
-        }
-        for task in ("s2v", "rs2v")
-    }
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
@@ -1022,11 +1007,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
 @RUNNER_REGISTER("seko_talk_ar")
 class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, WanAudioRunner):
-    supported_request_fields_by_task = {
-        "rs2v": WanAudioRunner.supported_request_fields_by_task["rs2v"] - {"num_frames", "resize_mode", "fixed_area"},
-    }
-
     _WARMUP_RESOLUTIONS = ()
+
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if self.config.get("prompt_travel") and request_data.get("prompt") is not None:
+            raise ValueError("SekoTalk AR prompt cannot be overridden while prompt_travel is configured; edit prompt_travel_text or remove prompt_travel to use a single prompt.")
+        return input_info
 
     def get_stream_output_path(self, input_info):
         # Live audio uses VAController's editable publication buffer for
@@ -1079,12 +1066,6 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
         self.model.transformer_infer.reset_kv_cache()
         self.input_info = None
         self.inputs = {}
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("prompt_travel"):
-            supported_request_fields -= {"prompt"}
-        return supported_request_fields
 
     @dataclass(frozen=True)
     class PromptTravelSegment:

@@ -32,7 +32,6 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
 
     scheduler_class = WorldPlayARScheduler
     input_info_cls_by_task = {"t2v": WorldPlayT2VInputInfo, "i2v": WorldPlayI2VInputInfo}
-    supported_request_fields_by_task = {task: request_fields | {"pose"} for task, request_fields in HunyuanVideo15Runner.supported_request_fields_by_task.items()}
 
     def __init__(self, config):
         # AR-specific parameters

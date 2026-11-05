@@ -24,7 +24,7 @@ curl -X POST http://localhost:8000/v1/tasks/video/ \
 
 响应包含 `task_id`、`task_status: "pending"` 和 `save_result_path`。请保存任务 ID 用于轮询。I2V 需使用匹配的模型与配置启动服务，并提供 `image_path`，或通过 multipart 表单上传图片。本地输入路径指服务端文件系统中的路径。
 
-可选生成字段省略或传入 `null` 时继承启动默认值，同时仍需符合当前模型/任务支持的范围。关闭 CFG 时应省略 `negative_prompt`，空字符串也不应传入。JSON 中的 `size` 按 `[高, 宽]` 表示。
+可选生成字段省略或传入 `null` 时继承启动默认值，同时仍需符合当前模型/任务支持的范围。关闭 CFG 时，显式传入的 `negative_prompt`（包括空字符串）会被忽略，并记录警告。JSON 中的 `size` 按 `[高, 宽]` 表示。
 
 ## 查询、下载与取消
 

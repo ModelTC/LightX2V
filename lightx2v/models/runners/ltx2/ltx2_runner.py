@@ -9,7 +9,6 @@ from lightx2v.models.input_encoders.hf.ltx2.model import LTX2TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.ltx2.model import LTX2Model
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.ltx2.scheduler import LTX2Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.audio_vae import encode_audio
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
@@ -89,22 +88,6 @@ def _ltx2_resize_video_denoise_mask_for_stage2(mask: torch.Tensor, target_h: int
 
 @RUNNER_REGISTER("ltx2")
 class LTX2Runner(DefaultRunner):
-    supported_request_fields_by_task = {
-        "t2av": VIDEO_REQUEST_FIELDS,
-        "i2av": VIDEO_REQUEST_FIELDS | {"image_frame_indices", "image_path", "image_strength"},
-        "ltx2_s2v": VIDEO_REQUEST_FIELDS | {"audio_path", "image_frame_indices", "image_path", "image_strength"},
-        "v2av": VIDEO_REQUEST_FIELDS
-        | {
-            "image_frame_indices",
-            "image_path",
-            "image_strength",
-            "mux_audio_video_path",
-            "reference_video_frame_cap",
-            "reference_video_strength",
-            "video_path",
-        },
-    }
-
     _WARMUP_RESOLUTIONS = ((480, 480), (512, 768))
     _UPSAMPLER_WARMUP_RESOLUTIONS = ((480, 480), (1024, 1536))
     transformer_model_class = LTX2Model

@@ -16,16 +16,34 @@ Qwen-Image-2.1 uses `T2IInputInfo` for `t2i` and `I2IInputInfo` for `i2i`; both 
 
 ## 2. Declare support
 
-Add the field to the intended tasks in the runner's `supported_request_fields_by_task`, keeping its existing fields. Qwen-Image-2.1 declares these in `lightx2v/models/runners/qwen_image_21/qwen_image_21_runner.py`:
+Declare an `Argument` for the intended tasks in the model's own `cli.py`, keeping its existing fields. Qwen-Image-2.1 declares these in `lightx2v/models/runners/qwen_image_21/cli.py`:
 
 ```python
-supported_request_fields_by_task = {
-    "t2i": IMAGE_REQUEST_FIELDS | {"resolution"},
-    "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "resolution"},
+from lightx2v.models.runners.request_args import IMAGE
+from lightx2v.utils.request_spec import Argument
+
+SPECS = {
+    "qwen_image_21": QwenImage21Spec(
+        {
+            "t2i": dict(
+                IMAGE,
+                resolution=Argument(type=int, help="Output resolution."),
+            ),
+            "i2i": dict(
+                IMAGE,
+                image_path=Argument(help="Input image path."),
+                resolution=Argument(type=int, help="Output resolution."),
+            ),
+        }
+    ),
 }
 ```
 
-This permits the corresponding tasks to override `resolution`. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
+The CLI builds options and help from this Spec, and `BaseRunner` uses the same Spec to validate tasks and request fields. Define model-specific arguments locally without changing a global argument table or repeating declarations in the runner. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
+
+Keep declared arguments in the Spec when a startup setting makes them unusable. Validate incompatible combinations in the runner's request preparation or inference path, with an error explaining the conflicting setting and how to resolve it. Do not conditionally remove these fields from the Spec.
+
+For a supported `negative_prompt` supplied while CFG is disabled, log a warning and ignore the request value instead of raising an error.
 
 ## 3. Use the parameter during inference
 
@@ -53,15 +71,11 @@ The runner preserves `0`, `False`, `""` and `[]` when merging parameters. Field 
 | Entry point | Where to change |
 |---|---|
 | Python | Usually no change: `generate(resolution=768)` forwards new fields through `**task_inputs`. |
-| CLI | Declare an option in `build_parser()` in `lightx2v/infer.py`. |
+| CLI | The `Argument` declared in step 2 generates the option automatically; no change to `infer.py` is needed. |
 | Native HTTP JSON / forms | Declare a field in `ImageTaskRequest` or `VideoTaskRequest` in `lightx2v/server/schema.py`. |
 | OpenAI image API | Declare a field in a request class in `lightx2v/server/api/openai_images.py`, and ensure `ImageTaskRequest` also accepts it. |
 
-Use `default=None` for CLI options so omitted parameters retain startup values:
-
-```python
-parser.add_argument("--resolution", type=int, default=None)
-```
+`Argument` sets `default=None` for CLI options so omitted parameters retain startup values.
 
 Example field declaration in an HTTP request class:
 

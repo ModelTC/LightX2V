@@ -17,7 +17,6 @@ except ImportError:
 
 from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.animate2_model import WanAnimate2Model
-from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.animate2 import WanAnimate2Scheduler
 from lightx2v.utils.envs import GET_DTYPE
@@ -177,10 +176,6 @@ class WanAnimate2Runner(WanRunner):
     intentionally registered separately from the pose/face-adapter based
     ``wan2.2_animate`` runner.
     """
-
-    supported_request_fields_by_task = {
-        "animate": VIDEO_REQUEST_FIELDS | {"image_path", "ref_video_prompt", "pose_video_path", "ref_image_paths", "video_path"},
-    }
 
     def __init__(self, config):
         super().__init__(config)

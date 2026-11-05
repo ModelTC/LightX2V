@@ -20,7 +20,6 @@ from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRun
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 from lightx2v.models.runners.minimax_h3_causal.action_prompt_travel import ActionPromptTravel, ActionPromptTravelConfig, coerce_action_prompts
 from lightx2v.models.runners.minimax_h3_causal.reference_cache import MiniMaxH3ReferenceCache
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3_causal.scheduler import MiniMaxH3CausalScheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
@@ -29,7 +28,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3_causal.video_writer import Min
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -38,10 +37,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 @RUNNER_REGISTER("minimax_h3_causal")
 class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     _WARMUP_SIZE = (256, 256)
-
-    supported_request_fields_by_task = {
-        "refa2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "audio_path", "prompt", "action_prompts"},
-    }
 
     def __init__(self, config):
         ar_config = config.get("ar_config", {})
@@ -63,9 +58,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         super().__init__(config)
         # Called on rank 0 with (RGB [1,3,F,H,W], start_frame, is_final).
         self.stream_callback = None
-
-    def get_supported_tasks(self):
-        return ("refa2v",)
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
@@ -306,61 +298,60 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self.model.transformer_infer.before_graph_capture = async_decoder.synchronize if async_decoder is not None else torch.cuda.synchronize
         reuse_input_audio = self.config.get("reuse_input_audio", False)
         self._decoded_video_frames = 0
-        with no_sync_profiling(self.video_decode_graph is not None or async_decoder is not None):
-            try:
-                videos, left, right = [], [], []
-                chunks = self.scheduler.plan.chunks
-                waveform = self.waveform[:1] if self.config.get("audio_mono", False) else self.waveform
-                audio_encoder_cache = MiniMaxH3AudioEncoderPrefixCache(self.audio_vae.encoder)
-                for index, chunk in enumerate(chunks):
+        try:
+            videos, left, right = [], [], []
+            chunks = self.scheduler.plan.chunks
+            waveform = self.waveform[:1] if self.config.get("audio_mono", False) else self.waveform
+            audio_encoder_cache = MiniMaxH3AudioEncoderPrefixCache(self.audio_vae.encoder)
+            for index, chunk in enumerate(chunks):
+                self.check_stop()
+                logger.info(f"MiniMax-H3 causal chunk {index + 1}/{len(chunks)}")
+                # Recompute the right edge from the current prefix; future audio
+                # must not change the current chunk's conditioning.
+                latents = self.audio_vae.encode(waveform[..., : chunk.audio_frames.stop * self.audio_vae.hop_length], return_cpu=False, encoder_cache=audio_encoder_cache)
+                if waveform.shape[0] == 1:
+                    latents = latents.expand(2, -1, -1)
+                clean = latents[..., chunk.audio_frames].transpose(1, 2).reshape(-1, latents.shape[1]).contiguous()
+                self.scheduler.prepare_chunk(index, clean)
+                for step in range(self.scheduler.infer_steps):
                     self.check_stop()
-                    logger.info(f"MiniMax-H3 causal chunk {index + 1}/{len(chunks)}")
-                    # Recompute the right edge from the current prefix; future audio
-                    # must not change the current chunk's conditioning.
-                    latents = self.audio_vae.encode(waveform[..., : chunk.audio_frames.stop * self.audio_vae.hop_length], return_cpu=False, encoder_cache=audio_encoder_cache)
-                    if waveform.shape[0] == 1:
-                        latents = latents.expand(2, -1, -1)
-                    clean = latents[..., chunk.audio_frames].transpose(1, 2).reshape(-1, latents.shape[1]).contiguous()
-                    self.scheduler.prepare_chunk(index, clean)
-                    for step in range(self.scheduler.infer_steps):
-                        self.check_stop()
-                        self.scheduler.step_pre(step)
-                        self.model.infer(self.inputs)
-                        self.scheduler.step_post()
-                        if self.progress_callback:
-                            self.progress_callback(100 * (index * self.scheduler.infer_steps + step + 1) / (len(chunks) * self.scheduler.infer_steps), 100)
-                    video = unpatchify_video_tokens(self.scheduler.video_latents, chunk.video_frames.stop - chunk.video_frames.start, self.scheduler.latent_height, self.scheduler.latent_width)
-                    if async_decoder is None:
-                        videos.extend(self.decode_video_chunk(decoder, video))
-                    else:
-                        async_decoder.submit(self.decode_video_chunk, decoder, video.clone())
-                    travel = self.action_travel
-                    if travel is not None and travel.config.min_slice_rolling and (index + 1) % travel.config.unit_transition == 0 and index + 1 < len(chunks):
-                        if async_decoder is not None:
-                            async_decoder.synchronize()
-                        seconds = (decoder.emitted_frames or (index + 1) * FRAMES_PER_CHUNK) / FPS
-                        if travel.update(seconds):
-                            self.inputs["text_encoder_output"] = self.encode_action_prompt()
-                            self.fill_condition_cache(overwrite=True)
-                            logger.info(f"H3 action prompt updated after chunk {index + 1} at {seconds:.3f}s")
-                    if not reuse_input_audio:
-                        left.append(clean[: chunk.num_audio_frames].cpu())
-                        right.append(clean[chunk.num_audio_frames :].cpu())
+                    self.scheduler.step_pre(step)
+                    self.model.infer(self.inputs)
+                    self.scheduler.step_post()
+                    if self.progress_callback:
+                        self.progress_callback(100 * (index * self.scheduler.infer_steps + step + 1) / (len(chunks) * self.scheduler.infer_steps), 100)
+                video = unpatchify_video_tokens(self.scheduler.video_latents, chunk.video_frames.stop - chunk.video_frames.start, self.scheduler.latent_height, self.scheduler.latent_width)
                 if async_decoder is None:
-                    videos.extend(self.decode_video_chunk(decoder))
+                    videos.extend(self.decode_video_chunk(decoder, video))
                 else:
-                    async_decoder.submit(self.decode_video_chunk, decoder)
-                    videos = [frames for outputs in async_decoder.finish() for frames in outputs]
-                video = decoder.output_buffer if decoder.output_buffer is not None else (torch.cat(videos, dim=2) if videos else None)
-                audio_rows = None if reuse_input_audio else torch.cat((torch.cat(left), torch.cat(right)))
-                return video, audio_rows
-            finally:
-                try:
+                    async_decoder.submit(self.decode_video_chunk, decoder, video.clone())
+                travel = self.action_travel
+                if travel is not None and travel.config.min_slice_rolling and (index + 1) % travel.config.unit_transition == 0 and index + 1 < len(chunks):
                     if async_decoder is not None:
-                        async_decoder.finish()
-                finally:
-                    self.model.transformer_infer.before_graph_capture = None
-                    decoder.close()
+                        async_decoder.synchronize()
+                    seconds = (decoder.emitted_frames or (index + 1) * FRAMES_PER_CHUNK) / FPS
+                    if travel.update(seconds):
+                        self.inputs["text_encoder_output"] = self.encode_action_prompt()
+                        self.fill_condition_cache(overwrite=True)
+                        logger.info(f"H3 action prompt updated after chunk {index + 1} at {seconds:.3f}s")
+                if not reuse_input_audio:
+                    left.append(clean[: chunk.num_audio_frames].cpu())
+                    right.append(clean[chunk.num_audio_frames :].cpu())
+            if async_decoder is None:
+                videos.extend(self.decode_video_chunk(decoder))
+            else:
+                async_decoder.submit(self.decode_video_chunk, decoder)
+                videos = [frames for outputs in async_decoder.finish() for frames in outputs]
+            video = decoder.output_buffer if decoder.output_buffer is not None else (torch.cat(videos, dim=2) if videos else None)
+            audio_rows = None if reuse_input_audio else torch.cat((torch.cat(left), torch.cat(right)))
+            return video, audio_rows
+        finally:
+            try:
+                if async_decoder is not None:
+                    async_decoder.finish()
+            finally:
+                self.model.transformer_infer.before_graph_capture = None
+                decoder.close()
 
     def decode_video_chunk(self, decoder, video=None):
         if video is None:
