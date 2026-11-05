@@ -69,7 +69,12 @@ class EmbeddingWeightTemplate(metaclass=ABCMeta):
         self.pin_weight = self._create_cpu_pin_weight(weight_tensor)
 
     def to_cuda(self, non_blocking=False):
-        self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
+        # Mirrors to_cpu(): without a host copy (e.g. released after a resident
+        # load), move the tensor the module holds.
+        if hasattr(self, "pin_weight"):
+            self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
+        else:
+            self.weight = self.weight.to(AI_DEVICE, non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):
