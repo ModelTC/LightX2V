@@ -49,9 +49,10 @@ class WanInfiniteTalkModel(WanModel):
             target_device = torch.device("cpu") if adapter_offload else torch.device(AI_DEVICE)
             target_dtype = GET_DTYPE()
             for key, tensor in adapter_weights_dict.items():
-                adapter_weights_dict[key] = (
-                    tensor.to(device=target_device, dtype=target_dtype) if (tensor.is_floating_point() and tensor.dtype != torch.float8_e4m3fn) else tensor.to(device=target_device)
-                )
+                dtype = tensor.dtype
+                if tensor.is_floating_point() and tensor.dtype != torch.float8_e4m3fn and not key.endswith(".weight_scale"):
+                    dtype = GET_SENSITIVE_DTYPE() if any(pattern in key for pattern in sensitive_layer) else target_dtype
+                adapter_weights_dict[key] = tensor.to(device=target_device, dtype=dtype)
             return adapter_weights_dict
         else:
             return self._load_safetensor_to_dict(adapter_model_path, unified_dtype, sensitive_layer)

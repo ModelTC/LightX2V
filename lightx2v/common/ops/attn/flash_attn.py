@@ -129,6 +129,51 @@ class FlashAttn2Weight(AttnWeightTemplate):
         return output, lse
 
 
+@ATTN_WEIGHT_REGISTER("flash_attn2_varlen")
+class FlashAttn2VarlenWeight(FlashAttn2Weight):
+    def apply(
+        self,
+        q,
+        k,
+        v,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        causal = kwargs.get("causal", False)
+        softmax_scale = kwargs.get("softmax_scale", None)
+        total_seqlen = q.shape[0] if q.ndim == 3 else q.shape[0] * q.shape[1]
+
+        if cu_seqlens_q is not None:
+            cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
+            cu_seqlens_kv = cu_seqlens_kv.to(k.device, non_blocking=True)
+            if q.ndim == 4:
+                q = q.reshape(-1, q.shape[-2], q.shape[-1])
+                k = k.reshape(-1, k.shape[-2], k.shape[-1])
+                v = v.reshape(-1, v.shape[-2], v.shape[-1])
+            x = flash_attn_varlen_func_v2(
+                q,
+                k,
+                v,
+                cu_seqlens_q,
+                cu_seqlens_kv,
+                max_seqlen_q,
+                max_seqlen_kv,
+                softmax_scale=softmax_scale,
+                causal=causal,
+            )
+        else:
+            if q.ndim == 3:
+                q = q.unsqueeze(0)
+                k = k.unsqueeze(0)
+                v = v.unsqueeze(0)
+            x = flash_attn_func_v2(q, k, v, softmax_scale=softmax_scale, causal=causal)
+
+        return x.reshape(total_seqlen, -1)
+
+
 @ATTN_WEIGHT_REGISTER("flash_attn3")
 class FlashAttn3Weight(AttnWeightTemplate):
     def __init__(self):
