@@ -34,6 +34,10 @@ RUN pip install --no-cache-dir jsonschema pymongo mooncake-transfer-engine tos z
 
 RUN pip install --no-cache-dir bson aio-pika PyJWT asyncpg>=0.27.0 aioboto3>=12.0.0 alibabacloud_dypnsapi20170525==1.2.2 redis==6.4.0
 
+RUN pip install --no-cache-dir future easydict termcolor
+
+RUN pip install --no-cache-dir -U setuptools wheel
+
 RUN pip list
 
 # FA2 Whl: https://github.com/alkemiik-coder/FlashAttention-2.8.3-Custom-Linux-Wheels
