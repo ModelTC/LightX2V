@@ -5,8 +5,11 @@ AMD ROCm provides CUDA-compatible APIs through HIP (Heterogeneous-computing Inte
 This module handles AMD-specific optimizations including:
 - Disabling cudnn for faster VAE convolution
 - sgl_kernel compatibility layer using aiter library (optional; only for the aiter-backed GEMM/RMSNorm path)
+- Optional run-to-run deterministic FP32 GEMM/convolution (ROCM_DETERMINISTIC_FP32_BLAS=1)
 """
 
+import functools
+import os
 import sys
 
 import torch
@@ -93,6 +96,41 @@ def _get_aiter_sgl_kernel():
         return None
 
 
+def _fp32_on_rocblas(fn):
+    """Run ``fn`` on rocBLAS when one of its first two arguments is an fp32 GPU tensor.
+
+    hipBLASLt may pick a different FP32 GEMM kernel in each process for the same
+    shape (e.g. MT16x8x64 on one rank, MT128x128x16 on another), so FP32 layers give
+    ulp-level different results from run to run and diffusion sampling amplifies them.
+    rocBLAS kernel selection is fixed per shape. BF16/FP16 GEMMs keep using hipBLASLt.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not any(isinstance(t, torch.Tensor) and t.is_cuda and t.dtype == torch.float32 for t in args[:2]):
+            return fn(*args, **kwargs)
+        prev = torch.backends.cuda.preferred_blas_library()
+        torch.backends.cuda.preferred_blas_library("cublas")  # rocBLAS on ROCm
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            torch.backends.cuda.preferred_blas_library(prev)
+
+    return wrapper
+
+
+def _route_fp32_blas_to_rocblas():
+    # rocBLAS itself may hand GEMMs to hipBLASLt on recent ROCm; keep them in rocBLAS.
+    os.environ.setdefault("ROCBLAS_USE_HIPBLASLT", "0")
+    F = torch.nn.functional
+    for mod, name in ((torch, "mm"), (torch, "addmm"), (F, "linear"), (F, "conv1d"), (F, "conv2d"), (F, "conv3d")):
+        fn = getattr(mod, name)
+        if not getattr(fn, "_lightx2v_fp32_rocblas", False):
+            wrapped = _fp32_on_rocblas(fn)
+            wrapped._lightx2v_fp32_rocblas = True
+            setattr(mod, name, wrapped)
+
+
 @PLATFORM_DEVICE_REGISTER("amd_rocm")
 class AmdRocmDevice:
     """
@@ -113,6 +151,8 @@ class AmdRocmDevice:
         1. Disable cudnn for faster VAE convolution
         2. Inject aiter as sgl_kernel compatibility layer (optional; only the
            aiter-backed GEMM/RMSNorm path needs it)
+        3. With ROCM_DETERMINISTIC_FP32_BLAS=1, run FP32 GEMMs/convolutions on rocBLAS
+           so that repeated runs give bitwise identical outputs
         """
         logger.info("AMD ROCm platform detected, initializing optimizations...")
 
@@ -136,6 +176,10 @@ class AmdRocmDevice:
                 if mod is not None and hasattr(mod, "sgl_kernel"):
                     setattr(mod, "sgl_kernel", sgl_kernel)
             logger.info("  - aiter sgl_kernel compatibility layer enabled (RMSNorm, GEMM)")
+
+        if os.getenv("ROCM_DETERMINISTIC_FP32_BLAS", "0") in ("1", "True", "true"):
+            _route_fp32_blas_to_rocblas()
+            logger.info("  - FP32 GEMM/convolution routed to rocBLAS (deterministic across runs)")
 
     @staticmethod
     def is_available() -> bool:
