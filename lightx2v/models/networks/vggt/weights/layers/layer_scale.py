@@ -10,11 +10,15 @@ import torch
 from torch import Tensor, nn
 
 
-class LayerScale(nn.Module):
+class LayerScaleWeights(nn.Module):
+    _inference_type = ("lightx2v.models.networks.vggt.infer.layers.layer_scale", "LayerScaleInfer")
+
     def __init__(self, dim: int, init_values: Union[float, Tensor] = 1e-05, inplace: bool = False) -> None:
         super().__init__()
         self.inplace = inplace
         self.gamma = nn.Parameter(init_values * torch.ones(dim))
 
-    def forward(self, x: Tensor) -> Tensor:
-        return x.mul_(self.gamma) if self.inplace else x * self.gamma
+    def forward(self, *args, **kwargs):
+        from lightx2v.models.networks.vggt.infer.layers.layer_scale import LayerScaleInfer
+
+        return LayerScaleInfer(self).infer(*args, **kwargs)

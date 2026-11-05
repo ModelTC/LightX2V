@@ -9,7 +9,6 @@
 from typing import Callable, Optional, Tuple, Union
 
 import torch.nn as nn
-from torch import Tensor
 
 
 def make_2tuple(x):
@@ -20,7 +19,7 @@ def make_2tuple(x):
     return (x, x)
 
 
-class PatchEmbed(nn.Module):
+class PatchEmbedWeights(nn.Module):
     """
     2D image to patch embedding: (B,C,H,W) -> (B,N,D)
 
@@ -31,6 +30,8 @@ class PatchEmbed(nn.Module):
         embed_dim: Number of linear projection output channels.
         norm_layer: Normalization layer.
     """
+
+    _inference_type = ("lightx2v.models.networks.vggt.infer.layers.patch_embed", "PatchEmbedInfer")
 
     def __init__(
         self,
@@ -55,22 +56,7 @@ class PatchEmbed(nn.Module):
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_HW, stride=patch_HW)
         self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
 
-    def forward(self, x: Tensor) -> Tensor:
-        (_, _, H, W) = x.shape
-        (patch_H, patch_W) = self.patch_size
-        assert H % patch_H == 0, f"Input image height {H} is not a multiple of patch height {patch_H}"
-        assert W % patch_W == 0, f"Input image width {W} is not a multiple of patch width: {patch_W}"
-        x = self.proj(x)
-        (H, W) = (x.size(2), x.size(3))
-        x = x.flatten(2).transpose(1, 2)
-        x = self.norm(x)
-        if not self.flatten_embedding:
-            x = x.reshape(-1, H, W, self.embed_dim)
-        return x
+    def forward(self, *args, **kwargs):
+        from lightx2v.models.networks.vggt.infer.layers.patch_embed import PatchEmbedInfer
 
-    def flops(self) -> float:
-        (Ho, Wo) = self.patches_resolution
-        flops = Ho * Wo * self.embed_dim * self.in_chans * (self.patch_size[0] * self.patch_size[1])
-        if self.norm is not None:
-            flops += Ho * Wo * self.embed_dim
-        return flops
+        return PatchEmbedInfer(self).infer(*args, **kwargs)

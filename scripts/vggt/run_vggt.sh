@@ -1,0 +1,30 @@
+#!/bin/bash
+set -euo pipefail
+
+lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+model_path="${MODEL_PATH:-${lightx2v_path}/weights/vggt}"
+input_path="${INPUT_PATH:-${lightx2v_path}/example_images}"
+save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/vggt/reconstruction.npz}"
+
+if [[ "${1:-}" == "--help" ]]; then
+  echo "Usage: MODEL_PATH=/path/to/weights INPUT_PATH=/path/to/input bash scripts/vggt/run_vggt.sh [lightx2v.infer arguments]"
+  exit 0
+fi
+
+# PLATFORM selects the existing LightX2V platform implementation.
+# Set the corresponding device visibility variable before starting this script.
+export PYTHONPATH="${PYTHONPATH:-}"
+source "${lightx2v_path}/scripts/base/base.sh"
+export DTYPE=BF16
+mkdir -p -- "$(dirname -- "${save_result_path}")"
+cd -- "${lightx2v_path}"
+
+python -m lightx2v.infer \
+  --model_cls vggt \
+  --task recon \
+  --model_path "${model_path}" \
+  --config_json "${lightx2v_path}/configs/vggt/vggt_recon_bf16.json" \
+  --input_path "${input_path}" \
+  --save_result_path "${save_result_path}" \
+  --seed "${SEED:-42}" \
+  "$@"

@@ -21,7 +21,14 @@ class VGGTRunner(BaseRunner):
     def init_modules(self):
         validate_bf16_graph_config(self.config)
         self.device = torch.device(AI_DEVICE)
-        self.model = load_vggt(self.config["model_path"], self.device, self.config.get("attn_type", "torch_sdpa"), self.config.get("linear_backend", "Default"))
+        self.model = load_vggt(
+            self.config["model_path"],
+            self.device,
+            self.config.get("attn_type", "torch_sdpa"),
+            self.config.get("dit_quant_scheme", "Default"),
+            self.config.get("ln_norm_type", "torch"),
+            self.config.get("conv_type", "Default"),
+        )
 
     @torch.inference_mode()
     @ProfilingContext4DebugL1("Run Pipeline")

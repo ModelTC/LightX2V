@@ -8,10 +8,12 @@
 
 from typing import Callable, Optional
 
-from torch import Tensor, nn
+from torch import nn
 
 
-class Mlp(nn.Module):
+class MlpWeights(nn.Module):
+    _inference_type = ("lightx2v.models.networks.vggt.infer.layers.mlp", "MlpInfer")
+
     def __init__(
         self, in_features: int, hidden_features: Optional[int] = None, out_features: Optional[int] = None, act_layer: Callable[..., nn.Module] = nn.GELU, drop: float = 0.0, bias: bool = True
     ) -> None:
@@ -23,10 +25,7 @@ class Mlp(nn.Module):
         self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
         self.drop = nn.Dropout(drop)
 
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
-        return x
+    def forward(self, *args, **kwargs):
+        from lightx2v.models.networks.vggt.infer.layers.mlp import MlpInfer
+
+        return MlpInfer(self).infer(*args, **kwargs)
