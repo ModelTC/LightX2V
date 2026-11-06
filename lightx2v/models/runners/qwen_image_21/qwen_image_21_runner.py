@@ -17,6 +17,7 @@ from lightx2v.models.networks.qwen_image_21.input_utils import prepare_images
 from lightx2v.models.networks.qwen_image_21.lora import QwenImage21LoraAdapter, validate_lora_config
 from lightx2v.models.networks.qwen_image_21.model import QwenImage21TransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.qwen_image_21.int8_metal_binding import validate_int8_metal_binding
 from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
@@ -164,6 +165,8 @@ class QwenImage21Runner(DefaultRunner):
         self.scheduler = QwenImage21Scheduler(self.config)
 
     def load_transformer(self):
+        if self.config.get("dit_quant_scheme") == "int8-metal":
+            validate_int8_metal_binding(self.config)
         if self.config.get("dit_quant_scheme") == "fp8-f16-accum":
             reason = fp8_f16_accum_mm_unavailable_reason()
             if reason is not None:
