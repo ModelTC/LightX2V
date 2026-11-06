@@ -5,11 +5,8 @@ from pathlib import Path
 
 import torch
 
-from lightx2v.common.modules.inference_weights import InferenceWeights
 from lightx2v.common.ops.inference_module import InferenceAttention, bind_linear_operators, bind_spatial_operators, cast_matrix_weights
-from lightx2v.common.transformer_infer.module_infer import bind_inference
-from lightx2v.models.networks.vggt.weights.layers.attention import AttentionWeights
-from lightx2v.models.networks.vggt.weights.model import VGGTWeights
+from lightx2v.models.networks.vggt.weights.transformer_weights import AttentionWeights, VGGTWeights
 
 
 def load_vggt(model_path, device, attention_backend="torch_sdpa", linear_backend="Default", norm_backend="torch", conv_backend="Default"):
@@ -28,4 +25,4 @@ def load_vggt(model_path, device, attention_backend="torch_sdpa", linear_backend
     for layer in model.modules():
         if isinstance(layer, AttentionWeights):
             layer.attention = InferenceAttention(attention_backend)
-    return bind_inference(InferenceWeights.from_module(model))
+    return model
