@@ -7,15 +7,12 @@ from pathlib import Path
 import torch
 from safetensors.torch import load_file
 
-from lightx2v.common.modules.inference_weights import InferenceWeights
 from lightx2v.common.ops.inference_module import InferenceAttention, bind_linear_operators, bind_spatial_operators, cast_matrix_weights
 from lightx2v.common.ops.module_norm import LayerNorm32
 from lightx2v.common.ops.sparse import SparseConv3d
 from lightx2v.common.ops.sparse.linear import bind_sparse_linear_operators
 from lightx2v.common.ops.sparse.neighbor_map import NEIGHBOR_MAPS
-from lightx2v.common.transformer_infer.module_infer import bind_inference
-from lightx2v.models.networks.trellis2.weights.sparse_structure_flow import SparseStructureFlowModelWeights
-from lightx2v.models.networks.trellis2.weights.structured_latent_flow import SLatFlowModelWeights
+from lightx2v.models.networks.trellis2.weights.transformer_weights import SLatFlowModelWeights, SparseStructureFlowModelWeights
 from lightx2v.models.video_encoders.hf.trellis2.autoencoders.fdg_vae import FlexiDualGridVaeDecoder
 from lightx2v.models.video_encoders.hf.trellis2.autoencoders.sparse_structure_vae import SparseStructureDecoder
 from lightx2v.models.video_encoders.hf.trellis2.autoencoders.sparse_unet_vae import SparseUnetVaeDecoder
@@ -46,6 +43,4 @@ def load_component(path, device, neighbor_map="sorted", attention_backend="torch
             layer.neighbor_map = NEIGHBOR_MAPS[neighbor_map]
         elif isinstance(layer, InferenceAttention):
             layer.op = InferenceAttention(attention_backend).op
-    if hasattr(model, "_inference_type"):
-        return bind_inference(InferenceWeights.from_module(model))
     return model

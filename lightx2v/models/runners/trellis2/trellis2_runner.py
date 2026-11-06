@@ -8,7 +8,7 @@ from PIL import Image
 from lightx2v.common.ops.inference_module import validate_bf16_graph_config
 from lightx2v.common.ops.sparse import SparseTensor
 from lightx2v.models.input_encoders.hf.trellis2.encoder import TrellisImageEncoder
-from lightx2v.models.networks.trellis2.weights.loader import load_component
+from lightx2v.models.networks.trellis2.model import load_trellis2_component
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.trellis2.flow_euler import FlowEulerSampler
@@ -35,7 +35,7 @@ class Trellis2Runner(BaseRunner):
             relative = self.pipeline_config["models"][name]
             prefix = "microsoft/TRELLIS-image-large/"
             path = Path(self.config.get("base_model_path", root / "base")) / relative[len(prefix) :] if relative.startswith(prefix) else root / relative
-            self.models[name] = load_component(
+            self.models[name] = load_trellis2_component(
                 path,
                 self.device,
                 self.config.get("neighbor_map", "sorted"),
