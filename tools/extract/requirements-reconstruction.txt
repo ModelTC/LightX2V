@@ -1,0 +1,4 @@
+# Install after the LightX2V base dependencies; keep your CUDA-enabled PyTorch build.
+# Diffusers 0.41.0.dev0 with Qwen-Image 2.1 reference operators.
+diffusers @ git+https://github.com/huggingface/diffusers.git@62cde2b0115d57492d2f5ecefab54994797df2e3
+transformers==5.14.1

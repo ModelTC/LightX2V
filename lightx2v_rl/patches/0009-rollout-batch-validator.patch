@@ -1,0 +1,150 @@
+diff --git a/verl_omni/trainer/diffusion/v1/trainer_base.py b/verl_omni/trainer/diffusion/v1/trainer_base.py
+--- a/verl_omni/trainer/diffusion/v1/trainer_base.py
++++ b/verl_omni/trainer/diffusion/v1/trainer_base.py
+@@ -204,6 +204,9 @@
+         validate_distillation_config(config)
+         self._teacher_one_step_off = self.use_teacher_policy and self.distillation_config.scheduler == "one_step_off"
+         self._pending_teacher_batch = None
++        self._rollout_batch_validator = None
++        self._rollout_batch_expected_uids = None
++        self._configure_rollout_batch_validator()
+         self.replay_buffer = self._build_replay_buffer()
+ 
+         # ref_in_actor: reference policy is the actor without lora applied.
+@@ -217,6 +220,57 @@
+         # Local update index within the parameter-sync cycle.
+         self.local_trigger_step = 0
+         self._nonfinite_grad_streak = 0
++
++    def _configure_rollout_batch_validator(self):
++        """An optional batch guard requires one submission per synchronous sample."""
++        validator_fqn = self.config.trainer.get("rollout_batch_validator")
++        if not validator_fqn:
++            return
++        sampler = self.config.trainer.v1.sampler
++        gen_batch_size = self.config.data.get("gen_batch_size") or self.config.data.train_batch_size
++        if (
++            self.trainer_mode != "sync"
++            or self.parameter_sync_step != 1
++            or gen_batch_size != self.config.data.train_batch_size
++            or self._teacher_one_step_off
++            or self._should_prefetch_local_batches()
++            or sampler.get("drop_incomplete_groups", False)
++            or sampler.get("sync_refill_failed_groups", False)
++            or self.config.algorithm.get("filter_groups", {}).get("enable", False)
++        ):
++            raise ValueError(
++                "trainer.rollout_batch_validator requires synchronous one-batch sampling: "
++                "trainer_mode='sync', parameter_sync_step=1, gen_batch_size=train_batch_size, "
++                "and no teacher one_step_off, prefetch, group filtering, or failed-group refill."
++            )
++        from verl.utils.import_utils import load_class_from_fqn
++
++        validator = load_class_from_fqn(validator_fqn, "rollout batch validator")
++        if not callable(validator):
++            raise TypeError("trainer.rollout_batch_validator must resolve to a callable")
++        self._rollout_batch_validator = validator
++
++    def _validate_rollout_batch(self, batch_meta, expected_uids, num_candidates, global_step):
++        validator = self._rollout_batch_validator
++        if validator is None:
++            return
++        # sample() clears prompt keys from TQ when materializing the batch, but
++        # retains the terminal metadata snapshot. Do not resync that snapshot.
++        group_statuses = {}
++        for status in ("pending", "running", "finished", "failure"):
++            status_keys = getattr(self.replay_buffer, f"{status}_keys")[batch_meta.partition_id]
++            group_statuses.update((uid, status) for uid in expected_uids if uid in status_keys)
++        try:
++            validator(
++                keys=batch_meta.keys,
++                tags=batch_meta.tags,
++                expected_uids=expected_uids,
++                group_statuses=group_statuses,
++                num_candidates=num_candidates,
++                global_step=global_step,
++            )
++        except RuntimeError as error:
++            raise RuntimeError(f"Rollout batch partition={batch_meta.partition_id}: {error}") from error
+ 
+     def _build_replay_buffer(self) -> ReplayBuffer:
+         sampler_config = self.config.trainer.v1.sampler
+@@ -1230,11 +1284,34 @@
+         """Use the upstream replay buffer and replace only selected failed groups."""
+         sampler_config = self.config.trainer.v1.sampler
+         if not sampler_config.get("drop_incomplete_groups", False):
+-            batch_meta, off_policy_metrics = self.replay_buffer.sample(
+-                global_steps=self.global_steps,
+-                partition_id="train",
+-                batch_size=batch_size,
+-            )
++            if self._rollout_batch_validator is not None:
++                expected_uids = self._rollout_batch_expected_uids
++                if expected_uids is None or len(expected_uids) != batch_size:
++                    raise RuntimeError("Rollout batch validation requires one complete submitted prompt batch")
++            try:
++                batch_meta, off_policy_metrics = self.replay_buffer.sample(
++                    global_steps=self.global_steps,
++                    partition_id="train",
++                    batch_size=batch_size,
++                )
++            except RuntimeError as error:
++                no_trajectories = "Sync replay buffer selected terminal groups with no materializable trajectories."
++                if self._rollout_batch_validator is None or str(error) not in (
++                    no_trajectories,
++                    no_trajectories
++                    + " Enable trainer.v1.sampler.sync_refill_failed_groups to replace failed groups.",
++                ):
++                    raise
++                batch_meta = KVBatchMeta(partition_id="train", keys=[], tags=[])
++                off_policy_metrics = {}
++            if self._rollout_batch_validator is not None:
++                self._validate_rollout_batch(
++                    batch_meta,
++                    expected_uids=self._rollout_batch_expected_uids,
++                    num_candidates=self.config.actor_rollout_ref.rollout.n,
++                    global_step=self.global_steps,
++                )
++                self._rollout_batch_expected_uids = None
+             # Restore the v0 prompt-major row order before any consumer reads
+             # or writes these keys (TQ key order is storage-arbitrary).
+             return canonicalize_diffusion_tq_meta(batch_meta), off_policy_metrics
+@@ -1316,6 +1393,16 @@
+         }
+ 
+     def _submit_batch_to_rollout(self, batch) -> int:
++        if self._rollout_batch_validator is not None:
++            if (
++                self._rollout_batch_expected_uids is not None
++                or len(batch) != self.config.data.train_batch_size
++                or self._should_prefetch_local_batches()
++                or self.replay_buffer.filter_groups_metric is not None
++                or self.replay_buffer.sync_refill_failed_groups
++            ):
++                raise RuntimeError("Rollout batch validation requires one unfiltered submission per sample")
++            self._rollout_batch_expected_uids = tuple(batch["uid"])
+         tags = [{"is_prompt": True, "status": "pending", "global_steps": self.global_steps} for _ in range(len(batch))]
+         if self.trainer_mode != "sync":
+             from tensordict.tensorclass import NonTensorData
+@@ -1544,12 +1631,21 @@
+             tags = [
+                 {"is_prompt": True, "status": "pending", "global_steps": self.global_steps} for _ in range(len(batch))
+             ]
++            if self._rollout_batch_validator is not None:
++                expected_uids = tuple(batch["uid"])
+             tq.kv_batch_put(keys=list(batch["uid"]), partition_id="val", tags=tags)
+             self.agent_loop_manager.generate_sequences(batch)
+ 
+             batch_meta, _ = self.replay_buffer.sample(
+                 global_steps=self.global_steps, partition_id="val", batch_size=len(batch)
+             )
++            if self._rollout_batch_validator is not None:
++                self._validate_rollout_batch(
++                    batch_meta,
++                    expected_uids=expected_uids,
++                    num_candidates=self.config.actor_rollout_ref.rollout.val_kwargs.n,
++                    global_step=self.global_steps,
++                )
+             batch_meta = canonicalize_diffusion_tq_meta(batch_meta)
+             data = diffusion_tq_batch_to_dataproto(batch_meta, pad_token_id=self.tokenizer.pad_token_id or 0)
+ 

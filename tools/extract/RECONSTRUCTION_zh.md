@@ -1,110 +1,97 @@
-# Qwen-Image 2.1 LoRA 重建
+# TFMQ LoRA 重建
 
-[English](RECONSTRUCTION.md)
+[English](RECONSTRUCTION.md) · [工具入口与实验结论](README_zh.md)
 
-从 base 和全参数 target 模型提取 LoRA，使 **base + LoRA 尽量接近 target**。重建时冻结 base，仅利用 target 的采样轨迹优化 LoRA 参数。示例配置选择 232 组 Linear，使用 rank 64、alpha 8，不导出归一化权重差分。
+本文以 Qwen-Image 2.1 为例，当前重建实现支持 Qwen-Image 2.1。
 
-## 配置选择
+冻结 base，只优化 LoRA。示例配置选择 232 组 Linear，rank 64、alpha 8。统一入口 `lora_reconstructor.py` 根据 `target_model` 自动识别完整模型目录、导出的 transformer 目录（含分片）或单个 safetensors 文件，使用同一套 TFMQ 流程。
 
-| 配置 | 时间条件重建 | 输入混合 |
-|---|---|---|
-| [qdiff](configs/qwen_image_21_reconstruct_qdiff.json) | 依次重建时间通路的四个 Linear | 关闭 |
-| [tfmq](configs/qwen_image_21_reconstruct_tfmq.json) | 联合匹配 modulation 和最终 scale 输出 | 关闭 |
-| [tfmq_qdrop](configs/qwen_image_21_reconstruct_tfmq_qdrop.json) | 同 `tfmq` | 50% student / 50% teacher |
-
-这些流程借鉴 [Q-Diffusion](https://github.com/Xiuyu-Li/q-diffusion)、[TFMQ-DM](https://github.com/ModelTC/TFMQ-DM) 和 [QDrop](https://github.com/wimh966/QDrop) 的思想，用于 LoRA 重建，不做量化。重建顺序均为：
-
-```text
-时间条件模块 → 输入投影 → block_00 … block_31 → 输出投影
-```
-
-时间通路重建后冻结。Teacher 和 student 分别维护自己的特征缓存，逐块向后传递，梯度不跨越重建单元。
+先联合重建时间通路的 modulation 和最终 scale，再冻结该通路。随后按输入投影、block 00–31、输出投影的顺序重建，最小化 `MSE(S(xs, ms), T(xt, mt))`：学生和教师分别使用各自的前缀特征、时间条件，梯度不跨重建单元。
 
 ## 启动
 
-在仓库根目录执行命令。Python 环境需要包含 `diffusers.models.transformers.transformer_qwenimage21`；采集轨迹还需要 LightX2V 推理环境。先修改所选配置中的模型和数据路径，相对路径均相对于启动目录解析。
-
-**复用已有校准轨迹，在 8 卡上重建：**
+先修改配置中的模型与数据路径，再从仓库根目录运行。在具有 CUDA 版 PyTorch 的环境中安装 LightX2V 基础依赖后，安装重建依赖：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+pip install -r tools/extract/requirements-reconstruction.txt
+python -c "from diffusers.models.transformers import transformer_qwenimage21; print('Qwen-Image 2.1 backend available')"
+```
+
+已验证环境使用 Diffusers `0.41.0.dev0`，对应提交 `62cde2b0115d57492d2f5ecefab54994797df2e3`，以及 Transformers `5.14.1`，版本已固定在上述依赖文件中。无需安装训练框架。
+
+```bash
+# target 为完整模型目录：先采集轨迹，再重建
 torchrun --standalone --nproc_per_node=8 tools/extract/lora_reconstructor.py \
-  --config tools/extract/configs/qwen_image_21_reconstruct_tfmq_qdrop.json
+  --config tools/extract/configs/qwen_image_21_reconstruct_tfmq.json \
+  --collect-and-reconstruct
+
+# target 为导出的 transformer 目录或单个 .safetensors 文件
+torchrun --standalone --nproc_per_node=8 tools/extract/lora_reconstructor.py \
+  --config tools/extract/configs/qwen_image_21_reconstruct_checkpoint_tfmq.json \
+  --collect-and-reconstruct
 ```
 
-需要采集时，在上面的命令后追加相应选项：
+### 命令行参数
 
-| 选项 | 行为 |
+`lora_reconstructor.py`：
+
+- `--config <路径>`：必填，指定 JSON 或 YAML 重建配置文件。
+- `--calibration <路径>`：覆盖配置中的校准文件或目录；执行采集时，该目录用于保存轨迹。
+- `--output <路径>`：覆盖最终 LoRA 的 `.safetensors` 输出路径。
+- `--work-dir <路径>`：覆盖运行日志和临时重建缓存的保存目录。
+- `--device <设备>`：覆盖重建设备，例如 `auto`、`cuda:0` 或 `cpu`。torchrun 下建议使用 `auto`，由各进程选择本地 GPU。此参数不控制采集使用的 GPU。
+- `--collect-calibration`：仅准备校准轨迹。所有 target 格式均自动复用已有的匹配轨迹。
+- `--collect-and-reconstruct`：准备轨迹后，在同一次启动中进行重建。
+- `--reuse-calibration`：要求使用已有校准数据进行重建，不重新采集。所有 target 格式均校验来源和文件清单，并可从较大的缓存中选取子集。数据缺失或不匹配时报错。
+- `--dry-run`：检查采集或复用流程，不执行推理或训练；必须与上述三个流程参数之一同时使用。独立 transformer 目录或文件的准备过程仍可能写入推理目录链接和配置。
+- `--help`：显示可用参数。
+
+三个流程参数互斥。都不传时，直接使用 `calibration` 重建，不执行采集准备或 checkpoint 子集选择。
+
+### 运行方式
+
+target 为导出的 transformer 目录或文件时，采集器使用其权重和 base 的冻结组件组成推理目录。目录支持单文件及带索引的 safetensors 分片。采样使用 `calibration_inference_config`；权重旁若有 `inference_config.json`，其中的 `sample_sigmas` 和 `scheduler` 会覆盖对应设置。目前采集要求 CFG=1。
+
+新采集清单记录模型文件的实际路径、大小和修改时间、JSON 配置摘要、请求清单路径及摘要、seed、实际推理配置和采集精度，复用前统一比对。旧单文件 checkpoint 缓存仍按原有来源记录校验；没有可验证来源记录的旧缓存，需要另选目录重新采集。模型权重使用文件元数据识别，不计算整份权重的哈希。
+
+采集使用各卡独立的 BF16 推理与 CPU 卸载；重建使用 DDP，每次加载一个单元。单个单元及激活须能放入一张 GPU，各卡需共享模型、数据和输出文件系统。单卡运行时将 torchrun 前缀换成 `python`。
+
+## 配置与产物
+
+提取目标是 **`source_model` + 导出的 LoRA ≈ `target_model`**。
+
+- `source_model`：冻结的原始 base，之后使用 LoRA 时也应加载这个模型。两份示例均使用 `lightx2v_train/models/Qwen-Image-2.1`。
+- `target_model`：希望逼近的完整模型权重，作为 teacher 生成校准轨迹和重建监督；这里填写完整模型目录、独立 transformer 目录或权重文件，不是 LoRA 文件，也不要求来自 RL。
+- `output`：最终导出的 LoRA `.safetensors` 路径；使用时将它加载到 `source_model` 上。
+
+两份示例的 target 分别为：
+
+| 配置 | `target_model` |
 |---|---|
-| `--collect-calibration` | 仅采集 target 轨迹 |
-| `--collect-and-reconstruct` | 重新采集一份数据，完成后开始重建 |
-| `--collect-calibration --dry-run` | 仅检查样本选择和参考图路径，不执行推理 |
+| [qwen_image_21_reconstruct_tfmq.json](configs/qwen_image_21_reconstruct_tfmq.json) | `lightx2v_train/models/Qwen-Image-2.1-Lightning-v2-base` |
+| [qwen_image_21_reconstruct_checkpoint_tfmq.json](configs/qwen_image_21_reconstruct_checkpoint_tfmq.json) | `lightx2v_train/models/Qwen-Image-2.1-Lightning-v2-RL/diffusion_pytorch_model.safetensors` |
 
-单卡时，将 `torchrun --standalone --nproc_per_node=8` 换成 `python`，并设置 `CUDA_VISIBLE_DEVICES=0`。切换算法只需更换配置文件路径。
+第一项名称中的 `-base` 是目标模型名称的一部分；本次提取的原始 base 仍由 `source_model` 指定。两份配置使用同一算法，数据量和迭代数只是实验取值。
 
-采集时每卡独立进行 BF16 推理，使用 block CPU offload；`compute_dtype` 仅控制重建精度。重放时间步先按轨迹记录的采集精度转换并除以 1000，再转为重建精度；未记录采集精度的旧轨迹按 BF16 处理。重建时通过 DDP 同步当前单元的 LoRA 梯度，依次加载 teacher/student 单元，无需 FSDP。各进程需要共享模型、数据和输出目录；单卡仍需容纳当前单元及其激活。
+其他关键参数：
 
-## 校准数据与参数
-
-示例配置采集 **512 条 T2I + 256 条单参考图 + 256 条多参考图请求**。每条请求取 4 个去噪时间步，共 **4096 条重建样本**。每个 `.pt` 轨迹保存带噪 latent、条件和时间步；各块的监督目标在重建时另外计算。
-
-| 字段 | 含义 / 示例配置值 |
+| 参数 | 含义 |
 |---|---|
-| `source_model`、`target_model` | Base 和完整 target 权重，也支持已导出的学生模型权重 |
-| `output`、`layers`、`rank`、`alpha` | LoRA 输出位置、选择的层、rank 64、alpha 8 |
-| `calibration` | 已有轨迹文件或目录，也是采集结果的保存位置 |
-| `calibration_manifest` | 请求清单，默认 `lightx2v_train/data/opengpt4o_qwen_image21/train.jsonl` |
-| `calibration_counts` | 各任务请求数，尚未乘以时间步数 |
-| `calibration_inference_config` | 原生推理配置，示例使用 4 步 |
-| `iterations`、`temporal_iterations` | 普通单元 / 时间单元各优化 1000 iter |
-| `batch_size` | 全局 batch 为 8，8 卡时每卡处理 1 条样本 |
-| `learning_rate`、`gradient_clip` | `5e-5`、`1.0` |
-| `compute_dtype` | BF16 计算；LoRA 主参数、优化器状态和 MSE 运算保留 FP32 |
-| `dtype` | 导出的 LoRA 精度，默认 FP32 |
-| `log_every` | 每 25 iter 更新当前训练 batch 的 MSE 日志 |
-| `seed` | 请求选择和重建采样的随机种子 |
-| `work_dir`、`keep_cache` | 重建临时目录；默认清理中间缓存 |
+| `layers` | 要提取并优化 LoRA 的 Linear 层名称，支持 `*` 通配符；示例覆盖 232 组 Linear。 |
+| `rank` / `alpha` | LoRA 的秩和缩放参数，示例为 64 / 8；权重增量为 `(alpha / rank) × up @ down`。SVD 初始化会补偿该缩放，alpha=8 不表示只拟合目标差分的 1/8。 |
+| `initialization` | `svd`：对 target 与 source 的权重差做 SVD 初始化，并在训练前保存；`lora`：从 `initial_lora` 加载已有 LoRA；也支持 `random`。 |
+| `svd_output` / `initial_lora` | 前者是 SVD 初始化的独立保存路径，默认将 `output` 的 `.safetensors` 后缀换为 `.svd.safetensors`；后者仅在 `initialization: lora` 时填写。 |
+| `calibration_manifest` | 采集请求清单，包含提示词、参考图等，用于选择请求。 |
+| `calibration_counts` | 按 `t2i`、`i2i_single`、`i2i_multi` 指定请求数；使用全部采集时间步，每个请求的每个时间步产生一条重建数据，例如 1024 个请求 × 4 步 = 4096 条。 |
+| `calibration_inference_config` | teacher 采集时的推理配置，包含采样步数、分辨率等；独立权重旁的采样配置覆盖规则见上文。 |
+| `calibration` | 原始校准轨迹的保存或读取路径，与请求清单分开；采集后保留。 |
+| `iterations` / `temporal_iterations` | 分别为每个普通重建单元、时间通路的优化器更新次数；不是遍历数据集的 epoch 数。 |
+| `batch_size` / `learning_rate` | 全局 batch 和 LoRA 学习率，示例为 8 / `5e-5`。每卡每次前向一个样本，累积 `batch_size / WORLD_SIZE` 步，batch 必须能被卡数整除。 |
+| `compute_dtype` / `dtype` | 前者控制重建前向精度（`bf16` 或 `fp32`），LoRA 主参数和 MSE 保持 FP32；后者控制导出权重精度。 |
+| `checkpointing` | 开启重建单元内部的梯度检查点，通过反向时重算降低激活显存；不是训练断点保存。 |
+| `work_dir` | 存放运行记录和临时单元缓存。单元推进时清理上一单元缓存，正常结束时清理剩余临时缓存；原始校准轨迹和导出权重保留。 |
+| `log_every` / `save_iteration_losses` | 前者控制每隔多少 iter 显示 minibatch MSE；后者开启逐 iter 的 `iteration_losses.jsonl` 保存。 |
 
-少于 8 卡时，梯度累积次数为 `batch_size / world_size`，必须整除。训练从缓存中随机抽样，按固定 iter 优化，不按完整 epoch 遍历。时间条件重建使用采集到的时间步，加上条件分支的 `t=0`。
+`work_dir/<run>/` 保存配置及各单元训练前后的 `metrics.jsonl`。MSE 在该单元全量校准缓存上计算，变差时恢复该单元的初始 LoRA。重新启动会从初始化开始重建，不恢复优化器状态。
 
-采集要求 `target_model` 是完整推理 pipeline。如果 target 只有导出的 transformer 权重，需要另行采集并提供轨迹。采集的推理时间步应匹配 target 模型。`calibration_selection.json` 记录选中的文件及完成状态；采集未完成时，重建会报错。
-
-采集工具会自动读取关闭动态 shifting 的 target 模型中 `model_index.json` 的 `sample_sigmas`，作为固定 `sigmas` 传给公共 scheduler，并关闭再次 shift；显式配置的 `sigmas` 优先。每个采集输出目录会保留实际使用的 `inference_config.json`，原配置文件不变。
-
-## QDrop 输入混合
-
-两种算法都支持以下配置，只有 `tfmq_qdrop` 示例默认启用：
-
-```json
-{
-  "qdrop_input_mix": true,
-  "qdrop_student_prob": 0.5
-}
-```
-
-训练 Transformer block 和输出层时，每个特征元素以 `qdrop_student_prob` 的概率选择 student 前缀输出，否则选择对应的 teacher 前缀输出。每次微步重新生成随机掩码。设为 `0` 表示纯 teacher 特征，设为 `1` 表示纯 student 特征。
-
-监督目标始终是 teacher 输出；时间条件、输入层和独立时间单元的重建不变。**全量评估及传给下一块的缓存始终使用纯 student 输入。** 启用混合需要额外缓存 teacher 输入，会增加临时磁盘占用。
-
-## MSE、输出和缓存清理
-
-每个单元在训练前后，都对**该单元的全部校准样本**评估一次。这里使用的是训练校准集，没有单独划分验证集。训练当前单元期间，teacher 目标和 student 前缀输入固定。若最终 MSE 变差，则恢复初始 LoRA 参数。`MSE 前 → 后` 表示最终保留参数的效果；进度条上的 MSE 是当前训练 batch 的误差。生成质量需要另用留出请求评估。
-
-`tfmq_qdrop` 的默认保存位置：
-
-```text
-outputs/qwen_image_21_calibration/                         # 保留的原始轨迹
-    calibration_selection.json
-    collection_<id>/rank_<rank>/*.pt                       # 多卡采集结果
-outputs/qwen_image_21_tfmq_qdrop_r64_a8.svd.safetensors     # 保留的 SVD 初始化 LoRA
-outputs/qwen_image_21_tfmq_qdrop_r64_a8.safetensors         # 最终 LoRA
-outputs/reconstruction_tfmq_qdrop/<id>/
-    config.json
-    calibration.json
-    metrics.jsonl
-    rank_<rank>/                                          # 临时特征缓存
-```
-
-使用 `initialization: "svd"` 时，训练前会保存初始化 LoRA，位置可通过 `svd_output` 覆盖。`keep_cache: false` 会随重建推进删除上一阶段的特征缓存，成功结束后清理剩余缓存及各卡的初始化分片。**原始轨迹、完整 SVD LoRA、最终 LoRA 和运行指标都会保留。**
-
-中断后需要重新开始重建，目前不支持恢复优化器或已完成阶段。可设置 `initialization: "lora"`，并通过 `initial_lora` 加载层名、rank 和 alpha 匹配的导出 LoRA，复用初始化。不同实验应使用独立输出路径。
+图片效果验证使用 inference 框架。

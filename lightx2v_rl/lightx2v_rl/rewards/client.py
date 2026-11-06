@@ -23,6 +23,10 @@ class RemoteRewardError(RuntimeError):
     """The requested reward was not computed; never substitute a zero reward."""
 
 
+class RemoteRewardFormatError(RemoteRewardError):
+    """A successful HTTP response contains an invalid response body."""
+
+
 def _request(endpoint, route, *, payload=None, timeout_seconds=1800.0):
     parts = urlsplit(endpoint)
     if parts.scheme not in {"http", "https"} or not parts.netloc or parts.query or parts.fragment:

@@ -50,7 +50,7 @@ def main(argv=None):
                 print("Required before training: " + ", ".join(missing))
             return
         if sys.version_info < (3, 11):
-            raise RuntimeError("The pinned verl-omni training runtime requires Python >= 3.11; core tests support 3.10.")
+            raise RuntimeError("The pinned verl-omni training runtime requires Python >= 3.11.")
         checkout = prepare_runtime(args.checkout, check_only=True)
         installed = importlib.util.find_spec("verl_omni")
         if installed is None or Path(installed.origin).resolve().parent != checkout / "verl_omni":

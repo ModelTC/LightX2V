@@ -127,7 +127,7 @@ python -m lightx2v.server \
 
 使用 `tools/extract/lora_extractor.py`，按 JSON/YAML 配置对选定 Linear 的权重差做 FP32 SVD。运行以下命令前，先修改配置中的模型与输出路径。相对路径以运行命令的工作目录为准，支持 `~` 和环境变量。
 
-需要基于校准数据优化 Qwen-Image 2.1 LoRA 时，使用独立入口 `tools/extract/lora_reconstructor.py`。支持 Q-Diffusion 风格的逐块重建，以及 TFMQ 风格的时间通路联合重建后再逐块重建；支持单卡和 `torchrun` DDP。示例配置使用 rank=64、alpha=8，并单独保存 SVD 初始化 LoRA。校准数据采集、算法细节和运行命令见[重建说明](https://github.com/ModelTC/LightX2V/blob/main/tools/extract/RECONSTRUCTION_zh.md)。
+需要基于校准数据优化 Qwen-Image 2.1 LoRA 时，使用独立入口 `tools/extract/lora_reconstructor.py`。支持 TFMQ 风格的时间通路联合重建后再逐块重建；支持单卡和 `torchrun` DDP。示例配置使用 rank=64、alpha=8，并单独保存 SVD 初始化 LoRA。校准数据采集、算法细节和运行命令见[重建说明](https://github.com/ModelTC/LightX2V/blob/main/tools/extract/RECONSTRUCTION_zh.md)。
 
 ### 基本用法
 

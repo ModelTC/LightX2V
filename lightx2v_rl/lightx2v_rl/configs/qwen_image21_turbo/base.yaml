@@ -13,12 +13,23 @@ actor_rollout_ref:
       max_steps: 8
       timestep_shift: 1.0
       timestep_sampling_mode: fixed_uniform
-      cycle_train_idx: true
+      # Isolate stochastic exploration to one transition per prompt group.
+      num_train_timesteps: 1
+      # Cover different positions within an iteration while sharing within groups.
+      cycle_train_idx: false
+      clip_range: 0.001
     external_lib: lightx2v_rl.models.qwen_image.register
   actor:
+    # Prompt counts, before rollout.n expansion; two updates per iteration.
     ppo_mini_batch_size: 4
     ppo_micro_batch_size_per_gpu: 1
+    ppo_epochs: 1
+    shuffle: true
     enable_timestep_staging: false
+    optim:
+      # FewStepRL Qwen baseline, using FP32 master parameters.
+      lr: 2.0e-06
+      clip_grad: 0.5
     fsdp_config:
       forward_prefetch: false
   rollout:
@@ -27,7 +38,7 @@ actor_rollout_ref:
     max_num_seqs: 1
     max_prompt_embed_length: 4096
     prompt_length: 4096
-    'n': 4
+    'n': 8
     enable_prompt_embed_cache: false
     step_execution: false
     agent:
@@ -64,7 +75,7 @@ actor_rollout_ref:
         output_type: image
         output_resolution: ${actor_rollout_ref.rollout.pipeline.output_resolution}
         max_reference_tokens: ${actor_rollout_ref.rollout.pipeline.max_reference_tokens}
-        max_reference_images: 1
+        max_reference_images: ${actor_rollout_ref.rollout.pipeline.max_reference_images}
         replay_prompt_length: 4096
         use_kv_cache: true
 algorithm:
@@ -73,14 +84,19 @@ algorithm:
     weights:
       unifiedreward_normalized: ${reward.custom_reward_function.reward_kwargs.unifiedreward_weight}
       hpsv3_general_calibrated: ${reward.custom_reward_function.reward_kwargs.hps_weight}
+    # Match scoring and optimization weights; zero I2I weight skips HPSv3.
+    task_weights:
+      i2i:
+        hpsv3_general_calibrated: ${reward.custom_reward_function.reward_kwargs.hps_weight_i2i}
 data:
   train_files:
   - lightx2v_rl/data/opengpt4o/train.jsonl
   val_files:
   - lightx2v_rl/data/opengpt4o/val_t2i.jsonl
   - lightx2v_rl/data/opengpt4o/val_i2i.jsonl
-  train_batch_size: 4
-  gen_batch_size: 4
+  # Four training GPUs: 8 prompts x 8 candidates = 64 trajectories.
+  train_batch_size: 8
+  gen_batch_size: 8
   val_batch_size: 1
   validation_shuffle: false
   dataloader_num_workers: 0
@@ -110,10 +126,12 @@ reward:
       hps_endpoint: http://127.0.0.1:8791
       unifiedreward_weight: 1.0
       hps_weight: 0.5
+      hps_weight_i2i: 0.0
       hps_offset: 0.0
       hps_scale: 1.0
       image_layout: CHW
-      timeout_seconds: 1800
+      # Fail stalled scoring with task, replica and sample diagnostics.
+      timeout_seconds: 600
       max_concurrent_samples: 8
 trainer:
   experiment_name: qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}
@@ -124,9 +142,13 @@ trainer:
   val_before_train: true
   default_local_dir: lightx2v_rl/outputs/qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}
   validation_data_dir: lightx2v_rl/outputs/qwen_image21_turbo_${actor_rollout_ref.model.fewstep.bridge}/validation
-  validation_data_max_samples: 16
+  validation_media_class: lightx2v_rl.training.validation_media.TaskValidationMedia
+  validation_samples_per_task: 8
+  # Reject failed/missing candidates before padding, advantages, or updates.
+  rollout_batch_validator: lightx2v_rl.training.rollout_groups.validate_rollout_groups
   v1:
     sync:
       parameter_sync_step: 1
     sampler:
       drop_incomplete_groups: false
+      sync_refill_failed_groups: false

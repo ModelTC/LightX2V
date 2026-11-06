@@ -141,7 +141,7 @@ def main(argv=None):
     from lightx2v_rl.rewards.assets import resolve_reward_assets
 
     try:
-        assets = resolve_reward_assets(args.assets_root)
+        assets = resolve_reward_assets(args.assets_root, models=models)
         hps = alignment = None
         if "hpsv3" in models:
             from lightx2v_rl.rewards.hpsv3 import HPSv3Scorer

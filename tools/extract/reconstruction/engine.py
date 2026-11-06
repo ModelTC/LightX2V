@@ -165,14 +165,12 @@ def prepare_calibration(config, architecture, runtime, work):
         if "steps" in data:
             references = len(data["condition"]["source_img_shapes"])
             counts["t2i" if references == 0 else "i2i_single" if references == 1 else "i2i_multi"] += 1
-            records = trace_records(data, config.step_indices, config.compute_dtype)
+            records = trace_records(data, config.compute_dtype)
         elif "hidden_states" in data:
             references = len(data["img_shapes"]) - 1
             counts["t2i" if references == 0 else "i2i_single" if references == 1 else "i2i_multi"] += 1
             if config.calibration_counts is not None:
                 raise ValueError("calibration_counts counts complete native traces, not individual prepared timestep records; omit it for prepared records")
-            if config.step_indices is not None:
-                raise ValueError("step_indices only applies to native traces")
             records = [data]
         else:
             raise ValueError(f"Not a native trace or prepared calibration record: {path}")
@@ -224,26 +222,9 @@ def objective(prediction, record, outputs=None):
 
 
 def accumulation_steps(config, world_size):
-    if config.batch_size is None:
-        return config.gradient_accumulation
     if config.batch_size % world_size:
         raise ValueError(f"Global batch_size={config.batch_size} must be divisible by WORLD_SIZE={world_size}; each forward processes one sample per rank")
     return config.batch_size // world_size
-
-
-def mix_training_input(record, student_prob, generator):
-    """Mix paired prefix features elementwise without changing targets/caches."""
-    if "x" not in record or student_prob == 1:
-        return record
-    student, teacher = record["x"], record["teacher_input_x"]
-    if student.shape != teacher.shape:
-        raise ValueError("QDrop requires matching teacher/student input shapes")
-    if student_prob == 0:
-        mixed = teacher
-    else:
-        mask = torch.rand(student.shape, device=student.device, generator=generator) < student_prob
-        mixed = torch.where(mask, student, teacher)
-    return {**record, "x": mixed}
 
 
 def optimize(unit, paths, config, runtime, stage, work, iterations, outputs=None):
@@ -257,11 +238,14 @@ def optimize(unit, paths, config, runtime, stage, work, iterations, outputs=None
     wrapped = DistributedDataParallel(unit, device_ids=[device.index] if device.type == "cuda" else None, broadcast_buffers=False) if runtime.world > 1 else unit
     optimizer = torch.optim.Adam(parameters, lr=config.learning_rate)
 
+    def load_record(path):
+        return move(_load(path), device, dtype)
+
     def evaluate():
         total = 0.0
         with torch.no_grad():
             for path in paths:
-                record = move(_load(path), device, dtype)
+                record = load_record(path)
                 total += float(objective(unit(record), record, outputs))
         return runtime.mean(total / len(paths))
 
@@ -270,15 +254,12 @@ def optimize(unit, paths, config, runtime, stage, work, iterations, outputs=None
         raise FloatingPointError(f"Non-finite initial reconstruction loss: {stage}")
     original = [parameter.detach().cpu().clone() for parameter in parameters]
     generator = random.Random(config.seed + runtime.rank)
-    mix_generator = torch.Generator(device=device).manual_seed(config.seed + runtime.rank) if config.qdrop_input_mix else None
     progress = runtime.progress(range(iterations), desc=stage, unit="iter")
     for iteration in progress:
         optimizer.zero_grad(set_to_none=True)
         accumulated = 0.0
         for micro_step in range(accumulation):
-            record = move(_load(generator.choice(paths)), device, dtype)
-            if config.qdrop_input_mix:
-                record = mix_training_input(record, config.qdrop_student_prob, mix_generator)
+            record = load_record(generator.choice(paths))
             synchronize = micro_step == accumulation - 1
             context = wrapped.no_sync() if runtime.world > 1 and not synchronize else nullcontext()
             with context:
@@ -291,10 +272,15 @@ def optimize(unit, paths, config, runtime, stage, work, iterations, outputs=None
         if valid != 1.0:
             raise FloatingPointError(f"Non-finite loss/gradient in {stage}, iteration {iteration}")
         optimizer.step()
-        if (iteration + 1) % config.log_every == 0 or iteration == 0 or iteration + 1 == iterations:
+        display = (iteration + 1) % config.log_every == 0 or iteration == 0 or iteration + 1 == iterations
+        if display or config.save_iteration_losses:
             average = runtime.mean(accumulated)
             if runtime.rank == 0:
-                progress.set_postfix(mse=f"{average:.6g}")
+                if config.save_iteration_losses:
+                    with (work / "iteration_losses.jsonl").open("a") as file:
+                        file.write(json.dumps({"stage": stage, "iteration": iteration + 1, "training_mse": average}) + "\n")
+                if display:
+                    progress.set_postfix(mse=f"{average:.6g}")
     final = evaluate()
     accepted = math.isfinite(final) and final <= initial
     if not accepted:
@@ -324,19 +310,13 @@ def temporal_reconstruction(source, target, selected, factors, architecture, tim
             paths.append(path)
     del teacher
     _release()
-    if config.algorithm == "tfmq":
-        # The shared modulation and final scale are the consumers of the time
-        # embedding. Jointly fit these endpoints, letting embedding errors be
-        # compensated inside this temporal unit (no extra embedding penalty).
-        stages = [("temporal_joint", TEMPORAL_LAYERS, ("modulation", "scale"))]
-    else:
-        stages = [(f"temporal_{index}", (name,), (output,)) for index, (name, output) in enumerate(zip(TEMPORAL_LAYERS, ("first", "embedding", "modulation", "scale"), strict=True))]
-    for name, active, outputs in stages:
-        unit = build_unit("temporal", architecture, source, runtime.device, dtype, factors, set(active) & selected)
-        optimize(unit, paths, config, runtime, name, work, config.temporal_iterations, outputs)
-        update_factors(unit, factors)
-        del unit
-        _release()
+    # Jointly fit both consumers of the time embedding, without an extra
+    # embedding penalty. Freeze this path before reconstructing the blocks.
+    unit = build_unit("temporal", architecture, source, runtime.device, dtype, factors, set(TEMPORAL_LAYERS) & selected)
+    optimize(unit, paths, config, runtime, "temporal_joint", work, config.temporal_iterations, ("modulation", "scale"))
+    update_factors(unit, factors)
+    del unit
+    _release()
     # Cache the two finalized temporal paths. t=0 is a distinct, fixed row for
     # text/reference tokens, not replaced with the target image's timestep.
     result = {}
@@ -369,8 +349,6 @@ def reconstruct_stage(kind, index, source, target, selected, factors, architectu
             output = teacher(move(teacher_input, runtime.device, dtype)).cpu()
             if kind != "input":
                 record["x"] = record.pop("student_x")
-                if config.qdrop_input_mix:
-                    record["teacher_input_x"] = record["teacher_x"]
                 del record["teacher_x"]
             record.update(temporal["student", time])
             record["y"] = output
@@ -389,16 +367,14 @@ def reconstruct_stage(kind, index, source, target, selected, factors, architectu
     with torch.no_grad():
         for path in runtime.progress(train_paths, desc=f"{stage}: student cache", unit="sample"):
             record = _load(path)
-            output = unit(move(record, runtime.device, dtype)).cpu()
+            record["student_x"] = unit(move(record, runtime.device, dtype)).cpu()
             record["teacher_x"] = record.pop("y")
-            record["student_x"] = output
-            for key in ("x", "teacher_input_x", "modulation", "scale", "loss_mask", "hidden_states", "encoder_hidden_states", "repeats", "image_pad_mask", "target_tokens"):
+            for key in ("x", "modulation", "scale", "loss_mask", "hidden_states", "encoder_hidden_states", "repeats", "image_pad_mask", "target_tokens"):
                 record.pop(key, None)
             _save(path, record)
     del unit
     _release()
-    if not config.keep_cache:
-        shutil.rmtree(paths[0].parent)
+    shutil.rmtree(paths[0].parent)
     return train_paths
 
 
@@ -434,8 +410,6 @@ def reconstruct(config):
         work = Path(config.work_dir) / run_id[0]
         work.mkdir(parents=True, exist_ok=True)
         runtime.log(f"Reconstruction: {config.algorithm}, {len(selected)} Linear layers, rank={config.rank}, alpha={config.alpha}, DDP={runtime.world}\nRun directory: {work}")
-        if config.qdrop_input_mix:
-            runtime.log(f"QDrop input mixing: student probability={config.qdrop_student_prob}; training only, evaluation and prefix propagation use student inputs")
         if runtime.rank == 0:
             (work / "config.json").write_text(json.dumps(asdict(config), indent=2))
         paths, times = prepare_calibration(config, architecture, runtime, work)
@@ -448,9 +422,8 @@ def reconstruct(config):
             save_adapter(config.output, factors, config, "reconstructed")
             runtime.log(f"Saved reconstructed LoRA: {config.output}\nMetrics: {work / 'metrics.jsonl'}")
         runtime.barrier()
-        if not config.keep_cache:
-            shutil.rmtree(work / f"rank_{runtime.rank}")
-            (work / f"initial_rank_{runtime.rank}.safetensors").unlink(missing_ok=True)
+        shutil.rmtree(work / f"rank_{runtime.rank}")
+        (work / f"initial_rank_{runtime.rank}.safetensors").unlink(missing_ok=True)
         return str(work)
     finally:
         runtime.close()

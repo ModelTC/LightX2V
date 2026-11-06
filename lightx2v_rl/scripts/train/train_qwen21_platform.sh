@@ -6,20 +6,30 @@ usage() {
     cat <<'EOF'
 Usage: bash lightx2v_rl/scripts/train/train_qwen21_platform.sh [key=value overrides]
 
-Submit this command to a platform that runs it once on each of four or five eight-GPU
+Submit this command to a platform that runs it once on each of four, five, six or seven eight-GPU
 nodes. The platform must provide the same MASTER_ADDR and MASTER_PORT on all nodes.
 MASTER_PORT is the torchrun rendezvous port and must differ from Ray's port 6379.
 
 This launcher starts one CPU bootstrap per node. The recipe selects the topology:
   *_32gpu: 4 total nodes = 3 Ray training nodes + 1 reward node.
   *_40gpu: 5 total nodes = 4 Ray training nodes + 1 reward node.
-The last rank runs six UnifiedReward and two HPSv3 services. Only rank 0 starts
-the training driver. The GPU suffix includes reward GPUs.
+  qwen_image21_4step_geo_6nodes (alias *_48gpu): 4 Ray nodes + 2 reward nodes.
+For four/five nodes, the last rank runs six UnifiedReward and two HPSv3 services.
+For six nodes, ranks 4 and 5 each run six UnifiedReward and two HPSv3 services.
+For the seven-node HPS recipe, ranks 4..5 run 7 UR + 1 HPS; rank 6 runs 6 UR + 2 HPS.
+  qwen_image21_4step_geo_7nodes_hps02: 4 Ray nodes + 3 reward nodes (27B).
+  qwen_image21_4step_geo_7nodes_ur_only: 4 Ray nodes + 3 reward nodes (8 UR each).
+Only rank 0 starts the training driver. The GPU suffix includes reward GPUs.
 
 Optional environment:
   LIGHTX2V_RL_PYTHON    Training interpreter (default: lightx2v_rl/.venv-rl/bin/python)
   LIGHTX2V_RL_CONFIG    qwen_image21_turbo_geo_40gpu (default),
-                       qwen_image21_turbo_{geo,cps,flow_grpo}_{32,40}gpu
+                       qwen_image21_turbo_{geo,cps,flow_grpo}_{32,40}gpu,
+                       qwen_image21_4step_geo_6nodes (alias *_48gpu),
+                       qwen_image21_4step_geo_6nodes_hps02,
+                       qwen_image21_4step_geo_7nodes_{hps02,ur_only}
+  LIGHTX2V_RL_DATA_DIR  Four-step train.jsonl, val.jsonl and val_preview.jsonl directory
+                       (default: lightx2v_rl/data/opengpt4o_multiref)
   LIGHTX2V_RDZV_ID      Shared job-specific rendezvous ID (default: 5236)
   LIGHTX2V_PLATFORM_STARTUP_TIMEOUT  Service startup timeout in seconds (default: 1800)
   GLOO_SOCKET_IFNAME    CPU control-plane interface, when explicit selection is needed
@@ -49,7 +59,9 @@ export LIGHTX2V_RL_CONFIG="${LIGHTX2V_RL_CONFIG:-qwen_image21_turbo_geo_40gpu}"
 case "$LIGHTX2V_RL_CONFIG" in
     qwen_image21_turbo_geo_32gpu|qwen_image21_turbo_cps_32gpu|qwen_image21_turbo_flow_grpo_32gpu) RL_PLATFORM_NODES=4 ;;
     qwen_image21_turbo_geo_40gpu|qwen_image21_turbo_cps_40gpu|qwen_image21_turbo_flow_grpo_40gpu) RL_PLATFORM_NODES=5 ;;
-    *) printf 'This launcher requires a qwen_image21_turbo_*_32gpu or *_40gpu recipe.\n' >&2; exit 2 ;;
+    qwen_image21_4step_geo_6nodes|qwen_image21_4step_geo_48gpu|qwen_image21_4step_geo_6nodes_hps02) RL_PLATFORM_NODES=6 ;;
+    qwen_image21_4step_geo_7nodes_hps02|qwen_image21_4step_geo_7nodes_ur_only) RL_PLATFORM_NODES=7 ;;
+    *) printf 'This launcher requires a supported Qwen multi-node recipe (32gpu, 40gpu, six-node or seven-node 4-step recipe).\n' >&2; exit 2 ;;
 esac
 
 RL_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -68,7 +80,7 @@ if [[ "$HF_HOME" != /* ]]; then export HF_HOME="$PWD/$HF_HOME"; fi
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 
 # Catch a replaced PyPI Diffusers before allocating Ray workers and loading the
-# eight reward models. This imports definitions only, without model weights.
+# reward models. This imports definitions only, without model weights.
 "$RL_PYTHON" - <<'PY'
 import sys
 try:
@@ -77,7 +89,7 @@ except ImportError as exc:
     raise SystemExit(
         f'Qwen-Image-2.1 training environment check failed ({sys.executable}): {exc}\n'
         'The training environment requires the pinned official Diffusers commit in '
-        'lightx2v_rl/requirements/qwen_image21.txt; PyPI diffusers 0.40.0 lacks QwenImage21.\n'
+        'lightx2v_rl/requirements/qwen_image21.txt.\n'
         'Run bash lightx2v_rl/scripts/setup/repair_qwen21_diffusers.sh once on the GPU host, then resubmit.'
     ) from None
 PY

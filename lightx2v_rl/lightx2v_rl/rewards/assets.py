@@ -14,7 +14,7 @@ EXPECTED_ASSETS = {
 }
 
 
-def resolve_reward_assets(root: str | Path | None = None, *, verify_hashes: bool = False) -> dict[str, dict[str, Path]]:
+def resolve_reward_assets(root: str | Path | None = None, *, verify_hashes: bool = False, models=None) -> dict[str, dict[str, Path]]:
     """Return absolute local model paths; relocating the whole bundle is supported.
 
     The default uses the checkout's ``models/rewards`` entry, and can be overridden
@@ -22,7 +22,14 @@ def resolve_reward_assets(root: str | Path | None = None, *, verify_hashes: bool
     only relative paths, so moving the workspace from /mnt/... to /data does not
     require rewriting it. Relative overrides are resolved from the repository
     root. Hash verification is optional because it reads ~40 GiB.
+    ``models`` selects the required backends; omitted means both legacy models.
+    Unselected files need not be present, even in an existing full manifest.
     """
+    if isinstance(models, (str, bytes)):
+        raise ValueError("models must be a sequence of hpsv3/videoalign names")
+    selected = tuple(EXPECTED_ASSETS if models is None else models)
+    if not selected or len(set(selected)) != len(selected) or any(name not in EXPECTED_ASSETS for name in selected):
+        raise ValueError("models must be a nonempty, unique hpsv3/videoalign subset")
     root = Path(root or os.environ.get("LIGHTX2V_RL_REWARD_ASSETS") or DEFAULT_ASSETS_ROOT).expanduser()
     if not root.is_absolute():
         root = Path(__file__).resolve().parents[3] / root
@@ -35,14 +42,23 @@ def resolve_reward_assets(root: str | Path | None = None, *, verify_hashes: bool
             "then run lightx2v_rl/scripts/assets/link_resources.py and link_reward_weights.py."
         )
     manifest = json.loads(manifest_path.read_text())
-    if manifest.get("version") != 1 or manifest.get("assets") != EXPECTED_ASSETS or not manifest.get("files"):
+    declared = manifest.get("assets")
+    if (
+        manifest.get("version") != 1
+        or not isinstance(declared, dict)
+        or any(name not in EXPECTED_ASSETS or paths != EXPECTED_ASSETS[name] for name, paths in declared.items())
+        or not set(selected).issubset(declared)
+        or not manifest.get("files")
+    ):
         raise ValueError(f"Unsupported or incomplete reward asset manifest: {manifest_path}")
     listed = set()
     for entry in manifest["files"]:
         relative = Path(entry["path"])
-        if relative.is_absolute() or ".." in relative.parts or entry["path"] in listed:
+        if not relative.parts or relative.is_absolute() or ".." in relative.parts or entry["path"] in listed:
             raise ValueError(f"Invalid reward asset manifest path: {entry['path']!r}")
         listed.add(entry["path"])
+        if not relative.parts or relative.parts[0] not in selected:
+            continue
         path = root / relative
         if path.is_symlink() or root not in path.resolve().parents:
             raise ValueError(f"Reward asset is not an independent local file: {path}")
@@ -55,8 +71,13 @@ def resolve_reward_assets(root: str | Path | None = None, *, verify_hashes: bool
                     digest.update(chunk)
             if digest.hexdigest() != entry["sha256"]:
                 raise ValueError(f"SHA-256 mismatch for reward asset: {path}")
-    required = ["hpsv3/HPSv3.safetensors", "videoalign/model_config.json", "videoalign/checkpoint-11352/model.pth"]
-    for base in ("hpsv3/base_model", "videoalign/base_model"):
+    required = []
+    if "hpsv3" in selected:
+        required.append("hpsv3/HPSv3.safetensors")
+    if "videoalign" in selected:
+        required += ["videoalign/model_config.json", "videoalign/checkpoint-11352/model.pth"]
+    for name in selected:
+        base = EXPECTED_ASSETS[name]["base_model"]
         required += [f"{base}/{name}" for name in ("config.json", "preprocessor_config.json", "tokenizer_config.json", "tokenizer.json")]
         index = root / base / "model.safetensors.index.json"
         if index.is_file():
@@ -69,4 +90,4 @@ def resolve_reward_assets(root: str | Path | None = None, *, verify_hashes: bool
             required.append(f"{base}/model.safetensors")
     if missing := set(required) - listed:
         raise ValueError(f"Reward asset manifest omits required dependencies: {sorted(missing)}")
-    return {name: {key: root / relative for key, relative in paths.items()} for name, paths in EXPECTED_ASSETS.items()}
+    return {name: {key: root / relative for key, relative in EXPECTED_ASSETS[name].items()} for name in selected}

@@ -1,0 +1,30 @@
+# Four eight-GPU training nodes and two separate reward nodes (6 UR + 2 HPS each).
+inherits: base
+reward:
+  num_workers: 12
+  custom_reward_function:
+    reward_kwargs:
+      # 9B client concurrency: up to 96 samples across 12 workers.
+      max_concurrent_samples: 8
+      unifiedreward_endpoint:
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8792
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8793
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8794
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8795
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8796
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8797
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8792
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8793
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8794
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8795
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8796
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8797
+      hps_endpoint:
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8791
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8798
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8791
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8798
+trainer:
+  # Keep the output name stable for existing checkpoints and runs.
+  experiment_name: qwen_image21_4step_geo_pe_v2_48gpu_uredit9b
+  default_local_dir: lightx2v_rl/outputs/qwen_image21_4step_geo_pe_v2_48gpu_uredit9b

@@ -33,12 +33,9 @@
   "temporal_iterations": 1000,
   "learning_rate": 5e-05,
   "gradient_clip": 1.0,
-  "qdrop_input_mix": false,
-  "qdrop_student_prob": 0.5,
   "checkpointing": true,
   "seed": 42,
   "log_every": 25,
-  "keep_cache": false,
   "calibration_manifest": "lightx2v_train/data/opengpt4o_qwen_image21/train.jsonl",
   "calibration_counts": {
     "t2i": 512,

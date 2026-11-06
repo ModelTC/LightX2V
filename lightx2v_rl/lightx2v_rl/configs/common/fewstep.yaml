@@ -32,7 +32,7 @@ actor_rollout_ref:
       weight_decay: 0.0001
     fsdp_config:
       strategy: fsdp2
-      model_dtype: bfloat16
+      model_dtype: fp32
       param_offload: true
       optimizer_offload: true
     diffusion_loss:
@@ -109,7 +109,8 @@ trainer:
   nnodes: 1
   total_training_steps: 5000
   total_epochs: 10
-  save_freq: 20
+  save_freq: 100
+  max_actor_ckpt_to_keep: 3
   test_freq: 20
   val_before_train: false
   use_v1: true

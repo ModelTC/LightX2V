@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Expose shared models and the source dataset through portable local links.
 
-The source directories stay next to the repository. This only creates links;
+By default, the source directories sit next to the repository. This only creates links;
 it does not download models, copy data, or regenerate prepared data manifests.
 """
 
@@ -15,12 +15,23 @@ from uuid import uuid4
 DEFAULT_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
-def link_resources(repository_root: Path = DEFAULT_REPOSITORY_ROOT, *, check: bool = False) -> list[tuple[Path, str]]:
+def link_resources(
+    repository_root: Path = DEFAULT_REPOSITORY_ROOT,
+    *,
+    models_dir: Path | None = None,
+    dataset_dir: Path | None = None,
+    check: bool = False,
+) -> list[tuple[Path, str]]:
     repository_root = Path(repository_root).resolve()
     module_root = repository_root / "lightx2v_rl"
+
+    def source_path(value, default):
+        path = Path(value).expanduser() if value is not None else default
+        return (path if path.is_absolute() else repository_root / path).resolve()
+
     links = [
-        (module_root / "models", repository_root.parent / "models"),
-        (module_root / "data/OpenGPT-4o-Image", repository_root.parent / "OpenGPT-4o-Image"),
+        (module_root / "models", source_path(models_dir, repository_root.parent / "models")),
+        (module_root / "data/OpenGPT-4o-Image", source_path(dataset_dir, repository_root.parent / "OpenGPT-4o-Image")),
     ]
     updates = []
     result = []
@@ -61,10 +72,12 @@ def link_resources(repository_root: Path = DEFAULT_REPOSITORY_ROOT, *, check: bo
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--models-dir", type=Path, help="Shared model storage; relative paths start at the repository root")
+    parser.add_argument("--dataset-dir", type=Path, help="OpenGPT-4o-Image source directory; relative to the repository root")
     parser.add_argument("--check", action="store_true", help="Check the links without changing them")
     args = parser.parse_args(argv)
     try:
-        links = link_resources(check=args.check)
+        links = link_resources(models_dir=args.models_dir, dataset_dir=args.dataset_dir, check=args.check)
     except (OSError, ValueError, RuntimeError) as error:
         parser.exit(1, f"Resource links: {error}\n")
     for link, target in links:

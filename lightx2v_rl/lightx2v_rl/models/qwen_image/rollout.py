@@ -2,7 +2,7 @@
 
 The upstream pipeline owns prompt templates, RGBA handling, reference resizing,
 Qwen3-VL encoding, VAE normalization, latent layout and the checkpoint's sigma
-grid. Only one scheduler transition is replaced by the selected RL bridge.
+grid. Selected scheduler transitions are replaced by the configured RL bridge.
 No copy of the upstream pipeline is maintained here.
 """
 
@@ -29,24 +29,36 @@ CONDITION_KEYS = (
 class QwenImage21RolloutOutput:
     images: Any
     tensors: dict[str, torch.Tensor]
-    selected_step: int | None
+    selected_steps: tuple[int, ...]
+
+    @property
+    def selected_step(self) -> int | None:
+        """Compatibility accessor for single-transition callers."""
+        if len(self.selected_steps) > 1:
+            raise ValueError("A multi-transition rollout exposes selected_steps; use the plural accessor.")
+        return self.selected_steps[0] if self.selected_steps else None
 
     def training_tensors(self, *, cpu: bool = True) -> dict[str, torch.Tensor]:
-        if self.selected_step is None:
+        if not self.selected_steps:
             raise ValueError("Deterministic evaluation has no stochastic transition to train on.")
         return {key: value.detach().cpu() if cpu else value for key, value in self.tensors.items()}
 
 
-def validate_turbo_schedule(sigmas: Any) -> list[float]:
-    """Require the checkpoint's actual eight-step grid, never synthesize one."""
+def validate_checkpoint_schedule(sigmas: Any, *, num_steps: int) -> list[float]:
+    """Require the checkpoint's saved grid and the requested rollout length."""
     if sigmas is None:
-        raise ValueError("Qwen-Image-2.1-Turbo requires sample_sigmas in model_index.json.")
+        raise ValueError("Qwen-Image-2.1 few-step RL requires sample_sigmas in model_index.json.")
     values = torch.as_tensor(list(sigmas), dtype=torch.float64)
-    if values.shape != (8,) or not torch.isfinite(values).all():
-        raise ValueError("Expected the Turbo checkpoint's eight finite sampling sigmas.")
+    if values.shape != (num_steps,) or not torch.isfinite(values).all():
+        raise ValueError(f"Expected the checkpoint's {num_steps} finite sampling sigmas; do not truncate a different schedule.")
     if values[0] != 1 or values[-1] <= 0 or not torch.all(values[:-1] > values[1:]):
-        raise ValueError("Turbo sampling sigmas must descend from 1 to a positive final sampling sigma.")
+        raise ValueError("Qwen sampling sigmas must descend from 1 to a positive final sampling sigma.")
     return values.tolist()
+
+
+def validate_turbo_schedule(sigmas: Any) -> list[float]:
+    """Compatibility entry point for callers checking the eight-step Turbo model."""
+    return validate_checkpoint_schedule(sigmas, num_steps=8)
 
 
 def _clone_tensor(value: torch.Tensor) -> torch.Tensor:
@@ -119,11 +131,12 @@ class QwenImage21FewStepRollout:
     def __init__(self, pipeline: Any, config: FewStepConfig):
         self.pipeline = pipeline
         self.config = config
-        validate_turbo_schedule(pipeline.config.sample_sigmas)
-        if config.min_steps != 8 or config.max_steps != 8:
-            raise ValueError("Qwen-Image-2.1-Turbo keeps its checkpoint's eight-step schedule.")
+        if config.min_steps != config.max_steps:
+            raise ValueError("Qwen-Image-2.1 keeps a fixed checkpoint schedule.")
+        self.num_steps = config.max_steps
+        validate_checkpoint_schedule(getattr(pipeline.config, "sample_sigmas", None), num_steps=self.num_steps)
         if config.timestep_sampling_mode != "fixed_uniform" or config.timestep_shift != 1:
-            raise ValueError("Turbo uses its saved grid; random timestep sampling or an extra shift is unsupported.")
+            raise ValueError("Qwen uses its saved grid; random timestep sampling or an extra shift is unsupported.")
         if getattr(pipeline.scheduler.config, "stochastic_sampling", False):
             raise ValueError("The official deterministic Euler scheduler is required outside the RL transition.")
         self._active = False
@@ -182,7 +195,7 @@ class QwenImage21FewStepRollout:
         self._active = True
         try:
             if deterministic:
-                return QwenImage21RolloutOutput(self.pipeline(**call_kwargs).images, {}, None)
+                return QwenImage21RolloutOutput(self.pipeline(**call_kwargs).images, {}, ())
             return self._generate_training(call_kwargs, cycle_index, generator)
         finally:
             self._active = False
@@ -194,27 +207,35 @@ class QwenImage21FewStepRollout:
         had_step_override = "step" in vars(scheduler)
         previous_step_override = vars(scheduler).get("step")
         step_index = 0
-        selected_step = None
+        selected_steps = None
         tensors = {}
+        records = []
+        model_timesteps = []
 
         def capture_inputs(module, args, kwargs):
-            nonlocal selected_step
+            nonlocal selected_steps
             if args:
                 raise RuntimeError("The official QwenImage21 transformer call must use named arguments.")
             num_steps = len(scheduler.timesteps)
-            if num_steps != 8:
-                raise ValueError("The loaded Turbo scheduler did not produce eight denoising steps.")
-            if selected_step is None:
+            if num_steps != self.num_steps:
+                raise ValueError(f"The loaded Qwen scheduler did not produce {self.num_steps} denoising steps.")
+            if selected_steps is None:
+                count = self.config.num_train_timesteps
                 if self.config.cycle_train_idx:
-                    selected_step = cycle_index % (num_steps - 1)
+                    selected_steps = tuple(sorted((cycle_index + offset) % (num_steps - 1) for offset in range(count)))
                 else:
                     # The shared stream also keeps random step selection the
                     # same within a group; only the bridge stream differs.
                     rng = call_kwargs["generator"]
                     rng = rng[0] if isinstance(rng, list) else rng
                     rng_device = "cpu" if rng is None else rng.device
-                    selected_step = int(torch.randint(num_steps - 1, (), device=rng_device, generator=rng))
-            if step_index != selected_step:
+                    if count == 1:
+                        # Keep the old single-transition RNG behavior reproducible.
+                        selected_steps = (int(torch.randint(num_steps - 1, (), device=rng_device, generator=rng)),)
+                    else:
+                        indices = torch.randperm(num_steps - 1, device=rng_device, generator=rng)[:count]
+                        selected_steps = tuple(sorted(indices.tolist()))
+            if step_index not in selected_steps:
                 return
             if kwargs.get("kv_cache") is not None or kwargs.get("kv_cache_mode") is not None:
                 raise ValueError("Training rollout unexpectedly enabled prefix KV caching.")
@@ -235,16 +256,17 @@ class QwenImage21FewStepRollout:
             image_mask = kwargs["img_mask"]
             if image_mask.shape[0] == 1:
                 image_mask = image_mask.expand(batch_size, -1)
-            tensors.update(
-                prompt_embeds=_clone_tensor(embedding),
-                prompt_embeds_mask=_clone_tensor(embedding_mask),
-                qwen_image_latents=_clone_tensor(hidden[:, :-target_tokens]),
-                qwen_img_shapes=_clone_tensor(shapes),
-                qwen_img_mask=_clone_tensor(image_mask),
-                # Official code casts t to latent dtype BEFORE dividing by
-                # 1000. Reconstructing from float32 sigma would change policy.
-                qwen_model_timesteps=_clone_tensor(kwargs["timestep"]).reshape(batch_size, 1),
-            )
+            if not tensors:
+                tensors.update(
+                    prompt_embeds=_clone_tensor(embedding),
+                    prompt_embeds_mask=_clone_tensor(embedding_mask),
+                    qwen_image_latents=_clone_tensor(hidden[:, :-target_tokens]),
+                    qwen_img_shapes=_clone_tensor(shapes),
+                    qwen_img_mask=_clone_tensor(image_mask),
+                )
+            # Official code casts t to latent dtype BEFORE dividing by 1000.
+            # Keep the exact value separately for every selected transition.
+            model_timesteps.append(_clone_tensor(kwargs["timestep"]).reshape(batch_size))
 
         def bridge_scheduler_step(model_output, timestep, sample, *args, **kwargs):
             nonlocal step_index
@@ -255,7 +277,7 @@ class QwenImage21FewStepRollout:
             # Preserve scheduler state progression and every unselected Euler
             # update (including dtype handling) exactly as upstream implements it.
             official_output = original_step(model_output, timestep, sample, *args, **kwargs)
-            if index != selected_step:
+            if selected_steps is None or index not in selected_steps:
                 return official_output
             if not isinstance(official_output, tuple):
                 raise RuntimeError("The official QwenImage21 pipeline must request scheduler return_dict=False.")
@@ -279,13 +301,19 @@ class QwenImage21FewStepRollout:
                 next_sample=next_sample.float(),
             )
             batch_size = sample.shape[0]
-            tensors.update(
-                all_latents=torch.stack((sample.float(), next_sample.float()), dim=1),
-                all_timesteps=(sigma * 1000).expand(batch_size, 1).clone(),
-                all_next_timesteps=(next_sigma * 1000).expand(batch_size, 1).clone(),
-                qwen_sigmas=sigma.expand(batch_size, 1).clone(),
-                qwen_next_sigmas=next_sigma.expand(batch_size, 1).clone(),
-                rollout_log_probs=scored.log_prob[:, None],
+            # Selected steps can have deterministic Euler steps between them.
+            # Store explicit source/action pairs, as in upstream Flux DanceGRPO;
+            # the next selected source is not this transition's action.
+            records.append(
+                {
+                    "all_latents": _clone_tensor(sample.float()),
+                    "all_next_latents": _clone_tensor(next_sample.float()),
+                    "all_timesteps": (sigma * 1000).expand(batch_size).clone(),
+                    "all_next_timesteps": (next_sigma * 1000).expand(batch_size).clone(),
+                    "qwen_sigmas": sigma.expand(batch_size).clone(),
+                    "qwen_next_sigmas": next_sigma.expand(batch_size).clone(),
+                    "rollout_log_probs": scored.log_prob,
+                }
             )
             return (next_sample, *official_output[1:])
 
@@ -293,9 +321,11 @@ class QwenImage21FewStepRollout:
         scheduler.step = bridge_scheduler_step
         try:
             output = pipeline(**call_kwargs)
-            if step_index != 8 or selected_step is None or "all_latents" not in tensors:
-                raise RuntimeError("The rollout ended before completing its trainable Turbo trajectory.")
-            return QwenImage21RolloutOutput(output.images, tensors, selected_step)
+            if step_index != self.num_steps or selected_steps is None or len(records) != self.config.num_train_timesteps or len(model_timesteps) != len(records):
+                raise RuntimeError("The rollout ended before completing its trainable Qwen trajectory.")
+            tensors.update({key: torch.stack([record[key] for record in records], dim=1) for key in records[0]})
+            tensors["qwen_model_timesteps"] = torch.stack(model_timesteps, dim=1)
+            return QwenImage21RolloutOutput(output.images, tensors, selected_steps)
         finally:
             handle.remove()
             if had_step_override:

@@ -4,14 +4,16 @@ inherits:
 - cluster
 actor_rollout_ref:
   actor:
+    # 32 prompts x 8 candidates = 256 trajectories per optimizer update.
     ppo_mini_batch_size: 32
     ppo_epochs: 1
   rollout:
     agent:
       num_workers: 32
 data:
-  train_batch_size: 32
-  gen_batch_size: 32
+  # FewStepRL baseline: 16 trajectories per GPU per iteration, split into two updates.
+  train_batch_size: 64
+  gen_batch_size: 64
   val_batch_size: 32
 trainer:
   nnodes: 4

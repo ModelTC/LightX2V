@@ -26,7 +26,9 @@ def reference():
     try:
         from diffusers.models.transformers import transformer_qwenimage21
     except ImportError as exc:
-        raise ImportError("Reconstruction requires a Diffusers build containing models/transformers/transformer_qwenimage21.py, as used by this repository's Qwen-Image 2.1 training backend.") from exc
+        raise ImportError(
+            "Reconstruction requires the Qwen-Image 2.1 Diffusers reference operators. From the repository root, run: pip install -r tools/extract/requirements-reconstruction.txt"
+        ) from exc
     return transformer_qwenimage21
 
 
@@ -218,18 +220,16 @@ def prepare_record(raw, architecture, rope):
     }
 
 
-def trace_records(trace, step_indices, compute_dtype):
+def trace_records(trace, compute_dtype):
     """Convert existing native validation traces, including reference images."""
     if trace.get("format_version") != 1:
         raise ValueError("Expected native validation trace format_version=1")
     condition = trace["condition"]
     # Older traces from this collector used BF16 without recording the dtype.
     collection_dtype = torch_dtype(trace.get("collection_dtype", "bf16").lower())
-    indices = step_indices if step_indices is not None else list(range(len(trace["steps"])))
-    if not indices or max(indices) >= len(trace["steps"]):
-        raise ValueError("step_indices outside the captured trace")
-    for index in indices:
-        step = trace["steps"][index]
+    if not trace["steps"]:
+        raise ValueError("Captured trace contains no steps")
+    for step in trace["steps"]:
         latents = step["latents"]
         source = condition.get("source_latents")
         shapes = list(condition["source_img_shapes"]) + [(1, trace["height"] // 16, trace["width"] // 16)]
