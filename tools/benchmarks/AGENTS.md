@@ -84,7 +84,7 @@ Agent主动按改动影响选择验证，不等待开发者逐次提醒；测试
 - 使用独立CPU环境或已核实依赖相同的环境，保存源码/依赖身份、命令、日志及退出状态；需要结构化收据时导出JUnit到本次新产物目录。失败按原因修复后定向重验，不把跳过当通过。
 - CPU回归只证明数学和Python接线。native执行、数值或性能有实质变化时，另选必要的目标设备验证，遵守资源授权；不自动扩展GPU矩阵。
 
-先准备独立的Linux/Python 3.12环境，避免改动现有推理环境。以下命令从源码根目录执行：
+已验证的CPU回归参考环境为独立Linux/Python 3.12环境，下面给出可复现示例；其他环境先核依赖并保存验证结果，不据此认定所有平台已支持。避免改动现有推理环境，以下命令从源码根目录执行：
 
 ```bash
 python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cpu
@@ -114,8 +114,8 @@ FlashInfer MoE由adapter在计时外调当前token点，正式调用以False上�
 ## SP单算子
 
 - 使用独立SP suite及torchrun，进程数等于sp_size。L1完整路径用于排序；L2/L3只解释计算、布局与通信，不拿分量代替L1排名。层级TP/SP对比属于其他工具。
-- 用户未指定SP范围时可派生2/4/8；每个度数重新核head、sequence、aux/main及真实payload。完整配置包含algorithm、leaf、通信精度、fusion、pre/post、A2A和head流水；不能只给最优leaf。
-- 诊断可显式传`--candidate`，也可用`--measurement-report`读取measured配置和base seed；相同repeat编号才对应相同生成输入，性能诊断不需要质量批准。先核实际诊断支持边界：当前L2/L3构造仅覆盖bulk；head流水须沿实际分组异步时间线解释，不得静默换成bulk分量或相加预测重叠。此限制不影响head流水的L1/子调用算量。日常对话只给各SP度数最优延迟与完整报告入口，最终报告按既有模板列最快完整配置、并列情况和覆盖明细。
+- 用户未指定SP范围时，可在获准且可执行的资源范围内派生有意义的度数，例如2/4/8；每个度数重新核head、sequence、aux/main及真实payload。完整配置包含algorithm、leaf、通信精度、fusion、pre/post、A2A和head流水；不能只给最优leaf。
+- 诊断可显式传`--candidate`，也可用`--measurement-report`读取measured配置和base seed；相同repeat编号才对应相同生成输入，性能诊断不需要质量批准。先核实际诊断支持边界：当前L2/L3构造仅覆盖bulk；head流水须沿实际分组异步时间线解释，不得静默换成bulk分量或相加预测重叠。此限制不影响head流水的L1/子调用算量。最终报告按既有模板列最快完整配置、并列情况和覆盖明细。
 - Sparse只从原始token顺序的全局、RoPE后、pre-SP QKV派生。采集卡数不绑定目标SP；leaf局部输入不能再次切分通信。未知采集边界不能靠补标志冒充，需核原采集代码/拓扑或重新采集。
 - 对replicated conditioner前缀使用derive-replay-suites，conditioner长度来自模型语义，不根据整除性猜。不能删除捕获点之前会改变输入的层后仍称真实输入；缩层/提前停止的代表性写入来源。
 - Aux遵循生产语义：Ulysses的aux绕过main QKV A2A、output all-gather；Ring的aux绕过main K/V rotation。head流水须记录尾组；只在双方已验证语义上公平比较。Ring需要原生分块输出/LSE，不支持的leaf明确说明。

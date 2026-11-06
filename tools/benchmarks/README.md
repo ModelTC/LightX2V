@@ -657,6 +657,8 @@ if leader:
 
 API返回`(report, raw)`：`module_benchmark_v1`保留时延汇总、逐次最慢rank和逐rank显存/数值状态；raw保留各rank逐次样本。`compare(reports)`只接受相同公共身份，返回`module_comparison_v1`，保留参数、实际组和数值状态。任务脚本保存JSON/JSONL、命令、工厂源码与配置内容身份；这些工作不进入计时。中文展示使用[完整层报告模板](MODULE_REPORT_TEMPLATE.md)，API不自动写Markdown。非零差异、参考缺失及比较范围留原始记录；模型层误差不代替最终图像/视频质量。
 
+代码候选也须保留实际源码身份。同一候选源码树内保留原实现与新实现时，共同source应覆盖两者及实际接线，任务侧通过report.factory保存每个方案的真实选择/配置，再按相同公共身份使用compare。若比较两个源码快照，分别调用benchmark保存各自真实report/raw，在探索报告中核对固定输入、权重、精度、资源与测量条件后说明差异；当前TP/SP compare不聚合跨source报告。不要为通过比较复用旧hash或忽略整个source，其中可能还含权重/模型配置身份。
+
 单层的边界须沿生产调用确定。例如H3在整组blocks前/后做SP切分/最终gather，单层应预先切分，计时`infer_block`，仅检查时还原全局输出；每层都计入最终gather会夸大生产层成本。只用post-SP QKV不能重建完整层。reset和目标调用之间逐次协调普通Python错误，避免失败rank与下一次barrier错序；目标collective内部挂起仍依赖torchrun/group timeout及外部任务监督，不能声称安全恢复任意NCCL错误。
 
 需要解释时，复用`tools.profile.capture.Capture`独立采各rank的同一真实call：先干净时间线，再按疑点联合core统计；record_shapes默认关闭。元数据记录实际TP/SP组及本地/全局输入身份，读取实际本地MM/attention shape。通信带宽必须来自真实payload和关联通信活动的独立分母，未知留空；不以字节除整层延迟，也不把重叠分量相加。

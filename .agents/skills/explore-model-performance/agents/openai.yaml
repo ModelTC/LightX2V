@@ -1,0 +1,4 @@
+interface:
+  display_name: "模型性能优化探索"
+  short_description: "全面发现优化机会，优先瓶颈并按充分粒度验证，交付候选和条件知识"
+  default_prompt: "使用 $explore-model-performance 探索指定模型与平台的优化机会，先核版本与成本，优先瓶颈并选择充分验证粒度，连续完成有界探索及候选交付。"
