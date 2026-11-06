@@ -85,6 +85,9 @@ include-package-data = true
 include = ["lightx2v*"]
 exclude = ["lightx2v_kernel*"]
 
+[tool.setuptools.package-data]
+"lightx2v_platform.ops.attn.amd_rocm.hip_sage" = ["csrc/*.hip", "csrc/*.h"]
+
 [tool.ruff]
 exclude = [
     ".git",
