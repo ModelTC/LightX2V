@@ -41,7 +41,6 @@ Documentation
    Python API <getting_started/python_api.md>
    Model Structure <getting_started/model_structure.md>
    Benchmark <getting_started/benchmark.md>
-   TRELLIS2 BF16 <getting_started/trellis2.md>
 
 .. toctree::
    :maxdepth: 1
