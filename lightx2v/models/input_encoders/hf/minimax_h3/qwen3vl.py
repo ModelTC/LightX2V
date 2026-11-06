@@ -1066,6 +1066,26 @@ class MiniMaxH3Qwen3VLTextEncoder:
             block_offload=self.block_offload,
             tp_group=self.tp_group,
         )
+        if self.config.get("mps_resident_weights", False):
+            if AI_DEVICE != "mps" or self.cpu_offload or self.tensor_parallel or quantized or self.config.get("text_encoder_shared_cpu_weights", False):
+                raise ValueError("MPS resident H3 text loading requires unquantized single-device resident text weights")
+            from lightx2v.common.offload.mps_resident import load_resident_groups
+            from lightx2v.common.offload.safetensors_checkpoint import SafetensorsCheckpoint
+
+            mapping, dtype = self._preflight_native_checkpoint(text_encoder, text_encoder_path, text_config)
+            if dtype != "BF16":
+                raise ValueError("MPS resident H3 text loading requires BF16 checkpoint weights")
+            embedding = text_encoder.embed_tokens
+            embedding.base_attrs = [(embedding.weight_name, "weight", False)]
+            groups = [("text embedding", embedding)] + [(f"text layer {i}", layer) for i, layer in enumerate(text_encoder.layers)]
+            text_encoder._inv_freq = text_encoder._inv_freq.to("mps")
+            # Indexed releases also contain the unused decoder suffix and
+            # vision tower. Only the validated native 50-layer prefix is resident.
+            selected = {name: mapping[name] for name, _ in text_encoder.named_weight_modules()}
+            checkpoint = SafetensorsCheckpoint(text_encoder_path, weight_map=selected)
+            self.mps_resident_storage = load_resident_groups(checkpoint, groups)
+            self.text_encoder = text_encoder
+            return text_encoder
         if self.config.get("text_encoder_shared_cpu_weights", False):
             from lightx2v.models.input_encoders.hf.minimax_h3.shared_weights import load_shared_text_weights
 
@@ -1130,9 +1150,11 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     def load(self):
         self.load_tokenizer()
-        self.load_processor()
+        if self.config.get("text_encoder_load_vision_on_init", True):
+            self.load_processor()
         self.load_text_encoder()
-        self.load_vision_encoder()
+        if self.config.get("text_encoder_load_vision_on_init", True):
+            self.load_vision_encoder()
         return self
 
     def unload(self):

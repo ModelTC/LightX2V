@@ -10,8 +10,6 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.ops.mm.fp8_f16_accum import cutlass_scaled_fp8_mm_f16_accum
-from lightx2v.common.ops.mm.fused_gelu_linear import fused_gelu_int8_convrot_linear, fused_gelu_quant_fp8_f16_accum, fused_gelu_quant_fp8_sgl, prepare_convrot_gelu_fusion
-from lightx2v.common.ops.mm.fused_swiglu_linear import fused_swiglu_quant_fp8_f16_accum
 from lightx2v.common.ops.mm.mm_weight import MMWeightTP, MMWeightWfp8channelAfp8channelF16Accum, MMWeightWfp8channelAfp8channelF32Accum, MMWeightWfp8channelAfp8channeldynamicSgl, MMWeightWint8ConvRot
 from lightx2v.common.ops.mm.projection_group import ConvRotProjectionGroup, FP8F16AccumProjectionGroup, FP8ProjectionGroup, _backend_apis_available
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm
@@ -79,6 +77,8 @@ def apply_swiglu_linear(module, value, gate):
         or (tp is not None and tp.split_dim != "row")
     ):
         return module.apply(value * F.silu(gate))
+    from lightx2v.common.ops.mm.fused_swiglu_linear import fused_swiglu_quant_fp8_f16_accum
+
     quantized, input_scale = fused_swiglu_quant_fp8_f16_accum(value, gate, qmax)
     output = linear.fp8_gemm(quantized, weight, input_scale, scale, linear.infer_dtype, linear._get_actual_bias())
     if tp is not None and tp.reduce_output and tp.tp_size > 1 and tp.tp_group is not None:
@@ -136,13 +136,19 @@ class GeluLinear:
         ):
             return module.apply(F.gelu(hidden, approximate="tanh"))
         if self.fusion == "fp8-sgl":
+            from lightx2v.common.ops.mm.fused_gelu_linear import fused_gelu_quant_fp8_sgl
+
             quantized, scale = fused_gelu_quant_fp8_sgl(hidden)
             return sgl_fp8_scaled_mm(quantized, self.weight, scale, self.scale, self.infer_dtype, self.bias)
         if self.fusion == "fp8-f16-accum":
+            from lightx2v.common.ops.mm.fused_gelu_linear import fused_gelu_quant_fp8_f16_accum
+
             quantized, scale = fused_gelu_quant_fp8_f16_accum(hidden, self.activation_qmax)
             return cutlass_scaled_fp8_mm_f16_accum(quantized, self.weight, scale, self.scale, self.infer_dtype, self.bias)
         if hidden.shape[0] < 3 or module._convrot_groupsize != 256:
             return module.apply(F.gelu(hidden, approximate="tanh"))
+        from lightx2v.common.ops.mm.fused_gelu_linear import fused_gelu_int8_convrot_linear
+
         return fused_gelu_int8_convrot_linear(hidden, self.weight, self.scale, self.bias, self.infer_dtype, module._convrot_groupsize)
 
 
@@ -175,6 +181,8 @@ class OffloadedF16GeluLinear:
             or hidden.device != self.weight.device
         ):
             return module.apply(F.gelu(hidden, approximate="tanh"))
+        from lightx2v.common.ops.mm.fused_gelu_linear import fused_gelu_quant_fp8_f16_accum
+
         quantized, scale = fused_gelu_quant_fp8_f16_accum(hidden, self.activation_qmax)
         return cutlass_scaled_fp8_mm_f16_accum(quantized, self.weight, scale, self.scale, self.infer_dtype, self.bias)
 
@@ -233,6 +241,8 @@ def make_gelu_linear(module, *, enabled=True, offload_buffers=False):
         return GeluLinear(module)
     if type(module) is not MMWeightWint8ConvRot or module.infer_dtype != torch.bfloat16 or getattr(module, "_convrot_groupsize", None) != 256:
         return GeluLinear(module)
+    from lightx2v.common.ops.mm.fused_gelu_linear import prepare_convrot_gelu_fusion
+
     weight, scale, bias = getattr(module, "weight", None), getattr(module, "weight_scale", None), getattr(module, "bias", None)
     if (
         not isinstance(weight, torch.Tensor)

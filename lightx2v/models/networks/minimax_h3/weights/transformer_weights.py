@@ -3,6 +3,7 @@ import torch.distributed as dist
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.mm.mm_weight import unwrap_tp_weight
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
+from lightx2v.models.networks.minimax_h3.int8_metal import linear_quant_scheme
 from lightx2v.models.networks.minimax_h3.weights.fused_qkv import FusedQKVStorage
 from lightx2v.utils.envs import DTYPE_MAP
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, H3_PROJECTION_SUFFIXES
@@ -12,7 +13,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
     lora_prefix = "transformer_blocks"
-    quant_scheme = config.get("dit_quant_scheme", "Default")
+    quant_scheme = linear_quant_scheme(config, name)
     if config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
         tp_mm_type = config.get("tp_mm_type", "TensorParallel")

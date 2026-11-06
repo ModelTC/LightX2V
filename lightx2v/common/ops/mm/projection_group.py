@@ -10,7 +10,6 @@ import torch
 from lightx2v.common.ops.mm.fp8_f16_accum import cutlass_scaled_fp8_mm_f16_accum, fp8_f16_accum_mm_available
 from lightx2v.common.ops.mm.mm_weight import MMWeightWfp8channelAfp8channelF16Accum, MMWeightWfp8channelAfp8channeldynamicSgl, MMWeightWint8ConvRot
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_per_token_quant, sgl_fp8_scaled_mm, sgl_kernel
-from lightx2v.common.ops.mm.triton_kernels import fp8_quantize_range_triton
 
 try:
     import comfy_kitchen
@@ -342,6 +341,8 @@ class FP8F16AccumProjectionGroup(FP8ProjectionGroup):
         self.activation_qmax = modules[0].fp8_activation_qmax
 
     def quantize(self, x):
+        from lightx2v.common.ops.mm.triton_kernels import fp8_quantize_range_triton
+
         return fp8_quantize_range_triton(x, self.activation_qmax)
 
     def matmul(self, quantized, weight, input_scale, weight_scale, bias):
