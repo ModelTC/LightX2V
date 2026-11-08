@@ -4,7 +4,7 @@ set -euo pipefail
 lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/weights/vggt}"
 input_path="${INPUT_PATH:-${lightx2v_path}/example_images}"
-config_json="${CONFIG_JSON:-${lightx2v_path}/configs/vggt/vggt_recon_bf16.json}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/mlu/vggt_recon_bf16.json}"
 save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/vggt/reconstruction.npz}"
 
 if [[ "${1:-}" == "--help" ]]; then
