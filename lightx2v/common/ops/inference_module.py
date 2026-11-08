@@ -44,7 +44,18 @@ class InferenceAttention(nn.Module):
     def forward(self, q, k, v):
         batch, heads, tokens, dim = q.shape
         q, k, v = (x.to(v.dtype).transpose(1, 2).contiguous() for x in (q, k, v))
-        out = self.op.apply(q, k, v)
+        kwargs = {}
+        if batch > 1:
+            # FlashAttention's registry contract requires sequence boundaries
+            # for multiple samples, including equal-length dense batches.
+            kv_tokens = k.shape[1]
+            kwargs = {
+                "cu_seqlens_q": torch.arange(batch + 1, device=q.device, dtype=torch.int32) * tokens,
+                "cu_seqlens_kv": torch.arange(batch + 1, device=k.device, dtype=torch.int32) * kv_tokens,
+                "max_seqlen_q": tokens,
+                "max_seqlen_kv": kv_tokens,
+            }
+        out = self.op.apply(q, k, v, **kwargs)
         return out.reshape(batch, tokens, heads, dim).transpose(1, 2)
 
 

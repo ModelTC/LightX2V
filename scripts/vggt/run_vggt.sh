@@ -4,6 +4,7 @@ set -euo pipefail
 lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/weights/vggt}"
 input_path="${INPUT_PATH:-${lightx2v_path}/example_images}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/vggt/vggt_recon_bf16.json}"
 save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/vggt/reconstruction.npz}"
 
 if [[ "${1:-}" == "--help" ]]; then
@@ -23,7 +24,7 @@ python -m lightx2v.infer \
   --model_cls vggt \
   --task recon \
   --model_path "${model_path}" \
-  --config_json "${lightx2v_path}/configs/vggt/vggt_recon_bf16.json" \
+  --config_json "${config_json}" \
   --input_path "${input_path}" \
   --save_result_path "${save_result_path}" \
   --seed "${SEED:-42}" \
