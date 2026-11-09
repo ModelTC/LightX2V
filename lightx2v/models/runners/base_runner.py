@@ -12,6 +12,22 @@ from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
+def release_frozen_gc() -> int:
+    """Unfreeze the GC and run a full collection; returns the number of objects collected.
+
+    ``gc.collect()`` skips objects in the permanent generation, which is where
+    ``BaseRunner._maybe_freeze_gc()`` and ``DefaultRunner._collect_garbage()``
+    put long-lived objects. A runner holds itself in reference cycles (for
+    example ``self.run_input_encoder`` is one of its own bound methods), so a
+    runner dropped while frozen is not freed by a plain ``gc.collect()`` and
+    its ``__del__`` never runs. Call this after dropping or replacing a runner
+    in a long-lived process to release its models right away; otherwise they
+    are released at the next periodic full pass of ``_collect_garbage()``.
+    """
+    gc.unfreeze()
+    return gc.collect()
+
+
 class BaseRunner(ABC):
     """Abstract base class for all Runners
 
