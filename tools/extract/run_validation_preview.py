@@ -82,13 +82,11 @@ def build_requests(manifest, output_dir, per_task, indices, seed):
                 path = manifest.parent / path
             if not path.is_file():
                 raise FileNotFoundError(f"Sample {index}: missing reference {path}")
-            if "," in str(path):
-                raise ValueError(f"LightX2V's image_path separator cannot represent a comma in {path}")
             refs.append(str(path))
         request = {
             "task": "t2i" if group == "t2i" else "i2i",
             "prompt": record["prompt"],
-            "image_path": ",".join(refs) if refs else None,
+            "image_path": refs if refs else None,
             "size": [height, width],
             "seed": seed + index,
             "save_result_path": str(output_dir / f"{index:05d}_{group}.png"),

@@ -20,7 +20,7 @@ SPECS = {
             "i2i": TaskSpec(
                 dict(
                     IMAGE,
-                    image_path=Argument(help="Input image path."),
+                    image_path=Argument(type=list[str], help="Input image paths."),
                     resolution=Argument(type=int, gt=0, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
                 ),
                 outputs=("image",),

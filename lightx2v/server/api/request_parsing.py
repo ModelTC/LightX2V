@@ -10,25 +10,30 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.datastructures import UploadFile
 
+from lightx2v.utils.request_spec import is_list_type
+
 
 def _contains_json_value(annotation):
-    if get_origin(annotation) in (list, dict, tuple) or isinstance(annotation, type) and issubclass(annotation, BaseModel):
+    if annotation in (list, dict, tuple) or get_origin(annotation) in (list, dict, tuple) or isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return True
     return any(_contains_json_value(arg) for arg in get_args(annotation))
 
 
 @lru_cache
-def _json_form_fields(request_type, task=None):
+def _form_fields(request_type, task=None):
     if get_origin(request_type) is Annotated:
         request_type = get_args(request_type)[0]
     models = get_args(request_type) or (request_type,)
     return {
-        field.alias or name
+        field.alias or name: field
         for model in models
         if task is None or "task" not in model.model_fields or task in get_args(model.model_fields["task"].annotation)
         for name, field in model.model_fields.items()
-        if _contains_json_value(field.annotation)
     }
+
+
+def _json_form_fields(request_type, task=None):
+    return {name for name, field in _form_fields(request_type, task).items() if _contains_json_value(field.annotation)}
 
 
 def validate_request(request_type, request_data, *, strict=None):
@@ -58,18 +63,27 @@ def parse_form_request(request_cls, request_data):
 async def parse_upload_form(request_cls, form, file_service, uploads):
     """Save uploaded files into their request path fields, then validate the form."""
     data = dict(form)
+    fields = _form_fields(request_cls, data.get("task"))
     for name, field in uploads.items():
-        upload = data.pop(name, None)
-        if not upload:
-            continue
-        if not isinstance(upload, UploadFile):
+        data.pop(name, None)
+        submitted = form.getlist(name)
+        if any(upload and not isinstance(upload, UploadFile) for upload in submitted):
             raise HTTPException(status_code=422, detail=f"{name} must be a file")
-        if not upload.filename:
+        files = [upload for upload in submitted if isinstance(upload, UploadFile) and upload.filename]
+        if not files:
             continue
-        content = await upload.read()
+        if field not in fields:
+            raise HTTPException(status_code=422, detail=f"{name} is not supported for this task")
+        multiple = is_list_type(fields[field].annotation)
+        if not multiple and len(files) > 1:
+            raise HTTPException(status_code=422, detail=f"{name} accepts only one file")
+        paths = []
         target_dir = file_service.input_audio_dir if field == "audio_path" else None
-        path = await asyncio.to_thread(file_service.save_uploaded_file, content, upload.filename, target_dir)
-        data[field] = str(path)
+        for upload in files:
+            content = await upload.read()
+            path = await asyncio.to_thread(file_service.save_uploaded_file, content, upload.filename, target_dir)
+            paths.append(str(path))
+        data[field] = paths if multiple else paths[0]
     return parse_form_request(request_cls, data)
 
 
@@ -90,6 +104,13 @@ def form_request_openapi(request_cls, *, uploads=None, **extra_fields):
     # Form containers travel as JSON text; task variants keep their own fields.
     variants = schema.get("oneOf", [schema])
     for variant in variants:
+        task = variant["properties"].get("task", {}).get("const")
+        fields = _form_fields(request_cls, task)
+        upload_fields = {}
+        for name, field in (uploads or {}).items():
+            if field in variant["properties"]:
+                file_schema = {"type": "string", "format": "binary"}
+                upload_fields[name] = {"type": "array", "items": file_schema} if is_list_type(fields[field].annotation) else file_schema
         for name in _json_form_fields(request_cls):
             if name not in variant["properties"]:
                 continue
@@ -100,6 +121,6 @@ def form_request_openapi(request_cls, *, uploads=None, **extra_fields):
                 "description": (field_schema.get("description", "") + " Submit lists and objects as JSON text.").strip(),
             }
         variant["properties"].update(extra_fields)
-        variant["properties"].update({name: {"type": "string", "format": "binary"} for name, field in (uploads or {}).items() if field in variant["properties"]})
+        variant["properties"].update(upload_fields)
     schema.pop("discriminator", None)
     return {"requestBody": {"required": any(variant.get("required") for variant in variants), "content": {"multipart/form-data": {"schema": schema}}}}

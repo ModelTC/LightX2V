@@ -139,7 +139,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                 task="refa2v",
                 seed=0,
                 prompt="A person speaks naturally into a microphone.",
-                image_path=Image.new("RGB", (width, height)),
+                image_path=[Image.new("RGB", (width, height))],
                 size=[height, width],
                 num_frames=self.config["num_frames"],
             )
@@ -217,7 +217,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         return {"text_encoder_output": text}
 
     def _prepare_references(self):
-        paths = self._split_reference_paths(self.input_info.image_path)
+        paths = self.input_info.image_path
         if not 1 <= len(paths) <= MAX_REFERENCE_IMAGES:
             raise ValueError("Causal H3 requires 1..9 reference images")
         references = []

@@ -7,7 +7,7 @@ from loguru import logger
 
 from ...schema import ImageTaskRequest, TaskResponse
 from ...task_manager import TaskStatus, task_manager
-from ..deps import get_services, validate_url_async
+from ..deps import get_services, validate_image_urls
 from ..request_parsing import form_request_openapi, parse_upload_form
 
 
@@ -91,12 +91,7 @@ def create_router(request_type):
     @router.post("/", response_model=TaskResponse)
     async def create_image_task(message: request_type):
         try:
-            if hasattr(message, "image_path") and message.image_path and message.image_path.startswith("http"):
-                if not await validate_url_async(message.image_path):
-                    raise HTTPException(status_code=400, detail=f"Image URL is not accessible: {message.image_path}")
-            if hasattr(message, "image_mask_path") and message.image_mask_path and message.image_mask_path.startswith("http"):
-                if not await validate_url_async(message.image_mask_path):
-                    raise HTTPException(status_code=400, detail=f"Image mask URL is not accessible: {message.image_mask_path}")
+            await validate_image_urls(message)
 
             message._prefer_memory_result = False
             task_id = task_manager.create_task(message)
@@ -107,6 +102,8 @@ def create_router(request_type):
                 task_status="pending",
                 save_result_path=message.save_result_path,
             )
+        except HTTPException:
+            raise
         except RuntimeError as e:
             if getattr(e, "original_error_type", "") == "ValueError":
                 raise HTTPException(status_code=413, detail=str(e))
@@ -129,12 +126,7 @@ def create_router(request_type):
 
         task_id = None
         try:
-            if hasattr(message, "image_path") and message.image_path and message.image_path.startswith("http"):
-                if not await validate_url_async(message.image_path):
-                    raise HTTPException(status_code=400, detail=f"Image URL is not accessible: {message.image_path}")
-            if hasattr(message, "image_mask_path") and message.image_mask_path and message.image_mask_path.startswith("http"):
-                if not await validate_url_async(message.image_mask_path):
-                    raise HTTPException(status_code=400, detail=f"Image mask URL is not accessible: {message.image_mask_path}")
+            await validate_image_urls(message)
             if hasattr(message, "presigned_url") and message.presigned_url:
                 if not message.presigned_url.startswith(("http://", "https://")):
                     raise HTTPException(status_code=400, detail=f"Invalid presigned_url: {message.presigned_url}")

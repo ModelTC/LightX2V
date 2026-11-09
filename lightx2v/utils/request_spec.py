@@ -7,6 +7,10 @@ from typing import Literal, get_args, get_origin
 OutputType = Literal["image", "video", "text", "mesh", "depth", "reconstruction"]
 
 
+def is_list_type(annotation):
+    return annotation is list or get_origin(annotation) is list or any(arg is list or get_origin(arg) is list for arg in get_args(annotation))
+
+
 class Argument:
     def __init__(self, type=str, *, cli=True, server=True, gt=None, ge=None, lt=None, le=None, strict=None, **options):
         self.type = type
@@ -19,7 +23,7 @@ class Argument:
         options = dict(self.options)
         if self.type is bool:
             options.setdefault("action", argparse.BooleanOptionalAction)
-        elif get_origin(self.type) is list:
+        elif get_origin(self.type) is list and get_args(self.type)[0] in (str, int, float):
             options.update(type=get_args(self.type)[0], nargs="+")
         elif self.type in (str, int, float):
             options["type"] = self.type

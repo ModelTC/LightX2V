@@ -12,7 +12,7 @@
 resolution: Optional[int] = None
 ```
 
-Qwen-Image-2.1 的 `t2i`、`i2i` 分别使用 `T2IInputInfo`、`I2IInputInfo`，两者都有此字段。模型专属字段也可以放在专用子类中，由 `input_info_cls_by_task` 选择。
+Qwen-Image-2.1 的 `t2i`、`i2i` 分别使用 `T2IInputInfo`、`MultiImageI2IInputInfo`，两者都有此字段。模型专属字段也可以放在专用子类中，由 `input_info_cls_by_task` 选择。
 
 ## 2. 声明支持范围
 
@@ -32,7 +32,7 @@ SPECS = {
             "i2i": TaskSpec(
                 dict(
                     IMAGE,
-                    image_path=Argument(help="Input image path."),
+                    image_path=Argument(type=list[str], help="Input image paths."),
                     resolution=Argument(type=int, gt=0, help="Output resolution."),
                 ),
                 outputs=("image",),
@@ -84,7 +84,19 @@ runner 合并参数时保留 `0`、`False`、`""`、`[]`。它们是否有效由
 | 原生 HTTP JSON / 表单 | 服务启动时从同一份 Spec 生成请求模型，无需额外声明字段。 |
 | OpenAI 图片接口 | 推理字段从 Spec 生成；协议字段继续放在 OpenAI 适配层。 |
 
-`Argument.type` 表示完整的参数类型，例如 `int`、`list[int]`、`str | dict`。CLI 将列表转换为空格分隔的选项，将对象转换为 JSON 输入；HTTP 接收对应的 JSON 值。`gt`、`ge`、`lt`、`le` 定义两端共用的数值范围。
+多输入参数统一声明为 `list[T]`，例如 `Argument(type=list[str])`。CLI 使用空格分隔，JSON 请求与启动配置使用数组，Python 调用传列表；即使只有一项，也保留列表。runner 直接使用列表，不再拆分逗号字符串。
+
+| 参数 | CLI | JSON / Python |
+|---|---|---|
+| 多张参考图 | `--image_path a.png b.png` | `"image_path": ["a.png", "b.png"]` |
+| 条件强度 | `--image_strength 1.0 0.8` | `"image_strength": [1.0, 0.8]` |
+| 帧索引 | `--image_frame_indices 0 32` | `"image_frame_indices": [0, 32]` |
+
+只有支持多输入的字段声明为列表；单图字段仍使用 `str`。`layout_bboxes`、`action_prompts` 等嵌套结构在 CLI 中使用 JSON 文本，HTTP 直接传数组或对象。`layout_bboxes` 也可以传 JSON 文件路径。
+
+表单中的列表和对象使用 JSON 文本；文件上传对列表字段重复提交同名文件字段，OpenAPI 会显示为文件数组。上传后保持列表类型及顺序。
+
+`Argument.type` 表示完整的参数类型，例如 `int`、`list[int]`、`str | dict`。CLI 将简单列表转换为空格分隔的选项，将嵌套列表和对象转换为 JSON 输入；HTTP 接收对应的 JSON 值。`gt`、`ge`、`lt`、`le` 定义两端共用的数值范围。
 
 使用 `cli=False` 或 `server=False` 声明入口差异；Python 回调、内存张量等内部输入应同时关闭两者。NeoPP 的 CLI 初始化参数仍通过自己的 `get_cli_arguments()` 声明。
 

@@ -33,7 +33,7 @@ negative_prompt = " "
 size = [1024, 1024]
 
 # https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/cat.png
-image_path = "/path/to/cat.png"
+image_path = ["/path/to/cat.png"]
 
 save_result_path = f"{lightx2v_path}/save_results/{model_cls}_{task}_{ts}.png"
 

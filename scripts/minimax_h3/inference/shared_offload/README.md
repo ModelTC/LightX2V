@@ -93,7 +93,7 @@ For Ref2AV, replace the corresponding arguments in the launch command with the f
   --image_path "${lightx2v_path}/assets/inputs/imgs/img_0.jpg" \
 ```
 
-Ref2AV accepts comma-separated paths for multiple references of the same type. Audio references must accompany images or video. The script does not supply a reference image automatically. Adjust `--prompt` and `--save_result_path` when changing tasks.
+Ref2AV accepts space-separated paths for multiple references of the same type. Audio references must accompany images or video. The script does not supply a reference image automatically. Adjust `--prompt` and `--save_result_path` when changing tasks.
 
 ## Other options
 

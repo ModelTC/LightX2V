@@ -18,7 +18,7 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import count_conv3d, patchify
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
-from lightx2v.utils.input_info import I2VAInputInfo
+from lightx2v.utils.input_info import I2VAInputInfo, MultiViewI2VAInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
@@ -66,6 +66,8 @@ class _StreamingVAEEncoder:
 
 @RUNNER_REGISTER("lingbot_va")
 class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
+    input_info_cls_by_task = {"i2va": MultiViewI2VAInputInfo}
+
     def __init__(self, config):
         config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)
         config["enable_action_cfg"] = config.get("enable_action_cfg", config.get("action_sample_guide_scale", 1.0) > 1)
@@ -449,12 +451,12 @@ class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
         image_path = getattr(self.input_info, "image_path", "")
         if not image_path:
             raise ValueError("LingBot-VA requires image_path from input_info.")
-        image_path = os.path.expanduser(str(image_path))
+        image_path = [os.path.expanduser(path) for path in image_path]
         cam_keys = self.config["obs_cam_keys"]
-        if os.path.isdir(image_path):
-            image_files = [os.path.join(image_path, f"{key}.png") for key in cam_keys]
+        if len(image_path) == 1 and os.path.isdir(image_path[0]):
+            image_files = [os.path.join(image_path[0], f"{key}.png") for key in cam_keys]
         else:
-            image_files = [item.strip() for item in image_path.split(",") if item.strip()]
+            image_files = image_path
             if len(image_files) != len(cam_keys):
                 raise ValueError(f"Expected {len(cam_keys)} camera images, got {len(image_files)} from image_path={image_path}")
         obs = {}

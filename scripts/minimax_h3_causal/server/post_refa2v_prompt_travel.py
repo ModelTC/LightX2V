@@ -74,7 +74,7 @@ N/A"""
         "task": "refa2v",
         "prompt": prompt,
         # Encode client-local media so the server does not need these paths.
-        "image_path": file_to_base64("/path/to/meinv_01.png"),
+        "image_path": [file_to_base64("/path/to/meinv_01.png")],
         "audio_path": file_to_base64("/path/to/female_qingdao_62s.mp3"),
         "action_prompts": action_prompts,
         "seed": 42,

@@ -409,6 +409,7 @@ class LightX2VPipeline:
         Omitted/None negative prompts default to ""; explicit strings require model support.
         Explicit negative prompts are ignored with a warning when CFG is disabled.
         Size is (height, width) in pixels, subject to the model's sizing rules.
+        Multi-input fields use lists, including when supplying a single item.
         Seed is a non-negative integer; omitted/None defaults to 42.
         NeoPP continues LightLLM's session RNG when seed is omitted or None.
         An omitted output path is passed to the runner as None. Most runners skip saving;

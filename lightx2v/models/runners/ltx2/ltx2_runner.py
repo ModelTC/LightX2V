@@ -15,7 +15,7 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2Upsampler, LTX2VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import I2AVInputInfo, T2AVInputInfo, align_num_frames
+from lightx2v.utils.input_info import LTX2I2AVInputInfo, T2AVInputInfo, align_num_frames
 from lightx2v.utils.ltx2_media_io import decode_audio_from_file, load_image_conditioning, load_video_conditioning
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
 from lightx2v.utils.profiler import *
@@ -24,10 +24,6 @@ from lightx2v.utils.utils import mux_audio_from_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
-
-
-def _ltx2_parse_image_paths(image_path: str) -> list[str]:
-    return [p.strip() for p in image_path.split(",") if p.strip()]
 
 
 def _ltx2_audio_to_stereo(audio: Audio) -> Audio:
@@ -46,14 +42,10 @@ def _ltx2_audio_to_stereo(audio: Audio) -> Audio:
 
 
 def _ltx2_normalize_image_strengths(image_strength, n: int) -> list[float]:
-    if image_strength is None:
-        return [1.0] * n
-    if not isinstance(image_strength, list):
-        return [float(image_strength)] * n
     if len(image_strength) == 1:
         return [float(image_strength[0])] * n
     if len(image_strength) != n:
-        raise ValueError(f"i2av image_strength: expected 1 or {n} values (scalar or list), got length {len(image_strength)}")
+        raise ValueError(f"i2av image_strength: expected 1 or {n} values, got length {len(image_strength)}")
     return [float(x) for x in image_strength]
 
 
@@ -88,6 +80,8 @@ def _ltx2_resize_video_denoise_mask_for_stage2(mask: torch.Tensor, target_h: int
 
 @RUNNER_REGISTER("ltx2")
 class LTX2Runner(DefaultRunner):
+    input_info_cls_by_task = {"i2av": LTX2I2AVInputInfo}
+
     _WARMUP_RESOLUTIONS = ((480, 480), (512, 768))
     _UPSAMPLER_WARMUP_RESOLUTIONS = ((480, 480), (1024, 1536))
     transformer_model_class = LTX2Model
@@ -194,7 +188,7 @@ class LTX2Runner(DefaultRunner):
         logger.info("[Warmup] Warmup completed")
 
     def _prepare_warmup_inputs(self, task, height, width, text_encoder_output=None):
-        input_cls = T2AVInputInfo if task == "t2av" else I2AVInputInfo
+        input_cls = T2AVInputInfo if task == "t2av" else LTX2I2AVInputInfo
         self.input_info = input_cls(
             task=task,
             seed=0,
@@ -421,28 +415,22 @@ class LTX2Runner(DefaultRunner):
             "image_encoder_output": None,
         }
 
-    def _normalize_i2av_input_fields(self) -> None:
+    def _validate_i2av_input_fields(self) -> None:
         info = self.input_info
-        if isinstance(info.image_strength, str):
-            p = [float(x.strip()) for x in info.image_strength.split(",") if x.strip()]
-            info.image_strength = 1.0 if not p else (p[0] if len(p) == 1 else p)
-        if isinstance(info.image_frame_indices, str):
-            p = [int(x.strip()) for x in info.image_frame_indices.split(",") if x.strip()]
-            info.image_frame_indices = p or None
-        n = len(_ltx2_parse_image_paths(info.image_path or ""))
+        n = len(info.image_path)
         if n == 0:
             return
         st, fi = info.image_strength, info.image_frame_indices
-        if isinstance(st, list) and len(st) not in (1, n):
+        if len(st) not in (1, n):
             raise ValueError(f"i2av image_strength: need 1 or {n} values, got {len(st)}")
-        if fi is not None and len(fi) != n:
+        if fi and len(fi) != n:
             raise ValueError(f"i2av image_frame_indices: need {n} indices, got {len(fi)}")
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2av(self):
         self._clear_ltx2_reference_audio_state()
         self._clear_ltx2_reference_video_state()
-        self._normalize_i2av_input_fields()
+        self._validate_i2av_input_fields()
         self.prepare_stage1_size()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         text_encoder_output = self.run_text_encoder(self.input_info)
@@ -539,7 +527,7 @@ class LTX2Runner(DefaultRunner):
         LTX-2.3 IC-LoRA video-to-audio-video.
         """
         self._clear_ltx2_reference_audio_state()
-        self._normalize_i2av_input_fields()
+        self._validate_i2av_input_fields()
         self._override_size_from_ref_video()
         if not self.input_info.size:
             self.input_info.size = self.config["size"]
@@ -613,7 +601,7 @@ class LTX2Runner(DefaultRunner):
         text_encoder_output = self.run_text_encoder(self.input_info)
 
         # Optional image conditioning (character image / keyframes).
-        if _ltx2_parse_image_paths(self.input_info.image_path or ""):
+        if self.input_info.image_path:
             self.video_denoise_mask, self.initial_video_latent = self.run_vae_encoder()
         else:
             self.video_denoise_mask = None
@@ -638,7 +626,7 @@ class LTX2Runner(DefaultRunner):
     def _run_input_encoder_local_ltx2_s2v(self):
         """Reference audio (frozen in latent) + optional reference images; mux original waveform when saving."""
         self._clear_ltx2_reference_video_state()
-        self._normalize_i2av_input_fields()
+        self._validate_i2av_input_fields()
         self.prepare_stage1_size()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
 
@@ -699,7 +687,7 @@ class LTX2Runner(DefaultRunner):
 
         text_encoder_output = self.run_text_encoder(self.input_info)
 
-        if len(_ltx2_parse_image_paths(self.input_info.image_path or "")) == 0:
+        if len(self.input_info.image_path) == 0:
             self.video_denoise_mask = None
             self.initial_video_latent = None
             self._i2av_guiding_keyframe_meta = None
@@ -752,7 +740,7 @@ class LTX2Runner(DefaultRunner):
             device=AI_DEVICE,
         )
 
-        image_paths = _ltx2_parse_image_paths(self.input_info.image_path)
+        image_paths = self.input_info.image_path
         n = len(image_paths)
         if n == 0:
             if self.input_info.task == "i2av":

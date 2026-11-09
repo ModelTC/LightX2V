@@ -20,6 +20,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
+from lightx2v.utils.input_info import MultiImageI2IInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -29,6 +30,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
+    input_info_cls_by_task = {"i2i": MultiImageI2IInputInfo}
     _WARMUP_RESOLUTIONS = ((1024, 1024), (768, 960))
 
     def __init__(self, config):
@@ -130,7 +132,7 @@ class QwenImage21Runner(DefaultRunner):
                         request = {"task": task, "prompt": "warmup", "seed": 0, "size": [height, width]}
                         if task == "i2i":
                             Image.new("RGBA", (width, height), color=(0, 0, 0, 255)).save(image_path)
-                            request["image_path"] = str(image_path)
+                            request["image_path"] = [str(image_path)]
                         # Internal warmup covers both paths even for a single-task runner.
                         self.input_info = self.create_input_info(request)
                         self.inputs = self.run_input_encoder()

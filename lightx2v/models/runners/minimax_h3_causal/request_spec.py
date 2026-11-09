@@ -7,7 +7,7 @@ SPECS = {
             "refa2v": TaskSpec(
                 dict(
                     COMMON | VIDEO_OUTPUT,
-                    image_path=Argument(help="Input image path."),
+                    image_path=Argument(type=list[str], help="Reference image paths."),
                     audio_path=Argument(help="Driving audio path."),
                     prompt=Argument(help="Text prompt."),
                     action_prompts=Argument(type=dict | list, help="MiniMax-H3 causal timed actions as a JSON object or list"),

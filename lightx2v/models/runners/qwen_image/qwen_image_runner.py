@@ -17,7 +17,7 @@ from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import I2IInputInfo, T2IInputInfo
+from lightx2v.utils.input_info import MultiImageI2IInputInfo, T2IInputInfo
 from lightx2v.utils.profiler import *
 
 # from lightx2v.utils.torch_trace_profiler import TorchTraceProfileContext
@@ -57,6 +57,7 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 
 @RUNNER_REGISTER("qwen_image")
 class QwenImageRunner(DisaggMixin, DefaultRunner):
+    input_info_cls_by_task = {"i2i": MultiImageI2IInputInfo}
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     _WARMUP_RESOLUTIONS = ((480, 480), (832, 1248))
@@ -134,7 +135,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
     def _prepare_warmup_inputs(self, height, width, t2i_text_cache=None):
         task = self.config["task"]
-        input_info_cls = T2IInputInfo if task == "t2i" else I2IInputInfo
+        input_info_cls = T2IInputInfo if task == "t2i" else MultiImageI2IInputInfo
         self.input_info = input_info_cls(
             seed=0,
             prompt="warmup",
@@ -339,7 +340,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
         self.input_info.original_size.clear()
-        image_paths_list = self.input_info.image_path.split(",")
+        image_paths_list = self.input_info.image_path
         images_list = []
         for image_path in image_paths_list:
             _, image = self.read_image_input(image_path)
@@ -545,7 +546,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             "negative_prompt": self.input_info.negative_prompt,
         }
         if self.config["task"] == "i2i":
-            reuse_key["image_path"] = self.input_info.image_path.split(",")
+            reuse_key["image_path"] = self.input_info.image_path
         return reuse_key
 
     def reuse_input_info(self):

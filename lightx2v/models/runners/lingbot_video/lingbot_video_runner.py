@@ -242,7 +242,7 @@ class LingBotVideoRunner(DefaultRunner):
     def _run_input_encoder_local_i2v(self, image=None):
         height, width = self.get_target_size()
         if image is None:
-            image_path = self.input_info.image_path.split(",")[0]
+            image_path = self.input_info.image_path
             if not image_path:
                 raise ValueError("LingBot-Video i2v requires --image_path.")
             image = Image.open(image_path).convert("RGB")

@@ -36,7 +36,7 @@ FAST_WAM = RequestSpec(
         "i2va": TaskSpec(
             dict(
                 COMMON,
-                image_path=Argument(help="Input image path."),
+                image_path=Argument(type=list[str], help="Camera image paths, or a directory containing the camera inputs."),
                 prompt=Argument(help="Text prompt."),
                 save_action_path=Argument(help="Output action file path."),
                 state_path=Argument(help="Input robot state file."),
@@ -107,7 +107,7 @@ WAN_VACE = RequestSpec(
             dict(
                 VIDEO,
                 mask_path=Argument(help="Input mask path."),
-                ref_image_paths=Argument(type=str | list[str], help="Reference image paths, separated by commas."),
+                ref_image_paths=Argument(type=list[str], help="Reference image paths."),
                 video_path=Argument(help="Input video path."),
             ),
             outputs=("video",),
@@ -121,7 +121,7 @@ SPECS = {
             "i2va": TaskSpec(
                 dict(
                     COMMON | PROMPT,
-                    image_path=Argument(help="Input image path."),
+                    image_path=Argument(type=list[str], help="Camera image paths, or a directory containing the camera inputs."),
                     save_action_path=Argument(help="Output action file path."),
                     state_path=Argument(help="Input robot state file."),
                 ),
@@ -135,7 +135,7 @@ SPECS = {
             "s2v": TaskSpec(
                 dict(
                     COMMON | PROMPT,
-                    audio_path=Argument(help="Driving audio path."),
+                    audio_path=Argument(type=list[str], help="Driving audio paths, or a directory containing audio and speaker metadata."),
                     image_path=Argument(help="Input image path."),
                     num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
                     video_duration=Argument(type=float, help="Requested output duration in seconds for audio-driven video generation."),
@@ -150,7 +150,7 @@ SPECS = {
             "i2va": TaskSpec(
                 dict(
                     COMMON | PROMPT,
-                    image_path=Argument(help="Input image path."),
+                    image_path=Argument(type=list[str], help="Camera image paths, or a directory containing the camera inputs."),
                 ),
                 outputs=("video",),
             )
@@ -185,7 +185,7 @@ SPECS = {
                     COMMON | PROMPT,
                     face_video_path=Argument(help="Face input path."),
                     pose_video_path=Argument(help="Pose driving video path."),
-                    ref_image_paths=Argument(type=str | list[str], help="Reference image paths, separated by commas."),
+                    ref_image_paths=Argument(type=list[str], help="Reference image paths."),
                     num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
                 ),
                 outputs=("video",),
@@ -200,7 +200,7 @@ SPECS = {
                     image_path=Argument(help="Input image path."),
                     ref_video_prompt=Argument(help="Reference/driving-video prompt for Wan-Animate-2."),
                     pose_video_path=Argument(help="Pose driving video path."),
-                    ref_image_paths=Argument(type=str | list[str], help="Reference image paths, separated by commas."),
+                    ref_image_paths=Argument(type=list[str], help="Reference image paths."),
                     video_path=Argument(help="Input video path."),
                 ),
                 outputs=("video",),

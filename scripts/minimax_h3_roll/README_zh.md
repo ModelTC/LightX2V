@@ -122,7 +122,7 @@ bash scripts/minimax_h3_roll/run_minimax_h3_ref2av_resample.sh
 
 默认输出到 `save_results/minimax_h3_roll_ref2av/draft.mp4` 和 `resample.mp4`。两个阶段都传 `--model-variant ref2av --task ref2av`，使用相同的 `--image_path`、提示词、seed `42` 和帧数 `124`。草片为 `--size 480 864 --draft_steps 3`；重生成为 `--size 768 1344 --resample_start_step 1`，执行原 8 步时间表的后 7 步。删除草片脚本中的 `--draft_steps 3` 可生成完整 8 步草片；15 秒例子将两个脚本的 `--num_frames` 都改为 `362`。每个脚本分别加载模型。
 
-替换参考输入时，两个脚本都应同步修改 `--image_path` 和提示词；也可添加 `--video_path` / `--audio_path`，同类多个文件用逗号分隔，音频参考需同时提供图片或视频参考。重生成时保留原始参考输入，将选中的带音轨草片传给 `--resample_source_video`；`--video_path` 表示参考视频，不能替代该参数。
+替换参考输入时，两个脚本都应同步修改 `--image_path` 和提示词；也可添加 `--video_path` / `--audio_path`，同类多个文件以空格分隔传入，音频参考需同时提供图片或视频参考。重生成时保留原始参考输入，将选中的带音轨草片传给 `--resample_source_video`；`--video_path` 表示参考视频，不能替代该参数。
 
 ## 参数与固定流程
 

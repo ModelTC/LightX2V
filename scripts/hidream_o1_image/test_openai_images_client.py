@@ -174,7 +174,7 @@ def _extra_body_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
 
 
 def _image_paths_from_args(args: argparse.Namespace) -> list[Path]:
-    image_paths = [Path(path.strip()) for path in args.image.split(",") if path.strip()]
+    image_paths = [Path(path) for path in args.image]
     if not image_paths:
         raise ValueError("--image is required for edit mode")
 
@@ -329,7 +329,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None, help="Optional generation seed")
     parser.add_argument("--size", type=str, default="1024x1024", help="Image size, e.g. 1024x1024")
     parser.add_argument("--response_format", choices=["url", "b64_json"], default="b64_json", help="OpenAI response format")
-    parser.add_argument("--image", type=str, default="", help="Input image path for edit mode. Use comma-separated paths for multiple images.")
+    parser.add_argument("--image", nargs="+", default=[], help="Input image paths for edit mode.")
     parser.add_argument("--mask", type=str, default="", help="Optional mask image path for edit mode")
     parser.add_argument("--i2i_denoise_strength", type=float, default=None, help="Optional LightX2V edit denoising strength in [0.0, 1.0]")
     parser.add_argument("--output_dir", type=str, default="outputs/openai_images_test", help="Directory to save outputs")

@@ -11,7 +11,7 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 from lightx2v.models.runners.registry import get_model_spec
-from lightx2v.utils.request_spec import create_request_model
+from lightx2v.utils.request_spec import create_request_model, is_list_type
 
 from ..schema import ImageTaskRequest, Usage, hide_request_defaults
 from ..services.file_service import FileService
@@ -239,8 +239,9 @@ def create_router(config, request_type):
             result_png, usage = await _run_sync_image_task(request, message)
             return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
 
-    if "i2i" in tasks:
+    if "i2i" in tasks and "image_path" in spec.get_fields(config, "i2i"):
         edit_request = request_model("i2i", OpenAIImageEditRequest)
+        multiple_images = is_list_type(spec.get_arguments(config, "i2i")["image_path"].type)
 
         @router.post(
             "/edits",
@@ -272,13 +273,15 @@ def create_router(config, request_type):
 
             if not image_uploads:
                 raise HTTPException(status_code=400, detail="At least one image is required")
+            if not multiple_images and len(image_uploads) > 1:
+                raise HTTPException(status_code=400, detail="This model accepts only one input image")
             if mask is not None and len(image_uploads) != 1:
                 raise HTTPException(status_code=400, detail="mask is only supported when exactly one image is uploaded")
 
             image_paths = []
             for image_upload in image_uploads:
                 image_paths.append(await _save_upload_file(image_upload, services.file_service))
-            message.image_path = ",".join(image_paths)
+            message.image_path = image_paths if multiple_images else image_paths[0]
 
             if mask is not None:
                 message.image_mask_path = await _save_upload_file(mask, services.file_service)

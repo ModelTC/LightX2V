@@ -9,7 +9,7 @@ SPECS = {
                 dict(
                     IMAGE,
                     i2i_denoise_strength=Argument(type=float, help="Image edit strength in [0, 1]; 0 preserves the input and 1 redraws it."),
-                    image_path=Argument(help="Input image path."),
+                    image_path=Argument(type=list[str], help="Input image paths."),
                 ),
                 outputs=("image",),
             ),

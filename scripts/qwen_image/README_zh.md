@@ -42,7 +42,7 @@ bash scripts/qwen_image/qwen_image_t2i_2512.sh
 图像编辑支持多个输入，按顺序对应提示词中的 Image 1、Image 2 等：
 
 ```bash
---image_path "/path/to/1.png,/path/to/2.png,/path/to/3.png"
+--image_path "/path/to/1.png" "/path/to/2.png" "/path/to/3.png"
 ```
 
 ## 服务与请求

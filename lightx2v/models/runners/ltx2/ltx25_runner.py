@@ -9,7 +9,7 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.ltx2.duration_head import LTX25DurationPredictor
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX25TextEncoder
 from lightx2v.models.networks.ltx2.ltx25_model import LTX25Model
-from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner, _ltx2_parse_image_paths, _ltx2_resolve_pixel_frame_indices
+from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner, _ltx2_resolve_pixel_frame_indices
 from lightx2v.models.schedulers.ltx2.ltx25_scheduler import LTX25Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX25AudioVAE, LTX25VideoVAE
 from lightx2v.utils.envs import GET_DTYPE
@@ -164,11 +164,11 @@ class LTX25Runner(LTX2Runner):
     def _run_input_encoder_local_i2av(self):
         self._clear_ltx2_reference_audio_state()
         self._clear_ltx2_reference_video_state()
-        self._normalize_i2av_input_fields()
+        self._validate_i2av_input_fields()
         self.prepare_stage1_size()
         text_encoder_output = self.run_text_encoder(self.input_info)
         num_frames = self._resolve_num_frames(text_encoder_output)
-        image_paths = _ltx2_parse_image_paths(self.input_info.image_path or "")
+        image_paths = self.input_info.image_path
         frame_indices = _ltx2_resolve_pixel_frame_indices(self.input_info.image_frame_indices, len(image_paths), num_frames)
         guiding_keyframes = sum(frame_idx != 0 for frame_idx in frame_indices)
         self._validate_sequence_parallel_shape(num_frames, guiding_keyframes)

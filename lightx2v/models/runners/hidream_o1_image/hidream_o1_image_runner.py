@@ -158,7 +158,7 @@ class HidreamO1ImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run HiDream i2i input encoder")
     def _run_input_encoder_local_i2i(self):
-        ref_image_paths = [path.strip() for path in self.input_info.image_path.split(",") if path.strip()]
+        ref_image_paths = self.input_info.image_path
         if not ref_image_paths:
             raise ValueError("HiDream i2i requires --image_path with one or more reference image paths.")
 

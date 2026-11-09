@@ -125,3 +125,5 @@ torchrun --standalone --nproc_per_node=4 your_script.py
 | WorldPlay | [scripts/worldplay](https://github.com/ModelTC/LightX2V/blob/main/scripts/worldplay/README.md) |
 
 机器人推理和评测见 [RealtimeWAM](https://github.com/ModelTC/LightX2V/blob/main/scripts/realtimewam/README.md)。模型启动说明维护在 `scripts/<model>/README*`，通用 API 和部署说明维护在正式文档中。
+
+多输入字段传入列表，即使只有一个输入，例如 `image_path=["a.png"]`。仅当模型支持多图时使用 `image_path=["a.png", "b.png"]`；单图模型继续传字符串。条件强度与帧索引同样使用列表，例如 `image_strength=[1.0, 0.8]`、`image_frame_indices=[0, 32]`。

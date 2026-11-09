@@ -52,7 +52,7 @@ pipe.create_generator(
 # Generation parameters
 seed = 42
 prompt = "Replace the polka-dot shirt with a light blue shirt."
-image_path = "/path/to/img.png"  # or "/path/to/img_0.jpg,/path/to/img_1.jpg"
+image_path = ["/path/to/img.png"]  # or ["/path/to/img_0.jpg", "/path/to/img_1.jpg"]
 save_result_path = "/path/to/save_results/output.png"
 
 # Generate video
@@ -70,7 +70,7 @@ pipe.switch_lora(lora_path="/path/to/lora_2.safetensors", strength=1.0)
 # Generation parameters
 seed = 42
 prompt = "Replace the polka-dot shirt with a light blue shirt."
-image_path = "/path/to/img.png"  # or "/path/to/img_0.jpg,/path/to/img_1.jpg"
+image_path = ["/path/to/img.png"]  # or ["/path/to/img_0.jpg", "/path/to/img_1.jpg"]
 save_result_path = "/path/to/save_results/output.png"
 
 # Generate video

@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional
 from PIL import Image
 from loguru import logger
 
+from lightx2v.utils.request_spec import is_list_type
+
 from ...media import is_base64_audio, is_base64_image, save_base64_audio, save_base64_image
 from ...schema import TaskResponse
 from ..file_service import FileService
@@ -22,7 +24,9 @@ class BaseGenerationService(ABC):
     def get_output_extension(self) -> str:
         pass
 
-    async def _resolve_image_path(self, image_path: str) -> str:
+    async def _resolve_image_path(self, image_path: str | list[str]) -> str | list[str]:
+        if isinstance(image_path, list):
+            return [await self._resolve_image_path(path) for path in image_path]
         if not image_path:
             return ""
 
@@ -41,6 +45,11 @@ class BaseGenerationService(ABC):
         if not image_path or not image_mask_path:
             return
 
+        multiple = isinstance(image_path, list)
+        if multiple:
+            if len(image_path) != 1:
+                raise ValueError("Mask mode requires exactly one input image")
+            image_path = image_path[0]
         image_file = Path(image_path)
         mask_file = Path(image_mask_path)
         if not image_file.exists() or not image_file.is_file():
@@ -66,46 +75,24 @@ class BaseGenerationService(ABC):
                 mask_rgb = mask_rgb.resize(target_size, Image.NEAREST)
             mask_rgb.save(mask_dst)
 
-        task_data["image_path"] = str(image_pair_dir)
+        task_data["image_path"] = [str(image_pair_dir)] if multiple else str(image_pair_dir)
         task_data["image_mask_path"] = ""
 
-    async def _process_audio_path(self, audio_path: str, task_data: Dict[str, Any]) -> None:
-        if not audio_path:
-            return
-
+    async def _resolve_audio_path(self, audio_path: str | list[str]) -> str | list[str]:
+        if isinstance(audio_path, list):
+            return [await self._resolve_audio_path(path) for path in audio_path]
         if audio_path.startswith("http"):
-            downloaded_path = await self.file_service.download_audio(audio_path)
-            task_data["audio_path"] = str(downloaded_path)
-        elif is_base64_audio(audio_path):
-            saved_path = save_base64_audio(audio_path, str(self.file_service.input_audio_dir))
-            task_data["audio_path"] = str(saved_path)
-        else:
-            task_data["audio_path"] = audio_path
+            return str(await self.file_service.download_audio(audio_path))
+        if is_base64_audio(audio_path):
+            return str(save_base64_audio(audio_path, str(self.file_service.input_audio_dir)))
+        return audio_path
 
-    async def _process_talk_objects(self, talk_objects: list, task_data: Dict[str, Any]) -> None:
-        if not talk_objects:
-            return
-
-        task_data["talk_objects"] = [{} for _ in range(len(talk_objects))]
-
-        for index, talk_object in enumerate(talk_objects):
-            if talk_object.audio.startswith("http"):
-                audio_path = await self.file_service.download_audio(talk_object.audio)
-                task_data["talk_objects"][index]["audio"] = str(audio_path)
-            elif is_base64_audio(talk_object.audio):
-                audio_path = save_base64_audio(talk_object.audio, str(self.file_service.input_audio_dir))
-                task_data["talk_objects"][index]["audio"] = str(audio_path)
-            else:
-                task_data["talk_objects"][index]["audio"] = talk_object.audio
-
-            task_data["talk_objects"][index]["mask"] = await self._resolve_image_path(talk_object.mask)
-
+    async def _process_talk_objects(self, talk_objects: list, task_data: Dict[str, Any], *, multiple=False) -> None:
+        task_data["talk_objects"] = [{"audio": await self._resolve_audio_path(obj.audio), "mask": await self._resolve_image_path(obj.mask)} for obj in talk_objects]
         temp_path = self.file_service.cache_dir / uuid.uuid4().hex[:8]
         temp_path.mkdir(parents=True, exist_ok=True)
-        task_data["audio_path"] = str(temp_path)
-
-        config_path = temp_path / "config.json"
-        with open(config_path, "w") as f:
+        task_data["audio_path"] = [str(temp_path)] if multiple else str(temp_path)
+        with open(temp_path / "config.json", "w") as f:
             json.dump({"talk_objects": task_data["talk_objects"]}, f)
 
     def prepare_task_data(self, message):
@@ -139,10 +126,7 @@ class BaseGenerationService(ABC):
 
             reference_images = getattr(message, "ref_image_paths", None)
             if reference_images:
-                if isinstance(reference_images, str):
-                    reference_images = reference_images.split(",")
-                reference_image_paths = [await self._resolve_image_path(image) for image in reference_images]
-                task_data["ref_image_paths"] = ",".join(reference_image_paths)
+                task_data["ref_image_paths"] = await self._resolve_image_path(reference_images)
                 logger.info(f"Task {message.task_id} reference image paths: {task_data['ref_image_paths']}")
 
             if hasattr(message, "image_mask_path") and message.image_mask_path:
@@ -152,11 +136,12 @@ class BaseGenerationService(ABC):
                 logger.info(f"Task {message.task_id} packed image+mask dir: {task_data.get('image_path')}")
 
             if hasattr(message, "audio_path") and message.audio_path:
-                await self._process_audio_path(message.audio_path, task_data)
+                task_data["audio_path"] = await self._resolve_audio_path(message.audio_path)
                 logger.info(f"Task {message.task_id} audio path: {task_data.get('audio_path')}")
 
             if hasattr(message, "talk_objects") and message.talk_objects:
-                await self._process_talk_objects(message.talk_objects, task_data)
+                audio_field = type(message).model_fields.get("audio_path")
+                await self._process_talk_objects(message.talk_objects, task_data, multiple=audio_field is not None and is_list_type(audio_field.annotation))
 
             task_data.pop("image_mask_path", None)
             task_data.pop("talk_objects", None)

@@ -375,7 +375,10 @@ class WanAnimate2Runner(WanRunner):
         return reader.get_batch(indices).asnumpy()
 
     def prepare_input(self):
-        reference_path = (self.input_info.image_path or self.input_info.ref_image_paths or "").split(",")[0].strip()
+        references = self.input_info.ref_image_paths
+        if len(references) > 1:
+            raise ValueError("Wan-Animate-2 accepts exactly one reference image.")
+        reference_path = self.input_info.image_path or (references[0] if references else "")
         video_path = (self.input_info.video_path or self.input_info.pose_video_path or "").strip()
         if not reference_path:
             raise ValueError("Wan-Animate-2 requires --image_path (or --ref_image_paths).")

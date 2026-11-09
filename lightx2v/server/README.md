@@ -357,7 +357,7 @@ Native image and video request schemas accept the inference fields supported by 
 
 Only `seko_talk` tasks `s2v` and `rs2v` support `resize_mode` and `fixed_area` requests for image and mask resizing. Omitted or null values use the startup config. A `size` request for these tasks requires the configured or requested `resize_mode` to be `fixed_shape`.
 
-The `/form` endpoints accept the same named request fields as the JSON endpoints, alongside their existing file uploads. Encode structured values such as `size`, `image_frame_indices`, `image_strength` lists, `ref_image_paths`, `talk_objects`, and WorldPlay `pose` objects as JSON strings. For example, use `size='[480,832]'`. Text fields, including prompts and `layout_bboxes`, retain their submitted text.
+The `/form` endpoints accept the same named request fields as the JSON endpoints, alongside their existing file uploads. Encode structured values such as `size`, `image_frame_indices`, `image_strength` lists, `ref_image_paths`, `talk_objects`, and WorldPlay `pose` objects as JSON strings. For example, use `size='[480,832]'`. Prompts retain their submitted text. `layout_bboxes` accepts JSON arrays/objects or a JSON file path.
 
 Video, pose-video, mask-video, action, and state paths refer to files or directories on the server. Image and audio inputs retain their existing URL, Base64, and local-path handling. Python-only inputs such as callbacks and in-memory policy tensors are not exposed as JSON fields; synchronous image APIs select tensor output internally.
 
@@ -465,3 +465,7 @@ The server uses `loguru` for structured logging. Logs include:
 ## License
 
 See the main project LICENSE file for licensing information.
+
+## Multi-input parameters
+
+List-valued fields use JSON arrays, including for one input: `"image_path": ["a.png", "b.png"]`. Single-image fields still use strings. Check the running service's OpenAPI schema for each model/task's types. Forms submit lists and objects as JSON text. For list-valued upload fields, repeat the same file field (for example `image_file`); uploaded paths stay ordered lists. The OpenAI image edit adapter uses the selected model's single-image or multi-image definition.

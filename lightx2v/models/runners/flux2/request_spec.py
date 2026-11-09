@@ -27,7 +27,7 @@ SPECS = {
             "i2i": TaskSpec(
                 dict(
                     COMMON,
-                    image_path=Argument(help="Input image path."),
+                    image_path=Argument(type=list[str], help="Input image paths or a directory containing reference images."),
                     prompt=Argument(help="Text prompt."),
                 ),
                 outputs=("image",),

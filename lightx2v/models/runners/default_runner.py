@@ -377,7 +377,7 @@ class DefaultRunner(BaseRunner):
         src_video, src_mask, src_ref_images = self.prepare_source(
             [self.input_info.video_path or None],
             [self.input_info.mask_path or None],
-            [ref_images.split(",") if ref_images else None],
+            [ref_images or None],
             (target_width, target_height),
         )
         self.src_ref_images = src_ref_images

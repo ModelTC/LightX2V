@@ -3,7 +3,7 @@ from loguru import logger
 
 from ...schema import TaskResponse
 from ...task_manager import task_manager
-from ..deps import get_services, validate_url_async
+from ..deps import get_services, validate_image_urls
 from ..request_parsing import form_request_openapi, parse_upload_form
 
 
@@ -15,9 +15,7 @@ def create_router(request_type):
     @router.post("/video/", response_model=TaskResponse)
     async def create_video_task(message: request_type):
         try:
-            if hasattr(message, "image_path") and message.image_path and message.image_path.startswith("http"):
-                if not await validate_url_async(message.image_path):
-                    raise HTTPException(status_code=400, detail=f"Image URL is not accessible: {message.image_path}")
+            await validate_image_urls(message)
 
             task_id = task_manager.create_task(message)
             message.task_id = task_id
@@ -27,6 +25,8 @@ def create_router(request_type):
                 task_status="pending",
                 save_result_path=message.save_result_path,
             )
+        except HTTPException:
+            raise
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e))
         except Exception as e:

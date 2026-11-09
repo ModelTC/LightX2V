@@ -574,7 +574,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if "size" in self.get_supported_request_fields(self.input_info.task):
             reuse_key["size"] = list(self.get_target_size())
         if self.input_info.task == "i2v":
-            reuse_key["image_path"] = self.input_info.image_path.split(",")
+            reuse_key["image_path"] = self.input_info.image_path
         return reuse_key
 
     def reuse_input_info(self):

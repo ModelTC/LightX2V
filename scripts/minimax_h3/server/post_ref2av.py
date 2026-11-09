@@ -17,10 +17,10 @@ if __name__ == "__main__":
     message = {
         "task": "ref2av",
         "prompt": "Generate an audio-video scene following the references.",
-        "image_path": image_to_base64("assets/inputs/imgs/img_0.jpg"),
+        "image_path": [image_to_base64("assets/inputs/imgs/img_0.jpg")],
         # Video/audio paths below are local to the server. Audio needs a visual reference.
-        # "video_path": "/path/to/reference.mp4",
-        # "audio_path": "/path/to/reference.wav",
+        # "video_path": ["/path/to/reference.mp4"],
+        # "audio_path": ["/path/to/reference.wav"],
         "seed": 42,
         "num_frames": 124,
         "size": [544, 960],

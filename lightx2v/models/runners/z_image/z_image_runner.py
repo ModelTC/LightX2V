@@ -14,6 +14,7 @@ from lightx2v.models.schedulers.z_image.scheduler import ZImageScheduler
 from lightx2v.models.video_encoders.hf.z_image.vae import AutoencoderKLZImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import MultiImageI2IInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process
@@ -42,6 +43,7 @@ def build_z_image_model_with_lora(z_image_module, config, model_kwargs, lora_con
 
 @RUNNER_REGISTER("z_image")
 class ZImageRunner(DefaultRunner):
+    input_info_cls_by_task = {"i2i": MultiImageI2IInputInfo}
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
 
@@ -141,7 +143,7 @@ class ZImageRunner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
         self.input_info.original_size.clear()
-        image_paths_list = [image_path.strip() for image_path in self.input_info.image_path.split(",") if image_path.strip()]
+        image_paths_list = self.input_info.image_path
         if len(image_paths_list) != 1:
             raise ValueError(f"z-image i2i currently supports exactly one input image, got {len(image_paths_list)}.")
 

@@ -1157,13 +1157,6 @@ class HunyuanImage3Runner(DefaultRunner):
         prepared_inputs.update(self._attach_tokenizer_cond_masks(cond_inputs, output, latent_device) or {})
         return prepared_inputs
 
-    def _split_image_paths(self, image_path):
-        if not image_path:
-            raise ValueError("HunyuanImage3 ti2i requires --image_path with one or more comma-separated images.")
-        if isinstance(image_path, (list, tuple)):
-            return [str(path) for path in image_path if str(path)]
-        return [path.strip() for path in str(image_path).split(",") if path.strip()]
-
     def _build_batch_cond_images(self, image_paths, align_image_size):
         return [
             self.hunyuan_image_processor.build_cond_images(
@@ -1518,7 +1511,9 @@ class HunyuanImage3Runner(DefaultRunner):
         self._ensure_pipeline_modules()
         prompt = getattr(input_info, "prompt", "")
         seed = input_info.seed
-        image_paths = self._split_image_paths(input_info.image_path)
+        image_paths = input_info.image_path
+        if not image_paths:
+            raise ValueError("HunyuanImage3 ti2i requires one or more --image_path values.")
         align_image_size = bool(input_info.align_image_size)
 
         batch_cond_images = self._build_batch_cond_images(image_paths, align_image_size)

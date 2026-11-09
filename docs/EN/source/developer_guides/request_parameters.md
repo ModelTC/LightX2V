@@ -12,7 +12,7 @@ Check the runner's `input_info_cls_by_task` first. If it has no entry for the ta
 resolution: Optional[int] = None
 ```
 
-Qwen-Image-2.1 uses `T2IInputInfo` for `t2i` and `I2IInputInfo` for `i2i`; both declare this field. A model-specific field can also live in a dedicated subclass selected through `input_info_cls_by_task`.
+Qwen-Image-2.1 uses `T2IInputInfo` for `t2i` and `MultiImageI2IInputInfo` for `i2i`; both declare this field. A model-specific field can also live in a dedicated subclass selected through `input_info_cls_by_task`.
 
 ## 2. Declare support
 
@@ -32,7 +32,7 @@ SPECS = {
             "i2i": TaskSpec(
                 dict(
                     IMAGE,
-                    image_path=Argument(help="Input image path."),
+                    image_path=Argument(type=list[str], help="Input image paths."),
                     resolution=Argument(type=int, gt=0, help="Output resolution."),
                 ),
                 outputs=("image",),
@@ -46,7 +46,19 @@ SPECS = {
 
 The CLI and HTTP API generate their input models, validation and documentation from this Spec. `BaseRunner` uses the same Spec to validate tasks and request fields. Define model-specific arguments locally without changing a global argument table or repeating declarations in the runner or server schema. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
 
-`Argument.type` describes the complete value, such as `int`, `list[int]`, or `str | dict`. The CLI turns lists into space-separated options and structured values into JSON inputs; HTTP accepts the corresponding JSON values. Use `gt`, `ge`, `lt` and `le` for shared numeric bounds. Set `cli=False` or `server=False` for inputs specific to an entry point; callbacks and in-memory tensors should disable both.
+Declare multi-input fields as `list[T]`, for example `Argument(type=list[str])`. CLI values are space-separated; JSON requests and startup configs use arrays; Python calls use lists. A single item still uses a list. Runners consume lists directly without splitting comma-separated strings.
+
+| Parameter | CLI | JSON / Python |
+|---|---|---|
+| Reference images | `--image_path a.png b.png` | `"image_path": ["a.png", "b.png"]` |
+| Conditioning strengths | `--image_strength 1.0 0.8` | `"image_strength": [1.0, 0.8]` |
+| Frame indices | `--image_frame_indices 0 32` | `"image_frame_indices": [0, 32]` |
+
+Only multi-input fields use lists; single-image fields remain `str`. Nested structures such as `layout_bboxes` and `action_prompts` use JSON text in the CLI and native arrays or objects over HTTP. `layout_bboxes` also accepts a JSON file path.
+
+Form lists and objects use JSON text. Upload multiple files by repeating the same upload field; OpenAPI shows an array of files for list-valued inputs. Saved paths retain their list type and order.
+
+`Argument.type` describes the complete value, such as `int`, `list[int]`, or `str | dict`. The CLI turns flat lists into space-separated options and nested lists or objects into JSON inputs; HTTP accepts the corresponding JSON values. Use `gt`, `ge`, `lt` and `le` for shared numeric bounds. Set `cli=False` or `server=False` for inputs specific to an entry point; callbacks and in-memory tensors should disable both.
 
 Declare only public tasks in the Spec. For example, HunyuanImage3 generates text internally to enhance image prompts; its public tasks are `t2i`, `ti2i` and `i2i`.
 

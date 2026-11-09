@@ -170,7 +170,7 @@ class MiniMaxH3Runner(DefaultRunner):
         )
         image = Image.new("RGB", (width, height), color=0)
         if task in ("i2av", "fl2av", "ref2av"):
-            self.input_info.image_path = image
+            self.input_info.image_path = [image] if task == "ref2av" else image
         if task in ("l2av", "fl2av"):
             self.input_info.last_frame_path = image.copy() if task == "fl2av" else image
 
@@ -372,32 +372,10 @@ class MiniMaxH3Runner(DefaultRunner):
             values, anchors = [self.input_info.image_path, self.input_info.last_frame_path], ("first", "last")
         else:
             return [], ()
-        if any(isinstance(value, str) and "," in value for value in values):
-            raise ValueError(f"MiniMax-H3 {task} accepts one file per frame argument, not comma-separated lists")
         images = [self._load_rgb_image(value) for value in values]
         self._resolve_request_geometry(images[0])
         images = [prepare_keyframe_image(image, self.request_height, self.request_width, stretch=index == 0) for index, image in enumerate(images)]
         return images, anchors
-
-    @staticmethod
-    def _split_reference_paths(value):
-        """Normalize the shared media CLI fields into individual references."""
-        if value is None:
-            return []
-        if isinstance(value, str):
-            return [path.strip() for path in value.split(",") if path.strip()]
-        if isinstance(value, (list, tuple)):
-            paths = []
-            for path in value:
-                if path is None:
-                    continue
-                if isinstance(path, str):
-                    path = path.strip()
-                    if not path:
-                        continue
-                paths.append(path)
-            return paths
-        return [value]
 
     def _prepare_references(self):
         entries = []
@@ -406,7 +384,7 @@ class MiniMaxH3Runner(DefaultRunner):
             ("video", self.input_info.video_path),
             ("audio", self.input_info.audio_path),
         ):
-            entries.extend({kind: path} for path in self._split_reference_paths(value))
+            entries.extend({kind: path} for path in value)
         if not entries:
             raise ValueError("MiniMax-H3 ref2av requires --image_path, --video_path, or --audio_path")
         if len(entries) > MAX_REFERENCES:

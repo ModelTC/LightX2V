@@ -146,25 +146,24 @@ class Flux2Runner(DefaultRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.text_encoders[0]
 
-        image_path = self.input_info.image_path
         from PIL import Image
 
-        if isinstance(image_path, str):
-            if os.path.isdir(image_path):
-                image_files = sorted([os.path.join(image_path, f) for f in os.listdir(image_path) if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"))])
-                input_image = [Image.open(img_file).convert("RGB") for img_file in image_files]
+        input_image = []
+        for path in self.input_info.image_path:
+            if isinstance(path, Image.Image):
+                input_image.append(path)
+            elif os.path.isdir(path):
+                image_files = sorted(os.path.join(path, name) for name in os.listdir(path) if name.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff")))
+                input_image.extend(Image.open(file).convert("RGB") for file in image_files)
             else:
-                input_image = Image.open(image_path).convert("RGB")
-        else:
-            input_image = image_path
+                input_image.append(Image.open(path).convert("RGB"))
+        if not input_image:
+            raise ValueError("Flux2 i2i requires one or more input images.")
 
         vae_scale_factor = self.config["vae_scale_factor"]
         from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
         image_processor = Flux2ImageProcessor(vae_scale_factor=vae_scale_factor)
-
-        if not isinstance(input_image, list):
-            input_image = [input_image]
 
         condition_images = []
         max_image_area = self.config.get("max_image_area", 1024 * 1024)
