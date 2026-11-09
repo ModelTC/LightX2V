@@ -95,6 +95,10 @@ class DmdCheckpointManager:
             metadata["dmd_model_mode"] = getattr(self, "dmd_model_mode", "eval")
         if residual_head is not None:
             metadata["residual_head_config"] = residual_head.checkpoint_metadata()
+        gan_head = getattr(self, "dmd2_gan_head", None)
+        metadata["dmd2_gan_enabled"] = gan_head is not None
+        if gan_head is not None:
+            metadata["dmd2_gan_config"] = self.dmd2_gan_metadata
         sampler = getattr(self.dataloader_train, "sampler", None)
         if getattr(sampler, "is_minimax_h3_ref_cost_sampler", False) or getattr(sampler, "is_minimax_h3_task_cycle_sampler", False):
             metadata["minimax_h3_route_sampling"] = sampler.checkpoint_metadata(
@@ -134,6 +138,7 @@ class DmdCheckpointManager:
     def _validate_checkpoint_state(self, state, state_path, resume_ckpt_path):
         self._validate_checkpoint_metadata(state, state_path, resume_ckpt_path)
         self._validate_residual_head_state(state, state_path)
+        self._validate_dmd2_gan_state(state, state_path)
         self._validate_student_ema_state(state, state_path)
         expected = {self.checkpoint_version_key: self.checkpoint_version}
         for role, runtime in self._active_role_runtimes():
@@ -206,12 +211,32 @@ class DmdCheckpointManager:
 
     def _extra_residual_head_training_state(self):
         residual_head = getattr(self, "residual_head", None)
-        return {} if residual_head is None else {"residual_head_state": residual_head.state_dict()}
+        state = {} if residual_head is None else {"residual_head_state": residual_head.state_dict()}
+        if getattr(self, "dmd2_gan_head", None) is not None:
+            state.update(
+                dmd2_gan_head=self.dmd2_gan_head.state_dict(),
+                dmd2_gan_optimizer=self.dmd2_gan_optimizer.state_dict(),
+                dmd2_gan_lr_scheduler=self.dmd2_gan_lr_scheduler.state_dict(),
+            )
+        return state
 
     def _load_residual_head_training_state(self, state):
         residual_head = getattr(self, "residual_head", None)
         if residual_head is not None:
             residual_head.load_state_dict(state["residual_head_state"])
+        if getattr(self, "dmd2_gan_head", None) is not None:
+            self.dmd2_gan_head.load_state_dict(state["dmd2_gan_head"])
+            self.dmd2_gan_optimizer.load_state_dict(state["dmd2_gan_optimizer"])
+            self.dmd2_gan_lr_scheduler.load_state_dict(state["dmd2_gan_lr_scheduler"])
+
+    def _validate_dmd2_gan_state(self, state, state_path):
+        enabled = getattr(self, "dmd2_gan_head", None) is not None
+        if state.get("dmd2_gan_enabled", False) != enabled:
+            raise RuntimeError(f"Checkpoint dmd2_gan_enabled differs from the current run: {state_path}; use weights-only warm-start in a fresh output directory.")
+        if enabled:
+            self._require_checkpoint_keys(state, ["dmd2_gan_config", "dmd2_gan_head", "dmd2_gan_optimizer", "dmd2_gan_lr_scheduler"], state_path)
+            if state["dmd2_gan_config"] != self.dmd2_gan_metadata:
+                raise RuntimeError(f"Checkpoint dmd2_gan_config differs from the current run: {state_path}; use a fresh output directory for a changed GAN recipe.")
 
     @staticmethod
     def _validate_h3_checkpoint_metadata(state, current, state_path, allow_transition):

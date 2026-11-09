@@ -131,7 +131,7 @@ def critic_objective(student, fake, trajectory, sigmas, noise):
     return student.regression_loss(velocity, target)
 
 
-def student_objective(student, fake, teacher, trajectory, index, ratio):
+def student_objective(student, fake, teacher, trajectory, index, ratio, *, return_clean=False):
     """One grad-enabled student call, with a query on its predicted trajectory."""
     start = trajectory.states[index]
     if torch.is_tensor(start):
@@ -150,7 +150,8 @@ def student_objective(student, fake, teacher, trajectory, index, ratio):
             fake_clean = student.x0_from_velocity(query, fake_prediction, query_sigmas)
             teacher_clean = student.x0_from_velocity(query, teacher_prediction, query_sigmas)
         loss = student.dmd_loss(clean, fake_clean, teacher_clean)
-        return loss, {**student.dmd_metrics(), "student_exit_index": float(index), "score_sigma_video": query_sigmas[0].detach()}
+        metrics = {**student.dmd_metrics(), "student_exit_index": float(index), "score_sigma_video": query_sigmas[0].detach()}
+        return (loss, metrics, clean) if return_clean else (loss, metrics)
     sigmas = torch.stack((trajectory.video_grid[index], trajectory.audio_grid[index]))
     student.set_training(False)
     velocity = student.predict_velocity(start, sigmas, positive_condition(trajectory.condition))
@@ -170,9 +171,10 @@ def student_objective(student, fake, teacher, trajectory, index, ratio):
         fake_clean = student.x0_from_velocity(query, fake_velocity, query_sigmas)
         teacher_clean = student.x0_from_velocity(query, teacher_prediction, query_sigmas)
     loss = student.dmd_loss(clean, fake_clean, teacher_clean)
-    return loss, {
+    metrics = {
         **student.dmd_metrics(),
         "student_exit_index": float(index),
         "score_sigma_video": query_sigmas[0].detach(),
         "score_sigma_audio": query_sigmas[1].detach(),
     }
+    return (loss, metrics, clean) if return_clean else (loss, metrics)

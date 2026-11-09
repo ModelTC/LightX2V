@@ -147,6 +147,8 @@ class DmdTrainer(_DmdRuntime):
                 expected_preset=preset_metadata,
                 model_name=getattr(self, "model_config", {}).get("name"),
             )
+        if resume_ckpt_path is None and getattr(self, "fake_config", {}).get("checkpoint_path"):
+            self._load_fake_checkpoint(self.fake_config["checkpoint_path"], strict=self.fake_config.get("checkpoint_strict", True))
         self._setup_fake_real_resources()
         if self.residual_head_config.enabled:
             if hasattr(self.fake_model, "residual_head_feature_dims"):

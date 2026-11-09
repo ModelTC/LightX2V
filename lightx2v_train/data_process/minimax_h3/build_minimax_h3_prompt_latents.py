@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import gc
 import hashlib
 import json
@@ -21,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image, ImageOps
+from prompt_records import read_json_rows
 
 TEXT_ENCODER_LAYER = 50
 CACHE_SCHEMA_VERSION = 3
@@ -61,7 +63,7 @@ TASK_ANCHORS = {
 ANCHOR_CODES = {"first": 0, "last": 1}
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "prompts",
@@ -81,13 +83,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-frames", type=int, default=124)
     parser.add_argument("--max-samples", type=int)
     parser.add_argument("--start-index", type=int, default=0)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--num-shards", type=int, default=1)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
         "--replace-manifest",
         action="store_true",
         help="Write metadata.jsonl from only this invocation instead of merging chunks.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if bool(args.prompts) == bool(args.metadata):
         parser.error("Pass exactly one positional input path or --metadata.")
     args.input_path = Path(args.prompts or args.metadata)
@@ -95,6 +99,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--start-index must be non-negative.")
     if args.max_samples is not None and args.max_samples <= 0:
         parser.error("--max-samples must be positive.")
+    if args.num_shards <= 0 or not 0 <= args.shard_index < args.num_shards:
+        parser.error("Require --num-shards > 0 and 0 <= --shard-index < --num-shards.")
+    if args.num_shards > 1 and (args.start_index or args.max_samples is not None or args.overwrite or args.replace_manifest):
+        parser.error("Sharded encoding requires the complete input and does not permit overwrite/reset flags.")
     if args.height % 32 or args.width % 32:
         parser.error("MiniMax-H3 height and width must be divisible by 32.")
     if args.num_frames % 17 != 5:
@@ -114,27 +122,8 @@ def normalize_task(value: str | None) -> str:
 
 
 def _read_json_rows(path: Path) -> list[dict]:
-    if path.suffix.lower() == ".jsonl":
-        rows = []
-        with path.open("r", encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError as error:
-                    raise ValueError(f"Invalid JSON at {path}:{line_number}: {error}") from error
-                if not isinstance(row, dict):
-                    raise TypeError(f"Expected a JSON object at {path}:{line_number}.")
-                rows.append(row)
-        return rows
-    if path.suffix.lower() == ".json":
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            payload = payload.get("data", payload.get("records", [payload]))
-        if not isinstance(payload, list) or not all(isinstance(row, dict) for row in payload):
-            raise TypeError(f"{path} must contain a JSON object/list of objects.")
-        return payload
+    if path.suffix.lower() in {".json", ".jsonl"}:
+        return read_json_rows(path)
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
 
@@ -348,6 +337,14 @@ def initialize_cache_namespace(
     *,
     allow_replace: bool,
 ) -> None:
+    # Independent global-rank encoders may enter simultaneously. Serialize
+    # namespace creation so two different prompt/model recipes cannot race.
+    with (output_dir / ".preprocess.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _initialize_cache_namespace_unlocked(output_dir, descriptor, allow_replace=allow_replace)
+
+
+def _initialize_cache_namespace_unlocked(output_dir: Path, descriptor: dict, *, allow_replace: bool) -> None:
     identity_path = output_dir / "preprocess_config.json"
     fingerprint = descriptor_fingerprint(descriptor)
     expected = {
@@ -669,8 +666,8 @@ def condition_path_for_sample(condition_dir: Path, output_index: int) -> tuple[P
     return relative, condition_dir.parent / relative
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     args.input_path = args.input_path.expanduser().resolve()
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.dtype]
     task_override = normalize_task(args.task) if args.task else None
@@ -681,6 +678,8 @@ def main() -> None:
         args.start_index,
         args.max_samples,
     )
+    if args.num_shards > 1:
+        samples = [sample for sample in samples if sample["source_index"] % args.num_shards == args.shard_index]
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     model_descriptor = model_identity(args.model_path)
@@ -918,7 +917,7 @@ def main() -> None:
         del vae
         release_device_memory()
 
-    manifest = output_dir / "metadata.jsonl"
+    manifest = output_dir / ("metadata.jsonl" if args.num_shards == 1 else f"metadata.shard-{args.shard_index:05d}-of-{args.num_shards:05d}.jsonl")
     replace_manifest = args.replace_manifest or (args.start_index == 0 and args.max_samples is None)
     merged_rows = merge_manifest(manifest, manifest_rows, replace=replace_manifest)
     atomic_write_jsonl(manifest, merged_rows)

@@ -200,6 +200,11 @@ class _DmdRuntime(BaseTrainer):
         role_config["model"].update(override)
         return role_config
 
+    def _load_fake_checkpoint(self, checkpoint_path, strict=True):
+        from .fake_warmstart import load_fake_checkpoint
+
+        load_fake_checkpoint(self, checkpoint_path, strict=strict)
+
     def setup(self, resume_ckpt_path=None):
         super().setup(resume_ckpt_path=None)
         base_model_config = {
@@ -267,6 +272,10 @@ class _DmdRuntime(BaseTrainer):
             num_warmup_steps=0,
             num_training_steps=max(1, self.max_train_iters * self.fake_update_ratio),
         )
+
+        from .dmd2_gan_head import setup_dmd2_gan_head
+
+        setup_dmd2_gan_head(self)
 
         self.scheduler = DMDFlowMatchingScheduler(self.config)
 

@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+from contextlib import nullcontext
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 
@@ -84,6 +85,9 @@ def validate_official_pdmd_config(config):
         raise ValueError("official_pdmd currently requires sequence_parallel size 1")
     if int(training.get("gradient_accumulation_iters", 1)) < 1:
         raise ValueError("gradient_accumulation_iters must be positive")
+    from .dmd2_gan import validate_gan_config
+
+    validate_gan_config(config)
 
 
 class OfficialH3PdmdTraining:
@@ -98,7 +102,20 @@ class OfficialH3PdmdTraining:
         self.cached = []
         self.consumed_microbatches = 0
         self.route_loss_scale = lambda microbatch: 1.0
+        self.gan = None
+        self.gan_real_stream = None
         validate_official_pdmd_config(trainer.config)
+        if self.dmd.get("gan", {}).get("enabled", False):
+            from .dmd2_gan_data import DMD2GanRealStream
+
+            geometry = tuple(self.dmd["generation_shapes"][0]["value"])
+            self.gan_real_stream = DMD2GanRealStream(
+                self.dmd["gan"]["real_cache"],
+                seed=self.seed,
+                rank=get_data_parallel_rank(),
+                world_size=get_data_parallel_world_size(),
+                geometry=geometry,
+            )
 
     def recipe(self):
         config = self.trainer.config
@@ -112,6 +129,14 @@ class OfficialH3PdmdTraining:
                 digest.update(json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
                 digest.update(b"\n")
             recipe["dataset"] = {"rows": len(dataset), "sha256": digest.hexdigest()}
+        if self.gan_real_stream is not None:
+            recipe["gan_real_data"] = self.gan_real_stream.recipe()
+            samples = self.trainer.dataloader_train.dataset.samples
+            digest = hashlib.sha256()
+            for sample in samples:
+                digest.update(json.dumps(sample, sort_keys=True, ensure_ascii=False, default=str).encode())
+                digest.update(b"\n")
+            recipe["gan_prompt_data"] = {"rows": len(samples), "sha256": digest.hexdigest()}
         return recipe
 
     @staticmethod
@@ -196,6 +221,8 @@ class OfficialH3PdmdTraining:
             self.cached = []
         t.optimizer.zero_grad(set_to_none=True)
         t.fake_optimizer.zero_grad(set_to_none=True)
+        if self.gan is not None:
+            t.dmd2_gan_optimizer.zero_grad(set_to_none=True)
         generator = torch.Generator().manual_seed(stream_seed(self.seed, "exit", iteration))
         index = int(torch.randint(t.num_inference_steps, (1,), generator=generator))
         totals = {}
@@ -209,9 +236,30 @@ class OfficialH3PdmdTraining:
                 self.consumed_microbatches += 1
             set_sync(micro == self.accum - 1)
             draws = torch.Generator().manual_seed(stream_seed(self.seed, "draws", iteration, slot))
+            route_scale = self.route_loss_scale(batch_start + micro)
             if role == "student":
                 ratio = float(torch.rand((), generator=draws))
-                loss, metrics = student_objective(t.student, t.fake, t.teacher, trajectory, index, ratio)
+                if self.gan is not None:
+                    from .dmd2_gan_head import frozen_dmd2_gan_critic
+
+                    context = frozen_dmd2_gan_critic(t)
+                else:
+                    context = nullcontext()
+                # Freeze parameters through backward too: activation checkpoint
+                # recomputation must see the same flags as the forward pass.
+                with context:
+                    if self.gan is None:
+                        loss, metrics = student_objective(t.student, t.fake, t.teacher, trajectory, index, ratio)
+                    else:
+                        loss, metrics, clean = student_objective(t.student, t.fake, t.teacher, trajectory, index, ratio, return_clean=True)
+                        metrics["pdmd_loss"] = loss.detach()
+                        gan_loss, gan_metrics = self.gan.generator(clean, trajectory.condition, iteration, slot)
+                        loss = loss + gan_loss
+                        metrics.update(gan_metrics)
+                        del clean, gan_loss
+                    loss = loss * route_scale
+                    (loss / self.accum).backward()
+                loss_value = loss.detach()
             else:
                 video_only = torch.is_tensor(trajectory.states[-1])
                 sigmas = critic_sigmas(
@@ -229,15 +277,32 @@ class OfficialH3PdmdTraining:
                     metrics["score_sigma_audio"] = sigmas[1]
                 if role_at(iteration + 1, self.critic_steps) == "student":
                     self.cached.append(trajectory)
-            route_scale = self.route_loss_scale(batch_start + micro)
-            loss = loss * route_scale
-            (loss / self.accum).backward()
-            for name, value in {"loss": loss.detach(), **metrics}.items():
+                loss = loss * route_scale
+                (loss / self.accum).backward()
+                loss_value = float(loss.detach())
+                if self.gan is not None:
+                    metrics["fake_flow_loss"] = loss_value
+                    # Separate backwards avoid retaining three H3 graphs.
+                    gan_value, gan_metrics = self.gan.backward_discriminator(
+                        trajectory,
+                        batch_start + micro,
+                        iteration,
+                        slot,
+                        route_scale / self.accum,
+                    )
+                    loss_value += route_scale * gan_value
+                    metrics.update(gan_metrics)
+            for name, value in {"loss": loss_value, **metrics}.items():
                 value = value.detach().item() if torch.is_tensor(value) else float(value)
                 totals[name] = totals.get(name, 0.0) + value / self.accum
             del loss, trajectory
         t._sync_sequence_parallel_grads(params)
-        norm = torch.nn.utils.clip_grad_norm_(params, t.max_grad_norm)
+        if role == "fake" and self.gan is not None:
+            from .dmd2_gan_head import clip_dmd2_gan_grad_norm
+
+            norm = clip_dmd2_gan_grad_norm(t, t.max_grad_norm)
+        else:
+            norm = torch.nn.utils.clip_grad_norm_(params, t.max_grad_norm)
         if hasattr(norm, "full_tensor"):
             norm = norm.full_tensor()
         finite = torch.isfinite(norm).to(device=t.student.device, dtype=torch.int32)
@@ -248,6 +313,10 @@ class OfficialH3PdmdTraining:
         if not bool(finite):
             raise FloatingPointError(f"official_pdmd nonfinite {role} gradient norm or metrics at optimizer update {iteration + 1}")
         optimizer.step()
+        if role == "fake" and self.gan is not None:
+            t.dmd2_gan_optimizer.step()
+            t.dmd2_gan_lr_scheduler.step()
+            t.dmd2_gan_optimizer.zero_grad(set_to_none=True)
         if role == "student":
             t._after_student_optimizer_step("main")
             self.cached = []
@@ -304,6 +373,13 @@ class OfficialH3PdmdTraining:
         sampler.configure_from_microbatch_offset(start_microbatch=self.consumed_microbatches, gradient_accumulation_iters=self.accum, fake_update_ratio=self.critic_steps)
         self.route_loss_scale = getattr(sampler, "cursor_microbatch_loss_scale", self.route_loss_scale)
         t.setup(resume_ckpt_path=checkpoint)
+        if self.gan_real_stream is not None:
+            from .dmd2_gan import Dmd2GanObjective
+
+            self.gan = Dmd2GanObjective(t, self.gan_real_stream)
+            logger.info(
+                "[pdmd_official][gan] DMD2 logistic losses, shared fake backbone; G={} D={} real_data={}", self.gan.generator_weight, self.gan.discriminator_weight, self.gan_real_stream.recipe()
+            )
         self._validate_wan_residency()
         self.cached = move_tensors(self.cached, t.student.device)
         self.video_grid = rollout_grid(t.num_inference_steps, float(self.dmd.get("official_rollout_video_shift", 1.0)), t.student.device)
