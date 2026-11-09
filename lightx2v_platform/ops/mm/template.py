@@ -94,6 +94,15 @@ class MMWeightTemplate(metaclass=ABCMeta):
         return bias + self.bias_diff
 
     def to_cuda(self, non_blocking=False):
+        if not hasattr(self, "pin_weight"):
+            # Mirrors to_cpu(): without a host copy (e.g. released after a
+            # resident load), move the tensors the module holds.
+            self.weight = self.weight.to(AI_DEVICE, non_blocking=non_blocking)
+            if hasattr(self, "weight_scale"):
+                self.weight_scale = self.weight_scale.to(AI_DEVICE, non_blocking=non_blocking)
+            if hasattr(self, "bias") and self.bias is not None:
+                self.bias = self.bias.to(AI_DEVICE, non_blocking=non_blocking)
+            return
         self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
         if hasattr(self, "pin_weight_scale"):
             self.weight_scale = self.pin_weight_scale.to(AI_DEVICE, non_blocking=non_blocking)
