@@ -28,6 +28,21 @@ class StorageDescription:
     auxiliary: tuple[tuple[str, str], ...] = ()
 
 
+def describe_weight_storage(operator, metadata, path):
+    """Describe a weight operator or confirm that it has no persistent state."""
+    describe = getattr(operator, "describe_storage", None)
+    if describe is not None:
+        return describe(metadata)
+    state_dict = getattr(operator, "state_dict", None)
+    if state_dict is not None:
+        try:
+            if not state_dict():
+                return StorageDescription()
+        except AttributeError:
+            pass
+    raise ValueError(f"Missing storage contract: {path} ({type(operator).__name__})")
+
+
 def require_dtype(name, dtype, accepted):
     if dtype not in accepted:
         raise ValueError(f"{name}: expected checkpoint dtype in {accepted}, got {dtype}; implicit quantization/dequantization is not supported")

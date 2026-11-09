@@ -447,6 +447,10 @@ class MMWeightForceFp32(MMWeight):
     running in bf16/fp16 degrades final predictions.
     """
 
+    def describe_storage(self, metadata):
+        self.validate_checkpoint(metadata)
+        return StorageDescription(tuple(WeightStorage(name, attr, metadata[name].shape, torch.float32, transpose) for name, attr, transpose in self.base_attrs))
+
     def load(self, weight_dict):
         if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
             device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
@@ -890,7 +894,20 @@ class MMWeightInt8Metal(MMWeightQuantTemplate):
         self.scale_force_fp32 = True
 
     def validate_checkpoint(self, metadata):
-        require_dtype(self.weight_name, metadata[self.weight_name].dtype, (torch.int8,))
+        weight = metadata[self.weight_name]
+        require_dtype(self.weight_name, weight.dtype, (torch.int8,))
+        if len(weight.shape) != 2 or any(size <= 0 or size % 128 for size in weight.shape):
+            raise ValueError(f"{self.weight_name}: INT8 Metal weight dimensions must be positive multiples of 128")
+        output_channels = weight.shape[0]
+        scale = metadata[self.weight_scale_name]
+        require_dtype(self.weight_scale_name, scale.dtype, (torch.float16, torch.bfloat16, torch.float32))
+        if tuple(scale.shape) not in ((output_channels,), (output_channels, 1)):
+            raise ValueError(f"{self.weight_scale_name}: INT8 Metal requires one scale per output channel")
+        if self.bias_name is not None:
+            bias = metadata[self.bias_name]
+            require_dtype(self.bias_name, bias.dtype, (torch.float16, torch.bfloat16, torch.float32))
+            if tuple(bias.shape) != (output_channels,):
+                raise ValueError(f"{self.bias_name}: INT8 Metal requires one bias per output channel")
 
     def describe_storage(self, metadata):
         self.validate_checkpoint(metadata)
@@ -909,7 +926,7 @@ class MMWeightInt8Metal(MMWeightQuantTemplate):
 
     def load(self, weight_dict):
         if not self.lazy_load and not isinstance(weight_dict, BlockLoadContext):
-            require_dtype(self.weight_name, weight_dict[self.weight_name].dtype, (torch.int8,))
+            self.validate_checkpoint(weight_dict)
         super().load(weight_dict)
 
     def apply(self, input_tensor):

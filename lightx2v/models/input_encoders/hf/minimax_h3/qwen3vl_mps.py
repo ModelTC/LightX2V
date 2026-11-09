@@ -1,4 +1,4 @@
-"""MPS text-only Qwen3-VL inference with two disk-prefetched weight buffers."""
+"""MPS text-only Qwen3-VL inference with resident or disk-streamed weights."""
 
 import gc
 
@@ -8,6 +8,7 @@ from loguru import logger
 
 from lightx2v.common.modules.weight_module import WeightModuleList
 from lightx2v.common.offload.mps_manager import MpsSharedWeightAsyncStreamManager, host_view
+from lightx2v.common.offload.mps_resident import load_resident_groups
 from lightx2v.common.offload.safetensors_checkpoint import SafetensorsCheckpoint
 from lightx2v.common.ops.utils import resolve_block_name
 from lightx2v.utils.envs import GET_DTYPE
@@ -125,6 +126,15 @@ class _Qwen3VLMpsTextBackboneWeights(qwen3vl._Qwen3VLTextBackboneWeights):
 class MiniMaxH3MpsQwen3VLTextEncoder(qwen3vl.MiniMaxH3Qwen3VLTextEncoder):
     def __init__(self, config):
         self.config = config
+        self.resident_weights = bool(config.get("mps_resident_weights", False))
+        if self.resident_weights:
+            if qwen3vl.AI_DEVICE != "mps":
+                raise ValueError("MPS resident text loading requires an MPS device")
+            offloaded = config.get("text_encoder_cpu_offload", config.get("cpu_offload", False))
+            parallel = config.get("text_encoder_tensor_parallel", config.get("tensor_parallel", False))
+            incompatible = ("text_encoder_disk_streaming", "text_encoder_quantized", "text_encoder_shared_cpu_weights")
+            if offloaded or parallel or any(config.get(option, False) for option in incompatible):
+                raise ValueError("MPS resident text loading requires unquantized single-device weights without offload or shared CPU storage")
         self.local_files_only = config.get("local_files_only", True)
         self.release_block_offload_buffers = bool(config.get("text_encoder_release_block_offload_buffers", False))
         self.text_encoder = None
@@ -145,29 +155,41 @@ class MiniMaxH3MpsQwen3VLTextEncoder(qwen3vl.MiniMaxH3Qwen3VLTextEncoder):
         text_encoder_path = self._component_path("text_encoder_path", "text_encoder")
         text_config = self._read_text_config(text_encoder_path)
         self._validate_text_config(text_config)
-        text_encoder = _Qwen3VLMpsTextBackboneWeights(
+        backbone_class = qwen3vl._Qwen3VLTextBackboneWeights if self.resident_weights else _Qwen3VLMpsTextBackboneWeights
+        text_encoder = backbone_class(
             self.config,
             text_config,
             num_layers=qwen3vl.MINIMAX_H3_TEXT_ENCODER_LAYER,
             attn_type=self._resolve_attn_type(self.config),
         )
-        weight_map, _ = self._preflight_native_checkpoint(text_encoder, text_encoder_path, text_config)
-        text_encoder.init_disk_streaming(text_encoder_path, weight_map)
+        weight_map, dtype = self._preflight_native_checkpoint(text_encoder, text_encoder_path, text_config)
+        if self.resident_weights:
+            if dtype != "BF16":
+                raise ValueError("MPS resident text loading requires BF16 checkpoint weights")
+            # Released checkpoints also contain unused decoder suffix and vision weights.
+            selected = {name: weight_map[name] for name, _ in text_encoder.named_weight_modules()}
+            checkpoint = SafetensorsCheckpoint(text_encoder_path, weight_map=selected)
+            groups = [("text embedding", text_encoder.embed_tokens)]
+            groups.extend((f"text layer {index}", layer) for index, layer in enumerate(text_encoder.layers))
+            load_resident_groups(checkpoint, groups)
+        else:
+            text_encoder.init_disk_streaming(text_encoder_path, weight_map)
         self.text_encoder = text_encoder
         return self.text_encoder
 
     def unload_text_encoder(self):
-        if self.text_encoder is not None:
+        if self.text_encoder is not None and not self.resident_weights:
             self.text_encoder.release_disk_streaming_buffer()
         super().unload_text_encoder()
 
     @torch.inference_mode()
     def infer(self, prompt, image_list=None, references=None):
         if image_list or references is not None:
-            raise NotImplementedError("MiniMax-H3 Qwen3-VL MPS disk streaming supports text-only t2av prompts.")
+            raise NotImplementedError("MiniMax-H3 Qwen3-VL MPS supports text-only t2av prompts.")
         self._ensure_loaded()
         try:
-            input_ids = self._prepare_t2av_input_ids(prompt, "cpu")
+            device = self.text_encoder.device if self.resident_weights else "cpu"
+            input_ids = self._prepare_t2av_input_ids(prompt, device)
             prompt_embeds = self.text_encoder.forward(input_ids)
             expected_shape = (input_ids.shape[0], qwen3vl.MINIMAX_H3_TEXT_HIDDEN_SIZE)
             if tuple(prompt_embeds.shape) != expected_shape:
@@ -178,5 +200,5 @@ class MiniMaxH3MpsQwen3VLTextEncoder(qwen3vl.MiniMaxH3Qwen3VLTextEncoder):
                 "text_token_tags": torch.full((input_ids.shape[0],), qwen3vl.MINIMAX_H3_TEXT_TAG, dtype=torch.long, device=prompt_embeds.device),
             }
         finally:
-            if self.release_block_offload_buffers and self.text_encoder is not None:
+            if not self.resident_weights and self.release_block_offload_buffers and self.text_encoder is not None:
                 self.text_encoder.release_disk_streaming_buffer()

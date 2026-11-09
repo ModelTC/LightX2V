@@ -46,6 +46,7 @@ H3_CHANNEL_QUANT_SCHEMES = {
     "int8-vllm",
     "int8-intel-xpu",
     "int8-convrot",
+    "int8-metal",
 }
 
 
@@ -59,7 +60,7 @@ class MiniMaxH3Model(BaseTransformerModel):
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         validate_minimax_h3_residency_config(config)
         self.lora_alpha = lora_alpha
-        config.setdefault("use_fused_qkv", bool(config.get("dit_quantized", False)))
+        config.setdefault("use_fused_qkv", bool(config.get("dit_quantized", False)) and config.get("dit_quant_scheme") != "int8-metal")
         if config.get("cpu_offload_block_contiguous", False):
             for option in ("use_fused_qkv", "dit_release_block_offload_buffers", "dit_quantized"):
                 if config.get(option, False):
@@ -91,6 +92,13 @@ class MiniMaxH3Model(BaseTransformerModel):
                 raise NotImplementedError(f"MiniMax-H3 quantized inference requires a per-output-channel FP8/INT8 scheme; got {quant_scheme!r}. Supported schemes: {sorted(H3_CHANNEL_QUANT_SCHEMES)}")
             if not config.get("dit_quantized_ckpt"):
                 raise ValueError("MiniMax-H3 quantized inference requires dit_quantized_ckpt")
+            if quant_scheme == "int8-metal":
+                if torch.device(device).type != "mps":
+                    raise ValueError("H3 int8-metal requires an MPS device")
+                if config.get("tensor_parallel", False):
+                    raise NotImplementedError("H3 int8-metal checkpoint loading is single-device only")
+                if config.get("use_fused_qkv", False):
+                    raise NotImplementedError("H3 int8-metal requires individual Q/K/V projections")
             if quant_scheme in ("fp8-f16-accum", "fp8-f32-accum"):
                 validate_checkpoint(config["dit_quantized_ckpt"], profile=H3_QUANTIZATION_PROFILE)
                 if quant_scheme == "fp8-f32-accum":
@@ -149,9 +157,38 @@ class MiniMaxH3Model(BaseTransformerModel):
         return super()._apply_weights(weight_dict)
 
     def _init_weights(self, weight_dict=None):
+        if self.config.get("mps_resident_weights", False):
+            return self._init_mps_resident_weights(weight_dict)
         if self.config.get("dit_disk_streaming", False):
             return self._init_disk_streaming_weights()
         return super()._init_weights(weight_dict)
+
+    def _init_mps_resident_weights(self, weight_dict):
+        """Load each weight group directly into its declared MPS storage."""
+        from lightx2v.common.offload.mps_resident import load_resident_groups
+        from lightx2v.common.offload.safetensors_checkpoint import SafetensorsCheckpoint
+
+        if torch.device(self.device).type != "mps":
+            raise ValueError("mps_resident_weights requires an MPS device")
+        if weight_dict is not None or self.lora_path or self.config.get("lora_configs"):
+            raise ValueError("mps_resident_weights requires checkpoint weights with LoRA already merged")
+        incompatible = ("cpu_offload", "dit_disk_streaming", "shared_cpu_weights", "tensor_parallel", "lazy_load", "unload_modules", "dummy_model", "lora_dynamic_apply", "weight_auto_quant")
+        enabled = [option for option in incompatible if self.config.get(option, False)]
+        if enabled:
+            raise ValueError(f"mps_resident_weights is incompatible with {', '.join(enabled)}")
+        if self.dit_quantized and self.config["dit_quant_scheme"] != "int8-metal":
+            raise ValueError("MPS resident quantized H3 requires int8-metal")
+
+        checkpoint_path = self.config["dit_quantized_ckpt"] if self.dit_quantized else self.model_path
+        checkpoint = SafetensorsCheckpoint.from_index(checkpoint_path) if self.dit_quantized else SafetensorsCheckpoint(checkpoint_path)
+        checkpoint.weight_map = {name: shard for name, shard in checkpoint.weight_map.items() if not any(part in name for part in self.remove_keys)}
+        self.pre_weight = self.pre_weight_class(self.config)
+        self.transformer_weights = self.transformer_weight_class(self.config)
+        self.post_weight = self.post_weight_class(self.config)
+        groups = [("DiT pre", self.pre_weight)]
+        groups.extend((f"DiT block {index}", block) for index, block in enumerate(self.transformer_weights.blocks))
+        groups.append(("DiT post", self.post_weight))
+        load_resident_groups(checkpoint, groups)
 
     def _init_disk_streaming_weights(self):
         self.transformer_weights = MiniMaxH3StreamingTransformerWeights(self.config)

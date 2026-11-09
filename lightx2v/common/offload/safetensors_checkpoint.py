@@ -36,6 +36,19 @@ class SafetensorsCheckpoint:
             with safe_open(path, framework="pt", device="cpu") as source:
                 self.weight_map.update(dict.fromkeys(source.keys(), path.name))
 
+    @classmethod
+    def from_index(cls, checkpoint_dir):
+        """Open an indexed checkpoint, including nested shard paths."""
+        checkpoint = Path(checkpoint_dir)
+        indices = sorted(checkpoint.glob("*.safetensors.index.json"))
+        if len(indices) != 1:
+            raise ValueError(f"Expected one safetensors checkpoint index: {checkpoint}")
+        index = json.loads(indices[0].read_text())
+        mapping = index.get("weight_map")
+        if not isinstance(mapping, dict) or not mapping:
+            raise ValueError(f"Safetensors index requires a nonempty weight_map: {indices[0]}")
+        return cls(checkpoint, weight_map=mapping)
+
     def tensor_metadata(self, name):
         """Return dtype, shape and absolute file range without loading payloads."""
         shard_name = self.shard_for_tensor(name)
