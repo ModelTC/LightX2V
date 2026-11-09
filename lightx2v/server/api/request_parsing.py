@@ -2,11 +2,11 @@
 
 import json
 from functools import lru_cache
-from typing import get_args, get_origin
+from typing import Annotated, get_args, get_origin
 
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 def _contains_json_value(annotation):
@@ -16,27 +16,41 @@ def _contains_json_value(annotation):
 
 
 @lru_cache
-def _json_form_fields(request_cls):
-    return {field.alias or name for name, field in request_cls.model_fields.items() if _contains_json_value(field.annotation)}
+def _json_form_fields(request_type, task=None):
+    if get_origin(request_type) is Annotated:
+        request_type = get_args(request_type)[0]
+    models = get_args(request_type) or (request_type,)
+    return {
+        field.alias or name
+        for model in models
+        if task is None or "task" not in model.model_fields or task in get_args(model.model_fields["task"].annotation)
+        for name, field in model.model_fields.items()
+        if _contains_json_value(field.annotation)
+    }
+
+
+def validate_request(request_type, request_data, *, strict=None):
+    try:
+        return TypeAdapter(request_type).validate_python(request_data, strict=strict)
+    except ValidationError as exc:
+        errors = exc.errors(include_input=False)
+        for error in errors:
+            error["loc"] = ("body", *error["loc"])
+        raise RequestValidationError(errors) from exc
 
 
 def parse_form_request(request_cls, request_data):
     """Decode JSON containers, then validate submitted fields with the request schema."""
     request_data = dict(request_data)
-    json_fields = _json_form_fields(request_cls)
+    json_fields = _json_form_fields(request_cls, request_data.get("task"))
     for name, value in request_data.items():
         if name in json_fields and isinstance(value, str) and value.lstrip().startswith(("[", "{")):
             try:
                 request_data[name] = json.loads(value)
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=f"{name} must contain valid JSON") from exc
-    try:
-        return request_cls.model_validate(request_data)
-    except ValidationError as exc:
-        errors = exc.errors(include_input=False)
-        for error in errors:
-            error["loc"] = ("body", *error["loc"])
-        raise RequestValidationError(errors) from exc
+    # Form scalar values arrive as strings, including strict numeric fields.
+    return validate_request(request_cls, request_data, strict=False)
 
 
 def _inline_schema_refs(value, definitions):
@@ -51,16 +65,20 @@ def _inline_schema_refs(value, definitions):
 
 def form_request_openapi(request_cls, **upload_fields):
     """Describe raw form fields without duplicating scalar endpoint parameters."""
-    schema = request_cls.model_json_schema()
-    for name in _json_form_fields(request_cls):
-        field_schema = schema["properties"][name]
-        schema["properties"][name] = {
-            "type": "string",
-            "title": field_schema.get("title", name),
-            "description": (field_schema.get("description", "") + " Submit lists and objects as JSON text.").strip(),
-        }
-    # Inline remaining references (e.g. enums): this schema is embedded in an
-    # OpenAPI operation, where Pydantic's root-relative #/$defs paths do not apply.
+    schema = TypeAdapter(request_cls).json_schema()
     schema = _inline_schema_refs(schema, schema.pop("$defs", {}))
-    schema["properties"].update(upload_fields)
-    return {"requestBody": {"required": bool(schema.get("required")), "content": {"multipart/form-data": {"schema": schema}}}}
+    # Form containers travel as JSON text; task variants keep their own fields.
+    variants = schema.get("oneOf", [schema])
+    for variant in variants:
+        for name in _json_form_fields(request_cls):
+            if name not in variant["properties"]:
+                continue
+            field_schema = variant["properties"][name]
+            variant["properties"][name] = {
+                "type": "string",
+                "title": field_schema.get("title", name),
+                "description": (field_schema.get("description", "") + " Submit lists and objects as JSON text.").strip(),
+            }
+        variant["properties"].update(upload_fields)
+    schema.pop("discriminator", None)
+    return {"requestBody": {"required": any(variant.get("required") for variant in variants), "content": {"multipart/form-data": {"schema": schema}}}}

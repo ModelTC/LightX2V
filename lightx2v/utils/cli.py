@@ -4,6 +4,7 @@ import argparse
 import sys
 
 from lightx2v.models.runners.registry import RUNNER_MODULES, get_model_spec
+from lightx2v.utils.request_spec import create_request_model
 from lightx2v.utils.set_config import build_startup_config
 
 
@@ -60,6 +61,15 @@ def parse_cli_inputs(argv=None):
         parser.error(str(error))
 
     args = build_parser(config, task).parse_args(argv)
+    from pydantic import ValidationError
+
+    arguments = spec.get_cli_arguments(config, task)
+    values = {name: getattr(args, name) for name in arguments if getattr(args, name) is not None}
+    try:
+        values = create_request_model("CLIRequest", arguments).model_validate(values).model_dump(exclude_unset=True)
+    except ValidationError as error:
+        parser.error(str(error))
+    vars(args).update(values)
     request_fields = spec.get_fields(config, task)
     request = {key: value for key, value in vars(args).items() if key in request_fields and value is not None}
     request["task"] = task

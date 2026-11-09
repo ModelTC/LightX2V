@@ -19,16 +19,16 @@ TASK_PROCESSING_IDLE_WAIT_TIMEOUT_SECONDS = 0.2
 
 
 class ApiServer:
-    def __init__(self, max_queue_size: int = 10, app: Optional[FastAPI] = None):
+    def __init__(self, config, max_queue_size: int = 10, app: Optional[FastAPI] = None):
         self.app = app or FastAPI(title="LightX2V API", version="1.0.0")
         self.max_queue_size = max_queue_size
 
         self.processing_thread = None
         self.stop_processing = threading.Event()
 
-        self._setup_routes()
+        self._setup_routes(config)
 
-    def _setup_routes(self):
+    def _setup_routes(self, config):
         @self.app.middleware("http")
         async def metrics_middleware(request, call_next):
             start_time = time.monotonic()
@@ -71,7 +71,7 @@ class ApiServer:
         def health_check():
             return {"status": "ok"}
 
-        api_router = create_api_router()
+        api_router = create_api_router(config)
         self.app.include_router(api_router)
 
     def _ensure_processing_thread_running(self):

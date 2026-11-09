@@ -2,9 +2,9 @@ from lightx2v.models.runners.request_args import COMMON, VIDEO, VIDEO_OUTPUT
 from lightx2v.utils.request_spec import Argument, RequestSpec
 
 IMAGE_CONDITION = {
-    "image_frame_indices": Argument(help="Comma-separated pixel frame indices, one per image. Omit to space images evenly across the output frames."),
+    "image_frame_indices": Argument(type=str | list[int], help="Comma-separated pixel frame indices, one per image. Omit to space images evenly across the output frames."),
     "image_path": Argument(help="Input image paths, separated by commas."),
-    "image_strength": Argument(help="Image conditioning strength: one float, or comma-separated floats for each image."),
+    "image_strength": Argument(type=str | float | list[float], help="Image conditioning strength: one float, or comma-separated floats for each image."),
 }
 
 SPECS = {

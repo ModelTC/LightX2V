@@ -50,7 +50,7 @@ WAN_AUDIO = RequestSpec(
             video_duration=Argument(type=float, help="Requested output duration in seconds for audio-driven video generation."),
             resize_mode=Argument(help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config."),
             fixed_area=Argument(help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config."),
-            size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+            size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
         )
         for task in ("s2v", "rs2v")
     }
@@ -76,7 +76,7 @@ LINGBOT = RequestSpec(
         "i2v": dict(
             WAN.tasks["i2v"],
             action_path=Argument(help="Directory path for lingbot camera/action control files (poses.npy, intrinsics.npy, optional action.npy)."),
-            pose=Argument(help="Camera pose specification or JSON file path."),
+            pose=Argument(type=str | dict, help="Camera pose specification or JSON file path."),
         )
     }
 )
@@ -88,7 +88,7 @@ WAN_VACE = RequestSpec(
         "vace": dict(
             VIDEO,
             mask_path=Argument(help="Input mask path."),
-            ref_image_paths=Argument(help="Reference image paths, separated by commas."),
+            ref_image_paths=Argument(type=str | list[str], help="Reference image paths, separated by commas."),
             video_path=Argument(help="Input video path."),
         )
     }
@@ -151,7 +151,7 @@ SPECS = {
                 COMMON | PROMPT,
                 face_video_path=Argument(help="Face input path."),
                 pose_video_path=Argument(help="Pose driving video path."),
-                ref_image_paths=Argument(help="Reference image paths, separated by commas."),
+                ref_image_paths=Argument(type=str | list[str], help="Reference image paths, separated by commas."),
                 num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
             )
         }
@@ -163,7 +163,7 @@ SPECS = {
                 image_path=Argument(help="Input image path."),
                 ref_video_prompt=Argument(help="Reference/driving-video prompt for Wan-Animate-2."),
                 pose_video_path=Argument(help="Pose driving video path."),
-                ref_image_paths=Argument(help="Reference image paths, separated by commas."),
+                ref_image_paths=Argument(type=str | list[str], help="Reference image paths, separated by commas."),
                 video_path=Argument(help="Input video path."),
             )
         }

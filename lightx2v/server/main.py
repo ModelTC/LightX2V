@@ -65,7 +65,7 @@ def run_server(args):
             cache_dir = Path(server_config.cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
 
-            api_server = ApiServer(max_queue_size=server_config.max_queue_size)
+            api_server = ApiServer(inference_service.worker.runner.config, max_queue_size=server_config.max_queue_size)
             api_server.initialize_services(cache_dir, inference_service)
 
             app = api_server.get_app()

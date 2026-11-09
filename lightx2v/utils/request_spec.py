@@ -1,13 +1,48 @@
-"""Request definitions shared by the CLI and runners."""
+"""Request definitions shared by the CLI, HTTP API and runners."""
+
+import argparse
+import json
+from typing import Literal, get_args, get_origin
 
 
 class Argument:
-    def __init__(self, *, cli=True, **options):
+    def __init__(self, type=str, *, cli=True, server=True, gt=None, ge=None, lt=None, le=None, strict=None, **options):
+        self.type = type
         self.cli = cli
+        self.server = server
         self.options = options
+        self.constraints = {name: value for name, value in dict(gt=gt, ge=ge, lt=lt, le=le, strict=strict).items() if value is not None}
 
     def add_to(self, parser, name):
-        parser.add_argument(f"--{name}", default=None, **self.options)
+        options = dict(self.options)
+        if self.type is bool:
+            options.setdefault("action", argparse.BooleanOptionalAction)
+        elif get_origin(self.type) is list:
+            options.update(type=get_args(self.type)[0], nargs="+")
+        elif self.type in (str, int, float):
+            options["type"] = self.type
+        else:
+            options["type"] = self._parse_cli_value
+        parser.add_argument(f"--{name}", default=None, **options)
+
+    def _parse_cli_value(self, value):
+        if str in get_args(self.type) and not value.lstrip().startswith(("[", "{")):
+            return value
+        return json.loads(value)
+
+    def model_field(self):
+        from pydantic import Field
+
+        annotation = Literal[tuple(self.options["choices"])] if "choices" in self.options else self.type
+        return annotation | None, Field(default=None, description=self.options.get("help"), **self.constraints)
+
+
+def create_request_model(name, arguments, *, base=None, **fields):
+    from pydantic import ConfigDict, create_model
+
+    options = {"__base__": base} if base is not None else {"__config__": ConfigDict(extra="forbid")}
+    definitions = {name: argument.model_field() for name, argument in arguments.items()}
+    return create_model(name, **options, **(definitions | fields))
 
 
 class RequestSpec:

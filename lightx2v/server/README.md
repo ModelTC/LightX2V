@@ -16,7 +16,7 @@ server/
 ├── main.py                  # Server startup
 ├── config.py                # Configuration
 ├── task_manager.py          # Task management
-├── schema.py                # Data models (VideoTaskRequest, ImageTaskRequest)
+├── schema.py                # Service envelopes and Spec-generated request models
 ├── api/
 │   ├── __init__.py
 │   ├── router.py            # Main router aggregation
@@ -337,43 +337,11 @@ stateDiagram-v2
 
 ## Request Models
 
-### VideoTaskRequest
+Model inference fields are declared once in each model's `request_spec.py` Spec. At startup, the server uses these definitions to generate Pydantic request models and OpenAPI documentation for its supported tasks. The CLI uses the same types, descriptions, choices and numeric constraints.
 
-```python
-class VideoTaskRequest(BaseTaskRequest):
-    num_frames: Optional[int] = Field(
-        None,
-        description="Number of output frames; defaults to the startup config",
-    )
-    reuse_prefix_segments: int = Field(0, ge=0)
-    video_path: str = ""
-    sr_ratio: float = Field(2.0, gt=0)
-    audio_path: str = ""
-    video_duration: int = 5
-    resize_mode: Optional[str] = None
-    fixed_area: Optional[str] = None
-    talk_objects: Optional[list[TalkObject]] = None
-    ref_image_paths: list[str] = Field(default_factory=list)
-```
+`BaseTaskRequest`, `ImageTaskRequest` and `VideoTaskRequest` contain service fields such as task IDs, uploads, LoRA controls and reuse settings. They do not maintain a second collection of model input fields. Python-only callbacks and tensor-return controls are excluded through `server=False`.
 
-### ImageTaskRequest
-
-```python
-class ImageTaskRequest(BaseTaskRequest):
-    aspect_ratio: str = "16:9"
-```
-
-### BaseTaskRequest (Common Fields)
-
-```python
-class BaseTaskRequest(BaseModel):
-    task_id: str  # auto-generated
-    prompt: str = ""
-    negative_prompt: Optional[str] = ""
-    image_path: str = ""  # URL, base64, or local path
-    save_result_path: Optional[str] = None  # omitted/null: do not save a file
-    seed: Optional[int]  # non-negative; omitted/null: 42
-```
+To add an inference parameter, declare an `Argument` in the model's Spec, add it to the model's `InputInfo` if needed, and implement its use in the runner. JSON and form endpoints pick it up automatically; the OpenAI image adapter also reuses these fields while keeping its own protocol conventions.
 
 To download an asynchronous task's file result, provide `save_result_path` in the request. Omitting it or passing null skips file saving. Synchronous image APIs return the image from memory.
 
@@ -450,7 +418,7 @@ torchrun --nproc_per_node=2 -m lightx2v.server \
 ### 4. Separate Video/Image Endpoints
 
 - **Dedicated endpoints** for video and image generation
-- **Type-specific request models** (VideoTaskRequest, ImageTaskRequest)
+- **Model-specific request schemas** generated from Specs
 - **Automatic service routing** based on task type
 - **Backward compatible** with legacy `/v1/tasks` endpoint
 

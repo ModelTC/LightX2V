@@ -16,7 +16,7 @@ Qwen-Image-2.1 的 `t2i`、`i2i` 分别使用 `T2IInputInfo`、`I2IInputInfo`，
 
 ## 2. 声明支持范围
 
-在模型自己的 `cli.py` 中，为需要支持的任务声明 `Argument`，保留原有字段。Qwen-Image-2.1 的声明位于 `lightx2v/models/runners/qwen_image_21/cli.py`：
+在模型自己的 `request_spec.py` 中，为需要支持的任务声明 `Argument`，保留原有字段。Qwen-Image-2.1 的声明位于 `lightx2v/models/runners/qwen_image_21/request_spec.py`：
 
 ```python
 from lightx2v.models.runners.request_args import IMAGE
@@ -27,19 +27,19 @@ SPECS = {
         {
             "t2i": dict(
                 IMAGE,
-                resolution=Argument(type=int, help="Output resolution."),
+                resolution=Argument(type=int, gt=0, help="Output resolution."),
             ),
             "i2i": dict(
                 IMAGE,
                 image_path=Argument(help="Input image path."),
-                resolution=Argument(type=int, help="Output resolution."),
+                resolution=Argument(type=int, gt=0, help="Output resolution."),
             ),
         }
     ),
 }
 ```
 
-CLI 根据这份 Spec 生成参数和帮助，`BaseRunner` 也从同一份 Spec 校验任务与请求字段。模型专属参数直接定义在自己的 `cli.py` 中，无需修改公共参数表或在 runner 中重复声明。当前实例实际接受的任务和字段还受启动任务及模型配置限制。涉及模型初始化的参数，需要先确认模型支持在运行时修改。
+CLI 和 HTTP 都根据这份 Spec 生成请求参数、校验规则和文档，`BaseRunner` 也从同一份 Spec 校验任务与请求字段。模型专属参数直接定义在自己的 `request_spec.py` 中，无需修改公共参数表，或在 runner、服务端 Schema 中重复声明。当前实例实际接受的任务和字段还受启动任务及模型配置限制。涉及模型初始化的参数，需要先确认模型支持在运行时修改。
 
 参数与某个启动设置不兼容时，仍在 Spec 中保留声明，在 runner 的请求准备或推理路径中检查，并报出冲突设置及解决方法。不要根据配置从 Spec 中移除这些字段。
 
@@ -70,24 +70,22 @@ runner 合并参数时保留 `0`、`False`、`""`、`[]`。它们是否有效由
 
 | 入口 | 修改位置 |
 |---|---|
-| Python | 通常无需修改；`generate(resolution=768)` 会通过 `**task_inputs` 转发新字段。 |
-| CLI | 第 2 步中的 `Argument` 自动生成选项，无需修改 `infer.py`。 |
-| 原生 HTTP JSON / 表单 | 在 `lightx2v/server/schema.py` 的 `ImageTaskRequest` 或 `VideoTaskRequest` 中声明字段。 |
-| OpenAI 图片接口 | 在 `lightx2v/server/api/openai_images.py` 的请求类中声明字段，并确保 `ImageTaskRequest` 也接受它。 |
+| Python | 通常无需修改；`generate(resolution=768)` 通过 `**task_inputs` 转发新字段。 |
+| CLI | 第 2 步中的 `Argument` 自动生成选项和帮助，无需修改 `infer.py`。 |
+| 原生 HTTP JSON / 表单 | 服务启动时从同一份 Spec 生成请求模型，无需额外声明字段。 |
+| OpenAI 图片接口 | 推理字段从 Spec 生成；协议字段继续放在 OpenAI 适配层。 |
 
-`Argument` 自动为 CLI 选项设置 `default=None`，让未传参数保留启动值。
+`Argument.type` 表示完整的参数类型，例如 `int`、`list[int]`、`str | dict`。CLI 将列表转换为空格分隔的选项，将对象转换为 JSON 输入；HTTP 接收对应的 JSON 值。`gt`、`ge`、`lt`、`le` 定义两端共用的数值范围。
 
-HTTP 请求类的字段声明示例：
+使用 `cli=False` 或 `server=False` 声明入口差异；Python 回调、内存张量等内部输入应同时关闭两者。NeoPP 的 CLI 初始化参数仍通过自己的 `get_cli_arguments()` 声明。
 
-```python
-resolution: Optional[int] = Field(None, gt=0, description="Qwen-Image-2.1 resolution")
-```
+CLI 和 HTTP 的请求覆盖值默认都为 `None`，实际默认值继续由启动配置和 `InputInfo` 决定。HTTP 按 `model_fields_set` 转发显式提交的字段，不会用请求模型的构造默认值覆盖启动配置。
 
-JSON 和表单共用此声明进行校验并生成文档。普通新字段无需再添加 `Form(...)` 形参或解析白名单。HTTP 按 `model_fields_set` 转发用户提交的普通推理字段，因此请求类的构造默认值不会自动覆盖启动配置。
+服务为每个支持的任务生成请求模型，多任务请求通过 `task` 选择，单任务请求可以省略它。`/docs` 展示当前模型的字段，而不是所有模型的参数集合。
 
-OpenAI 两个图片接口共用的字段放在 `OpenAIImageRequest`，接口独有字段放在 `OpenAIImageGenerationRequest` 或 `OpenAIImageEditRequest`。普通同名推理字段自动转发；需要格式转换的字段（如 `size`）或协议控制字段，仍需显式调整适配器。
+OpenAI 图片接口共用 Spec 中的推理字段，同时保留必填 `prompt`、`n`、`response_format` 和 `size="WIDTHxHEIGHT"` 等协议约定。格式转换和新增协议控制仍需调整适配器。
 
-列表或对象在表单中使用 JSON 文本，例如 `size=[512,768]`。新增文件上传还需声明端点的 `File(...)` 参数、保存文件，并在 `form_request_openapi()` 中补充上传字段文档。
+列表或对象在表单中使用 JSON 文本，例如 `size=[512,768]`。新增文件上传还需声明端点的 `File(...)` 参数、保存文件，并在 `form_request_openapi()` 中补充上传字段文档；普通服务端文件路径无需这些处理。
 
 ## 5. 验证效果
 

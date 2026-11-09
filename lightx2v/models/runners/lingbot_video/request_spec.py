@@ -6,7 +6,7 @@ SPECS = {
         {
             "t2i": dict(
                 COMMON | PROMPT,
-                size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
             ),
             "t2v": VIDEO,
             "i2v": dict(

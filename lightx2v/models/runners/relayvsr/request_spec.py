@@ -7,7 +7,7 @@ RELAY_VSR = RequestSpec(
             COMMON,
             video_path=Argument(help="Input video path."),
             image_path=Argument(help="Input image path."),
-            sr_ratio=Argument(type=float, help="super resolution ratio for sr task"),
+            sr_ratio=Argument(type=float, gt=0, help="super resolution ratio for sr task"),
         )
     }
 )

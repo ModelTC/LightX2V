@@ -30,7 +30,7 @@ XPU 示例配置在 `configs/platforms/intel_xpu/`，多卡配置在其 `dist_in
 dir configs\platforms\intel_xpu\
 ```
 
-当前示例 JSON 通常不含 `model_cls` / `task`。CLI 的 `--model_cls` 来自 `registry.RUNNER_MODULES`，任务和请求字段由模型 `cli.py` 中的 Spec 声明并校验。
+当前示例 JSON 通常不含 `model_cls` / `task`。CLI 的 `--model_cls` 来自 `registry.RUNNER_MODULES`，任务和请求字段由模型 `request_spec.py` 中的 Spec 声明并校验。
 
 常见任务包括 `t2v/i2v/t2i/i2i/t2av/i2av/fl2av/ref2av/i23d`；完整 CLI choices 见 `lightx2v/infer.py`，每个模型支持的子集以 runner 和匹配脚本为准。
 

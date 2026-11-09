@@ -3,11 +3,17 @@ from lightx2v.utils.request_spec import Argument, MultiTaskSpec
 
 REGENERATION = {
     "draft_steps": Argument(
-        type=int, help="MiniMax-H3: only a positive K smaller than configured infer_steps enables a draft prefix and final velocity projection. Omit or use K >= infer_steps for normal sampling."
+        type=int,
+        gt=0,
+        strict=True,
+        help="MiniMax-H3: only a positive K smaller than configured infer_steps enables a draft prefix and final velocity projection. Omit or use K >= infer_steps for normal sampling.",
     ),
     "resample_source_video": Argument(help="MiniMax-H3 source video with audio; RGB frames are resized to the target canvas before VAE encoding and regeneration."),
     "resample_start_step": Argument(
-        type=int, help="MiniMax-H3 zero-based regeneration start index in [0,infer_steps]. Defaults to the startup config or 1; 0 runs all steps, infer_steps only decodes the VAE-encoded source."
+        type=int,
+        ge=0,
+        strict=True,
+        help="MiniMax-H3 zero-based regeneration start index in [0,infer_steps]. Defaults to the startup config or 1; 0 runs all steps, infer_steps only decodes the VAE-encoded source.",
     ),
 }
 REQUEST = COMMON | VIDEO_OUTPUT | REGENERATION

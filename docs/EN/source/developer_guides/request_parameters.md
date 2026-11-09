@@ -16,7 +16,7 @@ Qwen-Image-2.1 uses `T2IInputInfo` for `t2i` and `I2IInputInfo` for `i2i`; both 
 
 ## 2. Declare support
 
-Declare an `Argument` for the intended tasks in the model's own `cli.py`, keeping its existing fields. Qwen-Image-2.1 declares these in `lightx2v/models/runners/qwen_image_21/cli.py`:
+Declare an `Argument` for the intended tasks in the model's own `request_spec.py`, keeping its existing fields. Qwen-Image-2.1 declares these in `lightx2v/models/runners/qwen_image_21/request_spec.py`:
 
 ```python
 from lightx2v.models.runners.request_args import IMAGE
@@ -27,19 +27,21 @@ SPECS = {
         {
             "t2i": dict(
                 IMAGE,
-                resolution=Argument(type=int, help="Output resolution."),
+                resolution=Argument(type=int, gt=0, help="Output resolution."),
             ),
             "i2i": dict(
                 IMAGE,
                 image_path=Argument(help="Input image path."),
-                resolution=Argument(type=int, help="Output resolution."),
+                resolution=Argument(type=int, gt=0, help="Output resolution."),
             ),
         }
     ),
 }
 ```
 
-The CLI builds options and help from this Spec, and `BaseRunner` uses the same Spec to validate tasks and request fields. Define model-specific arguments locally without changing a global argument table or repeating declarations in the runner. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
+The CLI and HTTP API generate their input models, validation and documentation from this Spec. `BaseRunner` uses the same Spec to validate tasks and request fields. Define model-specific arguments locally without changing a global argument table or repeating declarations in the runner or server schema. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
+
+`Argument.type` describes the complete value, such as `int`, `list[int]`, or `str | dict`. The CLI turns lists into space-separated options and structured values into JSON inputs; HTTP accepts the corresponding JSON values. Use `gt`, `ge`, `lt` and `le` for shared numeric bounds. Set `cli=False` or `server=False` for inputs specific to an entry point; callbacks and in-memory tensors should disable both.
 
 Keep declared arguments in the Spec when a startup setting makes them unusable. Validate incompatible combinations in the runner's request preparation or inference path, with an error explaining the conflicting setting and how to resolve it. Do not conditionally remove these fields from the Spec.
 
@@ -72,20 +74,14 @@ The runner preserves `0`, `False`, `""` and `[]` when merging parameters. Field 
 |---|---|
 | Python | Usually no change: `generate(resolution=768)` forwards new fields through `**task_inputs`. |
 | CLI | The `Argument` declared in step 2 generates the option automatically; no change to `infer.py` is needed. |
-| Native HTTP JSON / forms | Declare a field in `ImageTaskRequest` or `VideoTaskRequest` in `lightx2v/server/schema.py`. |
-| OpenAI image API | Declare a field in a request class in `lightx2v/server/api/openai_images.py`, and ensure `ImageTaskRequest` also accepts it. |
+| Native HTTP JSON / forms | Generated from the same Spec at service startup; no additional field declaration. |
+| OpenAI image API | Inference fields are generated from the Spec; protocol fields remain in the OpenAI adapter. |
 
-`Argument` sets `default=None` for CLI options so omitted parameters retain startup values.
+CLI and HTTP request overrides default to `None`, leaving startup and `InputInfo` defaults in control. HTTP forwards only explicitly submitted fields through `model_fields_set`.
 
-Example field declaration in an HTTP request class:
+The service builds one request model for each supported task. Multi-task requests select the model through `task`; single-task requests may omit it. `/docs` shows the selected model's fields rather than a global image/video parameter collection.
 
-```python
-resolution: Optional[int] = Field(None, gt=0, description="Qwen-Image-2.1 resolution")
-```
-
-JSON and forms share this declaration for validation and documentation. Ordinary new fields need no additional `Form(...)` arguments or parsing whitelist. HTTP forwards submitted inference fields using `model_fields_set`, so request-class construction defaults do not automatically override startup configuration.
-
-Put fields shared by both OpenAI image endpoints in `OpenAIImageRequest`, and endpoint-specific fields in `OpenAIImageGenerationRequest` or `OpenAIImageEditRequest`. Ordinary inference fields with matching names pass through automatically. Format conversions, such as `size`, and protocol controls still require explicit adapter changes.
+OpenAI image endpoints reuse the Spec's inference fields while retaining protocol conventions such as required `prompt`, `n`, `response_format` and `size="WIDTHxHEIGHT"`. Format conversions and new protocol controls still belong in that adapter.
 
 Submit lists or objects as JSON text in forms, such as `size=[512,768]`. A new upload also needs an endpoint `File(...)` argument, file-saving code, and upload-field documentation in `form_request_openapi()`.
 

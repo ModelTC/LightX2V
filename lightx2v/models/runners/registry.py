@@ -63,4 +63,4 @@ RUNNER_MODULES = {
 
 def get_model_spec(model_cls):
     module = RUNNER_MODULES[model_cls].rsplit(".", 1)[0]
-    return import_module(f"{module}.cli").SPECS[model_cls]
+    return import_module(f"{module}.request_spec").SPECS[model_cls]

@@ -19,7 +19,7 @@ SPECS = {
                 COMMON,
                 aspect_ratio=Argument(help="Output aspect ratio."),
                 prompt=Argument(help="Text prompt."),
-                size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
             ),
             "i2i": dict(
                 COMMON,

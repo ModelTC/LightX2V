@@ -7,8 +7,8 @@ SPECS = {
             "sr": dict(
                 COMMON,
                 image_path=Argument(help="Input image path."),
-                sr_ratio=Argument(type=float, help="super resolution ratio for sr task"),
-                size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+                sr_ratio=Argument(type=float, gt=0, help="super resolution ratio for sr task"),
+                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
                 video_path=Argument(help="Input video path."),
             )
         }

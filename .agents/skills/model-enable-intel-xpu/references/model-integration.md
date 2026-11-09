@@ -100,7 +100,7 @@ touch lightx2v/models/schedulers/$MODEL/__init__.py
 | `video_encoders/hf/{model}/vae.py` | 包装 diffusers AutoencoderKL* |
 | `input_encoders/hf/{model}/text_encoder.py` | 包装 T5 / CLIP / Qwen 等 |
 | `runners/{model}/{model}_runner.py` | Runner 注册（见第七步） |
-| `runners/{model}/cli.py` | 任务及请求参数声明（见第七步） |
+| `runners/{model}/request_spec.py` | 任务及请求参数声明（见第七步） |
 | `schedulers/{model}/{model}_scheduler.py` | Flow Matching / DDIM 等 |
 
 ---
@@ -241,7 +241,7 @@ class MyModelRunner(DefaultRunner):
         self.scheduler = MyScheduler(self.config)
 ```
 
-在 `runners/{model}/cli.py` 中声明任务和请求参数：
+在 `runners/{model}/request_spec.py` 中声明任务和请求参数：
 
 ```python
 from lightx2v.models.runners.request_args import VIDEO

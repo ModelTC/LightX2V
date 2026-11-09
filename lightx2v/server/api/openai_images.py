@@ -10,13 +10,14 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from lightx2v.models.runners.registry import get_model_spec
+from lightx2v.utils.request_spec import create_request_model
+
 from ..schema import ImageTaskRequest, Usage, hide_request_defaults
 from ..services.file_service import FileService
 from ..task_manager import TaskStatus, task_manager
 from .deps import get_services
-from .request_parsing import form_request_openapi, parse_form_request
-
-router = APIRouter()
+from .request_parsing import form_request_openapi, parse_form_request, validate_request
 
 _SIZE_PATTERN = re.compile(r"^\s*(\d+)\s*x\s*(\d+)\s*$", re.IGNORECASE)
 OPENAI_IMAGE_RESULT_POLL_INTERVAL_SECONDS = 0.2
@@ -24,15 +25,13 @@ OPENAI_IMAGE_PROTOCOL_FIELDS = {"model", "n", "size", "response_format", "user"}
 
 
 class OpenAIImageRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra=lambda schema: hide_request_defaults(schema, keep_defaults=OPENAI_IMAGE_PROTOCOL_FIELDS))
+    model_config = ConfigDict(extra="forbid", json_schema_extra=lambda schema: hide_request_defaults(schema, keep_defaults=OPENAI_IMAGE_PROTOCOL_FIELDS))
 
     prompt: str = Field(..., description="Text prompt")
     model: Optional[str] = Field(default=None, description="Ignored for compatibility")
     n: int = Field(default=1, description="Number of images, currently only supports 1")
     size: Optional[str] = Field(default=None, description="Image size, e.g. 1024x1024")
-    resolution: Optional[int] = Field(None, gt=0, description="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config")
     user: Optional[str] = Field(default=None, description="Ignored for compatibility")
-    seed: Optional[int] = Field(default=None, description="Optional random seed")
 
 
 class OpenAIImageGenerationRequest(OpenAIImageRequest):
@@ -41,8 +40,6 @@ class OpenAIImageGenerationRequest(OpenAIImageRequest):
 
 class OpenAIImageEditRequest(OpenAIImageRequest):
     response_format: Literal["url", "b64_json"] = "url"
-    negative_prompt: str = ""
-    i2i_denoise_strength: Optional[float] = None
 
 
 class OpenAIImageResponse(BaseModel):
@@ -124,7 +121,7 @@ async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> t
         task_id = task_manager.create_task(message)
         create_task_elapsed_ms = (time.perf_counter() - create_task_start) * 1000
         message.task_id = task_id
-        logger.info(f"Task {task_id} OpenAI image create_task cost {create_task_elapsed_ms:.2f} ms prompt_chars={len(message.prompt)} image_size={message.size}")
+        logger.info(f"Task {task_id} OpenAI image create_task cost {create_task_elapsed_ms:.2f} ms prompt_chars={len(message.prompt)} image_size={message.get('size')}")
 
         wait_task = asyncio.create_task(_wait_task_result_png(task_id, timeout_seconds, poll_interval_seconds))
         disconnect_task = asyncio.create_task(_watch_client_disconnect(request, task_id))
@@ -190,7 +187,7 @@ def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, r
     return response
 
 
-def _build_image_task_request(body: OpenAIImageRequest, *, task: str) -> ImageTaskRequest:
+def _build_image_task_request(body: OpenAIImageRequest, request_type, *, task: str) -> ImageTaskRequest:
     if body.n != 1:
         raise HTTPException(status_code=400, detail="Only n=1 is currently supported")
     if not body.prompt.strip():
@@ -205,14 +202,7 @@ def _build_image_task_request(body: OpenAIImageRequest, *, task: str) -> ImageTa
             payload["size"] = [height, width]
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    return ImageTaskRequest(task=task, **payload)
-
-
-@router.post("/generations", response_model=OpenAIImageResponse)
-async def create_openai_image_generation(request: Request, body: OpenAIImageGenerationRequest):
-    message = _build_image_task_request(body, task="t2i")
-    result_png, usage = await _run_sync_image_task(request, message)
-    return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
+    return validate_request(request_type, dict(payload, task=task))
 
 
 async def _save_upload_file(file: UploadFile, file_service: FileService) -> str:
@@ -228,46 +218,69 @@ async def _save_upload_file(file: UploadFile, file_service: FileService) -> str:
     return str(file_path)
 
 
-@router.post(
-    "/edits",
-    response_model=OpenAIImageResponse,
-    openapi_extra=form_request_openapi(
-        OpenAIImageEditRequest,
-        image={"type": "array", "items": {"type": "string", "format": "binary"}},
-        mask={"type": "string", "format": "binary"},
-    ),
-)
-async def create_openai_image_edit(
-    request: Request,
-    image: list[UploadFile] | None = File(default=None),
-    mask: UploadFile | None = File(default=None),
-):
-    form = await request.form()
-    image_uploads = list(image or [])
-    if not image_uploads:
-        image_uploads = [upload for upload in form.getlist("image[]") if hasattr(upload, "filename") and hasattr(upload, "read")]
+def create_router(config, request_type):
+    router = APIRouter()
+    spec = get_model_spec(config["model_cls"])
+    tasks = spec.get_tasks(config)
 
-    # Preserve FastAPI's previous empty-form defaults, except negative_prompt:
-    # its explicitly submitted empty string must still reach the runner.
-    form_data = {key: value for key, value in form.items() if key not in {"image", "image[]", "mask"} and (value != "" or key == "negative_prompt")}
-    body = parse_form_request(OpenAIImageEditRequest, form_data)
-    message = _build_image_task_request(body, task="i2i")
+    def request_model(task, base):
+        arguments = {name: argument for name, argument in spec.get_arguments(config, task).items() if argument.server and name != "task" and name not in base.model_fields}
+        return create_request_model(f"{config['model_cls']}_{base.__name__}", arguments, base=base)
 
-    services = get_services()
-    assert services.file_service is not None, "File service is not initialized"
+    if "t2i" in tasks:
+        generation_request = request_model("t2i", OpenAIImageGenerationRequest)
 
-    if not image_uploads:
-        raise HTTPException(status_code=400, detail="At least one image is required")
-    if mask is not None and len(image_uploads) != 1:
-        raise HTTPException(status_code=400, detail="mask is only supported when exactly one image is uploaded")
+        @router.post("/generations", response_model=OpenAIImageResponse)
+        async def create_openai_image_generation(request: Request, body: generation_request):
+            message = _build_image_task_request(body, request_type, task="t2i")
+            result_png, usage = await _run_sync_image_task(request, message)
+            return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
 
-    image_paths = []
-    for image_upload in image_uploads:
-        image_paths.append(await _save_upload_file(image_upload, services.file_service))
-    message.image_path = ",".join(image_paths)
+    if "i2i" in tasks:
+        edit_request = request_model("i2i", OpenAIImageEditRequest)
 
-    if mask is not None:
-        message.image_mask_path = await _save_upload_file(mask, services.file_service)
+        @router.post(
+            "/edits",
+            response_model=OpenAIImageResponse,
+            openapi_extra=form_request_openapi(
+                edit_request,
+                image={"type": "array", "items": {"type": "string", "format": "binary"}},
+                mask={"type": "string", "format": "binary"},
+            ),
+        )
+        async def create_openai_image_edit(
+            request: Request,
+            image: list[UploadFile] | None = File(default=None),
+            mask: UploadFile | None = File(default=None),
+        ):
+            form = await request.form()
+            image_uploads = list(image or [])
+            if not image_uploads:
+                image_uploads = [upload for upload in form.getlist("image[]") if hasattr(upload, "filename") and hasattr(upload, "read")]
 
-    result_png, usage = await _run_sync_image_task(request, message)
-    return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
+            # Preserve FastAPI's previous empty-form defaults, except negative_prompt:
+            # its explicitly submitted empty string must still reach the runner.
+            form_data = {key: value for key, value in form.items() if key not in {"image", "image[]", "mask"} and (value != "" or key == "negative_prompt")}
+            body = parse_form_request(edit_request, form_data)
+            message = _build_image_task_request(body, request_type, task="i2i")
+
+            services = get_services()
+            assert services.file_service is not None, "File service is not initialized"
+
+            if not image_uploads:
+                raise HTTPException(status_code=400, detail="At least one image is required")
+            if mask is not None and len(image_uploads) != 1:
+                raise HTTPException(status_code=400, detail="mask is only supported when exactly one image is uploaded")
+
+            image_paths = []
+            for image_upload in image_uploads:
+                image_paths.append(await _save_upload_file(image_upload, services.file_service))
+            message.image_path = ",".join(image_paths)
+
+            if mask is not None:
+                message.image_mask_path = await _save_upload_file(mask, services.file_service)
+
+            result_png, usage = await _run_sync_image_task(request, message)
+            return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
+
+    return router

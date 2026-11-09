@@ -12,12 +12,12 @@ SPECS = {
         {
             "t2i": dict(
                 IMAGE,
-                resolution=Argument(type=int, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
+                resolution=Argument(type=int, gt=0, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
             ),
             "i2i": dict(
                 IMAGE,
                 image_path=Argument(help="Input image path."),
-                resolution=Argument(type=int, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
+                resolution=Argument(type=int, gt=0, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
             ),
         },
     ),

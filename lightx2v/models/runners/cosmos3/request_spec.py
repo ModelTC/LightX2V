@@ -6,7 +6,7 @@ SPECS = {
         {
             "t2i": dict(
                 COMMON | PROMPT,
-                size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
             ),
             "t2v": VIDEO,
             "i2v": dict(
@@ -24,11 +24,11 @@ SPECS = {
                 action_path=Argument(help="Input action path."),
                 domain_name=Argument(help="Cosmos3 action embodiment domain name."),
                 image_path=Argument(help="Input image path."),
-                policy_image=Argument(cli=False),
-                policy_state=Argument(cli=False),
+                policy_image=Argument(server=False, cli=False),
+                policy_state=Argument(server=False, cli=False),
                 save_action_path=Argument(help="Output action file path."),
                 state_path=Argument(help="Input robot state file."),
-                size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
                 video_path=Argument(help="Input video path."),
                 view_point=Argument(help="Cosmos3 action viewpoint label."),
             ),
@@ -39,7 +39,7 @@ SPECS = {
                 domain_name=Argument(help="Cosmos3 action embodiment domain name."),
                 image_path=Argument(help="Input image path."),
                 save_action_path=Argument(help="Output action file path."),
-                size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
                 video_path=Argument(help="Input video path."),
                 view_point=Argument(help="Cosmos3 action viewpoint label."),
             ),

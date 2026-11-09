@@ -24,11 +24,11 @@ SPECS = {
         {
             "t2i": dict(
                 without(COMMON, "return_result_tensor"),
-                size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
             ),
             "i2i": dict(
                 without(COMMON, "return_result_tensor"),
-                size=Argument(type=int, nargs="+", help="Output size in pixels: HEIGHT WIDTH"),
+                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
             ),
         },
     ),
