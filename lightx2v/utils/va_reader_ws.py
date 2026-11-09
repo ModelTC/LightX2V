@@ -272,8 +272,8 @@ class MinimaxH3CausalWSReader(SekoARWSReader):
 
         origin_audio = None
         valid_duration = 0
-        try:
-            if self.rank == self.target_rank and self.chat_adapter is not None:
+        if self.rank == self.target_rank and self.chat_adapter is not None:
+            try:
                 if self.chat_adapter.reset_prev:
                     self.chat_adapter.reset_prev = False
 
@@ -287,13 +287,15 @@ class MinimaxH3CausalWSReader(SekoARWSReader):
                 else:
                     origin_audio, valid_duration = self.prepare_audio_data(None)
 
-            if self.world_size > 1:
-                origin_audio = self.braodcast_audio_data(origin_audio, self.origin_audio_tensor, self.origin_flag_tensor)
-                valid_duration = self.braodcast_valid_duration(valid_duration)
+            except Exception:
+                logger.warning(f"Failed to get voice segment: {traceback.format_exc()}")
+                origin_audio, valid_duration = None, 0
 
-            origin_audio = self.bytes_to_ndarray(origin_audio)
-            return origin_audio, valid_duration
+        # Preparation errors are local to the source rank. Broadcast the empty
+        # result so peers skip this segment together instead of hanging in NCCL.
+        if self.world_size > 1:
+            origin_audio = self.braodcast_audio_data(origin_audio, self.origin_audio_tensor, self.origin_flag_tensor)
+            valid_duration = self.braodcast_valid_duration(valid_duration)
 
-        except Exception:
-            logger.warning(f"Failed to get voice segment: {traceback.format_exc()}")
-            return None, 0
+        origin_audio = self.bytes_to_ndarray(origin_audio)
+        return origin_audio, valid_duration

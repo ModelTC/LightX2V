@@ -428,16 +428,27 @@ class OmniVAReader:
         return audio_data
 
     def convert_pcm_s16le_to_mono_resampled(self, audio_data, audio_info):
-        audio = np.frombuffer(audio_data, dtype=np.int16)
+        # Network chunks may split samples. The adapter buffers them until a
+        # segment is ready; only a truncated final PCM frame can remain here.
+        frame_bytes = audio_info.channel_count * np.dtype("<i2").itemsize
+        trailing_bytes = len(audio_data) % frame_bytes
+        if trailing_bytes:
+            logger.warning(f"Discarding {trailing_bytes} trailing byte(s) from incomplete PCM frame: {audio_info}")
+            audio_data = audio_data[:-trailing_bytes]
+        audio = np.frombuffer(audio_data, dtype="<i2")
         sample_count = audio_info.sample_count
         assert len(audio) == sample_count * audio_info.channel_count, f"audio length {len(audio)} != sample_count * channel_count {sample_count * audio_info.channel_count}"
+        if sample_count == 0:
+            return audio, 0
         # convert to mono
         if audio_info.channel_count > 1:
-            audio = audio.reshape(-1, audio_info.channel_count).mean(axis=1)
+            audio = audio.reshape(-1, audio_info.channel_count).mean(axis=1).astype(np.int16)
 
         # logger.info(f"audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()}")
         if audio_info.sample_rate != self.sample_rate:
             sample_count = int(len(audio) * self.sample_rate / audio_info.sample_rate)
+            if sample_count == 0:
+                return np.array([], dtype=np.int16), 0
             audio = resample(audio, sample_count).astype(np.int16)
             # logger.info(f"resampled audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()} {sample_count}")
         logger.warning(f"valid audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()} {sample_count}")
@@ -517,7 +528,9 @@ class OmniVAReader:
                     audio_data, valid_duration = self.prepare_audio_data(None)
             except Exception as e:
                 logger.warning(f"Failed to get voice segment: {e}")
-                return None, 0
+                audio_data, valid_duration = None, 0
+        # Even when the source rank cannot prepare audio, every rank must enter
+        # the same broadcasts and receive the same empty result.
         if self.world_size > 1:
             audio_data = self.braodcast_audio_data(audio_data)
             valid_duration = self.braodcast_valid_duration(valid_duration)
@@ -781,8 +794,8 @@ class SekoAROmniVAReader(OmniVAReader):
         origin_audio = None
         latent_audio = None
         valid_duration = 0
-        try:
-            if self.rank == self.target_rank:
+        if self.rank == self.target_rank:
+            try:
                 fetch_duration = self.get_fetch_duration()
                 # logger.info(f"Get segment, fetch_duration: {fetch_duration}")
                 if self.chat_adapter.status == "voice":
@@ -797,21 +810,21 @@ class SekoAROmniVAReader(OmniVAReader):
                 else:
                     origin_audio, latent_audio, valid_duration = self.prepare_audio_data(None)
 
-            if self.world_size > 1:
-                origin_audio = self.braodcast_audio_data(origin_audio, self.origin_audio_tensor, self.origin_flag_tensor)
-                latent_audio = self.braodcast_audio_data(latent_audio, self.latent_audio_tensor, self.latent_flag_tensor)
-                valid_duration = self.braodcast_valid_duration(valid_duration)
+            except Exception:
+                logger.warning(f"Failed to get voice segment: {traceback.format_exc()}")
+                origin_audio, latent_audio, valid_duration = None, None, 0
 
-            origin_audio = self.bytes_to_ndarray(origin_audio)
-            latent_audio = self.bytes_to_ndarray(latent_audio)
-            if latent_audio is not None:
-                # latent_audio: (latent_per_chunk, audio_window * sr)
-                latent_audio = latent_audio.reshape(self.latent_per_chunk, -1)
-            return origin_audio, latent_audio, valid_duration
+        if self.world_size > 1:
+            origin_audio = self.braodcast_audio_data(origin_audio, self.origin_audio_tensor, self.origin_flag_tensor)
+            latent_audio = self.braodcast_audio_data(latent_audio, self.latent_audio_tensor, self.latent_flag_tensor)
+            valid_duration = self.braodcast_valid_duration(valid_duration)
 
-        except Exception:
-            logger.warning(f"Failed to get voice segment: {traceback.format_exc()}")
-            return None, None, 0
+        origin_audio = self.bytes_to_ndarray(origin_audio)
+        latent_audio = self.bytes_to_ndarray(latent_audio)
+        if latent_audio is not None:
+            # latent_audio: (latent_per_chunk, audio_window * sr)
+            latent_audio = latent_audio.reshape(self.latent_per_chunk, -1)
+        return origin_audio, latent_audio, valid_duration
 
     def braodcast_audio_data(self, audio_data, audio_tensor, flag_tensor):
         if self.rank == self.target_rank:
