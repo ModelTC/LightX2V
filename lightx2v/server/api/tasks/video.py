@@ -1,16 +1,15 @@
-import asyncio
-
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Request
 from loguru import logger
 
 from ...schema import TaskResponse
 from ...task_manager import task_manager
 from ..deps import get_services, validate_url_async
-from ..request_parsing import form_request_openapi, parse_form_request
+from ..request_parsing import form_request_openapi, parse_upload_form
 
 
 def create_router(request_type):
     router = APIRouter()
+    uploads = {"image_file": "image_path", "last_frame_file": "last_frame_path", "audio_file": "audio_path"}
 
     @router.post("/", response_model=TaskResponse, deprecated=True)
     @router.post("/video/", response_model=TaskResponse)
@@ -37,36 +36,14 @@ def create_router(request_type):
     @router.post(
         "/video/form",
         response_model=TaskResponse,
-        openapi_extra=form_request_openapi(
-            request_type,
-            image_file={"type": "string", "format": "binary"},
-            last_frame_file={"type": "string", "format": "binary"},
-            audio_file={"type": "string", "format": "binary"},
-        ),
+        openapi_extra=form_request_openapi(request_type, uploads=uploads),
     )
-    async def create_video_task_form(
-        request: Request,
-        image_file: UploadFile = File(None),
-        last_frame_file: UploadFile = File(None),
-        audio_file: UploadFile = File(None),
-    ):
+    async def create_video_task_form(request: Request):
         services = get_services()
         assert services.file_service is not None, "File service is not initialized"
 
-        form = await request.form()
-        data = {key: value for key, value in form.items() if key not in {"image_file", "last_frame_file", "audio_file"}}
-        if image_file and image_file.filename:
-            content = await image_file.read()
-            data["image_path"] = str(await asyncio.to_thread(services.file_service.save_uploaded_file, content, image_file.filename))
-
-        if last_frame_file and last_frame_file.filename:
-            content = await last_frame_file.read()
-            data["last_frame_path"] = str(await asyncio.to_thread(services.file_service.save_uploaded_file, content, last_frame_file.filename))
-
-        if audio_file and audio_file.filename:
-            content = await audio_file.read()
-            data["audio_path"] = str(await asyncio.to_thread(services.file_service.save_uploaded_file, content, audio_file.filename, services.file_service.input_audio_dir))
-
-        return await create_video_task(parse_form_request(request_type, data))
+        async with request.form() as form:
+            message = await parse_upload_form(request_type, form, services.file_service, uploads)
+        return await create_video_task(message)
 
     return router

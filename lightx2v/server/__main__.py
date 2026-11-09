@@ -1,7 +1,5 @@
 import argparse
 
-from .main import run_server
-
 
 def main():
     parser = argparse.ArgumentParser(description="LightX2V Server")
@@ -18,7 +16,11 @@ def main():
     parser.add_argument("--metric_port", type=int, default=None, help="Metrics server port")
     parser.add_argument("--max_queue_size", type=int, default=10, help="Maximum active tasks (pending + processing)")
 
-    run_server(parser.parse_args())
+    args = parser.parse_args()
+
+    from .main import run_server
+
+    run_server(args)
 
 
 if __name__ == "__main__":

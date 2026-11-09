@@ -1,5 +1,6 @@
 """Decode form requests and document them from their JSON schemas."""
 
+import asyncio
 import json
 from functools import lru_cache
 from typing import Annotated, get_args, get_origin
@@ -7,6 +8,7 @@ from typing import Annotated, get_args, get_origin
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from starlette.datastructures import UploadFile
 
 
 def _contains_json_value(annotation):
@@ -53,6 +55,24 @@ def parse_form_request(request_cls, request_data):
     return validate_request(request_cls, request_data, strict=False)
 
 
+async def parse_upload_form(request_cls, form, file_service, uploads):
+    """Save uploaded files into their request path fields, then validate the form."""
+    data = dict(form)
+    for name, field in uploads.items():
+        upload = data.pop(name, None)
+        if not upload:
+            continue
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(status_code=422, detail=f"{name} must be a file")
+        if not upload.filename:
+            continue
+        content = await upload.read()
+        target_dir = file_service.input_audio_dir if field == "audio_path" else None
+        path = await asyncio.to_thread(file_service.save_uploaded_file, content, upload.filename, target_dir)
+        data[field] = str(path)
+    return parse_form_request(request_cls, data)
+
+
 def _inline_schema_refs(value, definitions):
     if isinstance(value, list):
         return [_inline_schema_refs(item, definitions) for item in value]
@@ -63,7 +83,7 @@ def _inline_schema_refs(value, definitions):
     return value
 
 
-def form_request_openapi(request_cls, **upload_fields):
+def form_request_openapi(request_cls, *, uploads=None, **extra_fields):
     """Describe raw form fields without duplicating scalar endpoint parameters."""
     schema = TypeAdapter(request_cls).json_schema()
     schema = _inline_schema_refs(schema, schema.pop("$defs", {}))
@@ -79,6 +99,7 @@ def form_request_openapi(request_cls, **upload_fields):
                 "title": field_schema.get("title", name),
                 "description": (field_schema.get("description", "") + " Submit lists and objects as JSON text.").strip(),
             }
-        variant["properties"].update(upload_fields)
+        variant["properties"].update(extra_fields)
+        variant["properties"].update({name: {"type": "string", "format": "binary"} for name, field in (uploads or {}).items() if field in variant["properties"]})
     schema.pop("discriminator", None)
     return {"requestBody": {"required": any(variant.get("required") for variant in variants), "content": {"multipart/form-data": {"schema": schema}}}}
