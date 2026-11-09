@@ -14,6 +14,10 @@ bash scripts/server/start_server.sh
 
 单任务服务在启动时绑定任务，JSON 和表单请求都不能包含 `task`。MiniMax-H3 等多任务服务则需要每次在原生请求中传入 `task`。运行中服务的 `/docs` 会展示对应的请求结构。
 
+接口按任务输出类型注册：H3、Wan 视频服务只开放视频生成接口，图像服务只开放图片生成接口。SR 模型可同时开放两类接口，并检查请求与输出类型是否匹配。当前服务尚无文本、网格、深度和重建输出的适配器。
+
+BAGEL、Flux2、HiDream-O1-Image、Z-Image、LingBot-Video、HunyuanImage3、LTX2/LTX2.5、Wan2.2 TI2V-5B 和 Cosmos3 Omni 支持请求级任务：启动时省略 `--task`，每次原生请求指定 `task`。HunyuanImage3 只开放图像任务；Cosmos3 在启动 JSON 中通过 `model_variant` 区分模型版本。
+
 ## 提交视频任务
 
 服务就绪后，在另一个终端提交请求。以下示例适用于默认 T2V 服务：

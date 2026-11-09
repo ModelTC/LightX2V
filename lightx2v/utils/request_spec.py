@@ -4,6 +4,8 @@ import argparse
 import json
 from typing import Literal, get_args, get_origin
 
+OutputType = Literal["image", "video", "text", "mesh", "depth", "reconstruction"]
+
 
 class Argument:
     def __init__(self, type=str, *, cli=True, server=True, gt=None, ge=None, lt=None, le=None, strict=None, **options):
@@ -37,16 +39,28 @@ class Argument:
         return annotation | None, Field(default=None, description=self.options.get("help"), **self.constraints)
 
 
-def create_request_model(name, arguments, *, base=None, **fields):
+def create_request_model(name, arguments, *, base=None, validators=None, **fields):
     from pydantic import ConfigDict, create_model
 
     options = {"__base__": base} if base is not None else {"__config__": ConfigDict(extra="forbid")}
+    if validators:
+        options["__validators__"] = validators
     definitions = {name: argument.model_field() for name, argument in arguments.items()}
     return create_model(name, **options, **(definitions | fields))
 
 
+class TaskSpec:
+    def __init__(self, arguments: dict[str, Argument], *, outputs: tuple[OutputType, ...]):
+        self.arguments = arguments
+        self.outputs = outputs
+
+    def get_output_type(self, inputs):
+        (output,) = self.outputs
+        return output
+
+
 class RequestSpec:
-    def __init__(self, tasks: dict[str, dict[str, Argument]]):
+    def __init__(self, tasks: dict[str, TaskSpec]):
         self.tasks = tasks
 
     def get_tasks(self, config):
@@ -56,7 +70,10 @@ class RequestSpec:
         return (task,)
 
     def get_arguments(self, config, task):
-        return dict(self.tasks[task])
+        return dict(self.tasks[task].arguments)
+
+    def get_tasks_for_output(self, config, output: OutputType):
+        return tuple(task for task in self.get_tasks(config) if output in self.tasks[task].outputs)
 
     def get_fields(self, config, task):
         return frozenset(self.get_arguments(config, task))

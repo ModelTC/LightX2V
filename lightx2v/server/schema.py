@@ -1,9 +1,9 @@
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from lightx2v.models.runners.registry import get_model_spec
-from lightx2v.utils.request_spec import create_request_model
+from lightx2v.utils.request_spec import OutputType, create_request_model
 
 from ..utils.generate_task_id import generate_task_id
 
@@ -69,23 +69,41 @@ class ImageTaskRequest(BaseTaskRequest):
     _prefer_memory_result: bool = PrivateAttr(default=False)
 
 
-def build_task_request(config, base):
-    """Build this service's request schema from its model and supported tasks."""
+def _output_validator(config, task, output):
+    @model_validator(mode="after")
+    def check_output(self):
+        inputs = dict(config)
+        inputs.update(self.model_dump(exclude_unset=True, exclude_none=True))
+        actual = task.get_output_type(inputs)
+        if actual is not None and actual != output:
+            raise ValueError(f"This request produces {actual}; use /v1/tasks/{actual}/.")
+        return self
+
+    return check_output
+
+
+def build_task_request(config, base, output: OutputType):
+    """Build a schema for tasks compatible with this output API."""
     spec = get_model_spec(config["model_cls"])
-    tasks = spec.get_tasks(config)
-    single_task = len(tasks) == 1
+    tasks = spec.get_tasks_for_output(config, output)
+    if not tasks:
+        return None
+    single_task = len(spec.get_tasks(config)) == 1
     models = []
     for task in tasks:
         arguments = {name: argument for name, argument in spec.get_arguments(config, task).items() if argument.server and name != "task"}
         fields = {} if single_task else {"task": (Literal[task], Field(..., description="Inference task"))}
+        definition = spec.tasks[task]
+        validators = {"check_output": _output_validator(config, definition, output)} if len(definition.outputs) > 1 else None
         model = create_request_model(
             f"{config['model_cls']}_{task}_{base.__name__}",
             arguments,
             base=base,
+            validators=validators,
             **fields,
         )
         models.append(model)
-    if single_task:
+    if len(models) == 1:
         return models[0]
     return Annotated[Union[tuple(models)], Field(discriminator="task")]
 

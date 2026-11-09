@@ -159,7 +159,7 @@ Runner should follow the closest existing family style.
 Responsibilities:
 
 - register with `@RUNNER_REGISTER("<model_cls>")` and add its import path to `registry.RUNNER_MODULES`
-- declare tasks and arguments in the family's `request_spec.py` through `SPECS`, `RequestSpec` and `Argument`; reuse common groups from `request_args.py`, and keep model-specific parameters local
+- declare tasks and arguments in the family's `request_spec.py` through `SPECS`, `RequestSpec`, `TaskSpec` and `Argument`; declare output types on each `TaskSpec` so HTTP routes match generated media; reuse common groups from `request_args.py`, and keep model-specific parameters local
 - add `input_info_cls_by_task` or `INPUT_INFO_TYPES` entries only when needed
 - initialize/load modules
 - initialize scheduler(s)

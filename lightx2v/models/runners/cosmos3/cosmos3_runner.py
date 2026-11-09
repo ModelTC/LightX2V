@@ -141,6 +141,12 @@ class Cosmos3Runner(DefaultRunner):
         input_info.view_point = request_data.get("view_point", "")
         input_info.action_chunk_size = None
         input_info.raw_action_dim = None
+        if input_info.task == "t2i":
+            input_info.num_frames = 1
+        if input_info.task in ("t2av", "i2av") and not self.config.get("sound_gen", False):
+            raise ValueError("Cosmos3 audio-video tasks require a checkpoint with sound_gen=True.")
+        if input_info.task in ("i2va", "v2av") and not self.config.get("action_gen", False):
+            raise ValueError("Cosmos3 action tasks require a checkpoint with action_gen=True.")
         return input_info
 
     @ProfilingContext4DebugL2("Load models")
@@ -181,10 +187,6 @@ class Cosmos3Runner(DefaultRunner):
             assert self.config.get("cpu_offload", False)
         if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)
-        if self.config["task"] in ("t2av", "i2av") and not self.config.get("sound_gen", False):
-            raise ValueError("Cosmos3 sound generation requires a checkpoint with sound_gen=True.")
-        if (self.config.get("action_mode", "") or self.config["task"] in ("i2va", "v2av")) and not self.config.get("action_gen", False):
-            raise ValueError("Cosmos3 action generation requires a checkpoint with action_gen=True.")
         self.run_input_encoder = self._run_input_encoder_local
         self.run_dit = self._run_dit_local
         self.config.lock()
@@ -225,10 +227,9 @@ class Cosmos3Runner(DefaultRunner):
         return self._action_spec
 
     def _get_action_mode(self):
-        mode = getattr(self.input_info, "action_mode", None) or self.config.get("action_mode", "")
-        if self.config["task"] in ("i2va", "v2av") and not mode:
-            mode = "inverse_dynamics" if self.config["task"] == "v2av" else "forward_dynamics"
-        return mode or None
+        if self.input_info.task not in ("i2va", "v2av"):
+            return None
+        return self.input_info.action_mode or ("inverse_dynamics" if self.input_info.task == "v2av" else "forward_dynamics")
 
     def _get_action_value(self, key, default=None):
         value = getattr(self.input_info, key, None)
@@ -434,7 +435,7 @@ class Cosmos3Runner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Prepare i2v condition")
     def _prepare_i2v_condition_latents(self):
-        if self.config["task"] not in ("i2v", "i2av"):
+        if self.input_info.task not in ("i2v", "i2av"):
             return
         if self.input_info.vision_condition_latents is not None:
             return
@@ -942,7 +943,7 @@ class Cosmos3Runner(DefaultRunner):
         return outputs
 
     def _is_video_output(self, input_info):
-        return input_info.num_frames > 1
+        return input_info.task != "t2i"
 
     def end_run(self):
         if hasattr(self, "model") and self.model is not None:

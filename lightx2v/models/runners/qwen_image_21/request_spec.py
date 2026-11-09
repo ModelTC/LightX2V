@@ -1,5 +1,5 @@
 from lightx2v.models.runners.request_args import IMAGE
-from lightx2v.utils.request_spec import Argument, RequestSpec
+from lightx2v.utils.request_spec import Argument, RequestSpec, TaskSpec
 
 
 class QwenImage21Spec(RequestSpec):
@@ -10,14 +10,20 @@ class QwenImage21Spec(RequestSpec):
 SPECS = {
     "qwen_image_21": QwenImage21Spec(
         {
-            "t2i": dict(
-                IMAGE,
-                resolution=Argument(type=int, gt=0, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
+            "t2i": TaskSpec(
+                dict(
+                    IMAGE,
+                    resolution=Argument(type=int, gt=0, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
+                ),
+                outputs=("image",),
             ),
-            "i2i": dict(
-                IMAGE,
-                image_path=Argument(help="Input image path."),
-                resolution=Argument(type=int, gt=0, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
+            "i2i": TaskSpec(
+                dict(
+                    IMAGE,
+                    image_path=Argument(help="Input image path."),
+                    resolution=Argument(type=int, gt=0, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
+                ),
+                outputs=("image",),
             ),
         },
     ),

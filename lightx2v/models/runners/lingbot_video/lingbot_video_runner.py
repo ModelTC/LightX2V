@@ -86,10 +86,11 @@ class LingBotVideoRunner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
-        self._run_warmup()
+        for task in self.supported_tasks:
+            self._run_warmup(task)
         self._maybe_freeze_gc()
 
-    def _run_warmup(self):
+    def _run_warmup(self, task):
         scheduler = self.model.scheduler
         text_encoder_output = None
 
@@ -97,7 +98,7 @@ class LingBotVideoRunner(DefaultRunner):
             logger.info(f"Warmup: {height}x{width}")
             try:
                 scheduler.generator = None
-                text_encoder_output = self._prepare_warmup_inputs(height, width, text_encoder_output)
+                text_encoder_output = self._prepare_warmup_inputs(task, height, width, text_encoder_output)
                 scheduler.prepare(self.input_info)
                 self._apply_condition_latent()
                 scheduler.step_pre(step_index=0)
@@ -111,9 +112,10 @@ class LingBotVideoRunner(DefaultRunner):
 
         logger.info("[Warmup] Warmup completed")
 
-    def _prepare_warmup_inputs(self, height, width, text_encoder_output=None):
-        input_cls = {"t2i": T2IInputInfo, "t2v": T2VInputInfo, "i2v": I2VInputInfo}[self.config["task"]]
+    def _prepare_warmup_inputs(self, task, height, width, text_encoder_output=None):
+        input_cls = {"t2i": T2IInputInfo, "t2v": T2VInputInfo, "i2v": I2VInputInfo}[task]
         self.input_info = input_cls(
+            task=task,
             seed=0,
             prompt="warmup",
             negative_prompt="",
@@ -121,7 +123,7 @@ class LingBotVideoRunner(DefaultRunner):
             return_result_tensor=True,
         )
 
-        if self.config["task"] == "i2v":
+        if task == "i2v":
             self.inputs = self._run_input_encoder_local_i2v(Image.new("RGB", (width, height), color=0))
         else:
             if text_encoder_output is None:
@@ -167,12 +169,13 @@ class LingBotVideoRunner(DefaultRunner):
 
     def init_modules(self):
         super().init_modules()
-        if self.config["task"] in {"t2i", "t2v"}:
-            self.run_input_encoder = self._run_input_encoder_local_t2v
-        elif self.config["task"] == "i2v":
-            self.run_input_encoder = self._run_input_encoder_local_i2v
         self.run_dit = self._run_dit_local
         self.config.lock()
+
+    def run_input_encoder(self):
+        if self.input_info.task == "i2v":
+            return self._run_input_encoder_local_i2v()
+        return self._run_input_encoder_local_t2v()
 
     def init_scheduler(self):
         super().init_scheduler()
@@ -261,7 +264,7 @@ class LingBotVideoRunner(DefaultRunner):
         if height % 16 != 0 or width % 16 != 0:
             raise ValueError(f"LingBot-Video target shape must be divisible by 16, got {height}x{width}.")
 
-        if self.config["task"] == "t2i":
+        if self.input_info.task == "t2i":
             frames = 1
         else:
             frames = self.get_num_frames()
@@ -318,7 +321,7 @@ class LingBotVideoRunner(DefaultRunner):
             return
         save_result_path = input_info.save_result_path
         os.makedirs(os.path.dirname(os.path.abspath(save_result_path)), exist_ok=True)
-        if self.config["task"] == "t2i":
+        if self.input_info.task == "t2i":
             image = outputs[0] if isinstance(outputs, list) else outputs
             image.save(save_result_path)
             logger.info(f"Image saved: {save_result_path}")
@@ -334,8 +337,8 @@ class LingBotVideoRunner(DefaultRunner):
         torch_device_module.empty_cache()
         gc.collect()
         if self.input_info.return_result_tensor:
-            return {"images": outputs} if self.config["task"] == "t2i" else {"video": outputs}
-        return {"images": None} if self.config["task"] == "t2i" else {"video": None}
+            return {"images": outputs} if self.input_info.task == "t2i" else {"video": outputs}
+        return {"images": None} if self.input_info.task == "t2i" else {"video": None}
 
     @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):

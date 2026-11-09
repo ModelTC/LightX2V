@@ -20,26 +20,35 @@ Qwen-Image-2.1 的 `t2i`、`i2i` 分别使用 `T2IInputInfo`、`I2IInputInfo`，
 
 ```python
 from lightx2v.models.runners.request_args import IMAGE
-from lightx2v.utils.request_spec import Argument
+from lightx2v.utils.request_spec import Argument, TaskSpec
 
 SPECS = {
     "qwen_image_21": QwenImage21Spec(
         {
-            "t2i": dict(
-                IMAGE,
-                resolution=Argument(type=int, gt=0, help="Output resolution."),
+            "t2i": TaskSpec(
+                dict(IMAGE, resolution=Argument(type=int, gt=0, help="Output resolution.")),
+                outputs=("image",),
             ),
-            "i2i": dict(
-                IMAGE,
-                image_path=Argument(help="Input image path."),
-                resolution=Argument(type=int, gt=0, help="Output resolution."),
+            "i2i": TaskSpec(
+                dict(
+                    IMAGE,
+                    image_path=Argument(help="Input image path."),
+                    resolution=Argument(type=int, gt=0, help="Output resolution."),
+                ),
+                outputs=("image",),
             ),
         }
     ),
 }
 ```
 
+`TaskSpec` 将任务参数与输出类型放在一起。`i2v` 虽然输入图片，仍声明 `outputs=("video",)`。服务端只注册与任务输出匹配的图片/视频接口。`request_args.py` 中的 `ImageVideoTaskSpec` 声明两类输出，并根据合并后的启动配置与请求路径判断实际类型；发错接口的请求在入队前返回 HTTP 422。其他输出类型需要对应的服务适配器才能提供服务。
+
 CLI 和 HTTP 都根据这份 Spec 生成请求参数、校验规则和文档，`BaseRunner` 也从同一份 Spec 校验任务与请求字段。模型专属参数直接定义在自己的 `request_spec.py` 中，无需修改公共参数表，或在 runner、服务端 Schema 中重复声明。当前实例实际接受的任务和字段还受启动任务及模型配置限制。涉及模型初始化的参数，需要先确认模型支持在运行时修改。
+
+Spec 只声明对外提供的任务。例如 HunyuanImage3 的文本生成用于图像流程内部的 prompt 增强，对外只提供 `t2i`、`ti2i`、`i2i`。
+
+同一套已加载权重支持多个请求任务时，使用 `MultiTaskSpec`。runner 和 scheduler 在推理时读取 `input_info.task`，初始化时加载各任务需要的组件，并在请求之间清理状态。不要通过每次修改 `config["task"]` 来切换任务，以免将部署设置与请求状态混在一起。
 
 参数与某个启动设置不兼容时，仍在 Spec 中保留声明，在 runner 的请求准备或推理路径中检查，并报出冲突设置及解决方法。不要根据配置从 Spec 中移除这些字段。
 
@@ -81,7 +90,7 @@ runner 合并参数时保留 `0`、`False`、`""`、`[]`。它们是否有效由
 
 CLI 和 HTTP 的请求覆盖值默认都为 `None`，实际默认值继续由启动配置和 `InputInfo` 决定。HTTP 按 `model_fields_set` 转发显式提交的字段，不会用请求模型的构造默认值覆盖启动配置。
 
-服务为每个支持的任务生成请求模型，多任务请求通过必填的 `task` 选择。单任务请求模型不包含 `task`，传入会返回 HTTP 422，由 runner 使用启动时绑定的任务。`/docs` 展示当前模型的字段，而不是所有模型的参数集合。
+服务按输出接口筛选任务并生成请求模型；单任务、多任务规则仍按整个服务的任务集合判断，多任务请求通过必填的 `task` 选择。单任务请求模型不包含 `task`，传入会返回 HTTP 422，由 runner 使用启动时绑定的任务。`/docs` 展示当前模型的字段，而不是所有模型的参数集合。
 
 OpenAI 图片接口共用 Spec 中的推理字段，同时保留必填 `prompt`、`n`、`response_format` 和 `size="WIDTHxHEIGHT"` 等协议约定。格式转换和新增协议控制仍需调整适配器。
 

@@ -25,6 +25,12 @@ class Flux2Runner(DefaultRunner):
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     input_info_cls_by_task = {"i2i": Flux2I2IInputInfo}
 
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if self.config.get("pipefusion_parallel", False) and input_info.task != "t2i":
+            raise ValueError("Flux2 PipeFusion supports task=t2i only.")
+        return input_info
+
     def __init__(self, config):
         self.model_variant = config["model_variant"]
         if self.model_variant == "klein":
@@ -106,13 +112,15 @@ class Flux2Runner(DefaultRunner):
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
 
-        task = self.config.get("task", "t2i")
-        if task == "i2i":
-            self.run_input_encoder = self._run_input_encoder_local_i2i
-            self.run_dit = self._run_dit_local_i2i
-        else:
-            self.run_input_encoder = self._run_input_encoder_local_t2i
-            self.run_dit = self._run_dit_local
+    def run_input_encoder(self):
+        if self.input_info.task == "i2i":
+            return self._run_input_encoder_local_i2i()
+        return self._run_input_encoder_local_t2i()
+
+    def run_dit(self, total_steps=None):
+        if self.input_info.task == "i2i":
+            return self._run_dit_local_i2i(total_steps)
+        return self._run_dit_local(total_steps)
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
@@ -404,7 +412,7 @@ class Flux2Runner(DefaultRunner):
         return (width, height)
 
     def set_latent_shape(self):
-        task = self.config.get("task", "t2i")
+        task = self.input_info.task
         if task == "i2i":
             height, width = self.input_info.size
         else:

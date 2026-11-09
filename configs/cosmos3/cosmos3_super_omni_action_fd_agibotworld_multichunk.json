@@ -1,4 +1,5 @@
 {
+    "model_variant": "omni",
     "infer_steps": 30,
     "sample_shift": 10.0,
     "size": [720, 640],

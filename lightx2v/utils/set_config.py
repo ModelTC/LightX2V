@@ -342,6 +342,10 @@ def normalize_startup_config(config, model_config):
     if config["model_cls"] in {"cosmos3", "lingbot_video"}:
         config.setdefault("num_frames", 1)
         config.setdefault("fps", config.get("base_fps", 24) if config["model_cls"] == "cosmos3" else 24)
+    if config["model_cls"] == "cosmos3" and config.get("model_variant") not in ("omni", "t2i", "i2v", "policy"):
+        raise ValueError("Cosmos3 requires model_variant='omni', 't2i', 'i2v', or 'policy' in the startup config.")
+    if config["model_cls"] == "wan2.2":
+        config.setdefault("use_image_encoder", False)
     if config["model_cls"] == "lingbot_video":
         config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
         config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
@@ -432,7 +436,7 @@ def _validate_pipefusion_config(config):
             "(model_cls='flux2_klein', or model_cls='flux2' with model_variant='klein'); "
             f"got model_cls={model_cls!r}, model_variant={config.get('model_variant')!r}."
         )
-    if config.get("task", "t2i") != "t2i":
+    if config.get("task") not in (None, "t2i"):
         raise ValueError(f"PipeFusion currently supports only the 't2i' task, got {config.get('task', 't2i')!r}.")
     if AI_DEVICE != "cuda":
         raise ValueError(f"PipeFusion requires CUDA, but AI_DEVICE={AI_DEVICE!r}.")

@@ -223,8 +223,8 @@ async def _save_upload_file(file: UploadFile, file_service: FileService) -> str:
 def create_router(config, request_type):
     router = APIRouter()
     spec = get_model_spec(config["model_cls"])
-    tasks = spec.get_tasks(config)
-    multi_task = len(tasks) > 1
+    tasks = spec.get_tasks_for_output(config, "image")
+    multi_task = len(spec.get_tasks(config)) > 1
 
     def request_model(task, base):
         arguments = {name: argument for name, argument in spec.get_arguments(config, task).items() if argument.server and name != "task" and name not in base.model_fields}

@@ -1,8 +1,8 @@
 from lightx2v.models.runners.request_args import COMMON
-from lightx2v.utils.request_spec import Argument, RequestSpec
+from lightx2v.utils.request_spec import Argument, MultiTaskSpec, TaskSpec
 
 
-class Flux2Spec(RequestSpec):
+class Flux2Spec(MultiTaskSpec):
     def get_arguments(self, config, task):
         arguments = super().get_arguments(config, task)
         if task == "i2i" and config.get("inpaint_mask_enabled", False):
@@ -15,16 +15,22 @@ class Flux2Spec(RequestSpec):
 SPECS = {
     "flux2": Flux2Spec(
         {
-            "t2i": dict(
-                COMMON,
-                aspect_ratio=Argument(help="Output aspect ratio."),
-                prompt=Argument(help="Text prompt."),
-                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
+            "t2i": TaskSpec(
+                dict(
+                    COMMON,
+                    aspect_ratio=Argument(help="Output aspect ratio."),
+                    prompt=Argument(help="Text prompt."),
+                    size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
+                ),
+                outputs=("image",),
             ),
-            "i2i": dict(
-                COMMON,
-                image_path=Argument(help="Input image path."),
-                prompt=Argument(help="Text prompt."),
+            "i2i": TaskSpec(
+                dict(
+                    COMMON,
+                    image_path=Argument(help="Input image path."),
+                    prompt=Argument(help="Text prompt."),
+                ),
+                outputs=("image",),
             ),
         },
     ),

@@ -1,5 +1,5 @@
 from lightx2v.models.runners.request_args import COMMON, VIDEO_OUTPUT
-from lightx2v.utils.request_spec import Argument, MultiTaskSpec
+from lightx2v.utils.request_spec import Argument, MultiTaskSpec, TaskSpec
 
 REGENERATION = {
     "draft_steps": Argument(
@@ -22,32 +22,47 @@ REQUEST = COMMON | VIDEO_OUTPUT | REGENERATION
 SPECS = {
     "minimax_h3": MultiTaskSpec(
         {
-            "t2av": dict(
-                REQUEST,
-                prompt=Argument(help="Text prompt."),
+            "t2av": TaskSpec(
+                dict(
+                    REQUEST,
+                    prompt=Argument(help="Text prompt."),
+                ),
+                outputs=("video",),
             ),
-            "i2av": dict(
-                REQUEST,
-                image_path=Argument(help="Input image path; ref2av accepts comma-separated reference images."),
-                prompt=Argument(help="Text prompt."),
+            "i2av": TaskSpec(
+                dict(
+                    REQUEST,
+                    image_path=Argument(help="Input image path; ref2av accepts comma-separated reference images."),
+                    prompt=Argument(help="Text prompt."),
+                ),
+                outputs=("video",),
             ),
-            "l2av": dict(
-                REQUEST,
-                last_frame_path=Argument(help="Last-frame image path."),
-                prompt=Argument(help="Text prompt."),
+            "l2av": TaskSpec(
+                dict(
+                    REQUEST,
+                    last_frame_path=Argument(help="Last-frame image path."),
+                    prompt=Argument(help="Text prompt."),
+                ),
+                outputs=("video",),
             ),
-            "fl2av": dict(
-                REQUEST,
-                image_path=Argument(help="Input image path; ref2av accepts comma-separated reference images."),
-                last_frame_path=Argument(help="Last-frame image path."),
-                prompt=Argument(help="Text prompt."),
+            "fl2av": TaskSpec(
+                dict(
+                    REQUEST,
+                    image_path=Argument(help="Input image path; ref2av accepts comma-separated reference images."),
+                    last_frame_path=Argument(help="Last-frame image path."),
+                    prompt=Argument(help="Text prompt."),
+                ),
+                outputs=("video",),
             ),
-            "ref2av": dict(
-                REQUEST,
-                audio_path=Argument(help="Reference audio paths, separated by commas."),
-                image_path=Argument(help="Input image path; ref2av accepts comma-separated reference images."),
-                prompt=Argument(help="Text prompt."),
-                video_path=Argument(help="Reference video paths, separated by commas."),
+            "ref2av": TaskSpec(
+                dict(
+                    REQUEST,
+                    audio_path=Argument(help="Reference audio paths, separated by commas."),
+                    image_path=Argument(help="Input image path; ref2av accepts comma-separated reference images."),
+                    prompt=Argument(help="Text prompt."),
+                    video_path=Argument(help="Reference video paths, separated by commas."),
+                ),
+                outputs=("video",),
             ),
         },
     ),

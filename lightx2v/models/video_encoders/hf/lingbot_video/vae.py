@@ -340,15 +340,11 @@ class LingBotVideoWanVAE:
         self.vae_config.setdefault("in_channels", 3)
         self.vae_config.setdefault("out_channels", 3)
         self.vae_config.setdefault("num_res_blocks", 2)
-        self.load_encoder = self.config.get("task") == "i2v" or self.config.get("lingbot_video_load_vae_encoder", False)
-        model_cls = LingBotVideoAutoencoderKLWan if self.load_encoder else LingBotVideoAutoencoderKLWanDecodeOnly
-        self.model = model_cls(self.vae_config).to(self.device).to(self.dtype)
+        self.model = LingBotVideoAutoencoderKLWan(self.vae_config).to(self.device).to(self.dtype)
 
         state = {}
         weight_path = os.path.join(vae_path, "diffusion_pytorch_model.safetensors")
-        prefixes = ("decoder.", "post_quant_conv.")
-        if self.load_encoder:
-            prefixes = prefixes + ("encoder.", "quant_conv.")
+        prefixes = ("decoder.", "post_quant_conv.", "encoder.", "quant_conv.")
         with safe_open(weight_path, framework="pt", device=str(self.device)) as f:
             for key in f.keys():
                 if not key.startswith(prefixes):
@@ -386,8 +382,6 @@ class LingBotVideoWanVAE:
 
     @torch.no_grad()
     def encode_image_latent(self, pixel, generator=None):
-        if not self.load_encoder:
-            raise RuntimeError("LingBotVideoWanVAE was loaded without encoder. Use task=i2v or set lingbot_video_load_vae_encoder=True.")
         if self.cpu_offload:
             self.model.to(AI_DEVICE)
         device = next(self.model.parameters()).device
@@ -420,10 +414,6 @@ class LingBotVideoWanVAE:
             if hasattr(torch_device_module, "empty_cache"):
                 torch_device_module.empty_cache()
             gc.collect()
-        if input_info is not None and input_info.return_result_tensor:
-            if self.config.get("task") in ("t2v", "i2v"):
-                return self._to_frame_tensor(decoded)
-            return (decoded + 1.0) / 2.0
-        if self.config.get("task") in ("t2v", "i2v"):
+        if input_info.return_result_tensor or input_info.task in ("t2v", "i2v"):
             return self._to_frame_tensor(decoded)
         return self._to_pil_frames(decoded)

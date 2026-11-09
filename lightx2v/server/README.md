@@ -337,6 +337,8 @@ stateDiagram-v2
 
 ## Request Models
 
+Each model declares `TaskSpec(arguments, outputs=(...))` in its own `request_spec.py`. Image outputs register image APIs; video and audio-video outputs register video APIs. SR tasks can support both, with request inputs checked against the chosen API before queueing. A service whose selected tasks have no image/video output adapter fails startup with an explicit error.
+
 Model inference fields are declared once in each model's `request_spec.py` Spec. At startup, the server uses these definitions to generate Pydantic request models and OpenAPI documentation for its supported tasks. The CLI uses the same types, descriptions, choices and numeric constraints.
 
 `BaseTaskRequest`, `ImageTaskRequest` and `VideoTaskRequest` contain service fields such as task IDs, uploads, LoRA controls and reuse settings. They do not maintain a second collection of model input fields. Python-only callbacks and tensor-return controls are excluded through `server=False`.
@@ -348,6 +350,8 @@ To download an asynchronous task's file result, provide `save_result_path` in th
 Omitted or null `negative_prompt` uses startup/default values. The field must be supported by the selected model/task. When CFG is disabled, explicitly supplied values, including `""`, are ignored with a warning. With CFG enabled, empty text can still use model templates and does not disable CFG.
 
 Single-task services use their startup task and do not expose a `task` request field; including it in JSON or form data is rejected with HTTP 422. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively, and supply the selector internally only for multi-task services.
+
+Multi-task services include BAGEL, Flux2, HiDream-O1-Image, Z-Image, LingBot-Video, HunyuanImage3 (image tasks only), LTX2/LTX2.5, Wan2.2 TI2V-5B and Cosmos3 Omni. They can start without `--task`; CLI inference still selects one task with `--task`. LTX2's specialized `ltx2_s2v` and `v2av` deployments retain their startup task and dedicated configs. Cosmos3 uses an explicit `model_variant` in the startup config; see [Cosmos3 examples](../../scripts/cosmos3/README.md).
 
 Native image and video request schemas accept the inference fields supported by their runners, including animation conditions, action/state paths, LTX reference controls, and image-edit options. The runner validates whether a field is supported by the selected model, task, and startup configuration. Unknown JSON or form fields are rejected with HTTP 422; startup settings such as `infer_steps` and `warmup` belong in the startup configuration.
 

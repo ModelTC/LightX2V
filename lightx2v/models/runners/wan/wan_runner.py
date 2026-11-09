@@ -102,7 +102,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("disagg_mode") in ("transformer", "decode"):
             return input_info
 
-        task = self.config["task"]
+        task = input_info.task
         if task == "i2v":
             if not input_info.image_path:
                 raise ValueError("Wan i2v requires image_path")
@@ -125,15 +125,15 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "infinitetalk",
         ):
             raise NotImplementedError("Wan reuse currently supports Wan2.1, Wan2.2, and InfiniteTalk only")
-        if model_cls != "infinitetalk" and self.config["task"] not in ("t2v", "i2v"):
-            raise NotImplementedError(f"Wan reuse does not support task: {self.config['task']}")
+        if model_cls != "infinitetalk" and any(task not in ("t2v", "i2v") for task in self.supported_tasks):
+            raise NotImplementedError(f"Wan reuse does not support tasks: {self.supported_tasks}")
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
         if not self.supports_generic_warmup():
             raise NotImplementedError(f"Wan warmup is not supported for {type(self).__name__}")
-        if self.config.get("task") not in self._WARMUP_TASKS:
-            raise NotImplementedError(f"Wan warmup does not support task: {self.config.get('task')}")
+        if any(task not in self._WARMUP_TASKS for task in self.supported_tasks):
+            raise NotImplementedError(f"Wan warmup does not support tasks: {self.supported_tasks}")
 
         if self.config.get("lazy_load", False):
             try:
@@ -147,21 +147,24 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
         self._maybe_freeze_gc()
 
-    def _run_warmup(self):
-        input_info = T2VInputInfo(prompt="warmup")
-        inputs = {"text_encoder_output": self.run_text_encoder(input_info)}
+    def _run_warmup(self, task=None):
+        task = self.config["task"] if task is None else task
+        input_info = T2VInputInfo(task=task, prompt="warmup")
+        inputs = {"task": task, "text_encoder_output": self.run_text_encoder(input_info)}
         scheduler = self.model.scheduler
         original_guide_scale = scheduler.sample_guide_scale
 
         try:
             for height, width in self._WARMUP_RESOLUTIONS:
+                self.input_info = input_info
+                scheduler.input_info = input_info
                 latent_shape = self.get_warmup_latent_shape(height, width)
                 logger.info(f"Warmup: {height}x{width}")
                 try:
                     inputs["image_encoder_output"] = self.get_warmup_image_encoder_output(latent_shape)
                     scheduler.generator = None
                     scheduler.prepare(seed=input_info.seed, latent_shape=latent_shape, image_encoder_output=inputs["image_encoder_output"])
-                    if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
+                    if self.config.get("model_cls") == "wan2.2" and task == "i2v":
                         inputs["image_encoder_output"]["vae_encoder_out"] = None
                     try:
                         previous_step_index = None
@@ -563,13 +566,14 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def reuse_key(self):
         reuse_key = {
+            "task": self.input_info.task,
             "prompt": self.input_info.prompt,
             "negative_prompt": self.input_info.negative_prompt,
             "num_frames": self.get_num_frames(),
         }
-        if "size" in self.get_supported_request_fields(self.config["task"]):
+        if "size" in self.get_supported_request_fields(self.input_info.task):
             reuse_key["size"] = list(self.get_target_size())
-        if self.config["task"] == "i2v":
+        if self.input_info.task == "i2v":
             reuse_key["image_path"] = self.input_info.image_path.split(",")
         return reuse_key
 
@@ -604,6 +608,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def _run_pipeline_disagg_transformer(self, request_config):
         self.inputs = self.receive_encoder_outputs(request_config)
+        self.inputs["task"] = self.input_info.task
         latent_shape = self.inputs.get("latent_shape")
         if latent_shape:
             self.input_info.latent_shape = latent_shape
@@ -1231,6 +1236,18 @@ class Wan22DenseRunner(WanRunner):
         self.vae_name = "Wan2.2_VAE.pth"
         self.tiny_vae_name = "taew2_2.pth"
 
+    def run_input_encoder(self):
+        if self.input_info.task == "i2v":
+            inputs = self._run_input_encoder_local_i2v()
+        else:
+            inputs = self._run_input_encoder_local_t2v()
+        inputs["task"] = self.input_info.task
+        return inputs
+
+    def _run_warmup(self):
+        for task in self.supported_tasks:
+            super()._run_warmup(task)
+
     def _resolve_wan22_vae_paths(self):
         requested_vae_type = str(self.config.get("vae_type", "wan2.2")).lower()
         if requested_vae_type not in {"wan2.2", "mg_lightvae", "mg_lightvae_v2"}:
@@ -1277,9 +1294,6 @@ class Wan22DenseRunner(WanRunner):
         }
 
     def load_vae_encoder(self):
-        eden_video = self.config["task"] == "v2v" and "edenlive" in self.config.get("model_cls", "")
-        if not eden_video and self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v", "i2va"]:
-            return None
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
 
@@ -1291,7 +1305,7 @@ class Wan22DenseRunner(WanRunner):
         return self._configure_vae_compile(decoder, components=("decoder",))
 
     def get_warmup_image_encoder_output(self, latent_shape):
-        if self.config["task"] == "t2v":
+        if self.input_info.task == "t2v":
             return None
 
         _, stride_h, stride_w = self.config["vae_stride"]

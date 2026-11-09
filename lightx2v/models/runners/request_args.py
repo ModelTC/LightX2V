@@ -1,6 +1,19 @@
-"""Common request argument groups; model-specific fields belong in each model's request_spec.py."""
+"""Common request definitions; model-specific fields belong in each model's request_spec.py."""
 
-from lightx2v.utils.request_spec import Argument
+from lightx2v.utils.request_spec import Argument, TaskSpec
+
+
+class ImageVideoTaskSpec(TaskSpec):
+    def __init__(self, arguments):
+        super().__init__(arguments, outputs=("image", "video"))
+
+    def get_output_type(self, inputs):
+        if inputs.get("video_path", ""):
+            return "video"
+        if inputs.get("image_path", ""):
+            return "image"
+        return None
+
 
 COMMON = {
     "return_result_tensor": Argument(type=bool, server=False, action="store_true", help="Whether to return result tensor. (Useful for comfyui)"),

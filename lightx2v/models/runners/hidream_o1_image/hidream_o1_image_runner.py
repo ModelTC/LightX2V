@@ -56,12 +56,15 @@ class HidreamO1ImageRunner(DefaultRunner):
         self.scheduler = HidreamO1ImageScheduler(self.config, torch.bfloat16)
 
     def init_modules(self):
-        task = self.config["task"]
-        logger.info(f"Initializing HiDream-O1-Image {task} runner...")
+        logger.info("Initializing HiDream-O1-Image runner...")
         self.load_model()
-        self.run_input_encoder = self._run_input_encoder_local_t2i if task == "t2i" else self._run_input_encoder_local_i2i
         self.run_dit = self._run_dit_local
         self.config.lock()
+
+    def run_input_encoder(self):
+        if self.input_info.task == "i2i":
+            return self._run_input_encoder_local_i2i()
+        return self._run_input_encoder_local_t2i()
 
     @ProfilingContext4DebugL2("Load HiDream-O1-Image model")
     def load_model(self):
@@ -246,6 +249,7 @@ class HidreamO1ImageRunner(DefaultRunner):
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
         self.inputs = self.run_input_encoder()
+        self.inputs["task"] = input_info.task
         image = self.run_main()
 
         save_result_path = self.inputs.get("save_result_path")

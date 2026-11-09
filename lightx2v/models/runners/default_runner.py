@@ -172,7 +172,7 @@ class DefaultRunner(BaseRunner):
             assert self.config.get("cpu_offload", False)
         if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)  # set scheduler to model
-        task = self.config.get("task")
+        task = self.supported_tasks[0] if len(self.supported_tasks) == 1 else None
         if task == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
         elif task == "flf2v":
@@ -405,8 +405,9 @@ class DefaultRunner(BaseRunner):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
 
+        self.model.scheduler.input_info = self.input_info
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
-        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
+        if self.config.get("model_cls") == "wan2.2" and self.input_info.task in ["i2v", "s2v", "rs2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
         if hasattr(self, "sr_version") and self.sr_version is not None:
@@ -496,7 +497,7 @@ class DefaultRunner(BaseRunner):
         out_path = self.input_info.save_result_path
         img_in = (getattr(self.input_info, "image_path", None) or "").strip()
         vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
-        sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
+        sr_from_image_only = self.input_info.task == "sr" and bool(img_in) and not bool(vid_in)
 
         if sr_from_image_only:
             logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
@@ -506,7 +507,7 @@ class DefaultRunner(BaseRunner):
             logger.info(f"🎬 Start to save video 🎬")
 
             save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
-            if self.config.get("task") in ("sr", "animate"):
+            if self.input_info.task in ("sr", "animate"):
                 input_video_path = getattr(self.input_info, "video_path", "")
                 if input_video_path:
                     muxed_path = mux_audio_from_video(

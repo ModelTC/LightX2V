@@ -22,16 +22,6 @@ class BaseGenerationService(ABC):
     def get_output_extension(self) -> str:
         pass
 
-    @abstractmethod
-    def get_task_type(self) -> str:
-        pass
-
-    def _is_target_task_type(self) -> bool:
-        if self.inference_service.worker and self.inference_service.worker.runner:
-            task_type = self.inference_service.worker.runner.config.get("task", "t2v")
-            return task_type in self.get_task_type().split(",")
-        return False
-
     async def _resolve_image_path(self, image_path: str) -> str:
         if not image_path:
             return ""

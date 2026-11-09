@@ -11,9 +11,6 @@ class ImageGenerationService(BaseGenerationService):
     def get_output_extension(self) -> str:
         return ".png"
 
-    def get_task_type(self) -> str:
-        return "t2i,i2i"
-
     async def generate_with_stop_event(self, message: ImageTaskRequest, stop_event) -> Optional[TaskResponse]:
         try:
             task_data = self.prepare_task_data(message)

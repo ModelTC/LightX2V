@@ -220,25 +220,6 @@ class NeoppInputInfo(InputInfo):
 
 
 @dataclass
-class T2TInputInfo(InputInfo):
-    prompt: str = ""
-    max_new_tokens: Optional[int] = None
-    text_do_sample: Optional[bool] = None
-    text_temperature: Optional[float] = None
-    text_top_k: Optional[int] = None
-    text_top_p: Optional[float] = None
-    bot_task: Optional[str] = None
-    system_prompt: Optional[str] = None
-    stream_callback: Any = None
-
-
-@dataclass
-class TI2TInputInfo(T2TInputInfo):
-    image_path: str = ""
-    align_image_size: Optional[bool] = None
-
-
-@dataclass
 class I2IInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str | None = ""
@@ -469,9 +450,7 @@ INPUT_INFO_TYPES = {
     "s2v": S2VInputInfo,
     "rs2v": RS2VInputInfo,
     "animate": AnimateInputInfo,
-    "t2t": T2TInputInfo,
     "t2i": T2IInputInfo,
-    "ti2t": TI2TInputInfo,
     "ti2i": TI2IInputInfo,
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,

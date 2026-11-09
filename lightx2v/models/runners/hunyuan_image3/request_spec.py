@@ -1,20 +1,8 @@
 import argparse
 
 from lightx2v.models.runners.request_args import COMMON
-from lightx2v.utils.request_spec import Argument, RequestSpec
+from lightx2v.utils.request_spec import Argument, MultiTaskSpec, TaskSpec
 
-TEXT = dict(
-    COMMON,
-    bot_task=Argument(help="HunyuanImage3 text generation mode."),
-    max_new_tokens=Argument(type=int, help="Maximum number of generated text tokens."),
-    prompt=Argument(help="Text prompt."),
-    stream_callback=Argument(server=False, cli=False),
-    system_prompt=Argument(help="System prompt for text generation."),
-    text_do_sample=Argument(type=bool, action=argparse.BooleanOptionalAction, help="Enable sampling during text generation."),
-    text_temperature=Argument(type=float, help="Text sampling temperature."),
-    text_top_k=Argument(type=int, help="Top-k text sampling limit."),
-    text_top_p=Argument(type=float, help="Top-p text sampling threshold."),
-)
 REFERENCE_IMAGE = {
     "image_path": Argument(help="Input image paths, separated by commas."),
     "align_image_size": Argument(type=bool, action=argparse.BooleanOptionalAction, help="Align HunyuanImage3 reference image sizes during inference."),
@@ -22,13 +10,11 @@ REFERENCE_IMAGE = {
 IMAGE_OUTPUT = {"prompt": Argument(help="Text prompt."), "size": Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH")}
 
 SPECS = {
-    "hunyuan_image3": RequestSpec(
+    "hunyuan_image3": MultiTaskSpec(
         {
-            "t2t": TEXT,
-            "ti2t": TEXT | REFERENCE_IMAGE,
-            "t2i": COMMON | IMAGE_OUTPUT,
-            "ti2i": COMMON | REFERENCE_IMAGE | IMAGE_OUTPUT,
-            "i2i": COMMON | REFERENCE_IMAGE | IMAGE_OUTPUT,
+            "t2i": TaskSpec(COMMON | IMAGE_OUTPUT, outputs=("image",)),
+            "ti2i": TaskSpec(COMMON | REFERENCE_IMAGE | IMAGE_OUTPUT, outputs=("image",)),
+            "i2i": TaskSpec(COMMON | REFERENCE_IMAGE | IMAGE_OUTPUT, outputs=("image",)),
         },
     ),
 }

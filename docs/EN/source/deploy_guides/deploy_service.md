@@ -14,6 +14,10 @@ The example loads Wan2.1 T2V with `configs/wan/wan_t2v.json` and listens on port
 
 Single-task services bind their task at startup; JSON and form requests must not include `task`. Multi-task services such as MiniMax-H3 require `task` in each native request. `/docs` shows the request schema for the running service.
 
+Routes follow task output types. H3 and Wan video services expose video APIs; image services expose image APIs. SR models expose both and reject requests sent to the wrong output API. Text, mesh, depth and reconstruction tasks currently have no adapter in this server.
+
+BAGEL, Flux2, HiDream-O1-Image, Z-Image, LingBot-Video, HunyuanImage3, LTX2/LTX2.5, Wan2.2 TI2V-5B and Cosmos3 Omni support per-request tasks. Omit startup `--task` and select a task in each native request. HunyuanImage3 exposes image tasks only; Cosmos3 uses an explicit `model_variant` in the startup JSON.
+
 ## Submit a video task
 
 Once the service is ready, submit a request from another terminal. This example uses the default T2V service:

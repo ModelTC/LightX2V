@@ -245,9 +245,9 @@ class MyModelRunner(DefaultRunner):
 
 ```python
 from lightx2v.models.runners.request_args import VIDEO
-from lightx2v.utils.request_spec import RequestSpec
+from lightx2v.utils.request_spec import RequestSpec, TaskSpec
 
-SPECS = {"{model_cls}": RequestSpec({"t2v": VIDEO})}
+SPECS = {"{model_cls}": RequestSpec({"t2v": TaskSpec(VIDEO, outputs=("video",))})}
 ```
 
 模型专属参数直接在这个文件中通过 `Argument` 声明。`BaseRunner` 从 Spec 校验任务和字段，CLI 也从同一份声明生成参数和帮助。

@@ -549,7 +549,7 @@ class Cosmos3Scheduler(BaseScheduler):
         else:
             self.latents = noise
         self.sound_latents = None
-        if self.config["task"] in ("t2av", "i2av"):
+        if input_info.task in ("t2av", "i2av"):
             sound_shape = getattr(input_info, "sound_latent_shape", None) or getattr(input_info, "audio_latent_shape", None)
             if not sound_shape:
                 sound_dim = int(self.config.get("sound_dim", 64))

@@ -9,7 +9,7 @@ def main():
     parser.add_argument("--model_path", type=str, required=True, help="Path to model")
     parser.add_argument("--model_cls", type=str, required=True, help="Model class name")
     parser.add_argument("--model-variant", type=str, default=None, help="Model-specific startup weight variant; MiniMax-H3 uses fl2av or ref2av.")
-    parser.add_argument("--task", type=str, default=None, help="Startup task for models selected by task; MiniMax-H3 uses --model-variant instead.")
+    parser.add_argument("--task", type=str, default=None, help="Startup task for models that require one. Multi-task models select task in each request.")
     parser.add_argument("--config_json", type=str, required=True, help="Path to startup config")
     parser.add_argument("--lora_dir", type=str, default=None, help="Directory containing LoRA files (.safetensors)")
 

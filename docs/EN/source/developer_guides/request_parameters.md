@@ -20,28 +20,37 @@ Declare an `Argument` for the intended tasks in the model's own `request_spec.py
 
 ```python
 from lightx2v.models.runners.request_args import IMAGE
-from lightx2v.utils.request_spec import Argument
+from lightx2v.utils.request_spec import Argument, TaskSpec
 
 SPECS = {
     "qwen_image_21": QwenImage21Spec(
         {
-            "t2i": dict(
-                IMAGE,
-                resolution=Argument(type=int, gt=0, help="Output resolution."),
+            "t2i": TaskSpec(
+                dict(IMAGE, resolution=Argument(type=int, gt=0, help="Output resolution.")),
+                outputs=("image",),
             ),
-            "i2i": dict(
-                IMAGE,
-                image_path=Argument(help="Input image path."),
-                resolution=Argument(type=int, gt=0, help="Output resolution."),
+            "i2i": TaskSpec(
+                dict(
+                    IMAGE,
+                    image_path=Argument(help="Input image path."),
+                    resolution=Argument(type=int, gt=0, help="Output resolution."),
+                ),
+                outputs=("image",),
             ),
         }
     ),
 }
 ```
 
+`TaskSpec` groups a task's arguments and output types. An `i2v` task declares `outputs=("video",)` even though it accepts an image. The server registers image/video routes only for compatible tasks. `ImageVideoTaskSpec` in `request_args.py` declares both outputs and resolves the actual type from the merged startup/request paths; mismatched requests fail with HTTP 422 before queueing. Other output types require a service adapter before they can be served.
+
 The CLI and HTTP API generate their input models, validation and documentation from this Spec. `BaseRunner` uses the same Spec to validate tasks and request fields. Define model-specific arguments locally without changing a global argument table or repeating declarations in the runner or server schema. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
 
 `Argument.type` describes the complete value, such as `int`, `list[int]`, or `str | dict`. The CLI turns lists into space-separated options and structured values into JSON inputs; HTTP accepts the corresponding JSON values. Use `gt`, `ge`, `lt` and `le` for shared numeric bounds. Set `cli=False` or `server=False` for inputs specific to an entry point; callbacks and in-memory tensors should disable both.
+
+Declare only public tasks in the Spec. For example, HunyuanImage3 generates text internally to enhance image prompts; its public tasks are `t2i`, `ti2i` and `i2i`.
+
+Use `MultiTaskSpec` when one loaded checkpoint supports multiple request tasks. The runner and scheduler must read `input_info.task` during inference. Load the components needed by those tasks at initialization and reset request state between runs; changing `config["task"]` per request would mix deployment settings with request state.
 
 Keep declared arguments in the Spec when a startup setting makes them unusable. Validate incompatible combinations in the runner's request preparation or inference path, with an error explaining the conflicting setting and how to resolve it. Do not conditionally remove these fields from the Spec.
 
@@ -79,7 +88,7 @@ The runner preserves `0`, `False`, `""` and `[]` when merging parameters. Field 
 
 CLI and HTTP request overrides default to `None`, leaving startup and `InputInfo` defaults in control. HTTP forwards only explicitly submitted fields through `model_fields_set`.
 
-The service builds one request model for each supported task. Multi-task requests select the model through the required `task` field. Single-task request models do not contain `task`; submitting it is rejected with HTTP 422, and the runner uses its startup task. `/docs` shows the selected model's fields rather than a global image/video parameter collection.
+The service builds request models from each output API's compatible tasks. The single/multi-task rule uses the entire service's task set, even if an API contains only one of those tasks. Multi-task requests select the model through the required `task` field. Single-task request models do not contain `task`; submitting it is rejected with HTTP 422, and the runner uses its startup task. `/docs` shows the selected model's fields rather than a global image/video parameter collection.
 
 OpenAI image endpoints reuse the Spec's inference fields while retaining protocol conventions such as required `prompt`, `n`, `response_format` and `size="WIDTHxHEIGHT"`. Format conversions and new protocol controls still belong in that adapter.
 

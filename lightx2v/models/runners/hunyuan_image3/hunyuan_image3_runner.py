@@ -189,8 +189,7 @@ class HunyuanImage3Runner(DefaultRunner):
         self.hunyuan_vision_aligner_cls = modules["LightProjector"]
         self.hunyuan_get_system_prompt = modules["get_system_prompt"]
 
-        # Text-only tasks do not need a VAE. Image paths load it on demand so
-        # T2T can run without paying the extra memory and initialization cost.
+        # Load VAE and vision modules on demand.
         self.vae_decoder = None
         self.vision_model = None
         self.vision_aligner = None
@@ -200,7 +199,7 @@ class HunyuanImage3Runner(DefaultRunner):
         if self.vae_decoder is not None:
             return
 
-        task = str(self.config.get("task", "t2i")).lower()
+        task = self.input_info.task
         load_vae_on_this_rank = not (task == "t2i" and self._sequence_parallel_enabled() and not self._is_output_rank())
         if load_vae_on_this_rank:
             self.vae_decoder = self._load_vae_decoder()
@@ -802,16 +801,6 @@ class HunyuanImage3Runner(DefaultRunner):
         tokenizer = self.hunyuan_tokenizer
         if bot_task == "auto":
             final_stop_tokens = list(tokenizer.conversation.stop_token_ids)
-            if self.config.get("task") in ("t2t", "ti2t"):
-                # Text-only tasks must stop before the model transitions into
-                # recaption/answer completion or image-generation control tokens.
-                final_stop_tokens.extend(
-                    [
-                        tokenizer.end_of_recaption_token_id,
-                        tokenizer.end_of_answer_token_id,
-                        tokenizer.boi_token_id,
-                    ]
-                )
             return HunyuanImage3TextGenerationPlan(
                 first_bot_task="auto",
                 stage_transitions=[],
@@ -1070,20 +1059,6 @@ class HunyuanImage3Runner(DefaultRunner):
 
         return generated
 
-    def _decode_text_result(self, generated_tokens, plan):
-        tokens = list(generated_tokens)
-        while tokens and tokens[-1] in plan.final_stop_tokens:
-            tokens.pop()
-        if not tokens:
-            return ""
-
-        generated_text = self.hunyuan_tokenizer.decode(torch.tensor(tokens, dtype=torch.long))
-        if plan.first_bot_task == "think":
-            return self.hunyuan_tokenizer.think_token + generated_text
-        if plan.first_bot_task == "recaption":
-            return self.hunyuan_tokenizer.recaption_token + generated_text
-        return generated_text
-
     def _decode_cot_text(self, generated_tokens, plan):
         if not generated_tokens:
             return None
@@ -1092,68 +1067,6 @@ class HunyuanImage3Runner(DefaultRunner):
         if plan.first_bot_task == "think":
             return self.hunyuan_tokenizer.think_token + generated_text
         return self.hunyuan_tokenizer.recaption_token + generated_text
-
-    def _input_text_generation_options(self, input_info):
-        options = {}
-        for key in ("max_new_tokens", "text_do_sample", "text_temperature", "text_top_k", "text_top_p"):
-            value = getattr(input_info, key, None)
-            if value is not None:
-                options[key] = value
-        seed = getattr(input_info, "seed", None)
-        if seed is not None:
-            options["text_seed"] = seed
-        return options
-
-    def _stream_text_prefix(self, plan, stream_callback=None):
-        if plan.first_bot_task == "think":
-            prefix = self.hunyuan_tokenizer.think_token
-        elif plan.first_bot_task == "recaption":
-            prefix = self.hunyuan_tokenizer.recaption_token
-        else:
-            prefix = ""
-        if not prefix:
-            return
-        if stream_callback is not None and self._is_output_rank():
-            stream_callback(prefix)
-        else:
-            self._print_text_generation_chunk(prefix)
-
-    def _generate_text(self, input_info, batch_cond_images=None, cond_inputs=None):
-        self._activate_parallel_phase("ar")
-        bot_task = str(getattr(input_info, "bot_task", None) or self._resolve_bot_task()).strip().lower()
-        if bot_task == "image":
-            raise ValueError("HunyuanImage3 text generation requires bot_task='auto', 'think', 'recaption', or 'think_recaption'.")
-
-        plan = self._resolve_text_generation_plan(bot_task)
-        system_prompt = getattr(input_info, "system_prompt", None)
-        if system_prompt is None:
-            system_prompt = self._resolve_system_prompt(plan.first_bot_task)
-        prepared = self._prepare_text_generation_inputs(
-            getattr(input_info, "prompt", ""),
-            plan.first_bot_task,
-            system_prompt,
-            batch_cond_images=batch_cond_images,
-            cond_inputs=cond_inputs,
-        )
-
-        stream_callback = getattr(input_info, "stream_callback", None)
-        stream_output = self._text_stream_enabled() or stream_callback is not None
-        if stream_output:
-            self._stream_text_prefix(plan, stream_callback=stream_callback)
-        with self._build_flashinfer_autotune_controller().context():
-            generated_tokens = self._generate_text_tokens(
-                prepared["input_ids"],
-                prepared["tokenizer_output"],
-                plan,
-                stream_output=stream_output,
-                cond_inputs=prepared.get("cond_inputs"),
-                rope_image_info=prepared.get("rope_image_info"),
-                stream_callback=stream_callback,
-                generation_options=self._input_text_generation_options(input_info),
-            )
-        if stream_output and stream_callback is None:
-            self._print_text_generation_chunk("\n")
-        return self._decode_text_result(generated_tokens, plan)
 
     def _generate_cot_text(self, prompt, image_size, batch_cond_images=None, cond_inputs=None):
         self._activate_parallel_phase("ar")
@@ -1583,22 +1496,6 @@ class HunyuanImage3Runner(DefaultRunner):
         return [Image.fromarray((sample * 255.0).round().astype("uint8")) for sample in image]
 
     @torch.no_grad()
-    def generate_t2t(self, input_info):
-        self._ensure_pipeline_modules()
-        return self._generate_text(input_info)
-
-    @torch.no_grad()
-    def generate_ti2t(self, input_info):
-        self._ensure_pipeline_modules()
-        seed = input_info.seed
-        image_paths = self._split_image_paths(input_info.image_path)
-        align_image_size = bool(input_info.align_image_size)
-
-        batch_cond_images = self._build_batch_cond_images(image_paths, align_image_size)
-        cond_inputs = self._prepare_cond_inputs(batch_cond_images, cfg_factor=1, seed=seed)
-        return self._generate_text(input_info, batch_cond_images=batch_cond_images, cond_inputs=cond_inputs)
-
-    @torch.no_grad()
     def generate_t2i(self, input_info):
         self._ensure_pipeline_modules()
         prompt = getattr(input_info, "prompt", "")
@@ -1664,30 +1561,16 @@ class HunyuanImage3Runner(DefaultRunner):
 
     def _run_pipeline(self, input_info):
         self.input_info = input_info
-        task = self.config.get("task")
-        if task == "t2t":
-            text = self.generate_t2t(input_info)
-        elif task == "ti2t":
-            text = self.generate_ti2t(input_info)
-        elif task == "t2i":
+        task = input_info.task
+        if task == "t2i":
             images = self.generate_t2i(input_info)
         elif task in ("i2i", "ti2i"):
             images = self.generate_ti2i(input_info)
         else:
-            raise NotImplementedError("HunyuanImage3 native runner supports task=t2t/t2i/ti2t/ti2i (i2i is a compatibility alias).")
+            raise NotImplementedError("HunyuanImage3 native runner supports task=t2i/ti2i (i2i is a compatibility alias).")
 
         if not self._is_output_rank():
-            return {"text": None} if task in ("t2t", "ti2t") else {"image": None}
-
-        if task in ("t2t", "ti2t"):
-            if getattr(input_info, "return_result_tensor", False):
-                return {"text": text}
-            save_result_path = getattr(input_info, "save_result_path", None)
-            if save_result_path:
-                Path(save_result_path).parent.mkdir(parents=True, exist_ok=True)
-                Path(save_result_path).write_text(text, encoding="utf-8")
-                logger.info(f"HunyuanImage3 text saved successfully to: {save_result_path}")
-            return {"text": None}
+            return {"image": None}
 
         if getattr(input_info, "return_result_tensor", False):
             return {"image": images}

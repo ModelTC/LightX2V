@@ -78,12 +78,11 @@ class ZImageRunner(DefaultRunner):
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
-        if self.config["task"] == "t2i":
-            self.run_input_encoder = self._run_input_encoder_local_t2i
-        elif self.config["task"] == "i2i":
-            self.run_input_encoder = self._run_input_encoder_local_i2i
-        else:
-            assert NotImplementedError
+
+    def run_input_encoder(self):
+        if self.input_info.task == "i2i":
+            return self._run_input_encoder_local_i2i()
+        return self._run_input_encoder_local_t2i()
 
     @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):
@@ -175,7 +174,7 @@ class ZImageRunner(DefaultRunner):
             monitor_cli.lightx2v_input_prompt_len.observe(len(text))
         text_encoder_output = {}
 
-        if self.config["task"] == "t2i":
+        if self.input_info.task == "t2i":
             # T2I task: only text encoding
             # qwen3_model.infer always returns (embedding_list, image_info)
             # For t2i, image_info is empty dict {}
@@ -189,7 +188,7 @@ class ZImageRunner(DefaultRunner):
                 neg_prompt_embeds = neg_prompt_embeds_list[0]
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
-        elif self.config["task"] == "i2i":
+        elif self.input_info.task == "i2i":
             # I2I task: text encoding + image preprocessing
             if image_list is not None:
                 prompt_embeds_list, image_info = self.text_encoders[0].infer([text], image_list)
@@ -290,7 +289,7 @@ class ZImageRunner(DefaultRunner):
             width, height = as_maps[aspect_ratio]
             return (width, height)
 
-        if self.config["task"] == "i2i" and self.input_info.original_size:
+        if self.input_info.task == "i2i" and self.input_info.original_size:
             width, height = self.input_info.original_size[-1]
             logger.info(f"Z Image Runner got i2i source image shape: {width}x{height}")
             return (width, height)
@@ -357,7 +356,7 @@ class ZImageRunner(DefaultRunner):
 
         self.inputs = self.run_input_encoder()
         # Store image_encoder_output in input_info for scheduler to access
-        if self.config["task"] == "i2i" and "image_encoder_output" in self.inputs:
+        if self.input_info.task == "i2i" and "image_encoder_output" in self.inputs:
             self.input_info.image_encoder_output = self.inputs["image_encoder_output"]
 
         self.set_latent_shape()
