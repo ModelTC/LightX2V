@@ -197,7 +197,7 @@ The pipeline is split by `disagg_mode` into three roles, with two Mooncake phase
 
 ## 2. Configuration
 
-Set routing and queue parameters in `disagg_config`. Mooncake reads the file selected by `MOONCAKE_CONFIG_PATH` (`configs/mooncake_config.json` in the scripts); corresponding `MOONCAKE_*` environment variables take precedence.
+Set routing and queue parameters in `disagg_config`. Mooncake reads the file selected by `MOONCAKE_CONFIG_PATH` (`configs/mooncake/mooncake_config.json` in the scripts); corresponding `MOONCAKE_*` environment variables take precedence.
 
 ### 2.1 T2V (Wan)
 

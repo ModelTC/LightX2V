@@ -24,7 +24,7 @@ CFG_TRANS_TMPL="${LIGHTX2V_PATH}/configs/disagg/qwen/qwen_image_t2i_disagg_trans
 TMP_DIR="${TMP_DIR:-/tmp/qwen_t2i_decentralized_cfg}"
 mkdir -p "${TMP_DIR}"
 
-export MOONCAKE_CONFIG_PATH="${LIGHTX2V_PATH}/configs/mooncake_config.json"
+export MOONCAKE_CONFIG_PATH="${LIGHTX2V_PATH}/configs/mooncake/mooncake_config.json"
 
 # Generate per-rank transformer configs (rank 1, 2, 3)
 export LIGHTX2V_PATH TMP_DIR
