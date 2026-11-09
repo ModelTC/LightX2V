@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import fcntl
 import gc
 import hashlib
 import json
 import os
+import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +28,7 @@ from prompt_records import read_json_rows
 
 TEXT_ENCODER_LAYER = 50
 CACHE_SCHEMA_VERSION = 3
+CACHE_INIT_TIMEOUT = 30.0
 VIDEO_TAG = 0
 TEXT_TAG = 1
 KEYFRAME_ENCODE_SEED = 42
@@ -192,35 +195,37 @@ def read_samples(
     return output
 
 
-def atomic_write_jsonl(path: Path, rows: list[dict]) -> None:
-    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+@contextmanager
+def _atomic_output(path: Path):
+    # PIDs can repeat across ACP nodes sharing this directory.
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.tmp.", dir=path.parent)
+    os.fchmod(fd, 0o644)
+    os.close(fd)
+    temporary = Path(name)
     try:
+        yield temporary
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def atomic_write_jsonl(path: Path, rows: list[dict]) -> None:
+    with _atomic_output(path) as temporary:
         with temporary.open("w", encoding="utf-8") as handle:
             for row in rows:
                 handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=str) + "\n")
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def atomic_write_json(path: Path, payload: dict) -> None:
-    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
-    try:
+    with _atomic_output(path) as temporary:
         with temporary.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True, default=str)
             handle.write("\n")
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def atomic_torch_save(payload: dict, path: Path) -> None:
-    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
-    try:
+    with _atomic_output(path) as temporary:
         torch.save(payload, temporary)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _path_identity(path: Path) -> dict:
@@ -337,11 +342,37 @@ def initialize_cache_namespace(
     *,
     allow_replace: bool,
 ) -> None:
-    # Independent global-rank encoders may enter simultaneously. Serialize
-    # namespace creation so two different prompt/model recipes cannot race.
-    with (output_dir / ".preprocess.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    identity_path = output_dir / "preprocess_config.json"
+    fingerprint = descriptor_fingerprint(descriptor)
+
+    def matches():
+        return identity_path.is_file() and json.loads(identity_path.read_text(encoding="utf-8")).get("preprocess_fingerprint") == fingerprint
+
+    # Normal workers and restarts only read an already-published namespace.
+    if matches():
+        return
+    # AFS may return EAGAIN even for blocking flock. Atomic mkdir provides the
+    # small publication reservation without requiring filesystem flock support.
+    reservation = output_dir / ".preprocess.init-lock"
+    deadline = time.monotonic() + CACHE_INIT_TIMEOUT
+    while True:
+        try:
+            reservation.mkdir()
+            break
+        except FileExistsError:
+            if matches():
+                return
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out initializing prompt cache: {reservation}. "
+                    "If a previous initializer stopped before publishing, confirm its workers have exited "
+                    "before removing this empty reservation directory, or choose a new cache directory."
+                ) from None
+            time.sleep(0.1)
+    try:
         _initialize_cache_namespace_unlocked(output_dir, descriptor, allow_replace=allow_replace)
+    finally:
+        reservation.rmdir()
 
 
 def _initialize_cache_namespace_unlocked(output_dir: Path, descriptor: dict, *, allow_replace: bool) -> None:

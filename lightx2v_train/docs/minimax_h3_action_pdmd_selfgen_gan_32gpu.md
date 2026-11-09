@@ -110,3 +110,10 @@ $H3_STAGED_OUTPUT/
 ```
 
 Detailed encoding logs are under `$H3_GAN_PROMPT_CACHE/logs/rank-*`.
+
+Cache namespace initialization runs on global rank 0 and broadcasts its result
+before encoding. It uses atomic directory publication protection rather than
+`flock`, since shared AFS mounts may return `EAGAIN` for blocking file locks.
+Workers reuse a matching namespace through a read-only check. Legacy
+`.preprocess.lock` files are ignored; existing valid condition caches can be
+reused after restarting a failed launch.

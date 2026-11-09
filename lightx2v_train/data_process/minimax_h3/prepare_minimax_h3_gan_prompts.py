@@ -93,6 +93,20 @@ def run_encoder_logged(encode_argv, log_path):
             raise
 
 
+def initialize_shared_namespace(output_dir, descriptor, rank):
+    """Publish once, and propagate failures before any rank starts encoding."""
+    status = [None]
+    if rank == 0:
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            builder.initialize_cache_namespace(output_dir, descriptor, allow_replace=False)
+        except Exception as exception:
+            status[0] = f"{type(exception).__name__}: {exception}"
+    dist.broadcast_object_list(status, src=0)
+    if status[0]:
+        raise RuntimeError(f"Prompt cache namespace initialization failed: {status[0]}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prompts", required=True)
@@ -142,9 +156,7 @@ def main(argv=None):
         dist.all_gather_object(identities, builder.descriptor_fingerprint(descriptor))
         if len(set(identities)) != 1:
             raise ValueError("Workers disagree on prompt/model/cache preprocessing identity")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        builder.initialize_cache_namespace(output_dir, descriptor, allow_replace=False)
-        dist.barrier()
+        initialize_shared_namespace(output_dir, descriptor, rank)
         count = sum(sample["source_index"] % world_size == rank for sample in samples)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         log_path = output_dir / "logs" / f"rank-{rank:05d}.{stamp}.{os.getpid()}.log"
