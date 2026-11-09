@@ -12,6 +12,8 @@ bash scripts/server/start_server.sh
 
 示例使用 Wan2.1 T2V、`configs/wan/wan_t2v.json`，监听 8000 端口。切换模型时，需要配套修改 `--model_cls`、`--task` 和 `--config_json`。`--max_queue_size` 默认为 10，统计等待中和执行中的任务总数。
 
+单任务服务在启动时绑定任务，JSON 和表单请求都不能包含 `task`。MiniMax-H3 等多任务服务则需要每次在原生请求中传入 `task`。运行中服务的 `/docs` 会展示对应的请求结构。
+
 ## 提交视频任务
 
 服务就绪后，在另一个终端提交请求。以下示例适用于默认 T2V 服务：

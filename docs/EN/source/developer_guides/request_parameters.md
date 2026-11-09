@@ -79,7 +79,7 @@ The runner preserves `0`, `False`, `""` and `[]` when merging parameters. Field 
 
 CLI and HTTP request overrides default to `None`, leaving startup and `InputInfo` defaults in control. HTTP forwards only explicitly submitted fields through `model_fields_set`.
 
-The service builds one request model for each supported task. Multi-task requests select the model through `task`; single-task requests may omit it. `/docs` shows the selected model's fields rather than a global image/video parameter collection.
+The service builds one request model for each supported task. Multi-task requests select the model through the required `task` field. Single-task request models do not contain `task`; submitting it is rejected with HTTP 422, and the runner uses its startup task. `/docs` shows the selected model's fields rather than a global image/video parameter collection.
 
 OpenAI image endpoints reuse the Spec's inference fields while retaining protocol conventions such as required `prompt`, `n`, `response_format` and `size="WIDTHxHEIGHT"`. Format conversions and new protocol controls still belong in that adapter.
 

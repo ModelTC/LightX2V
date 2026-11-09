@@ -347,7 +347,7 @@ To download an asynchronous task's file result, provide `save_result_path` in th
 
 Omitted or null `negative_prompt` uses startup/default values. The field must be supported by the selected model/task. When CFG is disabled, explicitly supplied values, including `""`, are ignored with a warning. With CFG enabled, empty text can still use model templates and does not disable CFG.
 
-Single-task services use the task selected by `--task` at startup, so POST requests can omit `task`. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively.
+Single-task services use their startup task and do not expose a `task` request field; including it in JSON or form data is rejected with HTTP 422. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively, and supply the selector internally only for multi-task services.
 
 Native image and video request schemas accept the inference fields supported by their runners, including animation conditions, action/state paths, LTX reference controls, and image-edit options. The runner validates whether a field is supported by the selected model, task, and startup configuration. Unknown JSON or form fields are rejected with HTTP 422; startup settings such as `infer_steps` and `warmup` belong in the startup configuration.
 

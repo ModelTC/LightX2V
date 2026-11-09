@@ -76,13 +76,13 @@ def build_task_request(config, base):
     single_task = len(tasks) == 1
     models = []
     for task in tasks:
-        arguments = {name: argument for name, argument in spec.get_arguments(config, task).items() if argument.server}
-        task_type = Literal[task] | None if single_task else Literal[task]
+        arguments = {name: argument for name, argument in spec.get_arguments(config, task).items() if argument.server and name != "task"}
+        fields = {} if single_task else {"task": (Literal[task], Field(..., description="Inference task"))}
         model = create_request_model(
             f"{config['model_cls']}_{task}_{base.__name__}",
             arguments,
             base=base,
-            task=(task_type, Field(default=None if single_task else ..., description="Inference task")),
+            **fields,
         )
         models.append(model)
     if single_task:

@@ -187,7 +187,7 @@ def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, r
     return response
 
 
-def _build_image_task_request(body: OpenAIImageRequest, request_type, *, task: str) -> ImageTaskRequest:
+def _build_image_task_request(body: OpenAIImageRequest, request_type, *, task: str | None = None) -> ImageTaskRequest:
     if body.n != 1:
         raise HTTPException(status_code=400, detail="Only n=1 is currently supported")
     if not body.prompt.strip():
@@ -202,7 +202,9 @@ def _build_image_task_request(body: OpenAIImageRequest, request_type, *, task: s
             payload["size"] = [height, width]
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-    return validate_request(request_type, dict(payload, task=task))
+    if task is not None:
+        payload["task"] = task
+    return validate_request(request_type, payload)
 
 
 async def _save_upload_file(file: UploadFile, file_service: FileService) -> str:
@@ -222,6 +224,7 @@ def create_router(config, request_type):
     router = APIRouter()
     spec = get_model_spec(config["model_cls"])
     tasks = spec.get_tasks(config)
+    multi_task = len(tasks) > 1
 
     def request_model(task, base):
         arguments = {name: argument for name, argument in spec.get_arguments(config, task).items() if argument.server and name != "task" and name not in base.model_fields}
@@ -232,7 +235,7 @@ def create_router(config, request_type):
 
         @router.post("/generations", response_model=OpenAIImageResponse)
         async def create_openai_image_generation(request: Request, body: generation_request):
-            message = _build_image_task_request(body, request_type, task="t2i")
+            message = _build_image_task_request(body, request_type, task="t2i" if multi_task else None)
             result_png, usage = await _run_sync_image_task(request, message)
             return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
 
@@ -262,7 +265,7 @@ def create_router(config, request_type):
             # its explicitly submitted empty string must still reach the runner.
             form_data = {key: value for key, value in form.items() if key not in {"image", "image[]", "mask"} and (value != "" or key == "negative_prompt")}
             body = parse_form_request(edit_request, form_data)
-            message = _build_image_task_request(body, request_type, task="i2i")
+            message = _build_image_task_request(body, request_type, task="i2i" if multi_task else None)
 
             services = get_services()
             assert services.file_service is not None, "File service is not initialized"

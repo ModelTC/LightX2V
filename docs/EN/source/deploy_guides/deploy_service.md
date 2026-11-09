@@ -12,6 +12,8 @@ bash scripts/server/start_server.sh
 
 The example loads Wan2.1 T2V with `configs/wan/wan_t2v.json` and listens on port 8000. Change `--model_cls`, `--task`, and `--config_json` together when selecting another model. `--max_queue_size` defaults to 10 and counts both pending and processing tasks.
 
+Single-task services bind their task at startup; JSON and form requests must not include `task`. Multi-task services such as MiniMax-H3 require `task` in each native request. `/docs` shows the request schema for the running service.
+
 ## Submit a video task
 
 Once the service is ready, submit a request from another terminal. This example uses the default T2V service:
