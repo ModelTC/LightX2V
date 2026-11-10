@@ -4,7 +4,7 @@ set -euo pipefail
 lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/weights/vggt}"
 input_path="${INPUT_PATH:-${lightx2v_path}/example_images}"
-config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/mlu/vggt_recon_bf16.json}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/vggt/vggt_recon_bf16.json}"
 save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/vggt/reconstruction.npz}"
 
 if [[ "${1:-}" == "--help" ]]; then
@@ -12,8 +12,8 @@ if [[ "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-# PLATFORM selects the existing LightX2V platform implementation.
-# Set the corresponding device visibility variable before starting this script.
+export PLATFORM=cuda
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export PYTHONPATH="${PYTHONPATH:-}"
 source "${lightx2v_path}/scripts/base/base.sh"
 export DTYPE=BF16
