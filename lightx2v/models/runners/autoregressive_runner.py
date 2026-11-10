@@ -146,6 +146,9 @@ class AutoregressiveRunnerMixin(RunnerLifecycleMixin):
         try:
             with torch.random.fork_rng(devices=[torch_device_module.current_device()], device_type=AI_DEVICE), fatal_device_error_guard():
                 self._run_warmup()
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             self.clear_warmup_state()
         self.warmup_time_seconds = time.perf_counter() - started
