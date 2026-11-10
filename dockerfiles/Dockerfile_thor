@@ -68,19 +68,5 @@ RUN pip install --no-cache-dir rpyc uvloop orjson setproctitle atomics sortedcon
     zstandard sentencepiece tiktoken interegular partial-json-parser websockets hypercorn \
     ruamel.yaml soundfile cachetools termcolor pandas gguf torchada
 
-RUN git clone https://github.com/ModelTC/LightLLM.git --branch neo_plus_clean --depth 1
-RUN cd LightLLM \
-    && git fetch --depth 1 origin dba4de76c3627a5a544334fdbff0e8717ddfe585 \
-    && git checkout --detach FETCH_HEAD \
-    && sed -i 's|/usr/lib/x86_64-linux-gnu/libc\.so\.6|libc.so.6|g' \
-        lightllm/utils/kv_cache_utils.py lightllm/utils/auto_shm_cleanup.py \
-    && sed -i 's|candidates = \["libcudart.so", "/usr/local/cuda/targets/x86_64-linux/lib/libcudart\.so"\]|candidates = ["libcudart.so", "/usr/local/cuda/targets/x86_64-linux/lib/libcudart.so", "/usr/local/cuda/lib64/libcudart.so", "/usr/local/cuda/targets/aarch64-linux/lib/libcudart.so"]|' \
-        lightllm/utils/kv_cache_utils.py \
-    && pip install --no-cache-dir --no-deps --no-build-isolation -v -e .
-
-# Include the runtime so deployment does not require host source checkouts.
-COPY lightx2v /workspace/LightX2V/lightx2v
-COPY lightx2v_platform /workspace/LightX2V/lightx2v_platform
-COPY configs/neopp/neopp_dense_thor.json /workspace/LightX2V/configs/neopp/neopp_dense_thor.json
-
+# Mount LightLLM and LightX2V source trees when starting the container.
 WORKDIR /workspace
