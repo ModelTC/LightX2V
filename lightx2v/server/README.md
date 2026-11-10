@@ -490,87 +490,42 @@ The server uses `loguru` for structured logging. Logs include:
 
 1. **Input Validation**: All inputs validated with Pydantic schemas
 
+## Recovery from fatal device errors
+
+Documented fatal GPU errors terminate the process before device cleanup,
+fallback or synchronization. Ordinary errors, including out-of-memory, retain
+existing behavior. Run the service under torchrun and a process/container
+supervisor to restart the runtime after a rank exits. Process restart does not
+reset hardware or guarantee recovery of a faulty GPU.
+
+The classifier accepts only a RuntimeError whose complete first line matches
+`lightx2v/utils/inference_errors.py`, including matching causes/contexts.
+CUDA strings were checked with CUDA 12.8; MUSA strings were queried from
+installed libmusart 5.2.0 and checked against explicit restart contracts in
+`include/driver_types.h`. torch_musa 2.9.1.post1+musa5.2.0 native and generated
+compatible checks use MUSA/CUDA prefixes respectively. Other SDK versions may
+emit different wording. XID category names are not runtime exception strings.
+
+The whitelist excludes generic ECC 214, unknown 999, GPU-lost messages and
+NCCL/MCCL wrapper messages unless their exception chain independently contains
+a matched runtime error. Communication handlers skip barrier retry only when
+this classifier confirms a fatal error; this is not general communication-error
+coverage. No task timeout, watchdog or hardware-log monitoring is added.
+
+Fatal diagnostics make a best-effort nonblocking write of at most 4096 bytes,
+including bounded Python frame locations for the error and its exception chain.
+They do not flush log handlers, inspect local values, read source files or call
+GPU APIs. Linux stderr is reopened with independent status flags so sibling
+ranks keep their original blocking mode. Closed/full or unsupported stderr may
+lose diagnostics, but must not prevent exit.
+
+A device assertion can be input-triggered while still invalidating the device
+context. The supervisor's runtime restart policy and the scheduler's task retry
+policy are separate: deployments should bound task retries to prevent a bad
+request repeatedly restarting workers. CPU subprocess tests verify exit order,
+ordinary cleanup/fallback, and diagnostic behavior; they do not establish live
+GPU recovery or deployed task-retry behavior.
+
 ## License
 
 See the main project LICENSE file for licensing information.
-
-
-## Recovery from fatal device errors
-
-The whitelist below follows explicit vendor recovery requirements. CUDA error
-names/text were checked against CUDA 12.8 `cudaGetErrorName`/`cudaGetErrorString`
-without executing device work. [NVIDIA documents the following errors as
-requiring process restart](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html):
-
-| CUDA code | Error | Meaning |
-| --- | --- | --- |
-| 226 | cudaErrorContained | Contained device exception |
-| 700 | cudaErrorIllegalAddress | Illegal device memory access |
-| 702 | cudaErrorLaunchTimeout | Device kernel execution timeout |
-| 710 | cudaErrorAssert | Device assertion |
-| 714 | cudaErrorHardwareStackError | Device stack fault |
-| 715 | cudaErrorIllegalInstruction | Illegal device instruction |
-| 716 | cudaErrorMisalignedAddress | Unaligned device access |
-| 717 | cudaErrorInvalidAddressSpace | Invalid device address space |
-| 718 | cudaErrorInvalidPc | Invalid device program counter |
-| 719 | cudaErrorLaunchFailure | Device kernel exception |
-| 721 | cudaErrorTensorMemoryLeak | Kernel tensor memory leak |
-| 810 | cudaErrorMpsClientTerminated | MPS server terminated the client |
-| 911 | cudaErrorExternalDevice | Only the explicit asynchronous error wording |
-
-MUSA 5.2.0 `include/driver_types.h` explicitly requires terminating and
-relaunching the process for runtime codes 226, 700, 702, 710, 714–719, 721,
-783–799, 810 and 911. The whitelist uses the exact strings queried with
-`musaGetErrorString()` from installed `libmusart.so.5.2.0`, including
-`axi bus timeout` (796), `axi bus decode error` (797) and
-`axi bus slave error` (798). See `_MUSA_FATAL_RUNTIME_MESSAGES` for the full
-code/message inventory.
-
-Installed torch_musa `2.9.1.post1+musa5.2.0` uses `MUSA error: ` in
-`csrc/core/MUSAException.cpp` and `CUDA error: ` in its generated compatible
-`c10/musa/MUSAException.cpp`; both prefixes are accepted for these strings.
-This verifies error-string lookup and source formatting, not real hardware
-fault injection. Other runtime versions need their own wording verification.
-XID category names are not runtime return strings and are excluded.
-
-Matching requires a RuntimeError with a complete whitelisted first line.
-Subsequent diagnostic lines are allowed. This handler does not monitor kernel logs.
-Matching remains text-based and cannot authenticate the origin of an exception.
-
-Destroyed/uninitialized contexts, page faults, contained ECC warnings, MTLINK
-down alone, OOM, generic external-device errors and combined "GPU Page fault or
-AXI bus error" descriptions are excluded. Hardware faults may require GPU/host
-recovery beyond process restart. No task timeout is inferred from these errors.
-Profiling skips device synchronization and memory collection while propagating
-fatal exceptions. Fatal errors raised during image result conversion also exit
-immediately. Classification follows exception causes/contexts so wrapped device
-errors are not lost. A shared exception handler is used by the worker, image
-encoder and Qwen pipeline before its failure cleanup. Fatal communication
-errors exit without retrying a distributed barrier.
-Ordinary errors, including out-of-memory, retain their
-existing handling.
-
-Run the service under a supervisor. A nonzero rank exit lets torchrun tear down
-its worker group; Kubernetes or another supervisor must then restart/recreate
-the runtime. This change does not reset hardware or guarantee recovery of a
-faulty GPU. It does not add a task execution timeout or cancellation watchdog.
-
-
-### Exception-boundary coverage
-
-The shared handler is applied before runner cleanup/offload and fallbacks,
-CUDA graph/stream/collective exits, and background copy/decode synchronization.
-The current upstream AR implementation shares decoder cleanup in
-`AutoregressiveRunnerMixin` and dispatches GPU work through
-`AsyncVAEChunkDecoder`; fatal failures are checked inside those callbacks before
-context exits or waiting for more Futures. Ordinary errors retain their original
-propagation, suppression, return and cleanup behavior. Pure CPU/file/codec paths
-are not made fatal by this change.
-
-CPU regressions cover 86 explicitly catalogued runner boundaries, real LoRA
-fallbacks, full Qwen/LTX25/MiniMax methods, CUDA capture, copy-stream exit order,
-and background writer/VAE callbacks. Tests preserve static ordinary outcomes,
-mock-call traces and cleanup state; mutations exercise missing/throwing cleanup,
-late exit, reversed contexts and invalid child execution. They verify Python
-control flow and process exit, not GPU/driver recovery or imported-library
-internals. No watchdog, execution timeout or cancellation deadline is added.

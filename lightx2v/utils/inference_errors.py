@@ -1,16 +1,39 @@
 """Exit on fatal device errors without touching the broken GPU runtime."""
 
 import os
+import traceback
 from contextlib import contextmanager
 
 
-def terminate_inference_process(reason):
-    # Avoid GPU cleanup, distributed barriers and potentially blocked log sinks.
+def terminate_inference_process(reason, error=None):
+    # Reopen stderr with an independent file description: changing fd 2's
+    # O_NONBLOCK flag would also change stderr inherited by sibling ranks.
+    fd = None
     try:
-        os.set_blocking(2, False)
-        os.write(2, f"LightX2V fatal inference failure: {reason}; exiting for supervisor restart\n".encode()[:4096])
+        fd = os.open("/proc/self/fd/2", os.O_WRONLY | os.O_NONBLOCK | os.O_APPEND | os.O_CLOEXEC)
+        payload = f"LightX2V fatal inference failure: {reason}; exiting for supervisor restart\n".encode()[:1024]
+        if error is not None:
+            # Read frame metadata only, without formatting locals or looking up
+            # source files. Keep this distinct from an uncaught Python traceback.
+            stack = []
+            seen = set()
+            while error is not None and id(error) not in seen and len(seen) < 8:
+                seen.add(id(error))
+                frames = list(traceback.walk_tb(error.__traceback__))[-8:]
+                stack.append(f"{type(error).__name__} stack (most recent call last):\n")
+                stack.extend(f'  File "{frame.f_code.co_filename}", line {line}, in {frame.f_code.co_name}\n' for frame, line in frames)
+                error = error.__cause__ if error.__cause__ is not None else error.__context__
+            payload += "".join(stack).encode()[-3072:]
+        os.write(fd, payload)
+    except Exception:
+        # Closed/full/unsupported stderr and diagnostic failures must not stop exit.
+        pass
     finally:
-        os._exit(1)
+        try:
+            if fd is not None:
+                os.close(fd)
+        finally:
+            os._exit(1)
 
 
 # NVIDIA explicitly requires process restart for these CUDA Runtime errors.
@@ -91,7 +114,7 @@ def is_fatal_device_error(error):
 def terminate_on_fatal_device_error(error):
     """Handle fatal exceptions before normal failure handling or cleanup."""
     if is_fatal_device_error(error):
-        terminate_inference_process(f"{type(error).__name__}: {error}")
+        terminate_inference_process(f"{type(error).__name__}: {error}", error=error)
 
 
 @contextmanager
