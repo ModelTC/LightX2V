@@ -137,6 +137,26 @@ def launched(workflow):
     return [event[1] for event in workflow["events"] if event[0] == "run"]
 
 
+@pytest.mark.parametrize("iterations", [1200, 15000])
+def test_environment_iteration_budget_builds_fake_lr_scheduler(workflow, monkeypatch, iterations):
+    from lightx2v_train.trainers.dmd.trainer import DmdTrainer
+
+    monkeypatch.setenv("H3_GAN_MAX_ITERS", str(iterations))
+    config = helper.load_config(PHASE2)
+    assert config["training"]["max_train_iters"] == str(iterations)
+    trainer = DmdTrainer(config)
+    assert type(trainer.max_train_iters) is int
+    assert trainer.max_train_iters == iterations
+
+    optimizer = torch.optim.AdamW([torch.nn.Parameter(torch.zeros(()))], lr=4e-6)
+    scheduler = trainer._build_lr_scheduler(
+        optimizer,
+        num_warmup_steps=0,
+        num_training_steps=max(1, trainer.max_train_iters * trainer.fake_update_ratio),
+    )
+    assert scheduler.get_last_lr() == [4e-6]
+
+
 def test_fresh_run_orders_encoding_plain_pdmd_and_weights_only_gan(workflow):
     workflow["execute"]()
     assert launched(workflow) == ["prompts", "phase1", "phase2"]

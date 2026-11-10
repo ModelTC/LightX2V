@@ -60,7 +60,7 @@ class BaseTrainer:
 
         self.lr_scheduler_name = self.training_config.get("lr_scheduler", "constant")
         self.lr_warmup_iters = self.training_config["lr_warmup_iters"]
-        self.max_train_iters = self.training_config["max_train_iters"]
+        self.max_train_iters = int(self.training_config["max_train_iters"])
 
         self.output_train_dir = self.training_config["output_dir"]
         self.gradient_accumulation_iters = self.training_config["gradient_accumulation_iters"]
