@@ -19,7 +19,7 @@
   "rope_type": "torch_real_rope",
   "rope_compute_dtype": "bf16",
   "feature_caching": "NoCaching",
-  "use_compile": false,
+  "use_compile": true,
   "vae_spatial_scale_factor": 16,
   "parallel": {
     "tensor_p_size": 2
