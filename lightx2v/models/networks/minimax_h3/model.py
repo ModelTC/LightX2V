@@ -60,7 +60,10 @@ class MiniMaxH3Model(BaseTransformerModel):
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         validate_minimax_h3_residency_config(config)
         self.lora_alpha = lora_alpha
-        config.setdefault("use_fused_qkv", bool(config.get("dit_quantized", False)) and config.get("dit_quant_scheme") != "int8-metal")
+        if "use_fused_qkv" not in config:
+            is_quantized = bool(config.get("dit_quantized", False))
+            is_int8_metal = config.get("dit_quant_scheme") == "int8-metal"
+            config["use_fused_qkv"] = is_quantized and not is_int8_metal
         if config.get("cpu_offload_block_contiguous", False):
             for option in ("use_fused_qkv", "dit_release_block_offload_buffers", "dit_quantized"):
                 if config.get(option, False):
@@ -87,6 +90,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         if config.get("cfg_parallel", False) or config.get("enable_cfg", False):
             raise ValueError("MiniMax-H3 is guidance-distilled and does not have a CFG/unconditional branch")
         if config.get("dit_quantized", False):
+            # dit_quant_scheme selects the quantization backend; dit_quantized_ckpt supplies the weights path.
             quant_scheme = config.get("dit_quant_scheme", "Default")
             if quant_scheme not in H3_CHANNEL_QUANT_SCHEMES:
                 raise NotImplementedError(f"MiniMax-H3 quantized inference requires a per-output-channel FP8/INT8 scheme; got {quant_scheme!r}. Supported schemes: {sorted(H3_CHANNEL_QUANT_SCHEMES)}")

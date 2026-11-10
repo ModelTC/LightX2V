@@ -172,7 +172,10 @@ class MiniMaxH3FeedForwardWeights(WeightModule):
         self.add_module("in_proj", _linear(config, f"{prefix}.net.0.proj", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         self.add_module("out_proj", _linear(config, f"{prefix}.net.2", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
         self.swiglu_linear = None
-        if getattr(unwrap_tp_weight(self.out_proj), "fp8_activation_qmax", None) is not None:
+        out_proj_unwrapped = unwrap_tp_weight(self.out_proj)
+        # For native FP8, _linear enables this marker only when its GEMM backend is available.
+        has_fp8_activation = getattr(out_proj_unwrapped, "fp8_activation_qmax", None) is not None
+        if has_fp8_activation:
             from lightx2v.common.ops.mm.optimized_linear import apply_swiglu_linear
 
             self.swiglu_linear = partial(apply_swiglu_linear, self.out_proj)
