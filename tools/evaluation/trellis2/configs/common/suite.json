@@ -1,0 +1,4620 @@
+{
+  "schema_version": 1,
+  "source_manifest": "frozen GSO 40-object synchronized-view fixture manifest",
+  "source_manifest_sha256": "563190b4fc49e4dbff577ca80c54fb9a6f0e84bb328fe571be4d708182fcd78c",
+  "dataset": "GSO synchronized RGB/depth/pose; frozen 40-object subset, not all 1023 objects",
+  "samples": [
+    {
+      "id": "gso_000_06K3jXvzqIM",
+      "index": 0,
+      "seed": 42,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_000/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_000/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_000/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_000/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_000/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_000",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/input.png",
+          "bytes": 18590,
+          "sha256": "fce1672caaeabe8b6021ee0c75643f09f237a461a14e5843f6ce455335bbdca3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/target_01.png",
+          "bytes": 19029,
+          "sha256": "ac4577be6f95a9c71024a580f7d95f86da6c59aa44690efc1941cc00d943a46f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/target_02.png",
+          "bytes": 18284,
+          "sha256": "9449b84b8bdf05ccf3ebed0288c1f8893b25a0ee5d9e33975c99409e8f40eef1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/target_03.png",
+          "bytes": 19017,
+          "sha256": "e315f8a916c6cabe207db3d070fe7a7950a7acc5e7b6a86e6748a5df2e54a043"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/target_04.png",
+          "bytes": 18730,
+          "sha256": "f9cda909bc6a0b207fe50d14e598497610c09699e7fb2ed80f5a13116bbada04"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/depth_00.png",
+          "bytes": 28323,
+          "sha256": "f537af34b4dcdd284f2f56c3170a554b1a1679f7eca6a03959a850c9897134d3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/pose_00.txt",
+          "bytes": 407,
+          "sha256": "c4af4f52503f37cf106efb480782d12d82b57f82a0f3c938a6d8a63cb02c7ed9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/depth_01.png",
+          "bytes": 28616,
+          "sha256": "12e8a541986134d533c08ecfe0ae0c28dbbc4ff737b17bf559c9ed02b51d407e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/pose_01.txt",
+          "bytes": 407,
+          "sha256": "d343a40048f9a21dc37c421a5620cca7eb39e94b5a74268c1b28224f0e439931"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/depth_02.png",
+          "bytes": 25461,
+          "sha256": "4b53cac27648f52c406f03221763fe71628c1697375af72143103733b9693fff"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/pose_02.txt",
+          "bytes": 405,
+          "sha256": "f51aabef54f0b26be6c87ed07204aad8999014f7fe9bd8e3e821aa1c50cb8e39"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/depth_03.png",
+          "bytes": 28168,
+          "sha256": "d0569b6239f5c5bf08eb65bb5fa7b3cc5205e67c71762a878560fe39b74ad4e7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/pose_03.txt",
+          "bytes": 408,
+          "sha256": "5107004cba6eda23eff63252569104b5f0e4ba9cb2be38f141de5b700523b3f3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/depth_04.png",
+          "bytes": 25187,
+          "sha256": "fa4fdd4ffad617ed913af1d613a6f13584eb94dbb7aa00a4d48bdff0e1f81b75"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/pose_04.txt",
+          "bytes": 408,
+          "sha256": "8838c640f511191733e2b78df4759cc13818d9999629462491e745d23ebf2925"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_000/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_001_07VFzIVabgh",
+      "index": 1,
+      "seed": 43,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_001/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_001/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_001/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_001/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_001/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_001",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/input.png",
+          "bytes": 11534,
+          "sha256": "f525469f51a0774b25b9edce83ac5b52e0b81d3c87df87574d68167b20d9d826"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/target_01.png",
+          "bytes": 11735,
+          "sha256": "b83bbff90c0abb9af320cb288f3a0eaa89b03a6de4e17fa3e18b5e787658b183"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/target_02.png",
+          "bytes": 11823,
+          "sha256": "97a7e2e944a7cd5d4e5ad4988cc4b2035648c0062171aff64e851584af9559f7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/target_03.png",
+          "bytes": 11235,
+          "sha256": "5b181aa21651ea2ed9127e3f2e6a65eb020eb416390ed39496cbb828ccd9b833"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/target_04.png",
+          "bytes": 11734,
+          "sha256": "f6d44d7528acd12b26d38343f7e9f890837370df112a7d794f388f4a250f2fe6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/depth_00.png",
+          "bytes": 22754,
+          "sha256": "162fd5fe73eeec028862899d04453e919a030122b25ed7a125d470be76d50f67"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/pose_00.txt",
+          "bytes": 406,
+          "sha256": "f09e1be21409e6112362d77011f2dfafd511a90aa958c30dba246ee678b7a9ea"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/depth_01.png",
+          "bytes": 22645,
+          "sha256": "ed5d9e0c8115590f2e362a802fcab121d7d5231769b954c1b8e550fc7fb5faab"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/pose_01.txt",
+          "bytes": 406,
+          "sha256": "2ad7e89b4c9128b52147b29997a9c912edaf9c217139b0e9582d106a4ccdb686"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/depth_02.png",
+          "bytes": 23019,
+          "sha256": "7efe32d9c600be20cb5b3042620b678600f5221e77d657dbbdc318a494f901e8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/pose_02.txt",
+          "bytes": 405,
+          "sha256": "ded1adfecc80ec63c0a11bf8c7f2120c872bd2c5c951f5ab233abaa7a5ce234f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/depth_03.png",
+          "bytes": 21197,
+          "sha256": "ad24868854b44a3e3d50a6c9ae4dd8983978cc1a41089db616389936dc2bde30"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/pose_03.txt",
+          "bytes": 405,
+          "sha256": "0f32620906bcb033f3716f626ab8568a96ad348c2e9f0cb8114d806031038fab"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/depth_04.png",
+          "bytes": 22546,
+          "sha256": "0480a5c988fe2af8b64f4778268a4d106113dfa696b9f80bdc367b98d79ffd46"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/pose_04.txt",
+          "bytes": 405,
+          "sha256": "1d4dda67cfa2adc46b5d3159da56d6354a16ea150e5c7e8c39f8e466630de49e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_001/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_002_0CVcQy3RjJ6",
+      "index": 2,
+      "seed": 44,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_002/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_002/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_002/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_002/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_002/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_002",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/input.png",
+          "bytes": 8256,
+          "sha256": "471bf2f9b952805d136a5cda1dd4b06fbad79e780dca215f884f7ee4f1adde35"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/target_01.png",
+          "bytes": 8824,
+          "sha256": "5df0471eab62072c1171ba55d9056afe92f3a5cd1cc09818571b12f9d76e3ca5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/target_02.png",
+          "bytes": 11975,
+          "sha256": "d7896cf69b4639c6ea0feded16a3e1d0d0cbac3739fe6acda1666ddc7e55aa23"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/target_03.png",
+          "bytes": 12056,
+          "sha256": "552dbab3649e6dad91f6c496c99f14abfb8d422a372255c6dea757d04303c2c4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/target_04.png",
+          "bytes": 7937,
+          "sha256": "c0ebf203a8fdf032b226c39256b2cb19e6c2279b307de2f574898d53592a15ba"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/depth_00.png",
+          "bytes": 11947,
+          "sha256": "6c9c106c4863bfb380dca6cf020fb0b9cc1c1bb170c9392ccc167f0683319bd1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/pose_00.txt",
+          "bytes": 405,
+          "sha256": "9f83060c8fb4bf08c09f11f09b2569deb132f6b1d2abf48ef80753d676291008"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/depth_01.png",
+          "bytes": 12950,
+          "sha256": "26d54d41a6b0179b5c52699bdbc6ce4e13950a436516c77bb4949514d55a6387"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/pose_01.txt",
+          "bytes": 406,
+          "sha256": "3816ad3499207a6a6094bc094f27928237c27890c9c721bfa1db032416d632b6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/depth_02.png",
+          "bytes": 16203,
+          "sha256": "a9d20ae0b9c8a74df90e8b3f77ecbf70cce646e6304901fe9a26b5d16641fe2b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/pose_02.txt",
+          "bytes": 406,
+          "sha256": "38fa01d59d4ab30adfb9378dd7a0caa976abfb00581a30f66c33640fcf245fcc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/depth_03.png",
+          "bytes": 16849,
+          "sha256": "d0304d09f15eec9377e7feb34d2a660daab93dab8ab85ed89708af48aecc2423"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/pose_03.txt",
+          "bytes": 408,
+          "sha256": "8abe0664573e2901afd71bdc1860aaf9f7932af6afb9438a3371410d7d74128e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/depth_04.png",
+          "bytes": 11101,
+          "sha256": "a8d4e0fbd1e480bfeaa3442dce77b2a0ba4813ba6317c8b4839bb2ab028fb3f3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/pose_04.txt",
+          "bytes": 405,
+          "sha256": "2420056572ba2c25af64789a38b2b9d40cbf2e8063cc2bc6f0afc0899fcf5c94"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_002/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_003_0F6dJwGpWZB",
+      "index": 3,
+      "seed": 45,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_003/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_003/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_003/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_003/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_003/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_003",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/input.png",
+          "bytes": 13064,
+          "sha256": "3210f7d6e84ef08ec5c627ff506255e5b87f7c6d43d4f03066682c05aca9223c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/target_01.png",
+          "bytes": 12806,
+          "sha256": "12114f52ce7f000a08e37fba52c8fb330eb55a6640b6d8b18c21d92c8b033f3c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/target_02.png",
+          "bytes": 5347,
+          "sha256": "59b18b204aa993053d234b4f1a9103586625903268232ac995a8168ff7f4703c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/target_03.png",
+          "bytes": 8535,
+          "sha256": "2d3f73b5ef5b6503558514f2f889bb095d70bad4b09632e56d0627ad232faf08"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/target_04.png",
+          "bytes": 14281,
+          "sha256": "9b978f7b6631b52e8eabfef798c3ef4b758cd3b4f953bf059e3f15481d90ff7e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/depth_00.png",
+          "bytes": 25201,
+          "sha256": "8489060b8a75192dde9f3b7ea87644f8adec6f3ff044012e7b1675c946f3e542"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/pose_00.txt",
+          "bytes": 406,
+          "sha256": "8fe5d602d7a9f22c23caced104b226a336afbff2795f7428eb6384430a600ced"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/depth_01.png",
+          "bytes": 25783,
+          "sha256": "4988eadfa51619aff589e098594292592679e32e5c480b410cd735f589acb3c6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/pose_01.txt",
+          "bytes": 405,
+          "sha256": "0395a238bfdd9180483e210c727775256e027d0edcc1c2d6d5adceedced3b5f4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/depth_02.png",
+          "bytes": 9668,
+          "sha256": "738dce0a292188b4d7d873031da9663763b9b3b81b0f320f86328a798b5984a4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/pose_02.txt",
+          "bytes": 407,
+          "sha256": "9413dc92850529085a57394442e10702c3fbd5fc15af0a176c0f15f4e861b3fa"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/depth_03.png",
+          "bytes": 14751,
+          "sha256": "c31dce82691a9954a444cc16e46f076416f05af92175ae585e029079237dddf6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/pose_03.txt",
+          "bytes": 405,
+          "sha256": "771d25883bc07a39e120b6c2b778f2de6f8e0cd2d4b31a78d14e75b2711db2a2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/depth_04.png",
+          "bytes": 28761,
+          "sha256": "5c7c84fa5c358960558147950d04ed3b5eacc080901032f1b01c1d91f5c1cce7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/pose_04.txt",
+          "bytes": 405,
+          "sha256": "b6e9c0bde8fe29084e6c4de1a04fd55aa497ac443bfe8296886aae4667ac4146"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_003/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_004_0JmsKlmzoCS",
+      "index": 4,
+      "seed": 46,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_004/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_004/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_004/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_004/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_004/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_004",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/input.png",
+          "bytes": 11017,
+          "sha256": "005a8d0872833d2e39ff69bf7cd685a905597c8eadbcdb1b7f2cab07e9e68706"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/target_01.png",
+          "bytes": 11149,
+          "sha256": "6b765d1753218374db9a57b6cd082b033a18b95e66befecd6a64837fed6bdb6b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/target_02.png",
+          "bytes": 9593,
+          "sha256": "39d1f957f39e2794ecb144a18beebf49c2834630bc98d18d7858212087ee3be2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/target_03.png",
+          "bytes": 10705,
+          "sha256": "28ccfe795692f2b47f733e76ff14c46cf0794ad19834a51a60df74b415915bc4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/target_04.png",
+          "bytes": 11164,
+          "sha256": "f4e61e12575fbedde8cfda173855894e527472ad85b2463536fd06cd245aee29"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/depth_00.png",
+          "bytes": 17628,
+          "sha256": "e43d7fc2ea122b70c447c11672caf1a6c0ef707399d85b3f69155d16ba0a6578"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/pose_00.txt",
+          "bytes": 405,
+          "sha256": "21ad194b1e20474e159e68c22a5a9f7aed2ec0ce1d25b57ea7fe7ace6ec0d286"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/depth_01.png",
+          "bytes": 17412,
+          "sha256": "2cc32a6f6da952d90177bd229834a192c2f0ae4cbc71728f632c9b4f9e9dfaa0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/pose_01.txt",
+          "bytes": 405,
+          "sha256": "a3a907648ed59eea7fdf1a5d4a72c6c4d69608bf5fe819ffb0cce829334ea16f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/depth_02.png",
+          "bytes": 15324,
+          "sha256": "bb4f4bc36ecc3dd425a6c1afa09e6b26838de138f82e25cb89a06e9d7814fe4b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/pose_02.txt",
+          "bytes": 408,
+          "sha256": "969673fd66524f974499f64c3f5ff7005991fdf6339a0a1be03a25b092da2c04"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/depth_03.png",
+          "bytes": 17661,
+          "sha256": "651c6b5dff40305cea88d1faed736520908528dac8edb38d6bcc3b563c2398ef"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/pose_03.txt",
+          "bytes": 405,
+          "sha256": "ec6a181f41f95f0b6e31885c1b9fbec02ccf3d4f26b90a60f09e5a381e640de0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/depth_04.png",
+          "bytes": 17570,
+          "sha256": "6c3ef5de3c7331cffca92ec88f358b2914a22fbf62b8f94ec0a84eafa6576614"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/pose_04.txt",
+          "bytes": 405,
+          "sha256": "e2d55dfcc51138e7bbd857d236f8972924c9cb6f10024bc6692c869af94d0d4c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_004/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_005_0OxI9io8Yxd",
+      "index": 5,
+      "seed": 47,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_005/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_005/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_005/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_005/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_005/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_005",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/input.png",
+          "bytes": 5235,
+          "sha256": "38686ffa2805f05fee742c361fdf1d192817a72e14dac369352c97893dfa00f9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/target_01.png",
+          "bytes": 5255,
+          "sha256": "27a9450553f903ed0860e0864670ed1b9fe1dce9991c6c9dcbf5408d8e756261"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/target_02.png",
+          "bytes": 6064,
+          "sha256": "3eb48b815b7381cf73da2a1500d49c24141481627d64e4cb37fdc9b5e4c8781a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/target_03.png",
+          "bytes": 6172,
+          "sha256": "fac4108c430dd21039ca2784c93e668fdb44d50513712098972a708d2b160f7c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/target_04.png",
+          "bytes": 5771,
+          "sha256": "f11e0518d8223dbf1d0669066b20b7ab1b6e9b383b9b59cf161f168bccc3c98f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/depth_00.png",
+          "bytes": 7634,
+          "sha256": "e83baeda73af6ee59353b75288fdea895567878027421cadd80f085b7a17b7cd"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/pose_00.txt",
+          "bytes": 406,
+          "sha256": "a1bfe605547ba96a11aacd5c304efd51550035c521695497a2ff24601065b93f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/depth_01.png",
+          "bytes": 7727,
+          "sha256": "a7786675e4c9a4af98d7d9d0db70ed2925c0c9345887559a9bc6db5fb68f17e0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/pose_01.txt",
+          "bytes": 406,
+          "sha256": "149d187fc3d052b63bc3f3d8aece2d6378687bd1048b1c95bd1e9191e375261e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/depth_02.png",
+          "bytes": 10882,
+          "sha256": "eca2c79a2d50fe9430a777cb09be254295772c85112f577df9f4812add0b0b09"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/pose_02.txt",
+          "bytes": 407,
+          "sha256": "c1f797befcf992793afc507fffdfe1b1ba00fca06679315616e088ccad4e9797"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/depth_03.png",
+          "bytes": 10712,
+          "sha256": "bcabe6a346ea2ca6d5feaa32d4c53204b4a1f2943673b25c500a4f14182144a2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/pose_03.txt",
+          "bytes": 406,
+          "sha256": "1b1e0a4bb8d50bb7c297415999fb2dd2be73d7ddc1bee9cca9792ec7ac8475e1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/depth_04.png",
+          "bytes": 8151,
+          "sha256": "b2e6485fca76ffd83c8c34ab9eae7235537a5836d4185129dab9ea969e91950c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/pose_04.txt",
+          "bytes": 408,
+          "sha256": "3bc212743908abc17bf6f56ee84df8901e0b69ab88fce5de83e596cb52bf804c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_005/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_006_0U0mezsyXDq",
+      "index": 6,
+      "seed": 48,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_006/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_006/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_006/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_006/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_006/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_006",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/input.png",
+          "bytes": 12595,
+          "sha256": "b9a443fe4c557ae3fdca81eb3b456c7aa80282262bef6f725aed3228d9327f64"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/target_01.png",
+          "bytes": 12585,
+          "sha256": "b9f380bdbbcc8fb989bb4870b96bf31187bcf6ae5076addbb3b1c38f22b1fd8a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/target_02.png",
+          "bytes": 11520,
+          "sha256": "6a0f720b485d3cd8042894a21623463f6183e0ef297712b2ce89680c5ed26e7b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/target_03.png",
+          "bytes": 11426,
+          "sha256": "ae5e9666db109dfd0f2a58bfa072efd7e01d97fb02b77af79073e3e6bbb48e42"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/target_04.png",
+          "bytes": 11597,
+          "sha256": "aa2688471a1ebf8d5dbccd45a3dca2c9a9d5c3c54b4ff234d1683ce01581eca0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/depth_00.png",
+          "bytes": 17980,
+          "sha256": "a7880a0c298485d5a89992755fc3bda675414017fedbe65364214fecff2c9eee"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/pose_00.txt",
+          "bytes": 405,
+          "sha256": "bacec8ee4fb09e19535cac4f51c542beb2cc31b1f6788c468fbe78c0bfe40c02"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/depth_01.png",
+          "bytes": 18142,
+          "sha256": "df479fe8e78732761241c4239923191877829a5b36b01e79006b9844e81f0011"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/pose_01.txt",
+          "bytes": 405,
+          "sha256": "4876bcaba631587471c7bce11c3ff8f9b136d5dc9fd6f3677534ad685928b056"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/depth_02.png",
+          "bytes": 14841,
+          "sha256": "0d0228231092fe29555a8b2674e94dbb05e68166e7d439fd813de3d5e290f59c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/pose_02.txt",
+          "bytes": 406,
+          "sha256": "375bf1ea9468905b3536678e60c7fc94f2537c2864bb6aef7312689e6911453a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/depth_03.png",
+          "bytes": 18039,
+          "sha256": "64cc613c6389036bb98653fe04888e23c4a2f2c6d8883df302eeb589f5ff2910"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/pose_03.txt",
+          "bytes": 407,
+          "sha256": "7f5165a665738c9275f2b49ee60eec73bb29a4c54a862b60a1772fd65334cb5c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/depth_04.png",
+          "bytes": 18114,
+          "sha256": "0953fdb5f78d0f47ad73c93ca0c9e255eaebdb4f51ee7696ec6cb824764cc149"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/pose_04.txt",
+          "bytes": 408,
+          "sha256": "4f9e176762da85b0872d27a38ec78b747c5daa3aadd2da69a040c80762f479ee"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_006/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_007_0U8oBJIs5jr",
+      "index": 7,
+      "seed": 49,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_007/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_007/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_007/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_007/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_007/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_007",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/input.png",
+          "bytes": 17520,
+          "sha256": "d49b7dcfa154af176bfdf63c426e0c1c9cbc1cdc80a470e38435342b9d059133"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/target_01.png",
+          "bytes": 17564,
+          "sha256": "c93d5ff24ce7bfdddd30742a8e9788d5ed3a238a0f2e633c82a4029022e7573e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/target_02.png",
+          "bytes": 12576,
+          "sha256": "aba2b0fc6e2050b564c9816a69132007104bc1c1509ac7f084355037048d8f21"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/target_03.png",
+          "bytes": 10828,
+          "sha256": "5a02047c2269da03c979aa3871d6dfa3a0a1121f2db378e175af067934781478"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/target_04.png",
+          "bytes": 17536,
+          "sha256": "d6713e0958b658d36a6c27bd2de9866f3ca7ce410f26b52813a339b4912ada4d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/depth_00.png",
+          "bytes": 19145,
+          "sha256": "d0bd9bdc68620942bf74cb96b537ee6f2b9cb46a7cb62d2bb0bbc307ec54ee3c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/pose_00.txt",
+          "bytes": 408,
+          "sha256": "42c2e9787b1c285f3eba66c0c8241136b1b897eba2980e8fa399f8166e21d2da"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/depth_01.png",
+          "bytes": 19042,
+          "sha256": "de1cfce37d254da702c9ebea282ded1943e560ea77af275b20faf78c2706e0f9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/pose_01.txt",
+          "bytes": 408,
+          "sha256": "ba41c01a19b05d1a843b198f8be2fb894595a8105dbe8af4477a469a2a08d884"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/depth_02.png",
+          "bytes": 17557,
+          "sha256": "71966f7a0e90e7e5f3eea6a52ad774320b617db9106a40e5c428c40ddc2a6a86"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/pose_02.txt",
+          "bytes": 405,
+          "sha256": "a07a4a43801bef080a6c2d29c4ddb5338aebc0a0797823cd9e1260d21b25b7ce"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/depth_03.png",
+          "bytes": 14944,
+          "sha256": "a2e03bcb2afd958f73c1c988e29d26c8d5c072df7fc9d97dd7bbad8503a17767"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/pose_03.txt",
+          "bytes": 406,
+          "sha256": "24ee40dbe996beb2859a88b2240ebbf1a676ce655158ee60139bc1866678df9f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/depth_04.png",
+          "bytes": 18976,
+          "sha256": "77ecd8f4b68e31169693eeab9542c50a736465b58040b46d3002df81a1c82afb"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/pose_04.txt",
+          "bytes": 407,
+          "sha256": "8b4677b3842ddcd672be8ddd2538a9136c8dd6812546db7887910ebd8adb14ba"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_007/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_009_0XL2C1WEb3y",
+      "index": 9,
+      "seed": 50,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_009/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_009/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_009/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_009/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_009/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_009",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/input.png",
+          "bytes": 12581,
+          "sha256": "d7e8b6e694fce35dfd8cd65866472bf39164513305d57dc2ca57cfb683424325"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/target_01.png",
+          "bytes": 12641,
+          "sha256": "1157a717a3b53ac6132938ee3c55aede60eb1ad8d857674a8ead35831971b16e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/target_02.png",
+          "bytes": 12787,
+          "sha256": "5e55078ba7f75562636f3756aabb1ba481be060057c93186d7a8583747d0d2f4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/target_03.png",
+          "bytes": 12962,
+          "sha256": "f29eeccbcd489e169bba8c348a464c42431183b983ea6f34f42749b43c109c86"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/target_04.png",
+          "bytes": 12862,
+          "sha256": "bd287c118f8fa52f650dd2a9995f80cbddceadc214a9e3eee6d7bfdb10ea817d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/depth_00.png",
+          "bytes": 25190,
+          "sha256": "2ddec17e5846492c14857790f62d8a2b9535189786aae76b737b0024eb76f60e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/pose_00.txt",
+          "bytes": 406,
+          "sha256": "3b3a50d625256466b26984df78ae082471133928c205e68abe4c773c36cf0eab"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/depth_01.png",
+          "bytes": 25441,
+          "sha256": "b5c799356ac57752131fc4c1a45bc3f6c4e611cd1f245a638e3e647a11e9fecf"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/pose_01.txt",
+          "bytes": 406,
+          "sha256": "03eed00e020b145176735d9f6e4970ed1811519c38667cead58bc4bc0289ed6a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/depth_02.png",
+          "bytes": 24808,
+          "sha256": "d9f10cba23c78474be692b5344e05af47108c737a4229a979763ec929bc6ed29"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/pose_02.txt",
+          "bytes": 405,
+          "sha256": "0c419cec2f8cfa800a246454b2349398da3fedc8b31b357620eb245ffde522de"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/depth_03.png",
+          "bytes": 23935,
+          "sha256": "4f0bfd81411f2c7217061c92053164ba90904b8ca27b7ce38bae00bbb0fd533d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/pose_03.txt",
+          "bytes": 407,
+          "sha256": "0cf84259dfa064ff0b21b07ef1fdecc2ef91038ba08e0ed41bb962a3c3e68f4e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/depth_04.png",
+          "bytes": 23568,
+          "sha256": "3197c7bcca2d4c783fe926fd20d19c480af1fb05b8dc78ad986847216d51e8f2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/pose_04.txt",
+          "bytes": 407,
+          "sha256": "d8b6c46da8953cc18a355d497f3924234a35137608f2b2c9a9219091389d59aa"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_009/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_010_0ZzPH0GTFV1",
+      "index": 10,
+      "seed": 51,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_010/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_010/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_010/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_010/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_010/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_010",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/input.png",
+          "bytes": 13639,
+          "sha256": "c7f91d30a684298d7600ff0f936f35e5eb94b383dbab42d5299dc884fe75e606"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/target_01.png",
+          "bytes": 13817,
+          "sha256": "3e86fa68eb0ea9822cc99634d4a88e618cf6de2752ee5777d4a11c7b6eaf4703"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/target_02.png",
+          "bytes": 16166,
+          "sha256": "f9e18fdb83b14b94ae36c4df47f5507cdfdcc61fdcf4b3822b22ac398ff4d4af"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/target_03.png",
+          "bytes": 16265,
+          "sha256": "3e37dfc69e72b9abd4f1c3dbf7e72b81e5b7cb3179d8a36b91779f7c5f617d1d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/target_04.png",
+          "bytes": 13408,
+          "sha256": "c8eb923e7530d4409e9b432924ded809a6c14cf42f323d66e1850d0d354712d5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/depth_00.png",
+          "bytes": 21519,
+          "sha256": "95a10185d64cd1c49f2a7a3628b3d7d79167e76d67afbfac5de59d310c47cc95"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/pose_00.txt",
+          "bytes": 405,
+          "sha256": "934b9ff23df44f9dc9db005434a607b53b51ae16e2d8c025d3f7d16610c4751a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/depth_01.png",
+          "bytes": 21877,
+          "sha256": "04446a5df21552085989bc678da3f43239f877fc69ed4749008fbd4e6543b64a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/pose_01.txt",
+          "bytes": 405,
+          "sha256": "3fc753a2d96e1001bf219cd4e2907a8a5ad1a16160b5f6f2a2e948fe03a3799a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/depth_02.png",
+          "bytes": 21266,
+          "sha256": "30afa8a89b1087d1e6f2d71e1eb43ebd1598e0d360a3d446f2a35c8979af55f2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/pose_02.txt",
+          "bytes": 407,
+          "sha256": "2b38ed6d772c098f582e06bab86af86728cdf5d085426ddcd57702fad3330b82"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/depth_03.png",
+          "bytes": 20909,
+          "sha256": "f9cbe9290f8732496970ff1c7d0b3d13fb452167e17175e8c99ee4c1f2d7e060"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/pose_03.txt",
+          "bytes": 406,
+          "sha256": "ca310884e080d1599479003e9fbda5f4f03c80b4652c255b3b88816fc88bc7ea"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/depth_04.png",
+          "bytes": 21285,
+          "sha256": "bd6d36c99707b56a57468de8b019714bc1fbb9b70b44ec82fdd4e243b64bc989"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/pose_04.txt",
+          "bytes": 405,
+          "sha256": "d35408fd29aa20987b3ec0ebff91becde4a11de0ff8169ffdc9bb980f5d24286"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_010/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_011_0dG1Jg3AoyI",
+      "index": 11,
+      "seed": 52,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_011/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_011/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_011/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_011/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_011/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_011",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/input.png",
+          "bytes": 7204,
+          "sha256": "f180b0d5356c8e7a47025a2fb8b1247ea60ae3d2d5544dc8591ea1879963aef6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/target_01.png",
+          "bytes": 7062,
+          "sha256": "2a71fec6863b5c1236e0fb5578e6dc04eacca724f32cdd0a5d725adfb33c884d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/target_02.png",
+          "bytes": 7054,
+          "sha256": "b7c1949011b878390f0b052f6fb85140e959a69521e22b0103df1867a8241ba4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/target_03.png",
+          "bytes": 7275,
+          "sha256": "c265cabd7bb8eac490b9afe33f1679141e63715edabd0b330b840421c7c8bb0b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/target_04.png",
+          "bytes": 7069,
+          "sha256": "eed6421d1badb643f2caa83d1fbfecdf2afbf5cf20051c727d74e78d952df112"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/depth_00.png",
+          "bytes": 18299,
+          "sha256": "39d542a71a25ff337cfaf5536e2d80442ca746ab9aa70d5fcf8a7af79414bc64"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/pose_00.txt",
+          "bytes": 408,
+          "sha256": "c1a6bd31b52a2a2ef743e4c01839b084e7dfdfa77303da1d4363473a24a40807"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/depth_01.png",
+          "bytes": 18402,
+          "sha256": "7ca67e16beed5152cdd267d4a4abf5341b992e732b17ba1d06a982f0255c9ada"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/pose_01.txt",
+          "bytes": 408,
+          "sha256": "cd5299f69aa085d292c9ac17dafef863349793fb447f4bb8836a206e2e9c681e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/depth_02.png",
+          "bytes": 18187,
+          "sha256": "8d76da029284fd4bb428661e69e9e0ad13ffeb9481e01bc2a1a74ad92f1b7295"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/pose_02.txt",
+          "bytes": 405,
+          "sha256": "cde5a7deeca95ebca7732e341a079784e70b18fc77933d63e0b4a0c4376676ee"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/depth_03.png",
+          "bytes": 19338,
+          "sha256": "80952af83d44fd4c21894bce20069cac35d7c5b2274b20b364fe382f013e03e8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/pose_03.txt",
+          "bytes": 406,
+          "sha256": "0ebb79274b3e509f4e5f4b1830904797f152c7247386ee5a0f134195d094a2ae"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/depth_04.png",
+          "bytes": 18283,
+          "sha256": "99ec98143fe9ec7b53de9ceed919231845e237c8ec5fc8640d8af46db2b96651"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/pose_04.txt",
+          "bytes": 408,
+          "sha256": "abbebe1d4755a41839fa2fa1eb13fa78ec3605601067cf933b53e3772a8a184a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_011/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_012_0dwAfYFQmmq",
+      "index": 12,
+      "seed": 53,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_012/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_012/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_012/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_012/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_012/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_012",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/input.png",
+          "bytes": 6438,
+          "sha256": "dade1cd26ff32f4a22802abcad30ab8086fe5b2f5fbcf49326c1b779d0f93690"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/target_01.png",
+          "bytes": 7026,
+          "sha256": "975949a3e699c6ef333154772cfe2f88f01a30836b8d86dde85e1f976a227d4e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/target_02.png",
+          "bytes": 7485,
+          "sha256": "b72ddd3d23978ae47f04bdfb23f87a0b2aa086c5d9d15515b528c09620e473d5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/target_03.png",
+          "bytes": 6705,
+          "sha256": "728b42d9922c7e9b33b91bf5b44d0d38970d2d835dae9a0a389363b97cb863b6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/target_04.png",
+          "bytes": 7585,
+          "sha256": "187079ba450a45768b3db306cafa2ada9fd0c6b6a0324be0e5fc34b5e42c1d6d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/depth_00.png",
+          "bytes": 8862,
+          "sha256": "680149a93a354beed1b7413a9cad28f4c72cd0f140c9bf25328b76a7a40c861b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/pose_00.txt",
+          "bytes": 408,
+          "sha256": "f5f60258ac98d1c4dec9d6ffeeb8696a3d04541164290e8bc2f5c37174c5f692"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/depth_01.png",
+          "bytes": 10421,
+          "sha256": "f7d6160721c89290c1a3b885f48787020ad995148d3c089c67cbc6d3fb235056"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/pose_01.txt",
+          "bytes": 407,
+          "sha256": "d7a12264bb76a93bd13e54fdda56b6c9211b58a7f1a8768196f2df0e1eff00de"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/depth_02.png",
+          "bytes": 11915,
+          "sha256": "74f64a56fb3587c056804a12ad8159c771e19812b7472a4d90f97446e05151f3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/pose_02.txt",
+          "bytes": 408,
+          "sha256": "e23822cd858162de62f0d01512173a3e861a3284fb78a21272cf918069bc8d12"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/depth_03.png",
+          "bytes": 10991,
+          "sha256": "a83398ff0b219e394e90a22e4509a6fc4a9fe7c9bece9aebea710134960a7345"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/pose_03.txt",
+          "bytes": 407,
+          "sha256": "5582185efd2c948de68a9c76f63dc38b8b46be18b51c13033dc47bc8f08f8b4e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/depth_04.png",
+          "bytes": 13380,
+          "sha256": "ded35523f6ca700c833dc1cdc27c8a18b7dc2dc3ce75e68840565c6fdf686448"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/pose_04.txt",
+          "bytes": 407,
+          "sha256": "f15ac2c22ff2906868079bfdbf0a49e4e619f903537bffb90ca9fb945ec8ae05"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_012/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_013_0eL7mQdyAHH",
+      "index": 13,
+      "seed": 54,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_013/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_013/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_013/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_013/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_013/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_013",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/input.png",
+          "bytes": 8300,
+          "sha256": "9ba36a018fd84a255f9c72d96a02ed6954cda37c5344360fbaf8e55d8e92156d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/target_01.png",
+          "bytes": 8410,
+          "sha256": "a52085e4244f4ae98269f8f0fe2830cacc50bcf7c77e8b6227c2e84cbd9aad50"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/target_02.png",
+          "bytes": 8094,
+          "sha256": "5e33d4be2d25b3fda6148fc3d48001097702b37ae157b914db0e40806180aca7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/target_03.png",
+          "bytes": 7509,
+          "sha256": "e2a72c81664f2f8a27ee86023b4d5a93571354e82e8c55684b966e63a57f38b2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/target_04.png",
+          "bytes": 8358,
+          "sha256": "eca549d6a749b99c7587b18626a8a43f31de92a3a6cb9d3c3a3c2dec31572814"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/depth_00.png",
+          "bytes": 11696,
+          "sha256": "21b8e9edc51e3e7740f586a57ee31ebc502aa4c23ebc2c1c5baf7ffe6778a319"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/pose_00.txt",
+          "bytes": 408,
+          "sha256": "06cfd2a4e61d936a4e861b76684a963d7e0edca017f4db3fe1209eadb846f353"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/depth_01.png",
+          "bytes": 11509,
+          "sha256": "3b5326891dd9bed47b484eca5a67d91bb112f152f424e6abe378a842dce0b7a6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/pose_01.txt",
+          "bytes": 407,
+          "sha256": "70ecb04dff3e919d84bd85d401b9f376d814a4e8a9a0d507240fda39889ad8d1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/depth_02.png",
+          "bytes": 11318,
+          "sha256": "544d48edb3d1e688df8ad66beb07fffd5ed79a1a254dced27558e6577f09ec87"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/pose_02.txt",
+          "bytes": 408,
+          "sha256": "db1d4e8cd8956938f7b60b9345476dd710cf9a18c032288649637174b02f39cc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/depth_03.png",
+          "bytes": 10043,
+          "sha256": "55f984cc1ec01a56ae459726255d6e5d9700d85568d86b3ab87994910c16375b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/pose_03.txt",
+          "bytes": 407,
+          "sha256": "56c52cd324f6ad2e19d8aec19279dcbf35389993d879736c6eda0d8097dda644"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/depth_04.png",
+          "bytes": 11185,
+          "sha256": "463a074dff17678ba45e2465c9ca3dcbda0f4715a3f9d7b5d6929307fa196993"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/pose_04.txt",
+          "bytes": 407,
+          "sha256": "4a0724540b5574c02d0a4aae5e5a6469e70d1ca78dc70ae68c23d039353e52ed"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_013/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_014_0eLI82cUm5q",
+      "index": 14,
+      "seed": 55,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_014/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_014/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_014/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_014/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_014/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_014",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/input.png",
+          "bytes": 10347,
+          "sha256": "c531b3cdc55a242dcd7a47726c7f063c76494bad242f7cee258db8a3fe306d3b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/target_01.png",
+          "bytes": 9194,
+          "sha256": "af90a18c3b159672d326674d9ca9b630359969b646f39ff36e13fd9b5b3b387d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/target_02.png",
+          "bytes": 8317,
+          "sha256": "41d7fe7bca86df32ac154ba514cd989f43ccbfc18f77a41d8927c00e623d9ff2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/target_03.png",
+          "bytes": 9037,
+          "sha256": "20b4c9046aea919218f27cd136497ea1782caf08a238a7c6d49133f7865cc46b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/target_04.png",
+          "bytes": 9688,
+          "sha256": "eae32fa367cbf52319114d54107e7f7e9cb9b31cf34d78b5446218c02f3ef7e9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/depth_00.png",
+          "bytes": 10261,
+          "sha256": "e6b8cc93fe739529316d37985da4ef835667851eda2432f283ace26a1b13db8c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/pose_00.txt",
+          "bytes": 406,
+          "sha256": "6dca5d4461e7b90762e85b88a86ad7f2ccc2adbdd9cb03b619439f3f9da961fa"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/depth_01.png",
+          "bytes": 10696,
+          "sha256": "e0f9eca40ffee79d2eaa6fbedbae828a9e1197d9a9483c579088aaedc5afb98c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/pose_01.txt",
+          "bytes": 405,
+          "sha256": "bc05c7ec187ee3fca2941357522ac2dceaba44f1a08233414bdbad5112a31b1e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/depth_02.png",
+          "bytes": 7857,
+          "sha256": "1bbfdd02134623c86ef0061ad26382cc6b11e64b307310dff57341d05c8c61fe"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/pose_02.txt",
+          "bytes": 407,
+          "sha256": "e63b78fce6f46d47bc5ad88a7804ea49a399d0ae17b9284c8adf30ef68dc48a8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/depth_03.png",
+          "bytes": 11222,
+          "sha256": "55ee3209810fc2cfb45c987d1dd18e47560509c4b16f5bfe11737d9a60e8b875"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/pose_03.txt",
+          "bytes": 405,
+          "sha256": "467d834a01c7766edcae957bca334f59d1c03191a41e7d6b6a788a8154224371"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/depth_04.png",
+          "bytes": 10908,
+          "sha256": "ac08633b9c83832c784f2720cc8099677d73cd14088bda871a920a87b981c4bb"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/pose_04.txt",
+          "bytes": 405,
+          "sha256": "5aa51945ee484ac5c51c0c3e005f0f602eb608b6c51cf673eb66ad102829a633"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_014/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_015_0jVRGFVnpYx",
+      "index": 15,
+      "seed": 56,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_015/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_015/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_015/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_015/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_015/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_015",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/input.png",
+          "bytes": 6539,
+          "sha256": "e929a19603a059ed34e9c8d37543a4ccf2f48ef200cbb0aec3cb3b2a804b4b89"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/target_01.png",
+          "bytes": 6448,
+          "sha256": "22bce004ecd7b94638449c6e7f066700b82d5d0936e2e0f704854beb80182942"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/target_02.png",
+          "bytes": 4215,
+          "sha256": "6ec8e889299b188ed9c9ed9427ba045430e29376d30c161bb2bc534203e4a26e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/target_03.png",
+          "bytes": 6067,
+          "sha256": "bf964de91ba1dd0131fa2576568a135bb8d1d8f4127bf473312f83ae1e0b210e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/target_04.png",
+          "bytes": 7372,
+          "sha256": "4e32753675ece461a87d481d1749233b7a5551fe138b97737325b15a9eb6d1ef"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/depth_00.png",
+          "bytes": 16267,
+          "sha256": "f4ecddbcb1ac5339f21618a3224b5411d0825ef30dfb577e2428a472eaca12a5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/pose_00.txt",
+          "bytes": 407,
+          "sha256": "e102569a226fa7e070f2d597af33471b892c839fb559e576e05ab694f1a46217"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/depth_01.png",
+          "bytes": 15971,
+          "sha256": "8b7640774258676deac3beccacff514564ce6692426e5ec5bbb61c8f455bb92e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/pose_01.txt",
+          "bytes": 407,
+          "sha256": "3a60bc1319daecbbb43eb305397362ad5bfc5798c876fbe7feca19a36692beae"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/depth_02.png",
+          "bytes": 6880,
+          "sha256": "70c470ebe0e1900f9f78a245f2911f2637a1d66b5c4135b1e3c8e3bbb0393bcc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/pose_02.txt",
+          "bytes": 405,
+          "sha256": "fcd44ea15e483b52ece7e7cfa42996e0cfaec80fed7a43a15bd1d9ffc6b3c031"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/depth_03.png",
+          "bytes": 14390,
+          "sha256": "d4903ea0e789bf5bf4d0f200d76707094df41f4dae2fd64214da59138dbd3fa3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/pose_03.txt",
+          "bytes": 405,
+          "sha256": "cd38d95048de5cc7ea9ab3842bb58991c67b7a80c7e18300456e8686e7f4618d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/depth_04.png",
+          "bytes": 18143,
+          "sha256": "e78ec66b88e4984cf00b46d8bf4c58ac113d5130c03dd14905ff06c701472a22"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/pose_04.txt",
+          "bytes": 406,
+          "sha256": "ea615a9ed0051646e7dff081f36548245b0ea08cee07bfa0613212ff8d3717bb"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_015/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_016_0p1dM5hyQZz",
+      "index": 16,
+      "seed": 57,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_016/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_016/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_016/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_016/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_016/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_016",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/input.png",
+          "bytes": 16212,
+          "sha256": "eb54a6b109e6f95057783381a41e07a60f487b925ac6e0432baf2934361727b7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/target_01.png",
+          "bytes": 16218,
+          "sha256": "b693da761573ccc30cc28a7a271cbec5c105cfe412037c98d31e7be8a49a514b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/target_02.png",
+          "bytes": 16234,
+          "sha256": "bedcd1dcc4f3a5a2fe52451f3b15e346adf30736daedb3e2bbbe0c65cd3e57cf"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/target_03.png",
+          "bytes": 17131,
+          "sha256": "9f7a1bcdf5e90b911a0b2335b1396015244e354cc7c5f3fee10870f635c02e63"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/target_04.png",
+          "bytes": 17141,
+          "sha256": "dc7df1eaf4eea1449f668ff487f1723b91ca60826e608fb75b696805500e2b9c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/depth_00.png",
+          "bytes": 20177,
+          "sha256": "b8009294fcabc1c76fa94ce5dfe6651c3d1bc393eaa0528c231305f98d25b811"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/pose_00.txt",
+          "bytes": 405,
+          "sha256": "cf72881b0a897f17321601605ccc680ddf8e047056b7c1a875d0abc209942098"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/depth_01.png",
+          "bytes": 18575,
+          "sha256": "d85e651fed2e580d7740f8be63bc67786e2b22414a17e0717c5f3aee46db3d2d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/pose_01.txt",
+          "bytes": 406,
+          "sha256": "d86d4e5de2996a2a43584423865c824ea232b9fd6739066f9efc22da204e1ba2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/depth_02.png",
+          "bytes": 21482,
+          "sha256": "e8f98df84d16df6c231b5273a59d4edf2e93e3468da77e96041552f58407f482"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/pose_02.txt",
+          "bytes": 406,
+          "sha256": "724a6750e460563d64d2f138067c9b45723f381be457a6a8fe77350e4cb23177"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/depth_03.png",
+          "bytes": 21710,
+          "sha256": "ead38afc30d8a7e7dc96e59e8b1550166eca3e7e62185574cd815769048f4089"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/pose_03.txt",
+          "bytes": 406,
+          "sha256": "0116cf49912b7ab7d3f90da27bb71f14366d98fa5fec46b0a474175333af9253"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/depth_04.png",
+          "bytes": 20460,
+          "sha256": "960e79527723a46af7b9f06f950568910ff0e1466bd9972a0aee25c470bca0fd"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/pose_04.txt",
+          "bytes": 406,
+          "sha256": "260581d5333cba7b9005ddeef313d09236a3c48adffb980921fdde34f6ee19e4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_016/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_017_0rVqLMxImmM",
+      "index": 17,
+      "seed": 58,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_017/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_017/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_017/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_017/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_017/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_017",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/input.png",
+          "bytes": 8396,
+          "sha256": "27c4e31683ee90599dfd084f6443b51cb0f1ea5f1e6078ea2e6bb460794135f6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/target_01.png",
+          "bytes": 8593,
+          "sha256": "96542e1a8056ae2e502dee22a55b9775fadd5215b3bc0fd5edcdf629afe394c0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/target_02.png",
+          "bytes": 11616,
+          "sha256": "2b25a4467b9531d5f520f4cbe918a5b23837ea6c5e56d1101ee30ca07d639801"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/target_03.png",
+          "bytes": 10820,
+          "sha256": "dc910cf0abd81d43dfcb987702e22af40755772b5c53e005c38971574b54ba4b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/target_04.png",
+          "bytes": 7465,
+          "sha256": "0027a75ea48646608254dbbc94b67f35eda1b1ce164ad449c116ea2dc42dbc3b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/depth_00.png",
+          "bytes": 11611,
+          "sha256": "e7f1cf127716db5f5d84038230e9f70e3418c43be08d78e2830fa8c538e3801f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/pose_00.txt",
+          "bytes": 405,
+          "sha256": "d7285ddb6941cb4e3d3da4d2ff606aaf546ca23112fd8008adf5e3c2cd71d0ba"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/depth_01.png",
+          "bytes": 11299,
+          "sha256": "dfa1b02fe215be14b234fd20eaa8199ddbcb38760e322f8980b3fff81631e8e2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/pose_01.txt",
+          "bytes": 404,
+          "sha256": "482cdc40428c6812ac7787d88fd78f184a3eef76bfe1b9c7212d50be288b4480"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/depth_02.png",
+          "bytes": 19192,
+          "sha256": "9472584965d248daa5ef9a06c505f82350466b0e64aea0f6a397be4c572ca96d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/pose_02.txt",
+          "bytes": 405,
+          "sha256": "376f715cf88a60998d43c9b472d9ae4df41827963585d32458afa71973ee2aa5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/depth_03.png",
+          "bytes": 19175,
+          "sha256": "4edffe6b7aac1e1cc4150a67562cc54836c563ba5e97b7d0c9c98601784e69aa"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/pose_03.txt",
+          "bytes": 405,
+          "sha256": "55364feb2299d5c96cc88feaf22a37d251baaf427cf22cb5fb3964b90a99cafd"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/depth_04.png",
+          "bytes": 14530,
+          "sha256": "0f2b3c487d6b6ad2a8d65e0bf5c337b4bbaf0d0333611980ebc3597e285576f7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/pose_04.txt",
+          "bytes": 405,
+          "sha256": "ef31ef42fb2f0260dc4023a604854cca3404bc086c7b0f333bd1005abcaa5707"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_017/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_018_0s41RtTXVq2",
+      "index": 18,
+      "seed": 59,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_018/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_018/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_018/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_018/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_018/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_018",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/input.png",
+          "bytes": 10376,
+          "sha256": "21ab6a618ccc3494060ef65a6fb3776dd7670bb09e518abc00e883dbfcb72782"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/target_01.png",
+          "bytes": 10361,
+          "sha256": "b63022d2dc454aebb3cbec23a602ca9fe21ec90d8db28287c174d6a0016200c4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/target_02.png",
+          "bytes": 11298,
+          "sha256": "30f79f3d12c2c4ad010e60679468b797042ae7644e5d2b046063577773352b87"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/target_03.png",
+          "bytes": 12620,
+          "sha256": "74b70b33130b7afd0b7203a689a5ad77e45f2620d192f75263eab69db5159868"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/target_04.png",
+          "bytes": 12740,
+          "sha256": "cc2abc2aa9739dec1531a95293ab09f35fdbd24d4c0c7b2172f79d4d837a7433"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/depth_00.png",
+          "bytes": 18269,
+          "sha256": "65e9a09c9282dca2f446227044097e96edb5b95332ca5fc4b457ce84c4afd7d4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/pose_00.txt",
+          "bytes": 405,
+          "sha256": "0af52903c41b6c1f4de6af0730b3e5ea0a0bdb84a2bfb821fdd77f1d0651990c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/depth_01.png",
+          "bytes": 18067,
+          "sha256": "4ef0d4d323c69db4c22af0fa648f715baad5767b9d71272f30023cba527f2303"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/pose_01.txt",
+          "bytes": 406,
+          "sha256": "cb8e62f00950e6fbf1852ac11cf1f1c27b5622d6338d52ab1d8eeee43abe076f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/depth_02.png",
+          "bytes": 19317,
+          "sha256": "1d665783e013ca53b181d2a115a80861dc51725b80ec384f020e9039564d0fdf"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/pose_02.txt",
+          "bytes": 406,
+          "sha256": "6b73d1f188c23927ea56f78981b842167f7ea4b0b9bd7e04c0061cafe558f1d9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/depth_03.png",
+          "bytes": 19215,
+          "sha256": "7d35e16ab5272e510c7e46e2fb6b5f8f675d939aff57a54ff98fdb9d989b5011"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/pose_03.txt",
+          "bytes": 406,
+          "sha256": "7005760abb980f26953b120870e01fade3aeb869a4354c8c8e502a5de9bfbbcd"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/depth_04.png",
+          "bytes": 20468,
+          "sha256": "c30adec6982c5be2ce8eccaf17d51f55c45ffafac2b8fe75fd79526014ce3884"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/pose_04.txt",
+          "bytes": 406,
+          "sha256": "5af9a965004b9a559f8b14f935e94257c2f8977f8ac9c30bfc4c7605f10e351b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_018/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_019_0ttis3Nz1yD",
+      "index": 19,
+      "seed": 60,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_019/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_019/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_019/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_019/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_019/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_019",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/input.png",
+          "bytes": 11535,
+          "sha256": "f4647bec6a8f14bb5fe71baa24f2c1967e076bc627946ddff4e733eb9a57986f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/target_01.png",
+          "bytes": 11565,
+          "sha256": "66740aaa1a0c3abc0f98586477330024418099abe5ed274d5915e60468399731"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/target_02.png",
+          "bytes": 11214,
+          "sha256": "8a732c799a664997a31dfa34efe85b4237c15a1d4ae389ee87aecbc015fe7bd5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/target_03.png",
+          "bytes": 8939,
+          "sha256": "b3ef8d40a8d57641b0f8034e12767e5ee9777942437a24af6d5c07edf8967ea3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/target_04.png",
+          "bytes": 9298,
+          "sha256": "16c6a149396a276cd5f683d1a1362aebf3d9f84986f37a689a0e8e90359233a2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/depth_00.png",
+          "bytes": 18483,
+          "sha256": "3a7aea67c459e799781bdef7e44196c874fbfe0da289231d1c41b781662cdfca"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/pose_00.txt",
+          "bytes": 406,
+          "sha256": "f9ac927ac759a4eb098737456aeab7da21b8d111a2d88924a63c3f88a937c359"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/depth_01.png",
+          "bytes": 18418,
+          "sha256": "e63085ad7529bfc6805885c2dfd0f0bd3b3e2b834a8e528adc1e5f04267355ea"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/pose_01.txt",
+          "bytes": 406,
+          "sha256": "36d8e6a007f9fd0774a00141f524b679006fcdf7115d380597512ed8c0a5647e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/depth_02.png",
+          "bytes": 18893,
+          "sha256": "ccaab6567b1e0a30630a2a819eb5320015de3d6e00d222417fc87e70b13455b2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/pose_02.txt",
+          "bytes": 406,
+          "sha256": "d841d8b0a4567a4cd5da076107da593ae9b590dc6ac849aa6dce7dac2f77fa76"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/depth_03.png",
+          "bytes": 15871,
+          "sha256": "132a576a5703cfb06dca6a8880290440d15b8188afacd57effb0394535664ed1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/pose_03.txt",
+          "bytes": 407,
+          "sha256": "1d35b827d5832ab1b04a27404551a003f84f2b4aaee635d14b7e73364156eaf6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/depth_04.png",
+          "bytes": 16643,
+          "sha256": "79c7cfd00b6e88597472750e3e6f437a8d0f7446bdd903abdc1daaee9f2c1925"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/pose_04.txt",
+          "bytes": 408,
+          "sha256": "fa589228c0b53b2178701ebf296b490755a6290749177ac0298edcf8a77383db"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_019/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_020_0uVJxBmgWoN",
+      "index": 20,
+      "seed": 61,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_020/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_020/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_020/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_020/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_020/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_020",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/input.png",
+          "bytes": 6318,
+          "sha256": "b45c415f81e9914c27be8dd6231dd97c5c21b89afa77d640cea0394353069df8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/target_01.png",
+          "bytes": 6433,
+          "sha256": "e0d4ab989a9681b6ee5cbbc8bd140d08ee816759cd134ee6df3284f4cf7f4c3f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/target_02.png",
+          "bytes": 9064,
+          "sha256": "a39790c2f8ed58cc2335e1b907ae101e0a421f565a8eb353e51764930f228d12"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/target_03.png",
+          "bytes": 9099,
+          "sha256": "a49a5e40e6945fa8bf69184e23d7ba64d89389e56b132724ac363b473e37bbd0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/target_04.png",
+          "bytes": 7165,
+          "sha256": "8c609340885e06ebd930ad8dc45b37d82a1d9b523d17cd422416b9f04d1f528c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/depth_00.png",
+          "bytes": 10904,
+          "sha256": "5ab6f2d54bc2bc2800e2be884514c6106bcf853a12acc1b6866d7f47085ed391"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/pose_00.txt",
+          "bytes": 406,
+          "sha256": "617c3176c7ea2394d85ef2ae67e5f42967d00ffc359048ae511caf86dfa44993"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/depth_01.png",
+          "bytes": 11046,
+          "sha256": "89aa4fd48a79381d00864388fb44e81cc7e62ee7f66a6ef8f90a53ad0bae7159"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/pose_01.txt",
+          "bytes": 405,
+          "sha256": "84e14713eff7eb1a94ba962e3552358fd3b982acd254524d9a8820017bd07f23"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/depth_02.png",
+          "bytes": 16921,
+          "sha256": "718dcda5c182e0b9f1b9c9e3032903b7bb9ab2a6a3c5dbda037a19fc1086fd74"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/pose_02.txt",
+          "bytes": 408,
+          "sha256": "046b79ac8f4ce4f754c257c2e832a6c06508faf17bb277063b0bcbd8079ab528"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/depth_03.png",
+          "bytes": 16414,
+          "sha256": "cd9b5bc44472093a602daeda8ca9714c49a45c17c1c47ebc8098f9130c5d4122"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/pose_03.txt",
+          "bytes": 407,
+          "sha256": "7ec347fe5d6aa880920e84e214d1d328b4cac4067cdf493184ae4c9a74298a47"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/depth_04.png",
+          "bytes": 13419,
+          "sha256": "1f5720445d908735fc19bf8185b1618b222e3dea53cd49286ce0236e21d479c0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/pose_04.txt",
+          "bytes": 407,
+          "sha256": "62e136146f3adadebae638b8f6292e6a4e39e7611cc4d333b5d35c50e4131511"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_020/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_021_12eXGU18BWP",
+      "index": 21,
+      "seed": 62,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_021/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_021/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_021/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_021/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_021/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_021",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/input.png",
+          "bytes": 12583,
+          "sha256": "24e58bc36a2c9180cd00ffdd0a26eaf6ed81012b5a55cc940c5d275be0c574d8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/target_01.png",
+          "bytes": 12366,
+          "sha256": "c802ad4f74caa950cfbaefef24ff47fc25b1d4a72fb28756f6f0312eaa629d34"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/target_02.png",
+          "bytes": 10098,
+          "sha256": "7e724bf60dbb13c2b493957fec61034045376a8c1f483160e6d44be57260858c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/target_03.png",
+          "bytes": 12106,
+          "sha256": "c5d618de68bb29829ecc2371f19ea8d7bfc6974f08539bb78422e8212bce08d0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/target_04.png",
+          "bytes": 11617,
+          "sha256": "6ade328caf8ee392fb4c8823af7eedf91430c4c44ef445ff73a541bf534fd8f0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/depth_00.png",
+          "bytes": 21282,
+          "sha256": "0a4dd2afcb31e2ad18ad77877b03a1c3dd8a1bcbdc1f622e52f0c87422f2d207"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/pose_00.txt",
+          "bytes": 405,
+          "sha256": "c08fdbbf8ef7eca73fb75a4203511fecf4a92c29ddf578ad24eb5b082155f198"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/depth_01.png",
+          "bytes": 20872,
+          "sha256": "a9a0e7d208ad96e07bee2e863eea2d71cbdebafdac8fdd835dbd3dcfb69f628a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/pose_01.txt",
+          "bytes": 406,
+          "sha256": "a46e31af8c826649ac3b1f90c4faed1b496ff261b0f919d842b4aa1b5b1a2e5f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/depth_02.png",
+          "bytes": 15517,
+          "sha256": "e4158cbbf35bcaa3410e1dfd611ab6477d58c39f20af54c222900c2059d3c9a2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/pose_02.txt",
+          "bytes": 406,
+          "sha256": "68d8f82c6a7ee30332520dba266382c17e9f01e4956ee4af35694f8e8e7bcab3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/depth_03.png",
+          "bytes": 20612,
+          "sha256": "e02d42fcd8b422b605f8e6b7ac2f8cacf87e4f88f8ae7130c90fd88d7ad5210d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/pose_03.txt",
+          "bytes": 408,
+          "sha256": "6035b84344e97e4fd59b0275d8dcdb53e3106d78368b6e1bc129bead79daaeaf"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/depth_04.png",
+          "bytes": 19398,
+          "sha256": "c447624bffaa52743c96af4c31e28e921f900bb2c825062a511943b99c374c34"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/pose_04.txt",
+          "bytes": 408,
+          "sha256": "4e96fd50d2c1bdebcea575115cb9c69c2984c53ed95f6326e4d73677c4a0a225"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_021/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_022_16nprgrkWfS",
+      "index": 22,
+      "seed": 63,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_022/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_022/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_022/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_022/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_022/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_022",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/input.png",
+          "bytes": 13901,
+          "sha256": "6d2fd2277b5343de342b590b21257e0f5ad1ecad32b1ad4ce104780307a5a5c0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/target_01.png",
+          "bytes": 13892,
+          "sha256": "13eaccd6fa9fb4a8fc2c3aab0dba9526fc32da6ae59bf4de3ca96a563aa32190"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/target_02.png",
+          "bytes": 12987,
+          "sha256": "ac21f31075bdfc3e79b4a38d427b12d60a8bb9a50575ac0df2969c321718ad36"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/target_03.png",
+          "bytes": 9469,
+          "sha256": "b1be01ab6020eabd362ecf4fabfe36d5fafa1fac220be381ddd0d586e9984de4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/target_04.png",
+          "bytes": 14023,
+          "sha256": "5d481719f209ecac311328fa610aa638e436ffa2ee45d5111da04fd8c2cb211d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/depth_00.png",
+          "bytes": 15991,
+          "sha256": "c93bc89ad3952fdcf13e38d04f5db753b90deaaff40355b6dda2b45190cb0e4e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/pose_00.txt",
+          "bytes": 408,
+          "sha256": "d79ec0fd4be74634093091533f0ac176807d64bb903b12df847e44719bb90fed"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/depth_01.png",
+          "bytes": 16099,
+          "sha256": "030547c4ee93037490768021c981fc32f5aa31a6da556b4c7f6d11df85e378e3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/pose_01.txt",
+          "bytes": 408,
+          "sha256": "3b3839755b41d282a35e67c99dca5a79aab857fef0d70b1044bfe8af9976c755"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/depth_02.png",
+          "bytes": 19596,
+          "sha256": "3486369588ec46279cab56ebdb2cd8adcf1bc40669fd2825da03174dd20037a4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/pose_02.txt",
+          "bytes": 406,
+          "sha256": "3273d074a9334d24bf5231f3af89e5598eb5d4c70f6a8e3908aa6e726586c664"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/depth_03.png",
+          "bytes": 12537,
+          "sha256": "af21cadb6f0ea682afecf68f0b55266d646c84bb8be28e0383728fae6b8fa378"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/pose_03.txt",
+          "bytes": 406,
+          "sha256": "ec0ff5b73d896df406b539cd31645040d5a10be8fbda1a0fe12cda96ca1b88b4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/depth_04.png",
+          "bytes": 16894,
+          "sha256": "6b7714b730ad4451f6f295335b1d5fe765067481a83ff2bba748ebb4b15b89e4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/pose_04.txt",
+          "bytes": 407,
+          "sha256": "50beb5dcab6c3bd834962130479743886b0e3c65cb5786ef0d0bf925b81d805d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_022/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_023_1Arf1jhYFSg",
+      "index": 23,
+      "seed": 64,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_023/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_023/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_023/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_023/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_023/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_023",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/input.png",
+          "bytes": 7516,
+          "sha256": "3a940f783f5638692489133b05245af230e96ef3563ea67bb0c11ee7ee9b56bc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/target_01.png",
+          "bytes": 7505,
+          "sha256": "a148ae1d51ad2819270c2e7cac4af17d3e1366f191b39d55f38550a54d1e6df0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/target_02.png",
+          "bytes": 7740,
+          "sha256": "24b09ab68f5282842d05f9a2bc25abe7a71bf1fbaf9487147688b96639baa61c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/target_03.png",
+          "bytes": 6298,
+          "sha256": "84c6c3760ed1b74f70a4445b174e538b1190309739fcd52cb9ff0bdf7d8a7a12"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/target_04.png",
+          "bytes": 7910,
+          "sha256": "a7f37f36a47e1e984e4d232285db5f68a3b4bc738c260145d0474a369db96f48"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/depth_00.png",
+          "bytes": 13663,
+          "sha256": "5b6bd63bbb12f671b272059027737d7ba511db43cacafd48203ad24d6d13bde5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/pose_00.txt",
+          "bytes": 405,
+          "sha256": "42b53cd99c07ea88c906b13f1dae7b76985361c80276bd80bf2138993ba08887"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/depth_01.png",
+          "bytes": 13527,
+          "sha256": "6b405417d9c98cdf1889784716f1a0adad97fa511eafaf01a67a011a61ee917d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/pose_01.txt",
+          "bytes": 405,
+          "sha256": "c6fdaee8eccd841b9181f9ff237829fa7c5f1a1a556594d237614e8f6593b9d3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/depth_02.png",
+          "bytes": 14010,
+          "sha256": "2a39102be5eb96ff0e125011232b6e4bd45042f4e29fd50f06d04e1c77607dce"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/pose_02.txt",
+          "bytes": 405,
+          "sha256": "044d926089dff52efa1e714101afd2e44177f102337870bcd5eb8df9393754db"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/depth_03.png",
+          "bytes": 11815,
+          "sha256": "3b85e00d70925e2901abef2fa48c1113f8f4bbfdf96856a4ec95908dbcd7f3d0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/pose_03.txt",
+          "bytes": 405,
+          "sha256": "022121cdd0aabd2e82776533c87331072f3668e14e404ca2635b3f30cadc47e6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/depth_04.png",
+          "bytes": 15368,
+          "sha256": "63ac498bc7f124478f5a38c3dd8a2f22cdb7c17b6442882c1a65a3c90ed6960f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/pose_04.txt",
+          "bytes": 407,
+          "sha256": "ba2b07b386e507024b1431aca376734f6dded6b3907e30ba65c8ce8e903bd6ae"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_023/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_024_1BGrR23Yepi",
+      "index": 24,
+      "seed": 65,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_024/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_024/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_024/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_024/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_024/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_024",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/input.png",
+          "bytes": 10867,
+          "sha256": "f73dbeede40d219046c6be65f02b3b9087b048533c996036bd0ce7989a805e07"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/target_01.png",
+          "bytes": 10785,
+          "sha256": "10f14d29cf4e53fff35203d47ee4c22e3428925c7be6fbc11b6eb55fc5c3aaac"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/target_02.png",
+          "bytes": 9804,
+          "sha256": "bbf62621633c15c21a664f44cd732d272ad940ea0116101b55b84a53ff6d3a21"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/target_03.png",
+          "bytes": 9683,
+          "sha256": "a97e0269f2862a75c6b0e3539b83fccfcfcbaaae50fd2908cae36296fa7bd3ff"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/target_04.png",
+          "bytes": 12340,
+          "sha256": "2cbd53fad898597c8ba300b730f8670f8d1530cb07eda8827e0537893b3dc8f6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/depth_00.png",
+          "bytes": 17341,
+          "sha256": "01469db65d3ac31bad53ddec0e60871fd0f38dc803f4e5a6cfea4b99d6aeda1f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/pose_00.txt",
+          "bytes": 408,
+          "sha256": "356b8d2c465cd3db636f81b965f40a952b494ad50534f761c3f0892aba668a69"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/depth_01.png",
+          "bytes": 17510,
+          "sha256": "ad050f626eb105ae7a192e95085bb1087fbdd01d8240f16ce69f34d8d1d8d583"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/pose_01.txt",
+          "bytes": 408,
+          "sha256": "2f1a63341c33c75cee01bcea5778d0522b7e7170d49155d1ef9fe5b9332a63e2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/depth_02.png",
+          "bytes": 16813,
+          "sha256": "ddee767bc0a148ee3ef6935e37d7a5f7c0bf51f39d901d6816bf1cba7d9319c9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/pose_02.txt",
+          "bytes": 406,
+          "sha256": "6a850b9770ad2032743d2e0a5c53f7682cca3b2bb5b9731d70891fd1895710e4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/depth_03.png",
+          "bytes": 16928,
+          "sha256": "5b97ddd5bed6e9fff1c7cfbfc0ac8da0e2821c14d77080a4af517b5e75a0f694"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/pose_03.txt",
+          "bytes": 406,
+          "sha256": "d409a1965c07dffe00001c84b00a2fb337408ddcd0a614617c7a5023e345a4b9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/depth_04.png",
+          "bytes": 18940,
+          "sha256": "8bc08dcb0c4af3239c4aa84824e97d19214ee8b9f24f088393ed4a237204f791"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/pose_04.txt",
+          "bytes": 407,
+          "sha256": "c1d205609ea7152908f2859ab68979a2c82b80e26882a11de29b502bbbd309eb"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_024/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_025_1CjiUtkULQh",
+      "index": 25,
+      "seed": 66,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_025/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_025/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_025/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_025/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_025/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_025",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/input.png",
+          "bytes": 9098,
+          "sha256": "cc4f987a29717bae3e3b912c2cf6bb33f942a565180bca7c335ad41464a1f298"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/target_01.png",
+          "bytes": 8926,
+          "sha256": "7115a80407c0878b65b70f134ed63ab3ba4df726e341acba38acdba07c7f6bdd"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/target_02.png",
+          "bytes": 9876,
+          "sha256": "b3fffb633eadd544b173ccfb18415da7879607160a05cbb8049f4cbf7b60a002"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/target_03.png",
+          "bytes": 9633,
+          "sha256": "4e18a4c1b8ce79206298a73d0dfa3f977184f3dada2db9ed67a630c80cc986b7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/target_04.png",
+          "bytes": 5060,
+          "sha256": "1354de9ab43811605e44001bd9fba90886f3d35af544e874e2941b6a51d66cd7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/depth_00.png",
+          "bytes": 20141,
+          "sha256": "04f885434b982437409e254b178c86636c55362280e11bfb3eafccc431bdad63"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/pose_00.txt",
+          "bytes": 408,
+          "sha256": "549a6683d5e953776ade9f22c5b2770e68dabb9e4e0f98c6ae10f0fc22b7508f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/depth_01.png",
+          "bytes": 20182,
+          "sha256": "ba890e7a6c081a10ce6afca623fbbf5d2be56a9e01521569c59fcc0bb8b9dec4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/pose_01.txt",
+          "bytes": 408,
+          "sha256": "6f444e8ecf7114e7e860068b80cd8fa2c42c7714d674bfbc455cf9219467f9cc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/depth_02.png",
+          "bytes": 19189,
+          "sha256": "65c82d7f1b57f922177c20bef180273ae5d360ba01f10a633ea3c713b11ade8b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/pose_02.txt",
+          "bytes": 406,
+          "sha256": "34568d8cbaf1f21a7a5cef07a504eaafa258bb6ee01474bad5c4341193f15ccd"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/depth_03.png",
+          "bytes": 19581,
+          "sha256": "bcd8790b1c5fc938b38971a71757e9849958794ab236236c300b326c23005f96"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/pose_03.txt",
+          "bytes": 408,
+          "sha256": "eb290180a40302dbb3d97e90d4fc5a59dbc1f9d73ed8978b9d5e6841e06f2fae"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/depth_04.png",
+          "bytes": 11511,
+          "sha256": "18b2e10d2dc5028e4ab27b665be6e8376d9070e559ed440a35c98578c12c6b5f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/pose_04.txt",
+          "bytes": 408,
+          "sha256": "b9d893cb0e841e808f28ea8b53b98ead53172a90d9c854205267486367057b46"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_025/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_026_1NIJCxatiw8",
+      "index": 26,
+      "seed": 67,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_026/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_026/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_026/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_026/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_026/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_026",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/input.png",
+          "bytes": 13865,
+          "sha256": "3da4d276bf789e43309c96140890a0e86f370a22b91046cea6c67af63dadb039"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/target_01.png",
+          "bytes": 14065,
+          "sha256": "5c0c0e20ab12aff58fbbe871a0f1b3b53274464555e02af2ec7c26c8f9a253b5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/target_02.png",
+          "bytes": 8352,
+          "sha256": "ecd2bf40c679619afd8ddf20d4167a1c81c8cbb692dd4ddc6ef4e65d6cadc312"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/target_03.png",
+          "bytes": 7992,
+          "sha256": "27ce9736b30716ee963ebd465ab7d9b64ad166da1f624b81ecd5305e9b005e02"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/target_04.png",
+          "bytes": 13491,
+          "sha256": "e4b13034c76e481aaba9a98a2a5c8b805f6a70a3ebf92926cce21ad5b1927656"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/depth_00.png",
+          "bytes": 21587,
+          "sha256": "ce19fe5ddcb45ee6648aed650e161a15d343dbf4d3e9a11912caf7c4d13bf926"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/pose_00.txt",
+          "bytes": 407,
+          "sha256": "49dc66fc3acc57ba3dbc928d85c49e0a758902b859440635454854a4f7df23a1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/depth_01.png",
+          "bytes": 21639,
+          "sha256": "d1018cac0bec7772d355629475342597549c9a57eba33313c7ad7c8430b87388"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/pose_01.txt",
+          "bytes": 407,
+          "sha256": "29a0863510ebe11ff85663a69a055a615b6632dff424ff09e19637da6a995914"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/depth_02.png",
+          "bytes": 13312,
+          "sha256": "b446a63c38c08854f721a987975be67e4b14d02e045d7672a91a0b74791f2d95"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/pose_02.txt",
+          "bytes": 408,
+          "sha256": "1c50516692e56372dba8d3dce8a0c8d5915d7ab646e8a1fff500215400681499"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/depth_03.png",
+          "bytes": 11994,
+          "sha256": "cbf4b68d4eec537c018f7e16fb184e4c1d472b076a009543bbac9bcf3fa63f60"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/pose_03.txt",
+          "bytes": 407,
+          "sha256": "6cbe861dbece364c8c0236fcb5aa7e48ce2cab3aabe5b78dbb7aa903cf3b26c3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/depth_04.png",
+          "bytes": 19563,
+          "sha256": "d1c42d9fd06dfa8d1f156ef13954ae33995c3e44581c7c459dd3b8e06dbf130a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/pose_04.txt",
+          "bytes": 407,
+          "sha256": "2128036fa7678ae91198e204f651ea974be2cf8d26f15a3f8b631e1039ab30df"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_026/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_027_1Q2uug8mLJm",
+      "index": 27,
+      "seed": 68,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_027/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_027/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_027/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_027/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_027/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_027",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/input.png",
+          "bytes": 8409,
+          "sha256": "b80a0e4629a57f72f6c6e74c74de54361922efd49b8cb1c15bbe15cd007e2329"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/target_01.png",
+          "bytes": 9206,
+          "sha256": "3e203fb0e1369894402a8d08366bd453517797079a86a7245d7c2823ddffd5b6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/target_02.png",
+          "bytes": 8154,
+          "sha256": "8dcb176a24c82521b0cb7ff4fba37f08e409fecf2763f7246f37c6daa1373af4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/target_03.png",
+          "bytes": 7998,
+          "sha256": "1c97eee74ca1d12263905e4d92a2fea9a9e40886dcf4e0a26a5c5fb47c0a7554"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/target_04.png",
+          "bytes": 8215,
+          "sha256": "5dce840d575dbee86b1ad6151eb83132361ba7402643cd533e8f0a0738c59284"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/depth_00.png",
+          "bytes": 17023,
+          "sha256": "5f1e21563f5e6383e5ab5f40bb60c3a86d9c03f611fb9029e984cbaef88e465d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/pose_00.txt",
+          "bytes": 408,
+          "sha256": "23847b119bb8fee0be4e257ae706a60349b94af6679cb5aeeaf66b6a3dc57433"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/depth_01.png",
+          "bytes": 19546,
+          "sha256": "757a8e6f439f7bf79a1da727623957309ddb5168532ef121cafcba921841b63b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/pose_01.txt",
+          "bytes": 407,
+          "sha256": "7454253247fdd7c7d96fd46593992b92472f7f622430c1e2edf3d208de7c86b9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/depth_02.png",
+          "bytes": 14121,
+          "sha256": "6f7bbde5a5f296d7fd1f23195bb8824899dccd38386cd2117778153977d05165"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/pose_02.txt",
+          "bytes": 408,
+          "sha256": "0cf493f429228474147f08ae988bb99907249c47c513b0176fc2377d48ed0274"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/depth_03.png",
+          "bytes": 14004,
+          "sha256": "25d0f57d1346fbad087cd6530a3c5e7285560f428ea41ec5e84c2f4b8c548068"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/pose_03.txt",
+          "bytes": 408,
+          "sha256": "19dc5cb9488b3c0711e046feefb14dad3a225f191c5dbe5d826f9a0abd00db18"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/depth_04.png",
+          "bytes": 14888,
+          "sha256": "d308fac3817f1f8aeb5fbf000f1695a8f9f40879dbed588430a490f7f25bc222"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/pose_04.txt",
+          "bytes": 407,
+          "sha256": "18de03476a2a78cfc41ec9954e308eabebcf0a3702112ea7a76b21cde7badcd5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_027/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_028_1QOoolgjBBJ",
+      "index": 28,
+      "seed": 69,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_028/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_028/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_028/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_028/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_028/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_028",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/input.png",
+          "bytes": 8914,
+          "sha256": "e3bd9462dd9b69bbd45fc0d25ecfc787b9aa9106fab79e97f2059e2c2bfd4954"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/target_01.png",
+          "bytes": 9157,
+          "sha256": "45f33eacb41c3419ef8f495501f32ae2765a560956083a2a9043461f499022b9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/target_02.png",
+          "bytes": 8563,
+          "sha256": "6589b413c4be7924b3d3ffe69b6f99b8322670c9c2afbd784936281cd83843f7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/target_03.png",
+          "bytes": 11684,
+          "sha256": "e94eebc841c0638258ee10f5fed75e161ddb35f5bb050288efc75dcf7066a14f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/target_04.png",
+          "bytes": 11478,
+          "sha256": "ce0b062ffe7401b03ae909863d067367a1f6f02c4fef080b617cdd77c545f6f2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/depth_00.png",
+          "bytes": 19892,
+          "sha256": "1ea3357285688a342cabc2d64bd0776b71dcb055bc88d7da1367bc7ba8a1f849"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/pose_00.txt",
+          "bytes": 408,
+          "sha256": "520fabbed786bf867268cd9764c2ebbf8e3e2713509c29d45f5d8dff13c7d14b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/depth_01.png",
+          "bytes": 20336,
+          "sha256": "14104cb7f08250e058764ac7c62cc32f8660ab50261261d6d15383613dbca416"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/pose_01.txt",
+          "bytes": 407,
+          "sha256": "3716f423871d5c9aadf30f73ec9ddb1091df59d3cbf2242499ce75e87bf7459a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/depth_02.png",
+          "bytes": 19094,
+          "sha256": "af2d70d50c35fff928f71f9fcceff24299da36578a725877d861787afe890b25"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/pose_02.txt",
+          "bytes": 407,
+          "sha256": "a33c1ac08842342d77596f1d7935ebf884cc23b919a406d3ec1e78ce6c5454cc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/depth_03.png",
+          "bytes": 21547,
+          "sha256": "9c8a6138c26f9371a7a74aa9931be86fe14c6bdadb430888178937c9b2a7b03e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/pose_03.txt",
+          "bytes": 407,
+          "sha256": "9128c9d37e4777db1bf5a1121d82bb52d982156c4e8fe22420e5598ffa7772cd"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/depth_04.png",
+          "bytes": 21079,
+          "sha256": "8a60f057f62083143756223f3786a604889d5d63458ae2906c05e0a64ccdee06"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/pose_04.txt",
+          "bytes": 408,
+          "sha256": "5e1f9f44243eb453d4f64700b62f1af701d5743f83542b236865a62871643535"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_028/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_029_1UjUXrr1pOb",
+      "index": 29,
+      "seed": 70,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_029/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_029/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_029/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_029/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_029/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_029",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/input.png",
+          "bytes": 9332,
+          "sha256": "99a7f425c7176505e5127d72cd7f719903040ee4ee7f37e93de78e4ccdc75925"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/target_01.png",
+          "bytes": 9237,
+          "sha256": "082623f04178f03fa7ce779d92b86a8d5f6d51284880355f313d38ad7b009b26"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/target_02.png",
+          "bytes": 9831,
+          "sha256": "563389b86ade9bb2d46f9840e4565daab32f5e7f4a0406835ebd6b1498b66cf1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/target_03.png",
+          "bytes": 9859,
+          "sha256": "ac74457ff131878d2f85fb1db849ef98f5e6bba03845d878ab0d408a1577f8f6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/target_04.png",
+          "bytes": 8433,
+          "sha256": "32f8f01ef0e97b2c868080c9da87054c4126b5295adec4f3add0a1a7983cb9d6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/depth_00.png",
+          "bytes": 19266,
+          "sha256": "2f81ffa5456a66849ec863f081f5044423dcb020e78ce95740b7994b6c7c10ca"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/pose_00.txt",
+          "bytes": 407,
+          "sha256": "af90e7705f62ed6680d3592b71a7f183e9aab94998b495034d759a8754974860"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/depth_01.png",
+          "bytes": 19183,
+          "sha256": "fb821aececa47421ffd2f5d0be8b557a7c92dafd474b5b4077582910c70be047"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/pose_01.txt",
+          "bytes": 407,
+          "sha256": "89ccff5ff8b5e3a2d276d3f77644a39a5b2fe1780fb610fd9c0ae0418aa55a5f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/depth_02.png",
+          "bytes": 22811,
+          "sha256": "2f9375be7a64030de3b7d8881b982f24fbad6df45ed6de7bfec98635cfd60406"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/pose_02.txt",
+          "bytes": 408,
+          "sha256": "d7640a6d6bf22ae95f1c800bf8096f722b7132755fedd0aeee2d9c8b2c33bd3f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/depth_03.png",
+          "bytes": 24720,
+          "sha256": "587495bf48f985ea3d625209e910c62dc58c7437d0788436a90f458524a00419"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/pose_03.txt",
+          "bytes": 408,
+          "sha256": "47cda6feaaf9e88cf489e3444d27b76deeb04dc3b58aea6b1a71cfe100b9af0f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/depth_04.png",
+          "bytes": 21263,
+          "sha256": "d2e0eacb4d3276b41d7da2d66b1e58a09a705e368def832f38bafca7ee025a27"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/pose_04.txt",
+          "bytes": 407,
+          "sha256": "af85497535f40d0240a06372ec77b52c7e237626825d462772d4e81f44fdd651"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_029/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_030_1XNsGzvspGC",
+      "index": 30,
+      "seed": 71,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_030/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_030/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_030/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_030/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_030/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_030",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/input.png",
+          "bytes": 15903,
+          "sha256": "6a36a90011ef1b9b333db584e3506f8c7dd696035635b159afeab35e3c18f48d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/target_01.png",
+          "bytes": 15581,
+          "sha256": "c26b90f2fad6c52bb98490c58c67c8bf7b97e7403d643beeed04ab30ed26d591"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/target_02.png",
+          "bytes": 10175,
+          "sha256": "2e1c9a48783e06ab7d9140bc6bb56488794fe6f0a5aa01d2f3e0266b44fdcd65"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/target_03.png",
+          "bytes": 10000,
+          "sha256": "cd3ee7c3bf9be755e3e28d5dfcc3ea253e0f662dc793aad95345ace9e4784cdf"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/target_04.png",
+          "bytes": 8521,
+          "sha256": "f8946fd43ab7a9ec26cee29f906eec61e949c304b2193f7b319b4acc930f26d3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/depth_00.png",
+          "bytes": 8662,
+          "sha256": "3b329d6d0576361e173ad4b580e64be6d28203453c92c7aa51bd390de14e51e7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/pose_00.txt",
+          "bytes": 406,
+          "sha256": "073c0d38bfbb9ea317ff1d1ae3a0defff6ed4764838eb5e0a7b7eea7734bfe31"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/depth_01.png",
+          "bytes": 11247,
+          "sha256": "1333d52a6ac42c5d274c707f15b4312ffec37da1c9312751d1fa450e18dcdd37"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/pose_01.txt",
+          "bytes": 406,
+          "sha256": "e7574d1a1a5fe05e5645e8893d78b16322c4f19e10288e752d5283c134cae864"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/depth_02.png",
+          "bytes": 13804,
+          "sha256": "5c664e798441bc892e99647f4f217f43e10106900e0f2503b324a46467463c29"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/pose_02.txt",
+          "bytes": 405,
+          "sha256": "ceed874300ec54b5ec18c865366991639b05ac4bf364d5e1731fb18dc7798e00"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/depth_03.png",
+          "bytes": 18188,
+          "sha256": "5b03151fffb3f9ecebec27bc988678bcd19215de7baeacd500af572d471ac6a7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/pose_03.txt",
+          "bytes": 408,
+          "sha256": "92104fcc8056058b77662eef819a16628e7a1d4b513b166e05a9583fd1e41ca0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/depth_04.png",
+          "bytes": 15042,
+          "sha256": "22b02542bf8c6575ab7b953834a440ff03ad69fb9132284e7a0d0f25f45fe143"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/pose_04.txt",
+          "bytes": 405,
+          "sha256": "425415ab1fd92ddd2bf41d43623958bd78506fb8a86cce66118b65f638f6d03c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_030/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_031_1jJREeOa3Xv",
+      "index": 31,
+      "seed": 72,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_031/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_031/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_031/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_031/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_031/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_031",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/input.png",
+          "bytes": 12083,
+          "sha256": "46fff7358003ac72e0a51cc1a80262f3c196a149f7b605d155e8d06e4d432917"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/target_01.png",
+          "bytes": 11904,
+          "sha256": "15f0b599447b2a5c053bdea136a7ec3ef1469a8275ae7a34bf37824e151f8fce"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/target_02.png",
+          "bytes": 12889,
+          "sha256": "9d7684a89347d1c2832ca4387998bc6239297736657f337b8825c7b5a05ad4ff"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/target_03.png",
+          "bytes": 6458,
+          "sha256": "89b05b641fb0dcd72a5eda37c8a4df44b8add4bac461f6d3156b537dbf7b422a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/target_04.png",
+          "bytes": 12505,
+          "sha256": "f53e11ae1f3d271f8b2cd69bd96f0ad930e28aff5f8ba4f6089e066bf6668997"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/depth_00.png",
+          "bytes": 13172,
+          "sha256": "600f76bc7bedcc81dfe01006917043ed7af9bd62c0f0f2a4521d8ae78d0fc00d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/pose_00.txt",
+          "bytes": 405,
+          "sha256": "8464ec2392b5c23486a39fb9cc8464dd7ebf8f6b7ec73fe56ca10d4ec039e807"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/depth_01.png",
+          "bytes": 12777,
+          "sha256": "bc853bb1117055cfbe3fb1a288a4cd923a4a7dbd9402064ac3a233d12a18081f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/pose_01.txt",
+          "bytes": 406,
+          "sha256": "84714cea0b0b49b5a50c2f086395ac2099ef048c4a274c4ea53c43c40f5f5f6c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/depth_02.png",
+          "bytes": 19261,
+          "sha256": "c3dee9a593038f734e6704f2e2a51842c0a7e031c41706d2620db73b2c13e9e6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/pose_02.txt",
+          "bytes": 405,
+          "sha256": "f6a8923966ab5a5e643498b1cf9200e9b08fddbf303dc7289d0301b5302ed731"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/depth_03.png",
+          "bytes": 14945,
+          "sha256": "a33faef49f91129bebda9bd274c5b8716fd382bfa77b445c412bd9a10b89de54"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/pose_03.txt",
+          "bytes": 405,
+          "sha256": "ea190be893a832b28acca7420911db136cd4954891be3215f0cd993304d40542"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/depth_04.png",
+          "bytes": 14655,
+          "sha256": "9371834728e5f9690f655fad224f22aec3c5d9a8b87f5e1b2a2f7fcb0c6cc53c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/pose_04.txt",
+          "bytes": 408,
+          "sha256": "709def317b13028f54e7b91e8e8c599e2ef9858df817e4aba2b5b82eb58e48e9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_031/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_032_1jSX61fpG9L",
+      "index": 32,
+      "seed": 73,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_032/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_032/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_032/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_032/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_032/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_032",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/input.png",
+          "bytes": 18918,
+          "sha256": "06fce03a7b8167d66315c4eacde9d1b1925801be194923c877877621194af193"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/target_01.png",
+          "bytes": 19214,
+          "sha256": "4cefd8056539cbbad21a6b116fbbeaa8dcb8083b54b70dcaf9a76ca7afc9bdbf"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/target_02.png",
+          "bytes": 18453,
+          "sha256": "007a691db768d2f96ef8987aa4c289ec4e3ae2731b68a702d88ad7ba588f19a8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/target_03.png",
+          "bytes": 15087,
+          "sha256": "d0045aa478ca984cb7e598d96a94369a61d33c13c5a27366f2ce615a609fc451"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/target_04.png",
+          "bytes": 14423,
+          "sha256": "b46fa57dd96e626f9793e09a28d5160222db51f18da0eb6663520aa3995545f9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/depth_00.png",
+          "bytes": 24397,
+          "sha256": "199593bb7a1eb0f164924beae10d71a6a4a348ad55f46a6d9e2234cde1acd92e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/pose_00.txt",
+          "bytes": 408,
+          "sha256": "e1df2f6309256b902782a1b3faf35d89df0a1cfeb4516dc9673ffdf783bbb993"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/depth_01.png",
+          "bytes": 24933,
+          "sha256": "67572e2cd74445093a4e084c44e4f0a19f5726fb989751ac729352c8de6ce6c3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/pose_01.txt",
+          "bytes": 408,
+          "sha256": "c5161d121018f33c733d9ae29934cacd918f5fa14b78f549f28e9dc3258c4754"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/depth_02.png",
+          "bytes": 24236,
+          "sha256": "af0d5a6fae0379c6b806c9fdf1e0eda6283196903b118434c0c1a91430b748f8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/pose_02.txt",
+          "bytes": 407,
+          "sha256": "972b2af985df025b94f934b3647bcb38c5058ed3b27a0411fa7fb8a58a234871"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/depth_03.png",
+          "bytes": 15550,
+          "sha256": "76af8e1114126c9dc278225b9e925db6b71a9acd953abdf72c12315b36427d5b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/pose_03.txt",
+          "bytes": 406,
+          "sha256": "9546b050a35b1d29e54229739ad72c28bd78ba23b065fb52e6928c3a1f282c2b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/depth_04.png",
+          "bytes": 15799,
+          "sha256": "c69697d02e78ccbd97bf918bf3287d18103e2679883a8a321d13b2e9ddb08572"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/pose_04.txt",
+          "bytes": 406,
+          "sha256": "1abe93117f3953e3d26315b68abaddfd0101b21d623bb4f577d83b19e7589cff"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_032/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_033_1lYjMGmRUAM",
+      "index": 33,
+      "seed": 74,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_033/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_033/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_033/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_033/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_033/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_033",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/input.png",
+          "bytes": 11280,
+          "sha256": "f7697d6faef76496efdce90831a6ebafee0a63f711013aca0bf6aa8e52bd9dfd"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/target_01.png",
+          "bytes": 11410,
+          "sha256": "e90a48f5079245f8d1ac2a2790e471f00345052e9fa34a26c0f304489b37ebdb"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/target_02.png",
+          "bytes": 11511,
+          "sha256": "9476348b16df9f23f070e98384cadc6559e5e066c056feb31a0bc45eb2e74117"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/target_03.png",
+          "bytes": 11054,
+          "sha256": "ed7b491eb92987d082a360f3ceff276c14c38267411042a6df4d9330dd0547cb"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/target_04.png",
+          "bytes": 11171,
+          "sha256": "2acae7765f8762db64fa8347083419a33670505e433e790f1ab60b6187137de7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/depth_00.png",
+          "bytes": 17808,
+          "sha256": "448994c6f8f4e18c4bc84be0750fa70fed0fc1ae0c57c725f194eae7bb11fe7b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/pose_00.txt",
+          "bytes": 407,
+          "sha256": "8ef7a56d8f9afff40d60bebc9bd6eea63ae27c88cd7136e804fdc0500065f697"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/depth_01.png",
+          "bytes": 17706,
+          "sha256": "dfd995a1debd3df059b6ac228bbd243f172ec86f4fb94bc9fbe0594caf88bf54"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/pose_01.txt",
+          "bytes": 407,
+          "sha256": "59882b74e0e05c7ab80c80ed34e20fea587b40fc1043fb987eaa520b764bcac0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/depth_02.png",
+          "bytes": 19732,
+          "sha256": "02783dfa503c86671073f6230273efcb3968d6abc55567b3f631491a58a4ed40"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/pose_02.txt",
+          "bytes": 407,
+          "sha256": "56f09b84adf77772e7d1c2ff9919d294796a39d4e52732b6e9dc2849f2e4a617"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/depth_03.png",
+          "bytes": 15679,
+          "sha256": "b52ff4b40f991964d9dd74497bac0debe359f933f3fd153b549967400ee5d3fa"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/pose_03.txt",
+          "bytes": 407,
+          "sha256": "4c3a5ec0ff7702ca816528f7cb4789ed8f10d3d2d4615cee6133e547e6ce1774"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/depth_04.png",
+          "bytes": 16923,
+          "sha256": "b65953469af0926a8d3df057abc279aaa5255d9c456ffbe551611c34cfac948e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/pose_04.txt",
+          "bytes": 407,
+          "sha256": "ec2f653dcaae312176b141e76e4951169e90800182320e2df09cf200a9cb7c95"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_033/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_034_1mdnNktZ0Qp",
+      "index": 34,
+      "seed": 75,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_034/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_034/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_034/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_034/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_034/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_034",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/input.png",
+          "bytes": 9310,
+          "sha256": "ccf505a7a9c0b51b489d714ba090d992b7e59c22365e5898c0caffd68d56e503"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/target_01.png",
+          "bytes": 9344,
+          "sha256": "51eab63f925a644c5f8378699bd174a5f6787ae82d0c8cf558c51c468b86f0e1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/target_02.png",
+          "bytes": 8002,
+          "sha256": "8a7b0d91ad94a9821361ff06a0df2fbe65719a88af23da6c2e0223fc4866db3c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/target_03.png",
+          "bytes": 10236,
+          "sha256": "78c0c56ede7ecaaf51fdf9deaa5f93df67ee87a5e8ef1c9ab6f29bdb7b18b639"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/target_04.png",
+          "bytes": 8551,
+          "sha256": "797c225d8724acab081d44e98f93b0c135c71be091c58ae32db3714c9accf539"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/depth_00.png",
+          "bytes": 14908,
+          "sha256": "bd47a78615588428c4396e86159595505f5c9f8f7af829f7af2df8892395d63f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/pose_00.txt",
+          "bytes": 408,
+          "sha256": "753017f6af9be463e9dbffc1665c69f79b6f6532c6289d449ea6d73485ec129d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/depth_01.png",
+          "bytes": 14578,
+          "sha256": "fd773b1e8efc9337149f2fe2a17f0a53648d002028659eb7a4db3b5c5e611458"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/pose_01.txt",
+          "bytes": 407,
+          "sha256": "1d091236d84d789d2e1ef63d6384af36be46b9fb004d09b3416fb759b1bd4933"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/depth_02.png",
+          "bytes": 15198,
+          "sha256": "33ef4264cd679e1b7a35fe133193f9b39c78ff57fac0af1ab492a80df6ea7dcb"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/pose_02.txt",
+          "bytes": 406,
+          "sha256": "f89d0b616dc8e0b3a24044f7dcb63f244f71cd2b77cb6fe685034d6f2d4f40bf"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/depth_03.png",
+          "bytes": 19366,
+          "sha256": "5511f624089151f292d4bef3303019f7180388b399fb82c68829b6f9976f5070"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/pose_03.txt",
+          "bytes": 405,
+          "sha256": "ce7adef9e8b148530b0d0b464dc55ed5222b0afeb42aaf01ed6141f89aa407c8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/depth_04.png",
+          "bytes": 14748,
+          "sha256": "2e30d2e1575a707c965a76f6fd505d04d789b17224452e44346355f4c249ed69"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/pose_04.txt",
+          "bytes": 407,
+          "sha256": "b6c558c8b81e6ac2ce86477d3cc5f2ca0ac0f5ebf29a9d44b2bf65a3ffede3e6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_034/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_035_1nIwCHX1MTh",
+      "index": 35,
+      "seed": 76,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_035/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_035/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_035/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_035/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_035/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_035",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/input.png",
+          "bytes": 12543,
+          "sha256": "322f1bf03c5f0f76dc6a9e9833e6197261dc7e06c4a66b9e1bd955d4b8b35df7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/target_01.png",
+          "bytes": 12674,
+          "sha256": "e3d3156c52fd0a8679f2643bcf43d7a9cdb1c3d8871d1886b10e4f0230c383ad"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/target_02.png",
+          "bytes": 12247,
+          "sha256": "58ef9bb07d99e469910ed2e037fbe0e2ea77d7e57978be628b91593e4a3a295b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/target_03.png",
+          "bytes": 12476,
+          "sha256": "3b95a937f3418e8acab443a3bcbbea4c33cee73f9abbac11d0a74a325c0765fa"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/target_04.png",
+          "bytes": 12168,
+          "sha256": "b4a9d953cb16d34007513f1228c0c2a204195c3a1fcb46dfdb77648e7344d797"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/depth_00.png",
+          "bytes": 16450,
+          "sha256": "3587497cc303d9fd753180fc01f3cdfc352b56050bb589fd734ffed05e0c575f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/pose_00.txt",
+          "bytes": 407,
+          "sha256": "41e9f22f8d30e43f2b52a646d06e35568361c12b2cf3bc29e50f61513e9f31a6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/depth_01.png",
+          "bytes": 17016,
+          "sha256": "4e249831d19e1e793c8ab95d2cda00bdd5454920f0c646a91f5553a007ff67ff"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/pose_01.txt",
+          "bytes": 408,
+          "sha256": "a85d1220000a0a09a3505577d949bf9c346f3822530c1d802c04a58583076355"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/depth_02.png",
+          "bytes": 15083,
+          "sha256": "75698693e2874536c217aaaf05ca1bcc96131a6b4440bad34e00d1b47fe7dfa8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/pose_02.txt",
+          "bytes": 407,
+          "sha256": "5e3f8229d1e1f1dadb33a23eb04915f7945b482c4b557241a7a99aafa44aaefc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/depth_03.png",
+          "bytes": 19989,
+          "sha256": "5bb1adbea246c773c2b585ba525c41646967448af2ab340b8ecc210a6fa16f2a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/pose_03.txt",
+          "bytes": 406,
+          "sha256": "9eafa57232189a1c482880086888fa5526442484b4c916296c542e46ee7055c3"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/depth_04.png",
+          "bytes": 20255,
+          "sha256": "b175a677be9bd1abcefaf3eba73a0591a430947ad6074f7885cf66a143d00e43"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/pose_04.txt",
+          "bytes": 406,
+          "sha256": "c03c2ad7976d5b174aa43c0b31e35a8085395644f0a299b3afb052109855b3d4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_035/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_037_1snJ13ee4Kl",
+      "index": 37,
+      "seed": 77,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_037/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_037/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_037/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_037/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_037/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_037",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/input.png",
+          "bytes": 11186,
+          "sha256": "81dabbcd2626eaa1c3c963762263419051b999a4bd16a0d0ea230ad01a50d4ce"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/target_01.png",
+          "bytes": 11576,
+          "sha256": "9aeaa32ce84278da958592f2d8244eace6b81bccb336a7563368ae417f0d2fdc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/target_02.png",
+          "bytes": 11846,
+          "sha256": "928093707ec7b95d9a9f39825d37d1a118762123dbc72e41c4b294fe4289ae16"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/target_03.png",
+          "bytes": 12260,
+          "sha256": "4ee2eeca2b7a773adcbb8a9755f3ba62e15ad8dfe624323a1279d6e9327f07c4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/target_04.png",
+          "bytes": 11011,
+          "sha256": "005add67d7bdbca91b1cf3fe9ccf9a7cb477d85deb11c7439d4d73006d67e837"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/depth_00.png",
+          "bytes": 17714,
+          "sha256": "b124774844300c81edacf49d768b8398671fbe5206556392ca98de0d123fbdec"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/pose_00.txt",
+          "bytes": 407,
+          "sha256": "6f54cc1a992f4276ff11ef6b10dd7846c4c42a50b7de1430975e0325474203ae"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/depth_01.png",
+          "bytes": 17642,
+          "sha256": "29f1425cf58058209f815a7ec8698cfb75e2e2f0f2fe13863ca4cee916cf80cc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/pose_01.txt",
+          "bytes": 408,
+          "sha256": "5b986a0e668580064e543d35d7b87e7c88fe17bc1fd1274e65c5b6b52ca10944"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/depth_02.png",
+          "bytes": 17746,
+          "sha256": "d76701c78d2cf5f2a366b5db3e9c599e510c688dfde491d7e4bd3a65fa6ab8f8"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/pose_02.txt",
+          "bytes": 405,
+          "sha256": "fb0174e5a794e0d97106466633d50d4f83674b4f51307837ed7b12e7a6eccf52"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/depth_03.png",
+          "bytes": 18076,
+          "sha256": "2fd6f191ee0d60c31418cc7692176aad920ee053c34a1406fefcfd55520f602f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/pose_03.txt",
+          "bytes": 405,
+          "sha256": "fc3ad12959a6a9f0ec1c56681f8b93717a4d2f18c1d2ebb28f12b94d0b712096"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/depth_04.png",
+          "bytes": 16330,
+          "sha256": "f95093473824272473af1b3d67b7f82d5a9f756848f248e6d823c9a882c76f8d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/pose_04.txt",
+          "bytes": 408,
+          "sha256": "e545ce4096d1327dcf4cd5b99777fae03ed08388ac327c2a3b2bc549b73b6526"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_037/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_038_1vZGMYeeIVP",
+      "index": 38,
+      "seed": 78,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_038/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_038/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_038/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_038/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_038/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_038",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/input.png",
+          "bytes": 11642,
+          "sha256": "d965cf939811a3dcce4c2c1e0637bc2488b022abc3d3bfae062a935e7cd7126a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/target_01.png",
+          "bytes": 12065,
+          "sha256": "9924209e83af50218602564cfb0148f2c991c0b7785be6c187fbc614191df55f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/target_02.png",
+          "bytes": 4876,
+          "sha256": "a41413e8e01ab9d73aedde42bbe34d3f0d7e0ec258098d3dfa190b9e2a98fa0d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/target_03.png",
+          "bytes": 6471,
+          "sha256": "10230d10f48b8c42829eacf3d80747d51be27008ca0e1e10e2ff1f23ba536f56"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/target_04.png",
+          "bytes": 10314,
+          "sha256": "506e6d5eddd789ccbcfd15e9ee1a5cb1cbe6b180612a9b10ace9785d1897fb41"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/depth_00.png",
+          "bytes": 18027,
+          "sha256": "61387267564b8df8baabc4e0e2186a53bec94615e58bf4b7f01ddc7c7b2d9708"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/pose_00.txt",
+          "bytes": 406,
+          "sha256": "206f4a694b141a4d2dc6485de00c2413791ac2aacfcfea63732521d0c3f2852a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/depth_01.png",
+          "bytes": 18509,
+          "sha256": "3674626f211db793847a327039080e8255fea0e5225be289b26a2ee4aaff9117"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/pose_01.txt",
+          "bytes": 406,
+          "sha256": "3e9f3a1d1897d83c23c7f706b93b2cdbc7b190940888c424ed7956d29a5c997a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/depth_02.png",
+          "bytes": 4265,
+          "sha256": "9c53ce058af02cda79b533a28551cbd9ac8eb24cce4f4adbab684a26925d3728"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/pose_02.txt",
+          "bytes": 406,
+          "sha256": "dbe2c93b6290ebd91636d203f78ee43a5fb07e7ef917975e31242a7c60cd3969"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/depth_03.png",
+          "bytes": 15885,
+          "sha256": "2f6a54e9b54e8111457fdc535ed9b6cc03e57008704d7c190e0a394e84d622de"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/pose_03.txt",
+          "bytes": 406,
+          "sha256": "6752e880a430ae2de614c8a9f0f35f796e362aa075b865f70ccc29f5ff44dd33"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/depth_04.png",
+          "bytes": 17476,
+          "sha256": "a8198dfcab4f594df1669aed48287cf88106a0f5313600e85d39cb93659b9f18"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/pose_04.txt",
+          "bytes": 408,
+          "sha256": "c594b53345d0a96e4242038f24ba9f080fc71866a6297e9c325f85028bcaf72e"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_038/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_039_1zHIH16K8dj",
+      "index": 39,
+      "seed": 79,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_039/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_039/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_039/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_039/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_039/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_039",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/input.png",
+          "bytes": 12087,
+          "sha256": "5b6b1805cb7c8633b65b00800688c1bd84fbfc3e7db8fb5161495115b09477a7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/target_01.png",
+          "bytes": 11979,
+          "sha256": "fe5d4c7ff0eb83a420155a41dd6541900e56df4c3e47584dfbb72c2022f4c39d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/target_02.png",
+          "bytes": 12082,
+          "sha256": "73e59c846840a5551df8aa322aab51b0029d52136b9517bd5562ef3e0e7c66d4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/target_03.png",
+          "bytes": 10335,
+          "sha256": "a465f4d1c85e9e477b7e5a2f54b0e3cc89eb7bf66cd983edb0c4cd7120888634"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/target_04.png",
+          "bytes": 9281,
+          "sha256": "c55bc57ac2b155c9bcd790062052f5327938b261e8f6d585218eff6847a927dd"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/depth_00.png",
+          "bytes": 19218,
+          "sha256": "24263b419c662525fc0311df4a975fdf52ff4f3b863cef6f81785cfa4c2686b4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/pose_00.txt",
+          "bytes": 407,
+          "sha256": "e27c4006b1cf29be6763fb27f17f42f82c66e70df9505df0d18a8b92d28a2663"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/depth_01.png",
+          "bytes": 18950,
+          "sha256": "554a97026d7b5640d6b2d6e889baf515addd881ce338b65dfe1b736d4aebf1e7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/pose_01.txt",
+          "bytes": 407,
+          "sha256": "93246cabbc2e13939424908f03ed5c6da8929621e4217878645649a065d60534"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/depth_02.png",
+          "bytes": 20085,
+          "sha256": "59794024eaf56bc35ae6efad791a626f2c803f0d0b2cd855fc610ab4b8fe10e5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/pose_02.txt",
+          "bytes": 406,
+          "sha256": "543ea71b4e76cd0bf602dda14b259333c1c793848541d6aa90bf7c6bcbb7d2fc"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/depth_03.png",
+          "bytes": 19158,
+          "sha256": "a9a83a74807cd93fa4c3ef3927b27bbd11624cd1b57cf95428fa17922e727602"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/pose_03.txt",
+          "bytes": 407,
+          "sha256": "fd0af7787aedec21c52a1eaf2ee4f09ed56a10f4cce58a36b7f10585c3131adf"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/depth_04.png",
+          "bytes": 16501,
+          "sha256": "eae9ff5eb0a2992e21754033357abc27b2cd67f344ef05f44925206d255427d0"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/pose_04.txt",
+          "bytes": 408,
+          "sha256": "1311f3d6acfa4fa32285e8256c9bbb16e94729c3412f675b056a4be376b90133"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_039/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_040_260caber2nc",
+      "index": 40,
+      "seed": 80,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_040/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_040/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_040/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_040/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_040/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_040",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/input.png",
+          "bytes": 8546,
+          "sha256": "2f0f98c65166d55b36b8a84f7c25fe9484f64d472b8b3ed9302a5b207971be97"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/target_01.png",
+          "bytes": 8511,
+          "sha256": "4a6addeb9321e83a9dcf01cad14c1d08b621ae322f74879b433bfe93e5a7b3ee"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/target_02.png",
+          "bytes": 8134,
+          "sha256": "471f4d4e27a0d2976af2224f417a72f6e33c0823614c34ccfe537ce0f57c8c1b"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/target_03.png",
+          "bytes": 8420,
+          "sha256": "dd7cccaa028a39595e789d7c6ef74d9663398be8461d07f83ca571adc0800304"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/target_04.png",
+          "bytes": 7864,
+          "sha256": "f2517c259df47ecb731ac122d3467fbfcad044b84f929711a34dbba933bfe82f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/depth_00.png",
+          "bytes": 19163,
+          "sha256": "25caa775b7ca342f58bea121925314f95ad311dcae52f9f064cb84aed9b51434"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/pose_00.txt",
+          "bytes": 405,
+          "sha256": "082810dc47a1235baf669a48860d04a412470a7a650e1475c50a8325d1b817bf"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/depth_01.png",
+          "bytes": 18875,
+          "sha256": "1864f8d7fefcd12a4b7e46a5cd879c6bcb54c0c2cba99cee7cbda67b8bed002f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/pose_01.txt",
+          "bytes": 406,
+          "sha256": "9400d959556d8fa5af42d761ac6170795689764383d212d52489f0aab86e01e9"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/depth_02.png",
+          "bytes": 18246,
+          "sha256": "1c0a1f985043bb9ae4b708d249c8d0c5b279213a75017761b94c81fd2483698c"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/pose_02.txt",
+          "bytes": 407,
+          "sha256": "61513e9b728a2ddac66414b6c4415dc2ee918503ae7a916f697b5bac8d9b774d"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/depth_03.png",
+          "bytes": 19314,
+          "sha256": "bdd63072a0cd2b9807c1f69ce229cae3513c8c011f1d52765d10a900d97f6335"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/pose_03.txt",
+          "bytes": 406,
+          "sha256": "4af3bbf32b02014cf4042c7dee3921de13c60cac012f4df2c92f4699f7bf361f"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/depth_04.png",
+          "bytes": 16975,
+          "sha256": "3c68a468947befdc2b4b50f8d972ebca98e8ad196add76b695d405ea08bb546a"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/pose_04.txt",
+          "bytes": 406,
+          "sha256": "0142ddb9323db9428020d9250b187058f17cc620c70adbc0bb2d413e59eb2896"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_040/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    },
+    {
+      "id": "gso_041_26DrdDUQ3Xn",
+      "index": 41,
+      "seed": 81,
+      "views": [
+        "fixtures/gso/fixed_full_rgb_v1/object_041/input.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_041/target_01.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_041/target_02.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_041/target_03.png",
+        "fixtures/gso/fixed_full_rgb_v1/object_041/target_04.png"
+      ],
+      "gt_directory": "fixtures/gso/fixed_full_rgb_v1/object_041",
+      "files": [
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/input.png",
+          "bytes": 20649,
+          "sha256": "883845ef9a8082c8b5a6f209531404d83ebde8997edfd8527d97fd28bb54ba61"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/target_01.png",
+          "bytes": 20940,
+          "sha256": "06c3007b30b6c1c602c84c8e9c8a32b9048df65d4390c0820fff716b09c0f348"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/target_02.png",
+          "bytes": 20789,
+          "sha256": "81df617a1e708ae844efe28149c2180fb103a53ab9ebe17e3604e721c8ee6007"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/target_03.png",
+          "bytes": 20028,
+          "sha256": "faa17f2daa18455048c3d02256e3009d0fb6ce08b78e3e7cfccd1206794497eb"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/target_04.png",
+          "bytes": 20615,
+          "sha256": "2db79f4d0e51c37f8f7fce65b4bfd93fba799247d00af532aa940a1b1dec70e7"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/depth_00.png",
+          "bytes": 17235,
+          "sha256": "f7da8f4454cae98aa05cf76eed129033d4d30242444c6eb61f610ece2c275c04"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/pose_00.txt",
+          "bytes": 406,
+          "sha256": "399b512506d62c95bbadf7b93955c13533823e1591df59239e0bc7cc7c0cef70"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/intrinsics_00.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/depth_01.png",
+          "bytes": 17318,
+          "sha256": "04fb12f3e218b9e903e715c5866444b9ee728f762faadc28c8757cc8f8c577c2"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/pose_01.txt",
+          "bytes": 406,
+          "sha256": "62dc1fe8970e1c3cb9af2d2201937ea5cba80fb9ad9c55a45249eb1f672086b4"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/intrinsics_01.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/depth_02.png",
+          "bytes": 15586,
+          "sha256": "e71ecf558615e914f04f858b73ea8efa7705f1bd2d3d5e395025bebb6c5a73aa"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/pose_02.txt",
+          "bytes": 407,
+          "sha256": "5649e8632e3e6b8d9755fb9a003b05a52ec4a28cca9d8f1bb6485c865bb7f0f6"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/intrinsics_02.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/depth_03.png",
+          "bytes": 15564,
+          "sha256": "57471b729b127127bb3c93a2126cd190469fe739182ed6204a1925cc6f3ff627"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/pose_03.txt",
+          "bytes": 407,
+          "sha256": "633d476d5e60a70a060d456112da280c9a411edd86c07a5e9dc9de116f719cb5"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/intrinsics_03.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/depth_04.png",
+          "bytes": 16170,
+          "sha256": "2c0d32823133fb3dc74c874a0937c735b12e250d2e2dab476b759b8e2a1d4f00"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/pose_04.txt",
+          "bytes": 405,
+          "sha256": "a449a09f0f6debc4f1bfaf8b2f3a751c0dd1811271ce7034fc9a1129d5ccf469"
+        },
+        {
+          "path": "fixtures/gso/fixed_full_rgb_v1/object_041/intrinsics_04.txt",
+          "bytes": 400,
+          "sha256": "cc18357e36cbd9b78cf9e33c99f6e96cdcf101aa76856e37b1b8b90c76ce31f1"
+        }
+      ]
+    }
+  ],
+  "repeats": 2,
+  "warmup_requests_per_implementation": 1,
+  "trellis2": {
+    "pipeline_type": "512",
+    "stages": 3,
+    "steps_per_stage": 12,
+    "preprocessing": "BiRefNet + crop + DINOv3",
+    "geometry_export": "geometry GLB + raw texture voxels"
+  },
+  "dtype": "BF16 matrix weights/autocast; original FP32-sensitive policies retained",
+  "determinism": "Python/NumPy/torch CPU/MLU seed reset per request; deterministic algorithms warn_only; actual repeat error reported",
+  "model": "trellis2"
+}
