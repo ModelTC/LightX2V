@@ -17,9 +17,10 @@ def validate_minimax_h3_residency_config(config):
         raise ValueError("Static MiniMax-H3 residency requires offload_granularity='block'")
     validate_residency_config(config)
     uniform_resident_indices(config["num_layers"], config["offload_resident_blocks"])
-    if config.get("model_cls") != "minimax_h3" or config.get("model_variant") != "fl2av":
-        raise ValueError("Static MiniMax-H3 residency currently requires the fl2av model variant")
-    if not config.get("use_adaln_cache", False) or GET_DTYPE() != torch.bfloat16:
+    image_model = config.get("model_cls") == "minimax_h3_image"
+    if not image_model and (config.get("model_cls") != "minimax_h3" or config.get("model_variant") != "fl2av"):
+        raise ValueError("Static MiniMax-H3 residency requires the fl2av variant or MiniMax-H3-Image")
+    if (not image_model and not config.get("use_adaln_cache", False)) or GET_DTYPE() != torch.bfloat16:
         raise ValueError("Static MiniMax-H3 residency requires BF16 and use_adaln_cache=true")
     for option in ("dit_quantized", "dit_disk_streaming", "use_fused_qkv", "enable_cfg"):
         if config.get(option, False):

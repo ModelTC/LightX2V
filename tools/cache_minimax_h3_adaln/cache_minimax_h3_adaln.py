@@ -12,7 +12,7 @@ def parse_args():
     )
     parser.add_argument("--model_path", required=True, help="MiniMax-H3 model root")
     parser.add_argument("--config_json", required=True, help="Inference JSON config")
-    parser.add_argument("--model_cls", choices=("minimax_h3", "minimax_h3_causal", "taomate_h3", "streamrender_h3"), default="minimax_h3")
+    parser.add_argument("--model_cls", choices=("minimax_h3", "minimax_h3_image", "minimax_h3_causal", "taomate_h3", "streamrender_h3"), default="minimax_h3")
     parser.add_argument(
         "--model-variant",
         choices=("fl2av", "ref2av"),
@@ -23,10 +23,11 @@ def parse_args():
 
 def main() -> None:
     args = parse_args()
+    task = {"minimax_h3_image": "t2i", "minimax_h3_causal": "refa2v", "taomate_h3": "t2av", "streamrender_h3": "refv2v"}.get(args.model_cls)
     config = build_startup_config(
         {
             "model_cls": args.model_cls,
-            "task": "refa2v" if args.model_cls == "minimax_h3_causal" else "t2av" if args.model_cls == "taomate_h3" else "refv2v" if args.model_cls == "streamrender_h3" else None,
+            "task": task,
             "model_variant": args.model_variant,
             "model_path": args.model_path,
             "config_json": args.config_json,

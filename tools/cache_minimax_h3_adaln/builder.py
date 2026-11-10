@@ -57,6 +57,16 @@ class _CheckpointTensors:
             from lightx2v.models.networks.minimax_h3.streamrender.weights import native_weight_names
 
             self.native_to_source = {native: source for source in self.locations for native in native_weight_names(source)}
+        elif layout == "minimax_h3_image_release":
+            from lightx2v.models.networks.minimax_h3_image.checkpoint import convert_transformer_tensor
+
+            # AdaLN/time/norm key conversion does not depend on tensor shape.
+            self.native_to_source = {
+                native: source
+                for source in self.locations
+                if source.startswith(("time_embedder.", "final_layer.adaln_proj.linear.")) or (source.startswith("blocks.") and ".adaln_proj.linear." in source)
+                for native in convert_transformer_tensor(source, torch.empty(0), {})
+            }
 
     def _find_locations(self) -> dict[str, Path]:
         directory = self.files[0].parent
@@ -76,7 +86,7 @@ class _CheckpointTensors:
         if self.tensors is not None:
             tensor = self.tensors[name]
         else:
-            source_name = self.native_to_source.get(name, name) if self.layout == "streamrender_release" else name
+            source_name = self.native_to_source.get(name, name) if self.layout in ("streamrender_release", "minimax_h3_image_release") else name
             path = self.locations.get(source_name)
             if path is None:
                 raise KeyError(f"MiniMax-H3 checkpoint tensor is missing: {name}")
@@ -86,7 +96,7 @@ class _CheckpointTensors:
                 from lightx2v.models.networks.minimax_h3.streamrender.weights import remap_streamrender_weight
 
                 tensor = remap_streamrender_weight(source_name, tensor)[name]
-        # Both H3 variants compute the time MLP in FP32 and modulation projections in BF16.
+        # H3 computes the time MLP in FP32 and modulation projections in BF16.
         dtype = tensor.dtype if preserve_dtype else torch.float32 if name.startswith("time_embedder.") else torch.bfloat16
         return tensor.to(device=AI_DEVICE, dtype=dtype)
 

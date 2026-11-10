@@ -14,10 +14,12 @@ ADALN_CACHE_GUIDE = """1. Configure the cache in the inference JSON config:
      tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
    Causal RefA2V:
      scripts/minimax_h3_causal/cache_adaln.sh
+   MiniMax-H3-Image:
+     scripts/minimax_h3_image/cache_adaln.sh
 
    Set lightx2v_path, model_path, and --config_json to match inference.
    For MiniMax-H3, set --model-variant fl2av for t2av/i2av/l2av/fl2av,
-   or ref2av for ref2av. The causal script already selects minimax_h3_causal.
+   or ref2av for ref2av. The causal and image scripts select their model classes.
 
 3. Generate the cache if no matching cache exists.
    If the target cache directory exists but is invalid, move it aside first.
@@ -29,5 +31,7 @@ ADALN_CACHE_GUIDE = """1. Configure the cache in the inference JSON config:
      bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
      # Causal RefA2V
      bash scripts/minimax_h3_causal/cache_adaln.sh
+     # MiniMax-H3-Image: generates both T2I and I2I profiles
+     bash scripts/minimax_h3_image/cache_adaln.sh
 
 4. Retry inference after the cache is ready."""
