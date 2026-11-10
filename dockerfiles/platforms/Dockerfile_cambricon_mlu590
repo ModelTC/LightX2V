@@ -6,9 +6,10 @@ WORKDIR /workspace/LightX2V
 ENV PYTHONPATH=/workspace/LightX2V
 ENV LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 
-# Install deps
+# Install deps without replacing the vendor Torch / torch_mlu stack.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
-    pip install --no-cache-dir \
+    python -c "import importlib.metadata as m; from pathlib import Path; names = {'torch', 'torchvision', 'torchaudio', 'torch-mlu'}; Path('/tmp/vendor-torch-constraints.txt').write_text(''.join(d.metadata['Name'] + '==' + d.version + '\n' for d in m.distributions() if d.metadata['Name'].lower().replace('_', '-') in names))" && \
+    python -m pip install --no-cache-dir --constraint /tmp/vendor-torch-constraints.txt \
     ftfy \
     imageio \
     imageio-ffmpeg \
@@ -17,7 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
     gguf \
     diffusers \
     peft==0.17.0 \
-    transformers==4.57.1 &&
+    transformers==4.57.1 \
+    Pillow \
+    timm \
+    kornia \
+    trimesh && \
+    rm /tmp/vendor-torch-constraints.txt
 
 # Copy files
 COPY app app
