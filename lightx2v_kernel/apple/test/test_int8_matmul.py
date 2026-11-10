@@ -38,11 +38,11 @@ class Int8MatmulTests(unittest.TestCase):
         compiler.start()
         self.addCleanup(compiler.stop)
 
-    def require_libraries(self, *shapes):
-        directory = Path(os.environ["LIGHTX2V_METALLIB_DIR"])
-        missing = [f"int8_k{k}_n{n}.metallib" for k, n in shapes if not (directory / f"int8_k{k}_n{n}.metallib").is_file()]
-        if missing:
-            self.skipTest("Compile the additional test shapes first: " + ", ".join(missing))
+    def require_library(self, k, n):
+        directory = Path(os.environ["LIGHTX2V_METALLIB_DIR"]).expanduser()
+        library = directory / f"int8_k{k}_n{n}.metallib"
+        if not library.is_file():
+            self.skipTest(f"Compile the additional test shape first: {library.name}")
 
     def matrices(self, m, k, n):
         # Power-of-two row scales make the online INT8 values exact, so the
@@ -53,10 +53,10 @@ class Int8MatmulTests(unittest.TestCase):
         xs = 2.0 ** (torch.arange(m) % 4 - 2)
         x = (qx.float() * xs[:, None]).to(torch.bfloat16).to("mps")
         qw = torch.randint(-128, 128, (n, k), dtype=torch.int8)
-        # Different exact scales across channels also verify scale indexing.
-        ws = 2.0 ** (torch.arange(n) % 4 - 7)
+        # Seven exact scales distinguish channels and successive 64/128-column tiles.
+        ws = 2.0 ** (torch.arange(n) % 7 - 9)
         bias = torch.randn(n, dtype=torch.bfloat16)
-        columns = list(range(n)) if n <= 256 else sorted({0, 31, 63, 64, 127, 128, 255, 256, n // 2, n - 1})
+        columns = list(range(n)) if n <= 256 else sorted(set(range(7)) | {31, 63, 64, 127, 128, 255, 256, n // 2, n - 1})
         acc = qx.to(torch.int32) @ qw[columns].to(torch.int32).T
         expected = (acc.float() * xs[:, None] * ws[columns] + bias[columns].float()).to(torch.bfloat16)
         return x, qw.to("mps").T, ws.to("mps"), bias.to("mps"), columns, expected
@@ -71,16 +71,16 @@ class Int8MatmulTests(unittest.TestCase):
                 torch.testing.assert_close(output[:, columns].cpu(), expected, rtol=0, atol=0)
 
     def test_short_k_and_quantizer_tail(self):
-        self.require_libraries((128, 128), (256, 128), (384, 256), (768, 128), (1280, 256))
         for m, k, n in ((1, 128, 128), (127, 256, 128), (128, 384, 256), (129, 768, 128), (257, 1280, 256)):
             with self.subTest(m=m, k=k, n=n):
+                self.require_library(k, n)
                 x, weight, scale, bias, columns, expected = self.matrices(m, k, n)
                 torch.testing.assert_close(int8_matmul(x, weight, scale, bias)[:, columns].cpu(), expected, rtol=0, atol=0)
 
     def test_h3_native_shapes(self):
-        self.require_libraries((5376, 28672), (5376, 7168), (7168, 5376), (14336, 5376), (2688, 96768))
         for m, k, n in ((1, 5376, 28672), (129, 5376, 28672), (128, 5376, 7168), (257, 7168, 5376), (129, 14336, 5376), (19, 2688, 96768)):
             with self.subTest(m=m, k=k, n=n):
+                self.require_library(k, n)
                 x, weight, scale, bias, columns, expected = self.matrices(m, k, n)
                 pointer = weight.untyped_storage().data_ptr()
                 output = int8_matmul(x, weight, scale, bias)
@@ -89,7 +89,7 @@ class Int8MatmulTests(unittest.TestCase):
                 self.assertEqual(weight.untyped_storage().data_ptr(), pointer)
 
     def test_h3_final_column_amax_and_zero_rows(self):
-        self.require_libraries((5376, 7168))
+        self.require_library(5376, 7168)
         x, weight, scale, _, columns, _ = self.matrices(129, 5376, 7168)
         x.zero_()
         x[-1, -1] = 127
@@ -98,7 +98,7 @@ class Int8MatmulTests(unittest.TestCase):
         torch.testing.assert_close(int8_matmul(x, weight, scale)[:, columns].cpu(), expected, rtol=0, atol=0)
 
     def test_h3_strides_offsets_and_independent_outputs(self):
-        self.require_libraries((5376, 7168))
+        self.require_library(5376, 7168)
         x, weight, scale, bias, columns, expected = self.matrices(128, 5376, 7168)
         strided = torch.empty(128, 5376 * 2, device="mps", dtype=torch.bfloat16)
         strided[:, ::2] = x

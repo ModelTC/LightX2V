@@ -8,7 +8,7 @@ from lightx2v.common.offload.block_layout import BlockBuffer, BlockLayout, Block
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.offload import get_block_offload_backend
-from lightx2v_platform.ops.offload.weight_storage import TensorMetadata, describe_weight_storage
+from lightx2v_platform.ops.offload.weight_storage import StorageDescription, TensorMetadata
 
 
 @dataclass
@@ -64,15 +64,30 @@ def validate_contiguous_config(config, lora_path=None):
         raise ValueError("contiguous layout currently supports a single rank")
 
 
+def _describe(leaf, metadata, path):
+    if getattr(leaf, "is_post_adapter", False):
+        raise ValueError(f"contiguous layout does not support adapter blocks: {path}")
+    describe = getattr(leaf, "describe_storage", None)
+    if describe is not None:
+        return describe(metadata)
+    # Stateless computation operators expose an empty state_dict before loading.
+    state_dict = getattr(leaf, "state_dict", None)
+    if state_dict is not None:
+        try:
+            if not state_dict():
+                return StorageDescription()
+        except AttributeError:
+            pass
+    raise ValueError(f"Missing storage contract: {path} ({type(leaf).__name__})")
+
+
 class BlockLoadPlan:
     def __init__(self, block, metadata, source_names, prefix=None, device_buffer=False):
         self.operators = dict(block.named_weight_leaves())
         self.auxiliary = {}
         entries = []
         for path, leaf in self.operators.items():
-            if getattr(leaf, "is_post_adapter", False):
-                raise ValueError(f"contiguous layout does not support adapter blocks: {path}")
-            description = describe_weight_storage(leaf, metadata, path)
+            description = _describe(leaf, metadata, path)
             if description.tensors and bool(leaf.create_cuda_buffer) != device_buffer:
                 raise ValueError(f"Block storage role disagrees with operator buffers: {path}")
             for spec in description.tensors:

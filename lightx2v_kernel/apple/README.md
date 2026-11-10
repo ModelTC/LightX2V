@@ -61,7 +61,9 @@ python tools/convert/convert_h3_int8_metal.py \
 The output directory must be new. The converter uses FP32 per-output-channel
 scales and quantizes 300 Linear weights across the 50 main blocks. AdaLN,
 pre/post projections, text refiner, text encoder and VAEs keep their original
-precision. Do not reapply the merged Turbo LoRA at runtime.
+precision. Output shards are written to the directory root for the native
+quantized loader, including when source shards are in subdirectories. Do not
+reapply the merged Turbo LoRA at runtime.
 
 In `configs/platforms/mps/minimax_h3_t2av_4step_int8.json`, set
 `dit_quantized_ckpt` to the converted `transformer` directory. Update
@@ -72,16 +74,18 @@ In `configs/platforms/mps/minimax_h3_t2av_4step_int8.json`, set
 bash scripts/platforms/mps/run_minimax_h3_t2av_int8.sh
 ```
 
-This uses the standard `python -m lightx2v.infer` entry point for resident
+This uses the standard `python -m lightx2v.infer` entry point for single-device
 T2AV: four steps, 544x960, 124 frames at 24 fps. `model_path` supplies the
 original tokenizer, text encoder and VAEs. Q/K/V remain separate.
 
-The opt-in `mps_resident_weights=true` loader reads DiT and BF16 text weights
-directly into MPS storage without retaining host weight copies. It requires
-single-device resident execution without offload, shared CPU arenas, runtime
-LoRA or lazy loading. The dedicated MPS text encoder loads the native text
-prefix for T2AV. Mixed INT8 disk streaming, tensor
-parallelism and other task types have not been validated.
+The example keeps all components on MPS with CPU offload disabled and was
+tested on an M5 Ultra with 256 GB of unified memory. INT8 DiT weights use the
+existing quantized loader and `int8-metal` operators; the text
+encoder and VAEs use their existing loading paths. The launch script sets
+`SENSITIVE_LAYER_DTYPE=FP32` to preserve H3's unquantized FP32 projections;
+`DTYPE` must remain `BF16`.
+Mixed INT8 disk streaming, tensor parallelism and other task types have not
+been validated.
 
 Compilation generates `.metal`, `.air`, and `.metallib` files. Only the `.metallib` files need to be kept for inference.
 

@@ -447,10 +447,6 @@ class MMWeightForceFp32(MMWeight):
     running in bf16/fp16 degrades final predictions.
     """
 
-    def describe_storage(self, metadata):
-        self.validate_checkpoint(metadata)
-        return StorageDescription(tuple(WeightStorage(name, attr, metadata[name].shape, torch.float32, transpose) for name, attr, transpose in self.base_attrs))
-
     def load(self, weight_dict):
         if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
             device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)

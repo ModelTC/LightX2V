@@ -50,7 +50,9 @@ kernel void gemm(device int8_t* xq, device int8_t* wq,
     constant uint2& shape, uint2 group [[threadgroup_position_in_grid]]) {
     // Keep the existing large tile for aligned Qwen shapes. H3 K=5376 and
     // K=2688 use exact divisor tiles so no TensorOps slice exceeds storage.
-    constexpr int BM = 128, BK = K % (BN * 8) == 0 ? BN * 8 : (K % 256 == 0 ? 256 : 128);
+    constexpr int BM = 128;
+    constexpr int BK =
+        K % (BN * 8) == 0 ? BN * 8 : (K % 256 == 0 ? 256 : 128);
     const uint gn = N / BN, gm = shape.x / BM;
     const uint pid = group.y * gn + group.x;
     if constexpr (BN == 64) {

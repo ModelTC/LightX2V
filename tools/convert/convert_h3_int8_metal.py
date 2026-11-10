@@ -4,6 +4,7 @@ import argparse
 import gc
 import json
 import shutil
+import sys
 from collections import defaultdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,11 +13,22 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
-PROJECTION_SUFFIXES = (".ff.net.0.proj", ".ff.net.2", ".attn.to_q", ".attn.to_k", ".attn.to_v", ".attn.to_out.0")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from lightx2v_platform.checkpoint_metadata import read_checkpoint_json  # noqa: E402
+
+PROJECTION_WEIGHT_SUFFIXES = (
+    ".ff.net.0.proj.weight",
+    ".ff.net.2.weight",
+    ".attn.to_q.weight",
+    ".attn.to_k.weight",
+    ".attn.to_v.weight",
+    ".attn.to_out.0.weight",
+)
 
 
 def is_projection_weight(name):
-    return name.startswith("transformer_blocks.") and name.endswith(tuple(suffix + ".weight" for suffix in PROJECTION_SUFFIXES))
+    return name.startswith("transformer_blocks.") and name.endswith(PROJECTION_WEIGHT_SUFFIXES)
 
 
 def quantize_weight(tensor, device):
@@ -37,7 +49,10 @@ def quantize_weight(tensor, device):
 def convert_shard(source, output, names, device):
     """Convert one indexed shard while preserving every unselected tensor."""
     weights = {}
-    with safe_open(str(source), framework="pt", device="cpu") as checkpoint, torch.inference_mode():
+    with (
+        safe_open(str(source), framework="pt", device="cpu") as checkpoint,
+        torch.inference_mode(),
+    ):
         if set(checkpoint.keys()) != set(names):
             raise ValueError(f"Index/shard key mismatch: {source.name}")
         for name in names:
@@ -47,7 +62,11 @@ def convert_shard(source, output, names, device):
             else:
                 weights[name] = tensor
         output.parent.mkdir(parents=True, exist_ok=True)
-        save_file(weights, str(output), metadata={"lightx2v_quant_scheme": "int8-metal", "lightx2v_quant_scope": "dit_proj"})
+        save_file(
+            weights,
+            str(output),
+            metadata={"lightx2v_quant_scheme": "int8-metal", "lightx2v_quant_scope": "dit_proj"},
+        )
         payload_bytes = sum(tensor.numel() * tensor.element_size() for tensor in weights.values())
         weight_names = tuple(weights)
     del weights
@@ -73,7 +92,7 @@ def convert(source, output, device="cpu"):
     indices = list(source.glob("*.safetensors.index.json"))
     if len(indices) != 1:
         raise ValueError("Expected one source safetensors index")
-    original = json.loads(indices[0].read_text())
+    original = read_checkpoint_json(indices[0])
     mapping = original["weight_map"]
     selected = {name for name in mapping if is_projection_weight(name)}
     if not selected:
@@ -82,6 +101,11 @@ def convert(source, output, device="cpu"):
         raise ValueError("Input checkpoint is already quantized")
     shards = defaultdict(list)
     for name, shard in mapping.items():
+        if not isinstance(shard, str) or not shard:
+            raise ValueError(f"Checkpoint shard must be a nonempty relative path: {shard!r}")
+        shard_path = Path(shard)
+        if not shard_path.parts or shard_path.is_absolute() or ".." in shard_path.parts:
+            raise ValueError(f"Checkpoint shard must be a relative path without '..': {shard!r}")
         shards[shard].append(name)
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -89,9 +113,11 @@ def convert(source, output, device="cpu"):
         staging = Path(temporary)
         weight_map = {}
         total_size = 0
-        for shard, names in sorted(shards.items()):
-            converted_names, payload_bytes = convert_shard(source / shard, staging / shard, names, device)
-            weight_map.update(dict.fromkeys(converted_names, shard))
+        for shard_index, (shard, names) in enumerate(sorted(shards.items()), start=1):
+            # The native quantized loader discovers shards in the output root.
+            output_shard = f"model-{shard_index:05d}-of-{len(shards):05d}.safetensors"
+            converted_names, payload_bytes = convert_shard(source / shard, staging / output_shard, names, device)
+            weight_map.update(dict.fromkeys(converted_names, output_shard))
             total_size += payload_bytes
             print(f"Converted {shard}", flush=True)
         if (source / "config.json").is_file():

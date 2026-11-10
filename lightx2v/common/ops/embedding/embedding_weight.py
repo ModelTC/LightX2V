@@ -10,7 +10,6 @@ from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import EMBEDDING_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.ops.offload.weight_storage import StorageDescription, WeightStorage, require_dtype
 
 
 class EmbeddingWeightTemplate(metaclass=ABCMeta):
@@ -23,11 +22,6 @@ class EmbeddingWeightTemplate(metaclass=ABCMeta):
         self.is_post_adapter = is_post_adapter
         self.infer_dtype = GET_DTYPE()
         self.config = {}
-
-    def describe_storage(self, metadata):
-        source = metadata[self.weight_name]
-        require_dtype(self.weight_name, source.dtype, (torch.float16, torch.bfloat16, torch.float32))
-        return StorageDescription((WeightStorage(self.weight_name, "weight", source.shape, self.infer_dtype),))
 
     def load(self, weight_dict):
         if self.create_cuda_buffer:

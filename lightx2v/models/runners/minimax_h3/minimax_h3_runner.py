@@ -117,7 +117,7 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def get_supported_tasks(self):
         """Return tasks supported by the loaded transformer weights."""
-        if self.config.get("text_encoder_disk_streaming", False) or self.config.get("mps_resident_weights", False):
+        if self.config.get("text_encoder_disk_streaming", False):
             return ("t2av",)
         if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
@@ -251,7 +251,7 @@ class MiniMaxH3Runner(DefaultRunner):
         return MiniMaxH3Model(**model_kwargs)
 
     def load_text_encoder(self):
-        if self.config.get("text_encoder_disk_streaming", False) or self.config.get("mps_resident_weights", False):
+        if self.config.get("text_encoder_disk_streaming", False):
             return [MiniMaxH3MpsQwen3VLTextEncoder(self.config)]
         return [MiniMaxH3Qwen3VLTextEncoder(self.config)]
 
