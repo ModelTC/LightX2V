@@ -83,17 +83,44 @@ DOCUMENTED_FATAL_MESSAGES = (
     "CUDA error: tensor memory not completely freed",
     "CUDA error: the MPS client has been terminated by the server",
     "CUDA error: an async error has occured in external entity outside of CUDA",
-    "MUSA error: GPU Initialization Failure",
-    "MUSA error: GPU hardware failure",
-    "MUSA error: Uncorrectable uncontained ECC error",
-    "MUSA error: ECC error counter overflow",
-    "MUSA error: Page retire failed",
-    "MUSA error: AXI Error",
-    "MUSA error: AXI bus error",
-    "MUSA error: GPU bios trap",
-    "MUSA error: GPU shutdown",
-    "MUSA error: Mtlink unrecoverable error",
 )
+
+
+# Captured with musaGetErrorString from installed MUSA 5.2.0; each code's
+# driver_types.h contract explicitly requires terminating/relaunching the process.
+MUSA_FATAL_RUNTIME_STRINGS = (
+    (226, "Invalid access of peer GPU memory over mtlink or a hardware error"),
+    (700, "an illegal memory access was encountered"),
+    (702, "the launch timed out and was terminated"),
+    (710, "device-side assert triggered"),
+    (714, "hardware stack error"),
+    (715, "an illegal instruction was encountered"),
+    (716, "misaligned address"),
+    (717, "operation not supported on global/shared address space"),
+    (718, "invalid program counter"),
+    (719, "unspecified launch failure"),
+    (721, "tensor memory not completely freed"),
+    (783, "operation aborted"),
+    (784, "out of bound"),
+    (785, "fp invalid vector"),
+    (786, "fp invalid tensor"),
+    (787, "fp overflow vector"),
+    (788, "fp overflow tensor"),
+    (789, "read write conflict"),
+    (790, "read write no barrier"),
+    (791, "cluster write fail"),
+    (792, "cluster read fail"),
+    (793, "TME illegal parameters"),
+    (794, "TCE illegal active mask"),
+    (795, "kill timeout"),
+    (796, "axi bus timeout"),
+    (797, "axi bus decode error"),
+    (798, "axi bus slave error"),
+    (799, "context switch timeout"),
+    (810, "the MPS client has been terminated by the server"),
+    (911, "an async error has occured in external entity outside of MUSA"),
+)
+DOCUMENTED_FATAL_MESSAGES += tuple(prefix + message for _, message in MUSA_FATAL_RUNTIME_STRINGS for prefix in ("MUSA error: ", "CUDA error: "))
 
 
 class FatalWhitelistTests(unittest.TestCase):
@@ -132,10 +159,6 @@ print('UNEXPECTED_RETURN')
             "CUDA error: GPU page fault",
             "GPU Page fault or AXI bus error",
             "MUSA error: GPU Page fault or AXI bus error",
-            "MUSA error: an illegal memory access was encountered",
-            "MUSA error: device-side assert triggered",
-            "MUSA error: unspecified launch failure",
-            "MUSA error: the launch timed out and was terminated",
             "MUSA error: Uncorrectable contained ECC error",
             "MUSA error: Single Bit ECC Error",
             "MUSA error: GPU memory page fault",
@@ -161,6 +184,35 @@ print('UNEXPECTED_RETURN')
                 # Exercise the production handler, not only the classifier.
                 errors.terminate_on_fatal_device_error(RuntimeError(message))
                 self.assertFalse(errors.is_fatal_device_error(RuntimeError(message)))
+
+    def test_musa_runtime_ordinary_and_near_match_errors_do_not_exit(self):
+        ordinary = (
+            "out of memory",
+            "uncorrectable ECC error encountered",
+            "invalid argument",
+            "GPU Initialization Failure",
+            "GPU hardware failure",
+            "Uncorrectable uncontained ECC error",
+            "ECC error counter overflow",
+            "Page retire failed",
+            "AXI Error",
+            "AXI bus error",
+            "GPU bios trap",
+            "GPU shutdown",
+            "Mtlink unrecoverable error",
+        )
+        for prefix in ("MUSA error: ", "CUDA error: "):
+            for message in ordinary:
+                with self.subTest(prefix=prefix, message=message):
+                    errors.terminate_on_fatal_device_error(RuntimeError(prefix + message))
+                    self.assertFalse(errors.is_fatal_device_error(RuntimeError(prefix + message)))
+        for _, message in MUSA_FATAL_RUNTIME_STRINGS:
+            for text in (message, "Input contains MUSA error: " + message, "MUSA error: " + message + " or invalid input", "warning\nMUSA error: " + message):
+                with self.subTest(text=text):
+                    errors.terminate_on_fatal_device_error(RuntimeError(text))
+                    self.assertFalse(errors.is_fatal_device_error(RuntimeError(text)))
+            for kind in (ValueError, OSError):
+                errors.terminate_on_fatal_device_error(kind("MUSA error: " + message))
 
     def test_validation_and_io_errors_with_device_text_do_not_exit(self):
         for cls in (ValueError, OSError):

@@ -32,21 +32,47 @@ _FATAL_DEVICE_MESSAGES = frozenset(
         "cuda error: the mps client has been terminated by the server",  # 810
         # 911: only the explicit asynchronous error form; generic external errors are ambiguous.
         "cuda error: an async error has occured in external entity outside of cuda",
-        # Moore Threads XID errors explicitly classified FATAL. These accepted
-        # message forms identify the fault; XID numbers are NOT MUSA API codes.
-        # https://docs.mthreads.com/gmc/gmc-doc-online/dcgm/historicalversion/v1.0.0/xid_guide/
-        "musa error: gpu initialization failure",  # 0x00000001
-        "musa error: gpu hardware failure",  # 0x01000006
-        "musa error: uncorrectable uncontained ecc error",  # 0x02000002
-        "musa error: ecc error counter overflow",  # 0x02000004
-        "musa error: page retire failed",  # 0x02000006
-        "musa error: axi error",  # 0x02000007
-        "musa error: axi bus error",  # explicit AXI wording
-        "musa error: gpu bios trap",  # 0x05000002
-        "musa error: gpu shutdown",  # 0x05000004
-        "musa error: mtlink unrecoverable error",  # 0x07000003
     )
 )
+
+# MUSA 5.2.0 driver_types.h explicitly requires process termination/relaunch
+# for these runtime codes. Strings were queried from libmusart.so.5.2.0.
+# torch_musa 2.9.1.post1+musa5.2.0 native checks use "MUSA error: ";
+# its generated CUDA-compatible checks use "CUDA error: ". XID names are
+# diagnostic categories, not verified runtime exception strings.
+_MUSA_FATAL_RUNTIME_MESSAGES = (
+    "invalid access of peer gpu memory over mtlink or a hardware error",  # 226: musaErrorContained
+    "an illegal memory access was encountered",  # 700: musaErrorIllegalAddress
+    "the launch timed out and was terminated",  # 702: musaErrorLaunchTimeout
+    "device-side assert triggered",  # 710: musaErrorAssert
+    "hardware stack error",  # 714: musaErrorHardwareStackError
+    "an illegal instruction was encountered",  # 715: musaErrorIllegalInstruction
+    "misaligned address",  # 716: musaErrorMisalignedAddress
+    "operation not supported on global/shared address space",  # 717: musaErrorInvalidAddressSpace
+    "invalid program counter",  # 718: musaErrorInvalidPc
+    "unspecified launch failure",  # 719: musaErrorLaunchFailure
+    "tensor memory not completely freed",  # 721: musaErrorTensorMemoryLeak
+    "operation aborted",  # 783: musaErrorAborted
+    "out of bound",  # 784: musaErrorOutOfBound
+    "fp invalid vector",  # 785: musaErrorFpInvalidVector
+    "fp invalid tensor",  # 786: musaErrorFpInvalidTensor
+    "fp overflow vector",  # 787: musaErrorFpOverflowVector
+    "fp overflow tensor",  # 788: musaErrorFpOverflowTensor
+    "read write conflict",  # 789: musaErrorReadWriteConflict
+    "read write no barrier",  # 790: musaErrorReadWriteNoBarrier
+    "cluster write fail",  # 791: musaErrorClusterWriteFail
+    "cluster read fail",  # 792: musaErrorClusterReadFail
+    "tme illegal parameters",  # 793: musaErrorTmeIllegalParameters
+    "tce illegal active mask",  # 794: musaErrorTceIllegalActiveMask
+    "kill timeout",  # 795: musaErrorKillTimeout
+    "axi bus timeout",  # 796: musaErrorAxiBusTimeout
+    "axi bus decode error",  # 797: musaErrorAxiBusDecodeError
+    "axi bus slave error",  # 798: musaErrorAxiBusSlaveError
+    "context switch timeout",  # 799: musaErrorCswTimeout
+    "the mps client has been terminated by the server",  # 810: musaErrorMpsClientTerminated
+    "an async error has occured in external entity outside of musa",  # 911: musaErrorExternalDevice
+)
+_FATAL_DEVICE_MESSAGES |= frozenset(prefix + message for prefix in ("musa error: ", "cuda error: ") for message in _MUSA_FATAL_RUNTIME_MESSAGES)
 
 
 def is_fatal_device_error(error):
