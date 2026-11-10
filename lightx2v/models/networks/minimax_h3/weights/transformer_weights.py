@@ -213,6 +213,8 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
             # the unquantized projection; update the offline builder if it changes.
             # AdaLN is the largest per-block projection in H3. Its output is
             # column-sharded here and gathered once per block before modulation.
+            # Selective INT8 Metal quantization keeps AdaLN in floating point.
+            keep_adaln_in_fp = config.get("dit_quant_scheme") == "int8-metal"
             self.add_module(
                 "adaln",
                 _linear(
@@ -221,7 +223,7 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
                     bias=True,
                     create_cuda_buffer=create_cuda_buffer,
                     tp_split="col",
-                    quantized=config.get("dit_quant_scheme") != "int8-metal",
+                    quantized=not keep_adaln_in_fp,
                 ),
             )
 
