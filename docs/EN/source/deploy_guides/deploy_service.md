@@ -12,6 +12,12 @@ bash scripts/server/start_server.sh
 
 The example loads Wan2.1 T2V with `configs/wan/wan_t2v.json` and listens on port 8000. Change `--model_cls`, `--task`, and `--config_json` together when selecting another model. `--max_queue_size` defaults to 10 and counts both pending and processing tasks.
 
+Single-task services bind their task at startup; JSON and form requests must not include `task`. Multi-task services such as MiniMax-H3 require `task` in each native request. `/docs` shows the request schema for the running service.
+
+Routes follow task output types. H3 and Wan video services expose video APIs; image services expose image APIs. SR models expose both and reject requests sent to the wrong output API. Text, mesh, depth and reconstruction tasks currently have no adapter in this server.
+
+BAGEL, Flux2, HiDream-O1-Image, Z-Image, LingBot-Video, HunyuanImage3, LTX2/LTX2.5, Wan2.2 TI2V-5B and Cosmos3 Omni support per-request tasks. Omit startup `--task` and select a task in each native request. HunyuanImage3 exposes image tasks only; Cosmos3 uses an explicit `model_variant` in the startup JSON.
+
 ## Submit a video task
 
 Once the service is ready, submit a request from another terminal. This example uses the default T2V service:
@@ -24,7 +30,7 @@ curl -X POST http://localhost:8000/v1/tasks/video/ \
 
 The response includes `task_id`, `task_status: "pending"`, and `save_result_path`. Keep the returned task ID for polling. For I2V, start the service with a matching I2V model/config and provide `image_path` or use the multipart form endpoint. Local input paths refer to the server filesystem.
 
-Optional generation fields inherit the startup defaults when omitted or set to `null`; fields must still be supported by the selected model/task. In particular, omit `negative_prompt` when CFG is disabled, including an empty string. A JSON `size` uses `[height, width]`.
+Optional generation fields inherit the startup defaults when omitted or set to `null`; fields must still be supported by the selected model/task. When CFG is disabled, an explicitly supplied `negative_prompt`, including an empty string, is ignored with a warning. A JSON `size` uses `[height, width]`.
 
 ## Poll, download, and cancel
 

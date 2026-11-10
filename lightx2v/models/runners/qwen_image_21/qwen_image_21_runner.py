@@ -17,10 +17,10 @@ from lightx2v.models.networks.qwen_image_21.input_utils import prepare_images
 from lightx2v.models.networks.qwen_image_21.lora import QwenImage21LoraAdapter, validate_lora_config
 from lightx2v.models.networks.qwen_image_21.model import QwenImage21TransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
+from lightx2v.utils.input_info import MultiImageI2IInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -30,8 +30,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
+    input_info_cls_by_task = {"i2i": MultiImageI2IInputInfo}
     _WARMUP_RESOLUTIONS = ((1024, 1024), (768, 960))
-    supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS | {"resolution"}, "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "resolution"}}
 
     def __init__(self, config):
         unsupported = (
@@ -111,11 +111,6 @@ class QwenImage21Runner(DefaultRunner):
             if config.get(key):
                 raise ValueError(f"Qwen-Image-2.1 MPS streaming does not support {key}")
 
-    def get_supported_tasks(self):
-        if self.config.get("task") is not None:
-            return super().get_supported_tasks()
-        return ("t2i", "i2i")
-
     @torch.inference_mode()
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
@@ -137,7 +132,7 @@ class QwenImage21Runner(DefaultRunner):
                         request = {"task": task, "prompt": "warmup", "seed": 0, "size": [height, width]}
                         if task == "i2i":
                             Image.new("RGBA", (width, height), color=(0, 0, 0, 255)).save(image_path)
-                            request["image_path"] = str(image_path)
+                            request["image_path"] = [str(image_path)]
                         # Internal warmup covers both paths even for a single-task runner.
                         self.input_info = self.create_input_info(request)
                         self.inputs = self.run_input_encoder()

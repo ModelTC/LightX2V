@@ -94,6 +94,7 @@ class WanPreInfer:
 
     @torch.no_grad()
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
+        task = inputs.get("task", self.task)
         x = self.scheduler.latents
         t = self.scheduler.timestep_input
 
@@ -105,7 +106,7 @@ class WanPreInfer:
         else:
             context = inputs["text_encoder_output"]["context_null"]
 
-        if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"]:
+        if task in ["i2v", "flf2v", "animate", "s2v", "rs2v"]:
             if self.config.get("use_image_encoder", True):
                 clip_fea = inputs["image_encoder_output"]["clip_encoder_out"]
 
@@ -169,8 +170,8 @@ class WanPreInfer:
             del out
             torch.cuda.empty_cache()
 
-        if self.task in ["i2v", "flf2v", "animate"] and self.config.get("use_image_encoder", True):
-            if self.task == "flf2v":
+        if task in ["i2v", "flf2v", "animate"] and self.config.get("use_image_encoder", True):
+            if task == "flf2v":
                 _, n, d = clip_fea.shape
                 clip_fea = clip_fea.view(2 * n, d)
                 clip_fea = clip_fea + weights.emb_pos.tensor.squeeze()

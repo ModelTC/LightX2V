@@ -12,6 +12,12 @@ bash scripts/server/start_server.sh
 
 示例使用 Wan2.1 T2V、`configs/wan/wan_t2v.json`，监听 8000 端口。切换模型时，需要配套修改 `--model_cls`、`--task` 和 `--config_json`。`--max_queue_size` 默认为 10，统计等待中和执行中的任务总数。
 
+单任务服务在启动时绑定任务，JSON 和表单请求都不能包含 `task`。MiniMax-H3 等多任务服务则需要每次在原生请求中传入 `task`。运行中服务的 `/docs` 会展示对应的请求结构。
+
+接口按任务输出类型注册：H3、Wan 视频服务只开放视频生成接口，图像服务只开放图片生成接口。SR 模型可同时开放两类接口，并检查请求与输出类型是否匹配。当前服务尚无文本、网格、深度和重建输出的适配器。
+
+BAGEL、Flux2、HiDream-O1-Image、Z-Image、LingBot-Video、HunyuanImage3、LTX2/LTX2.5、Wan2.2 TI2V-5B 和 Cosmos3 Omni 支持请求级任务：启动时省略 `--task`，每次原生请求指定 `task`。HunyuanImage3 只开放图像任务；Cosmos3 在启动 JSON 中通过 `model_variant` 区分模型版本。
+
 ## 提交视频任务
 
 服务就绪后，在另一个终端提交请求。以下示例适用于默认 T2V 服务：
@@ -24,7 +30,7 @@ curl -X POST http://localhost:8000/v1/tasks/video/ \
 
 响应包含 `task_id`、`task_status: "pending"` 和 `save_result_path`。请保存任务 ID 用于轮询。I2V 需使用匹配的模型与配置启动服务，并提供 `image_path`，或通过 multipart 表单上传图片。本地输入路径指服务端文件系统中的路径。
 
-可选生成字段省略或传入 `null` 时继承启动默认值，同时仍需符合当前模型/任务支持的范围。关闭 CFG 时应省略 `negative_prompt`，空字符串也不应传入。JSON 中的 `size` 按 `[高, 宽]` 表示。
+可选生成字段省略或传入 `null` 时继承启动默认值，同时仍需符合当前模型/任务支持的范围。关闭 CFG 时，显式传入的 `negative_prompt`（包括空字符串）会被忽略，并记录警告。JSON 中的 `size` 按 `[高, 宽]` 表示。
 
 ## 查询、下载与取消
 

@@ -7,15 +7,15 @@ from typing import Any, Dict
 import torch
 from loguru import logger
 
-from lightx2v.models.runners.runner_factory import build_runner
 from lightx2v.utils.set_config import build_startup_config, init_parallel
 
-from ..distributed_utils import DistributedManager
 from .pipeline_image_encode import encode_pipeline_return_to_png_bytes
 
 
 class TorchrunInferenceWorker:
     def __init__(self):
+        from ..distributed_utils import DistributedManager
+
         self.rank = int(os.environ.get("LOCAL_RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.runner = None
@@ -26,6 +26,8 @@ class TorchrunInferenceWorker:
         self.current_lora_strength = None
 
     def init(self, args) -> bool:
+        from lightx2v.models.runners.runner_factory import build_runner
+
         try:
             if self.world_size > 1:
                 if not self.dist_manager.init_process_group():

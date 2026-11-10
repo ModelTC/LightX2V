@@ -3,6 +3,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
+from fastapi import HTTPException
 from loguru import logger
 
 from ..services import (
@@ -57,3 +58,12 @@ async def validate_url_async(url: str) -> bool:
     except Exception as e:
         logger.warning(f"URL validation failed for {url}: {str(e)}")
         return False
+
+
+async def validate_image_urls(message):
+    for field in ("image_path", "image_mask_path"):
+        value = message.get(field)
+        paths = value if isinstance(value, list) else [value]
+        for path in paths:
+            if path and path.startswith("http") and not await validate_url_async(path):
+                raise HTTPException(status_code=400, detail=f"Image URL is not accessible: {path}")

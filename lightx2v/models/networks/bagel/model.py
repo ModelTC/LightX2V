@@ -49,7 +49,7 @@ class BagelModel:
         self.text_temperature = config.get("text_temperature", 0.3)
         self.max_think_token_n = config.get("max_think_token_n", 1000)
         self.enable_taylorseer = False
-        self.enable_vision_context = config.get("enable_vision_context", config.get("task", "t2i") == "i2i")
+        self.enable_vision_context = config.get("enable_vision_context", True)
 
         self.cpu_offload = config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
@@ -670,7 +670,7 @@ class BagelModel:
         if len(image_shape) != 2:
             raise ValueError(f"BAGEL image_shapes must be a 2D image shape (H, W), got: {input_info.image_shapes}")
 
-        task = self.config.get("task", "t2i")
+        task = input_info.task
         input_lists = []
         if task == "i2i":
             input_image = getattr(input_info, "input_image", None)

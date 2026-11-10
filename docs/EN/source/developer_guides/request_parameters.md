@@ -12,20 +12,61 @@ Check the runner's `input_info_cls_by_task` first. If it has no entry for the ta
 resolution: Optional[int] = None
 ```
 
-Qwen-Image-2.1 uses `T2IInputInfo` for `t2i` and `I2IInputInfo` for `i2i`; both declare this field. A model-specific field can also live in a dedicated subclass selected through `input_info_cls_by_task`.
+Qwen-Image-2.1 uses `T2IInputInfo` for `t2i` and `MultiImageI2IInputInfo` for `i2i`; both declare this field. A model-specific field can also live in a dedicated subclass selected through `input_info_cls_by_task`.
 
 ## 2. Declare support
 
-Add the field to the intended tasks in the runner's `supported_request_fields_by_task`, keeping its existing fields. Qwen-Image-2.1 declares these in `lightx2v/models/runners/qwen_image_21/qwen_image_21_runner.py`:
+Declare an `Argument` for the intended tasks in the model's own `request_spec.py`, keeping its existing fields. Qwen-Image-2.1 declares these in `lightx2v/models/runners/qwen_image_21/request_spec.py`:
 
 ```python
-supported_request_fields_by_task = {
-    "t2i": IMAGE_REQUEST_FIELDS | {"resolution"},
-    "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "resolution"},
+from lightx2v.models.runners.request_args import IMAGE
+from lightx2v.utils.request_spec import Argument, TaskSpec
+
+SPECS = {
+    "qwen_image_21": QwenImage21Spec(
+        {
+            "t2i": TaskSpec(
+                dict(IMAGE, resolution=Argument(type=int, gt=0, help="Output resolution.")),
+                outputs=("image",),
+            ),
+            "i2i": TaskSpec(
+                dict(
+                    IMAGE,
+                    image_path=Argument(type=list[str], help="Input image paths."),
+                    resolution=Argument(type=int, gt=0, help="Output resolution."),
+                ),
+                outputs=("image",),
+            ),
+        }
+    ),
 }
 ```
 
-This permits the corresponding tasks to override `resolution`. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
+`TaskSpec` groups a task's arguments and output types. An `i2v` task declares `outputs=("video",)` even though it accepts an image. The server registers image/video routes only for compatible tasks. `ImageVideoTaskSpec` in `request_args.py` declares both outputs and resolves the actual type from the merged startup/request paths; mismatched requests fail with HTTP 422 before queueing. Other output types require a service adapter before they can be served.
+
+The CLI and HTTP API generate their input models, validation and documentation from this Spec. `BaseRunner` uses the same Spec to validate tasks and request fields. Define model-specific arguments locally without changing a global argument table or repeating declarations in the runner or server schema. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
+
+Declare multi-input fields as `list[T]`, for example `Argument(type=list[str])`. CLI values are space-separated; JSON requests and startup configs use arrays; Python calls use lists. A single item still uses a list. Runners consume lists directly without splitting comma-separated strings.
+
+| Parameter | CLI | JSON / Python |
+|---|---|---|
+| Reference images | `--image_path a.png b.png` | `"image_path": ["a.png", "b.png"]` |
+| Conditioning strengths | `--image_strength 1.0 0.8` | `"image_strength": [1.0, 0.8]` |
+| Frame indices | `--image_frame_indices 0 32` | `"image_frame_indices": [0, 32]` |
+
+Only multi-input fields use lists; single-image fields remain `str`. Nested structures such as `layout_bboxes` and `action_prompts` use JSON text in the CLI and native arrays or objects over HTTP. `layout_bboxes` also accepts a JSON file path.
+
+Form lists and objects use JSON text. Upload multiple files by repeating the same upload field; OpenAPI shows an array of files for list-valued inputs. Saved paths retain their list type and order.
+
+`Argument.type` describes the complete value, such as `int`, `list[int]`, or `str | dict`. The CLI turns flat lists into space-separated options and nested lists or objects into JSON inputs; HTTP accepts the corresponding JSON values. Use `gt`, `ge`, `lt` and `le` for shared numeric bounds. Set `cli=False` or `server=False` for inputs specific to an entry point; callbacks and in-memory tensors should disable both.
+
+Declare only public tasks in the Spec. For example, HunyuanImage3 generates text internally to enhance image prompts; its public tasks are `t2i`, `ti2i` and `i2i`.
+
+Use `MultiTaskSpec` when one loaded checkpoint supports multiple request tasks. The runner and scheduler must read `input_info.task` during inference. Load the components needed by those tasks at initialization and reset request state between runs; changing `config["task"]` per request would mix deployment settings with request state.
+
+Keep declared arguments in the Spec when a startup setting makes them unusable. Validate incompatible combinations in the runner's request preparation or inference path, with an error explaining the conflicting setting and how to resolve it. Do not conditionally remove these fields from the Spec.
+
+For a supported `negative_prompt` supplied while CFG is disabled, log a warning and ignore the request value instead of raising an error.
 
 ## 3. Use the parameter during inference
 
@@ -53,25 +94,15 @@ The runner preserves `0`, `False`, `""` and `[]` when merging parameters. Field 
 | Entry point | Where to change |
 |---|---|
 | Python | Usually no change: `generate(resolution=768)` forwards new fields through `**task_inputs`. |
-| CLI | Declare an option in `build_parser()` in `lightx2v/infer.py`. |
-| Native HTTP JSON / forms | Declare a field in `ImageTaskRequest` or `VideoTaskRequest` in `lightx2v/server/schema.py`. |
-| OpenAI image API | Declare a field in a request class in `lightx2v/server/api/openai_images.py`, and ensure `ImageTaskRequest` also accepts it. |
+| CLI | The `Argument` declared in step 2 generates the option automatically; no change to `infer.py` is needed. |
+| Native HTTP JSON / forms | Generated from the same Spec at service startup; no additional field declaration. |
+| OpenAI image API | Inference fields are generated from the Spec; protocol fields remain in the OpenAI adapter. |
 
-Use `default=None` for CLI options so omitted parameters retain startup values:
+CLI and HTTP request overrides default to `None`, leaving startup and `InputInfo` defaults in control. HTTP forwards only explicitly submitted fields through `model_fields_set`.
 
-```python
-parser.add_argument("--resolution", type=int, default=None)
-```
+The service builds request models from each output API's compatible tasks. The single/multi-task rule uses the entire service's task set, even if an API contains only one of those tasks. Multi-task requests select the model through the required `task` field. Single-task request models do not contain `task`; submitting it is rejected with HTTP 422, and the runner uses its startup task. `/docs` shows the selected model's fields rather than a global image/video parameter collection.
 
-Example field declaration in an HTTP request class:
-
-```python
-resolution: Optional[int] = Field(None, gt=0, description="Qwen-Image-2.1 resolution")
-```
-
-JSON and forms share this declaration for validation and documentation. Ordinary new fields need no additional `Form(...)` arguments or parsing whitelist. HTTP forwards submitted inference fields using `model_fields_set`, so request-class construction defaults do not automatically override startup configuration.
-
-Put fields shared by both OpenAI image endpoints in `OpenAIImageRequest`, and endpoint-specific fields in `OpenAIImageGenerationRequest` or `OpenAIImageEditRequest`. Ordinary inference fields with matching names pass through automatically. Format conversions, such as `size`, and protocol controls still require explicit adapter changes.
+OpenAI image endpoints reuse the Spec's inference fields while retaining protocol conventions such as required `prompt`, `n`, `response_format` and `size="WIDTHxHEIGHT"`. Format conversions and new protocol controls still belong in that adapter.
 
 Submit lists or objects as JSON text in forms, such as `size=[512,768]`. A new upload also needs an endpoint `File(...)` argument, file-saving code, and upload-field documentation in `form_request_openapi()`.
 

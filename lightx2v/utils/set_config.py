@@ -2,16 +2,10 @@ import json
 import os
 from dataclasses import fields
 
-import torch
-import torch.distributed as dist
 from loguru import logger
-from torch.distributed.tensor.device_mesh import init_device_mesh
 
-from lightx2v.utils.async_vae import normalize_async_vae_config
-from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.lockable_dict import LockableDict
-from lightx2v.utils.utils import find_torch_model_path, is_main_process
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v.utils.model_paths import find_torch_model_path
 
 EDENLIVE_COMPONENT_FILES = {
     "wan21_edenlive": {
@@ -65,7 +59,7 @@ def get_default_config():
     )
 
 
-def build_startup_config(config_data):
+def build_startup_config(config_data, *, configure_runtime=True):
     """Assemble startup settings from deployment and model configs."""
     deployment_config = dict(config_data)
     if deployment_config.get("config_json") is not None:
@@ -84,12 +78,17 @@ def build_startup_config(config_data):
     config.update(model_config)
     config.update(deployment_config)
     normalize_startup_config(config, model_config)
-    configure_nccl_graph(config)
+    if configure_runtime:
+        configure_nccl_graph(config)
     return config
 
 
 def configure_nccl_graph(config):
     """Configure Ulysses graph communication before creating process groups."""
+    import torch
+
+    from lightx2v_platform.base.global_var import AI_DEVICE
+
     parallel = config.get("parallel") or {}
     if AI_DEVICE != "cuda" or not config.get("use_cuda_graph", False) or parallel.get("seq_p_size", 1) <= 1 or parallel.get("seq_p_attn_type", "ulysses") != "ulysses":
         return
@@ -145,7 +144,8 @@ def load_model_config(deployment_config):
             except (OSError, ValueError, TypeError) as exc:
                 raise ValueError(f"Failed to read LTX-2.5 transformer metadata from {transformer_path}: {exc}") from exc
 
-    assert os.path.exists(model_path), f"Model path not found: {model_path}"
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model path not found: {model_path}")
 
     if model_cls == "matrix_game4":
         with open(os.path.join(model_path, "release-config.json"), "r") as f:
@@ -336,12 +336,16 @@ def load_model_config(deployment_config):
 
 def normalize_startup_config(config, model_config):
     """Normalize merged startup settings and validate inference constraints."""
-    normalize_async_vae_config(config)
+    config["async_vae_decode"] = bool(config.get("async_vae_decode", False))
     if config["model_cls"] == "dreamzero" and "out_dim" in config:
         config["num_channels_latents"] = config["out_dim"]
     if config["model_cls"] in {"cosmos3", "lingbot_video"}:
         config.setdefault("num_frames", 1)
         config.setdefault("fps", config.get("base_fps", 24) if config["model_cls"] == "cosmos3" else 24)
+    if config["model_cls"] == "cosmos3" and config.get("model_variant") not in ("omni", "t2i", "i2v", "policy"):
+        raise ValueError("Cosmos3 requires model_variant='omni', 't2i', 'i2v', or 'policy' in the startup config.")
+    if config["model_cls"] == "wan2.2":
+        config.setdefault("use_image_encoder", False)
     if config["model_cls"] == "lingbot_video":
         config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
         config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
@@ -394,10 +398,10 @@ def normalize_startup_config(config, model_config):
         temporal_stride = int(config["vae_stride"][0])
         if (config["num_frames"] - 1) % temporal_stride != 0:
             original_length = config["num_frames"]
-            config["num_frames"] = align_num_frames(original_length, temporal_stride)
+            config["num_frames"] = original_length // temporal_stride * temporal_stride + 1
             logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {config['num_frames']} instead of {original_length}.")
 
-    if AI_DEVICE == "mps":
+    if os.getenv("PLATFORM", "cuda") == "mps":
         assert not any(config.get(key) for key in ("lora_configs", "lora_path", "lora_dynamic_apply", "lora_merge_force_fp32")), (
             "MPS inference does not support LoRA configs, dynamic LoRA, or load-time LoRA merging. "
             "Merge LoRA into the model weights offline before inference, remove the LoRA settings, and load the merged model checkpoint."
@@ -422,6 +426,8 @@ def _validate_pipefusion_config(config):
     pipeline driver only implements that slice; anything else must fail loudly
     at config time rather than run incorrectly (e.g. dropping CFG) or crash.
     """
+    from lightx2v_platform.base.global_var import AI_DEVICE
+
     model_cls = config.get("model_cls")
     is_klein = model_cls == "flux2_klein" or (model_cls == "flux2" and config.get("model_variant") == "klein")
     if not is_klein:
@@ -430,7 +436,7 @@ def _validate_pipefusion_config(config):
             "(model_cls='flux2_klein', or model_cls='flux2' with model_variant='klein'); "
             f"got model_cls={model_cls!r}, model_variant={config.get('model_variant')!r}."
         )
-    if config.get("task", "t2i") != "t2i":
+    if config.get("task") not in (None, "t2i"):
         raise ValueError(f"PipeFusion currently supports only the 't2i' task, got {config.get('task', 't2i')!r}.")
     if AI_DEVICE != "cuda":
         raise ValueError(f"PipeFusion requires CUDA, but AI_DEVICE={AI_DEVICE!r}.")
@@ -459,6 +465,12 @@ def _validate_pipefusion_config(config):
 
 def init_parallel(config):
     """Create the model's parallel mesh and warm up its communication."""
+    import torch
+    import torch.distributed as dist
+    from torch.distributed.tensor.device_mesh import init_device_mesh
+
+    from lightx2v_platform.base.global_var import AI_DEVICE
+
     parallel = config["parallel"]
     if not parallel or config.get("model_cls") == "swiftvr":
         # SwiftVR owns its chunk group and validates its parallel settings in the runner.
@@ -519,6 +531,8 @@ def init_parallel(config):
 
 
 def print_config(config, title="config"):
+    from lightx2v.utils.utils import is_main_process
+
     if is_main_process():
         logger.info(f"{title}:\n{json.dumps(config, ensure_ascii=False, indent=4, default=str)}")
 

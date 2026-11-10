@@ -3,7 +3,6 @@ import os
 
 import numpy as np
 import torch
-from loguru import logger
 
 try:
     from diffusers.pipelines.flux2.pipeline_flux2 import compute_empirical_mu
@@ -78,11 +77,9 @@ class Flux2Scheduler(BaseScheduler):
         init_scheduler_fls(self)
 
     def prepare(self, input_info):
+        self.clear()
         self.input_info = input_info
-        if self.generator is None:
-            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
-        else:
-            logger.info(f"Generator is not None, using existing generator for latents")
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
 
         self.latent_image_ids = input_info.latent_image_ids
         self.txt_ids = input_info.txt_ids
@@ -206,9 +203,6 @@ class Flux2Scheduler(BaseScheduler):
     def prepare_i2i(self, input_info, input_image, vae, inpaint_mask=None):
         self.vae = vae
         self.prepare(input_info)
-        self.input_latents = None
-        self.input_image_latents = None
-        self.input_image_ids = None
         self.inpaint_mask = inpaint_mask.to(AI_DEVICE, dtype=self.dtype) if inpaint_mask is not None else None
 
         image_latents = []

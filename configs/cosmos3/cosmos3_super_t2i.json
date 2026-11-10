@@ -1,4 +1,5 @@
 {
+    "model_variant": "t2i",
     "infer_steps": 50,
     "sample_guide_scale": 4.0,
     "sample_shift": 3.0,

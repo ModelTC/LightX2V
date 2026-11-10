@@ -12,7 +12,7 @@ if __name__ == "__main__":
     message = {
         "task": "i2i",
         "prompt": "Keep the main subject unchanged and replace the background with a sunlit garden.",
-        "image_path": base64.b64encode(image_path.read_bytes()).decode("utf-8"),
+        "image_path": [base64.b64encode(image_path.read_bytes()).decode("utf-8")],
         "seed": 42,
         "resolution": 1024,
         "size": [1024, 1024],  # [height, width]

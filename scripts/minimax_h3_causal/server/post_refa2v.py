@@ -17,7 +17,7 @@ if __name__ == "__main__":
         "task": "refa2v",
         "prompt": "The man in the reference image speaks naturally into the microphone, with lip movements synchronized to the audio, subtle facial expressions and natural hand gestures. The camera remains stationary.",
         # Encode client-local media so the server does not need these paths.
-        "image_path": file_to_base64(lightx2v_path / "assets/inputs/audio/seko_input.png"),
+        "image_path": [file_to_base64(lightx2v_path / "assets/inputs/audio/seko_input.png")],
         "audio_path": file_to_base64(lightx2v_path / "assets/inputs/audio/seko_input.mp3"),
         "seed": 0,
         "num_frames": 124,

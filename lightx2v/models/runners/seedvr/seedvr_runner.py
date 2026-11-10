@@ -23,7 +23,6 @@ from loguru import logger
 from torch import Tensor
 
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.seedvr.scheduler import SeedVRScheduler
 from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
 from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstruction
@@ -144,9 +143,6 @@ class SeedVRRunner(DefaultRunner):
     """Runner for SeedVR video super-resolution model."""
 
     input_info_cls_by_task = {"sr": SeedVRInputInfo}
-    supported_request_fields_by_task = {
-        "sr": COMMON_REQUEST_FIELDS | {"image_path", "match_target_size", "size", "sr_ratio", "video_path"},
-    }
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
@@ -157,12 +153,6 @@ class SeedVRRunner(DefaultRunner):
         if not isinstance(input_info.match_target_size, bool):
             raise ValueError("SeedVR match_target_size must be a boolean")
         return input_info
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("seq_parallel", False):
-            supported_request_fields -= {"image_path"}
-        return supported_request_fields
 
     def __init__(self, config):
         super().__init__(config)
@@ -787,7 +777,7 @@ class SeedVRRunner(DefaultRunner):
 
         video_path = self.input_info.video_path
         if self._seedvr_sp_size > 1 and not video_path:
-            raise ValueError("SeedVR VAE sequence parallel currently supports video SR input only")
+            raise ValueError("SeedVR sequence parallelism requires video_path; use a video input or set parallel.seq_p_size=1 for image SR.")
         seg_len, overlap = self._get_sr_segment_params()
         if not video_path or seg_len is None:
             self.inputs = self.run_input_encoder()

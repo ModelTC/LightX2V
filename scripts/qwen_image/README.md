@@ -44,7 +44,7 @@ Set prompts, input images, seed, and output path in the command. Select a [confi
 Image editing accepts multiple inputs, corresponding to Image 1, Image 2, and so on in the prompt:
 
 ```bash
---image_path "/path/to/1.png,/path/to/2.png,/path/to/3.png"
+--image_path "/path/to/1.png" "/path/to/2.png" "/path/to/3.png"
 ```
 
 ## Server and requests

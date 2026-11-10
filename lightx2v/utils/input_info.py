@@ -109,7 +109,7 @@ class Flf2vInputInfo(InputInfo):
 class VaceInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str = ""
-    ref_image_paths: Optional[str] = None
+    ref_image_paths: list[str] = field(default_factory=list)
     video_path: Optional[str] = None
     mask_path: Optional[str] = None
     # shape related
@@ -144,6 +144,11 @@ class S2VInputInfo(InputInfo):
     overlap_latent: Optional[torch.Tensor] = None
     # input preprocess audio
     audio_clip: Optional[torch.Tensor] = None
+
+
+@dataclass
+class InfiniteTalkInputInfo(S2VInputInfo):
+    audio_path: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -184,7 +189,7 @@ class AnimateInputInfo(InputInfo):
     image_path: str = ""
     pose_video_path: str = ""
     face_video_path: str = ""
-    ref_image_paths: str = ""
+    ref_image_paths: list[str] = field(default_factory=list)
     video_path: str = ""
     background_video_path: str = ""
     mask_path: str = ""
@@ -220,25 +225,6 @@ class NeoppInputInfo(InputInfo):
 
 
 @dataclass
-class T2TInputInfo(InputInfo):
-    prompt: str = ""
-    max_new_tokens: Optional[int] = None
-    text_do_sample: Optional[bool] = None
-    text_temperature: Optional[float] = None
-    text_top_k: Optional[int] = None
-    text_top_p: Optional[float] = None
-    bot_task: Optional[str] = None
-    system_prompt: Optional[str] = None
-    stream_callback: Any = None
-
-
-@dataclass
-class TI2TInputInfo(T2TInputInfo):
-    image_path: str = ""
-    align_image_size: Optional[bool] = None
-
-
-@dataclass
 class I2IInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str | None = ""
@@ -260,19 +246,24 @@ class I2IInputInfo(InputInfo):
 
 
 @dataclass
-class Flux2I2IInputInfo(I2IInputInfo):
+class MultiImageI2IInputInfo(I2IInputInfo):
+    image_path: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Flux2I2IInputInfo(MultiImageI2IInputInfo):
     inpaint_blur_size: Optional[int] = None
     inpaint_blur_sigma: Optional[float] = None
 
 
 @dataclass
-class HidreamI2IInputInfo(I2IInputInfo):
+class HidreamI2IInputInfo(MultiImageI2IInputInfo):
     keep_aspect_ratio: bool = False
-    layout_bboxes: str = ""
+    layout_bboxes: str | list | dict | None = None
 
 
 @dataclass
-class TI2IInputInfo(I2IInputInfo):
+class TI2IInputInfo(MultiImageI2IInputInfo):
     align_image_size: Optional[bool] = None
 
 
@@ -296,8 +287,6 @@ class I2AVInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str = ""
     image_path: str = ""
-    image_strength: float = 1.0
-    image_frame_indices: Optional[list[int]] = None
     # shape related
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
@@ -309,6 +298,13 @@ class I2AVInputInfo(InputInfo):
     draft_steps: Optional[int] = None
     resample_source_video: Optional[str] = None
     resample_start_step: int | None = None
+
+
+@dataclass
+class LTX2I2AVInputInfo(I2AVInputInfo):
+    image_path: list[str] = field(default_factory=list)
+    image_strength: list[float] = field(default_factory=lambda: [1.0])
+    image_frame_indices: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -324,16 +320,14 @@ class FL2AVInputInfo(T2AVInputInfo):
 
 @dataclass
 class Ref2AVInputInfo(T2AVInputInfo):
-    # Reuse the repository-wide media CLI. Comma-separated strings and Python
-    # sequences are normalized by MiniMaxH3Runner.
-    image_path: Any = ""
-    video_path: Any = ""
-    audio_path: Any = ""
+    image_path: list[str] = field(default_factory=list)
+    video_path: list[str] = field(default_factory=list)
+    audio_path: list[str] = field(default_factory=list)
 
 
 @dataclass
 class RefA2VInputInfo(T2AVInputInfo):
-    image_path: Any = ""
+    image_path: list[str] = field(default_factory=list)
     audio_path: str = ""
     action_prompts: dict[str, Any] | list[Any] | None = None
 
@@ -364,6 +358,11 @@ class I2VAInputInfo(InputInfo):
 
 
 @dataclass
+class MultiViewI2VAInputInfo(I2VAInputInfo):
+    image_path: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Cosmos3InputInfo(I2VAInputInfo):
     image_shapes: list = field(default_factory=list)
     txt_seq_lens: list = field(default_factory=list)
@@ -380,7 +379,7 @@ class Cosmos3InputInfo(I2VAInputInfo):
 
 
 @dataclass
-class V2AVInputInfo(I2AVInputInfo):
+class V2AVInputInfo(LTX2I2AVInputInfo):
     """LTX-2.3 IC-LoRA video-to-audio-video.
 
     Drives both motion-transfer (Union / Pose / Motion-Track-Control) and
@@ -402,7 +401,7 @@ class V2AVInputInfo(I2AVInputInfo):
 
 
 @dataclass
-class LTX2S2VInputInfo(I2AVInputInfo):
+class LTX2S2VInputInfo(LTX2I2AVInputInfo):
     """LTX-2 audio-conditioned video (reference audio + optional reference images)."""
 
     audio_path: str = ""
@@ -469,9 +468,7 @@ INPUT_INFO_TYPES = {
     "s2v": S2VInputInfo,
     "rs2v": RS2VInputInfo,
     "animate": AnimateInputInfo,
-    "t2t": T2TInputInfo,
     "t2i": T2IInputInfo,
-    "ti2t": TI2TInputInfo,
     "ti2i": TI2IInputInfo,
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,

@@ -122,7 +122,7 @@ bash scripts/minimax_h3_roll/run_minimax_h3_ref2av_resample.sh
 
 The default outputs are `save_results/minimax_h3_roll_ref2av/draft.mp4` and `resample.mp4`. Both stages pass `--model-variant ref2av --task ref2av` and use the same `--image_path`, prompt, seed `42`, and frame count `124`. The draft uses `--size 480 864 --draft_steps 3`; regeneration uses `--size 768 1344 --resample_start_step 1` and runs the last 7 steps of the original 8-step schedule. Remove `--draft_steps 3` from the draft script to generate a full 8-step draft. For roughly 15 seconds, change `--num_frames` to `362` in both scripts. Each script loads the model separately.
 
-To use different references, update `--image_path` and the prompt in both scripts. You can also add `--video_path` / `--audio_path`, with comma-separated paths for multiple files of the same type; audio references require an image or video reference as well. Retain the original references during regeneration and pass the selected draft with audio as `--resample_source_video`. The `--video_path` argument supplies a reference video and does not replace that parameter.
+To use different references, update `--image_path` and the prompt in both scripts. You can also add `--video_path` / `--audio_path`, with space-separated paths for multiple files of the same type; audio references require an image or video reference as well. Retain the original references during regeneration and pass the selected draft with audio as `--resample_source_video`. The `--video_path` argument supplies a reference video and does not replace that parameter.
 
 ## Parameters and workflow
 

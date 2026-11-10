@@ -16,7 +16,7 @@ server/
 ├── main.py                  # Server startup
 ├── config.py                # Configuration
 ├── task_manager.py          # Task management
-├── schema.py                # Data models (VideoTaskRequest, ImageTaskRequest)
+├── schema.py                # Service envelopes and Spec-generated request models
 ├── api/
 │   ├── __init__.py
 │   ├── router.py            # Main router aggregation
@@ -337,55 +337,27 @@ stateDiagram-v2
 
 ## Request Models
 
-### VideoTaskRequest
+Each model declares `TaskSpec(arguments, outputs=(...))` in its own `request_spec.py`. Image outputs register image APIs; video and audio-video outputs register video APIs. SR tasks can support both, with request inputs checked against the chosen API before queueing. A service whose selected tasks have no image/video output adapter fails startup with an explicit error.
 
-```python
-class VideoTaskRequest(BaseTaskRequest):
-    num_frames: Optional[int] = Field(
-        None,
-        description="Number of output frames; defaults to the startup config",
-    )
-    reuse_prefix_segments: int = Field(0, ge=0)
-    video_path: str = ""
-    sr_ratio: float = Field(2.0, gt=0)
-    audio_path: str = ""
-    video_duration: int = 5
-    resize_mode: Optional[str] = None
-    fixed_area: Optional[str] = None
-    talk_objects: Optional[list[TalkObject]] = None
-    ref_image_paths: list[str] = Field(default_factory=list)
-```
+Model inference fields are declared once in each model's `request_spec.py` Spec. At startup, the server uses these definitions to generate Pydantic request models and OpenAPI documentation for its supported tasks. The CLI uses the same types, descriptions, choices and numeric constraints.
 
-### ImageTaskRequest
+`BaseTaskRequest`, `ImageTaskRequest` and `VideoTaskRequest` contain service fields such as task IDs, uploads, LoRA controls and reuse settings. They do not maintain a second collection of model input fields. Python-only callbacks and tensor-return controls are excluded through `server=False`.
 
-```python
-class ImageTaskRequest(BaseTaskRequest):
-    aspect_ratio: str = "16:9"
-```
-
-### BaseTaskRequest (Common Fields)
-
-```python
-class BaseTaskRequest(BaseModel):
-    task_id: str  # auto-generated
-    prompt: str = ""
-    negative_prompt: Optional[str] = ""
-    image_path: str = ""  # URL, base64, or local path
-    save_result_path: Optional[str] = None  # omitted/null: do not save a file
-    seed: Optional[int]  # non-negative; omitted/null: 42
-```
+To add an inference parameter, declare an `Argument` in the model's Spec, add it to the model's `InputInfo` if needed, and implement its use in the runner. JSON and form endpoints pick it up automatically; the OpenAI image adapter also reuses these fields while keeping its own protocol conventions.
 
 To download an asynchronous task's file result, provide `save_result_path` in the request. Omitting it or passing null skips file saving. Synchronous image APIs return the image from memory.
 
-Omitted or null `negative_prompt` defaults to `""`. Explicit strings, including `""`, require model support. Empty text can still use model templates and does not disable CFG.
+Omitted or null `negative_prompt` uses startup/default values. The field must be supported by the selected model/task. When CFG is disabled, explicitly supplied values, including `""`, are ignored with a warning. With CFG enabled, empty text can still use model templates and does not disable CFG.
 
-Single-task services use the task selected by `--task` at startup, so POST requests can omit `task`. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively.
+Single-task services use their startup task and do not expose a `task` request field; including it in JSON or form data is rejected with HTTP 422. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively, and supply the selector internally only for multi-task services.
+
+Multi-task services include BAGEL, Flux2, HiDream-O1-Image, Z-Image, LingBot-Video, HunyuanImage3 (image tasks only), LTX2/LTX2.5, Wan2.2 TI2V-5B and Cosmos3 Omni. They can start without `--task`; CLI inference still selects one task with `--task`. LTX2's specialized `ltx2_s2v` and `v2av` deployments retain their startup task and dedicated configs. Cosmos3 uses an explicit `model_variant` in the startup config; see [Cosmos3 examples](../../scripts/cosmos3/README.md).
 
 Native image and video request schemas accept the inference fields supported by their runners, including animation conditions, action/state paths, LTX reference controls, and image-edit options. The runner validates whether a field is supported by the selected model, task, and startup configuration. Unknown JSON or form fields are rejected with HTTP 422; startup settings such as `infer_steps` and `warmup` belong in the startup configuration.
 
 Only `seko_talk` tasks `s2v` and `rs2v` support `resize_mode` and `fixed_area` requests for image and mask resizing. Omitted or null values use the startup config. A `size` request for these tasks requires the configured or requested `resize_mode` to be `fixed_shape`.
 
-The `/form` endpoints accept the same named request fields as the JSON endpoints, alongside their existing file uploads. Encode structured values such as `size`, `image_frame_indices`, `image_strength` lists, `ref_image_paths`, `talk_objects`, and WorldPlay `pose` objects as JSON strings. For example, use `size='[480,832]'`. Text fields, including prompts and `layout_bboxes`, retain their submitted text.
+The `/form` endpoints accept the same named request fields as the JSON endpoints, alongside their existing file uploads. Encode structured values such as `size`, `image_frame_indices`, `image_strength` lists, `ref_image_paths`, `talk_objects`, and WorldPlay `pose` objects as JSON strings. For example, use `size='[480,832]'`. Prompts retain their submitted text. `layout_bboxes` accepts JSON arrays/objects or a JSON file path.
 
 Video, pose-video, mask-video, action, and state paths refer to files or directories on the server. Image and audio inputs retain their existing URL, Base64, and local-path handling. Python-only inputs such as callbacks and in-memory policy tensors are not exposed as JSON fields; synchronous image APIs select tensor output internally.
 
@@ -450,7 +422,7 @@ torchrun --nproc_per_node=2 -m lightx2v.server \
 ### 4. Separate Video/Image Endpoints
 
 - **Dedicated endpoints** for video and image generation
-- **Type-specific request models** (VideoTaskRequest, ImageTaskRequest)
+- **Model-specific request schemas** generated from Specs
 - **Automatic service routing** based on task type
 - **Backward compatible** with legacy `/v1/tasks` endpoint
 
@@ -493,3 +465,7 @@ The server uses `loguru` for structured logging. Logs include:
 ## License
 
 See the main project LICENSE file for licensing information.
+
+## Multi-input parameters
+
+List-valued fields use JSON arrays, including for one input: `"image_path": ["a.png", "b.png"]`. Single-image fields still use strings. Check the running service's OpenAPI schema for each model/task's types. Forms submit lists and objects as JSON text. For list-valued upload fields, repeat the same file field (for example `image_file`); uploaded paths stay ordered lists. The OpenAI image edit adapter uses the selected model's single-image or multi-image definition.

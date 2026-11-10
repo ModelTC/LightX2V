@@ -52,7 +52,7 @@ seed = 42
 prompt = "视频中的人在做动作"
 pose_video_path = "/path/to/LightX2V/save_results/animate/process_results/src_pose.mp4"
 face_video_path = "/path/to/LightX2V/save_results/animate/process_results/src_face.mp4"
-ref_image_paths = "/path/to/LightX2V/save_results/animate/process_results/src_ref.png"
+ref_image_paths = ["/path/to/LightX2V/save_results/animate/process_results/src_ref.png"]
 save_result_path = "/path/to/save_results/output.mp4"
 
 pipe.generate(

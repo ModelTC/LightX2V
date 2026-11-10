@@ -9,7 +9,6 @@ from lightx2v.models.networks.bagel.model import BagelModel
 from lightx2v.models.runners.bagel.i2i_utils import load_bagel_i2i_input_image, resize_pil_to_shape, resolve_bagel_i2i_image_shape
 from lightx2v.models.runners.bagel.t2i_utils import get_bagel_latent_downsample, resolve_bagel_t2i_image_shape
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.bagel.scheduler import BagelScheduler
 from lightx2v.models.video_encoders.hf.bagel.vae import BagelVae
 from lightx2v.server.metrics import monitor_cli
@@ -27,13 +26,14 @@ def _has_save_path(input_info):
 
 @RUNNER_REGISTER("bagel")
 class BagelRunner(DefaultRunner):
-    supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "size"},
-        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt", "size"},
-    }
-
     def __init__(self, config):
         super().__init__(config)
+
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if input_info.task == "i2i" and not self.config.get("enable_vision_context", True):
+            raise ValueError("BAGEL i2i requires enable_vision_context=true.")
+        return input_info
 
     def _get_spatial_stride(self):
         vae_config = self.config.get("vae_config", {})
@@ -91,7 +91,7 @@ class BagelRunner(DefaultRunner):
         return image_shape
 
     def set_image_shapes(self):
-        if self.config["task"] == "i2i":
+        if self.input_info.task == "i2i":
             return self.set_i2i_image_shapes()
         return self.set_t2i_image_shapes()
 
@@ -190,7 +190,7 @@ class BagelRunner(DefaultRunner):
         self._refresh_scheduler_from_config()
         image_shape = self.set_image_shapes()
 
-        vae_encoder = self.vae_decoder if self.config["task"] == "i2i" else None
+        vae_encoder = self.vae_decoder if self.input_info.task == "i2i" else None
         self.inputs, self.scheduler = self.model.prepare_inputs(self.input_info, self.scheduler, vae_model=vae_encoder)
 
         latents, generator = self.run_dit()

@@ -18,14 +18,13 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.infinitetalk.audio_encoder import InfiniteTalkAudioEncoder
 from lightx2v.models.networks.wan.infinitetalk_model import WanInfiniteTalkModel
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
-from lightx2v.utils.input_info import S2VInputInfo
+from lightx2v.utils.input_info import InfiniteTalkInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, save_to_video, wan_vae_to_comfy
@@ -107,20 +106,10 @@ def _is_video(path):
 
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
+    input_info_cls_by_task = {"s2v": InfiniteTalkInputInfo}
+
     _WARMUP_RESOLUTIONS = ((480, 480), (544, 960))
     _WARMUP_STEP_COUNT = 2
-
-    supported_request_fields_by_task = {
-        "s2v": COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "audio_path",
-            "image_path",
-            "num_frames",
-            "video_duration",
-            "video_path",
-        },
-    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -191,7 +180,7 @@ class InfiniteTalkRunner(WanRunner):
         self._maybe_freeze_gc()
 
     def _prepare_warmup_inputs(self, height, width, num_frames):
-        self.input_info = S2VInputInfo(
+        self.input_info = InfiniteTalkInputInfo(
             task="s2v",
             seed=0,
             prompt="Make the character speak naturally according to the audio." if (height, width) == self._WARMUP_RESOLUTIONS[0] else "A person speaks calmly with a relaxed expression.",
@@ -318,12 +307,11 @@ class InfiniteTalkRunner(WanRunner):
             if cond_audio is not None:
                 cond_audio = dict(cond_audio)
             else:
-                audio_path = getattr(self.input_info, "audio_path", "") or self.config.get("audio_path", "")
-                if audio_path and os.path.isdir(audio_path):
-                    cond_audio, mask_files, bbox = self._load_directory_audio_input(audio_path)
+                audio_path = self.input_info.audio_path
+                if len(audio_path) == 1 and os.path.isdir(audio_path[0]):
+                    cond_audio, mask_files, bbox = self._load_directory_audio_input(audio_path[0])
                 else:
-                    audio_paths = [item.strip() for item in str(audio_path).split(",") if item.strip()]
-                    cond_audio = {f"person{idx + 1}": path for idx, path in enumerate(audio_paths)}
+                    cond_audio = {f"person{idx + 1}": path for idx, path in enumerate(audio_path)}
 
             cond_video = self.input_info.video_path or self.input_info.image_path or self.config.get("cond_video", "") or self.config.get("image_path", "")
             data = {
@@ -1295,14 +1283,10 @@ class InfiniteTalkRunner(WanRunner):
         cond_audio = input_data.get("cond_audio", {}) if isinstance(input_data, dict) else {}
         person_count = len(cond_audio) if isinstance(cond_audio, dict) else 0
         audio_input = self.input_info.audio_path
-        if audio_input is None:
-            audio_input = self.config.get("audio_path", "")
         if person_count <= 1 and audio_input:
-            audio_input = str(audio_input)
-            if not os.path.isdir(audio_input):
-                original_audio = audio_input.split(",")[0].strip()
-                if original_audio and os.path.isfile(original_audio):
-                    return original_audio
+            original_audio = audio_input[0]
+            if os.path.isfile(original_audio):
+                return original_audio
         return self.video_audio_path
 
     @staticmethod

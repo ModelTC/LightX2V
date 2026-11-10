@@ -107,7 +107,7 @@ The process count must match the selected parallel configuration. See [parallel 
 
 ## Model examples
 
-Edit the selected Python file's model/input/output paths before running it. Keep the model, checkpoint, sampling parameters and attention implementation together when comparing results with a Shell launcher. For CFG-disabled requests, omit `negative_prompt`, including the empty string.
+Edit the selected Python file's model/input/output paths before running it. Keep the model, checkpoint, sampling parameters and attention implementation together when comparing results with a Shell launcher. For CFG-disabled requests, explicitly supplied `negative_prompt` values, including the empty string, are ignored with a warning.
 
 | Model or task | Entry |
 | --- | --- |
@@ -125,3 +125,5 @@ Edit the selected Python file's model/input/output paths before running it. Keep
 | WorldPlay | [scripts/worldplay](https://github.com/ModelTC/LightX2V/blob/main/scripts/worldplay/README.md) |
 
 For robotics inference and evaluation, see [RealtimeWAM](https://github.com/ModelTC/LightX2V/blob/main/scripts/realtimewam/README.md). Model launch instructions belong in `scripts/<model>/README*`; shared API and deployment instructions belong in this documentation.
+
+Multi-input fields take lists even for one input, for example `image_path=["a.png"]`. Use `image_path=["a.png", "b.png"]` only for models that support multiple images; single-image models still take a string. Strengths and frame indices also use lists, for example `image_strength=[1.0, 0.8]` and `image_frame_indices=[0, 32]`.

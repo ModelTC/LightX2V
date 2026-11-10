@@ -8,7 +8,6 @@ from transformers import AutoProcessor
 
 from lightx2v.models.networks.hidream_o1_image.model import HidreamO1ImageModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.hidream_o1_image.scheduler import HidreamO1ImageScheduler
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
@@ -38,18 +37,6 @@ class HidreamO1ImageRunner(DefaultRunner):
     """LightX2V runner for HiDream-O1-Image t2i / i2i."""
 
     input_info_cls_by_task = {"i2i": HidreamI2IInputInfo}
-    supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | {"prompt", "size"},
-        "i2i": COMMON_REQUEST_FIELDS
-        | {
-            "i2i_denoise_strength",
-            "image_path",
-            "keep_aspect_ratio",
-            "layout_bboxes",
-            "prompt",
-            "size",
-        },
-    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -69,12 +56,15 @@ class HidreamO1ImageRunner(DefaultRunner):
         self.scheduler = HidreamO1ImageScheduler(self.config, torch.bfloat16)
 
     def init_modules(self):
-        task = self.config["task"]
-        logger.info(f"Initializing HiDream-O1-Image {task} runner...")
+        logger.info("Initializing HiDream-O1-Image runner...")
         self.load_model()
-        self.run_input_encoder = self._run_input_encoder_local_t2i if task == "t2i" else self._run_input_encoder_local_i2i
         self.run_dit = self._run_dit_local
         self.config.lock()
+
+    def run_input_encoder(self):
+        if self.input_info.task == "i2i":
+            return self._run_input_encoder_local_i2i()
+        return self._run_input_encoder_local_t2i()
 
     @ProfilingContext4DebugL2("Load HiDream-O1-Image model")
     def load_model(self):
@@ -168,7 +158,7 @@ class HidreamO1ImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run HiDream i2i input encoder")
     def _run_input_encoder_local_i2i(self):
-        ref_image_paths = [path.strip() for path in self.input_info.image_path.split(",") if path.strip()]
+        ref_image_paths = self.input_info.image_path
         if not ref_image_paths:
             raise ValueError("HiDream i2i requires --image_path with one or more reference image paths.")
 
@@ -259,6 +249,7 @@ class HidreamO1ImageRunner(DefaultRunner):
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
         self.inputs = self.run_input_encoder()
+        self.inputs["task"] = input_info.task
         image = self.run_main()
 
         save_result_path = self.inputs.get("save_result_path")

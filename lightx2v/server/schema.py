@@ -1,6 +1,9 @@
-from typing import Any, Optional
+from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+
+from lightx2v.models.runners.registry import get_model_spec
+from lightx2v.utils.request_spec import OutputType, create_request_model
 
 from ..utils.generate_task_id import generate_task_id
 
@@ -47,17 +50,9 @@ class BaseTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", json_schema_extra=lambda schema: hide_request_defaults(schema))
 
     task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
-    task: Optional[str] = Field(None, description="Required for multi-task runners; single-task services use their only supported task")
-    prompt: str = Field("", description="Generation prompt")
-    negative_prompt: Optional[str] = Field("", description="Negative prompt")
-    image_path: str = Field("", description="Base64 encoded image or URL")
-    last_frame_path: str = Field("", description="Last frame image path (base64, or local path)")
-    image_mask_path: str = Field("", description="Mask image path (supports URL, base64, or local path)")
-    save_result_path: Optional[str] = Field(None, description="Output path; omitted or null skips file saving")
+    image_mask_path: str = Field("", description="Mask image path (URL, base64, or local path)")
     presigned_url: str = Field("", description="Optional presigned URL for uploading final sync result")
-    seed: Optional[int] = Field(None, description="Non-negative seed; omitted or null defaults to 42")
     reuse: bool = Field(False, description="Reuse the previous successful request")
-    size: list[int] = Field([], description="Output size in pixels: [height, width]")
     lora_name: Optional[str] = Field(None, description="LoRA filename to load from lora_dir, None to disable LoRA")
     lora_strength: float = Field(1.0, description="LoRA strength")
 
@@ -66,61 +61,51 @@ class BaseTaskRequest(BaseModel):
 
 
 class VideoTaskRequest(BaseTaskRequest):
-    action_prompts: dict[str, Any] | list[Any] | None = Field(None, description="MiniMax-H3 causal action cues: seconds -> actions, or a list of timed actions")
-    num_frames: Optional[int] = Field(
-        None,
-        description="Number of output frames; defaults to the startup config",
-    )
-    draft_steps: int | None = Field(None, gt=0, strict=True, description="MiniMax-H3 draft prefix length; omitted uses the configured full schedule")
-    resample_source_video: str | None = Field(None, description="Server-local MiniMax-H3 draft MP4 with audio; re-encoded at the requested size")
-    resample_start_step: int | None = Field(None, ge=0, strict=True, description="MiniMax-H3 zero-based regeneration start index; omitted uses the startup config or 1; 0 runs the full schedule")
-    reuse_prefix_segments: int = Field(
-        0,
-        ge=0,
-        description="Number of prefix segments to reuse from the previous successful request",
-    )
-    video_path: str = Field("", description="Server-local input video path; comma-separated paths for multiple references")
-    sr_ratio: float = Field(2.0, gt=0, description="Super-resolution scale factor (SeedVR: capped by size area; SwiftVR: used when size is not set)")
-    match_target_size: Optional[bool] = Field(None, description="Crop or resize output to size (SeedVR SR only)")
-    audio_path: str = Field("", description="Input audio path (Wan-Audio)")
-    video_duration: float = Field(5, description="Video duration in seconds (Wan-Audio)")
-    resize_mode: Optional[str] = Field(None, description="Image and mask resize mode for seko_talk s2v/rs2v; defaults to the startup config")
-    fixed_area: Optional[str] = Field(None, description="480p, 720p, or 1080p for seko_talk area/min-side resizing; defaults to the startup config")
-    talk_objects: Optional[list[TalkObject]] = Field(None, description="Talk objects (Wan-Audio)")
-    ref_image_paths: list[str] = Field(default_factory=list, description="VACE reference images as base64, URL, or server-local paths")
-    ref_video_prompt: Optional[str] = Field(None, description="Prompt describing the driving video for Wan-Animate-2")
-    pose_video_path: Optional[str] = Field(None, description="Server-local pose video path")
-    face_video_path: Optional[str] = Field(None, description="Server-local face video path")
-    background_video_path: Optional[str] = Field(None, description="Server-local background video path")
-    mask_path: Optional[str] = Field(None, description="Server-local mask video path for VACE or animation replacement")
-    pose: str | dict[str, Any] | None = Field(None, description="Action string, server-local pose JSON path, or WorldPlay pose object")
-    action_path: Optional[str] = Field(None, description="Server-local action file or control directory")
-    state_path: Optional[str] = Field(None, description="Server-local robot state file")
-    action_mode: Optional[str] = Field(None, description="Cosmos3 action mode")
-    domain_name: Optional[str] = Field(None, description="Cosmos3 embodiment domain")
-    view_point: Optional[str] = Field(None, description="Cosmos3 viewpoint")
-    save_action_path: Optional[str] = Field(None, description="Action output path, resolved by the runner")
-    image_strength: float | list[float] | None = Field(None, description="LTX image conditioning strength, shared or per image")
-    image_frame_indices: Optional[list[int]] = Field(None, description="LTX pixel frame index for each conditioning image")
-    reference_video_strength: Optional[float] = Field(None, description="LTX reference-video conditioning strength")
-    reference_video_frame_cap: Optional[int] = Field(None, description="Maximum number of LTX reference-video frames")
-    mux_audio_video_path: Optional[str] = Field(None, description="Server-local media file whose audio is muxed into the saved LTX video")
+    reuse_prefix_segments: int = Field(0, ge=0, description="Number of prefix segments to reuse from the previous successful request")
+    talk_objects: Optional[list[TalkObject]] = Field(None, description="Audio and mask inputs for multi-person speech generation")
 
 
 class ImageTaskRequest(BaseTaskRequest):
-    # Sync image APIs return PNG bytes without requiring an output file.
     _prefer_memory_result: bool = PrivateAttr(default=False)
 
-    aspect_ratio: str = Field("16:9", description="Output aspect ratio; when omitted, the runner uses its startup/default sizing rules")
-    resolution: Optional[int] = Field(None, gt=0, description="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config")
-    i2i_denoise_strength: Optional[float] = Field(None, description="Single-image I2I edit denoising strength in [0.0, 1.0]; omit to keep existing behavior")
-    inpaint_blur_sigma: Optional[float] = Field(None, description="Flux2 inpainting mask blur sigma")
-    inpaint_blur_size: Optional[int] = Field(None, description="Flux2 inpainting mask blur kernel size")
-    sr_ratio: float = Field(2.0, gt=0, description="Super-resolution scale factor (SeedVR: capped by size area; SwiftVR: used when size is not set)")
-    match_target_size: Optional[bool] = Field(None, description="Crop or resize output to size (SeedVR SR only)")
-    keep_aspect_ratio: Optional[bool] = Field(None, description="Preserve a single HiDream reference image's aspect ratio")
-    layout_bboxes: Optional[str] = Field(None, description="HiDream layout boxes as a JSON string or server-local JSON file path")
-    align_image_size: Optional[bool] = Field(None, description="Align HunyuanImage3 reference image sizes during inference")
+
+def _output_validator(config, task, output):
+    @model_validator(mode="after")
+    def check_output(self):
+        inputs = dict(config)
+        inputs.update(self.model_dump(exclude_unset=True, exclude_none=True))
+        actual = task.get_output_type(inputs)
+        if actual is not None and actual != output:
+            raise ValueError(f"This request produces {actual}; use /v1/tasks/{actual}/.")
+        return self
+
+    return check_output
+
+
+def build_task_request(config, base, output: OutputType):
+    """Build a schema for tasks compatible with this output API."""
+    spec = get_model_spec(config["model_cls"])
+    tasks = spec.get_tasks_for_output(config, output)
+    if not tasks:
+        return None
+    single_task = len(spec.get_tasks(config)) == 1
+    models = []
+    for task in tasks:
+        arguments = {name: argument for name, argument in spec.get_arguments(config, task).items() if argument.server and name != "task"}
+        fields = {} if single_task else {"task": (Literal[task], Field(..., description="Inference task"))}
+        definition = spec.tasks[task]
+        validators = {"check_output": _output_validator(config, definition, output)} if len(definition.outputs) > 1 else None
+        model = create_request_model(
+            f"{config['model_cls']}_{task}_{base.__name__}",
+            arguments,
+            base=base,
+            validators=validators,
+            **fields,
+        )
+        models.append(model)
+    if len(models) == 1:
+        return models[0]
+    return Annotated[Union[tuple(models)], Field(discriminator="task")]
 
 
 class TaskStatusMessage(BaseModel):

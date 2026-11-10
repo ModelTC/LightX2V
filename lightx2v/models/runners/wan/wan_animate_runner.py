@@ -17,7 +17,6 @@ except ImportError:
 from lightx2v.models.input_encoders.hf.animate.face_encoder import FaceEncoder
 from lightx2v.models.input_encoders.hf.animate.motion_encoder import Generator
 from lightx2v.models.networks.wan.animate_model import WanAnimateModel
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
@@ -29,23 +28,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 @RUNNER_REGISTER("wan2.2_animate")
 class WanAnimateRunner(WanRunner):
-    supported_request_fields_by_task = {
-        "animate": COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "face_video_path",
-            "pose_video_path",
-            "ref_image_paths",
-            "num_frames",
-        },
-    }
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("replace_flag", False):
-            return supported_request_fields | {"mask_path", "background_video_path"}
-        return supported_request_fields
-
     def __init__(self, config):
         super().__init__(config)
         assert self.config["task"] == "animate"
@@ -319,7 +301,9 @@ class WanAnimateRunner(WanRunner):
 
         pose_video_path = self.input_info.pose_video_path
         face_video_path = self.input_info.face_video_path
-        src_ref_path = self.input_info.ref_image_paths
+        if len(self.input_info.ref_image_paths) != 1:
+            raise ValueError("Wan-Animate requires exactly one ref_image_paths entry.")
+        src_ref_path = self.input_info.ref_image_paths[0]
         self.cond_images, self.face_images, self.refer_images = self.prepare_source(pose_video_path, face_video_path, src_ref_path)
         self.refer_pixel_values = torch.tensor(self.refer_images / 127.5 - 1, dtype=GET_DTYPE(), device=AI_DEVICE).permute(2, 0, 1)  # chw
         self.latent_t = num_frames // self.config["vae_stride"][0] + 1

@@ -73,12 +73,9 @@ def build_i2i_samples(
 
     k = len(ref_pils)
     layout_data = None
-    if layout_bboxes and len(str(layout_bboxes).strip()) > 0 and preresized_ref_pil is None:
-        try:
-            layout_data = load_layout_bboxes(layout_bboxes)
-            k += 1
-        except Exception as exc:
-            logger.warning(f"Incorrect layout_bboxes: {layout_bboxes}, {exc}")
+    if layout_bboxes and preresized_ref_pil is None:
+        layout_data = load_layout_bboxes(layout_bboxes)
+        k += 1
 
     i2i_image_latents = None
     if i2i_denoise_strength is not None and len(ref_pils) == 1 and layout_data is None:

@@ -11,7 +11,7 @@ if __name__ == "__main__":
         "prompt": "Turn the image into a watercolor painting while preserving the main subject.",
         "negative_prompt": "",
         # Use the same absolute path readable by the server for every request.
-        "image_path": "/path/to/LightX2V/assets/inputs/imgs/img_0.jpg",
+        "image_path": ["/path/to/LightX2V/assets/inputs/imgs/img_0.jpg"],
         "seed": 42,
         "reuse": False,
         "save_result_path": "./output_lightx2v_qwen_i2i_reuse.png",

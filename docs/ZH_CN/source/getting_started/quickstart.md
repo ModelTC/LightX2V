@@ -173,7 +173,7 @@ git clone https://github.com/KONAKONA666/q8_kernels.git
 #### 步骤 6: 验证安装
 ```python
 import lightx2v
-print(f"LightX2V 版本: {lightx2v.__version__}")
+print("LightX2V 导入成功")
 ```
 
 (windows-environment-setup)=
@@ -307,7 +307,7 @@ popd
 #### 步骤 7: 验证安装
 ```python
 import lightx2v
-print(f"LightX2V 版本: {lightx2v.__version__}")
+print("LightX2V 导入成功")
 ```
 
 (inference-usage)=

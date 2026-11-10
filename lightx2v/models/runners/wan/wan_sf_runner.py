@@ -11,10 +11,6 @@ class WanSFRunner(WanAutoregressiveRunnerMixin, WanRunner):
     _SUPPORTS_AUTOREGRESSIVE_WARMUP = True
     _WARMUP_TASKS = ("t2v",)
 
-    supported_request_fields_by_task = {
-        "t2v": WanRunner.supported_request_fields_by_task["t2v"] - {"num_frames"},
-    }
-
     def __init__(self, config):
         super().__init__(config)
 

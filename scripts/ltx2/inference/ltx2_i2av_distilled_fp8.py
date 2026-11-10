@@ -34,14 +34,14 @@ pipe.create_generator(
 )
 
 seed = 42
-image_path = "/path/to/LightX2V/assets/inputs/imgs/woman.jpeg"  # For multiple images, use comma-separated paths: "path1.jpg,path2.jpg"
-image_strength = 1.0  # Scalar: use same strength for all images, or list: [1.0, 0.8] for different strengths
+image_path = ["/path/to/LightX2V/assets/inputs/imgs/woman.jpeg"]  # Add further paths as list items.
+image_strength = [1.0]  # One value broadcasts to every image; otherwise provide one per image.
 image_frame_indices = None  # Or e.g. [0, 60, 120] — pixel frame per image; None = evenly spaced in [0, num_frames-1]
 prompt = "A young woman with wavy, shoulder-length light brown hair is singing and dancing joyfully outdoors on a foggy day. She wears a cozy pink turtleneck sweater, swaying gracefully to the music with animated expressions and bright, piercing blue eyes. Her movements are fluid and energetic as she twirls and gestures expressively. A wooden fence and a misty, grassy field fade into the background, creating a dreamy atmosphere for her lively performance."
 save_result_path = "/path/to/LightX2V/save_results/output_lightx2v_ltx2_i2av_distilled_fp8.mp4"
 
 # Note: image_strength can also be set in config_json
-# For scalar: image_strength = 1.0 (all images use same strength)
+# A one-item list, e.g. image_strength = [1.0], applies to every image.
 # For list: image_strength = [1.0, 0.8] (must match number of images)
 pipe.generate(
     seed=seed,

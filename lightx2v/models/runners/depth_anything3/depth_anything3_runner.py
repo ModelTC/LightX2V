@@ -25,7 +25,6 @@ from lightx2v.models.runners.depth_anything3.output import (
     save_relative_depth_preview,
     save_sky_mask,
 )
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.utils.input_info import InputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.streaming_video import StreamingVideoWriter
@@ -46,7 +45,6 @@ class DepthAnything3Runner(BaseRunner):
     """Load an official or ComfyUI-format checkpoint once and reuse it across requests."""
 
     input_info_cls_by_task = {"depth": DepthInputInfo}
-    supported_request_fields_by_task = {"depth": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"image_path", "video_path", "save_depth_path", "save_sky_mask_path"}}
 
     def __init__(self, config):
         super().__init__(config)

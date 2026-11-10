@@ -29,6 +29,8 @@ bash scripts/ltx2/run_ltx2_t2av.sh
 
 The basic text/image scripts save results to `save_results/output_lightx2v_ltx2_t2av.mp4` or `save_results/output_lightx2v_ltx2_i2av.mp4`. Change `--save_result_path` to choose another location. Set resolution, frame count, and sampling parameters in the selected JSON under [configs/ltx2](../../configs/ltx2).
 
+LTX2 and LTX2.5 services can start without `--task`. Each native request selects `t2av` or `i2av`, sharing the loaded model. CLI inference still requires `--task`. LTX2's `ltx2_s2v` and `v2av` paths use dedicated deployment configs and keep their task selected at startup.
+
 For multi-GPU LTX-2 inference, choose the launchers ending in `_cfg_parallel.sh`, `_ulysses.sh`, or `_tp.sh`, and keep GPU count consistent with `--nproc_per_node` and the JSON parallel settings.
 
 ## Python API

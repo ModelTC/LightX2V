@@ -7,7 +7,6 @@ from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.flux2.feature_caching.scheduler import Flux2DevSchedulerCaching, Flux2SchedulerCaching
 from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2Scheduler
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
@@ -25,16 +24,12 @@ class Flux2Runner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     input_info_cls_by_task = {"i2i": Flux2I2IInputInfo}
-    supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "size"},
-        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt"},
-    }
 
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if task == "i2i" and self.config.get("inpaint_mask_enabled", False):
-            supported_request_fields |= {"inpaint_blur_sigma", "inpaint_blur_size"}
-        return supported_request_fields
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if self.config.get("pipefusion_parallel", False) and input_info.task != "t2i":
+            raise ValueError("Flux2 PipeFusion supports task=t2i only.")
+        return input_info
 
     def __init__(self, config):
         self.model_variant = config["model_variant"]
@@ -117,13 +112,15 @@ class Flux2Runner(DefaultRunner):
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
 
-        task = self.config.get("task", "t2i")
-        if task == "i2i":
-            self.run_input_encoder = self._run_input_encoder_local_i2i
-            self.run_dit = self._run_dit_local_i2i
-        else:
-            self.run_input_encoder = self._run_input_encoder_local_t2i
-            self.run_dit = self._run_dit_local
+    def run_input_encoder(self):
+        if self.input_info.task == "i2i":
+            return self._run_input_encoder_local_i2i()
+        return self._run_input_encoder_local_t2i()
+
+    def run_dit(self, total_steps=None):
+        if self.input_info.task == "i2i":
+            return self._run_dit_local_i2i(total_steps)
+        return self._run_dit_local(total_steps)
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
@@ -149,25 +146,24 @@ class Flux2Runner(DefaultRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.text_encoders[0]
 
-        image_path = self.input_info.image_path
         from PIL import Image
 
-        if isinstance(image_path, str):
-            if os.path.isdir(image_path):
-                image_files = sorted([os.path.join(image_path, f) for f in os.listdir(image_path) if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"))])
-                input_image = [Image.open(img_file).convert("RGB") for img_file in image_files]
+        input_image = []
+        for path in self.input_info.image_path:
+            if isinstance(path, Image.Image):
+                input_image.append(path)
+            elif os.path.isdir(path):
+                image_files = sorted(os.path.join(path, name) for name in os.listdir(path) if name.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff")))
+                input_image.extend(Image.open(file).convert("RGB") for file in image_files)
             else:
-                input_image = Image.open(image_path).convert("RGB")
-        else:
-            input_image = image_path
+                input_image.append(Image.open(path).convert("RGB"))
+        if not input_image:
+            raise ValueError("Flux2 i2i requires one or more input images.")
 
         vae_scale_factor = self.config["vae_scale_factor"]
         from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
         image_processor = Flux2ImageProcessor(vae_scale_factor=vae_scale_factor)
-
-        if not isinstance(input_image, list):
-            input_image = [input_image]
 
         condition_images = []
         max_image_area = self.config.get("max_image_area", 1024 * 1024)
@@ -415,7 +411,7 @@ class Flux2Runner(DefaultRunner):
         return (width, height)
 
     def set_latent_shape(self):
-        task = self.config.get("task", "t2i")
+        task = self.input_info.task
         if task == "i2i":
             height, width = self.input_info.size
         else:

@@ -22,8 +22,8 @@ pipe.create_generator(
 )
 
 seed = 42
-image_path = "/path/to/woman.jpeg"  # For multiple images, use comma-separated paths: "path1.jpg,path2.jpg"
-image_strength = 1.0  # Scalar: use same strength for all images, or list: [1.0, 0.8] for different strengths
+image_path = ["/path/to/woman.jpeg"]  # Add further paths as list items.
+image_strength = [1.0]  # One value broadcasts to every image; otherwise provide one per image.
 # Pixel frame index per image (optional). If None, indices are evenly spaced in [0, num_frames-1] (see create_generator num_frames).
 # Example for 3 images and num_frames=121: omit image_frame_indices to get ~[0, 60, 120], or set explicitly:
 # image_frame_indices = [0, 40, 120]
@@ -33,7 +33,7 @@ negative_prompt = "blurry, out of focus, overexposed, underexposed, low contrast
 save_result_path = "/path/to/save_results/output.mp4"
 
 # Note: image_strength can also be set in config_json
-# For scalar: image_strength = 1.0 (all images use same strength)
+# A one-item list, e.g. image_strength = [1.0], applies to every image.
 # For list: image_strength = [1.0, 0.8] (must match number of images)
 # image_frame_indices: list of pixel-frame indices (one per image), or None for even spacing across the clip
 

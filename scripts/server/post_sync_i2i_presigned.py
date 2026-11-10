@@ -88,11 +88,9 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
 
     payload = {key: value for key, value in payload.items() if value is not None}
 
-    image_base64 = args.image_base64
-    if not image_base64 and args.image_path:
-        image_base64 = file_to_base64(args.image_path)
-    if image_base64:
-        payload["image_path"] = image_base64
+    images = args.image_base64 or [file_to_base64(path) for path in args.image_path]
+    if images:
+        payload["image_path"] = images
 
     image_mask_base64 = args.image_mask_base64
     if not image_mask_base64 and args.image_mask_path:
@@ -141,8 +139,8 @@ def main() -> None:
     )
     parser.add_argument("--presign_expires", type=int, default=3600, help="Presigned URL expiry seconds")
 
-    parser.add_argument("--image_base64", type=str, default="", help="Base64 content for image_path")
-    parser.add_argument("--image_path", type=str, default="", help="Local image file path; encoded if image_base64 is empty")
+    parser.add_argument("--image_base64", nargs="+", default=[], help="Base64 images for image_path")
+    parser.add_argument("--image_path", nargs="+", default=[], help="Local image paths; encoded if image_base64 is empty")
     parser.add_argument("--image_mask_base64", type=str, default="", help="Base64 content for image_mask_path")
     parser.add_argument(
         "--image_mask_path",

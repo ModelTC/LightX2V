@@ -30,7 +30,7 @@ bash scripts/qwen_image_21/inference/offload_residency/run_npu.sh
 
 ## 图生图
 
-在上述命令末尾追加 `--task i2i --prompt '编辑指令'`：估测命令还需追加 `--image-path /path/to/input.png`，两条推理命令追加 `--image_path /path/to/input.png`。多张参考图用逗号分隔，三条命令使用相同输入。
+在上述命令末尾追加 `--task i2i --prompt '编辑指令'`：估测命令还需追加 `--image-path /path/to/input.png`，两条推理命令追加 `--image_path /path/to/input.png`。多张参考图在同一个参数后以空格分隔，三条命令使用相同输入。
 
 切换到图生图后先重新估测，再运行两份推理脚本；默认会覆盖同名配置和图片。
 

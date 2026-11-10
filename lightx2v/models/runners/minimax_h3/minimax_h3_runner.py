@@ -41,7 +41,6 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     trim_reference_num_frames,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, RESAMPLING_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
 from lightx2v.models.schedulers.minimax_h3.resampling import validate_draft_steps, validate_resample_start_step
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
@@ -101,28 +100,12 @@ class MiniMaxH3Runner(DefaultRunner):
         (544, 960, 124),
     )
     _WARMUP_STEP_COUNT = 2
-    supported_request_fields_by_task = {
-        "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"prompt"},
-        "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"image_path", "prompt"},
-        "l2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"last_frame_path", "prompt"},
-        "fl2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"image_path", "last_frame_path", "prompt"},
-        "ref2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"audio_path", "image_path", "prompt", "video_path"},
-    }
 
     def __init__(self, config):
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
         self.loaded_transformer_partition = "transformer_ref" if config.get("model_variant") == "ref2av" else "transformer"
-
-    def get_supported_tasks(self):
-        """Return tasks supported by the loaded transformer weights."""
-        if self.config.get("text_encoder_disk_streaming", False):
-            return ("t2av",)
-        if self.config["model_variant"] == "ref2av":
-            return ("ref2av",)
-        # Allow ref2av requests to use the base transformer for better visual quality.
-        return ("t2av", "i2av", "l2av", "fl2av", "ref2av")
 
     def init_modules(self):
         super().init_modules()
@@ -187,7 +170,7 @@ class MiniMaxH3Runner(DefaultRunner):
         )
         image = Image.new("RGB", (width, height), color=0)
         if task in ("i2av", "fl2av", "ref2av"):
-            self.input_info.image_path = image
+            self.input_info.image_path = [image] if task == "ref2av" else image
         if task in ("l2av", "fl2av"):
             self.input_info.last_frame_path = image.copy() if task == "fl2av" else image
 
@@ -389,32 +372,10 @@ class MiniMaxH3Runner(DefaultRunner):
             values, anchors = [self.input_info.image_path, self.input_info.last_frame_path], ("first", "last")
         else:
             return [], ()
-        if any(isinstance(value, str) and "," in value for value in values):
-            raise ValueError(f"MiniMax-H3 {task} accepts one file per frame argument, not comma-separated lists")
         images = [self._load_rgb_image(value) for value in values]
         self._resolve_request_geometry(images[0])
         images = [prepare_keyframe_image(image, self.request_height, self.request_width, stretch=index == 0) for index, image in enumerate(images)]
         return images, anchors
-
-    @staticmethod
-    def _split_reference_paths(value):
-        """Normalize the shared media CLI fields into individual references."""
-        if value is None:
-            return []
-        if isinstance(value, str):
-            return [path.strip() for path in value.split(",") if path.strip()]
-        if isinstance(value, (list, tuple)):
-            paths = []
-            for path in value:
-                if path is None:
-                    continue
-                if isinstance(path, str):
-                    path = path.strip()
-                    if not path:
-                        continue
-                paths.append(path)
-            return paths
-        return [value]
 
     def _prepare_references(self):
         entries = []
@@ -423,7 +384,7 @@ class MiniMaxH3Runner(DefaultRunner):
             ("video", self.input_info.video_path),
             ("audio", self.input_info.audio_path),
         ):
-            entries.extend({kind: path} for path in self._split_reference_paths(value))
+            entries.extend({kind: path} for path in value)
         if not entries:
             raise ValueError("MiniMax-H3 ref2av requires --image_path, --video_path, or --audio_path")
         if len(entries) > MAX_REFERENCES:

@@ -15,7 +15,6 @@ from safetensors import safe_open
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.wan.dreamzero_model import DreamZeroModel
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.dreamzero.scheduler import DreamZeroFlowUniPCScheduler
@@ -24,6 +23,7 @@ from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.input_info import MultiViewI2VAInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, save_to_video
@@ -34,9 +34,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("dreamzero")
 class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
-    supported_request_fields_by_task = {
-        "i2va": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "save_action_path", "state_path"},
-    }
+    input_info_cls_by_task = {"i2va": MultiViewI2VAInputInfo}
 
     def __init__(self, config):
         config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)
@@ -325,10 +323,11 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
         return np.stack(frames, axis=0)
 
     def _resolve_camera_files(self, image_path):
-        image_path = os.path.expanduser(str(image_path))
+        image_path = [os.path.expanduser(path) for path in image_path]
         cam_keys = self.config["obs_cam_keys"]
         aliases = self.config.get("obs_cam_aliases", {})
-        if os.path.isdir(image_path):
+        if len(image_path) == 1 and os.path.isdir(image_path[0]):
+            image_path = image_path[0]
             files = []
             for key in cam_keys:
                 stems = [key, key.replace("video.", ""), aliases.get(key, "")]
@@ -347,7 +346,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
                     raise FileNotFoundError(f"Could not find camera input for {key} under {image_path}")
                 files.append(found)
             return files
-        files = [item.strip() for item in image_path.split(",") if item.strip()]
+        files = image_path
         if len(files) != len(cam_keys):
             raise ValueError(f"Expected {len(cam_keys)} camera files, got {len(files)} from image_path={image_path}")
         return files
@@ -355,7 +354,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
     def _load_camera_sequences(self):
         image_path = getattr(self.input_info, "image_path", "")
         if not image_path:
-            raise ValueError("DreamZero i2va requires image_path as a directory or comma-separated camera files.")
+            raise ValueError("DreamZero i2va requires image_path as camera file paths or one directory.")
         sequences = []
         for file_path in self._resolve_camera_files(image_path):
             ext = os.path.splitext(file_path)[1].lower()

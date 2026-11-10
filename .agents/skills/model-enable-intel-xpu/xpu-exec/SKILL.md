@@ -30,7 +30,7 @@ XPU 示例配置在 `configs/platforms/intel_xpu/`，多卡配置在其 `dist_in
 dir configs\platforms\intel_xpu\
 ```
 
-当前示例 JSON 通常不含 `model_cls` / `task`。CLI 的 `--model_cls` 来自 `runner_factory.RUNNER_MODULES`，`--task` 还须通过 runner 的支持范围与请求字段校验。
+当前示例 JSON 通常不含 `model_cls` / `task`。CLI 的 `--model_cls` 来自 `registry.RUNNER_MODULES`，任务和请求字段由模型 `request_spec.py` 中的 Spec 声明并校验。
 
 常见任务包括 `t2v/i2v/t2i/i2i/t2av/i2av/fl2av/ref2av/i23d`；完整 CLI choices 见 `lightx2v/infer.py`，每个模型支持的子集以 runner 和匹配脚本为准。
 
@@ -114,7 +114,7 @@ pipe = LightX2VPipeline(
 pipe.create_generator(config_json="configs/platforms/intel_xpu/wan_t2v_1_3.json")
 
 pipe.generate(seed=42, prompt="a cat", save_result_path="output.mp4")
-# size/num_frames 等请求覆盖仍受 runner 的 supported_request_fields_by_task 限制。
+# size/num_frames 等请求覆盖须通过模型 Spec 的字段校验。
 ```
 
 不使用 JSON 时，可在这一次 `create_generator()` 调用中传入 `attn_mode`、`infer_steps`、`size=(height, width)` 等实际参数。传入 `config_json` 后，除 `fps` 外的这些推理参数以文件内容为准；不要同时传两套设置并期待合并。

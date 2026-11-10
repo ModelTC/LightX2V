@@ -174,7 +174,7 @@ git clone https://github.com/KONAKONA666/q8_kernels.git
 
 ```python
 import lightx2v
-print(f"LightX2V Version: {lightx2v.__version__}")
+print("LightX2V imported successfully")
 ```
 
 (windows-environment-setup)=
@@ -309,7 +309,6 @@ For other GPUs, it is recommended to install `q8_kernel==0.5.0`. Please refer to
 
 ```python
 import lightx2v
-print(f"LightX2V Version: {lightx2v.__version__}")
 ```
 
 (inference-usage)=

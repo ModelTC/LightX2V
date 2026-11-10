@@ -19,6 +19,8 @@ def image_to_base64(image_path):
 
 def process_image_path(image_path) -> Any | str:
     """Process image_path: convert to base64 if local path, keep unchanged if HTTP link"""
+    if isinstance(image_path, list):
+        return [process_image_path(path) for path in image_path]
     if not image_path:
         return image_path
 

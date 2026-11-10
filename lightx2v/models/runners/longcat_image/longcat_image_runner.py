@@ -9,7 +9,6 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.longcat.longcat_text_encoder import LongCatImageTextEncoder
 from lightx2v.models.networks.longcat_image.model import LongCatImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, IMAGE_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.schedulers.longcat_image.scheduler import LongCatImageScheduler
 from lightx2v.models.video_encoders.hf.longcat_image.vae import LongCatImageVAE
 from lightx2v.server.metrics import monitor_cli
@@ -54,10 +53,6 @@ def calculate_target_dimensions_from_image(image_size, target_area=1024 * 1024, 
 class LongCatImageRunner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-    supported_request_fields_by_task = {
-        "t2i": IMAGE_REQUEST_FIELDS,
-        "i2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path"},
-    }
 
     def load_transformer(self):
         model = LongCatImageTransformerModel(os.path.join(self.config["model_path"], "transformer"), self.config, self.init_device)

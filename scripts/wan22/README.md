@@ -67,7 +67,7 @@ bash scripts/wan22/server/start_server_t2v.sh
 python scripts/wan22/server/post_t2v.py
 ```
 
-For I2V or FLF2V, update the single-GPU service's `model_path`, `--task`, and `--config_json` to match the corresponding offline script, then use `scripts/wan/server/post_i2v.py` or `post_flf2v.py`. The task is selected at service startup. For TI2V, also set `--model_cls wan2.2` and use its weights and shared JSON.
+For MoE I2V or FLF2V, update the single-GPU service's `model_path`, `--task`, and `--config_json` to match the corresponding offline script, then use `scripts/wan/server/post_i2v.py` or `post_flf2v.py`. MoE tasks are selected at service startup. For TI2V, use `--model_cls wan2.2`, its weights and shared JSON, omit startup `--task`, and include `"task": "t2v"` or `"task": "i2v"` in every native request. One TI2V service handles both tasks.
 
 Edit `url` and `message` in the client. Images accept Base64 or server-accessible absolute paths; set `save_result_path` for output.
 

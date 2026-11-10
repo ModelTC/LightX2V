@@ -16,6 +16,6 @@ python -m lightx2v.infer \
     --config_json ${lightx2v_path}/configs/qwen_image/qwen_image_i2i_2511_service.json \
     --prompt "Make the girl from Image 1 wear the black dress from Image 2 and sit in the pose from Image 3." \
     --negative_prompt " " \
-    --image_path "/path/to/1.png,/path/to/2.png,/path/to/3.png" \
+    --image_path "/path/to/1.png" "/path/to/2.png" "/path/to/3.png" \
     --save_result_path ${lightx2v_path}/save_results/qwen_image_i2i_2511_service.png \
     --seed 0

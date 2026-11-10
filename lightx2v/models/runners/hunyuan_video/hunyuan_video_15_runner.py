@@ -13,7 +13,6 @@ from lightx2v.models.input_encoders.hf.hunyuan15.qwen25.model import Qwen25VL_Te
 from lightx2v.models.input_encoders.hf.hunyuan15.siglip.model import SiglipVisionEncoder
 from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.schedulers.hunyuan_video.feature_caching.scheduler import HunyuanVideo15SchedulerCaching
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15SRScheduler, HunyuanVideo15Scheduler
 from lightx2v.models.schedulers.hunyuan_video.step_distill.scheduler import HunyuanVideo15StepDistillScheduler
@@ -30,17 +29,6 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("hunyuan_video_1.5")
 class HunyuanVideo15Runner(DefaultRunner):
-    supported_request_fields_by_task = {
-        "t2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"num_frames"},
-        "i2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "num_frames"},
-    }
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.sr_version is not None and self.config_sr["enable_cfg"]:
-            supported_request_fields |= {"negative_prompt"}
-        return supported_request_fields
-
     def __init__(self, config):
         config["is_sr_running"] = False
 
@@ -70,6 +58,10 @@ class HunyuanVideo15Runner(DefaultRunner):
         self.vision_states_dim = 1152
         self.vae_cls = HunyuanVideo15VAE
         self.tae_cls = LightTaeHy15
+
+    def supports_negative_prompt(self):
+        sr = self.config.get("video_super_resolution", {})
+        return super().supports_negative_prompt() or (sr.get("sr_version") is not None and sr.get("enable_cfg", self.config.get("enable_cfg", False)))
 
     def init_scheduler(self):
         distill_method = self.config.get("distill_method")

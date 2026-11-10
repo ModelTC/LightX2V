@@ -70,14 +70,12 @@ class WanScheduler(BaseScheduler):
 
     def _uses_conditioned_latent_prefix(self):
         """Whether this Wan variant keeps a fixed latent prefix during diffusion."""
-        task = self.config.get("task")
-        model_cls = str(self.config.get("model_cls", ""))
-        if task not in ["i2v", "s2v", "rs2v"]:
-            return False
-        return model_cls == "wan2.2"
+        return self.config.get("model_cls") == "wan2.2" and self.input_info.task in ("i2v", "s2v", "rs2v")
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
         self.rope_request_id += 1
+        self.vae_encoder_out = None
+        self.mask = None
         if self._uses_conditioned_latent_prefix():
             self.vae_encoder_out = image_encoder_output["vae_encoder_out"] if image_encoder_output is not None else None
 

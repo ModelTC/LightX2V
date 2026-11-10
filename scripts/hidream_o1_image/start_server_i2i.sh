@@ -14,9 +14,9 @@ export LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 # set environment variables
 source "${lightx2v_path}/scripts/base/base.sh"
 
+# Native requests select t2i or i2i through task.
 torchrun --nproc_per_node=4 -m lightx2v.server \
 --model_cls hidream_o1_image \
---task i2i \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/hidream_o1_image/mlu/hidream_o1_image_i2i_dist.json \
 --host "${host}" \
