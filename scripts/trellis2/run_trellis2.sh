@@ -12,8 +12,8 @@ if [[ "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-# PLATFORM selects the existing LightX2V platform implementation.
-# Set the corresponding device visibility variable before starting this script.
+export PLATFORM=cuda
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export PYTHONPATH="${PYTHONPATH:-}"
 source "${lightx2v_path}/scripts/base/base.sh"
 export DTYPE=BF16
