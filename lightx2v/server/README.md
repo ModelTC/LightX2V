@@ -518,26 +518,23 @@ requiring process restart](https://docs.nvidia.com/cuda/cuda-runtime-api/group__
 | 810 | cudaErrorMpsClientTerminated | MPS server terminated the client |
 | 911 | cudaErrorExternalDevice | Only the explicit asynchronous error wording |
 
-[Moore Threads XID v1.0.0](https://docs.mthreads.com/gmc/gmc-doc-online/dcgm/historicalversion/v1.0.0/xid_guide/)
-classifies these faults as FATAL:
+MUSA 5.2.0 `include/driver_types.h` explicitly requires terminating and
+relaunching the process for runtime codes 226, 700, 702, 710, 714–719, 721,
+783–799, 810 and 911. The whitelist uses the exact strings queried with
+`musaGetErrorString()` from installed `libmusart.so.5.2.0`, including
+`axi bus timeout` (796), `axi bus decode error` (797) and
+`axi bus slave error` (798). See `_MUSA_FATAL_RUNTIME_MESSAGES` for the full
+code/message inventory.
 
-| XID | Error |
-| --- | --- |
-| 0x00000001 | GPU Initialization Failure |
-| 0x01000006 | GPU hardware failure |
-| 0x02000002 | Uncorrectable uncontained ECC error |
-| 0x02000004 | ECC error counter overflow |
-| 0x02000006 | Page retire failed |
-| 0x02000007 | AXI Error (also accepted as AXI bus error) |
-| 0x05000002 | GPU bios trap |
-| 0x05000004 | GPU shutdown |
-| 0x07000003 | Mtlink unrecoverable error |
+Installed torch_musa `2.9.1.post1+musa5.2.0` uses `MUSA error: ` in
+`csrc/core/MUSAException.cpp` and `CUDA error: ` in its generated compatible
+`c10/musa/MUSAException.cpp`; both prefixes are accepted for these strings.
+This verifies error-string lookup and source formatting, not real hardware
+fault injection. Other runtime versions need their own wording verification.
+XID category names are not runtime return strings and are excluded.
 
-Matching requires a RuntimeError with a complete whitelisted first line:
-`CUDA error: <runtime error string>` or `MUSA error: <explicit fault name>`.
-Subsequent diagnostic lines are allowed. The MUSA forms identify the documented
-faults; this is not a claim that every SDK emits those exact strings. XID IDs
-are not MUSA runtime return codes. This handler does not monitor kernel logs.
+Matching requires a RuntimeError with a complete whitelisted first line.
+Subsequent diagnostic lines are allowed. This handler does not monitor kernel logs.
 Matching remains text-based and cannot authenticate the origin of an exception.
 
 Destroyed/uninitialized contexts, page faults, contained ECC warnings, MTLINK
