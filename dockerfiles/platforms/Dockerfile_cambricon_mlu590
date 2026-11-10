@@ -1,4 +1,5 @@
-FROM cambricon-base/pytorch:v25.10.0-torch2.8.0-torchmlu1.29.1-ubuntu22.04-py310 AS base
+ARG BASE_IMAGE=cambricon-base/pytorch:v25.10.0-torch2.8.0-torchmlu1.29.1-ubuntu22.04-py310
+FROM ${BASE_IMAGE} AS base
 
 WORKDIR /workspace/LightX2V
 
@@ -23,7 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
     rm /tmp/vendor-torch-constraints.txt
 
 # Copy files
-COPY app app
 COPY assets assets
 COPY configs configs
 COPY lightx2v lightx2v
