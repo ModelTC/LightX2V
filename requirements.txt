@@ -14,6 +14,7 @@ tqdm
 accelerate
 safetensors
 opencv-python
+Pillow
 imageio
 imageio-ffmpeg
 einops
