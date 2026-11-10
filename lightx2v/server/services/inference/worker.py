@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.set_config import build_startup_config, init_parallel
 
 from ..distributed_utils import DistributedManager
@@ -67,6 +68,7 @@ class TorchrunInferenceWorker:
             return True
 
         except Exception as e:
+            terminate_on_fatal_device_error(e)
             logger.exception(f"Rank {self.rank} initialization failed: {str(e)}")
             return False
 
@@ -99,13 +101,18 @@ class TorchrunInferenceWorker:
             await asyncio.sleep(0)
 
         except Exception as e:
+            terminate_on_fatal_device_error(e)
             has_error = True
             error_msg = str(e)
             error_type = type(e).__name__
             logger.exception(f"Rank {self.rank} inference failed: {error_msg}")
 
         if self.world_size > 1:
-            self.dist_manager.barrier()
+            try:
+                self.dist_manager.barrier()
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
 
         if self.rank == 0:
             if has_error:
@@ -194,6 +201,7 @@ class TorchrunInferenceWorker:
                 await self.process_request(task_data)
 
             except Exception as e:
+                terminate_on_fatal_device_error(e)
                 error_str = str(e)
                 if "Connection closed by peer" in error_str or "Connection reset by peer" in error_str:
                     logger.info(f"Rank {self.rank} detected master process shutdown, exiting worker loop")
@@ -203,6 +211,7 @@ class TorchrunInferenceWorker:
                     try:
                         self.dist_manager.barrier()
                     except Exception as barrier_error:
+                        terminate_on_fatal_device_error(barrier_error)
                         logger.warning(f"Rank {self.rank} barrier failed, exiting: {barrier_error}")
                         break
                 continue

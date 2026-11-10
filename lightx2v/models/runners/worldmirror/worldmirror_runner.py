@@ -49,6 +49,7 @@ from lightx2v.models.networks.worldmirror.utils.inference_utils import (
 from lightx2v.models.networks.worldmirror.utils.render_utils import render_interpolated_video
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -639,6 +640,7 @@ class WorldMirrorRunner(BaseRunner):
                     if log_time:
                         timings["render_video"] = time.perf_counter() - t0_render
                 except Exception as e:
+                    terminate_on_fatal_device_error(e)
                     logger.warning(f"[WorldMirror] video rendering failed: {e}")
                     if log_time:
                         timings["render_video"] = -1.0

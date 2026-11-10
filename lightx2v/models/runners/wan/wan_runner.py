@@ -7,6 +7,8 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
+
 try:
     from scipy.interpolate import interp1d  # type: ignore
     from scipy.spatial.transform import Rotation, Slerp  # type: ignore
@@ -151,6 +153,9 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 self.model = self.load_transformer()
                 self.model.set_scheduler(self.scheduler)
                 self._run_warmup()
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 self.clean_lazy_load_warmup()
         else:
@@ -183,6 +188,9 @@ class WanRunner(DisaggMixin, DefaultRunner):
                             self.model.infer(inputs)
                             scheduler.step_post()
                             previous_step_index = step_index
+                    except Exception as e:
+                        terminate_on_fatal_device_error(e)
+                        raise
                     finally:
                         self.release_resident_blocks()
                         if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
@@ -190,9 +198,15 @@ class WanRunner(DisaggMixin, DefaultRunner):
                                 model.to_cpu()
                     self.run_vae_decoder(scheduler.latents)
                     torch_device_module.synchronize()
+                except Exception as e:
+                    terminate_on_fatal_device_error(e)
+                    raise
                 finally:
                     self.clear_warmup_state()
                     inputs.pop("image_encoder_output", None)
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             scheduler.sample_guide_scale = original_guide_scale
 
@@ -562,6 +576,9 @@ class WanRunner(DisaggMixin, DefaultRunner):
     def run_segment(self, segment_idx=0):
         try:
             return super().run_segment(segment_idx)
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             # Drop resident weights before VAE decode, including on cancellation.
             self.release_resident_blocks()
@@ -598,7 +615,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
             result = self.run_main()
             self.commit_reuse_result()
             return result
-        except Exception:
+        except Exception as _device_error:
+            terminate_on_fatal_device_error(_device_error)
             self.discard_reuse_result()
             raise
         finally:
@@ -646,6 +664,9 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 gen_video_final = self._run_pipeline_disagg_decode(request_config)
             else:
                 gen_video_final = self._run_pipeline_local()
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             if disagg_mode:
                 self._disagg_request_config = None
@@ -1354,6 +1375,9 @@ class Wan22DenseRunner(WanRunner):
             self.vae_encoder = self._configure_vae_compile(self.load_vae_encoder(), components=("encoder",))
         try:
             return self.vae_encoder.encode(img.unsqueeze(0).to(device=AI_DEVICE, dtype=GET_DTYPE()))
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             if transient:
                 del self.vae_encoder

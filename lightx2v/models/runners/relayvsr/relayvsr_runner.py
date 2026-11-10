@@ -23,6 +23,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.relayvsr.scheduler import RelayVSRScheduler
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import mux_audio_from_video
@@ -102,6 +103,9 @@ class RelayVSRRunner(DefaultRunner):
                         for scale in (2, 4) if self.geometry.scale == 4 else (2,):
                             pixels = self.postprocess(prediction, (height * scale, width * scale))
                 torch.cuda.synchronize()
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 frame = prediction = pixels = None
                 self.input_info = None
@@ -203,6 +207,9 @@ class RelayVSRRunner(DefaultRunner):
                 start, start_condition = window[-1], end_condition
                 if len(window) < self.config.get("clip_len", 16):
                     return
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             self.end_run()
 
@@ -276,11 +283,15 @@ class RelayVSRRunner(DefaultRunner):
                 temporary = None
                 logger.info("RelayVSR video saved to: {}", destination.resolve())
             return {"video": None}
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             if writer is not None and temporary is not None:
                 try:
                     writer.close()
-                except (RuntimeError, ValueError, OSError):
+                except (RuntimeError, ValueError, OSError) as _device_error:
+                    terminate_on_fatal_device_error(_device_error)
                     logger.exception("RelayVSR encoder cleanup failed")
             if temporary is not None:
                 Path(temporary).unlink(missing_ok=True)

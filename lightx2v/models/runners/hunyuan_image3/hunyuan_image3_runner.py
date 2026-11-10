@@ -24,6 +24,7 @@ from lightx2v.models.runners.hunyuan_image3.flashinfer_autotune import (
 )
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.hunyuan_image3.scheduler import HunyuanImage3Scheduler
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import TI2IInputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
@@ -1667,6 +1668,9 @@ class HunyuanImage3Runner(DefaultRunner):
     def run_pipeline(self, input_info):
         try:
             return self._run_pipeline(input_info)
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             if self._close_after_run:
                 self.close()
@@ -1714,11 +1718,17 @@ class HunyuanImage3Runner(DefaultRunner):
         try:
             if controller is not None:
                 controller.close()
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             try:
                 model = getattr(self, "model", None)
                 if model is not None:
                     model.close_shared_cpu_weights()
+            except Exception as error:
+                terminate_on_fatal_device_error(error)
+                raise
             finally:
                 context = self.config.get("parallel_context")
                 if context is not None:

@@ -7,6 +7,7 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import INPUT_INFO_TYPES, InputInfo
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -416,6 +417,7 @@ class BaseRunner(ABC):
             try:
                 self.end_run()
             except Exception as e:
+                terminate_on_fatal_device_error(e)
                 print(f"end_run failed: {e}")
             raise Exception(f"find rank: {rank} stop_signal, stop running, it's an expected behavior")
         if paused == 1:

@@ -9,6 +9,7 @@ from loguru import logger
 
 from lightx2v.models.runners.lifecycle import RunnerLifecycleMixin
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
+from lightx2v.utils.inference_errors import fatal_device_error_guard, terminate_on_fatal_device_error
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v.utils.streaming_video import StreamingVideoWriter, video_chunk_to_uint8
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -110,12 +111,14 @@ class AutoregressiveRunnerMixin(RunnerLifecycleMixin):
             with no_sync_profiling(enabled=decoder.is_async):
                 yield decoder
         except BaseException as error:
+            terminate_on_fatal_device_error(error)
             first_error = error
             raise
         finally:
             try:
                 decoder.finish()
-            except BaseException:
+            except BaseException as error:
+                terminate_on_fatal_device_error(error)
                 if first_error is None:
                     raise
 
@@ -141,7 +144,7 @@ class AutoregressiveRunnerMixin(RunnerLifecycleMixin):
         self.validate_warmup()
         started = time.perf_counter()
         try:
-            with torch.random.fork_rng(devices=[torch_device_module.current_device()], device_type=AI_DEVICE):
+            with torch.random.fork_rng(devices=[torch_device_module.current_device()], device_type=AI_DEVICE), fatal_device_error_guard():
                 self._run_warmup()
         finally:
             self.clear_warmup_state()

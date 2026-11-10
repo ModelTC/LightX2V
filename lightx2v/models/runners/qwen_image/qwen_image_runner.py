@@ -18,6 +18,7 @@ from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import I2IInputInfo, T2IInputInfo
 from lightx2v.utils.profiler import *
 
@@ -103,6 +104,9 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 self.model.set_scheduler(self.scheduler)
                 self.text_encoders = self.load_text_encoder()
                 self._run_warmup()
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 self.clean_lazy_load_warmup()
         else:
@@ -124,10 +128,16 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                     scheduler.step_pre(step_index=0)
                     self.model.infer(self.inputs)
                     scheduler.step_post()
+                except Exception as error:
+                    terminate_on_fatal_device_error(error)
+                    raise
                 finally:
                     self.release_resident_blocks()
                 self.run_vae_decoder(scheduler.latents)
                 torch_device_module.synchronize()
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
                     self.model.to_cpu()
@@ -281,6 +291,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             except FileNotFoundError as e:
                 logger.warning(f"TensorRT engine files not found, falling back to PyTorch VAE: {e}")
             except Exception as e:
+                terminate_on_fatal_device_error(e)
                 logger.warning(f"Failed to load TensorRT VAE, falling back to PyTorch VAE: {e}")
 
         # Baseline or fallback
@@ -444,6 +455,9 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                     self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
 
             return self.model.scheduler.latents, self.model.scheduler.generator
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             self.release_resident_blocks()
 
@@ -575,7 +589,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             result = self._finalize_pipeline_outputs(input_info, images, latents=latents, generator=generator)
             self.commit_reuse_result()
             return result
-        except Exception:
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
             self.discard_reuse_result()
             raise
         finally:
@@ -667,6 +682,9 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             if disagg_mode == "transformer":
                 return self._run_pipeline_disagg_transformer(input_info, request_config)
             return self._run_pipeline_local(input_info)
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             if disagg_mode:
                 self._disagg_request_config = None

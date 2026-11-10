@@ -28,6 +28,7 @@ from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT
 from lightx2v.models.schedulers.cosmos3.scheduler import Cosmos3Scheduler
 from lightx2v.models.video_encoders.hf.cosmos3.vae import Cosmos3WanVAE
 from lightx2v.utils.envs import *
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import Cosmos3InputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -1032,6 +1033,9 @@ class Cosmos3Runner(DefaultRunner):
                     del latents, images, video
                     torch_device_module.empty_cache()
                     gc.collect()
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             if hasattr(self, "_action_chunk_index"):
                 del self._action_chunk_index

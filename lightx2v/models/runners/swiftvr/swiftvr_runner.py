@@ -30,6 +30,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.inference_errors import fatal_device_error_guard, terminate_on_fatal_device_error
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_image
@@ -116,6 +117,9 @@ class SwiftVRRunner(DefaultRunner):
                     )
                     restored = self.restorer.restore_chunk(video, chunk, clip_latents)
                     del video, restored
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 self.restorer.transformer.overlap = overlap
                 self.restorer.autoencoder.chunk_p_group = None
@@ -197,7 +201,7 @@ class SwiftVRRunner(DefaultRunner):
 
         cpu_frames = torch.empty(frames.shape, dtype=frames.dtype, device="cpu", pin_memory=True)
         copy_stream.wait_stream(torch.cuda.current_stream(frames.device))
-        with torch.cuda.stream(copy_stream):
+        with torch.cuda.stream(copy_stream), fatal_device_error_guard():
             cpu_frames.copy_(frames, non_blocking=True)
             frames.record_stream(copy_stream)
             copy_complete = torch.cuda.Event()
@@ -293,7 +297,8 @@ class SwiftVRRunner(DefaultRunner):
     @staticmethod
     def write_video_frames(writer, frames, copy_complete):
         if copy_complete is not None:
-            copy_complete.synchronize()
+            with fatal_device_error_guard():
+                copy_complete.synchronize()
         for frame in frames.numpy():
             writer.send(frame)
 
@@ -333,6 +338,9 @@ class SwiftVRRunner(DefaultRunner):
                 return self.run_image_pipeline(input_info) if self.is_main_process else {}
             self.restorer.autoencoder.chunk_p_group = self.chunk_p_group
             return self.run_video_pipeline(input_info)
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             self.restorer.autoencoder.chunk_p_group = None
             self.restorer.reset()
@@ -467,6 +475,9 @@ class SwiftVRRunner(DefaultRunner):
                     del restored_frames
                 while pending_writes:
                     pending_writes.popleft().result()
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 if reader_executor is not None:
                     reader_executor.shutdown(wait=True, cancel_futures=True)

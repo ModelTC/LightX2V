@@ -493,3 +493,87 @@ The server uses `loguru` for structured logging. Logs include:
 ## License
 
 See the main project LICENSE file for licensing information.
+
+
+## Recovery from fatal device errors
+
+The whitelist below follows explicit vendor recovery requirements. CUDA error
+names/text were checked against CUDA 12.8 `cudaGetErrorName`/`cudaGetErrorString`
+without executing device work. [NVIDIA documents the following errors as
+requiring process restart](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html):
+
+| CUDA code | Error | Meaning |
+| --- | --- | --- |
+| 226 | cudaErrorContained | Contained device exception |
+| 700 | cudaErrorIllegalAddress | Illegal device memory access |
+| 702 | cudaErrorLaunchTimeout | Device kernel execution timeout |
+| 710 | cudaErrorAssert | Device assertion |
+| 714 | cudaErrorHardwareStackError | Device stack fault |
+| 715 | cudaErrorIllegalInstruction | Illegal device instruction |
+| 716 | cudaErrorMisalignedAddress | Unaligned device access |
+| 717 | cudaErrorInvalidAddressSpace | Invalid device address space |
+| 718 | cudaErrorInvalidPc | Invalid device program counter |
+| 719 | cudaErrorLaunchFailure | Device kernel exception |
+| 721 | cudaErrorTensorMemoryLeak | Kernel tensor memory leak |
+| 810 | cudaErrorMpsClientTerminated | MPS server terminated the client |
+| 911 | cudaErrorExternalDevice | Only the explicit asynchronous error wording |
+
+[Moore Threads XID v1.0.0](https://docs.mthreads.com/gmc/gmc-doc-online/dcgm/historicalversion/v1.0.0/xid_guide/)
+classifies these faults as FATAL:
+
+| XID | Error |
+| --- | --- |
+| 0x00000001 | GPU Initialization Failure |
+| 0x01000006 | GPU hardware failure |
+| 0x02000002 | Uncorrectable uncontained ECC error |
+| 0x02000004 | ECC error counter overflow |
+| 0x02000006 | Page retire failed |
+| 0x02000007 | AXI Error (also accepted as AXI bus error) |
+| 0x05000002 | GPU bios trap |
+| 0x05000004 | GPU shutdown |
+| 0x07000003 | Mtlink unrecoverable error |
+
+Matching requires a RuntimeError with a complete whitelisted first line:
+`CUDA error: <runtime error string>` or `MUSA error: <explicit fault name>`.
+Subsequent diagnostic lines are allowed. The MUSA forms identify the documented
+faults; this is not a claim that every SDK emits those exact strings. XID IDs
+are not MUSA runtime return codes. This handler does not monitor kernel logs.
+Matching remains text-based and cannot authenticate the origin of an exception.
+
+Destroyed/uninitialized contexts, page faults, contained ECC warnings, MTLINK
+down alone, OOM, generic external-device errors and combined "GPU Page fault or
+AXI bus error" descriptions are excluded. Hardware faults may require GPU/host
+recovery beyond process restart. No task timeout is inferred from these errors.
+Profiling skips device synchronization and memory collection while propagating
+fatal exceptions. Fatal errors raised during image result conversion also exit
+immediately. Classification follows exception causes/contexts so wrapped device
+errors are not lost. A shared exception handler is used by the worker, image
+encoder and Qwen pipeline before its failure cleanup. Fatal communication
+errors exit without retrying a distributed barrier.
+Ordinary errors, including out-of-memory, retain their
+existing handling.
+
+Run the service under a supervisor. A nonzero rank exit lets torchrun tear down
+its worker group; Kubernetes or another supervisor must then restart/recreate
+the runtime. This change does not reset hardware or guarantee recovery of a
+faulty GPU. It does not add a task execution timeout or cancellation watchdog.
+
+
+### Exception-boundary coverage
+
+The shared handler is applied before runner cleanup/offload and fallbacks,
+CUDA graph/stream/collective exits, and background copy/decode synchronization.
+The current upstream AR implementation shares decoder cleanup in
+`AutoregressiveRunnerMixin` and dispatches GPU work through
+`AsyncVAEChunkDecoder`; fatal failures are checked inside those callbacks before
+context exits or waiting for more Futures. Ordinary errors retain their original
+propagation, suppression, return and cleanup behavior. Pure CPU/file/codec paths
+are not made fatal by this change.
+
+CPU regressions cover 86 explicitly catalogued runner boundaries, real LoRA
+fallbacks, full Qwen/LTX25/MiniMax methods, CUDA capture, copy-stream exit order,
+and background writer/VAE callbacks. Tests preserve static ordinary outcomes,
+mock-call traces and cleanup state; mutations exercise missing/throwing cleanup,
+late exit, reversed contexts and invalid child execution. They verify Python
+control flow and process exit, not GPU/driver recovery or imported-library
+internals. No watchdog, execution timeout or cancellation deadline is added.
