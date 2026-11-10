@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "model": "vggt",
+  "source_project": "model-evaluation (historical joint project)",
+  "historical_suite_sha256": "4530c60cfe2a69178ca9f450ddc9030beac3e0dbf658eadfa547b6a0957fc45d",
+  "historical_source_lock_sha256": "d707f1dbd9c43cbc5313e3090981c4df947b93ccdf4e67e273709ace407d50e9",
+  "project_suite_sha256": "2f60f1cab96105fe8f947b7140d821e3e00f33d3dba6c265c8de595ebbb658d4",
+  "project_source_lock_sha256": "1f490a5f9867249f2597616528300b4756041d7b83c05cdf647791448baeb9c3",
+  "historic_evaluation_code_sha256": "2ed33f2955542cba62ffce0dca4f6675f55b26f72e8d886c3ab65c4ddb6115e0",
+  "reports": {
+    "vggt-comparison.json": "ad9dc16c72ad621265222abd0a9480cc62dfe990bb45dd0981f749293d652c5b"
+  },
+  "runs": {
+    "benchmark-vggt-lightx2v-01": {
+      "environment_sha256": "b96e2a340692d89c0cd153c9ead3bcbe4f5c80aeac252cc35219c4ae0f7f3bd0",
+      "requests_sha256": "80ac59632bed5b9a82c617cd9d31e2d6e28085eb25ca7a493cfb0b83888cca6d"
+    },
+    "benchmark-vggt-reference-01": {
+      "environment_sha256": "e95c3da5a3ee93a45c3640e5fee861ca5d65ef530b1e04f4b0fb33f9a54844fc",
+      "requests_sha256": "8ba630567989e3464a789621f29765242f88568eff5297cf0e0f0566ca4b8a93"
+    },
+    "smoke-vggt-lightx2v-04": {
+      "environment_sha256": "954e91ab4e5b20aa2b15df2967d735a466c4375e1478905ba2384e1f9818209d",
+      "requests_sha256": "ed77cebd8f9ad90fb10d51ff8f1f5ab1bd5e72ce91114d37bf92f996186436e8"
+    },
+    "smoke-vggt-reference-01": {
+      "environment_sha256": "1aa93d1fbea5000d852421173f695350aa4a7c61d9a00ada675a29653aa12e4d",
+      "requests_sha256": "f7a82457896e40a56364ddd6bf71204d9ddb236d15fc5a869ab48d3304e63192"
+    }
+  },
+  "artifact_copy_policy": "Independent regular files (copy-on-write when filesystem supports it); no cross-project links",
+  "model_rerun": false,
+  "configuration_aliases": [
+    {
+      "suite_sha256": "e29dee8ae4d33cd0bee3687124ffcac05053428243c26f4d66ba211bf7a328ad",
+      "source_lock_sha256": "03d378a0b77ac40ee797f172dc975a1c93ae38c9ee6b2194e5f2676b6d34a71f"
+    },
+    {
+      "suite_sha256": "4530c60cfe2a69178ca9f450ddc9030beac3e0dbf658eadfa547b6a0957fc45d",
+      "source_lock_sha256": "d707f1dbd9c43cbc5313e3090981c4df947b93ccdf4e67e273709ace407d50e9"
+    }
+  ],
+  "configuration_alias_reason": "Portable metadata and source inventory migration; inputs, weights and evaluated model Python bytes unchanged."
+}

@@ -1,0 +1,15 @@
+# Extra dependencies over the vendor image's pytorch_infer environment.
+# Installed with --no-deps into this project's runtime directory.
+# Never replace vendor torch, torch_mlu or torchvision.
+diffusers==0.36.0
+omegaconf==2.3.0
+antlr4-python3-runtime==4.9.3
+timm==1.0.30
+kornia==0.8.3
+kornia-rs==0.2.0
+trimesh==4.4.1
+easydict==1.13
+plyfile==1.1.3
+addict==2.4.0
+imageio==2.38.1
+imageio-ffmpeg==0.6.0
