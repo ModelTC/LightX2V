@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four-node ACP: encode action prompts -> 100 PDMD student updates -> self-generated GAN."""
+"""Four-node ACP self-generated GAN, optionally preceded by 100 action-PDMD updates."""
 
 import argparse
 import importlib.util
@@ -178,7 +178,70 @@ def immutable_plan(phase1, phase2, prompts, prompt_cache, real_cache):
     }
 
 
-def execute(phase1_path, phase2_path, *, prompts, prompt_cache, real_cache, dry_run=False):
+def execute_selfgen_only(phase2_path, *, real_cache, dry_run=False):
+    """Warm-start GAN directly from prior PDMD weights; never read action inputs."""
+    helper = load_module("_h3_action_selfgen_preflight", SCRIPT_ROOT / "minimax_h3_action_pdmd_selfgen_gan_preflight.py")
+    audit = load_module("_h3_action_selfgen_audit", SCRIPT_ROOT / "run_minimax_h3_cm_pdmd_stages.py")
+    config = helper.load_config(phase2_path)
+    source, _ = helper.validate_recipe(config, gan_enabled=True)
+    require(config.get("resume", {}).get("auto_resume") is True, "Direct selfgen training requires own-stage auto_resume")
+    requested_source = os.environ.get("H3_GAN_INIT_CHECKPOINT")
+    if requested_source:
+        require(source == Path(requested_source).expanduser().resolve(), "Direct selfgen config must initialize student and fake from H3_GAN_INIT_CHECKPOINT")
+    output = Path(config["training"]["output_dir"]).expanduser().resolve()
+    root = Path(os.environ.get("H3_STAGED_OUTPUT", str(output.parent))).expanduser().resolve()
+    require(output.parent == root, "Selfgen output must be a child of H3_STAGED_OUTPUT")
+    settings = rendezvous()
+    invocation = distributed_command("phase2", settings, SCRIPT_ROOT.parent / "train.py", ["--config", Path(phase2_path).resolve()])
+    summary = {
+        "mode": "selfgen_only",
+        "initial_checkpoint": str(source),
+        "initialization": "student_and_fake_weights_only",
+        "phase2_optimizer_iterations": int(config["training"]["max_train_iters"]),
+        "phase2_data": config["data"]["train"]["data_path"],
+        "phase2_output": str(output),
+        "rendezvous": settings["phase2"],
+    }
+    print(json.dumps(summary, indent=2), flush=True)
+    if dry_run:
+        print(f"[h3-stages][phase2] {shlex.join(invocation)}", flush=True)
+        print("[h3-stages] Direct selfgen preview: skips prompt encoding and action PDMD; input/checkpoint validation occurs on normal launch.", flush=True)
+        return summary
+
+    resume = helper.own_stage_resume(config, gan_enabled=True)
+    helper.validate_model(config)
+    plan_config = {key: value for key, value in config.items() if key != "config_path"}
+    plan_config["training"] = {key: value for key, value in config["training"].items() if key != "max_train_iters"}
+    plan = {
+        "schema_version": 1,
+        "mode": "selfgen_only",
+        "phase2": plan_config,
+        "self_generated_source": str(Path(real_cache).expanduser().resolve()),
+    }
+    stage_directory = root / "stages"
+    plan_id = audit.digest_value(plan)
+    audit.publish_once(stage_directory / "plan.json", {"plan_sha256": plan_id, **plan})
+    if resume is not None:
+        helper.validate_view(config["data"]["train"]["data_path"], kind="selfgen")
+        print(f"[h3-stages] Direct selfgen own-stage resume={resume}; restoring student/fake/GAN optimizers and data cursors", flush=True)
+    else:
+        initial = helper.validate_warm_start(config)
+        helper.prepare_selfgen_view(real_cache, config["data"]["train"]["data_path"])
+        audit.publish_once(stage_directory / "selfgen_direct_init.complete.json", {
+            "schema_version": 1,
+            "plan_sha256": plan_id,
+            **initial,
+            "student_weights_sha256": audit.digest_file(initial["student_weights"]),
+            "dist_metadata_sha256": audit.digest_file(source / "dist_state/.metadata"),
+        })
+        print(f"[h3-stages] Direct selfgen PDMD + GAN from {source}; student/fake weights only, fresh optimizers, GAN head and cursors; fake5/student1", flush=True)
+    subprocess.run(invocation, cwd=SCRIPT_ROOT.parent, check=True)
+    return {**summary, **({"resumed_phase2": str(resume)} if resume is not None else {})}
+
+
+def execute(phase1_path, phase2_path, *, prompts, prompt_cache, real_cache, dry_run=False, selfgen_only=False):
+    if selfgen_only:
+        return execute_selfgen_only(phase2_path, real_cache=real_cache, dry_run=dry_run)
     helper = load_module("_h3_action_selfgen_preflight", SCRIPT_ROOT / "minimax_h3_action_pdmd_selfgen_gan_preflight.py")
     audit = load_module("_h3_action_selfgen_audit", SCRIPT_ROOT / "run_minimax_h3_cm_pdmd_stages.py")
     phase1, phase2 = helper.load_config(phase1_path), helper.load_config(phase2_path)
@@ -263,9 +326,10 @@ def main(argv=None):
     parser.add_argument("--prompts", type=Path, required=True)
     parser.add_argument("--prompt-cache", type=Path, required=True)
     parser.add_argument("--real-cache", type=Path, required=True)
+    parser.add_argument("--selfgen-only", action="store_true", help="Skip action prompts/PDMD and warm-start selfgen GAN directly from the configured prior checkpoint")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-    execute(args.phase1_config, args.phase2_config, prompts=args.prompts, prompt_cache=args.prompt_cache, real_cache=args.real_cache, dry_run=args.dry_run)
+    execute(args.phase1_config, args.phase2_config, prompts=args.prompts, prompt_cache=args.prompt_cache, real_cache=args.real_cache, dry_run=args.dry_run, selfgen_only=args.selfgen_only)
 
 
 if __name__ == "__main__":

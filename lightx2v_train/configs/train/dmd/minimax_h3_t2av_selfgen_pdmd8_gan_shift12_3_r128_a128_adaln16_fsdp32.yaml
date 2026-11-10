@@ -1,4 +1,5 @@
-# Phase 2: self_generated T2AV conditions + paired AV positives, PDMD + GAN.
+# Self-generated T2AV conditions + paired AV positives, PDMD + GAN.
+# Default: phase-1 handoff; direct mode overrides H3_SELFGEN_INIT_CHECKPOINT.
 # Warm-start student + fake weights from PDMD; optimizers/cursors/GAN head start fresh.
 # Eight rollout steps, video/audio shifts 12/3, five fake updates per student update.
 seed: 42
@@ -124,7 +125,7 @@ training:
             max_sigma: 1.0
     student:
         train_type: lora
-        checkpoint_path: ${oc.env:H3_ACTION_PDMD_OUTPUT}/checkpoint-000000600
+        checkpoint_path: ${oc.env:H3_SELFGEN_INIT_CHECKPOINT,${oc.env:H3_ACTION_PDMD_OUTPUT}/checkpoint-000000600}
         checkpoint_strict: true
         # Load the live PDMD student export. No EMA is used in this stage.
         ema: {enabled: false}
@@ -144,7 +145,7 @@ training:
             adam_epsilon: 0.00000001
     fake:
         train_type: full
-        checkpoint_path: ${oc.env:H3_ACTION_PDMD_OUTPUT}/checkpoint-000000600
+        checkpoint_path: ${oc.env:H3_SELFGEN_INIT_CHECKPOINT,${oc.env:H3_ACTION_PDMD_OUTPUT}/checkpoint-000000600}
         optimizer:
             learning_rate: 0.000004
             adam_beta1: 0.0

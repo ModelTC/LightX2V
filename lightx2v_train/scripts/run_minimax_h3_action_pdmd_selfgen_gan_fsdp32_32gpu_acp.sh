@@ -22,6 +22,11 @@ export H3_ACTION_PDMD_VIEW="${H3_ACTION_PDMD_VIEW:-$H3_STAGED_OUTPUT/data/action
 export H3_SELFGEN_VIEW="${H3_SELFGEN_VIEW:-$H3_STAGED_OUTPUT/data/self_generated_t2av}"
 export H3_GAN_MAX_ITERS="${H3_GAN_MAX_ITERS:-15000}"
 export H3_RDZV_ID="${H3_RDZV_ID:-h3_action_pdmd_selfgen_gan_from5800_32gpu_20261109}"
+case "${H3_SKIP_ACTION_PDMD:-0}" in
+    0) export H3_SELFGEN_INIT_CHECKPOINT="$H3_ACTION_PDMD_OUTPUT/checkpoint-000000600" ;;
+    1) export H3_SELFGEN_INIT_CHECKPOINT="$H3_GAN_INIT_CHECKPOINT" ;;
+    *) echo "H3_SKIP_ACTION_PDMD must be 0 or 1" >&2; exit 2 ;;
+esac
 phase1_config="${H3_ACTION_PDMD_CONFIG:-$H3_CODE_ROOT/lightx2v_train/configs/train/dmd/minimax_h3_t2av_action_pdmd8_shift12_3_r128_a128_adaln16_fsdp32.yaml}"
 phase2_config="${H3_SELFGEN_GAN_CONFIG:-$H3_CODE_ROOT/lightx2v_train/configs/train/dmd/minimax_h3_t2av_selfgen_pdmd8_gan_shift12_3_r128_a128_adaln16_fsdp32.yaml}"
 
@@ -48,6 +53,9 @@ export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/h3_action_pdmd_selfgen_g
 stages=("$H3_PYTHON" -u "$H3_CODE_ROOT/lightx2v_train/scripts/run_minimax_h3_action_pdmd_selfgen_gan_stages.py"
     --phase1-config "$phase1_config" --phase2-config "$phase2_config"
     --prompts "$H3_GAN_PROMPTS" --prompt-cache "$H3_GAN_PROMPT_CACHE" --real-cache "$H3_SELFGEN_CACHE")
+if [[ "${H3_SKIP_ACTION_PDMD:-0}" == 1 ]]; then
+    stages+=(--selfgen-only)
+fi
 if [[ "${1:-}" == --dry-run ]]; then
     exec "${stages[@]}" --dry-run
 fi

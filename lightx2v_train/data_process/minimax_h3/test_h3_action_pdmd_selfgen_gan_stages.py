@@ -98,7 +98,8 @@ def workflow(tmp_path, monkeypatch):
     }
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
-    for key in ("H3_GAN_PREPROCESS_PORT", "H3_GAN_PHASE2_PORT", "CUDA_VISIBLE_DEVICES"):
+    for key in ("H3_GAN_PREPROCESS_PORT", "H3_GAN_PHASE2_PORT", "CUDA_VISIBLE_DEVICES",
+                "H3_SKIP_ACTION_PDMD", "H3_SELFGEN_INIT_CHECKPOINT"):
         monkeypatch.delenv(key, raising=False)
     phase1, phase2 = helper.load_config(PHASE1), helper.load_config(PHASE2)
     events = []
@@ -135,6 +136,73 @@ def workflow(tmp_path, monkeypatch):
 
 def launched(workflow):
     return [event[1] for event in workflow["events"] if event[0] == "run"]
+
+
+def direct_config(workflow, monkeypatch):
+    monkeypatch.setenv("H3_SELFGEN_INIT_CHECKPOINT", str(workflow["initial"]))
+    return helper.load_config(PHASE2)
+
+
+def direct_execute(workflow, dry_run=False):
+    return stages.execute(
+        workflow["root"] / "missing_phase1.yaml", PHASE2,
+        prompts=workflow["prompts"], prompt_cache=workflow["env"]["H3_GAN_PROMPT_CACHE"],
+        real_cache=workflow["env"]["H3_SELFGEN_CACHE"],
+        dry_run=dry_run, selfgen_only=True,
+    )
+
+
+def test_selfgen_only_warm_starts_prior_without_action_inputs(workflow, monkeypatch):
+    config = direct_config(workflow, monkeypatch)
+    assert config["training"]["student"]["checkpoint_path"] == str(workflow["initial"])
+    assert config["training"]["fake"]["checkpoint_path"] == str(workflow["initial"])
+    workflow["prompts"].unlink()
+    direct_execute(workflow)
+    assert launched(workflow) == ["phase2"]
+    assert [event[1] for event in workflow["events"] if event[0] == "warm_start"] == [str(workflow["initial"])]
+    assert ("prepare", "selfgen") in workflow["events"]
+    assert ("prepare", "action") not in workflow["events"]
+    plan = json.loads((workflow["root"] / "stages/plan.json").read_text())
+    assert plan["mode"] == "selfgen_only"
+    assert not (workflow["root"] / "phase1_action_pdmd").exists()
+    assert not (workflow["root"] / "stages/phase1_handoff.complete.json").exists()
+
+
+def test_selfgen_only_resume_does_not_require_original_checkpoint_or_prompts(workflow, monkeypatch):
+    config = direct_config(workflow, monkeypatch)
+    checkpoint = save_checkpoint(config, 100)
+    shutil.rmtree(workflow["initial"])
+    workflow["prompts"].unlink()
+    result = direct_execute(workflow)
+    assert result["resumed_phase2"] == str(checkpoint)
+    assert workflow["events"] == [("validate", "selfgen"), ("run", "phase2")]
+    assert not (workflow["root"] / "phase1_action_pdmd").exists()
+
+
+def test_selfgen_only_refuses_existing_two_stage_output(workflow, monkeypatch):
+    workflow["execute"]()
+    original_plan = (workflow["root"] / "stages/plan.json").read_bytes()
+    workflow["events"].clear()
+    direct_config(workflow, monkeypatch)
+    with pytest.raises(RuntimeError, match="Existing staged recipe differs"):
+        direct_execute(workflow)
+    assert launched(workflow) == []
+    assert (workflow["root"] / "stages/plan.json").read_bytes() == original_plan
+
+
+def test_selfgen_only_dry_run_needs_no_source_and_prints_one_train_command(workflow, monkeypatch, capsys):
+    direct_config(workflow, monkeypatch)
+    shutil.rmtree(workflow["initial"])
+    shutil.rmtree(workflow["env"]["H3_MODEL_PATH"])
+    workflow["prompts"].unlink()
+    direct_execute(workflow, dry_run=True)
+    output = capsys.readouterr().out
+    assert output.count("--nnodes=4 --nproc_per_node=8") == 1
+    assert str(PHASE2) in output
+    assert "prepare_minimax_h3_gan_prompts.py" not in output
+    assert "[h3-stages][phase1]" not in output
+    assert not workflow["root"].exists()
+    assert workflow["events"] == []
 
 
 @pytest.mark.parametrize("iterations", [1200, 15000])
@@ -297,9 +365,30 @@ def test_shell_dry_run_expands_default_source_and_all_three_commands(tmp_path):
         "H3_SELFGEN_VIEW",
         "H3_SELFGEN_CACHE",
         "H3_GAN_REAL_CACHE",
+        "H3_SKIP_ACTION_PDMD",
+        "H3_SELFGEN_INIT_CHECKPOINT",
     ):
         env.pop(key, None)
     result = subprocess.run(["bash", str(LAUNCHER), "--dry-run"], env=env, check=True, capture_output=True, text=True)
     assert result.stdout.count("--nnodes=4 --nproc_per_node=8") == 3
     assert '"phase1_student_updates": 100' in result.stdout
     assert not (tmp_path / "output").exists()
+
+
+def test_shell_selfgen_only_preview_skips_prompt_encoding_and_phase1(tmp_path):
+    env = dict(os.environ, MASTER_ADDR="127.0.0.1", MASTER_PORT="23456", H3_PYTHON=sys.executable,
+               H3_STAGED_OUTPUT=str(tmp_path / "direct"), H3_SKIP_ACTION_PDMD="1",
+               H3_GAN_INIT_CHECKPOINT=str(tmp_path / "prior/checkpoint-000005800"))
+    for key in ("LOCAL_KERNELS", "KERNELS_CACHE", "H3_KERNEL_SNAPSHOT", "CUDA_VISIBLE_DEVICES",
+                "H3_GAN_PREPROCESS_PORT", "H3_GAN_PHASE2_PORT", "H3_ACTION_PDMD_OUTPUT",
+                "H3_SELFGEN_GAN_OUTPUT", "H3_ACTION_PDMD_VIEW", "H3_SELFGEN_VIEW",
+                "H3_SELFGEN_CACHE", "H3_GAN_REAL_CACHE", "H3_SELFGEN_INIT_CHECKPOINT"):
+        env.pop(key, None)
+    result = subprocess.run(["bash", str(LAUNCHER), "--dry-run"], env=env,
+                            check=True, capture_output=True, text=True)
+    assert result.stdout.count("--nnodes=4 --nproc_per_node=8") == 1
+    assert '"mode": "selfgen_only"' in result.stdout
+    assert "checkpoint-000005800" in result.stdout
+    assert "prepare_minimax_h3_gan_prompts.py" not in result.stdout
+    assert "[h3-stages][phase1]" not in result.stdout
+    assert not (tmp_path / "direct").exists()
