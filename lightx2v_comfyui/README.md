@@ -267,11 +267,10 @@ A new model compatible with the existing image/video request contracts needs onl
 
 ## Config editing and paths
 
-**Browse LightX2V / Browse model** select directories. **Browse / Edit config** combines file selection, JSON editing and LoRA controls. JSON is formatted when read, but only Save / Save as writes it. Switching, reloading or closing with unsaved edits asks before discarding them.
+**Browse LightX2V / Browse model** select directories. **Browse / Edit config** opens the file selected by this Service. Browse selects an existing JSON file and updates the Service's config_json path. JSON is formatted when read; edit it or the LoRA fields, then click **Save**. Switching files or closing with unsaved edits asks before discarding them.
 
-- Save checks the content hash captured when opened, backs up the original bytes in `.lightx2v-config-backups`, then atomically replaces the file while preserving permissions. External edits cause a conflict; reload or save elsewhere.
-- Save as only creates a new JSON file and updates this Service's path. Services sharing a file all see a normal Save.
-- **Service startup config (read only)** shows the running instance's immutable startup snapshot. Editing does not modify an active model; the next execution replaces the affected service if content changed.
+- Save writes to the selected file. It checks the content hash captured when opened, backs up the original bytes in `.lightx2v-config-backups`, then atomically replaces the file while preserving permissions. If another editor changed the file, Browse it again before editing.
+- The next Run reads the selected file's saved contents and replaces the affected service if its config changed. Unsaved edits are not used. Services sharing the file see the same saved changes; saving does not interrupt a running model.
 - LoRA Browse selects a `.safetensors` path without loading weights or a model. `name` is under Advanced. Unknown JSON fields are preserved.
 
 All paths refer to the **filesystem visible to the Comfy process**, including inside containers. A remote browser's Browse dialog does not upload files from the browser computer. There is no Docker mount creation or path translation. Mount source, weights, configs and outputs yourself. Relative config_json paths resolve against lightx2v_path; relative resources inside configs use the backend working directory too. Configs must be UTF-8 JSON objects, up to 1 MiB.

@@ -6,7 +6,6 @@ style.textContent = `
 .lx2v-config { max-height: 90vh; overflow: auto; }
 .lx2v-config .lx-config-path { flex: 1; align-self: center; overflow-wrap: anywhere; }
 .lx2v-config textarea { width: 100%; box-sizing: border-box; min-height: 32vh; resize: vertical; padding: 12px; background: #151515; color: #eee; font: 13px/1.5 monospace; border: 1px solid #777; }
-.lx2v-config pre { max-height: 25vh; overflow: auto; white-space: pre-wrap; background: #151515; padding: 12px; }
 .lx2v-config table { width: 100%; border-collapse: collapse; margin: 10px 0; }
 .lx2v-config td, .lx2v-config th { padding: 4px; text-align: left; }
 .lx2v-config td input { width: 100%; box-sizing: border-box; }
@@ -52,24 +51,13 @@ export function openConfigEditor(node) {
     const table = el("table");
     const add = el("button", "Add LoRA");
     loras.append(table, add);
-    const loaded = el("details");
-    loaded.append(el("summary", "Service startup config (read only)"));
-    const loadedText = el("pre", "No running instance recorded for this Service.");
-    loaded.append(loadedText);
-    const destination = el("input");
-    destination.setAttribute("aria-label", "Save as path");
-    destination.placeholder = "New JSON path on the ComfyUI filesystem";
-    const saveAs = el("button", "Save as");
-    const targetRow = el("div", "", "lx-row");
-    targetRow.append(destination, saveAs);
     const footer = el("div", "", "lx-row lx-footer");
-    const reload = el("button", "Reload");
     const save = el("button", "Save");
     const close = el("button", "Close");
-    footer.append(reload, save, close);
+    footer.append(save, close);
     dialog.append(el("h2", "Browse / Edit config"), pathRow,
-        el("p", "Save updates the file and keeps a backup. Changes apply on the next run; a running service keeps its loaded config. Use Save as for an independent workflow."),
-        text, loras, loaded, targetRow, message, footer);
+        el("p", "Browse selects the config file for this Service. Save writes your edits to that file; changes apply on the next run."),
+        text, loras, message, footer);
     let original = null, baseline = "", pending = false, loraError = "";
     function selectPath(value) {
         if (widget.value === value) return;
@@ -100,12 +88,9 @@ export function openConfigEditor(node) {
         try { if (loraError) throw new Error(loraError); parsed(); valid = true; message.textContent = text.value === baseline ? "File loaded." : "Valid JSON · unsaved changes"; }
         catch (error) { message.textContent = error.message; }
         save.disabled = !valid || !original || pending;
-        saveAs.disabled = !valid || !destination.value.trim() || pending;
-        add.disabled = !valid || pending;
+        add.disabled = !valid || !original || pending;
         browse.disabled = pending;
-        reload.disabled = pending || !widget.value;
-        text.disabled = pending;
-        destination.disabled = pending;
+        text.disabled = !original || pending;
         for (const input of table.querySelectorAll("input, button")) input.disabled = pending;
         return valid;
     }
@@ -174,7 +159,6 @@ export function openConfigEditor(node) {
         message.textContent = "Loading config…";
         try {
             const query = new URLSearchParams({path: value, base});
-            if (node.properties?.lightx2v_service_key) query.set("service_key", node.properties.lightx2v_service_key);
             const data = await request(`/lightx2v/configs/content?${query}`);
             const formatted = JSON.stringify(JSON.parse(data.content), null, 2) + "\n";
             if (select) selectPath(data.path);
@@ -182,21 +166,17 @@ export function openConfigEditor(node) {
             // Display formatting is clean; retain the file's original hash for save conflicts.
             text.value = baseline = formatted;
             path.textContent = original.path;
-            destination.value = original.path.replace(/\.json$/i, ".copy.json");
-            loadedText.textContent = original.loaded
-                ? `${original.loaded.busy ? "Running" : "Resident"} · ${original.loaded.config_json}\n${original.loaded.content}`
-                : "No running instance recorded for this Service.";
             pending = false; renderLoras();
         } catch (error) { pending = false; validate(); message.textContent = error.message; }
     }
-    async function persist(createNew) {
-        if (pending || !validate()) return;
+    async function persist() {
+        if (pending || !original || !validate()) return;
         pending = true; validate();
         try {
             const data = await request("/lightx2v/configs/save", {
                 method: "POST", headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({path: createNew ? destination.value : original.path, base,
-                    content: text.value, expected_sha256: original?.sha256, create_new: createNew}),
+                body: JSON.stringify({path: original.path, base,
+                    content: text.value, expected_sha256: original.sha256}),
             });
             original = data; baseline = data.content; path.textContent = data.path;
             selectPath(data.path);
@@ -205,10 +185,8 @@ export function openConfigEditor(node) {
         } catch (error) { pending = false; validate(); message.textContent = error.message; }
     }
     text.oninput = renderLoras;
-    destination.oninput = validate;
     add.onclick = () => { const data = parsed(); (data.lora_configs ||= []).push({path: "", strength: 1}); text.value = JSON.stringify(data, null, 2) + "\n"; renderLoras(); };
-    save.onclick = () => persist(false);
-    saveAs.onclick = () => persist(true);
+    save.onclick = persist;
     browse.onclick = () => {
         if (pending) return;
         openFileBrowser({kind: "config", base,
@@ -218,7 +196,6 @@ export function openConfigEditor(node) {
             },
         });
     };
-    reload.onclick = () => { if (canDiscard("Discard unsaved config edits and reload the file?")) load(); };
     function canClose() { return !pending && canDiscard("Close without saving config edits?"); }
     close.onclick = () => { if (canClose()) dialog.close(); };
     dialog.addEventListener("cancel", event => { if (!canClose()) event.preventDefault(); });
@@ -226,5 +203,5 @@ export function openConfigEditor(node) {
     document.body.appendChild(dialog);
     dialog.showModal();
     if (widget.value) load();
-    else { validate(); message.textContent = "Browse to choose a config JSON file, or enter JSON and use Save as."; }
+    else { validate(); message.textContent = "Browse to choose a config JSON file."; }
 }

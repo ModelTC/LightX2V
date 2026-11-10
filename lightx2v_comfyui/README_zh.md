@@ -267,11 +267,10 @@ hf download lightx2v/Qwen-Image-Edit-2511-Lightning \
 
 ## Config 编辑和路径
 
-**Browse LightX2V / Browse model** 选目录。**Browse / Edit config** 在同一窗口浏览文件、编辑 JSON 和 LoRA；读取时自动格式化，只有 Save / Save as 才写文件。切换、重载或关闭有未保存修改时会确认。
+**Browse LightX2V / Browse model** 选目录。**Browse / Edit config** 默认打开当前 Service 选中的文件；Browse 选择已有 JSON，并更新 Service 的 config_json 路径。读取时自动格式化，修改 JSON 或 LoRA 后点击 **Save**。切换文件或关闭时，有未保存修改会先确认是否丢弃。
 
-- Save 校验打开时的内容哈希，将原始字节备份到同目录 `.lightx2v-config-backups`，再原子替换并保留权限。外部修改产生冲突，需 Reload 或另存。
-- Save as 仅创建新 JSON，并更新当前 Service 的路径。共享一个文件的多个 Service 会共同受到 Save 的影响。
-- **Service startup config (read only)** 显示已启动实例的不可变配置快照。编辑不会中途改模型；下次执行发现内容改变后替换对应服务。
+- Save 写回所选文件：校验打开时的内容哈希，将原始字节备份到同目录 `.lightx2v-config-backups`，再原子替换并保留权限。文件被其他编辑器修改时，需通过 Browse 重新打开后再编辑。
+- 下次 Run 读取所选文件已保存的内容，配置有变化时替换对应服务。未保存修改不参与运行；共享同一文件的 Service 会读到相同修改，保存不会中断正在运行的模型。
 - LoRA 的 Browse 只选择 `.safetensors` 路径，不读取权重、不加载模型；名称在 Advanced，未知 JSON 字段保留。
 
 所有路径都是 **Comfy 所在机器/容器可见的路径**。远端网页的 Browse 不是浏览器电脑的文件上传。没有 Docker 挂载或路径转换逻辑；容器使用者自行挂载源码、权重、配置和输出。`config_json` 相对路径按 lightx2v_path 解析，config 内的相对资源路径也使用后端工作目录。JSON 上限 1 MiB，需为 UTF-8 object。

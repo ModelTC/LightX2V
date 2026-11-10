@@ -90,16 +90,11 @@ def register_routes():
 
     @endpoint("GET", "/configs/content")
     async def config_content(request):
-        data = await asyncio.to_thread(read_config, request.query.get("path", ""), request.query.get("base"))
-        key = request.query.get("service_key")
-        if key and not re.fullmatch(r"[0-9a-f]{64}", key):
-            raise ValueError("Invalid service_key")
-        data["loaded"] = await asyncio.to_thread(manager().config_snapshot, key) if key else None
-        return data
+        return await asyncio.to_thread(read_config, request.query.get("path", ""), request.query.get("base"))
 
     @endpoint("POST", "/configs/save")
     async def config_save(request):
         body = await request.json()
-        if not isinstance(body, dict) or type(body.get("create_new", False)) is not bool:
-            raise ValueError("Expected a JSON object with boolean create_new")
-        return await asyncio.to_thread(save_config, body.get("path", ""), body.get("content"), body.get("expected_sha256"), create_new=body.get("create_new", False), base=body.get("base"))
+        if not isinstance(body, dict):
+            raise ValueError("Expected a JSON object")  # noqa: TRY004 - invalid input value
+        return await asyncio.to_thread(save_config, body.get("path", ""), body.get("content"), body.get("expected_sha256"), base=body.get("base"))

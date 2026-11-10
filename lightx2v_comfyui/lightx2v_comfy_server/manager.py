@@ -405,20 +405,6 @@ class Manager:
             finally:
                 self._lock.release()
 
-    def config_snapshot(self, service_key: str) -> dict | None:
-        """Read the immutable configuration loaded by an owned service, without starting it."""
-        with self._state_lock:
-            instance = self._instances.get(service_key)
-            if instance is None:
-                return None
-            return {
-                "config_json": instance.server.settings["config_json"],
-                "content": json.dumps(json.loads(instance.server.config_json), ensure_ascii=False, indent=2),
-                "fingerprint": instance.server.fingerprint,
-                "busy": instance.busy,
-                "instance_id": instance.directory.name,
-            }
-
     def snapshots(self) -> list[dict]:
         with self._state_lock:
             result = []

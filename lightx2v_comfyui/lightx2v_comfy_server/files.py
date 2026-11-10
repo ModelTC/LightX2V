@@ -117,7 +117,7 @@ def read_config(value, base=None):
     return {"path": str(path), "content": data.decode("utf-8-sig"), "sha256": hashlib.sha256(data).hexdigest()}
 
 
-def save_config(value, content, expected_sha256=None, *, create_new=False, base=None):
+def save_config(value, content, expected_sha256=None, *, base=None):
     if not isinstance(content, str):
         raise ValueError("Config content must be text")  # noqa: TRY004 - invalid input value
     data = content.encode("utf-8")
@@ -126,41 +126,32 @@ def save_config(value, content, expected_sha256=None, *, create_new=False, base=
     backup = None
     # Serializes this process's editors; the hash also detects external edits since opening.
     with _edit_lock:
-        if create_new:
+        with path.open("rb") as handle:
+            old = handle.read(MAX_CONFIG_BYTES + 1)
+        validate_config(old)
+        if hashlib.sha256(old).hexdigest() != expected_sha256:
+            raise ConfigConflict("Config changed since it was opened. Reopen the file with Browse before editing")
+        if data != old:
+            backups = path.parent / ".lightx2v-config-backups"
+            backups.mkdir(exist_ok=True)
+            backup = backups / (path.stem + "." + expected_sha256 + ".json")
             try:
-                with path.open("xb") as handle:
+                with backup.open("xb") as handle:
+                    handle.write(old)
+            except FileExistsError:
+                if backup.read_bytes() != old:
+                    raise ConfigConflict("Existing config backup does not match the original")
+            fd, temporary = tempfile.mkstemp(prefix=".lightx2v-config-", dir=path.parent)
+            try:
+                with os.fdopen(fd, "wb") as handle:
                     handle.write(data)
                     handle.flush()
                     os.fsync(handle.fileno())
-            except FileExistsError as error:
-                raise ConfigConflict("Save as requires a new filename; the destination already exists") from error
-        else:
-            with path.open("rb") as handle:
-                old = handle.read(MAX_CONFIG_BYTES + 1)
-            validate_config(old)
-            if hashlib.sha256(old).hexdigest() != expected_sha256:
-                raise ConfigConflict("Config changed since it was opened. Reload it or save to a new file")
-            if data != old:
-                backups = path.parent / ".lightx2v-config-backups"
-                backups.mkdir(exist_ok=True)
-                backup = backups / (path.stem + "." + expected_sha256 + ".json")
-                try:
-                    with backup.open("xb") as handle:
-                        handle.write(old)
-                except FileExistsError:
-                    if backup.read_bytes() != old:
-                        raise ConfigConflict("Existing config backup does not match the original")
-                fd, temporary = tempfile.mkstemp(prefix=".lightx2v-config-", dir=path.parent)
-                try:
-                    with os.fdopen(fd, "wb") as handle:
-                        handle.write(data)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                    os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
-                    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
-                        raise ConfigConflict("Config changed while saving. Reload before retrying")
-                    os.replace(temporary, path)
-                finally:
-                    Path(temporary).unlink(missing_ok=True)
+                os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
+                if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+                    raise ConfigConflict("Config changed while saving. Reopen the file with Browse before editing")
+                os.replace(temporary, path)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
         result = read_config(str(path))
     return dict(result, backup=str(backup) if backup else None)
