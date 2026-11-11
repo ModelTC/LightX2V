@@ -6,6 +6,8 @@ Supports text-to-image (`t2i`) and reference-image generation/editing (`i2i`) wi
 
 ## Setup
 
+Model weights: [MiniMaxAI/MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image).
+
 Install LightX2V and the dependencies for your device first. The Qwen3-VL vision encoder requires `transformers>=5.15.0`, including the `get_vision_interpolation_indices_and_weights` interface.
 
 Run the commands below from the repository root. In each new terminal, set the paths and load the base environment:
@@ -20,7 +22,7 @@ source "$lightx2v_path/scripts/base/base.sh"
 
 Set `model_path` to the complete model root containing the Transformer, Qwen3-VL, VAE, tokenizer/processor, `pdd_config.json`, and `pdd_fused_heads.safetensors`.
 
-Before using an inference script or the cache generation script, update its `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES`. The current single-GPU inference scripts use GPU 7, the four-GPU scripts use GPUs 4, 5, 6, and 7, and the cache generation script uses GPU 0.
+Before using an inference script, server startup script, or the cache generation script, update its `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES`. The current single-GPU inference and server scripts use GPU 7, the four-GPU scripts use GPUs 4, 5, 6, and 7, and the cache generation script uses GPU 0.
 
 ## AdaLN cache
 
@@ -90,40 +92,6 @@ IMAGE_PATH="/path/to/reference1.png,/path/to/reference2.png" \
   bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
 ```
 
-### Direct CLI commands
-
-Single-GPU T2I, with explicit prompt, size, seed, and output path:
-
-```bash
-CUDA_VISIBLE_DEVICES=7 python -m lightx2v.infer \
-  --model_cls minimax_h3_image \
-  --task t2i \
-  --model_path "$model_path" \
-  --config_json "$lightx2v_path/configs/minimax_h3_image/minimax_h3_image.json" \
-  --prompt "A photorealistic photograph of a cat sitting by a sunlit window." \
-  --size 2048 2048 \
-  --seed 42 \
-  --save_result_path "$lightx2v_path/save_results/minimax_h3_image_t2i.png"
-```
-
-Four-GPU I2I:
-
-```bash
-CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --standalone --nproc_per_node=4 \
-  -m lightx2v.infer \
-  --model_cls minimax_h3_image \
-  --task i2i \
-  --model_path "$model_path" \
-  --config_json "$lightx2v_path/configs/minimax_h3_image/minimax_h3_image_tp_sp.json" \
-  --image_path "$model_path/examples/reference1.png" \
-  --prompt "Keep the scene in <Picture 1> and change the lighting to warm sunset light." \
-  --size 2048 2048 \
-  --seed 1234 \
-  --save_result_path "$lightx2v_path/save_results/minimax_h3_image_i2i_tp_sp.png"
-```
-
-The CLI's `--image_path` also accepts comma-separated paths for up to 16 reference images. Images correspond, in input order, to `<Picture 1>`, `<Picture 2>`, and subsequent markers in the prompt.
-
 ### Parallel configurations
 
 The CUDA configs in [configs/minimax_h3_image](../../configs/minimax_h3_image) have the following defaults and can be used for T2I, I2I, and serving:
@@ -143,118 +111,30 @@ When changing configurations, also adjust `CUDA_VISIBLE_DEVICES` and `--nproc_pe
 
 ### Start the server
 
-Complete the path setup and AdaLN cache preparation first. Omit `--task` at server startup to support both T2I and I2I, selected by each request's `task`. Setting `--task t2i` or `--task i2i` at startup restricts the server to that task. H3 Image does not require `--model-variant`.
+Prepare the AdaLN cache, then update `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES` in the selected startup script. Both scripts support T2I and I2I on port 8000.
 
-Set the following variable to store cached server inputs and asynchronous outputs under the repository's `save_results/server_cache/` directory:
-
-```bash
-export LIGHTX2V_CACHE_DIR="$lightx2v_path/save_results/server_cache"
-```
-
-Single-GPU server:
+Single GPU ([start_server.sh](server/start_server.sh)):
 
 ```bash
-CUDA_VISIBLE_DEVICES=7 python -m lightx2v.server \
-  --model_cls minimax_h3_image \
-  --model_path "$model_path" \
-  --config_json "$lightx2v_path/configs/minimax_h3_image/minimax_h3_image.json" \
-  --host 0.0.0.0 \
-  --port 8000
+bash scripts/minimax_h3_image/server/start_server.sh
 ```
 
-Four-GPU server, using the same Qwen3-VL, DiT, and VAE parallel configuration as the CLI:
+Four GPUs, TP2 × SP2 ([start_server_parallel.sh](server/start_server_parallel.sh)):
 
 ```bash
-CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --standalone --nproc_per_node=4 \
-  -m lightx2v.server \
-  --model_cls minimax_h3_image \
-  --model_path "$model_path" \
-  --config_json "$lightx2v_path/configs/minimax_h3_image/minimax_h3_image_tp_sp.json" \
-  --host 0.0.0.0 \
-  --port 8000
+bash scripts/minimax_h3_image/server/start_server_parallel.sh
 ```
 
-Choose either the single-GPU or four-GPU startup command. Wait for model loading, compilation, warmup, and HTTP startup to complete before sending requests from another terminal. In multi-GPU mode, only rank 0 exposes the HTTP API; the other ranks participate in inference.
+### POST clients
+
+Wait for model loading, compilation, and warmup to finish, then run the client for your task in another terminal. Update the `url` in [post_t2i.py](server/post_t2i.py) or [post_i2i.py](server/post_i2i.py) for your server. For I2I, also set `image_path` to a client-local reference image; the client sends it as Base64.
 
 ```bash
-curl --fail http://127.0.0.1:8000/v1/service/status
+python scripts/minimax_h3_image/server/post_t2i.py
+python scripts/minimax_h3_image/server/post_i2i.py
 ```
 
-Interactive API documentation is available at `http://127.0.0.1:8000/docs`. For remote access, replace `127.0.0.1` below with the server's address.
-
-### Synchronous requests: return PNG bytes
-
-`POST /v1/tasks/image/sync` waits for generation and returns `image/png` bytes. Save them with `-o`. These examples do not require a server-side output file; the image is saved on the client running curl.
-
-T2I:
-
-```bash
-mkdir -p save_results
-curl --fail --max-time 610 \
-  http://127.0.0.1:8000/v1/tasks/image/sync \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "task": "t2i",
-    "prompt": "A photorealistic photograph of a cat sitting by a sunlit window.",
-    "seed": 42,
-    "size": [2048, 2048]
-  }' \
-  -o save_results/minimax_h3_image_t2i_http.png
-```
-
-I2I with a reference image on the server:
-
-```bash
-mkdir -p save_results
-curl --fail --max-time 610 \
-  http://127.0.0.1:8000/v1/tasks/image/sync \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "task": "i2i",
-    "prompt": "Keep the scene in <Picture 1> and change the lighting to warm sunset light.",
-    "image_path": "/path/to/MiniMax-H3-Image/examples/reference1.png",
-    "seed": 1234,
-    "size": [2048, 2048]
-  }' \
-  -o save_results/minimax_h3_image_i2i_http.png
-```
-
-`image_path` is a string. A single image can also be provided as a URL accessible to the server or as a Base64-encoded image file. For client-local images, encode the file contents as Base64 or place the file where the server can access it. For multiple references, use comma-separated **server-local paths**, for example `"image_path": "/path/to/a.png,/path/to/b.png"`, and refer to them in order as `<Picture 1>` and `<Picture 2>` in the prompt.
-
-The synchronous endpoint has a default timeout of 600 seconds. For longer requests, set a query parameter such as `?timeout_seconds=1200` and increase curl's `--max-time` accordingly.
-
-### Asynchronous requests: submit, query, and download
-
-The asynchronous endpoint returns a task ID immediately. Explicitly set `save_result_path` if you want to download the result later:
-
-```bash
-curl --fail http://127.0.0.1:8000/v1/tasks/image/ \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "task": "t2i",
-    "prompt": "A photorealistic photograph of a cat sitting by a sunlit window.",
-    "seed": 42,
-    "size": [2048, 2048],
-    "save_result_path": "minimax_h3_image_t2i_async.png"
-  }'
-```
-
-Replace the value below with the returned `task_id`, then query its status:
-
-```bash
-task_id="replace-with-returned-task-id"
-curl --fail "http://127.0.0.1:8000/v1/tasks/$task_id/status"
-```
-
-Successful tasks progress through `pending`, `processing`, and `completed`. Failed tasks report `failed` with error details in the status response. Once the status is `completed`, download the image:
-
-```bash
-mkdir -p save_results
-curl --fail "http://127.0.0.1:8000/v1/tasks/$task_id/result" \
-  -o save_results/minimax_h3_image_t2i_async.png
-```
-
-Relative `save_result_path` values are resolved under the server cache's `outputs/` directory. With the environment variable above, this example saves to `$lightx2v_path/save_results/server_cache/outputs/minimax_h3_image_t2i_async.png`. Asynchronous I2I uses the same endpoint; set `task` to `"i2i"` and add `image_path`.
+The clients return a task ID and request `2048 × 2048` PNG output by default. Completed images are saved on the server under `$lightx2v_path/save_results/server_cache/outputs/`. Edit `prompt`, `size`, `seed`, and `save_result_path` in the clients as needed.
 
 ## Request parameters and startup configuration
 
@@ -264,7 +144,7 @@ Relative `save_result_path` values are resolved under the server cache's `output
 | `task` | Selected with `--task` in the CLI; the server commands above select `t2i`/`i2i` through each request's `task`. |
 | `prompt`, `image_path`, `seed` | Set per request. An omitted or null seed defaults to 42; an explicit 0 is valid. |
 | `size` | `[height, width]`; use `--size height width` in the CLI. An explicit request size overrides the JSON; when omitted, the config default is `[2048, 2048]`. |
-| `save_result_path` | Required to save PNG files through the CLI. Synchronous HTTP requests can receive PNG bytes directly; asynchronous downloads require a server-side save path. |
+| `save_result_path` | PNG output path. Relative paths in service requests are resolved under `$LIGHTX2V_CACHE_DIR/outputs/`. |
 
 All four CUDA configs for this directory enable `use_adaln_cache`, `use_compile`, and `warmup` by default. The single-GPU, TP2, and SP2 configs enable CPU offload. The four-GPU TP2 × SP2 config sets `cpu_offload`, `text_encoder_cpu_offload`, and `vae_cpu_offload` to `false`, keeping DiT, Qwen3-VL, and VAE weights resident on the GPUs. Warmup runs at `[2048, 2048]` and `[3552, 4736]`; when serving both tasks, both are warmed up. Warmup sizes are independent of individual request output sizes.
 
