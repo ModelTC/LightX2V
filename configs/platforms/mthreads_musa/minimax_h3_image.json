@@ -1,9 +1,5 @@
 {
   "infer_steps": 6,
-  "size": [
-    2048,
-    2048
-  ],
   "enable_cfg": false,
   "sample_guide_scale": 1.0,
   "min_generation_area": 4194304,
@@ -23,6 +19,5 @@
   "feature_caching": "NoCaching",
   "use_compile": true,
   "warmup": true,
-  "vae_spatial_scale_factor": 16,
-  "text_encoder_path": "/data/models/MiniMax-H3/text_encoder"
+  "vae_spatial_scale_factor": 16
 }

@@ -1,6 +1,5 @@
 {
   "infer_steps": 6,
-  "size": [2048, 2048],
   "enable_cfg": false,
   "sample_guide_scale": 1.0,
   "min_generation_area": 4194304,

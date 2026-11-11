@@ -26,8 +26,8 @@ torchrun --standalone --nproc_per_node=4 -m lightx2v.infer \
   --model_cls minimax_h3_image \
   --task t2i \
   --model_path "$model_path" \
-  --config_json "$lightx2v_path/configs/platforms/mthreads_musa/minimax_h3_image_tp_sp.json" \
+  --config_json "$lightx2v_path/configs/platforms/mthreads_musa/minimax_h3_image_sp4.json" \
   --prompt "$prompt" \
   --size 3552 4736 \
   --seed 42 \
-  --save_result_path "$lightx2v_path/save_results/minimax_h3_image_t2i_tp_sp_musa.png"
+  --save_result_path "$lightx2v_path/save_results/minimax_h3_image_t2i_sp4_musa.png"

@@ -62,10 +62,10 @@ The generation tool raises `FileExistsError` if the target directory already exi
 
 ### Example scripts
 
-| Task | Single GPU | Four GPUs, TP2 × SP2 |
-| --- | --- | --- |
-| Text-to-image | [run_minimax_h3_image_t2i.sh](run_minimax_h3_image_t2i.sh) | [run_minimax_h3_image_t2i_tp_sp.sh](run_minimax_h3_image_t2i_tp_sp.sh) |
-| Reference-image generation/editing | [run_minimax_h3_image_i2i.sh](run_minimax_h3_image_i2i.sh) | [run_minimax_h3_image_i2i_tp_sp.sh](run_minimax_h3_image_i2i_tp_sp.sh) |
+| Task | Single GPU | Four GPUs, SP4 | Four GPUs, TP2 × SP2 |
+| --- | --- | --- | --- |
+| Text-to-image | [run_minimax_h3_image_t2i.sh](run_minimax_h3_image_t2i.sh) | [run_minimax_h3_image_t2i_sp4.sh](run_minimax_h3_image_t2i_sp4.sh) | [run_minimax_h3_image_t2i_tp_sp.sh](run_minimax_h3_image_t2i_tp_sp.sh) |
+| Reference-image generation/editing | [run_minimax_h3_image_i2i.sh](run_minimax_h3_image_i2i.sh) | [run_minimax_h3_image_i2i_sp4.sh](run_minimax_h3_image_i2i_sp4.sh) | [run_minimax_h3_image_i2i_tp_sp.sh](run_minimax_h3_image_i2i_tp_sp.sh) |
 
 Choose a script for your task:
 
@@ -76,20 +76,26 @@ bash scripts/minimax_h3_image/run_minimax_h3_image_t2i.sh
 # Single-GPU reference-image generation/editing
 bash scripts/minimax_h3_image/run_minimax_h3_image_i2i.sh
 
-# Four-GPU text-to-image
+# Four-GPU SP4 text-to-image
+bash scripts/minimax_h3_image/run_minimax_h3_image_t2i_sp4.sh
+
+# Four-GPU SP4 reference-image generation/editing
+bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_sp4.sh
+
+# Four-GPU TP2 × SP2 text-to-image
 bash scripts/minimax_h3_image/run_minimax_h3_image_t2i_tp_sp.sh
 
-# Four-GPU reference-image generation/editing
+# Four-GPU TP2 × SP2 reference-image generation/editing
 bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
 ```
 
-All four scripts currently generate `4096 × 4096` PNG files in the repository's `save_results/` directory, with filenames corresponding to the task and parallel mode. The default I2I reference image is `$model_path/examples/reference1.png`.
+All six scripts currently generate `4096 × 4096` PNG files in the repository's `save_results/` directory, with filenames corresponding to the task and parallel mode. The default I2I reference image is `$model_path/examples/reference1.png`.
 
-The four-GPU I2I script accepts an `IMAGE_PATH` override. For multiple references, use comma-separated paths and update the script's `prompt` accordingly:
+Both four-GPU I2I scripts accept an `IMAGE_PATH` override. For multiple references, use comma-separated paths and update the script's `prompt` accordingly:
 
 ```bash
 IMAGE_PATH="/path/to/reference1.png,/path/to/reference2.png" \
-  bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
+  bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_sp4.sh
 ```
 
 ### Parallel configurations
@@ -99,24 +105,30 @@ The CUDA configs in [configs/minimax_h3_image](../../configs/minimax_h3_image) h
 | Config | GPUs | DiT | Qwen3-VL | VAE |
 | --- | --- | --- | --- | --- |
 | [minimax_h3_image.json](../../configs/minimax_h3_image/minimax_h3_image.json) | 1 | Single GPU | Single GPU | Single GPU |
-| [minimax_h3_image_tp.json](../../configs/minimax_h3_image/minimax_h3_image_tp.json) | 2 | TP2 | Rank 0 | Rank 0 |
 | [minimax_h3_image_sp.json](../../configs/minimax_h3_image/minimax_h3_image_sp.json) | 2 | SP2 (Ulysses) | Rank 0 | Rank 0 |
+| [minimax_h3_image_sp4.json](../../configs/minimax_h3_image/minimax_h3_image_sp4.json) | 4 | SP4 (Ulysses) | TP4 | Spatial tile parallelism for both encoding and decoding |
 | [minimax_h3_image_tp_sp.json](../../configs/minimax_h3_image/minimax_h3_image_tp_sp.json) | 4 | TP2 × SP2 (Ulysses) | TP4 | Spatial tile parallelism for both encoding and decoding |
 
-The four-GPU config enables `text_encoder_tensor_parallel`, `vae_encode_parallel`, and `vae_decode_parallel` by default. The VAE encoder distributes tiles from one or multiple reference images across ranks, then uses all-gather so every rank receives the complete encoding results. The decoder computes tiles across ranks, and rank 0 collects, stitches, and outputs the final image. T2I has no reference images and skips VAE encoding.
+Both four-GPU configs enable `text_encoder_tensor_parallel`, `vae_encode_parallel`, and `vae_decode_parallel` by default. SP4 uses sequence parallelism without DiT tensor parallelism; both four-GPU configs disable CPU offload and enable DiT and VAE compilation. The VAE encoder distributes tiles from one or multiple reference images across ranks, then uses all-gather so every rank receives the complete encoding results. The decoder computes tiles across ranks, and rank 0 collects, stitches, and outputs the final image. T2I has no reference images and skips VAE encoding.
 
-When changing configurations, also adjust `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` so the process count matches the DiT TP × SP size. Qwen3-VL TP uses the entire inference process group, giving TP4 in the four-GPU mixed configuration.
+When changing configurations, also adjust `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` so the process count matches the DiT TP × SP size. Qwen3-VL TP uses the entire inference process group, giving TP4 in both four-GPU configs.
 
 ## Serving and POST requests
 
 ### Start the server
 
-Prepare the AdaLN cache, then update `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES` in the selected startup script. Both scripts support T2I and I2I on port 8000.
+Prepare the AdaLN cache, then update `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES` in the selected startup script. All three scripts support T2I and I2I on port 8000.
 
 Single GPU ([start_server.sh](server/start_server.sh)):
 
 ```bash
 bash scripts/minimax_h3_image/server/start_server.sh
+```
+
+Four GPUs, SP4 ([start_server_sp4.sh](server/start_server_sp4.sh)):
+
+```bash
+bash scripts/minimax_h3_image/server/start_server_sp4.sh
 ```
 
 Four GPUs, TP2 × SP2 ([start_server_parallel.sh](server/start_server_parallel.sh)):

@@ -62,10 +62,10 @@ bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_image_adaln.sh
 
 ### 使用示例脚本
 
-| 任务 | 单卡 | 四卡 TP2 × SP2 |
-| --- | --- | --- |
-| 文生图 | [run_minimax_h3_image_t2i.sh](run_minimax_h3_image_t2i.sh) | [run_minimax_h3_image_t2i_tp_sp.sh](run_minimax_h3_image_t2i_tp_sp.sh) |
-| 参考图生成／编辑 | [run_minimax_h3_image_i2i.sh](run_minimax_h3_image_i2i.sh) | [run_minimax_h3_image_i2i_tp_sp.sh](run_minimax_h3_image_i2i_tp_sp.sh) |
+| 任务 | 单卡 | 四卡 SP4 | 四卡 TP2 × SP2 |
+| --- | --- | --- | --- |
+| 文生图 | [run_minimax_h3_image_t2i.sh](run_minimax_h3_image_t2i.sh) | [run_minimax_h3_image_t2i_sp4.sh](run_minimax_h3_image_t2i_sp4.sh) | [run_minimax_h3_image_t2i_tp_sp.sh](run_minimax_h3_image_t2i_tp_sp.sh) |
+| 参考图生成／编辑 | [run_minimax_h3_image_i2i.sh](run_minimax_h3_image_i2i.sh) | [run_minimax_h3_image_i2i_sp4.sh](run_minimax_h3_image_i2i_sp4.sh) | [run_minimax_h3_image_i2i_tp_sp.sh](run_minimax_h3_image_i2i_tp_sp.sh) |
 
 按任务选择一个脚本运行：
 
@@ -76,20 +76,26 @@ bash scripts/minimax_h3_image/run_minimax_h3_image_t2i.sh
 # 单卡参考图生成／编辑
 bash scripts/minimax_h3_image/run_minimax_h3_image_i2i.sh
 
-# 四卡文生图
+# 四卡 SP4 文生图
+bash scripts/minimax_h3_image/run_minimax_h3_image_t2i_sp4.sh
+
+# 四卡 SP4 参考图生成／编辑
+bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_sp4.sh
+
+# 四卡 TP2 × SP2 文生图
 bash scripts/minimax_h3_image/run_minimax_h3_image_t2i_tp_sp.sh
 
-# 四卡参考图生成／编辑
+# 四卡 TP2 × SP2 参考图生成／编辑
 bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
 ```
 
-四个脚本当前均输出 `4096 × 4096` PNG，保存到仓库的 `save_results/` 目录；文件名与任务及并行方式对应。I2I 默认参考图为 `$model_path/examples/reference1.png`。
+六个脚本当前均输出 `4096 × 4096` PNG，保存到仓库的 `save_results/` 目录；文件名与任务及并行方式对应。I2I 默认参考图为 `$model_path/examples/reference1.png`。
 
-四卡 I2I 脚本支持通过 `IMAGE_PATH` 覆盖参考图。多张参考图使用英文逗号分隔，并相应修改脚本中的 `prompt`：
+两种四卡 I2I 脚本均支持通过 `IMAGE_PATH` 覆盖参考图。多张参考图使用英文逗号分隔，并相应修改脚本中的 `prompt`：
 
 ```bash
 IMAGE_PATH="/path/to/reference1.png,/path/to/reference2.png" \
-  bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
+  bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_sp4.sh
 ```
 
 ### 并行配置
@@ -99,24 +105,30 @@ IMAGE_PATH="/path/to/reference1.png,/path/to/reference2.png" \
 | 配置 | GPU 数量 | DiT | Qwen3-VL | VAE |
 | --- | --- | --- | --- | --- |
 | [minimax_h3_image.json](../../configs/minimax_h3_image/minimax_h3_image.json) | 1 | 单卡 | 单卡 | 单卡 |
-| [minimax_h3_image_tp.json](../../configs/minimax_h3_image/minimax_h3_image_tp.json) | 2 | TP2 | rank 0 | rank 0 |
 | [minimax_h3_image_sp.json](../../configs/minimax_h3_image/minimax_h3_image_sp.json) | 2 | SP2（Ulysses） | rank 0 | rank 0 |
+| [minimax_h3_image_sp4.json](../../configs/minimax_h3_image/minimax_h3_image_sp4.json) | 4 | SP4（Ulysses） | TP4 | 编码、解码均按空间 tile 并行 |
 | [minimax_h3_image_tp_sp.json](../../configs/minimax_h3_image/minimax_h3_image_tp_sp.json) | 4 | TP2 × SP2（Ulysses） | TP4 | 编码、解码均按空间 tile 并行 |
 
-四卡配置默认打开 `text_encoder_tensor_parallel`、`vae_encode_parallel` 和 `vae_decode_parallel`。VAE Encoder 将单张或多张参考图的 tile 分配给各 rank，计算后通过 all-gather 让各 rank 获得完整编码结果；Decoder 的 tile 由各 rank 并行计算，最终由 rank 0 汇总、拼接和输出图片。T2I 没有参考图，不执行 VAE 编码。
+两个四卡配置均默认打开 `text_encoder_tensor_parallel`、`vae_encode_parallel` 和 `vae_decode_parallel`。SP4 的 DiT 仅使用序列并行；两个四卡配置均关闭 CPU offload，开启 DiT 和 VAE 编译。VAE Encoder 将单张或多张参考图的 tile 分配给各 rank，计算后通过 all-gather 让各 rank 获得完整编码结果；Decoder 的 tile 由各 rank 并行计算，最终由 rank 0 汇总、拼接和输出图片。T2I 没有参考图，不执行 VAE 编码。
 
-切换配置时，同时调整 `CUDA_VISIBLE_DEVICES` 和 `--nproc_per_node`，使进程数等于 DiT 的 TP × SP 规模。Qwen3-VL 的 TP 使用整个推理进程组，因此四卡混合配置下为 TP4。
+切换配置时，同时调整 `CUDA_VISIBLE_DEVICES` 和 `--nproc_per_node`，使进程数等于 DiT 的 TP × SP 规模。Qwen3-VL 的 TP 使用整个推理进程组，因此两个四卡配置均为 TP4。
 
 ## 服务与 POST 请求
 
 ### 启动服务
 
-先准备 AdaLN 缓存，再修改所选启动脚本中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`。单卡、四卡服务均支持 T2I 和 I2I，默认端口为 8000。
+先准备 AdaLN 缓存，再修改所选启动脚本中的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`。单卡及两种四卡服务均支持 T2I 和 I2I，默认端口为 8000。
 
 单卡启动（[start_server.sh](server/start_server.sh)）：
 
 ```bash
 bash scripts/minimax_h3_image/server/start_server.sh
+```
+
+四卡 SP4 启动（[start_server_sp4.sh](server/start_server_sp4.sh)）：
+
+```bash
+bash scripts/minimax_h3_image/server/start_server_sp4.sh
 ```
 
 四卡 TP2 × SP2 启动（[start_server_parallel.sh](server/start_server_parallel.sh)）：
