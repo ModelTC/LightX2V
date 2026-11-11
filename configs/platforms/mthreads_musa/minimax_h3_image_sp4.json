@@ -1,9 +1,5 @@
 {
   "infer_steps": 6,
-  "size": [
-    2048,
-    2048
-  ],
   "enable_cfg": false,
   "sample_guide_scale": 1.0,
   "min_generation_area": 4194304,
@@ -16,8 +12,8 @@
   "vae_cpu_offload": true,
   "vae_use_compile": true,
   "vae_attn_type": "torch_sdpa",
-  "attn_type": "torch_sdpa",
-  "rms_type": "torch_native",
+  "attn_type": "flash_attn3",
+  "rms_type": "sgl-kernel",
   "rope_type": "torch_real_rope",
   "rope_compute_dtype": "bf16",
   "feature_caching": "NoCaching",
@@ -25,6 +21,7 @@
   "warmup": true,
   "vae_spatial_scale_factor": 16,
   "parallel": {
-    "tensor_p_size": 2
+    "seq_p_size": 4,
+    "seq_p_attn_type": "ulysses"
   }
 }
