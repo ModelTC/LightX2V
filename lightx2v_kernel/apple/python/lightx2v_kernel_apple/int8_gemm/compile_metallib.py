@@ -11,11 +11,11 @@ ROOT = Path(__file__).resolve().parent
 def parse_shape(value):
     try:
         k, n = map(int, value.lower().split("x"))
-        if k > 0 and n > 0 and k % 1024 == 0 and n % 128 == 0:
+        if k > 0 and n > 0 and k % 128 == 0 and n % 128 == 0:
             return k, n
     except ValueError:
         pass
-    raise argparse.ArgumentTypeError("Expected KxN; K must be a positive multiple of 1024 and N a positive multiple of 128")
+    raise argparse.ArgumentTypeError("Expected KxN; K and N must be positive multiples of 128")
 
 
 def main():

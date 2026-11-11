@@ -8,16 +8,18 @@ using namespace mpp::tensor_ops;
 constant constexpr int K = {{K}};
 constant constexpr int N = {{N}};
 constant constexpr int NT = K % 2048 == 0 ? 512 : 256;
+constant constexpr int QV = (K + NT * 4 - 1) / (NT * 4);
 
 kernel void quantize_x(device const bfloat* src, device int8_t* dst, device float* scales,
     uint row [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]], uint sg [[simdgroup_index_in_threadgroup]]) {
-    bfloat4 values[K / (NT * 4)];
+    bfloat4 values[QV];
     threadgroup float maxima[NT / 32];
     float amax = 0;
     #pragma clang loop unroll(full)
-    for (int i = 0; i < K / (NT * 4); ++i) {
-        values[i] = *reinterpret_cast<device const bfloat4*>(src + row*K + tid*4 + i*NT*4);
+    for (int i = 0; i < QV; ++i) {
+        uint col = tid*4 + i*NT*4;
+        values[i] = col < K ? *reinterpret_cast<device const bfloat4*>(src + row*K + col) : bfloat4(0);
         float4 v = abs(float4(values[i]));
         amax = max(amax, max(max(v.x, v.y), max(v.z, v.w)));
     }
@@ -27,9 +29,10 @@ kernel void quantize_x(device const bfloat* src, device int8_t* dst, device floa
     amax = simd_max(lane < NT/32 ? maxima[lane] : 0.0f);
     if (tid == 0) scales[row] = amax > 0 ? amax / 127.0f : 1.0f;
     #pragma clang loop unroll(full)
-    for (int i = 0; i < K / (NT * 4); ++i) {
+    for (int i = 0; i < QV; ++i) {
         float4 v = amax > 0 ? (float4(values[i]) / amax) * 127.0f : float4(0);
-        *reinterpret_cast<device char4*>(dst + row*K + tid*4 + i*NT*4) = char4(rint(v));
+        uint col = tid*4 + i*NT*4;
+        if (col < K) *reinterpret_cast<device char4*>(dst + row*K + col) = char4(rint(v));
     }
 }
 
@@ -45,7 +48,11 @@ kernel void gemm(device int8_t* xq, device int8_t* wq,
     device const float* xs, device const float* ws, device bfloat* output, device const bfloat* bias,
     // shape = {padded M, has_bias}; K and N are compile-time constants.
     constant uint2& shape, uint2 group [[threadgroup_position_in_grid]]) {
-    constexpr int BM = 128, BK = BN * 8;
+    // Keep the existing large tile for aligned Qwen shapes. H3 K=5376 and
+    // K=2688 use exact divisor tiles so no TensorOps slice exceeds storage.
+    constexpr int BM = 128;
+    constexpr int BK =
+        K % (BN * 8) == 0 ? BN * 8 : (K % 256 == 0 ? 256 : 128);
     const uint gn = N / BN, gm = shape.x / BM;
     const uint pid = group.y * gn + group.x;
     if constexpr (BN == 64) {

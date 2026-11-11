@@ -47,6 +47,7 @@ H3_CHANNEL_QUANT_SCHEMES = {
     "int8-vllm",
     "int8-intel-xpu",
     "int8-convrot",
+    "int8-metal",
 }
 
 
@@ -85,6 +86,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         if config.get("cfg_parallel", False) or config.get("enable_cfg", False):
             raise ValueError("MiniMax-H3 is guidance-distilled and does not have a CFG/unconditional branch")
         if config.get("dit_quantized", False):
+            # dit_quant_scheme selects the quantization backend; dit_quantized_ckpt supplies the weights path.
             quant_scheme = config.get("dit_quant_scheme", "Default")
             if quant_scheme not in H3_CHANNEL_QUANT_SCHEMES:
                 raise NotImplementedError(f"MiniMax-H3 quantized inference requires a per-output-channel FP8/INT8 scheme; got {quant_scheme!r}. Supported schemes: {sorted(H3_CHANNEL_QUANT_SCHEMES)}")
