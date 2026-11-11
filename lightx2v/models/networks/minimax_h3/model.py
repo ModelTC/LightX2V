@@ -12,12 +12,12 @@ from lightx2v.common.ops.mm.fp8_f16_accum import fp8_accum_gemm, fp8_f16_accum_m
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
 from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
-from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.offload.transformer_infer import validate_minimax_h3_residency_config
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import MiniMaxH3PreInfer
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
+from lightx2v.models.networks.minimax_h3.parallel import gather_packed_sequence, shard_packed_sequence, split_tensor_parallel_weight, tensor_parallel_split_type
 from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3PostWeights,
     MiniMaxH3PreWeights,
@@ -420,60 +420,16 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError(f"MiniMax-H3 TP size {self.tp_size} must divide {details}")
 
     def _tp_split_type(self, key):
-        if key.startswith("token_refiner.") and not self.config.get("text_refiner_tensor_parallel", True):
-            return None
-        if ".attn.to_q." in key or ".attn.to_k." in key or ".attn.to_v." in key:
-            return "col"
-        if ".attn.to_out.0." in key:
-            return "row"
-        if ".ff.net.0.proj." in key:
-            return "ff_fused_col"
-        if ".ff.net.2." in key:
-            return "row"
-        if ".adaln_proj.linear." in key:
-            return "col"
-        return None
+        return tensor_parallel_split_type(key, text_refiner_tensor_parallel=self.config.get("text_refiner_tensor_parallel", True))
 
     def _select_tensor_parallel_shard(self, key, tensor):
-        """Select this rank's checkpoint shard without materializing peers."""
-        if not self.config.get("tensor_parallel", False):
-            return tensor
-        split_type = self._tp_split_type(key)
-        if split_type is None:
-            return tensor
-        # Scalar metadata such as ConvRot's group size is shared by all TP
-        # ranks.  One-dimensional column biases/scales still need sharding.
-        if tensor.ndim == 0:
-            return tensor
-
-        if split_type == "row":
-            # Row-parallel biases belong to the fully reduced output and stay
-            # replicated.  Other one-dimensional metadata is replicated too.
-            if tensor.ndim < 2:
-                return tensor
-            # Per-output-channel quantization scales remain replicated for a
-            # row-parallel weight; only the weight's input dimension is split.
-            if key.endswith(".weight_scale"):
-                return tensor
-            split_dim = 1
-            if tensor.shape[split_dim] % self.tp_size:
-                raise ValueError(f"Cannot row-shard {key} shape {tuple(tensor.shape)} across TP size {self.tp_size}")
-            return torch.chunk(tensor, self.tp_size, dim=split_dim)[self.tp_rank].contiguous()
-
-        if split_type == "ff_fused_col":
-            if tensor.shape[0] % 2:
-                raise ValueError(f"Invalid H3 fused SwiGLU tensor {key} with shape {tuple(tensor.shape)}")
-            half = tensor.shape[0] // 2
-            if half % self.tp_size:
-                raise ValueError(f"Cannot fused-column-shard {key} shape {tuple(tensor.shape)} across TP size {self.tp_size}")
-            value, gate = tensor.split(half, dim=0)
-            value = torch.chunk(value, self.tp_size, dim=0)[self.tp_rank]
-            gate = torch.chunk(gate, self.tp_size, dim=0)[self.tp_rank]
-            return torch.cat((value, gate), dim=0).contiguous()
-
-        if tensor.shape[0] % self.tp_size:
-            raise ValueError(f"Cannot column-shard {key} shape {tuple(tensor.shape)} across TP size {self.tp_size}")
-        return torch.chunk(tensor, self.tp_size, dim=0)[self.tp_rank].contiguous()
+        return split_tensor_parallel_weight(
+            key,
+            tensor,
+            self.tp_size,
+            self.tp_rank,
+            text_refiner_tensor_parallel=self.config.get("text_refiner_tensor_parallel", True),
+        )
 
     def _should_load_weights(self):
         # Each TP rank reads its own slices.  This is also correct for TP+SP,
@@ -651,61 +607,11 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
-        world_size = dist.get_world_size(self.seq_p_group)
-        rank = dist.get_rank(self.seq_p_group)
-        total_length = pre_infer_out.hidden_states.shape[0]
-        text_length = pre_infer_out.text_indices.numel()
-        expected_text_indices = torch.arange(text_length, device=pre_infer_out.text_indices.device)
-        if not torch.equal(pre_infer_out.text_indices, expected_text_indices):
-            raise ValueError("MiniMax-H3 sequence parallel requires the conditioner rows to be a contiguous prefix")
-
-        # Keep the largest possible conditioner prefix replicated on every
-        # rank, and shard the remaining packed sequence without padding. This
-        # preserves exact dense-attention semantics for audio/video rows.
-        remainder = total_length % world_size
-        if text_length < remainder:
-            raise ValueError(f"MiniMax-H3 cannot split packed length {total_length} over {world_size} ranks with only {text_length} prefix rows")
-        aux_length = text_length - ((text_length - remainder) % world_size)
-        main_length = total_length - aux_length
-        if main_length <= 0 or main_length % world_size:
-            raise ValueError(f"MiniMax-H3 sequence split is invalid: total={total_length}, aux={aux_length}, seq_p_size={world_size}")
-        main_shard_length = main_length // world_size
-        shard_start = aux_length + rank * main_shard_length
-        shard_end = shard_start + main_shard_length
-
-        def shard_sequence(tensor):
-            return torch.cat((tensor[:aux_length], tensor[shard_start:shard_end]), dim=0)
-
-        pre_infer_out.sequence_parallel_state = MiniMaxH3SequenceParallelState(
-            aux_length=aux_length,
-            main_shard_length=main_shard_length,
-            timestep_indices=pre_infer_out.timestep_indices,
-            adaln_indices=pre_infer_out.adaln_indices,
-            rotary_emb=pre_infer_out.rotary_emb,
-        )
-        pre_infer_out.hidden_states = shard_sequence(pre_infer_out.hidden_states)
-        pre_infer_out.timestep_indices = shard_sequence(pre_infer_out.timestep_indices)
-        pre_infer_out.adaln_indices = shard_sequence(pre_infer_out.adaln_indices)
-        pre_infer_out.rotary_emb = tuple(shard_sequence(tensor) for tensor in pre_infer_out.rotary_emb)
-        return pre_infer_out
+        return shard_packed_sequence(pre_infer_out, self.seq_p_group)
 
     @torch.no_grad()
     def _seq_parallel_post_process(self, output, pre_infer_out):
-        state = pre_infer_out.sequence_parallel_state
-        if state is None:
-            raise RuntimeError("MiniMax-H3 sequence-parallel metadata is missing")
-        local_main = output[state.aux_length :]
-        if local_main.shape[0] != state.main_shard_length:
-            raise RuntimeError(f"MiniMax-H3 local sequence length changed from {state.main_shard_length} to {local_main.shape[0]}")
-        world_size = dist.get_world_size(self.seq_p_group)
-        gathered = [torch.empty_like(local_main) for _ in range(world_size)]
-        dist.all_gather(gathered, local_main.contiguous(), group=self.seq_p_group)
-        output = torch.cat((output[: state.aux_length], *gathered), dim=0)
-        pre_infer_out.timestep_indices = state.timestep_indices
-        pre_infer_out.adaln_indices = state.adaln_indices
-        pre_infer_out.rotary_emb = state.rotary_emb
-        pre_infer_out.sequence_parallel_state = None
-        return output
+        return gather_packed_sequence(output, pre_infer_out, self.seq_p_group)
 
     def to_cpu(self):
         if self.config.get("dit_disk_streaming", False):

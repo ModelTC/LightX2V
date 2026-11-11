@@ -41,7 +41,7 @@ def _projection_contract(config):
         sgl_version = metadata.version("sgl-kernel") if quantized else None
     except metadata.PackageNotFoundError:
         sgl_version = "unavailable"
-    return {
+    contract = {
         "version": 1,
         # Both accumulation modes leave AdaLN on the same SGL path.
         "scheme": "fp8-f16-accum" if scheme == "fp8-f32-accum" else scheme,
@@ -66,6 +66,7 @@ def _projection_contract(config):
         "checkpoint": [{"name": path.name, "size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns} for path in files],
         "index_sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in indices},
     }
+    return contract
 
 
 def validate_adaln_cache_config(config) -> None:
@@ -86,6 +87,8 @@ def _cache_root(config) -> Path:
 
 
 def _selected_profiles(config) -> list[str]:
+    if config["model_cls"] == "minimax_h3_image":
+        return ["image_t2i", "image_i2i"]
     if config["model_cls"] == "minimax_h3_causal":
         return ["refa2v_condition", "refa2v_media"]
     if config["model_cls"] == "taomate_h3":
@@ -125,7 +128,28 @@ def _timesteps_from_bits(bits: list[int], device="cpu") -> torch.Tensor:
     return torch.tensor(bits, dtype=torch.int32).view(torch.float32).to(device)
 
 
+def _image_step_sigmas(config) -> list[float]:
+    with open(config["pdd_config_path"], encoding="utf-8") as handle:
+        pdd_config = json.load(handle)
+    if int(config["infer_steps"]) != 6 or pdd_config["num_inference_steps"] != 6:
+        raise ValueError("MiniMax-H3-Image PDD requires exactly six inference steps")
+    # The terminal zero is an endpoint, not an inference step.
+    return pdd_config["sigmas"][:-1]
+
+
 def _cache_entries(config, profiles: list[str]) -> list[dict]:
+    if profiles == ["image_t2i", "image_i2i"]:
+        from lightx2v.models.schedulers.minimax_h3_image.scheduler import REFERENCE_TIMESTEP
+
+        # Match the scheduler's Python subtraction before its FP32 tensor cast.
+        timesteps = torch.tensor([1.0 - sigma for sigma in _image_step_sigmas(config)], dtype=torch.float32)
+        entries = []
+        for profile in profiles:
+            for step, timestep in enumerate(timesteps.tolist()):
+                values = [timestep, REFERENCE_TIMESTEP] if profile == "image_i2i" else [timestep]
+                unique = torch.unique(torch.tensor(values, dtype=torch.float32), sorted=True)
+                entries.append({"name": f"{profile}_step_{step:03d}", "timestep_bits": _float32_bits(unique.tolist())})
+        return entries
     if profiles == ["streamrender"]:
         from lightx2v.models.schedulers.streamrender_h3.scheduler import _shifted_timesteps
 
@@ -213,6 +237,10 @@ def _build_spec(config) -> dict:
 
 def _cache_path(config) -> Path:
     model = config["model_cls"]
+    if model == "minimax_h3_image":
+        # Round only the directory label; manifest entries retain exact timesteps.
+        sigmas = "_".join(f"{sigma:#.4g}" for sigma in _image_step_sigmas(config))
+        return _cache_root(config) / model / f"image_{int(config['infer_steps']):02d}steps_{sigmas}"
     cache_name = "refa2v" if model == "minimax_h3_causal" else "refv2v" if model == "streamrender_h3" else config.get("adaln_cache_profile") or config["model_variant"]
     infer_steps = int(config["infer_steps"])
     video_flow_shift = float(config.get("video_flow_shift", 12.0))

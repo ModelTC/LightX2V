@@ -12,7 +12,7 @@ def uniform_resident_indices(num_blocks, count):
     return tuple(k * num_blocks // count for k in range(count))
 
 
-def validate_residency_config(config):
+def validate_residency_config(config, *, allow_parallel=False):
     if not config.get("cpu_offload", False) or config.get("offload_granularity", "block") != "block":
         raise ValueError("Static residency requires CPU block offload")
     if AI_DEVICE not in ("cuda", "npu"):
@@ -21,9 +21,6 @@ def validate_residency_config(config):
     incompatible = (
         "lazy_load",
         "shared_cpu_weights",
-        "parallel",
-        "seq_parallel",
-        "tensor_parallel",
         "cfg_parallel",
         "pipefusion_parallel",
         "lora_configs",
@@ -32,8 +29,11 @@ def validate_residency_config(config):
         "changing_resolution",
         "enable_cuda_graph",
     )
+    if not allow_parallel:
+        incompatible += ("parallel", "seq_parallel", "tensor_parallel")
     if any(config.get(key, False) for key in incompatible) or config.get("feature_caching", "NoCaching") != "NoCaching":
-        raise ValueError("Static residency requires single-device eager execution with fixed weights, fixed resolution, and NoCaching")
+        execution = "" if allow_parallel else "single-device eager execution with "
+        raise ValueError(f"Static residency requires {execution}fixed weights, fixed resolution, and NoCaching")
 
 
 class ResidentBlocks:

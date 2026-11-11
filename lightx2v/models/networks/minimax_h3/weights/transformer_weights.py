@@ -104,7 +104,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
             parallel = config.get("parallel", {})
             self.add_module(
                 "calculate_parallel",
-                ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")](a2a_backend=parallel.get("seq_p_a2a_backend", "torch")),
+                ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")](),
             )
         self.add_module("to_out", _linear(config, f"{prefix}.to_out.0", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
 

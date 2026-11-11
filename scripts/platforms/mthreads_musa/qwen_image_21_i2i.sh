@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 lightx2v_path=/data/Lightx2v
 model_path=/data/wushuo/models/Qwen-Image-2.1
@@ -18,5 +17,4 @@ python -m lightx2v.infer \
     --prompt "Transform the cat into a cream-colored dog. Keep the sunglasses, pose, kayak, background and lighting unchanged." \
     --image_path "${image_path}" \
     --seed 42 \
-    --save_result_path "${lightx2v_path}/save_results/qwen_image_21_i2i_dmd_4step.png" \
-    "$@"
+    --save_result_path "${lightx2v_path}/save_results/qwen_image_21_i2i_dmd_4step.png"

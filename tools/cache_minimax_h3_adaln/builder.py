@@ -57,6 +57,16 @@ class _CheckpointTensors:
             from lightx2v.models.networks.minimax_h3.streamrender.weights import native_weight_names
 
             self.native_to_source = {native: source for source in self.locations for native in native_weight_names(source)}
+        elif layout == "minimax_h3_image_release":
+            from lightx2v.models.networks.minimax_h3_image.checkpoint import convert_transformer_tensor
+
+            # AdaLN/time/norm key conversion does not depend on tensor shape.
+            self.native_to_source = {
+                native: source
+                for source in self.locations
+                if source.startswith(("time_embedder.", "final_layer.adaln_proj.linear.")) or (source.startswith("blocks.") and ".adaln_proj.linear." in source)
+                for native in convert_transformer_tensor(source, torch.empty(0), {})
+            }
 
     def _find_locations(self) -> dict[str, Path]:
         directory = self.files[0].parent
@@ -76,7 +86,7 @@ class _CheckpointTensors:
         if self.tensors is not None:
             tensor = self.tensors[name]
         else:
-            source_name = self.native_to_source.get(name, name) if self.layout == "streamrender_release" else name
+            source_name = self.native_to_source.get(name, name) if self.layout in ("streamrender_release", "minimax_h3_image_release") else name
             path = self.locations.get(source_name)
             if path is None:
                 raise KeyError(f"MiniMax-H3 checkpoint tensor is missing: {name}")
@@ -86,7 +96,7 @@ class _CheckpointTensors:
                 from lightx2v.models.networks.minimax_h3.streamrender.weights import remap_streamrender_weight
 
                 tensor = remap_streamrender_weight(source_name, tensor)[name]
-        # Both H3 variants compute the time MLP in FP32 and modulation projections in BF16.
+        # H3 computes the time MLP in FP32 and modulation projections in BF16.
         dtype = tensor.dtype if preserve_dtype else torch.float32 if name.startswith("time_embedder.") else torch.bfloat16
         return tensor.to(device=AI_DEVICE, dtype=dtype)
 
@@ -127,10 +137,17 @@ def _empty_device_cache() -> None:
         torch_device_module.empty_cache()
 
 
-def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> None:
+def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path], *, model_cls=None) -> None:
     stage_path = Path(tempfile.mkdtemp(prefix=".building-", dir=cache_path.parent))
     try:
-        checkpoint = _CheckpointTensors(checkpoint_files, spec.get("projection_contract", {}).get("checkpoint_layout", "native_h3"))
+        layout = spec.get("projection_contract", {}).get("checkpoint_layout", "native_h3")
+        if model_cls == "minimax_h3_image":
+            # Image manifests share the base H3 schema; detect source keys only
+            # while building, without recording checkpoint or runtime identity.
+            with safe_open(checkpoint_files[0], framework="pt", device="cpu") as handle:
+                converted = any(name.startswith(("proj_in.", "transformer_blocks.", "pdd_proj_out.", "token_refiner.refiner_blocks.")) for name in handle.keys())
+            layout = "native_h3" if converted else "minimax_h3_image_release"
+        checkpoint = _CheckpointTensors(checkpoint_files, layout)
         with torch.inference_mode():
             # ADALN CACHE SYNC: Keep activation placement and casts aligned with
             # the three online infer modules named in this file's contract.
@@ -207,7 +224,7 @@ def build_persistent_adaln_cache(config) -> Path:
         raise FileExistsError(f"MiniMax-H3 AdaLN cache path already exists: {cache_path}")
     checkpoint_files = _checkpoint_files(config)
     logger.info("Building MiniMax-H3 AdaLN cache on {}: {}", AI_DEVICE, cache_path)
-    _build_cache(spec, cache_path, checkpoint_files)
+    _build_cache(spec, cache_path, checkpoint_files, model_cls=config["model_cls"])
 
     if not _validate_cache(cache_path, spec):
         raise RuntimeError(f"MiniMax-H3 AdaLN cache validation failed: {cache_path}")
