@@ -76,7 +76,6 @@ export LIGHTX2V_DIR="$HOME/LightX2V"
 git clone https://github.com/ModelTC/LightX2V.git "$LIGHTX2V_DIR"
 python -m pip install -v -e "$LIGHTX2V_DIR"
 python -m pip install httpx
-python -m pip check
 cd "$LIGHTX2V_DIR"
 python -m lightx2v.server --help
 
