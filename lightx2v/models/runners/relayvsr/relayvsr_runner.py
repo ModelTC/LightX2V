@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import av
+import cv2
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -23,7 +24,8 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.relayvsr.scheduler import RelayVSRScheduler
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.profiler import ProfilingContext4DebugL1
+from lightx2v.utils.image_io import save_image
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import mux_audio_from_video
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -225,11 +227,16 @@ class RelayVSRRunner(DefaultRunner):
             frame = torch.from_numpy(np.array(image.convert("RGB"))).permute(2, 0, 1).contiguous()
         target = self.output_size(input_info, *frame.shape[-2:])
         with closing(self.restore_frames([frame], input_info.seed)) as predictions:
-            pixels = self.postprocess(next(predictions), target).cpu()
+            prediction = next(predictions)
         if self.main_rank and input_info.save_result_path:
             path = Path(input_info.save_result_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            Image.fromarray(pixels.numpy()).save(path)
+            method = self.config.get("save_image_method", "opencv")
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {path}", time_unit="ms"):
+                pixels = self.postprocess(prediction, target).cpu()
+                image = Image.fromarray(pixels.numpy()) if method == "pil" else cv2.cvtColor(pixels.numpy(), cv2.COLOR_RGB2BGR)
+                save_image(image, path, method)
+        else:
+            pixels = self.postprocess(prediction, target).cpu()
         return {"images": pixels[None].float().div_(255) if input_info.return_result_tensor else None}
 
     def run_video(self, input_info):

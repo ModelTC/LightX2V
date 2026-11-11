@@ -2,6 +2,7 @@ import gc
 import math
 import os
 
+import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -15,8 +16,9 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS, VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.lingbot_video.scheduler import LingBotVideoScheduler
 from lightx2v.models.video_encoders.hf.lingbot_video.vae import LingBotVideoWanVAE
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.input_info import I2VInputInfo, T2IInputInfo, T2VInputInfo
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -326,8 +328,13 @@ class LingBotVideoRunner(DefaultRunner):
         save_result_path = input_info.save_result_path
         os.makedirs(os.path.dirname(os.path.abspath(save_result_path)), exist_ok=True)
         if self.config["task"] == "t2i":
-            image = outputs[0] if isinstance(outputs, list) else outputs
-            image.save(save_result_path)
+            method = self.config.get("save_image_method", "opencv")
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {save_result_path}", time_unit="ms"):
+                image = outputs[0] if isinstance(outputs, list) else outputs
+                pixels = image.detach().cpu().float().permute(1, 2, 0).numpy()
+                pixels = (pixels * 255).clip(0, 255).astype(np.uint8)
+                image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+                save_image(image, save_result_path, method)
             logger.info(f"Image saved: {save_result_path}")
         else:
             save_to_video(outputs, save_result_path, fps=float(self.config.get("fps", 24)), method="ffmpeg")

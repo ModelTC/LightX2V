@@ -8,6 +8,7 @@ from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
 from lightx2v.utils.async_vae import normalize_async_vae_config
+from lightx2v.utils.image_io import validate_save_image_method
 from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.lockable_dict import LockableDict
 from lightx2v.utils.utils import find_torch_model_path, is_main_process
@@ -61,6 +62,7 @@ def get_default_config():
             "enable_cfg": False,
             "warmup": False,
             "use_image_encoder": True,
+            "save_image_method": "opencv",
         }
     )
 
@@ -358,6 +360,7 @@ def load_model_config(deployment_config):
 
 def normalize_startup_config(config, model_config):
     """Normalize merged startup settings and validate inference constraints."""
+    validate_save_image_method(config.get("save_image_method", "opencv"))
     normalize_async_vae_config(config)
     if config["model_cls"] == "dreamzero" and "out_dim" in config:
         config["num_channels_latents"] = config["out_dim"]

@@ -16,7 +16,7 @@
 lightx2v_path=/path/to/LightX2V
 model_path=/path/to/MiniMax-H3-Image
 
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 source "${lightx2v_path}/scripts/base/base.sh"
 
 export LIGHTX2V_CACHE_DIR="${lightx2v_path}/save_results/server_cache"

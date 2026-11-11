@@ -239,7 +239,7 @@ class HidreamO1ImageScheduler(BaseScheduler):
             )[0].to(self.dtype)
 
     @ProfilingContext4DebugL2("Decode HiDream-O1-Image")
-    def decode(self):
+    def decode(self, return_tensor=False):
         img = (self.latents[0] + 1.0) / 2.0
         img = einops.rearrange(
             img,
@@ -249,6 +249,8 @@ class HidreamO1ImageScheduler(BaseScheduler):
             p1=PATCH_SIZE,
             p2=PATCH_SIZE,
         )
+        if return_tensor:
+            return img
         img = (img.cpu().float() * 255.0).clamp_(0, 255).round_().to(torch.uint8)
         return img[:, :, [2, 1, 0]].contiguous().numpy()
 

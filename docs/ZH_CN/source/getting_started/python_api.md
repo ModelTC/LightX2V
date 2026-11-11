@@ -46,6 +46,20 @@ pipe.create_generator(
 
 构造函数可通过 `dit_original_ckpt` 指定独立 DiT 权重；Wan2.2 MoE 使用 `high_noise_original_ckpt`、`low_noise_original_ckpt` 指定双分支权重。需要时，Wan 蒸馏模型设置 `distill_method="dmd2"`。模型专属说明见下方启动入口。
 
+### 图像文件保存
+
+图像生成、编辑以及图像超分/修复默认使用 OpenCV 保存文件。在传给 `config_json` 的 JSON 中设置 `save_image_method` 可切换保存方式；CLI 和服务端使用同一配置：
+
+```json
+{
+  "save_image_method": "pil"
+}
+```
+
+支持 `"opencv"`（默认）和 `"pil"`。各模型在保存入口按原有规则将 Tensor 转为 PIL 图像或 OpenCV 所需的 uint8 BGR/BGRA 数组；公共保存函数只负责创建目录和写文件。OpenCV 路径省去 PIL 中转，模型必须的 PIL 缩放/编辑后处理除外。各模型原有的归一化和四舍五入/截断规则保持一致。
+
+当 `PROFILING_DEBUG_LEVEL>=1` 时，每次保存会输出 `Save Image (opencv)` 或 `Save Image (pil)` 的毫秒耗时。计时放在各模型的保存入口，从 Tensor 开始覆盖上述转换、必要的后处理和文件写入。计时不添加额外设备同步，CPU 拷贝会等待图像数据就绪。此配置只控制图像文件保存；内存 PNG/Base64 编码沿用现有行为。
+
 ## 可选启动设置
 
 以下方法在 `create_generator()` 之前调用。根据模型选择支持的选项；这些片段分别演示不同功能，不代表需要全部开启。

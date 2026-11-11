@@ -22,7 +22,7 @@ source "$lightx2v_path/scripts/base/base.sh"
 
 Set `model_path` to the complete model root containing the Transformer, Qwen3-VL, VAE, tokenizer/processor, `pdd_config.json`, and `pdd_fused_heads.safetensors`.
 
-Before using an inference script, server startup script, or the cache generation script, update its `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES`. The current single-GPU inference and server scripts use GPU 7, the four-GPU scripts use GPUs 4, 5, 6, and 7, and the cache generation script uses GPU 0.
+Before using an inference script, server startup script, or the cache generation script, update its `lightx2v_path`, `model_path`, and `CUDA_VISIBLE_DEVICES`.
 
 ## AdaLN cache
 

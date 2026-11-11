@@ -1,8 +1,10 @@
 import gc
 import os
 
+import cv2
 import torch
 import torch.distributed as dist
+from PIL import Image
 from loguru import logger
 
 from lightx2v.models.networks.bagel.model import BagelModel
@@ -14,6 +16,7 @@ from lightx2v.models.schedulers.bagel.scheduler import BagelScheduler
 from lightx2v.models.video_encoders.hf.bagel.vae import BagelVae
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -145,6 +148,7 @@ class BagelRunner(DefaultRunner):
             "latent_channel": self.config["vae_config"]["z_channels"],
             "latent_patch_size": self.config["latent_patch_size"],
             "return_result_tensor": bool(getattr(self.input_info, "return_result_tensor", False)),
+            "save_result_path": self.input_info.save_result_path,
         }
 
     def _save_images(self, images, input_info, log_prefix="Image saved"):
@@ -157,14 +161,14 @@ class BagelRunner(DefaultRunner):
 
         image_prefix, image_suffix = os.path.splitext(input_info.save_result_path)
         image_suffix = image_suffix.lstrip(".") or "png"
-        if isinstance(images[0], list) and len(images[0]) > 1:
-            for idx, image in enumerate(images[0]):
-                out_path = f"{image_prefix}_{idx:05d}.{image_suffix}"
-                image.save(out_path)
-                logger.info(f"{log_prefix}: {out_path}")
-        else:
-            out_path = f"{image_prefix}.{image_suffix}"
-            images[0].save(out_path)
+        images = images[0] if isinstance(images[0], list) else images[:1]
+        method = self.config.get("save_image_method", "opencv")
+        for idx, image in enumerate(images):
+            out_path = f"{image_prefix}_{idx:05d}.{image_suffix}" if len(images) > 1 else f"{image_prefix}.{image_suffix}"
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {out_path}", time_unit="ms"):
+                pixels = image.detach().cpu().numpy()
+                image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+                save_image(image, out_path, method)
             logger.info(f"{log_prefix}: {out_path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None):
