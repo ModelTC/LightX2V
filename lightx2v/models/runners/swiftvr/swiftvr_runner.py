@@ -358,7 +358,7 @@ class SwiftVRRunner(DefaultRunner):
         if input_info.return_result_tensor:
             images = images.to(device="cpu", dtype=torch.float32)
         else:
-            save_to_image(images, output_path)
+            save_to_image(images, output_path, method=self.config.get("save_image_method", "opencv"))
             images = None
 
         elapsed = time.perf_counter() - started_at

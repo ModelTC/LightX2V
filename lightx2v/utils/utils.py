@@ -4,6 +4,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+import cv2
 import imageio
 import imageio_ffmpeg as ffmpeg
 import numpy as np
@@ -18,6 +19,8 @@ from loguru import logger
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
 
+from lightx2v.utils.image_io import save_image
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -348,16 +351,17 @@ def save_to_video(
         raise ValueError(f"Unknown save method: {method}")
 
 
-def save_to_image(images: torch.Tensor, output_path: str) -> None:
+def save_to_image(images: torch.Tensor, output_path: str, method: str = "opencv") -> None:
     """Save the first frame of ComfyUI tensor ``[N, H, W, C]`` (values in ``[0, 1]``) as a static image.
 
     Used for ``task=sr`` when conditioning comes from ``image_path`` only (no ``video_path``).
     """
     assert images.dim() == 4 and images.shape[-1] == 3, "Input must be [N, H, W, C] with C=3"
-    frame = images[0].clamp(0, 1).to(device="cpu", dtype=torch.float32).numpy()
-    frame_u8 = (frame * 255.0).round().astype(np.uint8)
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    Image.fromarray(frame_u8).save(output_path)
+    with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {output_path}", time_unit="ms"):
+        frame = images[0].clamp(0, 1).to(device="cpu", dtype=torch.float32).numpy()
+        pixels = (frame * 255.0).round().astype(np.uint8)
+        image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+        save_image(image, output_path, method)
 
 
 def mux_audio_from_video(

@@ -84,7 +84,7 @@ class LongCatImageVAE:
             input_info: Input information containing dimensions
 
         Returns:
-            List of PIL images
+            Image tensors for saving/return_result_tensor, otherwise PIL images.
         """
         if self.cpu_offload:
             self.model.to(AI_DEVICE)
@@ -106,7 +106,8 @@ class LongCatImageVAE:
 
         # Decode - latents is now [B, 16, H, W]
         images = self.model.decode(latents, return_dict=False)[0]
-        images = self.image_processor.postprocess(images, output_type="pt" if input_info.return_result_tensor else "pil")
+        output_type = "pt" if input_info.return_result_tensor or input_info.save_result_path else "pil"
+        images = self.image_processor.postprocess(images, output_type=output_type)
 
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))

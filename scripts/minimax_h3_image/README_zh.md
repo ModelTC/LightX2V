@@ -22,7 +22,7 @@ source "$lightx2v_path/scripts/base/base.sh"
 
 `model_path` 指向完整的模型根目录，包含 Transformer、Qwen3-VL、VAE、Tokenizer／Processor，以及 `pdd_config.json`、`pdd_fused_heads.safetensors`。
 
-使用推理脚本、服务启动脚本或缓存生成脚本前，先修改脚本内的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`。当前单卡推理及服务脚本使用 GPU 7，四卡脚本使用 GPU 4、5、6、7，缓存生成脚本使用 GPU 0。
+使用推理脚本、服务启动脚本或缓存生成脚本前，先修改脚本内的 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`。
 
 ## AdaLN 缓存
 

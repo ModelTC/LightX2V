@@ -58,7 +58,7 @@ class Flux2VAE:
             self.vae.to(AI_DEVICE)
 
         image = self.vae.decode(latents.to(AI_DEVICE, dtype=GET_DTYPE()))[0]
-        output_type = "pt" if input_info is not None and getattr(input_info, "return_result_tensor", False) else "pil"
+        output_type = "pt" if input_info is not None and (input_info.return_result_tensor or input_info.save_result_path) else "pil"
         image = self.image_processor.postprocess(image, output_type=output_type)
 
         if self.cpu_offload:

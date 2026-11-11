@@ -1,7 +1,7 @@
 import math
 from contextlib import suppress
-from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -18,7 +18,8 @@ from lightx2v.models.schedulers.minimax_h3_image import MiniMaxH3ImageScheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_image import MiniMaxH3ImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_RECORDER_MODE
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.image_io import save_image
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -345,21 +346,31 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             return self.vae.decode(latents)
         return self._run_on_rank0(lambda: self.vae.decode(latents))
 
-    def process_images_after_vae_decoder(self, value):
-        # The reference pipeline quantizes before resizing the canvas to the requested size.
+    def _prepare_output_image(self, value, method):
+        # The reference pipeline quantizes before resizing with PIL LANCZOS.
         pixels = value[0, :, 0].float().clamp(0, 1).permute(1, 2, 0).mul(255).to(torch.uint8).cpu().numpy()
-        image = Image.fromarray(pixels)
         height, width = self.output_size
-        if image.size != (width, height):
-            image = image.resize((width, height), Image.Resampling.LANCZOS)
-        if self.input_info.save_result_path and not self.input_info.return_result_tensor:
-            output_path = Path(self.input_info.save_result_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            image.save(output_path)
+        needs_resize = pixels.shape[:2] != (height, width)
+        if method == "pil" or needs_resize:
+            image = Image.fromarray(pixels)
+            if needs_resize:
+                image = image.resize((width, height), Image.Resampling.LANCZOS)
+            if method == "pil":
+                return image
+            pixels = np.asarray(image)
+        return cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+
+    def process_images_after_vae_decoder(self, value):
+        if self.input_info.return_result_tensor:
+            return {"images": [self._prepare_output_image(value, "opencv")]}
+        if self.input_info.save_result_path:
+            output_path = self.input_info.save_result_path
+            method = self.config.get("save_image_method", "opencv")
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {output_path}", time_unit="ms"):
+                image = self._prepare_output_image(value, method)
+                save_image(image, output_path, method)
             logger.info(f"✅ Image saved successfully to: {output_path} ✅")
-        # Match the BGR numpy image convention used by the other image runners.
-        images = [np.asarray(image)[..., ::-1].copy()] if self.input_info.return_result_tensor else None
-        return {"images": images}
+        return {"images": None}
 
     def _decode_output(self, latents):
         decoded = self.run_vae_decoder(latents)

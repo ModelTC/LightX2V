@@ -46,6 +46,20 @@ pipe.create_generator(
 
 The constructor accepts `dit_original_ckpt` for a separate DiT checkpoint, or `high_noise_original_ckpt` and `low_noise_original_ckpt` for Wan2.2 MoE. Distilled Wan models use `distill_method="dmd2"` where required. Model-specific instructions live beside the launchers below.
 
+### Saving image files
+
+Image generation, editing and image restoration/super-resolution use OpenCV to save files by default. Set `save_image_method` in the JSON passed to `config_json` to select a writer. CLI and server deployments use the same setting:
+
+```json
+{
+  "save_image_method": "pil"
+}
+```
+
+Supported values are `"opencv"` (default) and `"pil"`. Each model prepares a PIL image or a uint8 BGR/BGRA OpenCV array using its existing postprocessing rules. The shared file writer only creates the directory and writes the image. OpenCV avoids an intermediate PIL image except for required model-specific PIL resizing/editing. Each model keeps its existing normalization and rounding/truncation rules.
+
+With `PROFILING_DEBUG_LEVEL>=1`, each save logs `Save Image (opencv)` or `Save Image (pil)` in milliseconds. Profiling lives in each model's saving entry point and covers tensor conversion, required postprocessing and file writing. Profiling adds no device synchronization; CPU transfer waits for the image data to be ready. This setting controls image files; in-memory PNG/Base64 encoding keeps its existing behavior.
+
 ## Optional startup settings
 
 Apply the following methods before `create_generator()`. Choose the settings supported by your model; these snippets describe separate options rather than one configuration to enable in full.
