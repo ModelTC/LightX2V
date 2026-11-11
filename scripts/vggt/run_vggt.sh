@@ -10,6 +10,7 @@ save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/vggt/reconst
 if [[ "${1:-}" == "--help" ]]; then
   echo "Usage: MODEL_PATH=/path/to/weights [INPUT_PATH=/path/to/input] bash scripts/vggt/run_vggt.sh [lightx2v.infer arguments]"
   echo "Default input: ${input_path}"
+  echo "Prepare local weights first: ${lightx2v_path}/scripts/vggt/README.md"
   exit 0
 fi
 
