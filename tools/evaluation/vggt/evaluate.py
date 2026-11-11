@@ -968,9 +968,14 @@ def container_command(args, destination, stage, run=None):
         if path is None:
             run_paths.append("/results/lightx2v")
         else:
-            target = f"/saved/lightx2v/{path.name}"
-            command += ["--mount", f"type=bind,src={path},dst={target},readonly"]
-            run_paths.append(target)
+            if (path.parent / "configs").is_dir():
+                target_root = "/saved/lightx2v-output"
+                command += ["--mount", f"type=bind,src={path.parent},dst={target_root},readonly"]
+                run_paths.append(f"{target_root}/{path.name}")
+            else:
+                target = f"/saved/lightx2v/{path.name}"
+                command += ["--mount", f"type=bind,src={path},dst={target},readonly"]
+                run_paths.append(target)
         extra = ["--reuse-runs", *run_paths]
     command += [
         "-w",
