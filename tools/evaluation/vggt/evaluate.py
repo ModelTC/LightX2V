@@ -800,7 +800,7 @@ def make_markdown(report, summary):
     lines = [
         f"# {TITLE} 评测报告",
         "",
-        f"状态：{summary['status']}；范围：{summary['scope']}；对象数：{summary['sample_count']}；重复次数：{summary['repeats']}。",
+        f"状态：{summary['status']}；范围：{summary['scope']}；对象数：{summary['sample_count']}；每对象测量次数：{summary['repeats']}。",
         "",
         "本项目只运行 LightX2V 推理；精度指标按固定 GSO 真值计算。",
         "",
@@ -813,11 +813,11 @@ def make_markdown(report, summary):
         lines.append(f"| {key} | {number(result.get(key))} |")
     for key, value in (flatten_numbers(result["quality"], "quality") | flatten_numbers(result["performance"], "performance")).items():
         lines.append(f"| {key} | {number(value)} |")
+    if summary["repeats"] > 1:
+        lines += ["", "## 重复运行差异", "", repeat_status(report["lightx2v_repeat_differences"])]
+    else:
+        lines += ["", "每个对象只测量一次，不计算重复运行差异。"]
     lines += [
-        "",
-        "## 重复运行差异",
-        "",
-        repeat_status(report["lightx2v_repeat_differences"]),
         "",
         "## 数据与计时边界",
         "",
@@ -876,13 +876,14 @@ def postprocess(args):
         request_table.append({"implementation": "lightx2v", **{key: row.get(key) for key in ("id", "seed", "repeat", "warmup", "status", "pipeline_s", "peak_allocated_bytes", "peak_reserved_bytes", "peak_incremental_bytes", "cpu_process_peak_rss_kib", "artifact_write_s", "output", "output_sha256", "error")}, "events_json": json.dumps(row.get("events", []))})
     for row in side["per_output_metrics"]:
         metric_table.append({"implementation": "lightx2v", "id": row["id"], "repeat": row["repeat"], **flatten_numbers(row["metrics"])})
-    try:
-        report["lightx2v_repeat_differences"] = pair_runs(run, run, True)
-    except Exception:
-        report["lightx2v_repeat_differences"] = []
-        errors.append({"stage": "lightx2v_repeat_differences", "error": traceback.format_exc()})
-    if len(report["lightx2v_repeat_differences"]) != len(selected):
-        errors.append({"stage": "lightx2v_repeat_differences", "error": f"Expected {len(selected)} object pairs, got {len(report['lightx2v_repeat_differences'])}"})
+    report["lightx2v_repeat_differences"] = []
+    if manifest["repeats"] > 1:
+        try:
+            report["lightx2v_repeat_differences"] = pair_runs(run, run, True)
+        except Exception:
+            errors.append({"stage": "lightx2v_repeat_differences", "error": traceback.format_exc()})
+        if len(report["lightx2v_repeat_differences"]) != len(selected):
+            errors.append({"stage": "lightx2v_repeat_differences", "error": f"Expected {len(selected)} object pairs, got {len(report['lightx2v_repeat_differences'])}"})
     errors += [{"stage": "lightx2v_inference", "error": r["error"]} for r in side["inference_errors"]]
     errors += [{"stage": "lightx2v_metric", "error": r["error"]} for r in side["evaluation_errors"]]
     if side["success_count"] != expected or side["missing_measured_count"] or not side["finished_marker"]:
@@ -1229,9 +1230,9 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / ("evaluation-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")))
     parser.add_argument("--data-root", type=Path, default=Path(os.getenv("EVAL_DATA_ROOT", str(default_data_root))))
     parser.add_argument("--image", default=os.getenv("EVAL_IMAGE", profile["container_image"]))
-    parser.add_argument("--smoke", action="store_true", help="One object, two repeats, all metric/report stages")
+    parser.add_argument("--smoke", action="store_true", help="One object, one measured request, all metric/report stages")
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--repeats", type=int, default=2)
+    parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--reuse-runs", type=Path, nargs="+", metavar="LIGHTX2V_RUN", help="Reuse a saved LightX2V run; for older multi-path invocations, only the final path is read")
     parser.add_argument("--install-deps", action="store_true", help="Install pinned extra dependencies before running")
     parser.add_argument("--prepare-sources", action="store_true", help="Fetch the pinned LightX2V source revision; no inference")
@@ -1244,8 +1245,8 @@ def main():
     if args.prepare_sources:
         prepare_sources()
         return 0
-    if not 0 <= args.card <= int(profile.get("max_card_index", 7)) or args.repeats < 2 or (args.limit is not None and args.limit <= 0):
-        parser.error(f"Require card 0..{profile.get('max_card_index', 7)}, repeats >= 2 and a positive limit")
+    if not 0 <= args.card <= int(profile.get("max_card_index", 7)) or args.repeats < 1 or (args.limit is not None and args.limit <= 0):
+        parser.error(f"Require card 0..{profile.get('max_card_index', 7)}, repeats >= 1 and a positive limit")
     if args.smoke:
         args.limit = 1
     if args.reuse_runs and not args.worker and args.limit:
