@@ -3,12 +3,13 @@ set -euo pipefail
 
 lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/weights/vggt}"
-input_path="${INPUT_PATH:-${lightx2v_path}/example_images}"
+input_path="${INPUT_PATH:-${lightx2v_path}/assets/inputs/imgs/vggt}"
 config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platform/mlu/vggt_recon_bf16.json}"
 save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/vggt/reconstruction.npz}"
 
 if [[ "${1:-}" == "--help" ]]; then
-  echo "Usage: MODEL_PATH=/path/to/weights INPUT_PATH=/path/to/input bash scripts/platform/mlu/run_vggt.sh [lightx2v.infer arguments]"
+  echo "Usage: MODEL_PATH=/path/to/weights [INPUT_PATH=/path/to/input] bash scripts/platform/mlu/run_vggt.sh [lightx2v.infer arguments]"
+  echo "Default input: ${input_path}"
   exit 0
 fi
 
