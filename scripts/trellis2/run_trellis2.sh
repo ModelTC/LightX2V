@@ -3,12 +3,13 @@ set -euo pipefail
 
 lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/weights/trellis2}"
-input_path="${INPUT_PATH:-${lightx2v_path}/example.png}"
+input_path="${INPUT_PATH:-${lightx2v_path}/assets/inputs/imgs/trellis2/input.png}"
 config_json="${CONFIG_JSON:-${lightx2v_path}/configs/trellis2/trellis2_i23d_bf16.json}"
 save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/trellis2/mesh.glb}"
 
 if [[ "${1:-}" == "--help" ]]; then
-  echo "Usage: MODEL_PATH=/path/to/weights INPUT_PATH=/path/to/input bash scripts/trellis2/run_trellis2.sh [lightx2v.infer arguments]"
+  echo "Usage: MODEL_PATH=/path/to/weights [INPUT_PATH=/path/to/input] bash scripts/trellis2/run_trellis2.sh [lightx2v.infer arguments]"
+  echo "Default input: ${input_path}"
   exit 0
 fi
 
