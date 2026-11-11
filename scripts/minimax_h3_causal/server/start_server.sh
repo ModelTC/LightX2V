@@ -6,7 +6,6 @@ lightx2v_path=/data/zhangbilang/LightX2V
 model_path=/data/zhangbilang/models/MiniMaxAI/MiniMax-H3
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-source /data/zhangbilang/cuda130/use_cuda13_compat.sh
 source "${lightx2v_path}/scripts/base/base.sh"
 
 export DTYPE=BF16
