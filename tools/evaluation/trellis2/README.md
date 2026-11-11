@@ -16,7 +16,7 @@ bash scripts/platform/mlu/run_eval.sh --install-deps --smoke --card 0 --data-roo
 bash scripts/platform/mlu/run_eval.sh --card 0 --data-root /path/to/data
 ```
 
-完整运行处理1023个对象，每个对象测量2次，共2046次正式请求，另有1次预热。`--smoke`只运行1个对象；`--limit N`用于小样本诊断。失败和缺失保留在分母中，未完成返回非零退出码。NVIDIA使用`scripts/platform/nvidia/run_eval.sh`并设置`EVAL_IMAGE`。新增平台流程见[PLATFORMS.md](PLATFORMS.md)和[PLATFORM_ADAPTATION.md](PLATFORM_ADAPTATION.md)。
+完整运行处理1023个对象，每个对象测量1次，共1023次正式请求，另有1次预热。每个对象只提交一次；失败如实记录，不自动重试。`--smoke`只运行1个对象；`--limit N`用于小样本诊断。失败和缺失保留在分母中，未完成返回非零退出码。NVIDIA使用`scripts/platform/nvidia/run_eval.sh`并设置`EVAL_IMAGE`。新增平台流程见[PLATFORMS.md](PLATFORMS.md)和[PLATFORM_ADAPTATION.md](PLATFORM_ADAPTATION.md)。
 
 源码准备仅从source-lock中固定的LightX2V提交重建；不下载模型官方原版。准确提交见所选平台的`configs/<platform>/source-lock.json`。
 
@@ -24,7 +24,7 @@ bash scripts/platform/mlu/run_eval.sh --card 0 --data-root /path/to/data
 
 每次在`artifacts/evaluation-时间戳/`创建新目录：
 
-- `report.md`、`summary.json`、`comparison.json`：完成状态、LightX2V对GSO真值的质量/性能指标及重复差异。
+- `report.md`、`summary.json`、`comparison.json`：完成状态、LightX2V对GSO真值的质量/性能指标。
 - `requests.csv`、`metrics.csv`、`summary.csv`：逐请求时延、显存与逐对象质量指标。
 - `lightx2v/`：预测NPZ、环境、请求、预热和设备遥测。
 - 阶段日志、失败清单、配置快照和哈希。
