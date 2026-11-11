@@ -1,25 +1,38 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -eo pipefail
 
-lightx2v_path="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-model_path="${MODEL_PATH:-${lightx2v_path}/../models/H3/MiniMax-H3}"
-# The BF16 baseline uses TP8; CONFIG_PATH can select another preset.
-config_path="${CONFIG_PATH:-${lightx2v_path}/configs/minimax_h3_causal/5090/baseline_768p_bf16_tp8.json}"
+# Set repository/model paths and dit_original_ckpt in the selected JSON config.
+lightx2v_path=/data/zhangbilang/LightX2V
+model_path=/data/zhangbilang/models/MiniMaxAI/MiniMax-H3
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
+global_file=/data/zhangbilang/handoff/assets/refa2v_global.txt
+motion_file=/data/zhangbilang/handoff/assets/refa2v_motions.yaml
+image_path=/data/zhangbilang/handoff/assets/meinv_01.png
+audio_path=/data/zhangbilang/bf16_refa2av_40s.mp4
 
-# Set environment variables.
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+source /data/zhangbilang/cuda130/use_cuda13_compat.sh
 source "${lightx2v_path}/scripts/base/base.sh"
+
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
+export PROFILING_DEBUG_LEVEL=0
 
-torchrun --standalone --nproc_per_node=8 -m lightx2v.infer \
+# Load the same prompt and frame-based motions as post_refa2v.py.
+prompt=$(< "${global_file}")
+motions=$(python -c 'import json, sys, yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1], encoding="utf-8")), ensure_ascii=False))' "${motion_file}")
+
+# Eight-GPU BF16 inference. --size is HEIGHT WIDTH.
+python -m torch.distributed.run --standalone --nproc_per_node=8 -m lightx2v.infer \
   --model_cls minimax_h3_causal \
   --task refa2v \
   --model_path "${model_path}" \
-  --config_json "${config_path}" \
-  --prompt "The man in the reference image speaks naturally into the microphone, with lip movements synchronized to the audio, subtle facial expressions and natural hand gestures. The camera remains stationary." \
-  --image_path "${IMAGE_PATH:-${lightx2v_path}/assets/inputs/audio/seko_input.png}" \
-  --audio_path "${AUDIO_PATH:-${lightx2v_path}/assets/inputs/audio/seko_input.mp3}" \
-  --save_result_path "${OUTPUT_PATH:-${lightx2v_path}/save_results/h3_refa2v.mp4}" \
-  --seed "${SEED:-0}"
+  --config_json "${lightx2v_path}/configs/minimax_h3_causal/h100/refa2v_realtime_768p_sp8.json" \
+  --prompt "${prompt}" \
+  --image_path "${image_path}" \
+  --audio_path "${audio_path}" \
+  --motions "${motions}" \
+  --seed 42 \
+  --num_frames 974 \
+  --size 1376 768 \
+  --save_result_path "${lightx2v_path}/save_results/minimax_h3_causal_refa2v_prompt_travel.mp4"

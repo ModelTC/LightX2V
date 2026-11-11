@@ -47,6 +47,7 @@ def build_parser():
             "ref2av",
             "refv2v",
             "refa2v",
+            "refa2av",
             "i2va",
             "v2av",
             "v2v",
@@ -61,7 +62,7 @@ def build_parser():
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--prompt", type=str, default=None, help="The input prompt for text-to-video generation")
-    parser.add_argument("--action_prompts", type=json.loads, default=None, help="MiniMax-H3 causal timed actions as a JSON object or list")
+    parser.add_argument("--motions", type=json.loads, default=None, help="H3 causal motions: JSON [{frame: 0, text: ...}, ...], using zero-based frames.")
     parser.add_argument("--ref_video_prompt", type=str, default=None, help="Reference/driving-video prompt for Wan-Animate-2.")
     parser.add_argument("--negative_prompt", type=str, default=None)
     parser.add_argument("--bot_task", type=str, default=None, help="HunyuanImage3 text generation mode.")
@@ -83,7 +84,7 @@ def build_parser():
         "--audio_path",
         type=str,
         default=None,
-        help="Input audio path: driving audio for s2v / rs2v / ltx2_s2v / refa2v, or reference audio for MiniMax-H3 ref2av.",
+        help="Input audio path: driving audio for s2v / rs2v / ltx2_s2v / refa2v, or reference audio for MiniMax-H3 ref2av / refa2av.",
     )
     parser.add_argument(
         "--video_path",

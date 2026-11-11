@@ -15,11 +15,11 @@
 | **Wan Self-Forcing / LingbotFast** | 共用普通 rolling ring；默认 step 间共享历史，可由通用存储策略选择 step bank；sink、recent 由配置决定 | **当前 K 在写入 ring 前已经做 causal RoPE**；普通历史 K 不随新 chunk 重新旋转。当前 chunk 在每次去噪和 clean commit 时更新 | **resident rolling Sage 只保存 INT8 K＋平台原生 V＋统计量/有效位**；原始 K/V 历史均不分配。只编码当前完整物理写入段，历史量化 K/V 跨 forward、跨 chunk 复用。启用 KV offload 时保留原始 CPU K/V＋GPU staging/量化 companion | 继续保留原始 K/V ring；全 ring 直接把物理 K/V view 送一次 FA，不需要先排成逻辑顺序；窄窗口多 spans 时使用 workspace | [Wan causal infer](../../models/networks/wan/infer/autoregressive/causal_transformer_infer.py)、[Sage ring](attn/sage.py)、[FA ring](attn/ring.py) |
 | **Krea RealtimeVideo，`wan2.1_realtime`** | 每个输出 chunk 先重建3帧 clean context，再生成3帧；总容量6帧，step 间共享本 chunk 的 context。窗口移动后，context 首 latent 由最近9帧 decoded RGB 的最早一帧重新编码 | clean context 在局部坐标0–2重跑模型，当前 chunk 使用3–5；每个新 chunk 的 context **内容和 K/V 都重新计算**，不能把上一 chunk 的量化历史直接当成新 context | 使用相同 resident **仅编码 K/V** 存储；每 chunk reset 有效位并 refill，随后本 chunk 的多次去噪复用这3帧量化 context。没有额外 SF clean commit | 原始 K/V 的同一6帧缓存；reset/refill 与局部坐标策略相同 | [Krea runner](../../models/runners/wan/wan_realtime_video_runner.py)、[Krea infer](../../models/networks/wan/infer/realtime_video/transformer_infer.py)、[Krea scheduler](../../models/schedulers/wan/realtime_video/scheduler.py) |
 | **Matrix-Game-v4** | rolling ring，模型要求去噪 step 共享历史；一个 sink latent frame、每 chunk 一个 latent frame | 普通 K 写入前完成动态 causal RoPE。另保留 **raw sink K**，由 `SinkRoPE` 按 fixed/absolute 模式处理；sink 坐标变化时仅重编码对应 sink，不刷新普通 recent K/V | resident Sage 的普通历史同样**只有 INT8 K＋平台原生 V**；仅 sink 保留小份原始 K 和旋转 scratch，sink V 仍只有编码副本。KV offload 保留原始 backing/staging | 与 Wan causal 共用原始物理 ring view；需要时才 gather 子窗口到 workspace | [Matrix infer](../../models/networks/wan/infer/matrix_game4/transformer_infer.py)、[SinkRoPE](../../models/networks/wan/infer/matrix_game4/rope.py) |
-| **MiniMax-H3 Causal** | 原始 K/V 的 **per-step rolling**；condition、音频、视频写入长度不同；step 间各自维护历史 | 原始 K 在读出时做 partial split-half RoPE，默认旋转128维中的96维；每次 forward 在图内刷新共享的旋转/量化 K 工作区 | **原始 K/V＋量化 V** 按层、step bank 独立保存；INT8 K/scale/mean 由同几何的层与 bank 共用。使用专属 `H3SageRoPERingAttention(share_step_keys=True)`；保留原始 V 以支持不规则音视频写入 | `H3PhysicalRoPERingAttention`：同几何的层与 step bank 共用一个旋转 K 工作区，写入图内每次重算；原始 V 仍用物理 view，不连续子窗口按需 gather。GPU eager/compile/Graph oracle 与独立工作区逐位相同 | [H3 causal model](../../models/networks/minimax_h3/causal/model.py)、[H3 attention](../../models/networks/minimax_h3/infer/autoregressive/causal/attention.py)、[H3 infer](../../models/networks/minimax_h3/infer/autoregressive/causal/transformer_infer.py) |
+| **MiniMax-H3 Causal v0.1** | 条件与每个完成 chunk 的 clean KV；去噪步骤不分别保存历史 | 保存未旋转的 BF16 K/V，读取时按当前 chunk 位置旋转；融合 gather/RoPE 保持原始舍入 | sink 与最近历史使用轮转 slot，固定条件独立存储；motion 段切换时替换 prompt | prefix workspace 在同 chunk 的去噪步骤间复用；RefA2V 与 RefA2AV 使用同一 clean cache | [CleanAR model](../../models/networks/minimax_h3_causal/clean/model.py)、[clean KV](../../models/networks/minimax_h3_causal/clean/kv_cache.py) |
 | **TaoMate H3** | clean AV rolling 历史，step 间共享；首 chunk 后先保留完整 AV，再把首 chunk 的视频提升为 sink，保留两个最近完整 AV chunk；condition/current/padding 有独立可见性 | **clean K 写入前已经完成 QK norm 和 RoPE**，历史坐标不重排；仅在 clean commit 改变历史时刷新对应 history bank | 仍保留原始 clean K/V＋量化 companion；历史、condition、当前 media、padding 分成不同 bank。历史量化结果在多次 forward 间复用 | 对不同 query 可见性分别执行 FA；media query 的不连续 banks gather 到可复用 workspace 后一次 FA；不把 condition/padding 的可见性混在一起 | [clean cache](../../models/networks/minimax_h3/infer/autoregressive/taomate/clean_kv.py)、[TaoMate attention](../../models/networks/minimax_h3/infer/autoregressive/taomate/attention.py) |
 | **StreamRender H3** | **每个 guidance branch、每个 timestep 独立 prefix bank**；固定 prefix＋每次覆盖的 current suffix；不是不断滚动整个历史的普通 ring 语义 | prefix K 写入前已旋转；固定 prefix 后续不变，current K 每 forward 更新 | **完整 prefix 只常驻编码 K/V**；层与 bank 共用原始 K/V scratch。每个 prefix 仅保留不足一整段的原始尾部，长度为 `prefix_length % segment_tokens`，供 current 改写边界段时重编码；完整编码历史跨窗口复用 | 独立原始 K/V buffer；prefix＋current 连续物理 view，一次 FA。首次 prefix capture 分开处理 prefix query 与 current query，以保持 prefix 看不到 current | [prefix bank](../../models/networks/minimax_h3/infer/autoregressive/streamrender/prefix_cache.py)、[StreamRender infer](../../models/networks/minimax_h3/infer/autoregressive/streamrender/transformer_infer.py)、[bank 生命周期](../../models/networks/minimax_h3/streamrender/model.py) |
 
-Eden/Seko 的 V-only 路径要求物理段覆盖完整的 V 更新单位，以便历史 V 不必反量化后重新统计 scale。H3 Causal 的音视频、condition 长度使共同对齐单位可能只有1～2个 token；直接照搬会产生大量 attention 分段和 partial output，因此目前明确保留 H3 的原始 V adapter。H3 的当前实现是模型专属路径。Causal FA 原来按层/step 各分配旋转 K 工作区，在原生画布预热时使异步 VAE 拼接 OOM；现在按相同 cache 几何顺序复用，减少约5.79 GiB 的工作区预算。这个节省属于临时旋转工作区，不表示 per-step 原始 KV 历史也已共享。完整吞吐须看正式请求表，不能由小型 oracle 推算。
+Eden/Seko 的 V-only 路径要求物理段覆盖完整的 V 更新单位，以便历史 V 不必反量化后重新统计 scale。H3 Causal 的音视频、condition 长度使共同对齐单位可能只有1～2个 token；直接照搬会产生大量 attention 分段和 partial output，因此目前明确保留 H3 的原始 V adapter。H3 Causal v0.1 使用模型专属的 clean KV，不再保留逐 step 历史。完整吞吐须看正式请求表，不能由小型 oracle 推算。
 
 Wan resident Sage 的“仅编码 K/V”沿用同样的完整写入对齐约束，额外要求 K 的 RoPE 已经完成且在有效历史内不变。pool 只保留 slot、长度和 ring metadata，不分配原始 K/V 张量；当前投影产生的原始 K/V 是本次 forward 的临时输入。量化层仍保存 K centering 均值、K/V scale 和有效位，它们不等于另一套原始 K/V 历史。这个存储选择由实际 attention/backend 与 offload 策略自动决定，没有新增用户开关。
 
@@ -31,7 +31,7 @@ Krea 的新 runner 与旧的“用 `wan2.1_sf` 加载同一14B checkpoint”需�
 
 runner 通过 `WanAutoregressiveRunnerMixin` 复用 warmup、分块去噪、模型允许的 clean commit 和流式 VAE 生命周期，实际异步工作交给同一个 `AsyncVAEChunkDecoder`。Eden 保留 proxy 和专属 scheduler，通过 `AutoregressiveRunnerMixin` 共享请求清理；没有为了统一继承而改变各模型的 RoPE、step bank 或 context 语义。存储布局和量化编码在 `common/kvcache` 内，模型不再各自复制普通 ring attention。
 
-公共 [AutoregressiveRunnerMixin](../../models/runners/autoregressive_runner.py) 统一管理本地 MP4 流式写盘。Wan、固定音频 Seko、Eden 与 H3 runner 都将解码完成的 chunk 交给同一个 [StreamingVideoWriter](../../utils/streaming_video.py)：CPU 队列最多等待两个 chunk，后台 FFmpeg 持续写入临时 fragmented MP4，成功后原子发布最终文件；音频在结束时附加。只保存文件时不再拼接完整 GPU 视频，显式请求 tensor 返回仍保留原接口。MG4 在解码 chunk 上裁掉输入补齐产生的尾帧，文件帧率使用输入实际 FPS。Seko 实时音频输入保留 VAController 的可截断、回滚发布缓冲；它与追加写入的普通文件 sink 语义不同。H3 通过薄的 `H3AutoregressiveRunnerMixin` 追加模型状态清理；TaoMate/StreamRender 的实现直接位于各自 `runner.py`，旧 native runner 和注册别名已删除。解码异步与编码写盘是两个独立的生命周期。
+公共 [AutoregressiveRunnerMixin](../../models/runners/autoregressive_runner.py) 统一管理本地 MP4 流式写盘。Wan、固定音频 Seko、Eden 与多数 H3 runner 将解码完成的 chunk 交给同一个 [StreamingVideoWriter](../../utils/streaming_video.py)：CPU 队列最多等待两个 chunk，后台 FFmpeg 持续写入临时 fragmented MP4，成功后原子发布最终文件；音频在结束时附加。只保存文件时不再拼接完整 GPU 视频，显式请求 tensor 返回仍保留原接口。MG4 在解码 chunk 上裁掉输入补齐产生的尾帧，文件帧率使用输入实际 FPS。Seko 实时音频输入保留 VAController 的可截断、回滚发布缓冲；它与追加写入的普通文件 sink 语义不同。H3 通过薄的 `H3AutoregressiveRunnerMixin` 追加模型状态清理；TaoMate/StreamRender 的实现直接位于各自 `runner.py`，旧 native runner 和注册别名已删除。H3 Causal 使用专属 [AV writer](../../models/video_encoders/hf/minimax_h3_causal/video_writer.py)，以三个可复用 RGB 缓冲连接 PyAV 编码线程，在结束时写入驱动或生成的音频，并原子发布完整 MP4。解码异步与编码写盘是两个独立的生命周期。
 
 Seko step bank 每个输出 chunk 各执行一次 forward，没有 Eden 同一共享 bank 内多次去噪复用量化 K 的机会。`SageRoPERingAttention(share_step_keys=True)` 因而只共享临时 INT8 K/scale/mean；`key_valid.zero_()` 位于每次 apply 的图内，保证其他层/bank覆盖工作区后 Graph replay 仍会重建本次 K。raw K、原生 V 与有效位没有共享，RoPE、窗口、分段及 LSE 数学不变。Eden 默认关闭该共享，继续复用同 chunk 历史量化 K。720p 的最终配置显式启用 raw-K CPU offload。
 
@@ -62,7 +62,7 @@ rolling 的 slot 写入不需要每次新分配/移动历史；captured graph �
 
 ## 异步解码字段的位置
 
-所有模型统一使用**顶层** `async_vae_decode`，与 `warmup`、`use_compile`、`use_cuda_graph` 同级：
+通用异步解码使用**顶层** `async_vae_decode`，与 `warmup`、`use_compile`、`use_cuda_graph` 同级：
 
 ```json
 {
@@ -77,7 +77,7 @@ rolling 的 slot 写入不需要每次新分配/移动历史；captured graph �
 }
 ```
 
-异步解码只读取顶层 `async_vae_decode`，缺省关闭。各流式 runner 通过同一个 [AsyncVAEChunkDecoder](../../utils/async_vae.py) 解析。异步提交使用独立 CUDA stream；解码器内部仍按 chunk 顺序维护状态。
+异步解码只读取顶层 `async_vae_decode`，缺省关闭。各流式 runner 通过同一个 [AsyncVAEChunkDecoder](../../utils/async_vae.py) 解析。异步提交使用独立 CUDA stream；解码器内部仍按 chunk 顺序维护状态。H3 Causal 不使用该通用路径，分别通过 `vae_decode_overlap` 和 `audio_vae_decode_overlap` 控制视频、音频解码与 DiT 的重叠执行。
 
 ## 验证边界
 

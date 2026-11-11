@@ -7,6 +7,7 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
+from safetensors.torch import load_file
 
 from lightx2v.common.ops.mm.fp8_f16_accum import fp8_accum_gemm, fp8_f16_accum_mm_unavailable_reason
 from lightx2v.models.networks.base_model import BaseTransformerModel
@@ -80,9 +81,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         # to block offload and is ignored otherwise.
         self.prepost_resident = self.block_offload and config.get("dit_prepost_resident", False)
         if GET_DTYPE() != torch.bfloat16:
-            raise ValueError(
-                "MiniMax-H3 requires DTYPE=BF16. The native loader preserves the released checkpoint's 626 BF16 tensors and 12 FP32 projection/time/head tensors without dtype conversion."
-            )
+            raise ValueError("MiniMax-H3 requires DTYPE=BF16; input/time/output projections use FP32 internally.")
         if config.get("cfg_parallel", False) or config.get("enable_cfg", False):
             raise ValueError("MiniMax-H3 is guidance-distilled and does not have a CFG/unconditional branch")
         if config.get("dit_quantized", False):
@@ -472,9 +471,8 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     @staticmethod
     def _fp8_f16_checkpoint_tensor(key, tensor, sensitive_layer):
-        # H3 causal's original .pt checkpoint stores every projection as FP32.
-        # Its BF16 loader keeps only the input/time/output projections in FP32;
-        # restore that same contract for unquantized tensors in the FP8 file.
+        # Keep bulk unquantized tensors in BF16 while preserving the stored
+        # precision of sensitive projections, quantization scales and LoRA tensors.
         if tensor.dtype != torch.float32 or key.endswith(".weight_scale") or ".lora_" in key:
             return tensor
         if key.split(".", 1)[0] in sensitive_layer:
@@ -497,7 +495,7 @@ class MiniMaxH3Model(BaseTransformerModel):
                 for key in source.keys():
                     if any(remove_key in key for remove_key in remove_keys):
                         continue
-                    tensor = self._load_local_tensor(source, key, load_device)
+                    tensor = self._select_tensor_parallel_shard(key, source.get_tensor(key)).to(device=load_device)
                     weight_dict[key] = self._fp8_f16_checkpoint_tensor(key, tensor, sensitive_layer) if fp8_f16_profile else tensor
         self._validate_checkpoint_devices(weight_dict, load_device)
         return weight_dict
@@ -524,31 +522,27 @@ class MiniMaxH3Model(BaseTransformerModel):
             preview = ", ".join(misplaced[:4])
             raise RuntimeError(f"MiniMax-H3 checkpoint tensors were not loaded on {expected}: {preview}")
 
-    def _load_local_tensor(self, source, key, load_device):
-        """Shard on CPU before copying only this TP rank's tensor to the accelerator."""
-        tensor = self._select_tensor_parallel_shard(key, source.get_tensor(key))
-        if torch.device(load_device).type != "cpu":
-            tensor = tensor.to(load_device)
-        return tensor
-
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
-        """Load the released mixed-precision tensors without generic dtype coercion."""
+        """Load native H3 checkpoints without changing their stored dtypes."""
         del unified_dtype, sensitive_layer
-        if os.path.splitext(file_path)[-1] != ".safetensors":
-            raise ValueError(f"MiniMax-H3 native loading expects the released safetensors checkpoint; got {file_path}")
-        remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
-        preserve_keys = self.preserved_keys if hasattr(self, "preserved_keys") else None
+        extension = os.path.splitext(file_path)[-1]
+        if extension == ".pt":
+            source = torch.load(file_path, mmap=True, weights_only=True, map_location="cpu")
+        elif extension == ".safetensors":
+            source = load_file(file_path, device="cpu")
+        else:
+            raise ValueError(f"MiniMax-H3 expects a .pt or .safetensors checkpoint; got {file_path}")
+        self._record_checkpoint_metadata(source)
+        preserve_keys = getattr(self, "preserved_keys", None)
         load_device = self._checkpoint_load_device()
         # Reading a full tensor directly on the accelerator and then slicing it
-        # can retain the full safetensors storage behind a small TP view.  Shard
+        # can retain the full checkpoint storage behind a small TP view. Shard
         # on CPU first so accelerator memory contains only this rank's weights.
-        with safe_open(file_path, framework="pt", device="cpu") as source:
-            self._record_checkpoint_metadata(source)
-            weight_dict = {
-                key: self._load_local_tensor(source, key, load_device)
-                for key in source.keys()
-                if not any(remove_key in key for remove_key in remove_keys) and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
-            }
+        weight_dict = {
+            key: self._select_tensor_parallel_shard(key, tensor).to(device=load_device)
+            for key, tensor in source.items()
+            if not any(remove_key in key for remove_key in self.remove_keys) and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
+        }
         self._validate_checkpoint_devices(weight_dict, load_device)
         return weight_dict
 

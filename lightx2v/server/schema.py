@@ -66,7 +66,10 @@ class BaseTaskRequest(BaseModel):
 
 
 class VideoTaskRequest(BaseTaskRequest):
-    action_prompts: dict[str, Any] | list[Any] | None = Field(None, description="MiniMax-H3 causal action cues: seconds -> actions, or a list of timed actions")
+    motions: list[dict[str, Any]] | None = Field(
+        None,
+        description="H3 causal motions: [{frame: 0, text: ...}, ...]; zero-based frames, strictly increasing from 0. Cues align to the next 17-frame boundary and must land in distinct chunks within the output. Omitted uses the global prompt.",
+    )
     num_frames: Optional[int] = Field(
         None,
         description="Number of output frames; defaults to the startup config",
