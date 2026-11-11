@@ -145,7 +145,10 @@ def main(spec_path: str) -> int:
                 if linux:
                     signal_descendants(signal.SIGTERM)
             deadline = time.monotonic() + spec["stop_grace"]
-            alive = lambda: bool(linux_descendants()) if linux else group_alive(child.pid)
+
+            def alive():
+                return bool(linux_descendants()) if linux else group_alive(child.pid)
+
             while not force.is_set() and alive() and time.monotonic() < deadline:
                 reap(child)
                 time.sleep(0.05)
