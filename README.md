@@ -45,6 +45,8 @@ We thank the following community developers for their contributions to LightX2V:
 
 ## :fire: Latest News
 
+- **November 11, 2026:** 🚀 We now support [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) for text-to-image generation and reference-image generation/editing with one or multiple reference images. TP/SP parallelism, and CLI/serving examples are available in the [usage guide](scripts/minimax_h3_image/README.md).
+
 - **October 26, 2026:** 🚀 Added autoregressive inference for [TaoMate-H3](scripts/taomate_h3/run_t2av_3step.sh), [StreamRender-H3](scripts/streamrender_h3/run_refv2v_2step.sh), [Matrix-Game-4](scripts/matrix_game4/run_matrix_game4.sh), [LingBot-Fast](scripts/lingbot_fast/run_5090.sh), and [Realtime-Video](scripts/realtime_video/run_5090.sh). Model-specific scripts and BF16/FP8 profiles are available in the linked directories.
 
 - **October 18, 2026:** 🚀 We now support [EdenLive](scripts/edenlive/README.md) for video generation controlled by text, a first-frame image, and a proxy recording. Wan2.1 14B and Wan2.2 5B each support bidirectional and four-step autoregressive inference, with realtime profiles for RTX 5090 and H100/H200. See the [deployment guide](scripts/edenlive/README.md) for model conversion, quantization, and streaming inference.
@@ -221,11 +223,12 @@ LightX2V supports image, video, and world models and provides quantized weights,
 
 <details>
 <summary><strong>🎨 Image Generation &amp; Editing</strong><br><br>
-<a href="scripts/qwen_image/README.md">Qwen-Image</a> · <a href="scripts/flux2">FLUX.2</a> · <a href="scripts/hunyuan_image3">HunyuanImage</a> · <a href="scripts/z_image/README.md">Z-Image</a> · <a href="scripts/longcat/README.md">LongCat-Image</a> · <a href="scripts/bagel/README.md">BAGEL</a> · <a href="scripts/hidream_o1_image">HiDream</a> · <a href="scripts/ernie_image">ERNIE-Image</a> · <a href="scripts/neopp/README.md">SenseNova-U1</a>
+<a href="scripts/minimax_h3_image/README.md">MiniMax-H3-Image</a> · <a href="scripts/qwen_image/README.md">Qwen-Image</a> · <a href="scripts/flux2">FLUX.2</a> · <a href="scripts/hunyuan_image3">HunyuanImage</a> · <a href="scripts/z_image/README.md">Z-Image</a> · <a href="scripts/longcat/README.md">LongCat-Image</a> · <a href="scripts/bagel/README.md">BAGEL</a> · <a href="scripts/hidream_o1_image">HiDream</a> · <a href="scripts/ernie_image">ERNIE-Image</a> · <a href="scripts/neopp/README.md">SenseNova-U1</a>
 </summary>
 
 | Models / Variants and Weights | Guides / Scripts |
 | --- | --- |
+| [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) (text-to-image and reference-image generation/editing) | [Guide](scripts/minimax_h3_image/README.md) |
 | [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image) / [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) | [Guide](scripts/qwen_image/README.md) |
 | [Qwen-Image-Edit](https://huggingface.co/Qwen/Qwen-Image-Edit) / [2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) / [2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) | [Guide](scripts/qwen_image/README.md) |
 | [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) / [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) | [Guide](scripts/qwen_image_21/README.md) |
