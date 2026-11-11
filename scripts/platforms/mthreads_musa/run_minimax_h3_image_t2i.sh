@@ -2,7 +2,7 @@
 set -eo pipefail
 
 # Default configs require a pre-generated AdaLN cache.
-# Run scripts/minimax_h3_image/cache_adaln.sh first, using the same model,
+# Run tools/cache_minimax_h3_adaln/run_cache_minimax_h3_image_adaln.sh first, using the same model,
 # platform, config JSON and adaln_cache_dir as inference.
 
 lightx2v_path=/workspace/LightX2V
