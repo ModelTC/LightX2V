@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "model": "trellis2",
+  "platform": "ascend_npu",
+  "status": "not_yet_evaluated",
+  "runs": {}
+}

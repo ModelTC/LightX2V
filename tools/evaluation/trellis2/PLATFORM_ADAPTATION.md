@@ -8,3 +8,5 @@
 4. 先用目标卡运行 `--smoke`，确认空闲卡检查、设备计时/显存、两实现输出和报告完整后，再运行正式评测。只有目标硬件链路通过后，才把该平台标为已验证。
 
 示例：`bash scripts/platform/nvidia/run_eval.sh --smoke --card 0 --data-root /path/to/data`。NVIDIA profile 的镜像为空，运行前需设置 `EVAL_IMAGE`。新增平台时保留公共 suite 不变，并将新配置快照和平台身份记录在结果中。
+
+Ascend 910B 配置、依赖镜像与参考兼容补丁已提供；当前仅完成设备 API/配置检查，模型 smoke 和正式评测待执行。详见 [Ascend 配置](configs/ascend_npu/README.md)。

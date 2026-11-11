@@ -1,0 +1,625 @@
+{
+  "format": "line_edits_v1",
+  "upstream_repository": "https://github.com/microsoft/TRELLIS.2.git",
+  "upstream_revision": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+  "description": "Ascend inference compatibility; original model, preprocessing and sampling preserved. No CUDA or MLU API substitution at process scope.",
+  "files": [
+    {
+      "path": "trellis2/ascend_compat.py",
+      "base_sha256": null,
+      "result_sha256": "7216822762dc66e97056876f7465538181e5a0dff5e3c0b25747190d61b756d7",
+      "hunks": [
+        {
+          "start": 0,
+          "delete": 0,
+          "insert": [
+            "\"\"\"Portable inference mesh extraction for TRELLIS.2 on Ascend 910B.\n",
+            "\n",
+            "This mirrors the official O-Voxel dual-grid equations while replacing only the\n",
+            "CUDA hashmap with a CPU lookup. Neural decoder outputs are untouched.\n",
+            "\"\"\"\n",
+            "from __future__ import annotations\n",
+            "from typing import Iterable\n",
+            "import torch\n",
+            "\n",
+            "_EDGE_NEIGHBOUR_OFFSETS = torch.tensor([\n",
+            "    [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],\n",
+            "    [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],\n",
+            "    [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]],\n",
+            "], dtype=torch.int64)\n",
+            "_QUAD_SPLIT_1 = torch.tensor([0, 1, 2, 0, 2, 3], dtype=torch.long)\n",
+            "_QUAD_SPLIT_2 = torch.tensor([0, 1, 3, 3, 1, 2], dtype=torch.long)\n",
+            "\n",
+            "\n",
+            "def _triple(value: int | Iterable[int]) -> torch.Tensor:\n",
+            "    if isinstance(value, int):\n",
+            "        value = (value, value, value)\n",
+            "    return torch.tensor(tuple(value), dtype=torch.int64)\n",
+            "\n",
+            "\n",
+            "@torch.no_grad()\n",
+            "def flexible_dual_grid_to_mesh(coords, dual_vertices, intersected_flag, split_weight,\n",
+            "                               aabb, voxel_size=None, grid_size=None, train=False):\n",
+            "    if train:\n",
+            "        raise NotImplementedError(\"Ascend inference path does not implement training extraction\")\n",
+            "    coords_cpu = coords.detach().to('cpu', dtype=torch.int64)\n",
+            "    dual_cpu = dual_vertices.detach().to('cpu', dtype=torch.float32)\n",
+            "    flags_cpu = intersected_flag.detach().to('cpu', dtype=torch.bool)\n",
+            "    split_cpu = None if split_weight is None else split_weight.detach().to('cpu', dtype=torch.float32)\n",
+            "    aabb_cpu = torch.as_tensor(aabb, dtype=torch.float32)\n",
+            "    if voxel_size is None:\n",
+            "        if grid_size is None:\n",
+            "            raise ValueError('voxel_size or grid_size is required')\n",
+            "        grid_cpu = _triple(grid_size)\n",
+            "        voxel_cpu = (aabb_cpu[1] - aabb_cpu[0]) / grid_cpu\n",
+            "    else:\n",
+            "        voxel_cpu = torch.as_tensor(voxel_size, dtype=torch.float32).flatten()\n",
+            "        if voxel_cpu.numel() == 1:\n",
+            "            voxel_cpu = voxel_cpu.repeat(3)\n",
+            "        grid_cpu = ((aabb_cpu[1] - aabb_cpu[0]) / voxel_cpu).round().to(torch.int64)\n",
+            "    n_vertices = coords_cpu.shape[0]\n",
+            "    if n_vertices == 0:\n",
+            "        raise ValueError('decoder produced no active dual-grid vertices')\n",
+            "    strides = torch.tensor([int(grid_cpu[1] * grid_cpu[2]), int(grid_cpu[2]), 1], dtype=torch.int64)\n",
+            "    active_keys = (coords_cpu * strides).sum(dim=1)\n",
+            "    sorted_keys, order = torch.sort(active_keys)\n",
+            "    edge_neighbours = coords_cpu.reshape(n_vertices, 1, 1, 3) + _EDGE_NEIGHBOUR_OFFSETS\n",
+            "    # Decoder emits three edge flags per active voxel. Normalize singleton\n",
+            "    # dimensions explicitly so boolean indexing cannot broadcast into an\n",
+            "    # accidental extra axis on different torch/Ascend versions.\n",
+            "    flags_cpu = flags_cpu.reshape(n_vertices, -1)\n",
+            "    if flags_cpu.shape[1] != 3:\n",
+            "        raise ValueError(f'unexpected intersected flag shape: {tuple(flags_cpu.shape)}')\n",
+            "    connected = edge_neighbours[flags_cpu]\n",
+            "    if connected.numel() == 0:\n",
+            "        raise ValueError('decoder produced no intersected dual-grid edges')\n",
+            "    query_keys = (connected.reshape(-1, 3) * strides).sum(dim=1).reshape(-1, 4)\n",
+            "    positions = torch.searchsorted(sorted_keys, query_keys)\n",
+            "    safe_positions = positions.clamp_max(n_vertices - 1)\n",
+            "    valid = (positions < n_vertices) & (sorted_keys[safe_positions] == query_keys)\n",
+            "    valid = valid.all(dim=1)\n",
+            "    quad_indices = order[safe_positions][valid]\n",
+            "    if quad_indices.shape[0] == 0:\n",
+            "        raise ValueError('decoder produced no connected dual-grid quads')\n",
+            "    mesh_vertices = (coords_cpu.float() + dual_cpu) * voxel_cpu + aabb_cpu[0]\n",
+            "    attempt_0 = quad_indices[:, _QUAD_SPLIT_1]\n",
+            "    attempt_1 = quad_indices[:, _QUAD_SPLIT_2]\n",
+            "    if split_cpu is None:\n",
+            "        normals_00 = torch.cross(mesh_vertices[attempt_0[:, 1]] - mesh_vertices[attempt_0[:, 0]], mesh_vertices[attempt_0[:, 2]] - mesh_vertices[attempt_0[:, 0]], dim=1)\n",
+            "        normals_01 = torch.cross(mesh_vertices[attempt_0[:, 2]] - mesh_vertices[attempt_0[:, 1]], mesh_vertices[attempt_0[:, 3]] - mesh_vertices[attempt_0[:, 1]], dim=1)\n",
+            "        normals_10 = torch.cross(mesh_vertices[attempt_1[:, 1]] - mesh_vertices[attempt_1[:, 0]], mesh_vertices[attempt_1[:, 2]] - mesh_vertices[attempt_1[:, 0]], dim=1)\n",
+            "        normals_11 = torch.cross(mesh_vertices[attempt_1[:, 2]] - mesh_vertices[attempt_1[:, 1]], mesh_vertices[attempt_1[:, 3]] - mesh_vertices[attempt_1[:, 1]], dim=1)\n",
+            "        align_0 = (normals_00 * normals_01).sum(dim=1, keepdim=True).abs()\n",
+            "        align_1 = (normals_10 * normals_11).sum(dim=1, keepdim=True).abs()\n",
+            "        triangles = torch.where(align_0 > align_1, attempt_0, attempt_1)\n",
+            "    else:\n",
+            "        weights = split_cpu[quad_indices].reshape(-1, 4)\n",
+            "        choose_0 = (weights[:, 0] * weights[:, 2]) > (weights[:, 1] * weights[:, 3])\n",
+            "        triangles = torch.where(choose_0[:, None], attempt_0, attempt_1)\n",
+            "    return mesh_vertices, triangles.reshape(-1, 3).to(torch.int32)\n",
+            "\n",
+            "\n",
+            "def configure_rembg(model):\n",
+            "    \"\"\"Use the CPU torchvision operator where an NPU deform-conv kernel is absent.\n",
+            "\n",
+            "    This keeps the reference independent of LightX2V's deform-conv backend.\n",
+            "    Transfers and FP32 CPU computation remain inside the pipeline timing.\n",
+            "    \"\"\"\n",
+            "    import sys\n",
+            "    from torchvision.ops import deform_conv2d\n",
+            "    module = sys.modules[type(model).__module__]\n",
+            "\n",
+            "    def portable_deform(input, offset, weight, bias=None, stride=(1, 1),\n",
+            "                        padding=(0, 0), dilation=(1, 1), mask=None):\n",
+            "        if input.device.type != 'npu':\n",
+            "            return deform_conv2d(input, offset, weight, bias, stride, padding, dilation, mask)\n",
+            "        cpu = lambda tensor: None if tensor is None else tensor.float().cpu()\n",
+            "        with torch.autocast('npu', enabled=False):\n",
+            "            output = deform_conv2d(cpu(input), cpu(offset), cpu(weight), cpu(bias),\n",
+            "                                   stride, padding, dilation, cpu(mask))\n",
+            "        return output.to(device=input.device, dtype=input.dtype)\n",
+            "\n",
+            "    module.deform_conv2d = portable_deform\n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/models/sc_vaes/fdg_vae.py",
+      "base_sha256": "9e082e783ae86174ca2671ae33b6a1134a980fcbea8f168fa35a6800d19eebcb",
+      "result_sha256": "437c76bbc9e46f0a3d94a31b4bada028b60a32d4d6404f26dc43c0b09b411fcd",
+      "hunks": [
+        {
+          "start": 19,
+          "delete": 1,
+          "insert": [
+            "import os\n",
+            "if os.environ.get('TRELLIS2_ASCEND_COMPAT') == '1':\n",
+            "    from ...ascend_compat import flexible_dual_grid_to_mesh\n",
+            "else:\n",
+            "    from o_voxel.convert import flexible_dual_grid_to_mesh\n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/modules/image_feature_extractor.py",
+      "base_sha256": "12530b23e8b6a2cc6b87d8cd01922c7b0085199a365b731f19dd0e7ef4919150",
+      "result_sha256": "f278f239bc62fc6c8776866047865702a19de14d9e216f08e812996df3db7d97",
+      "hunks": [
+        {
+          "start": 7,
+          "delete": 0,
+          "insert": [
+            "import os\n"
+          ]
+        },
+        {
+          "start": 64,
+          "delete": 1,
+          "insert": [
+            "        local_name = os.environ.get('TRELLIS2_DINO_PATH', model_name)\n",
+            "        self.model = DINOv3ViTModel.from_pretrained(local_name, local_files_only=True)\n"
+          ]
+        },
+        {
+          "start": 111,
+          "delete": 1,
+          "insert": [
+            "            image = torch.stack(image).to(next(self.model.parameters()).device)\n"
+          ]
+        },
+        {
+          "start": 115,
+          "delete": 1,
+          "insert": [
+            "        image = self.transform(image).to(next(self.model.parameters()).device)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/modules/sparse/attention/full_attn.py",
+      "base_sha256": "bee0c32089f060c8136292f41a2cc7a952a8679a8b6d113d14c772f2c681e520",
+      "result_sha256": "8b08b8e09e69f2a0bad941fd8d8fc4891109bec1251cb6f8a3210d248633986d",
+      "hunks": [
+        {
+          "start": 213,
+          "delete": 0,
+          "insert": [
+            "    elif config.ATTN in ('sdpa', 'naive'):\n",
+            "        # Ascend-safe variable-length attention: process each batch independently.\n",
+            "        if num_all_args == 1:\n",
+            "            q, k, v = qkv.unbind(dim=1)\n",
+            "        elif num_all_args == 2:\n",
+            "            k, v = kv.unbind(dim=1)\n",
+            "        q_offs = [0] + list(torch.cumsum(torch.tensor(q_seqlen), dim=0).tolist())\n",
+            "        kv_offs = [0] + list(torch.cumsum(torch.tensor(kv_seqlen), dim=0).tolist())\n",
+            "        outs = []\n",
+            "        for i in range(len(q_seqlen)):\n",
+            "            qi = q[q_offs[i]:q_offs[i + 1]].unsqueeze(0).permute(0, 2, 1, 3)\n",
+            "            ki = k[kv_offs[i]:kv_offs[i + 1]].unsqueeze(0).permute(0, 2, 1, 3)\n",
+            "            vi = v[kv_offs[i]:kv_offs[i + 1]].unsqueeze(0).permute(0, 2, 1, 3)\n",
+            "            if config.ATTN == 'sdpa':\n",
+            "                from torch.nn.functional import scaled_dot_product_attention as _sdpa\n",
+            "                oi = _sdpa(qi, ki, vi)\n",
+            "            else:\n",
+            "                scale = 1.0 / (qi.shape[-1] ** 0.5)\n",
+            "                oi = torch.softmax(qi @ ki.transpose(-2, -1) * scale, dim=-1) @ vi\n",
+            "            outs.append(oi.permute(0, 2, 1, 3).squeeze(0))\n",
+            "        out = torch.cat(outs, dim=0)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/modules/sparse/attention/windowed_attn.py",
+      "base_sha256": "fd451b519391d4c17942632c8f82670022c7ef2f1acf50722db134818a25d6f1",
+      "result_sha256": "364c55897b3f7951092899f3260d7a08386cb01d116b9d57abd7a7203d9c00dd",
+      "hunks": [
+        {
+          "start": 115,
+          "delete": 0,
+          "insert": [
+            "    elif config.ATTN in ('sdpa', 'naive'):\n",
+            "        q, k, v = qkv_feats.unbind(dim=1)\n",
+            "        chunks = []\n",
+            "        start = 0\n",
+            "        for length in seq_lens.tolist():\n",
+            "            qi = q[start:start + length].unsqueeze(0).permute(0, 2, 1, 3)\n",
+            "            ki = k[start:start + length].unsqueeze(0).permute(0, 2, 1, 3)\n",
+            "            vi = v[start:start + length].unsqueeze(0).permute(0, 2, 1, 3)\n",
+            "            if config.ATTN == 'sdpa':\n",
+            "                from torch.nn.functional import scaled_dot_product_attention as _sdpa\n",
+            "                oi = _sdpa(qi, ki, vi)\n",
+            "            else:\n",
+            "                oi = torch.softmax(qi @ ki.transpose(-2, -1) / (qi.shape[-1] ** 0.5), dim=-1) @ vi\n",
+            "            chunks.append(oi.permute(0, 2, 1, 3).squeeze(0))\n",
+            "            start += length\n",
+            "        out = torch.cat(chunks, dim=0)\n"
+          ]
+        },
+        {
+          "start": 186,
+          "delete": 0,
+          "insert": [
+            "    elif config.ATTN in ('sdpa', 'naive'):\n",
+            "        k, v = kv_feats.unbind(dim=1)\n",
+            "        chunks = []\n",
+            "        q_start = kv_start = 0\n",
+            "        for q_len, kv_len in zip(q_seq_lens.tolist(), kv_seq_lens.tolist()):\n",
+            "            qi = q_feats[q_start:q_start + q_len].unsqueeze(0).permute(0, 2, 1, 3)\n",
+            "            ki = k[kv_start:kv_start + kv_len].unsqueeze(0).permute(0, 2, 1, 3)\n",
+            "            vi = v[kv_start:kv_start + kv_len].unsqueeze(0).permute(0, 2, 1, 3)\n",
+            "            if config.ATTN == 'sdpa':\n",
+            "                from torch.nn.functional import scaled_dot_product_attention as _sdpa\n",
+            "                oi = _sdpa(qi, ki, vi)\n",
+            "            else:\n",
+            "                oi = torch.softmax(qi @ ki.transpose(-2, -1) / (qi.shape[-1] ** 0.5), dim=-1) @ vi\n",
+            "            chunks.append(oi.permute(0, 2, 1, 3).squeeze(0))\n",
+            "            q_start += q_len\n",
+            "            kv_start += kv_len\n",
+            "        out = torch.cat(chunks, dim=0)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/modules/sparse/basic.py",
+      "base_sha256": "99dbcb7298238fdb6b6d47918ec068f618c68067653489d22b32c136c1ae0e78",
+      "result_sha256": "275644ba61e953df5397dd302d6471e91260b6971e12b8578eaa4d9ba6b7cd5c",
+      "hunks": [
+        {
+          "start": 282,
+          "delete": 1,
+          "insert": [
+            "        if red.device.type == 'npu':\n",
+            "            # torch-npu has no segment_reduce kernel; preserve the exact CPU\n",
+            "            # reduction semantics and include both transfers in pipeline time.\n",
+            "            red = torch.segment_reduce(red.cpu(), reduce=op, lengths=self.seqlen.cpu()).to(red.device)\n",
+            "        else:\n",
+            "            red = torch.segment_reduce(red, reduce=op, lengths=self.seqlen)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/modules/sparse/config.py",
+      "base_sha256": "6a9cb44608829cb2c11591685282959928c6081c5bc659687aa8395765c5f91b",
+      "result_sha256": "3bf3def25459246435819e69588de506535bff97ec7c461cc702f4627f1954e0",
+      "hunks": [
+        {
+          "start": 19,
+          "delete": 1,
+          "insert": [
+            "    if env_sparse_conv_backend is not None and env_sparse_conv_backend in ['none', 'torch', 'spconv', 'torchsparse', 'flex_gemm']:\n"
+          ]
+        },
+        {
+          "start": 23,
+          "delete": 1,
+          "insert": [
+            "    if env_sparse_attn_backend is not None and env_sparse_attn_backend in ['xformers', 'flash_attn', 'flash_attn_3', 'sdpa', 'naive']:\n"
+          ]
+        },
+        {
+          "start": 32,
+          "delete": 1,
+          "insert": [
+            "def set_conv_backend(backend: Literal['none', 'torch', 'spconv', 'torchsparse', 'flex_gemm']):\n"
+          ]
+        },
+        {
+          "start": 40,
+          "delete": 1,
+          "insert": [
+            "def set_attn_backend(backend: Literal['xformers', 'flash_attn', 'flash_attn_3', 'sdpa', 'naive']):\n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/modules/sparse/conv/conv_torch.py",
+      "base_sha256": null,
+      "result_sha256": "6b6e882e3970a50a181e597ad43cf8d34e91ded8949b57ece49ec9b1aa5deb8d",
+      "hunks": [
+        {
+          "start": 0,
+          "delete": 0,
+          "insert": [
+            "\"\"\"Inference-only pure PyTorch submanifold sparse convolution fallback.\n",
+            "\n",
+            "The official TRELLIS.2 implementation uses flex_gemm CUDA kernels.  This\n",
+            "backend keeps the same active-coordinate and checkpoint weight semantics and\n",
+            "performs neighbour gathering on CPU followed by GEMMs on the selected device.\n",
+            "It is intentionally limited to stride-one, no-padding convolutions, which are\n",
+            "the sparse layers used by the TRELLIS.2 inference checkpoints.\n",
+            "\"\"\"\n",
+            "from __future__ import annotations\n",
+            "\n",
+            "import itertools\n",
+            "import os\n",
+            "import math\n",
+            "import torch\n",
+            "import torch.nn as nn\n",
+            "from .. import SparseTensor\n",
+            "\n",
+            "\n",
+            "def _triple(value):\n",
+            "    if isinstance(value, (tuple, list)):\n",
+            "        return tuple(int(v) for v in value)\n",
+            "    return (int(value),) * 3\n",
+            "\n",
+            "\n",
+            "def sparse_conv3d_init(self, in_channels, out_channels, kernel_size, stride=1,\n",
+            "                       dilation=1, padding=None, bias=True, indice_key=None):\n",
+            "    if _triple(stride) != (1, 1, 1) or padding not in (None, 0, (0, 0, 0)):\n",
+            "        raise NotImplementedError(\"TRELLIS.2 torch sparse backend supports stride-one submanifold convolutions only\")\n",
+            "    self.in_channels = int(in_channels)\n",
+            "    self.out_channels = int(out_channels)\n",
+            "    self.kernel_size = _triple(kernel_size)\n",
+            "    self.stride = _triple(stride)\n",
+            "    self.dilation = _triple(dilation)\n",
+            "    self.indice_key = indice_key\n",
+            "    # Same layout as flex_gemm: [out_channels, kd, kh, kw, in_channels].\n",
+            "    self.weight = nn.Parameter(torch.empty((self.out_channels, *self.kernel_size, self.in_channels)))\n",
+            "    self.bias = nn.Parameter(torch.empty(self.out_channels)) if bias else None\n",
+            "    nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))\n",
+            "    if self.bias is not None:\n",
+            "        bound = 1.0 / math.sqrt(max(1, self.in_channels * math.prod(self.kernel_size)))\n",
+            "        nn.init.uniform_(self.bias, -bound, bound)\n",
+            "\n",
+            "\n",
+            "def _offsets(kernel_size, dilation):\n",
+            "    ranges = [range(-(k // 2), k // 2 + 1) for k in kernel_size]\n",
+            "    return [(tuple(int(v) for v in off), tuple(int(v * d) for v, d in zip(off, dilation)))\n",
+            "            for off in itertools.product(*ranges)]\n",
+            "\n",
+            "\n",
+            "def _neighbour_map_gpu(x, kernel_size, dilation):\n",
+            "    \"\"\"Vectorized exact replacement for the CPU dict loop (accel_repro_pack).\n",
+            "\n",
+            "    Same inputs/outputs as the dict version: per kernel offset an int64 index\n",
+            "    row (neighbour row or -1).  All work stays on the device: linearized\n",
+            "    keys + torch.sort + torch.searchsorted, with a reconstruct-and-compare\n",
+            "    guard that makes the mapping bit-identical to dict semantics (pure\n",
+            "    integer logic).  Enabled via TRELLIS_FAST_NEIGHBOUR=1.\n",
+            "    \"\"\"\n",
+            "    coords = x.coords.detach().to(x.feats.device, dtype=torch.int64)\n",
+            "    n = coords.shape[0]\n",
+            "    ymax = int(coords[:, 1].max()) + 2\n",
+            "    xmax = int(coords[:, 2].max()) + 2\n",
+            "    zmax = int(coords[:, 3].max()) + 2\n",
+            "    block = ymax * xmax * zmax\n",
+            "    key = coords[:, 0] * block + coords[:, 1] * (xmax * zmax) \\\n",
+            "        + coords[:, 2] * zmax + coords[:, 3]\n",
+            "    sorted_key, order = torch.sort(key)\n",
+            "    origin = coords.clone()\n",
+            "    maps = []\n",
+            "    for kernel_index, delta in _offsets(kernel_size, dilation):\n",
+            "        query = coords[:, 1:4] + torch.tensor(\n",
+            "            (delta[0], delta[1], delta[2]), device=coords.device,\n",
+            "            dtype=torch.int64)\n",
+            "        query_key = coords[:, 0] * block + query[:, 0] * (xmax * zmax) \\\n",
+            "            + query[:, 1] * zmax + query[:, 2]\n",
+            "        position = torch.searchsorted(sorted_key, query_key).clamp_max(n - 1)\n",
+            "        hit = sorted_key[position] == query_key\n",
+            "        matched = origin[order[position]]\n",
+            "        hit = hit & (matched[:, 0] == coords[:, 0]) \\\n",
+            "            & (matched[:, 1] == query[:, 0]) \\\n",
+            "            & (matched[:, 2] == query[:, 1]) \\\n",
+            "            & (matched[:, 3] == query[:, 2])\n",
+            "        indices = torch.where(hit, order[position],\n",
+            "                              torch.full_like(order[position], -1))\n",
+            "        maps.append((kernel_index, indices.to(\"cpu\")))\n",
+            "    return maps\n",
+            "\n",
+            "\n",
+            "def _neighbour_map(x, kernel_size, dilation):\n",
+            "    if os.environ.get(\"TRELLIS_FAST_NEIGHBOUR\") == \"1\":\n",
+            "        return _neighbour_map_gpu(x, kernel_size, dilation)\n",
+            "    key = f\"trellis2_torch_subm_map_{kernel_size}_{dilation}\"\n",
+            "    # Do not retain per-layer maps in SparseTensor's shared cache: a 64^3\n",
+            "    # structure can carry millions of active coordinates and retaining maps\n",
+            "    # for every residual block otherwise grows host RAM without bound.\n",
+            "    coords = x.coords.detach().to(\"cpu\", dtype=torch.int64).tolist()\n",
+            "    lookup = {tuple(c): i for i, c in enumerate(coords)}\n",
+            "    maps = []\n",
+            "    for kernel_index, delta in _offsets(kernel_size, dilation):\n",
+            "        indices = []\n",
+            "        for c in coords:\n",
+            "            q = (c[0], c[1] + delta[0], c[2] + delta[1], c[3] + delta[2])\n",
+            "            indices.append(lookup.get(q, -1))\n",
+            "        maps.append((kernel_index, torch.tensor(indices, dtype=torch.long)))\n",
+            "    return maps\n",
+            "\n",
+            "\n",
+            "def sparse_conv3d_forward(self, x: SparseTensor) -> SparseTensor:\n",
+            "    features = x.feats\n",
+            "    output = torch.zeros((features.shape[0], self.out_channels), dtype=features.dtype, device=features.device)\n",
+            "    for (kd, kh, kw), indices_cpu in _neighbour_map(x, self.kernel_size, self.dilation):\n",
+            "        valid_cpu = indices_cpu >= 0\n",
+            "        if not bool(valid_cpu.any()):\n",
+            "            continue\n",
+            "        valid = valid_cpu.to(features.device)\n",
+            "        indices = indices_cpu.clamp_min(0).to(features.device)\n",
+            "        gathered = features.index_select(0, indices)\n",
+            "        contrib = torch.matmul(gathered, self.weight[:, kd, kh, kw, :].transpose(0, 1))\n",
+            "        contrib.mul_(valid.to(contrib.dtype).unsqueeze(1))\n",
+            "        output.add_(contrib)\n",
+            "    if self.bias is not None:\n",
+            "        output = output + self.bias.to(output.dtype).unsqueeze(0)\n",
+            "    return x.replace(output)\n",
+            "\n",
+            "\n",
+            "def sparse_inverse_conv3d_init(self, *args, **kwargs):\n",
+            "    raise NotImplementedError(\"TRELLIS.2 torch sparse backend has no inverse convolution\")\n",
+            "\n",
+            "\n",
+            "def sparse_inverse_conv3d_forward(self, x: SparseTensor) -> SparseTensor:\n",
+            "    raise NotImplementedError(\"TRELLIS.2 torch sparse backend has no inverse convolution\")\n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/pipelines/rembg/BiRefNet.py",
+      "base_sha256": "f0d1148ad4f8ac8dcfeea5f5eb296913d009a5230feb6708a28a50f070a22487",
+      "result_sha256": "66c7f6b3ee86520e9bdc30caaf718d53ff345caf3294d19c4521a7c342abbfc4",
+      "hunks": [
+        {
+          "start": 5,
+          "delete": 0,
+          "insert": [
+            "import os\n"
+          ]
+        },
+        {
+          "start": 9,
+          "delete": 4,
+          "insert": [
+            "        # Lazy-load so an RGBA fixture can bypass background removal without\n",
+            "        # requiring an unarchived RMBG checkpoint or network access.\n",
+            "        self.model = None\n",
+            "        self.model_name = os.environ.get('TRELLIS2_REMBG_PATH', model_name)\n"
+          ]
+        },
+        {
+          "start": 22,
+          "delete": 1,
+          "insert": [
+            "        if self.model is not None:\n",
+            "            self.model.to(device)\n"
+          ]
+        },
+        {
+          "start": 25,
+          "delete": 1,
+          "insert": [
+            "        self.to('cuda')\n"
+          ]
+        },
+        {
+          "start": 28,
+          "delete": 1,
+          "insert": [
+            "        self.to('cpu')\n"
+          ]
+        },
+        {
+          "start": 31,
+          "delete": 0,
+          "insert": [
+            "        if self.model is None:\n",
+            "            self.model = AutoModelForImageSegmentation.from_pretrained(\n",
+            "                self.model_name, trust_remote_code=True, local_files_only=True\n",
+            "            )\n",
+            "            self.model.eval()\n"
+          ]
+        },
+        {
+          "start": 32,
+          "delete": 1,
+          "insert": [
+            "        device = next(self.model.parameters()).device\n",
+            "        input_images = self.transform_image(image).unsqueeze(0).to(device)\n"
+          ]
+        },
+        {
+          "start": 34,
+          "delete": 0,
+          "insert": [
+            "        from ...ascend_compat import configure_rembg\n",
+            "        configure_rembg(self.model)\n"
+          ]
+        },
+        {
+          "start": 35,
+          "delete": 1,
+          "insert": [
+            "            preds = self.model(input_images)[-1].sigmoid().float().cpu()\n"
+          ]
+        },
+        {
+          "start": 41,
+          "delete": 1,
+          "insert": [
+            "    \n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/pipelines/trellis2_image_to_3d.py",
+      "base_sha256": "e2addfca672354284b23d1541a8f49228d5a727d49220fcb8512cca2cdd38ce9",
+      "result_sha256": "7d342ac8db590416f8fe5914f280f77e326b83aed430e75daeaf56ee7a6aa75c",
+      "hunks": [
+        {
+          "start": 589,
+          "delete": 1,
+          "insert": [
+            "        getattr(torch, self.device.type).empty_cache()\n"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "trellis2/representations/mesh/base.py",
+      "base_sha256": "8539072e74efc4c2748b987694644a58b7fa40ff303488632dc36b15be73d932",
+      "result_sha256": "f60a4378666d62f1f735198bcb84744d0096a8b2e6732599ff0a458dc73f7a59",
+      "hunks": [
+        {
+          "start": 3,
+          "delete": 2,
+          "insert": [
+            "try:\n",
+            "    import cumesh\n",
+            "except ImportError:\n",
+            "    cumesh = None\n",
+            "try:\n",
+            "    from flex_gemm.ops.grid_sample import grid_sample_3d\n",
+            "except ImportError:\n",
+            "    grid_sample_3d = None\n"
+          ]
+        },
+        {
+          "start": 35,
+          "delete": 0,
+          "insert": [
+            "        if cumesh is None:\n",
+            "            return\n"
+          ]
+        },
+        {
+          "start": 59,
+          "delete": 0,
+          "insert": [
+            "        if cumesh is None:\n",
+            "            return\n"
+          ]
+        },
+        {
+          "start": 71,
+          "delete": 0,
+          "insert": [
+            "        if cumesh is None:\n",
+            "            return\n"
+          ]
+        },
+        {
+          "start": 222,
+          "delete": 0,
+          "insert": [
+            "        if grid_sample_3d is None:\n",
+            "            # Fallback used only for optional vertex-attribute queries.  The\n",
+            "            # neural mesh/voxel outputs themselves remain unchanged.\n",
+            "            grid = ((xyz - self.origin) / self.voxel_size).reshape(1, -1, 1, 1, 3)\n",
+            "            grid = grid / torch.tensor(self.voxel_shape[-3:], device=grid.device).reshape(1, 1, 1, 1, 3) * 2 - 1\n",
+            "            attrs = self.attrs.permute(1, 0, 2, 3, 4).unsqueeze(0)\n",
+            "            return torch.nn.functional.grid_sample(attrs, grid, mode='bilinear', align_corners=False)[0, :, :, 0, 0].T\n"
+          ]
+        }
+      ]
+    }
+  ]
+}
