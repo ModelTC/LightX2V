@@ -22,7 +22,7 @@ bash scripts/platform/mlu/run_eval.sh --check-inputs --rehash-weights --data-roo
 # 首对象完整链路，首次运行补装冻结的额外依赖
 bash scripts/platform/mlu/run_eval.sh --install-deps --smoke --card 0 --data-root /path/to/data
 
-# 正式40对象评测；两实现各预热1次、每对象重复2次
+# 完整1023对象GSO评测；两实现各预热1次、每对象重复2次
 bash scripts/platform/mlu/run_eval.sh --card 0 --data-root /path/to/data
 ```
 
@@ -40,7 +40,9 @@ NVIDIA运行使用`bash scripts/platform/nvidia/run_eval.sh ...`并设置`EVAL_I
 - `reference/`、`lightx2v/`：原始NPZ、环境、请求、预热、设备遥测；另有阶段日志、失败清单、配置快照与哈希。
 - `geometry/`：几何GLB及回读检查；原始纹理体素保留在NPZ。
 
-默认共160次正式请求。smoke仅4次正式请求，不代表40对象结果。CPU指标在两种模型进程结束后自动执行；失败/缺失不从分母删除，未完成返回非零退出码。`--output`指定新目录，已有目录不会覆盖。
+完整评测覆盖1023个GSO对象，两实现各重复2次，共4092次正式请求，另各预热1次。`--limit N`用于小样本诊断；smoke结果不代表完整GSO成绩。CPU指标在两种模型进程结束后自动执行；失败/缺失不从分母删除，未完成返回非零退出码。`--output`指定新目录，已有目录不会覆盖。
+
+每个正式请求记录端到端墙钟时间，并分别记录评测适配器调用、输出转为CPU NumPy数组、评测框架开销。`comparison.json`和`report.md`还汇总适配器可分辨的内部阶段；三段采样器事件时间是模型流水线时间的子项，不与上述部分重复相加。模型加载、预热、NPZ写盘、离线精度计算和几何导出不计入端到端时间。
 
 已有预测可直接重算，时间/显存沿用原记录：
 

@@ -169,12 +169,22 @@ class LightX2VAdapter:
         config = build_startup_config(settings)
         self.runner = build_runner(config)
         self.model = "trellis2"
+        self.last_stage_timings = {}
         self.metadata = {"configuration": dict(config), "source": str(source)}
 
     def predict(self, image_paths, seed):
+        prepare_start = time.perf_counter()
         fields = {"seed": seed}
         fields["image_path"] = str(DATA / image_paths[0])
-        return self.runner.run_request(self.runner.prepare_request(fields))
+        request = self.runner.prepare_request(fields)
+        prepare_s = time.perf_counter() - prepare_start
+        model_start = time.perf_counter()
+        result = self.runner.run_request(request)
+        self.last_stage_timings = {
+            "request_preparation_s": prepare_s,
+            "runner_inference_and_postprocess_s": time.perf_counter() - model_start,
+        }
+        return result
 
 
 class ReferenceAdapter:
@@ -211,11 +221,23 @@ class ReferenceAdapter:
     def predict(self, image_paths, seed):
         from PIL import Image
 
+        input_start = time.perf_counter()
         with Image.open(DATA / image_paths[0]) as source:
             image = source.copy()
+        input_s = time.perf_counter() - input_start
+        pipeline_start = time.perf_counter()
         with autocast_context():
             mesh = self.pipe.run(image, seed=seed, pipeline_type="512")[0]
-        return {"vertices": mesh.vertices.float().cpu(), "faces": mesh.faces.cpu(), "texture_coords": mesh.coords.cpu(), "texture_attrs": mesh.attrs.float().cpu()}
+        pipeline_s = time.perf_counter() - pipeline_start
+        output_start = time.perf_counter()
+        outputs = {"vertices": mesh.vertices.float().cpu(), "faces": mesh.faces.cpu(), "texture_coords": mesh.coords.cpu(), "texture_attrs": mesh.attrs.float().cpu()}
+        device_api().synchronize()
+        self.last_stage_timings = {
+            "input_image_read_s": input_s,
+            "pipeline_preprocess_inference_and_decode_s": pipeline_s,
+            "mesh_device_to_host_s": time.perf_counter() - output_start,
+        }
+        return outputs
 
 
 def measurement_targets(adapter, implementation):
@@ -276,7 +298,7 @@ def run_benchmark_job(args):
         "determinism": {"enabled": torch.are_deterministic_algorithms_enabled(), "warn_only": torch.is_deterministic_algorithms_warn_only_enabled(), "pythonhashseed": os.getenv("PYTHONHASHSEED")},
         "evaluation_driver": {"role": "developer_benchmark", "script": Path(__file__).name, "sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
         "evaluation_code": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in ("evaluate.py", "run_eval.sh")},
-        "timing_boundary": "image read, preprocessing, model inference, CPU output transfer; excludes model load, warmup, artifact write and offline evaluation",
+        "timing_boundary": "wall time from adapter.predict entry through CPU NumPy output materialization; includes image read/preprocessing, inference, model postprocessing and device-to-host transfer; excludes model load, warmup, artifact write and offline evaluation",
     }
     env["platform_configuration"] = platform_fingerprints()
     write_json(args.run_dir / "environment.json", env)
@@ -300,16 +322,27 @@ def run_benchmark_job(args):
         row["started_at_unix"] = time.time()
         start = time.perf_counter()
         try:
+            predict_start = time.perf_counter()
             with record_model_events(targets, backend) as events, torch.inference_mode():
                 result = adapter.predict(sample["views"], sample["seed"])
             backend.synchronize()
-            row["pipeline_s"] = time.perf_counter() - start
+            predict_call_s = time.perf_counter() - predict_start
             row["events"] = [{"stage": name, "seconds": a.elapsed_time(b) / 1000} for (name, a, b) in events]
             row["peak_allocated_bytes"] = backend.max_memory_allocated()
             row["peak_reserved_bytes"] = backend.max_memory_reserved()
             row["peak_incremental_bytes"] = row["peak_allocated_bytes"] - row["memory_before_bytes"]
             row["cpu_process_peak_rss_kib"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            conversion_start = time.perf_counter()
             arrays = {k: v.detach().cpu().float().numpy() if v.is_floating_point() else v.detach().cpu().numpy() for (k, v) in result.items()}
+            backend.synchronize()
+            conversion_s = time.perf_counter() - conversion_start
+            row["pipeline_s"] = time.perf_counter() - start
+            row["timing_breakdown_s"] = {
+                "adapter_predict_call": predict_call_s,
+                "result_cpu_numpy_conversion": conversion_s,
+                "evaluation_harness_overhead": max(0.0, row["pipeline_s"] - predict_call_s - conversion_s),
+            }
+            row["adapter_stage_s"] = getattr(adapter, "last_stage_timings", {})
             row["tensors"] = {k: {"shape": list(v.shape), "dtype": str(v.dtype), "finite_ratio": float(np.isfinite(v).mean())} for (k, v) in arrays.items()}
             if not all((np.isfinite(v).all() for v in arrays.values())):
                 raise ValueError("Non-finite output")
@@ -610,6 +643,10 @@ def evaluate_run(run, suite, data):
     }
     stages = sorted({e["stage"] for r in success for e in r["events"]})
     performance["event_stage_total_s_per_request"] = {stage: stats([sum((e["seconds"] for e in r["events"] if e["stage"] == stage)) for r in success]) for stage in stages}
+    timing_keys = sorted({key for r in success for key in r.get("timing_breakdown_s", {})})
+    performance["request_timing_breakdown_s"] = {key: stats([r["timing_breakdown_s"][key] for r in success if key in r.get("timing_breakdown_s", {})]) for key in timing_keys}
+    adapter_keys = sorted({key for r in success for key in r.get("adapter_stage_s", {})})
+    performance["adapter_stage_s"] = {key: stats([r["adapter_stage_s"][key] for r in success if key in r.get("adapter_stage_s", {})]) for key in adapter_keys}
     performance["model_load_s"] = environment.get("model_load_s")
     telemetry_path = run / "telemetry.jsonl"
     if telemetry_path.exists():
@@ -875,7 +912,7 @@ def make_markdown(report, summary):
         f"固定GSO对象、输入顺序、seed和精度策略；平台为 {load_platform_config()['platform']}。",
         "同步墙钟计时覆盖读图、预处理、模型执行和CPU输出，排除模型加载、预热、NPZ写盘及离线指标。",
         "原始输出差值与尺度/坐标对齐后的数据集精度分别报告；形状不一致不记零差。",
-        "小样本检查仅代表所选对象，不代表完整40对象或1023对象库。",
+        "小样本检查仅代表所选对象，不代表完整1023对象GSO评测。",
         "",
         "## 产物",
         "",
@@ -995,7 +1032,7 @@ def postprocess(args):
     summary = {
         "status": "complete" if not errors else "incomplete",
         "model": MODEL,
-        "scope": "full_frozen_40" if len(selected) == 40 else "diagnostic_subset",
+        "scope": "full_gso_1023" if len(selected) == 1023 and args.limit is None else "diagnostic_subset",
         "sample_count": len(selected),
         "repeats": manifest["repeats"],
         "expected_per_implementation": expected,

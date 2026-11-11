@@ -2,7 +2,7 @@
 
 | 目录/文件 | 内容 |
 |---|---|
-| common/suite.json | 40对象GSO输入、seed、尺寸/视图、重复与精度协议 |
+| common/suite.json | 完整1023对象GSO输入清单与哈希、seed、尺寸/视图、重复与精度协议 |
 | common/weight-lock.json | 同一批模型/权重文件字节数与SHA256 |
 | `<platform>/runtime.json` | 平台、PyTorch设备API、镜像/Python、环境、设备映射与监控 |
 | `<platform>/model.json` | 该平台的LightX2V模型后端预设 |
