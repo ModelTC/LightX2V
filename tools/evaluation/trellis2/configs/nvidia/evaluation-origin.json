@@ -3,5 +3,6 @@
   "model": "trellis2",
   "platform": "nvidia",
   "status": "not_yet_evaluated",
-  "runs": {}
+  "runs": {},
+  "reports": {}
 }

@@ -21,8 +21,8 @@ bash scripts/platform/ascend_npu/run_eval.sh --check-inputs --rehash-weights \
 
 数据和权重使用 `DATA.md` 的冻结目录与哈希；`paths.json` 仅记录相对路径，`--data-root`/`EVAL_DATA_ROOT` 由用户指定位置。所有输出请用 `--output` 指向本项目目录之外，权重、源码缓存、运行产物均不提交。
 
-参考基线由 `reference_patches/ascend_npu.json` 重建，每个文件均验证修改前后 SHA256；这属于官方源码的 Ascend 适配版本，不能标作未修改的 CUDA 官方实现。LightX2V 继续使用原评测锁定的模型 PR 提交。
+源码准备只下载source-lock中固定的LightX2V提交；本评测不下载或运行官方原版。
 
-TRELLIS.2 保持单输入视图、512 流程和三阶段各 12 步。LightX2V 使用 `torch_sdpa`、`DefaultBF16`、`torch_deform_bf16` 和 `neighbor_map: sorted`。参考实现使用原 MLU 适配中同等语义的纯 PyTorch 稀疏卷积、SDPA 与 CPU 网格提取，另将缓存清理切换至真实设备 API、缺失的 `segment_reduce` 放在 CPU，并为 BiRefNet 使用 FP32 CPU torchvision deform-conv 后回传 NPU。CPU 处理及传输均保留在原 pipeline 计时内；参考结果不代表 CUDA 专用稀疏/几何算子的性能。
+TRELLIS.2 保持单输入视图、512 流程和三阶段各 12 步。LightX2V 使用 `torch_sdpa`、`DefaultBF16`、`torch_deform_bf16` 和 `neighbor_map: sorted`。LightX2V使用`torch_sdpa`、`DefaultBF16`、`torch_deform_bf16`和`neighbor_map: sorted`配置；具体后端需在目标设备完成smoke验证。
 
-后续按确定的评测要求先运行一次 `--smoke`，验证两种实现、重复请求、输出与报告后，再决定是否运行全量。当前 `evaluation-origin.json` 保持空记录，`validation_status` 明确标记模型 smoke 待验证。
+后续按确定的评测要求先运行一次 `--smoke`，验证LightX2V推理、重复请求、输出与报告后，再决定是否运行全量。当前 `evaluation-origin.json` 保持空记录，`validation_status` 明确标记模型 smoke 待验证。

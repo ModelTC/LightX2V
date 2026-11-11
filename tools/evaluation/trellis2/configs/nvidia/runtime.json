@@ -35,8 +35,6 @@
   "card_index_environment": "CUDA_CARD",
   "default_card": 0,
   "autocast_dtype": "bfloat16",
-  "reference_weight_dtype": "bfloat16",
-  "cast_reference_matrices": false,
   "version_packages": [
     "torch",
     "transformers",

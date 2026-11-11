@@ -41,8 +41,6 @@
   "card_index_environment": "MLU_CARD",
   "default_card": 2,
   "autocast_dtype": "bfloat16",
-  "reference_weight_dtype": "bfloat16",
-  "cast_reference_matrices": true,
   "version_packages": [
     "torch",
     "torch_mlu",
