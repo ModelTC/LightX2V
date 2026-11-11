@@ -888,7 +888,7 @@ def postprocess(args):
     (destination / "report.md").write_text(make_markdown(report, summary))
     files = [{"path": str(p.relative_to(destination)), "bytes": p.stat().st_size, "sha256": sha256(p)} for p in sorted(destination.rglob("*")) if p.is_file() and p.name not in ("provenance.json", "postprocess.log")]
     write_json(destination / "provenance.json", {"model": MODEL, "evaluation_code_sha256": sha256(Path(__file__)), "suite_sha256": sha256(config_path("suite.json")), "source_lock_sha256": sha256(config_path("source-lock.json")), "weight_lock_sha256": sha256(config_path("weight-lock.json")), "platform_configuration": platform_fingerprints(), "files": files})
-    print(json.dumps({"status": summary["status"], "sample_count": len(selected), "output": str(destination)}, flush=True))
+    print(json.dumps({"status": summary["status"], "sample_count": len(selected), "output": str(destination)}), flush=True)
     return 0 if summary["status"] == "complete" else 1
 
 

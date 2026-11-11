@@ -1,0 +1,10 @@
+{
+  "host_data_root": "/root/jianghaozhe/high-eff-eva/upstream/GSO",
+  "container_data_root": "/data",
+  "weights": {
+    "trellis2": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d",
+    "base": "models/microsoft--TRELLIS-image-large/459ee480d7545f873a0768364bc5f5443eb1ff5e",
+    "dino": "deps/camenduru--dinov3-vitl16-pretrain-lvd1689m",
+    "rembg": "deps/ZhengPeng7--BiRefNet"
+  }
+}
