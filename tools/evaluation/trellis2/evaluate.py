@@ -319,28 +319,55 @@ def sha256(path):
 
 
 def verify_environment(run, environment=None):
+    """Verify saved outputs against their frozen run configs and the current model pin."""
     run = Path(run)
     environment = environment or json.loads((run / "environment.json").read_text())
     assert environment["model"] == MODEL, "Run belongs to another model"
-    if "platform_configuration" in environment:
-        assert environment["platform_configuration"] == platform_fingerprints(), "Platform runtime or model configuration differs"
-    origin = json.loads((config_path("evaluation-origin.json")).read_text())
-    historical = origin["runs"].get(run.name)
-    if historical and sha256(run / "environment.json") == historical["environment_sha256"]:
-        assert sha256(run / "requests.jsonl") == historical["requests_sha256"], "Historical requests changed"
-        assert sha256(config_path("suite.json")) == origin["project_suite_sha256"], "Frozen protocol changed"
-        assert sha256(config_path("source-lock.json")) == origin["project_source_lock_sha256"], "Frozen sources changed"
-        assert environment["suite_sha256"] == origin["historical_suite_sha256"]
-        assert environment["source_lock_sha256"] == origin["historical_source_lock_sha256"]
-        return "historical_byte_preserved"
-    pair = {"suite_sha256": environment["suite_sha256"], "source_lock_sha256": environment["source_lock_sha256"]}
-    if pair in origin.get("configuration_aliases", []):
-        assert sha256(config_path("suite.json")) == origin["project_suite_sha256"], "Frozen protocol changed"
-        assert sha256(config_path("source-lock.json")) == origin["project_source_lock_sha256"], "Frozen sources changed"
-        return "compatible_frozen_source_inventory"
+    profile = environment.get("platform_configuration") or {}
+    platform = profile.get("platform")
+    snapshot = run.parent / "configs"
+    platform_snapshot = snapshot / str(platform)
+    suite_snapshot = snapshot / "common" / "suite.json"
+    weights_snapshot = snapshot / "common" / "weight-lock.json"
+    source_snapshot = platform_snapshot / "source-lock.json"
+    runtime_snapshot = platform_snapshot / "runtime.json"
+    model_snapshot = platform_snapshot / "model.json"
+    if all(path.is_file() for path in (suite_snapshot, weights_snapshot, source_snapshot, runtime_snapshot, model_snapshot)):
+        assert environment["suite_sha256"] == sha256(suite_snapshot), "Saved suite snapshot differs from the run"
+        assert environment["source_lock_sha256"] == sha256(source_snapshot), "Saved source-lock snapshot differs from the run"
+        assert sha256(config_path("suite.json")) == sha256(suite_snapshot), "Current evaluation suite differs from the run"
+        assert sha256(config_path("weight-lock.json")) == sha256(weights_snapshot), "Current weight inventory differs from the run"
+        saved_runtime = json.loads(runtime_snapshot.read_text())
+        current_runtime = json.loads(config_path("runtime.json").read_text())
+        # These fields only configured the removed official-reference adapter.
+        for config in (saved_runtime, current_runtime):
+            config.pop("reference_weight_dtype", None)
+            config.pop("cast_reference_matrices", None)
+        assert saved_runtime == current_runtime, "Platform runtime changed beyond removed reference-only settings"
+        assert sha256(model_snapshot) == sha256(config_path("model.json")), "LightX2V model configuration differs from the run"
+        saved_locks = json.loads(source_snapshot.read_text())
+        current_locks = json.loads(config_path("source-lock.json").read_text())
+        saved_model_locks = {key: value for key, value in saved_locks.items() if key.startswith("lightx2v-")}
+        current_model_locks = {key: value for key, value in current_locks.items() if key.startswith("lightx2v-")}
+        assert saved_model_locks == current_model_locks, "Pinned LightX2V source differs from the run"
+        assert profile == platform_fingerprints_from_snapshot(platform_snapshot), "Saved platform fingerprint differs from its config snapshot"
+        return "frozen_run_snapshot"
+    if profile:
+        assert profile == platform_fingerprints(), "Platform runtime or model configuration differs"
     assert environment["suite_sha256"] == sha256(config_path("suite.json")), "Suite differs"
     assert environment["source_lock_sha256"] == sha256(config_path("source-lock.json")), "Sources differ"
     return "current_project"
+
+
+def platform_fingerprints_from_snapshot(directory):
+    runtime = json.loads((directory / "runtime.json").read_text())
+    return {
+        "platform": runtime["platform"],
+        "device_type": runtime["device_type"],
+        "runtime_sha256": sha256(directory / "runtime.json"),
+        "model_sha256": sha256(directory / "model.json"),
+    }
+
 
 
 def load_rows(run):
