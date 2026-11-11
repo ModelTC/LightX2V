@@ -77,11 +77,14 @@ bash scripts/platforms/mps/run_minimax_h3_t2av_int8.sh
 This uses the standard `python -m lightx2v.infer` entry point for single-device
 T2AV: four steps, 544x960, 124 frames at 24 fps. `model_path` supplies the
 original tokenizer, text encoder and VAEs. Q/K/V remain separate.
+The configuration uses `dit_quant_scheme="int8-metal"` for the main-block
+projections and `adaln_quant_scheme="Default"` to keep AdaLN in floating point.
+When `adaln_quant_scheme` is omitted, AdaLN inherits `dit_quant_scheme`.
 
 The example keeps all components on MPS with CPU offload disabled and was
 tested on an M5 Ultra with 256 GB of unified memory. INT8 DiT weights use the
 existing quantized loader and `int8-metal` operators; the text
-encoder and VAEs use their existing loading paths. The launch script sets
+encoder and VAEs use their existing loading paths. The launch script sets the required
 `SENSITIVE_LAYER_DTYPE=FP32` to preserve H3's unquantized FP32 projections;
 `DTYPE` must remain `BF16`.
 Mixed INT8 disk streaming, tensor parallelism and other task types have not

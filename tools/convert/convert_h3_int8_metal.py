@@ -2,9 +2,9 @@
 
 import argparse
 import gc
+import importlib.util
 import json
 import shutil
-import sys
 from collections import defaultdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,9 +13,10 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from lightx2v_platform.checkpoint_metadata import read_checkpoint_json  # noqa: E402
+# Reuse the metadata reader without initializing the inference package.
+metadata_spec = importlib.util.spec_from_file_location("checkpoint_metadata", Path(__file__).resolve().parents[2] / "lightx2v/common/offload/checkpoint_metadata.py")
+checkpoint_metadata = importlib.util.module_from_spec(metadata_spec)
+metadata_spec.loader.exec_module(checkpoint_metadata)
 
 PROJECTION_WEIGHT_SUFFIXES = (
     ".ff.net.0.proj.weight",
@@ -92,7 +93,7 @@ def convert(source, output, device="cpu"):
     indices = list(source.glob("*.safetensors.index.json"))
     if len(indices) != 1:
         raise ValueError("Expected one source safetensors index")
-    original = read_checkpoint_json(indices[0])
+    original = checkpoint_metadata.read_checkpoint_json(indices[0])
     mapping = original["weight_map"]
     selected = {name for name in mapping if is_projection_weight(name)}
     if not selected:

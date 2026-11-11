@@ -13,9 +13,10 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGI
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None, quantized=True):
+def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None, quant_scheme=None):
     lora_prefix = "transformer_blocks"
-    quant_scheme = config.get("dit_quant_scheme", "Default") if quantized else "Default"
+    if quant_scheme is None:
+        quant_scheme = config.get("dit_quant_scheme", "Default")
     if config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
         tp_mm_type = config.get("tp_mm_type", "TensorParallel")
@@ -216,8 +217,6 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
             # the unquantized projection; update the offline builder if it changes.
             # AdaLN is the largest per-block projection in H3. Its output is
             # column-sharded here and gathered once per block before modulation.
-            # Selective INT8 Metal quantization keeps AdaLN in floating point.
-            keep_adaln_in_fp = config.get("dit_quant_scheme") == "int8-metal"
             self.add_module(
                 "adaln",
                 _linear(
@@ -226,7 +225,7 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
                     bias=True,
                     create_cuda_buffer=create_cuda_buffer,
                     tp_split="col",
-                    quantized=not keep_adaln_in_fp,
+                    quant_scheme=config.get("adaln_quant_scheme"),
                 ),
             )
 

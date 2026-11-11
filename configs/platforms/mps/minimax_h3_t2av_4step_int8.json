@@ -25,6 +25,7 @@
     "text_encoder_disk_streaming": false,
     "warmup": false,
     "dit_quant_scheme": "int8-metal",
+    "adaln_quant_scheme": "Default",
     "use_fused_qkv": false,
     "vae_encoder_conv_mode": "torch",
     "vae_sensitive_layer_dtype": "fp32",

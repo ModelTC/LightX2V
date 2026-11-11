@@ -25,7 +25,7 @@ from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3TransformerWeights,
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
-from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, H3_QUANTIZATION_PROFILE, WEIGHT_QMAX, validate_checkpoint
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -60,10 +60,7 @@ class MiniMaxH3Model(BaseTransformerModel):
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         validate_minimax_h3_residency_config(config)
         self.lora_alpha = lora_alpha
-        if "use_fused_qkv" not in config:
-            is_quantized = bool(config.get("dit_quantized", False))
-            is_int8_metal = config.get("dit_quant_scheme") == "int8-metal"
-            config["use_fused_qkv"] = is_quantized and not is_int8_metal
+        config.setdefault("use_fused_qkv", bool(config.get("dit_quantized", False)))
         if config.get("cpu_offload_block_contiguous", False):
             for option in ("use_fused_qkv", "dit_release_block_offload_buffers", "dit_quantized"):
                 if config.get(option, False):
@@ -96,15 +93,6 @@ class MiniMaxH3Model(BaseTransformerModel):
                 raise NotImplementedError(f"MiniMax-H3 quantized inference requires a per-output-channel FP8/INT8 scheme; got {quant_scheme!r}. Supported schemes: {sorted(H3_CHANNEL_QUANT_SCHEMES)}")
             if not config.get("dit_quantized_ckpt"):
                 raise ValueError("MiniMax-H3 quantized inference requires dit_quantized_ckpt")
-            if quant_scheme == "int8-metal":
-                if torch.device(device).type != "mps":
-                    raise ValueError("H3 int8-metal requires an MPS device")
-                if config.get("tensor_parallel", False):
-                    raise NotImplementedError("H3 int8-metal checkpoint loading is single-device only")
-                if config.get("use_fused_qkv", False):
-                    raise NotImplementedError("H3 int8-metal requires individual Q/K/V projections")
-                if GET_SENSITIVE_DTYPE() != torch.float32:
-                    raise ValueError("H3 int8-metal loading requires SENSITIVE_LAYER_DTYPE=FP32")
             if quant_scheme in ("fp8-f16-accum", "fp8-f32-accum"):
                 validate_checkpoint(config["dit_quantized_ckpt"], profile=H3_QUANTIZATION_PROFILE)
                 if quant_scheme == "fp8-f32-accum":
