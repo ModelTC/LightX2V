@@ -11,7 +11,6 @@ image_path=/data/zhangbilang/handoff/assets/meinv_01.png
 audio_path=/data/zhangbilang/bf16_refa2av_40s.mp4
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-source /data/zhangbilang/cuda130/use_cuda13_compat.sh
 source "${lightx2v_path}/scripts/base/base.sh"
 
 export DTYPE=BF16
