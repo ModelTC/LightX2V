@@ -5,6 +5,13 @@ import torch.distributed as dist
 from torch.distributed.distributed_c10d import _resolve_process_group
 
 
+def fp8_packet_layout(rows: int, dim: int) -> tuple[int, int]:
+    """FP32 scale offset and 512-byte-aligned peer packet size."""
+    scale_offset = (rows * dim + 3) // 4
+    stride = ((scale_offset + rows) * 4 + 511) // 512 * 512
+    return scale_offset, stride
+
+
 # The FP8 and FP32 views share storage. Keep them inside custom ops so
 # torch.compile cannot functionalize them into independent output buffers.
 @torch.library.custom_op("lightx2v::h3_causal_exchange_qkv_fp8", mutates_args=(), device_types="cuda")
@@ -24,8 +31,7 @@ def exchange_qkv_fp8(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, group_na
     rows = length * 3 * shard_heads
     # Each peer gets one packet: FP8 payload, aligned FP32 scales, then padding.
     # Align peer packets to 512 bytes for NCCL transfers.
-    scale_offset = triton.cdiv(rows * dim, 4)
-    stride = triton.cdiv((scale_offset + rows) * 4, 512) * 512
+    scale_offset, stride = fp8_packet_layout(rows, dim)
     packed = torch.empty((size, stride), device=q.device, dtype=torch.uint8)
     total_rows = size * length * shard_heads
     kernels._qkv_pre_fp8_kernel[(triton.cdiv(total_rows, 8),)](
@@ -100,8 +106,7 @@ def exchange_output_fp8(value: torch.Tensor, group_name: str, size: int) -> torc
     kernels._check_hidden_dims(dim, "packed attention fp8 path")
     local_length = length // size
     rows = shard_heads * local_length
-    scale_offset = triton.cdiv(rows * dim, 4)
-    stride = triton.cdiv((scale_offset + rows) * 4, 512) * 512
+    scale_offset, stride = fp8_packet_layout(rows, dim)
     packed = torch.empty((size, stride), device=value.device, dtype=torch.uint8)
     total_rows = size * rows
     kernels._attn_pre_fp8_kernel[(triton.cdiv(total_rows, 8),)](

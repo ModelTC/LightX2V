@@ -271,8 +271,8 @@ def load_model_config(deployment_config):
     elif model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3"):
         causal = model_cls == "minimax_h3_causal"
         if causal:
-            if deployment_config.get("task") != "refa2v":
-                raise ValueError("MiniMax-H3 causal currently supports task='refa2v'; set --task refa2v when starting the model")
+            if deployment_config.get("task") not in {"refa2v", "refa2av"}:
+                raise ValueError("MiniMax-H3 causal requires task='refa2v' or 'refa2av'")
             if not deployment_config.get("dit_original_ckpt"):
                 raise ValueError("MiniMax-H3 causal inference requires dit_original_ckpt pointing to the causal checkpoint")
             transformer_subfolder = "transformer_ref"
