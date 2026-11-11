@@ -1,6 +1,6 @@
-# Extra dependencies over the vendor image's pytorch_infer environment.
+# Extra dependencies over the selected platform image's PyTorch environment.
 # Installed with --no-deps into this project's runtime directory.
-# Never replace vendor torch, torch_mlu or torchvision.
+# Never replace vendor torch, its accelerator plugin, or torchvision.
 diffusers==0.36.0
 omegaconf==2.3.0
 antlr4-python3-runtime==4.9.3

@@ -33,7 +33,7 @@ class PlatformConfigurationTests(unittest.TestCase):
             root = Path(temporary)
             evaluation.write_json(root / "configs/mlu/runtime.json", {"platform": "nvidia", "device_type": "cuda"})
             with patch.object(evaluation, "ROOT", root):
-                with self.assertRaisesRegex(ValueError, "only the validated MLU backend"):
+                with self.assertRaisesRegex(ValueError, "Invalid configs/mlu/runtime.json"):
                     evaluation.load_platform_config()
 
     def test_run_snapshot_copies_common_and_platform_configs_recursively(self):
