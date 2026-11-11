@@ -52,3 +52,5 @@ bash run_eval.sh --help
 ```
 
 数据与协议：[DATA.md](DATA.md)。配置目录：[configs/README.md](configs/README.md)。新增A100等平台的工程步骤及结果交付：[PLATFORMS.md](PLATFORMS.md)。
+
+Ascend 910B 配置、依赖镜像与参考兼容补丁已提供；当前仅完成设备 API/配置检查，模型 smoke 和正式评测待执行。详见 [Ascend 配置](configs/ascend_npu/README.md)。

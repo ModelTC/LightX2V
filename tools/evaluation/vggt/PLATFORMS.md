@@ -57,3 +57,5 @@
 - 公共输入协议不因增加平台而覆盖；平台配置和正式结果独立新增。原结果保留原状态和来源，不静默重写。
 - README保持运行说明，只更新已验证的平台入口或简短结果链接；详细 bring-up 与交付要求维护在本文和AGENTS。
 - 提交前检查实际PR文件清单：`history/`、`artifacts/`、`cache/`、`runtime/`、`sources/`、`data/`及本地工作记录全部排除，包括已跟踪文件。
+
+Ascend 910B 配置、依赖镜像与参考兼容补丁已提供；当前仅完成设备 API/配置检查，模型 smoke 和正式评测待执行。详见 [Ascend 配置](configs/ascend_npu/README.md)。

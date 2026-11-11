@@ -1,0 +1,25 @@
+{
+  "format": "line_edits_v1",
+  "upstream_repository": "https://github.com/facebookresearch/vggt.git",
+  "upstream_revision": "a288dd0f14786c93483e45524328726ab7b1b4ce",
+  "description": "Ascend inference compatibility; original model, preprocessing and sampling preserved. No CUDA or MLU API substitution at process scope.",
+  "files": [
+    {
+      "path": "vggt/layers/attention.py",
+      "base_sha256": "883b82b8fd1d833e4b7060a97cff44aa677288e2f91415763d0deac48d111469",
+      "result_sha256": "f5c4b354216c31a748f7567421e75d1caa97f018830168f155a362a31d9d39a2",
+      "hunks": [
+        {
+          "start": 60,
+          "delete": 0,
+          "insert": [
+            "            # RoPE produces FP32 q/k while v follows BF16 autocast.\n",
+            "            # Match dtypes and contiguous BNSD layout before the NPU SDPA kernel.\n",
+            "            if q.device.type == \"npu\":\n",
+            "                q, k, v = q.to(v.dtype).contiguous(), k.to(v.dtype).contiguous(), v.contiguous()\n"
+          ]
+        }
+      ]
+    }
+  ]
+}

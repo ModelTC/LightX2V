@@ -87,8 +87,11 @@ def platform_fingerprints():
 
 
 def copy_active_configs(destination):
-    for name in (*COMMON_CONFIGS, *PLATFORM_CONFIGS):
-        source = config_path(name)
+    sources = [config_path(name) for name in (*COMMON_CONFIGS, *PLATFORM_CONFIGS)]
+    requirements = load_platform_config().get("requirements_file")
+    if requirements:
+        sources.append(ROOT / requirements)
+    for source in sources:
         relative = source.relative_to(ROOT / "configs")
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1197,7 +1200,8 @@ def execute_stage(args, destination, stage):
         snapshot, cards = monitor_snapshot(args.card)
         (run / "device-before.txt").write_text(snapshot)
         card = cards.get(args.card)
-        if card is None or card.get("memory_mib", -1) != 0 or card.get("util_percent") != 0 or card.get("pids"):
+        idle_memory_max = load_platform_config().get("idle_memory_mib_max", 0)
+        if card is None or not 0 <= card.get("memory_mib", -1) <= idle_memory_max or card.get("util_percent") != 0 or card.get("pids"):
             raise RuntimeError(f"Physical card {args.card} is not idle: {card}")
         monitor = threading.Thread(target=telemetry_loop, args=(args.card, run / "telemetry.jsonl", stop), daemon=True)
         monitor.start()
@@ -1282,7 +1286,7 @@ def run_campaign(args):
                         "--target",
                         "/eval/runtime",
                         "-r",
-                        "/eval/runtime-requirements.txt",
+                        "/eval/" + load_platform_config().get("requirements_file", "runtime-requirements.txt"),
                     ],
                     stdout=log,
                     stderr=subprocess.STDOUT,
