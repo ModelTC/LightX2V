@@ -11,6 +11,7 @@
   "text_encoder_cpu_offload": true,
   "qwen3vl_attn_type": "torch_sdpa",
   "vae_cpu_offload": true,
+  "vae_use_compile": true,
   "vae_attn_type": "torch_sdpa",
   "attn_type": "torch_sdpa",
   "rms_type": "torch_native",

@@ -47,7 +47,7 @@ class MiniMaxH3ImageTransformerBlock(MiniMaxH3VideoTransformerBlock):
 
 
 class MiniMaxH3ImageViTDecoder2d(nn.Module):
-    def __init__(self, latent_channels, patch_size, config, attn_type):
+    def __init__(self, latent_channels, patch_size, config, attn_type, *, use_compile=False):
         super().__init__()
         config = _decoder_config(config)
         heads = int(config["decoder_num_attention_heads"])
@@ -55,6 +55,8 @@ class MiniMaxH3ImageViTDecoder2d(nn.Module):
         dim = heads * dim_head
         eps = float(config["decoder_norm_eps"])
         self.patch_size = patch_size
+        self.use_compile = use_compile
+        self.compiled_blocks = {}
         self.num_register_tokens = int(config["decoder_num_register_tokens"])
         self.rope = MiniMaxH3VideoRotaryPosEmbed(int(dim_head * config["decoder_rope_dim_ratio"]), config["decoder_rope_theta"], num_axes=2)
         self.proj_in = nn.Linear(latent_channels, dim)
@@ -64,6 +66,14 @@ class MiniMaxH3ImageViTDecoder2d(nn.Module):
         )
         self.norm_out = nn.LayerNorm(dim, eps=eps)
         self.proj_out = nn.Linear(dim, 3 * patch_size * patch_size)
+
+    def _run_block(self, index, block, hidden_states, rotary_emb):
+        if self.use_compile:
+            if index not in self.compiled_blocks:
+                # Preserve the reference block's explicit BF16 rounding.
+                self.compiled_blocks[index] = torch.compile(block, dynamic=None, options={"emulate_precision_casts": True})
+            block = self.compiled_blocks[index]
+        return block(hidden_states, rotary_emb)
 
     def forward(self, latents):
         batch_size, channels, height, width = latents.shape
@@ -76,8 +86,8 @@ class MiniMaxH3ImageViTDecoder2d(nn.Module):
         position_ids = position_ids.unsqueeze(0).expand(batch_size, -1, -1)
         suffix_ids = position_ids.new_zeros(batch_size, self.num_register_tokens + 1, 2)
         rotary_emb = self.rope(torch.cat((position_ids, suffix_ids), dim=1))
-        for block in self.transformer_blocks:
-            hidden_states = block(hidden_states, rotary_emb)
+        for index, block in enumerate(self.transformer_blocks):
+            hidden_states = self._run_block(index, block, hidden_states, rotary_emb)
         hidden_states = self.norm_out(hidden_states).to(self.proj_out.weight.dtype)
         output = self.proj_out(hidden_states)[:, : height * width]
         patch = self.patch_size
@@ -91,7 +101,7 @@ class MiniMaxH3ImageVAE(nn.Module):
     _blend = staticmethod(MiniMaxH3VideoVAE._blend)
     _stitch_clip = MiniMaxH3VideoVAE._stitch_clip
 
-    def __init__(self, config, *, device=AI_DEVICE, cpu_offload=False, attn_type="torch_sdpa"):
+    def __init__(self, config, *, device=AI_DEVICE, cpu_offload=False, attn_type="torch_sdpa", use_compile=False):
         super().__init__()
         self.config = {**config, **_decoder_config(config)}
         self.execution_device = torch.device(device)
@@ -115,7 +125,7 @@ class MiniMaxH3ImageVAE(nn.Module):
         )
         self.quant_conv = nn.Conv3d(2 * channels, 2 * channels, 1)
         self.post_quant_conv = nn.Conv2d(channels, channels, 1)
-        self.decoder = MiniMaxH3ImageViTDecoder2d(channels, self.spatial_compression_ratio, self.config, attn_type)
+        self.decoder = MiniMaxH3ImageViTDecoder2d(channels, self.spatial_compression_ratio, self.config, attn_type, use_compile=use_compile)
         self.stitch_preallocate = False
         self.tile_sample_min_height = self.tile_sample_min_width = int(config.get("vae_tile_size", 256))
         self.tile_sample_min_overlap_height = self.tile_sample_min_overlap_width = int(config.get("vae_tile_overlap_min", 64))
@@ -128,7 +138,7 @@ class MiniMaxH3ImageVAE(nn.Module):
             self.register_buffer(name, torch.tensor(values, dtype=torch.float32, device="cpu").view(1, -1, 1, 1, 1), persistent=False)
 
     @classmethod
-    def from_pretrained(cls, model_path, *, device=AI_DEVICE, cpu_offload=False, attn_type="torch_sdpa"):
+    def from_pretrained(cls, model_path, *, device=AI_DEVICE, cpu_offload=False, attn_type="torch_sdpa", use_compile=False):
         model_path = Path(model_path)
         if (model_path / "config.json").is_file():
             component = model_path
@@ -140,7 +150,7 @@ class MiniMaxH3ImageVAE(nn.Module):
         if original and not config.get("vit_decoder_2d", False):
             raise ValueError("MiniMax-H3-Image requires an image VAE checkpoint")
         with torch.device("meta"):
-            model = cls(config, device=device, cpu_offload=cpu_offload, attn_type=attn_type)
+            model = cls(config, device=device, cpu_offload=cpu_offload, attn_type=attn_type, use_compile=use_compile)
         load_image_vae_weights(model, component, original)
         # Match Diffusers' per-module FP32 exceptions to the BF16 VAE.
         for name, parameter in model.named_parameters():
@@ -149,6 +159,8 @@ class MiniMaxH3ImageVAE(nn.Module):
         model.eval().requires_grad_(False)
         if not cpu_offload:
             model.to(device=model.execution_device)
+        if use_compile:
+            model.encoder = torch.compile(model.encoder, dynamic=None)
         return model
 
     def _activate(self, encode):
