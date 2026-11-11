@@ -136,7 +136,7 @@ mkdir -p "$COMFY_DIR/custom_nodes"
 ln -s "$LIGHTX2V_DIR/lightx2v_comfyui" "$COMFY_DIR/custom_nodes/lightx2v_comfyui"
 ```
 
-### 3. 启动 ComfyUI 
+### 3. 启动 ComfyUI
 
 ```bash
 cd /workspace/ComfyUI
