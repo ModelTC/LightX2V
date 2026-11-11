@@ -11,8 +11,8 @@
 下文命令均从仓库根目录执行。新终端先设置路径并加载基础环境：
 
 ```bash
-lightx2v_path=/data/nvme1/yongyang/dan/x2v_infer/h3-image/LightX2V
-model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3-Image
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3-Image
 
 cd "$lightx2v_path"
 source "$lightx2v_path/scripts/base/base.sh"
@@ -86,7 +86,7 @@ bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
 四卡 I2I 脚本支持通过 `IMAGE_PATH` 覆盖参考图。多张参考图使用英文逗号分隔，并相应修改脚本中的 `prompt`：
 
 ```bash
-IMAGE_PATH="/absolute/path/reference1.png,/absolute/path/reference2.png" \
+IMAGE_PATH="/path/to/reference1.png,/path/to/reference2.png" \
   bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
 ```
 
@@ -212,14 +212,14 @@ curl --fail --max-time 610 \
   -d '{
     "task": "i2i",
     "prompt": "Keep the scene in <Picture 1> and change the lighting to warm sunset light.",
-    "image_path": "/data/nvme1/models/MiniMaxAI/MiniMax-H3-Image/examples/reference1.png",
+    "image_path": "/path/to/MiniMax-H3-Image/examples/reference1.png",
     "seed": 1234,
     "size": [2048, 2048]
   }' \
   -o save_results/minimax_h3_image_i2i_http.png
 ```
 
-`image_path` 是字符串。单图也可使用服务端可访问的图片 URL，或图片文件的 Base64 字符串；客户端本地图片必须先将文件内容转成 Base64，或将文件放到服务端可访问的位置。多参考图使用逗号分隔的**服务端本地路径**，例如 `"image_path": "/absolute/path/a.png,/absolute/path/b.png"`，并在提示词中按顺序引用 `<Picture 1>`、`<Picture 2>`。
+`image_path` 是字符串。单图也可使用服务端可访问的图片 URL，或图片文件的 Base64 字符串；客户端本地图片必须先将文件内容转成 Base64，或将文件放到服务端可访问的位置。多参考图使用逗号分隔的**服务端本地路径**，例如 `"image_path": "/path/to/a.png,/path/to/b.png"`，并在提示词中按顺序引用 `<Picture 1>`、`<Picture 2>`。
 
 同步接口默认等待上限为 600 秒。需要更长时间时，可通过 URL 查询参数 `?timeout_seconds=1200` 调整，同时增大 curl 的 `--max-time`。
 

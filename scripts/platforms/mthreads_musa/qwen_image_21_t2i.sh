@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 lightx2v_path=/data/Lightx2v
 model_path=/data/wushuo/models/Qwen-Image-2.1
@@ -17,5 +16,4 @@ python -m lightx2v.infer \
     --prompt 'A coffee shop entrance with a chalkboard reading "Qwen Coffee, $2 per cup" and a neon sign displaying "通义千问".' \
     --size 1024 1024 \
     --seed 42 \
-    --save_result_path "${lightx2v_path}/save_results/qwen_image_21_t2i_dmd_4step.png" \
-    "$@"
+    --save_result_path "${lightx2v_path}/save_results/qwen_image_21_t2i_dmd_4step.png"

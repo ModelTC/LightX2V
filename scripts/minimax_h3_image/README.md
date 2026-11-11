@@ -11,8 +11,8 @@ Install LightX2V and the dependencies for your device first. The Qwen3-VL vision
 Run the commands below from the repository root. In each new terminal, set the paths and load the base environment:
 
 ```bash
-lightx2v_path=/data/nvme1/yongyang/dan/x2v_infer/h3-image/LightX2V
-model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3-Image
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3-Image
 
 cd "$lightx2v_path"
 source "$lightx2v_path/scripts/base/base.sh"
@@ -86,7 +86,7 @@ All four scripts currently generate `4096 × 4096` PNG files in the repository's
 The four-GPU I2I script accepts an `IMAGE_PATH` override. For multiple references, use comma-separated paths and update the script's `prompt` accordingly:
 
 ```bash
-IMAGE_PATH="/absolute/path/reference1.png,/absolute/path/reference2.png" \
+IMAGE_PATH="/path/to/reference1.png,/path/to/reference2.png" \
   bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
 ```
 
@@ -212,14 +212,14 @@ curl --fail --max-time 610 \
   -d '{
     "task": "i2i",
     "prompt": "Keep the scene in <Picture 1> and change the lighting to warm sunset light.",
-    "image_path": "/data/nvme1/models/MiniMaxAI/MiniMax-H3-Image/examples/reference1.png",
+    "image_path": "/path/to/MiniMax-H3-Image/examples/reference1.png",
     "seed": 1234,
     "size": [2048, 2048]
   }' \
   -o save_results/minimax_h3_image_i2i_http.png
 ```
 
-`image_path` is a string. A single image can also be provided as a URL accessible to the server or as a Base64-encoded image file. For client-local images, encode the file contents as Base64 or place the file where the server can access it. For multiple references, use comma-separated **server-local paths**, for example `"image_path": "/absolute/path/a.png,/absolute/path/b.png"`, and refer to them in order as `<Picture 1>` and `<Picture 2>` in the prompt.
+`image_path` is a string. A single image can also be provided as a URL accessible to the server or as a Base64-encoded image file. For client-local images, encode the file contents as Base64 or place the file where the server can access it. For multiple references, use comma-separated **server-local paths**, for example `"image_path": "/path/to/a.png,/path/to/b.png"`, and refer to them in order as `<Picture 1>` and `<Picture 2>` in the prompt.
 
 The synchronous endpoint has a default timeout of 600 seconds. For longer requests, set a query parameter such as `?timeout_seconds=1200` and increase curl's `--max-time` accordingly.
 

@@ -1,5 +1,17 @@
 #!/bin/bash
 
+# AdaLN cache generation:
+# The default H3 Image inference configs enable "use_adaln_cache": true.
+# 1. Set lightx2v_path, model_path, --config_json, and platform/device settings
+#    below to match inference.
+# 2. From the repository root, run:
+#    bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_image_adaln.sh
+# 3. Start T2I/I2I inference after the cache is ready.
+# Use the same model weights, timesteps, platform, and adaln_cache_dir as inference.
+# One GPU generates both T2I and I2I profiles, reusable across TP/SP configs.
+# Reuse a matching cache. This tool will not overwrite an existing directory;
+# move an old cache aside before rebuilding.
+
 # Set paths before running.
 lightx2v_path=/data/nvme1/yongyang/dan/x2v_infer/h3-image/LightX2V
 model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3-Image
