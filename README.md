@@ -45,7 +45,7 @@ We thank the following community developers for their contributions to LightX2V:
 
 ## :fire: Latest News
 
-- **November 11, 2026:** 🚀 We now support [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) for text-to-image generation and reference-image generation/editing with one or multiple reference images. TP/SP parallelism, and CLI/serving examples are available in the [usage guide](scripts/minimax_h3_image/README.md).
+- **November 11, 2026:** 🚀 We now support [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) for text-to-image generation and reference-image generation/editing with one or multiple reference images. We support TP/SP parallelism and CPU offload. See the [usage guide](scripts/minimax_h3_image/README.md) for CLI and serving examples.
 
 - **October 26, 2026:** 🚀 Added autoregressive inference for [TaoMate-H3](scripts/taomate_h3/run_t2av_3step.sh), [StreamRender-H3](scripts/streamrender_h3/run_refv2v_2step.sh), [Matrix-Game-4](scripts/matrix_game4/run_matrix_game4.sh), [LingBot-Fast](scripts/lingbot_fast/run_5090.sh), and [Realtime-Video](scripts/realtime_video/run_5090.sh). Model-specific scripts and BF16/FP8 profiles are available in the linked directories.
 

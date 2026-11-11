@@ -45,7 +45,7 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
-- **2026年11月11日：** 🚀 我们现已支持 [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image)，支持文生图和单张／多张参考图生成与编辑，提供TP／SP 并行及离线推理和服务化示例。详见 [使用说明](scripts/minimax_h3_image/README_zh.md)。
+- **2026年11月11日：** 🚀 我们现已支持 [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image)，支持文生图和单张／多张参考图生成与编辑，支持 TP／SP 并行和 CPU offload。离线推理和服务化示例详见 [使用说明](scripts/minimax_h3_image/README_zh.md)。
 
 - **2026年10月26日：** 🚀 新增 [TaoMate-H3](scripts/taomate_h3/run_t2av_3step.sh)、[StreamRender-H3](scripts/streamrender_h3/run_refv2v_2step.sh)、[Matrix-Game-4](scripts/matrix_game4/run_matrix_game4.sh)、[LingBot-Fast](scripts/lingbot_fast/run_5090.sh) 和 [Realtime-Video](scripts/realtime_video/run_5090.sh) 的自回归推理支持。对应目录提供运行脚本及 BF16/FP8 配置。
 

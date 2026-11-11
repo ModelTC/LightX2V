@@ -139,6 +139,7 @@ class MiniMaxH3ImageRunner(DefaultRunner):
                 device=AI_DEVICE,
                 cpu_offload=self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False)),
                 attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
+                use_compile=self.config.get("vae_use_compile", False),
             )
         except Exception as exc:
             error = exc

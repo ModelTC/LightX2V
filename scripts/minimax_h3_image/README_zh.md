@@ -135,17 +135,3 @@ python scripts/minimax_h3_image/server/post_i2i.py
 ```
 
 客户端提交请求后返回任务 ID，默认输出为 `2048 × 2048` PNG。生成完成后，图片保存在服务端的 `$lightx2v_path/save_results/server_cache/outputs/` 下。可在客户端中修改 `prompt`、`size`、`seed` 和 `save_result_path`。
-
-## 请求参数与启动配置
-
-| 设置 | 位置与含义 |
-| --- | --- |
-| 模型、并行、卸载、算子、编译和预热 | 启动参数及 `--config_json`；CLI 和服务共用这些配置。 |
-| `task` | CLI 通过 `--task` 选择；上述服务通过每次请求的 `task` 选择 `t2i`／`i2i`。 |
-| `prompt`、`image_path`、`seed` | 每次请求设置；省略 seed 或设为 null 时使用 42，显式 0 是有效 seed。 |
-| `size` | `[高度, 宽度]`；CLI 写作 `--size 高度 宽度`。请求中显式设置的尺寸覆盖 JSON，省略时默认使用配置中的 `[2048, 2048]`。 |
-| `save_result_path` | PNG 输出路径；服务请求中的相对路径按 `$LIGHTX2V_CACHE_DIR/outputs/` 解析。 |
-
-本目录对应的四份 CUDA 配置均默认启用 `use_adaln_cache`、`use_compile` 和 `warmup`。单卡、TP2 和 SP2 配置默认启用 CPU offload；四卡 TP2 × SP2 配置默认将 `cpu_offload`、`text_encoder_cpu_offload` 和 `vae_cpu_offload` 设为 `false`，让 DiT、Qwen3-VL 和 VAE 权重常驻 GPU。预热使用 `[2048, 2048]` 和 `[3552, 4736]` 两组尺寸；服务同时支持两种任务时，两种任务都会预热。预热尺寸与单次请求的输出尺寸独立。
-
-当前推理使用六步 PDD 调度与 BF16 权重，并在实现中保留 FP32 敏感计算。该模型为 guidance-distilled 模型，配置保持 `enable_cfg: false`、`sample_guide_scale: 1.0`，无需传入负面提示词。

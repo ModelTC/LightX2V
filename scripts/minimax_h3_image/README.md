@@ -135,17 +135,3 @@ python scripts/minimax_h3_image/server/post_i2i.py
 ```
 
 The clients return a task ID and request `2048 × 2048` PNG output by default. Completed images are saved on the server under `$lightx2v_path/save_results/server_cache/outputs/`. Edit `prompt`, `size`, `seed`, and `save_result_path` in the clients as needed.
-
-## Request parameters and startup configuration
-
-| Setting | Location and meaning |
-| --- | --- |
-| Model, parallelism, offload, operators, compilation, and warmup | Startup arguments and `--config_json`; shared by the CLI and server. |
-| `task` | Selected with `--task` in the CLI; the server commands above select `t2i`/`i2i` through each request's `task`. |
-| `prompt`, `image_path`, `seed` | Set per request. An omitted or null seed defaults to 42; an explicit 0 is valid. |
-| `size` | `[height, width]`; use `--size height width` in the CLI. An explicit request size overrides the JSON; when omitted, the config default is `[2048, 2048]`. |
-| `save_result_path` | PNG output path. Relative paths in service requests are resolved under `$LIGHTX2V_CACHE_DIR/outputs/`. |
-
-All four CUDA configs for this directory enable `use_adaln_cache`, `use_compile`, and `warmup` by default. The single-GPU, TP2, and SP2 configs enable CPU offload. The four-GPU TP2 × SP2 config sets `cpu_offload`, `text_encoder_cpu_offload`, and `vae_cpu_offload` to `false`, keeping DiT, Qwen3-VL, and VAE weights resident on the GPUs. Warmup runs at `[2048, 2048]` and `[3552, 4736]`; when serving both tasks, both are warmed up. Warmup sizes are independent of individual request output sizes.
-
-Current inference uses the six-step PDD schedule and BF16 weights, preserving sensitive computations in FP32. The model is guidance-distilled: keep `enable_cfg: false` and `sample_guide_scale: 1.0`, and omit negative prompts.
