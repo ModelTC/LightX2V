@@ -91,13 +91,6 @@ bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
 
 All six scripts currently generate `4096 × 4096` PNG files in the repository's `save_results/` directory, with filenames corresponding to the task and parallel mode. The default I2I reference image is `$model_path/examples/reference1.png`.
 
-Both four-GPU I2I scripts accept an `IMAGE_PATH` override. For multiple references, use comma-separated paths and update the script's `prompt` accordingly:
-
-```bash
-IMAGE_PATH="/path/to/reference1.png,/path/to/reference2.png" \
-  bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_sp4.sh
-```
-
 ### Parallel configurations
 
 The CUDA configs in [configs/minimax_h3_image](../../configs/minimax_h3_image) have the following defaults and can be used for T2I, I2I, and serving:
@@ -131,10 +124,10 @@ Four GPUs, SP4 ([start_server_sp4.sh](server/start_server_sp4.sh)):
 bash scripts/minimax_h3_image/server/start_server_sp4.sh
 ```
 
-Four GPUs, TP2 × SP2 ([start_server_parallel.sh](server/start_server_parallel.sh)):
+Four GPUs, TP2 × SP2 ([start_server_tp_sp.sh](server/start_server_tp_sp.sh)):
 
 ```bash
-bash scripts/minimax_h3_image/server/start_server_parallel.sh
+bash scripts/minimax_h3_image/server/start_server_tp_sp.sh
 ```
 
 ### POST clients
