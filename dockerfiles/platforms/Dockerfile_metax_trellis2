@@ -1,0 +1,56 @@
+# MetaX C500, linux/amd64. This Dockerfile does not require local source files.
+# From this PR snapshot directory:
+#   mkdir -p /tmp/lightx2v-empty-context
+#   docker build -f dockerfiles/platforms/Dockerfile_metax_trellis2 -t lightx2v-trellis2-metax /tmp/lightx2v-empty-context
+# Optional: --build-arg PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+# Build downloads public Ubuntu, MetaX SDK/PyTorch, cu-bridge and PR 1676 (87e063ca9474d915dfbcdfb3d0af2eb842777036).
+# Host prerequisites: compatible C500 driver, /dev/mxcd, /dev/dri, and model weights.
+# Prepare weights: https://github.com/ModelTC/LightX2V/blob/87e063ca9474d915dfbcdfb3d0af2eb842777036/scripts/trellis2/README.md
+# Run (replace host paths; the weights remain outside the image):
+#   docker run --rm --ipc=host --device /dev/mxcd --device /dev/dri \
+#     -v /path/to/trellis2-weights:/weights:ro -v /path/to/output:/results \
+#     -e MODEL_PATH=/weights -e SAVE_RESULT_PATH=/results/mesh.glb \
+#     -e CUDA_VISIBLE_DEVICES=0 -e MACA_VISIBLE_DEVICES=0 lightx2v-trellis2-metax
+# Runtime PR source, MetaX launcher and config are generated and verified during build.
+ARG OS_BASE=ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11
+FROM ${OS_BASE} AS metax_sdk
+ENV DEBIAN_FRONTEND=noninteractive
+RUN printf '%s\n' 'deb http://mirrors.aliyun.com/ubuntu jammy main universe' 'deb http://mirrors.aliyun.com/ubuntu jammy-updates main universe' 'deb http://mirrors.aliyun.com/ubuntu jammy-security main universe' > /etc/apt/sources.list && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg python3 python3-pip python3-dev git build-essential && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://repos.metax-tech.com/public.gpg.key | gpg --dearmor -o /usr/share/keyrings/metax.gpg && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/metax.gpg] https://repos.metax-tech.com/r/maca-sdk-deb/ stable main' > /etc/apt/sources.list.d/metax.list && apt-get update && apt-get install -y --no-install-recommends maca_sdk_3.5.3=3.5.3.18 && rm -rf /var/lib/apt/lists/*
+ENV MACA_PATH=/opt/maca LD_LIBRARY_PATH=/opt/mxdriver/lib:/opt/maca/lib:/opt/maca/mxgpu_llvm/lib:/opt/maca/ompi/lib
+RUN ln -s /usr/bin/python3 /usr/local/bin/python && python -m pip install --no-cache-dir --no-deps --index-url https://repos.metax-tech.com/r/maca-pypi/simple 'torch==2.8.0+metax3.5.3.9' 'torchvision==0.15.1+metax3.5.3.9'
+
+FROM metax_sdk AS bridge
+RUN apt-get update && apt-get install -y --no-install-recommends cmake libelf1 libpng16-16 libjpeg-turbo8 && rm -rf /var/lib/apt/lists/* && curl -fL https://gitee.com/metax-maca/cu-bridge/repository/archive/1608d1dc09325a7327f80d7f41da004ce4c4b8d6.tar.gz -o /tmp/bridge.tar.gz && echo '89e92ed1a98076d772aaabcba4d7beac21971449785b8a6edebc1709d13c9319  /tmp/bridge.tar.gz' | sha256sum -c - && mkdir /tmp/bridge && tar -xzf /tmp/bridge.tar.gz --strip-components=1 -C /tmp/bridge && cmake -S /tmp/bridge -B /tmp/bridge/build -DCMAKE_INSTALL_PREFIX=/opt/maca/tools/cu-bridge && cmake --build /tmp/bridge/build -j4 && cmake --install /tmp/bridge/build && rm -rf /tmp/bridge /tmp/bridge.tar.gz
+FROM metax_sdk AS runtime
+ARG PYPI_INDEX_URL=https://pypi.org/simple
+WORKDIR /workspace/LightX2V
+ENV PLATFORM=metax_cuda HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+RUN printf '%s\n' 'torch==2.8.0+metax3.5.3.9' 'torchvision==0.15.1+metax3.5.3.9' > /tmp/vendor-constraints.txt \
+    && python -m pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" -c /tmp/vendor-constraints.txt \
+    'filelock==3.19.1' 'typing-extensions==4.15.0' 'sympy==1.14.0' 'networkx==3.4.2' \
+    'jinja2==3.1.6' 'fsspec==2025.9.0' 'numpy==1.26.4' 'scipy==1.15.3' \
+    'diffusers==0.35.2' 'transformers==4.57.1' 'tokenizers==0.22.1' 'tqdm==4.67.1' \
+    'accelerate==1.13.0' 'safetensors==0.6.2' 'einops==0.8.1' 'peft==0.19.1' \
+    'huggingface-hub==0.35.1' 'pillow==11.3.0' 'loguru==0.7.3' 'omegaconf==2.3.0' \
+    'opencv-python-headless==4.10.0.84' 'imageio==2.37.0' 'imageio-ffmpeg==0.5.1' \
+    'ftfy==6.3.1' 'aiohttp==3.13.2' 'pydantic==2.12.5' 'prometheus-client==0.21.1' 'gguf==0.13.0' \
+    'antlr4-python3-runtime==4.9.3' 'wcwidth==0.2.13' 'aiohappyeyeballs==2.6.1' 'aiosignal==1.4.0' \
+    'async-timeout==5.0.1' 'attrs==26.1.0' 'frozenlist==1.8.0' 'multidict==6.7.0' \
+    'propcache==0.4.1' 'yarl==1.22.0' 'annotated-types==0.7.0' 'pydantic-core==2.41.5' \
+    'typing-inspection==0.4.2'
+RUN python -m pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" -c /tmp/vendor-constraints.txt 'timm==0.9.16' 'kornia==0.7.2' 'kornia-rs==0.1.9' 'trimesh==4.5.3'
+COPY --from=bridge /opt/maca/lib/libruntime_cu.so /opt/maca/lib/
+COPY --from=bridge /opt/maca/lib/libToolsExt_cu.so /opt/maca/lib/
+COPY --from=bridge /opt/maca/lib/libsymbol_cu.so /opt/maca/lib/
+COPY --from=bridge /opt/maca/tools/cu-bridge /opt/maca/tools/cu-bridge
+COPY --from=bridge /lib/x86_64-linux-gnu/libelf-0.186.so /lib/x86_64-linux-gnu/libelf-0.186.so
+COPY --from=bridge /usr/lib/x86_64-linux-gnu/libpng16.so.16* /usr/lib/x86_64-linux-gnu/
+COPY --from=bridge /usr/lib/x86_64-linux-gnu/libjpeg.so.8* /usr/lib/x86_64-linux-gnu/
+RUN ln -s libelf-0.186.so /lib/x86_64-linux-gnu/libelf.so.1
+RUN curl -fL https://github.com/ModelTC/LightX2V/archive/87e063ca9474d915dfbcdfb3d0af2eb842777036.tar.gz -o /tmp/source.tar.gz \
+    && echo '4274ad67d17e4d9a5f1845c9f62a8baaa6ba0ca34e18c525389a04f44a2927d2  /tmp/source.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /workspace/LightX2V \
+    && rm /tmp/source.tar.gz
+RUN python -c 'from pathlib import Path; import shutil; a=Path('"'"'scripts/platform/metax/run_trellis2.sh'"'"'); b=Path('"'"'configs/platform/metax/trellis2_i23d_bf16.json'"'"'); a.parent.mkdir(parents=True,exist_ok=True); b.parent.mkdir(parents=True,exist_ok=True); s=Path('"'"'scripts/platform/mlu/run_trellis2.sh'"'"').read_text().replace("configs/platform/mlu/","configs/platform/metax/").replace("scripts/platform/mlu/","scripts/platform/metax/"); old='"'"'export PLATFORM=cambricon_mlu\nexport MLU_VISIBLE_DEVICES="${MLU_VISIBLE_DEVICES:-0}"\nexport NEUWARE_HOME="${NEUWARE_HOME:-/usr/local/neuware}"\nexport LD_LIBRARY_PATH="${NEUWARE_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"\nexport PYTORCH_MLU_ALLOC_CONF="${PYTORCH_MLU_ALLOC_CONF:-expandable_segments:True}"'"'"'; new='"'"'export PLATFORM=metax_cuda\nexport CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"\nexport MACA_VISIBLE_DEVICES="${MACA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES}}"\nexport MACA_PATH="${MACA_PATH:-/opt/maca}"\nexport LD_LIBRARY_PATH="/opt/mxdriver/lib:${MACA_PATH}/lib:${MACA_PATH}/mxgpu_llvm/lib:${MACA_PATH}/ompi/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"\nexport PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"'"'"'; assert old in s; a.write_text(s.replace(old,new)); a.chmod(0o755); shutil.copyfile('"'"'configs/platform/mlu/trellis2_i23d_bf16.json'"'"',b)' && echo '58f0b5b160152757012a557f1b764e262fee17fa74ad7a21edb7f5425ed20554  scripts/platform/metax/run_trellis2.sh' | sha256sum -c - && echo 'd0b6dc23a987238f6c28fce5cc4170f0be5a00563f0fff8392aa0a3c51a93fbf  configs/platform/metax/trellis2_i23d_bf16.json' | sha256sum -c -
+CMD ["bash", "scripts/platform/metax/run_trellis2.sh"]
