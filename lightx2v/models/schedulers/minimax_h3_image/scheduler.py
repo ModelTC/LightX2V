@@ -74,8 +74,10 @@ class MiniMaxH3ImageScheduler(BaseScheduler):
         self.video_latents[start:] = self.target_latents + delta * self.video_noise_pred[start:].float()
 
     def clear(self):
+        self.generator = None
         self.latents = self.video_latents = self.video_noise_pred = None
         self.layout = self.layout_cpu = self.reference_anchors = None
         self.unique_timesteps = self.unique_timesteps_cpu = self.timestep_indices = None
         self.num_condition_video_rows = 0
         self.step_index = 0
+        self.latent_height = self.latent_width = self.patch_size = None

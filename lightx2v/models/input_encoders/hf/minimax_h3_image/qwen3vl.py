@@ -15,7 +15,7 @@ class MiniMaxH3ImageTextEncoder(MiniMaxH3Qwen3VLTextEncoder):
         if self.vision_encoder is None:
             text_encoder_path = self._component_path("text_encoder_path", "text_encoder")
             vision_config = dict(self._read_model_config(text_encoder_path)["vision_config"])
-            logger.info("Building native MiniMax-H3-Image Qwen3-VL vision tower from {}", text_encoder_path)
+            logger.info("Building MiniMax-H3-Image Qwen3-VL vision tower from {}", text_encoder_path)
             self.vision_encoder = MiniMaxH3ImageQwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config)
             if not self.cpu_offload:
                 self.vision_encoder.to(AI_DEVICE)

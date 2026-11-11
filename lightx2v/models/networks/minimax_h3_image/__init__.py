@@ -1,1 +1,1 @@
-"""Native MiniMax-H3-Image transformer components."""
+"""MiniMax-H3-Image transformer components."""

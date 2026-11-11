@@ -1,4 +1,4 @@
-"""LightX2V-native MiniMax-H3-Image, using the shared H3 transformer blocks."""
+"""MiniMax-H3-Image, using the shared H3 transformer blocks."""
 
 from pathlib import Path
 

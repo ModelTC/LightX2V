@@ -1,4 +1,4 @@
-"""Map the released, head-interleaved DiT checkpoint onto native H3 ops."""
+"""Map the released, head-interleaved DiT checkpoint onto H3 ops."""
 
 import math
 

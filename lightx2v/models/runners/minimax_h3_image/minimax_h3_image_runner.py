@@ -16,15 +16,18 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.minimax_h3_image import MiniMaxH3ImageScheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_image import MiniMaxH3ImageVAE
+from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.envs import GET_RECORDER_MODE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import is_main_process
+from lightx2v.utils.utils import is_main_process, seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 @RUNNER_REGISTER("minimax_h3_image")
 class MiniMaxH3ImageRunner(DefaultRunner):
     supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS, "i2i": IMAGE_REQUEST_FIELDS | {"image_path"}}
+    _WARMUP_RESOLUTIONS = ((2048, 2048), (3552, 4736))
 
     def __init__(self, config):
         if config.get("enable_cfg", False) or config.get("cfg_parallel", False):
@@ -41,6 +44,64 @@ class MiniMaxH3ImageRunner(DefaultRunner):
     def get_supported_tasks(self):
         return super().get_supported_tasks() if self.config.get("task") is not None else ("t2i", "i2i")
 
+    @ProfilingContext4DebugL1("Warmup")
+    def run_warmup(self):
+        if type(self) is not MiniMaxH3ImageRunner or self.config.get("model_cls") != "minimax_h3_image":
+            raise NotImplementedError("MiniMax-H3-Image warmup requires an explicitly supported runner/model")
+        tasks = self.get_supported_tasks()
+        if not tasks or any(task not in ("t2i", "i2i") for task in tasks):
+            raise NotImplementedError(f"MiniMax-H3-Image warmup does not support tasks: {tasks}")
+        if self.config.get("lazy_load", False) or (self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "model") not in ("model", "block")):
+            raise NotImplementedError("MiniMax-H3-Image warmup supports normal, CPU model and CPU block offload only")
+        self._run_warmup(tasks)
+        # Transient inputs and decoded tensors must be gone before freezing GC.
+        self._maybe_freeze_gc()
+
+    @torch.inference_mode()
+    def _run_warmup(self, tasks):
+        for task in tasks:
+            for height, width in self._WARMUP_RESOLUTIONS:
+                logger.info(f"Warmup MiniMax-H3-Image {task}: {height}x{width}")
+                try:
+                    self.scheduler.generator = None
+                    request = {
+                        "task": task,
+                        "seed": 0,
+                        "prompt": "A cinematic photograph of a mountain lake.",
+                        "size": [height, width],
+                        "save_result_path": None,
+                        "return_result_tensor": False,
+                    }
+                    if task == "i2i":
+                        request["image_path"] = Image.new("RGB", (width, height))
+                    self.input_info = self.create_input_info(request)
+                    seed_all(self.input_info.seed)
+                    # Use the same attention dispatch as a formal request.
+                    with sdpa_kernel([SDPBackend.CUDNN_ATTENTION, SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]):
+                        try:
+                            self.inputs = self.run_input_encoder()
+                            self.init_run()
+                            # All six PDD steps share a block layout: one timestep
+                            # for T2I, two for I2I. The Euler solver has no history.
+                            self.scheduler.step_pre(0)
+                            self.model.infer(self.inputs)
+                            self.scheduler.step_post()
+                        finally:
+                            if self.config.get("cpu_offload", False):
+                                # Also resets block staging/residency for the next
+                                # shape. Keep the warmed allocator cache intact.
+                                self.model.to_cpu()
+                                getattr(torch, AI_DEVICE).synchronize()
+                        self.run_vae_decoder(self.scheduler.unpack_target_latents())
+                        getattr(torch, AI_DEVICE).synchronize()
+                finally:
+                    self.scheduler.clear()
+                    self.model.transformer_infer._clear_adaln_cache()
+                    self.input_info = None
+                    for name in ("inputs", "output_size", "request_height", "request_width"):
+                        self.__dict__.pop(name, None)
+        logger.info("[Warmup] Warmup completed")
+
     def init_scheduler(self):
         self.scheduler = MiniMaxH3ImageScheduler(self.config)
 
@@ -49,22 +110,49 @@ class MiniMaxH3ImageRunner(DefaultRunner):
         self.model = MiniMaxH3ImageModel(self.config["model_path"], self.config, self.init_device)
         self.text_encoders = []
         self.vae = None
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        self.vae_encode_parallel = bool(self.config.get("vae_encode_parallel", False) and world_size > 1)
+        self.vae_decode_parallel = bool(self.config.get("vae_decode_parallel", False) and world_size > 1)
+        if world_size == 1 and (self.config.get("vae_encode_parallel", False) or self.config.get("vae_decode_parallel", False)):
+            logger.info("MiniMax-H3-Image VAE parallel disabled for single-rank inference")
         self.text_encoder_tensor_parallel = self.config.get("text_encoder_tensor_parallel", False)
         if self.text_encoder_tensor_parallel:
             self.text_encoders = [MiniMaxH3ImageTextEncoder(self.config)]
         self._run_on_rank0(self._load_input_encoders)
+        if self.vae_encode_parallel or self.vae_decode_parallel:
+            self._load_vae()
 
     def _load_input_encoders(self):
         if not self.text_encoder_tensor_parallel:
             encoder_config = dict(self.config)
             encoder_config["text_encoder_tensor_parallel"] = False
             self.text_encoders = [MiniMaxH3ImageTextEncoder(encoder_config)]
-        self.vae = MiniMaxH3ImageVAE.from_pretrained(
-            self.config["model_path"],
-            device=AI_DEVICE,
-            cpu_offload=self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False)),
-            attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
-        )
+        if not (self.vae_encode_parallel or self.vae_decode_parallel):
+            self._load_vae()
+
+    def _load_vae(self):
+        error = None
+        try:
+            self.vae = MiniMaxH3ImageVAE.from_pretrained(
+                self.config["model_path"],
+                device=AI_DEVICE,
+                cpu_offload=self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False)),
+                attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
+            )
+        except Exception as exc:
+            error = exc
+        if self.vae_encode_parallel or self.vae_decode_parallel:
+            errors = [None] * dist.get_world_size()
+            dist.all_gather_object(errors, str(error) if error is not None else None)
+            for rank, detail in enumerate(errors):
+                if detail is not None:
+                    raise RuntimeError(f"MiniMax-H3-Image rank {rank} failed to load VAE: {detail}") from error
+        elif error is not None:
+            raise error
+        if self.vae_encode_parallel:
+            self.vae.enable_encode_parallel()
+        if self.vae_decode_parallel:
+            self.vae.enable_decode_parallel()
 
     def _run_on_rank0(self, function):
         if not dist.is_initialized():
@@ -111,10 +199,14 @@ class MiniMaxH3ImageRunner(DefaultRunner):
         if self.text_encoder_tensor_parallel:
             references = self._prepare_input_images()
             text_output = self.run_text_encoder([reference.qwen_image for reference in references])
-            inputs = self._run_on_rank0(lambda: self._sample_inputs(text_output, references))
+            inputs = self._sample_inputs(text_output, references) if self.vae_encode_parallel else self._run_on_rank0(lambda: self._sample_inputs(text_output, references))
+        elif self.vae_encode_parallel:
+            references = self._run_on_rank0(self._prepare_input_images)
+            text_output = self._run_on_rank0(lambda: self.run_text_encoder([reference.qwen_image for reference in references]))
+            inputs = self._sample_inputs(text_output, references)
         else:
             inputs = self._run_on_rank0(self._encode_inputs)
-        return self._broadcast_encoded_inputs(inputs)
+        return self._broadcast_encoded_inputs(inputs, samples_replicated=self.vae_encode_parallel)
 
     def _prepare_input_images(self):
         self._resolve_request_geometry()
@@ -136,21 +228,45 @@ class MiniMaxH3ImageRunner(DefaultRunner):
         generator = torch.Generator(device="cpu").manual_seed(int(self.input_info.seed))
         reference_latents = []
         with ProfilingContext4DebugL1("Run VAE Encoder"):
-            for reference in references:
-                pixels = image_to_tensor(reference.vae_image).unsqueeze(2)
-                reference_latents.append(self.vae.encode_condition(pixels, generator=generator))
+            if self.vae_encode_parallel:
+                pixels = self._broadcast_reference_pixels(references)
+                reference_latents = self.vae.encode_conditions(pixels, generator=generator)
+            else:
+                for reference in references:
+                    pixels = image_to_tensor(reference.vae_image).unsqueeze(2)
+                    reference_latents.append(self.vae.encode_condition(pixels, generator=generator))
         target_noise = torch.randn((1, 24, 1, self.request_height // 16, self.request_width // 16), generator=generator, dtype=torch.float32)
         reference_noises = [torch.randn(latent.shape, generator=generator, dtype=torch.float32) for latent in reference_latents]
         return {"text_encoder_output": text_output, "reference_latents": reference_latents, "target_noise": target_noise, "reference_noises": reference_noises}
 
-    def _broadcast_encoded_inputs(self, inputs):
+    def _broadcast_reference_pixels(self, references):
+        pixels = self._run_on_rank0(lambda: [image_to_tensor(reference.vae_image).unsqueeze(2) for reference in references])
+        metadata = [(self.output_size, self.request_height, self.request_width, [(tuple(tensor.shape), tensor.stride()) for tensor in pixels]) if is_main_process() else None]
+        dist.broadcast_object_list(metadata, src=0)
+        self.output_size, self.request_height, self.request_width, shapes = metadata[0]
+        received = []
+        for index, (shape, stride) in enumerate(shapes):
+            tensor = pixels[index].to(AI_DEVICE) if is_main_process() else torch.empty_strided(shape, stride, dtype=torch.uint8, device=AI_DEVICE)
+            packed = tensor.contiguous() if is_main_process() else torch.empty(shape, dtype=torch.uint8, device=AI_DEVICE)
+            dist.broadcast(packed, src=0)
+            if not is_main_process():
+                # Preserve the serial image tensor's channels-last layout.
+                tensor.copy_(packed)
+            received.append(tensor)
+        return received
+
+    def _broadcast_encoded_inputs(self, inputs, *, samples_replicated=False):
         if not dist.is_initialized():
+            return inputs
+        if samples_replicated and self.text_encoder_tensor_parallel:
             return inputs
         tensors = []
         metadata = [None]
         if is_main_process():
             text_output = inputs["text_encoder_output"]
-            tensors = [text_output["prompt_embeds"], text_output["text_token_tags"], inputs["target_noise"], *inputs["reference_latents"], *inputs["reference_noises"]]
+            tensors = [text_output["prompt_embeds"], text_output["text_token_tags"]]
+            if not samples_replicated:
+                tensors.extend([inputs["target_noise"], *inputs["reference_latents"], *inputs["reference_noises"]])
             metadata[0] = (self.output_size, self.request_height, self.request_width, len(inputs["reference_latents"]), [(tensor.shape, tensor.dtype) for tensor in tensors])
         dist.broadcast_object_list(metadata, src=0)
         self.output_size, self.request_height, self.request_width, num_references, tensor_metadata = metadata[0]
@@ -160,6 +276,8 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             tensor = tensors[index].to(AI_DEVICE).contiguous() if is_main_process() else torch.empty(shape, dtype=dtype, device=AI_DEVICE)
             dist.broadcast(tensor, src=0)
             received.append(tensor)
+        if samples_replicated:
+            return {**inputs, "text_encoder_output": {"prompt_embeds": received[0], "text_token_tags": received[1]}}
         return {
             "text_encoder_output": {"prompt_embeds": received[0], "text_token_tags": received[1]},
             "target_noise": received[2],
@@ -182,15 +300,24 @@ class MiniMaxH3ImageRunner(DefaultRunner):
         logger.info(f"MiniMax-H3-Image canvas: {self.request_height}x{self.request_width}; packed rows: {self.scheduler.video_latents.shape[0]}")
 
     def run_segment(self, segment_idx=0):
-        for step in range(self.scheduler.infer_steps):
-            self.check_stop()
-            logger.info(f"==> MiniMax-H3-Image step: {step + 1} / {self.scheduler.infer_steps}")
-            with ProfilingContext4DebugL1("Run Dit every step"):
-                self.scheduler.step_pre(step)
-                self.model.infer(self.inputs)
-                self.scheduler.step_post()
-            if self.progress_callback:
-                self.progress_callback((step + 1) * 100 / self.scheduler.infer_steps, 100)
+        infer_steps = self.scheduler.infer_steps
+        for step_index in range(infer_steps):
+            with ProfilingContext4DebugL1(
+                "Run Dit every step",
+                recorder_mode=GET_RECORDER_MODE(),
+                metrics_func=monitor_cli.lightx2v_run_per_step_dit_duration,
+                metrics_labels=[step_index + 1, infer_steps],
+            ):
+                self.check_stop()
+                logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.scheduler.step_pre(step_index)
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    self.model.infer(self.inputs)
+                with ProfilingContext4DebugL1("step_post"):
+                    self.scheduler.step_post()
+                if self.progress_callback:
+                    self.progress_callback((step_index + 1) * 100 / infer_steps, 100)
         return self.scheduler.unpack_target_latents()
 
     def _offload_transformer(self):
@@ -214,7 +341,9 @@ class MiniMaxH3ImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
-        return self.vae.decode(latents)
+        if self.vae_decode_parallel:
+            return self.vae.decode(latents)
+        return self._run_on_rank0(lambda: self.vae.decode(latents))
 
     def process_images_after_vae_decoder(self, value):
         # The reference pipeline quantizes before resizing the canvas to the requested size.
@@ -227,13 +356,14 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             output_path = Path(self.input_info.save_result_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             image.save(output_path)
-            logger.info(f"Image saved to {output_path}")
+            logger.info(f"✅ Image saved successfully to: {output_path} ✅")
         # Match the BGR numpy image convention used by the other image runners.
         images = [np.asarray(image)[..., ::-1].copy()] if self.input_info.return_result_tensor else None
         return {"images": images}
 
     def _decode_output(self, latents):
-        return self.process_images_after_vae_decoder(self.run_vae_decoder(latents))
+        decoded = self.run_vae_decoder(latents)
+        return self._run_on_rank0(lambda: self.process_images_after_vae_decoder(decoded))
 
     def _broadcast_output(self, result):
         if not dist.is_initialized():
@@ -258,7 +388,7 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             with sdpa_kernel([SDPBackend.CUDNN_ATTENTION, SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]):
                 self.inputs = self.run_input_encoder()
                 latents = self.run_main()
-                result = self._run_on_rank0(lambda: self._decode_output(latents))
+                result = self._decode_output(latents)
                 return self._broadcast_output(result)
         finally:
             self.scheduler.clear()

@@ -66,14 +66,6 @@ def _projection_contract(config):
         "checkpoint": [{"name": path.name, "size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns} for path in files],
         "index_sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in indices},
     }
-    if config["model_cls"] == "minimax_h3_image":
-        with safe_open(files[0], framework="pt", device="cpu") as handle:
-            converted = any(name.startswith(("proj_in.", "transformer_blocks.", "pdd_proj_out.", "token_refiner.refiner_blocks.")) for name in handle.keys())
-        contract.update(
-            checkpoint_layout="native_h3" if converted else "minimax_h3_image_release",
-            pdd_config_sha256=hashlib.sha256(Path(config["pdd_config_path"]).read_bytes()).hexdigest(),
-            timestep_schedule="python_one_minus_sigma_then_float32",
-        )
     return contract
 
 
@@ -136,16 +128,21 @@ def _timesteps_from_bits(bits: list[int], device="cpu") -> torch.Tensor:
     return torch.tensor(bits, dtype=torch.int32).view(torch.float32).to(device)
 
 
+def _image_step_sigmas(config) -> list[float]:
+    with open(config["pdd_config_path"], encoding="utf-8") as handle:
+        pdd_config = json.load(handle)
+    if int(config["infer_steps"]) != 6 or pdd_config["num_inference_steps"] != 6:
+        raise ValueError("MiniMax-H3-Image PDD requires exactly six inference steps")
+    # The terminal zero is an endpoint, not an inference step.
+    return pdd_config["sigmas"][:-1]
+
+
 def _cache_entries(config, profiles: list[str]) -> list[dict]:
     if profiles == ["image_t2i", "image_i2i"]:
         from lightx2v.models.schedulers.minimax_h3_image.scheduler import REFERENCE_TIMESTEP
 
-        with open(config["pdd_config_path"], encoding="utf-8") as handle:
-            pdd_config = json.load(handle)
-        if int(config["infer_steps"]) != 6 or pdd_config["num_inference_steps"] != 6:
-            raise ValueError("MiniMax-H3-Image PDD requires exactly six inference steps")
         # Match the scheduler's Python subtraction before its FP32 tensor cast.
-        timesteps = torch.tensor([1.0 - sigma for sigma in pdd_config["sigmas"][:-1]], dtype=torch.float32)
+        timesteps = torch.tensor([1.0 - sigma for sigma in _image_step_sigmas(config)], dtype=torch.float32)
         entries = []
         for profile in profiles:
             for step, timestep in enumerate(timesteps.tolist()):
@@ -233,7 +230,7 @@ def _build_spec(config) -> dict:
         files = sorted(checkpoint.glob("*.safetensors")) if checkpoint.is_dir() else [checkpoint]
         spec["projection_dtype"] = "fp32"
         spec["checkpoint"] = [{"path": str(path), "size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns} for path in files]
-    elif config["model_cls"] in {"taomate_h3", "streamrender_h3", "minimax_h3_image"}:
+    elif config["model_cls"] in {"taomate_h3", "streamrender_h3"}:
         spec["projection_contract"] = _projection_contract(config)
     return spec
 
@@ -241,7 +238,9 @@ def _build_spec(config) -> dict:
 def _cache_path(config) -> Path:
     model = config["model_cls"]
     if model == "minimax_h3_image":
-        return _cache_root(config) / model / f"pdd_{int(config['infer_steps']):02d}steps"
+        # Round only the directory label; manifest entries retain exact timesteps.
+        sigmas = "_".join(f"{sigma:#.4g}" for sigma in _image_step_sigmas(config))
+        return _cache_root(config) / model / f"image_{int(config['infer_steps']):02d}steps_{sigmas}"
     cache_name = "refa2v" if model == "minimax_h3_causal" else "refv2v" if model == "streamrender_h3" else config.get("adaln_cache_profile") or config["model_variant"]
     infer_steps = int(config["infer_steps"])
     video_flow_shift = float(config.get("video_flow_shift", 12.0))

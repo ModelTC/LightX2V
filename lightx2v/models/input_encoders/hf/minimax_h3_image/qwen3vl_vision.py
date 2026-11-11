@@ -3,7 +3,17 @@
 import math
 
 import torch
-from transformers.vision_utils import get_vision_interpolation_indices_and_weights
+import transformers
+
+try:
+    from transformers.vision_utils import get_vision_interpolation_indices_and_weights
+except ImportError as exc:
+    raise ImportError(
+        "MiniMax-H3-Image requires transformers>=5.15.0 with "
+        "'get_vision_interpolation_indices_and_weights'. "
+        f"Installed version: {transformers.__version__}. "
+        'Upgrade with: python -m pip install -U "transformers>=5.15.0"'
+    ) from exc
 
 from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl_vision import MiniMaxH3Qwen3VLVisionTower, _vision_cu_seqlens, _vision_position_ids
 
