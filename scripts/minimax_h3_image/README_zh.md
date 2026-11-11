@@ -91,13 +91,6 @@ bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
 
 六个脚本当前均输出 `4096 × 4096` PNG，保存到仓库的 `save_results/` 目录；文件名与任务及并行方式对应。I2I 默认参考图为 `$model_path/examples/reference1.png`。
 
-两种四卡 I2I 脚本均支持通过 `IMAGE_PATH` 覆盖参考图。多张参考图使用英文逗号分隔，并相应修改脚本中的 `prompt`：
-
-```bash
-IMAGE_PATH="/path/to/reference1.png,/path/to/reference2.png" \
-  bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_sp4.sh
-```
-
 ### 并行配置
 
 以下为 [configs/minimax_h3_image](../../configs/minimax_h3_image) 中 CUDA 配置的默认行为，T2I、I2I 和服务均可使用：
@@ -131,10 +124,10 @@ bash scripts/minimax_h3_image/server/start_server.sh
 bash scripts/minimax_h3_image/server/start_server_sp4.sh
 ```
 
-四卡 TP2 × SP2 启动（[start_server_parallel.sh](server/start_server_parallel.sh)）：
+四卡 TP2 × SP2 启动（[start_server_tp_sp.sh](server/start_server_tp_sp.sh)）：
 
 ```bash
-bash scripts/minimax_h3_image/server/start_server_parallel.sh
+bash scripts/minimax_h3_image/server/start_server_tp_sp.sh
 ```
 
 ### POST 客户端
