@@ -1,32 +1,122 @@
-ARG BASE_IMAGE=cambricon-base/pytorch:v25.10.0-torch2.8.0-torchmlu1.29.1-ubuntu22.04-py310
+# check=skip=InvalidDefaultArgInFrom
+# A compatible vendor runtime image must be supplied explicitly.
+# It must provide Python 3.11-3.12, Neuware and the five vendor packages below.
+ARG BASE_IMAGE
 FROM ${BASE_IMAGE} AS base
 
 WORKDIR /workspace/LightX2V
-
-# Set envs
 ENV PYTHONPATH=/workspace/LightX2V
 ENV LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 
-# Install deps without replacing the vendor Torch / torch_mlu stack.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
-    python -c "import importlib.metadata as m; from pathlib import Path; names = {'torch', 'torchvision', 'torchaudio', 'torch-mlu'}; Path('/tmp/vendor-torch-constraints.txt').write_text(''.join(d.metadata['Name'] + '==' + d.version + '\n' for d in m.distributions() if d.metadata['Name'].lower().replace('_', '-') in names))" && \
-    python -m pip install --no-cache-dir --constraint /tmp/vendor-torch-constraints.txt \
-    ftfy \
-    imageio \
-    imageio-ffmpeg \
-    loguru \
-    aiohttp \
-    gguf \
-    diffusers \
+# Runtime system dependencies; no host Python environment is mounted.
+RUN apt-get update -o Acquire::IndexTargets::deb::DEP-11::DefaultEnabled=false && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy only the vendor binary distributions into an isolated environment.
+# Other site-packages from BASE_IMAGE remain invisible to the application.
+ARG VENDOR_PYTHON=python
+RUN "${VENDOR_PYTHON}" - <<'PYENV'
+import importlib.metadata as metadata
+import pathlib
+import shutil
+import sys
+import subprocess
+import venv
+
+if sys.version_info[:2] not in ((3, 11), (3, 12)):
+    raise RuntimeError("The pinned application environment requires vendor Python 3.11 or 3.12")
+
+prefix = pathlib.Path("/opt/lightx2v")
+venv.EnvBuilder(with_pip=True, system_site_packages=False).create(prefix)
+target = pathlib.Path(subprocess.check_output([str(prefix / "bin/python"), "-c", 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True).strip())
+target.mkdir(parents=True, exist_ok=True)
+constraints = []
+for name in ("torch", "torchvision", "torchaudio", "torch_mlu", "torch_mlu_ops"):
+    distribution = metadata.distribution(name)
+    entries = {pathlib.PurePosixPath(str(f)).parts[0] for f in distribution.files or () if ".." not in pathlib.PurePosixPath(str(f)).parts}
+    if not entries:
+        raise RuntimeError(f"Vendor package {name} has no installed file manifest")
+    for entry in sorted(entries):
+        source = pathlib.Path(distribution.locate_file(entry))
+        destination = target / entry
+        if source.is_dir():
+            shutil.copytree(source, destination, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source, destination)
+    for entry in distribution.entry_points:
+        if entry.group == "console_scripts":
+            script = prefix / "bin" / entry.name
+            script.write_text(
+                "#!/opt/lightx2v/bin/python\n"
+                "import importlib.metadata as m, sys\n"
+                f"entry = next(e for e in m.distribution({name!r}).entry_points if e.group == 'console_scripts' and e.name == {entry.name!r})\n"
+                "sys.exit(entry.load()())\n"
+            )
+            script.chmod(0o755)
+    constraints.append(f"{distribution.metadata['Name']}=={distribution.version}")
+(prefix / "vendor-constraints.txt").write_text("\n".join(constraints) + "\n")
+PYENV
+
+ENV VIRTUAL_ENV=/opt/lightx2v
+ENV PATH=/opt/lightx2v/bin:${PATH}
+ENV PYTHONNOUSERSITE=1
+ENV HF_HOME=/opt/lightx2v/cache/huggingface
+ENV PLATFORM=cambricon_mlu
+
+# Do not let a base-image entrypoint reactivate another Python environment.
+ENTRYPOINT []
+CMD ["/bin/bash"]
+
+# Install the complete application dependency graph from the selected package index.
+# The copied vendor stack is constrained to its original versions.
+ARG PYPI_INDEX_URL=https://pypi.org/simple
+RUN PIP_CONFIG_FILE=/dev/null python -m pip --isolated install --no-cache-dir --index-url "${PYPI_INDEX_URL}" \
+    --constraint /opt/lightx2v/vendor-constraints.txt \
+    torch torchvision torchaudio torch_mlu torch_mlu_ops \
+    setuptools==70.2.0 \
+    ninja==1.13.0 \
+    numpy==1.26.4 \
+    scipy==1.14.1 \
+    Pillow==11.0.0 \
+    pandas==2.2.3 \
+    packaging==26.0 \
+    PyYAML==6.0.3 \
+    einops==0.8.2 \
+    loguru==0.7.3 \
+    ftfy==6.3.1 \
+    imageio==2.38.1 \
+    imageio-ffmpeg==0.8.1 \
+    aiohttp==3.13.3 \
+    gguf==0.19.0 \
+    diffusers==0.39.0 \
     peft==0.17.0 \
     transformers==4.57.1 \
-    Pillow \
-    timm \
-    kornia \
-    trimesh && \
-    rm /tmp/vendor-torch-constraints.txt
+    'huggingface-hub[cli]==0.36.2' \
+    tokenizers==0.22.2 \
+    accelerate==1.13.0 \
+    safetensors==0.8.0 \
+    tqdm==4.67.3 \
+    timm==1.0.31 \
+    kornia==0.9.0 \
+    trimesh==5.2.0 && \
+    python -m pip check && \
+    python -m pip list --format=freeze > /opt/lightx2v/resolved-requirements.txt
 
-# Copy files
+# Fail the build if the environment accidentally inherits vendor site-packages.
+RUN python - <<'PYCHECK'
+import importlib.metadata as metadata
+import pathlib
+import sys
+
+assert sys.prefix == "/opt/lightx2v"
+assert not any("/torch/venv3/" in path for path in sys.path), sys.path
+for name in ("torch", "torchvision", "torchaudio", "torch_mlu", "torch_mlu_ops", "numpy", "scipy", "Pillow", "einops", "imageio", "imageio-ffmpeg", "gguf", "diffusers", "transformers", "huggingface-hub", "timm", "kornia", "trimesh"):
+    distribution = metadata.distribution(name)
+    assert pathlib.Path(distribution.locate_file("")).is_relative_to(pathlib.Path(sys.prefix)), name
+print("Isolated application environment verified")
+PYCHECK
+
 COPY assets assets
 COPY configs configs
 COPY lightx2v lightx2v
