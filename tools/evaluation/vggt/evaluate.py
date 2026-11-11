@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent
 DATA = Path("/data")
 MODEL = "vggt"
 TITLE = "VGGT"
-PROTOCOL = "深度逐视图中位数尺度对齐后计算AbsRel、RMSE（米）、δ1；相机使用相对位姿AUC@5/10/20度。"
+PROTOCOL = "深度逐视图中位数尺度对齐后计算AbsRel、RMSE（米）、δ1；相机使用相对位姿AUC@5/10/20度；几何使用归一化对称Chamfer-L1。"
 COMMON_CONFIGS = {"suite.json": "common/suite.json", "weight-lock.json": "common/weight-lock.json"}
 PLATFORM_CONFIGS = ("paths.json", "source-lock.json", "evaluation-origin.json", "runtime.json", "model.json")
 ACTIVE_PLATFORM = os.getenv("EVAL_PLATFORM", "mlu")
@@ -436,6 +436,67 @@ def resize_depth(path, size):
     return np.asarray(Image.fromarray(square).resize((size, size), Image.Resampling.NEAREST))
 
 
+def normalize_cloud(points):
+    points = points[np.isfinite(points).all(axis=1)]
+    if len(points) < 2:
+        raise ValueError("Point cloud has fewer than two finite points")
+    centered = points - points.mean(axis=0)
+    rms = np.sqrt(np.mean(np.sum(centered * centered, axis=1)))
+    if rms < 1e-12:
+        raise ValueError("Degenerate point cloud")
+    return centered / rms
+
+
+def gso_geometry_cloud(gt_dir, size, grid_size=64):
+    """Reconstruct a deterministic sparse world-space cloud from GSO depth."""
+    clouds = []
+    axis = np.linspace(0, size - 1, grid_size, dtype=int)
+    u, v = np.meshgrid(axis, axis)
+    u, v = u.reshape(-1), v.reshape(-1)
+    for i in range(5):
+        depth_path = gt_dir / f"depth_{i:02d}.png"
+        with Image.open(depth_path) as image:
+            raw = np.asarray(image).astype(np.float64) / 1000.0
+        h, w = raw.shape
+        side = max(h, w)
+        top, left = (side - h) // 2, (side - w) // 2
+        depth = resize_depth(depth_path, size).astype(np.float64)
+        z = depth[v, u]
+        valid = np.isfinite(z) & (z > 1e-6)
+        px, py, z = u[valid], v[valid], z[valid]
+        if not len(z):
+            continue
+        intr = read_matrix(gt_dir / f"intrinsics_{i:02d}.txt")[:3, :3].copy()
+        scale = size / side
+        fx, fy = intr[0, 0] * scale, intr[1, 1] * scale
+        cx = (intr[0, 2] + left + 0.5) * scale - 0.5
+        cy = (intr[1, 2] + top + 0.5) * scale - 0.5
+        cam = np.stack(((px - cx) * z / fx, (py - cy) * z / fy, z), axis=1)
+        pose = read_matrix(gt_dir / f"pose_{i:02d}.txt")
+        clouds.append(cam @ pose[:3, :3].T + pose[:3, 3])
+    if not clouds:
+        raise ValueError("GSO depth produced no valid geometry points")
+    return np.concatenate(clouds)
+
+
+def chamfer_l1_aligned(predicted, target, iterations=20):
+    source, target = normalize_cloud(predicted), normalize_cloud(target)
+    target_tree = cKDTree(target)
+    for _ in range(iterations):
+        nearest = target_tree.query(source, k=1)[1]
+        source_mean, target_mean = source.mean(axis=0), target[nearest].mean(axis=0)
+        u, _, vt = np.linalg.svd((source - source_mean).T @ (target[nearest] - target_mean))
+        rotation = vt.T @ u.T
+        if np.linalg.det(rotation) < 0:
+            vt[-1] *= -1
+            rotation = vt.T @ u.T
+        translation = target_mean - source_mean @ rotation.T
+        source = source @ rotation.T + translation
+    dp = target_tree.query(source, k=1)[0]
+    dg = cKDTree(source).query(target, k=1)[0]
+    return float((dp.mean() + dg.mean()) / 2)
+
+
 def rotation_angle(matrix):
     return float(np.degrees(np.arccos(np.clip((np.trace(matrix) - 1) / 2, -1, 1))))
 
@@ -443,6 +504,7 @@ def rotation_angle(matrix):
 def vggt_metrics(output, sample, data):
     gt_dir = data / sample["gt_directory"]
     predicted = output["depth"][0, ..., 0].astype(np.float64)
+    predicted_points = output["world_points"][0].astype(np.float64)
     views = []
     for i, pred in enumerate(predicted):
         gt = resize_depth(gt_dir / f"depth_{i:02d}.png", pred.shape[0])
@@ -478,7 +540,20 @@ def vggt_metrics(output, sample, data):
             if np.linalg.norm(tp) > 1e-10 and np.linalg.norm(tg) > 1e-10:
                 row["translation_direction_deg"] = float(np.degrees(np.arccos(np.clip(np.dot(tp, tg) / (np.linalg.norm(tp) * np.linalg.norm(tg)), -1, 1))))
             pairs.append(row)
-    return {"depth_views": views, "camera_pairs": pairs, "depth_macro": {key: float(np.mean([v[key] for v in views])) for key in ("abs_rel", "rmse_m", "delta1")}}
+    size = predicted_points.shape[1]
+    axis = np.linspace(0, size - 1, 64, dtype=int)
+    u, v = np.meshgrid(axis, axis)
+    sampled_predictions = []
+    for i in range(predicted_points.shape[0]):
+        depth = resize_depth(gt_dir / f"depth_{i:02d}.png", size).astype(np.float64)
+        z = depth[v, u]
+        valid = np.isfinite(z) & (z > 1e-6)
+        sampled_predictions.append(predicted_points[i, v[valid], u[valid]])
+    # Both clouds use the same 64x64 pixel grid and GT-validity mask.
+    gt_cloud = gso_geometry_cloud(gt_dir, size)
+    pred_cloud = np.concatenate([p for p in sampled_predictions if len(p)], axis=0)
+    geometry = {"chamfer_l1": chamfer_l1_aligned(pred_cloud, gt_cloud)}
+    return {"depth_views": views, "camera_pairs": pairs, "depth_macro": {key: float(np.mean([v[key] for v in views])) for key in ("abs_rel", "rmse_m", "delta1")}, "geometry": geometry}
 
 
 def auc(errors, threshold):
@@ -521,6 +596,7 @@ def evaluate_run(run, suite, data):
     quality = {}
     if first:
         quality["depth_macro_per_object"] = {key: stats([r["depth_macro"][key] for r in first]) for key in ("abs_rel", "rmse_m", "delta1")}
+        quality["geometry_per_object"] = {"chamfer_l1": stats([r["geometry"]["chamfer_l1"] for r in first])}
         rotations = [p["rotation_deg"] for r in first for p in r["camera_pairs"]]
         translations = [p["translation_direction_deg"] for r in first for p in r["camera_pairs"] if "translation_direction_deg" in p]
         joint = [max(p["rotation_deg"], p["translation_direction_deg"]) for r in first for p in r["camera_pairs"] if "translation_direction_deg" in p]
