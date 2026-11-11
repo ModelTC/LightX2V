@@ -33,7 +33,7 @@ class AscendTests(unittest.TestCase):
 
     def test_npu_mapping_is_isolated_and_cpu_worker_has_no_devices(self):
         args = SimpleNamespace(card=3, image='test', reuse_runs=None, repeats=2, limit=1, data_root=Path('/input'))
-        _, command = evaluation.container_command(args, Path('/output'), 'reference')
+        _, command = evaluation.container_command(args, Path('/output'), 'lightx2v')
         _, cpu = evaluation.container_command(args, Path('/output'), 'postprocess')
         for value in ['/dev/davinci3', '/dev/davinci_manager', '/dev/devmm_svm', '/dev/hisi_hdc', 'ASCEND_RT_VISIBLE_DEVICES=3', '/usr/local/bin/eval-python']:
             self.assertIn(value, command)
@@ -69,18 +69,8 @@ class AscendTests(unittest.TestCase):
             with self.subTest(row=row), tempfile.TemporaryDirectory() as temporary:
                 with patch.object(evaluation, 'monitor_snapshot', return_value=('snapshot', {3: row})):
                     with self.assertRaisesRegex(RuntimeError, 'not idle'):
-                        evaluation.execute_stage(args, Path(temporary), 'reference')
+                        evaluation.execute_stage(args, Path(temporary), 'lightx2v')
 
-    def test_reference_patch_and_frozen_inventory_match(self):
-        import json
-        lock = json.loads(evaluation.config_path('source-lock.json').read_text())
-        record = lock['reference-' + evaluation.MODEL]
-        edits = evaluation.ROOT / record['patches']
-        self.assertEqual(evaluation.sha256(edits), record['patches_sha256'])
-        inventory = {item['path']: item['sha256'] for item in record['files']}
-        for item in json.loads(edits.read_text())['files']:
-            self.assertEqual(item['result_sha256'], inventory[item['path']])
-        self.assertNotIn('mlu_compat', edits.read_text())
 
 
 if __name__ == '__main__':

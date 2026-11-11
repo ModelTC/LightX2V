@@ -3,5 +3,6 @@
   "model": "vggt",
   "platform": "nvidia",
   "status": "not_yet_evaluated",
-  "runs": {}
+  "runs": {},
+  "reports": {}
 }

@@ -1,12 +1,12 @@
-# 平台适配速查
+# 新平台适配步骤
 
-评测协议和指标在 `configs/common/` 与 `evaluate.py` 中共用；设备、容器、模型后端及来源锁由 `configs/<platform>/` 选择。当前有 MLU 配置，以及供 NVIDIA 环境填写镜像后使用的配置模板；NVIDIA 尚未在目标卡上验证。MetaX 等新平台需先按下列接口增加配置和监控脚本。
+1. 阅读README、DATA和`configs/README.md`，确认新机器上的GSO文件与权重哈希。
+2. 新建`configs/<platform>/`，按现有平台提供runtime、model、paths、source-lock和evaluation-origin。source-lock只固定LightX2V源代码；推理统一走LightX2V runner。
+3. 新建`scripts/platform/<platform>/run_eval.sh`及必要监控适配。监控需报告设备身份、利用率、显存和进程归属；容器只映射分配给本次评测的一张卡。
+4. 核对设备API对应的torch namespace、同步、计时事件、显存统计、autocast和随机种子。平台相关差异放配置或设备适配层。
+5. 用单对象smoke检查输入输出、请求数和精度，再运行完整1023对象、2次重复。所有失败保留在分母内。
+6. 保存镜像/源码/权重/配置哈希、设备与依赖信息、汇总和逐对象指标、失败记录及遥测。只将精简可审查结果提交PR；原始NPZ、缓存和大文件放独立产物存储。
 
-1. 复制 `configs/mlu/` 或 `configs/nvidia/` 到 `configs/<platform>/`。填写 `runtime.json` 的 PyTorch 设备 namespace/type、注册模块、镜像/Python、容器设备参数、可见卡变量、dtype、包版本和监控命令。`monitor_parser: "json"` 的监控脚本必须输出 `card`、`util_percent`、`memory_mib`、`capacity_mib`、`pids`，可选输出温度和功耗。
-2. 从该平台的模型配置选择 attention、稀疏卷积、deform conv 等后端写入 `model.json`；不要沿用未在目标平台验证的组合。`paths.json` 指向本机数据和权重。`source-lock.json` 与兼容补丁必须固定该平台实际使用的参考源码。
-3. 添加 `scripts/platform/<platform>/run_eval.sh`，设置 `EVAL_PLATFORM=<platform>` 后执行 `evaluate.py --platform <platform>`；提供满足上述 JSON 协议的宿主机监控脚本，并在 `runtime.json` 指向它。
-4. 先用目标卡运行 `--smoke`，确认空闲卡检查、设备计时/显存、两实现输出和报告完整后，再运行正式评测。只有目标硬件链路通过后，才把该平台标为已验证。
+计时范围固定为读图、预处理、LightX2V推理和输出CPU化；模型加载、预热、写盘、离线评测不计入端到端时延。
 
-示例：`bash scripts/platform/nvidia/run_eval.sh --smoke --card 0 --data-root /path/to/data`。NVIDIA profile 的镜像为空，运行前需设置 `EVAL_IMAGE`。新增平台时保留公共 suite 不变，并将新配置快照和平台身份记录在结果中。
-
-Ascend 910B 配置、依赖镜像与参考兼容补丁已提供；当前仅完成设备 API/配置检查，模型 smoke 和正式评测待执行。详见 [Ascend 配置](configs/ascend_npu/README.md)。
+当前另含 Ascend 910B 配置模板，模型运行尚未验证。

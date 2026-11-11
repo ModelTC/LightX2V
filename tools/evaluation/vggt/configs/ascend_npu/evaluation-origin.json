@@ -3,5 +3,6 @@
   "model": "vggt",
   "platform": "ascend_npu",
   "status": "not_yet_evaluated",
-  "runs": {}
+  "runs": {},
+  "project_source_lock_sha256": "c61a381817cafcb37f7f3ee351823263d6c87ebebd95dcb8650c71e07c20fa37"
 }

@@ -19,7 +19,7 @@ class PlatformConfigurationTests(unittest.TestCase):
         profile["python_executable"] = "/custom/python"
         args = SimpleNamespace(card=3, image="test-image", reuse_runs=None, repeats=2, limit=1, data_root=Path("/data-source"))
         with patch.object(evaluation, "load_platform_config", return_value=profile):
-            _, command = evaluation.container_command(args, Path("/output"), "reference")
+            _, command = evaluation.container_command(args, Path("/output"), "lightx2v")
             _, scoring = evaluation.container_command(args, Path("/output"), "postprocess")
         self.assertIn("/dev/custom_mlu3", command)
         self.assertIn("CUSTOM_DEVICE=3", command)

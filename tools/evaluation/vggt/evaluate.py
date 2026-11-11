@@ -1,8 +1,8 @@
-"""VGGT single-file evaluator: execute models, measure, score, compare and report.
+"""VGGT single-file evaluator: run LightX2V and score against GSO ground truth.
 
 Host: python evaluate.py [--smoke] [--card 2]
-Saved outputs: python evaluate.py --reuse-runs REFERENCE LIGHTX2V
-Each model implementation runs in a fresh interpreter; postprocessing uses CPU.
+Saved outputs: python evaluate.py --reuse-runs LIGHTX2V
+Inference runs in an isolated worker; postprocessing uses CPU.
 """
 
 import argparse
@@ -119,20 +119,6 @@ def seed_all(seed):
     device_api().manual_seed_all(seed)
 
 
-def cast_matrices(module):
-    """Apply the reference precision policy declared by the selected profile."""
-    import torch
-
-    classes = (torch.nn.Linear, torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.ConvTranspose1d, torch.nn.ConvTranspose2d, torch.nn.ConvTranspose3d, torch.nn.Embedding)
-    dtype = getattr(torch, load_platform_config().get("reference_weight_dtype", "bfloat16"))
-    count = 0
-    for child in module.modules():
-        if isinstance(child, classes) or type(child).__name__ in ("SparseConv3d", "SparseInverseConv3d"):
-            child.to(dtype=dtype)
-            count += 1
-    return count
-
-
 @contextmanager
 def record_model_events(targets, device):
     """Attach temporary timing hooks and restore every method on success or error."""
@@ -192,54 +178,9 @@ class LightX2VAdapter:
         return result
 
 
-class ReferenceAdapter:
-    def __init__(self, paths, workdir):
-        from vggt.models.vggt import VGGT
-
-        self.model = VGGT()
-        state = torch.load(paths["vggt"] / "model.pt", map_location="cpu", weights_only=True)
-        loaded = self.model.load_state_dict(state, strict=True)
-        del state
-        self.model.eval().to(device_name())
-        converted = cast_matrices(self.model) if load_platform_config().get("cast_reference_matrices", True) else 0
-        self.metadata = {
-            "strict_checkpoint_load": str(loaded),
-            "matrix_modules_cast": converted,
-            "source": str(ROOT / "sources/reference-vggt"),
-            "track_head": "loaded but not invoked: no query points, matching reconstruction scope",
-        }
-
-    def predict(self, image_paths, seed):
-        from vggt.utils.load_fn import load_and_preprocess_images_square
-        from vggt.utils.pose_enc import pose_encoding_to_extri_intri
-
-        input_start = time.perf_counter()
-        images, coords = load_and_preprocess_images_square([str(DATA / p) for p in image_paths], 518)
-        input_s = time.perf_counter() - input_start
-        forward_start = time.perf_counter()
-        with autocast_context():
-            pred = self.model(images.to(device_name()))
-        device_api().synchronize()
-        forward_s = time.perf_counter() - forward_start
-        postprocess_start = time.perf_counter()
-        extrinsics, intrinsics = pose_encoding_to_extri_intri(pred["pose_enc"].float(), (518, 518))
-        pred.update(extrinsics=extrinsics, intrinsics=intrinsics, original_coords=coords)
-        names = ("pose_enc", "depth", "depth_conf", "world_points", "world_points_conf", "extrinsics", "intrinsics", "original_coords")
-        outputs = {name: pred[name].float().cpu() for name in names}
-        device_api().synchronize()
-        self.last_stage_timings = {
-            "image_read_and_preprocess_s": input_s,
-            "model_forward_s": forward_s,
-            "prediction_postprocess_and_cpu_transfer_s": time.perf_counter() - postprocess_start,
-        }
-        return outputs
-
-
-def measurement_targets(adapter, implementation):
-    """Choose optional developer timing points outside the inference adapter."""
-    if implementation == "lightx2v":
-        return [(adapter.runner.model.transformer_infer, "infer", "vggt_forward")]
-    return [(adapter.model, "forward", "vggt_forward")]
+def measurement_targets(adapter):
+    """Return model timing points for the sole LightX2V adapter."""
+    return [(adapter.runner.model.transformer_infer, "infer", "vggt_forward")]
 
 
 def run_benchmark_job(args):
@@ -253,7 +194,7 @@ def run_benchmark_job(args):
     samples = suite["samples"][: args.limit] if args.limit else suite["samples"]
     repeats = args.repeats or suite["repeats"]
     paths = {k: DATA / v for (k, v) in json.loads((config_path("paths.json")).read_text())["weights"].items()}
-    source = ROOT / "sources" / f"{args.implementation}-vggt"
+    source = ROOT / "sources" / "lightx2v-vggt"
     sys.path.insert(0, str(source))
     profile = load_platform_config()
     os.environ.update(profile["environment"])
@@ -300,14 +241,12 @@ def run_benchmark_job(args):
     write_json(args.run_dir / "environment.json", env)
     backend.synchronize()
     start = time.perf_counter()
-    if args.implementation == "lightx2v":
-        adapter = LightX2VAdapter(paths, args.run_dir)
-    else:
-        adapter = ReferenceAdapter(paths, args.run_dir)
+    args.implementation = "lightx2v"
+    adapter = LightX2VAdapter(paths, args.run_dir)
     backend.synchronize()
     env.update(model_load_s=time.perf_counter() - start, adapter=adapter.metadata)
     write_json(args.run_dir / "environment.json", env)
-    targets = measurement_targets(adapter, args.implementation)
+    targets = measurement_targets(adapter)
     schedule = ([("warmup", samples[0], -1)] if not args.no_warmup else []) + [("measured", sample, repeat) for sample in samples for repeat in range(repeats)]
     for kind, sample, repeat in schedule:
         row = {"id": sample["id"], "seed": sample["seed"], "repeat": repeat, "warmup": kind == "warmup", "status": "error"}
@@ -649,48 +588,8 @@ def repeat_status(pairs):
 
 
 def export_additional_outputs(runs, samples, data, destination):
-    """Export a representative input/GT/prediction figure from saved tensors."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    left = {(r["id"], r["repeat"]): r for r in load_rows(runs["reference"]) if r["status"] == "success" and not r["warmup"]}
-    right = {(r["id"], r["repeat"]): r for r in load_rows(runs["lightx2v"]) if r["status"] == "success" and not r["warmup"]}
-    sample = next((s for s in samples if (s["id"], 0) in left and (s["id"], 0) in right), None)
-    if sample is None:
-        return []
-    key = (sample["id"], 0)
-    gt = resize_depth(data / sample["gt_directory"] / "depth_00.png", 518)
-    valid = gt > 1e-6
-    predictions = []
-    for name, rows in (("reference", left), ("lightx2v", right)):
-        with np.load(runs[name] / rows[key]["output"]) as output:
-            depth = output["depth"][0, 0, ..., 0].copy()
-        depth *= np.median(gt[valid]) / np.median(depth[valid])
-        predictions.append(depth)
-    with Image.open(data / sample["views"][0]) as image:
-        rgb = image.convert("RGB").resize((518, 518), Image.Resampling.BICUBIC)
-    fig, axes = plt.subplots(2, 3, figsize=(12, 7), constrained_layout=True)
-    axes[0, 0].imshow(rgb)
-    axes[0, 0].set_title("Input")
-    low, high = np.percentile(gt[valid], [1, 99])
-    label = load_platform_config()["platform"].upper()
-    for axis, depth, title in ((axes[0, 1], gt, "GT (m)"), (axes[0, 2], predictions[0], f"Original {label}"), (axes[1, 0], predictions[1], f"LightX2V {label}")):
-        artist = axis.imshow(np.ma.array(depth, mask=~valid), vmin=low, vmax=high, cmap="viridis")
-        axis.set_title(title)
-        fig.colorbar(artist, ax=axis, shrink=0.7)
-    limit = max(float(np.abs(depth[valid] - gt[valid]).max()) for depth in predictions)
-    for axis, depth, title in ((axes[1, 1], predictions[0], "Original - GT"), (axes[1, 2], predictions[1], "LightX2V - GT")):
-        artist = axis.imshow(np.ma.array(depth - gt, mask=~valid), vmin=-limit, vmax=limit, cmap="coolwarm")
-        axis.set_title(title)
-        fig.colorbar(artist, ax=axis, shrink=0.7)
-    for axis in axes.flat:
-        axis.axis("off")
-    path = destination / "depth-example.png"
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
-    return [{"kind": "depth_figure", "sample": sample["id"], "file": path.name, "sha256": sha256(path)}]
+    """Export optional model-specific artifacts from LightX2V predictions."""
+    return []
 
 
 def parse_cnmon(text):
@@ -793,61 +692,44 @@ def empty_evaluation(run, expected, error):
 
 
 def make_markdown(report, summary):
+    result = report["lightx2v"]
     lines = [
         f"# {TITLE} 评测报告",
         "",
-        f"状态：{summary['status']}；范围：{summary['scope']}；每实现计划请求：{summary['expected_per_implementation']}。",
+        f"状态：{summary['status']}；范围：{summary['scope']}；对象数：{summary['sample_count']}；重复次数：{summary['repeats']}。",
         "",
-        "本次方式：" + ("复用已有预测重新计算指标，时间/显存来自原请求记录。" if summary["reused_predictions"] else "本次实际运行两种实现并计算指标。"),
+        "本项目只运行 LightX2V 推理；精度指标按固定 GSO 真值计算。",
         "",
-        f"| 指标 | 原项目 {load_platform_config()['platform'].upper()} | LightX2V {load_platform_config()['platform'].upper()} |",
-        "|---|---:|---:|",
+        "## 结果",
+        "",
+        "| 指标 | LightX2V |",
+        "|---|---:|",
     ]
-    sides = [report[key] for key in ("reference", "lightx2v")]
     for key in ("success_count", "failed_count", "missing_measured_count", "success_rate"):
-        lines.append(f"| {key} | {number(sides[0].get(key))} | {number(sides[1].get(key))} |")
-    metrics = [flatten_numbers(side["quality"], "quality") | flatten_numbers(side["performance"], "performance") for side in sides]
-    for key in dict.fromkeys(k for row in metrics for k in row):
-        lines.append(f"| {key} | {number(metrics[0].get(key))} | {number(metrics[1].get(key))} |")
+        lines.append(f"| {key} | {number(result.get(key))} |")
+    for key, value in (flatten_numbers(result["quality"], "quality") | flatten_numbers(result["performance"], "performance")).items():
+        lines.append(f"| {key} | {number(value)} |")
     lines += [
         "",
-        "## 固定随机性与输出差值",
+        "## 重复运行差异",
         "",
-        "- 原项目重复：" + repeat_status(report["reference_repeat_differences"]),
-        "- LightX2V重复：" + repeat_status(report["lightx2v_repeat_differences"]),
-        "",
-        "| 字段 | 可逐元素比较对象/配对对象 | 全元素MAE | 全元素RMSE | 最大绝对差 |",
-        "|---|---:|---:|---:|---:|",
-    ]
-    lines += field_summary(report["implementation_differences"])
-    if MODEL == "trellis2":
-        comparisons = [row["comparison"] for row in report["implementation_differences"]]
-        distances = [r["raw_vertex_set_distance"]["symmetric_mean_nearest_distance"] for r in comparisons if "raw_vertex_set_distance" in r]
-        overlaps = [r["texture_alignment"]["coordinate_iou"] for r in comparisons if "coordinate_iou" in r.get("texture_alignment", {})]
-        lines += [
-            "",
-            "原始顶点集合距离宏均值：" + number(sum(distances) / len(distances) if distances else None),
-            "纹理坐标IoU宏均值：" + number(sum(overlaps) / len(overlaps) if overlaps else None),
-            "坐标交集上的完整纹理属性差值见 comparison.json；原始纹理体素保存在NPZ。",
-        ]
-    lines += [
+        repeat_status(report["lightx2v_repeat_differences"]),
         "",
         "## 数据与计时边界",
         "",
         PROTOCOL,
         "",
         f"固定GSO对象、输入顺序、seed和精度策略；平台为 {load_platform_config()['platform']}。",
-        "同步墙钟计时覆盖读图、预处理、模型执行和CPU输出，排除模型加载、预热、NPZ写盘及离线指标。",
-        "原始输出差值与尺度/坐标对齐后的数据集精度分别报告；形状不一致不记零差。",
+        "端到端同步墙钟计时覆盖读图、预处理、模型执行和CPU输出，排除模型加载、预热、NPZ写盘及离线指标。",
         "小样本检查仅代表所选对象，不代表完整1023对象GSO评测。",
         "",
         "## 产物",
         "",
-        "- comparison.json：全部逐对象精度、性能统计、实现间及重复差值。",
-        "- requests.csv / metrics.csv / summary.csv：逐请求和指标表。",
-        "- summary.json / failures.json / provenance.json：完成状态、错误和来源。",
-        "- reference/、lightx2v/：新运行的NPZ、环境、请求、遥测；复用模式的数据位置见 summary.json。",
-        "- extra-output-manifest.json：图或网格的路径、哈希及导出检查。",
+        "- summary.json / report.md：完成状态、质量和性能汇总。",
+        "- requests.csv / metrics.csv：逐请求时延、显存和逐对象质量指标。",
+        "- lightx2v-metrics.json：LightX2V 对 GSO 真值的精度与性能。",
+        "- lightx2v/：本项目运行产生的NPZ、环境、请求和遥测记录。",
+        "- extra-output-manifest.json：额外产物清单。",
     ]
     if summary["errors"]:
         lines += ["", "## 未完成或失败项目", ""]
@@ -856,139 +738,63 @@ def make_markdown(report, summary):
 
 
 def postprocess(args):
-    """Compute every metric and report in a CPU process after model processes exit."""
+    """Compute LightX2V quality against GSO ground truth after inference exits."""
     load_numeric_dependencies()
     destination = args.output
     manifest = json.loads((destination / "manifest.json").read_text())
-    suite = json.loads((config_path("suite.json")).read_text())
+    suite = json.loads(config_path("suite.json").read_text())
     selected = suite["samples"][: manifest["sample_count"]]
     suite = dict(suite, samples=selected)
-    runs = dict(zip(("reference", "lightx2v"), args.reuse_runs))
+    run = args.reuse_runs[0] if args.reuse_runs else destination / "lightx2v"
+    runs = {"lightx2v": run}
     expected = manifest["sample_count"] * manifest["repeats"]
     report = {"model": MODEL, "evaluation_code_sha256": sha256(Path(__file__)), "suite_sha256": sha256(config_path("suite.json"))}
     errors = [{"stage": stage, "error": f"Worker exited with code {code}"} for stage, code in manifest.get("stage_exit_codes", {}).items() if code]
     request_table, metric_table = [], []
-    environments = {}
-    for implementation, run in runs.items():
-        try:
-            env = json.loads((run / "environment.json").read_text())
-            verify_environment(run, env)
-            if env["implementation"] != implementation or env["sample_count"] != len(selected) or env["repeats"] != manifest["repeats"]:
-                raise ValueError("Run implementation/sample count/repeats differ from this evaluation")
-            environments[implementation] = env
-            report[implementation] = evaluate_run(run, suite, args.data_root)
-        except Exception:
-            error = traceback.format_exc()
-            errors.append({"stage": implementation, "error": error})
-            report[implementation] = empty_evaluation(run, expected, error)
-        write_json(destination / f"{implementation}-metrics.json", report[implementation])
-        try:
-            request_rows = load_rows(run)
-        except Exception:
-            request_rows = []
-            errors.append({"stage": implementation + "_request_log", "error": traceback.format_exc()})
-        for row in request_rows:
-            request_table.append(
-                {
-                    "implementation": implementation,
-                    **{
-                        key: row.get(key)
-                        for key in (
-                            "id",
-                            "seed",
-                            "repeat",
-                            "warmup",
-                            "status",
-                            "pipeline_s",
-                            "peak_allocated_bytes",
-                            "peak_reserved_bytes",
-                            "peak_incremental_bytes",
-                            "cpu_process_peak_rss_kib",
-                            "artifact_write_s",
-                            "output",
-                            "output_sha256",
-                            "error",
-                        )
-                    },
-                    "events_json": json.dumps(row.get("events", [])),
-                }
-            )
-        for row in report[implementation]["per_output_metrics"]:
-            metric_table.append({"implementation": implementation, "id": row["id"], "repeat": row["repeat"], **flatten_numbers(row["metrics"])})
-    if len(environments) == 2 and environments["reference"]["versions"] != environments["lightx2v"]["versions"]:
-        errors.append({"stage": "environment", "error": "Runtime dependency versions differ between implementations"})
-    for name, left, right, repeat in (
-        ("implementation_differences", runs["reference"], runs["lightx2v"], False),
-        ("reference_repeat_differences", runs["reference"], runs["reference"], True),
-        ("lightx2v_repeat_differences", runs["lightx2v"], runs["lightx2v"], True),
-    ):
-        try:
-            report[name] = pair_runs(left, right, repeat)
-        except Exception:
-            report[name] = []
-            errors.append({"stage": name, "error": traceback.format_exc()})
-        if len(report[name]) != len(selected):
-            errors.append({"stage": name, "error": f"Expected {len(selected)} object pairs, got {len(report[name])}"})
-    for implementation in runs:
-        side = report[implementation]
-        errors += [{"stage": implementation + "_inference", "error": r["error"]} for r in side["inference_errors"]]
-        errors += [{"stage": implementation + "_metric", "error": r["error"]} for r in side["evaluation_errors"]]
-        if side["success_count"] != expected or side["missing_measured_count"] or not side["finished_marker"]:
-            errors.append({"stage": implementation, "error": f"Success={side['success_count']}, expected={expected}, missing={side['missing_measured_count']}, finished={side['finished_marker']}"})
-    extras = []
     try:
-        extras = export_additional_outputs(runs, selected, args.data_root, destination)
+        env = json.loads((run / "environment.json").read_text())
+        verify_environment(run, env)
+        if env["implementation"] != "lightx2v" or env["sample_count"] != len(selected) or env["repeats"] != manifest["repeats"]:
+            raise ValueError("Saved LightX2V run/sample count/repeats differ from this evaluation")
+        report["lightx2v"] = evaluate_run(run, suite, args.data_root)
     except Exception:
-        errors.append({"stage": "extra_outputs", "error": traceback.format_exc()})
-    write_json(destination / "extra-output-manifest.json", extras)
+        error = traceback.format_exc()
+        errors.append({"stage": "lightx2v", "error": error})
+        report["lightx2v"] = empty_evaluation(run, expected, error)
+    side = report["lightx2v"]
+    write_json(destination / "lightx2v-metrics.json", side)
+    try:
+        request_rows = load_rows(run)
+    except Exception:
+        request_rows = []
+        errors.append({"stage": "lightx2v_request_log", "error": traceback.format_exc()})
+    for row in request_rows:
+        request_table.append({"implementation": "lightx2v", **{key: row.get(key) for key in ("id", "seed", "repeat", "warmup", "status", "pipeline_s", "peak_allocated_bytes", "peak_reserved_bytes", "peak_incremental_bytes", "cpu_process_peak_rss_kib", "artifact_write_s", "output", "output_sha256", "error")}, "events_json": json.dumps(row.get("events", []))})
+    for row in side["per_output_metrics"]:
+        metric_table.append({"implementation": "lightx2v", "id": row["id"], "repeat": row["repeat"], **flatten_numbers(row["metrics"])})
+    try:
+        report["lightx2v_repeat_differences"] = pair_runs(run, run, True)
+    except Exception:
+        report["lightx2v_repeat_differences"] = []
+        errors.append({"stage": "lightx2v_repeat_differences", "error": traceback.format_exc()})
+    if len(report["lightx2v_repeat_differences"]) != len(selected):
+        errors.append({"stage": "lightx2v_repeat_differences", "error": f"Expected {len(selected)} object pairs, got {len(report['lightx2v_repeat_differences'])}"})
+    errors += [{"stage": "lightx2v_inference", "error": r["error"]} for r in side["inference_errors"]]
+    errors += [{"stage": "lightx2v_metric", "error": r["error"]} for r in side["evaluation_errors"]]
+    if side["success_count"] != expected or side["missing_measured_count"] or not side["finished_marker"]:
+        errors.append({"stage": "lightx2v", "error": f"Success={side['success_count']}, expected={expected}, missing={side['missing_measured_count']}, finished={side['finished_marker']}"})
+    write_json(destination / "extra-output-manifest.json", [])
     write_json(destination / "comparison.json", report)
     write_csv(destination / "requests.csv", request_table)
     write_csv(destination / "metrics.csv", metric_table)
-    write_csv(
-        destination / "summary.csv",
-        [
-            {
-                "implementation": key,
-                **{k: report[key][k] for k in ("success_count", "failed_count", "missing_measured_count", "success_rate")},
-                **flatten_numbers(report[key]["quality"], "quality"),
-                **flatten_numbers(report[key]["performance"], "performance"),
-            }
-            for key in runs
-        ],
-    )
-    summary = {
-        "status": "complete" if not errors else "incomplete",
-        "model": MODEL,
-        "scope": "full_gso_1023" if len(selected) == 1023 and args.limit is None else "diagnostic_subset",
-        "sample_count": len(selected),
-        "repeats": manifest["repeats"],
-        "expected_per_implementation": expected,
-        "reused_predictions": manifest["reused_predictions"],
-        "runs": {key: str(path) for key, path in runs.items()},
-        "results": {key: {k: report[key][k] for k in ("success_count", "failed_count", "missing_measured_count", "quality", "performance")} for key in runs},
-        "errors": errors,
-    }
+    write_csv(destination / "summary.csv", [{"implementation": "lightx2v", **{k: side[k] for k in ("success_count", "failed_count", "missing_measured_count", "success_rate")}, **flatten_numbers(side["quality"], "quality"), **flatten_numbers(side["performance"], "performance")}])
+    summary = {"status": "complete" if not errors else "incomplete", "model": MODEL, "scope": "full_gso_1023" if len(selected) == 1023 and args.limit is None else "diagnostic_subset", "sample_count": len(selected), "repeats": manifest["repeats"], "expected_per_implementation": expected, "reused_predictions": manifest["reused_predictions"], "runs": {"lightx2v": str(run)}, "results": {"lightx2v": {k: side[k] for k in ("success_count", "failed_count", "missing_measured_count", "quality", "performance")}}, "errors": errors}
     write_json(destination / "failures.json", errors)
     write_json(destination / "summary.json", summary)
     (destination / "report.md").write_text(make_markdown(report, summary))
-    files = [
-        {"path": str(p.relative_to(destination)), "bytes": p.stat().st_size, "sha256": sha256(p)}
-        for p in sorted(destination.rglob("*"))
-        if p.is_file() and p.name not in ("provenance.json", "postprocess.log")
-    ]
-    write_json(
-        destination / "provenance.json",
-        {
-            "model": MODEL,
-            "evaluation_code_sha256": sha256(Path(__file__)),
-            "suite_sha256": sha256(config_path("suite.json")),
-            "source_lock_sha256": sha256(config_path("source-lock.json")),
-            "weight_lock_sha256": sha256(config_path("weight-lock.json")),
-            "platform_configuration": platform_fingerprints(),
-            "files": files,
-        },
-    )
-    print(json.dumps({"status": summary["status"], "sample_count": len(selected), "output": str(destination)}), flush=True)
+    files = [{"path": str(p.relative_to(destination)), "bytes": p.stat().st_size, "sha256": sha256(p)} for p in sorted(destination.rglob("*")) if p.is_file() and p.name not in ("provenance.json", "postprocess.log")]
+    write_json(destination / "provenance.json", {"model": MODEL, "evaluation_code_sha256": sha256(Path(__file__)), "suite_sha256": sha256(config_path("suite.json")), "source_lock_sha256": sha256(config_path("source-lock.json")), "weight_lock_sha256": sha256(config_path("weight-lock.json")), "platform_configuration": platform_fingerprints(), "files": files})
+    print(json.dumps({"status": summary["status"], "sample_count": len(selected), "output": str(destination)}, flush=True))
     return 0 if summary["status"] == "complete" else 1
 
 
@@ -1012,36 +818,6 @@ def verify_source_files(directory, record):
             raise ValueError(f"Pinned source file differs or is missing: {path}")
 
 
-def apply_reference_edits(directory, patch_path, expected_sha256):
-    if sha256(patch_path) != expected_sha256:
-        raise ValueError(f"Compatibility patch hash differs: {patch_path}")
-    edits = json.loads(patch_path.read_text())
-    if edits["format"] != "line_edits_v1":
-        raise ValueError("Unknown reference compatibility patch format")
-    for file in edits["files"]:
-        relative = Path(file["path"])
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError("Reference patch path escapes its source directory")
-        path = directory / relative
-        if file["base_sha256"] is None:
-            if path.exists():
-                raise ValueError(f"Expected a new reference file: {relative}")
-            lines = []
-        else:
-            if sha256(path) != file["base_sha256"]:
-                raise ValueError(f"Official source does not match pinned patch base: {relative}")
-            lines = path.read_text().splitlines(keepends=True)
-        for hunk in reversed(file["hunks"]):
-            start, count = hunk["start"], hunk["delete"]
-            if start < 0 or count < 0 or start + count > len(lines):
-                raise ValueError("Reference patch line range is invalid")
-            lines[start : start + count] = hunk["insert"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("".join(lines))
-        if sha256(path) != file["result_sha256"]:
-            raise ValueError(f"Reference compatibility result differs: {relative}")
-
-
 def prepare_sources():
     """Rebuild ignored source dependencies from public, immutable Git revisions."""
     locks = json.loads(config_path("source-lock.json").read_text())
@@ -1062,8 +838,6 @@ def prepare_sources():
             subprocess.run(["git", "-C", str(temporary), "remote", "add", "origin", record["repository"]], check=True, env=env)
             subprocess.run(["git", "-C", str(temporary), "fetch", "--quiet", "--depth", "1", "origin", record["revision"]], check=True, env=env)
             subprocess.run(["git", "-C", str(temporary), "checkout", "--quiet", "--detach", "FETCH_HEAD"], check=True, env=env)
-            if record.get("patches"):
-                apply_reference_edits(temporary, ROOT / record["patches"], record["patches_sha256"])
             verify_source_files(temporary, record)
             temporary.rename(target)
             print(f"{name}: pinned revision and file hashes verified", flush=True)
@@ -1163,13 +937,13 @@ def container_command(args, destination, stage, run=None):
             extra += ["--limit", str(args.limit)]
     else:
         run_paths = []
-        for implementation, path in zip(("reference", "lightx2v"), args.reuse_runs or [destination / "reference", destination / "lightx2v"]):
-            if not args.reuse_runs:
-                run_paths.append(f"/results/{implementation}")
-            else:
-                target = f"/saved/{implementation}/{path.name}"
-                command += ["--mount", f"type=bind,src={path},dst={target},readonly"]
-                run_paths.append(target)
+        path = args.reuse_runs[0] if args.reuse_runs else None
+        if path is None:
+            run_paths.append("/results/lightx2v")
+        else:
+            target = f"/saved/lightx2v/{path.name}"
+            command += ["--mount", f"type=bind,src={path},dst={target},readonly"]
+            run_paths.append(target)
         extra = ["--reuse-runs", *run_paths]
     command += [
         "-w",
@@ -1293,7 +1067,7 @@ def run_campaign(args):
                     check=True,
                 )
         if not args.reuse_runs:
-            for stage in ("reference", "lightx2v"):
+            for stage in ("lightx2v",):
                 try:
                     manifest["stage_exit_codes"][stage] = execute_stage(args, destination, stage)
                 except Exception:
@@ -1308,7 +1082,7 @@ def run_campaign(args):
             raise RuntimeError("Postprocessing failed before writing summary.json; see postprocess.log")
         summary = json.loads((destination / "summary.json").read_text())
         summary["host_output_directory"] = str(destination)
-        summary["runs"] = {key: str(path) for key, path in zip(("reference", "lightx2v"), args.reuse_runs or [destination / "reference", destination / "lightx2v"])}
+        summary["runs"] = {key: str(path) for key, path in zip(("lightx2v",), args.reuse_runs or [destination / "lightx2v"])}
         summary["stage_exit_codes"] = manifest["stage_exit_codes"]
         write_json(destination / "summary.json", summary)
         write_json(destination / "progress.json", {"stage": "finished", "status": summary["status"]})
@@ -1339,7 +1113,7 @@ def main():
     default_data_root = Path(paths["host_data_root"])
     if not default_data_root.is_absolute():
         default_data_root = ROOT / default_data_root
-    parser = argparse.ArgumentParser(description=f"{TITLE}: model execution, performance, accuracy, differences and reports in one command.")
+    parser = argparse.ArgumentParser(description=f"{TITLE}: LightX2V inference and GSO quality/performance evaluation.")
     parser.add_argument("--platform", default=ACTIVE_PLATFORM, help="Platform profile directory under configs/ (for example mlu, nvidia or metax)")
     card_env = profile.get("card_index_environment", "EVAL_CARD")
     parser.add_argument("--card", type=int, default=int(os.getenv(card_env, str(profile.get("default_card", 0)))))
@@ -1349,12 +1123,12 @@ def main():
     parser.add_argument("--smoke", action="store_true", help="One object, two repeats, all metric/report stages")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--repeats", type=int, default=2)
-    parser.add_argument("--reuse-runs", type=Path, nargs=2, metavar=("REFERENCE", "LIGHTX2V"), help="Reuse saved predictions; do not run models or remeasure time")
+    parser.add_argument("--reuse-runs", type=Path, nargs="+", metavar="LIGHTX2V_RUN", help="Reuse a saved LightX2V run; for older multi-path invocations, only the final path is read")
     parser.add_argument("--install-deps", action="store_true", help="Install pinned extra dependencies before running")
-    parser.add_argument("--prepare-sources", action="store_true", help="Fetch pinned model implementations and apply the selected profile's compatibility edits; no inference")
+    parser.add_argument("--prepare-sources", action="store_true", help="Fetch the pinned LightX2V source revision; no inference")
     parser.add_argument("--check-inputs", action="store_true", help="Validate prepared data, sources and checkpoint inventory without model execution")
     parser.add_argument("--rehash-weights", action="store_true", help="Verify checkpoint SHA256 in addition to sizes")
-    parser.add_argument("--worker", choices=("reference", "lightx2v", "postprocess"), help=argparse.SUPPRESS)
+    parser.add_argument("--worker", choices=("lightx2v", "postprocess"), help=argparse.SUPPRESS)
     parser.add_argument("--run-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     select_platform(args.platform)
@@ -1370,7 +1144,7 @@ def main():
     args.data_root = args.data_root.resolve()
     args.output = args.output.resolve()
     if args.reuse_runs:
-        args.reuse_runs = [path.resolve() for path in args.reuse_runs]
+        args.reuse_runs = [args.reuse_runs[-1].resolve()]
     if args.check_inputs:
         args.output.mkdir(parents=True, exist_ok=False)
         verify_inputs(args, args.output)
