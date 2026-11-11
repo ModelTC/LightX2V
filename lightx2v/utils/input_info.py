@@ -332,10 +332,13 @@ class Ref2AVInputInfo(T2AVInputInfo):
 
 
 @dataclass
-class RefA2VInputInfo(T2AVInputInfo):
+class RefAInputInfo(T2VInputInfo):
+    """Inputs for the minimax_h3_causal model's RefA2V and RefA2AV tasks."""
+
     image_path: Any = ""
-    audio_path: str = ""
-    action_prompts: dict[str, Any] | list[Any] | None = None
+    # Driving audio for RefA2V; voice reference for RefA2AV.
+    audio_path: Any = ""
+    motions: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -479,7 +482,8 @@ INPUT_INFO_TYPES = {
     "l2av": L2AVInputInfo,
     "fl2av": FL2AVInputInfo,
     "ref2av": Ref2AVInputInfo,
-    "refa2v": RefA2VInputInfo,
+    "refa2v": RefAInputInfo,
+    "refa2av": RefAInputInfo,
     "i2va": I2VAInputInfo,
     "v2av": V2AVInputInfo,
     "ltx2_s2v": LTX2S2VInputInfo,

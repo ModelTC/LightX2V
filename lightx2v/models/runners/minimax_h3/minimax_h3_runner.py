@@ -416,13 +416,9 @@ class MiniMaxH3Runner(DefaultRunner):
             return paths
         return [value]
 
-    def _prepare_references(self):
+    def _prepare_references(self, sources):
         entries = []
-        for kind, value in (
-            ("image", self.input_info.image_path),
-            ("video", self.input_info.video_path),
-            ("audio", self.input_info.audio_path),
-        ):
+        for kind, value in sources.items():
             entries.extend({kind: path} for path in self._split_reference_paths(value))
         if not entries:
             raise ValueError("MiniMax-H3 ref2av requires --image_path, --video_path, or --audio_path")
@@ -598,7 +594,12 @@ class MiniMaxH3Runner(DefaultRunner):
         self.clear_conditioning_state()
         if task == "ref2av":
             self._resolve_request_geometry()
-            self.prepared_references = self._prepare_references()
+            reference_sources = {
+                "image": self.input_info.image_path,
+                "video": self.input_info.video_path,
+                "audio": self.input_info.audio_path,
+            }
+            self.prepared_references = self._prepare_references(reference_sources)
             text_encoder_output = self.run_text_encoder(self.input_info, references=self.prepared_references)
             with ProfilingContext4DebugL1(
                 "Run VAE Encoder",
