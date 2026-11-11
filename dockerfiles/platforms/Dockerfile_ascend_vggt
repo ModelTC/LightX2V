@@ -1,0 +1,48 @@
+# Build from high-eff-eva/ (both the main repository and PR export are needed):
+# docker build -f LightX2V-pr-1675/dockerfiles/platforms/Dockerfile_ascend_vggt \
+#   -t lightx2v-vggt:ascend-910b .
+#
+# Download weights as described in scripts/vggt/README.md, then run:
+# docker run --rm --init --shm-size=16g --cap-add ALL \
+#   --device /dev/davinci0 --device /dev/davinci_manager \
+#   --device /dev/devmm_svm --device /dev/hisi_hdc \
+#   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro \
+#   -v /your/weights:/weights:ro -v /your/images:/input:ro \
+#   -v /your/results:/output lightx2v-vggt:ascend-910b
+# MODEL_PATH, INPUT_PATH and SAVE_RESULT_PATH can override the container paths.
+# This host's driver requires --cap-add ALL for new containers to initialize NPU.
+
+FROM swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.10
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
+WORKDIR /opt/LightX2V
+ENV PLATFORM=ascend_npu DTYPE=BF16 PYTHONPATH=/opt/LightX2V \
+    PYTHONNOUSERSITE=1 ASCEND_RT_VISIBLE_DEVICES=0 OMP_NUM_THREADS=8 \
+    MODEL_PATH=/weights INPUT_PATH=/input SAVE_RESULT_PATH=/output/reconstruction.npz
+
+# Install the complete Torch/NPU stack from public package sources.
+RUN python3 -m pip install --no-cache-dir --no-deps torch==2.12.0+cpu torchvision==0.27.0+cpu \
+      --index-url https://download.pytorch.org/whl/cpu && \
+    python3 -m pip install --no-cache-dir \
+      torch-npu==2.12.0 \
+      filelock==3.32.3 typing-extensions==4.16.0 sympy==1.14.0 \
+      networkx==3.4.2 Jinja2==3.1.6 fsspec==2026.7.0 packaging==26.3 \
+      numpy==2.2.6 Pillow==11.3.0 scipy==1.15.3 \
+      transformers==4.57.1 tokenizers==0.22.2 huggingface-hub==0.36.2 \
+      diffusers==0.35.2 accelerate==1.10.1 safetensors==0.6.2 \
+      einops==0.8.1 loguru==0.7.3 imageio==2.37.0 imageio-ffmpeg==0.6.0 \
+      gguf==0.17.1 ftfy==6.3.1 aiohttp==3.12.15 peft==0.17.0
+
+# Compose the full application inside the image. Keep host repositories separate.
+# Explicit directories exclude Git data, user weights and inference outputs.
+COPY LightX2V/lightx2v/ ./lightx2v/
+COPY LightX2V/lightx2v_platform/ ./lightx2v_platform/
+COPY LightX2V/lightx2v_kernel/ ./lightx2v_kernel/
+COPY LightX2V/configs/ ./configs/
+COPY LightX2V/scripts/ ./scripts/
+COPY LightX2V/assets/ ./assets/
+COPY LightX2V-pr-1675/lightx2v/ ./lightx2v/
+COPY LightX2V-pr-1675/configs/ ./configs/
+COPY LightX2V-pr-1675/scripts/ ./scripts/
+COPY LightX2V-pr-1675/assets/ ./assets/
+CMD ["bash", "scripts/platform/ascend_npu/run_vggt.sh"]
