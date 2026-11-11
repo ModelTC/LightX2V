@@ -10,6 +10,7 @@ save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/trellis2/mes
 if [[ "${1:-}" == "--help" ]]; then
   echo "Usage: MODEL_PATH=/path/to/weights [INPUT_PATH=/path/to/input] bash scripts/platform/mlu/run_trellis2.sh [lightx2v.infer arguments]"
   echo "Default input: ${input_path}"
+  echo "Prepare local weights first: ${lightx2v_path}/scripts/trellis2/README.md"
   exit 0
 fi
 
