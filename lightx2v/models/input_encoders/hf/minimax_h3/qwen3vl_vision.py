@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -75,6 +76,32 @@ class _PatchEmbed(nn.Module):
         self.proj = nn.Conv3d(self.in_channels, config["hidden_size"], kernel_size=kernel, stride=kernel, bias=True)
 
     def forward(self, pixels):
+        weight, bias = self.proj.weight, self.proj.bias
+        if (
+            os.environ.get("LIGHTX2V_QWEN_PATCH_EXACT", "1") == "1"
+            and torch.version.hip is not None
+            and not torch.backends.cudnn.enabled
+            and not torch.is_grad_enabled()
+            and not torch.is_autocast_enabled("cuda")
+            and pixels.ndim == 2 and pixels.shape[0] > 0 and pixels.shape[1] == 1536
+            and (self.in_channels, self.temporal_patch_size, self.patch_size) == (3, 2, 16)
+            and weight.is_cuda and pixels.device == weight.device
+            and weight.dtype == torch.bfloat16 and tuple(weight.shape) == (1152, 3, 2, 16, 16)
+            and bias is not None and bias.device == weight.device and bias.dtype == weight.dtype
+            and tuple(bias.shape) == (1152,)
+            and pixels.is_contiguous() and weight.is_contiguous() and bias.is_contiguous()
+            and tuple(self.proj.stride) == (2, 16, 16) and tuple(self.proj.padding) == (0, 0, 0)
+            and tuple(self.proj.dilation) == (1, 1, 1) and self.proj.groups == 1
+            and self.proj.padding_mode == "zeros"
+            and torch.cuda.get_device_properties(weight.device).gcnArchName.split(":")[0] == "gfx1201"
+        ):
+            inputs = pixels.to(weight.dtype)
+            matrix = weight.view(1152, 1536)
+            output = bias.expand(inputs.shape[0], -1).clone()
+            for index in range(inputs.shape[0]):
+                target = output[index, :, None]
+                torch.addmm(target, matrix, inputs[index, :, None], beta=1, out=target)
+            return output
         pixels = pixels.view(-1, self.in_channels, self.temporal_patch_size, self.patch_size, self.patch_size)
         return self.proj(pixels.to(self.proj.weight.dtype)).view(-1, self.proj.out_channels)
 
