@@ -21,7 +21,7 @@ source "${lightx2v_path}/scripts/base/base.sh"
 
 export LIGHTX2V_CACHE_DIR="${lightx2v_path}/save_results/server_cache"
 
-# DiT SP4, Qwen3-VL TP4, and VAE tile parallelism share four GPUs.
+# DiT TP2 x SP2, Qwen3-VL TP4, and VAE tile parallelism share four GPUs.
 # Leave --task unset to serve both t2i and i2i requests with the same POST clients.
 torchrun --standalone --nproc_per_node=4 -m lightx2v.server \
   --model_cls minimax_h3_image \
