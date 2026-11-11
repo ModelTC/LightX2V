@@ -32,5 +32,28 @@
   },
   "monitor_command": [
     "cnmon"
-  ]
+  ],
+  "torch_namespace": "mlu",
+  "registration_modules": [
+    "torch_mlu"
+  ],
+  "monitor_parser": "cnmon",
+  "card_index_environment": "MLU_CARD",
+  "default_card": 2,
+  "autocast_dtype": "bfloat16",
+  "reference_weight_dtype": "bfloat16",
+  "cast_reference_matrices": true,
+  "version_packages": [
+    "torch",
+    "torch_mlu",
+    "transformers",
+    "numpy",
+    "scipy",
+    "Pillow",
+    "timm",
+    "kornia",
+    "trimesh",
+    "diffusers"
+  ],
+  "validation_status": "validated_mlu590"
 }

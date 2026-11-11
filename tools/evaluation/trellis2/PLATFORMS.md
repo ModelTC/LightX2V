@@ -4,7 +4,7 @@
 
 ## 当前边界
 
-- 当前实际实现并验证的平台是MLU；A100/CUDA尚未实现，不能通过复制MLU JSON或删除平台检查来宣称支持。
+- 平台选择和 PyTorch 设备 API 已由运行配置驱动；MLU 已验证。`configs/nvidia/` 是待目标硬件 smoke 的配置模板，不能当作 NVIDIA 已验证结果。
 - `common/suite.json`固定40对象、输入顺序、seed、5视图/512流程、BF16策略和两次重复；原始模型、LightX2V、不同平台共用相同输入和权重。
 - 时间覆盖读图、预处理、模型、必要CPU处理及CPU输出；加载、预热、保存、指标和导出分别计时或排除。跨平台沿用相同边界。
 - LightX2V源码和参考源码按提交及文件哈希固定。MLU参考实现带有明确兼容修改，不能冒称未经修改的CUDA原项目。
@@ -19,11 +19,11 @@
 
 ## 2. 新平台必须补的代码与配置
 
-建议目录为`configs/nvidia/a100/`，其他卡型使用各自同级目录。公共输入与公式继续在`configs/common/`。
+平台配置放在`configs/<platform>/`，公共输入与公式继续在`configs/common/`。NVIDIA 的宿主监控适配器示例位于`scripts/platform/nvidia/monitor.py`；其他厂商通过相同的归一化 JSON 监控接口接入。
 
 | 项目 | 需要完成的工作 |
 |---|---|
-| 配置选择 | 为CLI增加显式平台选择，使`CONFIG_LOCATIONS`、配置读取及快照复制选择目标目录；保留MLU默认和兼容性测试。不要把文件命名为A100却继续固定读mlu。 |
+| 配置选择 | 通过`--platform`选择配置目录；新平台需提供完整配置快照。 |
 | runtime.json | 选择真实可用的CUDA/PyTorch镜像和Python路径，固定依赖；配置NVIDIA容器设备映射、CUDA_VISIBLE_DEVICES与监控。不能保留`/dev/cambricon_*`或MLU镜像。 |
 | model.json | 采用模型仓库的NVIDIA预设，核对Attention等backend的真实可用性。不要默认所有精度或后端都已经在目标卡验证。 |
 | 设备操作 | `seed_all`、参考模型`.to()`/autocast、同步、Event、峰值allocated/reserved、缓存清理等必须按平台分派；CUDA使用实际`torch.cuda`接口。CPU指标进程不得映射加速卡。 |
@@ -32,7 +32,7 @@
 | paths/锁 | paths使用本机数据根或相对目录；source-lock记录目标实现版本、补丁和逐文件哈希；evaluation-origin只列本平台真实历史来源。 |
 | 来源验证 | 新平台配置哈希、模型配置哈希、实际镜像、版本和设备身份写入环境及manifest。旧MLU时间不可复制成CUDA时间；旧别名只能表示已经证明不改输入/计算的元数据迁移。 |
 
-当前`load_platform_config()`只接受MLU。新增后端时同时修改这个检查、上表代码和测试，不仅放宽检查。
+`evaluate.py`依据 runtime 配置选择 torch namespace、device type、autocast dtype、注册模块、容器设备参数和监控协议。新平台优先填写配置并提供满足 JSON 协议的宿主机监控脚本；如果设备 API 与现有 namespace 不兼容，再扩展该公共接口并保留 MLU 回归覆盖。
 
 ## 3. 测试顺序与完成标准
 

@@ -33,26 +33,49 @@ DATA = Path("/data")
 MODEL = "trellis2"
 TITLE = "TRELLIS.2"
 PROTOCOL = "几何使用固定采样、RMS归一化和20轮ICP，计算Chamfer及F-score；CPU稀疏/几何处理计入时间，未评测烘焙纹理质量。"
-CONFIG_LOCATIONS = {
-    "suite.json": "common/suite.json",
-    "weight-lock.json": "common/weight-lock.json",
-    "paths.json": "mlu/paths.json",
-    "source-lock.json": "mlu/source-lock.json",
-    "evaluation-origin.json": "mlu/evaluation-origin.json",
-    "runtime.json": "mlu/runtime.json",
-    "model.json": "mlu/model.json",
-}
+COMMON_CONFIGS = {"suite.json": "common/suite.json", "weight-lock.json": "common/weight-lock.json"}
+PLATFORM_CONFIGS = ("paths.json", "source-lock.json", "evaluation-origin.json", "runtime.json", "model.json")
+ACTIVE_PLATFORM = os.getenv("EVAL_PLATFORM", "mlu")
+CONFIG_LOCATIONS = {**COMMON_CONFIGS, **{name: f"{ACTIVE_PLATFORM}/{name}" for name in PLATFORM_CONFIGS}}
 
 
 def config_path(name):
-    return ROOT / "configs" / CONFIG_LOCATIONS[name]
+    relative = COMMON_CONFIGS.get(name, f"{ACTIVE_PLATFORM}/{name}")
+    return ROOT / "configs" / relative
+
+
+def select_platform(name):
+    global ACTIVE_PLATFORM, CONFIG_LOCATIONS
+    if not name or Path(name).name != name:
+        raise ValueError(f"Invalid platform name: {name!r}")
+    ACTIVE_PLATFORM = name
+    CONFIG_LOCATIONS = {**COMMON_CONFIGS, **{key: f"{name}/{key}" for key in PLATFORM_CONFIGS}}
+    if not config_path("runtime.json").is_file():
+        raise ValueError(f"No platform profile exists at configs/{name}/runtime.json")
 
 
 def load_platform_config():
     profile = json.loads(config_path("runtime.json").read_text())
-    if profile["platform"] != "mlu" or profile["device_type"] != "mlu":
-        raise ValueError("This evaluator currently supports only the validated MLU backend; another platform requires its own backend implementation.")
+    required = ("platform", "device_type", "torch_namespace", "container_image", "python_executable", "environment", "visibility_environment", "monitor_command", "monitor_parser")
+    missing = [key for key in required if key not in profile]
+    if missing or profile["platform"] != ACTIVE_PLATFORM:
+        raise ValueError(f"Invalid configs/{ACTIVE_PLATFORM}/runtime.json; missing={missing}, platform={profile.get('platform')!r}")
     return profile
+
+
+def device_api(torch_module=None):
+    import torch as torch_module_import
+    module = torch_module or torch_module_import
+    return getattr(module, load_platform_config()["torch_namespace"])
+
+
+def device_name(index=0):
+    return f"{load_platform_config()['device_type']}:{index}"
+
+
+def autocast_context():
+    profile = load_platform_config()
+    return torch.autocast(profile["device_type"], dtype=getattr(torch, profile.get("autocast_dtype", "bfloat16")))
 
 
 def platform_fingerprints():
@@ -61,8 +84,9 @@ def platform_fingerprints():
 
 
 def copy_active_configs(destination):
-    for relative in CONFIG_LOCATIONS.values():
-        source = ROOT / "configs" / relative
+    for name in (*COMMON_CONFIGS, *PLATFORM_CONFIGS):
+        source = config_path(name)
+        relative = source.relative_to(ROOT / "configs")
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
@@ -86,18 +110,19 @@ def seed_all(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.mlu.manual_seed_all(seed)
+    device_api().manual_seed_all(seed)
 
 
 def cast_matrices(module):
-    """Retain the frozen reference baseline's MLU BF16 setup policy."""
+    """Apply the reference precision policy declared by the selected profile."""
     import torch
 
     classes = (torch.nn.Linear, torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.ConvTranspose1d, torch.nn.ConvTranspose2d, torch.nn.ConvTranspose3d, torch.nn.Embedding)
     count = 0
+    dtype = getattr(torch, load_platform_config().get("reference_weight_dtype", "bfloat16"))
     for child in module.modules():
         if isinstance(child, classes) or type(child).__name__ in ("SparseConv3d", "SparseInverseConv3d"):
-            child.to(dtype=torch.bfloat16)
+            child.to(dtype=dtype)
             count += 1
     return count
 
@@ -172,15 +197,15 @@ class ReferenceAdapter:
         self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(str(stage))
         self.pipe.rembg_model.model = AutoModelForImageSegmentation.from_pretrained(str(paths["rembg"]), trust_remote_code=True, local_files_only=True).eval()
         modules = list(self.pipe.models.values()) + [self.pipe.image_cond_model.model, self.pipe.rembg_model.model]
-        converted = sum(cast_matrices(module) for module in modules)
-        self.pipe.to(torch.device("mlu:0"))
+        converted = sum(cast_matrices(module) for module in modules) if load_platform_config().get("cast_reference_matrices", True) else 0
+        self.pipe.to(torch.device(device_name()))
         self.metadata = {
             "source": str(ROOT / "sources/reference-trellis2"),
             "matrix_modules_cast": converted,
             "low_vram": False,
             "models_loaded": names,
             "staged_pipeline": config,
-            "adaptation": "existing pure torch sparse / SDPA MLU original-project adaptation; original preprocessing, samplers and decoders",
+            "adaptation": f"reference source prepared for {ACTIVE_PLATFORM}; original preprocessing, samplers and decoders",
         }
 
     def predict(self, image_paths, seed):
@@ -188,7 +213,7 @@ class ReferenceAdapter:
 
         with Image.open(DATA / image_paths[0]) as source:
             image = source.copy()
-        with torch.autocast("mlu", dtype=torch.bfloat16):
+        with autocast_context():
             mesh = self.pipe.run(image, seed=seed, pipeline_type="512")[0]
         return {"vertices": mesh.vertices.float().cpu(), "faces": mesh.faces.cpu(), "texture_coords": mesh.coords.cpu(), "texture_attrs": mesh.attrs.float().cpu()}
 
@@ -212,19 +237,23 @@ def run_benchmark_job(args):
     paths = {k: DATA / v for (k, v) in json.loads((config_path("paths.json")).read_text())["weights"].items()}
     source = ROOT / "sources" / f"{args.implementation}-trellis2"
     sys.path.insert(0, str(source))
-    os.environ.update(load_platform_config()["environment"])
-    for variable, key in load_platform_config()["model_path_environment"].items():
+    profile = load_platform_config()
+    os.environ.update(profile["environment"])
+    for variable, key in profile.get("model_path_environment", {}).items():
         os.environ[variable] = str(paths[key])
     import numpy as np
     import torch
-    import torch_mlu  # noqa: F401 - registers the MLU device backend before use
+    for module_name in profile.get("registration_modules", []):
+        __import__(module_name)
 
     torch.set_grad_enabled(False)
     torch.set_num_threads(8)
     torch.use_deterministic_algorithms(True, warn_only=True)
-    assert torch.mlu.is_available() and torch.mlu.device_count() == 1
+    backend = device_api(torch)
+    assert backend.is_available() and backend.device_count() == 1
     versions = {}
-    for name in ("torch", "torch_mlu", "transformers", "numpy", "scipy", "Pillow", "timm", "kornia", "trimesh", "diffusers"):
+    packages = profile.get("version_packages", ["torch", "transformers", "numpy", "scipy", "Pillow", "timm", "kornia", "trimesh", "diffusers"])
+    for name in packages:
         try:
             versions[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -232,11 +261,12 @@ def run_benchmark_job(args):
     env = {
         "model": "trellis2",
         "implementation": args.implementation,
+        "platform_validation_status": profile.get("validation_status", "unmarked"),
         "source": str(source),
         "versions": versions,
         "python": platform.python_version(),
-        "device": str(torch.mlu.get_device_name(0)),
-        "visible_device_count": torch.mlu.device_count(),
+        "device": str(backend.get_device_name(0)),
+        "visible_device_count": backend.device_count(),
         "physical_card": os.getenv("EVAL_PHYSICAL_CARD"),
         "suite_sha256": hashlib.sha256(suite_path.read_bytes()).hexdigest(),
         "source_lock_sha256": hashlib.sha256((config_path("source-lock.json")).read_bytes()).hexdigest(),
@@ -250,13 +280,13 @@ def run_benchmark_job(args):
     }
     env["platform_configuration"] = platform_fingerprints()
     write_json(args.run_dir / "environment.json", env)
-    torch.mlu.synchronize()
+    backend.synchronize()
     start = time.perf_counter()
     if args.implementation == "lightx2v":
         adapter = LightX2VAdapter(paths, args.run_dir)
     else:
         adapter = ReferenceAdapter(paths, args.run_dir)
-    torch.mlu.synchronize()
+    backend.synchronize()
     env.update(model_load_s=time.perf_counter() - start, adapter=adapter.metadata)
     write_json(args.run_dir / "environment.json", env)
     targets = measurement_targets(adapter, args.implementation)
@@ -264,19 +294,19 @@ def run_benchmark_job(args):
     for kind, sample, repeat in schedule:
         row = {"id": sample["id"], "seed": sample["seed"], "repeat": repeat, "warmup": kind == "warmup", "status": "error"}
         seed_all(sample["seed"])
-        torch.mlu.synchronize()
-        torch.mlu.reset_peak_memory_stats()
-        row["memory_before_bytes"] = torch.mlu.memory_allocated()
+        backend.synchronize()
+        backend.reset_peak_memory_stats()
+        row["memory_before_bytes"] = backend.memory_allocated()
         row["started_at_unix"] = time.time()
         start = time.perf_counter()
         try:
-            with record_model_events(targets, torch.mlu) as events, torch.inference_mode():
+            with record_model_events(targets, backend) as events, torch.inference_mode():
                 result = adapter.predict(sample["views"], sample["seed"])
-            torch.mlu.synchronize()
+            backend.synchronize()
             row["pipeline_s"] = time.perf_counter() - start
             row["events"] = [{"stage": name, "seconds": a.elapsed_time(b) / 1000} for (name, a, b) in events]
-            row["peak_allocated_bytes"] = torch.mlu.max_memory_allocated()
-            row["peak_reserved_bytes"] = torch.mlu.max_memory_reserved()
+            row["peak_allocated_bytes"] = backend.max_memory_allocated()
+            row["peak_reserved_bytes"] = backend.max_memory_reserved()
             row["peak_incremental_bytes"] = row["peak_allocated_bytes"] - row["memory_before_bytes"]
             row["cpu_process_peak_rss_kib"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             arrays = {k: v.detach().cpu().float().numpy() if v.is_floating_point() else v.detach().cpu().numpy() for (k, v) in result.items()}
@@ -299,7 +329,7 @@ def run_benchmark_job(args):
         except Exception:
             row.update(elapsed_until_error_s=time.perf_counter() - start, error=traceback.format_exc())
             try:
-                torch.mlu.empty_cache()
+                device_api().empty_cache()
             except Exception:
                 pass
         with (args.run_dir / "requests.jsonl").open("a") as stream:
@@ -722,6 +752,28 @@ def parse_cnmon(text):
     return cards
 
 
+def parse_device_monitor(text):
+    profile = load_platform_config()
+    parser = profile["monitor_parser"]
+    if parser == "cnmon":
+        return parse_cnmon(text)
+    if parser == "json":
+        value = json.loads(text)
+        if isinstance(value, dict) and "card" in value:
+            card = int(value.pop("card"))
+            return {card: value}
+        if isinstance(value, dict):
+            return {int(card): record for card, record in value.items()}
+    raise ValueError(f"Unsupported monitor_parser {parser!r}; provide normalized JSON or cnmon output")
+
+
+def monitor_snapshot(card):
+    profile = load_platform_config()
+    command = [part.format(card=card, project=str(ROOT)) for part in profile["monitor_command"]]
+    raw = subprocess.check_output(command, text=True, timeout=10)
+    return raw, parse_device_monitor(raw)
+
+
 # One-command orchestration and command line
 
 
@@ -776,6 +828,7 @@ def empty_evaluation(run, expected, error):
 
 
 def make_markdown(report, summary):
+    platform_label = load_platform_config()["platform"].upper()
     lines = [
         f"# {TITLE} 评测报告",
         "",
@@ -783,7 +836,7 @@ def make_markdown(report, summary):
         "",
         "本次方式：" + ("复用已有预测重新计算指标，时间/显存来自原请求记录。" if summary["reused_predictions"] else "本次实际运行两种实现并计算指标。"),
         "",
-        "| 指标 | 原项目 MLU | LightX2V MLU |",
+        f"| 指标 | 原项目 {platform_label} | LightX2V {platform_label} |",
         "|---|---:|---:|",
     ]
     sides = [report[key] for key in ("reference", "lightx2v")]
@@ -819,7 +872,7 @@ def make_markdown(report, summary):
         "",
         PROTOCOL,
         "",
-        "固定GSO对象、输入顺序、seed和BF16策略；原项目为已有MLU适配版本。",
+        f"固定GSO对象、输入顺序、seed和精度策略；平台为 {load_platform_config()['platform']}。",
         "同步墙钟计时覆盖读图、预处理、模型执行和CPU输出，排除模型加载、预热、NPZ写盘及离线指标。",
         "原始输出差值与尺度/坐标对齐后的数据集精度分别报告；形状不一致不记零差。",
         "小样本检查仅代表所选对象，不代表完整40对象或1023对象库。",
@@ -979,8 +1032,8 @@ def telemetry_loop(card, destination, stop):
     while not stop.is_set():
         row = {"timestamp": time.time(), "card": card}
         try:
-            text = subprocess.check_output(load_platform_config()["monitor_command"], text=True, timeout=10)
-            row.update(parse_cnmon(text)[card])
+            _, cards = monitor_snapshot(card)
+            row.update(cards[card])
         except Exception as exc:
             row["error"] = str(exc)
         with destination.open("a") as stream:
@@ -1134,8 +1187,11 @@ def container_command(args, destination, stage, run=None):
         command += ["-e", f"{key}={value}"]
     extra = []
     if stage != "postprocess":
-        for device in profile["docker_devices"]:
-            command += ["--device", device.format(card=args.card)]
+        if "docker_device_args" in profile:
+            command.extend(part.format(card=args.card, project=str(ROOT)) for part in profile["docker_device_args"])
+        else:
+            for device in profile.get("docker_devices", []):
+                command += ["--device", device.format(card=args.card)]
         for key, value in profile["visibility_environment"].items():
             command += ["-e", f"{key}={value.format(card=args.card)}"]
         extra = ["--run-dir", f"/results/{stage}", "--repeats", str(args.repeats)]
@@ -1161,6 +1217,8 @@ def container_command(args, destination, stage, run=None):
         "/eval/evaluate.py",
         "--worker",
         stage,
+        "--platform",
+        ACTIVE_PLATFORM,
         "--output",
         "/results",
         "--data-root",
@@ -1175,9 +1233,9 @@ def execute_stage(args, destination, stage):
     stop, monitor = threading.Event(), None
     if stage != "postprocess":
         run.mkdir()
-        snapshot = subprocess.check_output(load_platform_config()["monitor_command"], text=True, timeout=10)
+        snapshot, cards = monitor_snapshot(args.card)
         (run / "device-before.txt").write_text(snapshot)
-        card = parse_cnmon(snapshot).get(args.card)
+        card = cards.get(args.card)
         if card is None or card.get("memory_mib", -1) != 0 or card.get("util_percent") != 0 or card.get("pids"):
             raise RuntimeError(f"Physical card {args.card} is not idle: {card}")
         monitor = threading.Thread(target=telemetry_loop, args=(args.card, run / "telemetry.jsonl", stop), daemon=True)
@@ -1307,13 +1365,19 @@ def run_campaign(args):
 
 
 def main():
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument("--platform", default=os.getenv("EVAL_PLATFORM", "mlu"))
+    bootstrap_args, _ = bootstrap.parse_known_args()
+    select_platform(bootstrap_args.platform)
     profile = load_platform_config()
     paths = json.loads(config_path("paths.json").read_text())
     default_data_root = Path(paths["host_data_root"])
     if not default_data_root.is_absolute():
         default_data_root = ROOT / default_data_root
     parser = argparse.ArgumentParser(description=f"{TITLE}: model execution, performance, accuracy, differences and reports in one command.")
-    parser.add_argument("--card", type=int, default=int(os.getenv("MLU_CARD", "2")))
+    parser.add_argument("--platform", default=ACTIVE_PLATFORM, help="Platform profile directory under configs/ (for example mlu, nvidia or metax)")
+    card_env = profile.get("card_index_environment", "EVAL_CARD")
+    parser.add_argument("--card", type=int, default=int(os.getenv(card_env, str(profile.get("default_card", 0)))))
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / ("evaluation-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")))
     parser.add_argument("--data-root", type=Path, default=Path(os.getenv("EVAL_DATA_ROOT", str(default_data_root))))
     parser.add_argument("--image", default=os.getenv("EVAL_IMAGE", profile["container_image"]))
@@ -1322,17 +1386,18 @@ def main():
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--reuse-runs", type=Path, nargs=2, metavar=("REFERENCE", "LIGHTX2V"), help="Reuse saved predictions; do not run models or remeasure time")
     parser.add_argument("--install-deps", action="store_true", help="Install pinned extra dependencies before running")
-    parser.add_argument("--prepare-sources", action="store_true", help="Fetch pinned model implementations and apply verified MLU compatibility edits; no inference")
+    parser.add_argument("--prepare-sources", action="store_true", help="Fetch pinned model implementations and apply the selected profile's compatibility edits; no inference")
     parser.add_argument("--check-inputs", action="store_true", help="Validate prepared data, sources and checkpoint inventory without model execution")
     parser.add_argument("--rehash-weights", action="store_true", help="Verify checkpoint SHA256 in addition to sizes")
     parser.add_argument("--worker", choices=("reference", "lightx2v", "postprocess"), help=argparse.SUPPRESS)
     parser.add_argument("--run-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    select_platform(args.platform)
     if args.prepare_sources:
         prepare_sources()
         return 0
-    if not 0 <= args.card <= 7 or args.repeats < 2 or (args.limit is not None and args.limit <= 0):
-        parser.error("Require card 0..7, repeats >= 2 and a positive limit")
+    if not 0 <= args.card <= int(profile.get("max_card_index", 7)) or args.repeats < 2 or (args.limit is not None and args.limit <= 0):
+        parser.error(f"Require card 0..{profile.get('max_card_index', 7)}, repeats >= 2 and a positive limit")
     if args.smoke:
         args.limit = 1
     if args.reuse_runs and not args.worker and args.limit:
@@ -1346,6 +1411,8 @@ def main():
         verify_inputs(args, args.output)
         print(f"Inputs verified; audit: {args.output / 'input-audit.json'}")
         return 0
+    if not args.image:
+        parser.error(f"Set EVAL_IMAGE or configs/{ACTIVE_PLATFORM}/runtime.json:container_image")
     if args.worker == "postprocess":
         return postprocess(args)
     if args.worker:
