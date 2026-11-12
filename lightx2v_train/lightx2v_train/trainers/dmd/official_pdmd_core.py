@@ -31,9 +31,16 @@ def stream_seed(*parts):
     return int.from_bytes(digest[:8], "little") & ((1 << 63) - 1)
 
 
-def rollout_grid(steps, shift=1.0, device="cpu"):
+def rollout_grid(steps, shift=1.0, device="cpu", *, sigmas=None):
+    """Return physical noise levels; an explicit grid is never shifted again."""
     if steps < 1 or shift <= 0:
         raise ValueError("rollout steps and shift must be positive")
+    if sigmas is not None:
+        grid = torch.as_tensor(sigmas, device=device, dtype=torch.float32)
+        if (grid.ndim != 1 or grid.numel() != steps + 1 or not torch.isfinite(grid).all()
+                or grid[0] != 1 or grid[-1] != 0 or not torch.all(grid[:-1] > grid[1:])):
+            raise ValueError("Explicit rollout sigmas must have steps+1 strictly decreasing values from 1 to 0")
+        return grid
     base = torch.linspace(1, 0, steps + 1, device=device, dtype=torch.float64)
     return (shift * base / (1 + (shift - 1) * base)).float()
 

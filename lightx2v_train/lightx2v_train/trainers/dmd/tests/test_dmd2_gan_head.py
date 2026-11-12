@@ -14,10 +14,10 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 import torch.multiprocessing as mp
-from torch.utils.checkpoint import checkpoint
-
 from lightx2v_train.trainers.dmd.dmd2_gan_head import H3GanHead, clip_dmd2_gan_grad_norm, frozen_dmd2_gan_critic, setup_dmd2_gan_head
 from lightx2v_train.trainers.dmd.fake_warmstart import load_fake_checkpoint
+from torch.utils.checkpoint import checkpoint
+
 from lightx2v_train.trainers.dmd.tests import test_dmd_checkpoint_metadata as checkpoint_tests
 
 
@@ -44,6 +44,46 @@ def _joint_clip_worker(rank, init_file):
         dist.destroy_process_group()
 
 
+def _frozen_first_mixed_precision_worker(rank, init_file):
+    """Resume at G before any D forward: FSDP must retain FP32 master grads."""
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+    os.environ["GLOO_SOCKET_IFNAME"] = "lo"
+    torch.set_num_threads(1)
+    dist.init_process_group("gloo", init_method=f"file://{init_file}", rank=rank, world_size=2, timeout=timedelta(seconds=30))
+    try:
+        torch.manual_seed(33)
+        mesh = init_device_mesh("cpu", (2,))
+        backbone = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.SiLU(), torch.nn.Linear(4, 3))
+        policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)
+        for module in (backbone[0], backbone[2], backbone):
+            fully_shard(module, mesh=mesh, mp_policy=policy)
+        parameters = list(backbone.parameters())
+        head = H3GanHead(3, hidden_dim=4, temporal_bins=2)
+        owner = SimpleNamespace(
+            fake_trainable_params=parameters,
+            dmd2_gan_trainable_params=list(head.parameters()),
+            fake=SimpleNamespace(denoiser=lambda: backbone, set_training=backbone.train),
+        )
+        groups = [backbone[index]._get_fsdp_state()._fsdp_param_group for index in (0, 2)]
+        inputs = torch.randn(1, 4, 4, requires_grad=True)
+        with frozen_dmd2_gan_critic(owner):
+            head(backbone(inputs)).sum().backward()
+            assert all(group._orig_dtype is None and group._reduce_dtype is None for group in groups)
+        assert inputs.grad is not None and inputs.grad.abs().sum() > 0
+        assert all(parameter.grad is None and parameter.dtype == torch.float32 for parameter in parameters)
+        assert all(group._orig_dtype == torch.float32 and group._reduce_dtype == torch.float32 for group in groups)
+        # Before the fix this failed assigning BF16 gradients to FP32 DTensors.
+        head(backbone(inputs.detach())).sum().backward()
+        assert all(parameter.grad is not None and parameter.grad.dtype == torch.float32 for parameter in parameters)
+        assert all(torch.isfinite(parameter.grad.to_local()).all() for parameter in parameters)
+        torch.optim.SGD(parameters, lr=0.01).step()
+        assert all(parameter.dtype == torch.float32 for parameter in parameters)
+    finally:
+        dist.destroy_process_group()
+
+
 class H3GanHeadTest(unittest.TestCase):
     def test_ordered_video_bins_and_fp32_output_retain_input_gradients(self):
         head = H3GanHead(2, hidden_dim=1, temporal_bins=2)
@@ -65,7 +105,7 @@ class H3GanHeadTest(unittest.TestCase):
     def test_frozen_backbone_and_head_restore_flags_after_checkpointed_backward(self):
         backbone = torch.nn.Linear(3, 4)
         head = H3GanHead(4, hidden_dim=3, temporal_bins=2)
-        owner = SimpleNamespace(fake_trainable_params=list(backbone.parameters()), dmd2_gan_trainable_params=list(head.parameters()), fake=SimpleNamespace(set_training=Mock()))
+        owner = SimpleNamespace(fake_trainable_params=list(backbone.parameters()), dmd2_gan_trainable_params=list(head.parameters()), fake=SimpleNamespace(denoiser=lambda: backbone, set_training=Mock()))
         inputs = torch.randn(1, 5, 3, requires_grad=True)
         with frozen_dmd2_gan_critic(owner):
             features = checkpoint(backbone, inputs, use_reentrant=False)
@@ -131,6 +171,21 @@ class H3GanHeadTest(unittest.TestCase):
                     if context.join(timeout=1):
                         return
                 self.fail("Two-rank CPU FSDP GAN joint-clipping test timed out.")
+            finally:
+                for process in context.processes:
+                    if process.is_alive():
+                        process.terminate()
+                    process.join(timeout=2)
+
+    def test_first_frozen_forward_then_fake_update_preserves_fp32_masters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            context = mp.spawn(_frozen_first_mixed_precision_worker, args=(str(Path(directory) / "init"),), nprocs=2, join=False)
+            deadline = time.monotonic() + 50
+            try:
+                while time.monotonic() < deadline:
+                    if context.join(timeout=1):
+                        return
+                self.fail("Two-rank G-first FSDP mixed-precision test timed out.")
             finally:
                 for process in context.processes:
                     if process.is_alive():

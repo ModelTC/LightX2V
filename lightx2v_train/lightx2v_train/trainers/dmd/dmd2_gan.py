@@ -1,9 +1,9 @@
 """DMD2 logistic GAN losses on a shared H3 fake-score backbone.
 
 Source: https://github.com/tianweiy/DMD2/blob/main/main/sd_guidance.py
-H3 adaptations: RF noising of joint AV latents, target video-token classifier,
+H3 adaptations: RF noising of image/joint AV latents, target-token classifier,
 and the existing PDMD role schedule/trajectories (not DMD2's DDIM schedule).
-Real videos keep their own text conditioning; they need not match rollout prompts.
+Real samples keep their own text/reference conditioning; they need not match rollout prompts.
 """
 
 import math
@@ -19,20 +19,26 @@ def validate_gan_config(config):
     if not gan.get("enabled", False):
         return
     dmd = config["training"]["dmd"]
-    if not dmd.get("official_pdmd") or config["model"]["name"] != "minimax_h3_t2av":
-        raise ValueError("DMD2 GAN currently requires official PDMD with minimax_h3_t2av")
+    model = config["model"]
+    if not dmd.get("official_pdmd") or model["name"] not in {"minimax_h3_t2av", "minimax_h3_ref2av", "minimax_h3_image"}:
+        raise ValueError("DMD2 GAN requires official PDMD with minimax_h3_t2av, minimax_h3_ref2av or minimax_h3_image")
     if config["training"]["fake"]["train_type"] != "full":
         raise ValueError("DMD2 GAN trains the shared full fake-score backbone")
     if not gan.get("real_cache"):
-        raise ValueError("DMD2 GAN requires real_cache with paired video/audio latents and their own text conditions")
+        raise ValueError("DMD2 GAN requires real_cache with clean target latents and their own conditions")
     for key, default in (("generator_weight", 0.005), ("discriminator_weight", 0.01)):
         value = float(gan.get(key, default))
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"training.dmd.gan.{key} must be finite and positive")
     if not 0 < float(gan.get("sigma_max", 0.999)) < 1:
         raise ValueError("training.dmd.gan.sigma_max must be in (0, 1)")
-    if len(dmd.get("generation_shapes", ())) != 1:
-        raise ValueError("DMD2 GAN requires one fixed generation geometry matching its real samples")
+    metadata_geometry = (
+        model["name"] == "minimax_h3_ref2av"
+        and model.get("capabilities", {}).get("distribution_matching", {}).get("geometry_from_metadata") is True
+        and not dmd.get("generation_shapes")
+    )
+    if len(dmd.get("generation_shapes") or ()) != 1 and not metadata_geometry:
+        raise ValueError("DMD2 GAN requires one fixed generation geometry matching its real samples, or metadata-driven Ref2AV geometry")
 
 
 def generator_logistic_loss(logits):
@@ -43,14 +49,14 @@ def discriminator_logistic_loss(logits, *, real):
     return F.softplus(-logits.float() if real else logits.float()).mean()
 
 
-def gan_sigmas(generator, device, maximum=0.999):
-    """Uniform 1000 noise levels; an explicit physical pair avoids re-shifting.
+def gan_sigmas(generator, device, maximum=0.999, *, image=False):
+    """Uniform 1000 physical RF noise levels, never shifted a second time.
 
     DMD2 samples one diffusion timestep per image. For H3 the video and audio
     input use that same RF sigma; real/fake calls draw independently.
     """
     sigma = torch.randint(1000, (), generator=generator).float() * (maximum / 999)
-    return sigma.repeat(2).to(device=device)
+    return (sigma if image else sigma.repeat(2)).to(device=device)
 
 
 class Dmd2GanObjective:
@@ -65,12 +71,13 @@ class Dmd2GanObjective:
     def _logits(self, clean, condition, iteration, slot, branch):
         t = self.trainer
         draws = torch.Generator().manual_seed(stream_seed(self.seed, "gan_sigma", branch, iteration, slot))
-        sigmas = gan_sigmas(draws, t.student.device, float(self.config.get("sigma_max", 0.999)))
+        image = torch.is_tensor(clean)
+        sigmas = gan_sigmas(draws, t.student.device, float(self.config.get("sigma_max", 0.999)), image=image)
         generator = torch.Generator(device=t.student.device).manual_seed(stream_seed(self.seed, "gan_noise", branch, iteration, slot))
         noise = joint_noise_like(clean, generator)
         query = t.student.add_noise(None, clean, noise, sigmas)
         features = t.fake.predict_dmad_features(query, sigmas, positive_condition(condition), feature_block=int(self.config.get("feature_block", 49)))
-        return t.dmd2_gan_head(features["video"]), sigmas[0]
+        return t.dmd2_gan_head(features["image" if image else "video"]), sigmas.reshape(-1)[0]
 
     def generator(self, clean, condition, iteration, slot):
         """Caller freezes fake/head through backward, without disabling autograd."""
@@ -85,7 +92,12 @@ class Dmd2GanObjective:
         total = 0.0
         for real in (False, True):
             if real:
-                clean, condition = self.real_stream.load(t.student, cursor)
+                real_options = {}
+                if t.config.get("model", {}).get("name") == "minimax_h3_ref2av":
+                    shape = trajectory.states[-1].shape
+                    scale = t.student.model.vae_spatial_scale_factor
+                    real_options["geometry"] = (shape.num_frames, shape.latent_height * scale, shape.latent_width * scale)
+                clean, condition = self.real_stream.load(t.student, cursor, **real_options)
             else:
                 clean = t.student.detach(trajectory.states[-1])
                 condition = trajectory.condition

@@ -84,6 +84,7 @@ _MODEL_MODULES = {
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.longcat_image_edit",
     "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_t2av",
     "minimax_h3_ref2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_ref2av",
+    "minimax_h3_image": "lightx2v_train.model_zoo.minimax_h3_image.model",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.qwen_image",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.qwen_image_edit",
     "wan_t2v": "lightx2v_train.model_zoo.wan.wan_t2v",
@@ -93,6 +94,7 @@ _MODEL_MODULES = {
 }
 
 _TRAINER_MODULES = {
+    "pdd": "lightx2v_train.trainers.pdd.trainer",
     "turbo": "lightx2v_train.trainers.turbo.trainer",
     "autoregressive_dmd": "lightx2v_train.trainers.dmd.autoregressive_dmd",
     "consistency": "lightx2v_train.trainers.consistency.trainer",
@@ -153,6 +155,8 @@ def _ensure_data_registered(data_name):
         import lightx2v_train.data.image_dataset  # noqa: F401
     elif data_name == "cache_dataset":
         import lightx2v_train.data.cache_dataset  # noqa: F401
+    elif data_name == "minimax_h3_image_cache_dataset":
+        import lightx2v_train.data.minimax_h3_image_cache_dataset  # noqa: F401
     elif data_name in {"minimax_h3_cache_dataset", "minimax_h3_ref_cache_dataset"}:
         import lightx2v_train.data.minimax_h3_cache_dataset  # noqa: F401
     elif data_name == "minimax_h3_dmad_dataset":

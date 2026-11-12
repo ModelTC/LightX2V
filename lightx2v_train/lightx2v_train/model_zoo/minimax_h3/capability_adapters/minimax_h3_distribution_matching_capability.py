@@ -164,7 +164,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         "ff.net.2",
     )
     _PROFILE = DistributionMatchingProfile(
-        supported_training_methods=frozenset({"dmd", "dmad", "turbo"}),
+        supported_training_methods=frozenset({"dmd", "dmad", "turbo", "pdd"}),
         supports_guidance=False,
         supports_ida=False,
         supports_diversity=False,

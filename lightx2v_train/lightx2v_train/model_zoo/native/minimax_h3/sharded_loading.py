@@ -160,6 +160,8 @@ def stream_load_minimax_h3_transformer(
     device: torch.device,
     lora_seed: int = 0,
     init_lora_weights: bool | str = "gaussian",
+    tensor_transform=None,
+    extra_state=None,
 ) -> None:
     """Materialize and populate an FSDP2-sharded, meta-built H3 transformer."""
     if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() <= 1:
@@ -174,7 +176,8 @@ def stream_load_minimax_h3_transformer(
     _rebuild_nonpersistent_buffers(transformer, device)
 
     target_keys = set(transformer.state_dict().keys())
-    key_map = _checkpoint_to_target_keys(target_keys, set(weight_map.keys()))
+    extra_state = extra_state or {}
+    key_map = _checkpoint_to_target_keys(target_keys, set(weight_map.keys()) | set(extra_state))
     rank_zero = dist.get_rank() == 0
 
     logger.info(
@@ -185,7 +188,7 @@ def stream_load_minimax_h3_transformer(
     for shard_index, shard_name in enumerate(shard_names, start=1):
         if rank_zero:
             raw_state = load_file(str(transformer_dir / shard_name), device="cpu")
-            state = {key_map[key]: value for key, value in raw_state.items()}
+            state = {key_map[key]: tensor_transform(key, value) if tensor_transform is not None else value for key, value in raw_state.items()}
         else:
             raw_state = None
             state = {}
@@ -199,6 +202,11 @@ def stream_load_minimax_h3_transformer(
                 len(shard_names),
                 shard_name,
             )
+
+    if extra_state:
+        state = {key_map[key]: tensor_transform(key, value) if tensor_transform is not None else value for key, value in extra_state.items()} if rank_zero else {}
+        _load_partial_full_state(transformer, state)
+        del state
 
     lora_state = _lora_init_state(
         transformer,

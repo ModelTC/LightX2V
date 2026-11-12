@@ -194,6 +194,7 @@ class DmdRolePrecisionTest(TestCase):
         runtime.infer_every_iters = None
         runtime.max_train_iters = 1
         runtime.fake_update_ratio = 5
+        runtime.dmd_config = {}
         runtime.random_schedule_enabled = False
         runtime.defer_ida_setup = True
         runtime.fake_optimizer_learning_rate = 1e-5

@@ -22,6 +22,7 @@ from lightx2v_train.model_zoo.native.minimax_h3 import (
     resolve_transformer_dir,
     stream_load_minimax_h3_transformer,
 )
+from lightx2v_train.model_zoo.pdd import PDDModelMixin
 from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.runtime.sequence_parallel import sync_sequence_parallel_parameters
@@ -35,7 +36,7 @@ from .training_adapter import AdapterOptions, merge_training_adapter, write_expo
 
 
 @MODEL_REGISTER("minimax_h3_t2av")
-class MiniMaxH3T2AVModel(BaseModel):
+class MiniMaxH3T2AVModel(PDDModelMixin, BaseModel):
     """A standard trainable wrapper around Diffusers' MiniMax-H3 module."""
 
     pipeline_cls = None
@@ -166,6 +167,7 @@ class MiniMaxH3T2AVModel(BaseModel):
                 device=self.device,
                 lora_seed=self._stream_load_lora_seed,
                 init_lora_weights=self._lora_init_weights(),
+                tensor_transform=self.transform_pdd_pretrained_tensor,
             )
             self._stream_load_pending = False
         self._apply_training_adapter_if_ready()
@@ -366,7 +368,41 @@ class MiniMaxH3T2AVModel(BaseModel):
         # matching official PDMD and Turbo. Legacy recipes retain Gaussian A.
         training = self.config.get("training", {})
         official = training.get("dmd", {}).get("official_pdmd", False)
-        return True if official or training.get("method") == "turbo" else "gaussian"
+        return True if official or training.get("method") in {"turbo", "pdd"} else "gaussian"
+
+    def pdd_output_layer_paths(self):
+        return {"video": "proj_out", "audio": "audio_proj_out"}
+
+    def pdd_sigma_schedule(self, primary_sigma):
+        capability = self.ensure_capabilities().require(DistributionMatchingCapability)
+        value = torch.as_tensor(primary_sigma, device=self.device)
+        options = self.config.get("training", {}).get("pdd", {})
+        relative_shift = float(options.get("audio_shift", capability.audio_shift)) / float(options.get("video_shift", capability.video_shift))
+        return {"video": value, "audio": relative_shift * value / (1 + (relative_shift - 1) * value)}
+
+    def _pdd_raw_velocity(self, latents, sigma, condition):
+        schedules = self.pdd_sigma_schedule(torch.as_tensor(sigma, device=self.device).reshape(()))
+        pair = torch.stack((schedules["video"], schedules["audio"]))
+        capability = self.ensure_capabilities().require(DistributionMatchingCapability)
+        return capability.predict_velocity_at_sigmas(latents, pair, condition)
+
+    def predict_pdd_teacher(self, latents, sigma, condition):
+        from .capability_adapters.common import MiniMaxH3JointLatents
+
+        raw = self._pdd_raw_velocity(latents, sigma, condition)
+        return MiniMaxH3JointLatents(-raw.video.float(), -raw.audio.float(), latents.shape)
+
+    def predict_pdd_heads(self, latents, start_index, condition, sigma):
+        from .capability_adapters.common import MiniMaxH3JointLatents
+
+        if not 0 <= int(start_index) < self.pdd_steps:
+            raise ValueError("PDD start_index must address an interval in the configured base grid.")
+        raw = self._pdd_raw_velocity(latents, sigma, condition)
+
+        def split(value):
+            return -value.float().unflatten(-1, (self.pdd_steps, -1)).movedim(-2, 1)
+
+        return MiniMaxH3JointLatents(split(raw.video), split(raw.audio), latents.shape)
 
     def add_lora(self, rank, alpha, target_modules, *, rank_pattern=None, alpha_pattern=None):
         if not target_modules:
@@ -557,7 +593,16 @@ class MiniMaxH3T2AVModel(BaseModel):
     def fsdp2_shard_plan(self, fsdp_config):
         reshard = fsdp_config.get("reshard_after_forward", {})
         blocks = list(self.transformer.token_refiner.refiner_blocks) + list(self.transformer.transformer_blocks)
-        return [
+        precision = []
+        if self.config.get("training", {}).get("method") == "pdd":
+            precision = [
+                {
+                    "modules": [self.transformer.proj_in, self.transformer.audio_proj_in, self.transformer.time_embedder, self.transformer.proj_out, self.transformer.audio_proj_out],
+                    "reshard_after_forward": reshard.get("block_reshard", True),
+                    "mixed_precision": {"param_dtype": "fp32", "reduce_dtype": "fp32", "output_dtype": None, "cast_forward_inputs": False},
+                }
+            ]
+        return precision + [
             {
                 "modules": blocks,
                 "reshard_after_forward": reshard.get("block_reshard", True),

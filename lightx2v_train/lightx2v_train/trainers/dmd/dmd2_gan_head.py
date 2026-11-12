@@ -1,8 +1,8 @@
-"""Replicated FP32 video classifier for the shared H3 fake-score backbone.
+"""Replicated FP32 target-token classifier for the shared H3 fake backbone.
 
-DMD2's convolutional image classifier does not fit H3's packed video tokens.
+DMD2's convolutional UNet classifier does not fit H3's transformer tokens.
 This explicit adaptation retains four ordered pooled token bins before an MLP.
-Only target video tokens enter the head; audio and references condition the DiT.
+Only target image/video tokens enter; text/audio/references condition the DiT.
 """
 
 import copy
@@ -12,6 +12,7 @@ from contextlib import contextmanager
 import torch
 import torch.distributed as dist
 from torch import nn
+from torch.distributed.fsdp import FSDPModule
 
 
 class H3GanHead(nn.Module):
@@ -26,7 +27,7 @@ class H3GanHead(nn.Module):
 
     def forward(self, video_features):
         if video_features.ndim != 3 or video_features.shape[1] == 0 or video_features.shape[2] != self.feature_dim:
-            raise ValueError("H3 GAN expects nonempty target video features [B, tokens, feature_dim].")
+            raise ValueError("H3 GAN expects nonempty target features [B, tokens, feature_dim].")
         # Parameters and arithmetic stay FP32, including inside caller autocast.
         with torch.autocast(device_type=video_features.device.type, enabled=False):
             length = video_features.shape[1]
@@ -64,7 +65,7 @@ def setup_dmd2_gan_head(trainer):
     # every rank. Broadcast also protects against process-local RNG differences.
     with torch.random.fork_rng(devices=[]):
         torch.random.default_generator.manual_seed(int(trainer.config.get("seed", 42)) + 20903)
-        head = H3GanHead(width, options.get("head_hidden_dim", 1024), options.get("head_temporal_bins", 4))
+        head = H3GanHead(width, options.get("head_hidden_dim", 1024), options.get("head_token_bins", options.get("head_temporal_bins", 4)))
     trainer.dmd2_gan_head = head.to(device=trainer.student.device, dtype=torch.float32).eval()
     if dist.is_initialized():
         for value in head.state_dict().values():
@@ -88,7 +89,7 @@ def setup_dmd2_gan_head(trainer):
     )
     trainer.dmd2_gan_metadata = {
         "version": 1,
-        "head": "fp32_target_video_ordered_pool_mlp",
+        "head": "fp32_target_image_ordered_pool_mlp" if trainer.config.get("model", {}).get("name") == "minimax_h3_image" else "fp32_target_video_ordered_pool_mlp",
         "feature_dim": width,
         "options": copy.deepcopy(options),
     }
@@ -111,6 +112,15 @@ def frozen_dmd2_gan_critic(trainer):
     finally:
         for parameter, previous in zip(parameters, enabled):
             parameter.requires_grad_(previous)
+        # A checkpoint may resume directly into G. In PyTorch 2.8 the first
+        # frozen forward lazily caches orig/reduce dtype=None because the
+        # group has no trainable parameters. Refresh after unfreezing so the
+        # next D backward reduces/casts into the unchanged FP32 master dtype.
+        for module in trainer.fake.denoiser().modules():
+            if isinstance(module, FSDPModule):
+                state = module._get_fsdp_state()
+                if state._is_root is not None and state._fsdp_param_group is not None:
+                    state._fsdp_param_group._init_mp_dtypes()
 
 
 def sync_dmd2_gan_head_gradients(trainer):

@@ -50,11 +50,12 @@ def _cuda_memory_gb():
 def _iter_shard_plan(plan):
     for entry in plan:
         reshard_after_forward = entry["reshard_after_forward"]
+        mixed_precision = entry.get("mixed_precision")
         if "module" in entry:
-            yield entry["module"], reshard_after_forward
+            yield entry["module"], reshard_after_forward, mixed_precision
         else:
             for module in entry["modules"]:
-                yield module, reshard_after_forward
+                yield module, reshard_after_forward, mixed_precision
 
 
 def apply_fsdp2(model, config):
@@ -67,8 +68,9 @@ def apply_fsdp2(model, config):
     mp_policy = _build_mp_policy(mp_config)
     mesh = get_device_mesh()
 
-    for module, reshard_after_forward in _iter_shard_plan(model.fsdp2_shard_plan(fsdp_config)):
-        _fully_shard_module(module, mesh, mp_policy, reshard_after_forward)
+    for module, reshard_after_forward, mp_override in _iter_shard_plan(model.fsdp2_shard_plan(fsdp_config)):
+        module_policy = mp_policy if mp_override is None else _build_mp_policy({**mp_config, **mp_override})
+        _fully_shard_module(module, mesh, module_policy, reshard_after_forward)
 
     model.after_fsdp2_shard(config)
     torch.cuda.empty_cache()

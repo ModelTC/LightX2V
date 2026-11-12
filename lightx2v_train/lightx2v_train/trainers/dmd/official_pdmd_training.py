@@ -1,4 +1,4 @@
-"""Official PDMD optimizer-update loop using existing H3 or Wan model roles.
+"""Official PDMD optimizer-update loop using H3 video/image or Wan model roles.
 
 The user's Ref cache, FSDP2 topology, full critic, LoRA scaling and role dtypes
 are intentional adaptations. Default DMD/head/DMAD training never enters here.
@@ -53,8 +53,8 @@ def validate_official_pdmd_config(config):
     dmd = training.get("dmd", {})
     matching = config["model"].get("capabilities", {}).get("distribution_matching", {})
     model_name = config["model"]["name"]
-    if training.get("method") != "dmd" or model_name not in {"minimax_h3_ref2av", "minimax_h3_t2av", "wan_t2v"}:
-        raise ValueError("official_pdmd requires an H3 or Wan T2V DMD model")
+    if training.get("method") != "dmd" or model_name not in {"minimax_h3_ref2av", "minimax_h3_t2av", "minimax_h3_image", "wan_t2v"}:
+        raise ValueError("official_pdmd requires an H3 video/image or Wan T2V DMD model")
     if config["model"]["name"] == "minimax_h3_t2av":
         data = config["data"]["train"]
         legacy = data.get("name") == "minimax_h3_cache_dataset" and data.get("route_mode") == "stratified"
@@ -76,8 +76,15 @@ def validate_official_pdmd_config(config):
         raise ValueError("official_pdmd uses live student weights, not EMA")
     if model_name != "wan_t2v" and float(training.get("teacher", {}).get("guidance_scale", 1.0)) != 1.0:
         raise ValueError("official H3 PDMD has no CFG branch; guidance_scale must be 1")
-    if model_name == "wan_t2v" and int(config["data"]["train"].get("batch_size", 1)) != 1:
-        raise ValueError("official Wan PDMD currently requires singleton per-rank batches")
+    if model_name in {"wan_t2v", "minimax_h3_image"} and int(config["data"]["train"].get("batch_size", 1)) != 1:
+        raise ValueError("official single-modality PDMD currently requires singleton per-rank batches")
+    explicit_sigmas = dmd.get("official_rollout_sigmas")
+    if model_name == "minimax_h3_image" and explicit_sigmas is None:
+        raise ValueError("H3-Image PDMD requires explicit physical official_rollout_sigmas")
+    if explicit_sigmas is not None:
+        if model_name not in {"wan_t2v", "minimax_h3_image"}:
+            raise ValueError("official_rollout_sigmas is supported only for single-modality PDMD")
+        rollout_grid(int(dmd["num_inference_steps"]), sigmas=explicit_sigmas)
     if (matching.get("adaptive_video_regularization") or {}).get("enabled", False):
         raise ValueError("official_pdmd does not add adaptive video regularization")
     sp = config.get("distributed", {}).get("sequence_parallel", {})
@@ -108,13 +115,16 @@ class OfficialH3PdmdTraining:
         if self.dmd.get("gan", {}).get("enabled", False):
             from .dmd2_gan_data import DMD2GanRealStream
 
-            geometry = tuple(self.dmd["generation_shapes"][0]["value"])
+            model_name = trainer.config["model"]["name"]
+            task = {"minimax_h3_image": "t2i", "minimax_h3_ref2av": "ref2av"}.get(model_name, "t2av")
+            geometry = None if task == "ref2av" else tuple(self.dmd["generation_shapes"][0]["value"])
             self.gan_real_stream = DMD2GanRealStream(
                 self.dmd["gan"]["real_cache"],
                 seed=self.seed,
                 rank=get_data_parallel_rank(),
                 world_size=get_data_parallel_world_size(),
                 geometry=geometry,
+                task=task,
             )
 
     def recipe(self):
@@ -122,7 +132,7 @@ class OfficialH3PdmdTraining:
         training = {key: value for key, value in config["training"].items() if key not in {"max_train_iters", "output_dir", "save_every_iters", "save_total_limit", "save_consolidated_weights"}}
         data = {key: value for key, value in config["data"]["train"].items() if key not in {"num_workers", "pin_memory"}}
         recipe = {"seed": self.seed, "model": config["model"], "training": training, "data": data, "scheduler": config["scheduler"], "distributed": config.get("distributed", {})}
-        if config["model"]["name"] == "wan_t2v":
+        if config["model"]["name"] in {"wan_t2v", "minimax_h3_image"}:
             dataset = self.trainer.dataloader_train.dataset
             digest = hashlib.sha256()
             for record in dataset.samples:
@@ -326,9 +336,9 @@ class OfficialH3PdmdTraining:
         return role, totals
 
     def _prepare_wan_data(self):
-        """Install the same absolute DP cursor used by online Wan dCM training."""
+        """Install an absolute DP cursor for single-modality cached/online data."""
         t = self.trainer
-        if t.config["model"]["name"] != "wan_t2v" or hasattr(t.dataloader_train.sampler, "configure_from_microbatch_offset"):
+        if t.config["model"]["name"] not in {"wan_t2v", "minimax_h3_image"} or hasattr(t.dataloader_train.sampler, "configure_from_microbatch_offset"):
             return
         from torch.utils.data import DataLoader
 
@@ -382,7 +392,9 @@ class OfficialH3PdmdTraining:
             )
         self._validate_wan_residency()
         self.cached = move_tensors(self.cached, t.student.device)
-        self.video_grid = rollout_grid(t.num_inference_steps, float(self.dmd.get("official_rollout_video_shift", 1.0)), t.student.device)
+        self.video_grid = rollout_grid(
+            t.num_inference_steps, float(self.dmd.get("official_rollout_video_shift", 1.0)),
+            t.student.device, sigmas=self.dmd.get("official_rollout_sigmas"))
         self.audio_grid = rollout_grid(t.num_inference_steps, float(self.dmd.get("official_rollout_audio_shift", 1.0)), t.student.device)
         if getattr(t, "infer_every_iters", None):
             t.inferencer.set_data(t.dataloader_val)
