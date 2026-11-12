@@ -1,5 +1,7 @@
 # LightX2V Warmup Implementation Patterns
 
+简体中文 | [English](implementation-patterns_en.md)
+
 仅在需要代码骨架、family 特例或性能诊断时阅读本文件。以当前仓库为准，用 `rg` 重新定位接口，不要机械复制。
 
 ## 目录
@@ -10,6 +12,7 @@
 - [Runner 骨架](#runner-骨架)
 - [Wan 模式](#wan-模式)
 - [Qwen-Image 模式](#qwen-image-模式)
+- [MiniMax-H3-Image 模式](#minimax-h3-image-模式)
 - [LTX2 模式](#ltx2-模式)
 - [Lingbot-Video 模式](#lingbot-video-模式)
 - [冷启动边界与典型误区](#冷启动边界与典型误区)
@@ -27,9 +30,10 @@
 | Wan 状态清理 | `lightx2v/models/schedulers/wan/scheduler.py` |
 | Qwen T2I/I2I 模式 | `lightx2v/models/runners/qwen_image/qwen_image_runner.py` |
 | Qwen RoPE/diffusers 状态清理 | `lightx2v/models/schedulers/qwen_image/scheduler.py` |
+| MiniMax-H3-Image T2I/I2I 逐轮 prompt | `lightx2v/models/runners/minimax_h3_image/minimax_h3_image_runner.py` |
 | LTX2 多阶段/iterator 模式 | `lightx2v/models/runners/ltx2/ltx2_runner.py` |
 | LTX2 latent/sigma 清理 | `lightx2v/models/schedulers/ltx2/scheduler.py` |
-| 测试发现 | `rg --files tests test_cases`；当前没有已提交的 warmup 专项 Python 测试 |
+| 测试发现 | `rg --files tests test_cases` |
 
 ## 运行模式快照
 
@@ -62,7 +66,7 @@
 5. 若该 runner 有不同算子图的子类，让子类显式 opt-in。
 6. 先完成 normal 单 task，再逐项复用已验证模式的加载和卸载方法。
 
-eager 通常只需要 `run_warmup()`、`_run_warmup()` 和 `clear_warmup_state()`；lazy 若没有可复用的正式 cleanup，再增加一个 cleanup 方法。不要为了统一命名搬动正式函数；只有输入准备在多个 shape/task 中重复时才增加 helper。
+在 runner 中声明 `_WARMUP_SHAPES`、`_WARMUP_PROMPTS`，统一由 `_prepare_warmup_inputs()` 构造预热输入。按加载与清理的职责划分 `run_warmup()`、`_run_warmup()` 和 `clear_warmup_state()`。lazy 优先复用正式 cleanup。
 
 ## Runner 骨架
 
@@ -90,44 +94,61 @@ def run_warmup(self):
 要求：
 
 - `supports_warmup()` 只是 task/subclass guard 的占位符；不要只为套骨架新增无意义方法。
-- 骨架中的 helper 名只是职责提示；一次使用的薄包装应内联。
+- `_prepare_warmup_inputs()` 是 runner 的输入准备约定。其他 helper 按实际职责拆分。
 - 多个模型版本共用 runner 时同时检查版本特征；显式 `warmup=true` 遇到不支持的 model、版本、task 或模式必须报错，不能 warning 后继续。
 - 不要在 `run_pipeline()` 中增加 warmup 判断、锁或一次性状态。
 - lazy cleanup 必须位于 `finally`。
 - `_maybe_freeze_gc()` 必须在 `_run_warmup()` 返回后。
 - lazy 模式由公共方法跳过 freeze。
 
-核心循环（单模型示例）：
+单模型 T2I 示例。各轮 prompt 独占一行，scheduler 参数和 step 选择按实际模型补齐。
 
 ```python
-def _run_warmup(self):
-    scheduler = self.model.scheduler
-    model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model"
+class ExampleImageRunner(DefaultRunner):
+    _WARMUP_SHAPES = ((480, 480), (832, 1248))
+    _WARMUP_PROMPTS = (
+        "A pear on a plate.",
+        "A still life photograph of ripe pears on a ceramic plate beside a folded linen napkin. Soft afternoon light reveals the speckled fruit, the glazed rim, and the grain of the wooden table.",
+    )
 
-    for height, width in self.WARMUP_RESOLUTIONS:
-        inputs = output = None
-        try:
-            scheduler.generator = None
-            inputs = self.prepare_warmup_inputs(height, width)
-            scheduler.prepare(...)
+    def _prepare_warmup_inputs(self, warmup_index, height, width):
+        self.input_info = self.create_input_info(
+            {"task": "t2i", "prompt": self._WARMUP_PROMPTS[warmup_index], "size": [height, width], "seed": 0}
+        )
+        return self.run_input_encoder()
 
-            # 仅当该 scheduler 不能跨 step gap 复用内部状态时，在此加入 reset。
-            for step_index in self.get_warmup_step_indices(scheduler):
-                scheduler.step_pre(step_index)
-                self.model.infer(inputs)
-                scheduler.step_post()
+    def _run_warmup(self):
+        scheduler = self.model.scheduler
+        model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model"
 
-            output = self.run_vae_decoder(...)
-            consume_if_iterator(output)
-            torch_device_module.synchronize()
-        finally:
+        for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
             inputs = output = None
-            if model_offload:
-                self.model.to_cpu()
-            self.clear_warmup_state()
-            self.input_info = None
-            self.__dict__.pop("inputs", None)
+            try:
+                scheduler.generator = None
+                inputs = self._prepare_warmup_inputs(warmup_index, height, width)
+                scheduler.prepare(...)
+
+                # 仅当该 scheduler 不能跨 step gap 复用内部状态时，在此加入 reset。
+                for step_index in self.get_warmup_step_indices(scheduler):
+                    scheduler.step_pre(step_index)
+                    self.model.infer(inputs)
+                    scheduler.step_post()
+
+                output = self.run_vae_decoder(...)
+                consume_if_iterator(output)
+                torch_device_module.synchronize()
+            finally:
+                inputs = output = None
+                if model_offload:
+                    self.model.to_cpu()
+                self.clear_warmup_state()
+                self.input_info = None
+                self.__dict__.pop("inputs", None)
 ```
+
+单轮路径也通过 `_prepare_warmup_inputs(0, ...)` 取一条自然文本。纯帧 runner 的 helper 准备帧或 tensor，`_WARMUP_PROMPTS = ()`。
+
+部分路径通过 `RunnerLifecycleMixin.get_warmup_resolutions()` 在预设尺寸末尾加入 `config["size"]`，并去除相同的预设尺寸。以最终列表的序号取 prompt。EdenLive 和 MatrixGame4 的两个预设尺寸最多产生三轮，因此为第三轮准备独立文本。Wan 自回归的部分子类和 SekoTalk AR 没有预设尺寸，只用配置尺寸执行一轮，轮内覆盖多个 chunk。
 
 MoE 等多模型分支应按目标 runner 现有的模型集合，对所有实际加载过的模型执行下卡清理；已有内层 `finally` 负责下卡时复用该边界。
 
@@ -168,14 +189,20 @@ generator 必须在输入准备前清空，因为 I2V 的 VAE Encoder 可能先�
 关键点：
 
 - 当前实现固定 warmup `480×480` 和 `832×1248`，支持非 layered 的 T2I/I2I。
-- T2I 文本编码与分辨率无关时可跨 shape 复用。
+- T2I 两轮用不同长度的 prompt，各自执行 Text Encoder。只有实际文本条件相同时才按键复用编码输出及对应的 `txt_seq_lens`。
 - I2I 每个 shape 重新运行包含图片的 Text Encoder 和 VAE Encoder。
 - 直接执行一个 `step_pre → infer → step_post`；不要用带额外 profiling 的 `run(total_steps=1)`。
 - Step 0 输出可直接进入现有 VAE decode。
 - 清理 scheduler 中的 packed latent、image ids、timesteps、RoPE、内部 diffusers `_step_index/_begin_index`。
 - 清理 model pre-infer 的 request-specific RoPE cache。
 - warmup 只发生在首个请求前；每个 shape 的 `finally` 直接把 `input_info` 设为 `None` 并移除 `inputs`，不要保存旧请求快照。
-- 不要因为正式 I2I shape 与 warmup shape 不同就断言首步偏慢；至少做三轮实测。
+- 比较正式 I2I 首步时，结合实际图像和文本 token、guard 日志和计时。按任务约定决定样本数。
+
+## MiniMax-H3-Image 模式
+
+- 当前两个预热尺寸为 `2048×2048` 和 `3552×4736`。T2I、I2I、单卡和 SP4 共用按序号索引的一短一长两条单行 prompt。
+- 用实际 tokenizer 验证文本长度差异。当前两条原始文本分别为 8 和 79 token。I2I 的最终条件序列还包含参考图像相关 token。
+- 诊断 Dynamo 时同时核对文本条件相关的 `aux_length` 和图像 token shape。用 `TORCH_LOGS=recompiles` 定位 guard，按 rank 的 `Warmup cost` 确认事件发生阶段。
 
 ## LTX2 模式
 
@@ -220,7 +247,7 @@ lightx2v/common/offload/manager.py
 关键点：
 
 - 当前固定 warmup `480×480` 和 `320×832`；两个较低面积 shape 分别覆盖目标高度、宽度和横屏形态，避免 warmup 自身越过大视频 live tensor 峰值。
-- T2I/T2V 跨 shape 复用文本编码；I2V 每个 shape 用内存图片重走 VAE/VLM 条件编码。
+- T2I/T2V 的不同 prompt 各自执行文本编码。I2V 每个 shape 用内存图片重走 VAE/VLM 条件编码。
 - I2V VAE Encoder 会先消费 scheduler generator；每个 shape 必须先将 generator 置空，再准备输入，最后由 scheduler 继续生成 noise。
 - 单一 transformer 路径执行 Step 0 即可；decode 后清理 conditioning、generator、latents、timesteps、sigmas 和 solver history。
 - scheduler 继承 Wan 时复用其完整 `clear()`，再清理 Lingbot 独有状态，不要复制一份不完整字段列表。
@@ -242,7 +269,7 @@ warmup 可以保留 compile graph、已选择的 kernel、eager allocator cache�
 | 脚本或 config 接受某个 offload 值，就视为支持 | 必须同时找到 infer 分派、weights staging、manager 初始化和 cleanup |
 | 直接调用完整 `run_pipeline()` 最真实 | 会混入保存、profiling、请求 cleanup；应复用其内部正式方法 |
 | 用一个 dummy forward 或只创建 decoder iterator | 没覆盖真实 scheduler/分支，iterator 也必须完整消费 |
-| 从目标 config 读取一个分辨率 | 每条路径使用两个固定类常量，并覆盖不同 shape regime |
+| 只按 `_WARMUP_SHAPES` 的元素数推算轮数 | 核对最终列表是否加入配置尺寸或去重，prompt 按实际序号取值 |
 | 原配置缺少 LoRA/checkpoint 时静默删除后继续 | 替代配置只能做 smoke test；原配置仍是未验证/阻塞 |
 | 生产 shape 在目标设备本身 OOM，仍强行用于 warmup | 先用 no-warmup 复现；可用较低面积 shape 覆盖不同轴，但不能声称 exact compile graph 已覆盖 |
 | 相同 H×W 就能预热 compile | 还要一致的帧/token、dtype、stride/layout、CFG/MoE 和 Dynamo leaf-op 分派 |
@@ -340,12 +367,12 @@ no-warmup
 CUDA_VISIBLE_DEVICES=<free GPU>
 ```
 
-功能 smoke test 每个模式至少完整运行一次；只有要给出可靠性能结论时，每组才要求至少三轮并保存日志。原配置不可运行时，替代配置/shape 的结果必须单独标为 smoke test。提取：
+每个目标模式至少完整运行一次内置 warmup 和正式请求。按用户指定的次数测试，需要统计稳定性时再增加样本。原配置不可运行时，替代配置或尺寸的结果单独标为 smoke test。排查 Dynamo 时在原推理命令上设置 `TORCH_LOGS=recompiles`，按各 rank 的 `Warmup cost` 区分阶段。提取：
 
 ```bash
-rg "Warmup:|Warmup completed|Run Text Encoder|Run Image Encoder|Run VAE Encoder|Run VAE Decoder|step_index:|infer_main cost|Traceback|ERROR" <log>
+rg "Warmup|Recompiling function|Run Text Encoder|Run Image Encoder|Run VAE Encoder|Run VAE Decoder|Run Dit every step|Run DiT|infer_main cost|Save Image|RUN pipeline cost|Traceback|ERROR" <log>
 ```
 
 多阶段日志分别分组，不能把 Stage 1 和 Stage 2 的耗时混合平均。
 
-每轮开始前和运行中检查 GPU；出现其他进程时停止自己的实验，待 GPU 空闲后重测。按 stage 统计 Step 1、Step 2、Step 3–最后、Step 6–最后，并分别报告 warmup、自身正式 pipeline、`warmup + 正式 pipeline` 和 no-warmup pipeline。排除频率、温度和保存/IO；相同 seed 还要比较输出哈希/tensor 或合理容差。lazy/no-warmup 若在同一 `load_transformer/offload_manager` 位置失败，归类为基础 lazy/offload 问题。
+开始前和运行中检查 GPU 占用。单次基准记录预热、正式请求各阶段和端到端，四卡记录采样的 rank。需要做 warmup/no-warmup 对照时，另外报告两组的首请求与启动总耗时，并核对频率、温度和保存/IO 口径。相同 seed 可用输出哈希、tensor 或合理容差验证状态隔离。lazy/no-warmup 若在同一 `load_transformer/offload_manager` 位置失败，归类为基础 lazy/offload 问题。

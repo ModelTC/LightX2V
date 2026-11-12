@@ -31,7 +31,11 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
-    _WARMUP_RESOLUTIONS = ((1024, 1024), (768, 960))
+    _WARMUP_SHAPES = ((1024, 1024), (768, 960))
+    _WARMUP_PROMPTS = (
+        "A red bicycle beside a wall.",
+        "An eye level photograph of a red bicycle leaning against a pale brick wall on a quiet street. A wire basket holds a few flowers, leaves cast soft shadows across the pavement, and a small cafe window reflects the late afternoon sky.",
+    )
     supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS | {"resolution"}, "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "resolution"}}
 
     def __init__(self, config):
@@ -130,17 +134,12 @@ class QwenImage21Runner(DefaultRunner):
         with TemporaryDirectory(prefix="qwen_image_21_warmup_") as directory:
             image_path = Path(directory) / "reference.png"
             for task in ("t2i", "i2i"):
-                for height, width in self._WARMUP_RESOLUTIONS:
+                for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
                     logger.info(f"Warmup: {task}, {height}x{width}")
                     transformer_offloaded = not self.config.get("cpu_offload", False)
                     try:
                         self.scheduler.generator = None
-                        request = {"task": task, "prompt": "warmup", "seed": 0, "size": [height, width]}
-                        if task == "i2i":
-                            Image.new("RGBA", (width, height), color=(0, 0, 0, 255)).save(image_path)
-                            request["image_path"] = str(image_path)
-                        # Internal warmup covers both paths even for a single-task runner.
-                        self.input_info = self.create_input_info(request)
+                        self._prepare_warmup_inputs(warmup_index, task, height, width, image_path)
                         self.inputs = self.run_input_encoder()
                         self.init_run()
                         transformer_offloaded = False
@@ -160,6 +159,14 @@ class QwenImage21Runner(DefaultRunner):
                         self.end_run()
                         self.__dict__.pop("inputs", None)
         logger.info("[Warmup] Warmup completed")
+
+    def _prepare_warmup_inputs(self, warmup_index, task, height, width, image_path):
+        request = {"task": task, "prompt": self._WARMUP_PROMPTS[warmup_index], "seed": 0, "size": [height, width]}
+        if task == "i2i":
+            Image.new("RGBA", (width, height), color=(0, 0, 0, 255)).save(image_path)
+            request["image_path"] = str(image_path)
+        # Internal warmup covers both paths even for a single-task runner.
+        self.input_info = self.create_input_info(request)
 
     def init_scheduler(self):
         self.scheduler = QwenImage21Scheduler(self.config)

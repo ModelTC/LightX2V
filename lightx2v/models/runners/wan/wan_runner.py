@@ -79,7 +79,11 @@ class WanRunner(DisaggMixin, DefaultRunner):
         "nbhd_attn_flashinfer",
         "general_sparse_attn",
     }
-    _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
+    _WARMUP_SHAPES = ((480, 480), (720, 1280))
+    _WARMUP_PROMPTS = (
+        "A boat crosses a lake.",
+        "A small wooden boat crosses a calm lake in the early morning as the camera tracks it from the shore. Ripples spread behind the hull, mist drifts near the far bank, and the pale sky gradually brightens above the trees.",
+    )
     _WARMUP_TASKS = ("t2v", "i2v", "flf2v")
     _SUPPORTS_GENERIC_WARMUP = True
 
@@ -159,17 +163,16 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self._maybe_freeze_gc()
 
     def _run_warmup(self):
-        input_info = T2VInputInfo(prompt="warmup")
-        inputs = {"text_encoder_output": self.run_text_encoder(input_info)}
+        text_encoder_cache = {}
         scheduler = self.model.scheduler
         original_guide_scale = scheduler.sample_guide_scale
 
         try:
-            for height, width in self._WARMUP_RESOLUTIONS:
+            for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
                 latent_shape = self.get_warmup_latent_shape(height, width)
                 logger.info(f"Warmup: {height}x{width}")
                 try:
-                    inputs["image_encoder_output"] = self.get_warmup_image_encoder_output(latent_shape)
+                    input_info, inputs = self._prepare_warmup_inputs(warmup_index, latent_shape, text_encoder_cache)
                     scheduler.generator = None
                     scheduler.prepare(seed=input_info.seed, latent_shape=latent_shape, image_encoder_output=inputs["image_encoder_output"])
                     if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
@@ -192,11 +195,22 @@ class WanRunner(DisaggMixin, DefaultRunner):
                     torch_device_module.synchronize()
                 finally:
                     self.clear_warmup_state()
-                    inputs.pop("image_encoder_output", None)
+                    inputs = None
         finally:
             scheduler.sample_guide_scale = original_guide_scale
 
         logger.info("[Warmup] Warmup completed")
+
+    def _prepare_warmup_inputs(self, warmup_index, latent_shape, text_encoder_cache):
+        prompt = self._WARMUP_PROMPTS[warmup_index]
+        input_info = T2VInputInfo(prompt=prompt)
+        if prompt not in text_encoder_cache:
+            text_encoder_cache[prompt] = self.run_text_encoder(input_info)
+        inputs = {
+            "text_encoder_output": text_encoder_cache[prompt],
+            "image_encoder_output": self.get_warmup_image_encoder_output(latent_shape),
+        }
+        return input_info, inputs
 
     def supports_generic_warmup(self):
         # Specialized runners must opt in themselves; inherited support is not enough.

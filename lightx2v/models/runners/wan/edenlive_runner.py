@@ -27,7 +27,13 @@ class EdenLiveRunner(RunnerLifecycleMixin):
     model_class = EdenLiveModel
     scheduler_class = EdenLiveScheduler
     _WARMUP_TASKS = ("v2v",)
-    _WARMUP_RESOLUTIONS = ((480, 480), (480, 832))
+    _WARMUP_SHAPES = ((480, 480), (480, 832))
+    # Warmup also includes the configured request shape.
+    _WARMUP_PROMPTS = (
+        "A person walks outdoors.",
+        "A person in a light jacket walks along a garden path, turns their head toward a flowering tree, and briefly smiles at the camera.",
+        "A person walks through a courtyard in the morning, looking toward the camera before turning to follow a path under an arch. Their jacket moves slightly in the breeze, soft shadows shift across the stones, and the camera follows at a steady pace without changing the framing.",
+    )
     input_info_cls_by_task = {"v2v": EdenLiveInputInfo}
     supported_request_fields_by_task = {"v2v": VIDEO_REQUEST_FIELDS | {"image_path", "video_path"}}
 
@@ -137,14 +143,14 @@ class EdenLiveRunner(RunnerLifecycleMixin):
     def _initial_prompt_texts(self):
         return list(dict.fromkeys(self.prompts))
 
-    def _encode_inputs(self, image, frames, prompt_embeddings=None):
+    def _encode_inputs(self, image, frames, prompt_embeddings=None, *, prompts=None):
         image = image.to(device=AI_DEVICE)
         clean = self.vae_encoder.encode(image[None, :, None].to(GET_DTYPE()))
         clean = clean[0] if clean.ndim == 5 else clean
         image_condition = self.encode_image_condition(image, frames)
         image_condition["clean_first_frame"] = clean
         self.prompt_embeddings = {} if prompt_embeddings is None else dict(prompt_embeddings)
-        self.prompts = self.prompt_schedule()
+        self.prompts = self.prompt_schedule() if prompts is None else prompts
         unique_prompts = [text for text in self._initial_prompt_texts() if text not in self.prompt_embeddings]
         batch_prompts = len(unique_prompts) > 1 and self.config.get("t5_quantized", False) and self.config.get("t5_quant_scheme") == "fp8-f16-accum" and not self.config.get("enable_cfg", False)
         if batch_prompts:
@@ -224,15 +230,11 @@ class EdenLiveRunner(RunnerLifecycleMixin):
         if num_frames is None:
             num_frames = (latent_frames - 1) * self.config["vae_stride"][0] + 1
         try:
-            for height, width in self.get_warmup_resolutions():
+            for warmup_index, (height, width) in enumerate(self.get_warmup_resolutions()):
                 logger.info("EdenLive warmup: {}x{}, {} frames", height, width, num_frames)
-                self.scheduler.generator = None
-                stride_t, stride_h, stride_w = self.config["vae_stride"]
-                self.input_info = EdenLiveInputInfo(prompt="warmup", negative_prompt="warmup", seed=0, num_frames=num_frames)
-                self.input_info.latent_shape = [self.config["out_dim"], (num_frames - 1) // stride_t + 1, height // stride_h, width // stride_w]
-                self.proxy_pixels = torch.zeros(self.input_info.latent_shape[1], height, width, 3, dtype=torch.uint8).permute(3, 0, 1, 2)
+                self._prepare_warmup_inputs(warmup_index, height, width, num_frames)
                 try:
-                    self.inputs = self._encode_inputs(torch.zeros(3, height, width, device=AI_DEVICE), num_frames)
+                    self.inputs = self._encode_inputs(torch.zeros(3, height, width, device=AI_DEVICE), num_frames, prompts=[self.input_info.prompt])
                     self.scheduler.prepare(0, self.input_info.latent_shape, self.inputs["image_encoder_output"])
                     self.run_generation(step_indices=(0,))
                 finally:
@@ -247,6 +249,14 @@ class EdenLiveRunner(RunnerLifecycleMixin):
             self.prompts = []
             if hasattr(self, "inputs"):
                 del self.inputs
+
+    def _prepare_warmup_inputs(self, warmup_index, height, width, num_frames):
+        self.scheduler.generator = None
+        stride_t, stride_h, stride_w = self.config["vae_stride"]
+        prompt = self._WARMUP_PROMPTS[warmup_index]
+        self.input_info = EdenLiveInputInfo(prompt=prompt, negative_prompt=prompt, seed=0, num_frames=num_frames)
+        self.input_info.latent_shape = [self.config["out_dim"], (num_frames - 1) // stride_t + 1, height // stride_h, width // stride_w]
+        self.proxy_pixels = torch.zeros(self.input_info.latent_shape[1], height, width, 3, dtype=torch.uint8).permute(3, 0, 1, 2)
 
     def clear_warmup_state(self):
         self.scheduler.clear()
@@ -265,7 +275,7 @@ class EdenLiveRunner(RunnerLifecycleMixin):
 
 
 class EdenLiveARRunner(WanStreamingVAERunnerMixin, AutoregressiveRunnerMixin, EdenLiveRunner):
-    _WARMUP_RESOLUTIONS = ()
+    _WARMUP_SHAPES = ()
     model_class = EdenLiveARModel
     scheduler_class = EdenLiveARScheduler
 
@@ -390,7 +400,7 @@ class Wan21EdenLiveRunner(EdenLiveRunner, WanRunner):
 @RUNNER_REGISTER("wan22_edenlive")
 class Wan22EdenLiveRunner(EdenLiveRunner, Wan22DenseRunner):
     _SUPPORTS_GENERIC_WARMUP = True
-    _WARMUP_RESOLUTIONS = ((512, 512), (704, 1280))
+    _WARMUP_SHAPES = ((512, 512), (704, 1280))
 
 
 @RUNNER_REGISTER("wan21_edenlive_ar")

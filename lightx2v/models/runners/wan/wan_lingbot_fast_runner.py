@@ -142,9 +142,9 @@ class LingbotFastRunner(WanAutoregressiveRunnerMixin, LingbotRunner):
             if pre is not None:
                 pre.clear_condition_cache()
 
-    def prepare_warmup_inputs(self, height, width, latent_shape, text_output):
+    def _prepare_warmup_inputs(self, height, width, latent_shape, prompt, text_output):
         frame_count = (latent_shape[1] - 1) * self.config["vae_stride"][0] + 1
-        self.input_info = ActionI2VInputInfo(task="i2v", prompt="warmup", size=[height, width], num_frames=frame_count)
+        self.input_info = ActionI2VInputInfo(task="i2v", prompt=prompt, size=[height, width], num_frames=frame_count)
         self.input_info.latent_shape = latent_shape
         image_output = self.get_warmup_image_encoder_output(latent_shape)
         camera_channels = 6 * self.config["vae_stride"][1] * self.config["vae_stride"][2]

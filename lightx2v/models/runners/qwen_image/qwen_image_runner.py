@@ -63,7 +63,11 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 class QwenImageRunner(DisaggMixin, DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-    _WARMUP_RESOLUTIONS = ((480, 480), (832, 1248))
+    _WARMUP_SHAPES = ((480, 480), (832, 1248))
+    _WARMUP_PROMPTS = (
+        "A pear on a plate.",
+        "A still life photograph of ripe pears on a ceramic plate beside a folded linen napkin. Soft afternoon light enters from the left, revealing the speckled skin of the fruit, the glazed rim of the plate, and the grain of the wooden table.",
+    )
     _WARMUP_TASKS = ("t2i", "i2i")
     supported_request_fields_by_task = {
         "t2i": IMAGE_REQUEST_FIELDS,
@@ -115,12 +119,12 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
     def _run_warmup(self):
         scheduler = self.model.scheduler
-        t2i_text_cache = None
+        t2i_text_cache = {}
 
-        for height, width in self._WARMUP_RESOLUTIONS:
+        for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
             logger.info(f"Warmup: {height}x{width}")
             try:
-                t2i_text_cache = self._prepare_warmup_inputs(height, width, t2i_text_cache)
+                self._prepare_warmup_inputs(warmup_index, height, width, t2i_text_cache)
                 scheduler.generator = None
                 scheduler.prepare(self.input_info)
                 try:
@@ -140,24 +144,25 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         logger.info("[Warmup] Warmup completed")
 
-    def _prepare_warmup_inputs(self, height, width, t2i_text_cache=None):
+    def _prepare_warmup_inputs(self, warmup_index, height, width, t2i_text_cache):
         task = self.config["task"]
         input_info_cls = T2IInputInfo if task == "t2i" else I2IInputInfo
         self.input_info = input_info_cls(
             seed=0,
-            prompt="warmup",
+            prompt=self._WARMUP_PROMPTS[warmup_index],
             negative_prompt=" " if self.config["enable_cfg"] else None,
             size=[height, width],
             return_result_tensor=True,
         )
 
         if task == "t2i":
-            if t2i_text_cache is None:
-                text_encoder_output = self.run_text_encoder(self.input_info.prompt, neg_prompt=self.input_info.negative_prompt)
-                t2i_text_cache = text_encoder_output, tuple(self.input_info.txt_seq_lens)
-            else:
-                text_encoder_output, txt_seq_lens = t2i_text_cache
+            prompt = self.input_info.prompt
+            if prompt in t2i_text_cache:
+                text_encoder_output, txt_seq_lens = t2i_text_cache[prompt]
                 self.input_info.txt_seq_lens = list(txt_seq_lens)
+            else:
+                text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
+                t2i_text_cache[prompt] = text_encoder_output, tuple(self.input_info.txt_seq_lens)
             image_encoder_output = None
         else:
             image = Image.new("RGB", (width, height), color=0)
@@ -169,7 +174,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             "image_encoder_output": image_encoder_output,
         }
         self.set_latent_shape()
-        return t2i_text_cache
 
     def clear_warmup_state(self):
         self.model.scheduler.clear()
