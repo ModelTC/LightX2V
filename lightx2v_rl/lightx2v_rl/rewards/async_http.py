@@ -3,11 +3,12 @@
 import asyncio
 import json
 import math
+import time
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
 import aiohttp
 
-from lightx2v_rl.rewards.client import RemoteRewardError
+from lightx2v_rl.rewards.client import RemoteRewardError, RemoteRewardFormatError
 from lightx2v_rl.rewards.endpoint_pool import normalize_endpoints
 
 # Weak values avoid retaining a closed event loop through a contended semaphore.
@@ -39,6 +40,7 @@ async def post_json(session, endpoint, route, *, payload, content_type, timeout_
     normalize_endpoints(endpoint)
     validate_timeout(timeout_seconds)
     url = endpoint.rstrip("/") + route
+    started = time.monotonic()
     try:
         async with session.post(url, data=payload, headers={"Content-Type": content_type}, timeout=aiohttp.ClientTimeout(total=timeout_seconds), allow_redirects=False) as response:
             if not 200 <= response.status < 300:
@@ -49,11 +51,17 @@ async def post_json(session, endpoint, route, *, payload, content_type, timeout_
                 body.extend(chunk)
                 if len(body) > MAX_RESPONSE_BYTES:
                     raise RemoteRewardError(f"Reward service {endpoint} response exceeds 1 MiB")
-        result = json.loads(body)
-    except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError) as exc:
+        try:
+            result = json.loads(body)
+        except (ValueError, UnicodeError) as exc:
+            raise RemoteRewardFormatError(f"Reward service {endpoint} returned invalid JSON: {exc}") from exc
+    except asyncio.TimeoutError as exc:
+        elapsed = time.monotonic() - started
+        raise RemoteRewardError(f"Reward request {url} timed out after {elapsed:.1f}s (deadline {timeout_seconds:g}s)") from exc
+    except (aiohttp.ClientError, OSError, ValueError) as exc:
         raise RemoteRewardError(f"Reward service {endpoint} failed: {exc}") from exc
     if not isinstance(result, dict):
-        raise RemoteRewardError(f"Reward service {endpoint} returned a non-object JSON response")
+        raise RemoteRewardFormatError(f"Reward service {endpoint} returned a non-object JSON response")
     return result
 
 

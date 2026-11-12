@@ -1,7 +1,6 @@
 """One CPU supervisor per platform node, bootstrapped by torchrun."""
 
 import argparse
-import concurrent.futures
 import datetime
 import ipaddress
 import os
@@ -12,10 +11,10 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 
+from lightx2v_rl.deployment.health import HTTPReadiness
 from lightx2v_rl.paths import REPOSITORY_ROOT
 
 TORCHRUN_VARIABLES = {
@@ -33,13 +32,22 @@ TORCHRUN_VARIABLES = {
     "NODE_RANK",
 }
 RECIPES = {f"qwen_image21_turbo_{algorithm}_{nodes * 8}gpu": nodes for algorithm in ("geo", "cps", "flow_grpo") for nodes in (4, 5)}
+RECIPES.update(qwen_image21_4step_geo_6nodes=6, qwen_image21_4step_geo_48gpu=6)
+RECIPES["qwen_image21_4step_geo_6nodes_hps02"] = 6
+RECIPES["qwen_image21_4step_geo_7nodes_hps02"] = 7
+RECIPES["qwen_image21_4step_geo_7nodes_ur_only"] = 7
 
 
 def recipe_node_count(env):
     recipe = env.get("LIGHTX2V_RL_CONFIG", "qwen_image21_turbo_geo_40gpu")
     if recipe not in RECIPES:
-        raise ValueError("The platform launcher requires a qwen_image21_turbo_*_32gpu or *_40gpu recipe.")
+        raise ValueError("The platform launcher requires a supported Qwen multi-node recipe (32gpu, 40gpu, six-node or seven-node 4-step recipe).")
     return RECIPES[recipe]
+
+
+def recipe_training_node_count(env):
+    nodes = recipe_node_count(env)
+    return 4 if nodes in (6, 7) else nodes - 1
 
 
 def validate_topology(env):
@@ -86,16 +94,24 @@ def discover_address(env):
 
 def child_environment(env, addresses, rank):
     validate_addresses(addresses, recipe_node_count(env))
+    training_nodes = recipe_training_node_count(env)
+    reward_addresses = addresses[training_nodes:]
     result = {key: value for key, value in env.items() if key not in TORCHRUN_VARIABLES and not key.startswith("TORCHELASTIC_")}
     result.update(
         {
             "LIGHTX2V_HEAD_IP": addresses[0],
             "LIGHTX2V_NODE_IP": addresses[rank],
-            "LIGHTX2V_REWARD_HOST": addresses[-1],
+            "LIGHTX2V_REWARD_HOST": reward_addresses[0],
+            "LIGHTX2V_REWARD_HOSTS": ",".join(reward_addresses),
+            "LIGHTX2V_TRAIN_NODES": str(training_nodes),
+            "LIGHTX2V_REWARD_POOL_LAYOUT": ("8+0" if env.get("LIGHTX2V_RL_CONFIG") == "qwen_image21_4step_geo_7nodes_ur_only" else "7+1" if recipe_node_count(env) == 7 and rank in (4, 5) else "6+2"),
             "LIGHTX2V_RL_CONFIG": env.get("LIGHTX2V_RL_CONFIG", "qwen_image21_turbo_geo_40gpu"),
             "RAY_ADDRESS": f"{addresses[0]}:6379",
         }
     )
+    result.update({f"LIGHTX2V_REWARD_HOST_{index}": host for index, host in enumerate(reward_addresses)})
+    if rank >= training_nodes:
+        result["LIGHTX2V_REWARD_POOL_HOST"] = addresses[rank]
     return result
 
 
@@ -251,12 +267,15 @@ def _close_resources(*callbacks):
         raise failures[0]
 
 
-def supervise(rank, processes, exchange, *, head_ready, cluster_ready, reward_ready, num_nodes=4, startup_timeout=1800, interval=1.0, clock=time.monotonic, sleep=time.sleep):
+def supervise(rank, processes, exchange, *, head_ready, cluster_ready, reward_ready, num_nodes=4, training_nodes=None, startup_timeout=1800, interval=1.0, clock=time.monotonic, sleep=time.sleep):
     """All ranks exchange a small CPU status record, including during long training."""
     deadline = clock() + startup_timeout
     state = dict(error=None, head_ready=False, ready=False, training_started=False, done=False)
-    reward_rank = num_nodes - 1
-    service = "head" if rank == 0 else "reward" if rank == reward_rank else None
+    training_nodes = num_nodes - 1 if training_nodes is None else training_nodes
+    if not 1 <= training_nodes < num_nodes:
+        raise ValueError("The platform needs at least one training node and one reward node.")
+    reward_ranks = range(training_nodes, num_nodes)
+    service = "head" if rank == 0 else "reward" if rank in reward_ranks else None
     service_started = False
     train_started = False
     next_status = clock() + 30
@@ -287,7 +306,7 @@ def supervise(rank, processes, exchange, *, head_ready, cluster_ready, reward_re
                                     )
                                 )
                             state["done"] = True
-                elif rank == reward_rank:
+                elif rank in reward_ranks:
                     if not state["ready"]:
                         state["ready"] = reward_ready()
                 else:
@@ -306,13 +325,14 @@ def supervise(rank, processes, exchange, *, head_ready, cluster_ready, reward_re
                 return
             state["training_started"] = states[0]["training_started"]
             if rank == 0 and not train_started and clock() >= next_status:
-                print(f"Waiting for startup: head={states[0]['head_ready']}, cluster={states[0]['ready']}, reward={states[reward_rank]['ready']}", flush=True)
+                reward_states = {index: states[index]["ready"] for index in reward_ranks}
+                print(f"Waiting for startup: head={states[0]['head_ready']}, cluster={states[0]['ready']}, reward={reward_states}", flush=True)
                 next_status = clock() + 30
-            if 0 < rank < reward_rank and states[0]["head_ready"]:
+            if 0 < rank < training_nodes and states[0]["head_ready"]:
                 service = "worker"
             if rank == 0 and not train_started and all(item["ready"] for item in states):
                 try:
-                    print(f"All {reward_rank} Ray nodes and eight reward services are ready; starting one training driver.", flush=True)
+                    print(f"All {training_nodes} Ray nodes and {len(reward_ranks) * 8} reward services are ready; starting one training driver.", flush=True)
                     processes.start("train")
                     train_started = state["training_started"] = True
                 except Exception as exc:
@@ -328,18 +348,6 @@ def head_is_ready(address):
             return True
     except OSError:
         return False
-
-
-def rewards_are_ready(address):
-    def ready(port):
-        try:
-            with urllib.request.urlopen(f"http://{address}:{port}/health", timeout=1) as response:
-                return response.status == 200
-        except Exception:
-            return False
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        return all(pool.map(ready, range(8791, 8799)))
 
 
 class RayReadiness:
@@ -394,7 +402,7 @@ def probe_ray():
     ray.init(address=os.environ["RAY_ADDRESS"], logging_level="ERROR")
     try:
         nodes = [node for node in ray.nodes() if node["Alive"] and node["Resources"].get("GPU", 0)]
-        expected = recipe_node_count(os.environ) - 1
+        expected = recipe_training_node_count(os.environ)
         return 0 if len(nodes) == expected and all(node["Resources"]["GPU"] == 8 for node in nodes) else 1
     finally:
         ray.shutdown()
@@ -409,6 +417,7 @@ def main(argv=None):
         return probe_ray()
     rank = validate_topology(os.environ)
     num_nodes = recipe_node_count(os.environ)
+    training_nodes = recipe_training_node_count(os.environ)
     for item in args.overrides:
         if "=" not in item or item.startswith(("+", "~")):
             raise ValueError("Use plain training key=value overrides.")
@@ -445,7 +454,7 @@ def main(argv=None):
         env["PYTHONPATH"] = str(root / "lightx2v_rl") + os.pathsep + env.get("PYTHONPATH", "")
         run_id = re.sub(r"[^a-zA-Z0-9_.-]", "_", os.environ.get("TORCHELASTIC_RUN_ID", "platform"))[:100]
         log_dir = root / "lightx2v_rl" / "outputs" / "platform" / run_id / f"rank{rank}-{os.getpid()}"
-        print(f"Platform rank {rank}: {address}; head={addresses[0]}, reward={addresses[-1]}; logs={log_dir}", flush=True)
+        print(f"Platform rank {rank}: {address}; head={addresses[0]}, rewards={','.join(addresses[training_nodes:])}; logs={log_dir}", flush=True)
         processes = OwnedProcesses(root, env, args.overrides, log_dir)
         probe = RayReadiness(root, env, log_dir)
         supervise(
@@ -454,8 +463,9 @@ def main(argv=None):
             exchange,
             head_ready=lambda: head_is_ready(addresses[0]),
             cluster_ready=probe,
-            reward_ready=lambda: rewards_are_ready(addresses[-1]),
+            reward_ready=HTTPReadiness([f"http://{address}:{port}/health" for port in range(8791, 8799)]),
             num_nodes=num_nodes,
+            training_nodes=training_nodes,
             startup_timeout=timeout,
         )
         return 0

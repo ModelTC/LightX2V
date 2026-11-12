@@ -1,0 +1,44 @@
+diff --git a/verl_omni/trainer/diffusion/v1/trainer_base.py b/verl_omni/trainer/diffusion/v1/trainer_base.py
+--- a/verl_omni/trainer/diffusion/v1/trainer_base.py
++++ b/verl_omni/trainer/diffusion/v1/trainer_base.py
+@@ -1524,6 +1524,12 @@
+         sample_uids: list = []
+         data_sources: list = []
+         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
++        validation_media = None
++        if media_fqn := self.config.trainer.get("validation_media_class"):
++            from verl.utils.import_utils import load_class_from_fqn
++
++            media_cls = load_class_from_fqn(media_fqn, "ValidationMedia")
++            validation_media = media_cls(self.config, self.global_steps)
+ 
+         for batch_dict in self.val_dataloader:
+             batch_dict["uid"] = np.array(
+@@ -1581,7 +1587,8 @@
+                 num_real,
+             )
+             sample_inputs.extend(input_texts)
+-            sample_outputs.append(output_images)
++            if validation_media is None:
++                sample_outputs.append(output_images)
+             tool_extra = data.non_tensor_batch.get("tool_extra_fields")
+             sample_audios.extend(_resolve_rollout_media_field(data, tool_extra, "audio"))
+             sample_audio_sample_rates.extend(_resolve_rollout_media_field(data, tool_extra, "audio_sample_rate"))
+@@ -1608,7 +1615,17 @@
+             else:
+                 sample_gts.extend([None] * len(data))
+ 
++            if validation_media is not None:
++                validation_media.collect(data, input_texts, reward_extra_info)
+             tq.kv_clear(keys=batch_meta.keys, partition_id=batch_meta.partition_id)
++
++        if validation_media is not None:
++            try:
++                validation_media.log()
++            except Exception:
++                logger.exception("Validation media logging failed at step %s", self.global_steps)
++            data_sources_arr = np.concatenate(data_sources, axis=0) if data_sources else np.array([])
++            return self._val_metrics_update(data_sources_arr, sample_uids, reward_extra_infos_dict, sample_turns)
+ 
+         sample_outputs = torch.cat(sample_outputs, dim=0) if sample_outputs else torch.empty(0)
+         self._maybe_log_val_generations(

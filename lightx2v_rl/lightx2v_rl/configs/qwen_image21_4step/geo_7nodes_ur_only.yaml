@@ -1,0 +1,43 @@
+# Four training nodes + three reward nodes, eight UnifiedReward 27B replicas each.
+# Start from Lightning-v2-base; launch with train_qwen21_4step_7nodes_ur_only.sh.
+inherits: qwen_image21_4step/geo_7nodes_hps02
+reward:
+  num_workers: 24
+  custom_reward_function:
+    reward_kwargs:
+      # 48 samples in flight; two active requests per UR replica.
+      max_concurrent_samples: 2
+      unifiedreward_weight: 1.0
+      hps_weight: 0.0
+      hps_weight_i2i: 0.0
+      hps_endpoint: []
+      unifiedreward_endpoint:
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8791
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8792
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8793
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8794
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8795
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8796
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8797
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_0}:8798
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8791
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8792
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8793
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8794
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8795
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8796
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8797
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_1}:8798
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8791
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8792
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8793
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8794
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8795
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8796
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8797
+      - http://${oc.env:LIGHTX2V_REWARD_HOST_2}:8798
+trainer:
+  # This ablation starts from the base export. Set auto explicitly to resume it.
+  resume_mode: disable
+  experiment_name: qwen_image21_4step_geo_pe_v2_56gpu_uredit27b_only
+  default_local_dir: lightx2v_rl/outputs/qwen_image21_4step_geo_pe_v2_56gpu_uredit27b_only

@@ -17,6 +17,8 @@ class FewStepConfig:
     bridge: str = "geo"
     min_steps: int = 4
     max_steps: int = 4
+    # Qwen can replay several selected transitions; Wan retains its single-step adapter.
+    num_train_timesteps: int = 1
     cycle_train_idx: bool = True
     timestep_sampling_mode: str = "fixed_uniform"
     timestep_shift: float = 5.0
@@ -47,6 +49,10 @@ class FewStepConfig:
                 raise ValueError(f"{name} must be an integer of at least 2.")
         if self.max_steps < self.min_steps:
             raise ValueError("max_steps must be greater than or equal to min_steps.")
+        if isinstance(self.num_train_timesteps, bool) or not isinstance(self.num_train_timesteps, int):
+            raise TypeError("num_train_timesteps must be an integer.")
+        if not 1 <= self.num_train_timesteps < self.min_steps:
+            raise ValueError("num_train_timesteps must be between 1 and min_steps - 1; the final step is excluded.")
         for name in ("cycle_train_idx", "diffusion_clip"):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a boolean.")

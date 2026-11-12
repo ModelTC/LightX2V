@@ -36,6 +36,7 @@ def resolve_runtime_paths(config, *, root=None):
         "trainer.default_local_dir",
         "trainer.rollout_data_dir",
         "trainer.validation_data_dir",
+        "trainer.validation_preview_file",
         "trainer.metric_logging.raw_dir",
     )
     for key in scalar_keys:

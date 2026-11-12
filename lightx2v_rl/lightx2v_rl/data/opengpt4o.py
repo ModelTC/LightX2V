@@ -1,4 +1,4 @@
-"""OpenGPT-4o JSONL loading and deterministic, homogeneous T2I/I2I batches."""
+"""OpenGPT-4o JSONL loading and deterministic, homogeneous task batches."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ import hashlib
 import json
 import math
 import random
-from collections import defaultdict
+from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,16 @@ import torch
 from torch.utils.data import Dataset, Sampler
 
 from lightx2v_rl.data.prepare_opengpt4o import safe_relative_path
+
+
+def validate_task_cycle(value):
+    """Validate the ordered rollout task cycle, including repeated task slots."""
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or not value:
+        raise ValueError("task_cycle must be a nonempty list of t2i/i2i/i2i_single/i2i_multi")
+    cycle = tuple(value)
+    if any(task not in ("t2i", "i2i", "i2i_single", "i2i_multi") for task in cycle):
+        raise ValueError("task_cycle must be a nonempty list of t2i/i2i/i2i_single/i2i_multi")
+    return cycle
 
 
 class OpenGPT4oDataset(Dataset):
@@ -67,6 +78,10 @@ class OpenGPT4oDataset(Dataset):
     def get_task_type(self, index):
         return self.rows[index]["task_type"]
 
+    def get_sampling_task(self, index):
+        count = len(self.rows[index]["source_images"])
+        return "t2i" if count == 0 else ("i2i_single" if count == 1 else "i2i_multi")
+
     def get_modality(self, index):
         return self.get_task_type(index)
 
@@ -85,12 +100,13 @@ class OpenGPT4oDataset(Dataset):
             "prompt": row["prompt"],
             "task_type": row["task_type"],
             "source_images": paths,
-            "data_source": f"opengpt4o/{row['task_type']}",
+            "data_source": f"opengpt4o/{self.get_sampling_task(index)}",
             "reward_model": {"style": "model", "ground_truth": row["prompt"]},
             "extra_info": {
                 "index": index,
                 "sample_id": row["id"],
                 "task_type": row["task_type"],
+                "sampling_task": self.get_sampling_task(index),
                 "source_images": paths,
                 "prompt": row["prompt"],
                 "metadata": row.get("metadata", {}),
@@ -144,11 +160,14 @@ def collate_fn(features):
 
 
 class AlternatingTaskSampler(Sampler[int]):
-    """Alternate full T2I/I2I batches, cycling the smaller task each epoch.
+    """Repeat a task cycle with full, homogeneous rollout batches.
 
     Individual indices are yielded because verl's StatefulDataLoader accepts a
-    sampler and a separate batch_size. Each task is shuffled without replacement
-    until exhausted; every epoch has the same number of batches for both tasks.
+    sampler and a separate batch_size. Each pool is shuffled without replacement
+    until exhausted. ``i2i`` includes all editing records; ``i2i_single`` and
+    ``i2i_multi`` select exactly one or more than one reference respectively.
+    Repeated entries in ``data.task_cycle`` determine task sampling weights.
+    The default keeps the original exact 1:1 T2I/I2I alternation.
     Cursor and epoch implement StatefulDataLoader's sampler checkpoint protocol.
     """
 
@@ -159,15 +178,29 @@ class AlternatingTaskSampler(Sampler[int]):
         if self.batch_size < 1:
             raise ValueError("AlternatingTaskSampler requires a positive batch_size")
         self.seed = int(config.get("seed", 42) if seed is None else seed)
-        self.by_task = defaultdict(list)
+        self.task_cycle = validate_task_cycle(config.get("task_cycle", ("t2i", "i2i")))
+        self.by_task = {task: [] for task in self.task_cycle}
+        needs_reference_count = bool({"i2i_single", "i2i_multi"}.intersection(self.by_task))
+        if needs_reference_count and not callable(getattr(data_source, "get_sampling_task", None)):
+            raise ValueError("Reference-specific task_cycle requires a dataset with get_sampling_task(index)")
         for i in range(len(data_source)):
-            self.by_task[data_source.get_task_type(i)].append(i)
-        if set(self.by_task) != {"t2i", "i2i"}:
-            raise ValueError("AlternatingTaskSampler requires both T2I and I2I data")
+            task = data_source.get_task_type(i)
+            if task in self.by_task:
+                self.by_task[task].append(i)
+            if needs_reference_count:
+                sampling_task = data_source.get_sampling_task(i)
+                if sampling_task != task and sampling_task in self.by_task:
+                    self.by_task[sampling_task].append(i)
+        missing = [task for task, indices in self.by_task.items() if not indices]
+        if missing:
+            raise ValueError(f"AlternatingTaskSampler requires nonempty data for selected tasks: {missing}")
+        cycle_size = len(self.task_cycle)
         if num_batches is None:
-            num_batches = 2 * math.ceil(max(map(len, self.by_task.values())) / self.batch_size)
-        if num_batches < 2 or num_batches % 2:
-            raise ValueError("num_batches must be a positive even number for exact 1:1 alternation")
+            frequencies = Counter(self.task_cycle)
+            cycles = max(math.ceil(len(indices) / (frequencies[task] * self.batch_size)) for task, indices in self.by_task.items())
+            num_batches = cycle_size * cycles
+        if num_batches < cycle_size or num_batches % cycle_size:
+            raise ValueError("num_batches must be a positive multiple of task_cycle length")
         self.num_batches = int(num_batches)
         self.epoch = 0
         self.cursor = 0
@@ -180,11 +213,11 @@ class AlternatingTaskSampler(Sampler[int]):
         rng = random.Random(self.seed + self.epoch)
         pools = {task: list(indices) for task, indices in self.by_task.items()}
         offsets = {task: 0 for task in pools}
-        for task in ("t2i", "i2i"):
-            rng.shuffle(pools[task])
+        for pool in pools.values():
+            rng.shuffle(pool)
         order = []
         for batch in range(self.num_batches):
-            task = ("t2i", "i2i")[batch % 2]
+            task = self.task_cycle[batch % len(self.task_cycle)]
             for _ in range(self.batch_size):
                 if offsets[task] == len(pools[task]):
                     rng.shuffle(pools[task])
@@ -214,9 +247,13 @@ class AlternatingTaskSampler(Sampler[int]):
             "length": len(self),
             "dataset_length": len(self.data_source),
             "dataset_fingerprint": self.dataset_fingerprint,
+            "task_cycle": list(self.task_cycle),
         }
 
     def load_state_dict(self, state):
+        # Checkpoints written before explicit cycles used the default T2I/I2I order.
+        if tuple(state.get("task_cycle", ("t2i", "i2i"))) != self.task_cycle:
+            raise ValueError("Cannot resume sampler after changing task_cycle")
         for key in ("seed", "batch_size", "length", "dataset_length", "dataset_fingerprint"):
             if state[key] != self.state_dict()[key]:
                 raise ValueError(f"Cannot resume sampler after changing {key}")

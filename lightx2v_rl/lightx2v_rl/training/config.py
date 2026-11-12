@@ -19,6 +19,11 @@ RECIPE_ALIASES = {
         for suffix, profile in (("", ""), ("_32gpu", "_4nodes"), ("_40gpu", "_5nodes"))
     },
     "qwen_image21_agent": "qwen_image21_turbo/agent",
+    "qwen_image21_4step_geo_6nodes": "qwen_image21_4step/geo_6nodes",
+    "qwen_image21_4step_geo_48gpu": "qwen_image21_4step/geo_6nodes",
+    "qwen_image21_4step_geo_6nodes_hps02": "qwen_image21_4step/geo_6nodes_hps02",
+    "qwen_image21_4step_geo_7nodes_hps02": "qwen_image21_4step/geo_7nodes_hps02",
+    "qwen_image21_4step_geo_7nodes_ur_only": "qwen_image21_4step/geo_7nodes_ur_only",
 }
 
 
@@ -60,6 +65,8 @@ def validate_recipe(config, *, require_inputs: bool = False):
     if model.algorithm != f"fewstep_{fewstep.bridge}" or actor.diffusion_loss.loss_mode != model.algorithm:
         raise ValueError("Model algorithm, FewStep bridge and loss mode must agree.")
     get_model_spec(model.architecture, model.get("rl_adapter"))
+    if model.architecture == "WanPipeline" and fewstep.num_train_timesteps != 1:
+        raise ValueError("The Wan FewStep adapter currently requires num_train_timesteps=1.")
     if model.get("lora_rank", 0) != 0:
         raise ValueError("FewStep recipes currently support full-weight training only.")
     if actor.get("enable_timestep_staging", False):
@@ -69,8 +76,10 @@ def validate_recipe(config, *, require_inputs: bool = False):
     for role in (actor, config.actor_rollout_ref.ref):
         engine = role.fsdp_config
         param_dtype = (engine.get("mixed_precision") or {}).get("param_dtype", "bf16")
-        if engine.model_dtype not in ("bf16", "bfloat16") or param_dtype not in ("bf16", "bfloat16"):
-            raise ValueError("FewStep adapters require bf16 model weights and FSDP parameter dtype.")
+        if engine.model_dtype not in ("fp32", "float32", "bf16", "bfloat16"):
+            raise ValueError("FewStep adapters require fp32 or bf16 model weights.")
+        if param_dtype not in ("bf16", "bfloat16"):
+            raise ValueError("FewStep adapters require bf16 FSDP compute parameters.")
     for algo in (rollout.algo, rollout.val_kwargs.algo):
         if OmegaConf.to_container(algo.fewstep, resolve=True) != OmegaConf.to_container(model.fewstep, resolve=True):
             raise ValueError("Rollout and learner FewStep options must match.")

@@ -1,7 +1,7 @@
 {
   "source_model": "lightx2v_train/models/Qwen-Image-2.1",
-  "target_model": "lightx2v_train/models/Qwen-Image-2.1-Lightning-v2-base",
-  "output": "outputs/qwen_image_21_tfmq_qdrop_r64_a8.safetensors",
+  "target_model": "lightx2v_train/models/Qwen-Image-2.1-Lightning-v2-RL/diffusion_pytorch_model.safetensors",
+  "output": "outputs/qwen_image_21_rl_tfmq_r64_a8.safetensors",
   "rank": 64,
   "alpha": 8,
   "dtype": "fp32",
@@ -25,26 +25,24 @@
     "proj_out"
   ],
   "algorithm": "tfmq",
-  "calibration": "outputs/qwen_image_21_calibration",
-  "work_dir": "outputs/reconstruction_tfmq_qdrop",
+  "calibration": "outputs/qwen_image_21_rl_calibration",
+  "work_dir": "outputs/reconstruction_rl_tfmq",
   "initialization": "svd",
   "compute_dtype": "bf16",
-  "iterations": 1000,
+  "iterations": 500,
   "temporal_iterations": 1000,
   "learning_rate": 5e-05,
   "gradient_clip": 1.0,
-  "qdrop_input_mix": true,
-  "qdrop_student_prob": 0.5,
   "checkpointing": true,
   "seed": 42,
   "log_every": 25,
-  "keep_cache": false,
   "calibration_manifest": "lightx2v_train/data/opengpt4o_qwen_image21/train.jsonl",
   "calibration_counts": {
-    "t2i": 512,
-    "i2i_single": 256,
-    "i2i_multi": 256
+    "t2i": 256,
+    "i2i_single": 128,
+    "i2i_multi": 128
   },
   "calibration_inference_config": "tools/extract/configs/qwen_image_21_calibration.json",
-  "batch_size": 8
+  "batch_size": 8,
+  "save_iteration_losses": true
 }

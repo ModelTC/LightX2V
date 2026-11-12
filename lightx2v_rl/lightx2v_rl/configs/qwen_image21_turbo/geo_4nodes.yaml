@@ -10,8 +10,9 @@ actor_rollout_ref:
     agent:
       num_workers: 24
 data:
-  train_batch_size: 24
-  gen_batch_size: 24
+  # Match the per-GPU workload of the five-node profile.
+  train_batch_size: 48
+  gen_batch_size: 48
   val_batch_size: 24
 trainer:
   nnodes: 3

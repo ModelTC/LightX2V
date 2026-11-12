@@ -1,4 +1,4 @@
-"""Opt-in tensor capture for native Qwen-Image-2.1 validation debugging.
+"""Capture native Qwen-Image-2.1 denoising trajectories for calibration.
 
 Version 1 stores CPU tensors and plain Python metadata only, so consumers can
 load traces with ``torch.load(path, weights_only=True)``. Latents and velocities
@@ -25,23 +25,24 @@ def _batched(value, ndim):
     if value.ndim == ndim - 1:
         value = value.unsqueeze(0)
     if value.ndim != ndim or value.shape[0] != 1:
-        raise ValueError(f"Native preview trace expected one sample with {ndim} dimensions, got {tuple(value.shape)}")
+        raise ValueError(f"Calibration trace expected one sample with {ndim} dimensions, got {tuple(value.shape)}")
     return value
 
 
 @contextmanager
-def capture_validation_trace(runner, job, model_path):
+def capture_calibration_trace(runner, job, model_path):
     """Observe one request without changing model inputs, RNG, or offloading.
 
     All temporarily wrapped methods are restored even if inference raises. CPU
-    copies synchronize accelerator work, so this diagnostic mode is slower.
+    copies synchronize accelerator work, so trace collection adds inference overhead.
     """
     if runner.config.get("enable_cfg", False):
-        raise ValueError("--dump-trace currently requires native conditional inference (enable_cfg=false).")
+        raise ValueError("Calibration trace capture requires native conditional inference (enable_cfg=false).")
     request = job["request"]
     height, width = map(int, request["size"])
     trace = {
         "format_version": FORMAT_VERSION,
+        # Keep the version-1 metadata key for existing trace consumers.
         "validation_index": int(job["validation_index"]),
         "height": height,
         "width": width,
@@ -121,11 +122,11 @@ def capture_validation_trace(runner, job, model_path):
                 setattr(owner, name, previous)
 
 
-def save_validation_trace(trace, path):
+def save_calibration_trace(trace, path):
     """Write only a completed trace; no model or scheduler objects are saved."""
     required = ("initial_latents", "sigmas", "timesteps", "final_latents")
     if any(key not in trace for key in required) or len(trace["steps"]) != len(trace["timesteps"]):
-        raise RuntimeError("Cannot save an incomplete native validation trace.")
+        raise RuntimeError("Cannot save an incomplete calibration trace.")
     if any("next_latents" not in step for step in trace["steps"]):
         raise RuntimeError("Cannot save a trace with an unfinished denoising step.")
     path = Path(path)

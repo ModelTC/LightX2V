@@ -1,0 +1,11 @@
+# Six-node experiment with HPSv3 weight 0.2 for T2I and both I2I tasks.
+inherits: qwen_image21_4step/geo_6nodes
+reward:
+  custom_reward_function:
+    reward_kwargs:
+      # Inherited advantage weights follow these scoring weights automatically.
+      hps_weight: 0.2
+      hps_weight_i2i: 0.2
+trainer:
+  experiment_name: qwen_image21_4step_geo_pe_v2_48gpu_uredit9b_hps02
+  default_local_dir: lightx2v_rl/outputs/qwen_image21_4step_geo_pe_v2_48gpu_uredit9b_hps02

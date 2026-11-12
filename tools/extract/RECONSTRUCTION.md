@@ -1,110 +1,97 @@
-# Qwen-Image 2.1 LoRA reconstruction
+# TFMQ LoRA reconstruction
 
-[中文版](RECONSTRUCTION_zh.md)
+[中文说明](RECONSTRUCTION_zh.md) · [Tools and experiment results](README.md)
 
-Extract a LoRA so that **base + LoRA approximates the full target model**. The base stays frozen; reconstruction trains only LoRA factors using target sampling trajectories. The supplied configs select 232 Linear groups with rank 64 and alpha 8, without exporting normalization weight differences.
+This guide uses Qwen-Image 2.1 as an example. The current reconstruction implementation supports Qwen-Image 2.1.
 
-## Configurations
+Freeze the base and optimize only LoRA factors. The example configs select 232 Linear groups with rank 64 and alpha 8. `lora_reconstructor.py` detects whether `target_model` is a complete model directory, an exported transformer directory (including shards), or a single safetensors file and uses the same TFMQ workflow for all three.
 
-| Config | Time-condition reconstruction | Input mixing |
-|---|---|---|
-| [qdiff](configs/qwen_image_21_reconstruct_qdiff.json) | Fit four time-path Linear layers sequentially | Off |
-| [tfmq](configs/qwen_image_21_reconstruct_tfmq.json) | Jointly fit modulation and final-scale outputs | Off |
-| [tfmq_qdrop](configs/qwen_image_21_reconstruct_tfmq_qdrop.json) | Same as `tfmq` | 50% student / 50% teacher |
-
-These adapt ideas from [Q-Diffusion](https://github.com/Xiuyu-Li/q-diffusion), [TFMQ-DM](https://github.com/ModelTC/TFMQ-DM) and [QDrop](https://github.com/wimh966/QDrop) to LoRA reconstruction, without quantization. All use this order:
-
-```text
-Time-condition modules → input projections → block_00 … block_31 → output projection
-```
-
-The time path is frozen after its reconstruction. Teacher and student features advance through separate caches; gradients never cross unit boundaries.
+First jointly reconstruct the time path's modulation and final-scale outputs, then freeze it. Reconstruct the input projections, blocks 00–31 and output projection in order, minimizing `MSE(S(xs, ms), T(xt, mt))`: each model uses its own prefix features and time conditions. Gradients do not cross reconstruction units.
 
 ## Run
 
-Run commands from the repository root. Use an environment with `diffusers.models.transformers.transformer_qwenimage21`; collection also requires the LightX2V inference environment. Set model and data paths in the selected config first. Relative paths resolve from the working directory.
-
-**Reuse existing calibration traces and reconstruct on eight GPUs:**
+Run from the repository root after editing the model and data paths in the config. Install the LightX2V base dependencies in a CUDA-enabled PyTorch environment, then install the reconstruction dependencies:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+pip install -r tools/extract/requirements-reconstruction.txt
+python -c "from diffusers.models.transformers import transformer_qwenimage21; print('Qwen-Image 2.1 backend available')"
+```
+
+The verified environment uses Diffusers `0.41.0.dev0` at commit `62cde2b0115d57492d2f5ecefab54994797df2e3` and Transformers `5.14.1`, pinned in the requirements file. No training-framework installation is required.
+
+```bash
+# Target is a complete model directory: collect trajectories, then reconstruct.
 torchrun --standalone --nproc_per_node=8 tools/extract/lora_reconstructor.py \
-  --config tools/extract/configs/qwen_image_21_reconstruct_tfmq_qdrop.json
+  --config tools/extract/configs/qwen_image_21_reconstruct_tfmq.json \
+  --collect-and-reconstruct
+
+# Target is an exported transformer directory or a single .safetensors file.
+torchrun --standalone --nproc_per_node=8 tools/extract/lora_reconstructor.py \
+  --config tools/extract/configs/qwen_image_21_reconstruct_checkpoint_tfmq.json \
+  --collect-and-reconstruct
 ```
 
-Append an option when needed:
+### Command arguments
 
-| Option | Action |
+`lora_reconstructor.py`:
+
+- `--config <path>`: required reconstruction config, in JSON or YAML.
+- `--calibration <path>`: override the config's calibration file or directory; during collection, this is the trajectory output directory.
+- `--output <path>`: override the final LoRA `.safetensors` output path.
+- `--work-dir <path>`: override the directory for run logs and temporary reconstruction caches.
+- `--device <device>`: override the reconstruction device, such as `auto`, `cuda:0` or `cpu`. With torchrun, use `auto` so each worker uses its local GPU. This option does not select collection GPUs.
+- `--collect-calibration`: prepare calibration trajectories only. All target formats automatically reuse matching trajectories when available.
+- `--collect-and-reconstruct`: prepare trajectories, then reconstruct in the same launch.
+- `--reuse-calibration`: require existing calibration data and reconstruct without collecting. All target formats validate provenance and the file inventory, and can select a smaller subset. Missing or incompatible data raises an error.
+- `--dry-run`: check collection or reuse without inference or training; requires one of the three workflow flags above. Checkpoint preparation may still write pipeline links/config.
+- `--help`: display available arguments.
+
+The three workflow flags are mutually exclusive. With none set, reconstruct directly from `calibration`, without collection preparation or checkpoint subset selection.
+
+### Runtime behavior
+
+For an exported transformer directory or file, the collector combines its weights with the base's frozen components. Directory inputs support single-file and indexed/sharded safetensors exports. Sampling uses `calibration_inference_config`; optional `sample_sigmas` and `scheduler` in the checkpoint's adjacent `inference_config.json` override those settings. Collection currently requires CFG=1.
+
+New collections record the resolved model file paths, sizes/mtimes, JSON configuration digests, request manifest path/digest, seed, effective inference settings and collection dtype in the selection inventory. Reuse checks these fields before reading trajectories. Old single-file checkpoint inventories remain supported through their original provenance checks; old collections without verifiable provenance must be recollected in a separate directory. Model weights are identified by file metadata, not full-file hashes.
+
+Collection uses independent BF16 inference workers with CPU offload; reconstruction uses DDP, loading one unit at a time. Each unit and its activations must fit on one GPU, and workers must share the model/data/output filesystem. For one GPU, replace the torchrun prefix with `python`.
+
+## Configuration and outputs
+
+The extraction objective is **`source_model` + exported LoRA ≈ `target_model`**.
+
+- `source_model`: the frozen original base; load the exported LoRA onto this model for inference. Both examples use `lightx2v_train/models/Qwen-Image-2.1`.
+- `target_model`: the full model weights to approximate. This teacher supplies calibration trajectories and reconstruction targets. Specify a complete model directory, an exported transformer directory or a weight file, not a LoRA file; RL training is not required.
+- `output`: the final LoRA `.safetensors` path, to be loaded onto `source_model`.
+
+The two example targets are:
+
+| Config | `target_model` |
 |---|---|
-| `--collect-calibration` | Collect target trajectories only |
-| `--collect-and-reconstruct` | Collect a new dataset, then reconstruct after collection finishes |
-| `--collect-calibration --dry-run` | Check sample selection and reference paths without inference |
+| [qwen_image_21_reconstruct_tfmq.json](configs/qwen_image_21_reconstruct_tfmq.json) | `lightx2v_train/models/Qwen-Image-2.1-Lightning-v2-base` |
+| [qwen_image_21_reconstruct_checkpoint_tfmq.json](configs/qwen_image_21_reconstruct_checkpoint_tfmq.json) | `lightx2v_train/models/Qwen-Image-2.1-Lightning-v2-RL/diffusion_pytorch_model.safetensors` |
 
-For one GPU, replace `torchrun --standalone --nproc_per_node=8` with `python` and set `CUDA_VISIBLE_DEVICES=0`. To switch algorithms, change the config path.
+The first target's `-base` suffix is part of its model name; the original base for extraction is still specified by `source_model`. Both configs use the same algorithm; dataset sizes and iteration counts are experiment settings.
 
-Collection runs independent BF16 inference workers with block CPU offload; `compute_dtype` controls reconstruction only. Timestep replay casts to the recorded collection dtype and divides by 1000 before converting to reconstruction precision. Older traces without dtype metadata default to BF16. Reconstruction uses DDP for the current unit's LoRA parameters and loads teacher/student units sequentially; it does not require FSDP. Workers need shared access to models, data and output directories. Each active unit and its activations must fit on one GPU.
+Other key parameters:
 
-## Calibration data and settings
-
-The configs collect **512 T2I + 256 single-reference + 256 multi-reference requests**. Four denoising steps per request produce **4,096 reconstruction samples**. Each `.pt` trajectory stores noisy latents, conditions and timesteps; block targets are computed separately during reconstruction.
-
-| Field | Meaning / supplied value |
+| Parameter | Meaning |
 |---|---|
-| `source_model`, `target_model` | Base and full target weights; exported student weights are also supported |
-| `output`, `layers`, `rank`, `alpha` | LoRA output, selected layers, rank 64, alpha 8 |
-| `calibration` | Existing trace file/directory; also the collection destination |
-| `calibration_manifest` | Request manifest, default `lightx2v_train/data/opengpt4o_qwen_image21/train.jsonl` |
-| `calibration_counts` | Request counts before timestep expansion |
-| `calibration_inference_config` | Native inference settings; supplied config uses four steps |
-| `iterations`, `temporal_iterations` | 1,000 optimizer steps per ordinary/time reconstruction unit |
-| `batch_size` | Global batch 8: one sample per GPU on eight GPUs |
-| `learning_rate`, `gradient_clip` | `5e-5`, `1.0` |
-| `compute_dtype` | BF16 computation; LoRA master parameters, optimizer state and MSE arithmetic remain FP32 |
-| `dtype` | Saved LoRA precision, default FP32 |
-| `log_every` | Update the current iteration's batch MSE every 25 iterations |
-| `seed` | Seed for request selection and reconstruction sampling |
-| `work_dir`, `keep_cache` | Temporary reconstruction directory; remove intermediate caches by default |
+| `layers` | Linear layer names to extract and optimize, supporting `*` wildcards. The examples cover 232 Linear groups. |
+| `rank` / `alpha` | LoRA rank and scaling, set to 64 / 8 in the examples. The weight delta is `(alpha / rank) × up @ down`. SVD initialization compensates for this scaling; alpha=8 does not mean fitting only 1/8 of the target delta. |
+| `initialization` | `svd`: initialize from the target-minus-source weight delta and save it before training; `lora`: load an existing adapter from `initial_lora`. `random` is also supported. |
+| `svd_output` / `initial_lora` | The former is the separate SVD initialization output, defaulting to `output` with its `.safetensors` suffix replaced by `.svd.safetensors`. Set the latter only with `initialization: lora`. |
+| `calibration_manifest` | Request manifest containing prompts, reference images and other request fields, used to select collection requests. |
+| `calibration_counts` | Request counts for `t2i`, `i2i_single` and `i2i_multi`. All captured timesteps are used, each contributing a reconstruction record: for example, 1024 requests × 4 steps = 4096 records. |
+| `calibration_inference_config` | Teacher inference settings for collection, including sampling steps and resolution. See above for sampling overrides from metadata beside a standalone checkpoint. |
+| `calibration` | Where raw calibration trajectories are saved or read, separate from the request manifest. These trajectories are retained. |
+| `iterations` / `temporal_iterations` | Optimizer updates per ordinary reconstruction unit and for the time path, respectively; these are not dataset epochs. |
+| `batch_size` / `learning_rate` | Global batch and LoRA learning rate, set to 8 / `5e-5` in the examples. Each GPU processes one sample per forward and accumulates `batch_size / WORLD_SIZE` microsteps; batch must be divisible by GPU count. |
+| `compute_dtype` / `dtype` | The former controls reconstruction forward precision (`bf16` or `fp32`), while LoRA master parameters and MSE remain FP32. The latter controls export precision. |
+| `checkpointing` | Enable gradient checkpointing inside reconstruction units, recomputing activations during backward to reduce memory. This does not save training checkpoints. |
+| `work_dir` | Stores run records and temporary unit caches. Previous-unit caches are deleted as reconstruction advances; remaining temporary caches are deleted on successful completion. Raw calibration trajectories and exported weights are retained. |
+| `log_every` / `save_iteration_losses` | The former controls how often minibatch MSE is displayed; the latter enables per-iteration `iteration_losses.jsonl` output. |
 
-On fewer GPUs, gradient accumulation is `batch_size / world_size`, which must be an integer. Training samples cached records randomly rather than running fixed epochs. Time reconstruction uses the observed timesteps plus condition `t=0`.
+`work_dir/<run>/` stores the config and per-unit before/after MSE in `metrics.jsonl`. This MSE uses the full calibration cache for that unit; a worse result restores its initial LoRA. Restarting begins reconstruction afresh, without resuming optimizer state.
 
-Collection requires `target_model` to be a complete inference pipeline. For a transformer-only exported target, supply traces collected separately. Match the collection schedule to the target model. `calibration_selection.json` records selected files and completion status; reconstruction rejects incomplete collections.
-
-For targets with dynamic shifting disabled, the collector reads `sample_sigmas` from `model_index.json` and passes them as fixed `sigmas` to the public scheduler with shifting disabled. Explicitly configured `sigmas` take precedence. Each collection output directory retains the effective `inference_config.json`; the source config is unchanged.
-
-## QDrop input mixing
-
-Both algorithms support these fields; only the `tfmq_qdrop` config enables mixing:
-
-```json
-{
-  "qdrop_input_mix": true,
-  "qdrop_student_prob": 0.5
-}
-```
-
-During block/output training, each hidden-state element is independently taken from the student prefix with probability `qdrop_student_prob`, otherwise from the teacher prefix. A new mask is sampled each microstep. `0` selects only teacher features; `1` selects only student features.
-
-Targets always remain teacher outputs. Time conditioning and the input/time units are unchanged. **Full evaluation and propagation to the next block always use pure student inputs.** Mixing needs extra temporary disk space for teacher inputs.
-
-## MSE, outputs and cache cleanup
-
-Each unit is evaluated on **all its calibration samples before and after training**. This is the training calibration set, not a separate validation set. Teacher targets and student-prefix inputs stay fixed during that unit's training. If final MSE worsens, the initial factors are restored. `MSE before → after` reports the retained result; progress-bar MSE is the current training batch's loss. Evaluate generated images on held-out requests separately.
-
-For `tfmq_qdrop`, the default paths are:
-
-```text
-outputs/qwen_image_21_calibration/                         # retained raw trajectories
-    calibration_selection.json
-    collection_<id>/rank_<rank>/*.pt                       # parallel collection
-outputs/qwen_image_21_tfmq_qdrop_r64_a8.svd.safetensors     # retained SVD baseline
-outputs/qwen_image_21_tfmq_qdrop_r64_a8.safetensors         # final LoRA
-outputs/reconstruction_tfmq_qdrop/<id>/
-    config.json
-    calibration.json
-    metrics.jsonl
-    rank_<rank>/                                          # temporary feature caches
-```
-
-With `initialization: "svd"`, the initial LoRA is saved before training; `svd_output` can override its path. With `keep_cache: false`, previous-stage feature caches are removed as reconstruction advances, and remaining caches and per-rank initialization shards are removed after success. **Raw trajectories, the SVD baseline, final LoRA and run metrics are retained.**
-
-Interrupted runs restart reconstruction; optimizer/stage resume is not supported. To reuse an initialization, set `initialization: "lora"` and `initial_lora` to a matching exported LoRA. Use distinct output paths for different experiments.
+Use the inference framework to validate generated images.

@@ -1,41 +1,34 @@
 """Select calibration requests and invoke the existing native trace collector."""
 
-import importlib.util
+import hashlib
 import json
 import os
 import random
 import subprocess
 import sys
 import uuid
+from dataclasses import replace
 from datetime import timedelta
-from functools import cache
 from pathlib import Path
 
 import torch.distributed as dist
 
+from .collect_calibration import TASKS, build_requests, resolve_inference_config, task_group
+
 SELECTION_FILE = "calibration_selection.json"
-PREVIEW_SCRIPT = Path(__file__).resolve().parents[1] / "run_validation_preview.py"
-
-
-@cache
-def preview_module():
-    # Load the same local entry point used by the collection subprocess.
-    spec = importlib.util.spec_from_file_location("qwen_image21_calibration_preview", PREVIEW_SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+COLLECTION_SCRIPT = Path(__file__).with_name("collect_calibration.py")
+PIPELINE_COMPONENTS = ("transformer", "text_encoder", "processor", "vae", "scheduler")
 
 
 def select_indices(manifest, counts, seed):
-    preview = preview_module()
-    pools = {task: [] for task in preview.TASKS}
+    pools = {task: [] for task in TASKS}
     with Path(manifest).open() as file:
         records = [json.loads(line) for line in file if line.strip()]
     for index, record in enumerate(records):
-        pools[preview.task_group(record)].append(index)
+        pools[task_group(record)].append(index)
     generator = random.Random(seed)
     selected = []
-    for task in preview.TASKS:
+    for task in TASKS:
         if len(pools[task]) < counts[task]:
             raise ValueError(f"Calibration manifest has {len(pools[task])} {task} requests, but {counts[task]} were requested")
         selected.extend(generator.sample(pools[task], counts[task]))
@@ -97,7 +90,7 @@ def worker_environment(config, local_rank, distributed):
             if local_rank >= len(devices) or devices[local_rank] == "-1":
                 raise ValueError(f"LOCAL_RANK={local_rank} has no device in CUDA_VISIBLE_DEVICES={visible!r}")
             device = devices[local_rank]
-        # The preview resets LOCAL_RANK to zero. Restrict visibility first so
+        # The collector resets LOCAL_RANK to zero. Restrict visibility first so
         # that zero refers to this worker's GPU, not the launcher's first GPU.
         env["CUDA_VISIBLE_DEVICES"] = device
     for name in list(env):
@@ -110,23 +103,61 @@ def worker_environment(config, local_rank, distributed):
     return env
 
 
-def _collection_plan(config, world, dry_run):
+def collection_signature(config, inference=None):
+    """Record sampling inputs without reading multi-GB weight tensors."""
+    if not config.calibration_manifest or config.calibration_counts is None:
+        raise ValueError("Collection/reuse requires calibration_manifest and calibration_counts")
+    model = Path(config.target_model).resolve(strict=True)
+    if inference is None:
+        inference = resolve_inference_config(json.loads(Path(config.calibration_inference_config).read_text()), model)
+    if inference.get("enable_cfg", False) or inference.get("parallel", False) or inference.get("lora_configs"):
+        raise ValueError("Target collection requires CFG disabled, parallel=false and no additional LoRA")
+    files = set()
+    for name in PIPELINE_COMPONENTS:
+        component = (model / name).resolve(strict=True)
+        if not component.is_dir():
+            raise ValueError(f"Missing pipeline component directory: {component}")
+        files.update(path.resolve() for path in component.rglob("*") if path.is_file() and not any(part.startswith(".") for part in path.relative_to(component).parts))
+    if (model / "model_index.json").is_file():
+        files.add((model / "model_index.json").resolve())
+    inventory = []
+    for path in sorted(files):
+        stat = path.stat()
+        item = {"path": str(path), "bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+        if path.suffix == ".json":
+            item["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        inventory.append(item)
+    manifest = Path(config.calibration_manifest).resolve(strict=True)
+    return {
+        "format_version": 2,
+        "target_model": str(model),
+        "model_files": inventory,
+        "inference": inference,
+        "collection_dtype": "bf16",
+        "manifest": str(manifest),
+        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "seed": config.seed,
+        "counts": config.calibration_counts,
+    }
+
+
+def _collection_plan(config, world, dry_run, indices=None):
     if not config.calibration_manifest or config.calibration_counts is None:
         raise ValueError("Collection requires calibration_manifest and calibration_counts in the reconstruction config")
     manifest = Path(config.calibration_manifest).resolve()
     output = Path(config.calibration).resolve()
-    indices = select_indices(manifest, config.calibration_counts, config.seed)
+    indices = select_indices(manifest, config.calibration_counts, config.seed) if indices is None else indices
     # Validate image paths/canvas sizes without loading a model or writing files.
-    jobs = preview_module().build_requests(manifest, output, per_task=1, indices=indices, seed=config.seed)
+    jobs = build_requests(manifest, output, per_task=1, indices=indices, seed=config.seed)
     inference = Path(config.calibration_inference_config).resolve()
     inference_config = json.loads(inference.read_text())
     if inference_config.get("enable_cfg", False) or inference_config.get("parallel", False):
         raise ValueError("Trace collection requires enable_cfg=false and parallel=false")
     model = Path(config.target_model).resolve()
-    for component in ("transformer", "text_encoder", "processor", "vae", "scheduler"):
+    for component in PIPELINE_COMPONENTS:
         if not (model / component).is_dir():
             raise ValueError(f"Collection needs a full target inference pipeline; missing {model / component}")
-    inference_config = preview_module().resolve_inference_config(inference_config, model)
+    inference_config = resolve_inference_config(inference_config, model)
     selection = {
         "format_version": 1,
         "complete": False,
@@ -138,6 +169,7 @@ def _collection_plan(config, world, dry_run):
         "files": [Path(job["request"]["save_result_path"]).with_suffix(".pt").name for job in jobs],
         "world_size": world,
         "inference_config": str(inference),
+        "provenance": collection_signature(config, inference_config),
     }
     if world > 1:
         run_dir = f"collection_{uuid.uuid4().hex}"
@@ -182,7 +214,7 @@ def _collect_shard(config, selection, group):
     print(f"Collection rank {group.rank}/{group.world}: {len(indices)} requests, CUDA_VISIBLE_DEVICES={env.get('CUDA_VISIBLE_DEVICES', 'default')}, output={shard_output}", flush=True)
     command = [
         sys.executable,
-        str(PREVIEW_SCRIPT),
+        str(COLLECTION_SCRIPT),
         "--model-path",
         selection["target_model"],
         "--config-json",
@@ -193,7 +225,6 @@ def _collect_shard(config, selection, group):
         str(shard_output),
         "--seed",
         str(config.seed),
-        "--dump-trace",
         "--indices",
         *map(str, indices),
     ]
@@ -203,12 +234,12 @@ def _collect_shard(config, selection, group):
         raise RuntimeError(f"Collection did not produce all requested traces: {missing[:5]}")
 
 
-def collect_calibration(config, dry_run=False):
+def collect_calibration(config, dry_run=False, indices=None):
     group = CollectionGroup()
     try:
         # Only rank zero selects/validates requests. Broadcasting the plan keeps
         # filenames and seeds independent of worker scheduling and GPU count.
-        selection = group.on_main(lambda: _collection_plan(config, group.world, dry_run))
+        selection = group.on_main(lambda: _collection_plan(config, group.world, dry_run, indices))
         if dry_run:
             return selection
         output = Path(config.calibration).resolve()
@@ -252,3 +283,173 @@ def calibration_files(config):
     if not files or any(not path.is_file() for path in files):
         raise ValueError("No calibration .pt files found, or selected traces are missing")
     return files
+
+
+def link_file(destination, source):
+    source = source.resolve(strict=True)
+    if destination.is_symlink() or destination.exists():
+        if destination.resolve() != source:
+            raise ValueError(f"Existing pipeline entry points elsewhere: {destination}")
+    else:
+        destination.symlink_to(source, target_is_directory=source.is_dir())
+
+
+def prepare_pipeline(config):
+    """Use a full pipeline or attach exported transformer files to base assets."""
+    target = Path(config.target_model).resolve(strict=True)
+    if target.is_dir() and (target / "transformer").is_dir():
+        for name in PIPELINE_COMPONENTS:
+            if not (target / name).is_dir():
+                raise ValueError(f"Missing target pipeline component: {target / name}")
+        return str(target), str(Path(config.calibration_inference_config).resolve()), None
+
+    root = target.parent if target.is_file() else target
+    if target.is_file():
+        if target.suffix != ".safetensors":
+            raise ValueError("Collection requires safetensors weights; export the training checkpoint first")
+        weights = {"diffusion_pytorch_model.safetensors": target}
+    else:
+        indices = sorted(root.glob("*.safetensors.index.json"))
+        if len(indices) > 1:
+            raise ValueError(f"Multiple weight indices; specify a single transformer directory: {root}")
+        if indices:
+            names = set(json.loads(indices[0].read_text())["weight_map"].values())
+            if not names or any(Path(name).name != name or not name.endswith(".safetensors") for name in names):
+                raise ValueError("Transformer index must reference safetensors shards in the same directory")
+            weights = {name: root / name for name in sorted(names)}
+            weights[indices[0].name] = indices[0]
+        else:
+            weights = {path.name: path for path in sorted(root.glob("*.safetensors"))}
+        if not weights:
+            raise ValueError(f"No safetensors weights found in transformer directory: {root}")
+    for path in weights.values():
+        path.resolve(strict=True)
+
+    base = Path(config.source_model).resolve(strict=True)
+    inference = json.loads(Path(config.calibration_inference_config).read_text())
+    release_path = root / "inference_config.json"
+    if release_path.is_file():
+        release = json.loads(release_path.read_text())
+        if release.get("true_cfg_scale", 1.0) != 1.0:
+            raise ValueError("Checkpoint collection currently requires CFG=1")
+        if "sample_sigmas" in release:
+            if not release["sample_sigmas"]:
+                raise ValueError("Checkpoint sample_sigmas must not be empty")
+            inference.update(infer_steps=len(release["sample_sigmas"]), sigmas=release["sample_sigmas"], do_time_shift=False)
+        if "scheduler" in release:
+            inference["scheduler_config"] = release["scheduler"]
+    if inference.get("enable_cfg", False) or inference.get("parallel", False) or inference.get("lora_configs"):
+        raise ValueError("Target collection requires CFG disabled, parallel=false and no additional LoRA")
+    inference.update(enable_cfg=False, parallel=False)
+    pipeline = Path(config.work_dir).resolve() / "collection_pipeline"
+    transformer = pipeline / "transformer"
+    transformer.mkdir(parents=True, exist_ok=True)
+    existing = {path.name for pattern in ("*.safetensors", "*.safetensors.index.json") for path in transformer.glob(pattern)}
+    if existing - weights.keys():
+        raise ValueError(f"Collection pipeline contains stale weight files; use a separate work_dir: {transformer}")
+    for name, path in weights.items():
+        link_file(transformer / name, path)
+    model_config = Path(config.model_config) if config.model_config else root / "config.json"
+    if not config.model_config and not model_config.is_file():
+        model_config = base / "transformer/config.json"
+    link_file(transformer / "config.json", model_config)
+    for component in PIPELINE_COMPONENTS[1:]:
+        link_file(pipeline / component, base / component)
+    link_file(pipeline / "model_index.json", base / "model_index.json")
+    inference_file = pipeline / "collection_config.json"
+    inference_file.write_text(json.dumps(inference, indent=2) + "\n")
+
+    # Older single-file collections saved a separate, narrower signature.
+    legacy = None
+    if target.is_file() and config.calibration_manifest:
+        stat = target.stat()
+        legacy = {
+            "checkpoint": str(target),
+            "bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "base_model": str(base),
+            "inference": inference,
+            "seed": config.seed,
+            "counts": config.calibration_counts,
+            "manifest_sha256": hashlib.sha256(Path(config.calibration_manifest).read_bytes()).hexdigest(),
+        }
+    return str(pipeline), str(inference_file), legacy
+
+
+def reuse_collection(config, signature, dry_run=False, legacy_signature=None):
+    root = Path(config.calibration)
+    selection_file = root / SELECTION_FILE
+    if not selection_file.is_file():
+        if root.is_dir() and any(root.rglob("*.pt")):
+            raise ValueError("Existing calibration lacks a selection/provenance record; recollect in a separate calibration directory")
+        return None
+    selection = json.loads(selection_file.read_text())
+    if not selection.get("complete"):
+        return None
+    saved = selection.get("provenance")
+    expected = signature
+    if saved is None:
+        provenance = next((root / name for name in ("checkpoint_collection.json", "rl_collection.json") if (root / name).is_file()), None)
+        if legacy_signature is None or provenance is None:
+            raise ValueError("Existing calibration lacks verifiable provenance; recollect in a separate calibration directory")
+        saved = json.loads(provenance.read_text())
+        expected = legacy_signature
+    if {k: v for k, v in saved.items() if k != "counts"} != {k: v for k, v in expected.items() if k != "counts"}:
+        raise ValueError("Existing calibration belongs to a different checkpoint/config; use a separate calibration directory")
+    counts = config.calibration_counts
+    if (
+        selection["counts"] != saved["counts"]
+        or selection["seed"] != config.seed
+        or Path(selection["target_model"]).resolve() != Path(config.target_model).resolve()
+        or Path(selection["manifest"]).resolve() != Path(config.calibration_manifest).resolve()
+    ):
+        raise ValueError("Collection selection and provenance disagree")
+    files = calibration_files(replace(config, calibration_counts=saved["counts"]))
+    if len(files) != len(selection["indices"]) or len(set(selection["indices"])) != len(files) or len(files) != sum(saved["counts"].values()):
+        raise ValueError("Collection inventory is inconsistent")
+    if saved["counts"] == counts:
+        print(f"Reusing target trajectories: {root}", flush=True)
+        return str(root)
+    records = [json.loads(line) for line in Path(config.calibration_manifest).read_text().splitlines() if line.strip()]
+    if any(type(index) is not int or index < 0 or index >= len(records) for index in selection["indices"]):
+        raise ValueError("Collection selection contains invalid manifest indices")
+    pools = {task: [] for task in counts}
+    for index, path in zip(selection["indices"], files, strict=True):
+        pools[task_group(records[index])].append((index, path))
+    rng = random.Random(config.seed)
+    chosen = []
+    for task, count in counts.items():
+        if len(pools[task]) < count:
+            return None
+        chosen.extend(rng.sample(pools[task], count))
+    chosen.sort(key=lambda item: item[0])
+    suffix = "_".join(str(counts[k]) for k in ("t2i", "i2i_single", "i2i_multi"))
+    subset = root.with_name(f"{root.name}_subset_{suffix}_seed{config.seed}")
+    print(f"Reuse {len(chosen)} calibration traces from {root}; subset inventory: {subset}", flush=True)
+    if not dry_run:
+        subset.mkdir(parents=True, exist_ok=True)
+        names = []
+        for index, path in chosen:
+            name = f"{index:08d}.pt"
+            link_file(subset / name, path)
+            names.append(name)
+        _write_selection(subset, {**selection, "counts": counts, "indices": [i for i, _ in chosen], "files": names, "derived_from": str(root.resolve()), "provenance": signature})
+    return str(subset)
+
+
+def prepare_calibration_workflow(config, dry_run=False, reuse_only=False):
+    """Prepare and validate trajectories for full pipelines and exported weights."""
+    group = CollectionGroup()
+    try:
+        pipeline, inference, legacy = group.on_main(lambda: prepare_pipeline(config))
+        collection = replace(config, target_model=pipeline, calibration_inference_config=inference)
+        signature = group.on_main(lambda: collection_signature(collection))
+        reused = group.on_main(lambda: reuse_collection(collection, signature, dry_run, legacy))
+        if reused:
+            return replace(config, calibration=reused)
+        if reuse_only:
+            raise ValueError("No complete matching calibration with enough samples is available")
+        collect_calibration(collection, dry_run=dry_run)
+        return config
+    finally:
+        group.close()

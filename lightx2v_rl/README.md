@@ -1,63 +1,51 @@
 # LightX2V RL
 
-LightX2V 的少步图像与视频强化学习模块，与 `lightx2v_train` 并列。提供 CPS、Flow-GRPO、Geo-FSRL（简称 Geo）算法、模型适配、数据处理及 reward 接口，复用固定版本的 verl-omni 完成分布式调度、worker 管理、训练引擎和权重同步。
+LightX2V 的少步图像与视频强化学习模块。算法、模型适配、数据与 reward 接口位于本模块，固定版本的 [verl-omni](../third_party/verl-omni) 提供分布式调度、worker、FSDP 训练引擎和权重同步。
 
-| 能力 | 支持范围 |
+| 能力 | 当前范围 |
 | --- | --- |
-| 算法 | CPS、Flow-GRPO、Geo-FSRL；Geo 对应 FewStepRL 中的 IMMB |
-| 图像模型 | Qwen-Image-2.1-Turbo：T2I、单参考图 I2I |
+| 算法 | CPS、Flow-GRPO、Geo-FSRL（Geo，对应 FewStepRL 中的 IMMB） |
+| 图像模型 | Qwen-Image-2.1-Turbo；携带固定采样日程的 Qwen-Image-2.1 四步模型 |
+| 图像任务 | T2I、单参考图 I2I、多参考图 I2I |
 | 视频模型 | Wan2.1 单 transformer T2V，使用完整 Diffusers 格式权重 |
-| Reward | HPSv3、VideoAlign、UnifiedReward-Edit-qwen35-9b |
-| 训练后端 | verl-omni / FSDP2；支持独立 HTTP reward 服务 |
+| Reward | UnifiedReward-Edit 9B / 27B、HPSv3、VideoAlign |
+| 训练方式 | 同步在线 RL、全参数训练；Actor 默认 FP32 主参数、BF16 计算 |
 
-Qwen 使用官方 Diffusers pipeline，Wan rollout 复用 vLLM-Omni。LightX2V 原生加速推理后端、Wan2.2 双专家和 H3 尚需适配。
+Qwen rollout 使用官方 Diffusers pipeline，Wan rollout 复用 vLLM-Omni。LightX2V 原生加速 rollout、LoRA 训练、Wan2.2 双专家和 H3 尚未接入。
 
-本文所有命令均在 **LightX2V 仓库根目录**执行，即包含 `lightx2v_rl/` 与 `third_party/` 的目录；仓库目录可以任意命名。配置中的本地资源路径相对仓库根目录解析。安装与启动命令使用 Bash。
-
-[环境准备](#环境准备) · [模型与数据](#模型与数据) · [Reward 服务](#reward-服务) · [训练](#训练) · [日志与监控](#日志与监控) · [开发](#开发) · [常见问题](#常见问题)
+本文命令均使用 Bash，在 **LightX2V 仓库根目录**执行。配置中的模型、数据清单和输出路径相对仓库根目录解析；清单内部的图片路径相对清单所在目录解析。多机运行时，各节点须使用相同的共享挂载路径。
 
 ## 环境准备
 
-### 系统要求
+### 系统依赖
 
-- Linux、可用的 NVIDIA GPU 和与所安装 PyTorch / vLLM CUDA runtime 兼容的驱动。
-- 推荐 Python 3.12；完整 verl-omni 训练运行时要求 Python ≥ 3.11。
-- Git、curl、C/C++ 编译工具及与解释器匹配的 Python 开发头文件。
-- UnifiedReward 的固定 GPU wheel 要求 glibc ≥ 2.35。
+推荐 Linux、Python 3.12、兼容所安装 PyTorch / vLLM CUDA runtime 的 NVIDIA 驱动。完整训练栈要求 Python ≥ 3.11；UnifiedReward 的固定 GPU wheel 要求 glibc ≥ 2.35。环境安装应在 GPU 节点或同规格镜像上完成。
 
-GPU 数量、显存需求由模型、分辨率、batch 和评分服务决定。后文的单机与五节点配置是部署示例，不是安装环境的前提。驱动、CUDA 与容器的版本要求参见所固定版本的 [verl-omni 安装说明](../third_party/verl-omni/docs/start/install.md)；不同虚拟环境的 CUDA runtime 可能不同，需分别检查。
-
-以 Ubuntu 24.04、系统 Python 3.12 为例，在容器内安装系统依赖：
+Ubuntu 24.04 示例：
 
 ```bash
 apt-get update
 apt-get install -y --no-install-recommends \
   python3.12 python3.12-dev python3-pip \
   git curl build-essential ca-certificates
-
-python3.12 --version
 nvidia-smi
 ```
 
-其他发行版安装对应的软件包。使用其他 Python 版本时，开发头文件必须与解释器一致。系统依赖应预装到公共镜像，或在每个运行服务的节点安装；共享虚拟环境不包含这些系统依赖。
+Python 开发头文件必须与运行解释器一致。共享虚拟环境不能代替每个节点的系统依赖；建议将这些依赖预装到公共镜像。
 
-### 目录与缓存
-
-模型、reward、数据和运行输出统一通过本模块下的目录访问：
+### 资源目录与缓存
 
 ```text
-仓库根目录/
-├── third_party/verl-omni/     # 固定版本的 submodule
-└── lightx2v_rl/
-    ├── .venv-rl/             # 训练与 rollout 环境
-    ├── .venv-reward/         # 可选：HPSv3 / VideoAlign 环境
-    ├── .venv-unifiedreward/  # 可选：UnifiedReward 环境
-    ├── models/              # 生成模型、rewards/ 与下载缓存；可为软链接
-    ├── data/                # 原始数据入口与适配后的清单
-    └── outputs/             # 安装日志、训练日志、验证结果与 checkpoint
+lightx2v_rl/
+├── .venv-rl/             # Actor、rollout、Ray、reward 客户端
+├── .venv-reward/         # 可选：HPSv3 / VideoAlign 服务
+├── .venv-unifiedreward/  # 可选：UnifiedReward 服务
+├── models/              # 生成模型、rewards/ 与下载缓存，可使用相对软链接
+├── data/                # 原始数据入口、适配后的 JSONL / Parquet 清单
+└── outputs/             # 日志、checkpoint 与验证结果
 ```
 
-推荐将大文件放在共享存储，通过**相对软链接**接入。以下示例让模型实体保存在仓库同级的 `models/`；已有有效目录或链接时直接复用：
+以下示例将模型实体放在仓库同级的 `models/`，已存在的目录或链接会保留：
 
 ```bash
 set -euo pipefail
@@ -65,8 +53,6 @@ mkdir -p ../models lightx2v_rl/data lightx2v_rl/outputs/setup
 if [[ ! -e lightx2v_rl/models && ! -L lightx2v_rl/models ]]; then
   ln -s ../../models lightx2v_rl/models
 fi
-test -d lightx2v_rl/models
-
 RL_MODELS_DIR="$(cd lightx2v_rl/models && pwd)"
 export UV_CACHE_DIR="$RL_MODELS_DIR/.uv-cache"
 export PIP_CACHE_DIR="$RL_MODELS_DIR/.pip-cache"
@@ -74,25 +60,9 @@ export HF_HOME="$RL_MODELS_DIR/.hf-runtime"
 mkdir -p "$UV_CACHE_DIR" "$PIP_CACHE_DIR" "$HF_HOME"
 ```
 
-在同一终端继续执行安装命令。缓存路径在运行时展开，避免安装脚本切换目录后写入其他位置，不包含固定挂载路径。新终端需要重新设置这些变量。模型下载脚本直接写入 `models/`，不使用 Hugging Face 默认权重缓存。
-
-数据也可以按数据集分别建立相对软链接。迁移工作目录时保持链接与目标的相对关系。`weights/` 是旧 reward 路径的兼容入口，新配置统一使用 `models/rewards/`。
-
-### Python 环境划分
-
-训练和评分模型依赖不同版本的 Transformers / vLLM，采用独立环境，通过 HTTP 通信。只安装任务需要的 reward 环境。
-
-| 环境 | 用途 | 依赖定义 |
-| --- | --- | --- |
-| `.venv-rl` | Ray、Actor、reference、rollout、评分客户端 | 固定 verl-omni + [模型依赖覆盖](requirements/qwen_image21.txt) |
-| `.venv-reward` | HPSv3 / VideoAlign 服务 | [reward.txt](requirements/reward.txt)：Torch 2.8.0、Transformers 4.51.3、PEFT 0.17.0 |
-| `.venv-unifiedreward` | UnifiedReward-Edit vLLM 服务 | [unifiedreward.txt](requirements/unifiedreward.txt)：vLLM 0.20.2、Transformers 5.5.4 |
-
-脚本显式选择目标解释器，无需激活环境。多机共享环境时，在一台兼容的 GPU 节点安装一次，其余节点复用；节点须使用兼容镜像、相同的共享挂载路径及可用的基础 Python。不要向正在被训练使用的环境安装包，也不要让多个节点同时修改同一环境。
+继续在同一终端安装；新终端需要重新设置缓存变量。下载器直接写入指定模型目录，不使用 Hugging Face 默认权重缓存。模型、数据、虚拟环境和运行输出不纳入版本管理。`weights/` 仅作为旧 reward 路径的兼容入口，新配置统一使用 `models/rewards/`。
 
 ### 安装训练环境
-
-先检查 uv；镜像未提供时安装到本模块的工具目录：
 
 ```bash
 if ! command -v uv >/dev/null 2>&1; then
@@ -102,159 +72,128 @@ fi
 uv --version
 
 git submodule update --init third_party/verl-omni
+bash lightx2v_rl/scripts/setup/setup_qwen21_env.sh
 ```
 
-使用父仓库记录的 submodule 版本。当前完整 GPU 安装入口为 `setup_qwen21_env.sh`：它安装公共 verl-omni / vLLM-Omni 训练栈、本模块，以及 QwenImage21 所需的依赖覆盖；Wan 适配也复用这套训练环境。
+安装脚本创建 `.venv-rl`，安装固定的 verl-omni / vLLM-Omni、模型依赖覆盖和本模块，并检查 CUDA 与 QwenImage21 导入。Wan 适配复用此训练环境。依赖以 [qwen_image21.txt](requirements/qwen_image21.txt) 和安装脚本为准；仅 `pip install -e lightx2v_rl` 不包含完整 GPU 训练栈。
+
+安装时会应用 `patches/` 中的通用扩展接口补丁，不改变 submodule 的 Git 版本。可单独检查或在补丁更新后重新应用：
 
 ```bash
-(
-  set -euo pipefail
-  if [[ ! -e lightx2v_rl/.venv-rl && ! -L lightx2v_rl/.venv-rl ]]; then
-    uv venv --python "$(command -v python3.12)" --seed lightx2v_rl/.venv-rl
-  fi
-  bash lightx2v_rl/scripts/setup/setup_qwen21_env.sh \
-    2>&1 | tee lightx2v_rl/outputs/setup/install_training.log
-)
+# 只检查，不修改文件。
+lightx2v_rl/.venv-rl/bin/python lightx2v_rl/scripts/setup/prepare_verl_omni.py --check
+
+# 首次准备或补丁更新时应用。
+lightx2v_rl/.venv-rl/bin/python lightx2v_rl/scripts/setup/prepare_verl_omni.py
 ```
 
-在 GPU 节点执行；脚本会检查 CUDA 和官方 QwenImage21 导入。依赖版本以安装脚本和 requirements 为准，避免单独升级 Torch、Diffusers、Transformers 或 vLLM，破坏组合兼容性。仅 `pip install -e lightx2v_rl` 不会安装完整训练栈。
+这些补丁是运行依赖。使用父仓库记录的 submodule 版本，保留应用补丁后的工作区差异。
 
-安装脚本还会运行 `prepare_verl_omni.py`，应用本模块维护的通用接口补丁。准备完成后可只读检查：
+### 安装 reward 环境
+
+评分模型与训练模型依赖不同版本的 Transformers / vLLM，通过独立进程和 HTTP 通信。只安装实际启用的服务环境：
+
+| 环境 | 用途 | 固定依赖 |
+| --- | --- | --- |
+| `.venv-reward` | HPSv3 / VideoAlign | [reward.txt](requirements/reward.txt)：Torch 2.8.0、Transformers 4.51.3、PEFT 0.17.0 |
+| `.venv-unifiedreward` | UnifiedReward-Edit | [unifiedreward.txt](requirements/unifiedreward.txt)：vLLM 0.20.2、Transformers 5.5.4 |
 
 ```bash
-lightx2v_rl/.venv-rl/bin/python \
-  lightx2v_rl/scripts/setup/prepare_verl_omni.py --check
+# HPSv3 / VideoAlign
+REWARD_PYTHON_VERSION="$(command -v python3.12)" \
+REWARD_BOOTSTRAP_PYTHON="$(command -v python3.12)" \
+  bash lightx2v_rl/scripts/setup/setup_reward_env.sh
+
+# UnifiedReward-Edit
+LIGHTX2V_SETUP_PYTHON="$(command -v python3.12)" \
+  bash lightx2v_rl/scripts/setup/setup_unifiedreward_env.sh
 ```
 
-训练依赖这些补丁；`--check` 只验证、不修改文件，无需每个 iter 执行。首次准备或补丁更新后，可去掉 `--check` 应用补丁。submodule 中由此产生的工作区差异应保留。
+脚本优先使用 uv，无需激活环境。多机使用兼容镜像时，可在一台 GPU 节点安装共享环境，其余节点复用；不要同时从多个节点安装，也不要修改运行中作业使用的环境。依赖安装不包含模型权重。
 
-### 安装可选 reward 环境
+### 检查环境
 
-需要 HPSv3 或 VideoAlign 时执行：
-
-```bash
-(
-  set -euo pipefail
-  REWARD_PYTHON_VERSION="$(command -v python3.12)" \
-  REWARD_BOOTSTRAP_PYTHON="$(command -v python3.12)" \
-    bash lightx2v_rl/scripts/setup/setup_reward_env.sh \
-    2>&1 | tee lightx2v_rl/outputs/setup/install_reward.log
-)
-```
-
-需要 UnifiedReward-Edit 时执行：
+在 GPU 节点检查训练环境；评分环境可将命令中的 `.venv-rl` 替换成对应目录：
 
 ```bash
-(
-  set -euo pipefail
-  LIGHTX2V_SETUP_PYTHON="$(command -v python3.12)" \
-    bash lightx2v_rl/scripts/setup/setup_unifiedreward_env.sh \
-    2>&1 | tee lightx2v_rl/outputs/setup/install_unifiedreward.log
-)
-```
-
-两者使用系统 Python 创建独立环境，优先通过 uv 安装，不依赖系统 `ensurepip`。仅部署 reward 服务时，准备好系统依赖、目录、缓存和 uv 后即可安装，无需先安装训练栈。安装完成只表示 Python 依赖就绪；模型权重需另行准备，服务也需单独启动。Qwen 默认配方同时使用 UnifiedReward 和 HPSv3，因此需要两套 reward 环境。
-
-### 验证环境
-
-在 GPU 节点执行。下面检查所有已创建的环境，未安装的可选环境会跳过：
-
-```bash
-set -euo pipefail
-for RL_ENV in .venv-rl .venv-reward .venv-unifiedreward; do
-  [[ -d "lightx2v_rl/$RL_ENV" ]] || continue
-  "lightx2v_rl/$RL_ENV/bin/python" - <<'PY'
+lightx2v_rl/.venv-rl/bin/python - <<'PY'
 import sys
 import torch
-import transformers
-
 print("Python:", sys.executable)
-print("Torch:", torch.__version__, "CUDA runtime:", torch.version.cuda)
-print("Transformers:", transformers.__version__)
-print("CUDA:", torch.cuda.is_available(), "GPU count:", torch.cuda.device_count())
-assert torch.cuda.is_available(), "CUDA unavailable"
+print("PyTorch:", torch.__version__, "CUDA runtime:", torch.version.cuda)
+print("CUDA available:", torch.cuda.is_available(), "GPU count:", torch.cuda.device_count())
+assert torch.cuda.is_available()
 PY
-done
 
-lightx2v_rl/.venv-rl/bin/python -m lightx2v_rl.train --config wan_geo --check-config
 lightx2v_rl/.venv-rl/bin/python -m lightx2v_rl.train \
   --config qwen_image21_turbo_geo --check-config
 ```
 
-`--check-config` 检查配置约束，不加载真实模型；开始训练前仍需准备权重、数据和评分服务。
+`--check-config` 只检查配方约束，不加载模型或启动服务。
 
 ## 模型与数据
 
-### 资源约定
+### 模型资源
 
 | 资源 | 默认入口，相对仓库根目录 |
 | --- | --- |
 | 生成模型 | `lightx2v_rl/models/<模型名>/` |
 | HPSv3 | `lightx2v_rl/models/rewards/hpsv3/` |
 | VideoAlign | `lightx2v_rl/models/rewards/videoalign/` |
-| UnifiedReward-Edit | `lightx2v_rl/models/rewards/unifiedreward/` |
-| 原始数据 / 适配后数据 | `lightx2v_rl/data/<数据集名>/` |
+| UnifiedReward 默认别名 | `lightx2v_rl/models/rewards/unifiedreward/` |
 
-入口可以指向共享目录中的完整资源。下载与迁移工具生成的 `download-manifest.json` / `reward-assets.json` 用于启动前校验，应与权重一起保留。虚拟环境、模型、数据与运行输出均不提交到 Git。
-
-### 生成模型与 UnifiedReward
-
-提供 Qwen-Image-2.1-Turbo 和 UnifiedReward-Edit 的固定版本下载器，可续传并校验已有文件：
+Qwen-Image-2.1-Turbo 与 UnifiedReward 使用固定版本下载器，支持续传与完成校验：
 
 ```bash
 python3 lightx2v_rl/scripts/assets/download_qwen21_assets.py \
   --models qwen unifiedreward --connections 8
+
+# 可选：27B，保存到独立目录。
+python3 lightx2v_rl/scripts/assets/download_qwen21_assets.py \
+  --models unifiedreward27b --connections 8
 ```
 
-按需将 `--models` 改成 `qwen` 或 `unifiedreward`。默认分别保存到 `models/Qwen-Image-2.1-Turbo/`、`models/rewards/UnifiedReward-Edit-qwen35-9b/`，这里的 `models/` 指模块资源目录。下载 UnifiedReward 后建立服务使用的别名：
+分别保存到 `models/Qwen-Image-2.1-Turbo/`、`models/rewards/UnifiedReward-Edit-qwen35-9b/` 和 `models/rewards/UnifiedReward-Edit-qwen35-27b/`，这里的 `models/` 指模块资源目录。准备 9B 后建立服务默认别名与旧 `weights/` 兼容入口：
 
 ```bash
-if [[ ! -e lightx2v_rl/models/rewards/unifiedreward && \
-      ! -L lightx2v_rl/models/rewards/unifiedreward ]]; then
-  ln -s UnifiedReward-Edit-qwen35-9b lightx2v_rl/models/rewards/unifiedreward
-fi
+python3 lightx2v_rl/scripts/assets/link_reward_weights.py --models unifiedreward
 ```
 
-也可设置 `LIGHTX2V_UNIFIEDREWARD_MODEL` 指向另一个已校验的本地快照。Wan 权重需另行准备完整 Diffusers 目录，包含模型配置、文本编码器和 VAE；训练时用 `actor_rollout_ref.model.path` 指定。
+保留下载完成的 `download-manifest.json`，启动时会校验。四步 Qwen 模型需另行准备**完整 Diffusers pipeline**，其 `model_index.json` 必须携带对应的固定 `sample_sigmas`；本地蒸馏导出还须保留 `export_manifest.json`，供预检验证模型来源与结构。不能只把 Turbo 的步数改成 4。Wan 同样需要包含 transformer、文本编码器、VAE 和配置的完整 Diffusers 目录。
 
-### HPSv3 / VideoAlign 资产
-
-服务读取包含 checkpoint、基座、tokenizer 和 `reward-assets.json` 的自包含 bundle。已有 bundle 可以直接复制或通过目录软链接接入，运行时不依赖 FewStepRL 仓库。
-
-从已有 FewStepRL 资源整理 bundle 时，使用本地迁移工具：
+HPSv3 / VideoAlign 使用包含 checkpoint、基座、tokenizer 和 `reward-assets.json` 的自包含 bundle。已有 bundle 可直接复制或软链接；从已有 FewStepRL 资源整理时执行：
 
 ```bash
 python3 lightx2v_rl/scripts/assets/prepare_reward_assets.py \
-  --source-root ../FewStepRL \
-  --hf-cache ../models/.hf-runtime/hub
+  --source-root ../FewStepRL --hf-cache ../models/.hf-runtime/hub --dry-run
+python3 lightx2v_rl/scripts/assets/prepare_reward_assets.py \
+  --source-root ../FewStepRL --hf-cache ../models/.hf-runtime/hub
 ```
 
-示例参数需替换成实际的相对目录。该工具**不下载权重**：源仓库需包含 VideoAlign checkpoint，本地 HF 缓存需包含 HPSv3 checkpoint、Qwen2-VL-7B 和 Qwen2-VL-2B 基座；可先加 `--dry-run` 查看缺失资源。默认产物位于 `lightx2v_rl/models/rewards/fewstep/`，当前 bundle 校验要求包含 HPSv3 与 VideoAlign 两套资产，服务可只加载其中一种。
-
-准备好 bundle 后，首次建立默认入口：
+此工具不下载权重。源目录需含 VideoAlign checkpoint，本地 HF 缓存需含 HPSv3 checkpoint、Qwen2-VL-7B 和 Qwen2-VL-2B 基座。默认生成 `lightx2v_rl/models/rewards/fewstep/`；按实际资源位置修改参数。当前 bundle 包含两套资产，服务可只加载其中一种。首次建立默认入口：
 
 ```bash
-for RL_REWARD_ENTRY in hpsv3 videoalign reward-assets.json; do
-  if [[ ! -e "lightx2v_rl/models/rewards/$RL_REWARD_ENTRY" && \
-        ! -L "lightx2v_rl/models/rewards/$RL_REWARD_ENTRY" ]]; then
-    ln -s "fewstep/$RL_REWARD_ENTRY" "lightx2v_rl/models/rewards/$RL_REWARD_ENTRY"
-  fi
-done
+python3 lightx2v_rl/scripts/assets/link_reward_weights.py --models hpsv3 videoalign
 python3 lightx2v_rl/scripts/assets/prepare_reward_assets.py --check
 ```
 
-自定义 bundle 位置时，设置 `LIGHTX2V_RL_REWARD_ASSETS` 指向包含 `reward-assets.json`、`hpsv3/` 和 `videoalign/` 的目录。相对路径按仓库根目录解释。`--check --verify-hashes` 可进一步校验全部文件内容。
+链接工具的 `--models` 仅选择已经准备的 reward，不要求其他 reward 存在；可用 `--storage-dir` 指定共享权重位置。也可用 `LIGHTX2V_RL_REWARD_ASSETS` 指向完整 bundle。运行时无需 FewStepRL 源仓库。
 
-若使用仓库同级 `models/` 的共享布局，且两套评分模型的 bundle 与 UnifiedReward 均已准备，可用 `scripts/assets/link_reward_weights.py` 统一建立上述别名及旧 `weights/` 兼容链接，随后用 `--check` 验证。该工具要求全部目标已存在，不作为仅安装一种 reward 的前置步骤。
+### 数据清单
 
-### 数据准备
+Qwen 使用 JSONL，每行包含唯一 `id`、`task_type`、`prompt` 与有序 `source_images`：
 
-数据清单通过 `data.train_files`、`data.val_files` 配置，适配器通过 `data.custom_cls` 选择。自定义数据集应明确 prompt、任务类型、参考图/视频和 reward 所需元数据。
+```jsonl
+{"id":"text-001","task_type":"t2i","prompt":"A cat swimming in clear water.","source_images":[]}
+{"id":"edit-001","task_type":"i2i","prompt":"Replace the background with a garden.","source_images":["images/input.png"]}
+{"id":"multi-001","task_type":"i2i","prompt":"Add the object from <image2> to <image1>.","source_images":["images/canvas.png","images/reference.png"]}
+```
 
-Qwen 配方提供 OpenGPT-4o-Image 适配器。以下示例假设原始数据保存在仓库同级目录：
+图片路径相对清单目录，允许该目录中的图片入口使用软链接。RL 不要求标准输出图。多参考图按“第一张为待编辑画布，其余为素材参考”传入；生成结果在评分请求中放在最后。多 ref 的 UR rubric 是本模块的模板扩展，其评分准确性仍需结合任务样例评估。
+
+准备 OpenGPT-4o-Image 的示例：
 
 ```bash
-test -d ../OpenGPT-4o-Image
 if [[ ! -e lightx2v_rl/data/OpenGPT-4o-Image && \
       ! -L lightx2v_rl/data/OpenGPT-4o-Image ]]; then
   ln -s ../../../OpenGPT-4o-Image lightx2v_rl/data/OpenGPT-4o-Image
@@ -263,132 +202,133 @@ lightx2v_rl/.venv-rl/bin/python lightx2v_rl/scripts/assets/prepare_opengpt4o.py 
   --validation-size 256 --seed 42
 ```
 
-输出 `data/opengpt4o/train.jsonl`、`val_t2i.jsonl`、`val_i2i.jsonl` 及数据审计信息。划分按关联 prompt 和图像分组，减少训练/验证泄漏；默认联合训练只使用 T2I 与单参考图 I2I，多参考图样本单独保存。已有清单可直接复用，恢复训练时应保持清单和 sampler 配置一致。
+默认输出 `data/opengpt4o/train.jsonl`、`val_t2i.jsonl`、`val_i2i.jsonl`，按关联 prompt / 图像分组划分训练与验证。需要多参考图时添加 `--include-multi-reference`。已有清单可直接通过 `data.train_files`、`data.val_files` 指定。已有共享模型和原始数据目录时，也可用 `scripts/assets/link_resources.py --models-dir ../models --dataset-dir ../OpenGPT-4o-Image` 一次建立两个资源入口。
 
-对于上述共享布局，也可用 `scripts/assets/link_resources.py` 同时建立模型和原始数据链接；该工具要求两个源目录均已存在。它只建立入口，不下载或重新划分数据。
+默认按完整 iter 交替 T2I / I2I。可用 `data.task_cycle='[t2i,i2i_single,t2i,i2i_multi]'` 指定三类任务的轮换；清单必须包含所选任务。参考图数量增加时，需同步配置 `actor_rollout_ref.rollout.pipeline.max_reference_images`、`max_reference_tokens` 和服务端 `LIGHTX2V_UNIFIEDREWARD_LIMIT_MM_PER_PROMPT`；服务端图数上限包含生成结果。
 
 ## Reward 服务
 
-| Reward | 输入 | 可用指标 / 能力 |
-| --- | --- | --- |
-| HPSv3 | 图像或视频帧 + 文本 | `hpsv3_standard`、`hpsv3_general`、`hpsv3_percentile` |
-| VideoAlign | 视频 + 文本 | `videoalign_mq` 运动质量、`videoalign_ta` 文本对齐、`videoalign_vq` 视觉质量 |
-| UnifiedReward-Edit-qwen35-9b | prompt + 生成图；编辑时附一张参考图 | T2I 对齐/一致性/风格；I2I 编辑成功/内容保留 |
+### 独立部署
 
-HPSv3 基于单帧评分，不直接衡量跨帧运动。UnifiedReward 当前适配不包含视频或多参考图编辑。安装相应环境并准备好权重后，在独立终端启动需要的服务。
-
-HPSv3 / VideoAlign 服务示例：
+在单独终端启动评分服务，选择未用于训练的 GPU。以下为本机示例：
 
 ```bash
-# 一个服务、两张 GPU，分别加载 HPSv3 和 VideoAlign。
-CUDA_VISIBLE_DEVICES=0,1 bash lightx2v_rl/scripts/rewards/start_reward_server.sh \
-  --models hpsv3,videoalign --hps-device cuda:0 --videoalign-device cuda:1 \
-  --host 0.0.0.0 --port 8791
+# GPU 4：HPSv3；增加 VideoAlign 时可用 --models hpsv3,videoalign 分别指定设备。
+CUDA_VISIBLE_DEVICES=4 bash lightx2v_rl/scripts/rewards/start_reward_server.sh \
+  --models hpsv3 --hps-device cuda:0 --host 0.0.0.0 --port 8791
 ```
 
-仅需要一种时，将 `--models` 改成 `hpsv3` 或 `videoalign`，并选择对应设备。默认使用 SDPA，无需额外安装 FlashAttention。健康检查：
-
 ```bash
-lightx2v_rl/.venv-rl/bin/python -m lightx2v_rl.rewards.client \
-  --endpoint http://127.0.0.1:8791
-```
-
-UnifiedReward-Edit 服务示例：
-
-```bash
-CUDA_VISIBLE_DEVICES=2 LIGHTX2V_UNIFIEDREWARD_HOST=0.0.0.0 \
+# GPU 5：UnifiedReward-Edit 9B。
+source lightx2v_rl/scripts/rewards/profiles/unifiedreward_edit9b_h100.sh
+CUDA_VISIBLE_DEVICES=5 LIGHTX2V_UNIFIEDREWARD_HOST=0.0.0.0 \
   bash lightx2v_rl/scripts/rewards/start_unifiedreward_server.sh
 ```
 
-默认端口 8792、TP=1、服务模型名 `UnifiedReward`，通过 `LIGHTX2V_UNIFIEDREWARD_PORT`、`LIGHTX2V_UNIFIEDREWARD_TP` 等变量调整。可用 `curl --fail http://127.0.0.1:8792/health` 检查服务。
+UR 默认端口 8792，模型服务名为 `UnifiedReward`。选择 27B 时，将 profile 换成 `unifiedreward_edit27b_h100.sh`（单实例并发 1）或 `unifiedreward_edit27b_h100_concurrency2.sh`（并发 2）。这些是每实例一张 H100 80G 的部署配方；实际容量取决于输入尺寸、图数和上下文。profile 在启动时生效，不会修改已运行的服务。
 
-手工部署时，训练与 reward 选择不同 GPU；脚本不会自动为 Ray 预留评分卡。远端客户端使用服务节点的实际地址，`0.0.0.0` 仅用于监听。一个 HPSv3 / VideoAlign 实例串行处理评分，可增加独立实例扩容。
+服务默认关闭 prefix caching，避免固定 vLLM 版本多图请求的 Mamba 分块对齐停滞。客户端并发由 `reward.num_workers` 与 `reward.custom_reward_function.reward_kwargs.max_concurrent_samples` 控制，服务端并发由 `LIGHTX2V_UNIFIEDREWARD_MAX_NUM_SEQS` 控制。
 
-评分组合由配方控制：
+```bash
+# 检查服务身份与连通性。
+lightx2v_rl/.venv-rl/bin/python -m lightx2v_rl.rewards.client \
+  --endpoint http://127.0.0.1:8791
 
-- Qwen 默认 `UnifiedReward_normalized + 0.5 × HPSv3_general_raw`，同一图像的两项评分并发请求。0.5 是乘数，不代表固定贡献比例。T2I 的三个 1–5 分维度归一化为 `(均值 - 1) / 4`，I2I 的两个 0–25 分维度归一化为 `均值 / 25`。
-- Wan 可选 `--reward-config hpsv3`、`videoalign`、`hpsv3_videoalign`。默认聚合为 `sum(weight_i × reward_i) / 指标数量`，VideoAlign 保留 checkpoint 的 z-score 标准化。
-
-以上组合分数用于 reward 日志和 eval，训练默认采用 FewStepRL 的逐 reward advantage：每项未乘权重的分数先减去当前输入候选组的均值，再除以该项在本轮所有候选组中的最大标准差加 `epsilon`，最后按权重求和。这样先处理各项 reward 的尺度差异，再表达权重偏好；合并后不再次标准化，进入 policy loss 时仍按 `adv_clip_max` 裁剪。
-
-```yaml
-algorithm:
-  weight_advantages: true
-  reward_advantage:
-    normalization: max_group_std
-    epsilon: 0.0001
+# 实际发送 T2I 和两参考图 I2I 请求；不加载生成模型。
+lightx2v_rl/.venv-rl/bin/python -m lightx2v_rl.rewards.preflight \
+  --endpoint http://127.0.0.1:8792 --i2i-source-count 2
 ```
 
-`normalization` 也可设为 `group`（各组自己的标准差）或 `global`（该项在本轮所有样本的标准差），三者都减去当前组的均值。`algorithm.norm_adv_by_std_in_grpo=false` 时仅做组内中心化。启动命令追加 `algorithm.weight_advantages=false` 可恢复先合成 scalar reward、再计算 GRPO advantage 的路径；该路径继续使用原有 `algorithm.global_std` 设置。
+Qwen 启动预检会对每个 UR 实例执行真实评分请求，图数跟随数据。内部健康检查与评分请求不使用环境中的 HTTP 代理。远端部署需把训练配置中的 endpoint 改为服务的实际地址；`0.0.0.0` 仅用于监听。平台启动入口会自动分配 reward GPU 和地址，无需手工启动以上服务。
 
-Qwen 的训练分量为 `unifiedreward_normalized` 和 `hpsv3_general_calibrated`：UR 保持 `[0,1]` 归一化，HPS 使用 `(raw - hps_offset) / hps_scale`，默认即原始分数。两个分量各自计算 advantage 后，以 `1.0` 和 `0.5` 合并，HPS 权重仅应用一次。Wan 使用各指标的 `*_raw` 分量；这里的 raw 指未乘组合权重，VideoAlign 已有的 checkpoint 标准化仍然保留。内置配方中的 advantage 权重引用 reward 权重，修改 `reward.custom_reward_function.reward_kwargs` 下的对应权重即可同步调整；权重为零的项不参与 advantage，激活项缺失或分数非有限时直接报错。自定义 reward 需在 `algorithm.reward_advantage.weights` 中显式配置未加权分量名称及权重。
+### 评分与 advantage
 
-切换 advantage 策略不会改变原始 reward 日志、组合总分或 eval 的评分口径。评分失败或非有限结果会报错；UnifiedReward 有限的越界分数会先按量表裁剪，并保留原始值和裁剪指标。具体权重、指标与 endpoint 见 [Qwen 配置](lightx2v_rl/configs/qwen_image21_turbo/base.yaml) 和 [视频 reward 配置](lightx2v_rl/configs/rewards/)。
+| Reward | 使用方式 |
+| --- | --- |
+| UnifiedReward T2I | alignment / coherence / style 各 1–5 分，标量为 `(均值 - 1) / 4` |
+| UnifiedReward I2I | edit success / preservation 各 0–25 分，标量为 `均值 / 25` |
+| HPSv3 | 图像偏好评分；视频按帧评分后聚合 |
+| VideoAlign | 视频质量、运动质量与文本对齐，保留 checkpoint 的标准化方式 |
+
+Qwen 默认 UR 权重为 1，T2I 的 HPSv3 权重为 0.5，I2I 为 0；多节点变体可使用不同权重，以实际配方为准。修改以下参数会同步改变评分请求和 advantage 权重，权重为零的项不发送请求：
+
+```text
+reward.custom_reward_function.reward_kwargs.hps_weight=0.5
+reward.custom_reward_function.reward_kwargs.hps_weight_i2i=0.2
+```
+
+默认 `algorithm.weight_advantages=true`：各 reward 先独立计算组内相对 advantage，再按任务权重合并；`max_group_std` 使用该 reward 在本轮同任务各组中的最大标准差作分母。也支持 `group` / `global` 标准差。权重不是固定的梯度贡献比例。设为 `false` 可使用先合成 scalar reward、再计算 GRPO advantage 的路径。
+
+UR 输出格式无效时，整项 UR 使用量表中间分（T2I 三项为 3，I2I 两项为 12.5，归一化均为 0.5）继续，并记录 `ur_format_error_fraction`；其他 reward 仍使用真实分数。中间分仍参与组内 advantage。连接失败、HTTP 错误、超时或候选缺失则停止当前作业，避免不完整组参与更新。默认评分 HTTP 超时为 600 秒，不包含本地并发队列等待。
 
 ## 训练
 
-### 配置入口
-
-```bash
-lightx2v_rl/.venv-rl/bin/python -m lightx2v_rl.train \
-  --config qwen_image21_turbo_geo --print-config
-```
-
-`--config` 接受内置配方名或 YAML 路径，后接普通 `key=value` 覆盖，不使用 Hydra 的 `+` / `~` 前缀。切换算法时选择完整配方，保持 Actor、rollout 与 loss 参数一致。
+### 配方与公共参数
 
 | 模型 | Geo | CPS | Flow-GRPO |
 | --- | --- | --- | --- |
 | Qwen-Image-2.1-Turbo | `qwen_image21_turbo_geo` | `qwen_image21_turbo_cps` | `qwen_image21_turbo_flow_grpo` |
 | Wan2.1 T2V | `wan_geo` | `wan_cps` | `wan_flow_grpo` |
 
-默认训练 5000 iter，每 20 iter 验证一次，分别通过 `trainer.total_training_steps` 和 `trainer.test_freq` 调整。Qwen 默认训练前也验证，T2I / I2I 按 batch 1:1 交替；一个 iter 只处理一种任务。训练使用所选随机 bridge，验证使用确定性生成路径。
+`--config` 接受配方名或 YAML 路径，后接普通 `key=value` 覆盖，不使用 Hydra 的 `+` / `~` 前缀。可先用 `--print-config` 查看展开配置。
 
-Qwen 训练默认开启 `actor_rollout_ref.rollout.pipeline.init_same_noise=true`：同一输入（prompt 与参考图）的候选共享初始噪声，各候选的 bridge 转移噪声保持独立，适用于 Geo、CPS 和 Flow-GRPO。开启时需配置 `actor_rollout_ref.rollout.seed`（默认 42），初始 seed 由它与训练步、任务、样本标识派生，不依赖 worker 分配；初始 latent 仍由官方 pipeline 生成。使用随机训练步选择时，同组也共享该步的位置。验证继续使用原有固定 seed 和官方确定性生成路径。设为 `false` 可恢复各候选独立初始噪声的行为。
+Qwen 默认：8 个组内候选、共享初始噪声和所选训练位置、每轨迹随机选择一个非末尾转移进行 bridge / replay；其余转移沿用确定性路径。不同候选的 bridge 噪声独立。Actor 使用 FP32 主参数和 BF16 计算，学习率 `2e-6`，每 iter 两个 mini-batch、各更新一次。四步配方读取模型自己的采样日程，其他训练规则一致。
 
-### Qwen：单机示例
+训练默认 5000 iter；Qwen 在训练前验证，之后每 20 iter 验证，每 100 iter 保存 checkpoint，最多保留最近 3 份 Actor checkpoint。对应配置为 `trainer.total_training_steps`、`trainer.test_freq`、`trainer.save_freq` 和 `trainer.max_actor_ckpt_to_keep`。
 
-此示例使用 4 张训练 GPU、1 张 HPSv3 GPU 和 1 张 UnifiedReward GPU。先完成模型与 OpenGPT-4o-Image 数据准备，在三个独立终端依次执行：
+### 单机 Qwen
+
+准备好模型、数据和评分服务后，在新终端仅暴露训练卡：
 
 ```bash
-# 终端 1：HPSv3。
-CUDA_VISIBLE_DEVICES=4 bash lightx2v_rl/scripts/rewards/start_reward_server.sh \
-  --models hpsv3 --hps-device cuda:0 --port 8791
-
-# 终端 2：UnifiedReward-Edit。
-CUDA_VISIBLE_DEVICES=5 bash lightx2v_rl/scripts/rewards/start_unifiedreward_server.sh
-
-# 终端 3：预检并训练。
-CUDA_VISIBLE_DEVICES=0,1,2,3 lightx2v_rl/.venv-rl/bin/python \
-  -m lightx2v_rl.models.qwen_image.preflight --config qwen_image21_turbo_geo
-CUDA_VISIBLE_DEVICES=0,1,2,3 bash lightx2v_rl/scripts/train/train_qwen21.sh
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash lightx2v_rl/scripts/train/train_qwen21.sh \
+  trainer.experiment_name=qwen_geo \
+  trainer.default_local_dir=lightx2v_rl/outputs/qwen_geo \
+  trainer.validation_data_dir=lightx2v_rl/outputs/qwen_geo/validation
 ```
 
-通过 `LIGHTX2V_RL_CONFIG` 选择其他 Qwen 配方。默认每个输入生成 4 个候选；调整训练卡数时，同时检查 batch、mini-batch 和模型显存需求。
+默认选择 `qwen_image21_turbo_geo`。通过 `LIGHTX2V_RL_CONFIG` 切换配方，通过 `LIGHTX2V_RL_PYTHON` 指定训练解释器。启动脚本使用离线模型模式，所有权重须提前准备。
 
-### Qwen：五节点示例
+### 多节点平台
 
-提供 5 台 × 8 卡的配方，按 H100 80G 规划：4 个训练节点共 32 卡，1 个评分节点运行 6 个 UnifiedReward 与 2 个 HPSv3 实例。这是固定部署配方，其他拓扑需要同步适配配置和启动器。
+平台须在每个节点执行同一启动命令，并提供共同的 `MASTER_ADDR`、`MASTER_PORT`；所有节点各 8 张 GPU。脚本内部启动每节点一个协调进程，按 rank 建立 Ray 与评分服务，只有 rank 0 启动训练 driver。不要再套一层八进程 `torchrun`。
 
-平台须在**每个节点执行同一条命令一次**，提供各节点一致的 `MASTER_ADDR`、`MASTER_PORT`，工作目录设为仓库根目录：
+| 配方 | 总节点 | 训练卡 | 独立 reward 服务 |
+| --- | ---:| ---:| --- |
+| `qwen_image21_turbo_geo_40gpu` | 5 | 32 | 6 UR + 2 HPSv3 |
+| `qwen_image21_4step_geo_6nodes` | 6 | 32 | 12 UR + 4 HPSv3 |
+| `qwen_image21_4step_geo_7nodes_hps02` | 7 | 32 | 20 UR + 4 HPSv3 |
+| `qwen_image21_4step_geo_7nodes_ur_only` | 7 | 32 | 24 UR |
+
+Turbo 五节点也提供 CPS / Flow-GRPO 对应配方。五节点启动示例：
 
 ```bash
-set -euo pipefail
 export LIGHTX2V_RL_CONFIG=qwen_image21_turbo_geo_40gpu
-export LIGHTX2V_RDZV_ID=qwen-rl-run-001
-
-lightx2v_rl/.venv-rl/bin/python lightx2v_rl/scripts/setup/prepare_verl_omni.py --check
+export LIGHTX2V_RDZV_ID=qwen-geo-run1
 bash lightx2v_rl/scripts/train/train_qwen21_platform.sh
 ```
 
-`LIGHTX2V_RDZV_ID` 每个作业取唯一值、所有节点一致；`MASTER_PORT` 不使用 Ray 的 6379。启动器内部每节点只运行一个协调进程，无需再套多进程 torchrun。协调 rank 0 启动 Ray head 和唯一训练 driver，rank 1–3 启动 Ray worker，rank 4 启动评分池。评分节点不加入训练 Ray 资源池。
+七节点四步示例，模型路径需指向已准备的完整四步 pipeline。`LIGHTX2V_RL_DATA_DIR` 指定包含 `train.jsonl`、`val.jsonl` 的数据目录；没有固定预览清单时将 `trainer.validation_preview_file` 设为 `null`：
 
-`40gpu` 指申请总卡数，配置中的 `trainer.nnodes=4` 仅统计训练节点。其他算法对应 `qwen_image21_turbo_cps_40gpu`、`qwen_image21_turbo_flow_grpo_40gpu`。默认每 iter 为 32 个同任务输入、每输入 4 个候选、1 次 optimizer update。
+```bash
+export LIGHTX2V_RL_CONFIG=qwen_image21_4step_geo_7nodes_hps02
+export LIGHTX2V_QWEN_4STEP_MODEL=lightx2v_rl/models/qwen-image21-4step
+export LIGHTX2V_RL_DATA_DIR=lightx2v_rl/data/opengpt4o_multiref
+export LIGHTX2V_UNIFIEDREWARD_PROFILE=lightx2v_rl/scripts/rewards/profiles/unifiedreward_edit27b_h100_concurrency2.sh
+export LIGHTX2V_RDZV_ID=qwen-4step-run1
+bash lightx2v_rl/scripts/train/train_qwen21_4step_7nodes.sh \
+  trainer.validation_preview_file=null \
+  trainer.experiment_name=qwen_4step_geo \
+  trainer.default_local_dir=lightx2v_rl/outputs/qwen_4step_geo
+```
 
-该入口依赖平台向所有节点分发命令；在普通 SSH 会话只运行一次不会自动启动其他机器。手工部署可使用 `scripts/train/qwen21_cluster.sh` 和 `scripts/rewards/start_qwen21_reward_pool.sh`，参数见各脚本的 `--help`。
+四步平台配方按 `T2I → 单 ref → T2I → 多 ref` 轮换，使用 1024×1024 画布、每 iter 64 个 prompt × 8 候选。七节点混合 reward 配方使用 UR 27B，T2I / I2I 的 HPS 权重分别为 0.5 / 0.2；只使用 UR 时改用 `train_qwen21_4step_7nodes_ur_only.sh`。每个作业使用不同 rendezvous ID。`MASTER_PORT` 须与 Ray 的 6379 不同。
 
-### Wan：视频训练示例
+非自动分发平台可使用 `scripts/train/qwen21_cluster.sh head|worker|train` 和 `scripts/rewards/start_qwen21_reward_pool.sh` 手动部署；必需环境变量与节点布局见各脚本的 `--help`。
 
-先启动所需的 HPSv3 / VideoAlign 服务，再指定本地模型与数据清单。以下路径是示例，需要准备对应文件：
+### Wan 视频训练
+
+准备完整 Diffusers 模型、Parquet 数据和 HPSv3 / VideoAlign 服务后执行：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 bash lightx2v_rl/scripts/train/train_wan_reward.sh \
@@ -399,81 +339,76 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash lightx2v_rl/scripts/train/train_wan_reward.sh 
   'data.val_files=[lightx2v_rl/data/wan/val.parquet]'
 ```
 
-数据中的 `reward_model.ground_truth` 使用生成视频的原始 prompt。远端评分服务通过 `reward.custom_reward_function.reward_kwargs.endpoint` 指定。
+`--reward-config` 也可选 `hpsv3` 或 `videoalign`。数据中的 `reward_model.ground_truth` 应为生成视频的 prompt；远端服务通过 `reward.custom_reward_function.reward_kwargs.endpoint` 指定。
 
-## 日志与监控
+## 日志、验证与 checkpoint
 
-默认输出到 console，W&B 为可选项。使用官方云端时，先登录或由平台提供 `WANDB_API_KEY`：
+默认输出 console；使用 W&B 官方云端时先登录，再给训练命令添加 `trainer.logger='[console,wandb]'`。也可由平台提供 `WANDB_API_KEY`：
 
 ```bash
 unset WANDB_BASE_URL
 lightx2v_rl/.venv-rl/bin/wandb login
 ```
 
-训练命令追加以下参数即可启用；默认 project 为 `lightx2v_rl`：
+默认 project 为 `lightx2v_rl`，可用 `trainer.project_name` 修改。精简视图记录各 reward、policy / KL loss、学习率、梯度、格式错误比例与耗时，不显示加权总 reward。Qwen 的训练与验证 reward 按 `t2i`、`i2i_single`、`i2i_multi` 分开；`time/rollout_and_reward_s` 同时包含生成和等待评分。
+
+验证始终评分完整验证集。默认可视化 T2I / I2I 各 8 条，通过 `trainer.validation_samples_per_task` 调整；指定 `trainer.validation_preview_file` 时，展示该 JSONL 清单列出的全部 ID，并拆成三类任务表。预览 ID 必须属于完整验证集。I2I 展示所有原始参考图，图像、prompt 和评分明细同时保存到本地。
+
+| 内容 | 路径，相对模块目录 |
+| --- | --- |
+| 平台协调与训练 stdout | `outputs/platform/<run>/rank<rank>-<pid>/` |
+| 独立评分实例日志 | `outputs/reward_pool/<run-id>/` |
+| 完整原始指标 | `outputs/metrics/*.jsonl` |
+| checkpoint | `trainer.default_local_dir/global_step_<iter>/` |
+| 验证图像与 `samples.jsonl` | `trainer.validation_data_dir/global_step_<iter>/` |
+
+Ray Dashboard 默认监听 head 的 `127.0.0.1:8265`，可经平台端口转发或 SSH 隧道访问。平台需要按节点 IP 转发时，可设置 `LIGHTX2V_RAY_DASHBOARD_HOST=0.0.0.0` 并使用平台访问控制。独立 reward 进程日志不在 Ray worker 日志中。
+
+新实验应设置独立的 `trainer.default_local_dir` 和 `trainer.experiment_name`，并用 `trainer.resume_mode=disable` 从初始模型开始；恢复同一实验用 `auto`。恢复会加载优化器、学习率调度器和数据采样器状态，改变学习率初始化值不会覆盖已恢复的优化器状态；数据、batch 或任务周期变化后不应复用旧采样器状态。
+
+Qwen FSDP2 checkpoint 可导出为单个完整 transformer safetensors，显式指定来源、基座和目标：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 bash lightx2v_rl/scripts/train/train_qwen21.sh \
-  'trainer.logger=[console,wandb]' \
-  trainer.project_name=lightx2v_rl \
-  trainer.experiment_name=qwen_geo \
-  trainer.log_val_generations=8
+lightx2v_rl/.venv-rl/bin/python lightx2v_rl/scripts/assets/export_qwen21_rl.py \
+  --checkpoint lightx2v_rl/outputs/qwen_4step_geo/global_step_100/actor \
+  --base-model lightx2v_rl/models/qwen-image21-4step \
+  --output lightx2v_rl/models/qwen-image21-4step-rl \
+  --dtype bfloat16
 ```
 
-多机时将同样参数传给平台启动脚本。运行进程应能读取凭据；离线记录可设置 `WANDB_MODE=offline`。仅使用自建 W&B 时才需设置对应的 `WANDB_BASE_URL`。
+可先加 `--dry-run` 检查路径与架构。导出不需要 GPU，需足够 CPU 内存和磁盘空间；输出目录必须不存在。文件包含训练后的完整 transformer，不包含 VAE、文本编码器和完整 pipeline，推理时继续使用对应基座与采样日程。
 
-默认采用精简指标视图，展示 reward、policy / KL loss、clip 比例、学习率、梯度及耗时；Qwen 按 T2I / I2I 区分训练和验证曲线。`time/rollout_and_reward_s` 包含生成与等待评分，不能视为纯推理耗时。完整原始指标另存为 `outputs/metrics/*.jsonl`。
-
-Qwen 验证分项显示在 `eval_t2i/`、`eval_i2i/` 下：`reward` 为组合总分，`unifiedreward` 为未乘权重的归一化分数，`hpsv3_raw` 为未乘权重的 HPS 分数，`ur_clipped_fraction` 为评分越界裁剪比例。任务独有的原始维度保存在完整指标和验证明细中，不适用的维度不按零分参与均值。更新运行时补丁后需重新启动训练进程，新产生的 eval 才会记录这些明细。
-
-| 内容 | 模块内位置 |
-| --- | --- |
-| 安装日志 | `outputs/setup/` |
-| 平台协调及训练 stdout | `outputs/platform/<run>/rank<rank>-<pid>/` |
-| 独立评分实例日志 | `outputs/reward_pool/<run-id>/` |
-| 原始训练指标 | `outputs/metrics/` |
-| checkpoint、验证结果 | 配方的 `trainer.default_local_dir`、`trainer.validation_data_dir` |
-
-Ray Dashboard 默认监听 head 节点的 `127.0.0.1:8265`，通过平台端口转发或 SSH 隧道访问。平台需要按节点 IP 转发时，可在启动前设置 `LIGHTX2V_RAY_DASHBOARD_HOST=0.0.0.0`，配合平台访问控制。Ray 展示训练集群任务、Actor 和进程日志；独立 reward 节点需结合其服务日志与平台 GPU 监控查看。
-
-## 开发
+## 开发结构
 
 ```text
 lightx2v_rl/
-├── lightx2v_rl/              # Python 源码
-│   ├── algorithms/fewstep/  # CPS、Flow-GRPO、Geo 的共享数学实现
-│   ├── rollout/             # 模型无关的轨迹字段与构建
-│   ├── models/              # registry、qwen_image/、wan/ 等模型适配
-│   ├── backends/verl_omni/   # 配置、loss 与通用运行时接入
-│   ├── rewards/             # 评分模型、HTTP 协议、解析与聚合
-│   ├── data/                # 数据集适配和采样器
-│   ├── training/            # 配方组装、指标记录
-│   ├── deployment/          # 集群启动与进程管理
-│   └── configs/             # 公共、模型、算法、reward 与部署配方
+├── lightx2v_rl/
+│   ├── algorithms/fewstep/  # bridge、log-prob、loss 和选步规则
+│   ├── rollout/             # 模型无关的轨迹契约
+│   ├── models/              # 模型注册、qwen_image/、wan/ 适配
+│   ├── backends/verl_omni/   # 后端配置、advantage 与运行时接入
+│   ├── rewards/             # HTTP 客户端、评分服务和模板
+│   ├── data/                # 数据适配与任务采样器
+│   ├── training/            # 配置、指标、验证展示与候选组检查
+│   ├── deployment/          # 集群启动与健康检查
+│   └── configs/             # 算法、模型、reward 和部署配方
 ├── scripts/{setup,assets,rewards,train}/
-├── requirements/            # 环境依赖约束
+├── requirements/
 └── patches/                 # 固定 verl-omni 的通用扩展补丁
 ```
 
-顶层 `models/`、`data/` 是运行资源入口；Python 包内同名目录存放代码。
-
-新增模型时，在 `lightx2v_rl/models/<模型族>/` 实现 Actor 重算、rollout 与条件输入适配，在 `models/registry.py` 注册 `ModelSpec`，通过配方的 `actor_rollout_ref.model.rl_adapter` 选择。模型特有的 timestep、sigma、参考输入和 checkpoint 契约归模型目录；共享 bridge、logprob 和 loss 归算法目录。
-
-新增 reward 放在 `rewards/`，新增数据集放在 `data/`。算法和模型专属逻辑留在本模块，submodule 只维护必要的通用接口补丁。升级 verl-omni 时需重新验证补丁、配置和 Actor / rollout 数据契约。
-
-共享 advantage 逻辑位于 `backends/verl_omni/advantage.py`，通过通用扩展接口接入训练器；各模型的分量名称与权重由配方配置。
+顶层 `models/`、`data/` 是资源目录，Python 包内同名目录存放代码。新增模型需实现 learner 重算、rollout、条件输入和配置校验，在 `models/registry.py` 注册 `ModelSpec`，由 `actor_rollout_ref.model.rl_adapter` 选择。模型特有的 timestep / sigma / 参考图逻辑留在模型目录；共享算法和 reward 不依赖具体模型。submodule 仅维护必要的通用接口补丁。
 
 ## 常见问题
 
 | 现象 | 处理 |
 | --- | --- |
-| `uv` 存在，但模型依赖导入失败 | uv 是安装工具；运行对应环境的安装脚本与验证命令 |
-| `ensurepip is not available` | 安装 uv 后重跑；使用标准库 venv 时需安装匹配的 `python3.x-venv` |
-| `Python.h: No such file or directory` | 在运行服务的节点安装与解释器匹配的 `python3.x-dev` |
-| 无法导入 `QwenImage21Pipeline` | 执行 `bash lightx2v_rl/scripts/setup/repair_qwen21_diffusers.sh` 恢复固定官方 Diffusers |
-| submodule 补丁检查失败 | 运行 `prepare_verl_omni.py` 应用补丁；保持父仓库记录的 submodule 版本 |
-| 资源或 manifest 缺失 | 检查相对链接目标、下载/迁移完成状态，保留资产清单 |
-| 多节点出现 rendezvous 断连 | 优先查看最早的训练或服务异常，以及对应节点日志；断连可能是作业退出的后续现象 |
-| reward 连接失败 | 检查服务健康、endpoint、端口与节点网络；避免手工服务和平台入口重复占用同一端口 |
+| `Python.h` 缺失 | 在运行节点安装与解释器匹配的 `python3.x-dev` |
+| `ensurepip` 缺失 | 安装 uv 后重新运行环境脚本，或安装匹配的 `python3.x-venv` |
+| 无法导入 `QwenImage21Pipeline` | 运行 `scripts/setup/repair_qwen21_diffusers.sh` 恢复固定官方 Diffusers |
+| submodule 补丁检查失败 | 保持父仓库固定版本，运行 `prepare_verl_omni.py` 应用补丁 |
+| startup 等待评分服务 | 检查对应 `reward.log` 与实例日志；健康接口正常后仍需通过实际评分预检 |
+| rendezvous 断连 | 先定位最早的训练或服务异常，断连通常是作业退出的后续现象 |
+| 资源或 manifest 缺失 | 检查相对链接、下载完成状态，保留资产清单 |
 
-参考：[verl-omni 安装](../third_party/verl-omni/docs/start/install.md)、[diffusion v1 trainer](../third_party/verl-omni/docs/start/diffusion_v1.md)。
+参考：[verl-omni 安装说明](../third_party/verl-omni/docs/start/install.md)、[diffusion v1 trainer](../third_party/verl-omni/docs/start/diffusion_v1.md)。
