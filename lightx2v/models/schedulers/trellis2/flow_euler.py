@@ -29,7 +29,8 @@ class FlowEulerSampler:
                 guided_x0 = self._xstart(x, t, prediction)
                 dims = list(range(1, guided_x0.ndim))
                 ratio = positive_x0.std(dim=dims, keepdim=True) / guided_x0.std(dim=dims, keepdim=True)
-                rescaled = guidance_rescale * guided_x0 * ratio + (1 - guidance_rescale) * guided_x0
+                x0_rescaled = guided_x0 * ratio
+                rescaled = guidance_rescale * x0_rescaled + (1 - guidance_rescale) * guided_x0
                 prediction = ((1 - self.sigma_min) * x - rescaled) / (self.sigma_min + (1 - self.sigma_min) * t)
         else:
             prediction = positive

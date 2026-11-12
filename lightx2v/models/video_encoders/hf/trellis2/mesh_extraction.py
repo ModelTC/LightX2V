@@ -18,6 +18,30 @@ _QUAD_SPLIT_1 = torch.tensor([0, 1, 2, 0, 2, 3], dtype=torch.long)
 _QUAD_SPLIT_2 = torch.tensor([0, 1, 3, 3, 1, 2], dtype=torch.long)
 
 
+def fill_mesh_holes(vertices, faces, max_hole_perimeter=3e-2):
+    """Apply the upstream TRELLIS.2 CuMesh hole-filling sequence."""
+    import cumesh
+
+    device = vertices.device
+    mesh = cumesh.CuMesh()
+    mesh.init(vertices.float().cuda(), faces.int().cuda())
+    mesh.get_edges()
+    mesh.get_boundary_info()
+    if mesh.num_boundaries == 0:
+        return vertices, faces
+    mesh.get_vertex_edge_adjacency()
+    mesh.get_vertex_boundary_adjacency()
+    mesh.get_manifold_boundary_adjacency()
+    mesh.read_manifold_boundary_adjacency()
+    mesh.get_boundary_connected_components()
+    mesh.get_boundary_loops()
+    if mesh.num_boundary_loops == 0:
+        return vertices, faces
+    mesh.fill_holes(max_hole_perimeter=max_hole_perimeter)
+    vertices, faces = mesh.read()
+    return vertices.to(device), faces.to(device)
+
+
 def _triple(value: int | Iterable[int]) -> torch.Tensor:
     if isinstance(value, int):
         value = (value, value, value)

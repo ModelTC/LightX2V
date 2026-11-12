@@ -21,6 +21,7 @@ class SparseConv3d(nn.Module):
         self.dilation = _triple(dilation)
         self.out_channels = out_channels
         self.neighbor_map = neighbor_map
+        self.backend = "torch"
         self.weight = nn.Parameter(torch.empty(out_channels, *self.kernel_size, in_channels))
         self.bias = nn.Parameter(torch.empty(out_channels)) if bias else None
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
@@ -29,6 +30,21 @@ class SparseConv3d(nn.Module):
             nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, x):
+        if self.backend == "flex_gemm":
+            import flex_gemm
+            from flex_gemm.ops.spconv import sparse_submanifold_conv3d
+
+            flex_gemm.ops.spconv.set_algorithm("masked_implicit_gemm_splitk")
+            flex_gemm.ops.spconv.set_hashmap_ratio(2.0)
+            kx, ky, kz = self.kernel_size
+            cache_key = f"SubMConv3d_neighbor_cache_{kz}x{ky}x{kx}_dilation{self.dilation}"
+            cache = x.get_spatial_cache(cache_key)
+            output, new_cache = sparse_submanifold_conv3d(
+                x.feats, x.coords, torch.Size([*x.shape, *x.spatial_shape]), self.weight, self.bias, cache, self.dilation
+            )
+            if cache is None:
+                x.register_spatial_cache(cache_key, new_cache)
+            return x.replace(output)
         features = x.feats.to(self.weight.dtype)
         output = features.new_zeros((features.shape[0], self.out_channels))
         for (kx, ky, kz), indices in self.neighbor_map(x.coords.to(features.device), self.kernel_size, self.dilation):

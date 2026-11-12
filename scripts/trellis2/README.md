@@ -156,6 +156,19 @@ prove that a host driver or another vendor image is compatible.
 
 ## Run
 
+The precision-aligned runner uses the original image encoder and the same
+per-component dtypes as the upstream checkpoint configuration. NVIDIA uses
+the original variable-length FlashAttention 2 entry points and `flex_gemm`
+sparse convolution; both packages must be installed in the runtime environment
+(see the upstream TRELLIS.2 `setup.sh --flash-attn --flexgemm`). The tested
+environment uses PyTorch 2.5.1+cu124 and FlashAttention 2.7.4.post1. The MLU
+configuration retains its Torch sparse convolution fallback and has not been
+revalidated for equivalence after this change.
+
+Mesh hole filling follows the upstream CuMesh CUDA procedure and additionally
+requires `cumesh` (see upstream `setup.sh --cumesh`). The hole-filling step has
+not been validated on MLU.
+
 The default input is `assets/inputs/imgs/trellis2/input.png`. No dataset download,
 labels, camera files or evaluation manifest are needed.
 

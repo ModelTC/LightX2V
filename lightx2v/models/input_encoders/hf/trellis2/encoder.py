@@ -1,8 +1,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License; see lightx2v/models/networks/trellis2/LICENSE.
 
-from importlib import import_module
-
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -10,7 +8,6 @@ from PIL import Image
 from torchvision import transforms
 from transformers import AutoModelForImageSegmentation, DINOv3ViTModel
 
-from lightx2v.common.ops.inference_module import bind_linear_operators, cast_matrix_weights
 from lightx2v.utils.registry_factory import CONV2D_WEIGHT_REGISTER
 
 
@@ -34,18 +31,12 @@ class BiRefDeformConv(torch.nn.Module):
 
 
 class TrellisImageEncoder:
-    def __init__(self, dino_path, rembg_path, device, linear_backend="Default", deform_conv_backend="torch_deform_bf16"):
+    def __init__(self, dino_path, rembg_path, device, linear_backend="Default", deform_conv_backend="original"):
+        if linear_backend != "Default" or deform_conv_backend != "original":
+            raise NotImplementedError("Precision-aligned TRELLIS.2 requires the original image encoder operators")
         self.device = device
         self.dino = DINOv3ViTModel.from_pretrained(dino_path, local_files_only=True).eval().to(device)
         self.rembg = AutoModelForImageSegmentation.from_pretrained(rembg_path, trust_remote_code=True, local_files_only=True).eval().to(device)
-        for model in (self.dino, self.rembg):
-            cast_matrix_weights(model)
-            bind_linear_operators(model, linear_backend)
-        deform_type = import_module(type(self.rembg).__module__).DeformableConv2d
-        for parent in list(self.rembg.modules()):
-            for name, child in list(parent.named_children()):
-                if isinstance(child, deform_type):
-                    setattr(parent, name, BiRefDeformConv(child, deform_conv_backend, linear_backend).eval())
         self.normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         self.rembg_transform = transforms.Compose([transforms.Resize((1024, 1024)), transforms.ToTensor(), self.normalize])
 
@@ -74,7 +65,7 @@ class TrellisImageEncoder:
     def __call__(self, image):
         image = self.preprocess(image).resize((512, 512), Image.Resampling.LANCZOS)
         image = torch.from_numpy(np.asarray(image).astype(np.float32) / 255).permute(2, 0, 1).unsqueeze(0)
-        image = self.normalize(image).to(device=self.device, dtype=torch.bfloat16)
+        image = self.normalize(image).to(device=self.device, dtype=torch.float32)
         hidden = self.dino.embeddings(image, bool_masked_pos=None)
         positions = self.dino.rope_embeddings(image)
         for layer in self.dino.layer:

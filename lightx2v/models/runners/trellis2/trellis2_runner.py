@@ -12,6 +12,7 @@ from lightx2v.models.networks.trellis2.model import load_trellis2_component
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.trellis2.flow_euler import FlowEulerSampler
+from lightx2v.models.video_encoders.hf.trellis2.mesh_extraction import fill_mesh_holes
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -43,13 +44,14 @@ class Trellis2Runner(BaseRunner):
                 self.config.get("dit_quant_scheme", "Default"),
                 self.config.get("ln_norm_type", "torch"),
                 self.config.get("conv_type", "Default"),
+                self.config.get("sparse_conv_backend", "flex_gemm"),
             )
         self.encoder = TrellisImageEncoder(
             self.config.get("dino_model_path", root / "dinov3"),
             self.config.get("rembg_model_path", root / "rembg"),
             self.device,
             self.config.get("dit_quant_scheme", "Default"),
-            self.config.get("deform_conv_backend", "torch_deform_bf16"),
+            self.config.get("deform_conv_backend", "original"),
         )
         self.samplers = {stage: FlowEulerSampler(**self.pipeline_config[f"{stage}_sampler"]["args"]) for stage in ("sparse_structure", "shape_slat", "tex_slat")}
 
@@ -66,7 +68,7 @@ class Trellis2Runner(BaseRunner):
     def run_pipeline(self, input_info):
         with Image.open(input_info.image_path) as source:
             image = source.copy()
-        with torch.autocast(self.device.type, dtype=torch.bfloat16):
+        with torch.autocast(self.device.type, enabled=False):
             cond = self.encoder(image)
             torch.manual_seed(input_info.seed)
             structure_flow = self.models["sparse_structure_flow_model"]
@@ -94,7 +96,7 @@ class Trellis2Runner(BaseRunner):
             decoder.resolution = 512
             meshes, subdivisions = decoder(shape, return_subs=True)
             voxels = self.models["tex_slat_decoder"](texture, guide_subs=subdivisions) * 0.5 + 0.5
-        vertices, faces = meshes[0]
+        vertices, faces = fill_mesh_holes(*meshes[0])
         if input_info.save_result_path:
             import trimesh
 
