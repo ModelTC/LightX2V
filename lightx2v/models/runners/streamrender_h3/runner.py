@@ -46,7 +46,11 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
     supported_request_fields_by_task = {
         "refv2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt", "image_path", "video_path"},
     }
-    _WARMUP_SIZE = (256, 256)
+    _WARMUP_SHAPES = ((256, 256),)
+    _WARMUP_PROMPTS = (
+        "A presenter speaks to the camera.",
+        "A presenter speaks to the camera in a quiet studio, pausing naturally between sentences and occasionally gesturing with one hand. Keep the framing steady and preserve the facial features, clothing, and soft light from the reference throughout the clip.",
+    )
 
     def __init__(self, config):
         super().__init__(config)
@@ -94,9 +98,9 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         import av
         import numpy as np
 
-        sizes = dict.fromkeys((self._WARMUP_SIZE, tuple(self.config["size"])))
-        for height, width in sizes:
-            self.input_info = self.create_input_info({"task": "refv2v", "seed": 0, "size": [height, width], "num_frames": self.config["num_frames"]})
+        shapes = dict.fromkeys((*self._WARMUP_SHAPES, tuple(self.config["size"])))
+        for warmup_index, (height, width) in enumerate(shapes):
+            self._prepare_warmup_inputs(warmup_index, height, width)
             logger.info(f"Warmup refv2v: {height}x{width}x{self.input_info.num_frames}")
             try:
                 seed_all(self.input_info.seed)
@@ -139,6 +143,17 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         if dist.is_initialized():
             dist.barrier()
         self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, warmup_index, height, width):
+        self.input_info = self.create_input_info(
+            {
+                "task": "refv2v",
+                "prompt": self._WARMUP_PROMPTS[warmup_index],
+                "seed": 0,
+                "size": [height, width],
+                "num_frames": self.config["num_frames"],
+            }
+        )
 
     @staticmethod
     def _noise(shape, generator, device):

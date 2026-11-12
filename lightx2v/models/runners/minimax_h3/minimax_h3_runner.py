@@ -100,6 +100,10 @@ class MiniMaxH3Runner(DefaultRunner):
         (480, 480, 158),  # aligned from a 6-second request
         (544, 960, 124),
     )
+    _WARMUP_PROMPTS = (
+        "A fox crosses a snowy trail.",
+        "A camera glides along the edge of a mountain lake at sunrise. Thin clouds drift over the peaks and their reflections ripple across the water. A small wooden boat creaks against the dock as birds call from a stand of pines on the far shore.",
+    )
     _WARMUP_STEP_COUNT = 2
     supported_request_fields_by_task = {
         "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"prompt"},
@@ -143,12 +147,12 @@ class MiniMaxH3Runner(DefaultRunner):
             torch_device_module.synchronize()
             del pixels
 
-        for height, width, num_frames in self._WARMUP_SHAPES:
+        for warmup_index, (height, width, num_frames) in enumerate(self._WARMUP_SHAPES):
             logger.info(f"Warmup {task}: {height}x{width}x{num_frames}")
             transformer_offloaded = not self.config.get("cpu_offload", False)
             try:
                 self.scheduler.generator = None
-                self._prepare_warmup_inputs(task, height, width, num_frames)
+                self._prepare_warmup_inputs(warmup_index, task, height, width, num_frames)
                 self.inputs = self._run_input_encoder_local_h3()
                 self.init_run()
 
@@ -174,13 +178,11 @@ class MiniMaxH3Runner(DefaultRunner):
         logger.info("[Warmup] Warmup completed")
         self._maybe_freeze_gc()
 
-    def _prepare_warmup_inputs(self, task, height, width, num_frames):
+    def _prepare_warmup_inputs(self, warmup_index, task, height, width, num_frames):
         self.input_info = INPUT_INFO_TYPES[task](
             task=task,
             seed=0,
-            prompt="A sunrise over distant mountains reflected across a calm lake beneath drifting clouds."
-            if (height, width, num_frames) == self._WARMUP_SHAPES[0]
-            else "A cinematic fox walking through a snowy forest.",
+            prompt=self._WARMUP_PROMPTS[warmup_index],
             size=[height, width],
             num_frames=num_frames,
             return_result_tensor=True,

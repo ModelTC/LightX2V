@@ -30,7 +30,7 @@ class WanSFRunner(WanAutoregressiveRunnerMixin, WanRunner):
     def init_scheduler(self):
         self.scheduler = WanSFScheduler(self.config)
 
-    def prepare_warmup_inputs(self, height, width, latent_shape, text_output):
-        self.input_info = T2VInputInfo(task="t2v", prompt="warmup", size=[height, width])
+    def _prepare_warmup_inputs(self, height, width, latent_shape, prompt, text_output):
+        self.input_info = T2VInputInfo(task="t2v", prompt=prompt, size=[height, width])
         self.input_info.latent_shape = latent_shape
         self.inputs = {"text_encoder_output": text_output, "image_encoder_output": None}

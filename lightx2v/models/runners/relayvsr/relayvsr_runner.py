@@ -53,7 +53,8 @@ class RelayVSRRunner(DefaultRunner):
     geometry: ClassVar[RelayVSRGeometry]
     supported_request_fields_by_task: ClassVar[dict] = {"sr": COMMON_REQUEST_FIELDS | {"video_path", "image_path", "sr_ratio"}}
 
-    WARMUP_RESOLUTIONS = ((768, 1024), (768, 1344))
+    _WARMUP_SHAPES = ((768, 1024), (768, 1344))
+    _WARMUP_PROMPTS = ()
 
     def __init__(self, config):
         if config.get("native_scale", self.geometry.scale) != self.geometry.scale:
@@ -94,11 +95,11 @@ class RelayVSRRunner(DefaultRunner):
         # condition, first-frame and history branches follow the normal stream.
         references = 2 * self.model.wan_config["temporal_context_frames"]
         frames = (references - 1) * (self.config.get("clip_len", 16) - 1) + 1
-        for height, width in self.WARMUP_RESOLUTIONS:
+        for height, width in self._WARMUP_SHAPES:
             frame = prediction = pixels = None
             logger.info("RelayVSR warmup: {}x{}, {} reference frames", height, width, references)
             try:
-                frame = torch.zeros((3, height, width), dtype=torch.uint8, pin_memory=True)
+                frame = self._prepare_warmup_inputs(height, width)
                 with closing(self.restore_frames(repeat(frame, frames), 42)) as predictions:
                     for prediction in predictions:
                         for scale in (2, 4) if self.geometry.scale == 4 else (2,):
@@ -109,6 +110,9 @@ class RelayVSRRunner(DefaultRunner):
                 self.input_info = None
         logger.info("RelayVSR warmup cost {:.2f}s", time.perf_counter() - started)
         self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, height, width):
+        return torch.zeros((3, height, width), dtype=torch.uint8, pin_memory=True)
 
     def create_input_info(self, request_data):
         info = super().create_input_info(request_data)
@@ -305,4 +309,4 @@ class RelayVSRX2Runner(RelayVSRRunner):
     """Native 2x inference, followed by optional output resizing."""
 
     geometry = RelayVSRGeometry(2)
-    WARMUP_RESOLUTIONS = ((768, 1024), (768, 1344))
+    _WARMUP_SHAPES = ((768, 1024), (768, 1344))
