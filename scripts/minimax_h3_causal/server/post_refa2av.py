@@ -13,10 +13,10 @@ def file_to_base64(path):
 if __name__ == "__main__":
     url = "http://localhost:8000/v1/tasks/video/"
 
-    global_file = "/data/zhangbilang/handoff/assets/global.txt"
-    motion_file = "/data/zhangbilang/handoff/assets/motions.yaml"
-    image_path = "/data/zhangbilang/handoff/assets/meinv_01.png"
-    audio_path = "/data/zhangbilang/handoff/assets/meinv_01.wav"
+    global_file = "/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/assets/refa2av/global.txt"
+    motion_file = "/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/assets/refa2av/motions.yaml"
+    image_path = "/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/assets/refa2av/image.png"
+    audio_path = "/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/assets/refa2av/audio.wav"
 
     # Submit the replay script once. The runner encodes only the first motion
     # initially, then each later motion at the next 17-frame boundary after its frame cue.
@@ -31,7 +31,7 @@ if __name__ == "__main__":
         "motions": motions,
         "seed": 42,
         "num_frames": 957,
-        "size": [1376, 768],
+        "size": [1344, 768],
         "save_result_path": "./minimax_h3_causal_refa2av.mp4",
     }
 
