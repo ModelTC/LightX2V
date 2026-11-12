@@ -1,10 +1,7 @@
 {
   "infer_steps": 4,
   "num_frames": 957,
-  "size": [
-    1376,
-    768
-  ],
+  "size": [1344, 768],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": false,
