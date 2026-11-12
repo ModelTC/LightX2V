@@ -58,6 +58,7 @@ source "${lightx2v_path}/scripts/base/base.sh"
 
 # Supported model-variant: fl2av (task: t2av, i2av, l2av, fl2av), ref2av
 python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
+  --model_cls minimax_h3 \
   --model_path "${model_path}" \
   --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3.json" \
   --model-variant fl2av

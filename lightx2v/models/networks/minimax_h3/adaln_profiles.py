@@ -14,8 +14,8 @@ class AdaLNCachePlan:
     cache_name: str
     profiles: list[str]
     timesteps: dict[str, torch.Tensor]
-    quantized_projection: bool = False
     checkpoint_layout: str = "native_h3"
+    sigmas: tuple[float, ...] = ()
 
 
 def _scheduled_timesteps(config, profiles):
@@ -44,18 +44,19 @@ def cache_plan(config) -> AdaLNCachePlan:
             pdd_config = json.load(handle)
         if int(config["infer_steps"]) != 6 or pdd_config["num_inference_steps"] != 6:
             raise ValueError("MiniMax-H3-Image PDD requires exactly six inference steps")
-        sigmas = pdd_config["sigmas"][:-1]
+        sigmas = pdd_config["sigmas"]
         # Match the scheduler's Python subtraction before its FP32 tensor cast.
-        timesteps = torch.tensor([1.0 - sigma for sigma in sigmas], dtype=torch.float32)
+        timesteps = torch.tensor([1.0 - sigma for sigma in sigmas[:-1]], dtype=torch.float32)
         profiles = ["image_t2i", "image_i2i"]
         batches = {}
         for profile in profiles:
             for step, timestep in enumerate(timesteps.tolist()):
                 values = [timestep, REFERENCE_TIMESTEP] if profile == "image_i2i" else [timestep]
                 batches[f"{profile}_step_{step:03d}"] = torch.unique(torch.tensor(values, dtype=torch.float32), sorted=True)
-        # Round only the directory label; manifest entries retain exact timesteps.
-        label = "_".join(f"{sigma:#.4g}" for sigma in sigmas)
-        return AdaLNCachePlan(cache_name=f"image_06steps_{label}", profiles=profiles, timesteps=batches, checkpoint_layout="minimax_h3_image")
+        # Round only the directory label; retain the full source sigma schedule
+        # and bit-exact FP32 timesteps for manifest validation.
+        label = "_".join(f"{sigma:#.4g}" for sigma in sigmas[:-1])
+        return AdaLNCachePlan(cache_name=f"image_06steps_{label}", profiles=profiles, timesteps=batches, checkpoint_layout="minimax_h3_image", sigmas=tuple(sigmas))
 
     suffix = f"{int(config['infer_steps']):02d}steps_shift_{float(config.get('video_flow_shift', 12.0))}_{float(config.get('audio_flow_shift', 3.0))}"
     if model == "minimax_h3_causal":
@@ -97,7 +98,6 @@ def cache_plan(config) -> AdaLNCachePlan:
             cache_name=f"{profile or config['model_variant']}_{suffix}",
             profiles=profiles,
             timesteps=batches,
-            quantized_projection=bool(config.get("dit_quantized", False)),
         )
 
     if model == "streamrender_h3":
@@ -110,13 +110,11 @@ def cache_plan(config) -> AdaLNCachePlan:
         audio = 1.0 - _shifted_timesteps(1.5)
         clean = 1.0 - torch.tensor(0.001, dtype=torch.float32)
         batches = {f"streamrender_step_{step:03d}": torch.unique(torch.stack((v, a, clean)), sorted=True) for step, (v, a) in enumerate(zip(video, audio))}
-        quantized = bool(config.get("dit_quantized", False))
         return AdaLNCachePlan(
             cache_name=f"{config['task']}_{suffix}",
             profiles=["streamrender"],
             timesteps=batches,
-            quantized_projection=quantized,
-            checkpoint_layout="native_h3" if quantized else "streamrender_release",
+            checkpoint_layout="streamrender_release",
         )
 
     variant = config["model_variant"]
