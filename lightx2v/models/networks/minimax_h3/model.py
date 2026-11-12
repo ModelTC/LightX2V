@@ -12,7 +12,7 @@ from safetensors.torch import load_file
 from lightx2v.common.ops.mm.fp8_f16_accum import fp8_accum_gemm, fp8_f16_accum_mm_unavailable_reason
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
-from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
+from lightx2v.models.networks.minimax_h3.adaln_cache_guide import get_adaln_cache_guide
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.offload.transformer_infer import validate_minimax_h3_residency_config
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
@@ -68,7 +68,7 @@ class MiniMaxH3Model(BaseTransformerModel):
                     raise ValueError(f"MiniMax-H3 contiguous block offload does not support {option}")
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not (self.use_adaln_cache or config.get("allow_online_adaln_offload", False)):
-            message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{ADALN_CACHE_GUIDE}"
+            message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{get_adaln_cache_guide(config['model_cls'])}"
             logger.error(message)
             raise ValueError(message)
         if self.use_adaln_cache:

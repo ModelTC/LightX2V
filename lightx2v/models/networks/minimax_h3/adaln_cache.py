@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 from safetensors import SafetensorError, safe_open
 
-from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
+from lightx2v.models.networks.minimax_h3.adaln_cache_guide import get_adaln_cache_guide
 from lightx2v.models.networks.minimax_h3.adaln_profiles import cache_plan
 
 
@@ -30,7 +30,7 @@ def validate_adaln_cache_config(config) -> None:
         return
     cache_dir = config.get("adaln_cache_dir")
     if cache_dir is None or not str(cache_dir).strip():
-        message = f"\nMINIMAX-H3 ADALN CACHE CONFIGURATION ERROR\n\nuse_adaln_cache=true, but adaln_cache_dir is missing or empty.\n\n{ADALN_CACHE_GUIDE}"
+        message = f"\nMINIMAX-H3 ADALN CACHE CONFIGURATION ERROR\n\nuse_adaln_cache=true, but adaln_cache_dir is missing or empty.\n\n{get_adaln_cache_guide(config['model_cls'])}"
         logger.error(message)
         raise ValueError(message)
     if config.get("dummy_model", False):
@@ -153,7 +153,7 @@ def load_persistent_adaln_cache(
             "Expected cache files:\n"
             f"  {cache_path / 'manifest.json'}\n"
             f"  {cache_path / 'adaln_cache.safetensors'}\n\n"
-            f"{ADALN_CACHE_GUIDE}"
+            f"{get_adaln_cache_guide(config['model_cls'])}"
         )
         logger.error(message)
         raise FileNotFoundError(message)
