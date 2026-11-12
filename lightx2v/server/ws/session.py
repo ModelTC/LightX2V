@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import os
 import queue
@@ -8,12 +9,15 @@ import traceback
 from typing import Optional
 
 import torch
+from PIL import Image
 from loguru import logger
 
+from lightx2v.server.ws.bilibili.config import BilibiliConfig, is_bilibili_input
 from lightx2v.server.ws.protocol import (
     AudioChunk,
     ClientMessage,
     Start,
+    error_message,
     event_message,
     video_message,
     video_start_message,
@@ -118,6 +122,11 @@ def parse_stream_config(config_json, runner, task) -> dict:
         config["resolution"] = resolution
     config["video_input"] = uses_video_input(runner, task)
     config["no_output_audio"] = uses_no_output_audio(runner)
+    if is_bilibili_input(config):
+        if runner.config.get("model_cls") != "minimax_h3_causal":
+            raise ValueError("Bilibili input requires model_cls=minimax_h3_causal")
+        if not output_url or not output_url.startswith("rtmp://"):
+            raise ValueError("Bilibili input requires config_json.output_url=rtmp://...")
     if config["video_input"]:
         if not config.get("input_url"):
             raise ValueError("config_json.input_url is required")
@@ -273,6 +282,7 @@ class LiveSession:
         self.stream_config = {}
         self.busy = False
         self.video_input = False
+        self.bilibili_input = False
 
     def _on_output(self, item):
         self.video_queue.put(item)
@@ -287,6 +297,7 @@ class LiveSession:
         self.video_source = None
         self.stream_config = parse_stream_config(start.config_json, self.runner, self.input_info.task)
         self.video_input = self.stream_config["video_input"]
+        self.bilibili_input = is_bilibili_input(self.stream_config)
         logger.info(f"Rank {self.rank} stream_config: {self.stream_config}")
         self.request_id = start.request_id or "ws-session"
         self.tmp_dir = tempfile.TemporaryDirectory(prefix=f"lightx2v_ws_{self.request_id}_")
@@ -299,7 +310,14 @@ class LiveSession:
         seed = int(start.seed or 42)
         _, size = resolve_aspect_ratio(start.aspect_ratio, self.stream_config.get("resolution"))
 
-        if not self.video_input:
+        if self.bilibili_input:
+            world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+            if int(os.getenv("READER_RANK", "0")) % world_size != self.rank:
+                raise ValueError("Bilibili input requires READER_RANK to match the websocket server rank (WORKER_RANK)")
+            # Fail configuration checks before broadcasting work to the other ranks.
+            # Only serializable settings travel to the reader; it owns the adapter.
+            BilibiliConfig.from_env(self.stream_config)
+        elif not self.video_input:
             seg_duration = 1.0
             try:
                 fps = float(self.runner.config.get("target_fps", 16))
@@ -343,26 +361,70 @@ class LiveSession:
     def sends_ws_output(self):
         return not self.stream_config.get("output_url")
 
+    @property
+    def has_input(self) -> bool:
+        return self.video_input or self.bilibili_input or self.audio_source is not None
+
+    def _live_reader(self):
+        return getattr(getattr(self.runner, "va_controller", None), "reader", None)
+
+    def _control_target(self):
+        target = self._live_reader() if self.bilibili_input else self.audio_source
+        if target is None:
+            raise RuntimeError("Live input is not ready")
+        return target
+
     def start_pipeline(self):
         self.busy = True
         self.thread, self.future = launch_pipeline(self.runner, self.input_info, self.rank, self.loop)
 
+    def _set_image(self, message, target):
+        if self.runner.config.get("model_cls") != "minimax_h3_causal":
+            raise ValueError("SetImage currently requires minimax_h3_causal")
+        handler = getattr(target, "on_image_switch", None)
+        if handler is None:
+            raise ValueError("Live input does not support SetImage")
+        if self.tmp_dir is None:
+            raise RuntimeError("session not started")
+        data = message.image_data
+        if not data:
+            raise ValueError("SetImage.image_data is required")
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                image.load()
+                image_format = message.image_format or image.format
+        except Exception as exc:
+            raise ValueError("SetImage.image_data must contain a valid image") from exc
+        with tempfile.NamedTemporaryFile(prefix="ref_switch_", suffix=_image_suffix(image_format), dir=self.tmp_dir.name, delete=False) as image_file:
+            image_file.write(data)
+            image_path = image_file.name
+        try:
+            handler(image_path)
+        except Exception:
+            os.unlink(image_path)
+            raise
+
     def handle_client_body(self, msg: ClientMessage):
         which = msg.which()
+        if self.bilibili_input and which in {"audio_start", "audio", "audio_end"}:
+            raise ValueError("Bilibili input generates audio on the server; client audio messages are disabled")
+        target = self._control_target()
         if which == "audio_start":
-            self.audio_source.on_audio_start()
+            target.on_audio_start()
         elif which == "audio":
             chunk: AudioChunk = msg.audio
-            self.audio_source.on_audio_chunk(chunk.data, chunk.sequence)
+            target.on_audio_chunk(chunk.data, chunk.sequence)
         elif which == "audio_end":
-            self.audio_source.on_audio_end()
+            target.on_audio_end()
         elif which == "interrupt":
             reason = msg.interrupt.reason if msg.interrupt else ""
-            self.audio_source.on_clear_audio(reason)
+            target.on_clear_audio(reason)
+        elif which == "set_image":
+            self._set_image(msg.set_image, target)
         elif which == "set_prompt":
             prompt = msg.set_prompt.prompt if msg.set_prompt else ""
             duration = resolve_set_prompt_duration(msg.set_prompt.duration if msg.set_prompt else 0.0)
-            self.audio_source.on_action_switch(prompt, duration)
+            target.on_action_switch(prompt, duration)
         else:
             raise ValueError(f"unexpected client message {which}")
 
@@ -372,11 +434,26 @@ class LiveSession:
     async def wait_started(self, timeout: float = 120.0):
         if self.video_input:
             return
-        if self.audio_source is None:
+        if self.audio_source is None and not self.bilibili_input:
             raise RuntimeError("session not started")
-        ok = await asyncio.to_thread(self.audio_source.started_event.wait, timeout)
-        if not ok:
-            raise TimeoutError("reader did not start in time")
+        deadline = self.loop.time() + timeout
+        while True:
+            if self.future is not None and self.future.done():
+                status, _ = self.future.result()
+                raise RuntimeError("pipeline exited before the reader started (status=%s)" % status)
+            target = self._live_reader() if self.bilibili_input else self.audio_source
+            event = getattr(target, "started_event", None)
+            if event is not None and event.is_set():
+                return
+            if self.loop.time() >= deadline:
+                raise TimeoutError("reader did not start in time")
+            await asyncio.sleep(0.05)
+
+    async def watch_pipeline(self, websocket):
+        status, _ = await asyncio.shield(self.future)
+        if not status:
+            await websocket.send_bytes(error_message("pipeline_failed", "Live pipeline failed; check server logs", True))
+        await websocket.close()
 
     async def pump_video(self, websocket):
         while True:

@@ -3,6 +3,7 @@ import math
 import time
 import wave
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,7 @@ from lightx2v.models.networks.minimax_h3.packing import (
     AUDIO_LATENTS_PER_SECOND,
     FPS,
     FRAMES_PER_CHUNK,
+    LATENTS_PER_CHUNK,
     align_num_frames,
     audio_latent_num_frames,
     temporal_position_span,
@@ -96,15 +98,15 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
 
     def run_text_encoder(self, input_info, keyframes=None, references=None):
         use_action_travel = self.action_prompt_travel_config.enabled and bool(input_info.action_prompts)
-        if not use_action_travel and self.reference_cache is None:
-            return super().run_text_encoder(input_info, keyframes=keyframes, references=references)
         encoder = self.text_encoders[0]
         if self.text_reference_context is None:
             self.text_reference_context = encoder.prepare_reference_context(references)
         if not use_action_travel:
             if (input_info.negative_prompt or "").strip():
                 logger.warning("MiniMax-H3 is guidance-distilled; negative_prompt is ignored")
-            return encoder.infer(input_info.prompt, reference_context=self.text_reference_context)
+            text = encoder.infer(input_info.prompt, reference_context=self.text_reference_context)
+            text["_h3_prompt"] = input_info.prompt
+            return text
         reference_length = len(self.text_reference_context["token_ids"])
         self.action_travel = ActionPromptTravel(input_info.prompt, input_info.action_prompts, self.action_prompt_travel_config, encoder.tokenizer, reference_length)
         if isinstance(input_info.audio_path, dict) and self.action_prompt_travel_config.naive_travel:
@@ -114,20 +116,27 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
 
     def encode_action_prompt(self, action_prompt=None):
         travel = self.action_travel
-        prompt = travel.prompt
+        prompt = travel.prompt if travel is not None else self.input_info.prompt
         if action_prompt is not None:
             body = str(action_prompt).strip()
-            if body and travel.config.naive_travel and travel.config.prompt_form == "six_key" and not body.startswith("[Action"):
+            if body and travel is not None and travel.config.naive_travel and travel.config.prompt_form == "six_key" and not body.startswith("[Action"):
                 body = f"[Action 1]: {body}"
-            prompt = travel.assemble_prompt(body)
+            prompt = travel.assemble_prompt(body) if travel is not None else body
+        return self._encode_live_prompt(prompt)
+
+    def _encode_live_prompt(self, prompt):
+        travel = self.action_travel
         text = self.text_encoders[0].infer(
             prompt,
             reference_context=self.text_reference_context,
-            pad_to_len=travel.text_length if travel.config.naive_travel else None,
-            pad_mode=travel.config.naive_pad,
+            pad_to_len=travel.text_length if travel is not None and travel.config.naive_travel else None,
+            pad_mode=travel.config.naive_pad if travel is not None else "token_id",
         )
-        if text["text_token_tags"].numel() != travel.text_length:
+        if travel is not None and text["text_token_tags"].numel() != travel.text_length:
             raise RuntimeError("H3 action prompt length changed while rolling")
+        # Keep the exact presentation, including its action slot. A reference
+        # change must re-encode it without assembling that slot a second time.
+        text["_h3_prompt"] = prompt
         return text
 
     def init_scheduler(self):
@@ -222,16 +231,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             raise ValueError("RefA2V requires a reference image and a driving audio file")
         self.clear_conditioning_state()
         self._resolve_request_geometry()
-        self.prepared_references = self._prepare_references()
-        cached = self.reference_cache.get(self.prepared_references) if self.reference_cache is not None else None
-        if cached is not None:
-            self.text_reference_context, latents = cached
-        text = self.run_text_encoder(self.input_info, references=self.prepared_references)
-        if cached is None:
-            latents = self._encode_references(self.prepared_references)
-            if self.reference_cache is not None:
-                self.reference_cache.store(self.prepared_references, self.text_reference_context, latents)
-        self.condition_video_latents, self.condition_audio_latents = latents
+        text = self._encode_reference_conditions(self._prepare_references())
 
         # stream audio input is dict
         if not isinstance(self.input_info.audio_path, str):
@@ -255,8 +255,23 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self.waveform = F.pad(waveform[..., :samples], (0, max(0, samples - waveform.shape[-1]))).contiguous()
         return {"text_encoder_output": text}
 
-    def _prepare_references(self):
-        paths = self._split_reference_paths(self.input_info.image_path)
+    def _encode_reference_conditions(self, references):
+        self.prepared_references = references
+        self.text_reference_context = None
+        self.action_travel = None
+        cached = self.reference_cache.get(self.prepared_references) if self.reference_cache is not None else None
+        if cached is not None:
+            self.text_reference_context, latents = cached
+        text = self.run_text_encoder(self.input_info, references=self.prepared_references)
+        if cached is None:
+            latents = self._encode_references(self.prepared_references)
+            if self.reference_cache is not None:
+                self.reference_cache.store(self.prepared_references, self.text_reference_context, latents)
+        self.condition_video_latents, self.condition_audio_latents = latents
+        return text
+
+    def _prepare_references(self, image_path=None):
+        paths = self._split_reference_paths(self.input_info.image_path if image_path is None else image_path)
         if not 1 <= len(paths) <= MAX_REFERENCE_IMAGES:
             raise ValueError("Causal H3 requires 1..9 reference images")
         references = []
@@ -303,7 +318,17 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                     pinned_memory=self.config.get("vae_rgb_pinned_memory", False),
                     video_codec_options=self.config.get("video_codec_options"),
                 )
-        self.model.initialize_kv_cache(self.scheduler.plan.cache_size)
+        self._initialize_kv_cache()
+
+    def _initialize_kv_cache(self):
+        plan = self.scheduler.plan
+        capacity = plan.cache_size
+        if isinstance(self.input_info.audio_path, dict):
+            # A short configured clip still needs a full rolling window when
+            # used as an unbounded live stream. The first full chunk has the
+            # largest (29-latent) audio block.
+            capacity = max(capacity, plan.condition_layout.sequence_length + (plan.sink_chunks + plan.latest_chunks) * plan.chunks[0].positions.shape[0])
+        self.model.initialize_kv_cache(capacity)
 
     def fill_condition_cache(self, *, overwrite=False):
         self.scheduler.prepare_condition(overwrite=overwrite)
@@ -437,7 +462,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             self.stream_waveform = None
             self.last_rest_audio = None
 
-    def _get_stream_chunk(self, chunk_index):
+    def _get_stream_chunk(self, chunk_index, start_chunk=0):
         chunk_index = int(chunk_index)
         tags = self.inputs["text_encoder_output"]["text_token_tags"]
         rotary_time = float(tags.shape[0])
@@ -450,13 +475,64 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                 rotary_time += max(float(reference.num_audio_latents), temporal_position_span(reference.num_latent_frames))
             else:
                 raise ValueError(f"Unknown MiniMax-H3 reference kind: {reference.kind!r}")
-        return build_causal_stream_chunk(
+        chunk = build_causal_stream_chunk(
             chunk_index,
             self.request_height // 16,
             self.request_width // 16,
             rotary_time,
             tuple(self.config.get("patch_size", (1, 2, 2))),
         )
+        if start_chunk:
+            # Keep absolute audio slices (29/28/28 cadence) while starting a
+            # fresh video/KV epoch near the new reference's rotary origin.
+            positions = chunk.positions.clone()
+            positions[:, 0] -= temporal_position_span(start_chunk * LATENTS_PER_CHUNK)
+            start = (chunk_index - start_chunk) * LATENTS_PER_CHUNK
+            rows = chunk.num_video_rows // LATENTS_PER_CHUNK
+            chunk = replace(chunk, positions=positions, video_frames=slice(start, start + LATENTS_PER_CHUNK), video_rows=slice(start * rows, (start + LATENTS_PER_CHUNK) * rows))
+        return chunk
+
+    def _switch_image(self, image_path, origin_text_output):
+        # Every rank must accept or reject the reference together, before any
+        # text/VAE encoder can enter a collective operation.
+        references, error = None, ""
+        try:
+            references = self._prepare_references(image_path)
+        except Exception as exc:
+            error = str(exc) or type(exc).__name__
+        ready = torch.tensor([not error], dtype=torch.int32, device=AI_DEVICE)
+        if dist.is_initialized() and dist.get_world_size() > 1:
+            dist.all_reduce(ready, op=dist.ReduceOp.MIN)
+        notify = getattr(self.va_controller.reader, "on_image_switched", None)
+        if not ready.item():
+            error = error or "Reference image is unavailable on another rank"
+            logger.warning("H3 reference image switch rejected: {}", error)
+            if notify is not None:
+                notify(image_path, error=error)
+            return None
+
+        current_prompt = self.inputs["text_encoder_output"]["_h3_prompt"]
+        original, original_label = origin_text_output
+        pending = isinstance(original, str) and original == "pending"
+        original_prompt = None if pending else original["_h3_prompt"]
+        self.input_info.image_path = image_path
+        self._encode_reference_conditions(references)
+        current = self._encode_live_prompt(current_prompt)
+        if not pending:
+            original = current if original_prompt == current_prompt else self._encode_live_prompt(original_prompt)
+        self.inputs["text_encoder_output"] = current
+        self.model.reset_autoregressive_state()
+        self.model.reset_cuda_graph()
+        # Rebuild only model conditioning; keep the live reader, recorder,
+        # decoder overlap, audio history and fractional audio tail intact.
+        MiniMaxH3Runner.init_run(self)
+        self._initialize_kv_cache()
+        self.fill_condition_cache()
+        if notify is not None:
+            notify(image_path)
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            logger.info("H3 reference image switched: {}", image_path)
+        return original, original_label
 
     # origin_audio: (audio_end - audio_start) / AUDIO_LATENTS_PER_SECOND * sr, eg. (29 / 40 * 32000)
     def _encode_audio_for_each_chunk(self, chunk_idx: int, origin_audio: np.ndarray, chunk) -> torch.Tensor:
@@ -478,7 +554,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             max_samples = max(hop, int(window_secs * self.audio_vae.sampling_rate) // hop * hop)
             if self.stream_waveform.shape[-1] > max_samples:
                 if dist.get_rank() == 0:
-                    logger.warning(f"stream_waveform truncate from {self.stream_waveform.shape} to {max_samples}")
+                    logger.debug(f"stream_waveform truncate from {self.stream_waveform.shape} to {max_samples}")
                 self.stream_waveform = self.stream_waveform[..., -max_samples:].contiguous()
 
         encode_waveform = self.stream_waveform[:1] if self.config.get("audio_mono", False) else self.stream_waveform
@@ -576,18 +652,26 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             decoder = MiniMaxH3StreamingVideoDecoder(self.video_vae, self.request_num_frames, output_uint8=False)
 
             chunk_idx = 0
+            stream_start_idx = 0
             fail_count, max_fail_count = 0, 10
             last_origin_audio = None
             last_chunk_idx = 0
             last_valid_duration = 0
             self.last_rest_audio = None
-            origin_text_output = (self.inputs["text_encoder_output"], self.action_travel.prompt)
+            origin_text_output = (self.inputs["text_encoder_output"], self.inputs["text_encoder_output"]["_h3_prompt"])
             restore_prompt_at = -1
 
             while True:
                 control = self.va_controller.next_control()
 
-                if control.action == "perform_action":
+                if control.action == "switch_image":
+                    refreshed = self._switch_image(control.data, origin_text_output)
+                    if refreshed is not None:
+                        origin_text_output = refreshed
+                        stream_start_idx = chunk_idx
+                    continue
+
+                elif control.action == "perform_action":
                     prompt, duration = control.data["prompt"], control.data["duration"]
                     text_output = self.encode_action_prompt(prompt)
                     self._commit_text_output(text_output, emit=True, prompt=prompt)
@@ -613,7 +697,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                     time.sleep(0.01)
                     continue
 
-                chunk = self._get_stream_chunk(chunk_idx)
+                chunk = self._get_stream_chunk(chunk_idx, start_chunk=stream_start_idx)
                 origin_audio, valid_duration = self.va_controller.reader.get_audio_segment(chunk.num_audio_frames / AUDIO_LATENTS_PER_SECOND)
                 if origin_audio is None:
                     fail_count += 1
@@ -625,9 +709,9 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                 with ProfilingContext4DebugL1(f"stream segment end2end {chunk_idx}"):
                     self.check_stop()
                     if dist.get_rank() == 0:
-                        logger.info(f"MiniMax-H3 causal live chunk {chunk_idx}")
+                        logger.debug(f"MiniMax-H3 causal live chunk {chunk_idx}")
                     clean = self._encode_audio_for_each_chunk(chunk_idx, origin_audio, chunk)
-                    self.scheduler.prepare_chunk(chunk_idx, clean, chunk=chunk)
+                    self.scheduler.prepare_chunk(chunk_idx - stream_start_idx, clean, chunk=chunk)
                     for step in range(self.scheduler.infer_steps):
                         self.check_stop()
                         self.scheduler.step_pre(step)

@@ -102,6 +102,20 @@ class VAController:
         if not self.output_video_path or self.rank != self.target_recorder_rank:
             return
         logger.info(f"Rank {self.rank} init recorder with: {self.output_video_path}")
+        from lightx2v.server.ws.bilibili.config import is_bilibili_input
+
+        if is_bilibili_input(self.stream_config):
+            from lightx2v.server.ws.bilibili.recorder import BiliLiveVARecorder
+
+            self.recorder = BiliLiveVARecorder(
+                livestream_url=self.output_video_path,
+                fps=self.record_fps,
+                sample_rate=self.record_audio_sr,
+                slice_frame=self.slice_frame,
+                prev_frame=self.prev_frame_length,
+                stream_config=self.stream_config,
+            )
+            return
         if self.ws_output is not None:
             from lightx2v.utils.va_recorder_ws import WsVideoChunkRecorder
 
@@ -167,6 +181,24 @@ class VAController:
             return
 
         if not isinstance(self.audio_path, dict):
+            return
+        from lightx2v.server.ws.bilibili.config import is_bilibili_input
+
+        if is_bilibili_input(self.stream_config):
+            from lightx2v.server.ws.bilibili.reader import BiliLiveOmniVAReader
+
+            if not self.is_minimax_h3_causal:
+                raise ValueError("Bilibili input currently requires model_cls=minimax_h3_causal")
+            self.reader = BiliLiveOmniVAReader(
+                rank=self.rank,
+                world_size=self.world_size,
+                stream_url=self.audio_path.get("data", ""),
+                sample_rate=self.audio_sr,
+                target_rank=self.target_reader_rank,
+                model_runner=model_runner,
+                stream_config=self.stream_config,
+                va_recorder=self.recorder,
+            )
             return
         audio_type = self.audio_path.get("type")
         segment_duration = self.max_num_frames / self.target_fps
@@ -326,7 +358,9 @@ class VAController:
         image_switch = self.reader.get_image_switch()
         if not isinstance(image_switch, str) or len(image_switch) == 0:
             return None
-        if not os.path.exists(image_switch):
+        # H3 validates the decoded image collectively. A rank-local skip here
+        # could send its peers into reference-encoder collectives alone.
+        if not self.is_minimax_h3_causal and not os.path.exists(image_switch):
             logger.warning(f"Switch image path {image_switch} does not exist")
             return None
         # self.truncate_buffer(self.est_switch_image_end_idx + self.est_infer_end_idx, "image switch")

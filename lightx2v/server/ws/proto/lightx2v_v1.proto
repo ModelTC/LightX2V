@@ -12,6 +12,7 @@ message ClientMessage {
     Empty audio_end = 4;
     Interrupt interrupt = 5; // 打断
     SetPrompt set_prompt = 6; // 设置提示词
+    SetImage set_image = 7; // 切换参考图
   }
 }
 
@@ -70,6 +71,11 @@ message Interrupt { string reason = 1; }
 message SetPrompt {
   string prompt = 1;
   float duration = 2;  // -1=until next SetPrompt, 0/omit=server default, >0=client seconds
+}
+
+message SetImage {
+  bytes image_data = 1;
+  string image_format = 2;
 }
 
 message Failure {

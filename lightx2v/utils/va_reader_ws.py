@@ -1,6 +1,7 @@
 import threading
 import traceback
 from copy import deepcopy
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -101,6 +102,12 @@ class WsAudioSource:
             self.audio_buffer = None
             if self.status == "voice":
                 self.status = "blank"
+
+    def on_image_switch(self, image_path: str):
+        if not Path(image_path).is_file():
+            raise ValueError("Reference image is missing")
+        with self._lock:
+            self.image_switch = str(image_path)
 
     def on_action_switch(self, prompt: str, duration: float = 0):
         prompt = str(prompt).strip()

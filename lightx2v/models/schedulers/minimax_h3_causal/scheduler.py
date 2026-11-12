@@ -64,6 +64,10 @@ class MiniMaxH3CausalScheduler(MiniMaxH3Scheduler):
                 self.plan.chunks[index] = chunk
             else:
                 raise ValueError(f"live chunk {index} skipped planned length {len(self.plan.chunks)}")
+            if index == 0:
+                # An image switch starts a new cache epoch at any absolute
+                # audio phase; its sink can contain 28 or 29 audio latents.
+                self.plan.sink_rows = self.plan.condition_layout.sequence_length + chunk.positions.shape[0]
         self.prepared_inputs = None
         self.overwrite_condition = False
         self.condition_phase = False

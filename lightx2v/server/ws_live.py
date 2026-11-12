@@ -156,17 +156,20 @@ async def run_websocket_server(args, runner, input_info):
                     except Exception as e:
                         await websocket.send_bytes(error_message("start_failed", str(e), True))
                         await session.stop_and_join()
+                        await sync_ranks()
                         session.close()
                         state.session = None
                         session = None
                         continue
                     if session.sends_ws_output:
                         pump_task = asyncio.create_task(session.pump_video(websocket))
-                    if pump_task is not None and session.future is not None:
+                    elif session.bilibili_input:
+                        pump_task = asyncio.create_task(session.watch_pipeline(websocket))
+                    if session.sends_ws_output and pump_task is not None and session.future is not None:
                         session.future.add_done_callback(lambda fut: session.mark_pipeline_done(*(fut.result() if not fut.cancelled() else (False, "cancelled"))))
                     continue
 
-                if session is None or (session.audio_source is None and not session.video_input):
+                if session is None or not session.has_input:
                     await websocket.send_bytes(error_message("no_session", "send Start first", True))
                     continue
                 if session.video_input:
