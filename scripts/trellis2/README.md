@@ -169,8 +169,8 @@ Mesh hole filling follows the upstream CuMesh CUDA procedure and additionally
 requires `cumesh` (see upstream `setup.sh --cumesh`). The hole-filling step has
 not been validated on MLU.
 
-The default input is `assets/inputs/imgs/trellis2/input.png`. No dataset download,
-labels, camera files or evaluation manifest are needed.
+Provide an input image using `INPUT_PATH`. No labels, camera files or
+evaluation manifest are needed.
 
 | Platform | Configuration | Launcher |
 | --- | --- | --- |
@@ -181,10 +181,10 @@ With the default weight directory and prepared platform environment:
 
 ```bash
 # NVIDIA GPU; requires the FlashAttention v2 backend.
-bash scripts/trellis2/run_trellis2.sh
+INPUT_PATH=/path/to/my_object.png bash scripts/trellis2/run_trellis2.sh
 
 # MLU; requires a compatible vendor Torch / torch_mlu environment.
-bash scripts/platform/mlu/run_trellis2.sh
+INPUT_PATH=/path/to/my_object.png bash scripts/platform/mlu/run_trellis2.sh
 ```
 
 To use your own weights, image and output path:
