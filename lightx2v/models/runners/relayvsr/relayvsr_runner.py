@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import av
+import cv2
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -23,8 +24,9 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.relayvsr.scheduler import RelayVSRScheduler
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
-from lightx2v.utils.profiler import ProfilingContext4DebugL1
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import mux_audio_from_video
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -52,7 +54,8 @@ class RelayVSRRunner(DefaultRunner):
     geometry: ClassVar[RelayVSRGeometry]
     supported_request_fields_by_task: ClassVar[dict] = {"sr": COMMON_REQUEST_FIELDS | {"video_path", "image_path", "sr_ratio"}}
 
-    WARMUP_RESOLUTIONS = ((768, 1024), (768, 1344))
+    _WARMUP_SHAPES = ((768, 1024), (768, 1344))
+    _WARMUP_PROMPTS = ()
 
     def __init__(self, config):
         if config.get("native_scale", self.geometry.scale) != self.geometry.scale:
@@ -93,11 +96,11 @@ class RelayVSRRunner(DefaultRunner):
         # condition, first-frame and history branches follow the normal stream.
         references = 2 * self.model.wan_config["temporal_context_frames"]
         frames = (references - 1) * (self.config.get("clip_len", 16) - 1) + 1
-        for height, width in self.WARMUP_RESOLUTIONS:
+        for height, width in self._WARMUP_SHAPES:
             frame = prediction = pixels = None
             logger.info("RelayVSR warmup: {}x{}, {} reference frames", height, width, references)
             try:
-                frame = torch.zeros((3, height, width), dtype=torch.uint8, pin_memory=True)
+                frame = self._prepare_warmup_inputs(height, width)
                 with closing(self.restore_frames(repeat(frame, frames), 42)) as predictions:
                     for prediction in predictions:
                         for scale in (2, 4) if self.geometry.scale == 4 else (2,):
@@ -111,6 +114,9 @@ class RelayVSRRunner(DefaultRunner):
                 self.input_info = None
         logger.info("RelayVSR warmup cost {:.2f}s", time.perf_counter() - started)
         self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, height, width):
+        return torch.zeros((3, height, width), dtype=torch.uint8, pin_memory=True)
 
     def create_input_info(self, request_data):
         info = super().create_input_info(request_data)
@@ -232,11 +238,16 @@ class RelayVSRRunner(DefaultRunner):
             frame = torch.from_numpy(np.array(image.convert("RGB"))).permute(2, 0, 1).contiguous()
         target = self.output_size(input_info, *frame.shape[-2:])
         with closing(self.restore_frames([frame], input_info.seed)) as predictions:
-            pixels = self.postprocess(next(predictions), target).cpu()
+            prediction = next(predictions)
         if self.main_rank and input_info.save_result_path:
             path = Path(input_info.save_result_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            Image.fromarray(pixels.numpy()).save(path)
+            method = self.config.get("save_image_method", "opencv")
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {path}", time_unit="ms"):
+                pixels = self.postprocess(prediction, target).cpu()
+                image = Image.fromarray(pixels.numpy()) if method == "pil" else cv2.cvtColor(pixels.numpy(), cv2.COLOR_RGB2BGR)
+                save_image(image, path, method)
+        else:
+            pixels = self.postprocess(prediction, target).cpu()
         return {"images": pixels[None].float().div_(255) if input_info.return_result_tensor else None}
 
     def run_video(self, input_info):
@@ -309,4 +320,4 @@ class RelayVSRX2Runner(RelayVSRRunner):
     """Native 2x inference, followed by optional output resizing."""
 
     geometry = RelayVSRGeometry(2)
-    WARMUP_RESOLUTIONS = ((768, 1024), (768, 1344))
+    _WARMUP_SHAPES = ((768, 1024), (768, 1344))

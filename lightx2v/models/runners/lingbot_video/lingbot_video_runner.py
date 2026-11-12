@@ -2,6 +2,7 @@ import gc
 import math
 import os
 
+import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -15,9 +16,10 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS, VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.lingbot_video.scheduler import LingBotVideoScheduler
 from lightx2v.models.video_encoders.hf.lingbot_video.vae import LingBotVideoWanVAE
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import I2VInputInfo, T2IInputInfo, T2VInputInfo
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -85,7 +87,11 @@ class LingBotVideoRunner(DefaultRunner):
     }
 
     model_cpu_offload_seq = "text_encoder->transformer->vae"
-    _WARMUP_RESOLUTIONS = ((480, 480), (320, 832))
+    _WARMUP_SHAPES = ((480, 480), (320, 832))
+    _WARMUP_PROMPTS = (
+        "A train passes a station.",
+        "The camera pans slowly across an empty railway platform at sunrise as a blue passenger train rolls past. Warm light catches the windows, a paper timetable flutters beside a bench, and low mist hangs over the tracks beyond the station.",
+    )
 
     def __init__(self, config):
         if config.get("lazy_load", False) or config.get("unload_modules", False):
@@ -99,13 +105,13 @@ class LingBotVideoRunner(DefaultRunner):
 
     def _run_warmup(self):
         scheduler = self.model.scheduler
-        text_encoder_output = None
+        text_encoder_cache = {}
 
-        for height, width in self._WARMUP_RESOLUTIONS:
+        for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
             logger.info(f"Warmup: {height}x{width}")
             try:
                 scheduler.generator = None
-                text_encoder_output = self._prepare_warmup_inputs(height, width, text_encoder_output)
+                self._prepare_warmup_inputs(warmup_index, height, width, text_encoder_cache)
                 scheduler.prepare(self.input_info)
                 self._apply_condition_latent()
                 scheduler.step_pre(step_index=0)
@@ -122,11 +128,11 @@ class LingBotVideoRunner(DefaultRunner):
 
         logger.info("[Warmup] Warmup completed")
 
-    def _prepare_warmup_inputs(self, height, width, text_encoder_output=None):
+    def _prepare_warmup_inputs(self, warmup_index, height, width, text_encoder_cache):
         input_cls = {"t2i": T2IInputInfo, "t2v": T2VInputInfo, "i2v": I2VInputInfo}[self.config["task"]]
         self.input_info = input_cls(
             seed=0,
-            prompt="warmup",
+            prompt=self._WARMUP_PROMPTS[warmup_index],
             negative_prompt="",
             size=[height, width],
             return_result_tensor=True,
@@ -135,14 +141,14 @@ class LingBotVideoRunner(DefaultRunner):
         if self.config["task"] == "i2v":
             self.inputs = self._run_input_encoder_local_i2v(Image.new("RGB", (width, height), color=0))
         else:
-            if text_encoder_output is None:
-                text_encoder_output = self._run_input_encoder_local_t2v()["text_encoder_output"]
+            prompt = self.input_info.prompt
+            if prompt not in text_encoder_cache:
+                text_encoder_cache[prompt] = self._run_input_encoder_local_t2v()["text_encoder_output"]
             self.inputs = {
-                "text_encoder_output": text_encoder_output,
+                "text_encoder_output": text_encoder_cache[prompt],
                 "image_encoder_output": None,
             }
         self.set_latent_shape()
-        return text_encoder_output
 
     def clear_warmup_state(self):
         self.model.scheduler.clear()
@@ -330,8 +336,13 @@ class LingBotVideoRunner(DefaultRunner):
         save_result_path = input_info.save_result_path
         os.makedirs(os.path.dirname(os.path.abspath(save_result_path)), exist_ok=True)
         if self.config["task"] == "t2i":
-            image = outputs[0] if isinstance(outputs, list) else outputs
-            image.save(save_result_path)
+            method = self.config.get("save_image_method", "opencv")
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {save_result_path}", time_unit="ms"):
+                image = outputs[0] if isinstance(outputs, list) else outputs
+                pixels = image.detach().cpu().float().permute(1, 2, 0).numpy()
+                pixels = (pixels * 255).clip(0, 255).astype(np.uint8)
+                image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+                save_image(image, save_result_path, method)
             logger.info(f"Image saved: {save_result_path}")
         else:
             save_to_video(outputs, save_result_path, fps=float(self.config.get("fps", 24)), method="ffmpeg")

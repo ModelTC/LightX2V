@@ -41,7 +41,10 @@ class BagelVae:
         latents = latents.to(device=self.device, dtype=torch.float32)
         image = self.vae_model.decode(latents)
         image = (image * 0.5 + 0.5).clamp(0, 1)[0].permute(1, 2, 0) * 255
-        image = image.to(torch.uint8).cpu()
+        image = image.to(torch.uint8)
+        if decode_info.get("save_result_path") and not decode_info.get("return_result_tensor", False):
+            return [image]
+        image = image.cpu()
         if decode_info.get("return_result_tensor", False):
             return [image]
         return [Image.fromarray(image.numpy())]

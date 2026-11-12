@@ -1,6 +1,7 @@
 import gc
-from pathlib import Path
 
+import cv2
+import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
@@ -15,6 +16,7 @@ from lightx2v.models.schedulers.z_image.scheduler import ZImageScheduler
 from lightx2v.models.video_encoders.hf.z_image.vae import AutoencoderKLZImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process
@@ -373,10 +375,12 @@ class ZImageRunner(DefaultRunner):
         self.end_run()
 
         if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
-            image = images[0]
-            path = Path(input_info.save_result_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            image.save(path)
+            method = self.config.get("save_image_method", "opencv")
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {input_info.save_result_path}", time_unit="ms"):
+                pixels = images[0].detach().cpu().float().permute(1, 2, 0).numpy()
+                pixels = (pixels * 255).round().astype(np.uint8)
+                image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+                save_image(image, input_info.save_result_path, method)
             logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator

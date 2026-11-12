@@ -1,5 +1,7 @@
 import math
 
+import cv2
+import numpy as np
 import torch
 import torch.distributed as dist
 import torchvision.transforms.functional as TF
@@ -18,6 +20,7 @@ from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import I2IInputInfo, T2IInputInfo
 from lightx2v.utils.profiler import *
@@ -61,7 +64,11 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 class QwenImageRunner(DisaggMixin, DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-    _WARMUP_RESOLUTIONS = ((480, 480), (832, 1248))
+    _WARMUP_SHAPES = ((480, 480), (832, 1248))
+    _WARMUP_PROMPTS = (
+        "A pear on a plate.",
+        "A still life photograph of ripe pears on a ceramic plate beside a folded linen napkin. Soft afternoon light enters from the left, revealing the speckled skin of the fruit, the glazed rim of the plate, and the grain of the wooden table.",
+    )
     _WARMUP_TASKS = ("t2i", "i2i")
     supported_request_fields_by_task = {
         "t2i": IMAGE_REQUEST_FIELDS,
@@ -116,12 +123,12 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
     def _run_warmup(self):
         scheduler = self.model.scheduler
-        t2i_text_cache = None
+        t2i_text_cache = {}
 
-        for height, width in self._WARMUP_RESOLUTIONS:
+        for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
             logger.info(f"Warmup: {height}x{width}")
             try:
-                t2i_text_cache = self._prepare_warmup_inputs(height, width, t2i_text_cache)
+                self._prepare_warmup_inputs(warmup_index, height, width, t2i_text_cache)
                 scheduler.generator = None
                 scheduler.prepare(self.input_info)
                 try:
@@ -147,24 +154,25 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         logger.info("[Warmup] Warmup completed")
 
-    def _prepare_warmup_inputs(self, height, width, t2i_text_cache=None):
+    def _prepare_warmup_inputs(self, warmup_index, height, width, t2i_text_cache):
         task = self.config["task"]
         input_info_cls = T2IInputInfo if task == "t2i" else I2IInputInfo
         self.input_info = input_info_cls(
             seed=0,
-            prompt="warmup",
+            prompt=self._WARMUP_PROMPTS[warmup_index],
             negative_prompt=" " if self.config["enable_cfg"] else None,
             size=[height, width],
             return_result_tensor=True,
         )
 
         if task == "t2i":
-            if t2i_text_cache is None:
-                text_encoder_output = self.run_text_encoder(self.input_info.prompt, neg_prompt=self.input_info.negative_prompt)
-                t2i_text_cache = text_encoder_output, tuple(self.input_info.txt_seq_lens)
-            else:
-                text_encoder_output, txt_seq_lens = t2i_text_cache
+            prompt = self.input_info.prompt
+            if prompt in t2i_text_cache:
+                text_encoder_output, txt_seq_lens = t2i_text_cache[prompt]
                 self.input_info.txt_seq_lens = list(txt_seq_lens)
+            else:
+                text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
+                t2i_text_cache[prompt] = text_encoder_output, tuple(self.input_info.txt_seq_lens)
             image_encoder_output = None
         else:
             image = Image.new("RGB", (width, height), color=0)
@@ -176,7 +184,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             "image_encoder_output": image_encoder_output,
         }
         self.set_latent_shape()
-        return t2i_text_cache
 
     def clear_warmup_state(self):
         self.model.scheduler.clear()
@@ -537,14 +544,20 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
         image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
-        if isinstance(images[0], list) and len(images[0]) > 1:
-            for idx, image in enumerate(images[0]):
-                image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
-                logger.info(f"{log_prefix}: {image_prefix}_{idx:05d}.{image_suffix}")
-        else:
-            image = images[0]
-            image.save(f"{image_prefix}.{image_suffix}")
-            logger.info(f"{log_prefix}: {image_prefix}.{image_suffix}")
+        images = images[0] if isinstance(images[0], list) else images[:1]
+        method = self.config.get("save_image_method", "opencv")
+        for idx, image in enumerate(images):
+            path = f"{image_prefix}_{idx:05d}.{image_suffix}" if len(images) > 1 else f"{image_prefix}.{image_suffix}"
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {path}", time_unit="ms"):
+                pixels = image.detach().cpu().float().permute(1, 2, 0).numpy()
+                pixels = (pixels * 255).round().astype(np.uint8)
+                if method == "pil":
+                    image = Image.fromarray(pixels)
+                else:
+                    conversion = cv2.COLOR_RGBA2BGRA if pixels.shape[-1] == 4 else cv2.COLOR_RGB2BGR
+                    image = cv2.cvtColor(pixels, conversion)
+                save_image(image, path, method)
+            logger.info(f"{log_prefix}: {path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None):
         if latents is not None:

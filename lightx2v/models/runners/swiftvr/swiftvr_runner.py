@@ -45,7 +45,8 @@ class SwiftVRRunner(DefaultRunner):
     }
 
     # Two spatial shapes trigger dynamic compilation before serving requests.
-    WARMUP_RESOLUTIONS = ((720, 1280), (2048, 1536))
+    _WARMUP_SHAPES = ((720, 1280), (2048, 1536))
+    _WARMUP_PROMPTS = ()
 
     def __init__(self, config):
         parallel = config.get("parallel") or {}
@@ -97,7 +98,7 @@ class SwiftVRRunner(DefaultRunner):
         # One first, middle, and one-frame last chunk cover the 7- and 6-latent DiT paths.
         chunks = build_video_chunks(2 * clip_length + 5, clip_length)
 
-        for height, width in self.WARMUP_RESOLUTIONS:
+        for height, width in self._WARMUP_SHAPES:
             padded_height = height + (-height) % 32
             padded_width = width + (-width) % 32
             logger.info(f"Warmup: {height}x{width}")
@@ -106,15 +107,7 @@ class SwiftVRRunner(DefaultRunner):
                 self.restorer.transformer.overlap = 0
                 self.restorer.autoencoder.chunk_p_group = self.chunk_p_group
                 for chunk in chunks:
-                    video = torch.zeros(
-                        1,
-                        chunk.frame_count,
-                        3,
-                        padded_height,
-                        padded_width,
-                        dtype=GET_DTYPE(),
-                        device=self.init_device,
-                    )
+                    video = self._prepare_warmup_inputs(padded_height, padded_width, chunk.frame_count)
                     restored = self.restorer.restore_chunk(video, chunk, clip_latents)
                     del video, restored
             except Exception as e:
@@ -127,6 +120,9 @@ class SwiftVRRunner(DefaultRunner):
 
         logger.info("[Warmup] Warmup completed")
         self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, height, width, frame_count):
+        return torch.zeros(1, frame_count, 3, height, width, dtype=GET_DTYPE(), device=self.init_device)
 
     @staticmethod
     def resolve_output_size(
@@ -366,7 +362,7 @@ class SwiftVRRunner(DefaultRunner):
         if input_info.return_result_tensor:
             images = images.to(device="cpu", dtype=torch.float32)
         else:
-            save_to_image(images, output_path)
+            save_to_image(images, output_path, method=self.config.get("save_image_method", "opencv"))
             images = None
 
         elapsed = time.perf_counter() - started_at

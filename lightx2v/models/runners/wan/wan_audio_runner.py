@@ -282,7 +282,11 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 
 @RUNNER_REGISTER("seko_talk")
 class WanAudioRunner(WanRunner):  # type:ignore
-    _RS2V_WARMUP_RESOLUTIONS = ((480, 480), (544, 960))
+    _WARMUP_SHAPES = ((480, 480), (544, 960))
+    _WARMUP_PROMPTS = (
+        "A person speaks calmly.",
+        "A person speaks naturally to the camera at a kitchen table. Their lips follow the supplied audio, their gaze stays mostly on the lens, and they make small movements with their hands and shoulders as the light from a nearby window falls across their face.",
+    )
     _WARMUP_STEP_COUNT = 2
 
     input_info_cls_by_task = {"s2v": SekoTalkS2VInputInfo, "rs2v": SekoTalkRS2VInputInfo}
@@ -332,11 +336,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         num_frames = self.config["num_frames"]
         model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model"
-        for height, width in self._RS2V_WARMUP_RESOLUTIONS:
+        for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
             logger.info(f"Warmup rs2v: {height}x{width}x{num_frames}, first and continuation segments")
             transformer_offloaded = not model_offload
             try:
-                self._prepare_warmup_inputs(height, width, num_frames)
+                self._prepare_warmup_inputs(warmup_index, height, width, num_frames)
                 self._run_input_encoder_local_rs2v_static()
                 for is_first in (True, False):
                     # Cached VAE continuation segments emit three additional frames.
@@ -384,11 +388,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
         logger.info("[Warmup] Warmup completed")
         self._maybe_freeze_gc()
 
-    def _prepare_warmup_inputs(self, height, width, num_frames):
+    def _prepare_warmup_inputs(self, warmup_index, height, width, num_frames):
         self.input_info = SekoTalkRS2VInputInfo(
             task="rs2v",
             seed=0,
-            prompt="A person speaking naturally to the camera.",
+            prompt=self._WARMUP_PROMPTS[warmup_index],
             image_path=Image.new("RGB", (width, height), color=0),
             size=[height, width],
             resize_mode="fixed_shape",
@@ -1034,7 +1038,8 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
         "rs2v": WanAudioRunner.supported_request_fields_by_task["rs2v"] - {"num_frames", "resize_mode", "fixed_area"},
     }
 
-    _WARMUP_RESOLUTIONS = ()
+    _WARMUP_SHAPES = ()
+    _WARMUP_PROMPTS = ("A person speaks calmly to the camera.",)
 
     def get_stream_output_path(self, input_info):
         # Live audio uses VAController's editable publication buffer for
@@ -1049,7 +1054,6 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
 
     def _run_warmup(self):
         self.scheduler.set_audio_adapter(self.audio_adapter)
-        text_output = self.run_text_encoder(SekoTalkRS2VInputInfo(task="rs2v", prompt="warmup"))
         ar = self.config["ar_config"]
         chunk_frames = ar["num_frame_per_chunk"]
         if "hybrid_attn" in ar:
@@ -1057,19 +1061,10 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
         else:
             visible_frames = ar.get("local_attn_size", 21)
         chunks = (visible_frames + chunk_frames - 1) // chunk_frames + 1
-        for height, width in self.get_warmup_resolutions():
+        for warmup_index, (height, width) in enumerate(self.get_warmup_resolutions()):
             latent_shape = self.get_warmup_latent_shape(height, width)
             latent_shape[1] = chunks * chunk_frames
-            self.input_info = SekoTalkRS2VInputInfo(task="rs2v", prompt="warmup", seed=0, size=[height, width])
-            self.input_info.latent_shape = latent_shape
-            reference = torch.zeros(1, 3, height, width, device=AI_DEVICE)
-            self.inputs = {
-                "text_encoder_output": text_output,
-                "image_encoder_output": {"clip_encoder_out": self.run_image_encoder(reference), "vae_encoder_out": self.run_vae_encoder(reference)},
-                "audio_encoder_output": torch.zeros(1, latent_shape[1], self.config["audio_num_tokens"], self.config["audio_projection_dim"], device=AI_DEVICE, dtype=GET_DTYPE()),
-                "person_mask_latens": None,
-                "ref_state": self.config.get("ref_state", 0),
-            }
+            self._prepare_warmup_inputs(warmup_index, height, width, latent_shape)
             self.scheduler.prepare(seed=0, latent_shape=latent_shape, infer_steps=self.config["infer_steps"])
             self.get_video_segment_num()
             self.init_kv_cache_manager()
@@ -1080,6 +1075,20 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
                 self.decode_segment_latents(chunk, latents)
             torch.cuda.synchronize()
             self.clear_warmup_state()
+
+    def _prepare_warmup_inputs(self, warmup_index, height, width, latent_shape):
+        prompt = self._WARMUP_PROMPTS[warmup_index]
+        text_output = self.run_text_encoder(SekoTalkRS2VInputInfo(task="rs2v", prompt=prompt))
+        self.input_info = SekoTalkRS2VInputInfo(task="rs2v", prompt=prompt, seed=0, size=[height, width])
+        self.input_info.latent_shape = latent_shape
+        reference = torch.zeros(1, 3, height, width, device=AI_DEVICE)
+        self.inputs = {
+            "text_encoder_output": text_output,
+            "image_encoder_output": {"clip_encoder_out": self.run_image_encoder(reference), "vae_encoder_out": self.run_vae_encoder(reference)},
+            "audio_encoder_output": torch.zeros(1, latent_shape[1], self.config["audio_num_tokens"], self.config["audio_projection_dim"], device=AI_DEVICE, dtype=GET_DTYPE()),
+            "person_mask_latens": None,
+            "ref_state": self.config.get("ref_state", 0),
+        }
 
     def clear_warmup_state(self):
         super().clear_warmup_state()

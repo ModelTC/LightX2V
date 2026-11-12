@@ -30,8 +30,7 @@ class MiniMaxH3PostInfer:
         return hidden_states.float()
 
     def infer(self, weights, hidden_states, pre_infer_out):
-        # Both released output heads are fp32 and run over all packed rows
-        # before modality selection.
+        # Output heads compute in FP32 over all packed rows before modality selection.
         hidden_states = self.norm_out(weights, hidden_states, pre_infer_out)
         video = weights.proj_out.apply(hidden_states).index_select(0, pre_infer_out.video_indices)
         audio = self._project_audio(weights, hidden_states, pre_infer_out)

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
+import cv2
+import numpy as np
 import torch
 import torch.distributed as dist
 from PIL import Image
@@ -24,8 +26,10 @@ from lightx2v.models.runners.hunyuan_image3.flashinfer_autotune import (
 )
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.hunyuan_image3.scheduler import HunyuanImage3Scheduler
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import TI2IInputInfo
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
@@ -1589,8 +1593,28 @@ class HunyuanImage3Runner(DefaultRunner):
         if hasattr(vae, "ffactor_temporal"):
             image = image.squeeze(2)
 
-        image = (image / 2 + 0.5).clamp(0, 1).detach().cpu().permute(0, 2, 3, 1).float().numpy()
+        image = (image / 2 + 0.5).clamp(0, 1)
+        if self.input_info.save_result_path and not self.input_info.return_result_tensor:
+            return list(image)
+        image = image.detach().cpu().permute(0, 2, 3, 1).float().numpy()
         return [Image.fromarray((sample * 255.0).round().astype("uint8")) for sample in image]
+
+    def _save_images(self, images, input_info, batch_cond_images=None, align_image_size=False):
+        path = input_info.save_result_path
+        method = self.config.get("save_image_method", "opencv")
+        with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {path}", time_unit="ms"):
+            pixels = images[0].detach().cpu().float().permute(1, 2, 0).numpy()
+            pixels = (pixels * 255).round().astype(np.uint8)
+            if method == "pil" or align_image_size:
+                image = Image.fromarray(pixels)
+                if align_image_size:
+                    image = self.hunyuan_image_processor.postprocess_outputs([image], batch_cond_images=batch_cond_images, infer_align_image_size=True)[0]
+                if method == "opencv":
+                    pixels = np.asarray(image)
+            if method == "opencv":
+                image = cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+            save_image(image, path, method)
+        logger.info(f"HunyuanImage3 image saved successfully to: {path}")
 
     @torch.no_grad()
     def generate_t2t(self, input_info):
@@ -1655,6 +1679,9 @@ class HunyuanImage3Runner(DefaultRunner):
         if not self._is_output_rank():
             return []
         images = self._decode_latents(latents, prepared_inputs["generator"])
+        if input_info.save_result_path and not input_info.return_result_tensor:
+            self._save_images(images, input_info, batch_cond_images, align_image_size)
+            return []
         return self.hunyuan_image_processor.postprocess_outputs(
             images,
             batch_cond_images=batch_cond_images,
@@ -1706,10 +1733,8 @@ class HunyuanImage3Runner(DefaultRunner):
             return {"image": images}
 
         save_result_path = getattr(input_info, "save_result_path", None)
-        if save_result_path:
-            Path(save_result_path).parent.mkdir(parents=True, exist_ok=True)
-            images[0].save(save_result_path)
-            logger.info(f"HunyuanImage3 image saved successfully to: {save_result_path}")
+        if save_result_path and images:
+            self._save_images(images, input_info)
         return {"image": None}
 
     def close(self):

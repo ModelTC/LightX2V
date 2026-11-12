@@ -6,6 +6,7 @@ import tempfile
 import wave
 from collections import deque
 
+import cv2
 import imageio
 import imageio_ffmpeg as ffmpeg
 import numpy as np
@@ -28,6 +29,7 @@ from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT
 from lightx2v.models.schedulers.cosmos3.scheduler import Cosmos3Scheduler
 from lightx2v.models.video_encoders.hf.cosmos3.vae import Cosmos3WanVAE
 from lightx2v.utils.envs import *
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import Cosmos3InputInfo
 from lightx2v.utils.profiler import *
@@ -921,9 +923,11 @@ class Cosmos3Runner(DefaultRunner):
         return torch.stack(frames, dim=0).float().clamp(0, 1)
 
     def _save_frame_tensor(self, frame, path):
-        frame = frame.detach().float().cpu().clamp(0, 1)
-        frame = (frame.numpy() * 255.0).round().astype(np.uint8)
-        Image.fromarray(frame).save(path)
+        method = self.config.get("save_image_method", "opencv")
+        with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {path}", time_unit="ms"):
+            pixels = (frame.detach().float().cpu().clamp(0, 1).numpy() * 255).round().astype(np.uint8)
+            image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+            save_image(image, path, method)
 
     def _save_images(self, images, input_info, log_prefix="Image saved", sound=None):
         if dist.is_initialized() and dist.get_rank() != 0:
@@ -947,15 +951,16 @@ class Cosmos3Runner(DefaultRunner):
             return
         image_prefix, image_suffix = os.path.splitext(save_path)
         image_suffix = image_suffix.lstrip(".") or "png"
-        if isinstance(images, list) and len(images) > 1:
-            for idx, image in enumerate(images):
-                path = f"{image_prefix}_{idx:05d}.{image_suffix}"
-                image.save(path)
-                logger.info(f"{log_prefix}: {path}")
-            return
-        image = images[0] if isinstance(images, list) else images
-        image.save(f"{image_prefix}.{image_suffix}")
-        logger.info(f"{log_prefix}: {image_prefix}.{image_suffix}")
+        images = images if isinstance(images, list) else [images]
+        method = self.config.get("save_image_method", "opencv")
+        for idx, image in enumerate(images):
+            path = f"{image_prefix}_{idx:05d}.{image_suffix}" if len(images) > 1 else f"{image_prefix}.{image_suffix}"
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {path}", time_unit="ms"):
+                pixels = image.detach().cpu().float().permute(1, 2, 0).numpy()
+                pixels = (pixels * 255).round().astype(np.uint8)
+                image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+                save_image(image, path, method)
+            logger.info(f"{log_prefix}: {path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None, sound=None, action=None):
         if latents is not None:

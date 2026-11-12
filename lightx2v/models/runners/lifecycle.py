@@ -3,7 +3,7 @@ class RunnerLifecycleMixin:
 
     def get_warmup_resolutions(self):
         target = tuple(self.config["size"])
-        return tuple(size for size in self._WARMUP_RESOLUTIONS if size != target) + (target,)
+        return tuple(size for size in self._WARMUP_SHAPES if size != target) + (target,)
 
     def reset_model_request_state(self):
         model = getattr(self, "model", None)

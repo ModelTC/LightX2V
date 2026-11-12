@@ -21,7 +21,8 @@ from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.image_io import save_image
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -30,7 +31,11 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
-    _WARMUP_RESOLUTIONS = ((1024, 1024), (768, 960))
+    _WARMUP_SHAPES = ((1024, 1024), (768, 960))
+    _WARMUP_PROMPTS = (
+        "A red bicycle beside a wall.",
+        "An eye level photograph of a red bicycle leaning against a pale brick wall on a quiet street. A wire basket holds a few flowers, leaves cast soft shadows across the pavement, and a small cafe window reflects the late afternoon sky.",
+    )
     supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS | {"resolution"}, "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "resolution"}}
 
     def __init__(self, config):
@@ -129,17 +134,12 @@ class QwenImage21Runner(DefaultRunner):
         with TemporaryDirectory(prefix="qwen_image_21_warmup_") as directory:
             image_path = Path(directory) / "reference.png"
             for task in ("t2i", "i2i"):
-                for height, width in self._WARMUP_RESOLUTIONS:
+                for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
                     logger.info(f"Warmup: {task}, {height}x{width}")
                     transformer_offloaded = not self.config.get("cpu_offload", False)
                     try:
                         self.scheduler.generator = None
-                        request = {"task": task, "prompt": "warmup", "seed": 0, "size": [height, width]}
-                        if task == "i2i":
-                            Image.new("RGBA", (width, height), color=(0, 0, 0, 255)).save(image_path)
-                            request["image_path"] = str(image_path)
-                        # Internal warmup covers both paths even for a single-task runner.
-                        self.input_info = self.create_input_info(request)
+                        self._prepare_warmup_inputs(warmup_index, task, height, width, image_path)
                         self.inputs = self.run_input_encoder()
                         self.init_run()
                         transformer_offloaded = False
@@ -159,6 +159,14 @@ class QwenImage21Runner(DefaultRunner):
                         self.end_run()
                         self.__dict__.pop("inputs", None)
         logger.info("[Warmup] Warmup completed")
+
+    def _prepare_warmup_inputs(self, warmup_index, task, height, width, image_path):
+        request = {"task": task, "prompt": self._WARMUP_PROMPTS[warmup_index], "seed": 0, "size": [height, width]}
+        if task == "i2i":
+            Image.new("RGBA", (width, height), color=(0, 0, 0, 255)).save(image_path)
+            request["image_path"] = str(image_path)
+        # Internal warmup covers both paths even for a single-task runner.
+        self.input_info = self.create_input_info(request)
 
     def init_scheduler(self):
         self.scheduler = QwenImage21Scheduler(self.config)
@@ -304,16 +312,21 @@ class QwenImage21Runner(DefaultRunner):
         input_info = self.input_info
         if input_info.save_result_path and not input_info.return_result_tensor and dist.is_initialized() and dist.get_rank() != 0:
             return {"images": None}
-        pixels = (value / 2 + 0.5).clamp(0, 1).float().permute(0, 2, 3, 1).cpu().numpy()
+        if not input_info.return_result_tensor:
+            if input_info.save_result_path:
+                method = self.config.get("save_image_method", "opencv")
+                with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {input_info.save_result_path}", time_unit="ms"):
+                    pixels = (value[0] / 2 + 0.5).clamp(0, 1).float().permute(1, 2, 0).cpu().numpy()
+                    pixels = (pixels * 255).round().astype(np.uint8)
+                    image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGBA2BGRA)
+                    save_image(image, input_info.save_result_path, method)
+                logger.info(f"✅ Image saved successfully to: {input_info.save_result_path} ✅")
+            return {"images": None}
+        pixels = (value / 2 + 0.5).clamp(0, 1)
+        pixels = pixels.float().permute(0, 2, 3, 1).cpu().numpy()
         # OpenCV expects BGRA; keep alpha as the last channel.
         images = [cv2.cvtColor((p * 255).round().astype(np.uint8), cv2.COLOR_RGBA2BGRA) for p in pixels]
-        if input_info.save_result_path and not input_info.return_result_tensor:
-            path = Path(input_info.save_result_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if not cv2.imwrite(str(path), images[0]):
-                raise RuntimeError(f"Failed to save image to: {path}")
-            logger.info(f"✅ Image saved successfully to: {path} ✅")
-        return {"images": images if input_info.return_result_tensor else None}
+        return {"images": images}
 
     def end_run(self):
         self.model.clear_condition_kv()

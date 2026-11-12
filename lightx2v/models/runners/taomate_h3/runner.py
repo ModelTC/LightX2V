@@ -35,6 +35,8 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     """Generate Base10 audio guides, then Stage3 video and audio in LightX2V."""
 
     supported_request_fields_by_task = {"t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"}}
+    _WARMUP_SHAPES = (None,)  # Use the configured request size.
+    _WARMUP_PROMPTS = ("A red panda plays a small guitar on a quiet forest stage at sunrise.",)
     frames_per_request = 120
     max_continuous_requests = 12
 
@@ -82,16 +84,7 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     def run_warmup(self):
         """Warm the complete configured request, including Base10 and codecs."""
 
-        self.input_info = self.create_input_info(
-            {
-                "task": "t2av",
-                "prompt": self.config.get("prompt", "A red panda plays a small guitar on a quiet forest stage at sunrise."),
-                "seed": 8301,
-                "size": list(self.config["size"]),
-                "num_frames": self.config["num_frames"],
-                "return_result_tensor": True,
-            }
-        )
+        self._prepare_warmup_inputs(0)
         try:
             self.inputs = self._run_input_encoder_local_h3()
             self.run_main()
@@ -101,6 +94,19 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             self.model.reset_autoregressive_state()
             self.scheduler.clear()
             self.end_run()
+
+    def _prepare_warmup_inputs(self, warmup_index):
+        size = self._WARMUP_SHAPES[warmup_index] or self.config["size"]
+        self.input_info = self.create_input_info(
+            {
+                "task": "t2av",
+                "prompt": self.config.get("prompt", self._WARMUP_PROMPTS[warmup_index]),
+                "seed": 8301,
+                "size": list(size),
+                "num_frames": self.config["num_frames"],
+                "return_result_tensor": True,
+            }
+        )
 
     def _run_input_encoder_local_h3(self):
         if self.segment_prompts is not None:
