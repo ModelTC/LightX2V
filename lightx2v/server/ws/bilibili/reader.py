@@ -17,7 +17,7 @@ class BiliLiveOmniVAReader(MinimaxH3CausalWSReader):
             image_path = self.model_runner.input_info.image_path
             work_dir = self.stream_config.get("bilibili_work_dir") or str(Path(image_path).parent)
             self.chat_adapter = BiliLiveChatAdapter(
-                config=BilibiliConfig.from_env(self.stream_config),
+                config=BilibiliConfig.from_env(self.stream_config, requires_tts=getattr(self.model_runner, "config", {}).get("task") != "refa2av"),
                 image_path=image_path,
                 work_dir=work_dir,
                 model_runner=self.model_runner,
@@ -52,6 +52,14 @@ class BiliLiveOmniVAReader(MinimaxH3CausalWSReader):
 
     def on_action_switch(self, prompt: str, duration: float = 0) -> None:
         self._control_adapter().on_action_switch(prompt, duration)
+
+    def on_motion_started(self, prompt: str) -> None:
+        if self.rank == self.target_rank and self.chat_adapter is not None:
+            self.chat_adapter.on_motion_started(prompt)
+
+    def on_motion_finished(self, prompt: str) -> None:
+        if self.rank == self.target_rank and self.chat_adapter is not None:
+            self.chat_adapter.on_motion_finished(prompt)
 
     def _control_adapter(self) -> BiliLiveChatAdapter:
         if not self.started_event.is_set() or self.chat_adapter is None:

@@ -89,7 +89,7 @@ class BilibiliConfig:
     image_poll_interval: float = 1.0
 
     @classmethod
-    def from_env(cls, stream_config: Mapping | None = None) -> "BilibiliConfig":
+    def from_env(cls, stream_config: Mapping | None = None, *, requires_tts: bool = True) -> "BilibiliConfig":
         options = stream_config or {}
         provider = os.getenv("BILIBILI_LLM_PROVIDER", "volcengine").strip().lower()
         if provider not in LLM_PROVIDERS:
@@ -122,11 +122,11 @@ class BilibiliConfig:
             image_model=str(options.get("image_model", "Qwen-Image-Edit-2511")),
             image_timeout=float(options.get("image_timeout", 300)),
         )
-        config.validate()
+        config.validate(requires_tts=requires_tts)
         validate_padding_config(json_option(options, "padding_config", {}))
         return config
 
-    def validate(self) -> None:
+    def validate(self, *, requires_tts: bool = True) -> None:
         if self.llm_provider not in LLM_PROVIDERS:
             raise ValueError("BILIBILI_LLM_PROVIDER must be volcengine, deepseek or sensenova")
         required = {
@@ -135,8 +135,9 @@ class BilibiliConfig:
             "BILIBILI_ACCESS_KEY": self.access_key,
             "BILIBILI_ACCESS_KEY_SECRET": self.access_secret,
             LLM_PROVIDERS[self.llm_provider]["env_prefix"] + "_API_KEY": self.llm_api_key,
-            "VOLCENGINE_TTS_API_KEY": self.tts_api_key,
         }
+        if requires_tts:
+            required["VOLCENGINE_TTS_API_KEY"] = self.tts_api_key
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise ValueError("Bilibili input requires: " + ", ".join(missing))

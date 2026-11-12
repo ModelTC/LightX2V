@@ -21,7 +21,8 @@ from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.image_io import save_image
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -304,16 +305,21 @@ class QwenImage21Runner(DefaultRunner):
         input_info = self.input_info
         if input_info.save_result_path and not input_info.return_result_tensor and dist.is_initialized() and dist.get_rank() != 0:
             return {"images": None}
-        pixels = (value / 2 + 0.5).clamp(0, 1).float().permute(0, 2, 3, 1).cpu().numpy()
+        if not input_info.return_result_tensor:
+            if input_info.save_result_path:
+                method = self.config.get("save_image_method", "opencv")
+                with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {input_info.save_result_path}", time_unit="ms"):
+                    pixels = (value[0] / 2 + 0.5).clamp(0, 1).float().permute(1, 2, 0).cpu().numpy()
+                    pixels = (pixels * 255).round().astype(np.uint8)
+                    image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGBA2BGRA)
+                    save_image(image, input_info.save_result_path, method)
+                logger.info(f"✅ Image saved successfully to: {input_info.save_result_path} ✅")
+            return {"images": None}
+        pixels = (value / 2 + 0.5).clamp(0, 1)
+        pixels = pixels.float().permute(0, 2, 3, 1).cpu().numpy()
         # OpenCV expects BGRA; keep alpha as the last channel.
         images = [cv2.cvtColor((p * 255).round().astype(np.uint8), cv2.COLOR_RGBA2BGRA) for p in pixels]
-        if input_info.save_result_path and not input_info.return_result_tensor:
-            path = Path(input_info.save_result_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if not cv2.imwrite(str(path), images[0]):
-                raise RuntimeError(f"Failed to save image to: {path}")
-            logger.info(f"✅ Image saved successfully to: {path} ✅")
-        return {"images": images if input_info.return_result_tensor else None}
+        return {"images": images}
 
     def end_run(self):
         self.model.clear_condition_kv()

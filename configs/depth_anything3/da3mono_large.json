@@ -1,0 +1,8 @@
+{
+    "attn_type": "torch_sdpa",
+    "norm_type": "torch",
+    "backbone_dtype": "auto",
+    "use_cuda_graph": false,
+    "process_res": 504,
+    "process_res_method": "upper_bound_resize"
+}

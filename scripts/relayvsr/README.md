@@ -13,13 +13,14 @@ Download both checkpoint files for the selected variant, listed below, into the 
 
 ## Model variants
 
-| `model_cls` | Checkpoints | Output contract |
-| --- | --- | --- |
-| `relayvsr_x4` | RelayVSR HF `wan.safetensors`, `flash.safetensors` | Compute 4x; select 2x or 4x output with `sr_ratio=2/4` |
-| `relayvsr_x2` | LightX2V HF `wan_x2.safetensors`, `flash_x2.safetensors` | Compute 2x; require `sr_ratio=2` |
+| `model_cls` | Checkpoints | Default `sr_ratio` | Output contract |
+| --- | --- | --- | --- |
+| `relayvsr_x4` | RelayVSR HF `wan.safetensors`, `flash.safetensors` | `2.0` | Compute 4x; accept any floating-point `sr_ratio` in `[1, 4]` |
+| `relayvsr_x2` | LightX2V HF `wan_x2.safetensors`, `flash_x2.safetensors` | `2.0` | Compute 2x; accept any floating-point `sr_ratio` in `[1, 2]` |
 
 Both entries validate checkpoint formats, scale and architecture, and reject mixed 2x/4x weights.
 Both entries reject `size`; output dimensions are determined by the input dimensions and `sr_ratio`.
+For ratios below the native scale, the model first performs native inference, then applies the existing bicubic resize with antialiasing. Width and height are rounded down to integer pixels; video dimensions are further rounded down to even values (minimum 2 pixels) for YUV420 encoding.
 
 Configuration filenames distinguish `_x4` from `_x2`; choose the one matching `model_cls`.
 

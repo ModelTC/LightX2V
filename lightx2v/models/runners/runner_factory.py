@@ -7,6 +7,7 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 RUNNER_MODULES = {
     "bagel": "lightx2v.models.runners.bagel.bagel_runner",
     "cosmos3": "lightx2v.models.runners.cosmos3.cosmos3_runner",
+    "depth_anything3": "lightx2v.models.runners.depth_anything3.depth_anything3_runner",
     "dreamzero": "lightx2v.models.runners.wan.wan_dreamzero_runner",
     "ernie_image": "lightx2v.models.runners.ernie_image.ernie_image_runner",
     "fastwam": "lightx2v.models.runners.wan.fastwam_runner",
@@ -25,6 +26,7 @@ RUNNER_MODULES = {
     "ltx2": "lightx2v.models.runners.ltx2.ltx2_runner",
     "ltx2_5": "lightx2v.models.runners.ltx2.ltx25_runner",
     "minimax_h3": "lightx2v.models.runners.minimax_h3.minimax_h3_runner",
+    "minimax_h3_image": "lightx2v.models.runners.minimax_h3_image.minimax_h3_image_runner",
     "minimax_h3_causal": "lightx2v.models.runners.minimax_h3_causal.minimax_h3_causal_runner",
     "motus": "lightx2v.models.runners.motus.motus_runner",
     "neopp": "lightx2v.models.runners.neopp.neopp_runner",
@@ -65,7 +67,8 @@ RUNNER_MODULES = {
 def build_runner(config):
     """Instantiate a runner and initialize its model modules."""
     model_cls = config["model_cls"]
-    import_module("lightx2v.common.ops")
+    if model_cls != "depth_anything3":
+        import_module("lightx2v.common.ops")
     import_module(RUNNER_MODULES[model_cls])
 
     torch.set_grad_enabled(False)

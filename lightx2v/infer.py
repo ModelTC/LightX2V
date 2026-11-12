@@ -47,6 +47,7 @@ def build_parser():
             "ref2av",
             "refv2v",
             "refa2v",
+            "refa2av",
             "i2va",
             "v2av",
             "v2v",
@@ -54,13 +55,14 @@ def build_parser():
             "sr",
             "recon",
             "i23d",
+            "depth",
         ],
         default=None,
     )
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--prompt", type=str, default=None, help="The input prompt for text-to-video generation")
-    parser.add_argument("--action_prompts", type=json.loads, default=None, help="MiniMax-H3 causal timed actions as a JSON object or list")
+    parser.add_argument("--motions", type=json.loads, default=None, help="H3 causal motions: JSON [{frame: 0, text: ...}, ...], using zero-based frames.")
     parser.add_argument("--ref_video_prompt", type=str, default=None, help="Reference/driving-video prompt for Wan-Animate-2.")
     parser.add_argument("--negative_prompt", type=str, default=None)
     parser.add_argument("--bot_task", type=str, default=None, help="HunyuanImage3 text generation mode.")
@@ -82,7 +84,7 @@ def build_parser():
         "--audio_path",
         type=str,
         default=None,
-        help="Input audio path: driving audio for s2v / rs2v / ltx2_s2v / refa2v, or reference audio for MiniMax-H3 ref2av.",
+        help="Input audio path: driving audio for s2v / rs2v / ltx2_s2v / refa2v, or reference audio for MiniMax-H3 ref2av / refa2av.",
     )
     parser.add_argument(
         "--video_path",
@@ -175,6 +177,8 @@ def build_parser():
     parser.add_argument("--render_depth", action=argparse.BooleanOptionalAction, default=None, help="(worldmirror/recon) Also render a depth video with --save_rendered.")
 
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
+    parser.add_argument("--save_depth_path", type=str, default=None, help="(DA3 depth) Optional float32 NPY for an image, or streaming NPZ for a video.")
+    parser.add_argument("--save_sky_mask_path", type=str, default=None, help="(DA3 depth) Optional binary PNG for an image, or streaming NPZ for a video; may share the depth NPZ path.")
     parser.add_argument("--return_result_tensor", action="store_true", default=None, help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
     parser.add_argument("--size", type=int, nargs="+", default=None, help="Output size in pixels: HEIGHT WIDTH")

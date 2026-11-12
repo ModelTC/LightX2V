@@ -20,12 +20,16 @@ def main() -> None:
     parser.add_argument("--aspect_ratio", default="9:16")
     parser.add_argument("--prompt", default="A person speaks naturally to the camera, with occasional clear gestures.")
     parser.add_argument("--prompt_file", help="UTF-8 file containing the H3 visual prompt")
+    parser.add_argument("--reference_audio_path", help="RefA2AV 的声音参考文件路径，必须能被服务端所有推理进程读取；RefA2V 不需要")
     parser.add_argument("--config_json", help="Optional JSON file with additional Start.config_json settings")
     args = parser.parse_args()
     if not args.output_url.startswith("rtmp://"):
         parser.error("--output_url or BILIBILI_RTMP_URL must be a full rtmp:// URL")
     # 此 config 通过 Start.config_json 下发，服务端将其作为 stream_config 使用。
     # LLM/TTS 的 API Key 在服务端配置，不通过客户端传递。
+    # 服务端 task=refa2av 时，模型根据 motion prompt 中的动作和台词生成音视频，
+    # 不需要 TTS。reference_audio_path 仅用于初始化声音条件，不是逐句驱动音频。
+    # task=refa2v 时仍使用流式 TTS 作为驱动音频。
     config = {
         # 主播对话模型在这里改；当前示例通过 SenseNova 调用 DeepSeek。
         # 优先于服务端 SENSENOVA_MODEL；删除此项则使用服务端设置。
@@ -34,6 +38,10 @@ def main() -> None:
         "chat_history_max_length": 20,
         "event_batch_seconds": 2,
         "max_dm": 100,
+        # RefA2AV 示例；替换为服务端所有推理进程可访问的参考音频，或使用命令行参数。
+        # "reference_audio_path": "/path/on/server/voice_reference.wav",
+        # RefA2AV 在没有新台词或动作结束后恢复此 motion；全局 prompt 描述人物和场景。
+        "idle_prompt": "<Subject 1> waits quietly, keeps their mouth closed, and looks naturally at the camera. No speech.",
         # 旧版补边示例（已注释）：扩大画布，在画面左侧添加说明区域。
         # 切回补边时，用这段配置替换下面的 overlay 配置。
         # "padding_config": {
@@ -88,6 +96,8 @@ def main() -> None:
         if not isinstance(overrides, dict):
             parser.error("--config_json must contain a JSON object")
         config.update(overrides)
+    if args.reference_audio_path:
+        config["reference_audio_path"] = args.reference_audio_path
     config.update({"input_url": "https://bilibili", "output_url": args.output_url, "resolution": args.resolution})
     # 协议字段是 map<string, string>；数值和嵌套对象统一编码成字符串。
     config = {key: value if isinstance(value, str) else json.dumps(value, ensure_ascii=False) for key, value in config.items()}

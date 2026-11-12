@@ -1,5 +1,7 @@
 import math
 
+import cv2
+import numpy as np
 import torch
 import torch.distributed as dist
 import torchvision.transforms.functional as TF
@@ -18,6 +20,7 @@ from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.input_info import I2IInputInfo, T2IInputInfo
 from lightx2v.utils.profiler import *
 
@@ -523,14 +526,20 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
         image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
-        if isinstance(images[0], list) and len(images[0]) > 1:
-            for idx, image in enumerate(images[0]):
-                image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
-                logger.info(f"{log_prefix}: {image_prefix}_{idx:05d}.{image_suffix}")
-        else:
-            image = images[0]
-            image.save(f"{image_prefix}.{image_suffix}")
-            logger.info(f"{log_prefix}: {image_prefix}.{image_suffix}")
+        images = images[0] if isinstance(images[0], list) else images[:1]
+        method = self.config.get("save_image_method", "opencv")
+        for idx, image in enumerate(images):
+            path = f"{image_prefix}_{idx:05d}.{image_suffix}" if len(images) > 1 else f"{image_prefix}.{image_suffix}"
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {path}", time_unit="ms"):
+                pixels = image.detach().cpu().float().permute(1, 2, 0).numpy()
+                pixels = (pixels * 255).round().astype(np.uint8)
+                if method == "pil":
+                    image = Image.fromarray(pixels)
+                else:
+                    conversion = cv2.COLOR_RGBA2BGRA if pixels.shape[-1] == 4 else cv2.COLOR_RGB2BGR
+                    image = cv2.cvtColor(pixels, conversion)
+                save_image(image, path, method)
+            logger.info(f"{log_prefix}: {path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None):
         if latents is not None:

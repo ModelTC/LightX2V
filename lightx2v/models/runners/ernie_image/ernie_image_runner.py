@@ -2,8 +2,11 @@ import gc
 import math
 import os
 
+import cv2
+import numpy as np
 import torch
 import torch.distributed as dist
+from PIL import Image
 from loguru import logger
 
 from lightx2v.models.input_encoders.hf.ernie_image.mistral3_model import ErnieImageTextEncoder
@@ -13,7 +16,8 @@ from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.ernie_image.scheduler import ErnieImageScheduler
 from lightx2v.models.video_encoders.hf.ernie_image.vae import ErnieImageVAE
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
+from lightx2v.utils.image_io import save_image
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -189,12 +193,17 @@ class ErnieImageRunner(DefaultRunner):
             return
         image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
         image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
+        method = self.config.get("save_image_method", "opencv")
         for idx, image in enumerate(images):
             if idx == 0:
                 image_path = f"{image_prefix}.{image_suffix}"
             else:
                 image_path = f"{image_prefix}_{idx:05d}.{image_suffix}"
-            image.save(image_path)
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {image_path}", time_unit="ms"):
+                pixels = image.detach().cpu().float().permute(1, 2, 0).numpy()
+                pixels = (pixels * 255).round().astype(np.uint8)
+                image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+                save_image(image, image_path, method)
             logger.info(f"Image saved: {image_path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, revised_prompts, latents=None, generator=None):

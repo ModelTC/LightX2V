@@ -41,9 +41,11 @@ pre-commit run --all-files
 
 We thank the following community developers for their contributions to LightX2V:
 
-[zhtshr](https://github.com/zhtshr) · [triple-Mu](https://github.com/triple-Mu) · [vivienfanghuagood](https://github.com/vivienfanghuagood) · [yeahdongcn](https://github.com/yeahdongcn) · [kikidouloveme79](https://github.com/kikidouloveme79) · [ziyanxzy](https://github.com/ziyanxzy) · [Tyr0727](https://github.com/Tyr0727) · [hufangjian2017](https://github.com/hufangjian2017) · [Fatemanx](https://github.com/Fatemanx) · [qiuxin2012](https://github.com/qiuxin2012)
+[zhtshr](https://github.com/zhtshr) · [triple-Mu](https://github.com/triple-Mu) · [vivienfanghuagood](https://github.com/vivienfanghuagood) · [yeahdongcn](https://github.com/yeahdongcn) · [kikidouloveme79](https://github.com/kikidouloveme79) · [ziyanxzy](https://github.com/ziyanxzy) · [Tyr0727](https://github.com/Tyr0727) · [hufangjian2017](https://github.com/hufangjian2017) · [Fatemanx](https://github.com/Fatemanx) · [qiuxin2012](https://github.com/qiuxin2012) · [ZhengXinwei-F](https://github.com/ZhengXinwei-F)
 
 ## :fire: Latest News
+
+- **November 11, 2026:** 🚀 We now support [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) for text-to-image generation and reference-image generation/editing with one or multiple reference images. We support TP/SP parallelism and CPU offload. See the [usage guide](scripts/minimax_h3_image/README.md) for CLI and serving examples.
 
 - **October 26, 2026:** 🚀 Added autoregressive inference for [TaoMate-H3](scripts/taomate_h3/run_t2av_3step.sh), [StreamRender-H3](scripts/streamrender_h3/run_refv2v_2step.sh), [Matrix-Game-4](scripts/matrix_game4/run_matrix_game4.sh), [LingBot-Fast](scripts/lingbot_fast/run_5090.sh), and [Realtime-Video](scripts/realtime_video/run_5090.sh). Model-specific scripts and BF16/FP8 profiles are available in the linked directories.
 
@@ -221,11 +223,12 @@ LightX2V supports image, video, and world models and provides quantized weights,
 
 <details>
 <summary><strong>🎨 Image Generation &amp; Editing</strong><br><br>
-<a href="scripts/qwen_image/README.md">Qwen-Image</a> · <a href="scripts/flux2">FLUX.2</a> · <a href="scripts/hunyuan_image3">HunyuanImage</a> · <a href="scripts/z_image/README.md">Z-Image</a> · <a href="scripts/longcat/README.md">LongCat-Image</a> · <a href="scripts/bagel/README.md">BAGEL</a> · <a href="scripts/hidream_o1_image">HiDream</a> · <a href="scripts/ernie_image">ERNIE-Image</a> · <a href="scripts/neopp/README.md">SenseNova-U1</a>
+<a href="scripts/minimax_h3_image/README.md">MiniMax-H3-Image</a> · <a href="scripts/qwen_image/README.md">Qwen-Image</a> · <a href="scripts/flux2">FLUX.2</a> · <a href="scripts/hunyuan_image3">HunyuanImage</a> · <a href="scripts/z_image/README.md">Z-Image</a> · <a href="scripts/longcat/README.md">LongCat-Image</a> · <a href="scripts/bagel/README.md">BAGEL</a> · <a href="scripts/hidream_o1_image">HiDream</a> · <a href="scripts/ernie_image">ERNIE-Image</a> · <a href="scripts/neopp/README.md">SenseNova-U1</a>
 </summary>
 
 | Models / Variants and Weights | Guides / Scripts |
 | --- | --- |
+| [MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) (text-to-image and reference-image generation/editing) | [Guide](scripts/minimax_h3_image/README.md) |
 | [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image) / [Qwen-Image-2512](https://huggingface.co/Qwen/Qwen-Image-2512) | [Guide](scripts/qwen_image/README.md) |
 | [Qwen-Image-Edit](https://huggingface.co/Qwen/Qwen-Image-Edit) / [2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509) / [2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) | [Guide](scripts/qwen_image/README.md) |
 | [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) / [Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) | [Guide](scripts/qwen_image_21/README.md) |
@@ -256,7 +259,7 @@ LightX2V supports image, video, and world models and provides quantized weights,
 
 <details>
 <summary><strong>🌍 World Models, Robotics &amp; 3D</strong><br><br>
-<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game4">Matrix-Game-4</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README.md">EdenLive</a> · <a href="scripts/worldmirror/README.md">WorldMirror</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
+<a href="scripts/cosmos3">Cosmos3</a> · <a href="scripts/lingbot">LingBot-World</a> · <a href="scripts/matrix_game4">Matrix-Game-4</a> · <a href="scripts/worldplay/README.md">WorldPlay</a> · <a href="scripts/edenlive/README.md">EdenLive</a> · <a href="scripts/worldmirror/README.md">WorldMirror</a> · <a href="scripts/depth_anything3/README.md">Depth Anything 3</a> · <a href="scripts/dreamzero">DreamZero</a> · <a href="scripts/lingbot_va">LingBot-VA</a> · <a href="scripts/motus">Motus</a> · <a href="scripts/fastwam">Fast-WAM</a> · <a href="scripts/realtimewam/README.md">RealtimeWAM</a> · <a href="scripts/hunyuan3d">Hunyuan3D</a>
 </summary>
 
 | Models / Variants and Weights | Guides / Scripts |
@@ -269,6 +272,7 @@ LightX2V supports image, video, and world models and provides quantized weights,
 | [WorldPlay](https://huggingface.co/tencent/HY-WorldPlay) (bidirectional, autoregressive, and distilled) | [Guide](scripts/worldplay/README.md) |
 | [EdenLive](https://huggingface.co/VAST-AI/EdenLive) (Wan2.1 14B / Wan2.2 5B; bidirectional and four-step autoregressive) | [Guide](scripts/edenlive/README.md) |
 | [WorldMirror 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (3D reconstruction) | [Guide](scripts/worldmirror/README.md) |
+| [Depth Anything 3 MONO-LARGE](https://github.com/ByteDance-Seed/Depth-Anything-3) (image/video relative depth) | [Guide and run script](scripts/depth_anything3/README.md) |
 | [DreamZero](https://huggingface.co/GEAR-Dreams/DreamZero-DROID) | [Scripts](scripts/dreamzero) |
 | [LingBot-VA](https://huggingface.co/robbyant/lingbot-va-base) | [Scripts](scripts/lingbot_va) |
 | [Motus](https://huggingface.co/motus-robotics/Motus) | [Scripts](scripts/motus) |

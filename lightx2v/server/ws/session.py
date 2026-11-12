@@ -120,6 +120,10 @@ def parse_stream_config(config_json, runner, task) -> dict:
         if resolution not in ASPECT_RATIOS:
             raise ValueError(f"invalid resolution {resolution!r}, valid: {list(ASPECT_RATIOS)}")
         config["resolution"] = resolution
+    if runner.config.get("model_cls") == "minimax_h3_causal" and task == "refa2av":
+        reference_audio = config.get("reference_audio_path")
+        if not isinstance(reference_audio, str) or not reference_audio.strip():
+            raise ValueError("RefA2AV live input requires config_json.reference_audio_path on the server")
     config["video_input"] = uses_video_input(runner, task)
     config["no_output_audio"] = uses_no_output_audio(runner)
     if is_bilibili_input(config):
@@ -190,7 +194,6 @@ def apply_run_input(
             "image_path": image_path,
             input_key: input_path,
             "save_result_path": save_result_path,
-            "action_prompts": {"0": [""]},
             "stream_config": stream_config,
         }
     )
@@ -316,7 +319,7 @@ class LiveSession:
                 raise ValueError("Bilibili input requires READER_RANK to match the websocket server rank (WORKER_RANK)")
             # Fail configuration checks before broadcasting work to the other ranks.
             # Only serializable settings travel to the reader; it owns the adapter.
-            BilibiliConfig.from_env(self.stream_config)
+            BilibiliConfig.from_env(self.stream_config, requires_tts=self.input_info.task != "refa2av")
         elif not self.video_input:
             seg_duration = 1.0
             try:

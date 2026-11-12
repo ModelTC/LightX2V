@@ -1,4 +1,7 @@
+from functools import partial
+
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.mm.mm_weight import unwrap_tp_weight
@@ -10,9 +13,10 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGI
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
+def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None, quant_scheme=None):
     lora_prefix = "transformer_blocks"
-    quant_scheme = config.get("dit_quant_scheme", "Default")
+    if quant_scheme is None:
+        quant_scheme = config.get("dit_quant_scheme", "Default")
     if config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
         tp_mm_type = config.get("tp_mm_type", "TensorParallel")
@@ -104,7 +108,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
             parallel = config.get("parallel", {})
             self.add_module(
                 "calculate_parallel",
-                ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")](a2a_backend=parallel.get("seq_p_a2a_backend", "torch")),
+                ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")](),
             )
         self.add_module("to_out", _linear(config, f"{prefix}.to_out.0", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
 
@@ -168,6 +172,19 @@ class MiniMaxH3FeedForwardWeights(WeightModule):
         super().__init__()
         self.add_module("in_proj", _linear(config, f"{prefix}.net.0.proj", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         self.add_module("out_proj", _linear(config, f"{prefix}.net.2", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
+        self.swiglu_linear = None
+        out_proj_unwrapped = unwrap_tp_weight(self.out_proj)
+        # For native FP8, _linear enables this marker only when its GEMM backend is available.
+        has_fp8_activation = getattr(out_proj_unwrapped, "fp8_activation_qmax", None) is not None
+        if has_fp8_activation:
+            from lightx2v.common.ops.mm.optimized_linear import apply_swiglu_linear
+
+            self.swiglu_linear = partial(apply_swiglu_linear, self.out_proj)
+
+    def apply_swiglu(self, value, gate):
+        if self.swiglu_linear is not None:
+            return self.swiglu_linear(value, gate)
+        return self.out_proj.apply(value * F.silu(gate))
 
 
 class MiniMaxH3TransformerBlockWeights(WeightModule):
@@ -200,7 +217,17 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
             # the unquantized projection; update the offline builder if it changes.
             # AdaLN is the largest per-block projection in H3. Its output is
             # column-sharded here and gathered once per block before modulation.
-            self.add_module("adaln", _linear(config, f"{prefix}.adaln_proj.linear", bias=True, create_cuda_buffer=create_cuda_buffer, tp_split="col"))
+            self.add_module(
+                "adaln",
+                _linear(
+                    config,
+                    f"{prefix}.adaln_proj.linear",
+                    bias=True,
+                    create_cuda_buffer=create_cuda_buffer,
+                    tp_split="col",
+                    quant_scheme=config.get("adaln_quant_scheme"),
+                ),
+            )
 
 
 class MiniMaxH3TransformerWeights(WeightModule):
