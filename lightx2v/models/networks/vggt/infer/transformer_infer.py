@@ -52,9 +52,10 @@ class VGGTTransformerInfer(BaseTransformerInfer):
         if images.ndim == 4:
             images = images.unsqueeze(0)
         (tokens, patch_start) = self.infer_aggregator(weights.aggregator, images)
-        poses = self.infer_camera(weights.camera_head, tokens)
-        (depth, depth_conf) = self.infer_dpt(weights.depth_head, tokens, images=images, patch_start_idx=patch_start)
-        (points, points_conf) = self.infer_dpt(weights.point_head, tokens, images=images, patch_start_idx=patch_start)
+        with torch.autocast(device_type=images.device.type, enabled=False):
+            poses = self.infer_camera(weights.camera_head, tokens)
+            (depth, depth_conf) = self.infer_dpt(weights.depth_head, tokens, images=images, patch_start_idx=patch_start)
+            (points, points_conf) = self.infer_dpt(weights.point_head, tokens, images=images, patch_start_idx=patch_start)
         return {"pose_enc": poses[-1], "depth": depth, "depth_conf": depth_conf, "world_points": points, "world_points_conf": points_conf}
 
     def infer_aggregator(self, weights, images):
@@ -119,7 +120,11 @@ class VGGTTransformerInfer(BaseTransformerInfer):
         (batch, tokens, channels) = x.shape
         qkv = weights.qkv(x).reshape(batch, tokens, 3, weights.num_heads, weights.head_dim).permute(2, 0, 3, 1, 4)
         (q, k, v) = qkv.unbind(0)
-        (q, k) = (weights.q_norm(q), weights.k_norm(k))
+        if isinstance(weights.q_norm, nn.Identity):
+            (q, k) = (weights.q_norm(q), weights.k_norm(k))
+        else:
+            # Upstream autocast runs Q/K LayerNorm and RoPE in FP32.
+            (q, k) = (weights.q_norm(q.float()), weights.k_norm(k.float()))
         if weights.rope is not None:
             (q, k) = (self.infer_rope(weights.rope, q, pos), self.infer_rope(weights.rope, k, pos))
         out = weights.attention(q, k, v).transpose(1, 2).reshape(batch, tokens, channels)

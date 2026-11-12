@@ -83,8 +83,8 @@ docker run --rm --shm-size 8g \
   lightx2v-vggt-mlu bash scripts/platform/mlu/run_vggt.sh
 ```
 
-This image covers the provided BF16 MLU configuration (`torch_sdpa`). NVIDIA
-launchers require a CUDA environment with FlashAttention v2. The environment was
+This image covers the provided BF16 MLU configuration (`torch_sdpa`). The NVIDIA
+launcher uses PyTorch SDPA by default. The environment was
 validated with Python 3.12, Torch 2.9.1 and torch_mlu 1.31.1; a different vendor
 stack must be validated separately. A successful image build does not by itself
 prove that a host driver or another vendor image is compatible.
@@ -96,13 +96,13 @@ No dataset download, labels or camera files are needed for inference.
 
 | Platform | Configuration | Launcher |
 | --- | --- | --- |
-| NVIDIA GPU | `configs/vggt/vggt_recon_bf16.json` (`flash_attn2`) | `scripts/vggt/run_vggt.sh` |
+| NVIDIA GPU | `configs/vggt/vggt_recon_bf16.json` (`torch_sdpa`) | `scripts/vggt/run_vggt.sh` |
 | MLU | `configs/platform/mlu/vggt_recon_bf16.json` (`torch_sdpa`) | `scripts/platform/mlu/run_vggt.sh` |
 
 With the default weight directory and prepared platform environment:
 
 ```bash
-# NVIDIA GPU; requires the FlashAttention v2 backend.
+# NVIDIA GPU; uses PyTorch SDPA.
 bash scripts/vggt/run_vggt.sh
 
 # MLU; requires a compatible vendor Torch / torch_mlu environment.
