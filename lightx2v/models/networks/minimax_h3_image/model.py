@@ -50,9 +50,6 @@ class MiniMaxH3ImageModel(BaseTransformerModel):
         # Match Diffusers' BF16 sine/cosine before applying RoPE to Q/K.
         config.setdefault("rope_type", "torch_real_rope")
         config.setdefault("rope_compute_dtype", "bf16")
-        if config.get("use_compile", False) and config.get("compile_backend", "default") == "default":
-            # Preserve eager BF16 rounding when Inductor fuses operations.
-            config.setdefault("compile_options", {}).setdefault("emulate_precision_casts", True)
         checkpoint_root = Path(model_path).expanduser()
         transformer_path = Path(config.get("dit_original_ckpt") or checkpoint_root / "transformer")
         self.pdd_heads_path = Path(config.get("pdd_heads_path") or checkpoint_root / "pdd_fused_heads.safetensors")
