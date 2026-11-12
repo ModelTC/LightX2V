@@ -45,23 +45,25 @@ class TorchrunInferenceWorker:
                 else:
                     logger.info(f"LoRA directory set to: {self.lora_dir}")
 
-            config = build_startup_config(
-                {
-                    "config_json": args.config_json,
-                    "model_cls": args.model_cls,
-                    "model_variant": args.model_variant,
-                    "model_path": args.model_path,
-                    "task": args.task,
-                }
-            )
+            if args.model_cls == "seko_talk" and args.task == "rs2v":
+                from .shot_rs2v import build_shot_rs2v_runner
 
-            if config["parallel"]:
-                init_parallel(config)
-
-            if self.rank == 0:
-                logger.info(f"Config:\n {config}")
-
-            self.runner = build_runner(config)
+                self.runner = build_shot_rs2v_runner(args)
+            else:
+                config = build_startup_config(
+                    {
+                        "config_json": args.config_json,
+                        "model_cls": args.model_cls,
+                        "model_variant": args.model_variant,
+                        "model_path": args.model_path,
+                        "task": args.task,
+                    }
+                )
+                if config["parallel"]:
+                    init_parallel(config)
+                if self.rank == 0:
+                    logger.info(f"Config:\n {config}")
+                self.runner = build_runner(config)
             logger.info(f"Rank {self.rank}/{self.world_size - 1} initialization completed; supported tasks: {', '.join(self.runner.supported_tasks)}")
 
             return True
@@ -89,6 +91,8 @@ class TorchrunInferenceWorker:
             reuse = task_data.pop("reuse", False)
             reuse_prefix_segments = task_data.pop("reuse_prefix_segments", 0)
 
+            if hasattr(self.runner, "validate_lora"):
+                self.runner.validate_lora(lora_name)
             input_info = self.runner.prepare_request(task_data)
             if self.lora_dir:
                 self.switch_lora(lora_name, lora_strength)
