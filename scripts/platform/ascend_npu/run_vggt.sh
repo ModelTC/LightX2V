@@ -3,15 +3,19 @@ set -euo pipefail
 
 lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/weights/vggt}"
-input_path="${INPUT_PATH:-${lightx2v_path}/assets/inputs/imgs/vggt}"
+input_path="${INPUT_PATH:-}"
 config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platform/ascend_npu/vggt_recon_bf16.json}"
 save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/../outputs/vggt/reconstruction.npz}"
 
 if [[ "${1:-}" == "--help" ]]; then
-  echo "Usage: MODEL_PATH=/path/to/weights [INPUT_PATH=/path/to/input] bash scripts/platform/ascend_npu/run_vggt.sh [lightx2v.infer arguments]"
-  echo "Default input: ${input_path}"
+  echo "Usage: MODEL_PATH=/path/to/weights INPUT_PATH=/path/to/input bash scripts/platform/ascend_npu/run_vggt.sh [lightx2v.infer arguments]"
   echo "Prepare local weights first: ${lightx2v_path}/scripts/vggt/README.md"
   exit 0
+fi
+
+if [[ -z "${input_path}" ]]; then
+  echo "Error: set INPUT_PATH to the input image or image directory." >&2
+  exit 2
 fi
 
 export PLATFORM=ascend_npu

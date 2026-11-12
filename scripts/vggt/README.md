@@ -91,8 +91,8 @@ prove that a host driver or another vendor image is compatible.
 
 ## Run
 
-The default input is the five bundled PNG views in `assets/inputs/imgs/vggt/`.
-No dataset download, labels or camera files are needed for inference.
+Provide input images using `INPUT_PATH`. No labels or camera files are needed
+for inference.
 
 | Platform | Configuration | Launcher |
 | --- | --- | --- |
@@ -103,10 +103,10 @@ With the default weight directory and prepared platform environment:
 
 ```bash
 # NVIDIA GPU; uses PyTorch SDPA.
-bash scripts/vggt/run_vggt.sh
+INPUT_PATH=/path/to/my_views bash scripts/vggt/run_vggt.sh
 
 # MLU; requires a compatible vendor Torch / torch_mlu environment.
-bash scripts/platform/mlu/run_vggt.sh
+INPUT_PATH=/path/to/my_views bash scripts/platform/mlu/run_vggt.sh
 ```
 
 To use your own checkpoint directory, images and output path:
