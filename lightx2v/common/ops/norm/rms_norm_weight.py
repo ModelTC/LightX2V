@@ -11,7 +11,7 @@ from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.offload.weight_storage import FloatingWeightStorage, StorageDescription
 
-from .compile_ops import mean_square, native_rms_norm, rms_norm_from_sum, sum_square
+from .compile_ops import mean_square, rms_norm_from_sum, sum_square
 
 try:
     import sgl_kernel
@@ -257,8 +257,6 @@ class RMSWeightOpaque(RMSWeight):
 @RMS_WEIGHT_REGISTER("torch_native")
 class RMSWeightNative(RMSWeight):
     def apply(self, input_tensor):
-        if torch.compiler.is_compiling() and input_tensor.device.type == "cuda":
-            return native_rms_norm(input_tensor, self._get_actual_weight(), self.eps)
         return torch.nn.functional.rms_norm(
             input_tensor,
             (input_tensor.shape[-1],),

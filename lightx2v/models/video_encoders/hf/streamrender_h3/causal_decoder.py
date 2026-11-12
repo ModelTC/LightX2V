@@ -146,10 +146,9 @@ class StreamRenderH3CausalDecoder(nn.Module):
             return self._project_block, self._finish_block
         if self._compiled_projection is None:
             # Mutable KV, window visibility, trimming and stream state remain
-            # outside these pure arithmetic regions. Preserve BF16 cast points.
-            options = {"emulate_precision_casts": True}
-            self._compiled_projection = torch.compile(self._project_block, dynamic=None, options=options)
-            self._compiled_finish = torch.compile(self._finish_block, dynamic=None, options=options)
+            # outside these pure arithmetic regions.
+            self._compiled_projection = torch.compile(self._project_block, dynamic=None)
+            self._compiled_finish = torch.compile(self._finish_block, dynamic=None)
         return self._compiled_projection, self._compiled_finish
 
     def _ids(self, start: int, count: int, height: int, width: int, shift: int, device: torch.device):
