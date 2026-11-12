@@ -3,7 +3,7 @@ from dataclasses import replace
 import torch
 import torch.nn.functional as F
 
-from lightx2v.models.networks.wan.infer.dreamzero.module_io import DreamZeroPreInferOutput
+from lightx2v.models.networks.wan.infer.dreamzero.module_io import DreamZeroPreInferOutput, DreamZeroTimestepSegments
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -55,6 +55,8 @@ class DreamZeroPreInfer:
         self.num_state_per_block = int(config.get("num_state_per_block", 1))
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
+        # Same device check as DreamZeroTransformerInfer: Thor-only kernels.
+        self.is_thor = AI_DEVICE == "cuda" and torch.cuda.is_available() and "thor" in torch.cuda.get_device_name(torch.cuda.current_device()).lower().split()
         self._freqs = None
         self._freqs_action = None
         self._freqs_state = None
@@ -229,13 +231,73 @@ class DreamZeroPreInfer:
             return cached
 
         timestep_tokens = self._build_timestep_tokens(timestep, timestep_action, state, seq_len, action)
+        segments = self._unique_row_time_embeddings(weights, timestep_tokens.flatten(), device, dtype)
+        if segments is not None:
+            self._time_embedding_cache[cache_key] = segments
+            return segments
         embed = _dreamzero_sinusoidal_embedding_1d(self.freq_dim, timestep_tokens.flatten()).to(device=device, dtype=dtype)
         embed = weights.time_embedding_0.apply(embed.to(self.sensitive_layer_dtype if self.sensitive_layer_dtype != self.infer_dtype else embed.dtype))
         embed = F.silu(embed)
         embed = weights.time_embedding_2.apply(embed)
         embed0 = weights.time_projection_1.apply(F.silu(embed)).reshape(-1, 6, self.dim)
-        self._time_embedding_cache[cache_key] = (embed, embed0)
-        return embed, embed0
+        # Only the unique rows are kept: the per-token (seq, 6, dim) embed0 is
+        # never materialised downstream.
+        segments = self._timestep_segments(timestep_tokens.flatten(), embed, embed0)
+        self._time_embedding_cache[cache_key] = segments
+        return segments
+
+    def _unique_row_time_embeddings(self, weights, flat_timesteps, device, dtype):
+        """Time embedding MLP on one row per run of equal timesteps.
+
+        Rows of the per-token MLP depend only on their own timestep, and on
+        Thor the CUTLASS linear gives every row the bits the per-token cuBLAS
+        GEMMs give it (fixed kernel, K in order, no split-K), so this equals
+        ``_timestep_segments`` of the full computation bit for bit while doing
+        ~3 instead of seq_len rows.  None if that kernel cannot be used.
+        """
+        if not self.is_thor or self.sensitive_layer_dtype != self.infer_dtype or dtype != torch.bfloat16 or torch.device(device).type != "cuda":
+            return None
+        from lightx2v.common.ops.mm.thor_qkv import supports
+
+        mods = (weights.time_embedding_0, weights.time_embedding_2, weights.time_projection_1)
+        probe = torch.empty((1, self.freq_dim), device=device, dtype=dtype)
+        if not supports(mods[0], probe):
+            return None
+        probe = probe.new_empty((1, self.dim))
+        if not (supports(mods[1], probe) and supports(mods[2], probe)):
+            return None
+        from lightx2v.common.ops.mm.thor_qkv import linear
+
+        change = flat_timesteps[1:] != flat_timesteps[:-1]
+        starts = torch.cat([torch.zeros(1, dtype=torch.long, device=change.device), torch.nonzero(change).flatten() + 1])
+        seg_idx = torch.zeros(flat_timesteps.shape[0], dtype=torch.int32, device=flat_timesteps.device)
+        seg_idx[1:] = torch.cumsum(change, dim=0).to(torch.int32)
+        embed = _dreamzero_sinusoidal_embedding_1d(self.freq_dim, flat_timesteps.index_select(0, starts)).to(device=device, dtype=dtype)
+        embed = linear(mods[0], embed.contiguous())
+        embed = F.silu(embed)
+        embed = linear(mods[1], embed)
+        embed0 = linear(mods[2], F.silu(embed)).reshape(-1, 6, self.dim)
+        return DreamZeroTimestepSegments(seg_idx=seg_idx.to(embed0.device), embed=embed.contiguous(), embed0=embed0.contiguous())
+
+    @staticmethod
+    def _timestep_segments(flat_timesteps, embed, embed0):
+        """Collapse runs of equal per-token timesteps into segments.
+
+        Tokens with equal timesteps have identical embedding rows (same input
+        row to the same GEMMs), so one representative row per run is exact.
+        Returns (seg_idx int32 [seq], embed rows [nseg, dim], embed0 rows
+        [nseg, 6, dim]).  Runs once per time-embedding cache key.
+        """
+        change = flat_timesteps[1:] != flat_timesteps[:-1]
+        starts = torch.cat([torch.zeros(1, dtype=torch.long, device=change.device), torch.nonzero(change).flatten() + 1])
+        seg_idx = torch.zeros(flat_timesteps.shape[0], dtype=torch.int32, device=flat_timesteps.device)
+        seg_idx[1:] = torch.cumsum(change, dim=0).to(torch.int32)
+        starts = starts.to(embed0.device)
+        return DreamZeroTimestepSegments(
+            seg_idx=seg_idx.to(embed0.device),
+            embed=embed.index_select(0, starts).contiguous(),
+            embed0=embed0.index_select(0, starts).contiguous(),
+        )
 
     @torch.no_grad()
     def project_context(self, weights, inputs, device, dtype):
@@ -299,7 +361,7 @@ class DreamZeroPreInfer:
             x = torch.cat([x, action_register], dim=0)
 
         timestep = inputs["timestep"].to(device=x.device)
-        embed, embed0 = self.get_time_embeddings(weights, inputs, timestep, timestep_action, state, seq_len, action, x.device, x.dtype)
+        time_segments = self.get_time_embeddings(weights, inputs, timestep, timestep_action, state, seq_len, action, x.device, x.dtype)
 
         current_start_frame = int(inputs.get("current_start_frame", 0))
         freqs = self._create_attention_freqs(grid_size, current_start_frame, action_register_length, x.device)
@@ -312,8 +374,7 @@ class DreamZeroPreInfer:
         )
         return DreamZeroPreInferOutput(
             x=x,
-            embed=embed,
-            embed0=embed0,
+            time_segments=time_segments,
             context=None,
             freqs=freqs,
             rope_positions=rope_positions,
