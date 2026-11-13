@@ -83,11 +83,14 @@ class AiterAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        softmax_scale = kwargs.get("softmax_scale", None)
+        causal = kwargs.get("causal", False)
+
         # Dense callers (e.g. Ulysses) give no cu_seqlens. Use the batch kernel.
         if cu_seqlens_q is None:
             if len(q.shape) == 3:
                 q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
-            x = aiter_flash_attn_func(q, k, v)
+            x = aiter_flash_attn_func(q, k, v, softmax_scale=softmax_scale, causal=causal)
             return x.reshape(x.shape[0] * x.shape[1], -1)
 
         if len(q.shape) == 3:
@@ -113,5 +116,7 @@ class AiterAttnWeight(AttnWeightTemplate):
             cu_seqlens_kv,
             max_seqlen_q,
             max_seqlen_kv,
+            softmax_scale=softmax_scale,
+            causal=causal,
         ).reshape(bs * max_seqlen_q, -1)
         return x
