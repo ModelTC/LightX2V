@@ -19,3 +19,5 @@ triton-windows
 prometheus_client
 gguf
 modelscope
+
+pillow-heif>=1.0

@@ -1,5 +1,7 @@
 from typing import Dict
 
+from lightx2v.utils.image_input import is_heif_header
+
 from .base import MediaHandler
 
 
@@ -41,6 +43,8 @@ class ImageHandler(MediaHandler):
                 for signature in self.get_media_signatures().keys():
                     if decoded.startswith(signature):
                         return True
+                if is_heif_header(decoded):
+                    return True
                 if len(decoded) > 12 and decoded[8:12] == b"WEBP":
                     return True
         except Exception:
@@ -49,6 +53,8 @@ class ImageHandler(MediaHandler):
         return False
 
     def detect_extension(self, data: bytes) -> str:
+        if is_heif_header(data):
+            return "heif"
         for signature, ext in self.get_media_signatures().items():
             if data.startswith(signature):
                 return ext

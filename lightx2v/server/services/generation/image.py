@@ -23,7 +23,15 @@ class ImageGenerationService(BaseGenerationService):
                 return None
 
             if hasattr(message, "image_path") and message.image_path:
-                task_data["image_path"] = await self._resolve_image_path(message.image_path)
+                value = message.image_path
+                if isinstance(value, list):
+                    references = value
+                elif value.startswith(("http://", "https://", "data:image/")):
+                    references = [value]
+                else:
+                    references = value.split(",")
+                resolved = [await self._resolve_image_path(item.strip()) for item in references if item.strip()]
+                task_data["image_path"] = ",".join(resolved)
                 logger.info(f"Task {message.task_id} image path: {task_data.get('image_path')}")
 
             if hasattr(message, "image_mask_path") and message.image_mask_path:

@@ -45,3 +45,5 @@ zmq
 jsonschema
 pymongo
 modelscope
+
+pillow-heif>=1.0

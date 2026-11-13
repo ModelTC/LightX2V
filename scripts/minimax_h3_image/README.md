@@ -140,3 +140,10 @@ python scripts/minimax_h3_image/server/post_i2i.py
 ```
 
 The clients return a task ID and request `2048 × 2048` PNG output by default. Completed images are saved on the server under `$lightx2v_path/save_results/server_cache/outputs/`. Edit `prompt`, `size`, `seed`, and `save_result_path` in the clients as needed.
+
+
+### HEIC/HEIF editing references
+
+Editing accepts JPEG, PNG, WebP, HEIC and HEIF references. HEIC/HEIF decoding uses `pillow-heif` (included in the dependencies), identifies the container by content, applies orientation once and converts to RGB. Corrupt images produce a clear decode error.
+
+Existing reference strings, comma-separated local paths and multipart multi-file uploads remain supported. The native image-task API also accepts an ordered JSON `image_path` list for mixed local paths, URLs and Base64/data URLs, avoiding ambiguity with the comma inside a data URL. Reference order is preserved. Python inputs may be PIL images, path/byte-path values or streams; caller-owned streams stay open, and seekable stream positions are restored on success and failure.
