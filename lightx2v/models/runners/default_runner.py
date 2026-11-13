@@ -20,6 +20,10 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
+# Process-wide call count for the periodic full pass in DefaultRunner._collect_garbage().
+_GC_COLLECT_CALLS = 0
+
+
 class DefaultRunner(BaseRunner):
     def __init__(self, config):
         super().__init__(config)
@@ -264,6 +268,40 @@ class DefaultRunner(BaseRunner):
 
         return self.model.scheduler.latents
 
+    def _collect_garbage(self):
+        """Run a full GC without rescanning objects that survived earlier runs.
+
+        A full ``gc.collect()`` walks every tracked object, so its cost grows
+        with the heap. Objects that only ever accumulate (for example the two
+        small lists torch 2.9.0/2.9.1 leaks per ``torch.compile``'d call,
+        pytorch/pytorch#174468) make a per-request forced GC grow by
+        milliseconds per request and add seconds per request after a day.
+
+        With ``gc_freeze_survivors`` (default true) the survivors of each
+        collection move to the permanent generation (``gc.freeze()``), so the
+        next collection only walks objects created since. Reference counting
+        still frees frozen objects; only cyclic garbage among them waits for
+        the periodic full pass every ``gc_full_collect_every`` calls (default
+        200, 0 disables), which unfreezes and collects everything once. The
+        call count is process-wide, so a runner dropped while frozen is still
+        released by the next periodic pass of any runner;
+        ``base_runner.release_frozen_gc()`` releases it immediately.
+
+        Skipped with ``lazy_load`` / ``unload_modules``: those modes drop and
+        rebuild the model every request, and a frozen model caught in a
+        reference cycle would stay in memory until the next full pass.
+        """
+        if not self.config.get("gc_freeze_survivors", True) or self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            gc.collect()
+            return
+        global _GC_COLLECT_CALLS
+        _GC_COLLECT_CALLS += 1
+        every = int(self.config.get("gc_full_collect_every", 200))
+        if every > 0 and _GC_COLLECT_CALLS % every == 0:
+            gc.unfreeze()
+        gc.collect()
+        gc.freeze()
+
     def maybe_empty_cache(self, *, force: bool = False, collect_garbage: bool = False) -> bool:
         """Collect Python garbage when requested and release cached device memory under pressure."""
         gib = 1024**3
@@ -276,7 +314,7 @@ class DefaultRunner(BaseRunner):
             free_bytes, _ = torch_device_module.mem_get_info()
         check_cache = force or free_bytes < min_free_bytes
         if collect_garbage or check_cache:
-            gc.collect()
+            self._collect_garbage()
         if not check_cache:
             return False
 
