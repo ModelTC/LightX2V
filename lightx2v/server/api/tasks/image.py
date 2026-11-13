@@ -89,7 +89,7 @@ async def _watch_client_disconnect(request: Request, task_id: str, poll_interval
 @router.post("/", response_model=TaskResponse)
 async def create_image_task(message: ImageTaskRequest):
     try:
-        if hasattr(message, "image_path") and message.image_path and message.image_path.startswith("http"):
+        if hasattr(message, "image_path") and message.image_path and isinstance(message.image_path, str) and message.image_path.startswith("http"):
             if not await validate_url_async(message.image_path):
                 raise HTTPException(status_code=400, detail=f"Image URL is not accessible: {message.image_path}")
         if hasattr(message, "image_mask_path") and message.image_mask_path and message.image_mask_path.startswith("http"):
@@ -128,7 +128,7 @@ async def create_image_task_sync(
 
     task_id = None
     try:
-        if hasattr(message, "image_path") and message.image_path and message.image_path.startswith("http"):
+        if hasattr(message, "image_path") and message.image_path and isinstance(message.image_path, str) and message.image_path.startswith("http"):
             if not await validate_url_async(message.image_path):
                 raise HTTPException(status_code=400, detail=f"Image URL is not accessible: {message.image_path}")
         if hasattr(message, "image_mask_path") and message.image_mask_path and message.image_mask_path.startswith("http"):

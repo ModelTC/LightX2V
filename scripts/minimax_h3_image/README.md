@@ -106,6 +106,12 @@ Both four-GPU configs enable `text_encoder_tensor_parallel`, `vae_encode_paralle
 
 When changing configurations, also adjust `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` so the process count matches the DiT TP × SP size. Qwen3-VL TP uses the entire inference process group, giving TP4 in both four-GPU configs.
 
+## HEIC/HEIF editing references
+
+Editing accepts JPEG, PNG, WebP, HEIC and HEIF references. HEIC/HEIF decoding uses `pillow-heif` (included in the dependencies), identifies the container by content, applies orientation once and converts to RGB. Corrupt images produce a clear decode error.
+
+Existing reference strings, comma-separated local paths and multipart multi-file uploads remain supported. The native image-task API also accepts an ordered JSON `image_path` list for mixed local paths, URLs and Base64/data URLs, avoiding ambiguity with the comma inside a data URL. Reference order is preserved. Python inputs may be PIL images, path/byte-path values or streams; caller-owned streams stay open, and seekable stream positions are restored on success and failure.
+
 ## Serving and POST requests
 
 ### Start the server

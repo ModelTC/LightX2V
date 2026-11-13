@@ -32,6 +32,7 @@ classifiers = [
 
 dependencies = [
     "numpy",
+    "pillow-heif>=1.0",
     "scipy",
     "torch>=2.1",
     "torchvision",
