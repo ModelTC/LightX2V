@@ -34,13 +34,13 @@ pipe.enable_quantize(
 
 # Load distilled LoRA weights
 pipe.enable_lora(
-    [
+    lora_mode="separate",
+    lora_configs=[
         {
             "path": "/path/to/lora_1.safetensors",
             "strength": 1.0,
         },
     ],
-    lora_dynamic_apply=True,  # Support inference with LoRA weights, save memory but slower, default is False
 )
 # Create generator manually with specified parameters
 pipe.create_generator(

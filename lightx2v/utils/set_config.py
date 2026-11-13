@@ -53,8 +53,8 @@ def get_default_config():
             "teacache_thresh": 0.26,
             "use_ret_steps": False,
             "use_bfloat16": True,
+            "lora_mode": "merge",
             "lora_configs": None,  # List of dicts with 'path' and 'strength' keys
-            "lora_merge_force_fp32": False,
             "parallel": False,
             "seq_parallel": False,
             "cfg_parallel": False,
@@ -163,6 +163,15 @@ def load_model_config(deployment_config):
             "t5_tokenizer_path": "base/google/umt5-xxl",
             "vae_path": "base/Wan2.2_VAE.pth",
             "tae_path": "base/taew2_2.pth",
+        }
+        for key, filename in component_files.items():
+            model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
+    elif model_cls == "tbdub":
+        component_files = {
+            "dit_original_ckpt": "tbdub_student.safetensors",
+            "vae_path": "Wan2.2_VAE.safetensors",
+            "audio_encoder_path": "hubert-large-ll60k",
+            "prompt_embedding_path": "null_prompt_emb.pt",
         }
         for key, filename in component_files.items():
             model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
@@ -423,7 +432,7 @@ def normalize_startup_config(config, model_config):
             logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {config['num_frames']} instead of {original_length}.")
 
     if AI_DEVICE == "mps":
-        assert not any(config.get(key) for key in ("lora_configs", "lora_path", "lora_dynamic_apply", "lora_merge_force_fp32")), (
+        assert not (config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key) for key in ("lora_configs", "lora_path"))), (
             "MPS inference does not support LoRA configs, dynamic LoRA, or load-time LoRA merging. "
             "Merge LoRA into the model weights offline before inference, remove the LoRA settings, and load the merged model checkpoint."
         )

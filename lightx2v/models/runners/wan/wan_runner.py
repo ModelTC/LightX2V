@@ -46,7 +46,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
     if not lora_configs:
         return wan_module(**model_kwargs)
 
-    if config.get("lora_dynamic_apply", False):
+    if config.get("lora_mode", "merge") == "separate":
         model_kwargs["lora_path"] = lora_configs[0]["path"]
         model_kwargs["lora_strength"] = lora_configs[0]["strength"]
         model = wan_module(**model_kwargs)
@@ -67,6 +67,8 @@ def get_wan_model_class(distill_method):
 
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
+    supported_lora_modes = ("merge", "separate")
+
     supported_request_fields_by_task = {
         "t2v": VIDEO_REQUEST_FIELDS,
         "i2v": VIDEO_REQUEST_FIELDS | {"image_path"},
@@ -1084,7 +1086,7 @@ class MultiModelStruct:
                     if not lora_configs:
                         high_noise_model = get_wan_model_class(self.distill_method)(**high_model_kwargs)
                     else:
-                        assert self.config.get("lora_dynamic_apply", False)
+                        assert self.config.get("lora_mode", "merge") == "separate"
                         high_noise_model = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
                     high_noise_model.set_scheduler(self.scheduler)
                     self.model[0] = high_noise_model
@@ -1100,7 +1102,7 @@ class MultiModelStruct:
                     if not lora_configs:
                         low_noise_model = get_wan_model_class(self.distill_method)(**low_model_kwargs)
                     else:
-                        assert self.config.get("lora_dynamic_apply", False)
+                        assert self.config.get("lora_mode", "merge") == "separate"
                         low_noise_model = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
                     low_noise_model.set_scheduler(self.scheduler)
                     self.model[1] = low_noise_model
@@ -1216,8 +1218,6 @@ class Wan22MoeRunner(WanRunner):
         This method handles both high_noise_model and low_noise_model separately.
 
         Args:
-            lora_path: Path to the LoRA safetensors file (for backward compatibility)
-            strength: LoRA strength (default: 1.0) (for backward compatibility)
             high_lora_path: Path to the high_noise_model LoRA safetensors file
             high_lora_strength: High noise model LoRA strength (default: 1.0)
             low_lora_path: Path to the low_noise_model LoRA safetensors file
@@ -1226,6 +1226,8 @@ class Wan22MoeRunner(WanRunner):
         Returns:
             bool: True if LoRA was successfully switched, False otherwise
         """
+        if self.config.get("lora_mode", "merge") != "separate":
+            raise ValueError("switch_lora requires lora_mode='separate'")
         if not hasattr(self, "model") or self.model is None:
             logger.error("Model not loaded. Please load model first.")
             return False

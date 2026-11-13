@@ -1,5 +1,7 @@
 # MiniMax-H3 Roll：低成本抽卡
 
+示例 JSON 配置已设置 `lora_mode: "separate"`。cache 导出和推理使用相同的配置模式及 `LORA_DTYPE`（不设置时跟随 `DTYPE`）。
+
 [English](README.md) | [简体中文](README_zh.md)
 
 先用低分辨率草片筛选提示词和 seed，再对选中的草片做高分辨率重生成。可用 `draft_steps` 进一步减少草片的计算量。以下命令均从仓库根目录执行。

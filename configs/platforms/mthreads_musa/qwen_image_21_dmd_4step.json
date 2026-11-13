@@ -18,7 +18,6 @@
     "offload_granularity": "model",
     "text_encoder_cpu_offload": true,
     "warmup": false,
-    "lora_dynamic_apply": false,
     "lora_configs": [
         {
             "path": "/data/wushuo/models/Qwen-Image-2.1-Lightning/pytorch_lora_weights.safetensors",

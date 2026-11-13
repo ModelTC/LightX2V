@@ -114,7 +114,7 @@ class HidreamO1ImageRunner(DefaultRunner):
             "enable_cfg": self.config["enable_cfg"],
             "shift": float(self.config.get("shift", 1.0 if is_dev else 3.0)),
             "timesteps_list": self.config.get("timesteps_list", self.default_timesteps) if is_dev else None,
-            "scheduler_name": self.config.get("scheduler_name", "flash" if is_dev else "default"),
+            "scheduler_type": self.config.get("scheduler_type", "flash" if is_dev else "default"),
             "noise_scale_start": float(self.config.get("noise_scale_start", 8.0)),
             "noise_scale_end": float(self.config.get("noise_scale_end", 8.0)),
             "noise_clip_std": float(self.config.get("noise_clip_std", 8.0 if is_dev else 0.0)),

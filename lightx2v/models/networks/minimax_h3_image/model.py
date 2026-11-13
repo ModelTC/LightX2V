@@ -37,7 +37,7 @@ class MiniMaxH3ImageModel(BaseTransformerModel):
         ):
             if config.get(option, False):
                 raise NotImplementedError(f"MiniMax-H3-Image does not support {option}")
-        if config.get("lora_configs") or config.get("lora_dynamic_apply", False):
+        if config.get("lora_configs") or config.get("lora_mode", "merge") == "separate":
             raise NotImplementedError("LoRA loading is not implemented for MiniMax-H3-Image")
         if config.get("dit_quant_scheme", "Default") != "Default":
             raise ValueError("MiniMax-H3-Image requires original BF16/FP32 transformer weights")

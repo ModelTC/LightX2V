@@ -31,6 +31,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
+    supported_lora_modes = ("merge", "separate")
+
     _WARMUP_SHAPES = ((1024, 1024), (768, 960))
     _WARMUP_PROMPTS = (
         "A red bicycle beside a wall.",
@@ -178,11 +180,11 @@ class QwenImage21Runner(DefaultRunner):
                 raise RuntimeError(f"qwen_image_21 fp8-f16-accum is unavailable: {reason}")
             validate_checkpoint(self.config["dit_quantized_ckpt"], profile=QWEN_IMAGE_21_QUANTIZATION_PROFILE)
         lora_kwargs = {}
-        if self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_mode", "merge") == "separate":
             lora = self.config["lora_configs"][0]
             lora_kwargs = {"lora_path": lora["path"], "lora_strength": lora.get("strength", 1.0)}
         model = QwenImage21TransformerModel(str(Path(self.config["model_path"]) / "transformer"), self.config, self.init_device, **lora_kwargs)
-        if self.config.get("lora_configs") and not self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_configs") and self.config.get("lora_mode", "merge") != "separate":
             QwenImage21LoraAdapter(model).apply_lora(self.config["lora_configs"])
         return model
 

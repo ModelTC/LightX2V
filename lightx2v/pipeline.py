@@ -337,18 +337,17 @@ class LightX2VPipeline:
         elif self.model_cls in ("minimax_h3", "minimax_h3_causal"):
             self.startup_config["text_encoder_cpu_offload"] = text_encoder_offload
 
-    def enable_lora(self, lora_configs, lora_dynamic_apply=False):
-        self.startup_config.update(lora_configs=lora_configs, lora_dynamic_apply=lora_dynamic_apply)
+    def enable_lora(self, lora_configs, lora_mode="merge"):
+        self.startup_config.update(lora_configs=lora_configs, lora_mode=lora_mode)
 
     def switch_lora(self, lora_path: str, strength: float = 1.0):
         if lora_path == "":
             logger.info("Removing LoRA weights")
         else:
             logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
-        if not self.runner.config.get("lora_dynamic_apply", False):
-            logger.error("LoRA dynamic apply is not enabled. Please enable it first.")
-            return
-        self.runner.switch_lora(lora_path, strength)
+        if self.runner.config.get("lora_mode", "merge") not in ("separate", "consumer"):
+            raise ValueError("switch_lora requires lora_mode='separate' or 'consumer'")
+        return self.runner.switch_lora(lora_path, strength)
 
     def enable_cache(
         self,

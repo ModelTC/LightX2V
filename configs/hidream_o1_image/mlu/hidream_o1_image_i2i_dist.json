@@ -3,7 +3,7 @@
     "infer_steps": 50,
     "guidance_scale": 5.0,
     "shift": 3.0,
-    "scheduler_name": "default",
+    "scheduler_type": "default",
     "attn_type": "mlu_flash_attn",
     "rope_type": "torch_real_rope",
     "size": [2048, 2048],

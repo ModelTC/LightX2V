@@ -22,9 +22,9 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs):
-    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
+    use_lora_branch = config.get("lora_mode", "merge") == "separate"
 
-    if lora_dynamic_apply:
+    if use_lora_branch:
         lora_path = lora_configs[0]["path"]
         lora_strength = lora_configs[0]["strength"]
         model_kwargs["lora_path"] = lora_path
@@ -41,6 +41,8 @@ def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs
 
 @RUNNER_REGISTER("neopp")
 class NeoppRunner(DefaultRunner):
+    supported_lora_modes = ("merge", "separate")
+
     input_info_cls_by_task = {"t2i": NeoppInputInfo, "i2i": NeoppInputInfo}
     supported_request_fields_by_task = {
         "t2i": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"size"},

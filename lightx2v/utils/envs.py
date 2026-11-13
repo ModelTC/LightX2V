@@ -36,6 +36,12 @@ def GET_DTYPE():
 
 
 @lru_cache(maxsize=None)
+def GET_LORA_DTYPE():
+    dtype = os.getenv("LORA_DTYPE")
+    return GET_DTYPE() if dtype is None else DTYPE_MAP[dtype]
+
+
+@lru_cache(maxsize=None)
 def GET_SENSITIVE_DTYPE():
     RUNNING_FLAG = os.getenv("SENSITIVE_LAYER_DTYPE", "None")
     if RUNNING_FLAG == "None":

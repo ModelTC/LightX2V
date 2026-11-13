@@ -92,14 +92,16 @@ For Wan2.2 MoE use `high_noise_quantized_ckpt` and `low_noise_quantized_ckpt`. E
 
 ### LoRA
 
+Set `lora_mode` in JSON or pass it to `enable_lora()` before creating the generator (`merge` is the default; H3 also supports `consumer`). Precision is controlled by `LORA_DTYPE`, defaulting to `DTYPE`. The loaded JSON takes precedence over Python startup settings.
+
 ```python
 pipe.enable_lora(
     [{"path": "/path/to/lora.safetensors", "strength": 1.0}],
-    lora_dynamic_apply=True,
+    lora_mode="separate",
 )
 ```
 
-`lora_dynamic_apply=False` merges weights during loading. Dynamic application supports changing LoRA on a running pipeline through `switch_lora(lora_path=..., strength=...)`; see the [Qwen switch example](https://github.com/ModelTC/LightX2V/blob/main/scripts/qwen_image/inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py). Wan2.2 LoRA entries also name the `high_noise_model` or `low_noise_model` branch. See [LoRA deployment](../deploy_guides/lora_deploy.md).
+`lora_mode="merge"` (default) merges weights during loading. `separate` computes independent adapter branches; `consumer` fuses their addition into subsequent operators and is available only for MiniMax-H3. Both unmerged modes allow changing LoRA on a running pipeline through `switch_lora(lora_path=..., strength=...)`; see the [Qwen switch example](https://github.com/ModelTC/LightX2V/blob/main/scripts/qwen_image/inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py). Wan2.2 LoRA entries also name the `high_noise_model` or `low_noise_model` branch. See [LoRA deployment](../deploy_guides/lora_deploy.md).
 
 ### Parallel inference
 

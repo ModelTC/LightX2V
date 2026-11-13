@@ -25,7 +25,7 @@ class MMWeightBirenDefaultLinear(MMWeight):
         bias = self._get_actual_bias()
         if not self.has_lora_branch:
             return F.linear(input_tensor, weight, bias)
-        return F.linear(input_tensor, weight, bias) + self.apply_lora(input_tensor)
+        return self.add_lora(F.linear(input_tensor, weight, bias), input_tensor)
 
 
 @MM_WEIGHT_REGISTER("biren_tp2die")
@@ -54,7 +54,7 @@ class MMWeightBirenForceFp32(MMWeight):
         bias = self._get_actual_bias()
         if not self.has_lora_branch:
             return input_tensor @ weight + (bias if bias is not None else 0)
-        return input_tensor @ weight + (bias if bias is not None else 0) + self.apply_lora(input_tensor)
+        return self.add_lora(input_tensor @ weight + (bias if bias is not None else 0), input_tensor)
 
 
 @MM_WEIGHT_REGISTER("biren_linear")
@@ -66,7 +66,7 @@ class MMWeightBirenLinear(MMWeight):
         bias = self._get_actual_bias()
         if not self.has_lora_branch:
             return F.linear(input_tensor, weight.t(), bias)
-        return F.linear(input_tensor, weight.t(), bias) + self.apply_lora(input_tensor)
+        return self.add_lora(F.linear(input_tensor, weight.t(), bias), input_tensor)
 
 
 @PLATFORM_MM_WEIGHT_REGISTER("supa_tensor_parallel")

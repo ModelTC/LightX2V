@@ -16,7 +16,7 @@ from lightx2v import LightX2VPipeline
 repo_root = Path(__file__).resolve().parents[4]
 
 MODEL_PATH = "/path/to/MiniMax-H3"
-CONFIG_PATH = str(repo_root / "configs/minimax_h3/dmd/minimax_h3_bf16_4step.json")
+CONFIG_PATH = str(repo_root / "configs/minimax_h3/distill/4steps/minimax_h3_bf16_4step.json")
 OUTPUT_PATH = "save_results/minimax_h3_t2av_dmd_768p.mp4"
 
 

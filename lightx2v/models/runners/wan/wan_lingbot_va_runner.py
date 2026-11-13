@@ -67,6 +67,8 @@ class _StreamingVAEEncoder:
 
 @RUNNER_REGISTER("lingbot_va")
 class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
+    supported_lora_modes = ("merge",)
+
     supported_request_fields_by_task = {
         "i2va": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path"},
     }

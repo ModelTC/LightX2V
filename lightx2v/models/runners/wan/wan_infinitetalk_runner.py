@@ -107,6 +107,8 @@ def _is_video(path):
 
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
+    supported_lora_modes = ("merge",)
+
     _WARMUP_SHAPES = ((480, 480), (544, 960))
     _WARMUP_PROMPTS = (
         "A speaker addresses the camera.",

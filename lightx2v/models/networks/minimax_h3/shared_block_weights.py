@@ -168,7 +168,8 @@ def load_shared_dit(model):
         if not model.block_offload or not model.use_adaln_cache:
             raise ValueError("H3 shared DiT weights require block offload and AdaLN cache")
         if (
-            any(config.get(k, False) for k in ("tensor_parallel", "dit_quantized", "weight_auto_quant", "lazy_load", "unload_modules", "dummy_model", "lora_dynamic_apply", "use_compile"))
+            any(config.get(k, False) for k in ("tensor_parallel", "dit_quantized", "weight_auto_quant", "lazy_load", "unload_modules", "dummy_model", "use_compile"))
+            or config.get("lora_mode", "merge") in ("separate", "consumer")
             or model.lora_path
             or config.get("lora_configs")
         ):

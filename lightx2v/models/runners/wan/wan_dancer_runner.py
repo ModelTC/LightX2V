@@ -59,7 +59,7 @@ class WanDancerRunner(WanRunner):
         model = WanDancerModel(self.config["model_path"], self.config, self.init_device)
         lora_configs = self.config.get("lora_configs")
         if lora_configs:
-            if self.config.get("lora_dynamic_apply", False):
+            if self.config.get("lora_mode", "merge") == "separate":
                 raise NotImplementedError("Wan-Dancer 4-step LoRA uses merged mode.")
             model.apply_merged_lora(lora_configs)
         return model

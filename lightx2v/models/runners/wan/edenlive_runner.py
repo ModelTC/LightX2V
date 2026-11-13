@@ -24,6 +24,8 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 class EdenLiveRunner(RunnerLifecycleMixin):
     """Combine EdenLive inference with the Wan component loaders in concrete runners."""
 
+    supported_lora_modes = ("merge",)
+
     model_class = EdenLiveModel
     scheduler_class = EdenLiveScheduler
     _WARMUP_TASKS = ("v2v",)

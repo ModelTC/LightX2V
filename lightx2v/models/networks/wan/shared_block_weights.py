@@ -99,7 +99,7 @@ class WanFp8VllmSharedBlockAdapter:
             errors.append("weight_auto_quant is not supported")
         if self.config.get("adapter_model_path"):
             errors.append("adapter checkpoints are not supported")
-        if self.config.get("lora_configs") or self.config.get("lora_dynamic_apply", False) or lora_path:
+        if self.config.get("lora_configs") or self.config.get("lora_mode", "merge") == "separate" or lora_path:
             errors.append("LoRA/diff weights are not supported")
         num_layers = self.config.get("num_layers")
         if type(num_layers) is not int or num_layers <= 0:

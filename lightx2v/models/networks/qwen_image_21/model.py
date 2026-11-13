@@ -43,7 +43,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         self._init_infer()
 
     def _apply_weights(self, weight_dict=None):
-        if self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_mode", "merge") == "separate":
             source = weight_dict if weight_dict is not None else self.original_weight_dict
             self._lora_weight_shapes = {key: tuple(tensor.shape) for key, tensor in source.items() if tensor.ndim == 2}
         return super()._apply_weights(weight_dict)
@@ -55,8 +55,8 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         self._update_lora(lora_path, strength)
 
     def _update_lora(self, lora_path, strength):
-        if not self.config.get("lora_dynamic_apply", False) or isinstance(lora_path, dict):
-            raise ValueError("Qwen-Image-2.1 dynamic LoRA requires lora_dynamic_apply=true and one checkpoint path")
+        if self.config.get("lora_mode", "merge") != "separate" or isinstance(lora_path, dict):
+            raise ValueError("Qwen-Image-2.1 dynamic LoRA requires lora_mode='separate' and one checkpoint path")
         strength = float(strength)
         if not math.isfinite(strength):
             raise ValueError("Qwen-Image-2.1 LoRA strength must be finite")

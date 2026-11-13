@@ -70,7 +70,7 @@ class QwenBf16SharedBlockAdapter:
         for key in ("dit_original_ckpt", "transformer_model_path"):
             if self.config.get(key):
                 errors.append(f"{key} overrides are not supported; select the Diffusers directory with model_path")
-        if self.config.get("lora_configs") or self.config.get("lora_dynamic_apply") or lora_path or self.config.get("adapter_model_path"):
+        if self.config.get("lora_configs") or self.config.get("lora_mode", "merge") == "separate" or lora_path or self.config.get("adapter_model_path"):
             errors.append("LoRA/diff/adapter weights are not supported")
         if self.config.get("task") != "t2i":
             errors.append("the BF16 shared adapter currently supports task='t2i'")

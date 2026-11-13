@@ -34,6 +34,8 @@ _VIDEO_NOISE_REQUEST_STRIDE = 1_000_003
 class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     """Generate Base10 audio guides, then Stage3 video and audio in LightX2V."""
 
+    supported_lora_modes = ("separate",)
+
     supported_request_fields_by_task = {"t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"}}
     _WARMUP_SHAPES = (None,)  # Use the configured request size.
     _WARMUP_PROMPTS = ("A red panda plays a small guitar on a quiet forest stage at sunrise.",)
@@ -147,7 +149,8 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     def _base10_config(self):
         config = dict(self.config)
         config["size"] = [self.request_height, self.request_width]
-        for option in ("lora_configs", "lora_dynamic_apply", "lora_path"):
+        config["lora_mode"] = "merge"
+        for option in ("lora_configs", "lora_path"):
             config.pop(option, None)
         # The Stage3 weights are already loaded. Keep Base10 blocks on the CPU
         # so the two full BF16 DiTs never occupy GPU memory simultaneously.

@@ -34,6 +34,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("dreamzero")
 class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
+    supported_lora_modes = ("merge",)
+
     supported_request_fields_by_task = {
         "i2va": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "save_action_path", "state_path"},
     }

@@ -20,6 +20,8 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 @RUNNER_REGISTER("matrix_game4")
 class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
+    supported_lora_modes = ("merge",)
+
     _SUPPORTS_AUTOREGRESSIVE_WARMUP = True
     _WARMUP_TASKS = ("v2v",)
     _WARMUP_SHAPES = ((256, 448), (480, 864))

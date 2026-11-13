@@ -22,7 +22,7 @@
   "warmup": true,
   "video_flow_shift": 5.0,
   "audio_flow_shift": 3.0,
-  "h3_step_update": "training_euler",
+  "scheduler_type": "euler",
   "audio_sampling_rate": 32000,
   "audio_mono": true,
   "loop_audio": true,

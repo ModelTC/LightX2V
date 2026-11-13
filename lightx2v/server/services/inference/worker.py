@@ -142,6 +142,8 @@ class TorchrunInferenceWorker:
             return None
 
     def switch_lora(self, lora_name: str, lora_strength: float):
+        if (lora_name is not None or self.current_lora_name is not None) and self.runner.config.get("lora_mode", "merge") not in ("separate", "consumer"):
+            raise ValueError("Request-time LoRA switching requires lora_mode='separate' or 'consumer'")
         try:
             if lora_name is None:
                 if self.current_lora_name is not None:

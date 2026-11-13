@@ -11,13 +11,14 @@ from safetensors.torch import load_file
 
 from lightx2v.common.ops.mm.fp8_f16_accum import fp8_accum_gemm, fp8_f16_accum_mm_unavailable_reason
 from lightx2v.models.networks.base_model import BaseTransformerModel
-from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
+from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache, validate_adaln_cache_config
 from lightx2v.models.networks.minimax_h3.adaln_cache_guide import get_adaln_cache_guide
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3MpsOffloadTransformerInfer, MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.offload.transformer_infer import validate_minimax_h3_residency_config
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import MiniMaxH3PreInfer
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
+from lightx2v.models.networks.minimax_h3.lora import cached_modulation_shapes, read_lora_pairs
 from lightx2v.models.networks.minimax_h3.parallel import gather_packed_sequence, shard_packed_sequence, split_tensor_parallel_weight, tensor_parallel_split_type
 from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3PostWeights,
@@ -26,7 +27,7 @@ from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3TransformerWeights,
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
-from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.envs import GET_DTYPE, GET_LORA_DTYPE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, H3_QUANTIZATION_PROFILE, WEIGHT_QMAX, validate_checkpoint
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -59,6 +60,13 @@ class MiniMaxH3Model(BaseTransformerModel):
     post_weight_class = MiniMaxH3PostWeights
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
+        if config.get("lora_mode", "merge") == "consumer":
+            if AI_DEVICE != "cuda":
+                raise ValueError("LoRA consumer fusion requires minimax_h3 on CUDA")
+            if config.get("tensor_parallel"):
+                raise ValueError("LoRA consumer fusion does not support tensor parallel reductions; use sequence parallelism")
+            if config.get("do_mm_calib"):
+                raise ValueError("LoRA consumer fusion does not support GEMM calibration")
         validate_minimax_h3_residency_config(config)
         self.lora_alpha = lora_alpha
         config.setdefault("use_fused_qkv", bool(config.get("dit_quantized", False)))
@@ -76,7 +84,13 @@ class MiniMaxH3Model(BaseTransformerModel):
             self.remove_keys = [".adaln_proj.", "time_embedder.", "norm_out.linear."]
         self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block"
         if config.get("dit_release_block_offload_buffers", False):
-            if not self.block_offload or any(config.get(key, False) for key in ("tensor_parallel", "dit_quantized", "use_compile", "lora_dynamic_apply")) or lora_path or config.get("lora_configs"):
+            if (
+                not self.block_offload
+                or config.get("lora_mode", "merge") in ("separate", "consumer")
+                or any(config.get(key, False) for key in ("tensor_parallel", "dit_quantized", "use_compile"))
+                or lora_path
+                or config.get("lora_configs")
+            ):
                 raise ValueError("dit_release_block_offload_buffers requires unquantized block offload without TP, compile or LoRA")
         # Model offload moves pre/blocks/post together. Pre/post residency only applies
         # to block offload and is ignored otherwise.
@@ -144,7 +158,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         self._init_infer()
 
     def _apply_weights(self, weight_dict=None):
-        if self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_mode", "merge") in ("separate", "consumer"):
             source = weight_dict if weight_dict is not None else self.original_weight_dict
             self._h3_weight_shapes = {key: tuple(tensor.shape) for key, tensor in source.items() if isinstance(tensor, torch.Tensor) and tensor.ndim == 2}
         return super()._apply_weights(weight_dict)
@@ -220,30 +234,6 @@ class MiniMaxH3Model(BaseTransformerModel):
         self.transformer_infer.offload_manager = self.transformer_infer.create_offload_manager()
         self._init_offload_manager()
 
-    @staticmethod
-    def _normalize_dynamic_lora_key(key):
-        for prefix in ("base_model.model.", "model.diffusion_model.", "diffusion_model.", "transformer.", "model."):
-            if key.startswith(prefix):
-                key = key[len(prefix) :]
-                break
-
-        suffixes = {
-            ".lora_A.default.weight": ".lora_down.weight",
-            ".lora_B.default.weight": ".lora_up.weight",
-            ".lora_A.weight": ".lora_down.weight",
-            ".lora_B.weight": ".lora_up.weight",
-            ".lora.down.weight": ".lora_down.weight",
-            ".lora.up.weight": ".lora_up.weight",
-            ".lora_down.weight": ".lora_down.weight",
-            ".lora_up.weight": ".lora_up.weight",
-        }
-        for suffix, replacement in suffixes.items():
-            if key.endswith(suffix):
-                return key[: -len(suffix)] + replacement
-        if key.endswith(".alpha"):
-            return key
-        return None
-
     def _validate_dynamic_lora_shapes(self, source, normalized_sources, down_names):
         model_keys = set()
         ranks = set()
@@ -278,67 +268,37 @@ class MiniMaxH3Model(BaseTransformerModel):
         return model_keys, ranks
 
     def _load_lora_file(self, file_path, alpha=None):
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"MiniMax-H3 LoRA file not found: {file_path}")
-
-        effective_alpha = self.lora_alpha if alpha is None else alpha
-        if effective_alpha is not None:
-            effective_alpha = float(effective_alpha)
-            if not math.isfinite(effective_alpha) or effective_alpha <= 0:
-                raise ValueError(f"MiniMax-H3 LoRA alpha must be finite and positive, got {effective_alpha}")
-
+        config_alpha = self.lora_alpha if alpha is None else alpha
+        dtype = GET_LORA_DTYPE()
         load_device = self._checkpoint_load_device()
+        cached_shapes = cached_modulation_shapes(self.config) if self.use_adaln_cache else {}
         with safe_open(file_path, framework="pt", device=load_device) as source:
+            pairs = read_lora_pairs(source, config_alpha)
             normalized_sources = {}
-            unsupported = []
-            for source_key in source.keys():
-                normalized_key = self._normalize_dynamic_lora_key(source_key)
-                if normalized_key is None:
-                    unsupported.append(source_key)
+            online_pairs = {}
+            for prefix, (down, up, pair_alpha) in pairs.items():
+                model_key = prefix + ".weight"
+                if model_key in cached_shapes:
+                    shape = (source.get_slice(up).get_shape()[0], source.get_slice(down).get_shape()[1])
+                    if shape != cached_shapes[model_key]:
+                        raise ValueError(f"Cached LoRA shape mismatch for {model_key}: {shape}")
                     continue
-                if normalized_key in normalized_sources:
-                    raise ValueError(f"MiniMax-H3 LoRA keys collide after normalization: {source_key} and {normalized_sources[normalized_key]}")
-                normalized_sources[normalized_key] = source_key
-            if unsupported:
-                raise ValueError(f"MiniMax-H3 dynamic LoRA contains {len(unsupported)} unsupported tensors: {unsupported[:4]}")
-
-            down_names = {key for key in normalized_sources if key.endswith(".lora_down.weight")}
-            up_names = {key for key in normalized_sources if key.endswith(".lora_up.weight")}
-            expected_up_names = {key[: -len(".lora_down.weight")] + ".lora_up.weight" for key in down_names}
-            if not down_names or up_names != expected_up_names:
-                missing_up = sorted(expected_up_names - up_names)
-                orphan_up = sorted(up_names - expected_up_names)
-                raise ValueError(f"MiniMax-H3 dynamic LoRA has incomplete pairs: missing_up={missing_up[:3]}, orphan_up={orphan_up[:3]}")
-
+                online_pairs[prefix] = (down, up, pair_alpha)
+                normalized_sources[prefix + ".lora_down.weight"] = down
+                normalized_sources[prefix + ".lora_up.weight"] = up
+            down_names = {prefix + ".lora_down.weight" for prefix in online_pairs}
             model_keys, ranks = self._validate_dynamic_lora_shapes(source, normalized_sources, down_names)
-            expected_alpha_names = {key[: -len(".lora_down.weight")] + ".alpha" for key in down_names}
-            alpha_names = {key for key in normalized_sources if key.endswith(".alpha")}
-            orphan_alpha = sorted(alpha_names - expected_alpha_names)
-            if orphan_alpha:
-                raise ValueError(f"MiniMax-H3 dynamic LoRA contains alpha tensors without matching pairs: {orphan_alpha[:3]}")
-            missing_alpha = expected_alpha_names - alpha_names
-            if missing_alpha and effective_alpha is None:
-                raise ValueError("MiniMax-H3 dynamic LoRA requires an alpha in lora_configs because the checkpoint has no per-layer alpha tensors")
-
             lora_weights = {}
-            for normalized_key, source_key in normalized_sources.items():
-                tensor = source.get_tensor(source_key).to(GET_DTYPE())
-                lora_weights[normalized_key] = tensor.pin_memory() if torch.device(load_device).type == "cpu" else tensor
-            for alpha_name in missing_alpha:
-                alpha_tensor = torch.tensor(effective_alpha, dtype=GET_DTYPE(), device=load_device)
-                lora_weights[alpha_name] = alpha_tensor.pin_memory() if alpha_tensor.device.type == "cpu" else alpha_tensor
-
+            for prefix, (down, up, pair_alpha) in online_pairs.items():
+                tensors = {
+                    ".lora_down.weight": source.get_tensor(down).to(dtype),
+                    ".lora_up.weight": source.get_tensor(up).to(dtype),
+                    ".alpha": torch.tensor(pair_alpha, dtype=dtype, device=load_device),
+                }
+                for suffix, tensor in tensors.items():
+                    lora_weights[prefix + suffix] = tensor.pin_memory() if torch.device(load_device).type == "cpu" else tensor
         self._pending_dynamic_lora_model_keys = model_keys
-        if effective_alpha is not None:
-            self.lora_alpha = effective_alpha
-        logger.info(
-            "Loaded MiniMax-H3 dynamic LoRA {} (pairs={}, ranks={}, alpha={}, device={})",
-            file_path,
-            len(model_keys),
-            sorted(ranks),
-            effective_alpha,
-            load_device,
-        )
+        logger.info("Loaded H3 LoRA {}: online_layers={}, cached_layers={}, ranks={}, dtype={}", file_path, len(online_pairs), len(pairs) - len(online_pairs), sorted(ranks), dtype)
         return lora_weights
 
     @staticmethod
@@ -375,7 +335,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         registered = {weight.weight_name for weight in weights if getattr(weight, "has_lora_branch", False)}
         missing = sorted(self._pending_dynamic_lora_model_keys - registered)
         if missing:
-            self._remove_lora()
+            super()._remove_lora()
             raise RuntimeError(f"MiniMax-H3 failed to register {len(missing)} dynamic LoRA branches: {missing[:4]}")
         logger.info("Registered {} MiniMax-H3 dynamic LoRA branches with strength={}", len(self._pending_dynamic_lora_model_keys), strength)
 
@@ -388,21 +348,37 @@ class MiniMaxH3Model(BaseTransformerModel):
         if offload_manager is not None:
             offload_manager.need_init_first_buffer = True
 
+    def _load_lora_cache(self, lora_configs):
+        if self.use_adaln_cache:
+            return load_persistent_adaln_cache({**self.config, "lora_configs": lora_configs}, AI_DEVICE)
+        return None
+
+    def _set_lora_cache(self, cache):
+        if cache is not None:
+            self.transformer_infer._adaln_cache, self.transformer_infer._norm_out_cache = cache
+        self.transformer_infer._clear_adaln_cache()
+
     def _remove_lora(self):
+        cache = self._load_lora_cache([])
         super()._remove_lora()
-        transformer_infer = getattr(self, "transformer_infer", None)
-        if transformer_infer is not None:
-            transformer_infer._clear_adaln_cache()
+        self.lora_path = None
+        self._set_lora_cache(cache)
 
     def _update_lora(self, lora_path, strength, alpha=None):
         if isinstance(lora_path, dict):
-            raise NotImplementedError("MiniMax-H3 dynamic LoRA switching expects one checkpoint path, not a merged tensor dictionary")
-        lora_weights = self._load_lora_file(lora_path, alpha=alpha)
-        self._remove_lora()
+            raise NotImplementedError("MiniMax-H3 LoRA switching expects one checkpoint path")
+        config_alpha = self.lora_alpha if alpha is None else alpha
+        lora_configs = [{"path": lora_path, "strength": strength, "alpha": config_alpha}]
+        # Validate the replacement cache before changing any active branches.
+        cache = self._load_lora_cache(lora_configs)
+        lora_weights = self._load_lora_file(lora_path, alpha=config_alpha)
+        super()._remove_lora()
         self._register_dynamic_lora_weights(lora_weights, strength)
+        self.lora_alpha = config_alpha
         self.lora_path = lora_path
         self.lora_strength = float(strength)
-        offload_manager = getattr(getattr(self, "transformer_infer", None), "offload_manager", None)
+        self._set_lora_cache(cache)
+        offload_manager = getattr(self.transformer_infer, "offload_manager", None)
         if offload_manager is not None:
             offload_manager.need_init_first_buffer = True
 

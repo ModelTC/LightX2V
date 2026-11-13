@@ -66,7 +66,8 @@ class StreamRenderH3Model(H3AutoregressiveModel, MiniMaxH3Model):
             if not self.block_offload:
                 raise ValueError("StreamRender shared weights require block CPU offload")
             if (
-                any(self.config.get(key, False) for key in ("tensor_parallel", "weight_auto_quant", "lazy_load", "unload_modules", "dummy_model", "lora_dynamic_apply"))
+                any(self.config.get(key, False) for key in ("tensor_parallel", "weight_auto_quant", "lazy_load", "unload_modules", "dummy_model"))
+                or self.config.get("lora_mode", "merge") in ("separate", "consumer")
                 or self.lora_path
                 or self.config.get("lora_configs")
             ):
