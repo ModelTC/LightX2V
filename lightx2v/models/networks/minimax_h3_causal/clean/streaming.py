@@ -81,6 +81,8 @@ class MiniMaxH3CleanStreamingPlan:
     num_audio_latents: int
     policy: CleanAttentionPolicy
     patch_size: tuple[int, int, int] = (1, 2, 2)
+    live_stream: bool = False
+    stream_start_idx: int = 0
 
     @property
     def rows_per_frame(self) -> int:
@@ -90,17 +92,59 @@ class MiniMaxH3CleanStreamingPlan:
     def num_chunks(self) -> int:
         return self.chunk_specs.shape[0]
 
+    @property
+    def max_chunk_rows(self) -> int:
+        if self.live_stream:
+            return self.policy.num_frame_per_chunk * self.rows_per_frame + AUDIO_CHANNELS * 29
+        return max(self.chunk_row_slice(index).stop - self.chunk_row_slice(index).start for index in range(self.num_chunks))
+
+    def chunk_spec(self, chunk_index: int) -> tuple[int, int, int, int]:
+        if not self.live_stream:
+            return tuple(int(value) for value in self.chunk_specs[chunk_index].tolist())
+        if chunk_index < 0:
+            raise ValueError("Live chunk indices must be nonnegative")
+        global_index = self.stream_start_idx + chunk_index
+        # Five latent frames span exactly 85/3 audio latents. Integer ceil
+        # preserves the global 29/28/28 phase across reference-image changes.
+        audio_start = (85 * global_index + 2) // 3
+        audio_end = (85 * (global_index + 1) + 2) // 3
+        video_start = chunk_index * self.policy.num_frame_per_chunk
+        return video_start, video_start + self.policy.num_frame_per_chunk, audio_start, audio_end
+
+    def _live_chunk_geometry(self, chunk_index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        frame_start, frame_end, audio_start, audio_end = self.chunk_spec(chunk_index)
+        spatial, width_grid = _frame_position_grid(self.latent_height, self.latent_width, self.patch_size[1], self.patch_size[2])
+        frame_times = _temporal_position_grid(frame_end - frame_start, self.policy.media_origin + 85 * chunk_index / 3)
+        video = torch.zeros((frame_end - frame_start) * self.rows_per_frame, 3, dtype=torch.float64)
+        video[:, 0] = frame_times.repeat_interleave(self.rows_per_frame)
+        video[:, 1:] = spatial.repeat(frame_end - frame_start, 1)
+        audio_count = audio_end - audio_start
+        audio = torch.zeros(AUDIO_CHANNELS * audio_count, 3, dtype=torch.float64)
+        audio[:, 0] = (self.policy.media_origin + torch.arange(audio_start, audio_end, dtype=torch.float64) - 85 * self.stream_start_idx / 3).repeat(AUDIO_CHANNELS)
+        audio[:, 2] = width_grid[[0, -1]].repeat_interleave(audio_count)
+        tags = torch.cat((torch.full((video.shape[0],), VIDEO_TAG, dtype=torch.long), torch.full((audio.shape[0],), AUDIO_TAG, dtype=torch.long)))
+        return torch.cat((video, audio)), tags
+
     def segment_index(self, chunk_index: int) -> int:
         return int(torch.searchsorted(self.segment_starts, torch.tensor(chunk_index), right=True).item() - 1)
 
     def append_motion(self, chunk_index: int, token_tags: torch.Tensor):
         """Add a motion prompt at its chunk boundary; reuse all media geometry."""
+        last_start = int(self.segment_starts[-1])
+        if chunk_index < last_start:
+            raise ValueError("Motion prompts cannot precede the active segment")
         origin, media_origin = self.policy.motion_prompt_origin, self.policy.media_origin
         tags = token_tags.long().cpu()
         if origin + tags.numel() > media_origin:
             raise ValueError("Motion prompts must fit between motion_prompt_origin and media_origin")
         positions = torch.zeros(tags.numel(), 3, dtype=torch.float64)
         positions[:, 0] = origin + torch.arange(tags.numel(), dtype=torch.float64)
+        if self.live_stream:
+            # Only the active motion is needed by future chunks. Retain its
+            # boundary for the bridge sink without accumulating session history.
+            return replace(self, prompt_position_ids=(positions,), prompt_token_tags=(tags,), segment_starts=torch.tensor([chunk_index]))
+        if chunk_index == last_start:
+            return replace(self, prompt_position_ids=(*self.prompt_position_ids[:-1], positions), prompt_token_tags=(*self.prompt_token_tags[:-1], tags))
         return replace(
             self,
             prompt_position_ids=(*self.prompt_position_ids, positions),
@@ -109,7 +153,7 @@ class MiniMaxH3CleanStreamingPlan:
         )
 
     def chunk_slices(self, chunk_index: int) -> tuple[slice, slice]:
-        frame_start, frame_end, audio_start, audio_end = (int(value) for value in self.chunk_specs[chunk_index].tolist())
+        frame_start, frame_end, audio_start, audio_end = self.chunk_spec(chunk_index)
         return (
             slice(
                 frame_start * self.rows_per_frame,
@@ -134,10 +178,14 @@ class MiniMaxH3CleanStreamingPlan:
         if kind == "prompt":
             return self.prompt_position_ids[index]
         if kind == "chunk":
+            if self.live_stream:
+                return self._live_chunk_geometry(index)[0]
             return self.target_position_ids[self.chunk_row_slice(index)]
         raise KeyError(f"unknown CleanAR cache entry {key}")
 
     def chunk_token_tags(self, chunk_index: int) -> torch.Tensor:
+        if self.live_stream:
+            return self._live_chunk_geometry(chunk_index)[1]
         return self.target_token_tags[self.chunk_row_slice(chunk_index)]
 
     def global_layout(self) -> MiniMaxH3PackedSequence:
@@ -208,7 +256,7 @@ class MiniMaxH3CleanStreamingPlan:
     def segment_sink_indices(self, segment: int) -> tuple[int, ...]:
         count = self.policy.sink_chunk_num
         segment_start = int(self.segment_starts[segment])
-        if segment == 0:
+        if segment == 0 and (not self.live_stream or segment_start == 0):
             return tuple(range(count))
         return tuple(range(segment_start - count, segment_start))
 
@@ -286,9 +334,17 @@ def build_clean_streaming_plan_from_geometry(
     segment_starts: tuple[int, ...],
     policy: CleanAttentionPolicy,
     patch_size: tuple[int, int, int] = (1, 2, 2),
+    live_stream: bool = False,
+    stream_start_idx: int = 0,
 ) -> MiniMaxH3CleanStreamingPlan:
     """Build metadata from the scheduler's validated request geometry."""
     _, patch_h, patch_w = patch_size
+    if stream_start_idx < 0:
+        raise ValueError("stream_start_idx must be nonnegative")
+    if live_stream:
+        # Keep a single bounded geometry sample; subsequent chunks are lazy.
+        num_latent_frames = policy.num_frame_per_chunk
+        num_audio_latents = 29
     chunk_specs = build_chunk_specs(num_latent_frames, num_audio_latents, policy)
 
     frame_grid, width_grid = _frame_position_grid(latent_height, latent_width, patch_h, patch_w)
@@ -405,4 +461,6 @@ def build_clean_streaming_plan_from_geometry(
         num_audio_latents=num_audio_latents,
         policy=policy,
         patch_size=patch_size,
+        live_stream=live_stream,
+        stream_start_idx=stream_start_idx,
     )

@@ -336,9 +336,10 @@ class RefAInputInfo(T2VInputInfo):
     """Inputs for the minimax_h3_causal model's RefA2V and RefA2AV tasks."""
 
     image_path: Any = ""
-    # Driving audio for RefA2V; voice reference for RefA2AV.
+    # Driving audio for RefA2V; voice reference for RefA2AV; a stream descriptor for live input.
     audio_path: Any = ""
     motions: list[dict[str, Any]] | None = None
+    stream_config: dict = field(default_factory=dict)
 
 
 @dataclass

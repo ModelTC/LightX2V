@@ -30,7 +30,7 @@ class MiniMaxH3CleanKVCache:
         self._prefix_keys: tuple["CleanCacheKey", ...] = ()
         self._entry_key: "CleanCacheKey" | None = None
         self._persist = False
-        self._chunk_rows = max(plan.chunk_row_slice(index).stop - plan.chunk_row_slice(index).start for index in range(plan.num_chunks))
+        self._chunk_rows = plan.max_chunk_rows
         self._num_chunk_slots = plan.policy.sink_chunk_num + plan.policy.latest_chunk_num
         self._chunk_slots: dict["CleanCacheKey", int] = {}
         self._next_chunk_slot = 0
@@ -167,7 +167,7 @@ class MiniMaxH3CleanKVCache:
 
     def finish_chunk(self, chunk_index: int) -> None:
         next_chunk = chunk_index + 1
-        keep_chunks = set(self.plan.clean_history_indices(next_chunk)) if next_chunk < self.plan.num_chunks else set()
+        keep_chunks = set(self.plan.clean_history_indices(next_chunk)) if self.plan.live_stream or next_chunk < self.plan.num_chunks else set()
         for block in self._buffers:
             for key in tuple(block):
                 if key[0] == "chunk" and key[1] not in keep_chunks:

@@ -58,7 +58,7 @@ def decoder_context_latents(audio_vae) -> int:
 class MiniMaxH3StreamingAudioDecoder:
     """Exact overlap-save decoding for MiniMax-H3's non-causal audio VAE."""
 
-    def __init__(self, audio_vae, *, num_audio_latents: int, decode_graph=None) -> None:
+    def __init__(self, audio_vae, *, num_audio_latents: int | None, decode_graph=None) -> None:
         self.audio_vae = audio_vae
         self.decode_graph = decode_graph
         self.pending = None
@@ -119,7 +119,7 @@ class MiniMaxH3StreamingAudioDecoder:
     @torch.no_grad()
     def push(self, audio_rows: torch.Tensor) -> list[tuple[int, torch.Tensor]]:
         length = audio_rows.shape[0] // 2
-        if length < 1 or self._received + length > self.num_audio_latents:
+        if length < 1 or (self.num_audio_latents is not None and self._received + length > self.num_audio_latents):
             raise ValueError("invalid streaming audio chunk length")
         latents = self.audio_vae.denormalize_latents(unpack_audio_tokens(audio_rows, length))
         self._latents = latents if self._latents is None else torch.cat((self._latents, latents), dim=-1)
@@ -131,8 +131,8 @@ class MiniMaxH3StreamingAudioDecoder:
 
     @torch.no_grad()
     def finish(self) -> tuple[int, torch.Tensor]:
-        if self._received != self.num_audio_latents:
+        if self.num_audio_latents is not None and self._received != self.num_audio_latents:
             raise RuntimeError(f"received {self._received} audio latents, expected {self.num_audio_latents}")
-        output = self._decode_until(self.num_audio_latents)
+        output = self._decode_until(self._received if self.num_audio_latents is None else self.num_audio_latents)
         self._latents = None
         return output

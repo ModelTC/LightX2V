@@ -148,6 +148,7 @@ class ChatAdapter:
         self.immediate_switch = 0
         self.image_switch = ""
         self.action_switch = ""
+        self._lock = threading.Lock()
         self.model_runner = model_runner
 
     def launch_chat_server(self):
@@ -178,9 +179,10 @@ class ChatAdapter:
     # immediate switch to status, discard prev_bytes, set immediate_switch to 1
     def immediate_switch_to(self, status):
         logger.warning(f"VA reader immediate switch to {status}")
-        self.reset_prev = True
-        self.status = status
-        self.immediate_switch = 1
+        with self._lock:
+            self.reset_prev = True
+            self.status = status
+            self.immediate_switch = 1
         # only no action switch can be paused immediately
         if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
@@ -188,7 +190,8 @@ class ChatAdapter:
 
     def set_image_switch(self, image_path):
         logger.warning(f"Setting image switch: {image_path}")
-        self.image_switch = image_path
+        with self._lock:
+            self.image_switch = image_path
         # only blank status and no action switch can be paused immediately
         if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
@@ -196,11 +199,30 @@ class ChatAdapter:
 
     def set_action_switch(self, prompt):
         logger.warning(f"Setting action switch: {prompt}")
-        self.action_switch = prompt
+        with self._lock:
+            self.action_switch = prompt
         # only blank status can be paused immediately
         if self.model_runner is not None and self.model_runner.can_pause:
             self.model_runner.pause_signal = True
             logger.warning(f"Model runner set pause signal for action switch & blank status")
+
+    def take_immediate_switch(self):
+        with self._lock:
+            value = self.immediate_switch
+            self.immediate_switch = 0
+            return value
+
+    def take_image_switch(self):
+        with self._lock:
+            value = self.image_switch
+            self.image_switch = ""
+            return value
+
+    def take_action_switch(self):
+        with self._lock:
+            value = self.action_switch
+            self.action_switch = ""
+            return value
 
     def recv_loop(self):
         while True:
@@ -406,16 +428,27 @@ class OmniVAReader:
         return audio_data
 
     def convert_pcm_s16le_to_mono_resampled(self, audio_data, audio_info):
-        audio = np.frombuffer(audio_data, dtype=np.int16)
+        # Network chunks may split samples. The adapter buffers them until a
+        # segment is ready; only a truncated final PCM frame can remain here.
+        frame_bytes = audio_info.channel_count * np.dtype("<i2").itemsize
+        trailing_bytes = len(audio_data) % frame_bytes
+        if trailing_bytes:
+            logger.warning(f"Discarding {trailing_bytes} trailing byte(s) from incomplete PCM frame: {audio_info}")
+            audio_data = audio_data[:-trailing_bytes]
+        audio = np.frombuffer(audio_data, dtype="<i2")
         sample_count = audio_info.sample_count
         assert len(audio) == sample_count * audio_info.channel_count, f"audio length {len(audio)} != sample_count * channel_count {sample_count * audio_info.channel_count}"
+        if sample_count == 0:
+            return audio, 0
         # convert to mono
         if audio_info.channel_count > 1:
-            audio = audio.reshape(-1, audio_info.channel_count).mean(axis=1)
+            audio = audio.reshape(-1, audio_info.channel_count).mean(axis=1).astype(np.int16)
 
         # logger.info(f"audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()}")
         if audio_info.sample_rate != self.sample_rate:
             sample_count = int(len(audio) * self.sample_rate / audio_info.sample_rate)
+            if sample_count == 0:
+                return np.array([], dtype=np.int16), 0
             audio = resample(audio, sample_count).astype(np.int16)
             # logger.info(f"resampled audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()} {sample_count}")
         logger.warning(f"valid audio: {audio.shape} {audio.dtype} {audio.min()} {audio.max()} {sample_count}")
@@ -495,7 +528,9 @@ class OmniVAReader:
                     audio_data, valid_duration = self.prepare_audio_data(None)
             except Exception as e:
                 logger.warning(f"Failed to get voice segment: {e}")
-                return None, 0
+                audio_data, valid_duration = None, 0
+        # Even when the source rank cannot prepare audio, every rank must enter
+        # the same broadcasts and receive the same empty result.
         if self.world_size > 1:
             audio_data = self.braodcast_audio_data(audio_data)
             valid_duration = self.braodcast_valid_duration(valid_duration)
@@ -504,31 +539,23 @@ class OmniVAReader:
 
     def get_immediate_switch(self):
         if self.rank == self.target_rank:
-            if self.chat_adapter is not None and self.chat_adapter.immediate_switch == 1:
-                self.immediate_switch_tensor.fill_(1)
-                # reset immediate switch
-                self.chat_adapter.immediate_switch = 0
-            else:
-                self.immediate_switch_tensor.fill_(0)
+            switched = self.chat_adapter.take_immediate_switch() if self.chat_adapter is not None else 0
+            self.immediate_switch_tensor.fill_(1 if switched == 1 else 0)
         if self.world_size > 1:
             dist.broadcast(self.immediate_switch_tensor, src=self.target_rank)
         return self.immediate_switch_tensor.item()
 
     def get_image_switch(self):
-        data = "" if self.chat_adapter is None else self.chat_adapter.image_switch
-        image_switch = self.broadcast_data(data)
-        # reset image switch
-        if self.chat_adapter is not None:
-            self.chat_adapter.image_switch = ""
-        return image_switch
+        data = ""
+        if self.rank == self.target_rank and self.chat_adapter is not None:
+            data = self.chat_adapter.take_image_switch()
+        return self.broadcast_data(data)
 
     def get_action_switch(self):
-        data = "" if self.chat_adapter is None else self.chat_adapter.action_switch
-        action_switch = self.broadcast_data(data)
-        # reset action switch
-        if self.chat_adapter is not None:
-            self.chat_adapter.action_switch = ""
-        return action_switch
+        data = ""
+        if self.rank == self.target_rank and self.chat_adapter is not None:
+            data = self.chat_adapter.take_action_switch()
+        return self.broadcast_data(data)
 
     def broadcast_data(self, data):
         if self.world_size <= 1:
@@ -767,8 +794,8 @@ class SekoAROmniVAReader(OmniVAReader):
         origin_audio = None
         latent_audio = None
         valid_duration = 0
-        try:
-            if self.rank == self.target_rank:
+        if self.rank == self.target_rank:
+            try:
                 fetch_duration = self.get_fetch_duration()
                 # logger.info(f"Get segment, fetch_duration: {fetch_duration}")
                 if self.chat_adapter.status == "voice":
@@ -783,21 +810,21 @@ class SekoAROmniVAReader(OmniVAReader):
                 else:
                     origin_audio, latent_audio, valid_duration = self.prepare_audio_data(None)
 
-            if self.world_size > 1:
-                origin_audio = self.braodcast_audio_data(origin_audio, self.origin_audio_tensor, self.origin_flag_tensor)
-                latent_audio = self.braodcast_audio_data(latent_audio, self.latent_audio_tensor, self.latent_flag_tensor)
-                valid_duration = self.braodcast_valid_duration(valid_duration)
+            except Exception:
+                logger.warning(f"Failed to get voice segment: {traceback.format_exc()}")
+                origin_audio, latent_audio, valid_duration = None, None, 0
 
-            origin_audio = self.bytes_to_ndarray(origin_audio)
-            latent_audio = self.bytes_to_ndarray(latent_audio)
-            if latent_audio is not None:
-                # latent_audio: (latent_per_chunk, audio_window * sr)
-                latent_audio = latent_audio.reshape(self.latent_per_chunk, -1)
-            return origin_audio, latent_audio, valid_duration
+        if self.world_size > 1:
+            origin_audio = self.braodcast_audio_data(origin_audio, self.origin_audio_tensor, self.origin_flag_tensor)
+            latent_audio = self.braodcast_audio_data(latent_audio, self.latent_audio_tensor, self.latent_flag_tensor)
+            valid_duration = self.braodcast_valid_duration(valid_duration)
 
-        except Exception:
-            logger.warning(f"Failed to get voice segment: {traceback.format_exc()}")
-            return None, None, 0
+        origin_audio = self.bytes_to_ndarray(origin_audio)
+        latent_audio = self.bytes_to_ndarray(latent_audio)
+        if latent_audio is not None:
+            # latent_audio: (latent_per_chunk, audio_window * sr)
+            latent_audio = latent_audio.reshape(self.latent_per_chunk, -1)
+        return origin_audio, latent_audio, valid_duration
 
     def braodcast_audio_data(self, audio_data, audio_tensor, flag_tensor):
         if self.rank == self.target_rank:

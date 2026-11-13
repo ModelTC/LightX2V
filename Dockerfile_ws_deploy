@@ -1,0 +1,22 @@
+# FROM registry.ms-sc-01.maoshanwangtech.com/ms-ccr/lightx2v:26062001-cu130 AS base
+FROM registry.cn-sh-01.sensecore.cn/devsft-ccr-2/lightx2v:25111101-cu128
+ARG PROXY1
+RUN export http_proxy="$PROXY1" https_proxy="$PROXY1" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends sudo fonts-noto-cjk fontconfig \
+    && fc-cache -f \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN env http_proxy=$PROXY1 https_proxy=$PROXY1 \
+    pip install zmq jsonschema pymongo \
+    websockets==15.0.1 \
+    protobuf==7.36.1 \
+    grpcio-tools==1.84.0
+
+RUN mkdir /workspace/ -p
+WORKDIR /workspace/LightX2V
+ENV PYTHONPATH=/workspace/LightX2V
+
+COPY lightx2v lightx2v
+COPY lightx2v_kernel lightx2v_kernel
+COPY lightx2v_platform lightx2v_platform
