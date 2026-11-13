@@ -114,7 +114,7 @@ def validate(args):
     export = args.output / "export"
     export.mkdir(parents=True)
 
-    def checked(op, *buffers, n, arg=0, threshold=0.0):
+    def checked(op, *buffers, n, arg=0, threshold=0.0, force_export=False):
         before = [x.detach().cpu().numpy().copy() for x in buffers]
         expected = [x.copy() for x in before]
         if op == 24:
@@ -130,7 +130,7 @@ def validate(args):
             if np.issubdtype(actual[index].dtype, np.floating) and actual[index].size:
                 errors[op] = max(errors.get(op, 0), float(np.abs(actual[index] - expected[index]).max()))
         # Export one identical-input case for each kernel and each nontrivial n.
-        if n and (op, n) not in tested:
+        if n and ((op, n) not in tested or force_export):
             file = f"{len(cases):04d}-{names[op]}.npz"
             np.savez(export / file, **{f"before_{i}": x for i, x in enumerate(before)},
                      **{f"after_{i}": x for i, x in enumerate(actual)})
@@ -170,6 +170,21 @@ def validate(args):
                 pass
             else:
                 raise AssertionError("Invalid mesh input was accepted")
+        # This is the real-mesh regression that exposed scalar uint64 key
+        # truncation in CNCC. Keep it as a separate exported case even though
+        # a smaller op-0 case with the same n was already exported above.
+        high_faces = torch.tensor(
+            [[0, 1, 2], [70000, 70001, 70002], [70000, 4, 70002]],
+            dtype=torch.int32,
+            device="mlu",
+        )
+        checked(
+            0,
+            high_faces,
+            torch.empty(9, dtype=torch.int64, device="mlu"),
+            n=len(high_faces),
+            force_export=True,
+        )
     finally:
         mesh._run = original
         (export / "cases.json").write_text(json.dumps(cases, indent=2) + "\n")
