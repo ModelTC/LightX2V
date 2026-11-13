@@ -5,6 +5,8 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from loguru import logger
 
+from lightx2v.utils.image_output import image_format_for_bytes, image_format_for_path
+
 from ...schema import ImageTaskRequest, TaskResponse
 from ...task_manager import TaskStatus, task_manager
 from ..deps import get_services, validate_url_async
@@ -22,9 +24,9 @@ async def _wait_task_and_stream_result(task_id: str, timeout_seconds: int, poll_
 
         status = task_status.get("status")
         if status == TaskStatus.COMPLETED.value:
-            result_png = task_manager.get_task_result_png(task_id)
-            if result_png:
-                return result_png
+            result_image = task_manager.get_task_result_image(task_id)
+            if result_image:
+                return result_image
             raise HTTPException(status_code=500, detail=f"Task completed but no in-memory image found: {task_id}")
 
         if status == TaskStatus.FAILED.value:
@@ -44,15 +46,15 @@ async def _wait_task_and_stream_result(task_id: str, timeout_seconds: int, poll_
         await asyncio.sleep(poll_interval_seconds)
 
 
-def _build_png_response(result_png: bytes) -> Response:
+def _build_image_response(result_image: bytes) -> Response:
     return Response(
-        content=result_png,
-        media_type="image/png",
-        headers={"Content-Disposition": 'inline; filename="result.png"'},
+        content=result_image,
+        media_type=f"image/{image_format_for_bytes(result_image)}",
+        headers={"Content-Disposition": f'inline; filename="result.{image_format_for_bytes(result_image)}"'},
     )
 
 
-async def _upload_sync_result_if_needed(message: ImageTaskRequest, result_png: bytes):
+async def _upload_sync_result_if_needed(message: ImageTaskRequest, result_image: bytes):
     presigned_url = (getattr(message, "presigned_url", "") or "").strip()
     if not presigned_url:
         return None
@@ -63,8 +65,8 @@ async def _upload_sync_result_if_needed(message: ImageTaskRequest, result_png: b
     try:
         await services.file_service.upload_to_presigned_url(
             presigned_url=presigned_url,
-            file_content=result_png,
-            content_type="image/png",
+            file_content=result_image,
+            content_type=f"image/{image_format_for_bytes(result_image)}",
         )
     except ValueError as e:
         raise HTTPException(status_code=502, detail=f"Failed to upload sync result to presigned URL: {str(e)}")
@@ -121,6 +123,10 @@ async def create_image_task_sync(
     timeout_seconds: int = 600,
     poll_interval_seconds: float = 0.5,
 ):
+    try:
+        image_format_for_path(message.save_result_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if timeout_seconds <= 0:
         raise HTTPException(status_code=400, detail="timeout_seconds must be > 0")
     if poll_interval_seconds <= 0:
@@ -154,11 +160,11 @@ async def create_image_task_sync(
                 wait_task.cancel()
             raise HTTPException(status_code=499, detail=f"Client disconnected, task {task_id} cancelled")
 
-        result_png = wait_task.result()
-        upload_result = await _upload_sync_result_if_needed(message, result_png)
+        result_image = wait_task.result()
+        upload_result = await _upload_sync_result_if_needed(message, result_image)
         if upload_result is not None:
             return upload_result
-        return _build_png_response(result_png)
+        return _build_image_response(result_image)
 
     except asyncio.CancelledError:
         if task_id:

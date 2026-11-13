@@ -46,18 +46,18 @@ class TaskInfo:
     error: Optional[str] = None
     error_type: Optional[str] = None
     save_result_path: Optional[str] = None
-    result_png: Optional[bytes] = None
+    result_image: Optional[bytes] = None
     usage: Usage | dict | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     thread: Optional[threading.Thread] = None
 
 
 class TaskManager:
-    def __init__(self, max_queue_size: int = 100, result_png_keep_count: Optional[int] = None):
+    def __init__(self, max_queue_size: int = 100, result_image_keep_count: Optional[int] = None):
         self.max_queue_size = max_queue_size
-        if result_png_keep_count is None:
-            result_png_keep_count = _env_positive_int("LIGHTX2V_RESULT_PNG_KEEP_COUNT", 50)
-        self.result_png_keep_count = result_png_keep_count
+        if result_image_keep_count is None:
+            result_image_keep_count = _env_positive_int("LIGHTX2V_RESULT_PNG_KEEP_COUNT", 50)
+        self.result_image_keep_count = result_image_keep_count
 
         self._tasks: OrderedDict[str, TaskInfo] = OrderedDict()
         self._lock = threading.RLock()
@@ -110,7 +110,7 @@ class TaskManager:
         self,
         task_id: str,
         save_result_path: Optional[str] = None,
-        result_png: Optional[bytes] = None,
+        result_image: Optional[bytes] = None,
         usage: Usage | dict | None = None,
     ):
         with self._lock:
@@ -122,11 +122,11 @@ class TaskManager:
             task.status = TaskStatus.COMPLETED
             task.end_time = datetime.now()
             task.save_result_path = save_result_path
-            task.result_png = result_png
+            task.result_image = result_image
             task.usage = usage
 
-            if result_png is not None:
-                self._evict_old_result_png_unlocked()
+            if result_image is not None:
+                self._evict_old_result_image_unlocked()
 
             self.completed_tasks += 1
             self._emit_queue_metrics_unlocked()
@@ -177,12 +177,12 @@ class TaskManager:
         with self._lock:
             return self._tasks.get(task_id)
 
-    def get_task_result_png(self, task_id: str) -> Optional[bytes]:
+    def get_task_result_image(self, task_id: str) -> Optional[bytes]:
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
                 return None
-            return task.result_png
+            return task.result_image
 
     def get_task_result_usage(self, task_id: str) -> Usage | dict | None:
         with self._lock:
@@ -295,8 +295,8 @@ class TaskManager:
             del self._tasks[task_id]
             logger.debug(f"Cleaned up old task: {task_id}")
 
-    def _evict_old_result_png_unlocked(self):
-        """Free the oldest result_png blob once the cap is exceeded.
+    def _evict_old_result_image_unlocked(self):
+        """Free the oldest result_image blob once the cap is exceeded.
 
         Caller must hold ``self._lock``. Only the heavy bytes are dropped (set to None); the
         task record and its metadata stay in ``_tasks`` so ``get_task_status`` still works.
@@ -306,14 +306,14 @@ class TaskManager:
         is in start order (start_task's move_to_end), not completion order, so the oldest is
         selected explicitly by ``end_time``.
         """
-        keep = self.result_png_keep_count
-        blob_tasks = [(task_id, task) for task_id, task in self._tasks.items() if task.result_png is not None]
+        keep = self.result_image_keep_count
+        blob_tasks = [(task_id, task) for task_id, task in self._tasks.items() if task.result_image is not None]
         if len(blob_tasks) <= keep:
             return
 
         oldest_id, oldest = min(blob_tasks, key=lambda x: x[1].end_time or x[1].start_time)
-        oldest.result_png = None
-        logger.debug(f"Evicted oldest result_png blob (task {oldest_id}), keeping {keep} most recent")
+        oldest.result_image = None
+        logger.debug(f"Evicted oldest result_image blob (task {oldest_id}), keeping {keep} most recent")
 
     def _emit_queue_metrics_unlocked(self):
         pending_tasks = sum(1 for t in self._tasks.values() if t.status == TaskStatus.PENDING)

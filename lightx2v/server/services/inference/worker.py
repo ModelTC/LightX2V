@@ -11,7 +11,7 @@ from lightx2v.models.runners.runner_factory import build_runner
 from lightx2v.utils.set_config import build_startup_config, init_parallel
 
 from ..distributed_utils import DistributedManager
-from .pipeline_image_encode import encode_pipeline_return_to_png_bytes
+from .pipeline_image_encode import encode_pipeline_return_to_image_bytes
 
 
 class TorchrunInferenceWorker:
@@ -125,11 +125,15 @@ class TorchrunInferenceWorker:
                 }
                 if task_data.get("return_result_tensor"):
                     encode_start = time.perf_counter()
-                    png = encode_pipeline_return_to_png_bytes(pipeline_return)
+                    try:
+                        image_bytes = encode_pipeline_return_to_image_bytes(pipeline_return, task_data.get("save_result_path"), getattr(input_info, "output_compression", 95))
+                    except Exception as exc:
+                        logger.exception(f"Task {task_id} image encoding failed")
+                        return {"task_id": task_id, "status": "failed", "error": str(exc), "error_type": type(exc).__name__, "message": "Image encoding failed"}
                     encode_elapsed_ms = (time.perf_counter() - encode_start) * 1000
-                    logger.info(f"Task {task_id} encode result_png cost {encode_elapsed_ms:.2f} ms")
-                    if png:
-                        out["result_png"] = png
+                    logger.info(f"Task {task_id} encode result_image cost {encode_elapsed_ms:.2f} ms")
+                    if image_bytes:
+                        out["result_image"] = image_bytes
                     usage = self.runner.compute_usage(
                         prompt=task_data.get("prompt", ""),
                         size=task_data.get("size", []),

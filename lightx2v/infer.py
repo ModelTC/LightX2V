@@ -176,6 +176,7 @@ def build_parser():
     parser.add_argument("--render_interp_per_pair", type=int, default=None, help="(worldmirror/recon) Interpolated frames per camera pair for --save_rendered.")
     parser.add_argument("--render_depth", action=argparse.BooleanOptionalAction, default=None, help="(worldmirror/recon) Also render a depth video with --save_rendered.")
 
+    parser.add_argument("--output_compression", type=int, default=None, help="MiniMax-H3-Image JPEG/WebP quality, integer 0-100 (default 95); ignored for PNG")
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--save_depth_path", type=str, default=None, help="(DA3 depth) Optional float32 NPY for an image, or streaming NPZ for a video.")
     parser.add_argument("--save_sky_mask_path", type=str, default=None, help="(DA3 depth) Optional binary PNG for an image, or streaming NPZ for a video; may share the depth NPZ path.")

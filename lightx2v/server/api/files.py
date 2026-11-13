@@ -19,6 +19,7 @@ def _get_mime_type(filename: str) -> str:
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".png": "image/png",
+        ".webp": "image/webp",
         ".gif": "image/gif",
         ".txt": "text/plain; charset=utf-8",
         ".json": "application/json",
