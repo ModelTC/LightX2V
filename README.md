@@ -193,6 +193,10 @@ python scripts/minimax_h3/server/post_t2av.py
 
 Edit the prompt in the [request script](scripts/minimax_h3/server/post_t2av.py) to generate your own content. Requests are asynchronous; results are saved by default to `save_results/server_cache/outputs/` under the repository root.
 
+### ComfyUI Integration
+
+Use LightX2V server mode in ComfyUI for image/video generation and video upscaling, with model reuse and multi-GPU selection. See the [ComfyUI integration guide](lightx2v_comfyui/README.md) for setup and example workflows.
+
 ## 🤖 Supported Model Ecosystem
 
 LightX2V supports image, video, and world models and provides quantized weights, distilled models, and lightweight autoencoders.
@@ -323,7 +327,7 @@ Available optimizations depend on the model, hardware, and selected configuratio
 | Environment Setup & Configuration | [Quick Start Guide](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html) |
 | Model Preparation & Loading | [MiniMax-H3](scripts/minimax_h3/README.md) · [Wan2.1 / VACE](scripts/wan/README.md) · [Model Formats & Loading](https://lightx2v-en.readthedocs.io/en/latest/getting_started/model_structure.html) |
 | Service Deployment & API Usage | [Service Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_service.html) · [API Reference](lightx2v/server/README.md) |
-| Interactive Interfaces & Workflow Integration | [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) · [ComfyUI](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_comfyui.html) |
+| Interactive Interfaces & Workflow Integration | [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) · [ComfyUI](lightx2v_comfyui/README.md) |
 | Local Deployment on Windows | [Windows Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_local_windows.html) |
 | Resource-Constrained and Low-Latency Deployment | [Low-Resource Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_resource.html) · [Low-Latency Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_latency.html) |
 | Model Quantization & LoRA Deployment | [Quantization](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/quantization.html) · [LoRA Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/lora_deploy.html) |
