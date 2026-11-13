@@ -106,6 +106,12 @@ bash scripts/minimax_h3_image/run_minimax_h3_image_i2i_tp_sp.sh
 
 切换配置时，同时调整 `CUDA_VISIBLE_DEVICES` 和 `--nproc_per_node`，使进程数等于 DiT 的 TP × SP 规模。Qwen3-VL 的 TP 使用整个推理进程组，因此两个四卡配置均为 TP4。
 
+## HEIC/HEIF 编辑参考图
+
+编辑参考图支持 JPEG、PNG、WebP、HEIC 和 HEIF。HEIC/HEIF 通过依赖中包含的 `pillow-heif` 解码，根据内容识别容器，正确处理方向后转为 RGB；损坏图片返回明确的解码错误。
+
+原有字符串、逗号分隔的本地路径及 multipart 多文件上传继续兼容。原生图片任务 API 也接受有序的 JSON `image_path` 数组，支持混合本地路径、URL、Base64/Data URL，避免 Data URL 内逗号造成歧义，并保留参考图顺序。Python 调用可传 PIL 图片、路径、字节路径或文件流；不会关闭调用方传入的流，可 seek 流在成功或失败后均恢复原位置。
+
 ## 服务与 POST 请求
 
 ### 启动服务
@@ -140,10 +146,3 @@ python scripts/minimax_h3_image/server/post_i2i.py
 ```
 
 客户端提交请求后返回任务 ID，默认输出为 `2048 × 2048` PNG。生成完成后，图片保存在服务端的 `$lightx2v_path/save_results/server_cache/outputs/` 下。可在客户端中修改 `prompt`、`size`、`seed` 和 `save_result_path`。
-
-
-### HEIC/HEIF 编辑参考图
-
-编辑参考图支持 JPEG、PNG、WebP、HEIC 和 HEIF。HEIC/HEIF 通过依赖中包含的 `pillow-heif` 解码，根据内容识别容器，正确处理方向后转为 RGB；损坏图片返回明确的解码错误。
-
-原有字符串、逗号分隔的本地路径及 multipart 多文件上传继续兼容。原生图片任务 API 也接受有序的 JSON `image_path` 数组，支持混合本地路径、URL、Base64/Data URL，避免 Data URL 内逗号造成歧义，并保留参考图顺序。Python 调用可传 PIL 图片、路径、字节路径或文件流；不会关闭调用方传入的流，可 seek 流在成功或失败后均恢复原位置。
