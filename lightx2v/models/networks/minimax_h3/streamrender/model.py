@@ -17,7 +17,6 @@ from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostIn
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import unpack_audio_tokens, unpatchify_video_tokens
 from lightx2v.models.networks.minimax_h3.streamrender.weights import load_streamrender_rope_frequencies, remap_streamrender_weight
-from lightx2v.utils.envs import GET_LORA_MODE
 
 
 class StreamRenderH3Model(H3AutoregressiveModel, MiniMaxH3Model):
@@ -68,7 +67,7 @@ class StreamRenderH3Model(H3AutoregressiveModel, MiniMaxH3Model):
                 raise ValueError("StreamRender shared weights require block CPU offload")
             if (
                 any(self.config.get(key, False) for key in ("tensor_parallel", "weight_auto_quant", "lazy_load", "unload_modules", "dummy_model"))
-                or GET_LORA_MODE() in ("separate", "consumer")
+                or self.config.get("lora_mode", "merge") in ("separate", "consumer")
                 or self.lora_path
                 or self.config.get("lora_configs")
             ):

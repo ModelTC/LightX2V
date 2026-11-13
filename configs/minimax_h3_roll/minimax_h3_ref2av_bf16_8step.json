@@ -1,4 +1,5 @@
 {
+    "lora_mode": "separate",
     "infer_steps": 8,
     "num_frames": 362,
     "size": [480, 864],

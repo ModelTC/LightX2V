@@ -8,13 +8,12 @@ import torch
 from safetensors import safe_open
 
 from lightx2v.models.networks.lora_adapter import LoraAdapter
-from lightx2v.utils.envs import GET_LORA_MODE
 from lightx2v.utils.lora_loader import LoRALoader
 
 
 def validate_lora_config(config):
     loras = config.get("lora_configs") or []
-    if GET_LORA_MODE() == "separate" and len(loras) != 1:
+    if config.get("lora_mode", "merge") == "separate" and len(loras) != 1:
         raise ValueError("qwen_image_21 dynamic LoRA requires exactly one lora_configs entry")
     if loras:
         for key in ("dit_quantized", "weight_auto_quant", "shared_cpu_weights", "dit_disk_streaming"):

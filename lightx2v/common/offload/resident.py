@@ -3,7 +3,6 @@
 import torch
 from loguru import logger
 
-from lightx2v.utils.envs import GET_LORA_MODE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -31,7 +30,7 @@ def validate_residency_config(config, *, allow_parallel=False):
     )
     if not allow_parallel:
         incompatible += ("parallel", "seq_parallel", "tensor_parallel")
-    if GET_LORA_MODE() in ("separate", "consumer") or any(config.get(key, False) for key in incompatible) or config.get("feature_caching", "NoCaching") != "NoCaching":
+    if config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key, False) for key in incompatible) or config.get("feature_caching", "NoCaching") != "NoCaching":
         execution = "" if allow_parallel else "single-device eager execution with "
         raise ValueError(f"Static residency requires {execution}fixed weights, fixed resolution, and NoCaching")
 

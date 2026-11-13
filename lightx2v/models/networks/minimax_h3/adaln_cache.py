@@ -15,7 +15,7 @@ from safetensors import SafetensorError, safe_open
 from lightx2v.models.networks.minimax_h3.adaln_cache_guide import get_adaln_cache_guide
 from lightx2v.models.networks.minimax_h3.adaln_profiles import cache_plan
 from lightx2v.models.networks.minimax_h3.lora import cached_modulation_shapes, read_lora_pairs
-from lightx2v.utils.envs import GET_LORA_DTYPE, GET_LORA_MODE
+from lightx2v.utils.envs import GET_LORA_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -121,9 +121,9 @@ def resolve_adaln_cache(config) -> tuple[Path, dict]:
         spec["lora_configs"] = _modulation_loras(config)
         if spec["lora_configs"]:
             # Consumer and separate use identical arithmetic for modulation.
-            mode = GET_LORA_MODE()
+            mode = config.get("lora_mode", "merge")
             if mode not in ("merge", "separate", "consumer"):
-                raise ValueError(f"Unknown H3 LORA_MODE: {mode}")
+                raise ValueError(f"Unknown H3 lora_mode: {mode}")
             spec["lora_mode"] = "merge" if mode == "merge" else "separate"
             spec["lora_dtype"] = str(GET_LORA_DTYPE())
             if mode == "merge":

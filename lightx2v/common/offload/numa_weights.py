@@ -7,7 +7,6 @@ from loguru import logger
 
 from lightx2v.common.offload.shared_pinned_arena import SharedPinnedArena, SharedWeightManifest, TopologyRecord
 from lightx2v.common.offload.shared_weight_map import PinnedWeightViewMap, validate_shared_operator_views
-from lightx2v.utils.envs import GET_LORA_MODE
 
 
 def validate_numa_config(config, lora_path=None):
@@ -19,7 +18,7 @@ def validate_numa_config(config, lora_path=None):
     if not config.get("cpu_offload") or config.get("offload_granularity", "block") != "block":
         raise ValueError("cpu_offload_numa requires CPU block offload")
     incompatible = ("shared_cpu_weights", "cpu_offload_block_contiguous", "lazy_load", "tensor_parallel", "weight_auto_quant", "lora_configs")
-    if GET_LORA_MODE() in ("separate", "consumer") or any(config.get(key) for key in incompatible) or lora_path:
+    if config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key) for key in incompatible) or lora_path:
         raise ValueError("cpu_offload_numa requires static rank-local weights without lazy loading, TP, LoRA, shared or contiguous offload")
     for key in ("dit_quant_scheme", "adapter_quant_scheme"):
         scheme = config.get(key, "Default")

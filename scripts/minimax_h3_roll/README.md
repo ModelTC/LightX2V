@@ -1,6 +1,6 @@
 # MiniMax-H3 Roll: Low-cost candidate generation
 
-Set `export LORA_MODE=separate` before running the examples or exporting AdaLN caches. The shell launchers default to this mode; JSON no longer selects it. Set the same `LORA_DTYPE` for cache export and inference (unset follows `DTYPE`).
+The example JSON configs set `lora_mode: "separate"`. Use the same config mode and `LORA_DTYPE` for cache export and inference (unset dtype follows `DTYPE`).
 
 [English](README.md) | [简体中文](README_zh.md)
 

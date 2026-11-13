@@ -22,7 +22,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs):
-    use_lora_branch = GET_LORA_MODE() == "separate"
+    use_lora_branch = config.get("lora_mode", "merge") == "separate"
 
     if use_lora_branch:
         lora_path = lora_configs[0]["path"]

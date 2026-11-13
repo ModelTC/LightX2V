@@ -7,7 +7,6 @@ config_path="${CONFIG_PATH:-${lightx2v_path}/configs/taomate_h3/t2av_10s_bf16_sa
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 source "${lightx2v_path}/scripts/base/base.sh"
-export LORA_MODE=${LORA_MODE:-separate}
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 

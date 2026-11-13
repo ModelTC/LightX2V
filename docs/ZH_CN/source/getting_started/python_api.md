@@ -92,15 +92,16 @@ Wan2.2 MoE 使用 `high_noise_quantized_ckpt`、`low_noise_quantized_ckpt`。文
 
 ### LoRA
 
-启动 Python 前设置 `export LORA_MODE=separate`（默认 `merge`；H3 还支持 `consumer`）。精度由 `LORA_DTYPE` 控制，默认跟随 `DTYPE`。`enable_lora()` 只设置适配器列表。
+创建 generator 前，在 JSON 中设置 `lora_mode`，或传给 `enable_lora()`（默认 `merge`；H3 还支持 `consumer`）。精度由 `LORA_DTYPE` 控制，默认跟随 `DTYPE`。加载的 JSON 优先于 Python 启动配置。
 
 ```python
 pipe.enable_lora(
     [{"path": "/path/to/lora.safetensors", "strength": 1.0}],
+    lora_mode="separate",
 )
 ```
 
-`LORA_MODE=merge`（默认）在加载时合并权重。`separate` 独立计算适配器分支；`consumer` 将分支相加融合到后续算子，目前仅支持 MiniMax-H3。两种不合并模式都可在同一个 Pipeline 中调用 `switch_lora(lora_path=..., strength=...)` 切换 LoRA，见 [Qwen 切换示例](https://github.com/ModelTC/LightX2V/blob/main/scripts/qwen_image/inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py)。Wan2.2 LoRA 条目还需用 `name` 指定 `high_noise_model` 或 `low_noise_model` 分支，见 [LoRA 部署](../deploy_guides/lora_deploy.md)。
+`lora_mode="merge"`（默认）在加载时合并权重。`separate` 独立计算适配器分支；`consumer` 将分支相加融合到后续算子，目前仅支持 MiniMax-H3。两种不合并模式都可在同一个 Pipeline 中调用 `switch_lora(lora_path=..., strength=...)` 切换 LoRA，见 [Qwen 切换示例](https://github.com/ModelTC/LightX2V/blob/main/scripts/qwen_image/inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py)。Wan2.2 LoRA 条目还需用 `name` 指定 `high_noise_model` 或 `low_noise_model` 分支，见 [LoRA 部署](../deploy_guides/lora_deploy.md)。
 
 ### 并行推理
 

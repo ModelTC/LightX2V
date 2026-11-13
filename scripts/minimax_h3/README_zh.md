@@ -112,14 +112,21 @@ python scripts/minimax_h3/inference/distill/minimax_h3_t2av_dmd.py
 
 ## LoRA
 
-模式和精度统一使用环境变量，**导出 cache 和推理前都设置**，不再放进 JSON：
+模式写在推理 JSON 的 `lora_mode` 中，不设置时默认 `merge`。`distill/` 下所有配置均使用 `consumer`：
 
-```bash
-export LORA_MODE=consumer  # merge (default), separate, consumer
-export LORA_DTYPE=BF16     # BF16, FP16, FP32; unset follows DTYPE
+```json
+{
+  "lora_mode": "consumer"
+}
 ```
 
-| DiT 权重 | `LORA_MODE` | 行为 |
+精度仍使用环境变量，**导出 cache 和推理时保持一致**：
+
+```bash
+export LORA_DTYPE=BF16  # BF16、FP16、FP32；不设置时跟随 DTYPE
+```
+
+| DiT 权重 | `lora_mode` | 行为 |
 | --- | --- | --- |
 | 原始 BF16 | `merge`（默认）、`separate`、`consumer` | 分别表示加载时合并、独立分支计算、将分支相加融合进 H3 的激活/残差算子。 |
 | 量化 FP8 或 INT8，包括 ConvRot | `separate`、`consumer` | 保留现有量化 GEMM 和浮点 LoRA 分支，不支持将 LoRA 合并进量化 DiT 权重。 |
@@ -144,6 +151,7 @@ merge 最终转回基座权重 dtype；separate／consumer 在两路**相加后*
 
 ```json
 {
+  "lora_mode": "consumer",
   "infer_steps": 4,
   "video_flow_shift": 6.0,
   "audio_flow_shift": 3.0,
@@ -164,9 +172,9 @@ merge 最终转回基座权重 dtype；separate／consumer 在两路**相加后*
 `configs/minimax_h3/distill/8steps/` 下的 BF16、FP8 和 INT8 ConvRot 配置均使用
 `minimax_h3_fl2v_turbo_8step_v1.2_768p_bf16.safetensors`，8 步 Euler、shift 12/3、strength=1。
 将 LoRA 路径改为本地文件；alpha 直接读取权重中的逐层值，不在 JSON 中统一覆盖。
-使用 `export LORA_MODE=consumer` 或 `separate`；量化基座不支持 merge。
+这些配置已设为 `lora_mode: "consumer"`，也可改成 `separate`；量化基座不支持 merge。
 LoRA 本身仍是 BF16 权重，FP8／INT8 只对应基座。首次运行前按下文导出匹配的 AdaLN cache，
-导出和推理使用相同的配置及 `LORA_MODE` / `LORA_DTYPE`。
+导出和推理使用相同的配置（含 `lora_mode`）及 `LORA_DTYPE` 环境变量。
 最早的 FL2V v0.1 没有内嵌 alpha，需要配置指定。仓库中的完整 FP8 transformer 不是 LoRA。
 
 ### 调度器与带 LoRA 的 AdaLN cache
@@ -188,7 +196,7 @@ LoRA 本身仍是 BF16 权重，FP8／INT8 只对应基座。首次运行前按�
 这里是**未做 shift** 的基础 sigma，包含首尾端点，必须有 `infer_steps + 1` 个值，
 从 1 严格递减到 0；视频和音频各自做一次 shift。不要随意将 Euler 权重改用 LCM。
 
-使用**同一份推理 JSON 和相同的 `LORA_MODE` / `LORA_DTYPE` 环境变量**（含 LoRA、strength 和调度器配置）导出 cache：
+使用**同一份推理 JSON（含 `lora_mode`）和相同的 `LORA_DTYPE` 环境变量**（含 LoRA、strength 和调度器配置）导出 cache：
 
 ```bash
 PYTHONPATH=. python tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py \
@@ -216,7 +224,6 @@ Ref 基座改成 `--model-variant ref2av`。缓存标识包含基座、时间步
 ```bash
 hf download Pika-Labs/Pika-H3-Flex fl2va/adapter.safetensors ref2va/adapter.safetensors --local-dir /path/to/pika-h3-flex
 
-export LORA_MODE=consumer
 export DTYPE=BF16
 export LORA_DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=FP32
@@ -249,7 +256,7 @@ python -m lightx2v.infer \
 ```
 
 示例默认 768×1344、124 帧、单卡 block offload，未量化；官方的 LoRA 分支使用 BF16，
-因此显式设置 `LORA_DTYPE=BF16`。也可设置 `LORA_MODE=separate`；merge 的权重舍入不等价于独立分支。
+因此显式设置 `LORA_DTYPE=BF16`。也可设置 `lora_mode: "separate"`；merge 的权重舍入不等价于独立分支。
 Ref 示例统一使用 `reference_image_resize_mode: "match"`，按输出画布面积约束参考图、保留宽高比且不放大。
 这是本项目选用的预处理，与 Pika 官方 768p 档位的参考图短边 2048 缩放不等价。
 LightX2V 与官方使用的 attention/kernel 仍可能产生数值差异。

@@ -1,4 +1,5 @@
 {
+  "lora_mode": "consumer",
   "model_variant": "ref2av",
   "infer_steps": 6,
   "num_frames": 124,

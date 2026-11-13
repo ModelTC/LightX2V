@@ -8,7 +8,6 @@ import torch
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
-from lightx2v.utils.envs import GET_LORA_MODE
 from lightx2v.utils.set_config import build_startup_config, init_parallel
 
 from ..distributed_utils import DistributedManager
@@ -143,8 +142,8 @@ class TorchrunInferenceWorker:
             return None
 
     def switch_lora(self, lora_name: str, lora_strength: float):
-        if (lora_name is not None or self.current_lora_name is not None) and GET_LORA_MODE() not in ("separate", "consumer"):
-            raise ValueError("Request-time LoRA switching requires LORA_MODE='separate' or 'consumer'")
+        if (lora_name is not None or self.current_lora_name is not None) and self.runner.config.get("lora_mode", "merge") not in ("separate", "consumer"):
+            raise ValueError("Request-time LoRA switching requires lora_mode='separate' or 'consumer'")
         try:
             if lora_name is None:
                 if self.current_lora_name is not None:

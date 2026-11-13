@@ -8,7 +8,6 @@ from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
 from lightx2v.utils.async_vae import normalize_async_vae_config
-from lightx2v.utils.envs import GET_LORA_MODE
 from lightx2v.utils.image_io import validate_save_image_method
 from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.lockable_dict import LockableDict
@@ -54,6 +53,7 @@ def get_default_config():
             "teacache_thresh": 0.26,
             "use_ret_steps": False,
             "use_bfloat16": True,
+            "lora_mode": "merge",
             "lora_configs": None,  # List of dicts with 'path' and 'strength' keys
             "parallel": False,
             "seq_parallel": False,
@@ -432,7 +432,7 @@ def normalize_startup_config(config, model_config):
             logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {config['num_frames']} instead of {original_length}.")
 
     if AI_DEVICE == "mps":
-        assert not (GET_LORA_MODE() in ("separate", "consumer") or any(config.get(key) for key in ("lora_configs", "lora_path"))), (
+        assert not (config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key) for key in ("lora_configs", "lora_path"))), (
             "MPS inference does not support LoRA configs, dynamic LoRA, or load-time LoRA merging. "
             "Merge LoRA into the model weights offline before inference, remove the LoRA settings, and load the merged model checkpoint."
         )

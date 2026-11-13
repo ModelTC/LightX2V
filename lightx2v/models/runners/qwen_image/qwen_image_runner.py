@@ -42,7 +42,7 @@ def calculate_dimensions(target_area, ratio):
 
 
 def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_configs):
-    use_lora_branch = GET_LORA_MODE() == "separate"
+    use_lora_branch = config.get("lora_mode", "merge") == "separate"
 
     if use_lora_branch:
         lora_path = lora_configs[0]["path"]

@@ -1,4 +1,5 @@
 {
+  "lora_mode": "consumer",
   "infer_steps": 4,
   "num_frames": 362,
   "size": [768, 1344],

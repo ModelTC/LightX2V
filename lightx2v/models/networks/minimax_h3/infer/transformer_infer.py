@@ -9,7 +9,7 @@ from lightx2v.common.ops.mm.lora_consumer import ProjectionParts, base_projectio
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
 from lightx2v.models.networks.minimax_h3.infer import fused_qkv  # noqa: F401 - registers the Triton backend
-from lightx2v.utils.envs import GET_DTYPE, GET_LORA_MODE
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import QKV_NORM_ROPE_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -43,7 +43,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self.num_heads = self.global_num_heads // self.tp_size
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.infer_dtype = GET_DTYPE()
-        self.use_lora_consumer = GET_LORA_MODE() == "consumer"
+        self.use_lora_consumer = config.get("lora_mode", "merge") == "consumer"
         self.use_fused_qkv = bool(config.get("use_fused_qkv", False))
         self.use_fused_qkv_norm_rope = bool(config.get("use_fused_qkv_norm_rope", False))
         self.qkv_norm_rope_type = config.get("qkv_norm_rope_type", "triton")

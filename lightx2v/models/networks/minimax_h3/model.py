@@ -27,7 +27,7 @@ from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3TransformerWeights,
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
-from lightx2v.utils.envs import GET_DTYPE, GET_LORA_DTYPE, GET_LORA_MODE
+from lightx2v.utils.envs import GET_DTYPE, GET_LORA_DTYPE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, H3_QUANTIZATION_PROFILE, WEIGHT_QMAX, validate_checkpoint
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -60,7 +60,7 @@ class MiniMaxH3Model(BaseTransformerModel):
     post_weight_class = MiniMaxH3PostWeights
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
-        if GET_LORA_MODE() == "consumer":
+        if config.get("lora_mode", "merge") == "consumer":
             if AI_DEVICE != "cuda":
                 raise ValueError("LoRA consumer fusion requires minimax_h3 on CUDA")
             if config.get("tensor_parallel"):
@@ -86,7 +86,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         if config.get("dit_release_block_offload_buffers", False):
             if (
                 not self.block_offload
-                or GET_LORA_MODE() in ("separate", "consumer")
+                or config.get("lora_mode", "merge") in ("separate", "consumer")
                 or any(config.get(key, False) for key in ("tensor_parallel", "dit_quantized", "use_compile"))
                 or lora_path
                 or config.get("lora_configs")
@@ -158,7 +158,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         self._init_infer()
 
     def _apply_weights(self, weight_dict=None):
-        if GET_LORA_MODE() in ("separate", "consumer"):
+        if self.config.get("lora_mode", "merge") in ("separate", "consumer"):
             source = weight_dict if weight_dict is not None else self.original_weight_dict
             self._h3_weight_shapes = {key: tuple(tensor.shape) for key, tensor in source.items() if isinstance(tensor, torch.Tensor) and tensor.ndim == 2}
         return super()._apply_weights(weight_dict)

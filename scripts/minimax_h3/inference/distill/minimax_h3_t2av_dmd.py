@@ -8,7 +8,6 @@ import os
 
 # MiniMax-H3 retains sensitive projection layers in FP32.
 os.environ["SENSITIVE_LAYER_DTYPE"] = "FP32"
-os.environ.setdefault("LORA_MODE", "consumer")
 
 from pathlib import Path
 

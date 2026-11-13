@@ -15,7 +15,6 @@ from lightx2v.common.offload.checkpoint_metadata import checkpoint_content_diges
 from lightx2v.common.offload.shared_pinned_arena import SharedWeightManifest, TensorSpec
 from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error, materialize_shared_weight_arena, validate_shared_weight_config
 from lightx2v.common.offload.shared_weight_map import SharedWeightViewMap
-from lightx2v.utils.envs import GET_LORA_MODE
 
 _DTYPES = {"BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32, "F8_E4M3": torch.float8_e4m3fn}
 _QKV = re.compile(r"^(.*\.attn)\.to_([qkv])\.(weight(?:_scale)?)$")
@@ -170,7 +169,7 @@ def load_shared_dit(model):
             raise ValueError("H3 shared DiT weights require block offload and AdaLN cache")
         if (
             any(config.get(k, False) for k in ("tensor_parallel", "dit_quantized", "weight_auto_quant", "lazy_load", "unload_modules", "dummy_model", "use_compile"))
-            or GET_LORA_MODE() in ("separate", "consumer")
+            or config.get("lora_mode", "merge") in ("separate", "consumer")
             or model.lora_path
             or config.get("lora_configs")
         ):

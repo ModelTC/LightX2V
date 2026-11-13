@@ -1,6 +1,6 @@
 # LoRA 模型部署与相关工具
 
-`LORA_MODE` 只有三个取值：`merge`（默认）、`separate`、`consumer`。`separate` 独立计算基座和适配器分支，支持的模型可在运行时切换适配器。`consumer` 将两路相加融合到 MiniMax-H3 的激活和残差算子；其他模型使用该模式会报错。H3 consumer 支持 CUDA eager 和 `use_compile: true`，可以使用序列并行，不支持张量并行和 GEMM 校准。不会自动切换为其他模式。
+`lora_mode` 只有三个取值：`merge`（默认）、`separate`、`consumer`。`separate` 独立计算基座和适配器分支，支持的模型可在运行时切换适配器。`consumer` 将两路相加融合到 MiniMax-H3 的激活和残差算子；其他模型使用该模式会报错。H3 consumer 支持 CUDA eager 和 `use_compile: true`，可以使用序列并行，不支持张量并行和 GEMM 校准。不会自动切换为其他模式。
 
 LoRA (Low-Rank Adaptation) 是一种高效的模型微调技术，通过低秩矩阵分解显著减少可训练参数数量。LightX2V 全面支持 LoRA 技术，包括 LoRA 推理、LoRA 提取和 LoRA 合并等功能。
 
@@ -18,6 +18,7 @@ LoRA (Low-Rank Adaptation) 是一种高效的模型微调技术，通过低秩�
 
 ```json
 {
+  "lora_mode": "merge",
   "lora_configs": [
     {
       "path": "/path/to/your/lora.safetensors",
@@ -31,14 +32,14 @@ LoRA (Low-Rank Adaptation) 是一种高效的模型微调技术，通过低秩�
 
 - `lora_configs[].path`: 每个 LoRA 条目的权重文件路径；静态合并支持多个条目
 - `lora_configs[].strength`: LoRA 强度系数，控制 LoRA 对原模型的影响程度
-执行模式只通过**环境变量 `LORA_MODE`** 设置：`merge`（默认）、`separate` 或 `consumer`。JSON 只保存 LoRA 路径、强度和可选 alpha，不再配置模式和 dtype。推理、服务和 cache 导出前设置环境变量；更改后需重启进程。
+
+执行模式通过 **JSON 中的 `lora_mode`** 设置：`merge`（默认）、`separate` 或 `consumer`。它是推理、服务和 cache 导出共用的启动配置；精度仍由环境变量 `LORA_DTYPE` 控制。
 
 ### LoRA 精度
 
 使用环境变量 `LORA_DTYPE=BF16|FP16|FP32`，三种模式共用。不设置时跟随 `DTYPE`（通常是 BF16），不跟随 `SENSITIVE_LAYER_DTYPE`。
 
 ```bash
-export LORA_MODE=separate
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=FP32
 export LORA_DTYPE=FP32
@@ -74,6 +75,7 @@ python -m lightx2v.infer \
 
 ```json
 {
+  "lora_mode": "merge",
   "lora_configs": [
     {
       "path": "/path/to/first_lora.safetensors",
@@ -89,7 +91,7 @@ python -m lightx2v.infer \
 
 ### Wan 的组合限制与 Wan2.2 命名
 
-本页 JSON 是配置片段，需合并到对应模型的完整配置中。Wan 默认采用静态合并，不支持同时启用 `dit_quantized` 或 `lazy_load`。启用 `LORA_MODE=separate` 时，每个子模型仅使用匹配列表中的第一个 LoRA 条目；不要把多条目示例当成动态叠加。
+本页 JSON 是配置片段，需合并到对应模型的完整配置中。Wan 默认采用静态合并，不支持同时启用 `dit_quantized` 或 `lazy_load`。启用 `lora_mode: "separate"` 时，每个子模型仅使用匹配列表中的第一个 LoRA 条目；不要把多条目示例当成动态叠加。
 
 Wan2.2 MoE 需要通过 `name` 将 LoRA 分配到高噪声和低噪声模型：
 
@@ -116,7 +118,7 @@ H3 Turbo 发布的非 ComfyUI 权重使用 `*.lora_A.default.weight` / `*.lora_B
 
 H3 的 `separate`／`consumer` 支持单个激活 LoRA，可搭配 FP8／INT8 基座 GEMM，不向量化权重合并。接入 consumer 不代表每一种量化后端都已实测；编译兼容性还取决于所选 GEMM／attention 后端。
 
-使用持久化 AdaLN cache 时，导出和推理必须使用相同的 LoRA、strength、alpha、调度器、**`LORA_MODE`** 及 **`LORA_DTYPE`**。separate 和 consumer 的调制计算相同、共用 cache；merge 单独区分。缓存标识包含解析后的 alpha 和 LoRA dtype，缓存中的调制层更新不会在线重复应用。切换／移除 LoRA 前先生成对应的新／基座 cache。命令见 [H3 推理与缓存说明](https://github.com/ModelTC/LightX2V/blob/main/scripts/minimax_h3/README_zh.md)。
+使用持久化 AdaLN cache 时，导出和推理必须使用相同的 LoRA、strength、alpha、调度器、**`lora_mode`** 及 **`LORA_DTYPE`**。separate 和 consumer 的调制计算相同、共用 cache；merge 单独区分。缓存标识包含解析后的 alpha 和 LoRA dtype，缓存中的调制层更新不会在线重复应用。切换／移除 LoRA 前先生成对应的新／基座 cache。命令见 [H3 推理与缓存说明](https://github.com/ModelTC/LightX2V/blob/main/scripts/minimax_h3/README_zh.md)。
 
 ### 支持的 LoRA 格式
 

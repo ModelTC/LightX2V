@@ -551,8 +551,8 @@ class DefaultRunner(BaseRunner):
         Returns:
             bool: True if LoRA was successfully switched, False otherwise
         """
-        if GET_LORA_MODE() not in ("separate", "consumer"):
-            raise ValueError("switch_lora requires LORA_MODE='separate' or 'consumer'")
+        if self.config.get("lora_mode", "merge") not in ("separate", "consumer"):
+            raise ValueError("switch_lora requires lora_mode='separate' or 'consumer'")
         if not hasattr(self, "model") or self.model is None:
             logger.error("Model not loaded. Please load model first.")
             return False
@@ -599,8 +599,8 @@ class DefaultRunner(BaseRunner):
         Returns:
             bool: True on success, False otherwise.
         """
-        if GET_LORA_MODE() not in ("separate", "consumer"):
-            raise ValueError("switch_lora_multi requires LORA_MODE='separate' or 'consumer'")
+        if self.config.get("lora_mode", "merge") not in ("separate", "consumer"):
+            raise ValueError("switch_lora_multi requires lora_mode='separate' or 'consumer'")
         if not hasattr(self, "model") or self.model is None:
             logger.error("Model not loaded. Please load model first.")
             return False

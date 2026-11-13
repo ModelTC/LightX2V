@@ -15,7 +15,7 @@ from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.dancer import WanDancerScheduler, WanDancerStepDistillScheduler
 from lightx2v.models.video_encoders.hf.wan.dancer_vae import WanDancerVAE
-from lightx2v.utils.envs import GET_DTYPE, GET_LORA_MODE
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, is_main_process, mux_audio_from_video, save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -59,7 +59,7 @@ class WanDancerRunner(WanRunner):
         model = WanDancerModel(self.config["model_path"], self.config, self.init_device)
         lora_configs = self.config.get("lora_configs")
         if lora_configs:
-            if GET_LORA_MODE() == "separate":
+            if self.config.get("lora_mode", "merge") == "separate":
                 raise NotImplementedError("Wan-Dancer 4-step LoRA uses merged mode.")
             model.apply_merged_lora(lora_configs)
         return model

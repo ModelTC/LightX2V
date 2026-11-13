@@ -14,15 +14,15 @@ from lightx2v.models.networks.minimax_h3.infer.autoregressive.taomate.pre_infer 
 from lightx2v.models.networks.minimax_h3.infer.autoregressive.taomate.transformer_infer import TaoMateH3OffloadTransformerInfer, TaoMateH3TransformerInfer
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.taomate.weights import inspect_taomate_adapter, load_taomate_lora
-from lightx2v.utils.envs import GET_LORA_DTYPE, GET_LORA_MODE
+from lightx2v.utils.envs import GET_LORA_DTYPE
 
 
 class TaoMateH3NativeModel(H3AutoregressiveModel, MiniMaxH3Model):
     """Load FL2VA-equivalent base weights and apply the TaoMate LoRA bank."""
 
     def __init__(self, model_path, config, device):
-        if GET_LORA_MODE() != "separate":
-            raise ValueError("TaoMate Stage3 requires LORA_MODE='separate'")
+        if config.get("lora_mode", "merge") != "separate":
+            raise ValueError("TaoMate Stage3 requires lora_mode='separate'")
         self.adapter_info = inspect_taomate_adapter(config["adapter_path"])
         native_config = dict(config)
         # The refiner sees only a handful of text rows. Replicating it avoids

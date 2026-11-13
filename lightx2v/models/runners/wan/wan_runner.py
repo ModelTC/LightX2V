@@ -46,7 +46,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
     if not lora_configs:
         return wan_module(**model_kwargs)
 
-    if GET_LORA_MODE() == "separate":
+    if config.get("lora_mode", "merge") == "separate":
         model_kwargs["lora_path"] = lora_configs[0]["path"]
         model_kwargs["lora_strength"] = lora_configs[0]["strength"]
         model = wan_module(**model_kwargs)
@@ -1086,7 +1086,7 @@ class MultiModelStruct:
                     if not lora_configs:
                         high_noise_model = get_wan_model_class(self.distill_method)(**high_model_kwargs)
                     else:
-                        assert GET_LORA_MODE() == "separate"
+                        assert self.config.get("lora_mode", "merge") == "separate"
                         high_noise_model = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
                     high_noise_model.set_scheduler(self.scheduler)
                     self.model[0] = high_noise_model
@@ -1102,7 +1102,7 @@ class MultiModelStruct:
                     if not lora_configs:
                         low_noise_model = get_wan_model_class(self.distill_method)(**low_model_kwargs)
                     else:
-                        assert GET_LORA_MODE() == "separate"
+                        assert self.config.get("lora_mode", "merge") == "separate"
                         low_noise_model = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
                     low_noise_model.set_scheduler(self.scheduler)
                     self.model[1] = low_noise_model
@@ -1226,8 +1226,8 @@ class Wan22MoeRunner(WanRunner):
         Returns:
             bool: True if LoRA was successfully switched, False otherwise
         """
-        if GET_LORA_MODE() != "separate":
-            raise ValueError("switch_lora requires LORA_MODE='separate'")
+        if self.config.get("lora_mode", "merge") != "separate":
+            raise ValueError("switch_lora requires lora_mode='separate'")
         if not hasattr(self, "model") or self.model is None:
             logger.error("Model not loaded. Please load model first.")
             return False

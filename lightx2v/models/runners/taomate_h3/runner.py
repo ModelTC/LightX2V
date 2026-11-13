@@ -149,6 +149,7 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     def _base10_config(self):
         config = dict(self.config)
         config["size"] = [self.request_height, self.request_width]
+        config["lora_mode"] = "merge"
         for option in ("lora_configs", "lora_path"):
             config.pop(option, None)
         # The Stage3 weights are already loaded. Keep Base10 blocks on the CPU

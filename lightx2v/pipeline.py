@@ -9,7 +9,6 @@ import torch
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
-from lightx2v.utils.envs import GET_LORA_MODE
 from lightx2v.utils.set_config import build_startup_config, init_parallel
 from lightx2v.utils.utils import validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
@@ -338,16 +337,16 @@ class LightX2VPipeline:
         elif self.model_cls in ("minimax_h3", "minimax_h3_causal"):
             self.startup_config["text_encoder_cpu_offload"] = text_encoder_offload
 
-    def enable_lora(self, lora_configs):
-        self.startup_config["lora_configs"] = lora_configs
+    def enable_lora(self, lora_configs, lora_mode="merge"):
+        self.startup_config.update(lora_configs=lora_configs, lora_mode=lora_mode)
 
     def switch_lora(self, lora_path: str, strength: float = 1.0):
         if lora_path == "":
             logger.info("Removing LoRA weights")
         else:
             logger.info(f"Switching LoRA to: {lora_path} with strength={strength}")
-        if GET_LORA_MODE() not in ("separate", "consumer"):
-            raise ValueError("switch_lora requires LORA_MODE='separate' or 'consumer'")
+        if self.runner.config.get("lora_mode", "merge") not in ("separate", "consumer"):
+            raise ValueError("switch_lora requires lora_mode='separate' or 'consumer'")
         return self.runner.switch_lora(lora_path, strength)
 
     def enable_cache(

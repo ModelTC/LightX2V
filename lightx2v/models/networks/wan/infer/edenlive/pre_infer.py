@@ -6,7 +6,6 @@ from lightx2v.models.networks.wan.infer.module_io import GridOutput, WanPreInfer
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.models.networks.wan.infer.utils import sinusoidal_embedding_1d
 from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler
-from lightx2v.utils.envs import GET_LORA_MODE
 
 
 class EdenLivePreInfer(WanPreInfer):
@@ -57,7 +56,12 @@ class EdenLivePreInfer(WanPreInfer):
     def _prepare_projection_cache(self, weights, device):
         config = self.config
         scheduler = self.scheduler
-        if type(scheduler) is not EdenLiveARScheduler or not isinstance(getattr(scheduler, "generator", None), torch.Generator) or config.get("lora_configs") or GET_LORA_MODE() == "separate":
+        if (
+            type(scheduler) is not EdenLiveARScheduler
+            or not isinstance(getattr(scheduler, "generator", None), torch.Generator)
+            or config.get("lora_configs")
+            or self.config.get("lora_mode", "merge") == "separate"
+        ):
             self.clear_projection_cache()
             return False
         signatures, references = [], []

@@ -3,10 +3,6 @@ Wan2.2 distilled model with LoRA image-to-video generation example.
 This example demonstrates how to use LightX2V with Wan2.2 distilled model and LoRA for I2V generation.
 """
 
-import os
-
-os.environ.setdefault("LORA_MODE", "merge")
-
 from lightx2v import LightX2VPipeline
 
 # Initialize pipeline for Wan2.2 distilled I2V task with LoRA
@@ -30,7 +26,8 @@ pipe.enable_offload(
 
 # Load distilled LoRA weights
 pipe.enable_lora(
-    [
+    lora_mode="merge",
+    lora_configs=[
         {"name": "high_noise_model", "path": "lightx2v/Wan2.2-Distill-Loras/wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
         {"name": "low_noise_model", "path": "lightx2v/Wan2.2-Distill-Loras/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors", "strength": 1.0},
     ],

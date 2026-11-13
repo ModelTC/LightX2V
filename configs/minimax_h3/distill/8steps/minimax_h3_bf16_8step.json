@@ -1,4 +1,5 @@
 {
+  "lora_mode": "consumer",
   "infer_steps": 8,
   "num_frames": 362,
   "size": [768, 1344],
@@ -15,7 +16,7 @@
   "rms_type": "torch_native",
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
-  "use_compile": false,
+  "use_compile": true,
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "scheduler_type": "euler",

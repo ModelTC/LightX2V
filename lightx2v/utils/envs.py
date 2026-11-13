@@ -36,11 +36,6 @@ def GET_DTYPE():
 
 
 @lru_cache(maxsize=None)
-def GET_LORA_MODE():
-    return os.getenv("LORA_MODE", "merge")
-
-
-@lru_cache(maxsize=None)
 def GET_LORA_DTYPE():
     dtype = os.getenv("LORA_DTYPE")
     return GET_DTYPE() if dtype is None else DTYPE_MAP[dtype]

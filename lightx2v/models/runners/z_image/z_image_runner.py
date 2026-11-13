@@ -26,7 +26,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def build_z_image_model_with_lora(z_image_module, config, model_kwargs, lora_configs):
-    use_lora_branch = GET_LORA_MODE() == "separate"
+    use_lora_branch = config.get("lora_mode", "merge") == "separate"
 
     if use_lora_branch:
         lora_path = lora_configs[0]["path"]

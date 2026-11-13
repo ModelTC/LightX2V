@@ -1,6 +1,6 @@
 # MiniMax-H3 Roll：低成本抽卡
 
-运行示例和导出 AdaLN cache 前，设置 `export LORA_MODE=separate`。启动脚本默认使用该模式，JSON 不再选择模式；cache 导出和推理还需使用相同的 `LORA_DTYPE`（不设置时跟随 `DTYPE`）。
+示例 JSON 配置已设置 `lora_mode: "separate"`。cache 导出和推理使用相同的配置模式及 `LORA_DTYPE`（不设置时跟随 `DTYPE`）。
 
 [English](README.md) | [简体中文](README_zh.md)
 

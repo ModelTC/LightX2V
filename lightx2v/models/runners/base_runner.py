@@ -7,7 +7,6 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from lightx2v.utils.envs import GET_LORA_MODE
 from lightx2v.utils.input_info import INPUT_INFO_TYPES, InputInfo
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -26,9 +25,9 @@ class BaseRunner(ABC):
 
     def __init__(self, config):
         self.config = config
-        lora_mode = GET_LORA_MODE()
+        lora_mode = config.get("lora_mode", "merge")
         if lora_mode not in self.supported_lora_modes:
-            raise ValueError(f"{type(self).__name__} does not support LORA_MODE={lora_mode!r}; expected {self.supported_lora_modes}")
+            raise ValueError(f"{type(self).__name__} does not support lora_mode={lora_mode!r}; expected {self.supported_lora_modes}")
         task = config.get("task")
         if task is not None and task not in self.supported_request_fields_by_task:
             raise ValueError(f"{type(self).__name__} does not support task {task!r}")

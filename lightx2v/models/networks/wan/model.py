@@ -327,7 +327,7 @@ class WanModel(BaseTransformerModel):
             self._init_offload_manager()
 
     def _should_init_empty_model(self):
-        if self.config.get("lora_configs") and self.config["lora_configs"] and GET_LORA_MODE() != "separate":
+        if self.config.get("lora_configs") and self.config["lora_configs"] and self.config.get("lora_mode", "merge") != "separate":
             if self.model_type in ["wan2.1"]:
                 return True
             if self.model_type in ["wan2.2_moe_high_noise"]:

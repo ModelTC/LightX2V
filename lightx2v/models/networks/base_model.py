@@ -386,7 +386,7 @@ class BaseTransformerModel(ABC):
         Returns:
             bool: True if model should be initialized empty
         """
-        if self.config.get("lora_configs") and self.config["lora_configs"] and GET_LORA_MODE() not in ("separate", "consumer"):
+        if self.config.get("lora_configs") and self.config["lora_configs"] and self.config.get("lora_mode", "merge") not in ("separate", "consumer"):
             return True
         return False
 
@@ -454,7 +454,7 @@ class BaseTransformerModel(ABC):
             validate_numa_operator_views(numa_map, roots)
 
         # Handle LoRA if needed
-        if GET_LORA_MODE() in ("separate", "consumer") and self.lora_path is not None:
+        if self.config.get("lora_mode", "merge") in ("separate", "consumer") and self.lora_path is not None:
             assert self.config.get("lora_configs", False)
             if hasattr(self, "_register_lora"):
                 self._register_lora(self.lora_path, self.lora_strength)

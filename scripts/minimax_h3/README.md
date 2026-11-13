@@ -114,14 +114,21 @@ For low-resolution drafts, candidate selection, and higher-resolution regenerati
 
 ## LoRA
 
-Set mode and precision in the environment before **both cache export and inference**; neither is a JSON field:
+Set `lora_mode` in the inference JSON (`merge` by default). All `distill/` configs select `consumer`:
 
-```bash
-export LORA_MODE=consumer  # merge (default), separate, consumer
-export LORA_DTYPE=BF16     # BF16, FP16, FP32; unset follows DTYPE
+```json
+{
+  "lora_mode": "consumer"
+}
 ```
 
-| DiT weights | `LORA_MODE` | Behavior |
+Precision remains an environment setting for **both cache export and inference**:
+
+```bash
+export LORA_DTYPE=BF16  # BF16, FP16, FP32; unset follows DTYPE
+```
+
+| DiT weights | `lora_mode` | Behavior |
 | --- | --- | --- |
 | Original BF16 | `merge` (default), `separate`, `consumer` | Merge at load time, compute independent branches, or fuse branch addition into H3's activation/residual consumers. |
 | Quantized FP8 or INT8, including ConvRot | `separate`, `consumer` | Retain the existing quantized GEMM and a floating-point LoRA branch; merging into quantized DiT weights is unsupported. |
@@ -151,6 +158,7 @@ Base-task 4-step v1.0 LoRA example: add or update these fields in `minimax_h3.js
 
 ```json
 {
+  "lora_mode": "consumer",
   "infer_steps": 4,
   "video_flow_shift": 6.0,
   "audio_flow_shift": 3.0,
@@ -173,10 +181,10 @@ All BF16, FP8 and INT8 ConvRot configs under `configs/minimax_h3/distill/8steps/
 use `minimax_h3_fl2v_turbo_8step_v1.2_768p_bf16.safetensors`: eight Euler steps,
 shifts 12/3 and strength=1. Replace the LoRA path with your local file. Alpha is
 read per layer from the checkpoint, without a global JSON override.
-Set `export LORA_MODE=consumer` or `separate`; quantized bases do not support merge.
+These configs set `lora_mode: "consumer"`; `separate` is also supported. Quantized bases do not support merge.
 The adapter remains BF16; FP8/INT8 refers only to the base weights. Before the
 first run, export the matching AdaLN cache as below, using the same config and
-`LORA_MODE` / `LORA_DTYPE` environment for export and inference.
+`lora_mode` config and `LORA_DTYPE` environment for export and inference.
 The earliest FL2V v0.1 has no embedded alpha and requires an explicit configuration.
 The repository's FP8 full transformer checkpoint is not a LoRA.
 
@@ -201,7 +209,7 @@ These are **unshifted** sigma knots, including both endpoints. There must be
 `infer_steps + 1` values strictly descending from 1 to 0. Each modality applies
 its own shift once. Do not change an Euler-trained adapter to LCM arbitrarily.
 
-Generate the cache with the **same inference JSON and `LORA_MODE` / `LORA_DTYPE` environment**, including LoRA and scheduler:
+Generate the cache with the **same inference JSON (including `lora_mode`) and `LORA_DTYPE` environment**, including LoRA and scheduler:
 
 ```bash
 PYTHONPATH=. python tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py \
@@ -232,7 +240,6 @@ Download the adapters and update `lora_configs[0].path` in each config. Use the 
 ```bash
 hf download Pika-Labs/Pika-H3-Flex fl2va/adapter.safetensors ref2va/adapter.safetensors --local-dir /path/to/pika-h3-flex
 
-export LORA_MODE=consumer
 export DTYPE=BF16
 export LORA_DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=FP32
@@ -265,7 +272,7 @@ python -m lightx2v.infer \
 ```
 
 Examples use 768×1344, 124 frames, single-GPU block offload and unquantized weights.
-Set `LORA_DTYPE=BF16` to match the official adapter compute dtype. `LORA_MODE=separate`
+Set `LORA_DTYPE=BF16` to match the official adapter compute dtype. `lora_mode: "separate"`
 is also supported; merging introduces different weight rounding.
 The Ref config uses `reference_image_resize_mode: "match"`: cap reference image
 area to the output canvas while preserving aspect ratio, without upscaling.

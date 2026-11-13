@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 import torch
 
 from lightx2v.common.offload.block_layout import BlockBuffer, BlockLayout, BlockLoadContext
-from lightx2v.utils.envs import GET_DTYPE, GET_LORA_MODE, GET_SENSITIVE_DTYPE
+from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.offload import get_block_offload_backend
 from lightx2v_platform.ops.offload.weight_storage import StorageDescription, TensorMetadata
@@ -55,7 +55,7 @@ def validate_contiguous_config(config, lora_path=None):
         "quant_method",
         "adapter_model_path",
     )
-    if GET_LORA_MODE() in ("separate", "consumer") or any(config.get(key) for key in incompatible) or lora_path or config.get("feature_caching", "NoCaching") != "NoCaching":
+    if config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key) for key in incompatible) or lora_path or config.get("feature_caching", "NoCaching") != "NoCaching":
         raise ValueError("contiguous layout requires static rank-local weights, single-device eager inference, and NoCaching")
     if GET_SENSITIVE_DTYPE() != GET_DTYPE():
         raise ValueError("contiguous layout requires the default sensitive-layer dtype")

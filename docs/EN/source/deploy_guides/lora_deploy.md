@@ -1,6 +1,6 @@
 # LoRA Model Deployment and Related Tools
 
-`LORA_MODE` accepts `merge` (default), `separate`, and `consumer`. `separate` computes independent base/adapter branches and supports runtime adapter switching on supported models. `consumer` fuses their addition into MiniMax-H3's activation and residual kernels; other models reject it. H3 consumer supports CUDA eager and `use_compile: true`, including sequence parallelism, but not tensor parallelism or GEMM calibration. Modes are never switched automatically.
+`lora_mode` accepts `merge` (default), `separate`, and `consumer`. `separate` computes independent base/adapter branches and supports runtime adapter switching on supported models. `consumer` fuses their addition into MiniMax-H3's activation and residual kernels; other models reject it. H3 consumer supports CUDA eager and `use_compile: true`, including sequence parallelism, but not tensor parallelism or GEMM calibration. Modes are never switched automatically.
 
 LoRA (Low-Rank Adaptation) is an efficient model fine-tuning technique that significantly reduces the number of trainable parameters through low-rank matrix decomposition. LightX2V fully supports LoRA technology, including LoRA inference, LoRA extraction, and LoRA merging functions.
 
@@ -19,6 +19,7 @@ Specify LoRA path in configuration file:
 
 ```json
 {
+  "lora_mode": "merge",
   "lora_configs": [
     {
       "path": "/path/to/your/lora.safetensors",
@@ -32,14 +33,14 @@ Specify LoRA path in configuration file:
 
 - `lora_configs[].path`: Weight file path in each LoRA entry; static merging supports multiple entries
 - `lora_configs[].strength`: LoRA strength coefficient, controls LoRA's influence on the original model
-Execution mode is configured only through the **`LORA_MODE` environment variable**: `merge` (default), `separate`, or `consumer`. JSON stores the adapter path, strength and optional alpha, not the mode or dtype. Set the environment before starting inference, the server, or cache export; restart the process to change it.
+
+Execution mode is configured through **`lora_mode` in JSON**: `merge` (default), `separate`, or `consumer`. It is a startup setting shared by inference, the server, and cache export. Precision remains controlled by the `LORA_DTYPE` environment variable.
 
 ### LoRA precision
 
 Use the environment variable `LORA_DTYPE=BF16|FP16|FP32` for all three modes. When unset, it follows `DTYPE` (normally BF16), independently of `SENSITIVE_LAYER_DTYPE`.
 
 ```bash
-export LORA_MODE=separate
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=FP32
 export LORA_DTYPE=FP32
@@ -75,6 +76,7 @@ To use multiple LoRAs with different strengths, specify them in the config JSON 
 
 ```json
 {
+  "lora_mode": "merge",
   "lora_configs": [
     {
       "path": "/path/to/first_lora.safetensors",
@@ -90,7 +92,7 @@ To use multiple LoRAs with different strengths, specify them in the config JSON 
 
 ### Wan compatibility and Wan2.2 names
 
-The JSON blocks on this page are fragments to merge into a complete model config. Wan defaults to static merging, which cannot be combined with `dit_quantized` or `lazy_load`. With `LORA_MODE=separate`, each submodel uses only the first matching LoRA entry; the multi-entry example does not imply dynamic stacking.
+The JSON blocks on this page are fragments to merge into a complete model config. Wan defaults to static merging, which cannot be combined with `dit_quantized` or `lazy_load`. With `lora_mode: "separate"`, each submodel uses only the first matching LoRA entry; the multi-entry example does not imply dynamic stacking.
 
 Wan2.2 MoE requires `name` to assign LoRA weights to the high-noise and low-noise models:
 
@@ -117,7 +119,7 @@ The published non-ComfyUI H3 Turbo files use `*.lora_A.default.weight` / `*.lora
 
 H3 supports a single active adapter in `separate`/`consumer`, including FP8/INT8 base GEMMs; these modes do not merge into quantized weights. Consumer compatibility does not imply every quantization backend has been benchmarked. Compile compatibility also depends on the selected GEMM/attention backend.
 
-When using persistent AdaLN caching, export with the same LoRA, strength, alpha, scheduler, **`LORA_MODE`**, and **`LORA_DTYPE`** as inference. Separate and consumer share modulation arithmetic/cache; merge uses a different cache. The cache fingerprint includes resolved alpha and LoRA dtype, and cached modulation updates are not applied twice. Prepare the replacement/base cache before switching/removing an adapter. See [H3 inference and cache commands](https://github.com/ModelTC/LightX2V/blob/main/scripts/minimax_h3/README.md).
+When using persistent AdaLN caching, export with the same LoRA, strength, alpha, scheduler, **`lora_mode`**, and **`LORA_DTYPE`** as inference. Separate and consumer share modulation arithmetic/cache; merge uses a different cache. The cache fingerprint includes resolved alpha and LoRA dtype, and cached modulation updates are not applied twice. Prepare the replacement/base cache before switching/removing an adapter. See [H3 inference and cache commands](https://github.com/ModelTC/LightX2V/blob/main/scripts/minimax_h3/README.md).
 
 ### Supported LoRA Formats
 

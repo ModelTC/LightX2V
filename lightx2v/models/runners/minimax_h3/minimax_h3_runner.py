@@ -47,7 +47,7 @@ from lightx2v.models.schedulers.minimax_h3.resampling import validate_draft_step
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.envs import DTYPE_MAP, GET_LORA_MODE, GET_RECORDER_MODE
+from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -60,7 +60,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
     """Build H3 with either a dynamic LoRA branch or load-time merging."""
-    if GET_LORA_MODE() in ("separate", "consumer"):
+    if config.get("lora_mode", "merge") in ("separate", "consumer"):
         if len(lora_configs) != 1:
             raise ValueError("MiniMax-H3 dynamic LoRA currently accepts exactly one lora_configs entry")
         lora_config = lora_configs[0]
