@@ -12,6 +12,7 @@ from loguru import logger
 START_SPEAKING = 0
 STOP_SPEAKING = 1
 PROMPT_UPDATE = 2
+IMAGE_UPDATE = 3
 
 
 class H264AnnexBEncoder:
@@ -144,10 +145,16 @@ class WsVideoChunkRecorder:
         except Exception:
             logger.error(f"on_output failed: {traceback.format_exc()}")
 
-    def emit_prompt_update(self, prompt: str = ""):
+    def emit_prompt_update(self, prompt: str = "", command_id: str = ""):
         prompt = str(prompt)
         logger.info(f"PROMPT_UPDATE seq={self.sequence}: {prompt}")
-        self._emit(("event", PROMPT_UPDATE, prompt))
+        self._emit(("event", PROMPT_UPDATE, prompt, command_id))
+
+    def emit_image_update(self, command_id: str = "", message: str = "Reference image updated"):
+        self._emit(("event", IMAGE_UPDATE, message, command_id))
+
+    def emit_error(self, code: str, message: str, command_id: str):
+        self._emit(("error", code, message, command_id))
 
     def buffer_stream(self, images: torch.Tensor, audios: torch.Tensor, gen_video: torch.Tensor, valid_duration=1e9):
         N, height, width, C = images.shape
@@ -198,11 +205,11 @@ class WsVideoChunkRecorder:
         self.send_buffer = []
         speaking = any(not item[3] for item in batch)
         if speaking and not self.speaking:
-            self._emit(("event", START_SPEAKING, ""))
+            self._emit(("event", START_SPEAKING, "", ""))
             self.speaking = True
             logger.info(f"START_SPEAKING seq={self.sequence}")
         elif not speaking and self.speaking:
-            self._emit(("event", STOP_SPEAKING, ""))
+            self._emit(("event", STOP_SPEAKING, "", ""))
             self.speaking = False
             logger.info(f"STOP_SPEAKING seq={self.sequence}")
         imgs = torch.cat([item[0] for item in batch], dim=0)
@@ -238,7 +245,7 @@ class WsVideoChunkRecorder:
                 logger.error(f"Schedule stream buffer error: {traceback.format_exc()}")
                 break
         if self.speaking:
-            self._emit(("event", STOP_SPEAKING, ""))
+            self._emit(("event", STOP_SPEAKING, "", ""))
             self.speaking = False
         logger.info("WsVideoChunkRecorder schedule thread stopped")
 

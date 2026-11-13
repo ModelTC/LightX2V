@@ -30,15 +30,19 @@ message ServerEvent {
     START_SPEAKING = 0; // 开始说话
     STOP_SPEAKING = 1;  // 说话结束，可能因为音频播放完毕或者中断
     PROMPT_UPDATE = 2; // 提示词更新
+    IMAGE_UPDATE = 3; // 参考图实际切换成功
   }
 
   Type type = 1;
   string message = 2;
+  string request_id = 3;
+  string command_id = 4;
 }
 
 message Start {
   string request_id = 1;
   string audio_format = 2;
+  repeated bytes audio_data = 3; // 完整 PCM WAV 参考音频（当前 RefA2AV 使用一份）
   string image_fromat = 4;
   repeated bytes image_data = 5;
   string prompt = 6;
@@ -56,7 +60,7 @@ message AudioChunk {
 
 message VideoChunk {
   uint64 sequence = 1;
-  bytes audio_data = 2;  // pcm_s16le / 16000 / mono
+  bytes audio_data = 2;  // pcm_s16le / mono，采样率由模型配置决定，H3 默认 24000
   bytes video_data = 3;  // H.264 Annex-B access units
 }
 
@@ -66,22 +70,29 @@ message VideoStart {
   int32 video_height = 2;
 }
 
-message Interrupt { string reason = 1; }
+message Interrupt {
+  string reason = 1;
+  string command_id = 2;
+}
 
 message SetPrompt {
   string prompt = 1;
   float duration = 2;  // -1=until next SetPrompt, 0/omit=server default, >0=client seconds
+  string command_id = 3;
 }
 
 message SetImage {
   bytes image_data = 1;
   string image_format = 2;
+  string command_id = 3;
 }
 
 message Failure {
   string code = 1;
   string message = 2;
   bool retryable = 3;
+  string request_id = 4;
+  string command_id = 5;
 }
 
 message Empty {}

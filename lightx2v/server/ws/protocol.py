@@ -81,8 +81,8 @@ _add_oneof(ClientMessage)
 _add_oneof(ServerMessage)
 
 
-def event_message(event_type: int, message: str = "") -> bytes:
-    return ServerMessage(event=ServerEvent(type=event_type, message=message)).serialize()
+def event_message(event_type: int, message: str = "", request_id: str = "", command_id: str = "") -> bytes:
+    return ServerMessage(event=ServerEvent(type=event_type, message=message, request_id=request_id, command_id=command_id)).serialize()
 
 
 def video_start_message(width: int, height: int) -> bytes:
@@ -93,5 +93,5 @@ def video_message(sequence: int, audio_data: bytes, video_data: bytes) -> bytes:
     return ServerMessage(video=VideoChunk(sequence=sequence, audio_data=audio_data, video_data=video_data)).serialize()
 
 
-def error_message(code: str, message: str, retryable: bool = False) -> bytes:
-    return ServerMessage(error=Failure(code=code, message=message, retryable=retryable)).serialize()
+def error_message(code: str, message: str, retryable: bool = False, request_id: str = "", command_id: str = "") -> bytes:
+    return ServerMessage(error=Failure(code=code, message=message, retryable=retryable, request_id=request_id, command_id=command_id)).serialize()

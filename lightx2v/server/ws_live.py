@@ -130,21 +130,24 @@ async def run_websocket_server(args, runner, input_info):
         await websocket.accept()
         session = None
         pump_task = None
+        command_id = ""
         try:
             while True:
+                command_id = ""
                 data = await websocket.receive_bytes()
                 msg = ClientMessage.parse(data)
                 which = msg.which()
+                command_id = getattr(msg, which).command_id if which in {"interrupt", "set_prompt", "set_image"} else ""
                 if which == "start":
                     async with session_lock:
                         if state.session is not None and state.session.is_busy():
-                            await websocket.send_bytes(error_message("busy", "another session is running", True))
+                            await websocket.send_bytes(error_message("busy", "another session is running", True, request_id=msg.start.request_id))
                             continue
                         session = LiveSession(runner, input_info, RANK, asyncio.get_running_loop())
                         try:
                             cmd = session.apply_start(msg.start)
                         except Exception as e:
-                            await websocket.send_bytes(error_message("invalid_start", str(e), False))
+                            await websocket.send_bytes(error_message("invalid_start", str(e), False, request_id=msg.start.request_id))
                             session.close()
                             session = None
                             continue
@@ -154,7 +157,7 @@ async def run_websocket_server(args, runner, input_info):
                     try:
                         await session.wait_started()
                     except Exception as e:
-                        await websocket.send_bytes(error_message("start_failed", str(e), True))
+                        await websocket.send_bytes(error_message("start_failed", str(e), True, request_id=session.request_id))
                         await session.stop_and_join()
                         await sync_ranks()
                         session.close()
@@ -163,25 +166,24 @@ async def run_websocket_server(args, runner, input_info):
                         continue
                     if session.sends_ws_output:
                         pump_task = asyncio.create_task(session.pump_video(websocket))
-                    elif session.bilibili_input:
+                        session.future.add_done_callback(lambda fut, owner=session: owner.mark_pipeline_done(*(fut.result() if not fut.cancelled() else (False, "cancelled"))))
+                    else:
                         pump_task = asyncio.create_task(session.watch_pipeline(websocket))
-                    if session.sends_ws_output and pump_task is not None and session.future is not None:
-                        session.future.add_done_callback(lambda fut: session.mark_pipeline_done(*(fut.result() if not fut.cancelled() else (False, "cancelled"))))
                     continue
 
                 if session is None or not session.has_input:
-                    await websocket.send_bytes(error_message("no_session", "send Start first", True))
+                    await websocket.send_bytes(error_message("no_session", "send Start first", True, request_id=session.request_id if session else "", command_id=command_id))
                     continue
                 if session.video_input:
                     logger.info(f"Rank {RANK} ignore {which} during video input session")
                     continue
                 if which is None:
-                    await websocket.send_bytes(error_message("invalid_message", "empty ClientMessage", False))
+                    await websocket.send_bytes(error_message("invalid_message", "empty ClientMessage", False, request_id=session.request_id))
                     continue
                 try:
                     session.handle_client_body(msg)
                 except Exception as e:
-                    await websocket.send_bytes(error_message("bad_message", str(e), False))
+                    await websocket.send_bytes(error_message("bad_message", str(e), False, request_id=session.request_id, command_id=command_id))
 
         except WebSocketDisconnect:
             logger.warning(f"Rank {RANK} websocket disconnected")
@@ -189,7 +191,7 @@ async def run_websocket_server(args, runner, input_info):
         except Exception:
             logger.error(f"Rank {RANK} websocket handler failed: {traceback.format_exc()}")
             try:
-                await websocket.send_bytes(error_message("internal", "websocket internal error", True))
+                await websocket.send_bytes(error_message("internal", "websocket internal error", True, request_id=session.request_id if session else "", command_id=command_id))
             except Exception:
                 pass
         finally:

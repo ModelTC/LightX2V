@@ -10,7 +10,7 @@ import torch.distributed as dist
 import torchaudio
 from loguru import logger
 
-from lightx2v.models.audio_encoders.hf.minimax_h3_causal.driving import MiniMaxH3DrivingAudio
+from lightx2v.models.audio_encoders.hf.minimax_h3_causal.driving import MiniMaxH3DrivingAudio, MiniMaxH3StreamingDrivingAudio
 from lightx2v.models.audio_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingAudioDecoder
 from lightx2v.models.audio_encoders.hf.minimax_h3_causal.vae_graph import MiniMaxH3AudioDecoderGraph
 from lightx2v.models.networks.minimax_h3.packing import AUDIO_LATENTS_PER_SECOND, FPS, FRAMES_PER_CHUNK, unpatchify_video_tokens, video_latent_num_frames
@@ -85,8 +85,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         # With streaming encoding, RGB is borrowed until the callback returns.
         self.stream_callback = None
         self.va_controller = None
-        self.stream_waveform = None
-        self.last_rest_audio = None
 
     @property
     def live_stream(self):
@@ -116,10 +114,12 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         if self.reuse_input_audio and not audio_vae.cpu_offload:
             audio_vae.decoder.cpu()
             audio_vae.dec_in_proj.cpu()
-        if not self.reuse_input_audio and self.config.get("audio_vae_decode_overlap", False) and is_main_process():
-            self.audio_decode_graph = MiniMaxH3AudioDecoderGraph(audio_vae)
-            logger.info("MiniMax-H3 causal: FP32 audio CUDA Graph + clean commit overlap enabled")
         return video_vae, audio_vae
+
+    def _init_audio_decode_graph(self):
+        if self.audio_decode_graph is None and self.config.get("audio_vae_decode_overlap", False):
+            self.audio_decode_graph = MiniMaxH3AudioDecoderGraph(self.audio_vae)
+            logger.info("MiniMax-H3 causal: FP32 audio CUDA Graph + clean commit overlap enabled")
 
     def init_scheduler(self):
         self.scheduler = MiniMaxH3CleanScheduler(self.config)
@@ -215,8 +215,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         super().clear_conditioning_state()
         self.driving_audio = None
         self.motion_by_chunk = {}
-        self.stream_waveform = None
-        self.last_rest_audio = None
 
     def get_stream_output_path(self, input_info):
         # This runner owns joint AV output, including generated audio.
@@ -301,6 +299,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                 main_rank = is_main_process()
                 audio_decoder = None
                 if main_rank and not self.reuse_input_audio:
+                    self._init_audio_decode_graph()
                     audio_decoder = MiniMaxH3StreamingAudioDecoder(self.audio_vae, num_audio_latents=scheduler.num_audio_latents, decode_graph=self.audio_decode_graph)
                     decoders.callback(audio_decoder.close)
                 video_outputs, audio_outputs = [], []
@@ -364,20 +363,15 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self.prefill_clean_condition(prompt_key(0), self.inputs["motion_text_output"])
         return {"text_encoder_output": empty}
 
-    def _commit_live_motion(self, text, local_index, *, prompt=None):
+    def _commit_live_motion(self, text, local_index, *, prompt, command_id):
         self.scheduler.append_motion(local_index, text["text_token_tags"])
         self.inputs["motion_text_output"] = text
         self.prefill_clean_condition(prompt_key(self.scheduler.plan.segment_index(local_index)), text)
         recorder = self.va_controller.recorder
-        if prompt is not None and recorder is not None and hasattr(recorder, "emit_prompt_update"):
-            recorder.emit_prompt_update(prompt)
+        if self.va_controller.ws_output is not None and recorder is not None:
+            recorder.emit_prompt_update(prompt, command_id=command_id)
 
-    def _notify_live_motion(self, event, prompt):
-        callback = getattr(self.va_controller.reader, event, None)
-        if callback is not None and prompt is not None:
-            callback(prompt)
-
-    def _switch_live_image(self, image_path, chunk_index):
+    def _switch_live_image(self, image_path, chunk_index, *, command_id):
         # Validate on every rank before any reference encoder enters collectives.
         references, error = None, ""
         try:
@@ -389,11 +383,14 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         if dist.is_initialized():
             dist.all_reduce(ready, op=dist.ReduceOp.MIN)
         notify = getattr(self.va_controller.reader, "on_image_switched", None)
+        recorder = self.va_controller.recorder
         if not ready.item():
             error = error or "Reference image is unavailable on another rank"
-            logger.warning("H3 reference image switch rejected: {}", error)
+            logger.warning("H3 reference image switch rejected | command_id={} | {}", command_id, error)
             if notify is not None:
                 notify(image_path, error=error)
+            if self.va_controller.ws_output is not None and recorder is not None:
+                recorder.emit_error("set_image_failed", "Reference image update failed", command_id=command_id)
             return False
         self.input_info.image_path = image_path
         self.prepared_references = references
@@ -405,28 +402,14 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self._prefill_live_conditions()
         if notify is not None:
             notify(image_path)
-        logger.info("H3 reference image switched at live chunk {}", chunk_index)
+        logger.info("H3 reference image switched at live chunk {} | command_id={}", chunk_index, command_id)
+        if self.va_controller.ws_output is not None and recorder is not None:
+            recorder.emit_image_update(command_id=command_id)
         return True
 
-    def _encode_live_audio(self, audio, count):
-        block = torch.as_tensor(audio, dtype=torch.float32).reshape(1, -1)
-        if not self.config.get("audio_mono", False):
-            block = block.expand(2, -1).contiguous()
-        self.stream_waveform = block if self.stream_waveform is None else torch.cat((self.stream_waveform, block), dim=-1)
-        hop = self.audio_vae.hop_length
-        window = float(self.config.get("audio_encode_window_secs", 15))
-        if window > 0:
-            keep = max(count * hop, int(window * self.audio_vae.sampling_rate) // hop * hop)
-            self.stream_waveform = self.stream_waveform[..., -keep:].contiguous()
-        latents = self.audio_vae.encode(self.stream_waveform, return_cpu=False)
-        if latents.shape[0] == 1:
-            latents = latents.expand(2, -1, -1)
-        start = self.stream_waveform.shape[-1] // hop - count
-        return latents[..., start : start + count].transpose(1, 2).reshape(-1, latents.shape[1]).contiguous()
-
-    def _resample_live_audio(self, audio):
+    def _resample_live_audio(self, audio, *, sample_rate=None):
         audio = torch.as_tensor(audio, dtype=torch.float32).reshape(-1, audio.shape[-1]).mean(dim=0)
-        source_rate = self.audio_vae.sampling_rate
+        source_rate = self.audio_vae.sampling_rate if sample_rate is None else sample_rate
         target_rate = self.va_controller.record_audio_sr
         if source_rate != target_rate:
             audio = torchaudio.functional.resample(audio, source_rate, target_rate)
@@ -459,22 +442,26 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     def _run_live(self):
         media_inputs = self._prefill_live_conditions()
         self.set_vae_decode_tile_shape()
-        origin_motion = (self.inputs["motion_text_output"], self.motion_by_chunk[0])
+        origin_motion = (self.inputs["motion_text_output"], self.motion_by_chunk[0], "")
         active_prompt = None
         restore_at = -1
-        chunk_index = stream_start_idx = failures = 0
-        main_rank = is_main_process()
+        chunk_index = stream_start_idx = 0
+        output_rank = self.va_controller.target_recorder_rank
+        is_recorder_rank = self.va_controller.rank == output_rank
         # VAE audio and video have different lookahead. Publish only paired
         # samples/frames, preserving both decoder states across image switches.
         pending_video = deque()
-        pending_durations = deque()
+        pending_valid_duration = deque()
         audio_buffer = np.empty(0, dtype=np.float32)
+        if not self.generate_audio:
+            self.driving_audio = MiniMaxH3StreamingDrivingAudio(self.audio_vae, mono=self.config.get("audio_mono", False))
         emitted_chunk = 0
         with ExitStack() as decoders:
-            video_decoder = MiniMaxH3StreamingVideoDecoder(self.video_vae, self.request_num_frames, output_uint8=False, decode_graph=self.video_decode_graph)
+            video_decoder = MiniMaxH3StreamingVideoDecoder(self.video_vae, self.request_num_frames, output_uint8=False, decode_graph=self.video_decode_graph, output_rank=output_rank)
             decoders.callback(video_decoder.close)
             audio_decoder = None
-            if main_rank and self.generate_audio:
+            if is_recorder_rank and not self.reuse_input_audio:
+                self._init_audio_decode_graph()
                 audio_decoder = MiniMaxH3StreamingAudioDecoder(self.audio_vae, num_audio_latents=None, decode_graph=self.audio_decode_graph)
                 decoders.callback(audio_decoder.close)
             try:
@@ -482,79 +469,88 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                     self.check_stop()
                     control = self.va_controller.next_control()
                     local_index = chunk_index - stream_start_idx
+
                     if control.action == "switch_image":
-                        if self._switch_live_image(control.data, chunk_index):
+                        if self._switch_live_image(control.data["image_path"], chunk_index, command_id=control.data["command_id"]):
                             stream_start_idx = chunk_index
                             # Empty embeddings carry dtype/device only; recreate
                             # after global reference conditioning changes.
                             media_inputs = {"text_encoder_output": {"prompt_embeds": self.inputs["text_encoder_output"]["prompt_embeds"][:0]}}
                         continue
+
                     if control.action == "perform_action":
                         prompt, duration = control.data["prompt"], control.data["duration"]
+                        command_id = control.data["command_id"]
                         text = self.text_encoders[0].infer(prompt)
-                        self._commit_live_motion(text, local_index, prompt=prompt)
-                        self._notify_live_motion("on_motion_finished", active_prompt)
-                        self._notify_live_motion("on_motion_started", prompt)
+                        self._commit_live_motion(text, local_index, prompt=prompt, command_id=command_id)
+                        self.va_controller.reader.motion_update(old_prompt=active_prompt, new_prompt=prompt)
                         active_prompt = prompt
                         if duration == -1:
-                            origin_motion = text, prompt
+                            origin_motion = text, prompt, command_id
                         elif duration > 0 and control.data.get("superseded_prompt"):
-                            origin_motion = None, control.data["superseded_prompt"]
+                            origin_motion = None, control.data["superseded_prompt"], control.data["superseded_command_id"]
                         restore_at = chunk_index + max(1, math.ceil(duration * FPS / FRAMES_PER_CHUNK)) if duration > 0 else -1
-                        logger.info("H3 live motion switched at chunk {} for {}s", chunk_index, duration)
+                        logger.info("H3 live motion switched at chunk {} for {}s | command_id={}", chunk_index, duration, command_id)
                         continue
+
                     if restore_at >= 0 and chunk_index >= restore_at:
-                        text, prompt = origin_motion
+                        text, prompt, origin_command_id = origin_motion
                         pending = text is None
                         if pending:
                             text = self.text_encoders[0].infer(prompt)
-                            origin_motion = text, prompt
-                        self._commit_live_motion(text, local_index, prompt=prompt if pending else None)
-                        self._notify_live_motion("on_motion_finished", active_prompt)
-                        active_prompt = None
+                            origin_motion = text, prompt, origin_command_id
+                        self._commit_live_motion(text, local_index, prompt=prompt, command_id=origin_command_id)
+                        self.va_controller.reader.motion_update(old_prompt=active_prompt, new_prompt=prompt)
+                        active_prompt = prompt
                         restore_at = -1
+
                     if control.action == "wait":
                         time.sleep(0.01)
                         continue
-                    clean_audio = None
-                    origin_audio = None
-                    valid_duration = 1e9
+
+                    audio_latents = None
                     if not self.generate_audio:
                         audio_slice = self.scheduler.plan.chunk_slices(local_index)[1]
-                        count = audio_slice.stop - audio_slice.start
-                        origin_audio, valid_duration = self.va_controller.reader.get_audio_segment(count / AUDIO_LATENTS_PER_SECOND)
-                        if origin_audio is None:
-                            failures += 1
-                            if failures > 10:
-                                raise RuntimeError("Failed to read ten consecutive live audio chunks")
+                        duration = (audio_slice.stop - audio_slice.start) / AUDIO_LATENTS_PER_SECOND
+                        waveform, valid_duration = self.va_controller.reader.get_audio_segment(duration)
+                        if waveform is None:
+                            time.sleep(0.01)
                             continue
-                        clean_audio = self._encode_live_audio(origin_audio, count)
-                    self._run_dit_chunk(local_index, media_inputs, audio_decoder, audio_latents=clean_audio)
+                        audio_latents = self.driving_audio.encode(audio_slice, waveform, sample_rate=self.va_controller.audio_sr)
+                        if is_recorder_rank and self.reuse_input_audio:
+                            audio_buffer = np.concatenate((audio_buffer, self._resample_live_audio(waveform, sample_rate=self.va_controller.audio_sr)))
+
+                    self._run_dit_chunk(local_index, media_inputs, audio_decoder, audio_latents=audio_latents)
                     spec = self.scheduler.plan.chunk_spec(local_index)
                     video = unpatchify_video_tokens(self.scheduler.video_latents, spec[1] - spec[0], self.scheduler.latent_height, self.scheduler.latent_width)
+                    if is_recorder_rank:
+                        if self.generate_audio:
+                            valid_duration = FRAMES_PER_CHUNK / self.va_controller.record_fps if "<Audio 1>" in (active_prompt or self.motion_by_chunk[0]) else 0.0
+                        pending_valid_duration.append(valid_duration)
                     frames = video_decoder.push(video)
-                    if main_rank:
-                        pending_durations.append(valid_duration)
+                    if is_recorder_rank:
                         if audio_decoder is not None:
                             outputs = audio_decoder.push(self.scheduler.audio_latents) if self.audio_decode_graph is None else audio_decoder.flush()
                             for _, waveform in outputs:
                                 audio_buffer = np.concatenate((audio_buffer, self._resample_live_audio(waveform)))
-                        else:
-                            audio_buffer = np.concatenate((audio_buffer, self._resample_live_audio(origin_audio)))
-                        pending_video.extend(frames)
+                        # VAE lookahead can delay output across motion switches.
+                        # Keep the source duration with its original chunk; do
+                        # not recalculate RefA2V validity when RGB becomes ready.
+                        pending_video.extend((frame, pending_valid_duration.popleft()) for frame in frames)
                         while pending_video:
-                            frame = pending_video[0]
+                            frame, valid_duration = pending_video[0]
                             samples = round(frame.shape[2] * self.va_controller.record_audio_sr / self.va_controller.record_fps)
                             if audio_buffer.size < samples:
                                 break
-                            self._publish_live_frames(emitted_chunk, pending_video.popleft(), audio_buffer[:samples], pending_durations.popleft())
+                            pending_video.popleft()
+                            self._publish_live_frames(emitted_chunk, frame, audio_buffer[:samples], valid_duration)
                             audio_buffer = audio_buffer[samples:]
                             emitted_chunk += 1
                     chunk_index += 1
-                    failures = 0
             finally:
                 try:
-                    self._notify_live_motion("on_motion_finished", active_prompt)
+                    if active_prompt is not None:
+                        self.va_controller.reader.motion_update(old_prompt=active_prompt, new_prompt=None)
                 finally:
                     # Decoders hold tensors used by the VAE streams.
                     torch.cuda.synchronize()

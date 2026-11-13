@@ -6,6 +6,7 @@ import queue
 import tempfile
 import threading
 import traceback
+import wave
 from typing import Optional
 
 import torch
@@ -123,7 +124,7 @@ def parse_stream_config(config_json, runner, task) -> dict:
     if runner.config.get("model_cls") == "minimax_h3_causal" and task == "refa2av":
         reference_audio = config.get("reference_audio_path")
         if not isinstance(reference_audio, str) or not reference_audio.strip():
-            raise ValueError("RefA2AV live input requires config_json.reference_audio_path on the server")
+            raise ValueError("RefA2AV live input requires Start.audio_data or config_json.reference_audio_path on the server")
     config["video_input"] = uses_video_input(runner, task)
     config["no_output_audio"] = uses_no_output_audio(runner)
     if is_bilibili_input(config):
@@ -298,12 +299,32 @@ class LiveSession:
 
         self.audio_source = None
         self.video_source = None
-        self.stream_config = parse_stream_config(start.config_json, self.runner, self.input_info.task)
+        self.request_id = start.request_id or "ws-session"
+        config_json = dict(start.config_json or {})
+        audio_data = list(start.audio_data)
+        if audio_data:
+            if self.runner.config.get("model_cls") != "minimax_h3_causal" or self.input_info.task != "refa2av":
+                raise ValueError("Start.audio_data requires minimax_h3_causal task=refa2av")
+            if len(audio_data) != 1 or not audio_data[0]:
+                raise ValueError("Start.audio_data must contain exactly one nonempty WAV voice reference")
+            try:
+                with wave.open(io.BytesIO(audio_data[0]), "rb") as audio:
+                    frames = audio.getnframes()
+                    if frames < 1 or audio.getframerate() <= 0 or len(audio.readframes(frames)) != frames * audio.getnchannels() * audio.getsampwidth():
+                        raise ValueError("empty or incomplete WAV")
+            except (wave.Error, EOFError, ValueError) as exc:
+                raise ValueError("Start.audio_data must contain a complete, nonempty PCM WAV file") from exc
+            self.tmp_dir = tempfile.TemporaryDirectory(prefix="lightx2v_ws_voice_")
+            audio_path = os.path.join(self.tmp_dir.name, "voice_reference.wav")
+            with open(audio_path, "wb") as audio_file:
+                audio_file.write(audio_data[0])
+            config_json["reference_audio_path"] = audio_path
+        self.stream_config = parse_stream_config(config_json, self.runner, self.input_info.task)
         self.video_input = self.stream_config["video_input"]
         self.bilibili_input = is_bilibili_input(self.stream_config)
         logger.info(f"Rank {self.rank} stream_config: {self.stream_config}")
-        self.request_id = start.request_id or "ws-session"
-        self.tmp_dir = tempfile.TemporaryDirectory(prefix=f"lightx2v_ws_{self.request_id}_")
+        if self.tmp_dir is None:
+            self.tmp_dir = tempfile.TemporaryDirectory(prefix="lightx2v_ws_")
         image_path = os.path.join(self.tmp_dir.name, f"ref{_image_suffix(start.image_fromat)}")
         with open(image_path, "wb") as f:
             f.write(images[0])
@@ -313,10 +334,13 @@ class LiveSession:
         seed = int(start.seed or 42)
         _, size = resolve_aspect_ratio(start.aspect_ratio, self.stream_config.get("resolution"))
 
-        if self.bilibili_input:
-            world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+        world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+        if self.bilibili_input or (not self.video_input and not self.stream_config.get("input_url")):
             if int(os.getenv("READER_RANK", "0")) % world_size != self.rank:
-                raise ValueError("Bilibili input requires READER_RANK to match the websocket server rank (WORKER_RANK)")
+                raise ValueError("WS control input requires READER_RANK to match the websocket server rank (WORKER_RANK)")
+        if self.sends_ws_output and int(os.getenv("RECORDER_RANK", "0")) % world_size != self.rank:
+            raise ValueError("WS output requires RECORDER_RANK to match the websocket server rank (WORKER_RANK)")
+        if self.bilibili_input:
             # Fail configuration checks before broadcasting work to the other ranks.
             # Only serializable settings travel to the reader; it owns the adapter.
             BilibiliConfig.from_env(self.stream_config, requires_tts=self.input_info.task != "refa2av")
@@ -402,15 +426,16 @@ class LiveSession:
             image_file.write(data)
             image_path = image_file.name
         try:
-            handler(image_path)
+            handler(image_path, command_id=message.command_id)
         except Exception:
             os.unlink(image_path)
             raise
 
     def handle_client_body(self, msg: ClientMessage):
         which = msg.which()
-        if self.bilibili_input and which in {"audio_start", "audio", "audio_end"}:
-            raise ValueError("Bilibili input generates audio on the server; client audio messages are disabled")
+        command_id = getattr(msg, which).command_id if which in {"interrupt", "set_prompt", "set_image"} else ""
+        if which in {"audio_start", "audio", "audio_end"} and (self.bilibili_input or self.input_info.task == "refa2av"):
+            raise ValueError("This session generates audio on the server; client audio messages are disabled")
         target = self._control_target()
         if which == "audio_start":
             target.on_audio_start()
@@ -420,14 +445,15 @@ class LiveSession:
         elif which == "audio_end":
             target.on_audio_end()
         elif which == "interrupt":
-            reason = msg.interrupt.reason if msg.interrupt else ""
-            target.on_clear_audio(reason)
+            target.on_clear_audio(msg.interrupt.reason, command_id=command_id)
         elif which == "set_image":
             self._set_image(msg.set_image, target)
         elif which == "set_prompt":
-            prompt = msg.set_prompt.prompt if msg.set_prompt else ""
-            duration = resolve_set_prompt_duration(msg.set_prompt.duration if msg.set_prompt else 0.0)
-            target.on_action_switch(prompt, duration)
+            prompt = msg.set_prompt.prompt
+            duration = resolve_set_prompt_duration(msg.set_prompt.duration)
+            if not prompt.strip():
+                raise ValueError("SetPrompt.prompt must be nonempty")
+            target.on_action_switch(prompt, duration, command_id=command_id)
         else:
             raise ValueError(f"unexpected client message {which}")
 
@@ -455,7 +481,7 @@ class LiveSession:
     async def watch_pipeline(self, websocket):
         status, _ = await asyncio.shield(self.future)
         if not status:
-            await websocket.send_bytes(error_message("pipeline_failed", "Live pipeline failed; check server logs", True))
+            await websocket.send_bytes(error_message("pipeline_failed", "Live pipeline failed; check server logs", True, request_id=self.request_id))
         await websocket.close()
 
     async def pump_video(self, websocket):
@@ -469,9 +495,15 @@ class LiveSession:
                 _, seq, audio_data, video_data = item
                 await websocket.send_bytes(video_message(seq, audio_data, video_data))
             elif kind == "event":
-                _, event_type, message = item
-                await websocket.send_bytes(event_message(event_type, message))
+                _, event_type, message, command_id = item
+                await websocket.send_bytes(event_message(event_type, message, request_id=self.request_id, command_id=command_id))
+            elif kind == "error":
+                _, code, message, command_id = item
+                await websocket.send_bytes(error_message(code, message, False, request_id=self.request_id, command_id=command_id))
             elif kind == "done":
+                if not item[1]:
+                    await websocket.send_bytes(error_message("pipeline_failed", "Live pipeline failed; check server logs", True, request_id=self.request_id))
+                await websocket.close()
                 break
 
     def is_busy(self) -> bool:

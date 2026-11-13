@@ -1,5 +1,6 @@
 import threading
 import traceback
+from collections import deque
 from copy import deepcopy
 from pathlib import Path
 
@@ -48,6 +49,8 @@ class WsAudioSource:
         self.seg_duration = seg_duration
         self.model_runner = model_runner
         self.audio_buffer = ByteBuffer()
+        self._audio_write_buffer = self.audio_buffer
+        self._pending_audio_buffers = deque()
         self.audio_info = parse_pcm_audio_format(audio_format)
         if self.audio_info.sample_rate != sample_rate:
             logger.warning(f"WsAudioSource sample_rate {self.audio_info.sample_rate} != reader {sample_rate}")
@@ -78,38 +81,70 @@ class WsAudioSource:
     def on_audio_start(self, note: str = ""):
         logger.debug(f"WsAudioSource AudioStart note={note}")
         with self._lock:
-            self.audio_buffer = ByteBuffer()
+            self._start_audio_buffer()
+
+    def _start_audio_buffer(self):
+        # 新的 AudioStart 保留尚未被 reader 消费的前一段音频。
+        if self._audio_write_buffer is not None:
+            self._audio_write_buffer.mark_finished()
+        buffer = ByteBuffer()
+        if self.audio_buffer is None:
+            self.audio_buffer = buffer
+        else:
+            self._pending_audio_buffers.append(buffer)
+        self._audio_write_buffer = buffer
+        self._advance_audio_buffer()
+
+    def _advance_audio_buffer(self):
+        while self.audio_buffer is not None and self.audio_buffer.current_size == 0 and not self.audio_buffer.has_more_voice() and self._pending_audio_buffers:
+            self.audio_buffer = self._pending_audio_buffers.popleft()
+
+    def _has_pending_audio_locked(self):
+        self._advance_audio_buffer()
+        return self.audio_buffer is not None and (self.audio_buffer.current_size > 0 or self.audio_buffer.has_more_voice())
+
+    def has_pending_audio(self):
+        with self._lock:
+            return self._has_pending_audio_locked()
 
     def on_audio_chunk(self, pcm_data: bytes, sequence: int = 0):
         if not pcm_data:
             return
         with self._lock:
-            if self.audio_buffer is None:
-                self.audio_buffer = ByteBuffer()
-            self.audio_buffer.add(pcm_data)
+            if self._audio_write_buffer is None or not self._audio_write_buffer.has_more_voice():
+                self._start_audio_buffer()
+            self._audio_write_buffer.add(pcm_data)
             if self.status == "blank" and self.has_voice(self.seg_duration):
                 self.immediate_switch_to("voice")
 
     def on_audio_end(self, note: str = ""):
         logger.debug(f"WsAudioSource AudioEnd note={note}")
         with self._lock:
-            if self.audio_buffer is not None:
-                self.audio_buffer.mark_finished()
+            if self._audio_write_buffer is not None:
+                self._audio_write_buffer.mark_finished()
+            if self.status == "blank" and self.has_voice(self.seg_duration):
+                self.immediate_switch_to("voice")
 
-    def on_clear_audio(self, note: str = ""):
+    def on_clear_audio(self, note: str = "", command_id: str = ""):
         logger.warning(f"WsAudioSource Interrupt/ClearAudio note={note}")
         with self._lock:
             self.audio_buffer = None
+            self._audio_write_buffer = None
+            self._pending_audio_buffers.clear()
             if self.status == "voice":
                 self.status = "blank"
+            if getattr(self.model_runner, "config", {}).get("task") == "refa2av":
+                config = getattr(getattr(self.model_runner, "input_info", None), "stream_config", {}) or {}
+                idle = config.get("idle_prompt") or "<Subject 1> waits quietly, with a relaxed expression and closed mouth. No speech."
+                self.action_switch = {"prompt": str(idle), "duration": 0, "command_id": command_id}
 
-    def on_image_switch(self, image_path: str):
+    def on_image_switch(self, image_path: str, command_id: str = ""):
         if not Path(image_path).is_file():
             raise ValueError("Reference image is missing")
         with self._lock:
-            self.image_switch = str(image_path)
+            self.image_switch = {"image_path": str(image_path), "command_id": command_id}
 
-    def on_action_switch(self, prompt: str, duration: float = 0):
+    def on_action_switch(self, prompt: str, duration: float = 0, command_id: str = ""):
         prompt = str(prompt).strip()
         if not prompt:
             return
@@ -119,13 +154,15 @@ class WsAudioSource:
         logger.debug(f"WsAudioSource action prompt change: {prompt} duration={duration}")
         with self._lock:
             old = self.action_switch if isinstance(self.action_switch, dict) else {}
-            action = {"prompt": prompt, "duration": duration}
+            action = {"prompt": prompt, "duration": duration, "command_id": command_id}
             # 对于上一个会被覆盖掉的 -1 的 prompt，记录下来，动作结束后应当恢复的是这个 prompt
             if duration != -1:
                 if old.get("duration") == -1 and old.get("prompt"):
                     action["superseded_prompt"] = old["prompt"]
+                    action["superseded_command_id"] = old["command_id"]
                 elif old.get("superseded_prompt"):
                     action["superseded_prompt"] = old["superseded_prompt"]
+                    action["superseded_command_id"] = old["superseded_command_id"]
             self.action_switch = action
             if action.get("superseded_prompt"):
                 logger.warning(f"WsAudioSource keep overwritten global prompt: {action['superseded_prompt']}")
@@ -149,11 +186,13 @@ class WsAudioSource:
             return value
 
     def has_voice(self, duration) -> bool:
-        if self.audio_info is None or self.audio_buffer is None or self.audio_buffer.current_size == 0:
+        self._advance_audio_buffer()
+        if self.audio_info is None or self.audio_buffer is None:
             return False
         bytes_count = round(duration * self.audio_info.sample_rate) * self.audio_info.channel_count * 2
-        if self.audio_buffer.current_size < bytes_count and self.audio_buffer.has_more_voice():
-            logger.warning(f"Not enough bytes and maybe has more voice, content_size: {self.audio_buffer.current_size}, bytes_count: {bytes_count}")
+        buffers = (self.audio_buffer, *self._pending_audio_buffers)
+        available = sum(buffer.current_size for buffer in buffers)
+        if available == 0 or (available < bytes_count and any(buffer.has_more_voice() for buffer in buffers)):
             return False
         return bytes_count
 
@@ -161,17 +200,30 @@ class WsAudioSource:
         with self._lock:
             bytes_count = self.has_voice(fetch_duration)
             if bytes_count is False or self.audio_info is None or self.audio_buffer is None:
+                if not self._has_pending_audio_locked():
+                    self.status = "blank"
                 return None
-            pcm_data = self.audio_buffer.get(bytes_count)
+            pcm_data = bytearray()
+            while len(pcm_data) < bytes_count:
+                self._advance_audio_buffer()
+                data = self.audio_buffer.get(bytes_count - len(pcm_data))
+                if not data:
+                    break
+                pcm_data.extend(data)
+            self._advance_audio_buffer()
             sample_count = len(pcm_data) // (self.audio_info.channel_count * 2)
             audio_info = deepcopy(self.audio_info)
             audio_info.sample_count = sample_count
-            return (pcm_data, audio_info)
+            if not self._has_pending_audio_locked():
+                self.status = "blank"
+            return (bytes(pcm_data), audio_info)
 
     def stop(self):
         self.model_runner = None
         with self._lock:
             self.audio_buffer = None
+            self._audio_write_buffer = None
+            self._pending_audio_buffers.clear()
 
 
 class SekoARWSReader(SekoAROmniVAReader):
@@ -219,6 +271,10 @@ class MinimaxH3CausalWSReader(SekoARWSReader):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         logger.info(f"MinimaxH3CausalWSReader sample_rate={self.sample_rate} segment_duration={self.segment_duration}s samples={self.all_seg_sample_count}")
+
+    def motion_update(self, old_prompt=None, new_prompt=None):
+        """Plain WS input has no background reply scheduler to update."""
+        pass
 
     def start(self):
         if self.rank == self.target_rank:
@@ -286,11 +342,11 @@ class MinimaxH3CausalWSReader(SekoARWSReader):
 
                 if self.chat_adapter.status == "voice":
                     audio_result = self.chat_adapter.get_audio(segment_duration)
-                    origin_audio, valid_duration = self.prepare_audio_data(audio_result)
-                    # think all voice segments inferred, naturally switch to blank
-                    if audio_result is None:
-                        logger.info(f"Think all voice segments inferred, naturally switch to blank")
-                        self.chat_adapter.status = "blank"
+                    if audio_result is None and self.chat_adapter.has_pending_audio():
+                        # 等待网络后续分片，不用零声替代尚未收到的数据。
+                        origin_audio, valid_duration = None, 0
+                    else:
+                        origin_audio, valid_duration = self.prepare_audio_data(audio_result)
                 else:
                     origin_audio, valid_duration = self.prepare_audio_data(None)
 

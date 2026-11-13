@@ -82,7 +82,8 @@ class BiliLiveChatAdapter(WsAudioSource):
         if self._thread is not None:
             return
         logger.info(
-            "[Bili] 启动直播互动 | llm={}/{} | event_window={}s | max_events={}",
+            "[Bili] 启动直播互动 | task={} | llm={}/{} | event_window={}s | max_events={}",
+            "refa2av" if self.direct_av else "refa2v (streaming TTS)",
             log_preview(self.config.llm_provider, self.config),
             log_preview(self.config.llm_model, self.config),
             self.config.event_batch_seconds,
@@ -179,7 +180,8 @@ class BiliLiveChatAdapter(WsAudioSource):
         while not self._stopping.is_set():
             await asyncio.sleep(0.25)
             with self._lock:
-                busy = self._turn_busy or (not self.direct_av and (self.status != "blank" or bool(self.audio_buffer and self.audio_buffer.current_size)))
+                buffers = (self.audio_buffer, *self._pending_audio_buffers)
+                busy = self._turn_busy or (not self.direct_av and (self.status != "blank" or any(buffer and buffer.current_size for buffer in buffers)))
             if busy:
                 self._last_activity = time.monotonic()
                 continue
@@ -232,16 +234,19 @@ class BiliLiveChatAdapter(WsAudioSource):
             while (sentence := await sentences.get()) is not None:
                 if generation != self._generation:
                     return
-                if not started_audio:
-                    self.on_audio_start()
-                    started_audio = True
                 stream = self._tts.synthesize(sentence)
                 try:
                     async for pcm in stream:
-                        if generation != self._generation:
-                            return
-                        self.on_audio_chunk(pcm)
-                    pcm_bytes += len(pcm)
+                        if not pcm:
+                            continue
+                        with self._motion_gate:
+                            if generation != self._generation or self._stopping.is_set():
+                                return
+                            if not started_audio:
+                                self.on_audio_start()
+                                started_audio = True
+                            self.on_audio_chunk(pcm)
+                        pcm_bytes += len(pcm)
                 finally:
                     await stream.aclose()
 
@@ -265,12 +270,14 @@ class BiliLiveChatAdapter(WsAudioSource):
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            if started_audio and generation == self._generation:
-                # Finish only after all TTS audio, never when LLM text completes.
-                self.on_audio_end()
-            with self._lock:
-                self._turn_busy = False
-            self._last_activity = time.monotonic()
+            with self._motion_gate:
+                if generation == self._generation:
+                    if started_audio:
+                        # Finish after all TTS audio, never when LLM text completes.
+                        self.on_audio_end()
+                    with self._lock:
+                        self._turn_busy = False
+                    self._last_activity = time.monotonic()
 
     async def _answer_motion(self, prompt: str) -> None:
         """Queue one complete spoken motion; the runner releases its busy state."""
@@ -301,7 +308,7 @@ class BiliLiveChatAdapter(WsAudioSource):
             if not actions and not any(char.isalnum() for char in speech):
                 return
             motion = "\n".join(dict.fromkeys(action for action, _duration in actions))
-            speech_prompt = "The host says in Mandarin Chinese: %s." % json.dumps(speech, ensure_ascii=False) if speech else "The host remains silent."
+            speech_prompt = f"<Subject 1> speaks in a voice matching <Audio 1>: <d>[Chinese] {speech}</d>" if speech else "The host remains silent."
             motion = (motion + "\n" + speech_prompt).strip()
             duration = max((value for _action, value in actions), default=3.0)
             if speech:
@@ -340,44 +347,40 @@ class BiliLiveChatAdapter(WsAudioSource):
                         self._turn_busy = False
                     self._last_activity = time.monotonic()
 
-    def on_motion_started(self, prompt: str) -> None:
+    def motion_update(self, old_prompt=None, new_prompt=None) -> None:
         if not self.direct_av:
             return
         with self._lock:
-            if self._submitted_motion and prompt == self._submitted_motion:
-                self._motion_started = True
-
-    def on_motion_finished(self, prompt: str) -> None:
-        if not self.direct_av:
-            return
-        with self._lock:
-            if not self._motion_started or prompt != self._submitted_motion:
+            submitted = self._submitted_motion
+            if not submitted:
                 return
-            self._submitted_motion = ""
-            self._motion_started = False
-            self._turn_busy = False
-            self._last_activity = time.monotonic()
+            starting = new_prompt == submitted
+            # A new request can repeat the old text before it has started.
+            # Replacing it with the same prompt must keep this turn busy.
+            if self._motion_started and old_prompt == submitted and not starting:
+                self._submitted_motion = ""
+                self._motion_started = False
+                self._turn_busy = False
+                self._last_activity = time.monotonic()
+            if starting:
+                self._motion_started = True
+                self._turn_busy = True
 
-    def on_audio_end(self, note: str = "") -> None:
-        super().on_audio_end(note)
-        with self._lock:
-            wake = self.status == "blank" and bool(self.has_voice(self.seg_duration))
-        if wake:
-            # Finished short utterances must also become consumable by the reader.
-            self.immediate_switch_to("voice")
-
-    def on_clear_audio(self, note: str = "") -> None:
+    def on_clear_audio(self, note: str = "", command_id: str = "") -> None:
         logger.info("[Bili] 收到打断 | note={} | pending_events={}", log_preview(note, self.config, 80), len(self._events))
         with self._motion_gate:
             loop, turn_task = self._loop, self._turn_task
             self._generation += 1
-            super().on_clear_audio(note)
+            super().on_clear_audio(note, command_id=command_id)
+            with self._lock:
+                self._turn_busy = False
+                self._last_activity = time.monotonic()
             if self.direct_av:
                 stream_config = getattr(getattr(self.model_runner, "input_info", None), "stream_config", {}) or {}
                 idle_prompt = str(stream_config.get("idle_prompt") or "<Subject 1> waits quietly, with a relaxed expression and closed mouth. No speech.")
                 with self._lock:
                     # Internal zero-duration control leaves the runner's baseline intact.
-                    self.action_switch = {"prompt": idle_prompt, "duration": 0}
+                    self.action_switch = {"prompt": idle_prompt, "duration": 0, "command_id": command_id}
                     self._submitted_motion = ""
                     self._motion_started = False
                     self._turn_busy = False
@@ -385,15 +388,15 @@ class BiliLiveChatAdapter(WsAudioSource):
         if loop is not None and turn_task is not None:
             loop.call_soon_threadsafe(turn_task.cancel)
 
-    def on_image_switch(self, image_path: str) -> None:
-        self.set_image_switch(image_path)
+    def on_image_switch(self, image_path: str, command_id: str = "") -> None:
+        self.set_image_switch(image_path, command_id=command_id)
 
-    def set_image_switch(self, image_path: str) -> None:
+    def set_image_switch(self, image_path: str, command_id: str = "") -> None:
         image_path = str(image_path)
         if not Path(image_path).is_file():
             raise ValueError("Generated reference image is missing")
         with self._lock:
-            self.image_switch = image_path
+            self.image_switch = {"image_path": image_path, "command_id": command_id}
             self.pending_image_path = image_path
             self.requested_image_path = image_path
             if self.recorder is not None:
@@ -454,8 +457,9 @@ class BiliLiveChatAdapter(WsAudioSource):
     def stop(self) -> None:
         if not self._stopping.is_set():
             logger.info("[Bili] 停止直播互动 | pending_events={}", len(self._events))
-        self._stopping.set()
-        self._generation += 1
+        with self._motion_gate:
+            self._stopping.set()
+            self._generation += 1
         loop, event = self._loop, self._stop_event
         if loop is not None and event is not None:
             try:

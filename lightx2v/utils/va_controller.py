@@ -356,11 +356,12 @@ class VAController:
 
     def omni_reader_image_control(self):
         image_switch = self.reader.get_image_switch()
-        if not isinstance(image_switch, str) or len(image_switch) == 0:
+        if not image_switch:
             return None
-        # H3 validates the decoded image collectively. A rank-local skip here
-        # could send its peers into reference-encoder collectives alone.
-        if not self.is_minimax_h3_causal and not os.path.exists(image_switch):
+        if self.is_minimax_h3_causal:
+            # H3 validates the reference collectively on all ranks.
+            return NextControl(action="switch_image", data=image_switch)
+        if not os.path.exists(image_switch):
             logger.warning(f"Switch image path {image_switch} does not exist")
             return None
         # self.truncate_buffer(self.est_switch_image_end_idx + self.est_infer_end_idx, "image switch")
