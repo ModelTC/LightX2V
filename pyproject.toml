@@ -73,6 +73,9 @@ dependencies = [
     "torchada>=0.1.10",
 ]
 
+[project.optional-dependencies]
+tbdub = ["scikit-image"]
+
 [project.urls]
 Homepage = "https://github.com/ModelTC/LightX2V"
 Documentation = "https://lightx2v-en.readthedocs.io/en/latest/"

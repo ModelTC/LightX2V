@@ -41,6 +41,7 @@ RUNNER_MODULES = {
     "taomate_h3": "lightx2v.models.runners.taomate_h3.runner",
     "streamrender_h3": "lightx2v.models.runners.streamrender_h3.runner",
     "swiftvr": "lightx2v.models.runners.swiftvr.swiftvr_runner",
+    "tbdub": "lightx2v.models.runners.wan.wan_tbdub_runner",
     "wan2.1": "lightx2v.models.runners.wan.wan_runner",
     "wan2.1_sf": "lightx2v.models.runners.wan.wan_sf_runner",
     "wan2.1_realtime": "lightx2v.models.runners.wan.wan_realtime_video_runner",

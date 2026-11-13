@@ -166,6 +166,15 @@ def load_model_config(deployment_config):
         }
         for key, filename in component_files.items():
             model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
+    elif model_cls == "tbdub":
+        component_files = {
+            "dit_original_ckpt": "tbdub_student.safetensors",
+            "vae_path": "Wan2.2_VAE.safetensors",
+            "audio_encoder_path": "hubert-large-ll60k",
+            "prompt_embedding_path": "null_prompt_emb.pt",
+        }
+        for key, filename in component_files.items():
+            model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
     elif model_cls in EDENLIVE_COMPONENT_FILES:
         component_files = {
             "t5_original_ckpt": "umt5/text_encoder/model.safetensors",
