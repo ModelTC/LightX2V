@@ -20,6 +20,15 @@ _QUAD_SPLIT_2 = torch.tensor([0, 1, 3, 3, 1, 2], dtype=torch.long)
 
 def fill_mesh_holes(vertices, faces, max_hole_perimeter=3e-2):
     """Apply the upstream TRELLIS.2 CuMesh hole-filling sequence."""
+    from lightx2v_platform.base.global_var import AI_DEVICE
+
+    if torch.device(AI_DEVICE).type == "mlu":
+        from lightx2v_platform.ops.mesh.cambricon_mlu import fill_mesh_holes as mlu_fill_mesh_holes
+
+        device = vertices.device
+        result = mlu_fill_mesh_holes(vertices.to(AI_DEVICE), faces.to(AI_DEVICE), max_hole_perimeter)
+        return tuple(value.to(device) for value in result)
+
     import cumesh
 
     device = vertices.device

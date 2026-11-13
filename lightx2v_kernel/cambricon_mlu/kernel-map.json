@@ -1,0 +1,197 @@
+{
+  "upstream_commit": "12289e1062f0603f2f0d0771b02e1395d247f26f",
+  "kernels": [
+    {
+      "op": 0,
+      "cuda_file": "src/connectivity.cu",
+      "cuda_kernel": "expand_edges_kernel",
+      "mlu_kernel": "expand_edges_kernel",
+      "cuda_function_sha256": "97df6a9c31d895a36caea2b947e0b3bacdfa1aded4b8b7e766406f169a374e0a",
+      "launch_arguments": "(const int3*)p[0], n, (uint64_t*)p[1]"
+    },
+    {
+      "op": 1,
+      "cuda_file": "src/connectivity.cu",
+      "cuda_kernel": "get_vertex_edge_cnt_kernel",
+      "mlu_kernel": "get_vertex_edge_cnt_kernel",
+      "cuda_function_sha256": "9a3582fa64149e802bd20dfacd5b2152295ace9a61f36efa6089b2e455cda243",
+      "launch_arguments": "(const uint64_t*)p[0], n, (int*)p[1]"
+    },
+    {
+      "op": 2,
+      "cuda_file": "src/connectivity.cu",
+      "cuda_kernel": "get_vertex_edge_adjacency_kernel",
+      "mlu_kernel": "get_vertex_edge_adjacency_kernel",
+      "cuda_function_sha256": "0aa88ac8ab1ab01e07298d0e845aedce9490c43a63ea6cdb354a09d48e485c6f",
+      "launch_arguments": "(const uint64_t*)p[0], n, (int*)p[1], (int*)p[2], (int*)p[3]"
+    },
+    {
+      "op": 3,
+      "cuda_file": "src/connectivity.cu",
+      "cuda_kernel": "set_boundary_vertex_kernel",
+      "mlu_kernel": "set_boundary_vertex_kernel",
+      "cuda_function_sha256": "c2881223e6cfd660d83383415bc19c570bebd5b14847958985f103736a4e156d",
+      "launch_arguments": "(const uint64_t*)p[0], (const int*)p[1], (const int*)p[2], n, (uint8_t*)p[3]"
+    },
+    {
+      "op": 4,
+      "cuda_file": "src/connectivity.cu",
+      "cuda_kernel": "get_vertex_boundary_cnt_kernel",
+      "mlu_kernel": "get_vertex_boundary_cnt_kernel",
+      "cuda_function_sha256": "30089ebc939500ef7b2f489a020eb43780f96d03526178a6e957e86495639d8e",
+      "launch_arguments": "(const uint64_t*)p[0], (const int*)p[1], n, (int*)p[2]"
+    },
+    {
+      "op": 5,
+      "cuda_file": "src/connectivity.cu",
+      "cuda_kernel": "get_vertex_boundary_adjacency_kernel",
+      "mlu_kernel": "get_vertex_boundary_adjacency_kernel",
+      "cuda_function_sha256": "7007bd9d4898cef135c383f5b62dcffb7cdd3346f334a6364f6875f571e62943",
+      "launch_arguments": "(const uint64_t*)p[0], (const int*)p[1], n, (int*)p[2], (int*)p[3], (int*)p[4]"
+    },
+    {
+      "op": 6,
+      "cuda_file": "src/connectivity.cu",
+      "cuda_kernel": "get_vertex_is_manifold_kernel",
+      "mlu_kernel": "get_vertex_is_manifold_kernel",
+      "cuda_function_sha256": "0f3386209b2ce9f489c49a1465cb464682dd8ead75a179bb5fc77cd766f74f7f",
+      "launch_arguments": "(const int*)p[0], (const int*)p[1], (const int*)p[2], n, (uint8_t*)p[3]"
+    },
+    {
+      "op": 7,
+      "cuda_file": "src/connectivity.cu",
+      "cuda_kernel": "set_manifold_bound_adj_kernel",
+      "mlu_kernel": "set_manifold_bound_adj_kernel",
+      "cuda_function_sha256": "6fe4302d3e4ae4670d87359d174b38a7cfbda0d8c1196fca5b3ed2f81ccc03c3",
+      "launch_arguments": "(const int*)p[0], (const int*)p[1], (const int*)p[2], n, (int2*)p[3]"
+    },
+    {
+      "op": 8,
+      "cuda_file": "src/shared.cu",
+      "cuda_kernel": "hook_edges_kernel",
+      "mlu_kernel": "hook_edges_kernel",
+      "cuda_function_sha256": "c0e9df91ac45b09dfc67f33bc8747a32714232b010abf3e36beff17cb88cba37",
+      "launch_arguments": "(const int2*)p[0], n, (int*)p[1], (int*)p[2]"
+    },
+    {
+      "op": 9,
+      "cuda_file": "src/shared.cu",
+      "cuda_kernel": "compress_components_kernel",
+      "mlu_kernel": "compress_components_kernel",
+      "cuda_function_sha256": "150785308fae2ce06729d161dc7eb3ed9576e599eb5395c832f75b95cd5411ea",
+      "launch_arguments": "(int*)p[0], n"
+    },
+    {
+      "op": 10,
+      "cuda_file": "src/connectivity.cu",
+      "cuda_kernel": "is_bound_conn_comp_loop_kernel",
+      "mlu_kernel": "is_bound_conn_comp_loop_kernel",
+      "cuda_function_sha256": "f76dd88917554afb0efdda6a46f957ce5f6d04f31d2618070765910e664aa818",
+      "launch_arguments": "(const uint64_t*)p[0], (const int*)p[1], (const int*)p[2], (const int*)p[3], (const int*)p[4], n, (int*)p[5]"
+    },
+    {
+      "op": 11,
+      "cuda_file": "src/clean_up.cu",
+      "cuda_kernel": "compute_loop_boundary_lengths",
+      "mlu_kernel": "compute_loop_boundary_lengths",
+      "cuda_function_sha256": "dc751e75069b8e9678b1b48532444ea2359e7b544b863dbe061e061700aeba67",
+      "launch_arguments": "(const float3*)p[0], (const uint64_t*)p[1], (const int*)p[2], n, (float*)p[3]"
+    },
+    {
+      "op": 12,
+      "cuda_file": "src/clean_up.cu",
+      "cuda_kernel": "compute_loop_boundary_midpoints",
+      "mlu_kernel": "compute_loop_boundary_midpoints",
+      "cuda_function_sha256": "efd812ff6d5d6a3c59e67b402a00ab9c6b10a9a1e9f41c55bafeb274666381c9",
+      "launch_arguments": "(const float3*)p[0], (const uint64_t*)p[1], (const int*)p[2], n, (Vec3f*)p[3]"
+    },
+    {
+      "op": 13,
+      "cuda_file": "src/clean_up.cu",
+      "cuda_kernel": "connect_new_vertices_kernel",
+      "mlu_kernel": "connect_new_vertices_kernel",
+      "cuda_function_sha256": "6cb99fcd2cac0001e6ff169d70837bd235752366512420bd5cf4ff67e5735f3e",
+      "launch_arguments": "(const uint64_t*)p[0], (const int*)p[1], (const int*)p[2], n, arg, (int3*)p[3]"
+    },
+    {
+      "op": 14,
+      "cuda_file": "src/shared.h",
+      "cuda_kernel": "arange_kernel",
+      "mlu_kernel": "arange_kernel",
+      "cuda_function_sha256": "b8795bfe9fd677171fd9b9d30eb786cf33aa9dda360284c2410d55c5509d3800",
+      "launch_arguments": "(int*)p[0], n, arg"
+    },
+    {
+      "op": 15,
+      "cuda_file": "src/shared.h",
+      "cuda_kernel": "fill_kernel",
+      "mlu_kernel": "fill_kernel",
+      "cuda_function_sha256": "610d9567176a9844ace0f2de35333ff633721325bb8f3619b956356994d436ea",
+      "launch_arguments": "(int*)p[0], n, arg"
+    },
+    {
+      "op": 16,
+      "cuda_file": "src/shared.h",
+      "cuda_kernel": "scatter_kernel",
+      "mlu_kernel": "scatter_kernel",
+      "cuda_function_sha256": "34f413161f312a9f9dfe74de9cffcf327af56a2b11cda4fc6dfba49edcfe45ed",
+      "launch_arguments": "(const int*)p[0], (const int*)p[1], n, (int*)p[2]"
+    },
+    {
+      "op": 17,
+      "cuda_file": "src/shared.h",
+      "cuda_kernel": "index_kernel",
+      "mlu_kernel": "index_kernel",
+      "cuda_function_sha256": "7dad3154553e0f6d41b5e34fe01733e47037fbd9d4d0f584bd2314998dfa35ad",
+      "launch_arguments": "(const int*)p[0], (const int*)p[1], n, (int*)p[2]"
+    },
+    {
+      "op": 18,
+      "cuda_file": "src/shared.h",
+      "cuda_kernel": "diff_kernel",
+      "mlu_kernel": "diff_kernel",
+      "cuda_function_sha256": "667274c10e12eaa03f25f377158a57411cd01d975018052dde01436ea70a5f84",
+      "launch_arguments": "(const int*)p[0], n, (int*)p[1]"
+    },
+    {
+      "op": 19,
+      "cuda_file": "src/shared.h",
+      "cuda_kernel": "set_flag_kernel",
+      "mlu_kernel": "set_flag_kernel",
+      "cuda_function_sha256": "7944f59cbf5ea99b3d2a00fb1fa00a80d5d5ad1d97d54c56c22c6f52aea0f5cc",
+      "launch_arguments": "(const int*)p[0], n, (int*)p[1]"
+    },
+    {
+      "op": 20,
+      "cuda_file": "src/shared.h",
+      "cuda_kernel": "compare_kernel",
+      "mlu_kernel": "compare_kernel",
+      "cuda_function_sha256": "624b05515d78d2ec014adf777ac6c9fdcdfdcd5755786cf47f784d0269a0cf99",
+      "launch_arguments": "(const float*)p[0], threshold, n, LessThanOp(), (uint8_t*)p[1]"
+    },
+    {
+      "op": 21,
+      "cuda_file": "src/shared.h",
+      "cuda_kernel": "inplace_div_kernel",
+      "mlu_kernel": "inplace_div_kernel",
+      "cuda_function_sha256": "cc97d4d7710768343bc1bc970fd7b2e4dae3bce294e60f369200b9d9970f277a",
+      "launch_arguments": "(Vec3f*)p[0], (const int*)p[1], n"
+    },
+    {
+      "op": 22,
+      "cuda_file": "src/shared.h",
+      "cuda_kernel": "get_diff_kernel",
+      "mlu_kernel": "get_diff_kernel",
+      "cuda_function_sha256": "8bf019a02195a0b216b42f30f74d8d3140c63e3b4f6190db7d825b72c9b61125",
+      "launch_arguments": "(const int*)p[0], (int*)p[1], n"
+    },
+    {
+      "op": 23,
+      "cuda_file": "src/clean_up.cu",
+      "cuda_kernel": "copy_vec3f_to_float3_kernel",
+      "mlu_kernel": "copy_vec3f_to_float3_kernel",
+      "cuda_function_sha256": "eb8eccd308d0ee948f7c01f0ad170cdb0ee3a2758566511cbdf4d72387d5ba71",
+      "launch_arguments": "(const Vec3f*)p[0], n, (float3*)p[1]"
+    }
+  ]
+}

@@ -125,3 +125,6 @@ COPY lightx2v_platform lightx2v_platform
 COPY scripts scripts
 COPY test_cases test_cases
 COPY tools tools
+
+# Compile the TRELLIS.2 mesh operations with the same vendor ABI as the runtime.
+RUN MAX_JOBS=2 python -m pip install --no-build-isolation --no-deps ./lightx2v_kernel/cambricon_mlu

@@ -1,0 +1,555 @@
+// Adapted from CuMesh, Copyright (c) 2025 Jianfeng XIANG, MIT License.
+// Upstream: JeffreyXiang/CuMesh@12289e1062f0603f2f0d0771b02e1395d247f26f.
+#include <bang.h>
+#include <cnrt.h>
+#include <stdint.h>
+#include <math.h>
+__mlu_func__ int min(int a, int b) { return a < b ? a : b; }
+__mlu_func__ int max(int a, int b) { return a > b ? a : b; }
+struct int2 { int x, y; };
+// Preserve all 64 key bits through two int32 words. BANG scalar uint64
+// shifts/loads truncate the upper key bits for large vertex indices.
+struct Edge { uint32_t low, high; };
+struct int3 { int x, y, z; };
+struct float3 { float x, y, z; };
+__mlu_func__ float3 make_float3(float x, float y, float z) { return {x,y,z}; }
+struct Vec3f {
+    float x,y,z;
+    __mlu_func__ Vec3f() : x(0),y(0),z(0) {}
+    __mlu_func__ Vec3f(float3 a) : x(a.x),y(a.y),z(a.z) {}
+    __mlu_func__ Vec3f(float a,float b,float c) : x(a),y(b),z(c) {}
+    __mlu_func__ Vec3f operator+(const Vec3f& b) const { return {x+b.x,y+b.y,z+b.z}; }
+    __mlu_func__ Vec3f operator-(const Vec3f& b) const { return {x-b.x,y-b.y,z-b.z}; }
+    __mlu_func__ Vec3f operator*(float a) const { return {x*a,y*a,z*a}; }
+    __mlu_func__ Vec3f operator/(float a) const { return {x/a,y/a,z/a}; }
+    __mlu_func__ float norm() const { return sqrtf(x*x+y*y+z*z); }
+};
+__mlu_func__ int atomicAdd(int* address, int value) {
+    __nram__ int previous[1];
+    __bang_atomic_add(previous, address, value, 1);
+    return previous[0];
+}
+__mlu_func__ int atomicMin(int* address, int value) {
+    __nram__ int previous[1];
+    __bang_atomic_min(previous, address, value, 1);
+    return previous[0];
+}
+struct LessThanOp { __mlu_func__ bool operator()(float a,float b) const { return a<b; } };
+
+// CUDA: src/connectivity.cu :: expand_edges_kernel
+
+__mlu_global__ void expand_edges_kernel(
+    const int3* faces,
+    const int F,
+    Edge *edges
+) {
+    for (int tid = taskId; tid < F; tid += taskDim) {
+
+    int base = tid * 3;
+    int3 f = faces[tid];
+
+    // expand edges
+    edges[base + 0] = {(uint32_t)max(f.x, f.y), (uint32_t)min(f.x, f.y)};
+    edges[base + 1] = {(uint32_t)max(f.y, f.z), (uint32_t)min(f.y, f.z)};
+    edges[base + 2] = {(uint32_t)max(f.z, f.x), (uint32_t)min(f.z, f.x)};
+    }
+}
+
+// CUDA: src/connectivity.cu :: get_vertex_edge_cnt_kernel
+
+__mlu_global__ void get_vertex_edge_cnt_kernel(
+    const Edge* edges,
+    const int E,
+    int* vert2edge_cnt
+) {
+    for (int tid = taskId; tid < E; tid += taskDim) {
+
+    // get edge
+    Edge e = edges[tid];
+    int e0 = int(e.high);
+    int e1 = int(e.low);
+
+    // count vertex adjacent edge number
+    atomicAdd(&vert2edge_cnt[e0], 1);
+    atomicAdd(&vert2edge_cnt[e1], 1);
+    }
+}
+
+// CUDA: src/connectivity.cu :: get_vertex_edge_adjacency_kernel
+
+__mlu_global__ void get_vertex_edge_adjacency_kernel(
+    const Edge* edges,
+    const int E,
+    int* vert2edge,
+    int* vert2edge_offset,
+    int* vert2edge_cnt
+) {
+    for (int tid = taskId; tid < E; tid += taskDim) {
+
+    // get edge
+    Edge e = edges[tid];
+    int e0 = int(e.high);
+    int e1 = int(e.low);
+
+    // assign connectivity
+    vert2edge[vert2edge_offset[e0] + atomicAdd(&vert2edge_cnt[e0], 1)] = tid;
+    vert2edge[vert2edge_offset[e1] + atomicAdd(&vert2edge_cnt[e1], 1)] = tid;
+    }
+}
+
+// CUDA: src/connectivity.cu :: set_boundary_vertex_kernel
+
+__mlu_global__ void set_boundary_vertex_kernel(
+    const Edge* edges,
+    const int* boundaries,
+    const int* edge2face_cnt,
+    const int B,
+    uint8_t* vert_is_boundary
+) {
+    for (int tid = taskId; tid < B; tid += taskDim) {
+
+    int eid = boundaries[tid];
+
+    if (edge2face_cnt[eid] == 1) {
+        // get edge
+        Edge e = edges[eid];
+        int e0 = int(e.high);
+        int e1 = int(e.low);
+
+        // set boundary vertex
+        vert_is_boundary[e0] = 1;
+        vert_is_boundary[e1] = 1;
+    }
+    }
+}
+
+// CUDA: src/connectivity.cu :: get_vertex_boundary_cnt_kernel
+
+__mlu_global__ void get_vertex_boundary_cnt_kernel(
+    const Edge* edges,
+    const int* boundaries,
+    const int B,
+    int* vert2bound_cnt
+) {
+    for (int tid = taskId; tid < B; tid += taskDim) {
+
+    int eid = boundaries[tid];
+
+    // get edge
+    Edge e = edges[eid];
+    int e0 = int(e.high);
+    int e1 = int(e.low);
+
+    // count vertex adjacent boundary number
+    atomicAdd(&vert2bound_cnt[e0], 1);
+    atomicAdd(&vert2bound_cnt[e1], 1);
+    }
+}
+
+// CUDA: src/connectivity.cu :: get_vertex_boundary_adjacency_kernel
+
+__mlu_global__ void get_vertex_boundary_adjacency_kernel(
+    const Edge* edges,
+    const int* boundaries,
+    const int B,
+    int* vert2bound,
+    int* vert2bound_offset,
+    int* vert2bound_cnt
+) {
+    for (int tid = taskId; tid < B; tid += taskDim) {
+
+    int eid = boundaries[tid];
+
+    // get edge
+    Edge e = edges[eid];
+    int e0 = int(e.high);
+    int e1 = int(e.low);
+
+    // assign connectivity
+    vert2bound[vert2bound_offset[e0] + atomicAdd(&vert2bound_cnt[e0], 1)] = tid;
+    vert2bound[vert2bound_offset[e1] + atomicAdd(&vert2bound_cnt[e1], 1)] = tid;
+    }
+}
+
+// CUDA: src/connectivity.cu :: get_vertex_is_manifold_kernel
+
+__mlu_global__ void get_vertex_is_manifold_kernel(
+    const int* vert2edge,
+    const int* vert2edge_offset,
+    const int* edge2face_cnt,
+    const int V,
+    uint8_t* vert_is_manifold
+) {
+    for (int tid = taskId; tid < V; tid += taskDim) {
+
+    // traverse all edges of the vertex
+    int num_boundaries = 0;
+    bool is_manifold = true;
+    for (int i = vert2edge_offset[tid]; i < vert2edge_offset[tid+1]; i++) {
+        int eid = vert2edge[i];
+        // boundary edge
+        if (edge2face_cnt[eid] == 1) {
+            num_boundaries++;
+            if (num_boundaries > 2) {
+                is_manifold = false;
+                break;
+            }
+        }
+        // non-manifold edge
+        else if (edge2face_cnt[eid] > 2) {
+            is_manifold = false;
+            break;
+        }
+    }
+
+    vert_is_manifold[tid] = is_manifold ? 1 : 0;
+    }
+}
+
+// CUDA: src/connectivity.cu :: set_manifold_bound_adj_kernel
+
+__mlu_global__ void set_manifold_bound_adj_kernel(
+    const int* manifold_boundary_verts_idx,
+    const int* vert2bound,
+    const int* vert2bound_offset,
+    const size_t MBV,
+    int2* manifold_bound_adj
+) {
+    for (int tid = taskId; tid < MBV; tid += taskDim) {
+
+    // get vertex
+    int vert_idx = manifold_boundary_verts_idx[tid];
+
+    // get adjacent boundaries
+    int b0 = vert2bound[vert2bound_offset[vert_idx]];
+    int b1 = vert2bound[vert2bound_offset[vert_idx] + 1];
+
+    manifold_bound_adj[tid] = {b0, b1};
+    }
+}
+
+// CUDA: src/shared.cu :: hook_edges_kernel
+
+__mlu_global__ void hook_edges_kernel(
+    const int2* adj,
+    const int M,
+    int* conn_comp_ids,
+    int* end_flag
+) {
+    for (int tid = taskId; tid < M; tid += taskDim) {
+
+    // get adjacent faces
+    int f0 = adj[tid].x;
+    int f1 = adj[tid].y;
+
+    // union
+    // find roots
+    int root0 = conn_comp_ids[f0];
+    while (root0 != conn_comp_ids[root0]) {
+        root0 = conn_comp_ids[root0];
+    }
+    int root1 = conn_comp_ids[f1];
+    while (root1 != conn_comp_ids[root1]) {
+        root1 = conn_comp_ids[root1];
+    }
+
+    if (root0 == root1) continue;
+
+    int high = max(root0, root1);
+    int low = min(root0, root1);
+    atomicMin(&conn_comp_ids[high], low);
+    *end_flag = 0;
+    }
+}
+
+// CUDA: src/shared.cu :: compress_components_kernel
+
+__mlu_global__ void compress_components_kernel(
+    int* conn_comp_ids,
+    const int F
+) {
+    for (int tid = taskId; tid < F; tid += taskDim) {
+
+    int p = conn_comp_ids[tid];
+    while (p != conn_comp_ids[p]) {
+        p = conn_comp_ids[p];
+    }
+    conn_comp_ids[tid] = p;
+    }
+}
+
+// CUDA: src/connectivity.cu :: is_bound_conn_comp_loop_kernel
+
+__mlu_global__ void is_bound_conn_comp_loop_kernel(
+    const Edge* edges,
+    const int* boundaries,
+    const int* bound_conn_comp_ids,
+    const int* vert2bound,
+    const int* vert2bound_offset,
+    const int B,
+    int* is_bound_conn_comp_loop
+) {
+    for (int tid = taskId; tid < B; tid += taskDim) {
+
+    // get edge
+    int eid = boundaries[tid];
+    Edge e = edges[eid];
+    int e0 = int(e.high);
+    int e1 = int(e.low);
+
+    int self_comp_id = bound_conn_comp_ids[tid];
+
+    // check if both vertices are connected to another boundary with the same connected component id
+    int cnt = 0;
+    for (int i = vert2bound_offset[e0]; i < vert2bound_offset[e0+1]; i++) {
+        int b = vert2bound[i];
+        if (b == tid) continue; // skip self
+        int comp_id = bound_conn_comp_ids[b];
+        if (comp_id == self_comp_id) cnt++;
+    }
+    if (cnt == 0) {
+        is_bound_conn_comp_loop[self_comp_id] = 0;   // no loop
+        continue;
+    }
+    cnt = 0;
+    for (int i = vert2bound_offset[e1]; i < vert2bound_offset[e1+1]; i++) {
+        int b = vert2bound[i];
+        if (b == tid) continue; // skip self
+        int comp_id = bound_conn_comp_ids[b];
+        if (comp_id == self_comp_id) cnt++;
+    }
+    if (cnt == 0) {
+        is_bound_conn_comp_loop[self_comp_id] = 0;   // no loop
+        continue;
+    }
+    }
+}
+
+// CUDA: src/clean_up.cu :: compute_loop_boundary_lengths
+
+__mlu_global__ void compute_loop_boundary_lengths(
+    const float3* vertices,
+    const Edge* edges,
+    const int* loop_boundaries,
+    const size_t E,
+    float* loop_boundary_lengths
+) {
+    for (int tid = taskId; tid < E; tid += taskDim) {
+    Edge edge = edges[loop_boundaries[tid]];
+    int e0 = int(edge.low);
+    int e1 = int(edge.high);
+    Vec3f v0 = Vec3f(vertices[e0]);
+    Vec3f v1 = Vec3f(vertices[e1]);
+    loop_boundary_lengths[tid] = (v1 - v0).norm();
+    }
+}
+
+// CUDA: src/clean_up.cu :: compute_loop_boundary_midpoints
+
+__mlu_global__ void compute_loop_boundary_midpoints(
+    const float3* vertices,
+    const Edge* edges,
+    const int* loop_boundaries,
+    const size_t E,
+    Vec3f* loop_boundary_midpoints
+) {
+    for (int tid = taskId; tid < E; tid += taskDim) {
+    Edge edge = edges[loop_boundaries[tid]];
+    int e0 = int(edge.low);
+    int e1 = int(edge.high);
+    Vec3f v0 = Vec3f(vertices[e0]);
+    Vec3f v1 = Vec3f(vertices[e1]);
+    loop_boundary_midpoints[tid] = (v0 + v1) * 0.5f;
+    }
+}
+
+// CUDA: src/clean_up.cu :: connect_new_vertices_kernel
+
+__mlu_global__ void connect_new_vertices_kernel(
+    const Edge* edges,
+    const int* loop_boundaries,
+    const int* loop_bound_loop_ids,
+    const size_t L,
+    const size_t V,
+    int3* faces
+) {
+    for (int tid = taskId; tid < L; tid += taskDim) {
+    int loop_id = loop_bound_loop_ids[tid];
+    int loop_boundary = loop_boundaries[tid];
+    Edge e = edges[loop_boundary];
+    int e0 = int(e.low);
+    int e1 = int(e.high);
+    int new_v_id = loop_id + V;
+    faces[tid] = {e0, e1, new_v_id};
+    }
+}
+
+// CUDA: src/shared.h :: arange_kernel
+template<typename T>
+__mlu_global__ void arange_kernel(T* array, int N, int stride=1) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    array[tid] = static_cast<T>(tid * stride);
+    }
+}
+
+// CUDA: src/shared.h :: fill_kernel
+template<typename T>
+__mlu_global__ void fill_kernel(T* array, int N, T value) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    array[tid] = value;
+    }
+}
+
+// CUDA: src/shared.h :: scatter_kernel
+template<typename T>
+__mlu_global__ void scatter_kernel(
+    const int* indices,
+    const T* values,
+    const size_t N,
+    T* output
+) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    output[indices[tid]] = values[tid];
+    }
+}
+
+// CUDA: src/shared.h :: index_kernel
+template<typename T>
+__mlu_global__ void index_kernel(
+    const T* values,
+    const int* indices,
+    const size_t N,
+    T* output
+) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    output[tid] = values[indices[tid]];
+    }
+}
+
+// CUDA: src/shared.h :: diff_kernel
+template<typename T>
+__mlu_global__ void diff_kernel(
+    const T* values,
+    const size_t N,
+    T* output
+) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    output[tid] = values[tid+1] - values[tid];
+    }
+}
+
+// CUDA: src/shared.h :: set_flag_kernel
+template<typename T>
+__mlu_global__ void set_flag_kernel(
+    const int* indices,
+    const size_t N,
+    T* output
+) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    output[indices[tid]] = static_cast<T>(1);
+    }
+}
+
+// CUDA: src/shared.h :: compare_kernel
+template<typename CompT, typename FlagT, typename Comparator>
+__mlu_global__ void compare_kernel(
+    const CompT* values,
+    const CompT threshold,
+    const size_t N,
+    Comparator op,
+    FlagT* flag
+) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    flag[tid] = op(values[tid], threshold) ? static_cast<FlagT>(1) : static_cast<FlagT>(0);
+    }
+}
+
+// CUDA: src/shared.h :: inplace_div_kernel
+template<typename Ta, typename Tb>
+__mlu_global__ void inplace_div_kernel(
+    Ta* a,
+    const Tb* b,
+    const size_t N
+) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    a[tid] = a[tid] / static_cast<float>(b[tid]);
+    }
+}
+
+// CUDA: src/shared.h :: get_diff_kernel
+template<typename T>
+__mlu_global__ void get_diff_kernel(
+    const T* ids_sorted,
+    T* ids_diff,
+    const int N
+) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    if (tid == N-1) {
+        ids_diff[tid] = 1;
+        continue;
+    }
+    if (ids_sorted[tid] != ids_sorted[tid+1]) {
+        ids_diff[tid] = 1;
+    } else {
+        ids_diff[tid] = 0;
+    }
+    }
+}
+
+// CUDA: src/clean_up.cu :: copy_vec3f_to_float3_kernel
+
+__mlu_global__ void copy_vec3f_to_float3_kernel(
+    const Vec3f* vec3f,
+    const size_t N,
+    float3* output
+) {
+    for (int tid = taskId; tid < N; tid += taskDim) {
+    output[tid] = make_float3(vec3f[tid].x, vec3f[tid].y, vec3f[tid].z);
+    }
+}
+
+
+// Replacement for CUB DeviceSegmentedReduce::Sum. Reduction order is serial
+// within each segment; FP32 roundoff may differ from CUB's parallel tree.
+__mlu_global__ void segment_sum_kernel(const float* values, const int* offsets,
+                                      float* output, int segments, int width) {
+    for (int segment = taskId; segment < segments; segment += taskDim) {
+        for (int channel = 0; channel < width; ++channel) {
+            float sum = 0.0f;
+            for (int i = offsets[segment]; i < offsets[segment+1]; ++i)
+                sum += values[i * width + channel];
+            output[segment * width + channel] = sum;
+        }
+    }
+}
+
+extern "C" void launch_mesh(int op, cnrtQueue_t queue, void** p, int n, int arg, float threshold) {
+    cnrtDim3_t grid = {32, 1, 1};
+    switch (op) {
+    case 24: segment_sum_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const float*)p[0], (const int*)p[1], (float*)p[2], n, arg); break;
+    case 0: expand_edges_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const int3*)p[0], n, (Edge*)p[1]); break;
+    case 1: get_vertex_edge_cnt_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const Edge*)p[0], n, (int*)p[1]); break;
+    case 2: get_vertex_edge_adjacency_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const Edge*)p[0], n, (int*)p[1], (int*)p[2], (int*)p[3]); break;
+    case 3: set_boundary_vertex_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const Edge*)p[0], (const int*)p[1], (const int*)p[2], n, (uint8_t*)p[3]); break;
+    case 4: get_vertex_boundary_cnt_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const Edge*)p[0], (const int*)p[1], n, (int*)p[2]); break;
+    case 5: get_vertex_boundary_adjacency_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const Edge*)p[0], (const int*)p[1], n, (int*)p[2], (int*)p[3], (int*)p[4]); break;
+    case 6: get_vertex_is_manifold_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const int*)p[0], (const int*)p[1], (const int*)p[2], n, (uint8_t*)p[3]); break;
+    case 7: set_manifold_bound_adj_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const int*)p[0], (const int*)p[1], (const int*)p[2], n, (int2*)p[3]); break;
+    case 8: hook_edges_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const int2*)p[0], n, (int*)p[1], (int*)p[2]); break;
+    case 9: compress_components_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((int*)p[0], n); break;
+    case 10: is_bound_conn_comp_loop_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const Edge*)p[0], (const int*)p[1], (const int*)p[2], (const int*)p[3], (const int*)p[4], n, (int*)p[5]); break;
+    case 11: compute_loop_boundary_lengths<<<grid, cnrtFuncTypeBlock, queue>>>((const float3*)p[0], (const Edge*)p[1], (const int*)p[2], n, (float*)p[3]); break;
+    case 12: compute_loop_boundary_midpoints<<<grid, cnrtFuncTypeBlock, queue>>>((const float3*)p[0], (const Edge*)p[1], (const int*)p[2], n, (Vec3f*)p[3]); break;
+    case 13: connect_new_vertices_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const Edge*)p[0], (const int*)p[1], (const int*)p[2], n, arg, (int3*)p[3]); break;
+    case 14: arange_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((int*)p[0], n, arg); break;
+    case 15: fill_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((int*)p[0], n, arg); break;
+    case 16: scatter_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const int*)p[0], (const int*)p[1], n, (int*)p[2]); break;
+    case 17: index_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const int*)p[0], (const int*)p[1], n, (int*)p[2]); break;
+    case 18: diff_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const int*)p[0], n, (int*)p[1]); break;
+    case 19: set_flag_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const int*)p[0], n, (int*)p[1]); break;
+    case 20: compare_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const float*)p[0], threshold, n, LessThanOp(), (uint8_t*)p[1]); break;
+    case 21: inplace_div_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((Vec3f*)p[0], (const int*)p[1], n); break;
+    case 22: get_diff_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const int*)p[0], (int*)p[1], n); break;
+    case 23: copy_vec3f_to_float3_kernel<<<grid, cnrtFuncTypeBlock, queue>>>((const Vec3f*)p[0], n, (float3*)p[1]); break;
+    }
+}

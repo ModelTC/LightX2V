@@ -1,0 +1,3 @@
+include LICENSE README.md kernel-map.json
+recursive-include csrc *.cpp *.mlu
+recursive-include tests *.py
