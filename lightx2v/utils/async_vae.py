@@ -8,6 +8,8 @@ from typing import Any
 import torch
 from loguru import logger
 
+from lightx2v.utils.inference_errors import fatal_device_error_guard, terminate_on_fatal_device_error
+
 
 def async_vae_decode_enabled(config: dict[str, Any]) -> bool:
     """Read the shared top-level asynchronous decode switch."""
@@ -91,7 +93,8 @@ class AsyncVAEChunkDecoder:
         try:
             if hasattr(vae_decoder, "to_cuda"):
                 vae_decoder.to_cuda()
-        except BaseException:
+        except BaseException as error:
+            terminate_on_fatal_device_error(error)
             self._restore_vae()
             raise
 
@@ -178,7 +181,7 @@ class AsyncVAEChunkDecoder:
             self._submit_wait_ms += wait_ms
             self._log_new_async_chunks(wait_ms, wait_kind="submit_wait")
 
-        with torch.cuda.stream(stream), torch.no_grad():
+        with torch.cuda.stream(stream), torch.no_grad(), fatal_device_error_guard():
             stream.wait_event(diffusion_done)
             decode_start = torch.cuda.Event(enable_timing=True)
             decode_end = torch.cuda.Event(enable_timing=True)
@@ -200,13 +203,15 @@ class AsyncVAEChunkDecoder:
                 self._callback_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vae-chunks")
             self._callback_futures.append(self._callback_executor.submit(self._deliver_chunk, output, self._num_submitted - 1, decode_end))
 
+    @fatal_device_error_guard()
     def _deliver_chunk(self, output, index, done):
         done.synchronize()
-        with torch.cuda.device(output.device):
+        with torch.cuda.device(output.device), fatal_device_error_guard():
             self._on_chunk(output, index)
 
+    @fatal_device_error_guard()
     def _decode_chunk(self, decode_fn, args, kwargs, diffusion_done, index):
-        with torch.cuda.device(self._stream.device), torch.cuda.stream(self._stream), torch.no_grad():
+        with torch.cuda.device(self._stream.device), torch.cuda.stream(self._stream), torch.no_grad(), fatal_device_error_guard():
             self._stream.wait_event(diffusion_done)
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
@@ -232,12 +237,14 @@ class AsyncVAEChunkDecoder:
             try:
                 future.result()
             except BaseException as error:
+                terminate_on_fatal_device_error(error)
                 if first_error is None:
                     first_error = error
         if self._stream is not None:
             try:
                 self._stream.synchronize()
             except BaseException as error:
+                terminate_on_fatal_device_error(error)
                 if first_error is None:
                     first_error = error
         callbacks, self._callback_futures = self._callback_futures, []
@@ -245,6 +252,7 @@ class AsyncVAEChunkDecoder:
             try:
                 future.result()
             except BaseException as error:
+                terminate_on_fatal_device_error(error)
                 if first_error is None:
                     first_error = error
         if first_error is not None:
@@ -259,6 +267,7 @@ class AsyncVAEChunkDecoder:
             self._log_timing()
             return self._chunks
         except BaseException as error:
+            terminate_on_fatal_device_error(error)
             first_error = error
             raise
         finally:
@@ -268,6 +277,7 @@ class AsyncVAEChunkDecoder:
                     try:
                         executor.shutdown(wait=True)
                     except BaseException as error:
+                        terminate_on_fatal_device_error(error)
                         if cleanup_error is None:
                             cleanup_error = error
             self._decode_executor = None
@@ -284,6 +294,7 @@ class AsyncVAEChunkDecoder:
             try:
                 self._restore_vae()
             except BaseException as error:
+                terminate_on_fatal_device_error(error)
                 if cleanup_error is None:
                     cleanup_error = error
             if first_error is None and cleanup_error is not None:

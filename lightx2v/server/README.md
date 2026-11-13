@@ -490,6 +490,42 @@ The server uses `loguru` for structured logging. Logs include:
 
 1. **Input Validation**: All inputs validated with Pydantic schemas
 
+## Recovery from fatal device errors
+
+Documented fatal GPU errors terminate the process before device cleanup,
+fallback or synchronization. Ordinary errors, including out-of-memory, retain
+existing behavior. Run the service under torchrun and a process/container
+supervisor to restart the runtime after a rank exits. Process restart does not
+reset hardware or guarantee recovery of a faulty GPU.
+
+The classifier accepts only a RuntimeError whose complete first line matches
+`lightx2v/utils/inference_errors.py`, including matching causes/contexts.
+CUDA strings were checked with CUDA 12.8; MUSA strings were queried from
+installed libmusart 5.2.0 and checked against explicit restart contracts in
+`include/driver_types.h`. torch_musa 2.9.1.post1+musa5.2.0 native and generated
+compatible checks use MUSA/CUDA prefixes respectively. Other SDK versions may
+emit different wording. XID category names are not runtime exception strings.
+
+The whitelist excludes generic ECC 214, unknown 999, GPU-lost messages and
+NCCL/MCCL wrapper messages unless their exception chain independently contains
+a matched runtime error. Communication handlers skip barrier retry only when
+this classifier confirms a fatal error; this is not general communication-error
+coverage. No task timeout, watchdog or hardware-log monitoring is added.
+
+Fatal diagnostics make a best-effort nonblocking write of at most 4096 bytes,
+including bounded Python frame locations for the error and its exception chain.
+They do not flush log handlers, inspect local values, read source files or call
+GPU APIs. Linux stderr is reopened with independent status flags so sibling
+ranks keep their original blocking mode. Closed/full or unsupported stderr may
+lose diagnostics, but must not prevent exit.
+
+A device assertion can be input-triggered while still invalidating the device
+context. The supervisor's runtime restart policy and the scheduler's task retry
+policy are separate: deployments should bound task retries to prevent a bad
+request repeatedly restarting workers. CPU subprocess tests verify exit order,
+ordinary cleanup/fallback, and diagnostic behavior; they do not establish live
+GPU recovery or deployed task-retry behavior.
+
 ## License
 
 See the main project LICENSE file for licensing information.

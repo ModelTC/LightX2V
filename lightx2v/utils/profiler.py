@@ -9,6 +9,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.utils.envs import *
+from lightx2v.utils.inference_errors import is_fatal_device_error
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -152,6 +153,14 @@ class _ProfilingContext:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if is_fatal_device_error(exc_val):
+            # Propagate to the worker without touching the damaged device.
+            _get_excluded_time_stack().pop()
+            stack = _get_memory_profile_stack()
+            if self in stack:
+                stack.remove(self)
+            self._memory_profile_active = False
+            return False
         if not self._skip_sync:
             torch_device_module.synchronize()
         total_elapsed = time.perf_counter() - self.start_time
@@ -180,22 +189,7 @@ class _ProfilingContext:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if not self._skip_sync:
-            torch_device_module.synchronize()
-        total_elapsed = time.perf_counter() - self.start_time
-        memory_suffix = self._end_memory_profile()
-        excluded = _get_excluded_time_stack().pop()
-        elapsed = total_elapsed - excluded
-        if self.enable_recorder and self.metrics_func:
-            if self.metrics_labels:
-                self.metrics_func.labels(*self.metrics_labels).observe(elapsed)
-            else:
-                self.metrics_func.observe(elapsed)
-        if self.enable_logger:
-            suffix = " (non-sync)" if self._skip_sync else ""
-            display_elapsed = elapsed * 1000 if self.time_unit == "ms" else elapsed
-            logger.info(f"[Profile] {self.rank_info} - {self.name} cost {display_elapsed:.6f} {self.time_unit}{memory_suffix}{suffix}")
-        return False
+        return self.__exit__(exc_type, exc_val, exc_tb)
 
     def __call__(self, func):
         if asyncio.iscoroutinefunction(func):
@@ -253,6 +247,8 @@ class _ExcludedProfilingContext:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if is_fatal_device_error(exc_val):
+            return False
         if not self._skip_sync:
             torch_device_module.synchronize()
         elapsed = time.perf_counter() - self.start_time
@@ -273,16 +269,7 @@ class _ExcludedProfilingContext:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if not self._skip_sync:
-            torch_device_module.synchronize()
-        elapsed = time.perf_counter() - self.start_time
-        stack = _get_excluded_time_stack()
-        for i in range(len(stack)):
-            stack[i] += elapsed
-        if self.name and CHECK_PROFILING_DEBUG_LEVEL(1):
-            suffix = " (non-sync)" if self._skip_sync else ""
-            logger.info(f"[Profile-Excluded] {self.rank_info} - {self.name} cost {elapsed:.6f} seconds (excluded from outer profiling){suffix}")
-        return False
+        return self.__exit__(exc_type, exc_val, exc_tb)
 
     def __call__(self, func):
         if asyncio.iscoroutinefunction(func):

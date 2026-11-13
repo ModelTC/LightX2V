@@ -19,6 +19,7 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import count_conv3d, patchify
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import I2VAInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -60,6 +61,9 @@ class _StreamingVAEEncoder:
             encoded = encode_model.encoder(video, feat_cache=cache, feat_idx=[0])
             mu, _ = encode_model.conv1(encoded).chunk(2, dim=1)
             return (mu - self.vae.mean.view(1, -1, 1, 1, 1)) * self.vae.inv_std.view(1, -1, 1, 1, 1)
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             if self.vae.cpu_offload:
                 self.vae.to_cpu()

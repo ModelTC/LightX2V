@@ -17,6 +17,7 @@ from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT
 from lightx2v.models.schedulers.lingbot_video.scheduler import LingBotVideoScheduler
 from lightx2v.models.video_encoders.hf.lingbot_video.vae import LingBotVideoWanVAE
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import I2VInputInfo, T2IInputInfo, T2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -121,6 +122,9 @@ class LingBotVideoRunner(DefaultRunner):
                 self._apply_condition_latent()
                 self.run_vae_decoder(scheduler.latents)
                 torch_device_module.synchronize()
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 self.clear_warmup_state()
 
