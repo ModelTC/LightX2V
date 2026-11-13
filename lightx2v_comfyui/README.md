@@ -2,7 +2,7 @@
 
 English | [简体中文](README_zh.md)
 
-Run local LightX2V servers from ComfyUI. The first inference loads a model; later requests reuse its process.
+Run local LightX2V servers from ComfyUI. The first inference loads a model; later requests reuse the same service, with single- or multi-GPU inference.
 
 This directory can be symlinked into `ComfyUI/custom_nodes`.
 
@@ -30,7 +30,7 @@ lightx2v_comfyui/
 │   ├── files.py                 # Paths, browsing, JSON validation, backups, atomic saves
 │   └── routes.py                # Comfy /lightx2v/* HTTP endpoints
 ├── web/                         # Service, GPU, file browser and config editor UI
-├── examples/                    # Eight canvas workflows; no model configs
+├── examples/                    # Ten canvas workflows; no model configs
 ├── README.md
 └── README_zh.md
 ```
@@ -93,7 +93,7 @@ cd "$COMFY_DIR"
 python main.py --cpu --listen 127.0.0.1 --port 8188
 ```
 
-Choose the inference GPU in each Service node's **CUDA_VISIBLE_DEVICES** dropdown. The Comfy startup command needs no GPU assignment variables. For Docker, use `--gpus all` and keep `--cpu` on the Comfy command; the container exposes the devices and each Service selects its GPU. Starting Comfy or opening a workflow does not load a model.
+Choose the inference GPUs in each Service node's **CUDA_VISIBLE_DEVICES** dropdown. The Comfy startup command needs no GPU assignment variables. For Docker, use `--gpus all` and keep `--cpu` on the Comfy command; the container exposes the devices and each Service selects its GPUs. Starting Comfy or opening a workflow does not load a model.
 
 Open [ComfyUI](http://127.0.0.1:8188/) and import [h3_t2av_workflow.json](examples/h3_t2av_workflow.json). `--cpu` keeps Comfy itself off CUDA while the independent servers use the GPUs selected on Service. Remove it if other Comfy nodes need the GPU. For a remote host, run `ssh -N -L 8188:127.0.0.1:8188 user@server` on the browser computer. Only the Comfy port needs forwarding.
 
@@ -150,7 +150,7 @@ Press `Ctrl+C` in the container shell to stop Comfy, then run `exit` to leave an
 
 ## Workflows and other models
 
-This directory contains eight `*_workflow.json` canvas files. Drag them into ComfyUI to open, edit and run them. All paths and Load Image/Video filenames are placeholders and need to be replaced.
+This directory contains ten `*_workflow.json` canvas files. Drag them into ComfyUI to open, edit and run them. Paths beginning with `/path/to/` and Load Image/Video filenames are placeholders and need to be replaced.
 
 | Canvas | Model / task | Config source |
 | --- | --- | --- |
@@ -158,6 +158,8 @@ This directory contains eight `*_workflow.json` canvas files. Drag them into Com
 | [Repeated H3 generation](examples/h3_t2av_workflow.json) | minimax_h3/t2av | h3.json |
 | [H3 first/last frames](examples/h3_fl2av_workflow.json) | minimax_h3/fl2av | h3.json |
 | [H3 reference image](examples/h3_ref2av_workflow.json) | minimax_h3/ref2av | h3-ref2av.json |
+| [H3 Image text-to-image](examples/h3_image_t2i_workflow.json) | minimax_h3_image/t2i | [minimax_h3_image.json](../configs/minimax_h3_image/minimax_h3_image.json) |
+| [H3 Image editing](examples/h3_image_i2i_workflow.json) | minimax_h3_image/i2i | [minimax_h3_image.json](../configs/minimax_h3_image/minimax_h3_image.json) |
 | [Wan](examples/wan_t2v_workflow.json) | wan2.1/t2v | [wan_t2v.json](../configs/wan/wan_t2v.json) |
 | [Qwen text-to-image](examples/qwen_t2i_workflow.json) | qwen_image/t2i | [2512 distill](../configs/qwen_image/qwen_image_t2i_2512_distill.json) |
 | [Qwen editing](examples/qwen_i2i_workflow.json) | qwen_image/i2i | [2511 distill](../configs/qwen_image/qwen_image_i2i_2511_distill.json) |
@@ -188,7 +190,8 @@ Set these before starting Comfy and restart after changing them.
 | Layout | Service GPUs | Policy | Behavior |
 | --- | --- | --- | --- |
 | Rotate on one GPU | 0 / 0 | exclusive, the default | Release H3 before Relay starts; reload H3 next round |
-| Keep both on two GPUs | 0 / 1 | Either | Independent residency and reuse until timeout |
+| Keep models on separate GPUs | 0 / 1 | Either | Independent residency and reuse until timeout |
+| Keep models on separate GPU groups | 0,1 / 2,3 | Either | Each model uses two GPUs; the groups are independent |
 | Keep both on one GPU | 0 / 0 | coexist | Both must fit; external models are not evicted |
 
 To disable automatic release, stop the previous Comfy process and start it with:

@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-通过 ComfyUI 调用本机的 LightX2V server。首次执行加载模型，后续请求复用同一进程。
+通过 ComfyUI 调用本机的 LightX2V server。首次执行加载模型，后续请求复用同一服务，支持单卡或多卡推理。
 
 本目录可以直接软链接到 `ComfyUI/custom_nodes`。
 
@@ -30,7 +30,7 @@ lightx2v_comfyui/
 │   ├── files.py                 # 路径、文件浏览、JSON 校验、备份与原子保存
 │   └── routes.py                # Comfy 的 /lightx2v/* HTTP 接口
 ├── web/                         # Service、GPU、文件浏览、Config 编辑界面
-├── examples/                    # 8 个画布工作流 JSON；不放模型 config
+├── examples/                    # 10 个画布工作流 JSON；不放模型 config
 ├── README.md
 └── README_zh.md
 ```
@@ -93,7 +93,7 @@ cd "$COMFY_DIR"
 python main.py --cpu --listen 127.0.0.1 --port 8188
 ```
 
-推理 GPU 统一在每个 Service 节点的 **CUDA_VISIBLE_DEVICES** 下拉框中选择，Comfy 启动命令无需配置选卡环境变量。Docker 启动使用 `--gpus all`，Comfy 命令保留 `--cpu`：容器开放设备，具体用哪张卡由 Service 决定。启动 Comfy 或打开工作流不会加载模型。
+推理 GPU 统一在每个 Service 节点的 **CUDA_VISIBLE_DEVICES** 下拉框中选择，Comfy 启动命令无需配置选卡环境变量。Docker 启动使用 `--gpus all`，Comfy 命令保留 `--cpu`：容器开放设备，具体使用哪些卡由 Service 决定。启动 Comfy 或打开工作流不会加载模型。
 
 打开 [ComfyUI](http://127.0.0.1:8188/)，导入 [h3_t2av_workflow.json](examples/h3_t2av_workflow.json)。`--cpu` 让 Comfy 本身不创建 CUDA 上下文，独立后端仍使用节点选择的 GPU；需要其他 Comfy GPU 节点时可去掉它。远端部署在浏览器电脑使用 `ssh -N -L 8188:127.0.0.1:8188 用户@服务器`，只转发 Comfy 端口。
 
@@ -150,7 +150,7 @@ python main.py --cpu --listen 0.0.0.0 --port 8188
 
 ## 工作流与其他模型
 
-本目录保留 8 个 `*_workflow.json` 画布文件，可直接拖入 ComfyUI 打开、编辑和运行。所有路径和 Load Image/Video 文件名都是占位值，需要替换。
+本目录保留 10 个 `*_workflow.json` 画布文件，可直接拖入 ComfyUI 打开、编辑和运行。以 `/path/to/` 开头的路径和 Load Image/Video 文件名都是占位值，需要替换。
 
 | 画布                                                 | 模型 / task                        | 配置来源                                                                   |
 | -------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------- |
@@ -158,6 +158,8 @@ python main.py --cpu --listen 0.0.0.0 --port 8188
 | [H3 连续生成](examples/h3_t2av_workflow.json)          | minimax_h3/t2av                  | h3.json                                                                |
 | [H3 首尾帧](examples/h3_fl2av_workflow.json)          | minimax_h3/fl2av                 | h3.json                                                                |
 | [H3 参考图](examples/h3_ref2av_workflow.json)         | minimax_h3/ref2av                | h3-ref2av.json                                                         |
+| [H3 Image 文生图](examples/h3_image_t2i_workflow.json) | minimax_h3_image/t2i | [minimax_h3_image.json](../configs/minimax_h3_image/minimax_h3_image.json) |
+| [H3 Image 图片编辑](examples/h3_image_i2i_workflow.json) | minimax_h3_image/i2i | [minimax_h3_image.json](../configs/minimax_h3_image/minimax_h3_image.json) |
 | [Wan](examples/wan_t2v_workflow.json)              | wan2.1/t2v                       | [wan_t2v.json](../configs/wan/wan_t2v.json)                            |
 | [Qwen 文生图](examples/qwen_t2i_workflow.json)        | qwen_image/t2i                   | [2512 distill](../configs/qwen_image/qwen_image_t2i_2512_distill.json) |
 | [Qwen 单图编辑](examples/qwen_i2i_workflow.json)       | qwen_image/i2i                   | [2511 distill](../configs/qwen_image/qwen_image_i2i_2511_distill.json) |
@@ -188,7 +190,8 @@ python main.py --cpu --listen 0.0.0.0 --port 8188
 | 布局 | 两个 Service 的 GPU | 策略 | 行为 |
 | --- | --- | --- | --- |
 | 同卡轮换 | 0 / 0 | exclusive（默认） | 启动 Relay 前回收 H3；下一轮 H3 重新加载 |
-| 双卡常驻 | 0 / 1 | 任一策略 | 各自保留；未超时即可复用 |
+| 不同卡常驻 | 0 / 1 | 任一策略 | 各自保留；未超时即可复用 |
+| 多卡组常驻 | 0,1 / 2,3 | 任一策略 | 每个模型使用两张卡；两组互不影响 |
 | 同卡常驻 | 0 / 0 | coexist | 显存必须容纳二者；不自动驱逐外部模型 |
 
 无限常驻示例（先退出原 Comfy）：

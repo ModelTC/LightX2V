@@ -120,7 +120,7 @@ class LightX2VServer:
                     "STRING",
                     {
                         "default": "0",
-                        "tooltip": "Choose a GPU by its used/total VRAM and GPU utilization. Status updates automatically every 5 seconds while the page is visible. The saved value remains a device index or UUID.",
+                        "tooltip": "Choose one GPU or Select multiple GPUs. Usage refreshes every 5 seconds. One process starts per selected GPU; config.parallel must match the GPU count. Saved values are comma-separated indices or UUIDs.",
                     },
                 ),
             },
