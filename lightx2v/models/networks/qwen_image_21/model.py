@@ -14,7 +14,7 @@ from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from .infer.offload import QwenImage21OffloadTransformerInfer
 from .infer.offload.transformer_infer import validate_qwen_image_21_residency_config
 from .infer.post_infer import QwenImage21PostInfer
-from .infer.pre_infer import QwenImage21PreInfer
+from .infer.pre_infer import QwenImage21PreInfer, _slice_rotary
 from .infer.transformer_infer import QwenImage21TransformerInfer
 from .lora import prepare_lora_weights
 from .weights.post_weights import QwenImage21PostWeights
@@ -284,7 +284,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         end = begin + local_length
         state.hidden_states = state.hidden_states[begin:end].contiguous()
         if state.rotary_positions is None:
-            state.rotary = state.rotary[begin:end].contiguous()
+            state.rotary = _slice_rotary(state.rotary, begin, end, contiguous=True)
         else:
             # FlashInfer keeps the full lookup table and indexes the rank-local
             # target positions from it.
