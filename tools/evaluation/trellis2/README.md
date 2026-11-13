@@ -41,3 +41,8 @@ bash run_eval.sh --help
 数据协议见[DATA.md](DATA.md)，平台配置见[configs/README.md](configs/README.md)。
 
 Ascend 910B 配置已加入，尚未完成模型 smoke 或全量评测；详见 [Ascend 配置](configs/ascend_npu/README.md)。
+
+### NVIDIA inference revision and local execution
+
+The NVIDIA source lock tracks the aligned TRELLIS.2 PR #1676 revision with the original deformable convolution and flex_gemm sparse convolution. The weight lock excludes three downloader bookkeeping files; their original hashes are retained in `configs/common/weight-lock.provenance.json`. Model weights and configuration files remain verified. Inference arrays are saved as lossless compressed NPZ; artifact serialization is outside the measured request time.
+Platform profiles may optionally provide `docker_common_mounts` for read-only site-specific dependencies. Configure a suitable image and device mapping for the machine; never commit local host paths as portable defaults.

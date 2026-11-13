@@ -25,24 +25,9 @@
     "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154"
   },
   {
-    "path": "deps/camenduru--dinov3-vitl16-pretrain-lvd1689m/.download_complete.json",
-    "bytes": 487,
-    "sha256": "271a35493f1c6c1f4d02130508ed0f698f6727a2d91ced9f1d3715312e2487e3"
-  },
-  {
-    "path": "deps/camenduru--dinov3-vitl16-pretrain-lvd1689m/.hfd/sha256_verified.json",
-    "bytes": 422,
-    "sha256": "47a39ebdc291cb8d56f869f7e172651f5a0a309b56ebccbeca87f49ebc7c5053"
-  },
-  {
     "path": "deps/camenduru--dinov3-vitl16-pretrain-lvd1689m/config.json",
     "bytes": 745,
     "sha256": "135ecd23e34a70b6fbed8b083fdecb319b7e3a54e3d849258bbe4ddcf1783bb5"
-  },
-  {
-    "path": "deps/camenduru--dinov3-vitl16-pretrain-lvd1689m/download-manifest.json",
-    "bytes": 904,
-    "sha256": "10acb69db83bbc0da987a463f4d99226b23b33fdb32175907a5b83d2024b29f1"
   },
   {
     "path": "deps/camenduru--dinov3-vitl16-pretrain-lvd1689m/model.safetensors",

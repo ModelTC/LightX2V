@@ -284,7 +284,7 @@ def run_benchmark_job(args):
                 destination = args.run_dir / "outputs" / f"{sample['id']}_r{repeat}.npz"
                 destination.parent.mkdir(exist_ok=True)
                 save_start = time.perf_counter()
-                np.savez(destination, **arrays)
+                np.savez_compressed(destination, **arrays)
                 row.update(
                     output=str(destination.relative_to(args.run_dir)),
                     artifact_write_s=time.perf_counter() - save_start,
@@ -1016,6 +1016,8 @@ def container_command(args, destination, stage, run=None):
         "-e",
         "MPLCONFIGDIR=/eval/cache/matplotlib",
     ]
+    for mount in profile.get("docker_common_mounts", []):
+        command += ["--mount", mount]
     for key, value in profile["environment"].items():
         command += ["-e", f"{key}={value}"]
     extra = []
