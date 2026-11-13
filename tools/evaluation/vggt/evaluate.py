@@ -1026,6 +1026,8 @@ def container_command(args, destination, stage, run=None):
         "-e",
         "MPLCONFIGDIR=/eval/cache/matplotlib",
     ]
+    for mount in profile.get("docker_common_mounts", []):
+        command += ["--mount", mount]
     for key, value in profile["environment"].items():
         command += ["-e", f"{key}={value}"]
     extra = []

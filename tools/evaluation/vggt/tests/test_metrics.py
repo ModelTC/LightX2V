@@ -29,6 +29,9 @@ class MetricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
             extrinsics = []
+            world_points = []
+            yy, xx = np.meshgrid(np.arange(4), np.arange(4), indexing="ij")
+            camera_points = np.stack([xx, yy, np.ones_like(xx)], axis=-1)
             for i in range(5):
                 angle = i * 0.3
                 rotation = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
@@ -36,10 +39,12 @@ class MetricTests(unittest.TestCase):
                 pose[:3, :3] = rotation
                 pose[:3, 3] = [i * 0.2, i * 0.1, i * 0.05]
                 np.savetxt(directory / f"pose_{i:02d}.txt", pose)
+                np.savetxt(directory / f"intrinsics_{i:02d}.txt", np.eye(4))
+                world_points.append(camera_points @ rotation.T + pose[:3, 3])
                 Image.fromarray(np.full((4, 4), 1000, dtype=np.uint16)).save(directory / f"depth_{i:02d}.png")
                 pred_center = pose[:3, 3] * 3 + [2, 1, -4]
                 extrinsics.append(np.c_[rotation.T, -rotation.T @ pred_center])
-            output = {"depth": np.full((1, 5, 4, 4, 1), 2.0), "extrinsics": np.asarray(extrinsics)[None]}
+            output = {"depth": np.full((1, 5, 4, 4, 1), 2.0), "extrinsics": np.asarray(extrinsics)[None], "world_points": np.asarray(world_points)[None]}
             metrics = vggt_metrics(output, {"gt_directory": "."}, directory)
             self.assertEqual(metrics["depth_macro"]["abs_rel"], 0)
             self.assertEqual(metrics["depth_macro"]["delta1"], 1)
