@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "model": "vggt",
+  "platform": "metax",
+  "status": "not_yet_evaluated",
+  "runs": {},
+  "reports": {}
+}

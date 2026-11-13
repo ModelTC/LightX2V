@@ -1,0 +1,9 @@
+{
+  "model_cls": "vggt",
+  "task": "recon",
+  "attn_type": "torch_sdpa",
+  "preprocess_workers": 8,
+  "ln_norm_type": "torch",
+  "conv_type": "Default",
+  "dit_quant_scheme": "Default"
+}
