@@ -140,3 +140,10 @@ python scripts/minimax_h3_image/server/post_i2i.py
 ```
 
 客户端提交请求后返回任务 ID，默认输出为 `2048 × 2048` PNG。生成完成后，图片保存在服务端的 `$lightx2v_path/save_results/server_cache/outputs/` 下。可在客户端中修改 `prompt`、`size`、`seed` 和 `save_result_path`。
+
+
+### 输出格式与压缩质量
+
+通过输出路径后缀选择 PNG、JPEG（`.jpg`/`.jpeg`）或 WebP。H3-Image 新增整数参数 `output_compression`，范围 0–100，默认 95；可通过 `--output_compression 80`、`pipeline.generate(output_compression=80, ...)`、启动 JSON 默认值或图片服务请求设置。`save_image_method` 为 `pil` 或 `opencv` 时，JPEG/WebP 均使用该质量参数；PNG 忽略它，保留原有编码默认值。未传入质量参数的其他图片写入调用保持原有默认行为。
+
+同步图片请求使用 `save_result_path` 后缀作为格式提示；未提供路径或后缀时默认 PNG，无需新增 `output_format` 请求字段。JPEG/WebP 直接从 PIL/Tensor/NumPy 编码，不经过中间 PNG 编解码。Base64/URL 响应信息、实际下载 MIME 类型和预签名上传的 Content-Type 与图片字节保持一致。同步结果仍从内存返回，URL 响应会生成可下载文件。

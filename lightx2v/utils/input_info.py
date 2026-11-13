@@ -198,6 +198,7 @@ class AnimateInputInfo(InputInfo):
 
 @dataclass
 class T2IInputInfo(InputInfo):
+    output_compression: int = 95
     prompt: str = ""
     negative_prompt: str | None = ""
     # shape related
@@ -240,6 +241,7 @@ class TI2TInputInfo(T2TInputInfo):
 
 @dataclass
 class I2IInputInfo(InputInfo):
+    output_compression: int = 95
     prompt: str = ""
     negative_prompt: str | None = ""
     image_path: str = ""

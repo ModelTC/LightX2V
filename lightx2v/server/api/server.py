@@ -139,7 +139,7 @@ class ApiServer:
                 task_manager.complete_task(
                     task_id,
                     save_result_path=result.save_result_path or None,
-                    result_png=result.result_png,
+                    result_image=result.result_image,
                     usage=result.usage,
                 )
                 logger.info(f"Task {task_id} completed successfully")

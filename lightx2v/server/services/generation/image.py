@@ -48,15 +48,15 @@ class ImageGenerationService(BaseGenerationService):
 
             if result.get("status") == "success":
                 if prefer_memory_result:
-                    result_png = result.get("result_png")
-                    if not result_png:
-                        raise RuntimeError("Image inference did not return in-memory PNG bytes (result_png)")
+                    result_image = result.get("result_image")
+                    if not result_image:
+                        raise RuntimeError("Image inference did not return in-memory image bytes (result_image)")
                     usage = result.get("usage")
                     return TaskResponse(
                         task_id=message.task_id,
                         task_status="completed",
                         save_result_path=None,
-                        result_png=result_png,
+                        result_image=result_image,
                         usage=usage,
                     )
 

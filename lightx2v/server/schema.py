@@ -1,6 +1,8 @@
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr
+
+from lightx2v.utils.image_output import validate_output_compression
 
 from ..utils.generate_task_id import generate_task_id
 
@@ -111,7 +113,10 @@ class VideoTaskRequest(BaseTaskRequest):
 
 
 class ImageTaskRequest(BaseTaskRequest):
-    # Sync image APIs return PNG bytes without requiring an output file.
+    output_compression: Optional[Annotated[int, BeforeValidator(validate_output_compression)]] = Field(
+        None, description="JPEG/WebP quality, integer 0-100; defaults to the runner setting (95 for H3-Image); ignored for PNG"
+    )
+    # Sync image APIs return encoded image bytes without requiring an output file.
     _prefer_memory_result: bool = PrivateAttr(default=False)
 
     aspect_ratio: str = Field("16:9", description="Output aspect ratio; when omitted, the runner uses its startup/default sizing rules")
@@ -135,7 +140,7 @@ class TaskResponse(BaseModel):
     task_status: str
     save_result_path: Optional[str]
     # Filled after image generation in-process; never serialized in JSON responses.
-    result_png: Optional[bytes] = Field(default=None, exclude=True)
+    result_image: Optional[bytes] = Field(default=None, exclude=True)
     usage: Optional[Usage] = Field(default=None, exclude=True)
 
 
