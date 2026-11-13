@@ -51,7 +51,11 @@
     "timm",
     "kornia",
     "trimesh",
-    "diffusers"
+    "diffusers",
+    "lightx2v-kernel-mlu"
   ],
-  "validation_status": "validated_mlu590"
+  "validation_status": "validated_mlu590",
+  "source_extensions": [
+    "lightx2v-trellis2/lightx2v_kernel/cambricon_mlu"
+  ]
 }

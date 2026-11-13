@@ -1,6 +1,6 @@
 {
   "lightx2v-trellis2": {
-    "git_head": "21c7053f6af17f16345794fc218bb2ad2a7b4de3",
+    "git_head": "d57f724383d328a2530f310cb5c8de4c26460c21",
     "files": [
       {"path": ".agents/README.md","bytes": 3372,"sha256": "5a2ff75e7ea60f5c65d74d675528ac36c7d08ef6f1714cbf6255d923fcd9cdaa"},
       {"path": ".agents/skills/lightx2v-kernel-skills/intel-xpu/integration-skills/sycl-esimd-to-python-wheel/SKILL.md","bytes": 13564,"sha256": "c5918fb2cedb3e961e0e7720273fa26b56e89bfef2dc8819753c15206de07eb9"},
@@ -891,7 +891,7 @@
       {"path": "dockerfiles/build_deploy.sh","bytes": 1287,"sha256": "dd227b81a60bf88e8ebcf7102f32f368c5952a58eedec33010f67340cbdfa1d8"},
       {"path": "dockerfiles/platforms/Dockerfile_ascend_910b","bytes": 998,"sha256": "65750796d251c3d895bdf9b1c2dc2385095805e3b6e956b9395e265a368b68c4"},
       {"path": "dockerfiles/platforms/Dockerfile_ascend_trellis2","bytes": 2721,"sha256": "e767a914f4441052023fec67031711038d2e2f4724f81704515d485a8c7fd7e3"},
-      {"path": "dockerfiles/platforms/Dockerfile_cambricon_mlu590","bytes": 5047,"sha256": "fc76cf7590602a63a3b9e1fe5ec313a8ae589403b1b6bc166abfc271b8cc9267"},
+      {"path": "dockerfiles/platforms/Dockerfile_cambricon_mlu590","bytes": 5229,"sha256": "06bfdabea81259a3865c0c43bef2ccbf5a1bf6d7b565723f386a3dd5d27d79ba"},
       {"path": "dockerfiles/platforms/Dockerfile_metax_trellis2","bytes": 7272,"sha256": "b7f0e0fca61244f1795bb13d4f5240c1fa43ba428daa47886afd34b70d38dd38"},
       {"path": "dockerfiles/platforms/Dockerfile_mi350","bytes": 1697,"sha256": "ffcccdbb09a698b0215d8b0defc36a0b3eb45046fc92fb55c6bfa55c659211a1"},
       {"path": "dockerfiles/platforms/Dockerfile_ppu","bytes": 1337,"sha256": "84145dce9f146a67b9a33367263522bdda8987da776e510a9d7c6e3d80bdb938"},
@@ -1941,7 +1941,7 @@
       {"path": "lightx2v/models/video_encoders/hf/trellis2/autoencoders/fdg_vae.py","bytes": 1350,"sha256": "985856ae0b84c0a3d101a7a7aeb69cf6f6819a6ca69bcca3f4dd4dc9a490784e"},
       {"path": "lightx2v/models/video_encoders/hf/trellis2/autoencoders/sparse_structure_vae.py","bytes": 4610,"sha256": "3bd170ffa2e125bccf850dfab1a9471863fdb357112177797e6376a112f4b478"},
       {"path": "lightx2v/models/video_encoders/hf/trellis2/autoencoders/sparse_unet_vae.py","bytes": 5063,"sha256": "e9fbd40b83f09959e76a970e00e584ae5de274698282a357a4f434c34134ba0b"},
-      {"path": "lightx2v/models/video_encoders/hf/trellis2/mesh_extraction.py","bytes": 5542,"sha256": "407c322e8c3e6376e52cd686c15dd7a6534dee2597065c2f7beeea9dda9b3ea3"},
+      {"path": "lightx2v/models/video_encoders/hf/trellis2/mesh_extraction.py","bytes": 5945,"sha256": "5cffa2ea30034ef0fa87f5d50f94adda8ab08170665b0b7fa18135d69d577006"},
       {"path": "lightx2v/models/video_encoders/hf/vid_recon.py","bytes": 4247,"sha256": "41b5d75416a0fef09196a5c47c7f10039d0fa6fbf14748aca68d0cbe48ed33dc"},
       {"path": "lightx2v/models/video_encoders/hf/wan/__init__.py","bytes": 0,"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
       {"path": "lightx2v/models/video_encoders/hf/wan/dancer_vae.py","bytes": 4558,"sha256": "500b48cea2a19babc51d96df55b1782e4c3fc9e0cda993d50b59657bf0bfdcf3"},
@@ -2023,7 +2023,7 @@
       {"path": "lightx2v/utils/va_recorder.py","bytes": 26674,"sha256": "ab6e46e739f3562cf51f8f3104f0df49509de5b08f520aa18660141a8ccf04bc"},
       {"path": "lightx2v/utils/va_recorder_x264.py","bytes": 13484,"sha256": "970297f0644030d1fc3f14944c557834141f631b490c854fba85b0e1790ad2cb"},
       {"path": "lightx2v/utils/video_recorder.py","bytes": 14833,"sha256": "ceb4c4ecd66c1a0d03fae4c3aef27a6f35256e7852e130cc06259d9f15c5b1b8"},
-      {"path": "lightx2v_kernel/README.md","bytes": 635,"sha256": "55c0244a4a4c4df7bc7f9edf25fa899f64de7f16baabe4db8d379d23ae4dfe85"},
+      {"path": "lightx2v_kernel/README.md","bytes": 736,"sha256": "4128d979a6c65a6232581894fa18e2a76ceda3e719fd645eace25eba8b7b6c05"},
       {"path": "lightx2v_kernel/apple/README.md","bytes": 2000,"sha256": "5695758370535f93e10d0dfb3cf182baff048cce5c30bf0313d093078eab0168"},
       {"path": "lightx2v_kernel/apple/pyproject.toml","bytes": 507,"sha256": "aed823a404196e1e6cfd6571d3f1a5a0d7fd8a02ba07acc006e0bbd6f073f194"},
       {"path": "lightx2v_kernel/apple/python/lightx2v_kernel_apple/int8_gemm/__init__.py","bytes": 30,"sha256": "9eaca41aba51b6a005b63584d99dda41817cc946f985bba583ced41c48b1492b"},
@@ -2031,6 +2031,19 @@
       {"path": "lightx2v_kernel/apple/python/lightx2v_kernel_apple/int8_gemm/gemm.py","bytes": 3443,"sha256": "ea0f13b8849d5327ecc977b18e111d08ef5a096c1be4f25620c0c6b5825f5095"},
       {"path": "lightx2v_kernel/apple/python/lightx2v_kernel_apple/int8_gemm/int8_matmul.metal","bytes": 4622,"sha256": "b938060904990591f0f8c09a189f6d93ab0f19248ea6a43490ec389d70b97743"},
       {"path": "lightx2v_kernel/apple/test/test_int8_matmul.py","bytes": 3727,"sha256": "4cf481ea5dbfe8d29b188d3aa1fe972132df397d09c0b3f5ba73ffc44736fef5"},
+      {"path": "lightx2v_kernel/cambricon_mlu/.gitignore","bytes": 47,"sha256": "d4622197b30ac847fd7b356ffff78c4b225d8e6f86f056cb19e2af24680829f7"},
+      {"path": "lightx2v_kernel/cambricon_mlu/LICENSE","bytes": 1093,"sha256": "8eef85c2c0648a4d42a898f5e6d8bf35f532c477a6233a9647718b61228d275a"},
+      {"path": "lightx2v_kernel/cambricon_mlu/MANIFEST.in","bytes": 106,"sha256": "6a5d1f03c5d4d779d406f89a103e9292ba3a9f36445afad1d3ae9402c220039f"},
+      {"path": "lightx2v_kernel/cambricon_mlu/README.md","bytes": 6467,"sha256": "21819b40835f7d8b1b6e8ab94a9ad08c0331f8dab813e66c288c239fd8d7a5ae"},
+      {"path": "lightx2v_kernel/cambricon_mlu/csrc/bindings.cpp","bytes": 2067,"sha256": "4e76f94f8dbc616049ce7574688f942abb4724d6bbe2f93acdc0d0c01ff77ee5"},
+      {"path": "lightx2v_kernel/cambricon_mlu/csrc/mesh_kernels.mlu","bytes": 17736,"sha256": "903fff2f417a0f12b9a27a9c56fd72cc7babc8dc7c705405e649a8e0f853f6c9"},
+      {"path": "lightx2v_kernel/cambricon_mlu/kernel-map.json","bytes": 8223,"sha256": "b4e74f86de9de223e15def1fdfb86ced0da8ad6600f3562909e23b7b781b544d"},
+      {"path": "lightx2v_kernel/cambricon_mlu/pyproject.toml","bytes": 116,"sha256": "1934ff2fcbb3fd2af04b31b10d008395eebd7bdcf19533d42e14a75a99324319"},
+      {"path": "lightx2v_kernel/cambricon_mlu/python/lightx2v_kernel_mlu/__init__.py","bytes": 65,"sha256": "034a12a53dc64168dc2568cf9e7455f5697cd4b6280ea64036097091476adde5"},
+      {"path": "lightx2v_kernel/cambricon_mlu/python/lightx2v_kernel_mlu/mesh.py","bytes": 7975,"sha256": "31c56f0e20356357d1fe9ca6020bebd47971b7803c55f8b21d0d1d6e22078883"},
+      {"path": "lightx2v_kernel/cambricon_mlu/setup.py","bytes": 570,"sha256": "603d60f1df92904eb73730b3aca8718d6db2639f21720b39dd22b8efe26554d5"},
+      {"path": "lightx2v_kernel/cambricon_mlu/tests/compare_kernels.py","bytes": 11325,"sha256": "842f0b4c9ce9c68bf675993a70f199fd60f28a9b08ccdb9e6bfbc3a7e8fed867"},
+      {"path": "lightx2v_kernel/cambricon_mlu/tests/source_reference.py","bytes": 9738,"sha256": "5132ea72feee8307c61c8f82bfeb15219e96af835b2dea26e47932bb5e14d740"},
       {"path": "lightx2v_kernel/intel_xpu/CMakeLists.txt","bytes": 22802,"sha256": "b50a42f0a186172437f050f9d41d64a5a1c98c409458043e3a0e16626eeb2653"},
       {"path": "lightx2v_kernel/intel_xpu/README.md","bytes": 16206,"sha256": "6aadef666d0b480b5c9bff4aa18945c79cad9b7572eb1cb56024bfebcbdd8ad4"},
       {"path": "lightx2v_kernel/intel_xpu/build.bat","bytes": 11159,"sha256": "985d0669cc160a0837bf0e09e01b383d3a3ff571cb798c9f147cd357b743697b"},
@@ -2099,8 +2112,8 @@
       {"path": "lightx2v_kernel/nvidia/csrc/quantization/convrot_gelu_quant.cu","bytes": 7679,"sha256": "f8f0a5ae75fe40cebb4d51781a8476b3c41963b516b6e8cc9d946021bcbb5455"},
       {"path": "lightx2v_kernel/nvidia/docs/en_US/mx_formats_quantization_basics.md","bytes": 2498,"sha256": "d37c0280df82033aa54ed6d62b4962849b110cca338d82265d0951be8e3089a1"},
       {"path": "lightx2v_kernel/nvidia/docs/en_US/nvfp4_quantization_basics.md","bytes": 2600,"sha256": "f04c6e131cc05cb6d03a92ee5671c0b45aa2da418accad9ac96a9384c0a3f013"},
-      {"path": "lightx2v_kernel/nvidia/docs/zh_CN/mx_formats量化基础.md","bytes": 2148,"sha256": "cef965d1e54c263ac4c462646d8547f380e98a015614da42abf8a745a4a6307c"},
-      {"path": "lightx2v_kernel/nvidia/docs/zh_CN/nvfp4量化基础.md","bytes": 2245,"sha256": "d284f80c746cf82cf06f59ef6cccb4a2e0b90a345d83312fc1b30821cefc3c94"},
+      {"path": "lightx2v_kernel/nvidia/docs/zh_CN/mx_formats\u91cf\u5316\u57fa\u7840.md","bytes": 2148,"sha256": "cef965d1e54c263ac4c462646d8547f380e98a015614da42abf8a745a4a6307c"},
+      {"path": "lightx2v_kernel/nvidia/docs/zh_CN/nvfp4\u91cf\u5316\u57fa\u7840.md","bytes": 2245,"sha256": "d284f80c746cf82cf06f59ef6cccb4a2e0b90a345d83312fc1b30821cefc3c94"},
       {"path": "lightx2v_kernel/nvidia/include/lightx2v_kernel_ops.h","bytes": 4750,"sha256": "e57ead946789e8025087b0d0fcba033e5231b7625a4d26bc088f41fbd734f7fc"},
       {"path": "lightx2v_kernel/nvidia/include/utils.h","bytes": 16917,"sha256": "1ccaebee4537ab5be956410f5b269f7316fb8b4c3b3c1f2b65b419ff081712b5"},
       {"path": "lightx2v_kernel/nvidia/pyproject.toml","bytes": 789,"sha256": "66a86e7abf6afe8e2001bfb235f7a606bada8762a3ae98db04d1b3d4c4cd4292"},
@@ -2189,6 +2202,8 @@
       {"path": "lightx2v_platform/ops/attn/metax_cuda/metax_flash_attn.py","bytes": 4956,"sha256": "1e5831d6354dd15e7494328c0581599e2b303e7e432a52d92fdbc6242eb8b4c3"},
       {"path": "lightx2v_platform/ops/attn/metax_cuda/metax_sage_attn2.py","bytes": 1163,"sha256": "86d47d1baf975d3bc2efa5d181ec2296d81d38c4aa3c85ea9585f635d5d8f8aa"},
       {"path": "lightx2v_platform/ops/attn/template.py","bytes": 755,"sha256": "51937e5eae037b1afbd5b2b1433f506a2487ed0155b97da13d58d9bd2295e2c5"},
+      {"path": "lightx2v_platform/ops/mesh/__init__.py","bytes": 74,"sha256": "7518f714b2c4ae8781a7975a04a8c8e67433c41e04203755ed5e35a520d9e698"},
+      {"path": "lightx2v_platform/ops/mesh/cambricon_mlu/__init__.py","bytes": 527,"sha256": "1e0de3411d5147aad7411dce8659be471933a804f3d3adab7efcd1265c0ea536"},
       {"path": "lightx2v_platform/ops/mm/__init__.py","bytes": 0,"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
       {"path": "lightx2v_platform/ops/mm/amd_rocm/__init__.py","bytes": 25,"sha256": "3d964a8258662c6799a855ae2d8d756a079c337169161a55f4336c0302a05655"},
       {"path": "lightx2v_platform/ops/mm/amd_rocm/mm_weight.py","bytes": 6100,"sha256": "9520d48a82ebd7d344be7db9eb4cfe8d3e095b7ee57b40910bca17abc0af551e"},
@@ -3414,6 +3429,6 @@
       {"path": "tools/profile/analyze_torch_trace_gap.py","bytes": 10245,"sha256": "c60400ebc1e6816f3598fddffb5cbfc04e8d975474534d2414f0e68c28309f55"}
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "21c7053f6af17f16345794fc218bb2ad2a7b4de3"
+    "revision": "d57f724383d328a2530f310cb5c8de4c26460c21"
   }
 }

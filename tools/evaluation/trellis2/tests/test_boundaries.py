@@ -1,13 +1,15 @@
 """Verify that developer measurement preserves normal inference calls and cleanup."""
 
 import importlib.util
+from contextlib import nullcontext
 import sys
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
-from evaluate import MODEL, record_model_events
+from evaluate import MODEL, record_model_events, record_pipeline_stage_times
+import evaluate as evaluation
 
 
 class Event:
@@ -65,13 +67,70 @@ class AdapterTests(unittest.TestCase):
                     settings_module.build_startup_config = Mock(side_effect=lambda settings: settings)
                     paths = {name: Path("/weights") / name for name in ("trellis2", "base", "dino", "rembg")}
                     adapter = adapters.LightX2VAdapter(paths, Path("/unused"))
-                    result = adapter.predict(["images/a.png", "images/b.png"], seed=42)
+                    with patch.object(adapters, "record_pipeline_stage_times", return_value=nullcontext({})):
+                        result = adapter.predict(["images/a.png", "images/b.png"], seed=42)
                     self.assertIs(result, prediction)
                     expected = {"seed": 42, "image_path": "/data/images/a.png"}
                     self.assertEqual(settings_module.build_startup_config.call_args.args[0]["config_json"], str(adapters.config_path("model.json")))
                     runner.prepare_request.assert_called_once_with(expected)
                     runner.run_request.assert_called_once_with(prepared)
                     self.assertEqual(set(vars(runner)), {"prepare_request", "run_request"})
+
+
+class PipelineStageTests(unittest.TestCase):
+    def test_shared_callable_class_has_disjoint_stages_and_restores_methods(self):
+        class Callable:
+            def __call__(self, value):
+                return value
+
+        class Runner:
+            def __init__(self):
+                self.encoder = Callable()
+                self.models = {name: Callable() for name in (
+                    "sparse_structure_decoder", "shape_slat_decoder", "tex_slat_decoder")}
+
+            def _sample(self, stage, value):
+                return value
+
+        runner = Runner()
+        original = Callable.__call__
+        module = sys.modules[Runner.__module__]
+        filler = Mock(side_effect=lambda value: value)
+        device = SimpleNamespace(synchronize=Mock())
+        with patch.object(module, "fill_mesh_holes", filler, create=True), patch.object(evaluation, "device_api", return_value=device):
+            with record_pipeline_stage_times(runner) as timings:
+                self.assertEqual(runner.encoder(1), 1)
+                for model in runner.models.values():
+                    self.assertEqual(model(2), 2)
+                for stage in ("sparse_structure", "shape_slat", "tex_slat"):
+                    self.assertEqual(runner._sample(stage, 3), 3)
+                self.assertEqual(module.fill_mesh_holes(4), 4)
+            self.assertIs(module.fill_mesh_holes, filler)
+        self.assertIs(Callable.__call__, original)
+        self.assertNotIn("_sample", vars(runner))
+        self.assertEqual(len(timings), 8)
+        self.assertEqual(device.synchronize.call_count, 16)
+
+    def test_exception_restores_class_and_runner_hooks(self):
+        class Callable:
+            def __call__(self, value):
+                raise RuntimeError("expected stage failure")
+
+        class Runner:
+            encoder = Callable()
+            models = {key: Callable() for key in ("sparse_structure_decoder", "shape_slat_decoder", "tex_slat_decoder")}
+
+            def _sample(self, stage):
+                return stage
+
+        runner, original = Runner(), Callable.__call__
+        module = sys.modules[Runner.__module__]
+        with patch.object(module, "fill_mesh_holes", Mock(), create=True), patch.object(evaluation, "device_api", return_value=SimpleNamespace(synchronize=Mock())):
+            with self.assertRaisesRegex(RuntimeError, "expected stage failure"):
+                with record_pipeline_stage_times(runner):
+                    runner.encoder(0)
+        self.assertIs(Callable.__call__, original)
+        self.assertNotIn("_sample", vars(runner))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 {
   "lightx2v-trellis2": {
-    "git_head": "6daa6c895a7ddd6eb15ea3b9cc684627700df08f",
+    "git_head": "d57f724383d328a2530f310cb5c8de4c26460c21",
     "files": [
       {
         "path": ".agents/README.md",
@@ -2928,6 +2928,21 @@
         "sha256": "9507c3cf900da6e6abcadae863f786b0837427b72feda612e87f77862fadd5c7"
       },
       {
+        "path": "configs/platform/ascend_npu/trellis2_i23d_bf16.json",
+        "bytes": 281,
+        "sha256": "d0b6dc23a987238f6c28fce5cc4170f0be5a00563f0fff8392aa0a3c51a93fbf"
+      },
+      {
+        "path": "configs/platform/metax/trellis2_i23d_bf16.json",
+        "bytes": 281,
+        "sha256": "d0b6dc23a987238f6c28fce5cc4170f0be5a00563f0fff8392aa0a3c51a93fbf"
+      },
+      {
+        "path": "configs/platform/mlu/trellis2_i23d_bf16.json",
+        "bytes": 308,
+        "sha256": "cb00943247ad3b0a004b4adc3e896742404aaab5f906beeb383eeef9ccad2b49"
+      },
+      {
         "path": "configs/platforms/amd_rocm/qwen_image_21_bf16.json",
         "bytes": 422,
         "sha256": "ff3c75b535f564065435f30831c04238f0e9f69ce3983f4fb237eb4ace34ecf3"
@@ -3298,11 +3313,6 @@
         "sha256": "80c34d84fc8e82c87f2012f80fafaab4a41cc15805024fa0094e4ee6add0f40e"
       },
       {
-        "path": "configs/platforms/mlu/trellis2_i23d_bf16.json",
-        "bytes": 281,
-        "sha256": "d0b6dc23a987238f6c28fce5cc4170f0be5a00563f0fff8392aa0a3c51a93fbf"
-      },
-      {
         "path": "configs/platforms/mlu/wan_animate.json",
         "bytes": 773,
         "sha256": "e1970add41767cf6d0c8c67e69c100a1080491b57e7b251c99b10e57b32ee971"
@@ -3401,11 +3411,6 @@
         "path": "configs/platforms/nvidia/qwen_image_i2i_2511.json",
         "bytes": 654,
         "sha256": "992a24fdf28a4d4a5934bc438f0d2f251968a9bffd01b1a07c57516b34d3b1ea"
-      },
-      {
-        "path": "configs/platforms/nvidia/trellis2_i23d_bf16.json",
-        "bytes": 282,
-        "sha256": "d4b0a007c0becc0647a867713590b3b326d8c2d1a1a0991d84e03d91dbc03dce"
       },
       {
         "path": "configs/platforms/nvidia/wan_t2v.json",
@@ -4039,8 +4044,8 @@
       },
       {
         "path": "configs/trellis2/trellis2_i23d_bf16.json",
-        "bytes": 281,
-        "sha256": "d0b6dc23a987238f6c28fce5cc4170f0be5a00563f0fff8392aa0a3c51a93fbf"
+        "bytes": 313,
+        "sha256": "2566470212867611032d2ce86923fee26e1af471a85434a8c7bbd81038d61af6"
       },
       {
         "path": "configs/volcengine_voices_list.json",
@@ -4438,9 +4443,19 @@
         "sha256": "65750796d251c3d895bdf9b1c2dc2385095805e3b6e956b9395e265a368b68c4"
       },
       {
+        "path": "dockerfiles/platforms/Dockerfile_ascend_trellis2",
+        "bytes": 2721,
+        "sha256": "e767a914f4441052023fec67031711038d2e2f4724f81704515d485a8c7fd7e3"
+      },
+      {
         "path": "dockerfiles/platforms/Dockerfile_cambricon_mlu590",
-        "bytes": 735,
-        "sha256": "f26bc876e61e5dd0e7744bdd03acf3a91ba48858275764504bafdbdec809c6d9"
+        "bytes": 5229,
+        "sha256": "06bfdabea81259a3865c0c43bef2ccbf5a1bf6d7b565723f386a3dd5d27d79ba"
+      },
+      {
+        "path": "dockerfiles/platforms/Dockerfile_metax_trellis2",
+        "bytes": 7272,
+        "sha256": "b7f0e0fca61244f1795bb13d4f5240c1fa43ba428daa47886afd34b70d38dd38"
       },
       {
         "path": "dockerfiles/platforms/Dockerfile_mi350",
@@ -5349,8 +5364,8 @@
       },
       {
         "path": "lightx2v/common/ops/sparse/attention/packed.py",
-        "bytes": 1263,
-        "sha256": "f38761708072884db1098febf23b4f6bf3c2f0aeea1f2074110ed9ec04aa186c"
+        "bytes": 2732,
+        "sha256": "88f13879f20f9239c9e456c36ffd81a61a05a14ff488a620cfccd3b1e8ad1087"
       },
       {
         "path": "lightx2v/common/ops/sparse/attention/rope.py",
@@ -5394,8 +5409,8 @@
       },
       {
         "path": "lightx2v/common/ops/sparse/submanifold_conv.py",
-        "bytes": 2039,
-        "sha256": "6a3e58ba05615ca72570563b514ed2b4572a7339936a8e05a2a1ad6b903d8446"
+        "bytes": 2855,
+        "sha256": "17dc20d7ef86f0fb43e0ff80b85b60975f055d4febe8fabcd36193df072b732e"
       },
       {
         "path": "lightx2v/common/ops/tensor/__init__.py",
@@ -5964,8 +5979,8 @@
       },
       {
         "path": "lightx2v/models/input_encoders/hf/trellis2/encoder.py",
-        "bytes": 4346,
-        "sha256": "7dbeab35ff52b2d69ddeefe8c82f8dd408fa095bbd15145fe75d58f1bd41fd58"
+        "bytes": 3902,
+        "sha256": "8421d8887af683d51ecdce7dbca639fc41565e9ec923a956247d574dfdd70e79"
       },
       {
         "path": "lightx2v/models/input_encoders/hf/vace/vace_processor.py",
@@ -7469,8 +7484,8 @@
       },
       {
         "path": "lightx2v/models/networks/trellis2/weights/loader.py",
-        "bytes": 2449,
-        "sha256": "e48a9809c809fc923da8d383e53bf1898e91ddf248c2dd9d2bc181f5761b318d"
+        "bytes": 3305,
+        "sha256": "79e0917fb11c88143f158a2c42ae0e98f1765bdac96e8710e1ef9fa1089a0391"
       },
       {
         "path": "lightx2v/models/networks/trellis2/weights/transformer_weights.py",
@@ -8689,8 +8704,8 @@
       },
       {
         "path": "lightx2v/models/runners/trellis2/trellis2_runner.py",
-        "bytes": 5886,
-        "sha256": "67c079a72b3ca1021b8522fe49c3e7e741e8f123b2d0d10b6d095b361d01f8df"
+        "bytes": 6044,
+        "sha256": "cd2159a8230eb22100ffd239fade1ca201577a2a4bc6b77c7f0c0dd3868bbed0"
       },
       {
         "path": "lightx2v/models/runners/vsr/utils/TCDecoder.py",
@@ -9044,8 +9059,8 @@
       },
       {
         "path": "lightx2v/models/schedulers/trellis2/flow_euler.py",
-        "bytes": 2202,
-        "sha256": "4ceae89902369007509d3285768d2a7945e1abc21e08ac73d5df42abdf94ba97"
+        "bytes": 2244,
+        "sha256": "70520c4d111f4968a1605617142137eeaa30d0aa7b2e0d31057c093798ba2291"
       },
       {
         "path": "lightx2v/models/schedulers/wan/animate2/__init__.py",
@@ -9684,8 +9699,8 @@
       },
       {
         "path": "lightx2v/models/video_encoders/hf/trellis2/mesh_extraction.py",
-        "bytes": 4710,
-        "sha256": "4d1c9e621331d398f5425f76420ad807dd65e0e335bb293ce1030a4c8f49ec44"
+        "bytes": 5945,
+        "sha256": "5cffa2ea30034ef0fa87f5d50f94adda8ab08170665b0b7fa18135d69d577006"
       },
       {
         "path": "lightx2v/models/video_encoders/hf/vid_recon.py",
@@ -10094,8 +10109,8 @@
       },
       {
         "path": "lightx2v_kernel/README.md",
-        "bytes": 635,
-        "sha256": "55c0244a4a4c4df7bc7f9edf25fa899f64de7f16baabe4db8d379d23ae4dfe85"
+        "bytes": 736,
+        "sha256": "4128d979a6c65a6232581894fa18e2a76ceda3e719fd645eace25eba8b7b6c05"
       },
       {
         "path": "lightx2v_kernel/apple/README.md",
@@ -10131,6 +10146,71 @@
         "path": "lightx2v_kernel/apple/test/test_int8_matmul.py",
         "bytes": 3727,
         "sha256": "4cf481ea5dbfe8d29b188d3aa1fe972132df397d09c0b3f5ba73ffc44736fef5"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/.gitignore",
+        "bytes": 47,
+        "sha256": "d4622197b30ac847fd7b356ffff78c4b225d8e6f86f056cb19e2af24680829f7"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/LICENSE",
+        "bytes": 1093,
+        "sha256": "8eef85c2c0648a4d42a898f5e6d8bf35f532c477a6233a9647718b61228d275a"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/MANIFEST.in",
+        "bytes": 106,
+        "sha256": "6a5d1f03c5d4d779d406f89a103e9292ba3a9f36445afad1d3ae9402c220039f"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/README.md",
+        "bytes": 6467,
+        "sha256": "21819b40835f7d8b1b6e8ab94a9ad08c0331f8dab813e66c288c239fd8d7a5ae"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/csrc/bindings.cpp",
+        "bytes": 2067,
+        "sha256": "4e76f94f8dbc616049ce7574688f942abb4724d6bbe2f93acdc0d0c01ff77ee5"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/csrc/mesh_kernels.mlu",
+        "bytes": 17736,
+        "sha256": "903fff2f417a0f12b9a27a9c56fd72cc7babc8dc7c705405e649a8e0f853f6c9"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/kernel-map.json",
+        "bytes": 8223,
+        "sha256": "b4e74f86de9de223e15def1fdfb86ced0da8ad6600f3562909e23b7b781b544d"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/pyproject.toml",
+        "bytes": 116,
+        "sha256": "1934ff2fcbb3fd2af04b31b10d008395eebd7bdcf19533d42e14a75a99324319"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/python/lightx2v_kernel_mlu/__init__.py",
+        "bytes": 65,
+        "sha256": "034a12a53dc64168dc2568cf9e7455f5697cd4b6280ea64036097091476adde5"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/python/lightx2v_kernel_mlu/mesh.py",
+        "bytes": 7975,
+        "sha256": "31c56f0e20356357d1fe9ca6020bebd47971b7803c55f8b21d0d1d6e22078883"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/setup.py",
+        "bytes": 570,
+        "sha256": "603d60f1df92904eb73730b3aca8718d6db2639f21720b39dd22b8efe26554d5"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/tests/compare_kernels.py",
+        "bytes": 11325,
+        "sha256": "842f0b4c9ce9c68bf675993a70f199fd60f28a9b08ccdb9e6bfbc3a7e8fed867"
+      },
+      {
+        "path": "lightx2v_kernel/cambricon_mlu/tests/source_reference.py",
+        "bytes": 9738,
+        "sha256": "5132ea72feee8307c61c8f82bfeb15219e96af835b2dea26e47932bb5e14d740"
       },
       {
         "path": "lightx2v_kernel/intel_xpu/CMakeLists.txt",
@@ -10921,6 +11001,16 @@
         "path": "lightx2v_platform/ops/attn/template.py",
         "bytes": 755,
         "sha256": "51937e5eae037b1afbd5b2b1433f506a2487ed0155b97da13d58d9bd2295e2c5"
+      },
+      {
+        "path": "lightx2v_platform/ops/mesh/__init__.py",
+        "bytes": 74,
+        "sha256": "7518f714b2c4ae8781a7975a04a8c8e67433c41e04203755ed5e35a520d9e698"
+      },
+      {
+        "path": "lightx2v_platform/ops/mesh/cambricon_mlu/__init__.py",
+        "bytes": 527,
+        "sha256": "1e0de3411d5147aad7411dce8659be471933a804f3d3adab7efcd1265c0ea536"
       },
       {
         "path": "lightx2v_platform/ops/mm/__init__.py",
@@ -13424,8 +13514,8 @@
       },
       {
         "path": "pyproject.toml",
-        "bytes": 2561,
-        "sha256": "92eeda34db832ac7e8c7fe9de002e7541738dec5a61a750c49df1724694b01e5"
+        "bytes": 2624,
+        "sha256": "ff42876717f22fe63f9ffb2e6c7bd2f79c7b6617e5e1e22a25670a292cc44f5d"
       },
       {
         "path": "requirements-docs.txt",
@@ -13434,8 +13524,8 @@
       },
       {
         "path": "requirements.txt",
-        "bytes": 502,
-        "sha256": "f729742d98a17d58eb3bb730faf6877dbfe662e22445d1d7c13e3f91d5d545ba"
+        "bytes": 537,
+        "sha256": "0b8e08479d495c250f9250e9a50ed0e6adca3ec8a54e364af41426ebade9b84a"
       },
       {
         "path": "requirements_animate.txt",
@@ -14793,6 +14883,21 @@
         "sha256": "fd3be515a08b3ae5d8c4f57cbfc2ed9a9daf1c19b74e7407ebe0f2b0345c14cd"
       },
       {
+        "path": "scripts/platform/ascend_npu/run_trellis2.sh",
+        "bytes": 1365,
+        "sha256": "af5719847cf6b0e8e3755ace37db641884dc6da056d06225b0bac0f24818f0de"
+      },
+      {
+        "path": "scripts/platform/metax/run_trellis2.sh",
+        "bytes": 1620,
+        "sha256": "2b5185b92109d5d745796ed4e2f3b47e9c8f97b0d45c0a31ec1450a37e6afb1c"
+      },
+      {
+        "path": "scripts/platform/mlu/run_trellis2.sh",
+        "bytes": 1488,
+        "sha256": "b4ec7d87eb3538e9b2133d078b64fdea035efac20f93c94e5c6fedf13bc3fb59"
+      },
+      {
         "path": "scripts/platforms/amd_rocm/qwen_image_21_r9700_t2i.sh",
         "bytes": 623,
         "sha256": "de1da89ca66ece702a66abfb627a1eb7ab418b06a3b1ecbd14bb9b6da208be55"
@@ -15123,11 +15228,6 @@
         "sha256": "fceb2a4f4a6cf721979e858b7b8214277f33b7aca6b9098fcb3ff781e80a95ea"
       },
       {
-        "path": "scripts/platforms/mlu/run_trellis2.sh",
-        "bytes": 590,
-        "sha256": "75092d162c4f7cb4ea44d3b90e92ffd80ae7405767a8e40f2158ee403171f922"
-      },
-      {
         "path": "scripts/platforms/mlu/run_wan21_t2v.sh",
         "bytes": 1145,
         "sha256": "f2ec2d5e843f856d5c416f4fd2dd7cab196656405a7f51122162bc998d4f0e5e"
@@ -15241,11 +15341,6 @@
         "path": "scripts/platforms/nvidia/qwen_image_i2i_2511.sh",
         "bytes": 670,
         "sha256": "6d234de5d210c7b2a5fd922ebcc7062669d777b27a7116de5c8a4ac0bb0970ef"
-      },
-      {
-        "path": "scripts/platforms/nvidia/run_trellis2.sh",
-        "bytes": 428,
-        "sha256": "7123130002556daed2bbb61e5f828fe75f73706289d5f2f2ea4b909be006fd37"
       },
       {
         "path": "scripts/platforms/nvidia/run_wan21_t2v.sh",
@@ -16138,14 +16233,14 @@
         "sha256": "1dd7f02ce9e7114cd93ae490bc23848cc864f258d5d4c7d1d02dd544e061c319"
       },
       {
-        "path": "scripts/trellis2/requirements-mlu.txt",
-        "bytes": 383,
-        "sha256": "f3a28fed53b1239b98ebf740f360f7ac54b089a35f8f6d7d49a7c31db935eab8"
+        "path": "scripts/trellis2/README.md",
+        "bytes": 9338,
+        "sha256": "b009ada409f984bd5b7108c021e9ec0ef10ccd40ff6c4791319eef428c8f0a72"
       },
       {
         "path": "scripts/trellis2/run_trellis2.sh",
-        "bytes": 1154,
-        "sha256": "6120660ad93f0d8c487196fd039e50d512d7640977b1dc1ed256b9a0c61f6c5f"
+        "bytes": 1242,
+        "sha256": "d98a68c9847d3fc704f94af83296d953d50de0e2413c74303bb8c99057afdaa2"
       },
       {
         "path": "scripts/wan/README.md",
@@ -17034,6 +17129,6 @@
       }
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "6daa6c895a7ddd6eb15ea3b9cc684627700df08f"
+    "revision": "d57f724383d328a2530f310cb5c8de4c26460c21"
   }
 }

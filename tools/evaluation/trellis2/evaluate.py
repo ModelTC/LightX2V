@@ -168,12 +168,83 @@ class LightX2VAdapter:
         request = self.runner.prepare_request(fields)
         prepare_s = time.perf_counter() - prepare_start
         model_start = time.perf_counter()
-        result = self.runner.run_request(request)
+        with record_pipeline_stage_times(self.runner) as stages:
+            result = self.runner.run_request(request)
+        runner_s = time.perf_counter() - model_start
         self.last_stage_timings = {
             "request_preparation_s": prepare_s,
-            "runner_inference_and_postprocess_s": time.perf_counter() - model_start,
+            "runner_inference_and_postprocess_s": runner_s,
+            **stages,
+            "runner_other_s": max(0.0, runner_s - sum(stages.values())),
         }
         return result
+
+
+@contextmanager
+def record_pipeline_stage_times(runner):
+    """Measure disjoint runner stages with device synchronization at boundaries."""
+    device = device_api()
+    times, restore = {}, []
+
+    def measured(function, label, *args, **kwargs):
+        device.synchronize()
+        start = time.perf_counter()
+        try:
+            return function(*args, **kwargs)
+        finally:
+            device.synchronize()
+            times[label] = times.get(label, 0.0) + time.perf_counter() - start
+
+    def replace(target, name, function):
+        restore.append((target, name, name in vars(target), vars(target).get(name)))
+        setattr(target, name, function)
+
+    # Special methods are resolved on the class. Group by class and identify the
+    # particular model instance, preserving behavior when decoders share a type.
+    groups = {}
+    objects = [(runner.encoder, "image_encoder_s")]
+    for key, label in (
+        ("sparse_structure_decoder", "sparse_structure_decode_s"),
+        ("shape_slat_decoder", "shape_decode_and_mesh_extraction_s"),
+        ("tex_slat_decoder", "texture_decode_s"),
+    ):
+        objects.append((runner.models[key], label))
+    for target, label in objects:
+        groups.setdefault(type(target), {})[id(target)] = label
+    originals = {cls: cls.__call__ for cls in groups}
+    original_sample = runner._sample
+    module = sys.modules[type(runner).__module__]
+    original_fill = module.fill_mesh_holes
+    try:
+        for cls, labels in groups.items():
+            original = originals[cls]
+
+            @functools.wraps(original)
+            def call(instance, *args, _labels=labels, _original=original, **kwargs):
+                label = _labels.get(id(instance))
+                if label is None:
+                    return _original(instance, *args, **kwargs)
+                return measured(_original, label, instance, *args, **kwargs)
+
+            replace(cls, "__call__", call)
+
+        @functools.wraps(original_sample)
+        def sample(stage, *args, **kwargs):
+            return measured(original_sample, f"{stage}_denoise_s", stage, *args, **kwargs)
+
+        @functools.wraps(original_fill)
+        def fill(*args, **kwargs):
+            return measured(original_fill, "mesh_hole_filling_s", *args, **kwargs)
+
+        replace(runner, "_sample", sample)
+        replace(module, "fill_mesh_holes", fill)
+        yield times
+    finally:
+        for target, name, owned, value in reversed(restore):
+            if owned:
+                setattr(target, name, value)
+            else:
+                delattr(target, name)
 
 
 def measurement_targets(adapter):
@@ -607,6 +678,14 @@ def evaluate_run(run, suite, data):
     performance["request_timing_breakdown_s"] = {key: stats([r["timing_breakdown_s"][key] for r in success if key in r.get("timing_breakdown_s", {})]) for key in timing_keys}
     adapter_keys = sorted({key for r in success for key in r.get("adapter_stage_s", {})})
     performance["adapter_stage_s"] = {key: stats([r["adapter_stage_s"][key] for r in success if key in r.get("adapter_stage_s", {})]) for key in adapter_keys}
+    if times and "mesh_hole_filling_s" in adapter_keys:
+        exclusive = {key: value["mean"] for key, value in performance["adapter_stage_s"].items()
+                     if key != "runner_inference_and_postprocess_s"}
+        for key in ("result_cpu_numpy_conversion", "evaluation_harness_overhead"):
+            exclusive[key] = performance["request_timing_breakdown_s"][key]["mean"]
+        performance["pipeline_stage_share_percent"] = {
+            key: seconds / performance["pipeline_s"]["mean"] * 100 for key, seconds in exclusive.items()
+        }
     performance["model_load_s"] = environment.get("model_load_s")
     telemetry_path = run / "telemetry.jsonl"
     if telemetry_path.exists():
@@ -1168,6 +1247,17 @@ def run_campaign(args):
                     stderr=subprocess.STDOUT,
                     check=True,
                 )
+                for extension in load_platform_config().get("source_extensions", []):
+                    if Path(extension).is_absolute() or ".." in Path(extension).parts:
+                        raise ValueError(f"Invalid source extension path: {extension}")
+                    subprocess.run(
+                        ["docker", "run", "--rm", "--mount", f"type=bind,src={ROOT},dst=/eval",
+                         "-e", "PYTHONPATH=/eval/runtime", "-e", "MAX_JOBS=2",
+                         "--entrypoint", load_platform_config()["python_executable"], args.image,
+                         "-m", "pip", "install", "--no-build-isolation", "--no-deps", "--upgrade",
+                         "--target", "/eval/runtime", f"/eval/sources/{extension}"],
+                        stdout=log, stderr=subprocess.STDOUT, check=True,
+                    )
         if not args.reuse_runs:
             for stage in ("lightx2v",):
                 try:
