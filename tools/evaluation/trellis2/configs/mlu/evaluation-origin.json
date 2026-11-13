@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "model": "trellis2",
+  "source_project": "model-evaluation (historical joint project)",
+  "historical_suite_sha256": "4530c60cfe2a69178ca9f450ddc9030beac3e0dbf658eadfa547b6a0957fc45d",
+  "historical_source_lock_sha256": "d707f1dbd9c43cbc5313e3090981c4df947b93ccdf4e67e273709ace407d50e9",
+  "project_suite_sha256": "d36a1d75b43c0b63757d56687368f6ce6267e71de07a885fbd3cb2681c84379e",
+  "project_source_lock_sha256": "cfbe10e29c6af0e793ab274cffaf8e304ad2f2e5d145bdb4563bdbe1503ce193",
+  "historic_evaluation_code_sha256": "2ed33f2955542cba62ffce0dca4f6675f55b26f72e8d886c3ab65c4ddb6115e0",
+  "reports": {
+    "encoder-diagnostic.json": "f8d13c70a361c2f454798012acd5384a0c6093e9e122d3ff9b48c52b074444b7",
+    "geometry-export-manifest.json": "0f05408e2b3f1088cea33ccb54ca366b05588e2d3ae64c3ca70a083baf1c761d"
+  },
+  "runs": {
+    "benchmark-trellis2-lightx2v-01": {
+      "environment_sha256": "9ee35d469356d0877f909494ad35f49a59ed50099e2f40bbba14bd5c0df01211",
+      "requests_sha256": "de46f3f6351767da84fcb0d217bf686f73be3482dadd7b40480804685aa87333"
+    },
+    "smoke-trellis2-lightx2v-01": {
+      "environment_sha256": "25ce44f40f559ab241f29c037eeaae46008011a06a05cdce2f1e696f1520e8b5",
+      "requests_sha256": "21e9daaf0b19272ffb43770425295adf4d6aea25326f16223138958f39636408"
+    }
+  },
+  "artifact_copy_policy": "Independent regular files (copy-on-write when filesystem supports it); no cross-project links",
+  "model_rerun": false,
+  "configuration_aliases": [
+    {
+      "suite_sha256": "2507ebf5cf87f9b98c1893977e9b4694b3b352679664a0a71800a97195aa45f5",
+      "source_lock_sha256": "376e62ce79d948e606f875c9d904e6b860ffd000ca185770d8aa6196f51d3b48"
+    },
+    {
+      "suite_sha256": "4530c60cfe2a69178ca9f450ddc9030beac3e0dbf658eadfa547b6a0957fc45d",
+      "source_lock_sha256": "d707f1dbd9c43cbc5313e3090981c4df947b93ccdf4e67e273709ace407d50e9"
+    }
+  ],
+  "configuration_alias_reason": "Portable metadata and source inventory migration; inputs, weights and evaluated model Python bytes unchanged."
+}

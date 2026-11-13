@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "platform": "mlu",
+  "device_type": "mlu",
+  "container_image": "registry.cn-sh-02.sensecore.cn/ccr-zhanghaiyu/mlu_pytorch:26.02_u24.04_torch2.9.1_0405",
+  "python_executable": "/torch/venv3/pytorch_infer/bin/python",
+  "environment": {
+    "TRELLIS2_MLU_COMPAT": "1",
+    "SPARSE_CONV_BACKEND": "torch",
+    "ATTN_BACKEND": "sdpa",
+    "SPARSE_ATTN_BACKEND": "sdpa",
+    "PLATFORM": "cambricon_mlu",
+    "DTYPE": "BF16",
+    "PROFILING_DEBUG_LEVEL": "0",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "HF_HUB_DISABLE_XET": "1",
+    "PYTORCH_MLU_ALLOC_CONF": "expandable_segments:True"
+  },
+  "model_path_environment": {
+    "TRELLIS2_DINO_PATH": "dino",
+    "TRELLIS2_REMBG_PATH": "rembg"
+  },
+  "docker_devices": [
+    "/dev/cambricon_ctl",
+    "/dev/cambricon_dev{card}",
+    "/dev/cambricon_ipcm{card}"
+  ],
+  "visibility_environment": {
+    "MLU_VISIBLE_DEVICES": "0",
+    "EVAL_PHYSICAL_CARD": "{card}"
+  },
+  "monitor_command": [
+    "cnmon"
+  ],
+  "torch_namespace": "mlu",
+  "registration_modules": [
+    "torch_mlu"
+  ],
+  "monitor_parser": "cnmon",
+  "card_index_environment": "MLU_CARD",
+  "default_card": 2,
+  "autocast_dtype": "bfloat16",
+  "version_packages": [
+    "torch",
+    "torch_mlu",
+    "transformers",
+    "numpy",
+    "scipy",
+    "Pillow",
+    "timm",
+    "kornia",
+    "trimesh",
+    "diffusers",
+    "lightx2v-kernel-mlu"
+  ],
+  "validation_status": "validated_mlu590",
+  "source_extensions": [
+    "lightx2v-trellis2/lightx2v_kernel/cambricon_mlu"
+  ]
+}

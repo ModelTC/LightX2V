@@ -1,0 +1,12 @@
+{
+  "model_cls": "trellis2",
+  "task": "i23d",
+  "pipeline_type": "512",
+  "attn_type": "flash_attn2",
+  "deform_conv_backend": "original",
+  "neighbor_map": "sorted",
+  "sparse_conv_backend": "flex_gemm",
+  "ln_norm_type": "torch",
+  "conv_type": "Default",
+  "dit_quant_scheme": "Default"
+}

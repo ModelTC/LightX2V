@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "platform": "ascend_npu",
+  "device_type": "npu",
+  "container_image": "lightx2v-eval-trellis2:ascend-910b",
+  "python_executable": "/usr/local/bin/eval-python",
+  "environment": {
+    "SPARSE_CONV_BACKEND": "torch",
+    "ATTN_BACKEND": "sdpa",
+    "SPARSE_ATTN_BACKEND": "sdpa",
+    "PLATFORM": "ascend_npu",
+    "DTYPE": "BF16",
+    "PROFILING_DEBUG_LEVEL": "0",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "HF_HUB_DISABLE_XET": "1",
+    "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
+    "OMP_NUM_THREADS": "8",
+    "TRELLIS2_ASCEND_COMPAT": "1",
+    "ASCEND_CACHE_PATH": "/eval/cache/ascend"
+  },
+  "model_path_environment": {
+    "TRELLIS2_DINO_PATH": "dino",
+    "TRELLIS2_REMBG_PATH": "rembg"
+  },
+  "visibility_environment": {
+    "ASCEND_RT_VISIBLE_DEVICES": "{card}",
+    "EVAL_PHYSICAL_CARD": "{card}"
+  },
+  "monitor_command": [
+    "python3",
+    "{project}/scripts/platform/ascend_npu/monitor.py",
+    "--card",
+    "{card}"
+  ],
+  "torch_namespace": "npu",
+  "registration_modules": [
+    "torch_npu"
+  ],
+  "monitor_parser": "json",
+  "card_index_environment": "ASCEND_CARD",
+  "default_card": 0,
+  "autocast_dtype": "bfloat16",
+  "version_packages": [
+    "torch",
+    "torch-npu",
+    "torchvision",
+    "transformers",
+    "numpy",
+    "scipy",
+    "Pillow",
+    "timm",
+    "kornia",
+    "trimesh",
+    "diffusers"
+  ],
+  "validation_status": "ascend_device_checked_model_smoke_pending",
+  "max_card_index": 15,
+  "docker_device_args": [
+    "--init",
+    "--cap-add",
+    "ALL",
+    "--device",
+    "/dev/davinci{card}",
+    "--device",
+    "/dev/davinci_manager",
+    "--device",
+    "/dev/devmm_svm",
+    "--device",
+    "/dev/hisi_hdc",
+    "--mount",
+    "type=bind,src=/usr/local/Ascend/driver,dst=/usr/local/Ascend/driver,readonly"
+  ],
+  "idle_memory_mib_max": 4096,
+  "requirements_file": "configs/ascend_npu/runtime-requirements.txt"
+}
