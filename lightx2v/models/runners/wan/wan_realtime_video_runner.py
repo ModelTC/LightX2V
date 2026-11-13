@@ -28,6 +28,8 @@ def select_clean_context(history, *, segment_index, context_frames=3, keep_first
 
 @RUNNER_REGISTER("wan2.1_realtime")
 class WanRealtimeVideoRunner(WanSFRunner):
+    supported_lora_modes = ("merge",)
+
     _SUPPORTS_AUTOREGRESSIVE_WARMUP = True
     _WARMUP_TASKS = ("t2v",)
 

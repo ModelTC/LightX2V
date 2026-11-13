@@ -45,7 +45,6 @@ class TaoMateBase10Producer:
             weight_auto_quant=False,
             adapter_model_path=None,
             lora_configs=None,
-            lora_dynamic_apply=False,
         )
         device = "cpu" if config.get("cpu_offload", False) else AI_DEVICE
         if self.shared_base is None:

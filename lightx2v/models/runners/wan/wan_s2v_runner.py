@@ -54,6 +54,8 @@ def merge_video_audio(video_path: str, audio_path: str):
 
 @RUNNER_REGISTER("wan2.2_s2v")
 class WanS2VRunner(WanRunner):
+    supported_lora_modes = ("merge",)
+
     supported_request_fields_by_task = {
         "s2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"audio_path", "image_path", "pose_video_path"},
     }

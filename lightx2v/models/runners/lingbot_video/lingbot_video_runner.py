@@ -16,6 +16,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS, VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.lingbot_video.scheduler import LingBotVideoScheduler
 from lightx2v.models.video_encoders.hf.lingbot_video.vae import LingBotVideoWanVAE
+from lightx2v.utils.envs import GET_LORA_MODE
 from lightx2v.utils.image_io import save_image
 from lightx2v.utils.input_info import I2VInputInfo, T2IInputInfo, T2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
@@ -32,7 +33,7 @@ SPATIAL_MERGE_SIZE = 2
 
 
 def build_lingbot_video_model_with_lora(model_kwargs, config, lora_configs):
-    if config.get("lora_dynamic_apply", False):
+    if GET_LORA_MODE() == "separate":
         if len(lora_configs) != 1:
             raise ValueError("LingBot-Video dynamic LoRA mode requires exactly one lora_configs entry.")
         lora_config = lora_configs[0]
@@ -79,6 +80,8 @@ def smart_resize(height, width, factor, min_pixels=None, max_pixels=None):
 
 @RUNNER_REGISTER("lingbot_video")
 class LingBotVideoRunner(DefaultRunner):
+    supported_lora_modes = ("merge", "separate")
+
     supported_request_fields_by_task = {
         "t2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"size"},
         "t2v": VIDEO_REQUEST_FIELDS,

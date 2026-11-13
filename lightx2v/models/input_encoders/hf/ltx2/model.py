@@ -25,7 +25,7 @@ from lightx2v.models.input_encoders.hf.ltx2.gemma.model import (
     Gemma3ForConditionalGeneration,
 )
 from lightx2v.models.input_encoders.hf.ltx2.gemma.tokenizer import LTXVGemmaTokenizer
-from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.envs import GET_LORA_DTYPE
 from lightx2v.utils.lora_loader import LoRALoader
 from lightx2v.utils.ltx2_utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -190,7 +190,7 @@ class LTX2TextEncoder:
         v_context_n, a_context_n = contexts[1] if negative_prompt is not None else (None, None)
         return v_context_p, a_context_p, v_context_n, a_context_n
 
-    def apply_lora(self, lora_configs, force_fp32=False):
+    def apply_lora(self, lora_configs):
         """
         Apply LoRA weights to text encoder's feature extractor.
 
@@ -198,7 +198,6 @@ class LTX2TextEncoder:
             lora_configs: List of LoRA configuration dicts, each containing:
                 - path: Path to LoRA safetensors file
                 - strength: LoRA strength (default: 1.0)
-            force_fp32: Merge in FP32, then restore the original weight dtype
 
         Returns:
             bool: True if LoRA was successfully applied, False otherwise
@@ -229,7 +228,7 @@ class LTX2TextEncoder:
             (r"^text_embedding_projection\.", "feature_extractor."),
         ]
         lora_loader = LoRALoader(key_mapping_rules=key_mapping_rules)
-        lora_dtype = torch.float32 if force_fp32 else GET_DTYPE()
+        lora_dtype = GET_LORA_DTYPE()
 
         for lora_config in lora_configs:
             lora_path = lora_config["path"]
@@ -249,7 +248,7 @@ class LTX2TextEncoder:
                     weight_dict=weight_dict,
                     lora_weights=text_encoder_lora_weights,
                     strength=lora_strength,
-                    force_fp32=force_fp32,
+                    lora_dtype=lora_dtype,
                 )
 
                 if applied_count > 0:

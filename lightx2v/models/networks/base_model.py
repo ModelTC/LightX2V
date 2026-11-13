@@ -386,7 +386,7 @@ class BaseTransformerModel(ABC):
         Returns:
             bool: True if model should be initialized empty
         """
-        if self.config.get("lora_configs") and self.config["lora_configs"] and not self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_configs") and self.config["lora_configs"] and GET_LORA_MODE() not in ("separate", "consumer"):
             return True
         return False
 
@@ -454,7 +454,7 @@ class BaseTransformerModel(ABC):
             validate_numa_operator_views(numa_map, roots)
 
         # Handle LoRA if needed
-        if self.config.get("lora_dynamic_apply", False) and self.lora_path is not None:
+        if GET_LORA_MODE() in ("separate", "consumer") and self.lora_path is not None:
             assert self.config.get("lora_configs", False)
             if hasattr(self, "_register_lora"):
                 self._register_lora(self.lora_path, self.lora_strength)
@@ -468,7 +468,7 @@ class BaseTransformerModel(ABC):
         gc.collect()
 
     def _load_lora_file(self, file_path, dtype=None):
-        dtype = GET_DTYPE() if dtype is None else dtype
+        dtype = GET_LORA_DTYPE() if dtype is None else dtype
         if self.device.type != "cpu" and dist.is_initialized():
             device = f"{AI_DEVICE}:{dist.get_rank()}"
         else:

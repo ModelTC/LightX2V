@@ -1,5 +1,7 @@
 # MiniMax-H3 Roll: Low-cost candidate generation
 
+Set `export LORA_MODE=separate` before running the examples or exporting AdaLN caches. The shell launchers default to this mode; JSON no longer selects it. Set the same `LORA_DTYPE` for cache export and inference (unset follows `DTYPE`).
+
 [English](README.md) | [简体中文](README_zh.md)
 
 Generate low-resolution drafts to select prompts and seeds, then regenerate selected drafts at a higher resolution. Set `draft_steps` to reduce the cost of each draft further. Run the commands below from the repository root.

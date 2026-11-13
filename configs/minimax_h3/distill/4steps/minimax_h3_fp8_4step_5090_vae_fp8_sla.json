@@ -28,7 +28,7 @@
   "vae_attn_type": "sage_attn2",
   "video_flow_shift": 6.0,
   "audio_flow_shift": 3.0,
-  "h3_step_update": "training_euler",
+  "scheduler_type": "euler",
   "vae_spatial_scale_factor": 16,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-f16-accum",
@@ -37,7 +37,6 @@
   "video_vae_quant_scheme": "fp8-f16-accum",
   "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_f16_accum_encoder_conv_q21.safetensors",
   "vae_encoder_conv_mode": "cutlass_fp8_f16_accum",
-  "lora_dynamic_apply": true,
   "lora_configs": [
     {
       "path": "/path/to/minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_bf16.safetensors",

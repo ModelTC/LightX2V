@@ -1,7 +1,8 @@
 """LoRA merging for the native MiniMax-H3 inference implementation."""
 
 import gc
-from contextlib import nullcontext
+import math
+from collections import Counter
 
 import torch
 from loguru import logger
@@ -9,6 +10,64 @@ from safetensors import safe_open
 
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+def read_lora_pairs(source, config_alpha=None):
+    """Read the published native H3 format; alpha tensors override metadata/config."""
+    pairs = {}
+    alpha_sources = Counter()
+    keys = set(source.keys())
+    down_suffix, up_suffix = ".lora_A.default.weight", ".lora_B.default.weight"
+    prefixes = sorted(key[: -len(down_suffix)] for key in keys if key.endswith(down_suffix))
+    expected = {prefix + suffix for prefix in prefixes for suffix in (down_suffix, up_suffix)}
+    expected.update(prefix + ".alpha" for prefix in prefixes if prefix + ".alpha" in keys)
+    if not prefixes or keys != expected:
+        raise ValueError(f"Invalid native H3 LoRA keys: missing={sorted(expected - keys)[:3]}, unexpected={sorted(keys - expected)[:3]}")
+
+    metadata_alpha = (source.metadata() or {}).get("alpha")
+    for prefix in prefixes:
+        down, up = prefix + down_suffix, prefix + up_suffix
+        down_shape, up_shape = source.get_slice(down).get_shape(), source.get_slice(up).get_shape()
+        if len(down_shape) != 2 or len(up_shape) != 2 or down_shape[0] != up_shape[1] or down_shape[0] < 1:
+            raise ValueError(f"Invalid H3 LoRA factors for {prefix}: {down_shape}, {up_shape}")
+        if prefix + ".alpha" in keys:
+            alpha, origin = source.get_tensor(prefix + ".alpha").item(), "tensor"
+        elif metadata_alpha is not None:
+            alpha, origin = float(metadata_alpha), "metadata"
+        elif config_alpha is not None:
+            alpha, origin = float(config_alpha), "config"
+        else:
+            raise ValueError(f"{prefix} has no embedded alpha; set lora_configs[].alpha")
+        alpha = float(alpha)
+        if not math.isfinite(alpha) or alpha <= 0:
+            raise ValueError(f"Invalid H3 LoRA alpha for {prefix}: {alpha}")
+        pairs[prefix] = (down, up, alpha)
+        alpha_sources[origin, alpha] += 1
+    for (origin, alpha), count in sorted(alpha_sources.items()):
+        logger.info("H3 LoRA alpha: source={}, alpha={}, layers={}", origin, alpha, count)
+    return pairs
+
+
+def cached_modulation_shapes(config):
+    """Projections replaced by the persistent AdaLN tables."""
+    hidden = int(config.get("hidden_size", 5376))
+    time_dim = int(config.get("time_embed_dim", 2688))
+    shapes = {f"transformer_blocks.{i}.adaln_proj.linear.weight": (18 * hidden, time_dim) for i in range(int(config.get("num_layers", 50)))}
+    shapes["norm_out.linear.weight"] = (2 * hidden, time_dim)
+    return shapes
+
+
+def merge_lora_weight(parameter, up, down, alpha, strength, *, lora_dtype, device):
+    """Share the online/offline merge order, including the final BF16 rounding."""
+    dtype = lora_dtype
+    up, down = up.to(device=device, dtype=dtype), down.to(device=device, dtype=dtype)
+    with torch.autocast(device_type=torch.device(device).type, enabled=False):
+        delta = torch.mm(up, down)
+    if delta.shape != parameter.shape:
+        raise ValueError(f"LoRA delta shape {tuple(delta.shape)} != weight {tuple(parameter.shape)}")
+    merged = parameter.to(device=device, dtype=torch.promote_types(parameter.dtype, dtype))
+    merged.add_(delta, alpha=alpha / down.shape[0] * float(strength))
+    parameter.copy_(merged)
 
 
 class MiniMaxH3LoraAdapter(LoraAdapter):
@@ -31,37 +90,6 @@ class MiniMaxH3LoraAdapter(LoraAdapter):
         if is_available():
             return torch.device(AI_DEVICE, device_module.current_device())
         return parameter.device
-
-    @staticmethod
-    def _normalize_lora_key(key: str) -> str | None:
-        """Map supported H3 LoRA layouts to native down/up tensor names."""
-        for prefix in (
-            "base_model.model.",
-            "model.diffusion_model.",
-            "diffusion_model.",
-            "transformer.",
-            "model.",
-        ):
-            if key.startswith(prefix):
-                key = key[len(prefix) :]
-                break
-
-        suffixes = {
-            ".lora_A.default.weight": ".lora_down.weight",
-            ".lora_B.default.weight": ".lora_up.weight",
-            ".lora_A.weight": ".lora_down.weight",
-            ".lora_B.weight": ".lora_up.weight",
-            ".lora.down.weight": ".lora_down.weight",
-            ".lora.up.weight": ".lora_up.weight",
-            ".lora_down.weight": ".lora_down.weight",
-            ".lora_up.weight": ".lora_up.weight",
-        }
-        for suffix, replacement in suffixes.items():
-            if key.endswith(suffix):
-                return key[: -len(suffix)] + replacement
-        if key.endswith(".alpha"):
-            return key
-        return None
 
     def _shard_factors(self, model_key, lora_up, lora_down):
         if not self.model.use_tp:
@@ -95,84 +123,21 @@ class MiniMaxH3LoraAdapter(LoraAdapter):
     @torch.no_grad()
     def _merge_file(self, path, strength=1.0, alpha=None):
         with safe_open(path, framework="pt", device="cpu") as source:
-            normalized_sources = {}
-            unsupported = []
-            for source_key in source.keys():
-                normalized_key = self._normalize_lora_key(source_key)
-                if normalized_key is None:
-                    unsupported.append(source_key)
+            pairs = read_lora_pairs(source, alpha)
+            cached_shapes = cached_modulation_shapes(self.model.config) if self.model.use_adaln_cache else {}
+            for index, (prefix, (down_key, up_key, pair_alpha)) in enumerate(pairs.items(), start=1):
+                model_key = prefix + ".weight"
+                if model_key in cached_shapes:
+                    shape = (source.get_slice(up_key).get_shape()[0], source.get_slice(down_key).get_shape()[1])
+                    if shape != cached_shapes[model_key]:
+                        raise ValueError(f"Cached LoRA shape mismatch for {model_key}: {shape}")
                     continue
-                if normalized_key in normalized_sources:
-                    raise ValueError(f"MiniMax-H3 LoRA keys collide after normalization: {source_key} and {normalized_sources[normalized_key]}")
-                normalized_sources[normalized_key] = source_key
-
-            if unsupported:
-                preview = ", ".join(unsupported[:4])
-                raise ValueError(f"MiniMax-H3 LoRA contains {len(unsupported)} unsupported tensors: {preview}")
-
-            down_names = {key for key in normalized_sources if key.endswith(".lora_down.weight")}
-            up_names = {key for key in normalized_sources if key.endswith(".lora_up.weight")}
-            expected_up_names = {key[: -len(".lora_down.weight")] + ".lora_up.weight" for key in down_names}
-            if not down_names or up_names != expected_up_names:
-                missing_up = sorted(expected_up_names - up_names)
-                orphan_up = sorted(up_names - expected_up_names)
-                raise ValueError(f"MiniMax-H3 LoRA has incomplete pairs: missing_up={missing_up[:3]}, orphan_up={orphan_up[:3]}")
-
-            expected_alpha_names = {key[: -len(".lora_down.weight")] + ".alpha" for key in down_names}
-            alpha_names = {key for key in normalized_sources if key.endswith(".alpha")}
-            orphan_alpha = sorted(alpha_names - expected_alpha_names)
-            if orphan_alpha:
-                raise ValueError(f"MiniMax-H3 LoRA contains alpha tensors without matching pairs: {orphan_alpha[:3]}")
-            if alpha is None and expected_alpha_names - alpha_names:
-                raise ValueError("MiniMax-H3 merged LoRA requires lora_configs[].alpha when the checkpoint has no per-layer alpha tensors")
-
-            pairs = {}
-            for down_name in sorted(down_names):
-                base_name = down_name[: -len(".lora_down.weight")]
-                model_key = base_name + ".weight"
-                if model_key not in self.model.original_weight_dict:
-                    raise KeyError(f"MiniMax-H3 LoRA target does not exist in the loaded transformer: {model_key}")
-                pairs[model_key] = {
-                    "down_key": normalized_sources[down_name],
-                    "up_key": normalized_sources[base_name + ".lora_up.weight"],
-                    "alpha_key": normalized_sources.get(base_name + ".alpha"),
-                }
-
-            if not pairs:
-                raise ValueError(f"No supported LoRA pairs found in {path}")
-
-            for index, (model_key, pair) in enumerate(pairs.items(), start=1):
                 parameter = self.model.original_weight_dict[model_key]
-                lora_up = source.get_tensor(pair["up_key"])
-                lora_down = source.get_tensor(pair["down_key"])
-                lora_up, lora_down = self._shard_factors(model_key, lora_up, lora_down)
-                merge_device = self._merge_device(parameter)
-                merge_dtype = torch.float32 if self.merge_force_fp32 else parameter.dtype
-                lora_up = lora_up.to(device=merge_device, dtype=merge_dtype)
-                lora_down = lora_down.to(device=merge_device, dtype=merge_dtype)
-
-                pair_alpha = source.get_tensor(pair["alpha_key"]).item() if pair["alpha_key"] is not None else None
-                effective_alpha = pair_alpha if pair_alpha is not None else alpha
-                scale = float(effective_alpha) / lora_down.shape[0] if effective_alpha is not None else 1.0
-                with torch.autocast(device_type=merge_device.type, enabled=False) if self.merge_force_fp32 else nullcontext():
-                    delta = torch.mm(lora_up, lora_down)
-                if delta.shape != parameter.shape:
-                    raise ValueError(f"LoRA delta shape mismatch for {model_key}: delta={tuple(delta.shape)}, weight={tuple(parameter.shape)}")
-                merged = parameter.float() if self.merge_force_fp32 else parameter
-                merged.add_(
-                    delta.to(parameter.device),
-                    alpha=scale * float(strength),
-                )
-                if self.merge_force_fp32:
-                    parameter.copy_(merged)
-                del lora_up, lora_down, delta, merged
-
+                up, down = self._shard_factors(model_key, source.get_tensor(up_key), source.get_tensor(down_key))
+                merge_lora_weight(parameter, up, down, pair_alpha, strength, lora_dtype=self.lora_dtype, device=self._merge_device(parameter))
+                del up, down
                 if index % 24 == 0 or index == len(pairs):
-                    logger.info(
-                        "Merged MiniMax-H3 LoRA layers: {}/{}",
-                        index,
-                        len(pairs),
-                    )
+                    logger.info("Merged MiniMax-H3 LoRA layers: {}/{}", index, len(pairs))
 
         logger.info(
             "Successfully merged MiniMax-H3 LoRA: {} (layers={}, strength={})",

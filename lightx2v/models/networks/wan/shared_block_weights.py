@@ -19,7 +19,7 @@ from lightx2v.common.offload.checkpoint_metadata import read_safetensors_header 
 from lightx2v.common.offload.shared_pinned_arena import SharedWeightManifest
 from lightx2v.common.offload.shared_weight_coordinator import SharedArenaAllocation, materialize_shared_weight_arena, validate_shared_weight_config
 from lightx2v.common.offload.shared_weight_map import SharedWeightViewMap
-from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
+from lightx2v.utils.envs import GET_DTYPE, GET_LORA_MODE, GET_SENSITIVE_DTYPE
 
 _BLOCK_FILE_RE = re.compile(r"^block_(\d+)\.safetensors$")
 _BLOCK_KEY_RE = re.compile(r"^blocks\.(\d+)\.")
@@ -99,7 +99,7 @@ class WanFp8VllmSharedBlockAdapter:
             errors.append("weight_auto_quant is not supported")
         if self.config.get("adapter_model_path"):
             errors.append("adapter checkpoints are not supported")
-        if self.config.get("lora_configs") or self.config.get("lora_dynamic_apply", False) or lora_path:
+        if self.config.get("lora_configs") or GET_LORA_MODE() == "separate" or lora_path:
             errors.append("LoRA/diff weights are not supported")
         num_layers = self.config.get("num_layers")
         if type(num_layers) is not int or num_layers <= 0:

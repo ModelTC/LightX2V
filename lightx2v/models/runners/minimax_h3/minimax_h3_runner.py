@@ -47,7 +47,7 @@ from lightx2v.models.schedulers.minimax_h3.resampling import validate_draft_step
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
+from lightx2v.utils.envs import DTYPE_MAP, GET_LORA_MODE, GET_RECORDER_MODE
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -60,18 +60,16 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
     """Build H3 with either a dynamic LoRA branch or load-time merging."""
-    if config.get("lora_dynamic_apply", False):
+    if GET_LORA_MODE() in ("separate", "consumer"):
         if len(lora_configs) != 1:
             raise ValueError("MiniMax-H3 dynamic LoRA currently accepts exactly one lora_configs entry")
         lora_config = lora_configs[0]
         if not lora_config.get("path"):
             raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].path")
-        if lora_config.get("alpha") is None:
-            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].alpha (use 8 for the MiniMax-H3 Turbo LoRA)")
         model_kwargs.update(
             lora_path=lora_config["path"],
             lora_strength=lora_config.get("strength", 1.0),
-            lora_alpha=lora_config["alpha"],
+            lora_alpha=lora_config.get("alpha"),
         )
         return MiniMaxH3Model(**model_kwargs)
     if config.get("dit_quantized", False):
@@ -95,6 +93,8 @@ class MiniMaxH3Runner(DefaultRunner):
     offload behavior while keeping Diffusers out of the runtime dependency
     graph.
     """
+
+    supported_lora_modes = ("merge", "separate", "consumer")
 
     _WARMUP_SHAPES = (
         (480, 480, 158),  # aligned from a 6-second request

@@ -26,9 +26,9 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def build_z_image_model_with_lora(z_image_module, config, model_kwargs, lora_configs):
-    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
+    use_lora_branch = GET_LORA_MODE() == "separate"
 
-    if lora_dynamic_apply:
+    if use_lora_branch:
         lora_path = lora_configs[0]["path"]
         lora_strength = lora_configs[0]["strength"]
         model_kwargs["lora_path"] = lora_path
@@ -45,6 +45,8 @@ def build_z_image_model_with_lora(z_image_module, config, model_kwargs, lora_con
 
 @RUNNER_REGISTER("z_image")
 class ZImageRunner(DefaultRunner):
+    supported_lora_modes = ("merge", "separate")
+
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     supported_request_fields_by_task = {

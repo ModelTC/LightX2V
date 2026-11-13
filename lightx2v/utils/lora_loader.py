@@ -12,7 +12,6 @@ Supported formats:
 """
 
 import re
-from contextlib import nullcontext
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
@@ -345,7 +344,7 @@ class LoRALoader:
         lora_weights: Dict[str, torch.Tensor],
         alpha: float = None,
         strength: float = 1.0,
-        force_fp32: bool = False,
+        lora_dtype: torch.dtype | None = None,
     ) -> int:
         """
         Apply LoRA weights to model weights.
@@ -355,7 +354,7 @@ class LoRALoader:
             lora_weights: The LoRA weights dictionary
             alpha: Global alpha scaling factor
             strength: Additional strength factor for LoRA deltas
-            force_fp32: Compute and add deltas in FP32, then restore each weight's dtype
+            lora_dtype: LoRA computation dtype; None uses each base weight's dtype
 
         Returns:
             Number of LoRA weights successfully applied
@@ -384,7 +383,7 @@ class LoRALoader:
                 used_lora_keys.add(pair_info["mid_key"])
 
             try:
-                merge_dtype = torch.float32 if force_fp32 else param.dtype
+                merge_dtype = param.dtype if lora_dtype is None else lora_dtype
                 lora_up = lora_weights[up_key].to(param.device, merge_dtype)
                 lora_down = lora_weights[down_key].to(param.device, merge_dtype)
 
@@ -399,15 +398,12 @@ class LoRALoader:
                     lora_scale = 1
 
                 if len(lora_down.shape) == 2 and len(lora_up.shape) == 2:
-                    with torch.autocast(device_type=param.device.type, enabled=False) if force_fp32 else nullcontext():
+                    with torch.autocast(device_type=param.device.type, enabled=False):
                         lora_delta = torch.mm(lora_up, lora_down) * lora_scale
                     if strength is not None:
                         lora_delta = lora_delta * float(strength)
 
-                    if force_fp32:
-                        param.data.copy_(param.data.float() + lora_delta)
-                    else:
-                        param.data += lora_delta
+                    param.data.copy_(param.data + lora_delta)
                     applied_count += 1
                 else:
                     logger.warning(f"Unexpected LoRA shape for {model_key}: down={lora_down.shape}, up={lora_up.shape}")
@@ -429,15 +425,12 @@ class LoRALoader:
             used_lora_keys.add(diff_key)
 
             try:
-                lora_diff = lora_weights[diff_key].to(param.device, torch.float32 if force_fp32 else param.dtype)
+                lora_diff = lora_weights[diff_key].to(param.device, param.dtype if lora_dtype is None else lora_dtype)
                 if alpha is not None:
                     lora_delta = lora_diff * alpha * (float(strength) if strength is not None else 1.0)
                 else:
                     lora_delta = lora_diff * (float(strength) if strength is not None else 1.0)
-                if force_fp32:
-                    param.data.copy_(param.data.float() + lora_delta)
-                else:
-                    param.data += lora_delta
+                param.data.copy_(param.data + lora_delta)
                 applied_count += 1
             except Exception as e:
                 logger.warning(f"Failed to apply LoRA diff for {model_key}: {e}")

@@ -4,6 +4,7 @@ Offline generation lives in ``tools/cache_minimax_h3_adaln/builder.py`` so the
 inference path does not carry checkpoint-building concerns.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -13,6 +14,9 @@ from safetensors import SafetensorError, safe_open
 
 from lightx2v.models.networks.minimax_h3.adaln_cache_guide import get_adaln_cache_guide
 from lightx2v.models.networks.minimax_h3.adaln_profiles import cache_plan
+from lightx2v.models.networks.minimax_h3.lora import cached_modulation_shapes, read_lora_pairs
+from lightx2v.utils.envs import GET_LORA_DTYPE, GET_LORA_MODE
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def checkpoint_files(checkpoint) -> list[Path]:
@@ -75,6 +79,32 @@ def _video_cache_spec(config, plan) -> dict:
     }
 
 
+def _file_identity(path) -> dict:
+    path = Path(path).expanduser().resolve()
+    stat = path.stat()
+    return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _modulation_loras(config) -> list[dict]:
+    shapes = cached_modulation_shapes(config)
+    adapters = []
+    for adapter in config.get("lora_configs") or []:
+        identity = _file_identity(adapter["path"])
+        with safe_open(identity["path"], framework="pt", device="cpu") as source:
+            pairs = read_lora_pairs(source, adapter.get("alpha"))
+            alphas = {}
+            for prefix, (down, up, alpha) in pairs.items():
+                if prefix + ".weight" not in shapes:
+                    continue
+                shape = (source.get_slice(up).get_shape()[0], source.get_slice(down).get_shape()[1])
+                if shape != shapes[prefix + ".weight"]:
+                    raise ValueError(f"Cached LoRA shape mismatch for {prefix}: {shape}")
+                alphas[prefix] = alpha
+        if alphas:
+            adapters.append({**identity, "strength": float(adapter.get("strength", 1.0)), "alphas": alphas})
+    return adapters
+
+
 def resolve_adaln_cache(config) -> tuple[Path, dict]:
     """Resolve the cache directory and expected manifest from one model plan."""
     if not config.get("use_adaln_cache", False):
@@ -85,7 +115,22 @@ def resolve_adaln_cache(config) -> tuple[Path, dict]:
         spec = _image_cache_spec(config, plan)
     else:
         spec = _video_cache_spec(config, plan)
-    cache_path = _cache_root(config) / config["model_cls"] / plan.cache_name
+    name = plan.cache_name
+    if config["model_cls"] == "minimax_h3":
+        spec["checkpoint"] = [_file_identity(path) for path in checkpoint_files(config["dit_original_ckpt"])]
+        spec["lora_configs"] = _modulation_loras(config)
+        if spec["lora_configs"]:
+            # Consumer and separate use identical arithmetic for modulation.
+            mode = GET_LORA_MODE()
+            if mode not in ("merge", "separate", "consumer"):
+                raise ValueError(f"Unknown H3 LORA_MODE: {mode}")
+            spec["lora_mode"] = "merge" if mode == "merge" else "separate"
+            spec["lora_dtype"] = str(GET_LORA_DTYPE())
+            if mode == "merge":
+                spec["lora_merge_device"] = config.get("lora_merge_device", AI_DEVICE)
+        fingerprint = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
+        name += f"_{fingerprint}"
+    cache_path = _cache_root(config) / config["model_cls"] / name
     return cache_path, spec
 
 
@@ -143,7 +188,8 @@ def load_persistent_adaln_cache(
     """Load cached block AdaLN and final-norm modulation onto the device."""
     cache_path, spec = resolve_adaln_cache(config)
     if not _validate_cache(cache_path, spec):
-        config_summary = "".join(f"  {key}: {value}\n" for key, value in spec.items() if key != "entries")
+        config_summary = "".join(f"  {key}: {value}\n" for key, value in spec.items() if key not in {"entries", "checkpoint", "lora_configs"})
+        config_summary += "".join(f"  LoRA: {adapter['path']} (strength={adapter['strength']})\n" for adapter in spec.get("lora_configs", []))
         message = (
             "\nMINIMAX-H3 ADALN CACHE LOAD ERROR\n\n"
             "AdaLN cache is missing or does not match the current model, computation, or format.\n\n"

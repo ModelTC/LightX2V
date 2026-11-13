@@ -16,7 +16,7 @@ from lightx2v.models.networks.minimax_h3.weights.transformer_weights import Mini
 from lightx2v.models.networks.minimax_h3_image.checkpoint import convert_pdd_heads, convert_transformer_tensor
 from lightx2v.models.networks.minimax_h3_image.infer import MiniMaxH3ImagePostInfer, MiniMaxH3ImagePreInfer
 from lightx2v.models.networks.minimax_h3_image.weights import MiniMaxH3ImagePostWeights, MiniMaxH3ImagePreWeights
-from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.envs import GET_DTYPE, GET_LORA_MODE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -37,7 +37,7 @@ class MiniMaxH3ImageModel(BaseTransformerModel):
         ):
             if config.get(option, False):
                 raise NotImplementedError(f"MiniMax-H3-Image does not support {option}")
-        if config.get("lora_configs") or config.get("lora_dynamic_apply", False):
+        if config.get("lora_configs") or GET_LORA_MODE() == "separate":
             raise NotImplementedError("LoRA loading is not implemented for MiniMax-H3-Image")
         if config.get("dit_quant_scheme", "Default") != "Default":
             raise ValueError("MiniMax-H3-Image requires original BF16/FP32 transformer weights")

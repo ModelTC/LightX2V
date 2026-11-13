@@ -3,6 +3,10 @@ Qwen-image-edit Text-to-image generation example.
 This example demonstrates how to use LightX2V with Qwen-Image-2512 model for T2I generation.
 """
 
+import os
+
+os.environ.setdefault("LORA_MODE", "merge")
+
 from lightx2v import LightX2VPipeline
 
 # Initialize pipeline for Qwen-image-2512 T2I task
@@ -26,7 +30,6 @@ pipe.enable_lora(
     [
         {"path": "lightx2v/Qwen-Image-2512-Lightning/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors", "strength": 1.0},
     ],
-    lora_dynamic_apply=False,  # Support inference with LoRA weights, save memory but slower, default is False
 )
 # Create generator manually with specified parameters
 pipe.create_generator(

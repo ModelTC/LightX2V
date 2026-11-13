@@ -17,7 +17,7 @@ from lightx2v.common.offload.checkpoint_metadata import checkpoint_content_diges
 from lightx2v.common.offload.shared_pinned_arena import SharedWeightManifest
 from lightx2v.common.offload.shared_weight_coordinator import materialize_shared_weight_arena, validate_shared_weight_config
 from lightx2v.common.offload.shared_weight_map import SharedWeightViewMap, validate_shared_operator_views
-from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
+from lightx2v.utils.envs import GET_DTYPE, GET_LORA_MODE, GET_SENSITIVE_DTYPE
 
 _PRIVATE_KEYS = {
     "img_in.weight",
@@ -70,7 +70,7 @@ class QwenBf16SharedBlockAdapter:
         for key in ("dit_original_ckpt", "transformer_model_path"):
             if self.config.get(key):
                 errors.append(f"{key} overrides are not supported; select the Diffusers directory with model_path")
-        if self.config.get("lora_configs") or self.config.get("lora_dynamic_apply") or lora_path or self.config.get("adapter_model_path"):
+        if self.config.get("lora_configs") or GET_LORA_MODE() == "separate" or lora_path or self.config.get("adapter_model_path"):
             errors.append("LoRA/diff/adapter weights are not supported")
         if self.config.get("task") != "t2i":
             errors.append("the BF16 shared adapter currently supports task='t2i'")

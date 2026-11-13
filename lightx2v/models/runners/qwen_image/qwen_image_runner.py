@@ -42,9 +42,9 @@ def calculate_dimensions(target_area, ratio):
 
 
 def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_configs):
-    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
+    use_lora_branch = GET_LORA_MODE() == "separate"
 
-    if lora_dynamic_apply:
+    if use_lora_branch:
         lora_path = lora_configs[0]["path"]
         lora_strength = lora_configs[0]["strength"]
         model_kwargs["lora_path"] = lora_path
@@ -61,6 +61,8 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 
 @RUNNER_REGISTER("qwen_image")
 class QwenImageRunner(DisaggMixin, DefaultRunner):
+    supported_lora_modes = ("merge", "separate")
+
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     _WARMUP_SHAPES = ((480, 480), (832, 1248))

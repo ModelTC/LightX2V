@@ -47,6 +47,8 @@ def _merge_wan_dense_defaults(config):
 
 @RUNNER_REGISTER("motus")
 class MotusRunner(Wan22DenseRunner):
+    supported_lora_modes = ("merge",)
+
     input_info_cls_by_task = {"i2v": MotusInputInfo}
     supported_request_fields_by_task = {
         "i2v": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"image_path", "prompt", "save_action_path", "state_path"},

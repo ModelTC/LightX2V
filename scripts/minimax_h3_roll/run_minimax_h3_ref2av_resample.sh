@@ -8,6 +8,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 # set environment variables
 source "${lightx2v_path}/scripts/base/base.sh"
+export LORA_MODE=${LORA_MODE:-separate}
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 

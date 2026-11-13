@@ -30,7 +30,7 @@
   "feature_caching": "NoCaching",
   "video_flow_shift": 5.0,
   "audio_flow_shift": 3.0,
-  "h3_step_update": "renoise",
+  "scheduler_type": "renoise",
   "audio_sampling_rate": 32000,
   "reuse_input_audio": false,
   "dit_original_ckpt": "/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/SekoTalk-H3-v0.1.0.pt",

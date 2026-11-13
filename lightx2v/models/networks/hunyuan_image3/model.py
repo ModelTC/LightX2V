@@ -23,7 +23,7 @@ from lightx2v.models.networks.hunyuan_image3.weights.hybrid_tp import (
 from lightx2v.models.networks.hunyuan_image3.weights.post_weights import HunyuanImage3PostWeights
 from lightx2v.models.networks.hunyuan_image3.weights.pre_weights import HunyuanImage3PreWeights
 from lightx2v.models.networks.hunyuan_image3.weights.transformer_weights import HunyuanImage3TransformerWeights
-from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
+from lightx2v.utils.envs import GET_DTYPE, GET_LORA_MODE, GET_SENSITIVE_DTYPE
 
 
 def _normalize_device_name(device):
@@ -319,8 +319,10 @@ class HunyuanImage3Model(BaseTransformerModel):
             or self.config.get("hunyuan_image3_pipeline_devices")
         ):
             raise ValueError("HunyuanImage3 block offload uses one GPU per rank; set parallel.pipeline_parallel=false and remove pipeline_devices")
-        unsupported = ("lazy_load", "unload_modules", "dit_quantized", "weight_auto_quant", "load_from_rank0", "use_compile", "enable_ar_cuda_graph", "dummy_model", "lora_dynamic_apply")
+        unsupported = ("lazy_load", "unload_modules", "dit_quantized", "weight_auto_quant", "load_from_rank0", "use_compile", "enable_ar_cuda_graph", "dummy_model")
         enabled = [key for key in unsupported if self.config.get(key, False)]
+        if GET_LORA_MODE() == "separate":
+            enabled.append("LORA_MODE")
         if enabled or self.lora_path or self.config.get("lora_configs"):
             raise ValueError(f"HunyuanImage3 block offload requires original immutable weights without LoRA; incompatible options: {enabled}")
         if self.config.get("dit_quant_scheme", "Default") != "Default":

@@ -4,6 +4,7 @@ lightx2v_path=/path/to/LightX2V
 model_path=/path/to/Qwen-Image-2.1
 
 export CUDA_VISIBLE_DEVICES=0
+export LORA_DTYPE=${LORA_DTYPE:-FP32}
 
 source "${lightx2v_path}/scripts/base/base.sh"
 

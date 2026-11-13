@@ -9,7 +9,7 @@ from safetensors import safe_open
 
 from lightx2v.common.kvcache.manager import KVCacheManager
 from lightx2v.models.networks.base_model import BaseTransformerModel
-from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
+from lightx2v.utils.envs import GET_DTYPE, GET_LORA_MODE, GET_SENSITIVE_DTYPE
 
 from .infer.offload import QwenImage21OffloadTransformerInfer
 from .infer.offload.transformer_infer import validate_qwen_image_21_residency_config
@@ -43,7 +43,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         self._init_infer()
 
     def _apply_weights(self, weight_dict=None):
-        if self.config.get("lora_dynamic_apply", False):
+        if GET_LORA_MODE() == "separate":
             source = weight_dict if weight_dict is not None else self.original_weight_dict
             self._lora_weight_shapes = {key: tuple(tensor.shape) for key, tensor in source.items() if tensor.ndim == 2}
         return super()._apply_weights(weight_dict)
@@ -55,8 +55,8 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         self._update_lora(lora_path, strength)
 
     def _update_lora(self, lora_path, strength):
-        if not self.config.get("lora_dynamic_apply", False) or isinstance(lora_path, dict):
-            raise ValueError("Qwen-Image-2.1 dynamic LoRA requires lora_dynamic_apply=true and one checkpoint path")
+        if GET_LORA_MODE() != "separate" or isinstance(lora_path, dict):
+            raise ValueError("Qwen-Image-2.1 dynamic LoRA requires LORA_MODE='separate' and one checkpoint path")
         strength = float(strength)
         if not math.isfinite(strength):
             raise ValueError("Qwen-Image-2.1 LoRA strength must be finite")

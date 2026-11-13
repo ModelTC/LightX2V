@@ -3,6 +3,10 @@ Qwen-image-edit image-to-image generation example.
 This example demonstrates how to use LightX2V with Qwen-Image-Edit model for I2I generation.
 """
 
+import os
+
+os.environ.setdefault("LORA_MODE", "merge")
+
 from lightx2v import LightX2VPipeline
 
 # Initialize pipeline for Qwen-image-edit I2I task
@@ -27,7 +31,6 @@ pipe.enable_lora(
     [
         {"path": "lightx2v/Qwen-Image-Edit-2511-Lightning/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors", "strength": 1.0},
     ],
-    lora_dynamic_apply=False,  # Support inference with LoRA weights, save memory but slower, default is False
 )
 # Create generator manually with specified parameters
 pipe.create_generator(

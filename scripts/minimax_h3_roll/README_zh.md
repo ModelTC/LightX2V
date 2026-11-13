@@ -1,5 +1,7 @@
 # MiniMax-H3 Roll：低成本抽卡
 
+运行示例和导出 AdaLN cache 前，设置 `export LORA_MODE=separate`。启动脚本默认使用该模式，JSON 不再选择模式；cache 导出和推理还需使用相同的 `LORA_DTYPE`（不设置时跟随 `DTYPE`）。
+
 [English](README.md) | [简体中文](README_zh.md)
 
 先用低分辨率草片筛选提示词和 seed，再对选中的草片做高分辨率重生成。可用 `draft_steps` 进一步减少草片的计算量。以下命令均从仓库根目录执行。

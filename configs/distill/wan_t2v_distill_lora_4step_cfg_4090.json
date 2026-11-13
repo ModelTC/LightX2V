@@ -16,7 +16,6 @@
     "dit_quant_scheme": "fp8-q8f",
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-q8f",
-    "lora_dynamic_apply": true,
     "lora_configs": [
         {
             "path": "/path/to/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors",

@@ -18,7 +18,7 @@ class MiniMaxH3PostWeights(WeightModule):
             # its output; update the offline builder if its definition changes.
             self.add_module(
                 "norm_out_linear",
-                MM_WEIGHT_REGISTER["Default"]("norm_out.linear.weight", "norm_out.linear.bias"),
+                MM_WEIGHT_REGISTER["Default"]("norm_out.linear.weight", "norm_out.linear.bias", lora_prefix=None),
             )
         self.add_module(
             "proj_out",

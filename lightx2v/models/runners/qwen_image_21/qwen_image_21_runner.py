@@ -20,6 +20,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
+from lightx2v.utils.envs import GET_LORA_MODE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
 from lightx2v.utils.image_io import save_image
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
@@ -31,6 +32,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
+    supported_lora_modes = ("merge", "separate")
+
     _WARMUP_SHAPES = ((1024, 1024), (768, 960))
     _WARMUP_PROMPTS = (
         "A red bicycle beside a wall.",
@@ -178,11 +181,11 @@ class QwenImage21Runner(DefaultRunner):
                 raise RuntimeError(f"qwen_image_21 fp8-f16-accum is unavailable: {reason}")
             validate_checkpoint(self.config["dit_quantized_ckpt"], profile=QWEN_IMAGE_21_QUANTIZATION_PROFILE)
         lora_kwargs = {}
-        if self.config.get("lora_dynamic_apply", False):
+        if GET_LORA_MODE() == "separate":
             lora = self.config["lora_configs"][0]
             lora_kwargs = {"lora_path": lora["path"], "lora_strength": lora.get("strength", 1.0)}
         model = QwenImage21TransformerModel(str(Path(self.config["model_path"]) / "transformer"), self.config, self.init_device, **lora_kwargs)
-        if self.config.get("lora_configs") and not self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_configs") and GET_LORA_MODE() != "separate":
             QwenImage21LoraAdapter(model).apply_lora(self.config["lora_configs"])
         return model
 

@@ -31,6 +31,8 @@ class TBDubInputInfo(InputInfo):
 
 @RUNNER_REGISTER("tbdub")
 class TBDubRunner(Wan22DenseRunner):
+    supported_lora_modes = ("merge",)
+
     input_info_cls_by_task = {"v2v": TBDubInputInfo}
     supported_request_fields_by_task = {"v2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"video_path", "audio_path"}}
     # These are checkpoint temporal conventions, not the requested output length.

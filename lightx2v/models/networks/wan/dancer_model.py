@@ -6,6 +6,7 @@ from lightx2v.models.networks.wan.infer.dancer import (
 )
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.dancer import WanDancerPreWeights, WanDancerTransformerWeights
+from lightx2v.utils.envs import GET_LORA_MODE
 
 
 class WanDancerLoraAdapter(LoraAdapter):
@@ -55,7 +56,7 @@ class WanDancerModel(WanModel):
         super().__init__(model_path, config, device, model_type="wan_dancer")
 
     def _should_init_empty_model(self):
-        if self.config.get("lora_configs") and not self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_configs") and GET_LORA_MODE() != "separate":
             return True
         return super()._should_init_empty_model()
 

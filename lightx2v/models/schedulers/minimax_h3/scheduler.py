@@ -1,3 +1,4 @@
+import math
 from dataclasses import replace
 
 import torch
@@ -20,12 +21,24 @@ from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-def _make_schedule(infer_steps: int, shift: float, device) -> tuple[torch.Tensor, torch.Tensor]:
+def _make_schedule(infer_steps: int, shift: float, device, distilled_sigma_values=None) -> tuple[torch.Tensor, torch.Tensor]:
     if infer_steps < 1:
         raise ValueError(f"MiniMax-H3 infer_steps must be at least 1, got {infer_steps}")
-    base = torch.linspace(1.0, 0.0, infer_steps + 1, dtype=torch.float32, device="cpu")
+    if not math.isfinite(shift) or shift <= 0:
+        raise ValueError("MiniMax-H3 flow shifts must be finite and positive")
+    if distilled_sigma_values is None:
+        base = torch.linspace(1.0, 0.0, infer_steps + 1, dtype=torch.float32, device="cpu")
+    else:
+        # Pika shifts its unshifted knots in FP64, then stores FP32 sigmas.
+        base = torch.tensor(distilled_sigma_values, dtype=torch.float64, device="cpu")
+        if base.ndim != 1 or base.numel() != infer_steps + 1:
+            raise ValueError("distilled_sigma_values must contain infer_steps + 1 nodes")
+        if not torch.isfinite(base).all() or base[0] != 1 or base[-1] != 0 or not torch.all(base[:-1] > base[1:]):
+            raise ValueError("distilled_sigma_values must strictly descend from 1 to 0")
     sigmas = shift * base / (1.0 + (shift - 1.0) * base)
-    sigmas = torch.unique_consecutive(sigmas).to(device)
+    sigmas = sigmas.float().to(device)
+    if not torch.all(sigmas[:-1] > sigmas[1:]):
+        raise ValueError("MiniMax-H3 sigmas collapse after shifting to FP32")
     return sigmas, 1.0 - sigmas[:-1]
 
 
@@ -48,13 +61,14 @@ class MiniMaxH3Scheduler(BaseScheduler):
         infer_steps = int(config["infer_steps"])
         self.video_shift = float(config.get("video_flow_shift", 12.0))
         self.audio_shift = float(config.get("audio_flow_shift", 3.0))
-        self.step_update = config.get("h3_step_update", "reference_blend")
-        if self.step_update not in {"reference_blend", "training_euler"}:
-            raise ValueError(f"MiniMax-H3 h3_step_update must be 'reference_blend' or 'training_euler', got {self.step_update!r}")
-        if self.video_shift <= 0 or self.audio_shift <= 0:
-            raise ValueError("MiniMax-H3 flow shifts must be positive")
-        self.video_sigmas, self.video_timesteps = _make_schedule(infer_steps, self.video_shift, AI_DEVICE)
-        self.audio_sigmas, self.audio_timesteps = _make_schedule(infer_steps, self.audio_shift, AI_DEVICE)
+        self.scheduler_type = config.get("scheduler_type", "reference_blend")
+        if self.scheduler_type not in {"reference_blend", "euler", "lcm"}:
+            raise ValueError(f"Unknown MiniMax-H3 scheduler_type: {self.scheduler_type!r}")
+        sigmas = config.get("distilled_sigma_values")
+        if self.scheduler_type == "lcm" and sigmas is None:
+            raise ValueError("MiniMax-H3 lcm requires distilled_sigma_values")
+        self.video_sigmas, self.video_timesteps = _make_schedule(infer_steps, self.video_shift, AI_DEVICE, sigmas)
+        self.audio_sigmas, self.audio_timesteps = _make_schedule(infer_steps, self.audio_shift, AI_DEVICE, sigmas)
         if self.video_timesteps.numel() != self.audio_timesteps.numel():
             raise ValueError("video and audio schedules collapsed to different step counts")
         self.infer_steps = int(self.video_timesteps.numel())
@@ -117,15 +131,31 @@ class MiniMaxH3Scheduler(BaseScheduler):
             }
             logger.info(f"MiniMax-H3 regeneration schedule: {resampling_metadata}")
 
-        # The released pipeline uses one CPU random stream even when inference
-        # runs on CUDA: float32 video noise first, then channel-major audio.
-        self.generator = torch.Generator(device="cpu").manual_seed(int(seed))
+        # LCM follows Pika's independent initial, renoise and condition streams.
+        # Euler/reference_blend retain the released CPU channel-major stream.
+        lcm = self.scheduler_type == "lcm"
+        self.generator = torch.Generator(device=AI_DEVICE if lcm else "cpu").manual_seed(int(seed))
+        self.renoise_generator = torch.Generator(device=AI_DEVICE).manual_seed(int(seed) + 1) if lcm else None
+        condition_generator = torch.Generator(device=AI_DEVICE).manual_seed(int(seed) + 7919) if lcm else self.generator
+        self.lcm_video_shape = (1, latent_frames, int(self.config.get("in_channels", 24)), latent_height, latent_width)
+        self.lcm_audio_shape = (1, num_audio_latents, AUDIO_CHANNELS * int(self.config.get("audio_in_channels", 32)))
+        if lcm:
+            target_video_rows, target_audio_rows = self._lcm_noise(self.generator)
         condition_video_latents = condition_video_latents or []
         condition_audio_latents = condition_audio_latents or []
+        if lcm and self.config["model_variant"] == "fl2av":
+            condition_video_latents = [latent.bfloat16() for latent in condition_video_latents]
+            condition_audio_latents = [latent.bfloat16() for latent in condition_audio_latents]
         condition_video_rows = []
         for clean in condition_video_latents:
-            noise = torch.randn(clean.shape, generator=self.generator, device="cpu", dtype=torch.float32)
             clean_rows = patchify_video_latents(clean.float(), patch_size).to(AI_DEVICE)
+            if lcm:
+                external_shape = (clean.shape[0], clean.shape[2], clean.shape[1], clean.shape[3], clean.shape[4])
+                noise = torch.randn(external_shape, generator=condition_generator, device=AI_DEVICE, dtype=torch.float32).permute(0, 2, 1, 3, 4)
+                noise_rows = patchify_video_latents(noise, patch_size)
+                condition_video_rows.append(KEYFRAME_NOISE_AUG * clean_rows + (1.0 - KEYFRAME_NOISE_AUG) * noise_rows)
+                continue
+            noise = torch.randn(clean.shape, generator=self.generator, device="cpu", dtype=torch.float32)
             noise_rows = patchify_video_latents(noise.to(AI_DEVICE), patch_size)
             # Match Diffusers' ``scheduler.scale_noise`` exactly: the
             # conditioning VAE rows are moved first and mixed on the execution
@@ -135,27 +165,25 @@ class MiniMaxH3Scheduler(BaseScheduler):
             timestep = torch.tensor(KEYFRAME_NOISE_AUG, dtype=clean_rows.dtype, device=clean_rows.device)
             condition_video_rows.append(timestep * clean_rows + (1.0 - timestep) * noise_rows)
 
-        video_noise = torch.randn(
-            (1, int(self.config.get("in_channels", 24)), latent_frames, latent_height, latent_width),
-            generator=self.generator,
-            device="cpu",
-            dtype=torch.float32,
-        )
-        target_video_rows = patchify_video_latents(video_noise, patch_size).to(AI_DEVICE)
+        if not lcm:
+            video_noise = torch.randn(
+                (1, int(self.config.get("in_channels", 24)), latent_frames, latent_height, latent_width),
+                generator=self.generator,
+                device="cpu",
+                dtype=torch.float32,
+            )
+            target_video_rows = patchify_video_latents(video_noise, patch_size).to(AI_DEVICE)
         if source_video_latents is not None:
             clean_rows = patchify_video_latents(source_video_latents.float(), patch_size)
             target_video_rows = flow_renoise(clean_rows, target_video_rows, self.video_sigmas[self.start_step_index])
         self.video_latents = torch.cat(condition_video_rows + [target_video_rows])
-        target_audio_rows = torch.randn(
-            (
-                num_audio_latents * AUDIO_CHANNELS,
-                int(self.config.get("audio_in_channels", 32)),
-            ),
-            generator=self.generator,
-            device="cpu",
-            dtype=torch.float32,
-        )
-        # Preserve the original CPU random stream and stereo channel-major order.
+        if not lcm:
+            target_audio_rows = torch.randn(
+                (num_audio_latents * AUDIO_CHANNELS, int(self.config.get("audio_in_channels", 32))),
+                generator=self.generator,
+                device="cpu",
+                dtype=torch.float32,
+            )
         if source_audio_latents is not None:
             clean_rows = source_audio_latents.transpose(1, 2).reshape(-1, source_audio_latents.shape[1])
             target_audio_rows = flow_renoise(clean_rows, target_audio_rows.to(AI_DEVICE), self.audio_sigmas[self.start_step_index])
@@ -189,13 +217,26 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.unique_timesteps = unique.to(AI_DEVICE)
         self.timestep_indices = inverse.to(AI_DEVICE)
 
+    def _lcm_noise(self, generator):
+        """Draw video then audio in Pika's layouts before packing target rows."""
+        video = torch.randn(self.lcm_video_shape, generator=generator, device=generator.device, dtype=torch.float32)
+        audio = torch.randn(self.lcm_audio_shape, generator=generator, device=generator.device, dtype=torch.float32)
+        video = patchify_video_latents(video.permute(0, 2, 1, 3, 4), tuple(self.config.get("patch_size", (1, 2, 2))))
+        audio = audio.reshape(1, self.lcm_audio_shape[1], AUDIO_CHANNELS, -1).permute(0, 2, 1, 3).reshape(-1, self.lcm_audio_shape[2] // AUDIO_CHANNELS)
+        return video, audio
+
     @staticmethod
-    def _step(sample, model_output, timestep, sigmas, step_index, step_update):
+    def _step(sample, model_output, timestep, sigmas, step_index, scheduler_type, noise=None):
         sigma = sigmas[step_index].to(device=sample.device, dtype=torch.float32)
         sigma_next = sigmas[step_index + 1].to(device=sample.device, dtype=torch.float32)
-        if step_update == "training_euler":
+        if scheduler_type == "euler":
             # Match MiniMaxH3T2AVDmdTrainer.run_back_simulation exactly.
             return sample.float() + (sigma - sigma_next) * model_output.float()
+        if scheduler_type == "lcm":
+            clean = sample.float() + sigma * model_output.float()
+            if step_index == len(sigmas) - 2:
+                return clean
+            return (1.0 - sigma_next) * clean + sigma_next * noise
         # H3 predicts a data-ward velocity.  Keep the round trip through
         # timestep separate from the stored sigma grid to match the reference.
         sigma_from_timestep = 1.0 - timestep.to(device=sample.device, dtype=sample.dtype)
@@ -208,13 +249,17 @@ class MiniMaxH3Scheduler(BaseScheduler):
             raise RuntimeError("MiniMax-H3 transformer did not populate both velocity predictions")
         condition_video_rows = self.layout.num_condition_video_rows
         condition_audio_rows = self.layout.num_condition_audio_rows
+        video_noise = audio_noise = None
+        if self.scheduler_type == "lcm" and self.step_index < self.infer_steps - 1:
+            video_noise, audio_noise = self._lcm_noise(self.renoise_generator)
         self.video_latents[condition_video_rows:] = self._step(
             self.video_latents[condition_video_rows:],
             self.video_noise_pred[condition_video_rows:].float(),
             self.video_timesteps[self.step_index],
             self.video_sigmas,
             self.step_index,
-            self.step_update,
+            self.scheduler_type,
+            video_noise,
         )
         self.audio_latents[condition_audio_rows:] = self._step(
             self.audio_latents[condition_audio_rows:],
@@ -222,7 +267,8 @@ class MiniMaxH3Scheduler(BaseScheduler):
             self.audio_timesteps[self.step_index],
             self.audio_sigmas,
             self.step_index,
-            self.step_update,
+            self.scheduler_type,
+            audio_noise,
         )
 
     def project_clean(self):
@@ -276,3 +322,4 @@ class MiniMaxH3Scheduler(BaseScheduler):
         ):
             setattr(self, name, None)
         self.generator = None
+        self.renoise_generator = None

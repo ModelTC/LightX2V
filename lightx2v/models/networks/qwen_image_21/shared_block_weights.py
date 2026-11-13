@@ -13,7 +13,7 @@ from lightx2v.common.offload.checkpoint_metadata import checkpoint_content_diges
 from lightx2v.common.offload.shared_pinned_arena import SharedWeightManifest
 from lightx2v.common.offload.shared_weight_coordinator import materialize_shared_weight_arena, validate_shared_weight_config
 from lightx2v.common.offload.shared_weight_map import SharedWeightViewMap
-from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.envs import GET_DTYPE, GET_LORA_MODE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 _DTYPES = {"BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32, "F8_E4M3": torch.float8_e4m3fn, "F8_E4M3FN": torch.float8_e4m3fn}
@@ -60,8 +60,10 @@ class QwenImage21SharedBlockAdapter:
         validate_shared_weight_config(self.config)
         if not self.model.block_offload:
             raise ValueError("Qwen-Image-2.1 shared_cpu_weights requires cpu_offload=true and offload_granularity='block'")
-        unsupported = ("tensor_parallel", "lazy_load", "unload_modules", "weight_auto_quant", "dummy_model", "lora_dynamic_apply", "lora_configs", "adapter_model_path")
+        unsupported = ("tensor_parallel", "lazy_load", "unload_modules", "weight_auto_quant", "dummy_model", "lora_configs", "adapter_model_path")
         enabled = [key for key in unsupported if self.config.get(key)]
+        if GET_LORA_MODE() == "separate":
+            enabled.append("LORA_MODE")
         if enabled:
             raise ValueError(f"Qwen-Image-2.1 shared CPU weights do not support {enabled}")
         if AI_DEVICE != "cuda":

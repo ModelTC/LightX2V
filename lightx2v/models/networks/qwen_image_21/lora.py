@@ -8,12 +8,13 @@ import torch
 from safetensors import safe_open
 
 from lightx2v.models.networks.lora_adapter import LoraAdapter
+from lightx2v.utils.envs import GET_LORA_MODE
 from lightx2v.utils.lora_loader import LoRALoader
 
 
 def validate_lora_config(config):
     loras = config.get("lora_configs") or []
-    if config.get("lora_dynamic_apply", False) and len(loras) != 1:
+    if GET_LORA_MODE() == "separate" and len(loras) != 1:
         raise ValueError("qwen_image_21 dynamic LoRA requires exactly one lora_configs entry")
     if loras:
         for key in ("dit_quantized", "weight_auto_quant", "shared_cpu_weights", "dit_disk_streaming"):
@@ -59,7 +60,7 @@ def prepare_lora_weights(model, path, weights):
 
 class QwenImage21LoraAdapter(LoraAdapter):
     def _load_lora_file(self, file_path):
-        weights = self.model._load_lora_file(file_path, dtype=torch.float32 if self.merge_force_fp32 else None)
+        weights = self.model._load_lora_file(file_path, dtype=self.lora_dtype)
         if self.model.use_tp:
             for key, pair in self.lora_loader.extract_lora_pairs(weights).items():
                 split = self.model._tp_split_type(key)

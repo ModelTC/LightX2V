@@ -35,6 +35,8 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     Both use the same motion prefill, clean KV history and video output path.
     """
 
+    supported_lora_modes = ("merge",)
+
     supported_request_fields_by_task = {task: COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "audio_path", "prompt", "motions"} for task in ("refa2v", "refa2av")}
 
     def __init__(self, config):
