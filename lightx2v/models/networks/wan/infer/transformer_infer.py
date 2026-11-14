@@ -79,6 +79,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         self.cos_sin = None
         self.rope_positions = None
+        self.seq_p_valid_len = None
         self.init_compile(config)
 
         self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
@@ -113,6 +114,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
         self.rope_positions = getattr(pre_infer_out, "rope_positions", None)
+        self.seq_p_valid_len = getattr(pre_infer_out, "seq_p_valid_len", None)
         self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
         self.reset_attention_states(weights.blocks)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
@@ -324,6 +326,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                 tensor_fusion=self.seq_p_tensor_fusion,
                 head_parallel=self.seq_p_head_parallel,
                 attention_kwargs=attn_running_args,
+                kv_valid_len=self.seq_p_valid_len,
             )
             if aux_attn_out is not None:
                 raise RuntimeError("Wan self-attention does not have an auxiliary token output.")
