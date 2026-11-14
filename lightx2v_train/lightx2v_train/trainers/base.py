@@ -163,6 +163,10 @@ class BaseTrainer:
 
         self.parallel.apply(self.config)
 
+        deferred_loader = getattr(self.model, "load_deferred_transformer_weights", None)
+        if deferred_loader is not None:
+            deferred_loader()
+
         if self.gradient_checkpointing:
             self.trainable_model.enable_gradient_checkpointing()
 

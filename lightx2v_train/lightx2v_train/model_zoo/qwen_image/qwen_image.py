@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 
 import torch
@@ -10,6 +11,12 @@ from lightx2v_train.model_zoo.capability_adapters.common import GenericDistribut
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyModelCapability
 from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
+from lightx2v_train.runtime.sharded_loader import (
+    load_fsdp2_safetensors,
+    local_layout_from_template,
+    make_dtensor_from_template,
+    normalize_sharded_load_config,
+)
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
@@ -115,12 +122,93 @@ class QwenImageModel(BaseModel):
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
+
+        sharded_load = normalize_sharded_load_config(self.config)
+        if fsdp2_enabled(self.config) and sharded_load["enabled"]:
+            transformer_config = QwenImageTransformer2DModel.load_config(model_path, subfolder="transformer")
+            with torch.device("meta"):
+                self._deferred_transformer_model_path = model_path
+                self._deferred_transformer_load_options = sharded_load["options"]
+                return QwenImageTransformer2DModel.from_config(transformer_config)
+
         device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
         return QwenImageTransformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
             torch_dtype=self.transformer_param_dtype,
         ).to(device)
+
+    def load_deferred_transformer_weights(self):
+        """Load this model's adapter through the generic FSDP2 shard loader."""
+        model_path = getattr(self, "_deferred_transformer_model_path", None)
+        if model_path is None:
+            return
+        options = self._deferred_transformer_load_options
+        self._deferred_transformer_load_metadata = load_fsdp2_safetensors(
+            self.transformer,
+            os.path.join(model_path, "transformer"),
+            key_resolver=self._resolve_sharded_checkpoint_key,
+            initialize_missing=self._initialize_sharded_parameter,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+            index_filename=options.get("index_filename"),
+            strict=options.get("strict", True),
+            collect_garbage=options.get("collect_garbage", True),
+        )
+        self._materialize_qwen_rope()
+        del self._deferred_transformer_model_path
+        del self._deferred_transformer_load_options
+
+    @staticmethod
+    def _resolve_sharded_checkpoint_key(checkpoint_key, templates):
+        if checkpoint_key in templates:
+            return checkpoint_key
+        suffix = checkpoint_key.rsplit(".", 1)[-1]
+        if suffix in {"weight", "bias"}:
+            prefix = checkpoint_key.rsplit(".", 1)[0]
+            candidate = f"{prefix}.base_layer.{suffix}"
+            if candidate in templates:
+                return candidate
+        return None
+
+    def _initialize_sharded_parameter(self, name, template):
+        if "lora_A" not in name and "lora_B" not in name:
+            return None
+        local_shape, _ = local_layout_from_template(template, template.shape)
+        local_tensor = torch.empty(
+            local_shape,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+        )
+        if "lora_A" in name:
+            local_tensor.normal_(mean=0.0, std=0.02)
+        else:
+            local_tensor.zero_()
+        return make_dtensor_from_template(template, local_tensor)
+
+    def _materialize_qwen_rope(self):
+        # QwenEmbedRope keeps these tables as plain tensor attributes instead
+        # of registered buffers, so meta construction does not materialize them.
+        rope = self.transformer.pos_embed
+        if getattr(rope.pos_freqs, "is_meta", False):
+            pos_index = torch.arange(4096)
+            neg_index = torch.arange(4096).flip(0) * -1 - 1
+            rope.pos_freqs = torch.cat(
+                [
+                    rope.rope_params(pos_index, rope.axes_dim[0], rope.theta),
+                    rope.rope_params(pos_index, rope.axes_dim[1], rope.theta),
+                    rope.rope_params(pos_index, rope.axes_dim[2], rope.theta),
+                ],
+                dim=1,
+            ).to(self.device)
+            rope.neg_freqs = torch.cat(
+                [
+                    rope.rope_params(neg_index, rope.axes_dim[0], rope.theta),
+                    rope.rope_params(neg_index, rope.axes_dim[1], rope.theta),
+                    rope.rope_params(neg_index, rope.axes_dim[2], rope.theta),
+                ],
+                dim=1,
+            ).to(self.device)
 
     def denoiser_module(self):
         return self.transformer
