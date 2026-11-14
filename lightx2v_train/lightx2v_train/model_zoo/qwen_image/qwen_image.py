@@ -151,8 +151,6 @@ class QwenImageModel(BaseModel):
             device=self.device,
             dtype=self.transformer_param_dtype,
             index_filename=options.get("index_filename"),
-            strict=options.get("strict", True),
-            collect_garbage=options.get("collect_garbage", True),
         )
         self._materialize_qwen_rope()
         del self._deferred_transformer

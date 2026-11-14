@@ -1,113 +1,33 @@
-"""Memory bounded loading of Hugging Face safetensors into FSDP2 models.
-
-The loader in this module deliberately knows nothing about a model's LoRA
-layout, positional encodings, or other model-specific state.  A model adapter
-may resolve checkpoint names and initialize keys which are intentionally absent
-from the pretrained checkpoint, while this module only handles the generic
-DTensor/safetensors mechanics.
-"""
+"""Load safetensors directly into FSDP2 parameter shards."""
 
 from __future__ import annotations
 
-import gc
 import json
-import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
-
 
 _DEFAULT_INDEX_NAMES = (
     "model.safetensors.index.json",
     "diffusion_pytorch_model.safetensors.index.json",
     "pytorch_model.safetensors.index.json",
 )
-_SHARDED_LOAD_OPTIONS = {"index_filename", "strict", "collect_garbage"}
-_MISSING = object()
-
-
-def _parse_sharded_load(value):
-    if isinstance(value, bool):
-        return value, {}
-    if not isinstance(value, Mapping):
-        raise ValueError("distributed.fsdp2.sharded_load must be a bool or mapping")
-
-    options = dict(value)
-    enabled = options.pop("enabled", True)
-    if type(enabled) is not bool:
-        raise ValueError("distributed.fsdp2.sharded_load.enabled must be a bool")
-    unsupported = set(options) - _SHARDED_LOAD_OPTIONS
-    if unsupported:
-        names = ", ".join(sorted(repr(key) for key in unsupported))
-        raise ValueError(f"Unsupported distributed.fsdp2.sharded_load options: {names}.")
-    if "index_filename" in options and (
-        not isinstance(options["index_filename"], str) or not options["index_filename"]
-    ):
-        raise ValueError("distributed.fsdp2.sharded_load.index_filename must be a nonempty string")
-    for key in ("strict", "collect_garbage"):
-        if key in options and type(options[key]) is not bool:
-            raise ValueError(f"distributed.fsdp2.sharded_load.{key} must be a bool")
-    return enabled, options
 
 
 def normalize_sharded_load_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Normalize the sharded-load setting, including its legacy alias."""
-
-    fsdp_config = ((config or {}).get("distributed", {}) or {}).get("fsdp2", {}) or {}
-    if not isinstance(fsdp_config, Mapping):
-        raise ValueError("distributed.fsdp2 must be a mapping")
-
-    value = fsdp_config.get("sharded_load", _MISSING)
-    legacy = fsdp_config.get("serialized_load", _MISSING)
-    deprecated_alias = value is _MISSING and legacy is not _MISSING
-    if value is _MISSING:
-        enabled = False if legacy is _MISSING else legacy
-        if type(enabled) is not bool:
-            raise ValueError("distributed.fsdp2.serialized_load must be a bool")
-        options = {}
+    fsdp = ((config or {}).get("distributed", {}) or {}).get("fsdp2", {}) or {}
+    value = fsdp.get("sharded_load", fsdp.get("serialized_load", False))
+    if isinstance(value, Mapping):
+        options = dict(value)
+        enabled = options.pop("enabled", True)
     else:
-        enabled, options = _parse_sharded_load(value)
-        if legacy is not _MISSING:
-            if type(legacy) is not bool:
-                raise ValueError("distributed.fsdp2.serialized_load must be a bool")
-            if legacy != enabled:
-                raise ValueError("distributed.fsdp2.sharded_load conflicts with deprecated serialized_load")
-            deprecated_alias = True
-
-    return {
-        "enabled": enabled,
-        "options": options,
-        "deprecated_alias": deprecated_alias,
-    }
-
-
-def sharded_load_enabled(config: Mapping[str, Any] | None) -> bool:
-    """Return whether FSDP2 sharded loading is enabled for ``config``."""
-
-    return bool(normalize_sharded_load_config(config)["enabled"])
-
-
-# Transitional descriptive alias used by model adapters.
-fsdp2_sharded_load_enabled = sharded_load_enabled
+        enabled, options = value, {}
+    return {"enabled": enabled, "options": options}
 
 
 def make_dtensor_from_template(template: Any, local_tensor: Any) -> Any:
-    """Create a DTensor that preserves a FSDP2 state-dict template.
-
-    The helper is also useful to model adapters when initializing intentionally
-    absent keys (for example LoRA A/B parameters).  It does not initialize or
-    alter ``local_tensor`` and does not perform a collective validation.
-    """
-
     from torch.distributed.tensor import DTensor
 
-    if not isinstance(template, DTensor):
-        raise TypeError(f"Expected a DTensor template, got {type(template).__name__}")
-    local_shape = tuple(local_layout_from_template(template)[0])
-    if tuple(local_tensor.shape) != local_shape:
-        raise ValueError(
-            f"Local tensor shape {tuple(local_tensor.shape)} does not match DTensor local shape {local_shape}"
-        )
     return DTensor.from_local(
         local_tensor,
         device_mesh=template.device_mesh,
@@ -118,305 +38,7 @@ def make_dtensor_from_template(template: Any, local_tensor: Any) -> Any:
     )
 
 
-def load_fsdp2_safetensors(
-    module: Any,
-    checkpoint: str | os.PathLike[str],
-    *,
-    key_resolver: Callable[[str, Mapping[str, Any]], str | None] | None = None,
-    templates: Mapping[str, Any] | None = None,
-    index_filename: str | None = None,
-    device: Any = None,
-    dtype: Any = None,
-    strict: bool = True,
-    ignored_checkpoint_keys: Iterable[str] = (),
-    ignored_model_keys: Iterable[str] = (),
-    initialize_missing: Callable[[str, Any], Any] | None = None,
-    collect_garbage: bool = True,
-) -> dict[str, Any]:
-    """Load only each rank's FSDP2 parameter slice from HF safetensors.
-
-    ``templates`` are normally obtained from ``torch.distributed.checkpoint``
-    after FSDP2 wrapping.  Supplying them is supported for adapters and tests.
-    ``key_resolver`` maps a checkpoint key to the model state-dict key; return
-    ``None`` only for a key listed in ``ignored_checkpoint_keys``.  If the
-    checkpoint and model dtypes differ, pass an explicit ``dtype`` to request a
-    conversion.  With ``dtype=None`` strict mode requires exact dtype equality.
-
-    The function opens and loads one safetensors file at a time.  It does not
-    materialize a full checkpoint on CPU, and it leaves model-specific missing
-    key initialization to ``initialize_missing``.
-    """
-
-    root, index_path = _resolve_index_path(checkpoint, index_filename)
-    index = _read_index(index_path)
-    weight_map = index["weight_map"]
-    ignored_checkpoint = set(ignored_checkpoint_keys)
-    ignored_model = set(ignored_model_keys)
-    if any(not isinstance(key, str) for key in ignored_checkpoint):
-        raise TypeError("ignored_checkpoint_keys must contain strings")
-    if any(not isinstance(key, str) for key in ignored_model):
-        raise TypeError("ignored_model_keys must contain strings")
-
-    if templates is None:
-        from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
-
-        templates, _ = get_state_dict(
-            module,
-            (),
-            options=StateDictOptions(strict=False),
-        )
-    templates = dict(templates)
-    if not templates:
-        raise ValueError("FSDP2 state-dict templates are empty")
-
-    resolver = key_resolver or (lambda key, _templates: key)
-    mapped: dict[str, str] = {}
-    mapped_reverse: dict[str, str] = {}
-    ignored_checkpoint_found: list[str] = []
-    for checkpoint_key in weight_map:
-        if checkpoint_key in ignored_checkpoint:
-            ignored_checkpoint_found.append(checkpoint_key)
-            continue
-        model_key = resolver(checkpoint_key, templates)
-        if model_key is None:
-            raise KeyError(
-                f"Checkpoint key {checkpoint_key!r} was not resolved; add it to ignored_checkpoint_keys"
-            )
-        if not isinstance(model_key, str) or not model_key:
-            raise TypeError(f"key_resolver returned invalid key for {checkpoint_key!r}: {model_key!r}")
-        if model_key in mapped_reverse:
-            previous = mapped_reverse[model_key]
-            raise ValueError(
-                f"Multiple checkpoint keys resolve to model key {model_key!r}: {previous!r}, {checkpoint_key!r}"
-            )
-        if model_key not in templates:
-            raise KeyError(
-                f"Checkpoint key {checkpoint_key!r} resolves to missing model key {model_key!r}"
-            )
-        mapped[checkpoint_key] = model_key
-        mapped_reverse[model_key] = checkpoint_key
-
-    missing = [
-        key for key in templates
-        if key not in mapped.values() and key not in ignored_model
-    ]
-    initialized: list[str] = []
-    initial_state: dict[str, Any] = {}
-    if initialize_missing is not None:
-        for key in missing:
-            value = initialize_missing(key, templates[key])
-            if value is None:
-                continue
-            _validate_initialized_value(key, templates[key], value)
-            initial_state[key] = value
-            initialized.append(key)
-        missing = [key for key in missing if key not in initial_state]
-    missing_model_keys = list(missing)
-    if strict and missing:
-        raise KeyError(f"Model state-dict keys are absent from checkpoint: {missing[:8]!r}")
-
-    # Validate all paths before touching the module, so a malformed index cannot
-    # leave a partially loaded model.
-    _validate_weight_map(root, weight_map)
-    safe_open = _get_safe_open()
-    target_dtype = _normalize_dtype(dtype)
-    if initial_state:
-        _load_state(module, initial_state)
-
-    loaded = 0
-    dtype_casts = 0
-    loaded_files: list[str] = []
-    for filename, checkpoint_keys in _group_by_file(weight_map, mapped).items():
-        shard_state: dict[str, Any] = {}
-        shard_path = root / filename
-        with safe_open(str(shard_path), framework="pt", device="cpu") as shard:
-            for checkpoint_key in checkpoint_keys:
-                model_key = mapped[checkpoint_key]
-                template = templates[model_key]
-                tensor_slice = shard.get_slice(checkpoint_key)
-                source_shape = tuple(tensor_slice.get_shape())
-                expected_shape = tuple(_global_shape(template))
-                if source_shape != expected_shape:
-                    raise ValueError(
-                        f"Shape mismatch for {checkpoint_key!r} -> {model_key!r}: "
-                        f"checkpoint={source_shape}, model={expected_shape}"
-                    )
-                source_dtype = _normalize_dtype(tensor_slice.get_dtype())
-                effective_dtype = target_dtype or _template_dtype(template)
-                if target_dtype is None and source_dtype != effective_dtype:
-                    raise TypeError(
-                        f"Dtype mismatch for {checkpoint_key!r} -> {model_key!r}: "
-                        f"checkpoint={source_dtype}, model={effective_dtype}; pass dtype to cast explicitly"
-                    )
-                if source_dtype != effective_dtype:
-                    dtype_casts += 1
-
-                if _is_dtensor(template):
-                    local_shape, global_offset = local_layout_from_template(template)
-                    slices = tuple(
-                        slice(offset, offset + size)
-                        for offset, size in zip(global_offset, local_shape, strict=True)
-                    )
-                    local_tensor = tensor_slice[slices].contiguous()
-                    if tuple(local_tensor.shape) != tuple(local_shape):
-                        raise ValueError(
-                            f"Local slice shape mismatch for {checkpoint_key!r}: "
-                            f"actual={tuple(local_tensor.shape)}, expected={tuple(local_shape)}"
-                        )
-                else:
-                    local_tensor = tensor_slice[:] if source_shape else tensor_slice[()]
-                if device is not None or effective_dtype is not None:
-                    local_tensor = local_tensor.to(device=device, dtype=effective_dtype)
-                shard_state[model_key] = (
-                    make_dtensor_from_template(template, local_tensor)
-                    if _is_dtensor(template)
-                    else local_tensor
-                )
-                loaded += 1
-        _load_state(module, shard_state)
-        loaded_files.append(filename)
-        del shard_state
-        if collect_garbage:
-            gc.collect()
-
-    return {
-        "enabled": True,
-        "index_path": str(index_path),
-        "files": loaded_files,
-        "checkpoint_key_count": len(weight_map),
-        "mapped_key_count": len(mapped),
-        "loaded_key_count": loaded,
-        "ignored_checkpoint_keys": sorted(ignored_checkpoint_found),
-        "initialized_model_keys": initialized,
-        "ignored_model_keys": sorted(ignored_model),
-        "missing_model_keys": missing_model_keys,
-        "dtype_cast_count": dtype_casts,
-        "strict": strict,
-    }
-
-
-def _resolve_index_path(checkpoint: str | os.PathLike[str], index_filename: str | None):
-    path = Path(checkpoint).expanduser().resolve()
-    if path.is_file():
-        return path.parent, path
-    if not path.is_dir():
-        raise FileNotFoundError(f"Checkpoint path does not exist: {path}")
-    if index_filename is not None:
-        candidate = (path / index_filename).resolve()
-        if candidate.parent != path or not candidate.is_file():
-            raise FileNotFoundError(f"Safetensors index does not exist below checkpoint directory: {candidate}")
-        return path, candidate
-    candidates = [path / name for name in _DEFAULT_INDEX_NAMES if (path / name).is_file()]
-    if len(candidates) != 1:
-        raise FileNotFoundError(
-            f"Specify index_filename; expected exactly one index in {path}, found {len(candidates)}"
-        )
-    return path, candidates[0]
-
-
-def _read_index(index_path: Path) -> dict[str, Any]:
-    # Hugging Face also permits an unindexed, single safetensors file.  Treat
-    # every key in that file as belonging to the file itself.  This keeps the
-    # generic API useful for small checkpoints while preserving the same strict
-    # key/shape/dtype validation as indexed checkpoints.
-    if index_path.suffix == ".safetensors":
-        safe_open = _get_safe_open()
-        with safe_open(str(index_path), framework="pt", device="cpu") as shard:
-            keys = list(shard.keys())
-        return {"weight_map": {key: index_path.name for key in keys}}
-    try:
-        with index_path.open("r", encoding="utf-8") as handle:
-            index = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Invalid safetensors index {index_path}: {exc}") from exc
-    if not isinstance(index, dict) or not isinstance(index.get("weight_map"), dict):
-        raise ValueError(f"Safetensors index {index_path} must contain a weight_map object")
-    if not index["weight_map"] or any(
-        not isinstance(key, str) or not isinstance(value, str) or not value
-        for key, value in index["weight_map"].items()
-    ):
-        raise ValueError("Safetensors weight_map must be a non-empty string-to-string mapping")
-    return index
-
-
-def _validate_weight_map(root: Path, weight_map: Mapping[str, str]) -> None:
-    for filename in weight_map.values():
-        path = (root / filename).resolve()
-        if path.parent != root or path.name != filename or not path.is_file():
-            raise FileNotFoundError(f"Safetensors shard must be a file directly below checkpoint directory: {path}")
-
-
-def _group_by_file(weight_map: Mapping[str, str], mapped: Mapping[str, str]):
-    grouped: dict[str, list[str]] = {}
-    for key, filename in weight_map.items():
-        if key in mapped:
-            grouped.setdefault(filename, []).append(key)
-    return grouped
-
-
-def _get_safe_open():
-    from safetensors import safe_open
-
-    return safe_open
-
-
-def _load_state(module: Any, state: Mapping[str, Any]) -> None:
-    if not state:
-        return
-    incompatible = module.load_state_dict(state, strict=False, assign=True)
-    unexpected = getattr(incompatible, "unexpected_keys", ())
-    if unexpected:
-        raise RuntimeError(f"FSDP2 state-dict load returned unexpected keys: {list(unexpected)!r}")
-
-
-def _is_dtensor(value: Any) -> bool:
-    from torch.distributed.tensor import DTensor
-
-    return isinstance(value, DTensor)
-
-
-def _global_shape(template: Any) -> tuple[int, ...]:
-    shape = getattr(template, "shape", None)
-    if shape is None:
-        raise TypeError(f"State-dict template {type(template).__name__} has no shape")
-    return tuple(shape)
-
-
-def _template_dtype(template: Any):
-    dtype = getattr(template, "dtype", None)
-    if dtype is None:
-        raise TypeError(f"State-dict template {type(template).__name__} has no dtype")
-    return _normalize_dtype(dtype)
-
-
-def _normalize_dtype(dtype: Any):
-    if dtype is None:
-        return None
-    if not isinstance(dtype, str):
-        return dtype
-    import torch
-
-    mapping = {
-        "F64": torch.float64,
-        "F32": torch.float32,
-        "F16": torch.float16,
-        "BF16": torch.bfloat16,
-        "I64": torch.int64,
-        "I32": torch.int32,
-        "I16": torch.int16,
-        "I8": torch.int8,
-        "U8": torch.uint8,
-        "BOOL": torch.bool,
-        "C64": torch.complex64,
-        "C128": torch.complex128,
-    }
-    if dtype in mapping:
-        return mapping[dtype]
-    raise TypeError(f"Unsupported safetensors dtype {dtype!r}")
-
-
 def local_layout_from_template(template: Any):
-    """Return this rank's local shape and global offset for a DTensor template."""
     from torch.distributed.tensor._utils import compute_local_shape_and_global_offset
 
     return compute_local_shape_and_global_offset(
@@ -426,16 +48,116 @@ def local_layout_from_template(template: Any):
     )
 
 
-def _validate_initialized_value(name: str, template: Any, value: Any) -> None:
-    if _is_dtensor(template):
-        if not _is_dtensor(value):
-            raise TypeError(f"initialize_missing({name!r}) must return a DTensor")
-        if tuple(value.shape) != _global_shape(template):
-            raise ValueError(f"Initialized DTensor shape mismatch for {name!r}")
-        if value.dtype != template.dtype:
-            raise TypeError(f"Initialized DTensor dtype mismatch for {name!r}")
-        return
-    if tuple(getattr(value, "shape", ())) != _global_shape(template):
-        raise ValueError(f"Initialized tensor shape mismatch for {name!r}")
-    if getattr(value, "dtype", None) != getattr(template, "dtype", None):
-        raise TypeError(f"Initialized tensor dtype mismatch for {name!r}")
+def load_fsdp2_safetensors(
+    module: Any,
+    checkpoint: str | Path,
+    *,
+    key_resolver: Callable[[str, Mapping[str, Any]], str | None] | None = None,
+    templates: Mapping[str, Any] | None = None,
+    index_filename: str | None = None,
+    device: Any = None,
+    dtype: Any = None,
+    initialize_missing: Callable[[str, Any], Any] | None = None,
+) -> dict[str, Any]:
+    root, index_path = _resolve_index(checkpoint, index_filename)
+    weight_map = _read_index(index_path)
+    templates = _state_templates(module, templates)
+    resolver = key_resolver or (lambda key, _: key)
+
+    files: dict[str, list[tuple[str, str]]] = {}
+    mapped = set()
+    for checkpoint_key, filename in weight_map.items():
+        model_key = resolver(checkpoint_key, templates)
+        if model_key is None or model_key not in templates:
+            continue
+        files.setdefault(filename, []).append((checkpoint_key, model_key))
+        mapped.add(model_key)
+
+    initialized = {}
+    if initialize_missing is not None:
+        for name, template in templates.items():
+            if name not in mapped:
+                value = initialize_missing(name, template)
+                if value is not None:
+                    initialized[name] = value
+        _load_state(module, initialized)
+
+    from safetensors import safe_open
+
+    loaded = 0
+    loaded_files = []
+    for filename, entries in files.items():
+        state = {}
+        with safe_open(str(root / filename), framework="pt", device="cpu") as shard:
+            for checkpoint_key, model_key in entries:
+                template = templates[model_key]
+                value = shard.get_slice(checkpoint_key)
+                if _is_dtensor(template):
+                    local_shape, offset = local_layout_from_template(template)
+                    slices = tuple(
+                        slice(start, start + size)
+                        for start, size in zip(offset, local_shape, strict=True)
+                    )
+                    value = value[slices].contiguous()
+                else:
+                    value = value[:] if value.get_shape() else value[()]
+                value = value.to(dtype=dtype or template.dtype)
+                if device is not None:
+                    value = value.to(device)
+                state[model_key] = make_dtensor_from_template(template, value) if _is_dtensor(template) else value
+                loaded += 1
+        _load_state(module, state)
+        loaded_files.append(filename)
+
+    return {
+        "index_path": str(index_path),
+        "files": loaded_files,
+        "loaded_key_count": loaded,
+        "initialized_model_keys": list(initialized),
+    }
+
+
+def _resolve_index(checkpoint: str | Path, index_filename: str | None):
+    path = Path(checkpoint)
+    if path.is_file():
+        return path.parent, path
+    if index_filename:
+        return path, path / index_filename
+    for name in _DEFAULT_INDEX_NAMES:
+        candidate = path / name
+        if candidate.is_file():
+            return path, candidate
+    candidate = next(path.glob("*.index.json"), None)
+    if candidate is not None:
+        return path, candidate
+    return path, next(path.glob("*.safetensors"))
+
+
+def _read_index(index_path: Path) -> Mapping[str, str]:
+    if index_path.suffix == ".safetensors":
+        from safetensors import safe_open
+
+        with safe_open(str(index_path), framework="pt", device="cpu") as shard:
+            return {key: index_path.name for key in shard.keys()}
+    with index_path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)["weight_map"]
+
+
+def _state_templates(module: Any, templates: Mapping[str, Any] | None):
+    if templates is not None:
+        return dict(templates)
+    from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
+
+    state, _ = get_state_dict(module, (), options=StateDictOptions(strict=False))
+    return dict(state)
+
+
+def _load_state(module: Any, state: Mapping[str, Any]):
+    if state:
+        module.load_state_dict(state, strict=False, assign=True)
+
+
+def _is_dtensor(value: Any) -> bool:
+    from torch.distributed.tensor import DTensor
+
+    return isinstance(value, DTensor)
