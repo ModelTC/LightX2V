@@ -120,7 +120,7 @@ class TorchrunInferenceWorker:
                 out: Dict[str, Any] = {
                     "task_id": task_id,
                     "status": "success",
-                    "save_result_path": task_data.get("save_result_path"),
+                    "save_result_path": None if getattr(input_info, "teacher_latents_only", False) else task_data.get("save_result_path"),
                     "message": "Inference completed",
                 }
                 if task_data.get("return_result_tensor"):

@@ -75,6 +75,9 @@ class VideoTaskRequest(BaseTaskRequest):
         description="Number of output frames; defaults to the startup config",
     )
     draft_steps: int | None = Field(None, gt=0, strict=True, description="MiniMax-H3 draft prefix length; omitted uses the configured full schedule")
+    teacher_latents_dir: str | None = Field(None, description="Server-local MiniMax-H3 Ref2AV teacher trajectory directory")
+    teacher_latents_only: bool = Field(False, description="Export the teacher trajectory and skip video/audio VAE decoding")
+    teacher_sample_id: str | None = Field(None, description="Source sample identity stored in the teacher trajectory and conditioning cache")
     resample_source_video: str | None = Field(None, description="Server-local MiniMax-H3 draft MP4 with audio; re-encoded at the requested size")
     resample_start_step: int | None = Field(None, ge=0, strict=True, description="MiniMax-H3 zero-based regeneration start index; omitted uses the startup config or 1; 0 runs the full schedule")
     reuse_prefix_segments: int = Field(

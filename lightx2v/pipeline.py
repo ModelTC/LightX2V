@@ -406,6 +406,9 @@ class LightX2VPipeline:
         num_frames=None,
         sr_ratio=None,
         ref_video_prompt=None,
+        teacher_latents_dir=None,
+        teacher_latents_only=None,
+        teacher_sample_id=None,
         **task_inputs,
     ):
         """Generate one result, validating task-specific inputs in the runner.
@@ -442,6 +445,9 @@ class LightX2VPipeline:
             "image_strength": image_strength,
             "i2i_denoise_strength": i2i_denoise_strength,
             "image_frame_indices": image_frame_indices,
+            "teacher_latents_dir": teacher_latents_dir,
+            "teacher_latents_only": teacher_latents_only,
+            "teacher_sample_id": teacher_sample_id,
         }
         request_data.update(task_inputs)
 

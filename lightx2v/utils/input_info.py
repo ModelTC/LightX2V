@@ -329,6 +329,9 @@ class Ref2AVInputInfo(T2AVInputInfo):
     image_path: Any = ""
     video_path: Any = ""
     audio_path: Any = ""
+    teacher_latents_dir: str | None = None
+    teacher_latents_only: bool = False
+    teacher_sample_id: str | None = None
 
 
 @dataclass

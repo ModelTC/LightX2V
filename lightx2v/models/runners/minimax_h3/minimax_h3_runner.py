@@ -17,6 +17,7 @@ from lightx2v.models.networks.minimax_h3.packing import (
     TEXT_TAG,
     align_num_frames,
     audio_latent_num_frames,
+    patchify_video_latents,
     prepare_keyframe_image,
     resolve_canvas_size,
     unpack_audio_tokens,
@@ -48,6 +49,15 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
+from lightx2v.utils.h3_teacher_export import (
+    H3TeacherTrajectoryWriter,
+    fingerprint_metadata,
+    inference_config_fingerprint,
+    merged_checkpoint_identity,
+    path_identity,
+    run_collective_action,
+    run_rank_zero,
+)
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -110,7 +120,10 @@ class MiniMaxH3Runner(DefaultRunner):
         "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"image_path", "prompt"},
         "l2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"last_frame_path", "prompt"},
         "fl2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"image_path", "last_frame_path", "prompt"},
-        "ref2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"audio_path", "image_path", "prompt", "video_path"},
+        "ref2av": COMMON_REQUEST_FIELDS
+        | VIDEO_OUTPUT_FIELDS
+        | RESAMPLING_FIELDS
+        | {"audio_path", "image_path", "prompt", "video_path", "teacher_latents_dir", "teacher_latents_only", "teacher_sample_id"},
     }
 
     def __init__(self, config):
@@ -118,6 +131,23 @@ class MiniMaxH3Runner(DefaultRunner):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
         self.loaded_transformer_partition = "transformer_ref" if config.get("model_variant") == "ref2av" else "transformer"
+
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        export_dir = getattr(input_info, "teacher_latents_dir", None)
+        latent_only = getattr(input_info, "teacher_latents_only", False)
+        if not export_dir and (latent_only or getattr(input_info, "teacher_sample_id", None)):
+            raise ValueError("teacher_latents_only and teacher_sample_id require teacher_latents_dir")
+        if export_dir:
+            if not isinstance(export_dir, str) or not export_dir.strip():
+                raise ValueError("teacher_latents_dir must be a nonempty path")
+            if input_info.draft_steps is not None or input_info.resample_source_video:
+                raise ValueError("Teacher trajectory export requires the complete schedule without draft_steps or resampling")
+            if latent_only:
+                input_info.save_result_path = None
+                if input_info.return_result_tensor:
+                    raise ValueError("teacher_latents_only cannot return decoded result tensors")
+        return input_info
 
     def get_supported_tasks(self):
         """Return tasks supported by the loaded transformer weights."""
@@ -208,6 +238,7 @@ class MiniMaxH3Runner(DefaultRunner):
         self.__dict__.pop("inputs", None)
 
     def end_run(self):
+        self._teacher_writer = None
         self.clear_conditioning_state()
         super().end_run()
 
@@ -673,6 +704,116 @@ class MiniMaxH3Runner(DefaultRunner):
             self.model.ensure_block_offload_buffers()
         torch_device_module.synchronize()
 
+    def _start_teacher_export(self):
+        self._teacher_writer = None
+        if not getattr(self.input_info, "teacher_latents_dir", None):
+            return
+        if self.scheduler.start_step_index != 0 or self.scheduler.draft_steps is not None:
+            raise ValueError("Teacher trajectory export requires the complete schedule")
+
+        def start():
+            references = []
+            reference_paths = {kind: self._split_reference_paths(getattr(self.input_info, f"{kind}_path")) for kind in ("image", "video", "audio")}
+            paths = {kind: iter(values) for kind, values in reference_paths.items()}
+            video_conditions = iter(self.condition_video_latents)
+            audio_conditions = iter(self.condition_audio_latents)
+            for reference in self.prepared_references:
+                entry = {
+                    "kind": reference.kind,
+                    "path": os.fspath(next(paths[reference.kind])),
+                    "normalized": True,
+                    "num_latent_frames": int(reference.num_latent_frames),
+                    "latent_height": int(reference.latent_height),
+                    "latent_width": int(reference.latent_width),
+                    "num_audio_latents": int(reference.num_audio_latents),
+                    "video_latents": None,
+                    "audio_latents": None,
+                }
+                if reference.kind != "audio":
+                    entry["video_latents"] = patchify_video_latents(next(video_conditions).float(), tuple(self.config.get("patch_size", (1, 2, 2)))).detach().cpu().contiguous()
+                if reference.has_audio:
+                    latent = next(audio_conditions)
+                    entry["audio_latents"] = latent.transpose(1, 2).reshape(-1, latent.shape[1]).detach().float().cpu().contiguous()
+                references.append(entry)
+            text = self.inputs["text_encoder_output"]
+            prompt_embeds = text["prompt_embeds"].detach().float().cpu().contiguous()
+            if prompt_embeds.ndim == 2:
+                prompt_embeds = prompt_embeds.unsqueeze(0)
+            metadata = {
+                "task": "ref2av",
+                "seed": int(self.input_info.seed),
+                "prompt": self.input_info.prompt,
+                **{f"{kind}_paths": [os.fspath(path) for path in values] for kind, values in reference_paths.items()},
+                "num_frames": self.request_num_frames,
+                "height": self.request_height,
+                "width": self.request_width,
+                "fps": int(self.config.get("fps", 24)),
+                "num_steps": self.scheduler.infer_steps,
+                "scheduler_type": self.scheduler.scheduler_type,
+                "video_flow_shift": self.scheduler.video_shift,
+                "audio_flow_shift": self.scheduler.audio_shift,
+                "video_sigmas": self.scheduler.video_sigmas.detach().cpu().tolist(),
+                "audio_sigmas": self.scheduler.audio_sigmas.detach().cpu().tolist(),
+                "video_shape": [int(self.config.get("in_channels", 24)), self.scheduler.num_latent_frames, self.scheduler.latent_height, self.scheduler.latent_width],
+                "audio_shape": [2, int(self.config.get("audio_in_channels", 32)), self.scheduler.num_audio_latents],
+                "model_path": self.config["model_path"],
+                "model_variant": self.config["model_variant"],
+                "transformer_partition": self.loaded_transformer_partition,
+                "transformer_path": self.config.get("dit_original_ckpt") or os.path.join(self.config["model_path"], self.loaded_transformer_partition),
+                "guidance_scale": 1.0,
+                "enable_cfg": bool(self.config.get("enable_cfg", False)),
+                "lora_configs": self.config.get("lora_configs") or [],
+                "prompt_token_count": int(text["text_token_tags"].numel()),
+                "ref_image_count": len(reference_paths["image"]),
+                "reference_video_count": len(reference_paths["video"]),
+                "reference_audio_count": len(reference_paths["audio"]),
+                "reference_video_rows": self.scheduler.num_condition_video_rows,
+                "reference_audio_rows": self.scheduler.num_condition_audio_rows,
+                "reference_image_resize_mode": self.config.get("reference_image_resize_mode", DEFAULT_REFERENCE_IMAGE_RESIZE_MODE),
+                "references": [{key: value for key, value in entry.items() if key not in ("video_latents", "audio_latents")} for entry in references],
+                "parallel": {key: value for key, value in self.config.get("parallel", {}).items() if isinstance(value, (str, int, float, bool, type(None)))},
+                "inference_config_sha256": inference_config_fingerprint(self.config),
+            }
+            metadata["model_identity"] = path_identity(metadata["model_path"])
+            metadata["transformer_identity"] = path_identity(metadata["transformer_path"])
+            metadata["decfg_merged_identity"] = merged_checkpoint_identity(metadata["model_path"], metadata["transformer_path"])
+            metadata["model_provenance_sha256"] = fingerprint_metadata(metadata["decfg_merged_identity"])
+            metadata["reference_identities"] = [path_identity(entry["path"]) for entry in references]
+            metadata["cache_fingerprint"] = fingerprint_metadata(metadata)
+            metadata["source_id"] = self.input_info.teacher_sample_id or metadata["cache_fingerprint"]
+            condition = {
+                "task": "ref2av",
+                "prompt": self.input_info.prompt,
+                "cache_schema_version": 1,
+                "cache_stage": "complete",
+                "cache_fingerprint": metadata["cache_fingerprint"],
+                "source_id": metadata["source_id"],
+                "conditioning": {
+                    "positive": {
+                        "task": "ref2av",
+                        "prompt_embeds": prompt_embeds,
+                        "text_token_tags": text["text_token_tags"].detach().long().cpu().contiguous(),
+                        "references": references,
+                        "target_height": self.request_height,
+                        "target_width": self.request_width,
+                        "target_num_frames": self.request_num_frames,
+                    }
+                },
+            }
+            self._teacher_writer = H3TeacherTrajectoryWriter(self.input_info.teacher_latents_dir, metadata, condition)
+
+        run_rank_zero(start)
+
+    def _write_teacher_state(self, state_index):
+        if not getattr(self.input_info, "teacher_latents_dir", None):
+            return
+
+        def write():
+            video_latents, audio_latents = self._unpack_target_latents(self.scheduler.video_latents, self.scheduler.audio_latents)
+            self._teacher_writer.write_state(state_index, video_latents[0], audio_latents)
+
+        run_rank_zero(write)
+
     def run_segment(self, segment_idx=0):
         infer_steps = self.scheduler.infer_steps
         start_index = self.scheduler.start_step_index
@@ -686,6 +827,7 @@ class MiniMaxH3Runner(DefaultRunner):
                 metrics_labels=[step_index + 1, infer_steps],
             ):
                 self.check_stop()
+                self._write_teacher_state(step_index)
                 logger.info(f"==> MiniMax-H3 step: {step_index + 1} / {infer_steps}")
                 with ProfilingContext4DebugL1("step_pre"):
                     self.scheduler.step_pre(step_index)
@@ -700,6 +842,7 @@ class MiniMaxH3Runner(DefaultRunner):
                     self.progress_callback(((step_index - start_index + 1) / remaining_steps) * 100, 100)
         if remaining_steps == 0 and self.progress_callback:
             self.progress_callback(100, 100)
+        self._write_teacher_state(end_index)
         return self.scheduler.video_latents, self.scheduler.audio_latents
 
     @ProfilingContext4DebugL2("Offload DiT")
@@ -735,14 +878,7 @@ class MiniMaxH3Runner(DefaultRunner):
             self.video_vae.set_decode_tile_shape(*tile_shape)
             logger.info(f"MiniMax-H3 Video VAE decode tile shape for {resolution}: {tile_shape[0]}x{tile_shape[1]}")
 
-    @ProfilingContext4DebugL1(
-        "Run VAE Decoder",
-        recorder_mode=GET_RECORDER_MODE(),
-        metrics_func=monitor_cli.lightx2v_run_vae_decode_duration,
-        metrics_labels=["MiniMaxH3Runner"],
-    )
-    def run_vae_decoder(self, video_rows, audio_rows):
-        self._ensure_vae_loaded()
+    def _unpack_target_latents(self, video_rows, audio_rows):
         video_rows = video_rows[self.scheduler.num_condition_video_rows :]
         audio_rows = audio_rows[self.scheduler.num_condition_audio_rows :]
         video_latents = unpatchify_video_tokens(
@@ -754,6 +890,17 @@ class MiniMaxH3Runner(DefaultRunner):
             patch_size=tuple(self.config.get("patch_size", (1, 2, 2))),
         )
         audio_latents = unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)
+        return video_latents, audio_latents
+
+    @ProfilingContext4DebugL1(
+        "Run VAE Decoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_decode_duration,
+        metrics_labels=["MiniMaxH3Runner"],
+    )
+    def run_vae_decoder(self, video_rows, audio_rows):
+        self._ensure_vae_loaded()
+        video_latents, audio_latents = self._unpack_target_latents(video_rows, audio_rows)
         self.set_vae_decode_tile_shape()
 
         with ProfilingContext4DebugL1("Run Video VAE Decoder"):
@@ -817,6 +964,7 @@ class MiniMaxH3Runner(DefaultRunner):
         try:
             self._prepare_resampling_source()
             self.init_run()
+            self._start_teacher_export()
             try:
                 video_rows, audio_rows = self.run_segment(0)
             finally:
@@ -824,8 +972,22 @@ class MiniMaxH3Runner(DefaultRunner):
                     self._offload_transformer()
                     transformer_offloaded = True
 
-            self.gen_video, self.gen_audio = self.run_vae_decoder(video_rows, audio_rows)
-            return self.process_images_after_vae_decoder()
+            if getattr(self.input_info, "teacher_latents_only", False):
+                result = {"video": None, "audio": None}
+            else:
+
+                def decode():
+                    self.gen_video, self.gen_audio = self.run_vae_decoder(video_rows, audio_rows)
+                    return self.process_images_after_vae_decoder()
+
+                # Parallel video decoding needs every rank. Coordinate errors
+                # (including rank-zero audio decode/MP4 saving) before any rank
+                # enters the final manifest broadcast.
+                result = run_collective_action(decode) if getattr(self.input_info, "teacher_latents_dir", None) else decode()
+            if getattr(self.input_info, "teacher_latents_dir", None):
+                manifest_path = run_rank_zero(lambda: self._teacher_writer.finish())
+                result.update(teacher_latents_dir=self.input_info.teacher_latents_dir, teacher_manifest_path=manifest_path)
+            return result
         finally:
             # ``init_run`` can fail after a partial device transfer. Preserve
             # the original exception while still making a best-effort return
