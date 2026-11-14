@@ -123,7 +123,7 @@ class QwenImageModel(BaseModel):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
 
         fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
-        if fsdp2_enabled(self.config) and fsdp_config.get("sharded_load", False):
+        if fsdp_config.get("sharded_load", False):
             transformer_config = QwenImageTransformer2DModel.load_config(model_path, subfolder="transformer")
             with torch.device("meta"):
                 # FSDP2 must wrap this skeleton before rank-local weights can load.
@@ -139,7 +139,7 @@ class QwenImageModel(BaseModel):
     def load_deferred_transformer_weights(self):
         """Load Qwen weights after FSDP2 has defined the local parameter shards."""
         fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
-        if not fsdp2_enabled(self.config) or not fsdp_config.get("sharded_load", False):
+        if not fsdp_config.get("sharded_load", False):
             return
         model_path = self.config["model"]["pretrained_model_name_or_path"]
         load_fsdp2_safetensors(
