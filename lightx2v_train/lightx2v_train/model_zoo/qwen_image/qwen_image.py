@@ -44,10 +44,6 @@ class QwenImageModel(BaseModel):
     distribution_matching_uses_sample_context = False
     consistency_model_capability_cls = QwenImageConsistencyModelCapability
 
-    def __init__(self, config):
-        super().__init__(config)
-        self._deferred_transformer_path = None
-
     def register_capabilities(self):
         super().register_capabilities()
         self.capabilities.register(
@@ -131,7 +127,6 @@ class QwenImageModel(BaseModel):
             transformer_config = QwenImageTransformer2DModel.load_config(model_path, subfolder="transformer")
             with torch.device("meta"):
                 # FSDP2 must wrap this skeleton before rank-local weights can load.
-                self._deferred_transformer_path = model_path
                 return QwenImageTransformer2DModel.from_config(transformer_config)
 
         device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
@@ -143,18 +138,18 @@ class QwenImageModel(BaseModel):
 
     def load_deferred_transformer_weights(self):
         """Load Qwen weights after FSDP2 has defined the local parameter shards."""
-        if self._deferred_transformer_path is None:
+        if not fsdp2_enabled(self.config) or not sharded_load_enabled(self.config):
             return
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
         load_fsdp2_safetensors(
             self.transformer,
-            os.path.join(self._deferred_transformer_path, "transformer"),
+            os.path.join(model_path, "transformer"),
             key_resolver=self._resolve_sharded_checkpoint_key,
             initialize_missing=self._initialize_sharded_parameter,
             device=self.device,
             dtype=self.transformer_param_dtype,
         )
         self._materialize_qwen_rope()
-        self._deferred_transformer_path = None
 
     @staticmethod
     def _resolve_sharded_checkpoint_key(checkpoint_key, templates):
