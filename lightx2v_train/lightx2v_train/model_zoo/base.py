@@ -51,7 +51,6 @@ class BaseModel(CapabilityProvider):
         self.vae_config = None
         self.text_pipeline = None
         self.image_processor = None
-        self._deferred_transformer_load = None
 
     def transformer_forward_context(self):
         # Autocast changes forward computation, not the optimizer's FP32 parameters.
