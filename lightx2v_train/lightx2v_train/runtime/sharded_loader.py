@@ -17,15 +17,6 @@ _DEFAULT_INDEX_NAMES = (
 def _identity_key(checkpoint_key, _):
     return checkpoint_key
 
-
-def sharded_load_enabled(config: Mapping[str, Any] | None) -> bool:
-    fsdp = ((config or {}).get("distributed", {}) or {}).get("fsdp2", {}) or {}
-    value = fsdp.get("sharded_load", fsdp.get("serialized_load", False))
-    if isinstance(value, Mapping):
-        return value.get("enabled", True)
-    return value
-
-
 def make_dtensor_from_template(template: Any, local_tensor: Any) -> Any:
     from torch.distributed.tensor import DTensor
 
