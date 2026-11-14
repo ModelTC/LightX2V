@@ -371,6 +371,7 @@ class WanModel(BaseTransformerModel):
         cur_rank = dist.get_rank(self.seq_p_group)
         padding_size = (world_size - (x.shape[0] % world_size)) % world_size
         if padding_size > 0:
+            pre_infer_out.seq_p_valid_len = x.shape[0]
             x = F.pad(x, (0, 0, 0, padding_size))
 
         pre_infer_out.x = torch.chunk(x, world_size, dim=0)[cur_rank]
