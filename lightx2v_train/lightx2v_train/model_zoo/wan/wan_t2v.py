@@ -1,7 +1,10 @@
+import json
 import math
 import os
+import tempfile
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -33,13 +36,18 @@ from lightx2v_train.model_zoo.wan.capability_adapters.wan_teacher_forcing_capabi
 from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.distributed import get_sequence_parallel_world_size
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
+from lightx2v_train.runtime.sharded_loader import (
+    load_fsdp2_safetensors,
+    local_layout_from_template,
+    make_dtensor_from_template,
+)
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
 from ..base import BaseModel
 from ..native.wan.modules.attention import flash_attention
 from ..native.wan.modules.causal_model import CausalWanModel
-from ..native.wan.modules.model import WanModel
+from ..native.wan.modules.model import WanModel, rope_params
 from ..native.wan.modules.t5 import T5EncoderModel
 from ..native.wan.modules.vae import WanVAE
 
@@ -160,18 +168,37 @@ class WanT2VModel(BaseModel):
 
     def _load_transformer(self, model_path):
         backend = get_backend()
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        sharded_load = fsdp_config.get("sharded_load", False)
         if self.use_causal_transformer:
-            transformer = CausalWanModel.from_pretrained(
-                model_path,
-                torch_dtype=self.transformer_param_dtype,
-                local_attn_size=self.local_attn_size,
-                sink_size=self.sink_size,
-                defer_kv_cache_updates=self.defer_kv_cache_updates,
-                detach_kv_cache_updates=self.detach_kv_cache_updates,
-            )
+            if sharded_load:
+                transformer_config = CausalWanModel.load_config(model_path)
+                with torch.device("meta"):
+                    transformer = CausalWanModel.from_config(
+                        transformer_config,
+                        local_attn_size=self.local_attn_size,
+                        sink_size=self.sink_size,
+                        defer_kv_cache_updates=self.defer_kv_cache_updates,
+                        detach_kv_cache_updates=self.detach_kv_cache_updates,
+                    )
+            else:
+                transformer = CausalWanModel.from_pretrained(
+                    model_path,
+                    torch_dtype=self.transformer_param_dtype,
+                    local_attn_size=self.local_attn_size,
+                    sink_size=self.sink_size,
+                    defer_kv_cache_updates=self.defer_kv_cache_updates,
+                    detach_kv_cache_updates=self.detach_kv_cache_updates,
+                )
         else:
-            transformer = WanModel.from_pretrained(model_path, torch_dtype=self.transformer_param_dtype)
-            transformer.freqs = backend.prepare_rotary_frequencies(transformer.freqs)
+            if sharded_load:
+                transformer_config = WanModel.load_config(model_path)
+                with torch.device("meta"):
+                    transformer = WanModel.from_config(transformer_config)
+            else:
+                transformer = WanModel.from_pretrained(model_path, torch_dtype=self.transformer_param_dtype)
+            if not sharded_load:
+                transformer.freqs = backend.prepare_rotary_frequencies(transformer.freqs)
             for block in transformer.blocks:
                 block.self_attn.rope_apply = backend.rope_apply
         transformer.positional_dtype = backend.positional_dtype
@@ -179,10 +206,85 @@ class WanT2VModel(BaseModel):
         for block in transformer.blocks:
             block.self_attn.attention = attention
             block.cross_attn.attention = attention
+        if sharded_load:
+            return transformer
         # FSDP2 moves and shards one block at a time; loading the complete
         # denoiser on the accelerator first needlessly raises peak memory.
         device = backend.host_device if fsdp2_enabled(self.config) else self.device
         return transformer.to(device, dtype=self.transformer_param_dtype)
+
+    def load_deferred_transformer_weights(self):
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if not fsdp_config.get("sharded_load", False):
+            return
+        self._load_sharded_transformer_weights(self.transformer_path)
+        self._materialize_wan_freqs()
+
+    def _load_sharded_transformer_weights(self, checkpoint):
+        load_options = {
+            "key_resolver": self._resolve_sharded_checkpoint_key,
+            "initialize_missing": self._initialize_sharded_parameter,
+            "device": self.device,
+            "dtype": self.transformer_param_dtype,
+        }
+        checkpoint = Path(checkpoint)
+        if any(checkpoint.glob("*.index.json")):
+            load_fsdp2_safetensors(self.transformer, checkpoint, **load_options)
+            return
+
+        from safetensors import safe_open
+
+        weight_file = next(checkpoint.glob("*.safetensors")).resolve()
+        with safe_open(str(weight_file), framework="pt", device="cpu") as shard:
+            weight_map = {name: weight_file.name for name in shard.keys()}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir = Path(temp_dir)
+            os.symlink(weight_file, temp_dir / weight_file.name)
+            index = temp_dir / "model.safetensors.index.json"
+            index.write_text(json.dumps({"weight_map": weight_map}), encoding="utf-8")
+            load_fsdp2_safetensors(self.transformer, temp_dir, **load_options)
+
+    @staticmethod
+    def _resolve_sharded_checkpoint_key(checkpoint_key, templates):
+        if checkpoint_key in templates:
+            return checkpoint_key
+        suffix = checkpoint_key.rsplit(".", 1)[-1]
+        if suffix in {"weight", "bias"}:
+            prefix = checkpoint_key.rsplit(".", 1)[0]
+            candidate = f"{prefix}.base_layer.{suffix}"
+            if candidate in templates:
+                return candidate
+        return None
+
+    def _initialize_sharded_parameter(self, name, template):
+        if "lora_A" not in name and "lora_B" not in name:
+            return None
+        local_shape, _ = local_layout_from_template(template)
+        local_tensor = torch.empty(
+            local_shape,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+        )
+        if "lora_A" in name:
+            local_tensor.normal_(mean=0.0, std=0.02)
+        else:
+            local_tensor.zero_()
+        return make_dtensor_from_template(template, local_tensor)
+
+    def _materialize_wan_freqs(self):
+        backend = get_backend()
+        freqs = self.transformer.freqs
+        if freqs.is_meta:
+            d = self.transformer.dim // self.transformer.num_heads
+            freqs = torch.cat(
+                [
+                    rope_params(1024, d - 4 * (d // 6)),
+                    rope_params(1024, 2 * (d // 6)),
+                    rope_params(1024, 2 * (d // 6)),
+                ],
+                dim=1,
+            )
+        self.transformer.freqs = backend.prepare_rotary_frequencies(freqs.to(self.device))
 
     def _configure_transformer(self):
         self.patch_size = tuple(self.transformer.patch_size)

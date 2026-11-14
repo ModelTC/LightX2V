@@ -1,3 +1,5 @@
+import os
+
 import torch
 from diffusers import AutoencoderKLQwenImage21, QwenImage21Pipeline, QwenImage21Transformer2DModel
 from diffusers.image_processor import VaeImageProcessor
@@ -5,6 +7,11 @@ from diffusers.image_processor import VaeImageProcessor
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImage21ConsistencyModelCapability
 from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
+from lightx2v_train.runtime.sharded_loader import (
+    load_fsdp2_safetensors,
+    local_layout_from_template,
+    make_dtensor_from_template,
+)
 from lightx2v_train.utils.image_ops import image_tensor_to_pil
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
@@ -43,12 +50,61 @@ class QwenImage21Model(QwenImageModel):
         )
 
     def load_transformer(self):
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if fsdp_config.get("sharded_load", False):
+            transformer_config = QwenImage21Transformer2DModel.load_config(model_path, subfolder="transformer")
+            with torch.device("meta"):
+                return QwenImage21Transformer2DModel.from_config(transformer_config)
+
         device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
         return QwenImage21Transformer2DModel.from_pretrained(
-            self.config["model"]["pretrained_model_name_or_path"],
+            model_path,
             subfolder="transformer",
             torch_dtype=self.transformer_param_dtype,
         ).to(device)
+
+    def load_deferred_transformer_weights(self):
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if not fsdp_config.get("sharded_load", False):
+            return
+
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        load_fsdp2_safetensors(
+            self.transformer,
+            os.path.join(model_path, "transformer"),
+            key_resolver=self._resolve_sharded_checkpoint_key,
+            initialize_missing=self._initialize_sharded_parameter,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+        )
+
+    @staticmethod
+    def _resolve_sharded_checkpoint_key(checkpoint_key, state_templates):
+        if checkpoint_key in state_templates:
+            return checkpoint_key
+        suffix = checkpoint_key.rsplit(".", 1)[-1]
+        if suffix in {"weight", "bias"}:
+            prefix = checkpoint_key.rsplit(".", 1)[0]
+            candidate = f"{prefix}.base_layer.{suffix}"
+            if candidate in state_templates:
+                return candidate
+        return None
+
+    def _initialize_sharded_parameter(self, name, template):
+        if "lora_A" not in name and "lora_B" not in name:
+            return None
+        local_shape, _ = local_layout_from_template(template)
+        local_tensor = torch.empty(
+            local_shape,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+        )
+        if "lora_A" in name:
+            local_tensor.normal_(mean=0.0, std=0.02)
+        else:
+            local_tensor.zero_()
+        return make_dtensor_from_template(template, local_tensor)
 
     def add_lora(self, rank, alpha, target_modules):
         super().add_lora(rank, alpha, target_modules or ["to_q", "to_k", "to_v", "to_out.0"])

@@ -46,16 +46,22 @@ def load_minimax_h3_transformer(
     torch_dtype: torch.dtype | None = None,
     local_files_only: bool = True,
     attention_backend: str | None = None,
+    defer_weights: bool = False,
 ):
     """Load the official trainable H3 module without LightX2V MMWeight."""
     transformer_dir = resolve_transformer_dir(model_path)
     cls = _transformer_class()
-    transformer = cls.from_pretrained(
-        str(transformer_dir),
-        torch_dtype=torch_dtype,
-        local_files_only=local_files_only,
-        low_cpu_mem_usage=True,
-    )
+    if defer_weights:
+        config = cls.load_config(str(transformer_dir))
+        with torch.device("meta"):
+            transformer = cls.from_config(config)
+    else:
+        transformer = cls.from_pretrained(
+            str(transformer_dir),
+            torch_dtype=torch_dtype,
+            local_files_only=local_files_only,
+            low_cpu_mem_usage=True,
+        )
     if attention_backend:
         if not hasattr(transformer, "set_attention_backend"):
             raise ValueError(f"Installed Diffusers cannot select attention backend {attention_backend!r} on MiniMax-H3.")

@@ -8,6 +8,7 @@ distributed:
     backend: nccl
     timeout_minutes: 60
     fsdp2:
+        sharded_load: true
         enabled: true
         reshard_after_forward:
             root_reshard: false
