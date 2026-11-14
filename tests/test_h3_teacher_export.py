@@ -38,7 +38,7 @@ def _runner_type():
     path = ROOT / "lightx2v/models/runners/minimax_h3/minimax_h3_runner.py"
     parsed = ast.parse(path.read_text())
     original = next(node for node in parsed.body if isinstance(node, ast.ClassDef) and node.name == "MiniMaxH3Runner")
-    names = {"prepare_request", "_split_reference_paths", "_start_teacher_export", "_write_teacher_state", "_unpack_target_latents", "run_segment", "run_main"}
+    names = {"prepare_request", "_split_reference_paths", "_start_teacher_export", "_write_teacher_final", "_unpack_target_latents", "run_segment", "run_main"}
     methods = [node for node in original.body if isinstance(node, ast.FunctionDef) and node.name in names]
     for method in methods:
         method.decorator_list = [decorator for decorator in method.decorator_list if isinstance(decorator, ast.Name) and decorator.id == "staticmethod"]
@@ -177,32 +177,42 @@ def make_runner(tmp_path):
     return make
 
 
-def test_export_all_inputs_and_clean_endpoint_match_native_schedule(make_runner):
+def test_only_final_clean_pair_is_saved_after_all_29_steps(make_runner, monkeypatch):
     runner, observed, directory = make_runner()
+    writes = []
+    save = export.H3TeacherFinalWriter._save
+
+    def record_write(writer, name, value):
+        writes.append((name, len(observed)))
+        return save(writer, name, value)
+
+    monkeypatch.setattr(export.H3TeacherFinalWriter, "_save", record_write)
     result = runner.run_main()
     assert runner.decode_calls == []
     manifest = json.loads((directory / "manifest.json").read_text())
-    assert manifest["schema"] == "h3_teacher_trajectory_v1"
-    assert manifest["num_steps"] == 29 and manifest["num_states"] == 30
+    assert manifest["schema"] == "h3_teacher_final_v1"
+    assert manifest["export_mode"] == "final"
+    assert manifest["num_steps"] == 29 and manifest["num_states"] == 1
+    assert manifest["state_paths"] == []
+    assert manifest["final_state_index"] == 29
+    assert manifest["final_video_sigma"] == manifest["final_audio_sigma"] == 0
     assert manifest["video_shape"] == [24, 37, 2, 2]
     assert manifest["audio_shape"] == [2, 32, 207]
     assert manifest["source_id"] == "sample-001"
     assert manifest["decfg_merged_identity"][0]["metadata"]["complete"] is True
     assert result["teacher_manifest_path"] == str(directory / "manifest.json")
-    for index, (video_rows, audio_rows) in enumerate(observed):
-        state = torch.load(directory / manifest["state_paths"][index], weights_only=True)
-        expected_video = packing.unpatchify_video_tokens(video_rows, 37, 2, 2)[0]
-        assert torch.equal(state["video_latents"], expected_video)
-        assert torch.equal(state["audio_latents"], packing.unpack_audio_tokens(audio_rows, 207))
-        assert state["video_latents"].dtype == state["audio_latents"].dtype == torch.float32
-        assert state["normalized"] and not state["is_clean"]
-        assert state["video_sigma"] == manifest["video_sigmas"][index]
     assert len(observed) == 29
     assert torch.equal(runner.scheduler.video_latents[0], torch.full((96,), 7.0))
-    clean = torch.load(directory / "state_029.pt", weights_only=True)
-    assert clean["is_clean"] and clean["video_sigma"] == clean["audio_sigma"] == 0
-    assert torch.equal(clean["video_latents"], torch.load(directory / "video_latents.pt", weights_only=True)["latents"])
-    assert torch.equal(clean["audio_latents"], torch.load(directory / "audio_latents.pt", weights_only=True))
+    assert writes == [("condition.pt", 0), ("video_latents.pt", 29), ("audio_latents.pt", 29)]
+    assert sorted(path.name for path in directory.iterdir()) == ["audio_latents.pt", "condition.pt", "manifest.json", "video_latents.pt"]
+    video = torch.load(directory / "video_latents.pt", weights_only=True)
+    audio = torch.load(directory / "audio_latents.pt", weights_only=True)
+    assert video["normalized"]
+    assert video["latents"].dtype == audio.dtype == torch.float32
+    assert video["latents"].is_contiguous() and audio.is_contiguous()
+    expected_video = packing.unpatchify_video_tokens(runner.scheduler.video_latents[1:], 37, 2, 2)[0]
+    assert torch.equal(video["latents"], expected_video)
+    assert torch.equal(audio, packing.unpack_audio_tokens(runner.scheduler.audio_latents, 207))
     condition = torch.load(directory / "condition.pt", weights_only=True)
     positive = condition["conditioning"]["positive"]
     assert condition["cache_fingerprint"] == manifest["cache_fingerprint"]
@@ -235,7 +245,8 @@ def test_decode_failure_does_not_publish_completion(make_runner):
     runner.run_vae_decoder = fail
     with pytest.raises(RuntimeError, match="decode failed"):
         runner.run_main()
-    assert (directory / "state_029.pt").is_file()
+    assert (directory / "video_latents.pt").is_file()
+    assert (directory / "audio_latents.pt").is_file()
     assert not (directory / "manifest.json").exists()
 
 
@@ -244,10 +255,12 @@ def test_incomplete_out_of_order_and_completed_directory_rejected(make_runner):
     runner._start_teacher_export()
     with pytest.raises(RuntimeError, match="incomplete"):
         runner._teacher_writer.finish()
-    with pytest.raises(ValueError, match="Expected teacher state"):
-        runner._write_teacher_state(1)
+    with pytest.raises(ValueError, match="Expected one final teacher state"):
+        runner._write_teacher_final(1)
     assert not (directory / "manifest.json").exists()
     runner.run_main()
+    with pytest.raises(ValueError, match="Expected one final teacher state"):
+        runner._write_teacher_final(29)
     with pytest.raises(FileExistsError, match="already exists"):
         runner._start_teacher_export()
 
@@ -262,10 +275,30 @@ def test_atomic_save_failure_leaves_no_completion_or_partial_state(make_runner, 
 
     monkeypatch.setattr(export.torch, "save", fail)
     with pytest.raises(OSError, match="disk full"):
-        runner._write_teacher_state(0)
-    assert not (directory / "state_000.pt").exists()
+        runner._write_teacher_final(29)
+    assert not (directory / "video_latents.pt").exists()
+    assert not (directory / "audio_latents.pt").exists()
     assert not (directory / "manifest.json").exists()
     assert list(directory.glob("*.tmp")) == []
+
+
+def test_incomplete_av_pair_cannot_publish_manifest(make_runner, monkeypatch):
+    runner, _, directory = make_runner()
+    save = export.H3TeacherFinalWriter._save
+
+    def fail_audio(writer, name, value):
+        if name == "audio_latents.pt":
+            raise OSError("audio write failed")
+        return save(writer, name, value)
+
+    monkeypatch.setattr(export.H3TeacherFinalWriter, "_save", fail_audio)
+    with pytest.raises(OSError, match="audio write failed"):
+        runner.run_main()
+    assert (directory / "video_latents.pt").is_file()
+    assert not (directory / "audio_latents.pt").exists()
+    assert not (directory / "manifest.json").exists()
+    with pytest.raises(RuntimeError, match="incomplete"):
+        runner._teacher_writer.finish()
 
 
 def test_nonzero_rank_does_not_write_and_observes_rank_zero_failure(monkeypatch):

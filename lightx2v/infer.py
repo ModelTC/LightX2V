@@ -100,9 +100,9 @@ def build_parser():
         help="MiniMax-H3: only a positive K smaller than configured infer_steps enables a draft prefix and final velocity projection. Omit or use K >= infer_steps for normal sampling.",
     )
     parser.add_argument("--resample_source_video", type=str, default=None, help="MiniMax-H3 source video with audio; RGB frames are resized to the target canvas before VAE encoding and regeneration.")
-    parser.add_argument("--teacher_latents_dir", type=str, default=None, help="MiniMax-H3 Ref2AV: export all FP32 denoising input states and the clean endpoint here.")
-    parser.add_argument("--teacher_latents_only", action="store_true", default=None, help="Skip video/audio VAE decoding after teacher trajectory export.")
-    parser.add_argument("--teacher_sample_id", type=str, default=None, help="Source sample identity for the teacher trajectory and conditioning cache.")
+    parser.add_argument("--teacher_latents_dir", type=str, default=None, help="MiniMax-H3 Ref2AV: export final FP32 clean AV latents and their conditioning here.")
+    parser.add_argument("--teacher_latents_only", action="store_true", default=None, help="Save final clean teacher latents and skip video/audio VAE decoding.")
+    parser.add_argument("--teacher_sample_id", type=str, default=None, help="Source sample identity for the final teacher latents and conditioning cache.")
     parser.add_argument(
         "--resample_start_step",
         type=int,

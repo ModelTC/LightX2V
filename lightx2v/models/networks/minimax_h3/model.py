@@ -28,7 +28,7 @@ from lightx2v.models.networks.minimax_h3.weights import (
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
 from lightx2v.utils.envs import GET_DTYPE, GET_LORA_DTYPE
-from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, H3_QUANTIZATION_PROFILE, WEIGHT_QMAX, validate_checkpoint
+from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, H3_PROJECTION_SUFFIXES, H3_QUANTIZATION_PROFILE, WEIGHT_QMAX, validate_checkpoint
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 H3_CHANNEL_QUANT_SCHEMES = {
@@ -500,8 +500,19 @@ class MiniMaxH3Model(BaseTransformerModel):
             preview = ", ".join(misplaced[:4])
             raise RuntimeError(f"MiniMax-H3 checkpoint tensors were not loaded on {expected}: {preview}")
 
+    @staticmethod
+    def _checkpoint_runtime_dtype(key, stored_dtype):
+        # Merged adapters can promote BF16 linears to FP32 in the checkpoint.
+        # Match their BF16 activations once at load time; preserve norms and
+        # the FP32 input/time/output projections rather than downcasting all weights.
+        module, _, parameter = key.rpartition(".")
+        if parameter in {"weight", "bias"} and stored_dtype in (torch.float16, torch.bfloat16, torch.float32, torch.float64):
+            if module in {"context_embedder", "norm_out.linear"} or module.endswith((*H3_PROJECTION_SUFFIXES, ".adaln_proj.linear")):
+                return GET_DTYPE()
+        return stored_dtype
+
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
-        """Load native H3 checkpoints without changing their stored dtypes."""
+        """Load H3 weights using each layer's runtime precision, including merged adapters."""
         del unified_dtype, sensitive_layer
         extension = os.path.splitext(file_path)[-1]
         if extension == ".pt":
@@ -517,7 +528,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         # can retain the full checkpoint storage behind a small TP view. Shard
         # on CPU first so accelerator memory contains only this rank's weights.
         weight_dict = {
-            key: self._select_tensor_parallel_shard(key, tensor).to(device=load_device)
+            key: self._select_tensor_parallel_shard(key, tensor).to(device=load_device, dtype=self._checkpoint_runtime_dtype(key, tensor.dtype))
             for key, tensor in source.items()
             if not any(remove_key in key for remove_key in self.remove_keys) and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
         }

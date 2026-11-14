@@ -1,7 +1,7 @@
-"""Atomic, target-only MiniMax-H3 teacher trajectory artifacts.
+"""Atomic, target-only MiniMax-H3 teacher clean latent artifacts.
 
 The manifest is the completion marker. A failed or interrupted export may leave
-individual states, but never publishes a manifest for an incomplete trajectory.
+individual files, but never publishes a manifest without the final clean AV.
 This module intentionally has no model/platform imports so its disk contract
 can be checked on CPU.
 """
@@ -115,7 +115,7 @@ def _atomic_write(path, write):
             os.unlink(temporary)
 
 
-class H3TeacherTrajectoryWriter:
+class H3TeacherFinalWriter:
     """Synchronous writer; callers invoke this class on rank zero only."""
 
     def __init__(self, directory, metadata, condition):
@@ -125,7 +125,7 @@ class H3TeacherTrajectoryWriter:
             raise FileExistsError(f"Completed teacher export already exists: {self.directory}")
         self.metadata = dict(metadata)
         self.num_steps = int(metadata["num_steps"])
-        self.state_paths = []
+        self.final_written = False
         for key in ("video_sigmas", "audio_sigmas"):
             sigmas = metadata[key]
             if len(sigmas) != self.num_steps + 1 or sigmas[0] != 1.0 or sigmas[-1] != 0.0 or any(a <= b for a, b in zip(sigmas, sigmas[1:])):
@@ -135,9 +135,9 @@ class H3TeacherTrajectoryWriter:
     def _save(self, name, value):
         _atomic_write(self.directory / name, lambda handle: torch.save(value, handle))
 
-    def write_state(self, index, video_latents, audio_latents):
-        if index != len(self.state_paths) or index > self.num_steps:
-            raise ValueError(f"Expected teacher state {len(self.state_paths)}, got {index}")
+    def write_final(self, index, video_latents, audio_latents):
+        if index != self.num_steps or self.final_written:
+            raise ValueError(f"Expected one final teacher state at step {self.num_steps}, got {index}")
         tensors = {}
         for kind, value in (("video", video_latents), ("audio", audio_latents)):
             value = value.detach().to(device="cpu", dtype=torch.float32).contiguous()
@@ -146,31 +146,24 @@ class H3TeacherTrajectoryWriter:
             if not torch.isfinite(value).all():
                 raise ValueError(f"Nonfinite {kind} teacher latents at state {index}")
             tensors[f"{kind}_latents"] = value
-        state = {
-            **tensors,
-            "normalized": True,
-            "state_index": index,
-            "video_sigma": self.metadata["video_sigmas"][index],
-            "audio_sigma": self.metadata["audio_sigmas"][index],
-            "is_clean": index == self.num_steps,
-        }
-        name = f"state_{index:03d}.pt"
-        self._save(name, state)
-        self.state_paths.append(name)
-        if index == self.num_steps:
-            self._save("video_latents.pt", {"normalized": True, "latents": tensors["video_latents"]})
-            self._save("audio_latents.pt", tensors["audio_latents"])
+        self._save("video_latents.pt", {"normalized": True, "latents": tensors["video_latents"]})
+        self._save("audio_latents.pt", tensors["audio_latents"])
+        self.final_written = True
 
     def finish(self):
-        if len(self.state_paths) != self.num_steps + 1:
-            raise RuntimeError("Cannot complete an incomplete teacher trajectory")
+        if not self.final_written:
+            raise RuntimeError("Cannot complete an incomplete teacher export without final AV latents")
         manifest = {
             **self.metadata,
-            "schema": "h3_teacher_trajectory_v1",
+            "schema": "h3_teacher_final_v1",
+            "export_mode": "final",
             "normalized": True,
             "dtype": "float32",
-            "num_states": len(self.state_paths),
-            "state_paths": self.state_paths,
+            "num_states": 1,
+            "state_paths": [],
+            "final_state_index": self.num_steps,
+            "final_video_sigma": self.metadata["video_sigmas"][-1],
+            "final_audio_sigma": self.metadata["audio_sigmas"][-1],
             "condition_path": "condition.pt",
             "video_latents_path": "video_latents.pt",
             "audio_latents_path": "audio_latents.pt",

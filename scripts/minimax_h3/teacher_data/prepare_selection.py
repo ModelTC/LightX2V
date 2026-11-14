@@ -12,7 +12,7 @@ from common import atomic_json, atomic_jsonl, digest, file_digest, records
 DEFAULT_RAW = "/mnt/lm_data_afs/gushiqiao/datasets/omni_r2v_image_only_100k_20261004/omni_r2v_image_only_100000_ir.jsonl"
 DEFAULT_CACHE = str(Path(DEFAULT_RAW).parent / "latent_match124_bf16/metadata.jsonl")
 DEFAULT_MEDIA = "/mnt/lm_data_afs/gushiqiao/datasets/omini-r2v"
-DEFAULT_OUTPUT = "/mnt/devsft_afs_2/gushiqiao/outputs/data/omni_ref_teacher29_decfg_5k"
+DEFAULT_OUTPUT = "/mnt/devsft_afs_2/gushiqiao/outputs/data_new2/omni_ref_teacher29_decfg_5k"
 
 
 def source_identity(row, source_index=None):

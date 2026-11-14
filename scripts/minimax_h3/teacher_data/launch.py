@@ -2,6 +2,7 @@
 """Prepare data/cache, then run one independent 8-GPU service or offline smoke."""
 
 import argparse
+import fcntl
 import json
 import os
 import shlex
@@ -10,7 +11,10 @@ import socket
 import subprocess
 import sys
 import time
+from collections import deque
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from collect import collect, model_identity, validate_export, wait_ready
 from common import atomic_json, file_digest, records
@@ -19,6 +23,27 @@ from prepare_selection import DEFAULT_CACHE, DEFAULT_MEDIA, DEFAULT_OUTPUT, DEFA
 REPO = Path(__file__).resolve().parents[3]
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_MODEL = "/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3-DeCFG-score"
+
+
+@contextmanager
+def gpu_locks(devices, lock_dir=Path("/tmp")):
+    """Reserve local GPUs until all launcher work and subprocess cleanup finish."""
+    with ExitStack() as stack:
+        for device in sorted(set(devices)):
+            path = Path(lock_dir) / f"lightx2v-h3-teacher-gpu-{quote(device, safe='')}.lock"
+            lock = stack.enter_context(path.open("a+"))
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                lock.seek(0)
+                owner = lock.read().strip() or "unknown"
+                raise RuntimeError(f"GPU {device} is reserved by teacher launcher PID {owner} ({path}); wait for it to finish or stop that launcher") from None
+            lock.seek(0)
+            lock.truncate()
+            lock.write(f"{os.getpid()}\n")
+            lock.flush()
+        # Closing releases locks. Never unlink: another launcher may have opened this inode.
+        yield
 
 
 def verify_model(model_path):
@@ -63,6 +88,9 @@ def run_logged(command, log_path, env):
         try:
             return_code = process.wait()
             if return_code:
+                with Path(log_path).open(errors="replace") as failed_log:
+                    tail = "".join(deque(failed_log, maxlen=80))
+                print(f"\nSubprocess failed (exit {return_code}). Last 80 log lines from {log_path}:\n{tail}", file=sys.stderr, flush=True)
                 raise subprocess.CalledProcessError(return_code, command)
         finally:
             stop_process(process)
@@ -135,16 +163,21 @@ def main():
     parser.add_argument("--model-path", default=os.getenv("H3_MODEL_PATH", DEFAULT_MODEL))
     parser.add_argument("--config-json", default=os.getenv("H3_CONFIG_JSON", str(REPO / "configs/minimax_h3/minimax_h3_ref2av_teacher29_tp2_sp4.json")))
     parser.add_argument("--sample-index", type=int, default=0, help="Zero-based position in this node's selected shard")
-    parser.add_argument("--no-export", action="store_true", help="Smoke: decode MP4 without also exporting the trajectory")
+    parser.add_argument("--no-export", action="store_true", help="Smoke: decode MP4 without also exporting final clean AV latents")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     if args.sample_index < 0:
         parser.error("--sample-index must be nonnegative")
+    devices = [value.strip() for value in os.getenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7").split(",")]
+    if len(devices) != 8 or len(set(devices)) != 8 or any(not value for value in devices):
+        raise ValueError("Each machine must expose exactly eight distinct GPUs")
+    with gpu_locks(devices):
+        run(args, devices)
+
+
+def run(args, devices):
     config = verify_config(args.config_json)
     verify_model(args.model_path)
-    devices = os.getenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7").split(",")
-    if len(devices) != 8 or len(set(devices)) != 8 or any(not value.strip() for value in devices):
-        raise ValueError("Each machine must expose exactly eight distinct GPUs")
     root = Path(args.output_dir).resolve()
     stamp = time.strftime("%Y%m%d_%H%M%S") + f"_{os.getpid()}"
     log_dir = root / "logs" / f"node{args.node_index}"
@@ -172,7 +205,7 @@ def main():
         row = rows[args.sample_index]
         directory = root / "smoke" / f"node{args.node_index}" / stamp
         directory.mkdir(parents=True)
-        export_dir, video_path = directory / "trajectory", directory / "sample.mp4"
+        export_dir, video_path = directory / "final_latents", directory / "sample.mp4"
         atomic_json(directory / "sample.json", row)
         command = smoke_command(row, args, export_dir, video_path)
         atomic_json(directory / "command.json", command)
@@ -219,8 +252,16 @@ def main():
         process = subprocess.Popen(command, cwd=REPO, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             url = f"http://127.0.0.1:{args.port}"
+            print(f"Waiting for local service: {url} (torchrun PID={process.pid}, HTTP proxy disabled)", flush=True)
             wait_ready(url, process=process)
+            print(f"Local service ready: {url}; starting node{args.node_index} collection", flush=True)
             collect(root, args.node_index, args.config_json, args.model_path, url)
+        except Exception:
+            state = process.poll()
+            print(f"Collection failed; torchrun returncode={state} (None means still running). Stopping this launcher's service. Server log: {server_log}", file=sys.stderr, flush=True)
+            with server_log.open(errors="replace") as failed_log:
+                print("".join(deque(failed_log, maxlen=80)), file=sys.stderr, flush=True)
+            raise
         finally:
             stop_process(process)
 

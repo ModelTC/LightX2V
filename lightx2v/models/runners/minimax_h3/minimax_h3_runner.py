@@ -50,7 +50,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
 from lightx2v.utils.h3_teacher_export import (
-    H3TeacherTrajectoryWriter,
+    H3TeacherFinalWriter,
     fingerprint_metadata,
     inference_config_fingerprint,
     merged_checkpoint_identity,
@@ -142,7 +142,7 @@ class MiniMaxH3Runner(DefaultRunner):
             if not isinstance(export_dir, str) or not export_dir.strip():
                 raise ValueError("teacher_latents_dir must be a nonempty path")
             if input_info.draft_steps is not None or input_info.resample_source_video:
-                raise ValueError("Teacher trajectory export requires the complete schedule without draft_steps or resampling")
+                raise ValueError("Teacher clean latent export requires the complete schedule without draft_steps or resampling")
             if latent_only:
                 input_info.save_result_path = None
                 if input_info.return_result_tensor:
@@ -709,7 +709,7 @@ class MiniMaxH3Runner(DefaultRunner):
         if not getattr(self.input_info, "teacher_latents_dir", None):
             return
         if self.scheduler.start_step_index != 0 or self.scheduler.draft_steps is not None:
-            raise ValueError("Teacher trajectory export requires the complete schedule")
+            raise ValueError("Teacher clean latent export requires the complete schedule")
 
         def start():
             references = []
@@ -740,6 +740,7 @@ class MiniMaxH3Runner(DefaultRunner):
             if prompt_embeds.ndim == 2:
                 prompt_embeds = prompt_embeds.unsqueeze(0)
             metadata = {
+                "export_mode": "final",
                 "task": "ref2av",
                 "seed": int(self.input_info.seed),
                 "prompt": self.input_info.prompt,
@@ -800,17 +801,17 @@ class MiniMaxH3Runner(DefaultRunner):
                     }
                 },
             }
-            self._teacher_writer = H3TeacherTrajectoryWriter(self.input_info.teacher_latents_dir, metadata, condition)
+            self._teacher_writer = H3TeacherFinalWriter(self.input_info.teacher_latents_dir, metadata, condition)
 
         run_rank_zero(start)
 
-    def _write_teacher_state(self, state_index):
+    def _write_teacher_final(self, state_index):
         if not getattr(self.input_info, "teacher_latents_dir", None):
             return
 
         def write():
             video_latents, audio_latents = self._unpack_target_latents(self.scheduler.video_latents, self.scheduler.audio_latents)
-            self._teacher_writer.write_state(state_index, video_latents[0], audio_latents)
+            self._teacher_writer.write_final(state_index, video_latents[0], audio_latents)
 
         run_rank_zero(write)
 
@@ -827,7 +828,6 @@ class MiniMaxH3Runner(DefaultRunner):
                 metrics_labels=[step_index + 1, infer_steps],
             ):
                 self.check_stop()
-                self._write_teacher_state(step_index)
                 logger.info(f"==> MiniMax-H3 step: {step_index + 1} / {infer_steps}")
                 with ProfilingContext4DebugL1("step_pre"):
                     self.scheduler.step_pre(step_index)
@@ -842,7 +842,7 @@ class MiniMaxH3Runner(DefaultRunner):
                     self.progress_callback(((step_index - start_index + 1) / remaining_steps) * 100, 100)
         if remaining_steps == 0 and self.progress_callback:
             self.progress_callback(100, 100)
-        self._write_teacher_state(end_index)
+        self._write_teacher_final(end_index)
         return self.scheduler.video_latents, self.scheduler.audio_latents
 
     @ProfilingContext4DebugL2("Offload DiT")

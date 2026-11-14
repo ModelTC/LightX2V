@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import time
 import urllib.error
 import urllib.request
@@ -10,11 +11,14 @@ from pathlib import Path
 
 from common import artifact_path, atomic_json, atomic_jsonl, digest, file_digest, file_identity, records
 
+LOCAL_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 def api(url, payload=None, timeout=30):
     data = None if payload is None else json.dumps(payload).encode()
     request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    # Teacher requests must reach this node, even when the shell exports proxies.
+    with LOCAL_HTTP.open(request, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -65,7 +69,15 @@ def request_for(row, export_dir, latents_only=True):
 
 def request_fingerprint(row, config, model, selection_sha256):
     return digest(
-        {"schema": "h3_teacher_request_v1", "sample": row, "config": config, "model": model, "selection_sha256": selection_sha256, "images": [file_identity(path) for path in row["reference_images"]]}
+        {
+            "schema": "h3_teacher_request_v2",
+            "export_mode": "final",
+            "sample": row,
+            "config": config,
+            "model": model,
+            "selection_sha256": selection_sha256,
+            "images": [file_identity(path) for path in row["reference_images"]],
+        }
     )
 
 
@@ -73,13 +85,23 @@ def validate_export(export_dir, row):
     export_dir = Path(export_dir)
     manifest_path = export_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Export {manifest_path} must be a JSON object")
     expected = {
-        "schema": "h3_teacher_trajectory_v1",
+        "schema": "h3_teacher_final_v1",
+        "export_mode": "final",
         "task": "ref2av",
         "dtype": "float32",
         "normalized": True,
         "num_steps": 29,
-        "num_states": 30,
+        "num_states": 1,
+        "state_paths": [],
+        "final_state_index": 29,
+        "final_video_sigma": 0.0,
+        "final_audio_sigma": 0.0,
+        "condition_path": "condition.pt",
+        "video_latents_path": "video_latents.pt",
+        "audio_latents_path": "audio_latents.pt",
         "num_frames": 124,
         "height": row["target_height"],
         "width": row["target_width"],
@@ -92,14 +114,25 @@ def validate_export(export_dir, row):
         "model_variant": "ref2av",
     }
     for key, value in expected.items():
-        if manifest.get(key) != value:
+        actual = manifest.get(key)
+        if actual != value or (isinstance(actual, bool) and not isinstance(value, bool)):
             raise ValueError(f"Export {manifest_path} has wrong {key}: {manifest.get(key)!r}")
-    if not manifest.get("cache_fingerprint"):
+    if not isinstance(manifest.get("cache_fingerprint"), str) or not manifest["cache_fingerprint"]:
         raise ValueError("Export is missing runtime cache_fingerprint")
-    states = manifest.get("state_paths", [])
-    if len(states) != 30 or [Path(path).name for path in states] != [f"state_{index:03d}.pt" for index in range(30)]:
-        raise ValueError("Export must contain ordered state_000.pt through state_029.pt")
-    for value in states + [manifest[key] for key in ("condition_path", "video_latents_path", "audio_latents_path")]:
+    for key in ("video_sigmas", "audio_sigmas"):
+        sigmas = manifest.get(key)
+        if (
+            not isinstance(sigmas, list)
+            or len(sigmas) != 30
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in sigmas)
+            or sigmas[0] != 1.0
+            or sigmas[-1] != 0.0
+            or any(a <= b for a, b in zip(sigmas, sigmas[1:]))
+        ):
+            raise ValueError(f"Export requires a complete descending {key} schedule from 1 to 0")
+    if any(export_dir.glob("state_*.pt")):
+        raise ValueError("Final-only export must not contain trajectory state files")
+    for value in [manifest[key] for key in ("condition_path", "video_latents_path", "audio_latents_path")]:
         path = artifact_path(export_dir, value)
         if not path.is_file() or path.stat().st_size == 0:
             raise FileNotFoundError(f"Missing/empty export artifact: {path}")
