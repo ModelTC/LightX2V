@@ -250,12 +250,15 @@ class LightLLMKernelTextEncoder:
                 return_tensors="pt",
             ).to(AI_DEVICE)
 
+            # Recent processors return mm_token_type_ids; Qwen2.5-VL needs it to build the multimodal RoPE positions.
+            mm_inputs = {"mm_token_type_ids": model_inputs["mm_token_type_ids"]} if "mm_token_type_ids" in model_inputs else {}
             encoder_hidden_states = self.model(
                 input_ids=model_inputs.input_ids,
                 attention_mask=model_inputs.attention_mask,
                 pixel_values=model_inputs.pixel_values,
                 image_grid_thw=model_inputs.image_grid_thw,
                 output_hidden_states=True,
+                **mm_inputs,
             )
         else:
             txt = [template.format(e) for e in text]
