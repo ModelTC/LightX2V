@@ -127,7 +127,7 @@ class QwenImageModel(BaseModel):
         if fsdp2_enabled(self.config) and sharded_load["enabled"]:
             transformer_config = QwenImageTransformer2DModel.load_config(model_path, subfolder="transformer")
             with torch.device("meta"):
-                self._deferred_transformer = (model_path, sharded_load["options"])
+                self._deferred_transformer_load = (model_path, sharded_load["options"])
                 return QwenImageTransformer2DModel.from_config(transformer_config)
 
         device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
@@ -138,8 +138,8 @@ class QwenImageModel(BaseModel):
         ).to(device)
 
     def load_deferred_transformer_weights(self):
-        """Load this model's adapter through the generic FSDP2 shard loader."""
-        deferred = getattr(self, "_deferred_transformer", None)
+        """Load Qwen weights after FSDP2 has defined the local parameter shards."""
+        deferred = self._deferred_transformer_load
         if deferred is None:
             return
         model_path, options = deferred
@@ -153,7 +153,7 @@ class QwenImageModel(BaseModel):
             index_filename=options.get("index_filename"),
         )
         self._materialize_qwen_rope()
-        del self._deferred_transformer
+        self._deferred_transformer_load = None
 
     @staticmethod
     def _resolve_sharded_checkpoint_key(checkpoint_key, templates):

@@ -161,11 +161,9 @@ class BaseTrainer:
     def setup(self, resume_ckpt_path=None):
         self._setup_trainable_model(self.model)
 
+        # FSDP2 must define the DTensor layout before rank-local weights load.
         self.parallel.apply(self.config)
-
-        deferred_loader = getattr(self.model, "load_deferred_transformer_weights", None)
-        if deferred_loader is not None:
-            deferred_loader()
+        self.model.load_deferred_transformer_weights()
 
         if self.gradient_checkpointing:
             self.trainable_model.enable_gradient_checkpointing()
