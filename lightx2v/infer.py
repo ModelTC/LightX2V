@@ -221,18 +221,23 @@ def main():
     validate_config_paths(startup_config)
 
     runner = None
+    succeeded = False
     try:
         with no_sync_profiling(startup_config["model_cls"] in ("taomate_h3", "streamrender_h3")), ProfilingContext4DebugL1("Total Cost"):
             runner = build_runner(startup_config)
             input_info = runner.prepare_request(request_data)
             print_request(input_info, runner.get_supported_request_fields(input_info.task))
             runner.run_request(input_info)
+        succeeded = True
     finally:
         try:
             if runner is not None:
                 runner.close()
         finally:
-            if dist.is_initialized():
+            # On failure, peer ranks may still be blocked in a collective this rank
+            # will never join; destroy_process_group() would wait on them and hide
+            # the error. Exit instead so torchrun reports it and stops the peers.
+            if dist.is_initialized() and succeeded:
                 dist.destroy_process_group()
                 logger.info("Distributed process group cleaned up")
 
