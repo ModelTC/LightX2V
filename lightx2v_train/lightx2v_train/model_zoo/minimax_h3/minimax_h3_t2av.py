@@ -15,7 +15,15 @@ from lightx2v_train.model_zoo.minimax_h3.capability_adapters import (
     MiniMaxH3DistributionMatchingCapability,
     MiniMaxH3FlowMatchingCapability,
 )
-from lightx2v_train.model_zoo.native.minimax_h3 import load_minimax_h3_transformer
+from lightx2v_train.model_zoo.native.minimax_h3 import (
+    load_minimax_h3_transformer,
+    resolve_transformer_dir,
+)
+from lightx2v_train.runtime.sharded_loader import (
+    load_fsdp2_safetensors,
+    local_layout_from_template,
+    make_dtensor_from_template,
+)
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -67,6 +75,8 @@ class MiniMaxH3T2AVModel(BaseModel):
     ):
         config = self.config["model"]
         self.pretrained_model_path = config["pretrained_model_name_or_path"]
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        sharded_load = fsdp_config.get("sharded_load", False)
         self.latent_dtype = get_running_dtype(config.get("latent_dtype", "fp32"))
         self.patch_size = tuple(int(value) for value in config.get("patch_size", (1, 2, 2)))
         if len(self.patch_size) != 3:
@@ -114,8 +124,50 @@ class MiniMaxH3T2AVModel(BaseModel):
                 torch_dtype=self.transformer_param_dtype,
                 local_files_only=bool(config.get("local_files_only", True)),
                 attention_backend=config.get("attention_backend"),
+                defer_weights=sharded_load,
             )
-            self.transformer.to(self.device)
+            if not sharded_load:
+                self.transformer.to(self.device)
+
+    def load_deferred_transformer_weights(self):
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if not fsdp_config.get("sharded_load", False):
+            return
+        load_fsdp2_safetensors(
+            self.transformer,
+            resolve_transformer_dir(self.pretrained_model_path),
+            key_resolver=self._resolve_sharded_checkpoint_key,
+            initialize_missing=self._initialize_sharded_parameter,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+        )
+
+    @staticmethod
+    def _resolve_sharded_checkpoint_key(checkpoint_key, templates):
+        if checkpoint_key in templates:
+            return checkpoint_key
+        suffix = checkpoint_key.rsplit(".", 1)[-1]
+        if suffix in {"weight", "bias"}:
+            prefix = checkpoint_key.rsplit(".", 1)[0]
+            candidate = f"{prefix}.base_layer.{suffix}"
+            if candidate in templates:
+                return candidate
+        return None
+
+    def _initialize_sharded_parameter(self, name, template):
+        if "lora_A" not in name and "lora_B" not in name:
+            return None
+        local_shape, _ = local_layout_from_template(template)
+        local_tensor = torch.empty(
+            local_shape,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+        )
+        if "lora_A" in name:
+            local_tensor.normal_(mean=0.0, std=0.02)
+        else:
+            local_tensor.zero_()
+        return make_dtensor_from_template(template, local_tensor)
 
     def _load_vaes(self, config):
         try:

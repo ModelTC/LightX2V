@@ -11,6 +11,7 @@ distributed:
     timeout_minutes: 120
     fsdp2:
         enabled: true
+        sharded_load: true
         reshard_after_forward:
             root_reshard: false
             block_reshard: true

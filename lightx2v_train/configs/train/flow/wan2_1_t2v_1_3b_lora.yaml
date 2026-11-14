@@ -16,6 +16,7 @@ distributed:
         size: 1
     fsdp2:
         enabled: true
+        sharded_load: true
         size: ${oc.env:WORLD_SIZE,1}
         reshard_after_forward:
             root_reshard: false

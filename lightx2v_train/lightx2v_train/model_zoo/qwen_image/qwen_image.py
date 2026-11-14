@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 
 import torch
@@ -10,6 +11,11 @@ from lightx2v_train.model_zoo.capability_adapters.common import GenericDistribut
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyModelCapability
 from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
+from lightx2v_train.runtime.sharded_loader import (
+    load_fsdp2_safetensors,
+    local_layout_from_template,
+    make_dtensor_from_template,
+)
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
@@ -115,12 +121,75 @@ class QwenImageModel(BaseModel):
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
+
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if fsdp_config.get("sharded_load", False):
+            transformer_config = QwenImageTransformer2DModel.load_config(model_path, subfolder="transformer")
+            with torch.device("meta"):
+                # FSDP2 must wrap this skeleton before rank-local weights can load.
+                return QwenImageTransformer2DModel.from_config(transformer_config)
+
         device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
         return QwenImageTransformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
             torch_dtype=self.transformer_param_dtype,
         ).to(device)
+
+    def load_deferred_transformer_weights(self):
+        """Load Qwen weights after FSDP2 has defined the local parameter shards."""
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if not fsdp_config.get("sharded_load", False):
+            return
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        load_fsdp2_safetensors(
+            self.transformer,
+            os.path.join(model_path, "transformer"),
+            key_resolver=self._resolve_sharded_checkpoint_key,
+            initialize_missing=self._initialize_sharded_parameter,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+        )
+        self._materialize_qwen_rope()
+
+    @staticmethod
+    def _resolve_sharded_checkpoint_key(checkpoint_key, templates):
+        if checkpoint_key in templates:
+            return checkpoint_key
+        suffix = checkpoint_key.rsplit(".", 1)[-1]
+        if suffix in {"weight", "bias"}:
+            prefix = checkpoint_key.rsplit(".", 1)[0]
+            candidate = f"{prefix}.base_layer.{suffix}"
+            if candidate in templates:
+                return candidate
+        return None
+
+    def _initialize_sharded_parameter(self, name, template):
+        if "lora_A" not in name and "lora_B" not in name:
+            return None
+        local_shape, _ = local_layout_from_template(template)
+        local_tensor = torch.empty(
+            local_shape,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+        )
+        if "lora_A" in name:
+            local_tensor.normal_(mean=0.0, std=0.02)
+        else:
+            local_tensor.zero_()
+        return make_dtensor_from_template(template, local_tensor)
+
+    def _materialize_qwen_rope(self):
+        # QwenEmbedRope keeps these tables as plain tensor attributes instead
+        # of registered buffers, so meta construction does not materialize them.
+        rope = self.transformer.pos_embed
+        if getattr(rope.pos_freqs, "is_meta", False):
+            def build_freqs(index):
+                values = [rope.rope_params(index, axis, rope.theta) for axis in rope.axes_dim]
+                return torch.cat(values, dim=1).to(self.device)
+
+            rope.pos_freqs = build_freqs(torch.arange(4096))
+            rope.neg_freqs = build_freqs(torch.arange(4096).flip(0) * -1 - 1)
 
     def denoiser_module(self):
         return self.transformer

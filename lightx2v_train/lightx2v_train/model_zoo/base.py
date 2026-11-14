@@ -91,6 +91,10 @@ class BaseModel(CapabilityProvider):
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
 
+    def load_deferred_transformer_weights(self):
+        """Finish loading weights staged by meta initialization after FSDP2 wraps the model."""
+        return None
+
     def add_lora(self, rank, alpha, target_modules):
         lora_config = LoraConfig(
             r=rank,
