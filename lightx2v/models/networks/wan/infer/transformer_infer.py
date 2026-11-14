@@ -326,7 +326,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                 tensor_fusion=self.seq_p_tensor_fusion,
                 head_parallel=self.seq_p_head_parallel,
                 attention_kwargs=attn_running_args,
-                kv_valid_len=self.seq_p_valid_len,
+                valid_len=self.seq_p_valid_len,
             )
             if aux_attn_out is not None:
                 raise RuntimeError("Wan self-attention does not have an auxiliary token output.")
