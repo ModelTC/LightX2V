@@ -15,7 +15,7 @@ from lightx2v_train.runtime.sharded_loader import (
     load_fsdp2_safetensors,
     local_layout_from_template,
     make_dtensor_from_template,
-    get_sharded_load_settings,
+    sharded_load_enabled,
 )
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
@@ -47,7 +47,6 @@ class QwenImageModel(BaseModel):
     def __init__(self, config):
         super().__init__(config)
         self._deferred_transformer_path = None
-        self._deferred_transformer_options = {}
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -128,13 +127,11 @@ class QwenImageModel(BaseModel):
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
 
-        sharded_load_enabled, load_options = get_sharded_load_settings(self.config)
-        if fsdp2_enabled(self.config) and sharded_load_enabled:
+        if fsdp2_enabled(self.config) and sharded_load_enabled(self.config):
             transformer_config = QwenImageTransformer2DModel.load_config(model_path, subfolder="transformer")
             with torch.device("meta"):
                 # FSDP2 must wrap this skeleton before rank-local weights can load.
                 self._deferred_transformer_path = model_path
-                self._deferred_transformer_options = load_options
                 return QwenImageTransformer2DModel.from_config(transformer_config)
 
         device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
@@ -155,11 +152,9 @@ class QwenImageModel(BaseModel):
             initialize_missing=self._initialize_sharded_parameter,
             device=self.device,
             dtype=self.transformer_param_dtype,
-            index_filename=self._deferred_transformer_options.get("index_filename"),
         )
         self._materialize_qwen_rope()
         self._deferred_transformer_path = None
-        self._deferred_transformer_options = {}
 
     @staticmethod
     def _resolve_sharded_checkpoint_key(checkpoint_key, templates):

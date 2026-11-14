@@ -18,15 +18,12 @@ def _identity_key(checkpoint_key, _):
     return checkpoint_key
 
 
-def get_sharded_load_settings(config: Mapping[str, Any] | None) -> tuple[bool, dict[str, Any]]:
+def sharded_load_enabled(config: Mapping[str, Any] | None) -> bool:
     fsdp = ((config or {}).get("distributed", {}) or {}).get("fsdp2", {}) or {}
     value = fsdp.get("sharded_load", fsdp.get("serialized_load", False))
     if isinstance(value, Mapping):
-        options = dict(value)
-        enabled = options.pop("enabled", True)
-    else:
-        enabled, options = value, {}
-    return enabled, options
+        return value.get("enabled", True)
+    return value
 
 
 def make_dtensor_from_template(template: Any, local_tensor: Any) -> Any:
@@ -57,13 +54,12 @@ def load_fsdp2_safetensors(
     checkpoint: str | Path,
     *,
     key_resolver: Callable[[str, Mapping[str, Any]], str | None] | None = None,
-    index_filename: str | None = None,
     device: Any = None,
     dtype: Any = None,
     initialize_missing: Callable[[str, Any], Any] | None = None,
 ) -> None:
     checkpoint = Path(checkpoint)
-    index_path = checkpoint / (index_filename or _find_index(checkpoint))
+    index_path = checkpoint / _find_index(checkpoint)
     with index_path.open("r", encoding="utf-8") as handle:
         weight_map = json.load(handle)["weight_map"]
 
