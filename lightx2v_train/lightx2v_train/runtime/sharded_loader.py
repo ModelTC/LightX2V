@@ -22,74 +22,61 @@ _DEFAULT_INDEX_NAMES = (
     "diffusion_pytorch_model.safetensors.index.json",
     "pytorch_model.safetensors.index.json",
 )
+_SHARDED_LOAD_OPTIONS = {"index_filename", "strict", "collect_garbage"}
+_MISSING = object()
+
+
+def _parse_sharded_load(value):
+    if isinstance(value, bool):
+        return value, {}
+    if not isinstance(value, Mapping):
+        raise ValueError("distributed.fsdp2.sharded_load must be a bool or mapping")
+
+    options = dict(value)
+    enabled = options.pop("enabled", True)
+    if type(enabled) is not bool:
+        raise ValueError("distributed.fsdp2.sharded_load.enabled must be a bool")
+    unsupported = set(options) - _SHARDED_LOAD_OPTIONS
+    if unsupported:
+        names = ", ".join(sorted(repr(key) for key in unsupported))
+        raise ValueError(f"Unsupported distributed.fsdp2.sharded_load options: {names}.")
+    if "index_filename" in options and (
+        not isinstance(options["index_filename"], str) or not options["index_filename"]
+    ):
+        raise ValueError("distributed.fsdp2.sharded_load.index_filename must be a nonempty string")
+    for key in ("strict", "collect_garbage"):
+        if key in options and type(options[key]) is not bool:
+            raise ValueError(f"distributed.fsdp2.sharded_load.{key} must be a bool")
+    return enabled, options
 
 
 def normalize_sharded_load_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Normalize the generic ``fsdp2.sharded_load`` option.
-
-    ``serialized_load`` is retained as a compatibility alias for existing
-    configurations.  The returned dictionary is intentionally JSON serializable
-    so callers can include it in run metadata.
-    """
+    """Normalize the sharded-load setting, including its legacy alias."""
 
     fsdp_config = ((config or {}).get("distributed", {}) or {}).get("fsdp2", {}) or {}
     if not isinstance(fsdp_config, Mapping):
         raise ValueError("distributed.fsdp2 must be a mapping")
 
-    has_new = "sharded_load" in fsdp_config
-    has_old = "serialized_load" in fsdp_config
-    deprecated_alias = False
-    if has_new:
-        value = fsdp_config["sharded_load"]
-        if isinstance(value, bool):
-            options: dict[str, Any] = {}
-            enabled = value
-        elif isinstance(value, Mapping):
-            options = dict(value)
-            enabled_value = options.pop("enabled", True)
-            if not isinstance(enabled_value, bool):
-                raise ValueError("distributed.fsdp2.sharded_load.enabled must be a bool")
-            enabled = enabled_value
-        else:
-            raise ValueError("distributed.fsdp2.sharded_load must be a bool or mapping")
-        unsupported = set(options) - {"index_filename", "strict", "collect_garbage"}
-        if unsupported:
-            names = ", ".join(sorted(repr(key) for key in unsupported))
-            raise ValueError(f"Unsupported distributed.fsdp2.sharded_load options: {names}.")
-        if "index_filename" in options and (
-            not isinstance(options["index_filename"], str) or not options["index_filename"]
-        ):
-            raise ValueError("distributed.fsdp2.sharded_load.index_filename must be a nonempty string")
-        for key in ("strict", "collect_garbage"):
-            if key in options and type(options[key]) is not bool:
-                raise ValueError(f"distributed.fsdp2.sharded_load.{key} must be a bool")
-        if has_old:
-            old_value = fsdp_config["serialized_load"]
-            if not isinstance(old_value, bool):
-                raise ValueError("distributed.fsdp2.serialized_load must be a bool")
-            if old_value != enabled:
-                raise ValueError(
-                    "distributed.fsdp2.sharded_load conflicts with deprecated serialized_load"
-                )
-            deprecated_alias = True
-        source = "sharded_load"
-    elif has_old:
-        old_value = fsdp_config["serialized_load"]
-        if not isinstance(old_value, bool):
+    value = fsdp_config.get("sharded_load", _MISSING)
+    legacy = fsdp_config.get("serialized_load", _MISSING)
+    deprecated_alias = value is _MISSING and legacy is not _MISSING
+    if value is _MISSING:
+        enabled = False if legacy is _MISSING else legacy
+        if type(enabled) is not bool:
             raise ValueError("distributed.fsdp2.serialized_load must be a bool")
-        enabled = old_value
         options = {}
-        source = "serialized_load"
-        deprecated_alias = True
     else:
-        enabled = False
-        options = {}
-        source = "default"
+        enabled, options = _parse_sharded_load(value)
+        if legacy is not _MISSING:
+            if type(legacy) is not bool:
+                raise ValueError("distributed.fsdp2.serialized_load must be a bool")
+            if legacy != enabled:
+                raise ValueError("distributed.fsdp2.sharded_load conflicts with deprecated serialized_load")
+            deprecated_alias = True
 
     return {
         "enabled": enabled,
         "options": options,
-        "source": source,
         "deprecated_alias": deprecated_alias,
     }
 
@@ -116,7 +103,7 @@ def make_dtensor_from_template(template: Any, local_tensor: Any) -> Any:
 
     if not isinstance(template, DTensor):
         raise TypeError(f"Expected a DTensor template, got {type(template).__name__}")
-    local_shape = tuple(_compute_local_shape_and_offset(template)[0])
+    local_shape = tuple(local_layout_from_template(template)[0])
     if tuple(local_tensor.shape) != local_shape:
         raise ValueError(
             f"Local tensor shape {tuple(local_tensor.shape)} does not match DTensor local shape {local_shape}"
@@ -230,9 +217,8 @@ def load_fsdp2_safetensors(
 
     # Validate all paths before touching the module, so a malformed index cannot
     # leave a partially loaded model.
-    files = _validate_weight_map(root, weight_map)
+    _validate_weight_map(root, weight_map)
     safe_open = _get_safe_open()
-    target_device = device
     target_dtype = _normalize_dtype(dtype)
     if initial_state:
         _load_state(module, initial_state)
@@ -266,7 +252,7 @@ def load_fsdp2_safetensors(
                     dtype_casts += 1
 
                 if _is_dtensor(template):
-                    local_shape, global_offset = _compute_local_shape_and_offset(template)
+                    local_shape, global_offset = local_layout_from_template(template)
                     slices = tuple(
                         slice(offset, offset + size)
                         for offset, size in zip(global_offset, local_shape, strict=True)
@@ -279,8 +265,8 @@ def load_fsdp2_safetensors(
                         )
                 else:
                     local_tensor = tensor_slice[:] if source_shape else tensor_slice[()]
-                if target_device is not None or effective_dtype is not None:
-                    local_tensor = local_tensor.to(device=target_device, dtype=effective_dtype)
+                if device is not None or effective_dtype is not None:
+                    local_tensor = local_tensor.to(device=device, dtype=effective_dtype)
                 shard_state[model_key] = (
                     make_dtensor_from_template(template, local_tensor)
                     if _is_dtensor(template)
@@ -337,7 +323,7 @@ def _read_index(index_path: Path) -> dict[str, Any]:
         safe_open = _get_safe_open()
         with safe_open(str(index_path), framework="pt", device="cpu") as shard:
             keys = list(shard.keys())
-        return {"weight_map": {key: index_path.name for key in keys}, "single_file": True}
+        return {"weight_map": {key: index_path.name for key in keys}}
     try:
         with index_path.open("r", encoding="utf-8") as handle:
             index = json.load(handle)
@@ -353,14 +339,11 @@ def _read_index(index_path: Path) -> dict[str, Any]:
     return index
 
 
-def _validate_weight_map(root: Path, weight_map: Mapping[str, str]) -> set[str]:
-    files = set()
+def _validate_weight_map(root: Path, weight_map: Mapping[str, str]) -> None:
     for filename in weight_map.values():
         path = (root / filename).resolve()
         if path.parent != root or path.name != filename or not path.is_file():
             raise FileNotFoundError(f"Safetensors shard must be a file directly below checkpoint directory: {path}")
-        files.add(filename)
-    return files
 
 
 def _group_by_file(weight_map: Mapping[str, str], mapped: Mapping[str, str]):
@@ -432,23 +415,12 @@ def _normalize_dtype(dtype: Any):
     raise TypeError(f"Unsupported safetensors dtype {dtype!r}")
 
 
-def _compute_local_shape_and_offset(template: Any):
+def local_layout_from_template(template: Any):
+    """Return this rank's local shape and global offset for a DTensor template."""
     from torch.distributed.tensor._utils import compute_local_shape_and_global_offset
 
     return compute_local_shape_and_global_offset(
         template.shape,
-        template.device_mesh,
-        template.placements,
-    )
-
-
-def local_layout_from_template(template: Any, global_shape: Iterable[int] | None = None):
-    """Return this rank's local shape and global offset for a DTensor template."""
-    from torch.distributed.tensor._utils import compute_local_shape_and_global_offset
-
-    shape = template.shape if global_shape is None else global_shape
-    return compute_local_shape_and_global_offset(
-        shape,
         template.device_mesh,
         template.placements,
     )
