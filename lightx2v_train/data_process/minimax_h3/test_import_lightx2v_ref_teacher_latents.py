@@ -1,4 +1,4 @@
-"""CPU contracts for importing server-side H3 trajectories without copying them."""
+"""CPU contracts for importing final-only and legacy H3 teacher exports."""
 
 import copy
 import importlib.util
@@ -52,7 +52,7 @@ class ExportFixture(unittest.TestCase):
             export_dir=str(self.directory),
         )
         self.manifest = dict(
-            schema=helper.SCHEMA,
+            schema=helper.LEGACY_SCHEMA,
             task="ref2av",
             normalized=True,
             dtype="float32",
@@ -104,6 +104,20 @@ class ExportFixture(unittest.TestCase):
         write_jsonl(self.index_path, [self.index])
         write_json(self.directory / "manifest.json", self.manifest)
 
+    def final_only(self):
+        for path in self.directory.glob("state_*.pt"):
+            path.unlink()
+        self.manifest.update(
+            schema=helper.SCHEMA,
+            export_mode="final",
+            num_states=1,
+            state_paths=[],
+            final_state_index=29,
+            final_video_sigma=0.0,
+            final_audio_sigma=0.0,
+        )
+        self.save()
+
     def run_import(self, **kwargs):
         return helper.import_exports(self.raw_path, [self.index_path], self.output, media_root=self.root, **kwargs)
 
@@ -121,6 +135,9 @@ class ImportTests(ExportFixture):
         self.assertEqual(row["video_latent_path"], str(self.directory / "video_latents.pt"))
         self.assertNotIn("state_", row["video_latent_path"])
         self.assertEqual(row["teacher_trajectory_states"], 30)
+        self.assertEqual(row["teacher_saved_states"], 30)
+        self.assertEqual(row["teacher_export_schema"], helper.LEGACY_SCHEMA)
+        self.assertEqual(row["teacher_export_mode"], "trajectory")
         self.assertNotIn("video_latent_path", self.rows("condition_metadata")[0])
         self.assertEqual(sorted(path.name for path in self.output.iterdir()), ["condition_metadata.complete.json", "condition_metadata.jsonl", "metadata.complete.json", "metadata.jsonl"])
         gan = helper._leaf("lightx2v_train/trainers/dmd/dmd2_gan_data.py", "_test_import_gan")
@@ -257,6 +274,88 @@ class ImportTests(ExportFixture):
         self.assertEqual(len(self.rows()), 2)
 
 
+class FinalOnlyImportTests(ExportFixture):
+    def setUp(self):
+        super().setUp()
+        self.final_only()
+
+    def test_final_only_import_requires_only_clean_files_and_existing_gan_reader_accepts_it(self):
+        self.assertEqual(sorted(path.name for path in self.directory.iterdir()), ["audio_latents.pt", "condition.pt", "manifest.json", "video_latents.pt"])
+        receipt = self.run_import(expected_count=1)
+        row = self.rows()[0]
+        self.assertEqual(row["teacher_export_schema"], "h3_teacher_final_v1")
+        self.assertEqual(row["teacher_export_mode"], "final")
+        self.assertEqual(row["teacher_saved_states"], 1)
+        self.assertEqual(row["teacher_trajectory_states"], 1)
+        self.assertEqual(row["teacher_final_state_index"], 29)
+        self.assertEqual(row["teacher_final_video_sigma"], 0.0)
+        self.assertEqual(row["teacher_final_audio_sigma"], 0.0)
+        self.assertEqual(receipt["teacher_settings"]["num_states"], 1)
+        self.assertFalse(receipt["trajectory_tensors_loaded"])
+        gan = helper._leaf("lightx2v_train/trainers/dmd/dmd2_gan_data.py", "_test_final_import_gan")
+        manifest, rows, _ = gan.load_gan_real_records(self.output, task="ref2av", geometry=None)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual([Path(rows[0][key]).name for key in gan.CACHE_PATH_KEYS], ["condition.pt", "video_latents.pt", "audio_latents.pt"])
+        receipt_api = helper._leaf("scripts/minimax_h3_cm_pdmd_preflight.py", "_test_final_import_receipt")
+        receipt_api._receipt(manifest, 1)
+        receipt_api._receipt(self.output / "condition_metadata.jsonl", 1)
+
+    def test_final_only_cli_import_requires_no_torch(self):
+        ImportTests.test_cli_import_requires_no_torch(self)
+
+    def test_missing_or_empty_final_files_and_incomplete_manifest_block_publication(self):
+        for name in ("condition.pt", "video_latents.pt", "audio_latents.pt", "manifest.json"):
+            path = self.directory / name
+            content = path.read_bytes()
+            for empty in (False, True):
+                with self.subTest(name=name, empty=empty):
+                    path.unlink()
+                    if empty:
+                        path.touch()
+                    with self.assertRaisesRegex(ValueError, "Missing or empty"):
+                        self.run_import()
+                    self.assertFalse(self.output.exists())
+                    path.write_bytes(content)
+
+    def test_wrong_schema_or_incomplete_or_midpoint_final_export_is_rejected(self):
+        mutations = [
+            ("schema", "h3_teacher_final_v2"),
+            ("schema", helper.LEGACY_SCHEMA),
+            ("export_mode", "trajectory"),
+            ("export_mode", None),
+            ("num_states", 30),
+            ("num_states", True),
+            ("num_steps", 28),
+            ("state_paths", ["state_029.pt"]),
+            ("state_paths", None),
+            ("final_state_index", 28),
+            ("final_state_index", 29.0),
+            ("final_state_index", None),
+            ("final_video_sigma", 0.1),
+            ("final_audio_sigma", 0.1),
+            ("final_video_sigma", None),
+            ("final_audio_sigma", None),
+            ("final_video_sigma", float("nan")),
+            ("final_audio_sigma", False),
+            ("video_sigmas", self.manifest["video_sigmas"][:-1]),
+            ("audio_sigmas", self.manifest["audio_sigmas"][:-1]),
+            ("video_sigmas", [1 - number / 30 for number in range(30)]),
+        ]
+        for key, value in mutations:
+            with self.subTest(key=key, value=value):
+                write_json(self.directory / "manifest.json", {**self.manifest, key: value})
+                with self.assertRaises(ValueError):
+                    self.run_import()
+                self.assertFalse(self.output.exists())
+
+    def test_legacy_schema_still_requires_all_30_states(self):
+        legacy = {**self.manifest, "schema": helper.LEGACY_SCHEMA, "export_mode": "trajectory", "num_states": 30, "state_paths": [f"state_{number:03d}.pt" for number in range(30)]}
+        write_json(self.directory / "manifest.json", legacy)
+        with self.assertRaisesRegex(ValueError, "Missing or empty.*state_000.pt"):
+            self.run_import()
+        self.assertFalse(self.output.exists())
+
+
 @unittest.skipUnless(HAS_TORCH, "Optional CPU tensor checks require torch")
 class TensorImportTests(ExportFixture):
     def setUp(self):
@@ -305,6 +404,25 @@ class TensorImportTests(ExportFixture):
         # neither optional import validation nor GAN loading reads trajectories.
         stream = gan.DMD2GanRealStream(self.output, task="ref2av", geometry=None, seed=42)
         self.assertEqual(stream.recipe()["geometries"], [[124, 64, 96]])
+
+    def test_final_only_check_tensors_and_existing_deferred_gan_dataset(self):
+        self.final_only()
+        self.test_check_tensors_and_existing_deferred_gan_dataset()
+        self.assertEqual(self.rows()[0]["teacher_saved_states"], 1)
+        self.assertFalse(list(self.directory.glob("state_*.pt")))
+        receipt = json.loads((self.output / "metadata.complete.json").read_text())
+        self.assertTrue(receipt["check_tensors"])
+        self.assertEqual(receipt["tensor_validation_scope"], "condition_and_final_av")
+
+    def test_final_only_check_tensors_cli(self):
+        self.final_only()
+        result = subprocess.run(
+            [sys.executable, str(Path(helper.__file__)), "--raw-jsonl", str(self.raw_path), "--index", str(self.index_path), "--output-dir", str(self.output), "--expected-count", "1", "--check-tensors"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(json.loads(result.stdout)["tensor_validation_scope"], "condition_and_final_av")
 
     def test_check_tensors_rejects_wrong_condition_identity_caption_order_and_finiteness(self):
         for key, value in (("source_id", "wrong"), ("cache_fingerprint", "wrong"), ("prompt", "wrong")):

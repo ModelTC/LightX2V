@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Publish finalized LightX2V H3 Ref trajectories as paired clean GAN data.
+"""Publish finalized LightX2V H3 Ref teacher exports as paired clean GAN data.
 
 The normal path uses only the standard library and never deserializes tensors.
-All 30 trajectory states remain in place; GAN rows reference only clean final
-AV latents and their exact positive condition. No model or training is run.
+Final-only exports require no intermediate state files. Legacy full trajectories
+are also supported; GAN rows reference only clean final AV latents and their
+exact positive condition. No model or training is run.
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
-SCHEMA = "h3_teacher_trajectory_v1"
+SCHEMA = "h3_teacher_final_v1"
+LEGACY_SCHEMA = "h3_teacher_trajectory_v1"
 TRAIN_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MEDIA_ROOT = "/mnt/lm_data_afs/gushiqiao/datasets/omini-r2v"
 PROMPT_FIELDS = ("enhanced_prompt",)
@@ -141,13 +143,22 @@ def validate_export(raw, index, index_path, media_root):
         require(absolute(index["manifest_path"], index_path.parent) == manifest_path, "Index manifest_path differs from export_dir")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     require(isinstance(manifest, dict), "Export manifest must be an object")
+    schema = manifest.get("schema")
+    require(schema in (SCHEMA, LEGACY_SCHEMA), f"Invalid export schema: {schema!r}")
+    final_only = schema == SCHEMA
+    export_mode = "final" if final_only else "trajectory"
+    require(manifest.get("export_mode", None if final_only else "trajectory") == export_mode, f"Invalid export_mode for {schema}: expected {export_mode!r}")
+    saved_states = 1 if final_only else 30
+    if final_only:
+        require(type(manifest.get("final_state_index")) is int and manifest["final_state_index"] == 29, "Final-only export requires final_state_index=29")
+        for key in ("final_video_sigma", "final_audio_sigma"):
+            require(type(manifest.get(key)) in (int, float) and manifest[key] == 0.0, f"Final-only export requires {key}=0.0")
     for key, expected in {
-        "schema": SCHEMA,
         "task": "ref2av",
         "normalized": True,
         "dtype": "float32",
         "num_steps": 29,
-        "num_states": 30,
+        "num_states": saved_states,
         "num_frames": 124,
         "fps": 24,
         "scheduler_type": "reference_blend",
@@ -171,8 +182,8 @@ def validate_export(raw, index, index_path, media_root):
     for key, expected in {"target_height": height, "target_width": width, "num_frames": 124, "fps": 24}.items():
         require(index.get(key) == expected, f"Index {key} differs from export")
     require(manifest.get("video_shape") == [24, 37, height // 16, width // 16] and manifest.get("audio_shape") == [2, 32, 207], "Export must contain full normalized AV target shapes")
-    expected_states = [f"state_{number:03d}.pt" for number in range(30)]
-    require(manifest.get("state_paths") == expected_states, "Export must list all 30 ordered trajectory states")
+    expected_states = [] if final_only else [f"state_{number:03d}.pt" for number in range(30)]
+    require(manifest.get("state_paths") == expected_states, "Final-only export requires state_paths=[]" if final_only else "Export must list all 30 ordered trajectory states")
     for name in expected_states:
         path = absolute(name, directory)
         require(path.parent == directory, "Trajectory file escapes its sample directory")
@@ -206,10 +217,14 @@ def validate_export(raw, index, index_path, media_root):
     # reference geometry and generated target geometry may vary per example.
     settings_keys = (
         "schema",
+        "export_mode",
         "task",
         "dtype",
         "num_steps",
         "num_states",
+        "final_state_index",
+        "final_video_sigma",
+        "final_audio_sigma",
         "num_frames",
         "fps",
         "scheduler_type",
@@ -245,7 +260,7 @@ def validate_export(raw, index, index_path, media_root):
         video_latent_path=str(video),
         audio_latent_path=str(audio),
         cache_fingerprint=manifest["cache_fingerprint"],
-        latent_fingerprint=manifest.get("latent_fingerprint", digest({"schema": SCHEMA, "manifest": manifest})),
+        latent_fingerprint=manifest.get("latent_fingerprint", digest({"schema": schema, "manifest": manifest})),
         video_latent_shape=manifest["video_shape"],
         audio_latent_shape=manifest["audio_shape"],
         vae_normalized=True,
@@ -268,7 +283,13 @@ def validate_export(raw, index, index_path, media_root):
         reference_compute_cost=prompt_tokens + reference_rows,
         packed_sequence_tokens_124=prompt_tokens + reference_rows + 37 * (height // 32) * (width // 32) + 414,
         teacher_trajectory_manifest=str(manifest_path),
-        teacher_trajectory_states=30,
+        teacher_trajectory_states=saved_states,
+        teacher_export_schema=schema,
+        teacher_export_mode=export_mode,
+        teacher_saved_states=saved_states,
+        teacher_final_state_index=29,
+        teacher_final_video_sigma=manifest["video_sigmas"][-1],
+        teacher_final_audio_sigma=manifest["audio_sigmas"][-1],
         teacher_scheduler_type="reference_blend",
         teacher_model_path=manifest["model_path"],
         teacher_inference_config_sha256=manifest.get("inference_config_sha256"),
