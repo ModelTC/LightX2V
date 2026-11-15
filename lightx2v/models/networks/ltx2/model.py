@@ -473,6 +473,7 @@ class LTX2Model(BaseTransformerModel):
             vx = pre_infer_out.video_args.x
             self.original_video_seq_len = vx.shape[0]  # Record original length before padding
             padding_size = (world_size - (vx.shape[0] % world_size)) % world_size
+            self.transformer_infer.seq_p_valid_len = vx.shape[0] if padding_size > 0 else None
             if padding_size > 0:
                 vx = F.pad(vx, (0, 0, 0, padding_size))
             pre_infer_out.video_args.x = torch.chunk(vx, world_size, dim=0)[cur_rank]
