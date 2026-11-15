@@ -70,6 +70,8 @@ class HunyuanVideo15Model(BaseTransformerModel):
         cur_rank = dist.get_rank(self.seq_p_group)
 
         padding_size = (world_size - (seqlen % world_size)) % world_size
+        # Tell attention how many image tokens are real so the padding stays out of it.
+        self.transformer_infer.seq_p_valid_len = seqlen if padding_size > 0 else None
         if padding_size > 0:
             pre_infer_out.img = F.pad(pre_infer_out.img, (0, 0, 0, padding_size))
 

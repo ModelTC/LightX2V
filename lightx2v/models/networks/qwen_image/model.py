@@ -101,6 +101,8 @@ class QwenImageTransformerModel(BaseTransformerModel):
         cur_rank = dist.get_rank(self.seq_p_group)
         seqlen = pre_infer_out.hidden_states.shape[0]
         padding_size = (world_size - (seqlen % world_size)) % world_size
+        # Tell attention how many image tokens are real so the padding stays out of it.
+        self.transformer_infer.seq_p_valid_len = seqlen if padding_size > 0 else None
         if padding_size > 0:
             pre_infer_out.hidden_states = F.pad(pre_infer_out.hidden_states, (0, 0, 0, padding_size))
         pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=0)[cur_rank]
@@ -112,6 +114,8 @@ class QwenImageTransformerModel(BaseTransformerModel):
         gathered_noise_pred = [torch.empty_like(noise_pred) for _ in range(world_size)]
         dist.all_gather(gathered_noise_pred, noise_pred, group=self.seq_p_group)
         noise_pred = torch.cat(gathered_noise_pred, dim=1)
+        if self.transformer_infer.seq_p_valid_len is not None:
+            noise_pred = noise_pred[:, : self.transformer_infer.seq_p_valid_len]
         return noise_pred
 
     @torch.no_grad()
