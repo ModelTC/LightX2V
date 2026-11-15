@@ -230,7 +230,7 @@ class LTX2Model(BaseTransformerModel):
                                 distributed_weight_dict[key].copy_(weight_dict[rank_key], non_blocking=True)
                             else:
                                 # Send to other ranks
-                                dist.send(weight_dict[rank_key].contiguous(), dst=rank_idx, group=self.tp_group)
+                                dist.send(weight_dict[rank_key].to(device).contiguous(), dst=rank_idx, group=self.tp_group)
                 else:
                     # Other ranks: receive from rank 0
                     dist.recv(distributed_weight_dict[key], src=global_src_rank, group=self.tp_group)
