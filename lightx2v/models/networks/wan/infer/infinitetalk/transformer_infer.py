@@ -144,7 +144,6 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
                 tensor_fusion=self.seq_p_tensor_fusion,
                 head_parallel=self.seq_p_head_parallel,
                 attention_kwargs=attn_running_args,
-                valid_len=self.seq_p_valid_len,
             )
             if aux_attn_out is not None:
                 raise RuntimeError("InfiniteTalk self-attention does not have an auxiliary token output.")

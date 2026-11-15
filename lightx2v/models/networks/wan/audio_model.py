@@ -103,7 +103,6 @@ class WanAudioModel(WanModel):
 
         padding_size = (world_size - (x.shape[0] % world_size)) % world_size
         if padding_size > 0:
-            pre_infer_out.seq_p_valid_len = x.shape[0]
             x = F.pad(x, (0, 0, 0, padding_size))
             if person_mask_latens is not None:
                 person_mask_latens = F.pad(person_mask_latens, (0, padding_size))
