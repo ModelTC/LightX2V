@@ -1,4 +1,4 @@
-# Omni Ref2AV DeCFG teacher：两台机器，各 8 卡
+# Omni Ref2AV teacher：两台机器，各 8 卡
 
 这套流程从已有 Omni raw100k 中选择 5,000 条：仅非空 `enhanced_prompt`、仅图片参考、实际参考数 2/3/4/5/6 各 1,000 条。seed=42 按稳定 source ID 的 SHA256 排序采样；每桶交替分给两台机器，因此每台恰好每桶 500 条、共 2,500 条。两台各运行一个 TP=2、SP=4 的服务，不跨机组网；两台均可使用本机 `127.0.0.1:8000`。每条仅保存 29 步推理完成后的最终 clean video/audio latents 和训练 conditioning，不保存中间状态。
 
@@ -11,25 +11,30 @@
 先把本次代码放到两机均可访问的目标仓库，直接使用当前 shell 中的 LightX2V 推理 Python。两台机器执行相同的环境设置：
 
 ```bash
-export H3_CODE_ROOT=/mnt/devsft_afs_2/gushiqiao/outputs/LightX2V
-export H3_PYTHON=python
-export H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3-DeCFG-score
+export H3_CODE_ROOT=/mnt/afs_2/gushiqiao/outputs/LightX2V
+export H3_PYTHON="$(command -v python || command -v python3)"
+export H3_TEACHER_WEIGHTS=base
+export H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3
 export H3_RAW_JSONL=/mnt/lm_data_afs/gushiqiao/datasets/omni_r2v_image_only_100k_20261004/omni_r2v_image_only_100000_ir.jsonl
 export H3_CACHE_METADATA=/mnt/lm_data_afs/gushiqiao/datasets/omni_r2v_image_only_100k_20261004/latent_match124_bf16/metadata.jsonl
 export H3_MEDIA_ROOT=/mnt/lm_data_afs/gushiqiao/datasets/omini-r2v
-export H3_OUTPUT_DIR=/mnt/devsft_afs_2/gushiqiao/outputs/data_new2/omni_ref_teacher29_decfg_5k
+export H3_OUTPUT_DIR=/mnt/afs_2/gushiqiao/outputs/data_new2/omni_ref_teacher29_base_5k
 export H3_CONFIG_JSON="$H3_CODE_ROOT/configs/minimax_h3/minimax_h3_ref2av_teacher29_tp2_sp4.json"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export PLATFORM=cuda
+export NO_PROXY="localhost,127.0.0.1,::1${NO_PROXY:+,$NO_PROXY}"
+export no_proxy="$NO_PROXY"
 cd "$H3_CODE_ROOT"
 mkdir -p "$H3_OUTPUT_DIR/logs"
 ```
 
-启动前验证 `MiniMax-H3-DeCFG-score/decfg_merged.json` 是已完成的 `lightx2v_h3_score_decfg`，含已经合并的 `transformer_ref`。验证 config/index SHA256 和权重 shard 大小；不会回退到普通 H3 base。配置固定 29 步、124 帧、24 fps、CFG=false、CPU offload=false、VAE offload=false、reference resize=match、scheduler=reference_blend。
+`H3_TEACHER_WEIGHTS=base`（或 `--teacher-weights base`）加载原始模型的 `transformer_ref`，检查 config、索引引用的权重文件，并拒绝带有 DeCFG 合并记录的目录。上面的命令不加载 DeCFG 或其他 LoRA。配置固定 29 步、124 帧、24 fps、CFG=false、CPU offload=false、VAE offload=false、reference resize=match、scheduler=reference_blend。
+
+旧 DeCFG 流程仍可用：设置 `H3_TEACHER_WEIGHTS=decfg` 和 `H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3-DeCFG-score`，使用独立的输出目录。此模式要求 `decfg_merged.json` 是已完成的 `lightx2v_h3_score_decfg`，验证 `transformer_ref` 的 config/index SHA256 和权重 shard 大小。未指定模式时仍默认 `decfg`，保留旧命令行为。
 
 DeCFG 合并文件可以包含 FP32 的注意力/FFN 权重。H3 loader 在 TP 切片后将这些普通线性层转换为 BF16，与激活一致；保留归一化权重的原始精度，输入、时间和输出投影仍按原实现使用 FP32。磁盘上的合并权重不修改，scheduler 状态和导出的最终 AV latents 仍为 FP32。
 
-每次启动都会用**同一配置、同一个已合并 transformer_ref**验证 AdaLN。缺失时调用仓库现有 `tools/cache_minimax_h3_adaln/builder.py` 构建；不合法的同名 cache 先保留为 `.invalid.*` 再重建。配置的 `adaln_cache_dir` 保持原值 `~/.cache/lightx2v/adaln`，不会使用普通 base 的 cache。现有 cache resolver 会把 checkpoint 路径、大小和 mtime 纳入指纹，因此不同权重分开存储。AdaLN 预处理使用第一张可见 GPU；之后才启动 8 卡推理。
+每次启动都会用**同一配置、当前选中的 transformer_ref**验证 AdaLN。缺失时调用仓库现有 `tools/cache_minimax_h3_adaln/builder.py` 构建；不合法的同名 cache 先保留为 `.invalid.*` 再重建。配置的 `adaln_cache_dir` 保持原值 `~/.cache/lightx2v/adaln`。现有 cache resolver 会把 checkpoint 路径、大小和 mtime 纳入指纹，原始基座和 DeCFG 权重使用不同缓存。AdaLN 预处理使用第一张可见 GPU；之后才启动 8 卡推理。
 
 ## 先跑 1 条离线 smoke
 

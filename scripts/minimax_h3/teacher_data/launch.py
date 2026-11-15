@@ -46,15 +46,31 @@ def gpu_locks(devices, lock_dir=Path("/tmp")):
         yield
 
 
-def verify_model(model_path):
+def verify_model(model_path, teacher_weights="decfg"):
     root = Path(model_path).resolve()
+    transformer = (root / "transformer_ref").resolve()
+    if teacher_weights == "base":
+        for directory in {root, transformer, transformer.parent}:
+            if (directory / "decfg_merged.json").exists():
+                raise ValueError(f"Base teacher must not contain merged DeCFG weights: {directory}")
+        json.loads((transformer / "config.json").read_text())
+        index_path = transformer / "diffusion_pytorch_model.safetensors.index.json"
+        if index_path.is_file():
+            weight_map = json.loads(index_path.read_text())["weight_map"]
+            shards = [transformer / name for name in set(weight_map.values())]
+        else:
+            shards = list(transformer.glob("*.safetensors"))
+        if not shards or any(not path.is_file() or path.stat().st_size == 0 for path in shards):
+            raise ValueError(f"Base teacher requires complete transformer_ref weights: {transformer}")
+        return {"teacher_weights": "base", "transformer_path": str(transformer)}
+    if teacher_weights != "decfg":
+        raise ValueError(f"Unknown teacher weights: {teacher_weights}")
     manifest = json.loads((root / "decfg_merged.json").read_text())
     if manifest.get("format") != "lightx2v_h3_score_decfg" or manifest.get("complete") is not True or manifest.get("schema_version") != 1 or manifest.get("precision") != "fp32_merged_targets":
         raise ValueError("Model must be the completed FP32 merged DeCFG score checkpoint")
     component = manifest.get("components", {}).get("transformer_ref")
     if not isinstance(component, dict) or component.get("model_name") != "minimax_h3_ref2av" or component.get("adapted_weights", 0) <= 0:
         raise ValueError("Merged DeCFG manifest has no adapted transformer_ref component")
-    transformer = root / "transformer_ref"
     for name, hash_key in (("config.json", "config_sha256"), ("diffusion_pytorch_model.safetensors.index.json", "index_sha256")):
         if file_digest(transformer / name) != component.get(hash_key):
             raise ValueError(f"Merged transformer_ref {name} does not match its manifest")
@@ -76,7 +92,7 @@ def verify_config(path):
         if config.get(key) != value:
             raise ValueError(f"Teacher config {key} must be {value!r}")
     if config.get("lora_configs") or config.get("dit_original_ckpt"):
-        raise ValueError("Use the already merged transformer_ref; no LoRA or checkpoint override")
+        raise ValueError("Use the selected model's transformer_ref; no LoRA or checkpoint override")
     return config
 
 
@@ -161,6 +177,7 @@ def main():
     parser.add_argument("--media-root", default=os.getenv("H3_MEDIA_ROOT", DEFAULT_MEDIA))
     parser.add_argument("--output-dir", default=os.getenv("H3_OUTPUT_DIR", DEFAULT_OUTPUT))
     parser.add_argument("--model-path", default=os.getenv("H3_MODEL_PATH", DEFAULT_MODEL))
+    parser.add_argument("--teacher-weights", choices=("base", "decfg"), default=os.getenv("H3_TEACHER_WEIGHTS", "decfg"), help="base: original Ref weights; decfg: validated merged DeCFG checkpoint")
     parser.add_argument("--config-json", default=os.getenv("H3_CONFIG_JSON", str(REPO / "configs/minimax_h3/minimax_h3_ref2av_teacher29_tp2_sp4.json")))
     parser.add_argument("--sample-index", type=int, default=0, help="Zero-based position in this node's selected shard")
     parser.add_argument("--no-export", action="store_true", help="Smoke: decode MP4 without also exporting final clean AV latents")
@@ -177,7 +194,8 @@ def main():
 
 def run(args, devices):
     config = verify_config(args.config_json)
-    verify_model(args.model_path)
+    verify_model(args.model_path, args.teacher_weights)
+    print(f"Teacher weights: {args.teacher_weights}; transformer_ref: {(Path(args.model_path) / 'transformer_ref').resolve()}", flush=True)
     root = Path(args.output_dir).resolve()
     stamp = time.strftime("%Y%m%d_%H%M%S") + f"_{os.getpid()}"
     log_dir = root / "logs" / f"node{args.node_index}"

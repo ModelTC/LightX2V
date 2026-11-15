@@ -70,6 +70,71 @@ class TeacherWorkflowTests(unittest.TestCase):
         atomic_jsonl(self.raw, self.raw_rows)
         atomic_jsonl(self.cache, self.cache_rows)
 
+    def model_fixture(self):
+        model = self.root / "model"
+        transformer = model / "transformer_ref"
+        transformer.mkdir(parents=True)
+        atomic_json(transformer / "config.json", {"model_type": "minimax_h3"})
+        (transformer / "weights.safetensors").write_bytes(b"weight fixture")
+        atomic_json(transformer / "diffusion_pytorch_model.safetensors.index.json", {"weight_map": {"weight": "weights.safetensors"}})
+        return model, transformer
+
+    def test_base_teacher_accepts_indexed_and_single_file_weights(self):
+        model, transformer = self.model_fixture()
+        self.assertEqual(launch.verify_model(model, "base")["teacher_weights"], "base")
+        (transformer / "diffusion_pytorch_model.safetensors.index.json").unlink()
+        self.assertEqual(launch.verify_model(model, "base")["transformer_path"], str(transformer))
+
+    def test_base_teacher_rejects_missing_indexed_shard(self):
+        model, transformer = self.model_fixture()
+        (transformer / "weights.safetensors").unlink()
+        with self.assertRaisesRegex(ValueError, "complete transformer_ref"):
+            launch.verify_model(model, "base")
+
+    def test_base_teacher_rejects_merged_directory_and_symlink(self):
+        model, transformer = self.model_fixture()
+        atomic_json(model / "decfg_merged.json", {"complete": True})
+        with self.assertRaisesRegex(ValueError, "must not contain merged DeCFG"):
+            launch.verify_model(model, "base")
+        alias = self.root / "base_alias"
+        alias.mkdir()
+        (alias / "transformer_ref").symlink_to(transformer, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "must not contain merged DeCFG"):
+            launch.verify_model(alias, "base")
+
+    def test_decfg_teacher_keeps_existing_manifest_checks(self):
+        model, transformer = self.model_fixture()
+        with self.assertRaises(FileNotFoundError):
+            launch.verify_model(model)
+        manifest = {
+            "format": "lightx2v_h3_score_decfg",
+            "complete": True,
+            "schema_version": 1,
+            "precision": "fp32_merged_targets",
+            "components": {
+                "transformer_ref": {
+                    "model_name": "minimax_h3_ref2av",
+                    "adapted_weights": 1,
+                    "config_sha256": file_digest(transformer / "config.json"),
+                    "index_sha256": file_digest(transformer / "diffusion_pytorch_model.safetensors.index.json"),
+                    "shards": [{"path": "weights.safetensors", "size_bytes": (transformer / "weights.safetensors").stat().st_size}],
+                }
+            },
+        }
+        atomic_json(model / "decfg_merged.json", manifest)
+        self.assertEqual(launch.verify_model(model), manifest)
+        (transformer / "weights.safetensors").write_bytes(b"truncated")
+        with self.assertRaisesRegex(ValueError, "Missing/truncated"):
+            launch.verify_model(model)
+
+    def test_cli_passes_explicit_base_mode_to_launcher(self):
+        with patch.dict("os.environ", {"H3_TEACHER_WEIGHTS": "base", "H3_MODEL_PATH": "/original/model", "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7"}):
+            with patch.object(sys, "argv", ["launch.py", "node", "--node-index", "1"]), patch.object(launch, "gpu_locks", return_value=contextlib.nullcontext()), patch.object(launch, "run") as run:
+                launch.main()
+        args, devices = run.call_args.args
+        self.assertEqual((args.teacher_weights, args.model_path, args.node_index), ("base", "/original/model", 1))
+        self.assertEqual(devices, [str(index) for index in range(8)])
+
     def test_local_http_ignores_environment_and_global_proxy_for_all_requests(self):
         local_requests, proxy_requests = [], []
 
@@ -368,7 +433,14 @@ sys.stdin.readline()
         row = self.example()
         config, model, selection_hash = {"infer_steps": 29}, {"model_path": "fixture"}, "selection"
         old_fingerprint = digest(
-            {"schema": "h3_teacher_request_v1", "sample": row, "config": config, "model": model, "selection_sha256": selection_hash, "images": [file_identity(path) for path in row["reference_images"]]}
+            {
+                "schema": "h3_teacher_request_v1",
+                "sample": row,
+                "config": config,
+                "model": model,
+                "selection_sha256": selection_hash,
+                "images": [file_identity(path) for path in row["reference_images"]],
+            }
         )
         fingerprint = request_fingerprint(row, config, model, selection_hash)
         self.assertNotEqual(fingerprint, old_fingerprint)
