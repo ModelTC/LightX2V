@@ -404,6 +404,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         cur_rank = dist.get_rank(self.seq_p_group)
         seqlen = pre_infer_out.hidden_states.shape[0]
         padding_size = (world_size - (seqlen % world_size)) % world_size
+        self.transformer_infer.seq_p_valid_len = seqlen if padding_size > 0 else None
         if padding_size > 0:
             pre_infer_out.hidden_states = F.pad(pre_infer_out.hidden_states, (0, 0, 0, padding_size))
         pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=0)[cur_rank]

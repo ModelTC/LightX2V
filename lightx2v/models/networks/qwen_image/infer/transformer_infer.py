@@ -28,6 +28,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         if self.use_magi_compile:
             configure_dynamo_for_magi_compile()
             logger.info("Using Magi Compile (split: pre-attn / cross-attn eager / post-attn)")
+        self.seq_p_valid_len = None
         self.infer_func = self.infer_calculating
 
         self.attn_type = config.get("attn_type", "flash_attn3")
@@ -203,6 +204,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=True,
                 attention_kwargs={},
+                valid_len=self.seq_p_valid_len,
             )
             if txt_attn_output is None:
                 raise RuntimeError("Qwen image joint attention expected a text auxiliary output.")

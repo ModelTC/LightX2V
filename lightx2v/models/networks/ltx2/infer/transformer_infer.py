@@ -57,6 +57,7 @@ class LTX2TransformerInfer(BaseTransformerInfer):
             self.seq_p_prepost_backend = "torch"
             self.seq_p_a2a_backend = "torch"
             self.seq_p_quant_scheme = None
+        self.seq_p_valid_len = None
 
         # Initialize tensor parallel group
         if config.get("tensor_parallel", False):
@@ -153,6 +154,9 @@ class LTX2TransformerInfer(BaseTransformerInfer):
         context_gathered = [torch.zeros_like(context) for _ in range(world_size)]
         dist.all_gather(context_gathered, context, group=self.seq_p_group)
         gathered_context = torch.cat(context_gathered, dim=0)
+        valid_len = self.seq_p_valid_len
+        if valid_len is not None:
+            gathered_context = gathered_context[:valid_len]
 
         # Gather k_pe if provided
         gathered_k_pe = k_pe
@@ -166,6 +170,8 @@ class LTX2TransformerInfer(BaseTransformerInfer):
             dist.all_gather(cos_gathered, cos_freqs.contiguous(), group=self.seq_p_group)
             dist.all_gather(sin_gathered, sin_freqs.contiguous(), group=self.seq_p_group)
             gathered_k_pe = (torch.cat(cos_gathered, dim=seq_dim), torch.cat(sin_gathered, dim=seq_dim))
+            if valid_len is not None:
+                gathered_k_pe = tuple(t.narrow(seq_dim, 0, valid_len) for t in gathered_k_pe)
 
         return gathered_context, gathered_k_pe
 
@@ -305,6 +311,7 @@ class LTX2TransformerInfer(BaseTransformerInfer):
                 tensor_fusion=False,
                 head_parallel=False,
                 attention_kwargs={},
+                valid_len=self.seq_p_valid_len,
             )
             if aux_out is not None:
                 raise RuntimeError("LTX2 video self-attention received an unexpected auxiliary output.")

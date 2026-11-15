@@ -12,6 +12,23 @@ from .ulysses_prepost import create_ulysses_prepost_backend
 from .utils.seq_p import flatten_seq_p_tensor, split_main_aux_output, validate_seq_p_inputs
 
 
+def _drop_padding(tensor, global_len, valid_len, aux_len, aux_first):
+    """Remove the trailing sequence-parallel padding of the main sequence from an attention input."""
+    if aux_len == 0:
+        return tensor[:valid_len]
+    if aux_first:
+        return tensor[: aux_len + valid_len]
+    return torch.cat((tensor[:valid_len], tensor[global_len:]), dim=0)
+
+
+def _restore_padding(output, global_len, valid_len, aux_len, aux_first):
+    """Put zero rows back where the padding was dropped, so the output keeps its padded layout."""
+    padding = output.new_zeros((global_len - valid_len, *output.shape[1:]))
+    if aux_len == 0 or aux_first:
+        return torch.cat((output, padding), dim=0)
+    return torch.cat((output[:valid_len], padding, output[valid_len:]), dim=0)
+
+
 @dataclass
 class _HeadGroupExchange:
     """Keep group inputs and packed send buffers alive until exchanges finish."""
@@ -58,6 +75,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         aux_first=False,
         attention_kwargs=None,
         head_parallel_group_size=1,
+        valid_len=None,
     ):
         """Run Ulysses attention over QKV and optional auxiliary token regions.
 
@@ -75,6 +93,10 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         ``tensor_fusion`` packs Q/K/V into one Ulysses communication payload.
         ``head_parallel_group_size`` controls how many local attention heads are
         processed in each pipelined stage when ``head_parallel`` is enabled.
+        ``valid_len`` is the number of real tokens in the global main sequence
+        when the caller padded it to a multiple of the group size; the trailing
+        padding is then dropped from Q/K/V before attention and its output rows
+        are zero.
         The return value is ``(output, aux_output)``.
         """
         q = flatten_seq_p_tensor(q, "q")
@@ -89,6 +111,8 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         world_size = dist.get_world_size(seq_p_group)
         rank = dist.get_rank(seq_p_group)
         self._validate_inputs(q, k, v, aux_q, aux_k, aux_v, world_size)
+        if valid_len is not None and not 0 < valid_len <= q.shape[0] * world_size:
+            raise ValueError(f"valid_len must be in [1, {q.shape[0] * world_size}], got {valid_len}.")
 
         qkv_fusion = tensor_fusion
         prepost_name, a2a_name, qkv_fusion = self._resolve_options(
@@ -120,6 +144,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             world_size=world_size,
             rank=rank,
             attention_kwargs=attention_kwargs,
+            valid_len=valid_len,
         )
         if head_parallel:
             return self._apply_head_pipeline(head_group_size=head_parallel_group_size, **common_args)
@@ -143,6 +168,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         world_size,
         rank,
         attention_kwargs,
+        valid_len=None,
     ):
         local_len, q_heads, hidden_dims = q.shape
         shard_heads = q_heads // world_size
@@ -163,6 +189,11 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             world_size,
             aux_first,
         )
+        padded = valid_len is not None and valid_len != global_len
+        if padded:
+            kv_aux_len = 0 if aux_k is None else aux_k.shape[0]
+            attn_q = _drop_padding(attn_q, global_len, valid_len, aux_len, aux_first)
+            attn_k, attn_v = (_drop_padding(t, global_len, valid_len, kv_aux_len, aux_first) for t in (attn_k, attn_v))
         dense_attention_kwargs = UlyssesAttnWeight._dense_attention_kwargs(attention_kwargs, attn_q, attn_k)
 
         attn = attention_module.apply(
@@ -171,6 +202,8 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             v=attn_v,
             **dense_attention_kwargs,
         ).reshape(attn_q.shape[0], -1)
+        if padded:
+            attn = _restore_padding(attn, global_len, valid_len, aux_len, aux_first)
         output, local_aux_attn = split_main_aux_output(attn, global_len, aux_len, aux_first)
 
         packed_attn = prepost.pack_attn(output, local_len, world_size, shard_heads, hidden_dims, quant_scheme)
@@ -199,6 +232,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         rank,
         attention_kwargs,
         head_group_size,
+        valid_len=None,
     ):
         local_len, q_heads, hidden_dims = q.shape
         shard_heads = q_heads // world_size
@@ -279,6 +313,11 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 aux_first,
                 head_index=record.head_index,
             )
+            padded = valid_len is not None and valid_len != global_len
+            if padded:
+                kv_aux_len = 0 if aux_k is None else aux_k.shape[0]
+                attn_q = _drop_padding(attn_q, global_len, valid_len, aux_len, aux_first)
+                attn_k, attn_v = (_drop_padding(t, global_len, valid_len, kv_aux_len, aux_first) for t in (attn_k, attn_v))
             dense_attention_kwargs = UlyssesAttnWeight._dense_attention_kwargs(attention_kwargs, attn_q, attn_k)
             group_attn = attention_module.apply(
                 q=attn_q,
@@ -286,6 +325,8 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 v=attn_v,
                 **dense_attention_kwargs,
             ).reshape(attn_q.shape[0], -1)
+            if padded:
+                group_attn = _restore_padding(group_attn, global_len, valid_len, aux_len, aux_first)
             expected_width = group_size * hidden_dims
             if group_attn.shape[1] != expected_width:
                 raise ValueError(f"head_parallel attention output must flatten to {expected_width}, got shape={tuple(group_attn.shape)}.")

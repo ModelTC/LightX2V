@@ -38,6 +38,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
             self.seq_p_quant_scheme = None
             self.seq_p_tensor_fusion = False
             self.enable_head_parallel = False
+        self.seq_p_valid_len = None
 
     def _maybe_apply_stale_kv(self, key, value, num_txt_tokens, block_idx, block_type=None):
         """Hook for stale-KV cache in PipeFusion mode.  No-op in base class.
@@ -130,6 +131,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=True,
                 attention_kwargs={"model_cls": model_cls},
+                valid_len=self.seq_p_valid_len,
             )
             if txt_attn_output is None:
                 raise RuntimeError("Flux2 double-stream attention expected a text auxiliary output.")
@@ -239,6 +241,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=True,
                 attention_kwargs={"model_cls": model_cls},
+                valid_len=self.seq_p_valid_len,
             )
             if txt_attn_output is None:
                 raise RuntimeError("Flux2 single-stream attention expected a text auxiliary output.")

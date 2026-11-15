@@ -61,6 +61,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.seq_p_quant_scheme = None
             self.seq_p_tensor_fusion = False
             self.enable_head_parallel = False
+        self.seq_p_valid_len = None
         self.infer_func = self.infer_without_offload
         if self.config.get("modulate_type", "triton") == "triton":
             self.modulate_func = fuse_scale_shift_kernel
@@ -185,6 +186,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=False,
                 attention_kwargs={},
+                valid_len=self.seq_p_valid_len,
             )
             if txt_attn is None:
                 raise RuntimeError("HunyuanVideo-1.5 joint attention expected a text auxiliary output.")

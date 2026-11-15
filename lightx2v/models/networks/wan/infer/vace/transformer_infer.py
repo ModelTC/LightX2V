@@ -14,6 +14,7 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
 
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
+        self.seq_p_valid_len = getattr(pre_infer_out, "seq_p_valid_len", None)
         self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
         pre_infer_out.c = self.vace_pre_process(weights.vace_patch_embedding, pre_infer_out.vace_context)
 
