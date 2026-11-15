@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 
 import torch
@@ -108,12 +109,29 @@ class LongCatImageModel(BaseModel):
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if fsdp_config.get("sharded_load", False):
+            # FSDP2 defines each rank's DTensor shard after this skeleton is built.
+            transformer_config = LongCatImageTransformer2DModel.load_config(model_path, subfolder="transformer")
+            with torch.device("meta"):
+                transformer = LongCatImageTransformer2DModel.from_config(transformer_config)
+            return prepare_diffusers_attention(transformer, self.config)
+
         transformer = LongCatImageTransformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
             torch_dtype=self.transformer_param_dtype,
         ).to(self.device)
         return prepare_diffusers_attention(transformer, self.config)
+
+    def load_deferred_transformer_weights(self):
+        """Read the base transformer after FSDP2 has created its local shards."""
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if not fsdp_config.get("sharded_load", False):
+            return
+
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        self.load_sharded_transformer_weights(os.path.join(model_path, "transformer"))
 
     def denoiser_module(self):
         return self.transformer
