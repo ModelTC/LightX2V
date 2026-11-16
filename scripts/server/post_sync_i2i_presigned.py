@@ -80,7 +80,7 @@ def get_request_properties(url: str, task: str) -> Dict[str, Any]:
     response = requests.get(f"{url.rstrip('/')}/openapi.json", timeout=30)
     response.raise_for_status()
     document = response.json()
-    schema = document["paths"]["/v1/tasks/image/sync"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    schema = document["paths"]["/v1/tasks/sync"]["post"]["requestBody"]["content"]["application/json"]["schema"]
     if "discriminator" in schema:
         tasks = schema["discriminator"]["mapping"]
         if task not in tasks:
@@ -128,12 +128,12 @@ def build_payload(args: argparse.Namespace, properties: Dict[str, Any]) -> Dict[
 
 
 def call_sync_api(args: argparse.Namespace, payload: Dict[str, Any]) -> requests.Response:
-    endpoint = f"{args.url.rstrip('/')}/v1/tasks/image/sync?timeout_seconds={args.timeout_seconds}&poll_interval_seconds={args.poll_interval_seconds}"
+    endpoint = f"{args.url.rstrip('/')}/v1/tasks/sync?timeout_seconds={args.timeout_seconds}&poll_interval_seconds={args.poll_interval_seconds}"
     return requests.post(endpoint, json=payload, timeout=args.timeout_seconds + 30)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Call /v1/tasks/image/sync with presigned_url upload.")
+    parser = argparse.ArgumentParser(description="Call /v1/tasks/sync with presigned_url upload.")
     parser.add_argument("--url", type=str, default="http://127.0.0.1:8000", help="Server base url")
     parser.add_argument("--task", default="i2i", help="Task selected for multi-task services, e.g. i2i or t2i")
     parser.add_argument("--prompt", type=str, required=True, help="Prompt text")

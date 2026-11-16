@@ -4,6 +4,7 @@ from ...schema import TaskResponse
 from ..deps import get_services
 from ..request_parsing import form_request_openapi, parse_upload_form
 from .submission import submit_task
+from .sync import create_router as create_sync_router
 
 UPLOADS = {
     "image_file": "image_path",
@@ -17,6 +18,7 @@ UPLOADS = {
 
 def create_router(request_type):
     router = APIRouter()
+    router.include_router(create_sync_router(request_type))
 
     @router.post("/", response_model=TaskResponse)
     async def create_task(message: request_type):

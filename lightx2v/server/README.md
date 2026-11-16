@@ -28,8 +28,9 @@ server/
 │   └── tasks/
 │       ├── __init__.py
 │       ├── common.py        # Common task operations
-│       ├── generation.py    # POST /v1/tasks and /v1/tasks/form
+│       ├── generation.py    # Unified task submission and synchronous generation
 │       ├── submission.py    # Shared admission and image waiting
+│       ├── sync.py          # Shared synchronous image routes
 │       ├── video.py         # Compatibility: POST /v1/tasks/video
 │       └── image.py         # POST /v1/tasks/image
 ├── services/
@@ -97,6 +98,7 @@ flowchart TB
 
         TaskRoutes --> CreateTask["POST /v1/tasks/ - Create Task"]
         TaskRoutes --> CreateTaskForm["POST /v1/tasks/form - Upload and Create Task"]
+        TaskRoutes --> CreateTaskSync["POST /v1/tasks/sync - Generate Image Synchronously"]
         TaskRoutes --> GetTaskResults["GET /v1/tasks/{id}/results - List All Artifacts"]
         TaskRoutes --> CreateVideoTask["POST /v1/tasks/video - Create Video Task"]
         TaskRoutes --> CreateImageTask["POST /v1/tasks/image - Create Image Task"]
@@ -121,6 +123,7 @@ flowchart TB
 
         CreateVideoTask --> TaskManager
         CreateImageTask --> TaskManager
+        CreateTaskSync --> TaskManager
         TaskManager --> TaskQueue
         TaskManager --> TaskStatus
         TaskManager --> TaskResult
@@ -306,10 +309,12 @@ stateDiagram-v2
 |----------|--------|-------------|
 | `/v1/tasks/` | POST | Submit image, video or action tasks |
 | `/v1/tasks/form` | POST | Upload files and submit a task |
+| `/v1/tasks/sync` | POST | Generate an image synchronously; return PNG or a presigned upload receipt |
 | `/v1/tasks/video` | POST | Create video generation task |
 | `/v1/tasks/video/form` | POST | Create video task with form data |
 | `/v1/tasks/image` | POST | Create image generation task |
 | `/v1/tasks/image/form` | POST | Create image task with form data |
+| `/v1/tasks/image/sync` | POST | Compatibility endpoint for synchronous image generation |
 | `/v1/tasks` | GET | List all tasks |
 | `/v1/tasks/queue/status` | GET | Get queue status |
 | `/v1/tasks/{task_id}/status` | GET | Get task status |
@@ -335,6 +340,8 @@ stateDiagram-v2
 ## Request Models
 
 Submit image, video and action requests through `POST /v1/tasks/`, or upload files with `POST /v1/tasks/form`. Each task can produce multiple named artifacts. The server uses the runner's actual result records; Specs contain only tasks and input arguments.
+
+Use `POST /v1/tasks/sync` to wait for image generation and receive PNG bytes. This endpoint currently supports image output and uses the same Spec-generated request body as the asynchronous endpoint. Multi-task services require `task` in the request; single-task services omit it. Query parameters `timeout_seconds` and `poll_interval_seconds` default to `600` and `0.5`. Supplying `presigned_url` uploads the PNG to that URL and returns a JSON receipt instead. The legacy `/v1/tasks/image/sync` uses the same handler.
 
 Legacy `/v1/tasks/image/`, `/v1/tasks/video/`, their form endpoints, `/v1/tasks/image/sync`, and OpenAI image APIs remain compatible. They call the same internal submission and generation services. A legacy image/video request fails after execution if the required artifact was not produced.
 
