@@ -28,7 +28,9 @@ server/
 │   └── tasks/
 │       ├── __init__.py
 │       ├── common.py        # Common task operations
-│       ├── video.py         # POST /v1/tasks/video
+│       ├── generation.py    # POST /v1/tasks and /v1/tasks/form
+│       ├── submission.py    # Shared admission and image waiting
+│       ├── video.py         # Compatibility: POST /v1/tasks/video
 │       └── image.py         # POST /v1/tasks/image
 ├── services/
 │   ├── __init__.py
@@ -38,11 +40,7 @@ server/
 │   │   ├── __init__.py
 │   │   ├── worker.py        # TorchrunInferenceWorker
 │   │   └── service.py       # DistributedInferenceService
-│   └── generation/
-│       ├── __init__.py
-│       ├── base.py          # Base generation service
-│       ├── video.py         # VideoGenerationService
-│       └── image.py         # ImageGenerationService
+│   └── generation.py       # Shared GenerationService
 ├── media/
 │   ├── __init__.py
 │   ├── base.py              # MediaHandler base class
@@ -97,6 +95,9 @@ flowchart TB
         Router --> FileRoutes[File APIs]
         Router --> ServiceRoutes[Service Status APIs]
 
+        TaskRoutes --> CreateTask["POST /v1/tasks/ - Create Task"]
+        TaskRoutes --> CreateTaskForm["POST /v1/tasks/form - Upload and Create Task"]
+        TaskRoutes --> GetTaskResults["GET /v1/tasks/{id}/results - List All Artifacts"]
         TaskRoutes --> CreateVideoTask["POST /v1/tasks/video - Create Video Task"]
         TaskRoutes --> CreateImageTask["POST /v1/tasks/image - Create Image Task"]
         TaskRoutes --> CreateVideoTaskForm["POST /v1/tasks/video/form - Form Create Video"]
@@ -154,13 +155,8 @@ flowchart TB
         ProcessingThread --> ProcessTask
     end
 
-    subgraph Generation Services
-        VideoService[VideoGenerationService]
-        ImageService[ImageGenerationService]
-        BaseService[BaseGenerationService]
-
-        BaseService --> VideoService
-        BaseService --> ImageService
+    subgraph GenerationLayer[Generation Service]
+        Generation[GenerationService]
     end
 
     subgraph Distributed Inference Service
@@ -177,14 +173,11 @@ flowchart TB
     end
 
     TaskQueue --> ProcessingThread
-    ProcessTask --> VideoService
-    ProcessTask --> ImageService
-    VideoService --> InferenceService
-    ImageService --> InferenceService
+    ProcessTask --> Generation
+    Generation --> InferenceService
     GetTaskResult --> FileService
     DownloadFile --> FileService
-    VideoService --> FileService
-    ImageService --> FileService
+    Generation --> FileService
     FileService --> MediaHandler
 ```
 
@@ -196,13 +189,13 @@ sequenceDiagram
     participant API as API Server
     participant TM as TaskManager
     participant PT as Processing Thread
-    participant GS as GenerationService<br/>(Video/Image)
+    participant GS as GenerationService
     participant FS as FileService
     participant DIS as DistributedInferenceService
     participant TIW0 as TorchrunInferenceWorker<br/>(Rank 0)
     participant TIW1 as TorchrunInferenceWorker<br/>(Rank 1..N)
 
-    C->>API: POST /v1/tasks/video<br/>or /v1/tasks/image
+    C->>API: POST /v1/tasks/<br/>or a compatibility endpoint
     API->>TM: create_task()
     TM->>TM: Generate task_id
     TM->>TM: Add to queue<br/>(status: PENDING)
@@ -311,6 +304,8 @@ stateDiagram-v2
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/v1/tasks/` | POST | Submit image, video or action tasks |
+| `/v1/tasks/form` | POST | Upload files and submit a task |
 | `/v1/tasks/video` | POST | Create video generation task |
 | `/v1/tasks/video/form` | POST | Create video task with form data |
 | `/v1/tasks/image` | POST | Create image generation task |
@@ -318,6 +313,8 @@ stateDiagram-v2
 | `/v1/tasks` | GET | List all tasks |
 | `/v1/tasks/queue/status` | GET | Get queue status |
 | `/v1/tasks/{task_id}/status` | GET | Get task status |
+| `/v1/tasks/{task_id}/results` | GET | List all generated artifacts |
+| `/v1/tasks/{task_id}/results/{name}` | GET | Download one artifact |
 | `/v1/tasks/{task_id}/result` | GET | Get task result (stream) |
 | `/v1/tasks/{task_id}` | DELETE | Cancel task |
 | `/v1/tasks/all/running` | DELETE | Cancel all running tasks |
@@ -337,15 +334,21 @@ stateDiagram-v2
 
 ## Request Models
 
-Each model declares `TaskSpec(arguments, outputs=(...))` in its own `request_spec.py`. Image outputs register image APIs; video and audio-video outputs register video APIs. SR tasks can support both, with request inputs checked against the chosen API before queueing. A service whose selected tasks have no image/video output adapter fails startup with an explicit error.
+Submit image, video and action requests through `POST /v1/tasks/`, or upload files with `POST /v1/tasks/form`. Each task can produce multiple named artifacts. The server uses the runner's actual result records; Specs contain only tasks and input arguments.
+
+Legacy `/v1/tasks/image/`, `/v1/tasks/video/`, their form endpoints, `/v1/tasks/image/sync`, and OpenAI image APIs remain compatible. They call the same internal submission and generation services. A legacy image/video request fails after execution if the required artifact was not produced.
 
 Model inference fields are declared once in each model's `request_spec.py` Spec. At startup, the server uses these definitions to generate Pydantic request models and OpenAPI documentation for its supported tasks. The CLI uses the same types, descriptions, choices and numeric constraints.
 
-`BaseTaskRequest`, `ImageTaskRequest` and `VideoTaskRequest` contain service fields such as task IDs, uploads, LoRA controls and reuse settings. They do not maintain a second collection of model input fields. Python-only callbacks and tensor-return controls are excluded through `server=False`.
+`TaskRequest` contains service fields such as task IDs, uploads, LoRA controls and reuse settings. They do not maintain a second collection of model input fields. Python-only callbacks and tensor-return controls are excluded through `server=False`.
 
 To add an inference parameter, declare an `Argument` in the model's Spec, add it to the model's `InputInfo` if needed, and implement its use in the runner. JSON and form endpoints pick it up automatically; the OpenAI image adapter also reuses these fields while keeping its own protocol conventions.
 
-To download an asynchronous task's file result, provide `save_result_path` in the request. Omitting it or passing null skips file saving. Synchronous image APIs return the image from memory.
+Asynchronous tasks receive an output path automatically when no path is configured or supplied. `save_result_path` remains the primary artifact path. Synchronous image APIs keep PNG results in memory.
+
+`GET /v1/tasks/{task_id}/results` returns a list of `name`, `type`, `media_type` and `url` records. Download one through `GET /v1/tasks/{task_id}/results/{name}`. DreamZero, Cosmos3 joint modes, Motus and LingBot-VA can expose video and action under one task ID. Action files retain the runner's NPY or JSON format. The legacy singular `/result` endpoint keeps its primary-file behavior and output-directory restriction. In-memory result URLs return HTTP 410 after cache eviction.
+
+Single-file image/video runners reuse `BaseRunner.get_outputs()`. Multi-file runners call `record_output(type, path)` after saving each artifact, preserving their existing Python/CLI return values.
 
 Omitted or null `negative_prompt` uses startup/default values. The field must be supported by the selected model/task. When CFG is disabled, explicitly supplied values, including `""`, are ignored with a warning. With CFG enabled, empty text can still use model templates and does not disable CFG.
 
@@ -360,6 +363,21 @@ Only `seko_talk` tasks `s2v` and `rs2v` support `resize_mode` and `fixed_area` r
 The `/form` endpoints accept the same named request fields as the JSON endpoints, alongside their existing file uploads. Encode structured values such as `size`, `image_frame_indices`, `image_strength` lists, `ref_image_paths`, `talk_objects`, and WorldPlay `pose` objects as JSON strings. For example, use `size='[480,832]'`. Prompts retain their submitted text. `layout_bboxes` accepts JSON arrays/objects or a JSON file path.
 
 Video, pose-video, mask-video, action, and state paths refer to files or directories on the server. Image and audio inputs retain their existing URL, Base64, and local-path handling. Python-only inputs such as callbacks and in-memory policy tensors are not exposed as JSON fields; synchronous image APIs select tensor output internally.
+
+### Presigned sync image client
+
+`scripts/server/post_sync_i2i_presigned.py` reads the running service's `/openapi.json` to select the request schema and image type. `--task` defaults to `i2i`; the client includes it only for multi-task services. Single-image fields receive a string, while multi-image fields receive a list even for one image.
+
+```bash
+python scripts/server/post_sync_i2i_presigned.py \
+  --url http://localhost:8000 \
+  --task i2i \
+  --prompt "Change the background to a beach." \
+  --image_path input.png \
+  --presigned_url "https://storage.example/upload-presigned-url"
+```
+
+Replace the image path and presigned upload URL. Use `--task t2i` without image inputs for a multi-task service's text-to-image request. Single-task services keep their startup task.
 
 ## Configuration
 
@@ -419,12 +437,12 @@ torchrun --nproc_per_node=2 -m lightx2v.server \
 - **File validation** and format detection
 - **Unified media handling** via MediaHandler pattern
 
-### 4. Separate Video/Image Endpoints
+### 4. Unified Generation Endpoints
 
-- **Dedicated endpoints** for video and image generation
+- **One submission API** for image, video and action tasks
 - **Model-specific request schemas** generated from Specs
-- **Automatic service routing** based on task type
-- **Backward compatible** with legacy `/v1/tasks` endpoint
+- **One result list** for every task's generated artifacts
+- **Compatible image/video and OpenAI image APIs** sharing the same backend
 
 ## Performance Considerations
 

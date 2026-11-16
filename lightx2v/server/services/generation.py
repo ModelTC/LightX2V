@@ -1,6 +1,5 @@
 import json
 import uuid
-from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -9,20 +8,15 @@ from loguru import logger
 
 from lightx2v.utils.request_spec import is_list_type
 
-from ...media import is_base64_audio, is_base64_image, save_base64_audio, save_base64_image
-from ...schema import TaskResponse
-from ..file_service import FileService
-from ..inference import DistributedInferenceService
+from ..media import is_base64_audio, is_base64_image, save_base64_audio, save_base64_image
+from .file_service import FileService
+from .inference import DistributedInferenceService
 
 
-class BaseGenerationService(ABC):
+class GenerationService:
     def __init__(self, file_service: FileService, inference_service: DistributedInferenceService):
         self.file_service = file_service
         self.inference_service = inference_service
-
-    @abstractmethod
-    def get_output_extension(self) -> str:
-        pass
 
     async def _resolve_image_path(self, image_path: str | list[str]) -> str | list[str]:
         if isinstance(image_path, list):
@@ -98,17 +92,13 @@ class BaseGenerationService(ABC):
     def prepare_task_data(self, message):
         task_data = {field: getattr(message, field) for field in message.model_fields_set}
         task_data["task_id"] = message.task_id
-        output_path = task_data.get("save_result_path")
-        if output_path:
-            actual_save_path = self.file_service.get_output_path(output_path)
-            if not actual_save_path.suffix:
-                actual_save_path = actual_save_path.with_suffix(self.get_output_extension())
-            task_data["save_result_path"] = str(actual_save_path)
-        else:
-            task_data["save_result_path"] = None
+        task_data["_output_dir"] = str((self.file_service.output_video_dir / uuid.uuid4().hex).resolve())
+        task_data["_prefer_memory_result"] = message._prefer_memory_result
+        if task_data.get("save_result_path"):
+            task_data["save_result_path"] = str(self.file_service.get_output_path(task_data["save_result_path"]).resolve())
         return task_data
 
-    async def generate_with_stop_event(self, message: Any, stop_event) -> Optional[TaskResponse]:
+    async def generate_with_stop_event(self, message: Any, stop_event) -> Optional[dict]:
         try:
             task_data = self.prepare_task_data(message)
 
@@ -155,19 +145,24 @@ class BaseGenerationService(ABC):
                     return None
                 raise RuntimeError("Task processing failed")
 
-            if result.get("status") == "success":
-                output_path = result["save_result_path"]
-                return TaskResponse(
-                    task_id=message.task_id,
-                    task_status="completed",
-                    save_result_path=str(Path(output_path).absolute()) if output_path is not None else None,
-                )
-            else:
-                error_msg = result.get("error", "Inference failed")
-                error_type = result.get("error_type", "")
-                exc = RuntimeError(error_msg)
-                exc.original_error_type = error_type
+            if result["status"] != "success":
+                exc = RuntimeError(result.get("error", "Inference failed"))
+                exc.original_error_type = result.get("error_type", "")
                 raise exc
+
+            outputs = result["outputs"]
+            if not outputs:
+                raise RuntimeError("The runner did not produce any downloadable outputs.")
+            required = message._required_output
+            matching = [output for output in outputs if required is None or output.type == required]
+            if not matching:
+                produced = ", ".join(sorted({output.type for output in outputs}))
+                raise RuntimeError(f"This interface requires {required}; the task produced {produced}. Use /v1/tasks/ for other output types.")
+            for output in outputs:
+                if output.path is None and output.content is None:
+                    raise RuntimeError(f"The runner did not provide downloadable content for {output.name}.")
+            result["save_result_path"] = matching[0].path
+            return result
 
         except Exception as e:
             logger.exception(f"Task {message.task_id} processing failed: {str(e)}")

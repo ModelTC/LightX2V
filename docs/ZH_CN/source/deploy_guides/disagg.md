@@ -587,7 +587,7 @@ Encoder、Transformer、Decoder 的 `disagg_config` 使用 `decentralized_queue:
 
 `DisaggMixin` 的内部请求快照使用 `data_bootstrap_room` 标识传输 room，并可携带 `disagg_phase1_receiver_engine_rank` 选择 Transformer rank；`save_result_path` 表示输出路径。这些是内部配置/分发字段，不能直接视为 HTTP 请求字段。
 
-当前 [HTTP schema](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/server/schema.py) 禁止额外字段，`ImageTaskRequest` 未声明上述 room 和 rank 字段。HTTP 使用第 3 节的现有请求脚本；队列模式的任务完成回传、轮询端点和 Decoder 结果交付仍需随完整 worker 实现验证。
+当前 [HTTP schema](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/server/schema.py) 禁止额外字段，`TaskRequest` 未声明上述 room 和 rank 字段。HTTP 使用第 3 节的现有请求脚本；队列模式的任务完成回传、轮询端点和 Decoder 结果交付仍需随完整 worker 实现验证。
 
 ## 5. RDMA vs TCP 协议选择
 

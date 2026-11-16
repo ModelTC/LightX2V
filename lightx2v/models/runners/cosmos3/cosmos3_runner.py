@@ -848,6 +848,7 @@ class Cosmos3Runner(DefaultRunner):
         else:
             with open(save_action_path, "w") as f:
                 json.dump(action.tolist(), f)
+        self.record_output("action", save_action_path)
         logger.info(f"Action saved: {save_action_path}")
 
     def run(self, total_steps=None):
@@ -908,6 +909,7 @@ class Cosmos3Runner(DefaultRunner):
                 method=self.config.get("save_video_method", "ffmpeg"),
             )
             self._mux_generated_audio(save_path, sound)
+            self.record_output("video", save_path)
             logger.info(f"Video saved: {save_path}")
             return
         image_prefix, image_suffix = os.path.splitext(save_path)
@@ -916,10 +918,12 @@ class Cosmos3Runner(DefaultRunner):
             for idx, image in enumerate(images):
                 path = f"{image_prefix}_{idx:05d}.{image_suffix}"
                 image.save(path)
+                self.record_output("image", path)
                 logger.info(f"{log_prefix}: {path}")
             return
         image = images[0] if isinstance(images, list) else images
         image.save(f"{image_prefix}.{image_suffix}")
+        self.record_output("image", f"{image_prefix}.{image_suffix}")
         logger.info(f"{log_prefix}: {image_prefix}.{image_suffix}")
 
     def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None, sound=None, action=None):

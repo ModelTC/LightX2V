@@ -20,6 +20,8 @@ python -m lightx2v.server \
   --config_json configs/cosmos3/cosmos3_nano_omni.json
 ```
 
-Every native request to this service supplies `task`. Send `t2i` to `/v1/tasks/image/`; send video and audio-video tasks to `/v1/tasks/video/`. Changing tasks reuses the loaded weights.
+Every native request to this service supplies `task`. Submit all tasks to `/v1/tasks/`; joint generation exposes video and action downloads under the same task ID. The existing `/v1/tasks/image/` and `/v1/tasks/video/` routes remain compatible. Changing tasks reuses the loaded weights.
 
-Specialized variants remain single-task services; their native requests omit `task`. Policy-DROID with `decode_video=false` returns actions and uses the Python `Cosmos3Policy` interface; it has no image/video HTTP output adapter. Enable `decode_video` only when video output is needed.
+Specialized variants remain single-task services; their native requests omit `task`. Policy-DROID with `decode_video=false` returns actions through the unified HTTP endpoint or Python `Cosmos3Policy`. Enable `decode_video` only when video output is needed.
+
+An Omni request with `action_mode="policy"` also produces only actions when `decode_video=false`. Use the unified endpoint for action-only requests. A legacy image/video request fails after inference if its required artifact was not produced.

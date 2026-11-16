@@ -20,29 +20,23 @@ Qwen-Image-2.1 的 `t2i`、`i2i` 分别使用 `T2IInputInfo`、`MultiImageI2IInp
 
 ```python
 from lightx2v.models.runners.request_args import IMAGE
-from lightx2v.utils.request_spec import Argument, TaskSpec
+from lightx2v.utils.request_spec import Argument
 
 SPECS = {
     "qwen_image_21": QwenImage21Spec(
         {
-            "t2i": TaskSpec(
-                dict(IMAGE, resolution=Argument(type=int, gt=0, help="Output resolution.")),
-                outputs=("image",),
-            ),
-            "i2i": TaskSpec(
-                dict(
-                    IMAGE,
-                    image_path=Argument(type=list[str], help="Input image paths."),
-                    resolution=Argument(type=int, gt=0, help="Output resolution."),
-                ),
-                outputs=("image",),
+            "t2i": dict(IMAGE, resolution=Argument(type=int, gt=0, help="Output resolution.")),
+            "i2i": dict(
+                IMAGE,
+                image_path=Argument(type=list[str], help="Input image paths."),
+                resolution=Argument(type=int, gt=0, help="Output resolution."),
             ),
         }
     ),
 }
 ```
 
-`TaskSpec` 将任务参数与输出类型放在一起。`i2v` 虽然输入图片，仍声明 `outputs=("video",)`。服务端只注册与任务输出匹配的图片/视频接口。`request_args.py` 中的 `ImageVideoTaskSpec` 声明两类输出，并根据合并后的启动配置与请求路径判断实际类型；发错接口的请求在入队前返回 HTTP 422。其他输出类型需要对应的服务适配器才能提供服务。
+Spec 只维护任务与输入参数，不声明输出类型。统一接口 `POST /v1/tasks/` 接受当前部署模型的请求；`/docs` 根据任务和参数生成。旧图片、视频接口与 OpenAI 图片接口共用请求定义，通过实际生成的产物检查输出类型。
 
 CLI 和 HTTP 都根据这份 Spec 生成请求参数、校验规则和文档，`BaseRunner` 也从同一份 Spec 校验任务与请求字段。模型专属参数直接定义在自己的 `request_spec.py` 中，无需修改公共参数表，或在 runner、服务端 Schema 中重复声明。当前实例实际接受的任务和字段还受启动任务及模型配置限制。涉及模型初始化的参数，需要先确认模型支持在运行时修改。
 
@@ -102,7 +96,7 @@ runner 合并参数时保留 `0`、`False`、`""`、`[]`。它们是否有效由
 
 CLI 和 HTTP 的请求覆盖值默认都为 `None`，实际默认值继续由启动配置和 `InputInfo` 决定。HTTP 按 `model_fields_set` 转发显式提交的字段，不会用请求模型的构造默认值覆盖启动配置。
 
-服务按输出接口筛选任务并生成请求模型；单任务、多任务规则仍按整个服务的任务集合判断，多任务请求通过必填的 `task` 选择。单任务请求模型不包含 `task`，传入会返回 HTTP 422，由 runner 使用启动时绑定的任务。`/docs` 展示当前模型的字段，而不是所有模型的参数集合。
+服务按部署模型支持的任务生成请求模型，多任务请求通过必填的 `task` 选择。单任务请求模型不包含 `task`，传入会返回 HTTP 422，由 runner 使用启动时绑定的任务。`/docs` 展示当前模型的字段，而不是所有模型的参数集合。
 
 OpenAI 图片接口共用 Spec 中的推理字段，同时保留必填 `prompt`、`n`、`response_format` 和 `size="WIDTHxHEIGHT"` 等协议约定。格式转换和新增协议控制仍需调整适配器。
 
@@ -116,3 +110,14 @@ OpenAI 图片接口共用 Spec 中的推理字段，同时保留必填 `prompt`�
 - **实际效果**：检查模型计算是否使用新值，以及与其他参数的优先关系。
 
 例如，非空的 `size` 会优先决定 Qwen-Image-2.1 的输出尺寸，即使它来自启动配置。验证 `resolution` 对自动输出尺寸的影响时，应同时检查 `size`，不能只确认接口是否接受参数。
+
+## 登记生成结果
+
+普通单文件图片、视频 runner 可复用 `BaseRunner.get_outputs()`，从返回的 `image`、`images` 或 `video` 字段及实际保存路径收集结果。多文件、联合输出或保存路径发生变化时，在保存成功后登记真实路径：
+
+```python
+self.record_output("video", video_path)
+self.record_output("action", action_path)
+```
+
+这不会改变 `run_pipeline()` 的返回结构或 `InputInfo`。服务通过 `/v1/tasks/{task_id}/results` 展示实际结果，每项有独立下载地址。仅生成 action 的模型也使用统一入口。旧图片、视频接口缺少所需产物时，任务会在执行后失败；不再通过静态 Spec 在入队前筛选。

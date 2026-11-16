@@ -76,7 +76,25 @@ def build_presigned_url(args: argparse.Namespace) -> str:
     return presigned_url
 
 
-def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
+def get_request_properties(url: str, task: str) -> Dict[str, Any]:
+    response = requests.get(f"{url.rstrip('/')}/openapi.json", timeout=30)
+    response.raise_for_status()
+    document = response.json()
+    schema = document["paths"]["/v1/tasks/image/sync"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    if "discriminator" in schema:
+        tasks = schema["discriminator"]["mapping"]
+        if task not in tasks:
+            raise ValueError(f"Task {task!r} is not available; choose from: {', '.join(tasks)}")
+        schema = {"$ref": tasks[task]}
+    if "$ref" in schema:
+        schema = document["components"]["schemas"][schema["$ref"].rsplit("/", 1)[-1]]
+    properties = schema["properties"]
+    if "task" in properties and properties["task"]["const"] != task:
+        raise ValueError(f"This endpoint requires task={properties['task']['const']!r}")
+    return properties
+
+
+def build_payload(args: argparse.Namespace, properties: Dict[str, Any]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "prompt": args.prompt,
         "negative_prompt": args.negative_prompt,
@@ -87,10 +105,18 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
     payload = {key: value for key, value in payload.items() if value is not None}
+    if "task" in properties:
+        payload["task"] = args.task
 
     images = args.image_base64 or [file_to_base64(path) for path in args.image_path]
     if images:
-        payload["image_path"] = images
+        if "image_path" not in properties:
+            raise ValueError("This task does not accept image_path")
+        image_schema = properties["image_path"]
+        multiple = any(schema.get("type") == "array" for schema in image_schema.get("anyOf", [image_schema]))
+        if not multiple and len(images) != 1:
+            raise ValueError("This task accepts exactly one input image")
+        payload["image_path"] = images if multiple else images[0]
 
     image_mask_base64 = args.image_mask_base64
     if not image_mask_base64 and args.image_mask_path:
@@ -109,6 +135,7 @@ def call_sync_api(args: argparse.Namespace, payload: Dict[str, Any]) -> requests
 def main() -> None:
     parser = argparse.ArgumentParser(description="Call /v1/tasks/image/sync with presigned_url upload.")
     parser.add_argument("--url", type=str, default="http://127.0.0.1:8000", help="Server base url")
+    parser.add_argument("--task", default="i2i", help="Task selected for multi-task services, e.g. i2i or t2i")
     parser.add_argument("--prompt", type=str, required=True, help="Prompt text")
     parser.add_argument("--negative_prompt", type=str, default=None, help="Negative prompt text")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
@@ -158,9 +185,9 @@ def main() -> None:
     if args.presign_expires <= 0:
         raise ValueError("--presign_expires must be > 0")
 
-    args.presigned_url = build_presigned_url(args)
-
-    payload = build_payload(args)
+    properties = get_request_properties(args.url, args.task)
+    payload = build_payload(args, properties)
+    payload["presigned_url"] = build_presigned_url(args)
     response = call_sync_api(args, payload)
 
     if response.status_code != 200:

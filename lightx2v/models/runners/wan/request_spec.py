@@ -1,5 +1,5 @@
 from lightx2v.models.runners.request_args import COMMON, PROMPT, VIDEO, without
-from lightx2v.utils.request_spec import Argument, MultiTaskSpec, RequestSpec, TaskSpec
+from lightx2v.utils.request_spec import Argument, MultiTaskSpec, RequestSpec
 
 
 class WanAnimateSpec(RequestSpec):
@@ -20,46 +20,37 @@ class WanDancerSpec(RequestSpec):
 
 EDEN_LIVE = RequestSpec(
     {
-        "v2v": TaskSpec(
-            dict(
-                VIDEO,
-                image_path=Argument(help="Input image path."),
-                video_path=Argument(help="Input video path."),
-            ),
-            outputs=("video",),
+        "v2v": dict(
+            VIDEO,
+            image_path=Argument(help="Input image path."),
+            video_path=Argument(help="Input video path."),
         )
     }
 )
 
 FAST_WAM = RequestSpec(
     {
-        "i2va": TaskSpec(
-            dict(
-                COMMON,
-                image_path=Argument(type=list[str], help="Camera image paths, or a directory containing the camera inputs."),
-                prompt=Argument(help="Text prompt."),
-                save_action_path=Argument(help="Output action file path."),
-                state_path=Argument(help="Input robot state file."),
-            ),
-            outputs=("video",),
+        "i2va": dict(
+            COMMON,
+            image_path=Argument(type=list[str], help="Camera image paths, or a directory containing the camera inputs."),
+            prompt=Argument(help="Text prompt."),
+            save_action_path=Argument(help="Output action file path."),
+            state_path=Argument(help="Input robot state file."),
         )
     }
 )
 
 WAN_AUDIO = RequestSpec(
     {
-        task: TaskSpec(
-            dict(
-                COMMON | PROMPT,
-                audio_path=Argument(help="Driving audio path."),
-                image_path=Argument(help="Input image path."),
-                num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
-                video_duration=Argument(type=float, help="Requested output duration in seconds for audio-driven video generation."),
-                resize_mode=Argument(help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config."),
-                fixed_area=Argument(help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config."),
-                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
-            ),
-            outputs=("video",),
+        task: dict(
+            COMMON | PROMPT,
+            audio_path=Argument(help="Driving audio path."),
+            image_path=Argument(help="Input image path."),
+            num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
+            video_duration=Argument(type=float, help="Requested output duration in seconds for audio-driven video generation."),
+            resize_mode=Argument(help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config."),
+            fixed_area=Argument(help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config."),
+            size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
         )
         for task in ("s2v", "rs2v")
     }
@@ -67,50 +58,38 @@ WAN_AUDIO = RequestSpec(
 
 WAN = RequestSpec(
     {
-        "t2v": TaskSpec(VIDEO, outputs=("video",)),
-        "i2v": TaskSpec(
-            dict(
-                VIDEO,
-                image_path=Argument(help="Input image path."),
-            ),
-            outputs=("video",),
+        "t2v": VIDEO,
+        "i2v": dict(
+            VIDEO,
+            image_path=Argument(help="Input image path."),
         ),
-        "flf2v": TaskSpec(
-            dict(
-                VIDEO,
-                image_path=Argument(help="Input image path."),
-                last_frame_path=Argument(help="Last-frame image path."),
-            ),
-            outputs=("video",),
+        "flf2v": dict(
+            VIDEO,
+            image_path=Argument(help="Input image path."),
+            last_frame_path=Argument(help="Last-frame image path."),
         ),
     }
 )
 
 LINGBOT = RequestSpec(
     {
-        "i2v": TaskSpec(
-            dict(
-                WAN.tasks["i2v"].arguments,
-                action_path=Argument(help="Directory path for lingbot camera/action control files (poses.npy, intrinsics.npy, optional action.npy)."),
-                pose=Argument(type=str | dict, help="Camera pose specification or JSON file path."),
-            ),
-            outputs=("video",),
+        "i2v": dict(
+            WAN.tasks["i2v"],
+            action_path=Argument(help="Directory path for lingbot camera/action control files (poses.npy, intrinsics.npy, optional action.npy)."),
+            pose=Argument(type=str | dict, help="Camera pose specification or JSON file path."),
         )
     }
 )
 
-WAN_SF = RequestSpec({"t2v": TaskSpec(without(WAN.tasks["t2v"].arguments, "num_frames"), outputs=("video",))})
+WAN_SF = RequestSpec({"t2v": without(WAN.tasks["t2v"], "num_frames")})
 
 WAN_VACE = RequestSpec(
     {
-        "vace": TaskSpec(
-            dict(
-                VIDEO,
-                mask_path=Argument(help="Input mask path."),
-                ref_image_paths=Argument(type=list[str], help="Reference image paths."),
-                video_path=Argument(help="Input video path."),
-            ),
-            outputs=("video",),
+        "vace": dict(
+            VIDEO,
+            mask_path=Argument(help="Input mask path."),
+            ref_image_paths=Argument(type=list[str], help="Reference image paths."),
+            video_path=Argument(help="Input video path."),
         )
     }
 )
@@ -118,61 +97,49 @@ WAN_VACE = RequestSpec(
 SPECS = {
     "dreamzero": RequestSpec(
         {
-            "i2va": TaskSpec(
-                dict(
-                    COMMON | PROMPT,
-                    image_path=Argument(type=list[str], help="Camera image paths, or a directory containing the camera inputs."),
-                    save_action_path=Argument(help="Output action file path."),
-                    state_path=Argument(help="Input robot state file."),
-                ),
-                outputs=("video",),
+            "i2va": dict(
+                COMMON | PROMPT,
+                image_path=Argument(type=list[str], help="Camera image paths, or a directory containing the camera inputs."),
+                save_action_path=Argument(help="Output action file path."),
+                state_path=Argument(help="Input robot state file."),
             )
         }
     ),
     "fastwam": FAST_WAM,
     "infinitetalk": RequestSpec(
         {
-            "s2v": TaskSpec(
-                dict(
-                    COMMON | PROMPT,
-                    audio_path=Argument(type=list[str], help="Driving audio paths, or a directory containing audio and speaker metadata."),
-                    image_path=Argument(help="Input image path."),
-                    num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
-                    video_duration=Argument(type=float, help="Requested output duration in seconds for audio-driven video generation."),
-                    video_path=Argument(help="Input video path."),
-                ),
-                outputs=("video",),
+            "s2v": dict(
+                COMMON | PROMPT,
+                audio_path=Argument(type=list[str], help="Driving audio paths, or a directory containing audio and speaker metadata."),
+                image_path=Argument(help="Input image path."),
+                num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
+                video_duration=Argument(type=float, help="Requested output duration in seconds for audio-driven video generation."),
+                video_path=Argument(help="Input video path."),
             )
         }
     ),
     "lingbot_va": RequestSpec(
         {
-            "i2va": TaskSpec(
-                dict(
-                    COMMON | PROMPT,
-                    image_path=Argument(type=list[str], help="Camera image paths, or a directory containing the camera inputs."),
-                ),
-                outputs=("video",),
+            "i2va": dict(
+                COMMON | PROMPT,
+                image_path=Argument(type=list[str], help="Camera image paths, or a directory containing the camera inputs."),
             )
         }
     ),
     "lingbot_world": LINGBOT,
-    "lingbot_world_fast": RequestSpec({"i2v": TaskSpec(without(LINGBOT.tasks["i2v"].arguments, "num_frames"), outputs=("video",))}),
+    "lingbot_world_fast": RequestSpec({"i2v": without(LINGBOT.tasks["i2v"], "num_frames")}),
     "matrix_game4": RequestSpec(
         {
-            "v2v": TaskSpec(
-                dict(
-                    VIDEO,
-                    video_path=Argument(help="Input video path."),
-                    image_path=Argument(help="Input image path."),
-                ),
-                outputs=("video",),
+            "v2v": dict(
+                VIDEO,
+                video_path=Argument(help="Input video path."),
+                image_path=Argument(help="Input image path."),
             )
         }
     ),
     "realtimewam": FAST_WAM,
     "seko_talk": WAN_AUDIO,
-    "seko_talk_ar": RequestSpec({"rs2v": TaskSpec(without(WAN_AUDIO.tasks["rs2v"].arguments, "num_frames", "resize_mode", "fixed_area"), outputs=("video",))}),
+    "seko_talk_ar": RequestSpec({"rs2v": without(WAN_AUDIO.tasks["rs2v"], "num_frames", "resize_mode", "fixed_area")}),
     "wan2.1": WAN,
     "wan2.1_sf": WAN_SF,
     "wan2.1_realtime": WAN_SF,
@@ -180,30 +147,24 @@ SPECS = {
     "wan2.2": MultiTaskSpec({task: WAN.tasks[task] for task in ("t2v", "i2v")}),
     "wan2.2_animate": WanAnimateSpec(
         {
-            "animate": TaskSpec(
-                dict(
-                    COMMON | PROMPT,
-                    face_video_path=Argument(help="Face input path."),
-                    pose_video_path=Argument(help="Pose driving video path."),
-                    ref_image_paths=Argument(type=list[str], help="Reference image paths."),
-                    num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
-                ),
-                outputs=("video",),
+            "animate": dict(
+                COMMON | PROMPT,
+                face_video_path=Argument(help="Face input path."),
+                pose_video_path=Argument(help="Pose driving video path."),
+                ref_image_paths=Argument(type=list[str], help="Reference image paths."),
+                num_frames=Argument(type=int, help="Requested output frame count. Model-specific length constraints apply."),
             )
         }
     ),
     "wan2.2_animate2_distilled": RequestSpec(
         {
-            "animate": TaskSpec(
-                dict(
-                    VIDEO,
-                    image_path=Argument(help="Input image path."),
-                    ref_video_prompt=Argument(help="Reference/driving-video prompt for Wan-Animate-2."),
-                    pose_video_path=Argument(help="Pose driving video path."),
-                    ref_image_paths=Argument(type=list[str], help="Reference image paths."),
-                    video_path=Argument(help="Input video path."),
-                ),
-                outputs=("video",),
+            "animate": dict(
+                VIDEO,
+                image_path=Argument(help="Input image path."),
+                ref_video_prompt=Argument(help="Reference/driving-video prompt for Wan-Animate-2."),
+                pose_video_path=Argument(help="Pose driving video path."),
+                ref_image_paths=Argument(type=list[str], help="Reference image paths."),
+                video_path=Argument(help="Input video path."),
             )
         }
     ),
@@ -211,14 +172,11 @@ SPECS = {
     "wan2.2_moe_vace": WAN_VACE,
     "wan2.2_s2v": RequestSpec(
         {
-            "s2v": TaskSpec(
-                dict(
-                    COMMON | PROMPT,
-                    audio_path=Argument(help="Driving audio path."),
-                    image_path=Argument(help="Input image path."),
-                    pose_video_path=Argument(help="Pose driving video path."),
-                ),
-                outputs=("video",),
+            "s2v": dict(
+                COMMON | PROMPT,
+                audio_path=Argument(help="Driving audio path."),
+                image_path=Argument(help="Input image path."),
+                pose_video_path=Argument(help="Pose driving video path."),
             )
         }
     ),
@@ -228,13 +186,10 @@ SPECS = {
     "wan22_edenlive_ar": EDEN_LIVE,
     "wan_dancer": WanDancerSpec(
         {
-            "s2v": TaskSpec(
-                dict(
-                    COMMON | PROMPT,
-                    audio_path=Argument(help="Driving audio path."),
-                    image_path=Argument(help="Input image path."),
-                ),
-                outputs=("video",),
+            "s2v": dict(
+                COMMON | PROMPT,
+                audio_path=Argument(help="Driving audio path."),
+                image_path=Argument(help="Input image path."),
             )
         }
     ),

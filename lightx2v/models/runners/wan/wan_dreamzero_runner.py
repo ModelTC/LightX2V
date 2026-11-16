@@ -689,6 +689,8 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
         save_to_video(self.gen_video_final, video_path, fps=self.config.get("fps", 10), method=self.config.get("save_video_method", "imageio"))
         os.makedirs(os.path.dirname(action_path) or ".", exist_ok=True)
         np.save(action_path, self.pred_action.numpy())
+        self.record_output("video", video_path)
+        self.record_output("action", action_path if action_path.endswith(".npy") else action_path + ".npy")
         logger.info("Saved DreamZero video to {}", video_path)
         logger.info("Saved DreamZero actions to {}", action_path)
         if self.input_info.return_result_tensor:

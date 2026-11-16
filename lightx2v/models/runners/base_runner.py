@@ -2,6 +2,7 @@ import functools
 import gc
 import os
 from abc import ABC
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -9,6 +10,7 @@ from loguru import logger
 
 from lightx2v.models.runners.registry import get_model_spec
 from lightx2v.utils.input_info import INPUT_INFO_TYPES, InputInfo
+from lightx2v.utils.outputs import Output
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -29,6 +31,7 @@ class BaseRunner(ABC):
         self.supported_tasks = self.get_supported_tasks()
         self.vae_encoder_need_img_original = False
         self.input_info = None
+        self._outputs = []
         self.enable_reuse = config.get("enable_reuse", False)
         self.reuse = False
         self.reuse_prefix_segments = 0
@@ -141,9 +144,40 @@ class BaseRunner(ABC):
 
     def run_request(self, input_info):
         """Run a request that has already passed request preparation."""
+        self._outputs = []
         if input_info.seed is not None:
             seed_all(input_info.seed)
         return self.run_pipeline(input_info)
+
+    def get_output_extension(self, input_info):
+        if input_info.task in ("t2i", "i2i", "ti2i") or (input_info.task == "sr" and input_info.image_path and not input_info.video_path):
+            return ".png"
+        return ".mp4"
+
+    def record_output(self, output_type, path=None):
+        """Register a saved artifact, or an image returned in memory."""
+        index = sum(output.type == output_type for output in self._outputs)
+        name = "actions" if output_type == "action" else output_type
+        if index:
+            name = f"{name}_{index}"
+        self._outputs.append(Output(name, output_type, str(Path(path).resolve()) if path is not None else None))
+
+    def get_outputs(self, input_info, result):
+        """Single-file runners reuse their result keys; multi-file runners register paths."""
+        if self._outputs:
+            return self._outputs
+        if isinstance(result, dict):
+            for output_type, keys in (("image", ("images", "image")), ("video", ("video",)), ("action", ("actions", "action"))):
+                if not any(key in result for key in keys):
+                    continue
+                if output_type == "video" and input_info.task == "sr" and input_info.image_path and not input_info.video_path:
+                    output_type = "image"
+                if not input_info.return_result_tensor and input_info.save_result_path and Path(input_info.save_result_path).is_file():
+                    self.record_output(output_type, input_info.save_result_path)
+                    break
+                if any(result.get(key) is not None for key in keys):
+                    self.record_output(output_type)
+        return self._outputs
 
     def set_reuse(self, reuse, reuse_prefix_segments=0):
         if reuse and not self.enable_reuse:

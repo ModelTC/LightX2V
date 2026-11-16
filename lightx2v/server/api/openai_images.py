@@ -2,7 +2,6 @@ import asyncio
 import base64
 import re
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -13,11 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from lightx2v.models.runners.registry import get_model_spec
 from lightx2v.utils.request_spec import create_request_model, is_list_type
 
-from ..schema import ImageTaskRequest, Usage, hide_request_defaults
+from ..schema import TaskRequest, Usage, hide_request_defaults
 from ..services.file_service import FileService
-from ..task_manager import TaskStatus, task_manager
 from .deps import get_services
 from .request_parsing import form_request_openapi, parse_form_request, validate_request
+from .tasks.submission import run_image_task
 
 _SIZE_PATTERN = re.compile(r"^\s*(\d+)\s*x\s*(\d+)\s*$", re.IGNORECASE)
 OPENAI_IMAGE_RESULT_POLL_INTERVAL_SECONDS = 0.2
@@ -61,96 +60,6 @@ def _shape_from_size(size: str) -> tuple[int, int]:
     return width, height
 
 
-async def _wait_task_result_png(task_id: str, timeout_seconds: int, poll_interval_seconds: float) -> tuple[bytes, Usage | dict | None]:
-    start_time = time.monotonic()
-    status_checks = 0
-    while True:
-        status_checks += 1
-        task_status = task_manager.get_task_status(task_id)
-        if not task_status:
-            raise HTTPException(status_code=500, detail=f"Task status not found: {task_id}")
-
-        status = task_status.get("status")
-        if status == TaskStatus.COMPLETED.value:
-            result_png = task_manager.get_task_result_png(task_id)
-            usage = task_manager.get_task_result_usage(task_id)
-            if result_png:
-                wait_elapsed_ms = (time.monotonic() - start_time) * 1000
-                completion_observe_lag_ms = 0.0
-                end_time = task_status.get("end_time")
-                if end_time:
-                    completion_observe_lag_ms = (datetime.now() - end_time).total_seconds() * 1000
-                logger.info(
-                    f"Task {task_id} OpenAI image wait_task_result cost total={wait_elapsed_ms:.2f} ms "
-                    f"completion_observe_lag={completion_observe_lag_ms:.2f} ms "
-                    f"poll_interval={poll_interval_seconds:.2f} s status_checks={status_checks}"
-                )
-                return result_png, usage
-            raise HTTPException(status_code=500, detail=f"Task completed but no in-memory image found: {task_id}")
-
-        if status == TaskStatus.FAILED.value:
-            raise HTTPException(status_code=500, detail=task_status.get("error", "Task failed"))
-
-        if status == TaskStatus.CANCELLED.value:
-            raise HTTPException(status_code=409, detail=task_status.get("error", "Task cancelled"))
-
-        if (time.monotonic() - start_time) > timeout_seconds:
-            task_manager.cancel_task(task_id)
-            raise HTTPException(status_code=504, detail=f"Task {task_id} timed out after {timeout_seconds} seconds")
-
-        await asyncio.sleep(poll_interval_seconds)
-
-
-async def _watch_client_disconnect(request: Request, task_id: str, poll_interval_seconds: float = 0.2) -> bool:
-    while True:
-        if await request.is_disconnected():
-            task_manager.cancel_task(task_id)
-            logger.info(f"Client disconnected, task {task_id} cancelled")
-            return True
-        await asyncio.sleep(poll_interval_seconds)
-
-
-async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> tuple[bytes, Usage | dict | None]:
-    task_id = None
-    timeout_seconds = 600
-    poll_interval_seconds = OPENAI_IMAGE_RESULT_POLL_INTERVAL_SECONDS
-
-    try:
-        message._prefer_memory_result = True
-        create_task_start = time.perf_counter()
-        task_id = task_manager.create_task(message)
-        create_task_elapsed_ms = (time.perf_counter() - create_task_start) * 1000
-        message.task_id = task_id
-        logger.info(f"Task {task_id} OpenAI image create_task cost {create_task_elapsed_ms:.2f} ms prompt_chars={len(message.prompt)} image_size={message.get('size')}")
-
-        wait_task = asyncio.create_task(_wait_task_result_png(task_id, timeout_seconds, poll_interval_seconds))
-        disconnect_task = asyncio.create_task(_watch_client_disconnect(request, task_id))
-
-        done, pending = await asyncio.wait({wait_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
-        for pending_task in pending:
-            pending_task.cancel()
-
-        if disconnect_task in done:
-            if not wait_task.done():
-                wait_task.cancel()
-            raise HTTPException(status_code=499, detail=f"Client disconnected, task {task_id} cancelled")
-
-        result_png, usage = wait_task.result()
-        logger.info(f"Task {task_id} OpenAI image task result ready, building response")
-        return result_png, usage
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except HTTPException:
-        raise
-    except asyncio.CancelledError:
-        if task_id:
-            task_manager.cancel_task(task_id)
-        raise
-    except Exception as e:
-        logger.error(f"Failed to run OpenAI-compatible image task: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 def _build_url_response(request: Request, task_id: str, image_bytes: bytes) -> str:
     services = get_services()
     assert services.file_service is not None, "File service is not initialized"
@@ -187,7 +96,7 @@ def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, r
     return response
 
 
-def _build_image_task_request(body: OpenAIImageRequest, request_type, *, task: str | None = None) -> ImageTaskRequest:
+def _build_image_task_request(body: OpenAIImageRequest, request_type, *, task: str | None = None) -> TaskRequest:
     if body.n != 1:
         raise HTTPException(status_code=400, detail="Only n=1 is currently supported")
     if not body.prompt.strip():
@@ -223,7 +132,7 @@ async def _save_upload_file(file: UploadFile, file_service: FileService) -> str:
 def create_router(config, request_type):
     router = APIRouter()
     spec = get_model_spec(config["model_cls"])
-    tasks = spec.get_tasks_for_output(config, "image")
+    tasks = spec.get_tasks(config)
     multi_task = len(spec.get_tasks(config)) > 1
 
     def request_model(task, base):
@@ -236,7 +145,7 @@ def create_router(config, request_type):
         @router.post("/generations", response_model=OpenAIImageResponse)
         async def create_openai_image_generation(request: Request, body: generation_request):
             message = _build_image_task_request(body, request_type, task="t2i" if multi_task else None)
-            result_png, usage = await _run_sync_image_task(request, message)
+            result_png, usage = await run_image_task(request, message, poll_interval_seconds=OPENAI_IMAGE_RESULT_POLL_INTERVAL_SECONDS)
             return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
 
     if "i2i" in tasks and "image_path" in spec.get_fields(config, "i2i"):
@@ -286,7 +195,7 @@ def create_router(config, request_type):
             if mask is not None:
                 message.image_mask_path = await _save_upload_file(mask, services.file_service)
 
-            result_png, usage = await _run_sync_image_task(request, message)
+            result_png, usage = await run_image_task(request, message, poll_interval_seconds=OPENAI_IMAGE_RESULT_POLL_INTERVAL_SECONDS)
             return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
 
     return router

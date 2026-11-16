@@ -383,6 +383,9 @@ class FastWAMRunner(BaseRunner):
 
     policy_class = FastWAMPolicy
 
+    def get_output_extension(self, input_info):
+        return ".npy"
+
     def init_modules(self):
         logger.info("Loading {}...", self.policy_class.__name__)
         self.policy = self.policy_class.from_config(self.config)
@@ -454,6 +457,9 @@ class FastWAMRunner(BaseRunner):
                 json.dump(actions.tolist(), f, ensure_ascii=False, indent=2)
         else:
             np.save(action_path, actions)
+            if not action_path.endswith(".npy"):
+                action_path += ".npy"
+        self.record_output("action", action_path)
         logger.info("Saved FastWAM actions to {}", action_path)
 
     def run_pipeline(self, input_info):

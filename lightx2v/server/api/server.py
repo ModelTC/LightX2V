@@ -123,24 +123,14 @@ class ApiServer:
                 task_manager.fail_task(task_id, "Task cancelled")
                 return
 
-            from ..schema import ImageTaskRequest
-
-            if isinstance(message, ImageTaskRequest):
-                generation_service = services.image_service
-            else:
-                generation_service = services.video_service
-
-            if generation_service is None:
-                raise RuntimeError(f"Generation service is not initialized for request type {type(message)!r}")
-
-            result = await generation_service.generate_with_stop_event(message, task_info.stop_event)
+            result = await services.generation_service.generate_with_stop_event(message, task_info.stop_event)
 
             if result is not None:
                 task_manager.complete_task(
                     task_id,
-                    save_result_path=result.save_result_path or None,
-                    result_png=result.result_png,
-                    usage=result.usage,
+                    save_result_path=result["save_result_path"],
+                    results=result["outputs"],
+                    usage=result.get("usage"),
                 )
                 logger.info(f"Task {task_id} completed successfully")
             else:

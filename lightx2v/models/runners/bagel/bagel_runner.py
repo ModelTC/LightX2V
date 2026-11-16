@@ -161,10 +161,12 @@ class BagelRunner(DefaultRunner):
             for idx, image in enumerate(images[0]):
                 out_path = f"{image_prefix}_{idx:05d}.{image_suffix}"
                 image.save(out_path)
+                self.record_output("image", out_path)
                 logger.info(f"{log_prefix}: {out_path}")
         else:
             out_path = f"{image_prefix}.{image_suffix}"
             images[0].save(out_path)
+            self.record_output("image", out_path)
             logger.info(f"{log_prefix}: {out_path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None):

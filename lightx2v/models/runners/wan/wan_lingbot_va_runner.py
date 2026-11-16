@@ -505,6 +505,8 @@ class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
         save_to_video(self.gen_video_final, video_path, fps=self.config.get("fps", 10), method=self.config.get("save_video_method", "imageio"))
         os.makedirs(os.path.dirname(action_path) or ".", exist_ok=True)
         np.save(action_path, self.pred_action.flatten(1).numpy())
+        self.record_output("video", video_path)
+        self.record_output("action", action_path)
         logger.info("Saved LingBot-VA video to {}", video_path)
         logger.info("Saved LingBot-VA actions to {}", action_path)
         if self.input_info.return_result_tensor:

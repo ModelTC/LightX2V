@@ -301,3 +301,6 @@ class NeoppRunner(DefaultRunner):
         mean = torch.tensor(mean, device=x.device, dtype=x.dtype).view(1, 3, 1, 1)
         std = torch.tensor(std, device=x.device, dtype=x.dtype).view(1, 3, 1, 1)
         return (x * std + mean).clamp(0, 1)
+
+    def get_outputs(self, input_info, result):
+        return super().get_outputs(input_info, {"image": result})

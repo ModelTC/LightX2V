@@ -156,6 +156,9 @@ class MotusRunner(Wan22DenseRunner):
         with open(action_path, "w") as f:
             json.dump(pred_actions.detach().cpu().float().tolist(), f, ensure_ascii=False, indent=2)
 
+        self.record_output("video", video_path)
+        self.record_output("action", action_path)
+
         logger.info(f"Saved Motus video to {video_path}")
         logger.info(f"Saved Motus actions to {action_path}")
 

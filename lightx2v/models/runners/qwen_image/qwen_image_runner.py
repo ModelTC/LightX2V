@@ -522,10 +522,12 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         if isinstance(images[0], list) and len(images[0]) > 1:
             for idx, image in enumerate(images[0]):
                 image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
+                self.record_output("image", f"{image_prefix}_{idx:05d}.{image_suffix}")
                 logger.info(f"{log_prefix}: {image_prefix}_{idx:05d}.{image_suffix}")
         else:
             image = images[0]
             image.save(f"{image_prefix}.{image_suffix}")
+            self.record_output("image", f"{image_prefix}.{image_suffix}")
             logger.info(f"{log_prefix}: {image_prefix}.{image_suffix}")
 
     def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None):

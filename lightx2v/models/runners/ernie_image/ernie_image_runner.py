@@ -191,6 +191,7 @@ class ErnieImageRunner(DefaultRunner):
             else:
                 image_path = f"{image_prefix}_{idx:05d}.{image_suffix}"
             image.save(image_path)
+            self.record_output("image", image_path)
             logger.info(f"Image saved: {image_path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, revised_prompts, latents=None, generator=None):

@@ -1,5 +1,5 @@
 from lightx2v.models.runners.request_args import COMMON
-from lightx2v.utils.request_spec import Argument, MultiTaskSpec, TaskSpec
+from lightx2v.utils.request_spec import Argument, MultiTaskSpec
 
 
 class Flux2Spec(MultiTaskSpec):
@@ -15,22 +15,16 @@ class Flux2Spec(MultiTaskSpec):
 SPECS = {
     "flux2": Flux2Spec(
         {
-            "t2i": TaskSpec(
-                dict(
-                    COMMON,
-                    aspect_ratio=Argument(help="Output aspect ratio."),
-                    prompt=Argument(help="Text prompt."),
-                    size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
-                ),
-                outputs=("image",),
+            "t2i": dict(
+                COMMON,
+                aspect_ratio=Argument(help="Output aspect ratio."),
+                prompt=Argument(help="Text prompt."),
+                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
             ),
-            "i2i": TaskSpec(
-                dict(
-                    COMMON,
-                    image_path=Argument(type=list[str], help="Input image paths or a directory containing reference images."),
-                    prompt=Argument(help="Text prompt."),
-                ),
-                outputs=("image",),
+            "i2i": dict(
+                COMMON,
+                image_path=Argument(type=list[str], help="Input image paths or a directory containing reference images."),
+                prompt=Argument(help="Text prompt."),
             ),
         },
     ),

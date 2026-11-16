@@ -20,29 +20,23 @@ Declare an `Argument` for the intended tasks in the model's own `request_spec.py
 
 ```python
 from lightx2v.models.runners.request_args import IMAGE
-from lightx2v.utils.request_spec import Argument, TaskSpec
+from lightx2v.utils.request_spec import Argument
 
 SPECS = {
     "qwen_image_21": QwenImage21Spec(
         {
-            "t2i": TaskSpec(
-                dict(IMAGE, resolution=Argument(type=int, gt=0, help="Output resolution.")),
-                outputs=("image",),
-            ),
-            "i2i": TaskSpec(
-                dict(
-                    IMAGE,
-                    image_path=Argument(type=list[str], help="Input image paths."),
-                    resolution=Argument(type=int, gt=0, help="Output resolution."),
-                ),
-                outputs=("image",),
+            "t2i": dict(IMAGE, resolution=Argument(type=int, gt=0, help="Output resolution.")),
+            "i2i": dict(
+                IMAGE,
+                image_path=Argument(type=list[str], help="Input image paths."),
+                resolution=Argument(type=int, gt=0, help="Output resolution."),
             ),
         }
     ),
 }
 ```
 
-`TaskSpec` groups a task's arguments and output types. An `i2v` task declares `outputs=("video",)` even though it accepts an image. The server registers image/video routes only for compatible tasks. `ImageVideoTaskSpec` in `request_args.py` declares both outputs and resolves the actual type from the merged startup/request paths; mismatched requests fail with HTTP 422 before queueing. Other output types require a service adapter before they can be served.
+Specs contain tasks and input arguments, without output-type declarations. `POST /v1/tasks/` accepts requests for the deployed model; `/docs` is generated from its tasks and arguments. Legacy image/video routes and the OpenAI image adapter reuse these definitions and check the actual generated artifacts.
 
 The CLI and HTTP API generate their input models, validation and documentation from this Spec. `BaseRunner` uses the same Spec to validate tasks and request fields. Define model-specific arguments locally without changing a global argument table or repeating declarations in the runner or server schema. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
 
@@ -100,7 +94,7 @@ The runner preserves `0`, `False`, `""` and `[]` when merging parameters. Field 
 
 CLI and HTTP request overrides default to `None`, leaving startup and `InputInfo` defaults in control. HTTP forwards only explicitly submitted fields through `model_fields_set`.
 
-The service builds request models from each output API's compatible tasks. The single/multi-task rule uses the entire service's task set, even if an API contains only one of those tasks. Multi-task requests select the model through the required `task` field. Single-task request models do not contain `task`; submitting it is rejected with HTTP 422, and the runner uses its startup task. `/docs` shows the selected model's fields rather than a global image/video parameter collection.
+The service builds request models from the deployed model’s tasks. Multi-task requests select the task through the required `task` field. Single-task request models do not contain `task`; submitting it is rejected with HTTP 422, and the runner uses its startup task. `/docs` shows the selected model's fields rather than a global image/video parameter collection.
 
 OpenAI image endpoints reuse the Spec's inference fields while retaining protocol conventions such as required `prompt`, `n`, `response_format` and `size="WIDTHxHEIGHT"`. Format conversions and new protocol controls still belong in that adapter.
 
@@ -114,3 +108,14 @@ Submit lists or objects as JSON text in forms, such as `size=[512,768]`. A new u
 - **Actual effect:** check that computation uses the value, including its precedence relative to other parameters.
 
 For example, a nonempty `size` takes precedence for Qwen-Image-2.1 output dimensions, even when inherited from startup configuration. When verifying how `resolution` affects automatic dimensions, also check `size`; interface acceptance alone is insufficient.
+
+## Register generated artifacts
+
+Single-file image/video runners can reuse `BaseRunner.get_outputs()`, which collects the returned `image`, `images` or `video` field and its actual saved path. For multiple files, joint outputs, or rewritten filenames, register the real paths after saving:
+
+```python
+self.record_output("video", video_path)
+self.record_output("action", action_path)
+```
+
+This preserves `run_pipeline()` return values and `InputInfo`. `/v1/tasks/{task_id}/results` lists the actual artifacts with individual download URLs. Action-only models use the unified submission endpoint too. A legacy image/video request fails after execution if the required artifact was not produced; Specs no longer filter output capabilities before queueing.

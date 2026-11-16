@@ -14,7 +14,7 @@ The example loads Wan2.1 T2V with `configs/wan/wan_t2v.json` and listens on port
 
 Single-task services bind their task at startup; JSON and form requests must not include `task`. Multi-task services such as MiniMax-H3 require `task` in each native request. `/docs` shows the request schema for the running service.
 
-Routes follow task output types. H3 and Wan video services expose video APIs; image services expose image APIs. SR models expose both and reject requests sent to the wrong output API. Text, mesh, depth and reconstruction tasks currently have no adapter in this server.
+`POST /v1/tasks/` submits image, video and action tasks. The deployed model's Spec determines request fields and documentation, without static output declarations. `POST /v1/tasks/form` adds uploads documented from each task's supported inputs. Legacy image/video routes and OpenAI image endpoints share the same queue and inference service.
 
 BAGEL, Flux2, HiDream-O1-Image, Z-Image, LingBot-Video, HunyuanImage3, LTX2/LTX2.5, Wan2.2 TI2V-5B and Cosmos3 Omni support per-request tasks. Omit startup `--task` and select a task in each native request. HunyuanImage3 exposes image tasks only; Cosmos3 uses an explicit `model_variant` in the startup JSON.
 
@@ -23,7 +23,7 @@ BAGEL, Flux2, HiDream-O1-Image, Z-Image, LingBot-Video, HunyuanImage3, LTX2/LTX2
 Once the service is ready, submit a request from another terminal. This example uses the default T2V service:
 
 ```bash
-curl -X POST http://localhost:8000/v1/tasks/video/ \
+curl -X POST http://localhost:8000/v1/tasks/ \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"Two cats boxing on a stage.","seed":42,"save_result_path":"cat_boxing_seed42.mp4"}'
 ```
@@ -53,7 +53,15 @@ Task states are `pending`, `processing`, `completed`, `failed`, and `cancelled`.
 curl -f http://localhost:8000/v1/tasks/TASK_ID/result -o output.mp4
 ```
 
-The result endpoint only serves files under the service's configured output directory. Use a relative output filename such as the example above to keep it inside that directory.
+The legacy `/result` endpoint downloads the primary file under the configured output directory. Query `/results` for all artifacts and their download URLs:
+
+```bash
+curl -f http://localhost:8000/v1/tasks/TASK_ID/results
+# Download a specific artifact using its returned URL, for example:
+curl -f http://localhost:8000/v1/tasks/TASK_ID/results/actions -o actions.npy
+```
+
+Each entry contains `name`, `type`, `media_type` and `url`. Joint generation lists both video and action artifacts; downloading does not rerun inference. Asynchronous requests without a save path receive a task-specific output path automatically. `save_result_path` continues to identify the primary result. In-memory images retain the existing cache count limit; downloads return HTTP 410 after eviction.
 
 `GET /v1/service/status` reports execution state (`busy` or `idle`). A busy server can still accept requests while queue capacity remains. `GET /v1/tasks/queue/status` exposes `pending_count`, `active_count` (pending + processing), `queue_size`, and `queue_available`. A full queue rejects submissions with HTTP 503.
 
@@ -105,6 +113,8 @@ The helper currently submits to the compatibility route `POST /v1/tasks/` for vi
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
+| `/v1/tasks/` | POST | Submit image, video or action tasks |
+| `/v1/tasks/form` | POST | Upload files and submit tasks |
 | `/v1/tasks/video/` | POST | Submit a video task as JSON |
 | `/v1/tasks/video/form` | POST | Submit a video task with multipart uploads |
 | `/v1/tasks/image/` | POST | Submit an image task as JSON |
@@ -113,6 +123,8 @@ The helper currently submits to the compatibility route `POST /v1/tasks/` for vi
 | `/v1/tasks/` | GET | List tasks |
 | `/v1/tasks/queue/status` | GET | Inspect queue capacity |
 | `/v1/tasks/{task_id}/status` | GET | Inspect a task |
+| `/v1/tasks/{task_id}/results` | GET | List all generated artifacts |
+| `/v1/tasks/{task_id}/results/{name}` | GET | Download a specific artifact |
 | `/v1/tasks/{task_id}/result` | GET | Download a completed file-backed result |
 | `/v1/tasks/{task_id}` | DELETE | Cancel one task |
 | `/v1/tasks/all/running` | DELETE | Cancel all pending/processing tasks |
@@ -122,4 +134,4 @@ The helper currently submits to the compatibility route `POST /v1/tasks/` for vi
 | `/v1/images/generations` | POST | OpenAI-compatible image generation |
 | `/v1/images/edits` | POST | OpenAI-compatible image editing |
 
-`POST /v1/tasks/` remains a deprecated alias for video submission. Use the explicit video or image routes for new clients; `/v1/tasks/form` is not registered.
+Compatibility endpoints retain their request and response formats. Image/video endpoints require an artifact of the corresponding type; a mismatch fails the task after execution. Synchronous image and OpenAI endpoints return an error directly. The unified endpoint uses no static output declarations or output-type request selector.
