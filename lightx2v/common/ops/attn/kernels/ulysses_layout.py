@@ -355,7 +355,9 @@ def _qkv_pre_fp8_kernel(
     local_len: tl.constexpr,
     shard_heads: tl.constexpr,
     hidden_dims: tl.constexpr,
-    full_heads: tl.constexpr,
+    q_stride: tl.constexpr,
+    k_stride: tl.constexpr,
+    v_stride: tl.constexpr,
     head_offset: tl.constexpr,
     head_stride: tl.constexpr,
     payload_elems_per_rank: tl.constexpr,
@@ -379,11 +381,14 @@ def _qkv_pre_fp8_kernel(
     s = row_in_rank // shard_heads
 
     src_head = head_offset + rank * head_stride + h
-    src_offsets = (s[:, None] * full_heads + src_head[:, None]) * hidden_dims + cols[None, :]
+    # Fused projections expose Q/K/V as strided views of the same allocation.
+    q_offsets = s[:, None] * q_stride[0] + src_head[:, None] * q_stride[1] + cols[None, :] * q_stride[2]
+    k_offsets = s[:, None] * k_stride[0] + src_head[:, None] * k_stride[1] + cols[None, :] * k_stride[2]
+    v_offsets = s[:, None] * v_stride[0] + src_head[:, None] * v_stride[1] + cols[None, :] * v_stride[2]
 
-    q_vals = tl.load(q + src_offsets, mask=mask, other=0.0).to(tl.float32)
-    k_vals = tl.load(k + src_offsets, mask=mask, other=0.0).to(tl.float32)
-    v_vals = tl.load(v + src_offsets, mask=mask, other=0.0).to(tl.float32)
+    q_vals = tl.load(q + q_offsets, mask=mask, other=0.0).to(tl.float32)
+    k_vals = tl.load(k + k_offsets, mask=mask, other=0.0).to(tl.float32)
+    v_vals = tl.load(v + v_offsets, mask=mask, other=0.0).to(tl.float32)
 
     q_scale = tl.maximum(tl.max(tl.abs(q_vals), axis=1), 0.001953125) / 448.0
     k_scale = tl.maximum(tl.max(tl.abs(k_vals), axis=1), 0.001953125) / 448.0
@@ -585,6 +590,7 @@ def _attn_pre_fp8_kernel(
     scale_ptr,
     total_rows: tl.constexpr,
     local_len: tl.constexpr,
+    valid_len: tl.constexpr,
     shard_heads: tl.constexpr,
     hidden_dims: tl.constexpr,
     payload_elems_per_rank: tl.constexpr,
@@ -608,7 +614,10 @@ def _attn_pre_fp8_kernel(
 
     src_s = rank * local_len + s
     src_offsets = src_s[:, None] * (shard_heads * hidden_dims) + h[:, None] * hidden_dims + cols[None, :]
-    vals = tl.load(attn + src_offsets, mask=mask, other=0.0).to(tl.float32)
+    load_mask = mask
+    if valid_len < total_rows // shard_heads:
+        load_mask = load_mask & (src_s[:, None] < valid_len)
+    vals = tl.load(attn + src_offsets, mask=load_mask, other=0.0).to(tl.float32)
 
     scale = tl.maximum(tl.max(tl.abs(vals), axis=1), 0.001953125) / 448.0
     quant = (vals / scale[:, None]).to(tl.float8e4nv)
@@ -880,7 +889,9 @@ def qkv_pre_fp8(q, k, v, world_size, head_index=None):
         local_len,
         shard_heads,
         hidden_dims,
-        heads,
+        q.stride(),
+        k.stride(),
+        v.stride(),
         head_offset,
         head_stride,
         payload_elems_per_rank,
@@ -1026,6 +1037,7 @@ def attn_pre_fp8(attn, local_len, world_size, shard_heads, hidden_dims):
         scale,
         total_rows,
         local_len,
+        attn.shape[0],
         shard_heads,
         hidden_dims,
         payload_elems_per_rank,

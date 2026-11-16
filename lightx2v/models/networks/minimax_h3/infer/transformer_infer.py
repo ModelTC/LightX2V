@@ -176,6 +176,12 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
         return weights.apply_swiglu(value, gate)
 
+    @staticmethod
+    def _modulated_norm(norm, hidden_states, shift, scale, indices):
+        normed = norm.apply(hidden_states)
+        normed = normed * (1.0 + scale.index_select(0, indices))
+        return normed + shift.index_select(0, indices)
+
     def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None, base_projections=None):
         # Keep the Python cache lookup outside the compiled block.
         if modulation is None:
@@ -184,16 +190,12 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         indices = pre_infer_out.adaln_indices
 
         residual = hidden_states
-        normed = weights.norm1.apply(hidden_states)
-        normed = normed * (1.0 + scale_msa.index_select(0, indices))
-        normed = normed + shift_msa.index_select(0, indices)
+        normed = self._modulated_norm(weights.norm1, hidden_states, shift_msa, scale_msa, indices)
         attention = self._attention(weights.attn, normed, pre_infer_out, base_projections[0]) if self.use_lora_consumer else self._attention(weights.attn, normed, pre_infer_out)
         hidden_states = gated_residual_consumer(attention, residual, gate_msa, indices) if self.use_lora_consumer else residual + gate_msa.index_select(0, indices) * attention
 
         residual = hidden_states
-        normed = weights.norm2.apply(hidden_states)
-        normed = normed * (1.0 + scale_mlp.index_select(0, indices))
-        normed = normed + shift_mlp.index_select(0, indices)
+        normed = self._modulated_norm(weights.norm2, hidden_states, shift_mlp, scale_mlp, indices)
         feed_forward = self._ff(weights.ff, normed, *base_projections[1:]) if self.use_lora_consumer else self._ff(weights.ff, normed)
         hidden_states = gated_residual_consumer(feed_forward, residual, gate_mlp, indices) if self.use_lora_consumer else residual + gate_mlp.index_select(0, indices) * feed_forward
         return hidden_states
