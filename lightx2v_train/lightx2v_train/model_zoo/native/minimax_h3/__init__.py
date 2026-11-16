@@ -1,6 +1,6 @@
 """Trainable MiniMax-H3 building blocks used by LightX2V-Train."""
 
-from .modeling import load_minimax_h3_transformer
+from .modeling import load_minimax_h3_transformer, resolve_transformer_dir
 from .packing import (
     MiniMaxH3PackedSequence,
     audio_latent_num_frames,
@@ -15,5 +15,6 @@ __all__ = [
     "build_packed_sequence",
     "build_row_timesteps",
     "load_minimax_h3_transformer",
+    "resolve_transformer_dir",
     "video_latent_num_frames",
 ]
