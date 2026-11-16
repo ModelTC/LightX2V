@@ -5,8 +5,8 @@ from functools import partial
 import torch
 from loguru import logger
 
-from lightx2v.models.input_encoders.edenlive.proxy_dino import ProxyDINO
-from lightx2v.models.input_encoders.edenlive.recording import RecordingReader, frame_prompts, prepare_cover, prepare_recording
+from lightx2v.models.input_encoders.hf.edenlive.proxy_dino import ProxyDINO
+from lightx2v.models.input_encoders.hf.edenlive.recording import RecordingReader, frame_prompts, prepare_cover, prepare_recording
 from lightx2v.models.networks.wan.edenlive_model import EdenLiveARModel, EdenLiveModel
 from lightx2v.models.runners.autoregressive_runner import AutoregressiveRunnerMixin
 from lightx2v.models.runners.lifecycle import RunnerLifecycleMixin

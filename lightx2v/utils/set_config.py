@@ -8,27 +8,6 @@ from lightx2v.utils.image_io import validate_save_image_method
 from lightx2v.utils.lockable_dict import LockableDict
 from lightx2v.utils.model_paths import find_torch_model_path
 
-EDENLIVE_COMPONENT_FILES = {
-    "wan21_edenlive": {
-        "dit_original_ckpt": "dit-14b-bidir",
-        "vae_path": "vae-14b/Wan2.1_VAE.pth",
-        "clip_original_ckpt": "clip/image_encoder/model.safetensors",
-    },
-    "wan21_edenlive_ar": {
-        "dit_original_ckpt": "dit-14b",
-        "vae_path": "vae-14b/Wan2.1_VAE.pth",
-        "clip_original_ckpt": "clip/image_encoder/model.safetensors",
-    },
-    "wan22_edenlive": {
-        "dit_original_ckpt": "dit-5b-bidir",
-        "vae_path": "vae-5b/Wan2.2_VAE.pth",
-    },
-    "wan22_edenlive_ar": {
-        "dit_original_ckpt": "dit-5b",
-        "vae_path": "vae-5b/Wan2.2_VAE.pth",
-    },
-}
-
 
 def get_default_config():
     return LockableDict(
@@ -175,12 +154,21 @@ def load_model_config(deployment_config):
         }
         for key, filename in component_files.items():
             model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
-    elif model_cls in EDENLIVE_COMPONENT_FILES:
+    elif model_cls in {"wan21_edenlive", "wan21_edenlive_ar", "wan22_edenlive", "wan22_edenlive_ar"}:
+        is_wan21 = model_cls.startswith("wan21_")
+        model_size = "14b" if is_wan21 else "5b"
+        vae_filename = "Wan2.1_VAE.pth" if is_wan21 else "Wan2.2_VAE.pth"
+        dit_subfolder = f"dit-{model_size}"
+        if not model_cls.endswith("_ar"):
+            dit_subfolder += "-bidir"
         component_files = {
+            "dit_original_ckpt": dit_subfolder,
+            "vae_path": f"vae-{model_size}/{vae_filename}",
             "t5_original_ckpt": "umt5/text_encoder/model.safetensors",
             "t5_tokenizer_path": "umt5/tokenizer",
-            **EDENLIVE_COMPONENT_FILES[model_cls],
         }
+        if is_wan21:
+            component_files["clip_original_ckpt"] = "clip/image_encoder/model.safetensors"
         for key, filename in component_files.items():
             model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
         dit_path = model_config["dit_original_ckpt"]

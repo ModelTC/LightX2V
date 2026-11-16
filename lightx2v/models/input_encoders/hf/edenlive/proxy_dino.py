@@ -13,7 +13,7 @@ from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_re
 from lightx2v.common.ops.mm.optimized_linear import make_projection_group
 from lightx2v.common.ops.norm.l2_normalize import l2_normalize
 from lightx2v.common.ops.rope.rotary_qk import apply_rotary_qk
-from lightx2v.models.input_encoders.edenlive.proxy_cuda_graph import ProxyCUDAGraph
+from lightx2v.models.input_encoders.hf.edenlive.proxy_cuda_graph import ProxyCUDAGraph
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, EDENLIVE_PROXY_QUANTIZATION_PROFILE, validate_checkpoint
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV2D_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, TENSOR_REGISTER

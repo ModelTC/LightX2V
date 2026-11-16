@@ -2,7 +2,7 @@
 
 import torch
 
-from lightx2v.models.input_encoders.matrix_game4 import MatrixGame4ControlStream, create_streaming_encoder, encode_reference_image
+from lightx2v.models.input_encoders.hf.matrix_game4.video import MatrixGame4ControlStream, create_streaming_encoder, encode_reference_image
 from lightx2v.models.networks.wan.matrix_game4_model import WanMatrixGame4Model
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin

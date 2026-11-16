@@ -5,8 +5,8 @@ from pathlib import Path
 import torch
 from loguru import logger
 
-from lightx2v.models.input_encoders.hubert.model import HubertAudioEncoder, load_audio
-from lightx2v.models.input_encoders.tbdub import continuation_frames, match_reference_colors, read_video, video_tensor
+from lightx2v.models.input_encoders.hf.hubert.model import HubertAudioEncoder, load_audio
+from lightx2v.models.input_encoders.hf.tbdub.video import continuation_frames, match_reference_colors, read_video, video_tensor
 from lightx2v.models.networks.wan.tbdub_model import TBDubModel
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner

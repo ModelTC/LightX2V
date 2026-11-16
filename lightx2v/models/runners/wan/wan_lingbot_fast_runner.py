@@ -3,7 +3,7 @@ import os
 import numpy as np
 import torch
 
-from lightx2v.models.input_encoders.lingbot_fast import pack_camera_embedding
+from lightx2v.models.input_encoders.hf.lingbot_fast.camera import pack_camera_embedding
 from lightx2v.models.networks.wan.lingbot_fast_model import WanLingbotFastModel
 from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin
 from lightx2v.models.runners.wan.wan_runner import LingbotRunner, WanRunner, build_wan_model_with_lora
