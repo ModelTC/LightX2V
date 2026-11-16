@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 
 import torch
@@ -115,12 +116,42 @@ class QwenImageModel(BaseModel):
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
+
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if fsdp_config.get("sharded_load", False):
+            transformer_config = QwenImageTransformer2DModel.load_config(model_path, subfolder="transformer")
+            with torch.device("meta"):
+                # FSDP2 must wrap this skeleton before rank-local weights can load.
+                return QwenImageTransformer2DModel.from_config(transformer_config)
+
         device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
         return QwenImageTransformer2DModel.from_pretrained(
             model_path,
             subfolder="transformer",
             torch_dtype=self.transformer_param_dtype,
         ).to(device)
+
+    def load_deferred_transformer_weights(self):
+        """Load Qwen weights after FSDP2 has defined the local parameter shards."""
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if not fsdp_config.get("sharded_load", False):
+            return
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        self.load_sharded_transformer_weights(os.path.join(model_path, "transformer"))
+        self._materialize_qwen_rope()
+
+    def _materialize_qwen_rope(self):
+        # QwenEmbedRope keeps these tables as plain tensor attributes instead
+        # of registered buffers, so meta construction does not materialize them.
+        rope = self.transformer.pos_embed
+        if getattr(rope.pos_freqs, "is_meta", False):
+
+            def build_freqs(index):
+                values = [rope.rope_params(index, axis, rope.theta) for axis in rope.axes_dim]
+                return torch.cat(values, dim=1).to(self.device)
+
+            rope.pos_freqs = build_freqs(torch.arange(4096))
+            rope.neg_freqs = build_freqs(torch.arange(4096).flip(0) * -1 - 1)
 
     def denoiser_module(self):
         return self.transformer

@@ -15,7 +15,10 @@ from lightx2v_train.model_zoo.minimax_h3.capability_adapters import (
     MiniMaxH3DistributionMatchingCapability,
     MiniMaxH3FlowMatchingCapability,
 )
-from lightx2v_train.model_zoo.native.minimax_h3 import load_minimax_h3_transformer
+from lightx2v_train.model_zoo.native.minimax_h3 import (
+    load_minimax_h3_transformer,
+    resolve_transformer_dir,
+)
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -67,6 +70,8 @@ class MiniMaxH3T2AVModel(BaseModel):
     ):
         config = self.config["model"]
         self.pretrained_model_path = config["pretrained_model_name_or_path"]
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        sharded_load = fsdp_config.get("sharded_load", False)
         self.latent_dtype = get_running_dtype(config.get("latent_dtype", "fp32"))
         self.patch_size = tuple(int(value) for value in config.get("patch_size", (1, 2, 2)))
         if len(self.patch_size) != 3:
@@ -114,8 +119,24 @@ class MiniMaxH3T2AVModel(BaseModel):
                 torch_dtype=self.transformer_param_dtype,
                 local_files_only=bool(config.get("local_files_only", True)),
                 attention_backend=config.get("attention_backend"),
+                defer_weights=sharded_load,
             )
-            self.transformer.to(self.device)
+            if not sharded_load:
+                self.transformer.to(self.device)
+
+    def load_deferred_transformer_weights(self):
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if not fsdp_config.get("sharded_load", False):
+            return
+        self.load_sharded_transformer_weights(resolve_transformer_dir(self.pretrained_model_path))
+        self._materialize_h3_rope()
+
+    def _materialize_h3_rope(self):
+        rope = self.transformer.rope
+        if rope.inv_freq.is_meta:
+            rope_dim = self.transformer.config.rope_freq_dim
+            theta = self.transformer.config.rope_theta
+            rope.inv_freq = 1.0 / (theta ** (torch.arange(0, 2 * rope_dim, 2, dtype=torch.float32, device=self.device) / (2 * rope_dim)))
 
     def _load_vaes(self, config):
         try:

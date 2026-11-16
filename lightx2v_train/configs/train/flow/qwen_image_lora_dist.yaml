@@ -13,6 +13,9 @@ distributed:
     fsdp2:
         enabled: true
         size: ${oc.env:WORLD_SIZE,1}
+        # Generic meta-init + rank-local safetensors loading. Model adapters
+        # opt in when they implement the required key/state hooks.
+        sharded_load: true
         reshard_after_forward:
             root_reshard: false
             block_reshard: true

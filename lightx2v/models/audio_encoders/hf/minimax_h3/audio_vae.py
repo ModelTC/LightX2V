@@ -299,13 +299,20 @@ class MiniMaxH3AudioDownSample1d(nn.Module):
 
 
 class MiniMaxH3AudioActivation1d(nn.Module):
+    """Anti-aliased activation with a fused path for 2x, 12-tap SnakeBeta."""
+
     def __init__(self, activation: nn.Module, ratio: int = 2, kernel_size: int = 12) -> None:
         super().__init__()
         self.act = activation
         self.upsample = MiniMaxH3AudioUpSample1d(ratio, kernel_size)
         self.downsample = MiniMaxH3AudioDownSample1d(ratio, kernel_size)
+        self.use_fused = isinstance(activation, MiniMaxH3AudioSnakeBeta) and ratio == 2 and kernel_size == 12
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.use_fused and hidden_states.is_cuda:
+            from .triton_ops import anti_alias_activation
+
+            return anti_alias_activation(hidden_states, self.upsample.filter, self.downsample.lowpass.filter, self.act.alpha, self.act.beta)
         hidden_states = self.upsample(hidden_states)
         hidden_states = self.act(hidden_states)
         return self.downsample(hidden_states)

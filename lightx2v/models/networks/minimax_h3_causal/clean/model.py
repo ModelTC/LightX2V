@@ -11,7 +11,7 @@ from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostIn
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import MiniMaxH3PreInfer
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
-from lightx2v.models.networks.minimax_h3_causal.clean.fp8_communication import exchange_output_fp8, exchange_qkv_fp8
+from lightx2v.models.networks.minimax_h3_causal.clean.fp8_communication import FP8QKV, exchange_output_fp8, exchange_qkv_fp8
 from lightx2v.models.networks.minimax_h3_causal.clean.module_io import MiniMaxH3CleanPreInferOutput
 
 
@@ -44,27 +44,56 @@ class MiniMaxH3CleanTransformerInfer(MiniMaxH3TransformerInfer):
         self.fp8_communication = self.seq_p_group is not None and self.seq_p_quant_scheme is not None
         if self.fp8_communication and (self.seq_p_quant_scheme != "fp8" or self.seq_p_prepost_backend != "triton" or not self.seq_p_tensor_fusion):
             raise ValueError("CleanAR quantized communication requires FP8, Triton pre/post and seq_p_tensor_fusion=true")
+        self._cache_block = self._infer_cache_block
+        if self.use_compile:
+            if self.compile_backend == "default":
+                self._cache_block = torch.compile(self._cache_block, dynamic=None, options=self.compile_options)
+            else:
+                self._cache_block = torch.compile(self._cache_block, dynamic=None, backend=self._compile_backend_obj)
+
+    def run_block(self, block_idx, block, hidden_states, pre_infer_out):
+        # Only KV is consumed from the final clean block. Compile its shortened
+        # forward separately to preserve the ordinary block graphs.
+        if block_idx == self.config["num_layers"] - 1 and self.scheduler.clean_phase:
+            modulation = self._get_cached_adaln(block_idx) if self.use_adaln_cache else None
+            return self._cache_block(block, hidden_states, pre_infer_out, modulation)
+        return super().run_block(block_idx, block, hidden_states, pre_infer_out)
+
+    def _infer_cache_block(self, weights, hidden_states, pre, modulation=None):
+        if modulation is None:
+            modulation = self._compute_adaln_table(weights, pre)
+        shift, scale, *_ = modulation.chunk(6, dim=-1)
+        normed = self._modulated_norm(weights.norm1, hidden_states, shift, scale, pre.adaln_indices)
+        self._prepare_attention_qkv(weights.attn, normed, pre)
+
+    def _prepare_attention_qkv(self, weights, hidden_states, pre):
+        q, k, v = self._prepare_qkv(weights, hidden_states, None)
+        length = pre.valid_sequence_length
+        if self.fp8_communication:
+            group = self.seq_p_group
+            size = dist.get_world_size(group)
+            padded_length = q.shape[0] * size
+            shape = (length, q.shape[1] // size, q.shape[2])
+            qkv = FP8QKV(exchange_qkv_fp8(q, k, v, group.group_name, size), shape, q.dtype)
+        else:
+            if self.seq_p_group is not None:
+                q, k, v = all2all_seq2head_qkv(q, k, v, self.seq_p_group)
+            padded_length = q.shape[0]
+            qkv = (q[:length], k[:length], v[:length])
+        # Commit normalized, unrotated K before applying the current history RoPE.
+        q, k, v = self.scheduler.cache.get_attention_qkv(qkv, self.block_idx, rope=weights.rope, query_freqs=pre.rotary_emb, key_freqs=pre.key_rotary_emb)
+        return q, k, v, padded_length
 
     def _attention(self, weights, hidden_states, pre):
-        q, k, v = self._prepare_qkv(weights, hidden_states, None)
-        if self.seq_p_group is not None:
-            if self.fp8_communication:
-                # Fused QKV projections can return strided views.
-                group = self.seq_p_group
-                q, k, v = exchange_qkv_fp8(q.contiguous(), k.contiguous(), v.contiguous(), group.group_name, dist.get_world_size(group))
-            else:
-                q, k, v = all2all_seq2head_qkv(q, k, v, self.seq_p_group)
-        padded_length = q.shape[0]
+        q, k, v, padded_length = self._prepare_attention_qkv(weights, hidden_states, pre)
         length = pre.valid_sequence_length
-        q, k, v = q[:length], k[:length], v[:length]
-        # Store normalized, unrotated K. Segment changes move historical RoPE.
-        q, k, v = self.scheduler.cache.get_attention_qkv(q, k, v, self.block_idx, rope=weights.rope, query_freqs=pre.rotary_emb, key_freqs=pre.key_rotary_emb)
         output = weights.calculate.apply(q=q, k=k, v=v, causal=False).reshape(length, q.shape[1], q.shape[2])
         if self.seq_p_group is not None:
-            output = F.pad(output, (0, 0, 0, 0, 0, padded_length - length))
             if self.fp8_communication:
+                group = self.seq_p_group
                 output = exchange_output_fp8(output.contiguous(), group.group_name, dist.get_world_size(group))
             else:
+                output = F.pad(output, (0, 0, 0, 0, 0, padded_length - length))
                 output = all2all_head2seq(output, self.seq_p_group)
         return weights.to_out.apply(output.flatten(1).to(self.infer_dtype))
 
