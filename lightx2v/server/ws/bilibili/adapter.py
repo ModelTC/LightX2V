@@ -48,6 +48,8 @@ async def speech_sentences(deltas: AsyncIterator[str], max_chars: int) -> AsyncI
 class BiliLiveChatAdapter(WsAudioSource):
     def __init__(self, config: BilibiliConfig, image_path: str, work_dir: str, model_runner=None):
         super().__init__(seg_duration=29 / 40, sample_rate=config.tts_sample_rate, audio_format="pcm_s16le/%s/1" % config.tts_sample_rate, model_runner=model_runner)
+        # Queue ownership must change atomically with the inherited setter.
+        self._lock = threading.RLock()
         self.config = config
         self.direct_av = getattr(model_runner, "config", {}).get("task") == "refa2av"
         self.skip_immediate_switch = True
@@ -64,6 +66,8 @@ class BiliLiveChatAdapter(WsAudioSource):
         self._turn_task: asyncio.Task | None = None
         self._turn_busy = False
         self._submitted_motion = ""
+        self._submitted_action = None
+        self._taken_action = None
         self._motion_started = False
         self._motion_gate = threading.Lock()
         self._generation = 0
@@ -321,7 +325,9 @@ class BiliLiveChatAdapter(WsAudioSource):
                     self._submitted_motion = motion
                     self._motion_started = False
                     self._turn_busy = True
-                self.on_action_switch(motion, duration)
+                    # Automatic replies bypass the public, manual override path.
+                    super().on_action_switch(motion, duration)
+                    self._submitted_action = self.action_switch
                 submitted = True
             logger.info(
                 "[Bili] 原生音视频回复 #{} 已排队 | actions={} | speech_chars={} | duration={:.2f}s | elapsed={:.2f}s",
@@ -343,22 +349,55 @@ class BiliLiveChatAdapter(WsAudioSource):
                 if not submitted and generation == self._generation:
                     with self._lock:
                         self._submitted_motion = ""
+                        self._submitted_action = None
                         self._motion_started = False
                         self._turn_busy = False
                     self._last_activity = time.monotonic()
+
+    def on_action_switch(self, prompt: str, duration: float = 0, command_id: str = "") -> None:
+        if not self.direct_av:
+            return super().on_action_switch(prompt, duration, command_id=command_id)
+        with self._motion_gate, self._lock:
+            previous = self.action_switch
+            super().on_action_switch(prompt, duration, command_id=command_id)
+            if self.action_switch is previous or previous is not self._submitted_action:
+                return
+            # The automatic reply was still in the single pending slot. It can
+            # no longer start, so waiting for its model callback would deadlock.
+            self._submitted_motion = ""
+            self._submitted_action = None
+            self._motion_started = False
+            self._turn_busy = False
+            self._last_activity = time.monotonic()
+
+    def take_action_switch(self):
+        if not self.direct_av:
+            return super().take_action_switch()
+        with self._lock:
+            action = super().take_action_switch()
+            if action:
+                # One model consumer can have one taken command awaiting commit.
+                self._taken_action = action
+            return action
 
     def motion_update(self, old_prompt=None, new_prompt=None) -> None:
         if not self.direct_av:
             return
         with self._lock:
+            taken = self._taken_action
+            if taken is not None and taken.get("prompt") == new_prompt:
+                self._taken_action = None
+            else:
+                taken = None
             submitted = self._submitted_motion
             if not submitted:
                 return
-            starting = new_prompt == submitted
-            # A new request can repeat the old text before it has started.
-            # Replacing it with the same prompt must keep this turn busy.
+            starting = taken is not None and taken is self._submitted_action
+            # Text alone cannot distinguish a same-text manual replacement
+            # from the automatic command that owns this turn.
             if self._motion_started and old_prompt == submitted and not starting:
                 self._submitted_motion = ""
+                self._submitted_action = None
                 self._motion_started = False
                 self._turn_busy = False
                 self._last_activity = time.monotonic()
@@ -382,6 +421,7 @@ class BiliLiveChatAdapter(WsAudioSource):
                     # Internal zero-duration control leaves the runner's baseline intact.
                     self.action_switch = {"prompt": idle_prompt, "duration": 0, "command_id": command_id}
                     self._submitted_motion = ""
+                    self._submitted_action = None
                     self._motion_started = False
                     self._turn_busy = False
                     self._last_activity = time.monotonic()

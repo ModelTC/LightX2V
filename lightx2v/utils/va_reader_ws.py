@@ -22,6 +22,8 @@ def parse_pcm_audio_format(audio_format: str) -> AudioInfo:
     channel_count = int(parts[2]) if len(parts) > 2 and parts[2] else 1
     if sample_fmt != "pcm_s16le":
         raise ValueError(f"unsupported audio_format {audio_format}, expected pcm_s16le/<sr>/<ch>")
+    if sample_rate <= 0:
+        raise ValueError(f"audio sample rate must be positive, got {sample_rate}")
     if channel_count != 1:
         raise ValueError(f"only mono audio is supported, got channels={channel_count}")
     return AudioInfo(

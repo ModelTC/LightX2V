@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import math
 import os
 import queue
 import tempfile
@@ -46,10 +47,10 @@ def resolve_set_prompt_duration(value) -> float:
     # -1: hold until next SetPrompt; 0: server default; >0: client duration
     duration = float(value)
     if duration == 0:
-        return DEFAULT_SET_PROMPT_DURATION
-    if duration == -1 or duration > 0:
+        duration = DEFAULT_SET_PROMPT_DURATION
+    if math.isfinite(duration) and (duration == -1 or duration > 0):
         return duration
-    raise ValueError(f"SetPrompt.duration must be -1, 0 (server default), or > 0, got {duration}")
+    raise ValueError(f"SetPrompt.duration must be finite and resolve to -1 or > 0 (0 selects the server default), got {duration}")
 
 
 def _parse_ratio_shapes(resolution: str, ratios: dict) -> dict:
@@ -284,7 +285,6 @@ class LiveSession:
         self.tmp_dir = None
         self.request_id = ""
         self.stream_config = {}
-        self.busy = False
         self.video_input = False
         self.bilibili_input = False
 
@@ -402,7 +402,6 @@ class LiveSession:
         return target
 
     def start_pipeline(self):
-        self.busy = True
         self.thread, self.future = launch_pipeline(self.runner, self.input_info, self.rank, self.loop)
 
     def _set_image(self, message, target):
@@ -506,9 +505,6 @@ class LiveSession:
                 await websocket.close()
                 break
 
-    def is_busy(self) -> bool:
-        return self.busy or (self.thread is not None and self.thread.is_alive())
-
     def mark_pipeline_done(self, status: bool, err: str):
         self.video_queue.put(("done", status, err))
 
@@ -516,8 +512,7 @@ class LiveSession:
         self.request_stop()
         if not await join_pipeline(self.thread, self.future, self.rank):
             return False
-        self.busy = False
-        logger.info("pipeline stopped, session no longer busy")
+        logger.info("pipeline stopped")
         return True
 
     def close(self):

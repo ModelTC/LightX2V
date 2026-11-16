@@ -123,7 +123,7 @@ async def run_websocket_server(args, runner, input_info):
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "model_cls": args.model_cls, "busy": state.session is not None and state.session.is_busy()}
+        return {"status": "ok", "model_cls": args.model_cls, "busy": state.session is not None}
 
     @app.websocket("/v1/live")
     async def live_ws(websocket: WebSocket):
@@ -140,7 +140,8 @@ async def run_websocket_server(args, runner, input_info):
                 command_id = getattr(msg, which).command_id if which in {"interrupt", "set_prompt", "set_image"} else ""
                 if which == "start":
                     async with session_lock:
-                        if state.session is not None and state.session.is_busy():
+                        # Ownership lasts through thread shutdown and rank sync.
+                        if state.session is not None:
                             await websocket.send_bytes(error_message("busy", "another session is running", True, request_id=msg.start.request_id))
                             continue
                         session = LiveSession(runner, input_info, RANK, asyncio.get_running_loop())
