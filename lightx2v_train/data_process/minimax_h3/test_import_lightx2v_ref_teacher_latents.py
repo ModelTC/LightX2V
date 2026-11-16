@@ -118,6 +118,15 @@ class ExportFixture(unittest.TestCase):
         )
         self.save()
 
+    def original_base(self):
+        self.manifest.update(
+            model_path="/models/MiniMax-H3",
+            transformer_path="/models/MiniMax-H3/transformer_ref",
+            model_identity={"sha256": "original-ref-model-identity"},
+            decfg_merged_identity=[],
+        )
+        self.save()
+
     def run_import(self, **kwargs):
         return helper.import_exports(self.raw_path, [self.index_path], self.output, media_root=self.root, **kwargs)
 
@@ -303,6 +312,18 @@ class FinalOnlyImportTests(ExportFixture):
     def test_final_only_cli_import_requires_no_torch(self):
         ImportTests.test_cli_import_requires_no_torch(self)
 
+    def test_original_base_final_export_preserves_unmerged_model_identity(self):
+        self.original_base()
+        self.test_final_only_import_requires_only_clean_files_and_existing_gan_reader_accepts_it()
+        row = self.rows()[0]
+        self.assertEqual(row["teacher_model_path"], "/models/MiniMax-H3")
+        receipt = json.loads((self.output / "metadata.complete.json").read_text())
+        self.assertEqual(receipt["teacher_settings"]["decfg_merged_identity"], [])
+        self.assertEqual(receipt["teacher_settings"]["model_identity"], self.manifest["model_identity"])
+
+    def test_final_exports_cannot_mix_base_and_decfg_or_other_teacher_settings(self):
+        ImportTests.test_models_or_schedule_settings_cannot_be_mixed(self)
+
     def test_missing_or_empty_final_files_and_incomplete_manifest_block_publication(self):
         for name in ("condition.pt", "video_latents.pt", "audio_latents.pt", "manifest.json"):
             path = self.directory / name
@@ -413,6 +434,11 @@ class TensorImportTests(ExportFixture):
         receipt = json.loads((self.output / "metadata.complete.json").read_text())
         self.assertTrue(receipt["check_tensors"])
         self.assertEqual(receipt["tensor_validation_scope"], "condition_and_final_av")
+
+    def test_base_final_only_check_tensors_and_existing_deferred_gan_dataset(self):
+        self.original_base()
+        self.test_final_only_check_tensors_and_existing_deferred_gan_dataset()
+        self.assertEqual(self.rows()[0]["teacher_model_path"], "/models/MiniMax-H3")
 
     def test_final_only_check_tensors_cli(self):
         self.final_only()
