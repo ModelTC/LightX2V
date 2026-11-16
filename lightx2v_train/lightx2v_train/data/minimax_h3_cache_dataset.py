@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from loguru import logger
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
+from torch.utils.data._utils.collate import collate, default_collate_fn_map
 
 from lightx2v_train.data.utils import (
     prompt_text,
@@ -33,6 +34,17 @@ CONDITION_KEYS = (
     "audio_context",
     "context_mask",
 )
+
+
+def _collate_absent_field(values, *, collate_fn_map=None):
+    if any(value is not None for value in values):
+        raise TypeError("Cannot batch an absent cache field with a populated field.")
+    return None
+
+
+def collate_latent_samples(samples):
+    """Keep default batch axes while accepting optional cached fields such as image audio=None."""
+    return collate(samples, collate_fn_map={**default_collate_fn_map, type(None): _collate_absent_field})
 
 
 def _strip_condition_batch(value):
@@ -1897,6 +1909,7 @@ def _build_dataloader(dataset, data_config, train_or_val):
         num_workers=data_config.get("num_workers", 8),
         pin_memory=data_config.get("pin_memory", True),
         drop_last=drop_last if sampler is None else False,
+        collate_fn=collate_latent_samples,
     )
 
 
@@ -1945,6 +1958,7 @@ def build_minimax_h3_ref_cache_dataset(data_config, train_or_val="train", uncond
         num_workers=data_config.get("num_workers", 0),
         pin_memory=data_config.get("pin_memory", False),
         drop_last=False,
+        collate_fn=collate_latent_samples,
     )
 
 
@@ -1995,5 +2009,6 @@ def build_minimax_h3_cache_dataset(data_config, train_or_val="train", unconditio
             num_workers=data_config.get("num_workers", 8),
             pin_memory=data_config.get("pin_memory", True),
             drop_last=False,
+            collate_fn=collate_latent_samples,
         )
     return _build_dataloader(dataset, data_config, train_or_val)

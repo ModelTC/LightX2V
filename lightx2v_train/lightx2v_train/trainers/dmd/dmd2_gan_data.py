@@ -392,14 +392,53 @@ class DMD2GanRealStream:
         return clean, condition
 
 
+def _validate_teacher_target_identity(row):
+    """Teacher exports bind final tensors through their finalized manifest."""
+    schema = row["teacher_export_schema"]
+    manifest_path = Path(row["teacher_trajectory_manifest"]).expanduser().resolve()
+    raw = manifest_path.read_bytes()
+    manifest = json.loads(raw)
+    if schema not in {"h3_teacher_final_v1", "h3_teacher_trajectory_v1"} or manifest.get("schema") != schema:
+        raise ValueError("GAN real Ref has an unsupported or mismatched teacher export schema.")
+    fingerprint = manifest.get("latent_fingerprint")
+    if fingerprint is None:
+        identity = json.dumps({"schema": schema, "manifest": manifest}, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        fingerprint = hashlib.sha256(identity.encode()).hexdigest()
+    if fingerprint != row["latent_fingerprint"]:
+        raise ValueError("GAN real Ref teacher manifest fingerprint differs from imported metadata.")
+    receipt = json.loads((manifest_path.parent / "completion.json").read_text())
+    if receipt.get("manifest_sha256") != hashlib.sha256(raw).hexdigest():
+        raise ValueError("GAN real Ref teacher completion receipt differs from its manifest.")
+    for key in ("source_id", "cache_fingerprint"):
+        if manifest.get(key) != row[key] or receipt.get(key) != row[key]:
+            raise ValueError(f"GAN real Ref teacher {key} differs from its paired metadata.")
+    for key in ("request_fingerprint", "selection_sha256"):
+        if key in row and receipt.get(key) != row[key]:
+            raise ValueError(f"GAN real Ref teacher completion {key} differs from imported metadata.")
+    for row_key, export_key, default in (
+        ("condition_path", "condition_path", "condition.pt"),
+        ("video_latent_path", "video_latents_path", "video_latents.pt"),
+        ("audio_latent_path", "audio_latents_path", "audio_latents.pt"),
+    ):
+        path = Path(manifest.get(export_key, default)).expanduser()
+        path = path if path.is_absolute() else manifest_path.parent / path
+        if path.resolve() != Path(row[row_key]).resolve():
+            raise ValueError(f"GAN real Ref teacher {row_key} differs from its finalized manifest.")
+    if manifest.get("normalized") is not True or any(manifest.get(f"{kind}_shape") != row[f"{kind}_latent_shape"] for kind in ("video", "audio")):
+        raise ValueError("GAN real Ref teacher normalization or AV geometry differs from imported metadata.")
+
+
 def _load_ref_targets(sample, row):
     """Validate the paired normalized clean AV before capability packing."""
     import torch
 
+    teacher_export = bool(row.get("teacher_export_schema"))
+    if teacher_export:
+        _validate_teacher_target_identity(row)
     video = torch.load(row["video_latent_path"], map_location="cpu", weights_only=True)
     audio = torch.load(row["audio_latent_path"], map_location="cpu", weights_only=True)
     if (not isinstance(video, dict) or video.get("normalized") is not True
-            or video.get("latent_fingerprint") != row["latent_fingerprint"]):
+            or ("latent_fingerprint" in video or not teacher_export) and video.get("latent_fingerprint") != row["latent_fingerprint"]):
         raise ValueError("GAN real Ref video target normalization/latent_fingerprint differs from its paired metadata.")
     for tensor, expected, label in ((video.get("latents"), row["video_latent_shape"], "video"), (audio, row["audio_latent_shape"], "audio")):
         if (not torch.is_tensor(tensor) or list(tensor.shape) != expected

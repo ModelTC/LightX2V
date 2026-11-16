@@ -42,6 +42,7 @@ from lightx2v_train.data.minimax_h3_cache_dataset import (
     _build_dataloader,
     _condition_payload,
     _metadata_path,
+    collate_latent_samples,
 )
 from lightx2v_train.data.minimax_h3_dmad_manifest import (
     require_matching_identity,
@@ -243,4 +244,5 @@ def build_minimax_h3_dmad_dataset(data_config, train_or_val="train", uncondition
         num_workers=data_config.get("num_workers", 0),
         pin_memory=data_config.get("pin_memory", False),
         drop_last=False,
+        collate_fn=collate_latent_samples,
     )

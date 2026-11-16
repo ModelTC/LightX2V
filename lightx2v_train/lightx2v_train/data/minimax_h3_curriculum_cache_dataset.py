@@ -16,7 +16,7 @@ import torch
 from loguru import logger
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from lightx2v_train.data.minimax_h3_cache_dataset import LatentDataset, _discover_minimax_h3_cache_metadata
+from lightx2v_train.data.minimax_h3_cache_dataset import LatentDataset, _discover_minimax_h3_cache_metadata, collate_latent_samples
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
 
@@ -398,4 +398,4 @@ def build_minimax_h3_curriculum_cache_dataset(data_config, train_or_val="train")
         require_image_only=sources["old"].get("require_image_only", True),
         old_image_counts=sources["old"].get("image_counts"),
     )
-    return DataLoader(dataset, batch_size=1, sampler=sampler, shuffle=False, num_workers=data_config.get("num_workers", 8), pin_memory=data_config.get("pin_memory", True), drop_last=False)
+    return DataLoader(dataset, batch_size=1, sampler=sampler, shuffle=False, num_workers=data_config.get("num_workers", 8), pin_memory=data_config.get("pin_memory", True), drop_last=False, collate_fn=collate_latent_samples)

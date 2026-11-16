@@ -23,13 +23,14 @@ The initial budget is a short tuning run, not a validated optimum. The student L
 
 The launcher first uses one CPU process per node. Global rank zero imports both completed final-only teacher export indices, verifies the original teacher identity, then selects 1,000 eligible single-image self-generated samples deterministically with seed 42. The resulting dataset has 1,000 examples for each image count from 1 to 6. All clips use 124 frames at 24 FPS, either 768×1344 or 1344×768. Each GAN positive retains its own prompt and reference conditioning. No video encoding, latent copying or full trajectory loading is needed. The shared manifests are published once before starting 32 training workers.
 
-Run this same command on each of the four ACP nodes (8 GPUs per node). ACP supplies `MASTER_ADDR` and `MASTER_PORT`. Use the active environment containing the training dependencies.
+Run this same command on each of the four ACP nodes (8 GPUs per node). ACP supplies `MASTER_ADDR` and `MASTER_PORT`. Activate the existing `lightx2v_h3` training environment on every node.
 
 ```bash
 cd /mnt/lm_data_afs/gushiqiao/codes/news/LightX2V
+source /mnt/lm_data_afs/gushiqiao/envs/lightx2v_h3/bin/activate
 
 H3_CODE_ROOT="$PWD" \
-H3_PYTHON="$(command -v python)" \
+H3_PYTHON="$VIRTUAL_ENV/bin/python" \
 H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3 \
 H3_STUDENT_INIT=/mnt/lm_data_afs/gushiqiao/outputs/h3_ref2av_imgonly_dcm1500_pdmd1500000_restart_ema999_lr2e5_4e6_20261030/cm/train/checkpoint-000001500/student_ema \
 H3_TEACHER_EXPORT=/mnt/devsft_afs_2/gushiqiao/outputs/data_new2/omni_ref_teacher29_base_5k \

@@ -12,7 +12,7 @@ from collections import OrderedDict
 import torch
 from torch.utils.data import DataLoader, Sampler
 
-from lightx2v_train.data.minimax_h3_cache_dataset import LatentDataset, _condition_payload
+from lightx2v_train.data.minimax_h3_cache_dataset import LatentDataset, _condition_payload, collate_latent_samples
 from lightx2v_train.data.minimax_h3_turbo_paths import load_cm_records
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
@@ -204,4 +204,4 @@ def build_minimax_h3_turbo_cm_dataset(data_config_split, train_or_val="cm"):
         defer_latent_loading=bool(data_config_split.get("defer_latent_loading", True)),
     )
     sampler = MiniMaxH3TurboCMSampler(dataset, seed=data_config_split.get("seed", 42), shuffle=data_config_split.get("shuffle", True))
-    return DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=int(data_config_split.get("num_workers", 0)), pin_memory=bool(data_config_split.get("pin_memory", False)), drop_last=False)
+    return DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=int(data_config_split.get("num_workers", 0)), pin_memory=bool(data_config_split.get("pin_memory", False)), drop_last=False, collate_fn=collate_latent_samples)
