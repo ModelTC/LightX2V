@@ -31,6 +31,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import *
+from lightx2v.utils.inference_errors import fatal_device_error_guard, terminate_on_fatal_device_error
 from lightx2v.utils.input_info import SekoTalkRS2VInputInfo, SekoTalkS2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -375,9 +376,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
                     self.run_vae_cached_decoder_withflag(latents, is_first, not is_first)
                     self.input_info.overlap_latent = latents[:, -1:].clone()
                 torch_device_module.synchronize()
+            except Exception as error:
+                terminate_on_fatal_device_error(error)
+                raise
             finally:
                 if model_offload and not transformer_offloaded:
-                    with suppress(Exception):
+                    with suppress(Exception), fatal_device_error_guard():
                         self.model.to_cpu()
                 self.clear_warmup_state()
 
@@ -413,7 +417,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.input_info = None
         for name in ("inputs", "inputs_static", "ref_img"):
             self.__dict__.pop(name, None)
-        with suppress(Exception):
+        with suppress(Exception), fatal_device_error_guard():
             if self.audio_encoder.cpu_offload:
                 self.audio_encoder.to_cpu()
             if self.audio_adapter.cpu_offload:
@@ -422,7 +426,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
                 self.vae_decoder.to_cpu()
         if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") != "model":
             self.model.transformer_infer.offload_manager.need_init_first_buffer = True
-            with suppress(Exception):
+            with suppress(Exception), fatal_device_error_guard():
                 self.model.pre_weight.to_cpu()
                 self.model.transformer_weights.non_block_weights_to_cpu()
 
@@ -880,10 +884,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
                         segment_idx += 1
                         fail_count = 0
                     except Exception as e:
+                        terminate_on_fatal_device_error(e)
                         if "pause_signal, pause running" in str(e):
                             logger.warning(f"model infer audio pause: {e}, should continue")
                         else:
                             raise
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             if hasattr(self.model, "inputs"):
                 self.end_run()
@@ -1479,6 +1487,9 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
             for step_index in range(self.model.scheduler.infer_steps):
                 self.model.scheduler.step_pre_ref(step_index, ref_frames)
                 self.model.infer(self.inputs)
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             self.inputs.pop("_ar_ref_prefill", None)
 
@@ -1634,6 +1645,9 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
             result = self.process_images_after_vae_decoder()
             self.end_run()
             return result
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             if getattr(self, "va_controller", None) is not None:
                 self.va_controller.clear()
@@ -1792,14 +1806,21 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
                         segment_idx += 1
                         fail_count = 0
                     except Exception as e:
+                        terminate_on_fatal_device_error(e)
                         if "pause_signal, pause running" in str(e):
                             logger.warning(f"model infer audio pause: {e}, should continue")
                         else:
                             raise
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             try:
                 if decoder is not None:
                     decoder.finish()
+            except Exception as error:
+                terminate_on_fatal_device_error(error)
+                raise
             finally:
                 if decoder is not None:
                     self.vae_decoder.reset_decode_state()

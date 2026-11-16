@@ -10,6 +10,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.networks.hunyuan_image3.infer.kv_cache import HunyuanImage3StaticKVCache
+from lightx2v.utils.inference_errors import fatal_device_error_guard
 
 
 def _tensor_signature(tensor: torch.Tensor):
@@ -229,14 +230,14 @@ class HunyuanImage3ARCudaGraphController:
         self._capture_stream.wait_stream(current_stream)
         self._tp_barrier()
 
-        with torch.cuda.stream(self._capture_stream):
+        with torch.cuda.stream(self._capture_stream), fatal_device_error_guard():
             for _ in range(self.capture_warmups):
                 self.model.infer_ar_prepared(entry.pre_infer_out)["logits"][:, -1, :]
         self._capture_stream.synchronize()
         self._tp_barrier()
 
-        with self.config["parallel_context"].custom_all_reduce_capture():
-            with torch.cuda.graph(entry.graph, pool=self._pool, stream=self._capture_stream):
+        with self.config["parallel_context"].custom_all_reduce_capture(), fatal_device_error_guard():
+            with torch.cuda.graph(entry.graph, pool=self._pool, stream=self._capture_stream), fatal_device_error_guard():
                 entry.logits = self.model.infer_ar_prepared(entry.pre_infer_out)["logits"][:, -1, :]
             current_stream.wait_stream(self._capture_stream)
         self._tp_barrier()

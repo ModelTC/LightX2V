@@ -25,6 +25,7 @@ from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.inference_errors import fatal_device_error_guard, terminate_on_fatal_device_error
 from lightx2v.utils.input_info import S2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -184,9 +185,12 @@ class InfiniteTalkRunner(WanRunner):
                                 self.cond_frame = videos[:, :, -self.motion_frame :].to(dtype=torch.float32, device=AI_DEVICE)
                             del videos
                         torch_device_module.synchronize()
+                    except Exception as error:
+                        terminate_on_fatal_device_error(error)
+                        raise
                     finally:
                         if not transformer_offloaded:
-                            with suppress(Exception):
+                            with suppress(Exception), fatal_device_error_guard():
                                 self.model.to_cpu()
                         self.clear_warmup_state()
         finally:
@@ -237,6 +241,9 @@ class InfiniteTalkRunner(WanRunner):
                 self.vae_decoder.model.clear_cache()
                 if self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False)):
                     self.vae_decoder.to_cpu()
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             self.end_run()
             self.input_info = None
@@ -1291,6 +1298,9 @@ class InfiniteTalkRunner(WanRunner):
         try:
             logger.info(f"Muxing InfiniteTalk audio {mux_audio} into {out_path}")
             self._mux_audio(out_path, mux_audio)
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             self._remove_video_audio_path()
         logger.info(f"Video saved to {out_path}")
@@ -1425,10 +1435,14 @@ class InfiniteTalkRunner(WanRunner):
                 self._prepare_input_data(self._load_input_data())
                 self.inputs = self.load_reused_inputs() if self.reuse else self.run_input_encoder()
                 result = self.run_main()
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 self.end_run()
             self.commit_reuse_result()
-        except Exception:
+        except Exception as _device_error:
+            terminate_on_fatal_device_error(_device_error)
             self.discard_reuse_result()
             raise
         finally:

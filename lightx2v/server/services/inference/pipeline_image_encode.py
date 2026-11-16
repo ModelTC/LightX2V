@@ -14,6 +14,8 @@ import torch
 from PIL import Image
 from loguru import logger
 
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
+
 
 def _get_png_compression_level() -> int:
     raw = os.getenv("LIGHTX2V_SYNC_PNG_COMPRESSION", "6")
@@ -129,6 +131,7 @@ def encode_pipeline_return_to_png_bytes(pipeline_return: Any) -> Optional[bytes]
             pipeline_return = pipeline_return.get("images")
         return _image_to_png_bytes(_first_image(pipeline_return))
     except Exception as e:
+        terminate_on_fatal_device_error(e)
         logger.exception(f"Failed to encode pipeline output to PNG: {e}")
         return None
     return None

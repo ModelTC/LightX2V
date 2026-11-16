@@ -9,6 +9,7 @@ from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveR
 from lightx2v.models.runners.wan.wan_runner import LingbotRunner, WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.lingbot_fast.scheduler import WanLingbotFastScheduler
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import ActionI2VInputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -105,6 +106,9 @@ class LingbotFastRunner(WanAutoregressiveRunnerMixin, LingbotRunner):
         self.input_info.num_frames = (latent_frames - 1) * self.config["vae_stride"][0] + 1
         try:
             return super().get_vae_encoder_output(first_frame, lat_h, lat_w, last_frame)
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             self.input_info.num_frames = previous_frames
 
@@ -138,6 +142,9 @@ class LingbotFastRunner(WanAutoregressiveRunnerMixin, LingbotRunner):
         pre = getattr(self.model, "pre_infer", None)
         try:
             return super().end_run()
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             if pre is not None:
                 pre.clear_condition_cache()

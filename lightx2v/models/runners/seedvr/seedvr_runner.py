@@ -31,6 +31,7 @@ from lightx2v.models.video_encoders.hf.seedvr.common.distributed.advanced import
 from lightx2v.models.video_encoders.hf.seedvr.common.distributed.ops import set_sequence_parallel_a2a_backend
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import SeedVRInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -580,6 +581,9 @@ class SeedVRRunner(DefaultRunner):
     def run_vae_decoder(self, latents):
         try:
             samples = self.vae_decoder.vae_decode(latents)
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             cache_count, cache_bytes = self.vae_decoder.clear_causal_memory()
             if cache_count:
@@ -641,6 +645,9 @@ class SeedVRRunner(DefaultRunner):
     def run_vae_encoder(self, img):
         try:
             return self.vae_encoder.vae_encode([img])
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             cache_count, cache_bytes = self.vae_encoder.clear_causal_memory()
             if cache_count:
@@ -706,6 +713,7 @@ class SeedVRRunner(DefaultRunner):
                     try:
                         video = self._read_video_segment(video_path, start_idx, end_idx)
                     except Exception as e:
+                        terminate_on_fatal_device_error(e)
                         logger.warning(f"[SeedVRRunner] torchvision segment decode failed, switching to torchcodec: {e}")
                         self._sr_video_backend = "torchcodec"
                         video = self._read_video_segment_torchcodec(video_path, start_idx, end_idx)
@@ -797,6 +805,7 @@ class SeedVRRunner(DefaultRunner):
             total_frames, fps, pts = self._probe_video(video_path)
             self._sr_video_backend = "torchvision"
         except Exception as e:
+            terminate_on_fatal_device_error(e)
             logger.warning(f"[SeedVRRunner] torchvision video probe failed, switching segmented decode to torchcodec: {e}")
             total_frames, fps, pts = self._probe_video_torchcodec(video_path)
             self._sr_video_backend = "torchcodec"

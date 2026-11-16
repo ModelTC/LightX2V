@@ -13,6 +13,7 @@ from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.global_paras import CALIB
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -577,6 +578,7 @@ class DefaultRunner(BaseRunner):
                 logger.info("LoRA switched successfully")
             return True
         except Exception as e:
+            terminate_on_fatal_device_error(e)
             logger.error(f"Failed to switch LoRA: {e}")
             return False
 
@@ -631,6 +633,7 @@ class DefaultRunner(BaseRunner):
             logger.info("LoRA switched successfully")
             return True
         except Exception as e:
+            terminate_on_fatal_device_error(e)
             logger.error(f"Failed to switch LoRA (multi): {e}")
             return False
 

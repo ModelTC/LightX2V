@@ -48,6 +48,7 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
+from lightx2v.utils.inference_errors import fatal_device_error_guard, terminate_on_fatal_device_error
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -169,9 +170,12 @@ class MiniMaxH3Runner(DefaultRunner):
 
                 self.run_vae_decoder(video_rows, audio_rows)
                 torch_device_module.synchronize()
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 if self.config.get("cpu_offload", False) and not transformer_offloaded:
-                    with suppress(Exception):
+                    with suppress(Exception), fatal_device_error_guard():
                         self._offload_transformer()
                 self.clear_warmup_state()
 
@@ -819,6 +823,9 @@ class MiniMaxH3Runner(DefaultRunner):
             self.init_run()
             try:
                 video_rows, audio_rows = self.run_segment(0)
+            except Exception as e:
+                terminate_on_fatal_device_error(e)
+                raise
             finally:
                 if should_offload_transformer:
                     self._offload_transformer()
@@ -826,17 +833,22 @@ class MiniMaxH3Runner(DefaultRunner):
 
             self.gen_video, self.gen_audio = self.run_vae_decoder(video_rows, audio_rows)
             return self.process_images_after_vae_decoder()
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             # ``init_run`` can fail after a partial device transfer. Preserve
             # the original exception while still making a best-effort return
             # of the large transformer to host memory.
             if should_offload_transformer and not transformer_offloaded:
-                with suppress(Exception):
+                with suppress(Exception), fatal_device_error_guard():
                     self._offload_transformer()
             try:
-                self._release_low_memory_vae()
+                with fatal_device_error_guard():
+                    self._release_low_memory_vae()
             finally:
-                self.end_run()
+                with fatal_device_error_guard():
+                    self.end_run()
                 # Decoded FP32 video is large (roughly 1.5 GiB at the default
                 # shape). Returned tensors keep their own references/copies;
                 # the runner should not retain another request-sized result.

@@ -5,6 +5,8 @@ from itertools import islice
 import av
 import torch
 
+from lightx2v.utils.inference_errors import fatal_device_error_guard, terminate_on_fatal_device_error
+
 
 def prefetch_frames(container, batch_size):
     def frames():
@@ -38,7 +40,8 @@ class AsyncVideoWriter:
         self.closed = False
 
     def _write(self, pixels, event):
-        event.synchronize()
+        with fatal_device_error_guard():
+            event.synchronize()
         if self.container is None:
             self.container = av.open(str(self.path), mode="w")
             codec = self.config.get("video_codec", "libx265")
@@ -69,7 +72,7 @@ class AsyncVideoWriter:
             self.pending.popleft().result()
         host = torch.empty(pixels.shape, device="cpu", dtype=torch.uint8, pin_memory=True)
         self.copy_stream.wait_stream(torch.cuda.current_stream(pixels.device))
-        with torch.cuda.stream(self.copy_stream):
+        with torch.cuda.stream(self.copy_stream), fatal_device_error_guard():
             host.copy_(pixels, non_blocking=True)
             pixels.record_stream(self.copy_stream)
             event = torch.cuda.Event()
@@ -95,6 +98,9 @@ class AsyncVideoWriter:
                         packet.dts = packet.pts - decoder.reorder_depth
                 for packet in packets:
                     self.container.mux(packet)
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             self.executor.shutdown(wait=True)
             if self.container is not None:

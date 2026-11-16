@@ -10,6 +10,8 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
+
 try:
     from decord import VideoReader
 except ImportError:
@@ -475,6 +477,9 @@ class WanAnimate2Runner(WanRunner):
         try:
             pixels = pixels.to(device=AI_DEVICE, dtype=self.vae_encoder.dtype)
             return self.vae_encoder.encode(pixels).to(GET_DTYPE())
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             if transient:
                 del self.vae_encoder
@@ -645,11 +650,12 @@ class WanAnimate2Runner(WanRunner):
                 self.model.scheduler.prepare(self.input_info.seed, self.input_info.latent_shape)
             else:
                 self.model.scheduler.reset(self.input_info.seed, self.input_info.latent_shape)
-        except BaseException:
+        except BaseException as _device_error:
             # ``DefaultRunner.run_main`` calls this hook before it enters
             # ``run_segment``.  Clean up here as well so a failed/cancelled
             # reference prefill cannot strand the large static cache on a
             # resident service runner.
+            terminate_on_fatal_device_error(_device_error)
             self._release_segment_conditioning()
             raise
 
@@ -669,6 +675,9 @@ class WanAnimate2Runner(WanRunner):
     def run_segment(self, segment_idx=0):
         try:
             return super().run_segment(segment_idx)
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             # Denoising is the final consumer of driving latents and static K/V.
             # Release them before a CPU-offloaded VAE moves onto the accelerator,
@@ -756,16 +765,21 @@ class WanAnimate2Runner(WanRunner):
     def run_main(self):
         try:
             return super().run_main()
-        except BaseException:
+        except BaseException as _device_error:
+            terminate_on_fatal_device_error(_device_error)
             try:
                 self._close_stream_video(wait=False, mux_audio=False)
-            except Exception:
+            except Exception as _device_error:
+                terminate_on_fatal_device_error(_device_error)
                 logger.exception("Failed to stop Wan-Animate-2 stream recorder after an inference error.")
             raise
 
     def end_run(self):
         try:
             self._close_stream_video(wait=True, mux_audio=True)
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             for name in (
                 "generation_clip",

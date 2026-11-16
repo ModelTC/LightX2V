@@ -14,6 +14,7 @@ from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import NeoppInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -196,6 +197,9 @@ class NeoppRunner(DefaultRunner):
         try:
             self.inputs = self.run_input_encoder()
             return self.run_main()
+        except Exception as e:
+            terminate_on_fatal_device_error(e)
+            raise
         finally:
             self.clear_kvcache()
 

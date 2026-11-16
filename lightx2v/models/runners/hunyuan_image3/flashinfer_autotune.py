@@ -10,6 +10,8 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
+
 try:
     from flashinfer.autotuner import AutoTuner as FlashInferAutoTuner
     from flashinfer.autotuner import autotune as flashinfer_autotune
@@ -278,6 +280,7 @@ class FlashInferAutotuneController:
                     if not tuner.load_configs(cache_path):
                         return RuntimeError("FlashInfer autotune cache metadata does not match this runtime; choose a new cache path or remove the incompatible cache.")
                 except Exception as error:
+                    terminate_on_fatal_device_error(error)
                     return error
             elif self.options.mode == "load":
                 return FileNotFoundError(f"FlashInfer autotune cache does not exist for load mode: {cache_path}")
@@ -295,6 +298,7 @@ class FlashInferAutotuneController:
                 raise RuntimeError(f"FlashInfer autotune did not create a non-empty cache file: {cache_path}")
             logger.info(f"HunyuanImage3 FlashInfer autotune cache saved to: {cache_path}")
         except Exception as error:
+            terminate_on_fatal_device_error(error)
             logger.exception(f"Failed to persist distributed FlashInfer autotune cache: {cache_path}")
             return error
         return None

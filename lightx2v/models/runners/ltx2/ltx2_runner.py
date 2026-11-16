@@ -16,6 +16,7 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2Upsampler, LTX2VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.inference_errors import terminate_on_fatal_device_error
 from lightx2v.utils.input_info import I2AVInputInfo, T2AVInputInfo, align_num_frames
 from lightx2v.utils.ltx2_media_io import decode_audio_from_file, load_image_conditioning, load_video_conditioning
 from lightx2v.utils.ltx2_media_io import encode_video as save_video
@@ -204,11 +205,17 @@ class LTX2Runner(DefaultRunner):
                     for decoded_chunk in video:
                         del decoded_chunk
                     torch_device_module.synchronize()
+                except Exception as e:
+                    terminate_on_fatal_device_error(e)
+                    raise
                 finally:
                     v_latent = a_latent = video = None
                     if model_offload:
                         self.model.to_cpu()
                     self.clear_warmup_state()
+        except Exception as error:
+            terminate_on_fatal_device_error(error)
+            raise
         finally:
             scheduler.infer_steps = stage1_infer_steps
 

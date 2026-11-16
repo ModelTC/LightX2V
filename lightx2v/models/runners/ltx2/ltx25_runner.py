@@ -14,6 +14,7 @@ from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_
 from lightx2v.models.schedulers.ltx2.ltx25_scheduler import LTX25Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX25AudioVAE, LTX25VideoVAE
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.inference_errors import fatal_device_error_guard, terminate_on_fatal_device_error
 from lightx2v.utils.ltx2_media_io import encode_video_ltx25
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -213,12 +214,14 @@ class LTX25Runner(LTX2Runner):
         """Ensure a failed/cancelled LTX-2.5 request cannot retain RNG state."""
         try:
             return super().run_pipeline(input_info)
-        except BaseException:
+        except BaseException as e:
+            terminate_on_fatal_device_error(e)
             # The inherited runner only calls end_run() on the success path.
             # A resident runner must not reuse a partially consumed main or
             # ancestral generator after an encoder/DiT/VAE/media failure.
             try:
-                self.end_run()
+                with fatal_device_error_guard():
+                    self.end_run()
             finally:
                 self.__dict__.pop("inputs", None)
                 self.input_info = None
