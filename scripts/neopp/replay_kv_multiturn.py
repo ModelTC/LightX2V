@@ -4,9 +4,8 @@ Set model_path, kv_dir and output_dir to local paths before running.
 See README.md for FP8, parallel and 2K replay settings.
 """
 
+import json
 from pathlib import Path
-
-import torch.distributed as dist
 
 from lightx2v import LightX2VPipeline
 
@@ -26,26 +25,26 @@ turns = [
     ("to_x2v_cond_kv_2_441.pt", "to_x2v_uncond_kv_2_15.pt", 441, 15, 202),
 ]
 
-pipe = LightX2VPipeline(model_path=model_path, model_cls="neopp", support_tasks=["t2i", "i2i"])
-pipe.create_generator(config_json=str(config_path))
-pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False, "save_result_for_debug": True})
+config = json.loads(config_path.read_text())
+config.update(
+    {
+        "model_path": model_path,
+        "model_cls": "neopp",
+    }
+)
 
-for turn, (cond, uncond, offset_cond, offset_uncond, seed) in enumerate(turns):
-    pipe.runner.load_kvcache(str(kv_dir / cond), str(kv_dir / uncond) if uncond is not None else None)
-    pipe.runner.set_inference_params(
-        index_offset_cond=offset_cond,
-        index_offset_uncond=offset_uncond,
-        cfg_interval=(-1, 2),
-        cfg_scale=4.0,
-        cfg_norm="none",
-        timestep_shift=3.0,
-    )
-    pipe.generate(
-        task="t2i",
-        seed=seed,
-        size=size,
-        save_result_path=str(output_dir / f"{output_prefix}_{turn}.png"),
-    )
-
-if dist.is_initialized():
-    dist.destroy_process_group()
+with LightX2VPipeline(config) as pipe:
+    inference_params = {name: pipe.config[name] for name in ("cfg_interval", "cfg_scale", "cfg_norm", "timestep_shift") if name in pipe.config}
+    for turn, (cond, uncond, offset_cond, offset_uncond, seed) in enumerate(turns):
+        pipe.runner.load_kvcache(str(kv_dir / cond), str(kv_dir / uncond) if uncond is not None else None)
+        pipe.runner.set_inference_params(
+            index_offset_cond=offset_cond,
+            index_offset_uncond=offset_uncond,
+            **inference_params,
+        )
+        pipe.generate(
+            task="t2i",
+            seed=seed,
+            size=size,
+            save_result_path=str(output_dir / f"{output_prefix}_{turn}.png"),
+        )

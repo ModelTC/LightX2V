@@ -154,23 +154,29 @@ Video VAE encoding retains the existing seed-42 posterior sample. Audio VAE enco
 Run this Python example under eight-GPU `torchrun` with the matching config. `size` is `[height,width]`.
 
 ```python
+import json
+from pathlib import Path
+
 from lightx2v import LightX2VPipeline
 
-pipe = LightX2VPipeline(
-    model_path="/root/lightx2v_h3_world/models/MiniMax-H3-native",
-    model_cls="minimax_h3", model_variant="fl2av",
-)
-pipe.create_generator(config_json="configs/minimax_h3_roll/minimax_h3_bf16_8step.json")
-prompt = "A red fox walks through a snowy clearing, one locked-off shot. Sound: paws on snow and soft wind."
-pipe.generate(
-    task="t2av", prompt=prompt, seed=42, size=[480,864], num_frames=124,
-    save_result_path="/root/h3_example/draft.mp4",  # Full configured 8 steps.
-)
-pipe.generate(
-    task="t2av", prompt=prompt, seed=2026, size=[1088,1920], num_frames=124,
-    resample_source_video="/root/h3_example/draft.mp4",  # Default index 1: last 7 steps.
-    save_result_path="/root/h3_example/rgb.native.mp4",
-)
+config = json.loads(Path("configs/minimax_h3_roll/minimax_h3_bf16_8step.json").read_text())
+config.update({
+    "model_cls": "minimax_h3",
+    "model_path": "/root/lightx2v_h3_world/models/MiniMax-H3-native",
+    "model_variant": "fl2av",
+})
+
+with LightX2VPipeline(config) as pipe:
+    prompt = "A red fox walks through a snowy clearing, one locked-off shot. Sound: paws on snow and soft wind."
+    pipe.generate(
+        task="t2av", prompt=prompt, seed=42, size=[480,864], num_frames=124,
+        save_result_path="/root/h3_example/draft.mp4",  # Full configured 8 steps.
+    )
+    pipe.generate(
+        task="t2av", prompt=prompt, seed=2026, size=[1088,1920], num_frames=124,
+        resample_source_video="/root/h3_example/draft.mp4",  # Default index 1: last 7 steps.
+        save_result_path="/root/h3_example/rgb.native.mp4",
+    )
 ```
 
 With this config, omitting `draft_steps` from the first request produces a full 8-step draft. For a shorter draft, explicitly pass a positive integer below 8, such as `draft_steps=3`. `draft_steps=8` or larger still uses the original 8-step schedule. Using `[1088,1920]` for both stages skips RGB resizing but still performs VAE re-encoding and decoding. For FL2AV, pass `task="fl2av"`, `image_path`, and `last_frame_path` to both requests and explicitly specify their sizes.

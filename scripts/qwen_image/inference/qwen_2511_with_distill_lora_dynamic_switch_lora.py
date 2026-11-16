@@ -3,80 +3,44 @@ Qwen-image-edit image-to-image generation example.
 This example demonstrates how to use LightX2V with Qwen-Image-Edit model for I2I generation.
 """
 
+import json
+from pathlib import Path
+
 from lightx2v import LightX2VPipeline
 
-# Initialize pipeline for Qwen-image-edit I2I task
-# For Qwen-Image-Edit-2509, use model_cls="qwen-image-edit-2509"
-pipe = LightX2VPipeline(
-    model_path="/path/to/Qwen-Image-Edit-2511",
-    model_cls="qwen-image-edit-2511",
-    task="i2i",
+config = json.loads((Path(__file__).resolve().parents[3] / "configs/qwen_image/qwen_image_i2i_2511_distill_lora_fp8.json").read_text())
+config.update(
+    {
+        "model_path": "/path/to/Qwen-Image-Edit-2511",
+        "model_cls": "qwen_image",
+        "task": "i2i",
+    }
 )
 
-# Enable offloading to significantly reduce VRAM usage with minimal speed impact
-# Suitable for RTX 30/40/50 consumer GPUs
-# pipe.enable_offload(
-#     cpu_offload=True,
-#     offload_granularity="block", #["block", "phase"]
-#     text_encoder_offload=True,
-#     vae_offload=False,
-# )
+with LightX2VPipeline(config) as pipe:
+    seed = 42
+    prompt = "Replace the polka-dot shirt with a light blue shirt."
+    image_path = ["/path/to/img.png"]  # or ["/path/to/img_0.jpg", "/path/to/img_1.jpg"]
+    save_result_path = "/path/to/save_results/output.png"
 
-# Load fp8 Base weights (and int4 Qwen2_5 vl model (optional))
-pipe.enable_quantize(
-    dit_quantized=True,
-    dit_quantized_ckpt="lightx2v/Qwen-Image-Edit-2511-Lightning/qwen_image_edit_2511_fp8_e4m3fn_scaled.safetensors",
-    quant_scheme="fp8-sgl",
-    # text_encoder_quantized=True,
-    # text_encoder_quantized_ckpt="lightx2v/Encoders/GPTQModel/Qwen25-VL-4bit-GPTQ",
-    # text_encoder_quant_scheme="int4"
-)
+    pipe.generate(
+        seed=seed,
+        image_path=image_path,
+        prompt=prompt,
+        save_result_path=save_result_path,
+    )
 
-# Load distilled LoRA weights
-pipe.enable_lora(
-    lora_mode="separate",
-    lora_configs=[
-        {
-            "path": "/path/to/lora_1.safetensors",
-            "strength": 1.0,
-        },
-    ],
-)
-# Create generator manually with specified parameters
-pipe.create_generator(
-    attn_mode="flash_attn3",
-    infer_steps=8,
-    guidance_scale=1,
-)
+    # Switch LoRA
+    pipe.runner.switch_lora(lora_path="/path/to/lora_2.safetensors", strength=1.0)
 
-# Generation parameters
-seed = 42
-prompt = "Replace the polka-dot shirt with a light blue shirt."
-image_path = ["/path/to/img.png"]  # or ["/path/to/img_0.jpg", "/path/to/img_1.jpg"]
-save_result_path = "/path/to/save_results/output.png"
+    seed = 42
+    prompt = "Replace the polka-dot shirt with a light blue shirt."
+    image_path = ["/path/to/img.png"]  # or ["/path/to/img_0.jpg", "/path/to/img_1.jpg"]
+    save_result_path = "/path/to/save_results/output.png"
 
-# Generate video
-pipe.generate(
-    seed=seed,
-    image_path=image_path,
-    prompt=prompt,
-    save_result_path=save_result_path,
-)
-
-
-# Switch LoRA
-pipe.switch_lora(lora_path="/path/to/lora_2.safetensors", strength=1.0)
-
-# Generation parameters
-seed = 42
-prompt = "Replace the polka-dot shirt with a light blue shirt."
-image_path = ["/path/to/img.png"]  # or ["/path/to/img_0.jpg", "/path/to/img_1.jpg"]
-save_result_path = "/path/to/save_results/output.png"
-
-# Generate video
-pipe.generate(
-    seed=seed,
-    image_path=image_path,
-    prompt=prompt,
-    save_result_path=save_result_path,
-)
+    pipe.generate(
+        seed=seed,
+        image_path=image_path,
+        prompt=prompt,
+        save_result_path=save_result_path,
+    )

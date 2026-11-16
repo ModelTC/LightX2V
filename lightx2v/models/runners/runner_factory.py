@@ -18,10 +18,9 @@ def build_runner(config):
     try:
         runner.init_modules()
     except BaseException as error:
-        if config.get("cpu_offload_numa", False):
-            try:
-                runner.close()
-            except BaseException as cleanup_error:
-                error.add_note(f"NUMA runner cleanup also failed: {cleanup_error!r}")
+        try:
+            runner.close()
+        except BaseException as cleanup_error:
+            error.add_note(f"Runner cleanup also failed: {cleanup_error!r}")
         raise
     return runner

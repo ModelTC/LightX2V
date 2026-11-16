@@ -161,20 +161,19 @@ def main():
             "loading": "torch.load(path, map_location='cpu', weights_only=True)",
         }
     (args.output_dir / "requests.json").write_text(json.dumps(run_info, ensure_ascii=False, indent=2) + "\n")
-    # task=None allows one runner to serve both T2I and I2I requests.
-    pipe = LightX2VPipeline(task=None, model_path=str(args.model_path), model_cls="qwen_image_21")
-    pipe.create_generator(config_json=str(effective_config))
-    for position, job in enumerate(jobs, start=1):
-        request = job["request"]
-        print(f"[{position}/{len(jobs)}] validation={job['validation_index']} {job['group']} size={request['size']} seed={request['seed']}", flush=True)
-        if args.dump_trace:
-            with capture_validation_trace(pipe.runner, job, args.model_path) as trace:
+    config.update(model_path=str(args.model_path), model_cls="qwen_image_21")
+    with LightX2VPipeline(config) as pipe:
+        for position, job in enumerate(jobs, start=1):
+            request = job["request"]
+            print(f"[{position}/{len(jobs)}] validation={job['validation_index']} {job['group']} size={request['size']} seed={request['seed']}", flush=True)
+            if args.dump_trace:
+                with capture_validation_trace(pipe.runner, job, args.model_path) as trace:
+                    pipe.generate(**request)
+                save_validation_trace(trace, Path(request["save_result_path"]).with_suffix(".pt"))
+            else:
                 pipe.generate(**request)
-            save_validation_trace(trace, Path(request["save_result_path"]).with_suffix(".pt"))
-        else:
-            pipe.generate(**request)
-        if not Path(request["save_result_path"]).is_file():
-            raise RuntimeError(f"Native runner did not save {request['save_result_path']}")
+            if not Path(request["save_result_path"]).is_file():
+                raise RuntimeError(f"Native runner did not save {request['save_result_path']}")
     print(f"Saved {len(jobs)} images to {args.output_dir}", flush=True)
 
 
