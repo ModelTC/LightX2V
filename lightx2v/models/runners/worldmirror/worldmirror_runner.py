@@ -416,6 +416,9 @@ class WorldMirrorRunner(BaseRunner):
             logger.info(f"[WorldMirror] Inference done in {infer_time:.2f}s")
         return predictions, imgs, infer_time
 
+    def get_output_extension(self, input_info):
+        return ""
+
     @torch.no_grad()
     def run_pipeline(self, input_info):
         """Run WorldMirror reconstruction on a directory/video/image path."""
@@ -632,6 +635,10 @@ class WorldMirrorRunner(BaseRunner):
             timings["case_total"] = time.perf_counter() - case_t0
             if log_time:
                 print_and_save_timings(timings, outdir)
+
+            for path in sorted(outdir.rglob("*")):
+                if path.is_file():
+                    self.record_output("file", path)
 
             logger.info(f"[WorldMirror] Results saved to: {outdir}")
 

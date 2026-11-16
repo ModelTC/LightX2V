@@ -33,6 +33,9 @@ class Hunyuan3DShapeRunner(DefaultRunner):
         self._ckpt = None
         self.image_preprocessor = Hunyuan3DImagePreprocessor(enable_rembg=config.get("enable_rembg", True))
 
+    def get_output_extension(self, input_info):
+        return ".glb"
+
     def init_scheduler(self):
         self.scheduler = Hunyuan3DShapeScheduler(self.config)
 
@@ -223,6 +226,7 @@ class Hunyuan3DShapeRunner(DefaultRunner):
     def _save_mesh(self, mesh, save_path: str) -> str:
         os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
         mesh.export(save_path)
+        self.record_output("mesh", save_path)
         logger.info(f"[Hunyuan3D] Saved mesh to {save_path}")
         return save_path
 

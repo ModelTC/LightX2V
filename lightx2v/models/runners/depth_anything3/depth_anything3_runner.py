@@ -77,30 +77,48 @@ class DepthAnything3Runner(BaseRunner):
         self.model = model.to(self.device).eval()
         self.config.lock()
 
+    def get_output_extension(self, input_info):
+        return ".mp4" if input_info.video_path else ".png"
+
     def run_pipeline(self, input_info):
         if bool(input_info.image_path) == bool(input_info.video_path):
             raise ValueError("Depth Anything 3 requires exactly one of image_path or video_path")
-        if not input_info.save_result_path:
-            raise ValueError("Depth Anything 3 requires save_result_path")
-        destination = Path(input_info.save_result_path).expanduser()
+        if input_info.video_path and input_info.return_result_tensor:
+            raise ValueError("Depth Anything 3 return_result_tensor supports images only; video inference streams to a file")
+        destination = None
+        if not input_info.return_result_tensor:
+            if not input_info.save_result_path:
+                raise ValueError("Depth Anything 3 requires save_result_path")
+            destination = Path(input_info.save_result_path).expanduser()
         depth_path, sky_mask_path = self._optional_output_paths(input_info, destination)
         if input_info.video_path:
-            return self._run_video(input_info.video_path, destination, depth_path=depth_path, sky_mask_path=sky_mask_path)
-        if destination.suffix.lower() != ".png":
-            raise ValueError("Depth Anything 3 save_result_path must end in .png")
-        with Image.open(input_info.image_path) as source:
-            rgb = np.asarray(source.convert("RGB"))
-        image, original_size = preprocess_rgb(
-            rgb,
-            process_res=int(self.config.get("process_res", 504)),
-            process_res_method=self.config.get("process_res_method", "upper_bound_resize"),
-        )
-        depth, sky = self._infer(image)
-        result = save_relative_depth_preview(depth, sky, destination, size=original_size)
+            result = self._run_video(input_info.video_path, destination, depth_path=depth_path, sky_mask_path=sky_mask_path)
+        else:
+            if destination is not None and destination.suffix.lower() != ".png":
+                raise ValueError("Depth Anything 3 save_result_path must end in .png")
+            with Image.open(input_info.image_path) as source:
+                rgb = np.asarray(source.convert("RGB"))
+            image, original_size = preprocess_rgb(
+                rgb,
+                process_res=int(self.config.get("process_res", 504)),
+                process_res_method=self.config.get("process_res_method", "upper_bound_resize"),
+            )
+            depth, sky = self._infer(image)
+            if input_info.return_result_tensor:
+                preview = render_relative_depth_preview(depth, sky, size=original_size)
+                result = {"images": [torch.from_numpy(preview.copy()).unsqueeze(0)]}
+            else:
+                result = save_relative_depth_preview(depth, sky, destination, size=original_size)
+            if depth_path is not None:
+                save_float_depth(depth, depth_path)
+            if sky_mask_path is not None:
+                save_sky_mask(sky, sky_mask_path)
+
+        self.record_output("video" if input_info.video_path else "image", destination)
         if depth_path is not None:
-            save_float_depth(depth, depth_path)
-        if sky_mask_path is not None:
-            save_sky_mask(sky, sky_mask_path)
+            self.record_output("depth", depth_path)
+        if sky_mask_path is not None and sky_mask_path != depth_path:
+            self.record_output("sky_mask", sky_mask_path)
         return result
 
     def _optional_output_paths(self, input_info, destination):
@@ -109,10 +127,10 @@ class DepthAnything3Runner(BaseRunner):
         if input_info.video_path:
             depth_path = depth_path.resolve() if depth_path is not None else None
             sky_mask_path = sky_mask_path.resolve() if sky_mask_path is not None else None
-        outputs = [destination, *(path for path in (depth_path, sky_mask_path) if path is not None)]
+        outputs = [path for path in (destination, depth_path, sky_mask_path) if path is not None]
         resolved = [path.expanduser().resolve() for path in outputs]
         source = Path(input_info.video_path or input_info.image_path).expanduser().resolve()
-        if source in resolved or resolved[0] in resolved[1:] or (not input_info.video_path and len(set(resolved)) != len(resolved)):
+        if source in resolved or (destination is not None and resolved[0] in resolved[1:]) or (not input_info.video_path and len(set(resolved)) != len(resolved)):
             raise ValueError("Depth Anything 3 input and output paths must be distinct")
         if input_info.video_path:
             if destination.suffix.lower() != ".mp4":

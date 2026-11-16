@@ -401,7 +401,7 @@ class LingBotVideoWanVAE:
 
     @torch.no_grad()
     def decode(self, latents, input_info=None):
-        save_tensor = self.config.get("task") == "t2i" and input_info is not None and bool(input_info.save_result_path) and not input_info.return_result_tensor
+        save_tensor = input_info.task == "t2i" and bool(input_info.save_result_path) and not input_info.return_result_tensor
         if self.cpu_offload:
             self.model.to(AI_DEVICE)
         latents = latents.to(device=next(self.model.parameters()).device, dtype=torch.float32)
