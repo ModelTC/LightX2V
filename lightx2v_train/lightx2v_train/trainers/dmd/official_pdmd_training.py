@@ -24,11 +24,13 @@ from .official_pdmd_core import (
     critic_sigmas,
     critic_updates_before,
     full_rollout,
+    joint_map,
     joint_noise_like,
     role_at,
     rollout_grid,
     stream_seed,
     student_objective,
+    student_prediction,
 )
 
 
@@ -219,6 +221,40 @@ class OfficialH3PdmdTraining:
             noise = t.sample_initial_latents(shape)
         return full_rollout(t.student, noise, condition, self.video_grid, self.audio_grid)
 
+    def _student_recompute_backward(self, trajectory, index, ratio, iteration, slot, route_scale):
+        """Backpropagate through the critic and student sequentially.
+
+        Scores and the GAN loss are evaluated once. Only the student forward
+        is replayed, using the same RNG state, after the critic graph is freed.
+        The caller keeps the critic frozen throughout both backwards.
+        """
+        t = self.trainer
+        device = torch.device(t.student.device)
+        cuda_devices = [device.index if device.index is not None else torch.cuda.current_device()] if device.type == "cuda" else []
+        cpu_rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state(cuda_devices[0]) if cuda_devices else None
+        loss, metrics, clean = student_objective(t.student, t.fake, t.teacher, trajectory, index, ratio, return_clean=True, detach_student=True)
+        metrics["pdmd_loss"] = loss.detach()
+        gan_loss, gan_metrics = self.gan.generator(clean, trajectory.condition, iteration, slot)
+        metrics.update(gan_metrics)
+        loss = (loss + gan_loss) * route_scale
+        (loss / self.accum).backward()
+        gradients = joint_map(clean, lambda tensor, _: tensor.grad.detach())
+        loss_value = loss.detach()
+        del clean, loss, gan_loss
+
+        # Replay consumes the first forward's RNG state without advancing the
+        # process RNG a second time or repeating teacher/fake score queries.
+        with torch.random.fork_rng(devices=cuda_devices):
+            torch.set_rng_state(cpu_rng)
+            if cuda_devices:
+                torch.cuda.set_rng_state(cuda_rng, cuda_devices[0])
+            _, clean, _ = student_prediction(t.student, trajectory, index)
+            outputs = (clean,) if torch.is_tensor(clean) else (clean.video, clean.audio)
+            grad_tensors = (gradients,) if torch.is_tensor(gradients) else (gradients.video, gradients.audio)
+            torch.autograd.backward(outputs, grad_tensors)
+        return loss_value, metrics
+
     def _update(self, samples, iteration):
         t = self.trainer
         role = role_at(iteration, self.critic_steps)
@@ -258,17 +294,20 @@ class OfficialH3PdmdTraining:
                 # Freeze parameters through backward too: activation checkpoint
                 # recomputation must see the same flags as the forward pass.
                 with context:
-                    if self.gan is None:
-                        loss, metrics = student_objective(t.student, t.fake, t.teacher, trajectory, index, ratio)
+                    if self.gan is not None and self.dmd["gan"].get("student_recompute", False):
+                        loss, metrics = self._student_recompute_backward(trajectory, index, ratio, iteration, slot, route_scale)
                     else:
-                        loss, metrics, clean = student_objective(t.student, t.fake, t.teacher, trajectory, index, ratio, return_clean=True)
-                        metrics["pdmd_loss"] = loss.detach()
-                        gan_loss, gan_metrics = self.gan.generator(clean, trajectory.condition, iteration, slot)
-                        loss = loss + gan_loss
-                        metrics.update(gan_metrics)
-                        del clean, gan_loss
-                    loss = loss * route_scale
-                    (loss / self.accum).backward()
+                        if self.gan is None:
+                            loss, metrics = student_objective(t.student, t.fake, t.teacher, trajectory, index, ratio)
+                        else:
+                            loss, metrics, clean = student_objective(t.student, t.fake, t.teacher, trajectory, index, ratio, return_clean=True)
+                            metrics["pdmd_loss"] = loss.detach()
+                            gan_loss, gan_metrics = self.gan.generator(clean, trajectory.condition, iteration, slot)
+                            loss = loss + gan_loss
+                            metrics.update(gan_metrics)
+                            del clean, gan_loss
+                        loss = loss * route_scale
+                        (loss / self.accum).backward()
                 loss_value = loss.detach()
             else:
                 video_only = torch.is_tensor(trajectory.states[-1])
@@ -388,7 +427,11 @@ class OfficialH3PdmdTraining:
 
             self.gan = Dmd2GanObjective(t, self.gan_real_stream)
             logger.info(
-                "[pdmd_official][gan] DMD2 logistic losses, shared fake backbone; G={} D={} real_data={}", self.gan.generator_weight, self.gan.discriminator_weight, self.gan_real_stream.recipe()
+                "[pdmd_official][gan] DMD2 logistic losses, shared fake backbone; G={} D={} student_recompute={} real_data={}",
+                self.gan.generator_weight,
+                self.gan.discriminator_weight,
+                self.dmd["gan"].get("student_recompute", False),
+                self.gan_real_stream.recipe(),
             )
         self._validate_wan_residency()
         self.cached = move_tensors(self.cached, t.student.device)

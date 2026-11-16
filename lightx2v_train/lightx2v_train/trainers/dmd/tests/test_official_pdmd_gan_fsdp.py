@@ -13,7 +13,6 @@ from types import SimpleNamespace
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-
 from lightx2v_train.model_zoo.native.minimax_h3.modeling import install_minimax_h3_dmad_features
 from lightx2v_train.trainers.dmad.tests import test_dmad as native_fixtures
 from lightx2v_train.trainers.dmd.dmd2_gan import Dmd2GanObjective
@@ -22,7 +21,7 @@ from lightx2v_train.trainers.dmd.official_pdmd_core import full_rollout, rollout
 from lightx2v_train.trainers.dmd.official_pdmd_training import OfficialH3PdmdTraining
 
 
-def _native_gan_fsdp_worker(rank, init_file):
+def _native_gan_fsdp_worker(rank, init_file, student_recompute=False):
     from torch.distributed.device_mesh import init_device_mesh
     from torch.distributed.fsdp import fully_shard
 
@@ -33,7 +32,13 @@ def _native_gan_fsdp_worker(rank, init_file):
         mesh = init_device_mesh("cpu", (2,))
         models, capabilities = {}, {}
         for name in ("student", "fake", "teacher"):
-            model, capability, latents, condition = native_fixtures.DmadH3FeaturesTest().fixture(references=False, checkpointing=True)
+            model, capability, latents, condition = native_fixtures.DmadH3FeaturesTest().fixture(references=student_recompute, checkpointing=True)
+            if student_recompute:
+                # Different image counts on the two ranks exercise variable
+                # packed sequence lengths under otherwise identical collectives.
+                condition["references"] = (condition["references"][0],) * (rank + 2)
+                condition["noised_condition_video_latents"] = condition["noised_condition_video_latents"].repeat(rank + 2, 1)
+                condition.pop("condition_audio_latents")
             capability.options = replace(capability.options, official_pdmd=True, projected_dmd=True)
             capability.set_training = lambda enabled, module=model: module.train(enabled)
             if name == "teacher":
@@ -54,7 +59,7 @@ def _native_gan_fsdp_worker(rank, init_file):
         trainer.config = {"seed": 17}
         # Block zero omits a later FSDP block and output projections in GAN
         # calls, while the score/FM backward must still train those parameters.
-        trainer.dmd_config = {"gan": {"feature_block": 0, "generator_weight": 0.005, "discriminator_weight": 0.01}}
+        trainer.dmd_config = {"gan": {"feature_block": 0, "generator_weight": 0.005, "discriminator_weight": 0.01, "student_recompute": student_recompute}}
         trainer.trainable_params = role_parameters["student"]
         trainer.fake_trainable_params = role_parameters["fake"]
         torch.manual_seed(99)
@@ -112,8 +117,14 @@ def _native_gan_fsdp_worker(rank, init_file):
 
 class NativeH3GanFsdpTest(unittest.TestCase):
     def test_accumulated_score_and_gan_backwards_across_role_changes(self):
+        self.run_role_changes(student_recompute=False)
+
+    def test_recomputed_generator_with_different_reference_counts(self):
+        self.run_role_changes(student_recompute=True)
+
+    def run_role_changes(self, *, student_recompute):
         with tempfile.TemporaryDirectory() as directory:
-            context = mp.spawn(_native_gan_fsdp_worker, args=(str(Path(directory) / "init"),), nprocs=2, join=False)
+            context = mp.spawn(_native_gan_fsdp_worker, args=(str(Path(directory) / "init"), student_recompute), nprocs=2, join=False)
             deadline = time.monotonic() + 90
             try:
                 while time.monotonic() < deadline:

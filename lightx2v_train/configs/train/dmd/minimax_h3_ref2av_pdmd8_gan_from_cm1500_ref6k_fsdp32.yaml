@@ -118,6 +118,7 @@ training:
     generation_shapes: null  # Use each cached target's native geometry.
     gan:
       enabled: true
+      student_recompute: true  # Backpropagate at clean latents, then replay the student; keep one model graph alive.
       generator_weight: 0.005
       discriminator_weight: 0.01
       feature_block: 49

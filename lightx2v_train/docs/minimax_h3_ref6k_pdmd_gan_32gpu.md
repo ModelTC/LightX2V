@@ -14,12 +14,15 @@ Configuration: `configs/train/dmd/minimax_h3_ref2av_pdmd8_gan_from_cm1500_ref6k_
 | Full fake / GAN head LR | 4e-6 / 4e-6 |
 | Optimizers | AdamW, betas 0/0.9, epsilon 1e-8, weight decay 0, clip 1 |
 | GAN weights | Generator 0.005, discriminator 0.01; enabled from the first applicable update |
+| Student GAN memory | `gan.student_recompute: true`; compute the clean-latent gradient first, then replay the student forward |
 | Precision / parallel | BF16 compute, FP32 full-fake masters; FSDP32, SP1 |
 | Batch | 1 per GPU, accumulation 1; global batch 32 |
 | Initial budget | 3,000 role updates = 500 student + 2,500 fake updates |
 | Checkpoints | Every 100 role updates, keep 2, auto-resume own output |
 
 The initial budget is a short tuning run, not a validated optimum. The student LR matches the official PDMD value; keeping a full fake at 4e-6 and adding the H3 GAN head are adaptations, not the upstream PDMD recipe.
+
+The student update uses the chain rule at the clean AV latent boundary. A no-grad student prediction supplies the PDMD score queries and the GAN input. Their gradients are computed on detached clean latents, the critic graph is released, and a second student forward backpropagates those latent gradients into the student LoRA. This avoids retaining both 50-block activation graphs at once. It adds one student forward per student update; the losses, coefficients, data cursor and optimizer schedule are unchanged. The student replay preserves its RNG state.
 
 The launcher first uses one CPU process per node. Global rank zero imports both completed final-only teacher export indices, verifies the original teacher identity, then selects 1,000 eligible single-image self-generated samples deterministically with seed 42. The resulting dataset has 1,000 examples for each image count from 1 to 6. All clips use 124 frames at 24 FPS, either 768×1344 or 1344×768. Each GAN positive retains its own prompt and reference conditioning. No video encoding, latent copying or full trajectory loading is needed. The shared manifests are published once before starting 32 training workers.
 
@@ -49,3 +52,5 @@ bash lightx2v_train/scripts/run_minimax_h3_ref6k_pdmd8_gan_fsdp32_32gpu_acp.sh
 Append `--dry-run` to print both distributed commands without reading data or loading models. Normal startup validates checkpoint and dataset receipts before GPU training. It checks that self-gen has at least 1,000 eligible single-image samples; it never silently substitutes multi-image samples or repeats examples.
 
 Logs: `$H3_REF6K_OUTPUT/logs/launch.<hostname>.<timestamp>.<pid>.log` and `$H3_REF6K_OUTPUT/train.log`. Checkpoints live directly under `$H3_REF6K_OUTPUT/checkpoint-*`. A fresh run may log “Starting from scratch” while resolving auto-resume; source student loading occurs afterward. This means fresh training state, not random student initialization.
+
+When diagnosing a restart, select launch logs for the current ACP job ID; older attempts remain in the same directory. Training exceptions are written directly to stderr on every rank. A failed distributed worker exits immediately so torchrun can terminate its peers, instead of hanging in graceful NCCL teardown before displaying the original exception.

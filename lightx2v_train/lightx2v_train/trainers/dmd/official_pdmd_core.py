@@ -9,6 +9,7 @@ Neither path applies the inference shifts a second time.
 """
 
 import hashlib
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import torch
@@ -138,14 +139,27 @@ def critic_objective(student, fake, trajectory, sigmas, noise):
     return student.regression_loss(velocity, target)
 
 
-def student_objective(student, fake, teacher, trajectory, index, ratio, *, return_clean=False):
-    """One grad-enabled student call, with a query on its predicted trajectory."""
+def student_prediction(student, trajectory, index):
+    """Predict the selected endpoint, shared by the objective and its replay."""
+    start = trajectory.states[index]
+    sigmas = trajectory.video_grid[index : index + 1] if torch.is_tensor(start) else torch.stack((trajectory.video_grid[index], trajectory.audio_grid[index]))
+    student.set_training(False)
+    velocity = student.predict_velocity(start, sigmas, positive_condition(trajectory.condition))
+    return velocity, student.x0_from_velocity(start, velocity, sigmas), sigmas
+
+
+def student_objective(student, fake, teacher, trajectory, index, ratio, *, return_clean=False, detach_student=False):
+    """Query scores once, optionally building the loss on a clean-latent leaf.
+
+    The leaf path lets GAN backward finish before replaying the student, so
+    their activation-checkpoint graphs do not occupy memory together.
+    """
+    with torch.no_grad() if detach_student else nullcontext():
+        velocity, clean, sigmas = student_prediction(student, trajectory, index)
+    if detach_student:
+        clean = joint_map(clean, lambda tensor, _: tensor.detach().requires_grad_(True))
     start = trajectory.states[index]
     if torch.is_tensor(start):
-        sigmas = trajectory.video_grid[index : index + 1]
-        student.set_training(False)
-        velocity = student.predict_velocity(start, sigmas, positive_condition(trajectory.condition))
-        clean = student.x0_from_velocity(start, velocity, sigmas)
         query_sigmas = interval_sigmas(trajectory.video_grid, trajectory.video_grid, index, ratio)[0:1]
         with torch.no_grad():
             noise_hat = start.float() + (1 - sigmas) * velocity.float()
@@ -159,10 +173,6 @@ def student_objective(student, fake, teacher, trajectory, index, ratio, *, retur
         loss = student.dmd_loss(clean, fake_clean, teacher_clean)
         metrics = {**student.dmd_metrics(), "student_exit_index": float(index), "score_sigma_video": query_sigmas[0].detach()}
         return (loss, metrics, clean) if return_clean else (loss, metrics)
-    sigmas = torch.stack((trajectory.video_grid[index], trajectory.audio_grid[index]))
-    student.set_training(False)
-    velocity = student.predict_velocity(start, sigmas, positive_condition(trajectory.condition))
-    clean = student.x0_from_velocity(start, velocity, sigmas)
     query_sigmas = interval_sigmas(trajectory.video_grid, trajectory.audio_grid, index, ratio)
     with torch.no_grad():
         noise_hat = type(start)(

@@ -1,10 +1,11 @@
 import argparse
+import os
 import random
+import sys
+import traceback
 
 import numpy as np
 import torch
-from loguru import logger
-
 from lightx2v_train.data import build_data, build_sample_processor
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import (
@@ -13,9 +14,10 @@ from lightx2v_train.runtime import (
     load_config,
     setup_logger,
 )
-from lightx2v_train.runtime.distributed import get_rank
-from lightx2v_train.trainers import build_trainer
+from lightx2v_train.runtime.distributed import get_rank, is_distributed
 from lightx2v_train.utils.utils import check_val_is_enabled, is_train_cache_dataset
+
+from lightx2v_train.trainers import build_trainer
 
 
 def parse_args():
@@ -63,9 +65,17 @@ def main():
 
         trainer.train()
     except Exception:
-        logger.exception("Training failed")
+        # Rank-filtered logging can hide the first failing worker. Report before
+        # teardown: NCCL destroy may wait forever while peers are in collectives.
+        print(f"[rank{get_rank()}] Training failed:", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        if is_distributed():
+            # Let torchrun observe this failure and terminate the peer workers.
+            # Avoid both graceful NCCL teardown and Python CUDA destructors.
+            os._exit(1)
         raise
-    finally:
+    else:
         cleanup_distributed()
 
 
