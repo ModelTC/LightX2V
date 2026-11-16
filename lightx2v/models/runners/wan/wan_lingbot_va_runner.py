@@ -67,6 +67,7 @@ class _StreamingVAEEncoder:
 @RUNNER_REGISTER("lingbot_va")
 class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
     input_info_cls_by_task = {"i2va": MultiViewI2VAInputInfo}
+    supported_lora_modes = ("merge",)
 
     def __init__(self, config):
         config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)

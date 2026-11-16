@@ -107,8 +107,13 @@ def _is_video(path):
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
     input_info_cls_by_task = {"s2v": InfiniteTalkInputInfo}
+    supported_lora_modes = ("merge",)
 
-    _WARMUP_RESOLUTIONS = ((480, 480), (544, 960))
+    _WARMUP_SHAPES = ((480, 480), (544, 960))
+    _WARMUP_PROMPTS = (
+        "A speaker addresses the camera.",
+        "The speaker talks in a relaxed manner, matching their mouth movements to the rhythm of the supplied audio. They occasionally blink, glance to one side, and make a small hand gesture before returning their attention to the camera, with the background remaining steady.",
+    )
     _WARMUP_STEP_COUNT = 2
 
     def __init__(self, config):
@@ -142,11 +147,11 @@ class InfiniteTalkRunner(WanRunner):
         numpy_rng, python_rng = np.random.get_state(), random.getstate()
         try:
             with torch.random.fork_rng(devices=[torch_device_module.current_device()], device_type=AI_DEVICE):
-                for height, width in self._WARMUP_RESOLUTIONS:
+                for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
                     logger.info(f"Warmup InfiniteTalk: {height}x{width}x{num_frames}")
                     transformer_offloaded = True
                     try:
-                        self._prepare_warmup_inputs(height, width, num_frames)
+                        self._prepare_warmup_inputs(warmup_index, height, width, num_frames)
                         self.init_run()
                         for segment_idx in range(2):
                             self.init_run_segment(segment_idx)
@@ -179,11 +184,11 @@ class InfiniteTalkRunner(WanRunner):
         logger.info("[Warmup] Warmup completed")
         self._maybe_freeze_gc()
 
-    def _prepare_warmup_inputs(self, height, width, num_frames):
+    def _prepare_warmup_inputs(self, warmup_index, height, width, num_frames):
         self.input_info = InfiniteTalkInputInfo(
             task="s2v",
             seed=0,
-            prompt="Make the character speak naturally according to the audio." if (height, width) == self._WARMUP_RESOLUTIONS[0] else "A person speaks calmly with a relaxed expression.",
+            prompt=self._WARMUP_PROMPTS[warmup_index],
             size=[height, width],
             num_frames=num_frames,
             return_result_tensor=True,

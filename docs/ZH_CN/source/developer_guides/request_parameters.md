@@ -86,7 +86,7 @@ runner 合并参数时保留 `0`、`False`、`""`、`[]`。它们是否有效由
 | 条件强度 | `--image_strength 1.0 0.8` | `"image_strength": [1.0, 0.8]` |
 | 帧索引 | `--image_frame_indices 0 32` | `"image_frame_indices": [0, 32]` |
 
-只有支持多输入的字段声明为列表；单图字段仍使用 `str`。`layout_bboxes`、`action_prompts` 等嵌套结构在 CLI 中使用 JSON 文本，HTTP 直接传数组或对象。`layout_bboxes` 也可以传 JSON 文件路径。
+只有支持多输入的字段声明为列表；单图字段仍使用 `str`。`layout_bboxes`、`motions` 等嵌套结构在 CLI 中使用 JSON 文本，HTTP 直接传数组或对象。`layout_bboxes` 也可以传 JSON 文件路径。
 
 表单中的列表和对象使用 JSON 文本；文件上传对列表字段重复提交同名文件字段，OpenAPI 会显示为文件数组。上传后保持列表类型及顺序。
 

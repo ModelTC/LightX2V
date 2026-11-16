@@ -15,7 +15,16 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
-from triton.language.extra.cuda import libdevice
+
+try:
+    from triton.language.extra.cuda import libdevice
+except ModuleNotFoundError:
+    # MUSA Triton has no CUDA libdevice module; keep the optional FP8 kernel
+    # importable and use Triton's backend-neutral math implementation.
+    class _Libdevice:
+        tanh = staticmethod(tl.math.tanh)
+
+    libdevice = _Libdevice()
 
 from lightx2v.common.ops.mm.fp8_f16_accum import validate_fp8_f16_accum_qmax
 from lightx2v.common.ops.mm.projection_group import _backend_apis_available, convrot_projection_mm

@@ -1,4 +1,15 @@
+from dataclasses import dataclass
+
 import torch
+
+
+@dataclass
+class GraphEntry:
+    key: tuple
+    graph: torch.cuda.CUDAGraph
+    input: torch.Tensor
+    output: torch.Tensor
+    capture_stream: torch.cuda.Stream
 
 
 class MiniMaxH3VideoDecoderGraph:
@@ -12,7 +23,7 @@ class MiniMaxH3VideoDecoderGraph:
         self.decoder = vae.decoder
         self.device = vae.execution_device
         self.stream = torch.cuda.Stream(device=self.device)
-        self.entry = None
+        self.entry: GraphEntry | None = None
 
     def clear(self):
         if self.entry is not None:
@@ -20,9 +31,9 @@ class MiniMaxH3VideoDecoderGraph:
             self.entry = None
 
     @torch.no_grad()
-    def __call__(self, value):
+    def __call__(self, value, *, frame_indices):
         key = (tuple(value.shape), tuple(value.stride()), value.dtype, value.device)
-        if self.entry is None or self.entry[0] != key:
+        if self.entry is None or self.entry.key != key:
             # Keep only the current tile shape, including its graph memory pool.
             self.clear()
             stable = value.clone()
@@ -31,13 +42,13 @@ class MiniMaxH3VideoDecoderGraph:
             with torch.cuda.stream(capture_stream):
                 self.decoder(stable)
                 self.decoder(stable)
-            torch.cuda.synchronize(value.device)
             graph = torch.cuda.CUDAGraph()
+            # The graph context synchronizes warmup work before capture.
             with torch.cuda.graph(graph, stream=capture_stream):
                 output = self.decoder(stable)
-            self.entry = key, graph, stable, output, capture_stream
-        _key, graph, stable, output, _capture_stream = self.entry
-        stable.copy_(value)
-        graph.replay()
+            self.entry = GraphEntry(key=key, graph=graph, input=stable, output=output, capture_stream=capture_stream)
+        entry = self.entry
+        entry.input.copy_(value)
+        entry.graph.replay()
         # Several local tiles coexist until gather; replay overwrites output.
-        return output.clone()
+        return entry.output.index_select(2, frame_indices)

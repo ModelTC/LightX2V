@@ -29,7 +29,9 @@ def int8_matmul(x, weight, scale, bias=None):
 
     Requires LIGHTX2V_METALLIB_DIR with a precompiled library for (K,N).
     Libraries are cached per (K,N,directory); M stays dynamic.
-    K must be a multiple of 1024, N of 128. Short/partial M is padded to 128.
+    K and N must be multiples of 128. Short/partial M is padded to 128.
+    H3 widths such as K=5376 use their original INT8 weight storage; there is
+    no runtime weight conversion or padding along K.
     Scratch buffers are bounded and contain no weights or returned outputs.
     """
     if x.device.type != "mps" or x.dtype != torch.bfloat16 or x.ndim != 2 or x.requires_grad:
@@ -38,8 +40,8 @@ def int8_matmul(x, weight, scale, bias=None):
         raise ValueError("int8-metal requires MPS INT8 W[K,N]")
     m, k = x.shape
     n = weight.shape[1]
-    if k <= 0 or n <= 0 or weight.shape[0] != k or k % 1024 or n % 128 or weight.stride() != (1, k):
-        raise ValueError("int8-metal requires W[K,N] with strides (1,K), K divisible by 1024 and N by 128")
+    if k <= 0 or n <= 0 or weight.shape[0] != k or k % 128 or n % 128 or weight.stride() != (1, k):
+        raise ValueError("int8-metal requires W[K,N] with strides (1,K), K and N divisible by 128")
     mp = (m + 127) // 128 * 128
     if k * 127 * 128 >= 2**31 or max(mp * k, mp * n, k * n) >= 2**32:
         raise ValueError("int8-metal dimensions exceed INT32 accumulation or index limits")

@@ -3,6 +3,7 @@ from functools import partial
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
@@ -58,6 +59,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         aux_first=False,
         attention_kwargs=None,
         head_parallel_group_size=1,
+        valid_seq_len=None,
     ):
         """Run Ulysses attention over QKV and optional auxiliary token regions.
 
@@ -70,6 +72,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         ``None`` selects QKV-only attention; passing only ``aux_q=None`` selects
         the q-only cross-attention form. Set ``aux_first=True`` when auxiliary
         tokens precede the A2A tokens in the attention sequence.
+        For padded self-attention without auxiliary tokens, ``valid_seq_len``
+        is the number of real rows before the global sequence's trailing
+        padding. Padding is excluded from attention and restored for A2A.
         This interface supports one logical Q sequence and one logical KV
         sequence only. Packed-varlen batches are not supported.
         ``tensor_fusion`` packs Q/K/V into one Ulysses communication payload.
@@ -89,6 +94,11 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         world_size = dist.get_world_size(seq_p_group)
         rank = dist.get_rank(seq_p_group)
         self._validate_inputs(q, k, v, aux_q, aux_k, aux_v, world_size)
+        if valid_seq_len is not None:
+            if aux_k is not None:
+                raise ValueError("valid_seq_len requires Ulysses self-attention without auxiliary tokens.")
+            if not 0 < valid_seq_len <= q.shape[0] * world_size:
+                raise ValueError("valid_seq_len must be within the gathered sequence length.")
 
         qkv_fusion = tensor_fusion
         prepost_name, a2a_name, qkv_fusion = self._resolve_options(
@@ -120,6 +130,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             world_size=world_size,
             rank=rank,
             attention_kwargs=attention_kwargs,
+            valid_seq_len=valid_seq_len,
         )
         if head_parallel:
             return self._apply_head_pipeline(head_group_size=head_parallel_group_size, **common_args)
@@ -143,6 +154,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         world_size,
         rank,
         attention_kwargs,
+        valid_seq_len,
     ):
         local_len, q_heads, hidden_dims = q.shape
         shard_heads = q_heads // world_size
@@ -163,14 +175,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             world_size,
             aux_first,
         )
-        dense_attention_kwargs = UlyssesAttnWeight._dense_attention_kwargs(attention_kwargs, attn_q, attn_k)
-
-        attn = attention_module.apply(
-            q=attn_q,
-            k=attn_k,
-            v=attn_v,
-            **dense_attention_kwargs,
-        ).reshape(attn_q.shape[0], -1)
+        attn = UlyssesAttnWeight._run_attention(attention_module, attn_q, attn_k, attn_v, attention_kwargs, valid_seq_len)
         output, local_aux_attn = split_main_aux_output(attn, global_len, aux_len, aux_first)
 
         packed_attn = prepost.pack_attn(output, local_len, world_size, shard_heads, hidden_dims, quant_scheme)
@@ -198,6 +203,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         world_size,
         rank,
         attention_kwargs,
+        valid_seq_len,
         head_group_size,
     ):
         local_len, q_heads, hidden_dims = q.shape
@@ -279,13 +285,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 aux_first,
                 head_index=record.head_index,
             )
-            dense_attention_kwargs = UlyssesAttnWeight._dense_attention_kwargs(attention_kwargs, attn_q, attn_k)
-            group_attn = attention_module.apply(
-                q=attn_q,
-                k=attn_k,
-                v=attn_v,
-                **dense_attention_kwargs,
-            ).reshape(attn_q.shape[0], -1)
+            group_attn = UlyssesAttnWeight._run_attention(attention_module, attn_q, attn_k, attn_v, attention_kwargs, valid_seq_len)
             expected_width = group_size * hidden_dims
             if group_attn.shape[1] != expected_width:
                 raise ValueError(f"head_parallel attention output must flatten to {expected_width}, got shape={tuple(group_attn.shape)}.")
@@ -341,6 +341,17 @@ class UlyssesAttnWeight(AttnWeightTemplate):
     def _wait_works(works):
         for work in works:
             work.wait()
+
+    @staticmethod
+    def _run_attention(attention_module, q, k, v, attention_kwargs, valid_seq_len):
+        transport_length = q.shape[0]
+        if valid_seq_len is not None:
+            q, k, v = q[:valid_seq_len], k[:valid_seq_len], v[:valid_seq_len]
+        kwargs = UlyssesAttnWeight._dense_attention_kwargs(attention_kwargs, q, k)
+        output = attention_module.apply(q=q, k=k, v=v, **kwargs).reshape(q.shape[0], -1)
+        if valid_seq_len is not None:
+            output = F.pad(output, (0, 0, 0, transport_length - valid_seq_len))
+        return output
 
     @staticmethod
     def _dense_attention_kwargs(attention_kwargs, q, k):

@@ -36,6 +36,7 @@ class MiniMaxH3PreInfer:
         self.hidden_size = int(config.get("hidden_size", 5376))
         self.rope_freq_dim = int(config.get("rope_freq_dim", 16))
         self.rope_theta = float(config.get("rope_theta", 10000.0))
+        self.inv_freq = None
         self.freq_dim = int(config.get("freq_dim", 256))
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
 
@@ -76,31 +77,27 @@ class MiniMaxH3PreInfer:
     @torch.inference_mode(False)
     def _rotary_embedding(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         position_ids = position_ids.to(torch.float32)
-        inv_freq = 1.0 / (
-            self.rope_theta
-            ** (
-                torch.arange(
-                    0,
-                    2 * self.rope_freq_dim,
-                    2,
-                    dtype=torch.float32,
-                    device=position_ids.device,
-                )
-                / (2 * self.rope_freq_dim)
-            )
-        )
-        freqs = position_ids.unsqueeze(-1) * inv_freq.view(1, 1, -1)
+        if self.inv_freq is None or self.inv_freq.device != position_ids.device:
+            exponent = torch.arange(0, 2 * self.rope_freq_dim, 2, dtype=torch.float32, device=position_ids.device) / (2 * self.rope_freq_dim)
+            self.inv_freq = 1.0 / (self.rope_theta**exponent)
+        freqs = position_ids.unsqueeze(-1) * self.inv_freq.view(1, 1, -1)
         freqs_t, freqs_h, freqs_w = freqs.unbind(dim=1)
         freqs = torch.cat((freqs_t, freqs_h, freqs_w), dim=-1)
         freqs = torch.cat((freqs, freqs), dim=-1)
         return freqs.cos(), freqs.sin()
+
+    def project_audio(self, weights):
+        return weights.audio_proj_in.apply(self.scheduler.audio_latents.float()).to(GET_DTYPE())
+
+    def prepare_rope(self):
+        return self._rotary_embedding(self.scheduler.layout.position_ids)
 
     def prepare_inputs(self, weights, prompt_embeds):
         layout = self.scheduler.layout
         bulk_dtype = GET_DTYPE()
 
         video_embeds = weights.proj_in.apply(self.scheduler.video_latents.float()).to(bulk_dtype)
-        audio_embeds = weights.audio_proj_in.apply(self.scheduler.audio_latents.float()).to(bulk_dtype)
+        audio_embeds = self.project_audio(weights)
         hidden_states = video_embeds.new_zeros((layout.sequence_length, self.hidden_size))
         if layout.text_indices.numel():
             text_embeds = weights.context_embedder.apply(prompt_embeds.to(bulk_dtype))
@@ -108,7 +105,7 @@ class MiniMaxH3PreInfer:
             hidden_states.index_copy_(0, layout.text_indices, text_embeds)
         hidden_states.index_copy_(0, layout.audio_indices, audio_embeds)
         hidden_states.index_copy_(0, layout.video_indices, video_embeds)
-        return hidden_states, self._rotary_embedding(layout.position_ids)
+        return hidden_states, self.prepare_rope()
 
     def infer(self, weights, prompt_embeds):
         layout = self.scheduler.layout

@@ -4,6 +4,7 @@ from dataclasses import fields
 
 from loguru import logger
 
+from lightx2v.utils.image_io import validate_save_image_method
 from lightx2v.utils.lockable_dict import LockableDict
 from lightx2v.utils.model_paths import find_torch_model_path
 
@@ -46,8 +47,8 @@ def get_default_config():
             "teacache_thresh": 0.26,
             "use_ret_steps": False,
             "use_bfloat16": True,
+            "lora_mode": "merge",
             "lora_configs": None,  # List of dicts with 'path' and 'strength' keys
-            "lora_merge_force_fp32": False,
             "parallel": False,
             "seq_parallel": False,
             "cfg_parallel": False,
@@ -55,6 +56,7 @@ def get_default_config():
             "enable_cfg": False,
             "warmup": False,
             "use_image_encoder": True,
+            "save_image_method": "opencv",
         }
     )
 
@@ -164,6 +166,15 @@ def load_model_config(deployment_config):
         }
         for key, filename in component_files.items():
             model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
+    elif model_cls == "tbdub":
+        component_files = {
+            "dit_original_ckpt": "tbdub_student.safetensors",
+            "vae_path": "Wan2.2_VAE.safetensors",
+            "audio_encoder_path": "hubert-large-ll60k",
+            "prompt_embedding_path": "null_prompt_emb.pt",
+        }
+        for key, filename in component_files.items():
+            model_config[key] = deployment_config.get(key, os.path.join(model_path, filename))
     elif model_cls in EDENLIVE_COMPONENT_FILES:
         component_files = {
             "t5_original_ckpt": "umt5/text_encoder/model.safetensors",
@@ -244,11 +255,33 @@ def load_model_config(deployment_config):
         if os.path.exists(transformer_config_path):
             with open(transformer_config_path, "r") as f:
                 model_config.update(json.load(f))
+    elif model_cls == "minimax_h3_image":
+        transformer_subfolder = "transformer_diffusers" if os.path.isfile(os.path.join(model_path, "transformer_diffusers", "config.json")) else "transformer"
+        transformer_path = deployment_config.get("dit_original_ckpt") or os.path.join(model_path, transformer_subfolder)
+        with open(os.path.join(transformer_path, "config.json"), "r") as f:
+            model_config.update(json.load(f))
+        # The original H3 release names these differently from the native blocks.
+        for source, target in {
+            "token_refiner_num_layers": "num_refiner_layers",
+            "ffn_hidden_size": "ffn_dim",
+            "latents_dim": "in_channels",
+            "timestep_input_dim": "freq_dim",
+            "time_embed_hidden_size": "time_embed_hidden_dim",
+            "rope_inv_freq_len": "rope_freq_dim",
+        }.items():
+            if source in model_config:
+                model_config[target] = model_config[source]
+        model_config["dit_original_ckpt"] = transformer_path
+        model_config["pdd_heads_path"] = os.path.join(model_path, "pdd_fused_heads.safetensors")
+        model_config["pdd_config_path"] = os.path.join(model_path, "pdd_config.json")
+        for component in ("text_encoder", "tokenizer", "processor"):
+            model_config[f"{component}_path"] = os.path.join(model_path, component)
+        model_config.update(infer_steps=6, num_frames=1, size=[2048, 2048], sample_guide_scale=1.0, vae_stride=[1, 16, 16])
     elif model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3"):
         causal = model_cls == "minimax_h3_causal"
         if causal:
-            if deployment_config.get("task") != "refa2v":
-                raise ValueError("MiniMax-H3 causal currently supports task='refa2v'; set --task refa2v when starting the model")
+            if deployment_config.get("task") not in {"refa2v", "refa2av"}:
+                raise ValueError("MiniMax-H3 causal requires task='refa2v' or 'refa2av'")
             if not deployment_config.get("dit_original_ckpt"):
                 raise ValueError("MiniMax-H3 causal inference requires dit_original_ckpt pointing to the causal checkpoint")
             transformer_subfolder = "transformer_ref"
@@ -321,7 +354,7 @@ def load_model_config(deployment_config):
             model_config["vae_scale_factor_temporal"] = int(vae_config.get("scale_factor_temporal", 4))
             model_config["vae_scale_factor"] = model_config["vae_scale_factor_spatial"]
 
-    if model_cls in ("minimax_h3", "minimax_h3_causal", "taomate_h3", "streamrender_h3"):
+    if model_cls in ("minimax_h3", "minimax_h3_image", "minimax_h3_causal", "taomate_h3", "streamrender_h3"):
         # The generic Diffusers-VAE heuristic above counts six encoder stages
         # and would incorrectly derive 32. H3 downsamples space by exactly 16.
         model_config["vae_spatial_scale_factor"] = 16
@@ -336,6 +369,7 @@ def load_model_config(deployment_config):
 
 def normalize_startup_config(config, model_config):
     """Normalize merged startup settings and validate inference constraints."""
+    validate_save_image_method(config.get("save_image_method", "opencv"))
     config["async_vae_decode"] = bool(config.get("async_vae_decode", False))
     if config["model_cls"] == "dreamzero" and "out_dim" in config:
         config["num_channels_latents"] = config["out_dim"]
@@ -402,7 +436,7 @@ def normalize_startup_config(config, model_config):
             logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {config['num_frames']} instead of {original_length}.")
 
     if os.getenv("PLATFORM", "cuda") == "mps":
-        assert not any(config.get(key) for key in ("lora_configs", "lora_path", "lora_dynamic_apply", "lora_merge_force_fp32")), (
+        assert not (config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key) for key in ("lora_configs", "lora_path"))), (
             "MPS inference does not support LoRA configs, dynamic LoRA, or load-time LoRA merging. "
             "Merge LoRA into the model weights offline before inference, remove the LoRA settings, and load the merged model checkpoint."
         )

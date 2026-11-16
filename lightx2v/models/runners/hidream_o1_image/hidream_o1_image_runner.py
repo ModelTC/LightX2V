@@ -1,6 +1,7 @@
 import gc
-import os
 
+import cv2
+import numpy as np
 import torch
 from PIL import Image
 from loguru import logger
@@ -11,6 +12,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.hidream_o1_image.scheduler import HidreamO1ImageScheduler
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.image_io import save_image
 from lightx2v.utils.input_info import HidreamI2IInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -102,7 +104,7 @@ class HidreamO1ImageRunner(DefaultRunner):
             "enable_cfg": self.config["enable_cfg"],
             "shift": float(self.config.get("shift", 1.0 if is_dev else 3.0)),
             "timesteps_list": self.config.get("timesteps_list", self.default_timesteps) if is_dev else None,
-            "scheduler_name": self.config.get("scheduler_name", "flash" if is_dev else "default"),
+            "scheduler_type": self.config.get("scheduler_type", "flash" if is_dev else "default"),
             "noise_scale_start": float(self.config.get("noise_scale_start", 8.0)),
             "noise_scale_end": float(self.config.get("noise_scale_end", 8.0)),
             "noise_clip_std": float(self.config.get("noise_clip_std", 8.0 if is_dev else 0.0)),
@@ -230,7 +232,8 @@ class HidreamO1ImageRunner(DefaultRunner):
         return self.model.scheduler.latents
 
     def run_vae_decoder(self, latents):
-        return self.scheduler.decode()
+        save_tensor = bool(self.input_info.save_result_path and not self.input_info.return_result_tensor)
+        return self.scheduler.decode(return_tensor=save_tensor)
 
     @ProfilingContext4DebugL2("Run HiDream main")
     def run_main(self):
@@ -257,8 +260,11 @@ class HidreamO1ImageRunner(DefaultRunner):
             self.end_run()
             return {"images": [image]}
         if save_result_path:
-            os.makedirs(os.path.dirname(os.path.abspath(save_result_path)), exist_ok=True)
-            Image.fromarray(image[:, :, [2, 1, 0]]).save(save_result_path)
+            method = self.config.get("save_image_method", "opencv")
+            with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {save_result_path}", time_unit="ms"):
+                pixels = (image.detach().cpu().float().numpy() * 255).clip(0, 255).round().astype(np.uint8)
+                image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+                save_image(image, save_result_path, method)
             logger.info(f"HiDream image saved successfully to: {save_result_path}")
 
         if GET_RECORDER_MODE():

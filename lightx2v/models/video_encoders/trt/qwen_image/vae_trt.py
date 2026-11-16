@@ -388,6 +388,7 @@ class TensorRTVAE:
             images = self._pytorch_vae.decode(latents).sample
             images = images[:, :, 0]
 
-        images = self.image_processor.postprocess(images, output_type="pt" if input_info.return_result_tensor else "pil")
+        output_type = "pt" if input_info.return_result_tensor or input_info.save_result_path else "pil"
+        images = self.image_processor.postprocess(images, output_type=output_type)
 
         return images

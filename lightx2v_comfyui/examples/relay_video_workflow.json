@@ -1,0 +1,215 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LightX2VServer",
+      "pos": [
+        50,
+        70
+      ],
+      "size": [
+        540,
+        370
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "server",
+          "type": "LX2V_SERVER",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LightX2VServer"
+      },
+      "widgets_values": [
+        "/path/to/LightX2V",
+        "/path/to/models/RelayVSR",
+        "relayvsr_x4",
+        "/path/to/configs/relay.json",
+        "sr",
+        "0"
+      ],
+      "widgets_values_named": {
+        "lightx2v_path": "/path/to/LightX2V",
+        "model_path": "/path/to/models/RelayVSR",
+        "model_cls": "relayvsr_x4",
+        "config_json": "/path/to/configs/relay.json",
+        "task": "sr",
+        "CUDA_VISIBLE_DEVICES": "0"
+      }
+    },
+    {
+      "id": 2,
+      "type": "LoadVideo",
+      "pos": [
+        50,
+        510
+      ],
+      "size": [
+        420,
+        460
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        "input.mp4"
+      ],
+      "widgets_values_named": {
+        "file": "input.mp4"
+      }
+    },
+    {
+      "id": 3,
+      "type": "LightX2VUpscaleVideo",
+      "pos": [
+        680,
+        70
+      ],
+      "size": [
+        420,
+        460
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "server",
+          "type": "LX2V_SERVER",
+          "link": 1
+        },
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LightX2VUpscaleVideo"
+      },
+      "widgets_values": [
+        2,
+        42,
+        "increment"
+      ],
+      "widgets_values_named": {
+        "scale": 2,
+        "seed": 42,
+        "control_after_generate": "increment"
+      }
+    },
+    {
+      "id": 4,
+      "type": "SaveVideo",
+      "pos": [
+        1160,
+        70
+      ],
+      "size": [
+        420,
+        460
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SaveVideo"
+      },
+      "widgets_values": [
+        "video/LightX2V_Relay",
+        "mp4",
+        "h264",
+        "auto"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "video/LightX2V_Relay",
+        "format": "mp4",
+        "format.codec": "h264",
+        "format.codec.encoding": "auto"
+      }
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      3,
+      0,
+      "LX2V_SERVER"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      1,
+      "VIDEO"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      0,
+      "VIDEO"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.7,
+      "offset": [
+        20,
+        30
+      ]
+    }
+  },
+  "version": 0.4
+}

@@ -319,8 +319,10 @@ class HunyuanImage3Model(BaseTransformerModel):
             or self.config.get("hunyuan_image3_pipeline_devices")
         ):
             raise ValueError("HunyuanImage3 block offload uses one GPU per rank; set parallel.pipeline_parallel=false and remove pipeline_devices")
-        unsupported = ("lazy_load", "unload_modules", "dit_quantized", "weight_auto_quant", "load_from_rank0", "use_compile", "enable_ar_cuda_graph", "dummy_model", "lora_dynamic_apply")
+        unsupported = ("lazy_load", "unload_modules", "dit_quantized", "weight_auto_quant", "load_from_rank0", "use_compile", "enable_ar_cuda_graph", "dummy_model")
         enabled = [key for key in unsupported if self.config.get(key, False)]
+        if self.config.get("lora_mode", "merge") == "separate":
+            enabled.append("lora_mode")
         if enabled or self.lora_path or self.config.get("lora_configs"):
             raise ValueError(f"HunyuanImage3 block offload requires original immutable weights without LoRA; incompatible options: {enabled}")
         if self.config.get("dit_quant_scheme", "Default") != "Default":

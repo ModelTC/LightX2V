@@ -141,17 +141,20 @@ class AutoencoderKLQwenImageVAE:
         latents = latents / latents_std + latents_mean
 
         use_vae_decode_parallel = self.vae_decode_parallel and dist.is_initialized() and dist.get_world_size() > 1
+        output_type = "pt" if input_info.return_result_tensor or input_info.save_result_path else "pil"
 
         if self.is_layered:
             b, c, f, h, w = latents.shape
             latents = latents[:, :, 1:].permute(0, 2, 1, 3, 4).view(-1, c, 1, h, w)
             image = self._decode_dist(latents) if use_vae_decode_parallel else self.model.decode(latents, return_dict=False)[0]
             image = image.squeeze(2)
-            image = self.image_processor.postprocess(image, output_type="pt" if input_info.return_result_tensor else "pil")
+            image = self.image_processor.postprocess(image, output_type=output_type)
             images = [image[bidx * f : (bidx + 1) * f] for bidx in range(b)]
+            if input_info.save_result_path and not input_info.return_result_tensor:
+                images = [list(layers) for layers in images]
         else:
             image = self._decode_dist(latents) if use_vae_decode_parallel else self.model.decode(latents, return_dict=False)[0]
-            images = self.image_processor.postprocess(image[:, :, 0], output_type="pt" if input_info.return_result_tensor else "pil")
+            images = self.image_processor.postprocess(image[:, :, 0], output_type=output_type)
 
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))

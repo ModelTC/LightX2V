@@ -16,7 +16,7 @@ lightx2v_path=/path/to/LightX2V
 model_path=/path/to/MiniMax-H3
 
 export PLATFORM=musa
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export MUSA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

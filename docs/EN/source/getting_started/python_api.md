@@ -46,6 +46,20 @@ pipe.create_generator(
 
 The constructor accepts `dit_original_ckpt` for a separate DiT checkpoint, or `high_noise_original_ckpt` and `low_noise_original_ckpt` for Wan2.2 MoE. Distilled Wan models use `distill_method="dmd2"` where required. Model-specific instructions live beside the launchers below.
 
+### Saving image files
+
+Image generation, editing and image restoration/super-resolution use OpenCV to save files by default. Set `save_image_method` in the JSON passed to `config_json` to select a writer. CLI and server deployments use the same setting:
+
+```json
+{
+  "save_image_method": "pil"
+}
+```
+
+Supported values are `"opencv"` (default) and `"pil"`. Each model prepares a PIL image or a uint8 BGR/BGRA OpenCV array using its existing postprocessing rules. The shared file writer only creates the directory and writes the image. OpenCV avoids an intermediate PIL image except for required model-specific PIL resizing/editing. Each model keeps its existing normalization and rounding/truncation rules.
+
+With `PROFILING_DEBUG_LEVEL>=1`, each save logs `Save Image (opencv)` or `Save Image (pil)` in milliseconds. Profiling lives in each model's saving entry point and covers tensor conversion, required postprocessing and file writing. Profiling adds no device synchronization; CPU transfer waits for the image data to be ready. This setting controls image files; in-memory PNG/Base64 encoding keeps its existing behavior.
+
 ## Optional startup settings
 
 Apply the following methods before `create_generator()`. Choose the settings supported by your model; these snippets describe separate options rather than one configuration to enable in full.
@@ -78,14 +92,16 @@ For Wan2.2 MoE use `high_noise_quantized_ckpt` and `low_noise_quantized_ckpt`. E
 
 ### LoRA
 
+Set `lora_mode` in JSON or pass it to `enable_lora()` before creating the generator (`merge` is the default; H3 also supports `consumer`). Precision is controlled by `LORA_DTYPE`, defaulting to `DTYPE`. The loaded JSON takes precedence over Python startup settings.
+
 ```python
 pipe.enable_lora(
     [{"path": "/path/to/lora.safetensors", "strength": 1.0}],
-    lora_dynamic_apply=True,
+    lora_mode="separate",
 )
 ```
 
-`lora_dynamic_apply=False` merges weights during loading. Dynamic application supports changing LoRA on a running pipeline through `switch_lora(lora_path=..., strength=...)`; see the [Qwen switch example](https://github.com/ModelTC/LightX2V/blob/main/scripts/qwen_image/inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py). Wan2.2 LoRA entries also name the `high_noise_model` or `low_noise_model` branch. See [LoRA deployment](../deploy_guides/lora_deploy.md).
+`lora_mode="merge"` (default) merges weights during loading. `separate` computes independent adapter branches; `consumer` fuses their addition into subsequent operators and is available only for MiniMax-H3. Both unmerged modes allow changing LoRA on a running pipeline through `switch_lora(lora_path=..., strength=...)`; see the [Qwen switch example](https://github.com/ModelTC/LightX2V/blob/main/scripts/qwen_image/inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py). Wan2.2 LoRA entries also name the `high_noise_model` or `low_noise_model` branch. See [LoRA deployment](../deploy_guides/lora_deploy.md).
 
 ### Parallel inference
 

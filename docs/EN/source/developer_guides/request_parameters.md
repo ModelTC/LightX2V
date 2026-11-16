@@ -48,7 +48,7 @@ Declare multi-input fields as `list[T]`, for example `Argument(type=list[str])`.
 | Conditioning strengths | `--image_strength 1.0 0.8` | `"image_strength": [1.0, 0.8]` |
 | Frame indices | `--image_frame_indices 0 32` | `"image_frame_indices": [0, 32]` |
 
-Only multi-input fields use lists; single-image fields remain `str`. Nested structures such as `layout_bboxes` and `action_prompts` use JSON text in the CLI and native arrays or objects over HTTP. `layout_bboxes` also accepts a JSON file path.
+Only multi-input fields use lists; single-image fields remain `str`. Nested structures such as `layout_bboxes` and `motions` use JSON text in the CLI and native arrays or objects over HTTP. `layout_bboxes` also accepts a JSON file path.
 
 Form lists and objects use JSON text. Upload multiple files by repeating the same upload field; OpenAPI shows an array of files for list-valued inputs. Saved paths retain their list type and order.
 

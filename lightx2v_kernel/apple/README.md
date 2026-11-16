@@ -23,6 +23,11 @@ X[M,K] @ W[K,N] -> Y[M,N]
 
 K is the input feature dimension, N is the output feature dimension, and M is the number of input rows (e.g. tokens). K and N are fixed at compilation; M remains dynamic.
 
+K and N must be positive multiples of 128. Weights use their original INT8
+`[N,K]` checkpoint storage, passed to GEMM as a `[K,N]` transpose with strides
+`(1,K)`. The kernel handles widths such as K=5376 and K=2688 directly, without
+padding or dequantizing weights. Partial activation rows are padded along M.
+
 For Qwen-Image-2.1:
 
 ```bash
@@ -32,6 +37,58 @@ python lightx2v_kernel/apple/python/lightx2v_kernel_apple/int8_gemm/compile_meta
 ```
 
 Precompiled libraries for this example are also available in [Qwen-Image-2.1-Turbo-INT8 / apple_silicon_metal](https://huggingface.co/lightx2v/Qwen-Image-2.1-Turbo-INT8/tree/main/apple_silicon_metal). Download the `.metallib` files to any local directory to skip compilation.
+
+For MiniMax-H3's six main-block projections (FC1, FC2, Q, K, V and
+attention output):
+
+```bash
+python lightx2v_kernel/apple/python/lightx2v_kernel_apple/int8_gemm/compile_metallib.py \
+    5376x28672 14336x5376 5376x7168 7168x5376 \
+    --output-dir /path/to/h3-metallib
+```
+
+### MiniMax-H3 checkpoint
+
+Convert an already merged Turbo BF16 transformer into standalone INT8 shards:
+
+```bash
+python tools/convert/convert_h3_int8_metal.py \
+    --source /path/to/MiniMax-H3-Turbo-Merged/transformer \
+    --output /path/to/MiniMax-H3-Turbo-INT8/transformer \
+    --device mps
+```
+
+The output directory must be new. The converter uses FP32 per-output-channel
+scales and quantizes 300 Linear weights across the 50 main blocks. AdaLN,
+pre/post projections, text refiner, text encoder and VAEs keep their original
+precision. Output shards are written to the directory root for the native
+quantized loader, including when source shards are in subdirectories. Do not
+reapply the merged Turbo LoRA at runtime.
+
+In `configs/platforms/mps/minimax_h3_t2av_4step_int8.json`, set
+`dit_quantized_ckpt` to the converted `transformer` directory. Update
+`lightx2v_path`, `model_path` and `LIGHTX2V_METALLIB_DIR` in
+`scripts/platforms/mps/run_minimax_h3_t2av_int8.sh`, then run:
+
+```bash
+bash scripts/platforms/mps/run_minimax_h3_t2av_int8.sh
+```
+
+This uses the standard `python -m lightx2v.infer` entry point for single-device
+T2AV: four steps, 544x960, 124 frames at 24 fps. `model_path` supplies the
+original tokenizer, text encoder and VAEs. Q/K/V remain separate.
+The configuration uses `dit_quant_scheme="int8-metal"` for the main-block
+projections and `adaln_quant_scheme="Default"` to keep AdaLN in floating point.
+When `adaln_quant_scheme` is omitted, AdaLN inherits `dit_quant_scheme`.
+
+The example keeps all components on MPS with CPU offload disabled and was
+tested on an M5 Ultra with 256 GB of unified memory. INT8 DiT weights use the
+existing quantized loader and `int8-metal` operators; the text
+encoder and VAEs use their existing loading paths. The launch script sets the required
+`SENSITIVE_LAYER_DTYPE=FP32` to preserve H3's unquantized FP32 projections;
+`DTYPE` must remain `BF16`.
+Mixed INT8 disk streaming, tensor parallelism and other task types have not
+been validated.
 
 Compilation generates `.metal`, `.air`, and `.metallib` files. Only the `.metallib` files need to be kept for inference.
 

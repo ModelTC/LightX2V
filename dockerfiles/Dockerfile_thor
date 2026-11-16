@@ -1,0 +1,72 @@
+FROM nvcr.io/nvidia/pytorch:26.04-py3@sha256:192d749b4d773610ec9e01c0443a9df545d196c412b7b8fd33bfa3da362a49e7 AS base
+# Based on Dockerfile_cu130; ubuntu 24.04, aarch64, python 3.12, CUDA 13.2.
+# The original pytorch/pytorch image is amd64. This base provides Thor SM110
+# PyTorch and Triton binaries; no Triton source build or ptxas replacement.
+
+WORKDIR /app
+
+ARG DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/aarch64-linux-gnu/nvidia:$LD_LIBRARY_PATH
+
+# Use distribution FFmpeg and matching development libraries for ARM64 Decord.
+RUN apt-get update && apt-get install -y vim tmux zip unzip bzip2 wget git git-lfs build-essential libibverbs-dev ca-certificates \
+    curl iproute2 libsm6 libxext6 kmod ccache libnuma-dev libssl-dev flex bison libgtk-3-dev libpango1.0-dev software-properties-common \
+    libsoup2.4-dev libnice-dev libopus-dev libvpx-dev libx264-dev libsrtp2-dev libglib2.0-dev libdrm-dev libjpeg-dev libpng-dev \
+    cmake pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
+    libavdevice-dev libatomic1 libnl-3-dev libnl-route-3-dev libudev-dev redis-server ffmpeg \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* && git lfs install
+
+RUN printf '[global]\nbreak-system-packages = true\n' > /etc/pip.conf
+
+# Keep the NVIDIA GPU stack and validated NeoPP/LightLLM API versions;
+# all other common dependencies below retain Dockerfile_cu130's organization.
+RUN pip list --format=freeze | sed -n '/^torch==/p;/^torchvision==/p;/^triton==/p;/^torchao==/p' > /app/torch-constraints.txt \
+    && printf 'transformers==4.57.1\ndiffusers==0.37.0\naccelerate==1.13.0\npeft==0.18.1\nhuggingface-hub==0.36.2\nfastapi==0.119.1\nenvirons==9.5.0\nmarshmallow<4\nwebsockets==15.0.1\n' >> /app/torch-constraints.txt
+ENV PIP_CONSTRAINT=/app/torch-constraints.txt
+
+RUN pip install --no-cache-dir "packaging<=25.0" ninja cmake scikit-build-core uv meson ruff pre-commit fastapi uvicorn requests "setuptools>=77,<81" "setuptools-scm>=8" -U
+
+RUN pip install --no-cache-dir diffusers transformers tokenizers accelerate safetensors opencv-python numpy
+
+RUN pip install --no-cache-dir imageio imageio-ffmpeg einops loguru qtorch ftfy av matplotlib peft
+
+# Decord 0.6.0 has no PyPI ARM64 wheel. Build the original package from source.
+RUN git clone https://github.com/dmlc/decord.git --recursive --depth 1
+RUN cd decord \
+    && sed -i '/libavcodec\/avcodec.h/a #include <libavcodec/bsf.h>' src/video/ffmpeg/ffmpeg_common.h \
+    && sed -i 's/AVCodec \*dec;/const AVCodec *dec;/' src/video/video_reader.cc \
+    && mkdir build && cd build \
+    && /usr/bin/cmake .. -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release \
+    && /usr/bin/cmake --build . -j4 \
+    && cd ../python && pip install --no-cache-dir --no-deps --no-build-isolation -e .
+ENV DECORD_LIBRARY_PATH=/app/decord/build
+
+RUN pip install --no-cache-dir torchao modelscope Pillow omegaconf librosa scipy debugpy
+
+RUN pip install --no-cache-dir jsonschema pymongo mooncake-transfer-engine tos zmq graphviz pybind11
+
+# Thor: the torchcodec 0.17 ARM64 wheel aborted during CPU video decoding in
+# this NVIDIA nightly environment. Build 0.11 against its actual torch headers.
+RUN git clone https://github.com/pytorch/torchcodec.git --branch v0.11.0 --depth 1
+RUN cd torchcodec \
+    && CMAKE_PREFIX_PATH="$(python -m pybind11 --cmakedir)" \
+       CMAKE_BUILD_PARALLEL_LEVEL=4 ENABLE_CUDA=0 \
+       TORCHCODEC_DISABLE_COMPILE_WARNING_AS_ERROR=ON \
+       pip install --no-cache-dir --no-deps --no-build-isolation -v -e .
+
+
+# pymongo above provides bson; installing standalone bson would shadow it.
+RUN pip install --no-cache-dir aio-pika PyJWT "asyncpg>=0.27.0" "aioboto3>=12.0.0" alibabacloud_dypnsapi20170525==1.2.2 redis==6.4.0
+
+RUN pip list
+
+# NeoPP addition: LightLLM text conditioning + LightX2V image generation.
+RUN pip install --no-cache-dir rpyc uvloop orjson setproctitle atomics sortedcontainers \
+    easydict frozendict environs "marshmallow<4" ujson humanize multiprocessing-logging \
+    zstandard sentencepiece tiktoken interegular partial-json-parser websockets hypercorn \
+    ruamel.yaml soundfile cachetools termcolor pandas gguf torchada
+
+# Mount LightLLM and LightX2V source trees when starting the container.
+WORKDIR /workspace

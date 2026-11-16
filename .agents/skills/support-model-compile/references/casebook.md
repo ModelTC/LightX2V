@@ -1,5 +1,7 @@
 # LightX2V Compile Casebook
 
+简体中文 | [English](casebook_en.md)
+
 遇到相同现象时按“确认 → 根因 → 处理”复现，不要把历史结论直接套到新模型。
 
 ## 目录

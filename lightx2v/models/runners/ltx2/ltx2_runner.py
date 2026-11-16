@@ -82,8 +82,12 @@ def _ltx2_resize_video_denoise_mask_for_stage2(mask: torch.Tensor, target_h: int
 class LTX2Runner(DefaultRunner):
     input_info_cls_by_task = {"i2av": LTX2I2AVInputInfo}
 
-    _WARMUP_RESOLUTIONS = ((480, 480), (512, 768))
-    _UPSAMPLER_WARMUP_RESOLUTIONS = ((480, 480), (1024, 1536))
+    _WARMUP_SHAPES = ((480, 480), (512, 768))
+    _WARMUP_PROMPTS = (
+        "Rain falls on a roof.",
+        "A slow tracking shot follows rainwater down the side of a quiet mountain cabin. Drops patter against the metal roof, run through a narrow gutter, and fall into a puddle while pine branches sway gently in the background.",
+    )
+    _UPSAMPLER_WARMUP_SHAPES = ((480, 480), (1024, 1536))
     transformer_model_class = LTX2Model
     text_encoder_class = LTX2TextEncoder
     video_vae_class = LTX2VideoVAE
@@ -133,13 +137,13 @@ class LTX2Runner(DefaultRunner):
         _, spatial_scale_h, spatial_scale_w = self.config["vae_scale_factors"]
         upsample_scale = 2 if use_upsampler else 1
         stage_count = 2 if use_upsampler else 1
-        warmup_resolutions = self._UPSAMPLER_WARMUP_RESOLUTIONS if use_upsampler else self._WARMUP_RESOLUTIONS
-        text_encoder_output = None
+        warmup_shapes = self._UPSAMPLER_WARMUP_SHAPES if use_upsampler else self._WARMUP_SHAPES
+        text_encoder_cache = {}
         distilled_sigmas = self.config.get("distilled_sigma_values")
         stage1_sigmas = torch.tensor(distilled_sigmas, dtype=torch.float32, device=AI_DEVICE) if distilled_sigmas is not None else None
 
         try:
-            for requested_height, requested_width in warmup_resolutions:
+            for warmup_index, (requested_height, requested_width) in enumerate(warmup_shapes):
                 height = max(1, requested_height // (spatial_scale_h * upsample_scale)) * spatial_scale_h
                 width = max(1, requested_width // (spatial_scale_w * upsample_scale)) * spatial_scale_w
                 if use_upsampler:
@@ -150,7 +154,7 @@ class LTX2Runner(DefaultRunner):
                     logger.info(f"Warmup: {height}x{width}")
 
                 try:
-                    text_encoder_output = self._prepare_warmup_inputs(task, height, width, text_encoder_output)
+                    self._prepare_warmup_inputs(warmup_index, task, height, width, text_encoder_cache)
                     scheduler.generator = None
                     scheduler.infer_steps = stage1_infer_steps
                     if stage1_sigmas is not None:
@@ -187,12 +191,12 @@ class LTX2Runner(DefaultRunner):
 
         logger.info("[Warmup] Warmup completed")
 
-    def _prepare_warmup_inputs(self, task, height, width, text_encoder_output=None):
+    def _prepare_warmup_inputs(self, warmup_index, task, height, width, text_encoder_cache):
         input_cls = T2AVInputInfo if task == "t2av" else LTX2I2AVInputInfo
         self.input_info = input_cls(
             task=task,
             seed=0,
-            prompt="warmup",
+            prompt=self._WARMUP_PROMPTS[warmup_index],
             negative_prompt=" " if self.config["enable_cfg"] else "",
             size=[height, width],
             num_frames=self.config["num_frames"],
@@ -203,8 +207,9 @@ class LTX2Runner(DefaultRunner):
         self._i2av_guiding_keyframe_meta = None
         self._i2av_first_frame_meta = None
 
-        if text_encoder_output is None:
-            text_encoder_output = self.run_text_encoder(self.input_info)
+        prompt = self.input_info.prompt
+        if prompt not in text_encoder_cache:
+            text_encoder_cache[prompt] = self.run_text_encoder(self.input_info)
 
         if task == "i2av":
             latent_shape = self.input_info.video_latent_shape
@@ -218,8 +223,7 @@ class LTX2Runner(DefaultRunner):
             self.video_denoise_mask = torch.ones((1, *latent_shape[1:]), dtype=torch.float32, device=AI_DEVICE)
             self.video_denoise_mask[:, 0] = 0
 
-        self.inputs = {"text_encoder_output": text_encoder_output}
-        return text_encoder_output
+        self.inputs = {"text_encoder_output": text_encoder_cache[prompt]}
 
     def clear_warmup_state(self):
         self.model.scheduler.clear()
@@ -320,7 +324,7 @@ class LTX2Runner(DefaultRunner):
         # Apply LoRA to text encoder if configured
         lora_configs = self.config.get("lora_configs")
         if lora_configs:
-            text_encoder.apply_lora(lora_configs, force_fp32=self.config.get("lora_merge_force_fp32", False))
+            text_encoder.apply_lora(lora_configs)
 
         text_encoders = [text_encoder]
         return text_encoders

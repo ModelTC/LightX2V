@@ -47,7 +47,6 @@ def validate_contiguous_config(config, lora_path=None):
         "pipefusion_parallel",
         "lora_configs",
         "lora_path",
-        "lora_dynamic_apply",
         "use_compile",
         "enable_cuda_graph",
         "dummy_model",
@@ -56,7 +55,7 @@ def validate_contiguous_config(config, lora_path=None):
         "quant_method",
         "adapter_model_path",
     )
-    if any(config.get(key) for key in incompatible) or lora_path or config.get("feature_caching", "NoCaching") != "NoCaching":
+    if config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key) for key in incompatible) or lora_path or config.get("feature_caching", "NoCaching") != "NoCaching":
         raise ValueError("contiguous layout requires static rank-local weights, single-device eager inference, and NoCaching")
     if GET_SENSITIVE_DTYPE() != GET_DTYPE():
         raise ValueError("contiguous layout requires the default sensitive-layer dtype")

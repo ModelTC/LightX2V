@@ -1,6 +1,29 @@
 """Shared instructions for setting up the MiniMax-H3 AdaLN cache."""
 
-ADALN_CACHE_GUIDE = """1. Configure the cache in the inference JSON config:
+TOOL_DIR = "tools/cache_minimax_h3_adaln"
+MODEL_GUIDES = {
+    "minimax_h3": (
+        f"{TOOL_DIR}/run_cache_minimax_h3_adaln.sh",
+        "Set --model-variant fl2av for t2av/i2av/l2av/fl2av, or ref2av for ref2av.",
+    ),
+    "minimax_h3_causal": (
+        f"{TOOL_DIR}/run_cache_minimax_h3_causal_adaln.sh",
+        "Set --task refa2v or refa2av to match inference.",
+    ),
+    "minimax_h3_image": (
+        f"{TOOL_DIR}/run_cache_minimax_h3_image_adaln.sh",
+        "This script generates both T2I and I2I cache profiles.",
+    ),
+}
+
+
+def get_adaln_cache_guide(model_cls: str) -> str:
+    guide = MODEL_GUIDES.get(model_cls)
+    if guide is None:
+        return f"Refer to the .sh files under {TOOL_DIR}/ for AdaLN cache generation."
+
+    script, note = guide
+    return f"""1. Configure the cache in the inference JSON config:
 
      "use_adaln_cache": true,
      "adaln_cache_dir": "~/.cache/lightx2v/adaln"
@@ -8,16 +31,12 @@ ADALN_CACHE_GUIDE = """1. Configure the cache in the inference JSON config:
    You can use a custom cache root or point to an existing cache root.
    Cache generation and inference must use the same model and JSON config.
 
-2. Edit the cache generation script for your model:
+2. Edit the cache generation script for {model_cls}:
 
-   MiniMax-H3:
-     tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
-   Causal RefA2V:
-     scripts/minimax_h3_causal/cache_adaln.sh
+     {script}
 
    Set lightx2v_path, model_path, and --config_json to match inference.
-   For MiniMax-H3, set --model-variant fl2av for t2av/i2av/l2av/fl2av,
-   or ref2av for ref2av. The causal script already selects minimax_h3_causal.
+   {note}
 
 3. Generate the cache if no matching cache exists.
    If the target cache directory exists but is invalid, move it aside first.
@@ -25,9 +44,6 @@ ADALN_CACHE_GUIDE = """1. Configure the cache in the inference JSON config:
 
    Run the corresponding script from the repository root:
 
-     # MiniMax-H3
-     bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
-     # Causal RefA2V
-     bash scripts/minimax_h3_causal/cache_adaln.sh
+     bash {script}
 
 4. Retry inference after the cache is ready."""

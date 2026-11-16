@@ -69,18 +69,18 @@ class FlashFlowMatchEulerDiscreteScheduler:
         return {"prev_sample": sample}
 
 
-def build_scheduler(num_inference_steps, timesteps_list, shift, device, scheduler_name="default"):
+def build_scheduler(num_inference_steps, timesteps_list, shift, device, scheduler_type="default"):
     if timesteps_list is not None and len(timesteps_list) != num_inference_steps:
         raise ValueError("infer_steps must match the length of timesteps_list")
 
-    if scheduler_name == "flash":
+    if scheduler_type == "flash":
         sched = FlashFlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=shift, use_dynamic_shifting=False)
-    elif scheduler_name == "flow_match":
+    elif scheduler_type == "flow_match":
         sched = FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=shift)
-    elif scheduler_name == "default":
+    elif scheduler_type == "default":
         sched = FlowUniPCMultistepScheduler(use_dynamic_shifting=False, shift=shift)
     else:
-        raise ValueError(f"Unknown HiDream-O1-Image scheduler_name={scheduler_name!r}")
+        raise ValueError(f"Unknown HiDream-O1-Image scheduler_type={scheduler_type!r}")
     sched.set_timesteps(num_inference_steps, device=device)
     if timesteps_list is not None:
         sched.timesteps = torch.tensor(timesteps_list, device=device, dtype=torch.long)
@@ -192,7 +192,7 @@ class HidreamO1ImageScheduler(BaseScheduler):
             cfg["timesteps_list"],
             cfg["shift"],
             AI_DEVICE,
-            cfg["scheduler_name"],
+            cfg["scheduler_type"],
         )
         self.timesteps = self.sched.timesteps
         self.infer_steps = len(self.timesteps)
@@ -221,7 +221,7 @@ class HidreamO1ImageScheduler(BaseScheduler):
         self.noise_pred = None
 
     def step_post(self):
-        if self.generation_config["scheduler_name"] == "flash":
+        if self.generation_config["scheduler_type"] == "flash":
             self.latents = self.sched.step(
                 self.noise_pred.float(),
                 self.current_timestep.to(dtype=torch.float32),
@@ -239,7 +239,7 @@ class HidreamO1ImageScheduler(BaseScheduler):
             )[0].to(self.dtype)
 
     @ProfilingContext4DebugL2("Decode HiDream-O1-Image")
-    def decode(self):
+    def decode(self, return_tensor=False):
         img = (self.latents[0] + 1.0) / 2.0
         img = einops.rearrange(
             img,
@@ -249,6 +249,8 @@ class HidreamO1ImageScheduler(BaseScheduler):
             p1=PATCH_SIZE,
             p2=PATCH_SIZE,
         )
+        if return_tensor:
+            return img
         img = (img.cpu().float() * 255.0).clamp_(0, 255).round_().to(torch.uint8)
         return img[:, :, [2, 1, 0]].contiguous().numpy()
 

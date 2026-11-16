@@ -35,6 +35,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 @RUNNER_REGISTER("dreamzero")
 class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
     input_info_cls_by_task = {"i2va": MultiViewI2VAInputInfo}
+    supported_lora_modes = ("merge",)
 
     def __init__(self, config):
         config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)

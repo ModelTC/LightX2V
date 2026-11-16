@@ -1,0 +1,222 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LightX2VServer",
+      "pos": [
+        50,
+        70
+      ],
+      "size": [
+        540,
+        370
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "server",
+          "type": "LX2V_SERVER",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LightX2VServer"
+      },
+      "widgets_values": [
+        "/path/to/LightX2V",
+        "/path/to/models/MiniMax-H3-Image",
+        "minimax_h3_image",
+        "configs/minimax_h3_image/minimax_h3_image.json",
+        "i2i",
+        "0"
+      ],
+      "widgets_values_named": {
+        "lightx2v_path": "/path/to/LightX2V",
+        "model_path": "/path/to/models/MiniMax-H3-Image",
+        "model_cls": "minimax_h3_image",
+        "config_json": "configs/minimax_h3_image/minimax_h3_image.json",
+        "task": "i2i",
+        "CUDA_VISIBLE_DEVICES": "0"
+      },
+      "title": "H3 Image edit service"
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [
+        50,
+        510
+      ],
+      "size": [
+        420,
+        460
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            2
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png"
+      ],
+      "widgets_values_named": {
+        "image": "example.png"
+      }
+    },
+    {
+      "id": 3,
+      "type": "LightX2VGenerateImage",
+      "pos": [
+        680,
+        70
+      ],
+      "size": [
+        420,
+        460
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "server",
+          "type": "LX2V_SERVER",
+          "link": 1
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LightX2VGenerateImage"
+      },
+      "widgets_values": [
+        "Keep the subject and composition in <Picture 1> and change the lighting to warm golden sunset light.",
+        2048,
+        2048,
+        1234,
+        "increment",
+        ""
+      ],
+      "widgets_values_named": {
+        "prompt": "Keep the subject and composition in <Picture 1> and change the lighting to warm golden sunset light.",
+        "width": 2048,
+        "height": 2048,
+        "seed": 1234,
+        "control_after_generate": "increment",
+        "negative_prompt": ""
+      },
+      "title": "H3 Image edit 2048"
+    },
+    {
+      "id": 4,
+      "type": "SaveImage",
+      "pos": [
+        1160,
+        70
+      ],
+      "size": [
+        420,
+        460
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "LightX2V_H3_Image_Edit"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "LightX2V_H3_Image_Edit"
+      }
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      3,
+      0,
+      "LX2V_SERVER"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      1,
+      "IMAGE"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.7,
+      "offset": [
+        20,
+        30
+      ]
+    }
+  },
+  "version": 0.4
+}

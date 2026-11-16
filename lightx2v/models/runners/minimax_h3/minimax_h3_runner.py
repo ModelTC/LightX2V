@@ -59,18 +59,16 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
     """Build H3 with either a dynamic LoRA branch or load-time merging."""
-    if config.get("lora_dynamic_apply", False):
+    if config.get("lora_mode", "merge") in ("separate", "consumer"):
         if len(lora_configs) != 1:
             raise ValueError("MiniMax-H3 dynamic LoRA currently accepts exactly one lora_configs entry")
         lora_config = lora_configs[0]
         if not lora_config.get("path"):
             raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].path")
-        if lora_config.get("alpha") is None:
-            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].alpha (use 8 for the MiniMax-H3 Turbo LoRA)")
         model_kwargs.update(
             lora_path=lora_config["path"],
             lora_strength=lora_config.get("strength", 1.0),
-            lora_alpha=lora_config["alpha"],
+            lora_alpha=lora_config.get("alpha"),
         )
         return MiniMaxH3Model(**model_kwargs)
     if config.get("dit_quantized", False):
@@ -95,9 +93,15 @@ class MiniMaxH3Runner(DefaultRunner):
     graph.
     """
 
+    supported_lora_modes = ("merge", "separate", "consumer")
+
     _WARMUP_SHAPES = (
         (480, 480, 158),  # aligned from a 6-second request
         (544, 960, 124),
+    )
+    _WARMUP_PROMPTS = (
+        "A fox crosses a snowy trail.",
+        "A camera glides along the edge of a mountain lake at sunrise. Thin clouds drift over the peaks and their reflections ripple across the water. A small wooden boat creaks against the dock as birds call from a stand of pines on the far shore.",
     )
     _WARMUP_STEP_COUNT = 2
 
@@ -126,12 +130,12 @@ class MiniMaxH3Runner(DefaultRunner):
             torch_device_module.synchronize()
             del pixels
 
-        for height, width, num_frames in self._WARMUP_SHAPES:
+        for warmup_index, (height, width, num_frames) in enumerate(self._WARMUP_SHAPES):
             logger.info(f"Warmup {task}: {height}x{width}x{num_frames}")
             transformer_offloaded = not self.config.get("cpu_offload", False)
             try:
                 self.scheduler.generator = None
-                self._prepare_warmup_inputs(task, height, width, num_frames)
+                self._prepare_warmup_inputs(warmup_index, task, height, width, num_frames)
                 self.inputs = self._run_input_encoder_local_h3()
                 self.init_run()
 
@@ -157,13 +161,11 @@ class MiniMaxH3Runner(DefaultRunner):
         logger.info("[Warmup] Warmup completed")
         self._maybe_freeze_gc()
 
-    def _prepare_warmup_inputs(self, task, height, width, num_frames):
+    def _prepare_warmup_inputs(self, warmup_index, task, height, width, num_frames):
         self.input_info = INPUT_INFO_TYPES[task](
             task=task,
             seed=0,
-            prompt="A sunrise over distant mountains reflected across a calm lake beneath drifting clouds."
-            if (height, width, num_frames) == self._WARMUP_SHAPES[0]
-            else "A cinematic fox walking through a snowy forest.",
+            prompt=self._WARMUP_PROMPTS[warmup_index],
             size=[height, width],
             num_frames=num_frames,
             return_result_tensor=True,
@@ -377,14 +379,8 @@ class MiniMaxH3Runner(DefaultRunner):
         images = [prepare_keyframe_image(image, self.request_height, self.request_width, stretch=index == 0) for index, image in enumerate(images)]
         return images, anchors
 
-    def _prepare_references(self):
-        entries = []
-        for kind, value in (
-            ("image", self.input_info.image_path),
-            ("video", self.input_info.video_path),
-            ("audio", self.input_info.audio_path),
-        ):
-            entries.extend({kind: path} for path in value)
+    def _prepare_references(self, sources):
+        entries = [{kind: path} for kind, paths in sources.items() for path in paths]
         if not entries:
             raise ValueError("MiniMax-H3 ref2av requires --image_path, --video_path, or --audio_path")
         if len(entries) > MAX_REFERENCES:
@@ -559,7 +555,12 @@ class MiniMaxH3Runner(DefaultRunner):
         self.clear_conditioning_state()
         if task == "ref2av":
             self._resolve_request_geometry()
-            self.prepared_references = self._prepare_references()
+            reference_sources = {
+                "image": self.input_info.image_path,
+                "video": self.input_info.video_path,
+                "audio": self.input_info.audio_path,
+            }
+            self.prepared_references = self._prepare_references(reference_sources)
             text_encoder_output = self.run_text_encoder(self.input_info, references=self.prepared_references)
             with ProfilingContext4DebugL1(
                 "Run VAE Encoder",

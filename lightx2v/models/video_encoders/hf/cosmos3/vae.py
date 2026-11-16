@@ -633,6 +633,7 @@ class Cosmos3WanVAE:
 
     @torch.no_grad()
     def decode(self, latents, input_info):
+        save_tensor = input_info.task == "t2i" and bool(input_info.save_result_path) and not input_info.return_result_tensor
         if self.cpu_offload:
             self.model.to(torch.device(AI_DEVICE))
         latents = latents.to(device=next(self.model.parameters()).device, dtype=self.dtype)
@@ -641,10 +642,13 @@ class Cosmos3WanVAE:
         z_raw = latents * std + mean
         decoded = self.model.decode(z_raw).sample
         if self.cpu_offload:
-            decoded = decoded.cpu().float()
+            decoded = decoded.float() if save_tensor else decoded.cpu().float()
             self.model.to(torch.device("cpu"))
             torch_device_module.empty_cache()
             gc.collect()
         if input_info.return_result_tensor:
             return (decoded / 2 + 0.5).clamp(0, 1)
+        if save_tensor:
+            frames = (decoded[0] / 2 + 0.5).clamp(0, 1).permute(1, 0, 2, 3)
+            return list(frames)
         return self._to_pil_frames(decoded)

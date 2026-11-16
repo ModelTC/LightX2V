@@ -53,6 +53,8 @@ def merge_video_audio(video_path: str, audio_path: str):
 
 @RUNNER_REGISTER("wan2.2_s2v")
 class WanS2VRunner(WanRunner):
+    supported_lora_modes = ("merge",)
+
     def __init__(self, config):
         config.setdefault("fps", 16)
         self.vae_name = "Wan2.1_VAE.pth"

@@ -1,4 +1,4 @@
-from lightx2v.models.runners.request_args import COMMON, PROMPT, VIDEO, without
+from lightx2v.models.runners.request_args import COMMON, PROMPT, VIDEO, VIDEO_OUTPUT, without
 from lightx2v.utils.request_spec import Argument, MultiTaskSpec, RequestSpec
 
 
@@ -140,6 +140,15 @@ SPECS = {
     "realtimewam": FAST_WAM,
     "seko_talk": WAN_AUDIO,
     "seko_talk_ar": RequestSpec({"rs2v": without(WAN_AUDIO.tasks["rs2v"], "num_frames", "resize_mode", "fixed_area")}),
+    "tbdub": RequestSpec(
+        {
+            "v2v": dict(
+                COMMON | VIDEO_OUTPUT,
+                video_path=Argument(help="Input cropped face video path."),
+                audio_path=Argument(help="Driving audio path."),
+            )
+        }
+    ),
     "wan2.1": WAN,
     "wan2.1_sf": WAN_SF,
     "wan2.1_realtime": WAN_SF,

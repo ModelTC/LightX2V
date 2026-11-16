@@ -501,7 +501,7 @@ class DefaultRunner(BaseRunner):
 
         if sr_from_image_only:
             logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
-            save_to_image(self.gen_video_final, out_path)
+            save_to_image(self.gen_video_final, out_path, method=self.config.get("save_image_method", "opencv"))
             logger.info(f"✅ Image saved successfully to: {out_path} ✅")
         else:
             logger.info(f"🎬 Start to save video 🎬")
@@ -552,6 +552,8 @@ class DefaultRunner(BaseRunner):
         Returns:
             bool: True if LoRA was successfully switched, False otherwise
         """
+        if self.config.get("lora_mode", "merge") not in ("separate", "consumer"):
+            raise ValueError("switch_lora requires lora_mode='separate' or 'consumer'")
         if not hasattr(self, "model") or self.model is None:
             logger.error("Model not loaded. Please load model first.")
             return False
@@ -598,6 +600,8 @@ class DefaultRunner(BaseRunner):
         Returns:
             bool: True on success, False otherwise.
         """
+        if self.config.get("lora_mode", "merge") not in ("separate", "consumer"):
+            raise ValueError("switch_lora_multi requires lora_mode='separate' or 'consumer'")
         if not hasattr(self, "model") or self.model is None:
             logger.error("Model not loaded. Please load model first.")
             return False

@@ -18,7 +18,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 class WanAutoregressiveRunnerMixin(WanStreamingVAERunnerMixin, AutoregressiveRunnerMixin):
     """Chunk denoising, clean cache commits and warmup for Wan AR models."""
 
-    _WARMUP_RESOLUTIONS = ()
+    _WARMUP_SHAPES = ()
+    _WARMUP_PROMPTS = ("A camera moves slowly along a forest path.",)
     vae_decode_in_worker = True
 
     def validate_warmup(self):
@@ -27,14 +28,17 @@ class WanAutoregressiveRunnerMixin(WanStreamingVAERunnerMixin, AutoregressiveRun
 
     def _run_warmup(self):
         self.scheduler.generator = None
-        text_output = self.run_text_encoder(T2VInputInfo(prompt="warmup"))
+        text_encoder_cache = {}
         chunk_frames = self.scheduler.num_frame_per_chunk
         local_frames = self.config.get("ar_config", {}).get("local_attn_size", -1)
-        for height, width in self.get_warmup_resolutions():
+        for warmup_index, (height, width) in enumerate(self.get_warmup_resolutions()):
             latent_shape = self.get_warmup_latent_shape(height, width)
             chunks = math.ceil(local_frames / chunk_frames) + 1 if local_frames > 0 else math.ceil(latent_shape[1] / chunk_frames)
             latent_shape[1] = max(2, chunks) * chunk_frames
-            self.prepare_warmup_inputs(height, width, latent_shape, text_output)
+            prompt = self._WARMUP_PROMPTS[warmup_index]
+            if prompt not in text_encoder_cache:
+                text_encoder_cache[prompt] = self.run_text_encoder(T2VInputInfo(prompt=prompt))
+            self._prepare_warmup_inputs(height, width, latent_shape, prompt, text_encoder_cache[prompt])
             logger.info("[Warmup] {} {}x{}, {} chunks", type(self).__name__, height, width, chunks)
             self.init_run()
             for chunk in range(self.video_segment_num):

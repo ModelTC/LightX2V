@@ -3,7 +3,7 @@
     "infer_steps": 28,
     "guidance_scale": 0.0,
     "shift": 1.0,
-    "scheduler_name": "flash",
+    "scheduler_type": "flash",
     "size": [2048, 2048],
     "torch_dtype": "bfloat16",
     "enable_cfg": false,

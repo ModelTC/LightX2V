@@ -401,6 +401,7 @@ class LingBotVideoWanVAE:
 
     @torch.no_grad()
     def decode(self, latents, input_info=None):
+        save_tensor = self.config.get("task") == "t2i" and input_info is not None and bool(input_info.save_result_path) and not input_info.return_result_tensor
         if self.cpu_offload:
             self.model.to(AI_DEVICE)
         latents = latents.to(device=next(self.model.parameters()).device, dtype=torch.float32)
@@ -409,11 +410,14 @@ class LingBotVideoWanVAE:
             z_raw = z_raw.contiguous(memory_format=torch.channels_last_3d)
         decoded = self.model.decode(z_raw).sample.float().clamp_(-1, 1)
         if self.cpu_offload:
-            decoded = decoded.cpu()
+            if not save_tensor:
+                decoded = decoded.cpu()
             self.model.to("cpu")
             if hasattr(torch_device_module, "empty_cache"):
                 torch_device_module.empty_cache()
             gc.collect()
         if input_info.return_result_tensor or input_info.task in ("t2v", "i2v"):
             return self._to_frame_tensor(decoded)
+        if save_tensor:
+            return list(((decoded[0] + 1.0) / 2.0).permute(1, 0, 2, 3))
         return self._to_pil_frames(decoded)

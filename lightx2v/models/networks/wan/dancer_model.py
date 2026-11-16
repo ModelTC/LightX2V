@@ -55,7 +55,7 @@ class WanDancerModel(WanModel):
         super().__init__(model_path, config, device, model_type="wan_dancer")
 
     def _should_init_empty_model(self):
-        if self.config.get("lora_configs") and not self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_configs") and self.config.get("lora_mode", "merge") != "separate":
             return True
         return super()._should_init_empty_model()
 

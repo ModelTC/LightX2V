@@ -208,6 +208,8 @@ class RealtimeWAMPolicy(FastWAMPolicy):
 @RUNNER_REGISTER("realtimewam")
 class RealtimeWAMRunner(FastWAMRunner):
     policy_class = RealtimeWAMPolicy
+    _WARMUP_SHAPES = (None,)  # Use the policy's camera size.
+    _WARMUP_PROMPTS = ("Pick up the blue block and place it on the tray.",)
 
     def warmup(self):
         if not self.config.get("warmup", False):
@@ -220,10 +222,7 @@ class RealtimeWAMRunner(FastWAMRunner):
     @ProfilingContext4DebugL1("Warmup", time_unit="ms")
     def run_warmup(self):
         policy = self.policy
-        image = np.zeros((policy.camera_size, policy.camera_size, 3), dtype=np.uint8)
-        image_tensor = policy.build_image_tensor({"agentview": image, "wrist": image})
-        context, mask = policy.encode_prompt(policy.default_prompt.format(task_prompt="warmup"))
-        state = policy.state_normalizer.forward(np.zeros(policy.robot_state_dim, dtype=np.float32))
+        image_tensor, context, mask, state = self._prepare_warmup_inputs(0)
         if self.config.get("cuda_graph", False):
             policy.cuda_graph(image_tensor, context, mask, state, seed=0)
         else:
@@ -231,3 +230,12 @@ class RealtimeWAMRunner(FastWAMRunner):
             policy._run_action_denoising(inputs, shape, policy.action_infer_steps, seed=0)
         torch.cuda.synchronize(policy.device)
         logger.info("RealtimeWAM startup warmup completed (cuda_graph={}).", self.config.get("cuda_graph", False))
+
+    def _prepare_warmup_inputs(self, warmup_index):
+        policy = self.policy
+        height, width = self._WARMUP_SHAPES[warmup_index] or (policy.camera_size, policy.camera_size)
+        image = np.zeros((height, width, 3), dtype=np.uint8)
+        image_tensor = policy.build_image_tensor({"agentview": image, "wrist": image})
+        context, mask = policy.encode_prompt(policy.default_prompt.format(task_prompt=self._WARMUP_PROMPTS[warmup_index]))
+        state = policy.state_normalizer.forward(np.zeros(policy.robot_state_dim, dtype=np.float32))
+        return image_tensor, context, mask, state

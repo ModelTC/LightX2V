@@ -46,6 +46,8 @@ def _merge_wan_dense_defaults(config):
 
 @RUNNER_REGISTER("motus")
 class MotusRunner(Wan22DenseRunner):
+    supported_lora_modes = ("merge",)
+
     input_info_cls_by_task = {"i2v": MotusInputInfo}
 
     def __init__(self, config):

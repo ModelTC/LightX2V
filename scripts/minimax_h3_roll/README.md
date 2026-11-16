@@ -1,5 +1,7 @@
 # MiniMax-H3 Roll: Low-cost candidate generation
 
+The example JSON configs set `lora_mode: "separate"`. Use the same config mode and `LORA_DTYPE` for cache export and inference (unset dtype follows `DTYPE`).
+
 [English](README.md) | [简体中文](README_zh.md)
 
 Generate low-resolution drafts to select prompts and seeds, then regenerate selected drafts at a higher resolution. Set `draft_steps` to reduce the cost of each draft further. Run the commands below from the repository root.

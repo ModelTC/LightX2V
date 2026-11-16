@@ -45,7 +45,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
     if not lora_configs:
         return wan_module(**model_kwargs)
 
-    if config.get("lora_dynamic_apply", False):
+    if config.get("lora_mode", "merge") == "separate":
         model_kwargs["lora_path"] = lora_configs[0]["path"]
         model_kwargs["lora_strength"] = lora_configs[0]["strength"]
         model = wan_module(**model_kwargs)
@@ -66,8 +66,20 @@ def get_wan_model_class(distill_method):
 
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
-    FIXED_FRAME_ATTENTION_TYPES = {"svg_attn", "radial_attn", "nbhd_attn", "nbhd_attn_flashinfer", "general_sparse_attn"}
-    _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
+    supported_lora_modes = ("merge", "separate")
+
+    FIXED_FRAME_ATTENTION_TYPES = {
+        "svg_attn",
+        "radial_attn",
+        "nbhd_attn",
+        "nbhd_attn_flashinfer",
+        "general_sparse_attn",
+    }
+    _WARMUP_SHAPES = ((480, 480), (720, 1280))
+    _WARMUP_PROMPTS = (
+        "A boat crosses a lake.",
+        "A small wooden boat crosses a calm lake in the early morning as the camera tracks it from the shore. Ripples spread behind the hull, mist drifts near the far bank, and the pale sky gradually brightens above the trees.",
+    )
     _WARMUP_TASKS = ("t2v", "i2v", "flf2v")
     _SUPPORTS_GENERIC_WARMUP = True
 
@@ -149,19 +161,16 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def _run_warmup(self, task=None):
         task = self.config["task"] if task is None else task
-        input_info = T2VInputInfo(task=task, prompt="warmup")
-        inputs = {"task": task, "text_encoder_output": self.run_text_encoder(input_info)}
+        text_encoder_cache = {}
         scheduler = self.model.scheduler
         original_guide_scale = scheduler.sample_guide_scale
 
         try:
-            for height, width in self._WARMUP_RESOLUTIONS:
-                self.input_info = input_info
-                scheduler.input_info = input_info
+            for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
                 latent_shape = self.get_warmup_latent_shape(height, width)
                 logger.info(f"Warmup: {height}x{width}")
                 try:
-                    inputs["image_encoder_output"] = self.get_warmup_image_encoder_output(latent_shape)
+                    input_info, inputs = self._prepare_warmup_inputs(warmup_index, task, latent_shape, text_encoder_cache)
                     scheduler.generator = None
                     scheduler.prepare(seed=input_info.seed, latent_shape=latent_shape, image_encoder_output=inputs["image_encoder_output"])
                     if self.config.get("model_cls") == "wan2.2" and task == "i2v":
@@ -184,11 +193,25 @@ class WanRunner(DisaggMixin, DefaultRunner):
                     torch_device_module.synchronize()
                 finally:
                     self.clear_warmup_state()
-                    inputs.pop("image_encoder_output", None)
+                    inputs = None
         finally:
             scheduler.sample_guide_scale = original_guide_scale
 
         logger.info("[Warmup] Warmup completed")
+
+    def _prepare_warmup_inputs(self, warmup_index, task, latent_shape, text_encoder_cache):
+        prompt = self._WARMUP_PROMPTS[warmup_index]
+        input_info = T2VInputInfo(task=task, prompt=prompt)
+        self.input_info = input_info
+        self.model.scheduler.input_info = input_info
+        if prompt not in text_encoder_cache:
+            text_encoder_cache[prompt] = self.run_text_encoder(input_info)
+        inputs = {
+            "task": input_info.task,
+            "text_encoder_output": text_encoder_cache[prompt],
+            "image_encoder_output": self.get_warmup_image_encoder_output(latent_shape),
+        }
+        return input_info, inputs
 
     def supports_generic_warmup(self):
         # Specialized runners must opt in themselves; inherited support is not enough.
@@ -1064,7 +1087,7 @@ class MultiModelStruct:
                     if not lora_configs:
                         high_noise_model = get_wan_model_class(self.distill_method)(**high_model_kwargs)
                     else:
-                        assert self.config.get("lora_dynamic_apply", False)
+                        assert self.config.get("lora_mode", "merge") == "separate"
                         high_noise_model = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
                     high_noise_model.set_scheduler(self.scheduler)
                     self.model[0] = high_noise_model
@@ -1080,7 +1103,7 @@ class MultiModelStruct:
                     if not lora_configs:
                         low_noise_model = get_wan_model_class(self.distill_method)(**low_model_kwargs)
                     else:
-                        assert self.config.get("lora_dynamic_apply", False)
+                        assert self.config.get("lora_mode", "merge") == "separate"
                         low_noise_model = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
                     low_noise_model.set_scheduler(self.scheduler)
                     self.model[1] = low_noise_model
@@ -1196,8 +1219,6 @@ class Wan22MoeRunner(WanRunner):
         This method handles both high_noise_model and low_noise_model separately.
 
         Args:
-            lora_path: Path to the LoRA safetensors file (for backward compatibility)
-            strength: LoRA strength (default: 1.0) (for backward compatibility)
             high_lora_path: Path to the high_noise_model LoRA safetensors file
             high_lora_strength: High noise model LoRA strength (default: 1.0)
             low_lora_path: Path to the low_noise_model LoRA safetensors file
@@ -1206,6 +1227,8 @@ class Wan22MoeRunner(WanRunner):
         Returns:
             bool: True if LoRA was successfully switched, False otherwise
         """
+        if self.config.get("lora_mode", "merge") != "separate":
+            raise ValueError("switch_lora requires lora_mode='separate'")
         if not hasattr(self, "model") or self.model is None:
             logger.error("Model not loaded. Please load model first.")
             return False

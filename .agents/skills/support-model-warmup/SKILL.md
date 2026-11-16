@@ -1,13 +1,15 @@
 ---
 name: support-model-warmup
-description: 为尚无 warmup 的 LightX2V 模型或新任务设计、实现、审查和验证 `warmup=true`。先核对普通推理、CPU offload model/block/phase 和 lazy-load block/phase 的原生与 warmup 支持范围，再复用 Wan/Qwen-Image/LTX2/Lingbot-Video 经验覆盖 compile、MoE、多阶段或并行路径，检查 Encoder、DiT、scheduler 和 VAE decode 是否真正预热，并排查正式 Step 1 冷启动与请求状态污染。
+description: 为 LightX2V 模型或任务实现、维护、审查和验证内置 warmup。按 runner 定义预热 shape 和逐轮 prompt，核对普通推理、CPU offload 与 lazy-load 的支持范围，验证 Encoder、DiT、scheduler 和 VAE decode 的覆盖，以及正式请求的重编译与状态隔离。
 ---
 
 # Support LightX2V Warmup
 
+简体中文 | [English](SKILL_EN.md)
+
 ## 目标与边界
 
-按任务选择流程：纯审查核对调用链、状态和现有证据；实现任务执行对应功能验证；要求性能结论时再运行 warmup/no-warmup 对照。局部审查不自动扩展为实现或完整性能验收。
+按任务选择流程。纯审查核对调用链、状态和现有证据，实现任务执行对应功能验证。按用户指定的轮数和范围做基准测试，需要评估 warmup 收益时再运行 warmup/no-warmup 对照。
 
 让 warmup 复用正式请求的真实算子路径，并保证正式请求：
 
@@ -20,7 +22,7 @@ description: 为尚无 warmup 的 LightX2V 模型或新任务设计、实现、�
 
 若用户同时要求 warmup 和 compile，先用本 skill 完成 eager warmup 与状态隔离，再使用 [support-model-compile](../support-model-compile/SKILL.md) 接入 compile；不要在 warmup 代码中维护第二套编译逻辑。
 
-启用方式：在 `--config_json` 指向的启动 JSON 中设置 `"warmup": true`，关闭时设为 `false`（默认）。当前 `lightx2v/infer.py` 没有 `--warmup` 参数；Python API 同样在 `create_generator(config_json=...)` 初始化 runner 前读取该配置，不能通过 `generate()` 开启。
+在 `--config_json` 指向的启动 JSON 中设置 `"warmup": true`，关闭时设为 `false`（默认）。Python API 在 `create_generator(config_json=...)` 初始化 runner 前读取该配置。测试时直接运行原推理入口，让内置 warmup 随启动执行一次。
 
 ## 1. 先审计运行模式
 
@@ -70,7 +72,7 @@ rg -n "run_input_encoder|run_(text|image|vae)_encoder|run_vae_decoder|model\.inf
 
 启动 GPU 任务前解析最终 config，并确认模型/checkpoint、LoRA/adapter 和输入媒体路径存在。原配置缺少资产时，先报告阻塞；可以用仓库内有效的同 task 配置做功能 smoke test，但不能把它当作原配置验收，也不能静默删除 LoRA 或改变模型语义。
 
-固定前提：启用 `warmup=true` 时，warmup 在进程启动阶段、首个正式 `run_pipeline()` 之前完整执行一次。具体模型的 warmup 代码直接依赖这一公共生命周期，不要兼容请求后的手动重入，也不要增加旧请求状态快照。
+启用 `warmup=true` 时，启动 hook 在首个正式 `run_pipeline()` 之前执行一次，hook 内按实际覆盖范围运行一轮或多轮。每轮对应一组预热输入，可以包含多个 DiT step、视频 chunk 或模型阶段。具体模型的 warmup 代码依赖这一公共生命周期。
 
 正式入口是 `build_runner()` 初始化，再由 `prepare_request()` 验证请求字段并生成 `InputInfo`，最后 `run_request()` 调用 `run_pipeline()`。warmup 构造输入时也要遵循该 task 的 `InputInfo` 字段和 shape 契约；尺寸字段为 `size=[height, width]`。
 
@@ -94,13 +96,11 @@ warmup 必须调用这些已有方法，而不是重新实现其中的数学或�
 
 在已确认的运行模式内，再确定完整 shape signature：分辨率、帧数、文本/图片 token、dtype、stride/layout、CFG/MoE 分支、阶段数、并行模式和加载生命周期。
 
-本 skill 的默认接入与验收约定如下；这是工作流程要求，不是公共 API 对 shape 数量的限制：
-
-- 每条 warmup 路径固定两种代表分辨率，定义为 runner 类常量，不从 config 传递。优先覆盖小尺寸/方形和可运行的生产尺寸/非方形；两种 shape 都必须进入真实 DiT 和 decoder。
-- 先用目标设备确认 no-warmup 正式 shape 可运行。若正式 shape 本身 OOM，warmup 不负责让它变得可运行；可用两个较低面积的 shape 分别覆盖高度、宽度和长宽比做功能/eager kernel 预热，并明确记录生产 shape 未覆盖。compile 模式不能据此宣称生产 graph 已覆盖。
+- 常规多尺寸路径在 runner 类开头用 `_WARMUP_SHAPES` 声明两组代表尺寸。优先覆盖小尺寸或方形，以及可运行的生产尺寸或非方形。各组都走真实 DiT 和 decoder。
+- 按正式路径确定轮数。固定相机尺寸或只覆盖当前配置请求的专用路径可以单轮执行。需要覆盖配置尺寸的路径可以在预设尺寸之外加入 `config["size"]`，先去重，再按实际执行顺序编号。
+- 新增代表尺寸且可运行性未知时，先确认目标设备上的正式 shape 可运行。若正式 shape 本身 OOM，可用较低面积的 shape 分别覆盖高度、宽度和长宽比做功能或 eager kernel 预热，并明确记录生产 shape 和 compile graph 的覆盖缺口。
 - OOM 时区分 live allocated tensor 与 allocator reserved cache；allocated 已接近显存上限时，`empty_cache()` 无法解决。
-- 若两个 shape 无法覆盖互斥计算图，先说明缺口；不要静默增加第三种分辨率，也不要假装 dynamic 已覆盖。
-- 可复用与分辨率无关的文本编码结果。
+- 若预设 shape 无法覆盖互斥计算图，说明缺口及新增代表输入的依据。
 - I2V/I2I 每个分辨率都执行 Image/VAE Encoder。
 - FLF2V 同时把首帧和尾帧送入 Image/VAE Encoder。
 - 不跨分辨率复用 shape-dependent 输出。
@@ -113,9 +113,17 @@ warmup 必须调用这些已有方法，而不是重新实现其中的数学或�
 
 ## 4. 实现最小路径
 
-只新增有独立职责的方法。`run_warmup()` 是公共 hook；仅当 eager/lazy 生命周期、主体循环或异常清理需要分层时，再拆出 `_run_warmup()`、`clear_warmup_state()`。一次使用的一行包装直接内联；输入准备只有在多个 task/shape 复用时才提取 helper。
+`run_warmup()` 是公共 hook。仅当 eager/lazy 生命周期、主体循环或异常清理需要分层时，再拆出 `_run_warmup()` 和 `clear_warmup_state()`。
 
-每个目标 shape 至少执行：
+### Runner 输入约定
+
+- 在 runner 的 warmup 方法前依次声明 `_WARMUP_SHAPES` 和 `_WARMUP_PROMPTS`，并实现 `_prepare_warmup_inputs()`。单轮和纯帧输入路径也使用同名 helper。
+- 按实际轮次从 `_WARMUP_PROMPTS[warmup_index]` 取 prompt。共享循环可以先按序号取值，再把选中的 prompt 传给子类 helper。若运行时会追加配置尺寸，为额外一轮提供对应的 prompt。
+- 多轮 warmup 的 prompt 长度要明显不同。每条 prompt 写成同一物理行上的一个字符串字面量。单轮用一条 prompt，纯帧输入用空元组 `()`。
+- 同一 runner 的 T2I/I2I、单卡和多卡按轮次读取同一张 prompt 表。compile 模式同样保持各轮文本长度差异，按日志判断实际重编译。专用单轮若预热完整配置请求，记录其配置或分段文本来源，默认 prompt 仍从表中取值。
+- 不同 prompt 分别执行 Text Encoder。输入与 shape 无关且编码条件完全一致时才复用结果。缓存键包含实际文本和会改变编码的条件，随结果保留对应 token 长度或 mask。
+
+每轮执行目标任务需要的实际阶段。扩散图像或视频路径按以下顺序覆盖：
 
 ```text
 必要的 Text/Image/VAE Encoder
@@ -195,15 +203,16 @@ python -m py_compile <changed-python-files>
 git diff --check
 ```
 
-先用 `rg --files tests test_cases` 查找现有测试；当前没有已提交的 warmup 专项 Python 测试。实现或修改 warmup 时，在 `tests/test_<family>_warmup.py` 增加针对性回归测试，至少覆盖：model/version/task/subclass/mode guard 的异常、每个 shape 的 encoder/step/decode 顺序、iterator 消费、CPU model 最终位置、generator 清空、必要 scheduler 状态恢复、input 启动基线、异常 cleanup，以及 scheduler `clear()` 的请求边界语义。不要在每个模型中重复测试公共 warmup 调用顺序。纯文档维护不执行这些业务测试；临时验证遵循用户指定目录。
+先用 `rg --files tests test_cases` 查找现有测试，复用 warmup 用例。修改输入准备时，检查 prompt 单行格式、实际序号、文本长度差异、分别编码，以及追加尺寸和去重后的序号。有本地 tokenizer 时核对 token 数。其余测试按改动覆盖 mode guard、encoder/step/decode 顺序、iterator 消费、CPU model 下卡、generator、异常 cleanup 和 `clear()` 的请求边界。纯文档维护只验证文档和示例。
 
-只测试模式矩阵中正式推理已支持的行。功能验收时，每个目标模式至少完成一轮 warmup + 正式请求；要给出可靠性能结论时，使用用户原始脚本和 checkpoint 分别运行 warmup/no-warmup 至少三轮。需要时追加 `--return_result_tensor` 避免保存，但不要改变模型、task、config 或 shape。若因资产缺失或原正式 shape OOM 使用替代配置/shape，只能记为 smoke test，并单独保留原配置失败证据。offload、lazy 和多阶段分别对照。
+只测试模式矩阵中正式推理已支持的行。功能验收时，各目标模式至少完成一次内置 warmup 和正式请求。使用用户原始脚本、checkpoint、输入、分辨率和保存方式。用户要求单次时，每个 case 测一次。评估稳定性或 warmup 收益时，再按测试目标运行多次或做对照。若用替代配置或尺寸，单独标记为 smoke test，并保留原配置失败证据。
 
 每轮记录：
 
-- 每个 shape/encoder/DiT branch/stage/decode 是否真正执行；
-- 同一阶段 `infer_main cost` 的 Step 1、Step 2、Step 3–最后和 Step 6–最后；
-- warmup 自身、正式 pipeline，以及 `warmup + 正式 pipeline` 相对 no-warmup pipeline 的冷启动代价；
+- 各轮的实际 shape、prompt 长度和 encoder/DiT branch/stage/decode 覆盖；
+- 用 `TORCH_LOGS=recompiles` 记录 Dynamo 重编译，按各 rank 的 `Warmup cost` 分开统计预热和正式阶段；
+- 正式请求的 Text Encoder、适用时的 VAE Encoder、VAE Decoder、DiT 各步与总耗时、存图耗时。LightX2V 用 `Run Dit every step` 和 `Run DiT` 记录 DiT；
+- `Warmup cost` 单独记录。正式端到端取 `RUN pipeline cost`，执行存图时包含存图耗时；
 - warmup 前后显存，以及正式 Step 1 前的 cache 清理；
 - traceback 实际发生在加载、warmup 还是正式请求。
 
@@ -214,6 +223,6 @@ git diff --check
 3. 目标包含 lazy 时，warmup 后能完成正式请求；
 4. eager、no-warmup、非目标 task 和正式保存行为不变。
 
-不要要求所有模式的正式 Step 1 都等于稳态：CPU model 的整模上卡、每步 block/phase 传输与同步、lazy 正式请求重建模型/offload manager、请求级 cache 重算都不是 warmup 可以保留的状态。不要以单轮耗时或只有外层 `Warmup cost` 日志为结论；按 [implementation-patterns.md](references/implementation-patterns.md#冷启动边界与典型误区) 区分 warmup 缺陷、生命周期固有成本、原有 offload/lazy 问题和 profiling 偏差。
+单次基准报告当次耗时。用 guard 日志定位重编译，按 [implementation-patterns.md](references/implementation-patterns.md#冷启动边界与典型误区) 区分 warmup 缺陷、CPU model 上卡、每步 block/phase 传输与同步、lazy 重建、请求级 cache 重算及 profiling 偏差。
 
-交付前给出：运行模式矩阵、正式路径与 warmup 路径对应关系、两个 shape 和代表 step 的依据、状态清理清单、功能/性能证据等级、正式请求与冷启动总延迟、测试结果，以及剩余 Step 1 成本的归因。分别说明首请求、稳态吞吐和一次性启动成本的变化，不要把移到服务就绪前的成本称为稳态加速。
+交付时按任务记录运行方式、配置、源码改动、预热轮次、代表 step、测试结果和复现日志。比较性能时分别报告一次性 warmup、首个正式请求及已测的稳态吞吐。

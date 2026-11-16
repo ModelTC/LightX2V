@@ -82,8 +82,8 @@ class MiniMaxH3TokenRefinerBlockWeights(WeightModule):
 class MiniMaxH3PreWeights(WeightModule):
     def __init__(self, config):
         super().__init__()
-        # The released checkpoint deliberately keeps the two media projections
-        # and timestep MLP in fp32.  The text projection/refiner stay bf16.
+        # Media projections and the timestep MLP compute in FP32 regardless of
+        # checkpoint dtype. The text projection/refiner stay BF16.
         self.add_module("proj_in", _linear("proj_in", bias=True, force_fp32=True))
         self.add_module("audio_proj_in", _linear("audio_proj_in", bias=True, force_fp32=True))
         self.add_module("context_embedder", _linear("context_embedder", bias=True))

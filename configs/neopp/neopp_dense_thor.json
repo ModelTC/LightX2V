@@ -1,0 +1,17 @@
+{
+  "version": "dense",
+  "infer_steps": 50,
+  "attn_type": "torch_sdpa",
+  "cfg_scale": 4.0,
+  "cfg_interval": [
+    -1,
+    2
+  ],
+  "cfg_norm": "global",
+  "enable_cfg": true,
+  "use_triton_qknorm_rope": false,
+  "use_magi_compile": false,
+  "timestep_shift": 3.0,
+  "min_pixels": 65536,
+  "max_pixels": 4194304
+}

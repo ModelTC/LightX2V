@@ -71,7 +71,8 @@ class AutoencoderKLZImageVAE:
             latents = (latents / scaling_factor) + shift_factor
         images = self.model.decode(latents, return_dict=False)[0]
 
-        images = self.image_processor.postprocess(images, output_type="pt" if input_info.return_result_tensor else "pil")
+        output_type = "pt" if input_info.return_result_tensor or input_info.save_result_path else "pil"
+        images = self.image_processor.postprocess(images, output_type=output_type)
         if self.cpu_offload:
             self.model.to(torch.device("cpu"))
             torch.cuda.empty_cache()
