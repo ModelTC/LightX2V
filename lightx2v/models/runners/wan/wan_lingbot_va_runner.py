@@ -11,6 +11,7 @@ from loguru import logger
 
 from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.lingbot_va_model import WanLingbotVAModel
+from lightx2v.models.runners.wan.input_info import WanPolicyState
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.lingbot_va.scheduler import LingbotVAFlowMatchScheduler
@@ -18,7 +19,6 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import count_conv3d, patchify
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
-from lightx2v.utils.input_info import I2VAInputInfo, MultiViewI2VAInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
@@ -66,7 +66,7 @@ class _StreamingVAEEncoder:
 
 @RUNNER_REGISTER("lingbot_va")
 class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
-    input_info_cls_by_task = {"i2va": MultiViewI2VAInputInfo}
+    input_info_state = WanPolicyState
     supported_lora_modes = ("merge",)
 
     def __init__(self, config):
@@ -684,7 +684,7 @@ class LingbotVAPolicy:
 
     def _start_episode(self, images, task_description, seed):
         initial_observation = self._format_observation(images)
-        input_info = I2VAInputInfo(
+        input_info = self.runner.get_input_info_type("i2va")(
             seed=int(seed),
             prompt=str(task_description),
             negative_prompt="",

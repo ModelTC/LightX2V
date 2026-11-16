@@ -18,7 +18,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3_image import MiniMaxH3ImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_RECORDER_MODE
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import MultiImageI2IInputInfo
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, seed_all
@@ -27,7 +27,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 @RUNNER_REGISTER("minimax_h3_image")
 class MiniMaxH3ImageRunner(DefaultRunner):
-    input_info_cls_by_task = {"i2i": MultiImageI2IInputInfo}
+    input_info_state = ImageState
     _WARMUP_SHAPES = ((2048, 2048), (3552, 4736))
     _WARMUP_PROMPTS = (
         "A cinematic photograph of a mountain lake.",

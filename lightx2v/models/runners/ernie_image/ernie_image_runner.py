@@ -16,6 +16,7 @@ from lightx2v.models.schedulers.ernie_image.scheduler import ErnieImageScheduler
 from lightx2v.models.video_encoders.hf.ernie_image.vae import ErnieImageVAE
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -33,6 +34,7 @@ def calculate_dimensions(target_area, ratio, multiple_of):
 
 @RUNNER_REGISTER("ernie_image")
 class ErnieImageRunner(DefaultRunner):
+    input_info_state = ImageState
     model_cpu_offload_seq = "pe->text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
 

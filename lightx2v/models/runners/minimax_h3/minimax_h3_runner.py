@@ -47,7 +47,7 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
-from lightx2v.utils.input_info import INPUT_INFO_TYPES
+from lightx2v.utils.input_info import AudioVideoState
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -92,6 +92,8 @@ class MiniMaxH3Runner(DefaultRunner):
     offload behavior while keeping Diffusers out of the runtime dependency
     graph.
     """
+
+    input_info_state = AudioVideoState
 
     supported_lora_modes = ("merge", "separate", "consumer")
 
@@ -162,7 +164,7 @@ class MiniMaxH3Runner(DefaultRunner):
         self._maybe_freeze_gc()
 
     def _prepare_warmup_inputs(self, warmup_index, task, height, width, num_frames):
-        self.input_info = INPUT_INFO_TYPES[task](
+        self.input_info = self.get_input_info_type(task)(
             task=task,
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],

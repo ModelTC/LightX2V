@@ -7,8 +7,8 @@ SPECS = {
             "t2i": IMAGE,
             "i2i": dict(
                 COMMON | PROMPT,
-                image_path=Argument(help="Input image path."),
+                image_path=Argument(input_info_default="", help="Input image path."),
             ),
-        },
+        }
     ),
 }

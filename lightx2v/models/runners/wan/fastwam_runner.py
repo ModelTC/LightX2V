@@ -12,9 +12,9 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.networks.wan.fastwam_model import FastWAMNativeModel
 from lightx2v.models.runners.base_runner import BaseRunner
+from lightx2v.models.runners.wan.input_info import WanPolicyState
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.input_info import MultiViewI2VAInputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 AGENTVIEW_IMAGE_NAME = "agentview_image.png"
@@ -379,7 +379,7 @@ class FastWAMPolicy:
 
 @RUNNER_REGISTER("fastwam")
 class FastWAMRunner(BaseRunner):
-    input_info_cls_by_task = {"i2va": MultiViewI2VAInputInfo}
+    input_info_state = WanPolicyState
 
     policy_class = FastWAMPolicy
 

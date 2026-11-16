@@ -24,6 +24,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.relayvsr.scheduler import RelayVSRScheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import SRState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import mux_audio_from_video
@@ -48,6 +49,8 @@ def validate_config(config):
 
 class RelayVSRRunner(DefaultRunner):
     """Shared streaming lifecycle; registered subclasses fix the checkpoint geometry."""
+
+    input_info_state = SRState
 
     geometry: ClassVar[RelayVSRGeometry]
 

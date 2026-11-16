@@ -2,6 +2,8 @@
 
 import argparse
 import json
+from copy import deepcopy
+from dataclasses import field
 from typing import Literal, get_args, get_origin
 
 
@@ -10,12 +12,17 @@ def is_list_type(annotation):
 
 
 class Argument:
-    def __init__(self, type=str, *, cli=True, server=True, gt=None, ge=None, lt=None, le=None, strict=None, **options):
+    def __init__(self, type=str, *, input_info_default=None, repr=True, cli=True, server=True, gt=None, ge=None, lt=None, le=None, strict=None, **options):
         self.type = type
+        self.input_info_default = input_info_default
+        self.repr = repr
         self.cli = cli
         self.server = server
         self.options = options
         self.constraints = {name: value for name, value in dict(gt=gt, ge=ge, lt=lt, le=le, strict=strict).items() if value is not None}
+
+    def input_field(self):
+        return field(default_factory=lambda: deepcopy(self.input_info_default), repr=self.repr)
 
     def add_to(self, parser, name):
         options = dict(self.options)
@@ -50,8 +57,9 @@ def create_request_model(name, arguments, *, base=None, **fields):
 
 
 class RequestSpec:
-    def __init__(self, tasks: dict[str, dict[str, Argument]]):
+    def __init__(self, tasks: dict[str, dict[str, Argument]], *, context=None):
         self.tasks = tasks
+        self.context = context or {}
 
     def get_tasks(self, config):
         task = config.get("task", None)
@@ -64,6 +72,13 @@ class RequestSpec:
 
     def get_fields(self, config, task):
         return frozenset(self.get_arguments(config, task))
+
+    def get_input_arguments(self, config, task):
+        arguments = dict(self.context)
+        for task_arguments in self.tasks.values():
+            arguments.update(task_arguments)
+        arguments.update(self.get_arguments(config, task))
+        return arguments
 
     def get_cli_arguments(self, config, task):
         return {name: argument for name, argument in self.get_arguments(config, task).items() if argument.cli}

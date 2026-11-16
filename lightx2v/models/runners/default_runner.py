@@ -13,6 +13,7 @@ from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.global_paras import CALIB
+from lightx2v.utils.input_info import ShapeState
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -21,6 +22,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class DefaultRunner(BaseRunner):
+    input_info_state = ShapeState
+
     def __init__(self, config):
         super().__init__(config)
         self.progress_callback = None

@@ -17,7 +17,6 @@ from lightx2v.models.networks.minimax_h3.streamrender.model import StreamRenderH
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRunnerMixin
 from lightx2v.models.runners.streamrender_h3.output import StreamRenderVideoOutput
-from lightx2v.models.runners.streamrender_h3.request import StreamRenderH3InputInfo
 from lightx2v.models.schedulers.streamrender_h3 import StreamRenderH3Scheduler
 from lightx2v.models.video_encoders.hf.streamrender_h3 import (
     StreamRenderH3CausalDecoder,
@@ -42,7 +41,6 @@ _QWEN_SDPA_PRIORITY = [
 class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
     """Run the released two-step H3 student with native LightX2V modules."""
 
-    input_info_cls_by_task = {"refv2v": StreamRenderH3InputInfo}
     _WARMUP_SHAPES = ((256, 256),)
     _WARMUP_PROMPTS = (
         "A presenter speaks to the camera.",

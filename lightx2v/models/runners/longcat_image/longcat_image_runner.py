@@ -16,6 +16,7 @@ from lightx2v.models.video_encoders.hf.longcat_image.vae import LongCatImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process
@@ -54,6 +55,7 @@ def calculate_target_dimensions_from_image(image_size, target_area=1024 * 1024, 
 
 @RUNNER_REGISTER("longcat_image")
 class LongCatImageRunner(DefaultRunner):
+    input_info_state = ImageState
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
 

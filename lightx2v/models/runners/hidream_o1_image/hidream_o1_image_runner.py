@@ -13,7 +13,7 @@ from lightx2v.models.schedulers.hidream_o1_image.scheduler import HidreamO1Image
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import HidreamI2IInputInfo
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
@@ -38,7 +38,7 @@ def _add_special_tokens(tokenizer):
 class HidreamO1ImageRunner(DefaultRunner):
     """LightX2V runner for HiDream-O1-Image t2i / i2i."""
 
-    input_info_cls_by_task = {"i2i": HidreamI2IInputInfo}
+    input_info_state = ImageState
 
     def __init__(self, config):
         super().__init__(config)

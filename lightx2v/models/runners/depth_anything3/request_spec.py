@@ -6,10 +6,10 @@ SPECS = {
         {
             "depth": dict(
                 without(COMMON, "return_result_tensor"),
-                image_path=Argument(help="Input image path."),
-                video_path=Argument(help="Input video path."),
-                save_depth_path=Argument(help="Optional float32 NPY for an image, or streaming NPZ for a video."),
-                save_sky_mask_path=Argument(help="Optional binary PNG for an image, or streaming NPZ for a video; may share the depth NPZ path."),
+                image_path=Argument(input_info_default="", help="Input image path."),
+                video_path=Argument(input_info_default="", help="Input video path."),
+                save_depth_path=Argument(input_info_default="", help="Optional float32 NPY for an image, or streaming NPZ for a video."),
+                save_sky_mask_path=Argument(input_info_default="", help="Optional binary PNG for an image, or streaming NPZ for a video; may share the depth NPZ path."),
             )
         }
     ),

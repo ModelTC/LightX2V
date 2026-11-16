@@ -20,7 +20,7 @@ from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenIm
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import MultiImageI2IInputInfo, T2IInputInfo
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 
 # from lightx2v.utils.torch_trace_profiler import TorchTraceProfileContext
@@ -60,7 +60,7 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 
 @RUNNER_REGISTER("qwen_image")
 class QwenImageRunner(DisaggMixin, DefaultRunner):
-    input_info_cls_by_task = {"i2i": MultiImageI2IInputInfo}
+    input_info_state = ImageState
     supported_lora_modes = ("merge", "separate")
 
     model_cpu_offload_seq = "text_encoder->transformer->vae"
@@ -144,7 +144,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
     def _prepare_warmup_inputs(self, warmup_index, height, width, t2i_text_cache):
         task = self.config["task"]
-        input_info_cls = T2IInputInfo if task == "t2i" else MultiImageI2IInputInfo
+        input_info_cls = self.get_input_info_type(task)
         self.input_info = input_info_cls(
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],

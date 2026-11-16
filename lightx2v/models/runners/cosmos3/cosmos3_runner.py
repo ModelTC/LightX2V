@@ -18,6 +18,7 @@ from transformers import AutoTokenizer
 
 from lightx2v.models.audio_encoders.hf.cosmos3.sound_tokenizer import Cosmos3SoundTokenizer
 from lightx2v.models.networks.cosmos3.model import Cosmos3TransformerModel
+from lightx2v.models.runners.cosmos3.input_info import Cosmos3State
 from lightx2v.models.runners.cosmos3.policy_runtime import (
     PolicySeedSequence,
     build_json_policy_prompt,
@@ -29,7 +30,6 @@ from lightx2v.models.schedulers.cosmos3.scheduler import Cosmos3Scheduler
 from lightx2v.models.video_encoders.hf.cosmos3.vae import Cosmos3WanVAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import Cosmos3InputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
@@ -131,7 +131,7 @@ def compose_droid_policy_image(images):
 
 @RUNNER_REGISTER("cosmos3")
 class Cosmos3Runner(DefaultRunner):
-    input_info_cls_by_task = {task: Cosmos3InputInfo for task in ("t2i", "t2v", "i2v", "t2av", "i2av", "i2va", "v2av")}
+    input_info_state = Cosmos3State
 
     model_cpu_offload_seq = "transformer->vae->sound_tokenizer"
     _callback_tensor_inputs = ["latents"]

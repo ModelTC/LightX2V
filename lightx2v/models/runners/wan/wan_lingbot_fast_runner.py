@@ -9,7 +9,6 @@ from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveR
 from lightx2v.models.runners.wan.wan_runner import LingbotRunner, WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.lingbot_fast.scheduler import WanLingbotFastScheduler
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.input_info import ActionI2VInputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -141,7 +140,7 @@ class LingbotFastRunner(WanAutoregressiveRunnerMixin, LingbotRunner):
 
     def _prepare_warmup_inputs(self, height, width, latent_shape, prompt, text_output):
         frame_count = (latent_shape[1] - 1) * self.config["vae_stride"][0] + 1
-        self.input_info = ActionI2VInputInfo(task="i2v", prompt=prompt, size=[height, width], num_frames=frame_count)
+        self.input_info = self.get_input_info_type("i2v")(task="i2v", prompt=prompt, size=[height, width], num_frames=frame_count)
         self.input_info.latent_shape = latent_shape
         image_output = self.get_warmup_image_encoder_output(latent_shape)
         camera_channels = 6 * self.config["vae_stride"][1] * self.config["vae_stride"][2]

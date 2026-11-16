@@ -13,7 +13,6 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import NeoppInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -41,8 +40,6 @@ def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs
 @RUNNER_REGISTER("neopp")
 class NeoppRunner(DefaultRunner):
     supported_lora_modes = ("merge", "separate")
-
-    input_info_cls_by_task = {"t2i": NeoppInputInfo, "i2i": NeoppInputInfo}
 
     def resolve_request_seed(self, request_data):
         # Preserve LightLLM's session RNG unless a seed is supplied.

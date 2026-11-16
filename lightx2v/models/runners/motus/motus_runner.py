@@ -14,7 +14,6 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import MotusInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, save_to_video, wan_vae_to_comfy
@@ -47,8 +46,6 @@ def _merge_wan_dense_defaults(config):
 @RUNNER_REGISTER("motus")
 class MotusRunner(Wan22DenseRunner):
     supported_lora_modes = ("merge",)
-
-    input_info_cls_by_task = {"i2v": MotusInputInfo}
 
     def __init__(self, config):
         _merge_wan_dense_defaults(config)

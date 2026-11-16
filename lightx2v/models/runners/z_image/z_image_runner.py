@@ -16,7 +16,7 @@ from lightx2v.models.video_encoders.hf.z_image.vae import AutoencoderKLZImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import MultiImageI2IInputInfo
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process
@@ -45,7 +45,7 @@ def build_z_image_model_with_lora(z_image_module, config, model_kwargs, lora_con
 
 @RUNNER_REGISTER("z_image")
 class ZImageRunner(DefaultRunner):
-    input_info_cls_by_task = {"i2i": MultiImageI2IInputInfo}
+    input_info_state = ImageState
     supported_lora_modes = ("merge", "separate")
 
     model_cpu_offload_seq = "text_encoder->transformer->vae"

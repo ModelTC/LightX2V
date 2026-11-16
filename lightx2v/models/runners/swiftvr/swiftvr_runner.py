@@ -29,6 +29,7 @@ from lightx2v.models.networks.swiftvr import (
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.input_info import SRState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_image
@@ -37,6 +38,8 @@ from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_
 @RUNNER_REGISTER("swiftvr")
 class SwiftVRRunner(DefaultRunner):
     """Native LightX2V runner for SwiftVR image and video restoration."""
+
+    input_info_state = SRState
 
     # Two spatial shapes trigger dynamic compilation before serving requests.
     _WARMUP_SHAPES = ((720, 1280), (2048, 1536))

@@ -13,7 +13,7 @@ from lightx2v.models.schedulers.flux2.feature_caching.scheduler import Flux2DevS
 from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2Scheduler
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import Flux2I2IInputInfo
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process
@@ -24,9 +24,9 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("flux2")
 class Flux2Runner(DefaultRunner):
+    input_info_state = ImageState
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-    input_info_cls_by_task = {"i2i": Flux2I2IInputInfo}
 
     def prepare_request(self, request_data):
         input_info = super().prepare_request(request_data)

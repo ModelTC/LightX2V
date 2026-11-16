@@ -32,7 +32,7 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import ActionI2VInputInfo, T2VInputInfo, align_num_frames
+from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -201,7 +201,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def _prepare_warmup_inputs(self, warmup_index, task, latent_shape, text_encoder_cache):
         prompt = self._WARMUP_PROMPTS[warmup_index]
-        input_info = T2VInputInfo(task=task, prompt=prompt)
+        input_info = self.get_input_info_type(task)(task=task, prompt=prompt)
         self.input_info = input_info
         self.model.scheduler.input_info = input_info
         if prompt not in text_encoder_cache:
@@ -1387,8 +1387,6 @@ class Wan22DenseRunner(WanRunner):
 
 @RUNNER_REGISTER("lingbot_world")
 class LingbotRunner(Wan22MoeRunner):
-    input_info_cls_by_task = {"i2v": ActionI2VInputInfo}
-
     def __init__(self, config):
         super().__init__(config)
         self.control_type = config.get("control_type", "cam")

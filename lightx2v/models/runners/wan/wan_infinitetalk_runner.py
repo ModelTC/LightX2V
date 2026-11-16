@@ -18,13 +18,13 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.infinitetalk.audio_encoder import InfiniteTalkAudioEncoder
 from lightx2v.models.networks.wan.infinitetalk_model import WanInfiniteTalkModel
+from lightx2v.models.runners.wan.input_info import WanAudioState
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
-from lightx2v.utils.input_info import InfiniteTalkInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, save_to_video, wan_vae_to_comfy
@@ -106,7 +106,7 @@ def _is_video(path):
 
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
-    input_info_cls_by_task = {"s2v": InfiniteTalkInputInfo}
+    input_info_state = WanAudioState
     supported_lora_modes = ("merge",)
 
     _WARMUP_SHAPES = ((480, 480), (544, 960))
@@ -185,7 +185,7 @@ class InfiniteTalkRunner(WanRunner):
         self._maybe_freeze_gc()
 
     def _prepare_warmup_inputs(self, warmup_index, height, width, num_frames):
-        self.input_info = InfiniteTalkInputInfo(
+        self.input_info = self.get_input_info_type("s2v")(
             task="s2v",
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],

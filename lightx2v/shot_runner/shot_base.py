@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
-from lightx2v.utils.input_info import InputInfo, SekoTalkInputs
+from lightx2v.utils.input_info import InputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.set_config import build_startup_config, init_parallel, print_config
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
@@ -75,7 +75,7 @@ class ShotPipeline:
         if isinstance(input_data, InputInfo):
             supported_request_fields = runner.get_supported_request_fields(runner.config["task"])
             # Legacy contexts use "" for omitted negative prompts.
-            if isinstance(input_data, SekoTalkInputs) or request_data.get("negative_prompt"):
+            if request_data.get("negative_prompt"):
                 supported_request_fields = supported_request_fields | {"negative_prompt"}
             request_data = {key: value for key, value in request_data.items() if key in supported_request_fields}
         return request_data

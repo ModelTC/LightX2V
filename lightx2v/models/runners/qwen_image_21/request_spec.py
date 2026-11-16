@@ -16,9 +16,9 @@ SPECS = {
             ),
             "i2i": dict(
                 IMAGE,
-                image_path=Argument(type=list[str], help="Input image paths."),
+                image_path=Argument(input_info_default=[], type=list[str], help="Input image paths."),
                 resolution=Argument(type=int, gt=0, help="Qwen-Image-2.1 reference/automatic output resolution; defaults to the startup config"),
             ),
-        },
+        }
     ),
 }

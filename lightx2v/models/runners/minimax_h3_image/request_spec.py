@@ -13,7 +13,7 @@ SPECS = {
             "t2i": IMAGE,
             "i2i": dict(
                 IMAGE,
-                image_path=Argument(type=list[str], help="Reference image paths in prompt order, up to 16 images."),
+                image_path=Argument(input_info_default=[], type=list[str], help="Reference image paths in prompt order, up to 16 images."),
             ),
         }
     ),

@@ -30,7 +30,7 @@ from lightx2v.models.video_encoders.hf.seedvr.common.distributed.advanced import
 from lightx2v.models.video_encoders.hf.seedvr.common.distributed.ops import set_sequence_parallel_a2a_backend
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import SeedVRInputInfo
+from lightx2v.utils.input_info import SRState
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import mux_audio_from_video, save_to_video, wan_vae_to_comfy
@@ -142,7 +142,7 @@ def _get_read_video():
 class SeedVRRunner(DefaultRunner):
     """Runner for SeedVR video super-resolution model."""
 
-    input_info_cls_by_task = {"sr": SeedVRInputInfo}
+    input_info_state = SRState
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)

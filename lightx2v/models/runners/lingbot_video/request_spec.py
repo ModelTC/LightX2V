@@ -1,4 +1,4 @@
-from lightx2v.models.runners.request_args import COMMON, PROMPT, VIDEO
+from lightx2v.models.runners.request_args import COMMON, IMAGE, PROMPT, VIDEO
 from lightx2v.utils.request_spec import Argument, MultiTaskSpec
 
 SPECS = {
@@ -6,13 +6,14 @@ SPECS = {
         {
             "t2i": dict(
                 COMMON | PROMPT,
-                size=Argument(type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
+                size=Argument(input_info_default=[], type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
             ),
             "t2v": VIDEO,
             "i2v": dict(
                 VIDEO,
-                image_path=Argument(help="Input image path."),
+                image_path=Argument(input_info_default="", help="Input image path."),
             ),
         },
+        context=IMAGE | VIDEO,
     ),
 }

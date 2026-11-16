@@ -1,4 +1,4 @@
-from lightx2v.models.runners.request_args import COMMON, VIDEO_OUTPUT
+from lightx2v.models.runners.request_args import COMMON, VIDEO, VIDEO_OUTPUT
 from lightx2v.utils.request_spec import Argument, MultiTaskSpec
 
 REGENERATION = {
@@ -24,31 +24,32 @@ SPECS = {
         {
             "t2av": dict(
                 REQUEST,
-                prompt=Argument(help="Text prompt."),
+                prompt=Argument(input_info_default="", help="Text prompt."),
             ),
             "i2av": dict(
                 REQUEST,
-                image_path=Argument(help="Input image path."),
-                prompt=Argument(help="Text prompt."),
+                image_path=Argument(input_info_default="", help="Input image path."),
+                prompt=Argument(input_info_default="", help="Text prompt."),
             ),
             "l2av": dict(
                 REQUEST,
-                last_frame_path=Argument(help="Last-frame image path."),
-                prompt=Argument(help="Text prompt."),
+                last_frame_path=Argument(input_info_default="", help="Last-frame image path."),
+                prompt=Argument(input_info_default="", help="Text prompt."),
             ),
             "fl2av": dict(
                 REQUEST,
-                image_path=Argument(help="Input image path."),
-                last_frame_path=Argument(help="Last-frame image path."),
-                prompt=Argument(help="Text prompt."),
+                image_path=Argument(input_info_default="", help="Input image path."),
+                last_frame_path=Argument(input_info_default="", help="Last-frame image path."),
+                prompt=Argument(input_info_default="", help="Text prompt."),
             ),
             "ref2av": dict(
                 REQUEST,
-                audio_path=Argument(type=list[str], help="Reference audio paths."),
-                image_path=Argument(type=list[str], help="Reference image paths."),
-                prompt=Argument(help="Text prompt."),
-                video_path=Argument(type=list[str], help="Reference video paths."),
+                audio_path=Argument(input_info_default=[], type=list[str], help="Reference audio paths."),
+                image_path=Argument(input_info_default=[], type=list[str], help="Reference image paths."),
+                prompt=Argument(input_info_default="", help="Text prompt."),
+                video_path=Argument(input_info_default=[], type=list[str], help="Reference video paths."),
             ),
         },
+        context=VIDEO,
     ),
 }

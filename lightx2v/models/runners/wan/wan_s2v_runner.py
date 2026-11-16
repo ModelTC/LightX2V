@@ -12,6 +12,7 @@ from torchvision import transforms
 from lightx2v.models.input_encoders.hf.wan.s2v.audio_encoder import AudioEncoder
 from lightx2v.models.networks.wan.s2v_model import WanS2VModel
 from lightx2v.models.networks.wan.s2v_utils import get_size_less_than_area
+from lightx2v.models.runners.wan.input_info import WanAudioState
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.s2v.s2v_scheduler import WanS2VScheduler
 from lightx2v.server.metrics import monitor_cli
@@ -53,6 +54,7 @@ def merge_video_audio(video_path: str, audio_path: str):
 
 @RUNNER_REGISTER("wan2.2_s2v")
 class WanS2VRunner(WanRunner):
+    input_info_state = WanAudioState
     supported_lora_modes = ("merge",)
 
     def __init__(self, config):

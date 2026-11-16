@@ -23,6 +23,7 @@ from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdap
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioARModel, WanAudioModel
 from lightx2v.models.runners.autoregressive_runner import AutoregressiveRunnerMixin
+from lightx2v.models.runners.wan.input_info import WanAudioState
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler, WanAudioARScheduler
@@ -30,7 +31,6 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import SekoTalkRS2VInputInfo, SekoTalkS2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import fixed_shape_resize, isotropic_crop_resize, load_weights, wan_vae_to_comfy
@@ -280,14 +280,13 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 
 @RUNNER_REGISTER("seko_talk")
 class WanAudioRunner(WanRunner):  # type:ignore
+    input_info_state = WanAudioState
     _WARMUP_SHAPES = ((480, 480), (544, 960))
     _WARMUP_PROMPTS = (
         "A person speaks calmly.",
         "A person speaks naturally to the camera at a kitchen table. Their lips follow the supplied audio, their gaze stays mostly on the lens, and they make small movements with their hands and shoulders as the light from a nearby window falls across their face.",
     )
     _WARMUP_STEP_COUNT = 2
-
-    input_info_cls_by_task = {"s2v": SekoTalkS2VInputInfo, "rs2v": SekoTalkRS2VInputInfo}
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
@@ -370,7 +369,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self._maybe_freeze_gc()
 
     def _prepare_warmup_inputs(self, warmup_index, height, width, num_frames):
-        self.input_info = SekoTalkRS2VInputInfo(
+        self.input_info = self.get_input_info_type("rs2v")(
             task="rs2v",
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],
@@ -1057,8 +1056,8 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
 
     def _prepare_warmup_inputs(self, warmup_index, height, width, latent_shape):
         prompt = self._WARMUP_PROMPTS[warmup_index]
-        text_output = self.run_text_encoder(SekoTalkRS2VInputInfo(task="rs2v", prompt=prompt))
-        self.input_info = SekoTalkRS2VInputInfo(task="rs2v", prompt=prompt, seed=0, size=[height, width])
+        text_output = self.run_text_encoder(self.get_input_info_type("rs2v")(task="rs2v", prompt=prompt))
+        self.input_info = self.get_input_info_type("rs2v")(task="rs2v", prompt=prompt, seed=0, size=[height, width])
         self.input_info.latent_shape = latent_shape
         reference = torch.zeros(1, 3, height, width, device=AI_DEVICE)
         self.inputs = {

@@ -2,7 +2,6 @@ from lightx2v.models.networks.wan.sf_model import WanSFModel
 from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.self_forcing.scheduler import WanSFScheduler
-from lightx2v.utils.input_info import T2VInputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
@@ -27,6 +26,6 @@ class WanSFRunner(WanAutoregressiveRunnerMixin, WanRunner):
         self.scheduler = WanSFScheduler(self.config)
 
     def _prepare_warmup_inputs(self, height, width, latent_shape, prompt, text_output):
-        self.input_info = T2VInputInfo(task="t2v", prompt=prompt, size=[height, width])
+        self.input_info = self.get_input_info_type("t2v")(task="t2v", prompt=prompt, size=[height, width])
         self.input_info.latent_shape = latent_shape
         self.inputs = {"text_encoder_output": text_output, "image_encoder_output": None}

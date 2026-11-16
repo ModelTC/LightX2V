@@ -16,6 +16,7 @@ from lightx2v.models.video_encoders.hf.bagel.vae import BagelVae
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -29,6 +30,8 @@ def _has_save_path(input_info):
 
 @RUNNER_REGISTER("bagel")
 class BagelRunner(DefaultRunner):
+    input_info_state = ImageState
+
     def __init__(self, config):
         super().__init__(config)
 

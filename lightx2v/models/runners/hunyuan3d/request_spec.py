@@ -6,7 +6,7 @@ SPECS = {
         {
             "i23d": dict(
                 without(COMMON, "return_result_tensor"),
-                image_path=Argument(help="Input image path."),
+                image_path=Argument(input_info_default="", help="Input image path."),
             )
         }
     ),

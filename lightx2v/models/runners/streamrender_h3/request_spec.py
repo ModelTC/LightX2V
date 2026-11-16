@@ -6,9 +6,9 @@ SPECS = {
         {
             "refv2v": dict(
                 COMMON | VIDEO_OUTPUT,
-                prompt=Argument(help="Text prompt."),
-                image_path=Argument(help="Input image path."),
-                video_path=Argument(help="Input video path."),
+                prompt=Argument(input_info_default="", help="Text prompt."),
+                image_path=Argument(input_info_default="", help="Input image path."),
+                video_path=Argument(input_info_default="", help="Input video path."),
             )
         }
     ),

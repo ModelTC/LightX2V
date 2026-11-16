@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import gc
 from contextlib import ExitStack
-from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
@@ -25,26 +24,15 @@ from lightx2v.models.runners.depth_anything3.output import (
     save_relative_depth_preview,
     save_sky_mask,
 )
-from lightx2v.utils.input_info import InputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.streaming_video import StreamingVideoWriter
 from lightx2v.utils.utils import mux_audio_from_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-@dataclass
-class DepthInputInfo(InputInfo):
-    image_path: str = ""
-    video_path: str = ""
-    save_depth_path: str = ""
-    save_sky_mask_path: str = ""
-
-
 @RUNNER_REGISTER("depth_anything3")
 class DepthAnything3Runner(BaseRunner):
     """Load an official or ComfyUI-format checkpoint once and reuse it across requests."""
-
-    input_info_cls_by_task = {"depth": DepthInputInfo}
 
     def __init__(self, config):
         super().__init__(config)

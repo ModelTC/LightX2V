@@ -14,7 +14,6 @@ from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, WanRunner
 from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARScheduler, EdenLiveScheduler
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.input_info import EdenLiveInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -35,7 +34,6 @@ class EdenLiveRunner(RunnerLifecycleMixin):
         "A person in a light jacket walks along a garden path, turns their head toward a flowering tree, and briefly smiles at the camera.",
         "A person walks through a courtyard in the morning, looking toward the camera before turning to follow a path under an arch. Their jacket moves slightly in the breeze, soft shadows shift across the stones, and the camera follows at a steady pace without changing the framing.",
     )
-    input_info_cls_by_task = {"v2v": EdenLiveInputInfo}
 
     def __init__(self, config):
         config.setdefault("proxy_resize_mode", "bilinear")
@@ -254,7 +252,7 @@ class EdenLiveRunner(RunnerLifecycleMixin):
         self.scheduler.generator = None
         stride_t, stride_h, stride_w = self.config["vae_stride"]
         prompt = self._WARMUP_PROMPTS[warmup_index]
-        self.input_info = EdenLiveInputInfo(prompt=prompt, negative_prompt=prompt, seed=0, num_frames=num_frames)
+        self.input_info = self.get_input_info_type("v2v")(prompt=prompt, negative_prompt=prompt, seed=0, num_frames=num_frames)
         self.input_info.latent_shape = [self.config["out_dim"], (num_frames - 1) // stride_t + 1, height // stride_h, width // stride_w]
         self.proxy_pixels = torch.zeros(self.input_info.latent_shape[1], height, width, 3, dtype=torch.uint8).permute(3, 0, 1, 2)
 

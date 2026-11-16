@@ -11,7 +11,6 @@ from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.matrix_game4 import WanMatrixGame4Scheduler
 from lightx2v.models.video_encoders.hf.wan.matrix_game4_vae import MatrixGame4TAEVAE, set_matrix_game4_vae_norm
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.input_info import MatrixGame4InputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -32,7 +31,6 @@ class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
     )
     # Short MG4 chunks dispatch faster when VAE kernel launches share the caller thread.
     vae_decode_in_worker = False
-    input_info_cls_by_task = {"v2v": MatrixGame4InputInfo}
 
     def __init__(self, config):
         if not config.get("ar_config"):
@@ -138,7 +136,7 @@ class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
         return [48, 1, target_height // stride_h, target_width // stride_w]
 
     def _prepare_warmup_inputs(self, height, width, latent_shape, prompt, text_output):
-        self.input_info = MatrixGame4InputInfo(task="v2v", prompt=prompt, size=[height, width])
+        self.input_info = self.get_input_info_type("v2v")(task="v2v", prompt=prompt, size=[height, width])
         self.input_info.latent_shape = latent_shape
         encoder = create_streaming_encoder(self.vae_encoder)
         try:

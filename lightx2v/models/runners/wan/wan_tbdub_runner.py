@@ -1,6 +1,5 @@
 """Audio-driven cropped-video editing on the native Wan2.2 dense lifecycle."""
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -14,25 +13,15 @@ from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.tbdub.scheduler import TBDubScheduler
 from lightx2v.models.video_encoders.hf.wan.tbdub_vae import TBDubVAE
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
-from lightx2v.utils.input_info import InputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
-
-
-@dataclass
-class TBDubInputInfo(InputInfo):
-    video_path: str = ""
-    audio_path: str = ""
-    num_frames: int | None = None
-    size: list = field(default_factory=list)
 
 
 @RUNNER_REGISTER("tbdub")
 class TBDubRunner(Wan22DenseRunner):
     supported_lora_modes = ("merge",)
 
-    input_info_cls_by_task = {"v2v": TBDubInputInfo}
     # These are checkpoint temporal conventions, not the requested output length.
     clip_frames = 77
     motion_frames = 5

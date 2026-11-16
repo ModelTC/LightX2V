@@ -16,7 +16,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.lingbot_video.scheduler import LingBotVideoScheduler
 from lightx2v.models.video_encoders.hf.lingbot_video.vae import LingBotVideoWanVAE
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import I2VInputInfo, T2IInputInfo, T2VInputInfo
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
@@ -78,6 +78,7 @@ def smart_resize(height, width, factor, min_pixels=None, max_pixels=None):
 
 @RUNNER_REGISTER("lingbot_video")
 class LingBotVideoRunner(DefaultRunner):
+    input_info_state = ImageState
     supported_lora_modes = ("merge", "separate")
 
     model_cpu_offload_seq = "text_encoder->transformer->vae"
@@ -121,7 +122,7 @@ class LingBotVideoRunner(DefaultRunner):
         logger.info("[Warmup] Warmup completed")
 
     def _prepare_warmup_inputs(self, warmup_index, task, height, width, text_encoder_cache):
-        input_cls = {"t2i": T2IInputInfo, "t2v": T2VInputInfo, "i2v": I2VInputInfo}[task]
+        input_cls = self.get_input_info_type(task)
         self.input_info = input_cls(
             task=task,
             seed=0,

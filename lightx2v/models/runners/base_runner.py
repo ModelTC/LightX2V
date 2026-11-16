@@ -9,7 +9,8 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.runners.registry import get_model_spec
-from lightx2v.utils.input_info import INPUT_INFO_TYPES, InputInfo
+from lightx2v.models.runners.request_args import COMMON
+from lightx2v.utils.input_info import InputInfo, build_input_info_type
 from lightx2v.utils.outputs import Output
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -23,7 +24,7 @@ class BaseRunner(ABC):
 
     supported_lora_modes = ("merge",)
 
-    input_info_cls_by_task: dict[str, type[InputInfo]] = {}
+    input_info_state = InputInfo
 
     def __init__(self, config):
         self.config = config
@@ -34,6 +35,7 @@ class BaseRunner(ABC):
         if task is not None and task not in get_model_spec(config["model_cls"]).tasks:
             raise ValueError(f"{type(self).__name__} does not support task {task!r}")
         self.supported_tasks = self.get_supported_tasks()
+        self._input_info_types = {}
         self.vae_encoder_need_img_original = False
         self.input_info = None
         self._outputs = []
@@ -102,7 +104,7 @@ class BaseRunner(ABC):
         here. Internal warmup also uses this method, without task admission checks.
         """
         task = request_data["task"]
-        input_info_cls = self.input_info_cls_by_task.get(task) or INPUT_INFO_TYPES[task]
+        input_info_cls = self.get_input_info_type(task)
         input_info = input_info_cls()
         input_info.update(self.config)
         input_info.update(request_data)
@@ -112,6 +114,14 @@ class BaseRunner(ABC):
 
         input_info.seed = self.resolve_request_seed(request_data)
         return input_info
+
+    def get_input_info_type(self, task):
+        if task not in self._input_info_types:
+            spec = get_model_spec(self.config["model_cls"])
+            arguments = COMMON | spec.get_input_arguments(self.config, task)
+            name = f"{type(self).__name__}_{task}_InputInfo"
+            self._input_info_types[task] = build_input_info_type(name, arguments, self.input_info_state)
+        return self._input_info_types[task]
 
     def resolve_request_seed(self, request_data):
         return request_data.get("seed", 42)

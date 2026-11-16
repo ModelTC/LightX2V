@@ -26,7 +26,7 @@ from lightx2v.models.runners.hunyuan_image3.flashinfer_autotune import (
 )
 from lightx2v.models.schedulers.hunyuan_image3.scheduler import HunyuanImage3Scheduler
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import TI2IInputInfo
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
@@ -40,8 +40,8 @@ class HunyuanImage3TextGenerationPlan:
 
 @RUNNER_REGISTER("hunyuan_image3")
 class HunyuanImage3Runner(DefaultRunner):
+    input_info_state = ImageState
     model_cpu_offload_seq = "transformer"
-    input_info_cls_by_task = {"i2i": TI2IInputInfo}
 
     def __init__(self, config):
         super().__init__(config)

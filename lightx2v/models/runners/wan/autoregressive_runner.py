@@ -8,7 +8,6 @@ from lightx2v.models.runners.autoregressive_runner import AutoregressiveRunnerMi
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_RECORDER_MODE
-from lightx2v.utils.input_info import T2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -37,7 +36,7 @@ class WanAutoregressiveRunnerMixin(WanStreamingVAERunnerMixin, AutoregressiveRun
             latent_shape[1] = max(2, chunks) * chunk_frames
             prompt = self._WARMUP_PROMPTS[warmup_index]
             if prompt not in text_encoder_cache:
-                text_encoder_cache[prompt] = self.run_text_encoder(T2VInputInfo(prompt=prompt))
+                text_encoder_cache[prompt] = self.run_text_encoder(self.get_input_info_type(self.config["task"])(prompt=prompt))
             self._prepare_warmup_inputs(height, width, latent_shape, prompt, text_encoder_cache[prompt])
             logger.info("[Warmup] {} {}x{}, {} chunks", type(self).__name__, height, width, chunks)
             self.init_run()

@@ -4,17 +4,7 @@
 
 `InputInfo` 保存单次生成的参数，runner 负责使用这些参数执行模型推理。
 
-## 1. 添加字段
-
-先看 runner 的 `input_info_cls_by_task`；未指定时，在 `lightx2v/utils/input_info.py` 的 `INPUT_INFO_TYPES` 中查找任务对应的类。把新参数声明为该类的 dataclass 字段：
-
-```python
-resolution: Optional[int] = None
-```
-
-Qwen-Image-2.1 的 `t2i`、`i2i` 分别使用 `T2IInputInfo`、`MultiImageI2IInputInfo`，两者都有此字段。模型专属字段也可以放在专用子类中，由 `input_info_cls_by_task` 选择。
-
-## 2. 声明支持范围
+## 1. 在 Spec 中定义参数
 
 在模型自己的 `request_spec.py` 中，为需要支持的任务声明 `Argument`，保留原有字段。Qwen-Image-2.1 的声明位于 `lightx2v/models/runners/qwen_image_21/request_spec.py`：
 
@@ -28,7 +18,7 @@ SPECS = {
             "t2i": dict(IMAGE, resolution=Argument(type=int, gt=0, help="Output resolution.")),
             "i2i": dict(
                 IMAGE,
-                image_path=Argument(type=list[str], help="Input image paths."),
+                image_path=Argument(type=list[str], input_info_default=[], help="Input image paths."),
                 resolution=Argument(type=int, gt=0, help="Output resolution."),
             ),
         }
@@ -36,7 +26,7 @@ SPECS = {
 }
 ```
 
-Spec 只维护任务与输入参数，不声明输出类型。统一接口 `POST /v1/tasks/` 接受当前部署模型的请求；`/docs` 根据任务和参数生成。旧图片、视频接口与 OpenAI 图片接口共用请求定义，通过实际生成的产物检查输出类型。
+Spec 维护任务、输入参数和上下文默认值，不声明输出类型。统一接口 `POST /v1/tasks/` 接受当前部署模型的请求；`/docs` 根据任务和参数生成。旧图片、视频接口与 OpenAI 图片接口共用请求定义，通过实际生成的产物检查输出类型。
 
 CLI 和 HTTP 都根据这份 Spec 生成请求参数、校验规则和文档，`BaseRunner` 也从同一份 Spec 校验任务与请求字段。模型专属参数直接定义在自己的 `request_spec.py` 中，无需修改公共参数表，或在 runner、服务端 Schema 中重复声明。当前实例实际接受的任务和字段还受启动任务及模型配置限制。涉及模型初始化的参数，需要先确认模型支持在运行时修改。
 
@@ -47,6 +37,29 @@ Spec 只声明对外提供的任务。例如 HunyuanImage3 的文本生成用于
 参数与某个启动设置不兼容时，仍在 Spec 中保留声明，在 runner 的请求准备或推理路径中检查，并报出冲突设置及解决方法。不要根据配置从 Spec 中移除这些字段。
 
 已声明支持的 `negative_prompt` 是一个例外：关闭 CFG 时，显式传入该字段只记录警告并忽略请求值，不报错。
+
+## 2. 自动创建 InputInfo
+
+`Argument` 是请求字段的唯一来源。`type` 定义类型，`input_info_default` 定义创建 InputInfo 时的初始值，例如 `input_info_default=""`、`input_info_default=[]` 或 `input_info_default=[1.0]`。创建 InputInfo 时会深拷贝每个默认值，保证不同请求的列表和字典独立，包括嵌套容器。
+
+`BaseRunner.get_input_info_type(task)` 从 Spec 读取字段，与 runner 的 `input_info_state` 合成 dataclass，并在该 runner 中缓存类型。每次请求创建独立实例，先应用启动配置，再应用本次请求。新增参数无需修改 InputInfo 类或全局任务类型表。
+
+CLI/server 未提交的字段仍为 `None`，表示不覆盖启动配置；不会直接使用 `Argument.input_info_default` 作为请求覆盖值。
+
+公共的 `ShapeState`、`ImageState`、`AudioVideoState` 和 `SRState` 放在 `lightx2v/utils/input_info.py`。模型专属运行状态放在自己的 runner 目录，例如：
+
+```python
+@dataclass
+class ModelState(ShapeState):
+    encoded_condition: Any = field(default=None, repr=False)
+
+class ModelRunner(DefaultRunner):
+    input_info_state = ModelState
+```
+
+状态类只声明运行状态，不再重复声明 Spec 中的请求字段。需要从启动配置保留、但不允许请求覆盖的字段，可以通过 `RequestSpec(..., context={...})` 提供 `Argument` 定义；优先复用公共或模型已有的定义。生成的上下文也保留同一模型其他任务的字段，便于共享执行路径使用；对外允许哪些字段仍由当前任务的 `get_arguments()` 决定。
+
+预热或内部流程需要直接创建上下文时，使用 `runner.get_input_info_type(task)(...)`；正常请求使用 `prepare_request()`。
 
 ## 3. 在推理中使用参数
 
@@ -65,7 +78,7 @@ resolution = self.input_info.resolution
 | 不传、传 `None` 或 JSON `null` | `1024` |
 | 传 `768` | `768` |
 
-配置也未提供时，保留 `InputInfo` 默认值；模型可在请求准备或预处理中进一步处理。必要的类型、范围和参数组合校验也应放在这些位置，让所有入口都经过检查。
+配置也未提供时，保留 Spec 中声明的运行默认值；模型可在请求准备或预处理中进一步处理。必要的类型、范围和参数组合校验也应放在这些位置，让所有入口都经过检查。
 
 runner 合并参数时保留 `0`、`False`、`""`、`[]`。它们是否有效由字段规则决定，不能用 `if value` 把它们当作未传值。
 
@@ -74,7 +87,7 @@ runner 合并参数时保留 `0`、`False`、`""`、`[]`。它们是否有效由
 | 入口 | 修改位置 |
 |---|---|
 | Python | 通常无需修改；`generate(resolution=768)` 通过 `**task_inputs` 转发新字段。 |
-| CLI | 第 2 步中的 `Argument` 自动生成选项和帮助，无需修改 `infer.py`。 |
+| CLI | 第 1 步中的 `Argument` 自动生成选项和帮助，无需修改 `infer.py`。 |
 | 原生 HTTP JSON / 表单 | 服务启动时从同一份 Spec 生成请求模型，无需额外声明字段。 |
 | OpenAI 图片接口 | 推理字段从 Spec 生成；协议字段继续放在 OpenAI 适配层。 |
 

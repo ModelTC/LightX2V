@@ -15,6 +15,7 @@ from safetensors import safe_open
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.wan.dreamzero_model import DreamZeroModel
+from lightx2v.models.runners.wan.input_info import WanPolicyState
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.dreamzero.scheduler import DreamZeroFlowUniPCScheduler
@@ -23,7 +24,6 @@ from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
-from lightx2v.utils.input_info import MultiViewI2VAInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, save_to_video
@@ -34,7 +34,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("dreamzero")
 class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
-    input_info_cls_by_task = {"i2va": MultiViewI2VAInputInfo}
+    input_info_state = WanPolicyState
     supported_lora_modes = ("merge",)
 
     def __init__(self, config):

@@ -4,17 +4,7 @@ Make the model use the new value first, then connect the required entry points. 
 
 `InputInfo` holds parameters for one generation; the runner uses them to execute model inference.
 
-## 1. Add the field
-
-Check the runner's `input_info_cls_by_task` first. If it has no entry for the task, look up the class in `INPUT_INFO_TYPES` in `lightx2v/utils/input_info.py`. Declare the parameter as a dataclass field in that class:
-
-```python
-resolution: Optional[int] = None
-```
-
-Qwen-Image-2.1 uses `T2IInputInfo` for `t2i` and `MultiImageI2IInputInfo` for `i2i`; both declare this field. A model-specific field can also live in a dedicated subclass selected through `input_info_cls_by_task`.
-
-## 2. Declare support
+## 1. Define the parameter in its Spec
 
 Declare an `Argument` for the intended tasks in the model's own `request_spec.py`, keeping its existing fields. Qwen-Image-2.1 declares these in `lightx2v/models/runners/qwen_image_21/request_spec.py`:
 
@@ -28,7 +18,7 @@ SPECS = {
             "t2i": dict(IMAGE, resolution=Argument(type=int, gt=0, help="Output resolution.")),
             "i2i": dict(
                 IMAGE,
-                image_path=Argument(type=list[str], help="Input image paths."),
+                image_path=Argument(type=list[str], input_info_default=[], help="Input image paths."),
                 resolution=Argument(type=int, gt=0, help="Output resolution."),
             ),
         }
@@ -36,7 +26,7 @@ SPECS = {
 }
 ```
 
-Specs contain tasks and input arguments, without output-type declarations. `POST /v1/tasks/` accepts requests for the deployed model; `/docs` is generated from its tasks and arguments. Legacy image/video routes and the OpenAI image adapter reuse these definitions and check the actual generated artifacts.
+Specs contain tasks, input arguments and context defaults, without output-type declarations. `POST /v1/tasks/` accepts requests for the deployed model; `/docs` is generated from its tasks and arguments. Legacy image/video routes and the OpenAI image adapter reuse these definitions and check the actual generated artifacts.
 
 The CLI and HTTP API generate their input models, validation and documentation from this Spec. `BaseRunner` uses the same Spec to validate tasks and request fields. Define model-specific arguments locally without changing a global argument table or repeating declarations in the runner or server schema. The tasks and fields accepted by an initialized instance still depend on its startup task and model configuration. For parameters involved in model initialization, first confirm that the model supports changing them at runtime.
 
@@ -62,6 +52,29 @@ Keep declared arguments in the Spec when a startup setting makes them unusable. 
 
 For a supported `negative_prompt` supplied while CFG is disabled, log a warning and ignore the request value instead of raising an error.
 
+## 2. Create InputInfo from the Spec
+
+`Argument` is the single definition of each request field. Its `type` supplies the annotation; `input_info_default` supplies the initial value when creating InputInfo. Write values directly, such as `input_info_default=""`, `input_info_default=[]` or `input_info_default=[1.0]`. InputInfo creation deep-copies each default, so requests have independent lists and dictionaries, including nested containers.
+
+`BaseRunner.get_input_info_type(task)` combines the Spec fields with the runner's `input_info_state` into a dataclass and caches the type on that runner. Each request creates a fresh instance, applies startup settings, then applies request values. Adding a request parameter does not require editing an InputInfo class or a global task-to-type registry.
+
+Omitted CLI/server fields still use `None` to mean no override. They do not use `Argument.input_info_default` as a request override.
+
+Shared `ShapeState`, `ImageState`, `AudioVideoState` and `SRState` classes live in `lightx2v/utils/input_info.py`. Put model-specific runtime state in its runner directory:
+
+```python
+@dataclass
+class ModelState(ShapeState):
+    encoded_condition: Any = field(default=None, repr=False)
+
+class ModelRunner(DefaultRunner):
+    input_info_state = ModelState
+```
+
+State classes contain runtime state, without redeclaring request fields. Use `RequestSpec(..., context={...})` for `Argument` definitions initialized from startup settings but unavailable as request overrides; reuse existing common or model definitions where possible. Contexts also retain fields from the model's other tasks for shared execution paths. The current task's `get_arguments()` still determines which request fields are accepted.
+
+Warmup and internal code can construct a context through `runner.get_input_info_type(task)(...)`. Normal requests go through `prepare_request()`.
+
 ## 3. Use the parameter during inference
 
 Read the request value where computation uses it:
@@ -79,7 +92,7 @@ Reading `self.config["resolution"]` would use the startup value and miss the req
 | Omitted, `None`, or JSON `null` | `1024` |
 | `768` | `768` |
 
-If configuration also omits the field, the `InputInfo` default remains; model-specific request preparation or preprocessing may resolve it further. Put necessary type, range and parameter-combination checks in those stages so all entry points pass through them.
+If configuration also omits the field, the runtime default declared in the Spec remains; model-specific request preparation or preprocessing may resolve it further. Put necessary type, range and parameter-combination checks in those stages so all entry points pass through them.
 
 The runner preserves `0`, `False`, `""` and `[]` when merging parameters. Field rules determine whether they are valid; do not treat them as omitted by filtering with `if value`.
 
@@ -88,7 +101,7 @@ The runner preserves `0`, `False`, `""` and `[]` when merging parameters. Field 
 | Entry point | Where to change |
 |---|---|
 | Python | Usually no change: `generate(resolution=768)` forwards new fields through `**task_inputs`. |
-| CLI | The `Argument` declared in step 2 generates the option automatically; no change to `infer.py` is needed. |
+| CLI | The `Argument` declared in step 1 generates the option automatically; no change to `infer.py` is needed. |
 | Native HTTP JSON / forms | Generated from the same Spec at service startup; no additional field declaration. |
 | OpenAI image API | Inference fields are generated from the Spec; protocol fields remain in the OpenAI adapter. |
 

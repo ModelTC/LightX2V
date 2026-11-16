@@ -21,7 +21,7 @@ from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Schedu
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import MultiImageI2IInputInfo
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -31,7 +31,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
-    input_info_cls_by_task = {"i2i": MultiImageI2IInputInfo}
+    input_info_state = ImageState
     supported_lora_modes = ("merge", "separate")
 
     _WARMUP_SHAPES = ((1024, 1024), (768, 960))
