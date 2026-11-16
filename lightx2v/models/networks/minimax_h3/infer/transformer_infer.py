@@ -138,6 +138,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
         else:
             aux_length = sp_state.aux_length
+            parallel_kwargs = {} if sp_state.valid_seq_len is None else {"valid_seq_len": sp_state.valid_seq_len}
             out, aux_out = weights.calculate_parallel.apply(
                 q=q[aux_length:].contiguous(),
                 k=k[aux_length:].contiguous(),
@@ -154,6 +155,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.seq_p_head_parallel,
                 aux_first=True,
                 attention_kwargs=attention_kwargs,
+                **parallel_kwargs,
             )
             if aux_out is not None:
                 out = torch.cat((aux_out, out), dim=0)

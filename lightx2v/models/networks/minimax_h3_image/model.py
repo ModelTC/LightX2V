@@ -11,7 +11,7 @@ from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
 from lightx2v.models.networks.minimax_h3.infer.offload.transformer_infer import MiniMaxH3OffloadTransformerInfer, validate_minimax_h3_residency_config
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
-from lightx2v.models.networks.minimax_h3.parallel import gather_packed_sequence, shard_packed_sequence, split_tensor_parallel_weight
+from lightx2v.models.networks.minimax_h3.parallel import gather_packed_sequence, shard_full_packed_sequence, split_tensor_parallel_weight
 from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3TransformerWeights
 from lightx2v.models.networks.minimax_h3_image.checkpoint import convert_pdd_heads, convert_transformer_tensor
 from lightx2v.models.networks.minimax_h3_image.infer import MiniMaxH3ImagePostInfer, MiniMaxH3ImagePreInfer
@@ -84,8 +84,10 @@ class MiniMaxH3ImageModel(BaseTransformerModel):
                 raise ValueError(f"MiniMax-H3-Image TP size {self.tp_size} must divide {invalid}")
         if self.seq_p_group is not None:
             parallel_type = self.config.get("parallel", {}).get("seq_p_attn_type", "ulysses")
+            if parallel_type not in ("ulysses", "ulysses-4090"):
+                raise ValueError("MiniMax-H3-Image requires Ulysses sequence parallelism.")
             seq_size = dist.get_world_size(self.seq_p_group)
-            if parallel_type == "ulysses" and self.config["num_attention_heads"] % (self.tp_size * seq_size):
+            if self.config["num_attention_heads"] % (self.tp_size * seq_size):
                 raise ValueError("MiniMax-H3-Image Ulysses attention heads must be divisible by tensor_p_size * seq_p_size")
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
@@ -188,14 +190,9 @@ class MiniMaxH3ImageModel(BaseTransformerModel):
         return self.post_infer.infer(self.post_weight, hidden_states, pre)
 
     def _seq_parallel_pre_process(self, pre_infer_out):
-        pre = shard_packed_sequence(pre_infer_out, self.seq_p_group, allow_media_prefix=True)
-        if pre.sequence_parallel_state is None and self.scheduler.step_index == 0 and dist.get_rank() == 0:
-            logger.info("MiniMax-H3-Image packed sequence has fewer rows than SP ranks; replicating its dense attention while retaining TP")
-        return pre
+        return shard_full_packed_sequence(pre_infer_out, self.seq_p_group)
 
     def _seq_parallel_post_process(self, output, pre_infer_out):
-        if pre_infer_out.sequence_parallel_state is None:
-            return output
         return gather_packed_sequence(output, pre_infer_out, self.seq_p_group)
 
     def to_cpu(self):
