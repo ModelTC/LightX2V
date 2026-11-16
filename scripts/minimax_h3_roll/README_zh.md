@@ -124,7 +124,7 @@ bash scripts/minimax_h3_roll/run_minimax_h3_ref2av_resample.sh
 
 默认输出到 `save_results/minimax_h3_roll_ref2av/draft.mp4` 和 `resample.mp4`。两个阶段都传 `--model-variant ref2av --task ref2av`，使用相同的 `--image_path`、提示词、seed `42` 和帧数 `124`。草片为 `--size 480 864 --draft_steps 3`；重生成为 `--size 768 1344 --resample_start_step 1`，执行原 8 步时间表的后 7 步。删除草片脚本中的 `--draft_steps 3` 可生成完整 8 步草片；15 秒例子将两个脚本的 `--num_frames` 都改为 `362`。每个脚本分别加载模型。
 
-替换参考输入时，两个脚本都应同步修改 `--image_path` 和提示词；也可添加 `--video_path` / `--audio_path`，同类多个文件用逗号分隔，音频参考需同时提供图片或视频参考。重生成时保留原始参考输入，将选中的带音轨草片传给 `--resample_source_video`；`--video_path` 表示参考视频，不能替代该参数。
+替换参考输入时，两个脚本都应同步修改 `--image_path` 和提示词；也可添加 `--video_path` / `--audio_path`，同类多个文件以空格分隔传入，音频参考需同时提供图片或视频参考。重生成时保留原始参考输入，将选中的带音轨草片传给 `--resample_source_video`；`--video_path` 表示参考视频，不能替代该参数。
 
 ## 参数与固定流程
 
@@ -154,23 +154,29 @@ video VAE 保持现有 seed-42 posterior sample，audio VAE 固定编码草片�
 以下 Python 脚本需在与配置匹配的 8 卡 `torchrun` 进程中运行。`size` 顺序为 `[height,width]`。
 
 ```python
+import json
+from pathlib import Path
+
 from lightx2v import LightX2VPipeline
 
-pipe = LightX2VPipeline(
-    model_path="/root/lightx2v_h3_world/models/MiniMax-H3-native",
-    model_cls="minimax_h3", model_variant="fl2av",
-)
-pipe.create_generator(config_json="configs/minimax_h3_roll/minimax_h3_bf16_8step.json")
-prompt = "A red fox walks through a snowy clearing, one locked-off shot. Sound: paws on snow and soft wind."
-pipe.generate(
-    task="t2av", prompt=prompt, seed=42, size=[480,864], num_frames=124,
-    save_result_path="/root/h3_example/draft.mp4",  # 默认按配置完整跑 8 步
-)
-pipe.generate(
-    task="t2av", prompt=prompt, seed=2026, size=[1088,1920], num_frames=124,
-    resample_source_video="/root/h3_example/draft.mp4",  # 默认 resample_start_step=1，跑后 7 步
-    save_result_path="/root/h3_example/rgb.native.mp4",
-)
+config = json.loads(Path("configs/minimax_h3_roll/minimax_h3_bf16_8step.json").read_text())
+config.update({
+    "model_cls": "minimax_h3",
+    "model_path": "/root/lightx2v_h3_world/models/MiniMax-H3-native",
+    "model_variant": "fl2av",
+})
+
+with LightX2VPipeline(config) as pipe:
+    prompt = "A red fox walks through a snowy clearing, one locked-off shot. Sound: paws on snow and soft wind."
+    pipe.generate(
+        task="t2av", prompt=prompt, seed=42, size=[480,864], num_frames=124,
+        save_result_path="/root/h3_example/draft.mp4",  # 默认按配置完整跑 8 步
+    )
+    pipe.generate(
+        task="t2av", prompt=prompt, seed=2026, size=[1088,1920], num_frames=124,
+        resample_source_video="/root/h3_example/draft.mp4",  # 默认 resample_start_step=1，跑后 7 步
+        save_result_path="/root/h3_example/rgb.native.mp4",
+    )
 ```
 
 本配置下省略第一条请求的 `draft_steps` 即生成完整 8 步草片；需要少步草片时显式传入 `draft_steps=3` 等小于 8 的正整数。`draft_steps=8` 或更大时仍走原完整 8 步流程。高清草片也可使用 `size=[1088,1920]`，此时第二阶段不缩放 RGB，但仍需 VAE 重编码和解码。`fl2av` 两次请求均传入 `task="fl2av"`、`image_path` 和 `last_frame_path`，并显式指定各自的 `size`。

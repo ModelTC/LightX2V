@@ -48,7 +48,6 @@ from lightx2v.models.networks.worldmirror.utils.inference_utils import (
 )
 from lightx2v.models.networks.worldmirror.utils.render_utils import render_interpolated_video
 from lightx2v.models.runners.base_runner import BaseRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -132,19 +131,6 @@ def _broadcast_string(s, rank, src=0):
 @RUNNER_REGISTER("worldmirror")
 class WorldMirrorRunner(BaseRunner):
     """Runner for HY-WorldMirror-2.0 3D reconstruction model."""
-
-    supported_request_fields_by_task = {
-        "recon": COMMON_REQUEST_FIELDS
-        | {
-            "input_path",
-            "prior_cam_path",
-            "prior_depth_path",
-            "render_depth",
-            "render_interp_per_pair",
-            "save_rendered",
-            "strict_output_path",
-        },
-    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -430,6 +416,9 @@ class WorldMirrorRunner(BaseRunner):
             logger.info(f"[WorldMirror] Inference done in {infer_time:.2f}s")
         return predictions, imgs, infer_time
 
+    def get_output_extension(self, input_info):
+        return ""
+
     @torch.no_grad()
     def run_pipeline(self, input_info):
         """Run WorldMirror reconstruction on a directory/video/image path."""
@@ -646,6 +635,10 @@ class WorldMirrorRunner(BaseRunner):
             timings["case_total"] = time.perf_counter() - case_t0
             if log_time:
                 print_and_save_timings(timings, outdir)
+
+            for path in sorted(outdir.rglob("*")):
+                if path.is_file():
+                    self.record_output("file", path)
 
             logger.info(f"[WorldMirror] Results saved to: {outdir}")
 

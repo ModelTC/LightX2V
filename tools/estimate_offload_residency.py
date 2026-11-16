@@ -387,7 +387,7 @@ def main():
     parser.add_argument("--task", choices=("t2v", "i2v", "t2i", "i2i", "t2av"), required=True)
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--image-path")
+    parser.add_argument("--image-path", nargs="+")
     parser.add_argument("--prompt")
     parser.add_argument("--negative-prompt", default=" ")
     parser.add_argument("--output-config", type=Path)
@@ -412,7 +412,9 @@ def main():
     elif args.model_cls == "minimax_h3":
         case = build_minimax_h3_case(config, args.prompt)
     else:
-        case = build_wan_case(config, args.image_path)
+        if args.image_path is not None and len(args.image_path) != 1:
+            parser.error("Wan I2V requires exactly one --image-path")
+        case = build_wan_case(config, args.image_path[0] if args.image_path else None)
     try:
         c, d, compute_samples, transfer_samples = measure_block(case)
         count = estimate_resident_count(config["num_layers"], c, d)

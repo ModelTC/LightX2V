@@ -13,12 +13,12 @@ from lightx2v.models.input_encoders.hf.minimax_h3_image import MiniMaxH3ImageTex
 from lightx2v.models.input_encoders.hf.minimax_h3_image.preprocess import get_image_canvas_size, image_to_tensor, prepare_reference_images
 from lightx2v.models.networks.minimax_h3_image.model import MiniMaxH3ImageModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.minimax_h3_image import MiniMaxH3ImageScheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_image import MiniMaxH3ImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_RECORDER_MODE
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, seed_all
@@ -27,7 +27,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 @RUNNER_REGISTER("minimax_h3_image")
 class MiniMaxH3ImageRunner(DefaultRunner):
-    supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS, "i2i": IMAGE_REQUEST_FIELDS | {"image_path"}}
+    input_info_state = ImageState
     _WARMUP_SHAPES = ((2048, 2048), (3552, 4736))
     _WARMUP_PROMPTS = (
         "A cinematic photograph of a mountain lake.",
@@ -45,9 +45,6 @@ class MiniMaxH3ImageRunner(DefaultRunner):
         if config.get("negative_prompt") or config.get("sample_guide_scale", 1.0) != 1.0:
             raise ValueError("MiniMax-H3-Image uses one positive branch without negative prompts or guidance")
         super().__init__(config)
-
-    def get_supported_tasks(self):
-        return super().get_supported_tasks() if self.config.get("task") is not None else ("t2i", "i2i")
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
@@ -107,7 +104,7 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             "return_result_tensor": False,
         }
         if task == "i2i":
-            request["image_path"] = Image.new("RGB", (width, height))
+            request["image_path"] = [Image.new("RGB", (width, height))]
         self.input_info = self.create_input_info(request)
 
     def init_scheduler(self):

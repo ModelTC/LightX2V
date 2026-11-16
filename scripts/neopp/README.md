@@ -5,27 +5,44 @@ encodes the text and input images and supplies the required KV cache and
 position offsets. Start production inference and end-to-end debugging through
 the [SenseNova-U1 deployment instructions](https://github.com/OpenSenseNova/SenseNova-U1/blob/main/docs/deployment.md).
 
-The [LightLLM adapter](https://github.com/ModelTC/LightLLM/blob/fb7838ce86217a7c86625d71b15b72f2f05e0ac2/lightllm/server/x2i_server/lightx2v/adapter.py)
-uses these LightX2V interfaces:
+Read sampling settings from JSON and supplement the model path and class in the
+script. For LightLLM in-memory output, set `"save_result_for_debug": false` in the
+selected JSON before constructing the backend:
 
-- `LightX2VPipeline(..., support_tasks=["t2i", "i2i"])` initializes the backend.
-- `modify_config({"save_result_for_debug": False})` selects in-memory output.
-  LightLLM replaces `process_images_after_vae_decoder` to return encoded image
-  bytes, and wraps `_run_infer_step` to check cancellation.
-- `runner.set_kvcache(...)` injects conditioning; `set_inference_params(...)`
-  supplies matching position offsets, CFG settings and output format.
-- `generate(seed=None, save_result_path="", target_shape=[height, width])`
-  continues the RNG state restored by LightLLM for later images in a session.
-  NeoPP converts this existing LightLLM argument to `size`; new LightX2V calls
-  use `size=[height, width]`. Omitting `seed` also preserves the current RNG state;
-  an explicit integer seed starts a seeded generation.
+```python
+import json
+from pathlib import Path
 
-NeoPP defaults an omitted `task` to `t2i`; both tasks share the same generation
-path with conditioning supplied through KV. LightLLM calls remain unchanged.
+from lightx2v import LightX2VPipeline
 
-An explicit constructor `task`, such as `LightX2VPipeline(..., task="t2i")`, is the
-default for calls that omit it. Passing `generate(task="i2i", ...)` selects a task
-for that request without changing the default.
+config = json.loads(Path("configs/neopp/neopp_dense.json").read_text())
+config.update({
+    "model_cls": "neopp",
+    "model_path": "/path/to/neopp_dense",
+})
+
+with LightX2VPipeline(config) as pipe:
+    # Supply conditioning and matching position offsets before each request.
+    pipe.runner.set_kvcache(cond_kv, uncond_kv)
+    pipe.runner.set_inference_params(index_offset_cond, index_offset_uncond)
+    result = pipe.generate(task="t2i", seed=None, size=[1024, 1024])
+```
+
+A LightLLM adapter must use this constructor and configure the backend before
+loading it. Its runtime integration can still replace
+`process_images_after_vae_decoder` to return encoded image bytes and wrap
+`_run_infer_step` to check cancellation. There is no mutable pipeline configuration API.
+
+`runner.set_kvcache(...)` supplies conditioning. `set_inference_params(...)`
+supplies matching position offsets, CFG settings and output format.
+`generate(seed=None, ...)` continues the RNG state restored by LightLLM for later
+images in a session; omitting `seed` does the same. An explicit integer seed starts
+a seeded generation. Use `size=[height, width]` for the output size.
+
+NeoPP defaults an omitted request `task` to `t2i`; both tasks share the same
+generation path with conditioning supplied through KV. An explicit `task` in the
+config is the pipeline's request default. A request can select another supported
+task without changing that default.
 
 Default image editing also uses `set_kvcache`: LightLLM includes image
 conditioning in the two KV branches. The optional `image_guidance_scale != 1`
@@ -65,8 +82,9 @@ directory and replace all `/path/to/...` placeholders before running.
 - [replay_kv_multiturn.py](replay_kv_multiturn.py) loads one pipeline and replays three
   requests. Edit `model_path`, `config_path`, `kv_dir`, `output_dir`, `output_prefix`,
   `size` and `turns`. Results use `<output_dir>/<output_prefix>_<turn>.png`.
-  It preserves the dense 1K example's explicit `cfg_norm="none"`, CFG interval
-  `(-1, 2)`, scale `4.0`, shift `3.0` and seeds `200, 201, 202`.
+  Sampling settings come from the selected JSON. To reproduce the dense 1K
+  example, use `cfg_norm="none"`, CFG interval `[-1, 2]`, scale `4.0` and shift
+  `3.0` in that JSON. The example supplies seeds `200, 201, 202` per request.
 
 ```bash
 python scripts/neopp/replay_kv_multiturn.py
@@ -112,9 +130,8 @@ The 8-step example uses the matching LoRA config, size `[2048, 2048]`, and only
 `("to_x2v_cond_kv_0_298.pt", None, 298, None, 200)` in `turns`; CFG is disabled.
 The previous MoE examples use one turn with `to_x2v_cond_kv_325.pt`,
 `to_x2v_uncond_kv_9.pt`, offsets `325` / `9`, seed `200`, and size `[1024, 1024]`
-or `[2048, 2048]`. Set `cfg_interval=(0, 1)` and retain `cfg_norm="none"` in
-`set_inference_params` for those examples. These explicit overrides differ from
-the defaults of the existing MoE JSON and single-request launcher.
+or `[2048, 2048]`. Set `cfg_interval=[0, 1]` and `cfg_norm="none"` in the selected
+JSON for those examples. These settings differ from the existing MoE JSON defaults.
 
 ### Shell launchers
 

@@ -39,13 +39,14 @@ class WorldPlayARModel(HunyuanVideo15Model):
 
     def _init_infer_class(self):
         """Initialize WorldPlay AR-specific inference classes."""
+        feature_caching = self.config.get("feature_caching", "NoCaching")
         self.pre_infer_class = WorldPlayARPreInfer
         self.post_infer_class = WorldPlayPostInfer
 
-        if self.config["feature_caching"] == "NoCaching":
+        if feature_caching == "NoCaching":
             self.transformer_infer_class = WorldPlayARTransformerInfer
         else:
-            raise NotImplementedError(f"Feature caching {self.config['feature_caching']} not supported for AR model. AR model requires NoCaching due to KV cache management.")
+            raise NotImplementedError(f"Feature caching {feature_caching} not supported for AR model. AR model requires NoCaching due to KV cache management.")
 
     def _init_weights(self):
         """Initialize weights including action conditioning weights."""
@@ -182,7 +183,7 @@ class WorldPlayARModel(HunyuanVideo15Model):
 
         infer_module_out = self.pre_infer.infer(self.pre_weight, inputs)
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             # Save chunk cos_sin before splitting — must restore after transformer
             # to prevent double-splitting on subsequent denoising steps
             chunk_cos_sin = self.scheduler.cos_sin
@@ -197,14 +198,14 @@ class WorldPlayARModel(HunyuanVideo15Model):
             self.pre_weight.to_cpu()
             self.transformer_weights.non_block_weights_to_cpu()
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             # Restore full chunk cos_sin so next denoising step starts from unsplit data
             self.scheduler.cos_sin = chunk_cos_sin
 
         if cache_vision:
             return output  # Return KV cache
         else:
-            if self.config["seq_parallel"]:
+            if self.config.get("seq_parallel", False):
                 output = self._seq_parallel_post_process(output)
             # Run post-inference
             return self.post_infer.infer(output, infer_module_out)

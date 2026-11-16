@@ -26,6 +26,17 @@ Open [run_wan_t2v.sh](https://github.com/ModelTC/LightX2V/blob/main/scripts/wan/
 
 The launcher selects [wan_t2v.json](https://github.com/ModelTC/LightX2V/blob/main/configs/wan/wan_t2v.json). Edit startup settings such as sampling steps and guidance scale in JSON, and request parameters in the launcher.
 
+To list the input arguments accepted by your model, task and configuration, run:
+
+```bash
+python -m lightx2v.infer \
+  --model_cls wan2.1 --task t2v \
+  --model_path /path/to/models/Wan2.1-T2V-1.3B \
+  --config_json configs/wan/wan_t2v.json --help
+```
+
+Help reads configuration and checkpoint metadata without loading model weights or initializing the accelerator. Inputs disabled by the selected configuration are omitted. Use `python -m lightx2v.infer --help` for startup options, or add `--model_cls` to also list a model's tasks.
+
 The launcher's explicit `--size` and `--num_frames` override the corresponding JSON defaults, so changing only JSON does not change this launcher's output size or frame count. Edit those arguments in the launcher. To control both through JSON instead, remove the two arguments from the launcher, then set `size` (`[height, width]`) and `num_frames` in JSON.
 
 The supplied JSON uses `flash_attn3`. Select attention operators supported by your GPU and installation; see the [attention guide](../method_tutorials/attention.md). For lower GPU memory usage, see the [offload guide](../deploy_guides/for_low_resource.md).

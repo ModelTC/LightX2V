@@ -289,29 +289,30 @@ class WanModel(BaseTransformerModel):
     # ------------------------------------------------------------------ TP --
 
     def _init_infer_class(self):
+        feature_caching = self.config.get("feature_caching", "NoCaching")
         self.pre_infer_class = WanPreInfer
         self.post_infer_class = WanPostInfer
 
-        if self.config["feature_caching"] == "NoCaching":
+        if feature_caching == "NoCaching":
             self.transformer_infer_class = WanTransformerInfer if not self.cpu_offload else WanOffloadTransformerInfer
-        elif self.config["feature_caching"] == "Tea":
+        elif feature_caching == "Tea":
             self.transformer_infer_class = WanTransformerInferTeaCaching
-        elif self.config["feature_caching"] == "TaylorSeer":
+        elif feature_caching == "TaylorSeer":
             self.transformer_infer_class = WanTransformerInferTaylorCaching
-        elif self.config["feature_caching"] == "Ada":
+        elif feature_caching == "Ada":
             self.transformer_infer_class = WanTransformerInferAdaCaching
-        elif self.config["feature_caching"] == "Custom":
+        elif feature_caching == "Custom":
             self.transformer_infer_class = WanTransformerInferCustomCaching
-        elif self.config["feature_caching"] == "FirstBlock":
+        elif feature_caching == "FirstBlock":
             self.transformer_infer_class = WanTransformerInferFirstBlock
-        elif self.config["feature_caching"] == "DualBlock":
+        elif feature_caching == "DualBlock":
             self.transformer_infer_class = WanTransformerInferDualBlock
-        elif self.config["feature_caching"] == "DynamicBlock":
+        elif feature_caching == "DynamicBlock":
             self.transformer_infer_class = WanTransformerInferDynamicBlock
-        elif self.config["feature_caching"] == "Mag":
+        elif feature_caching == "Mag":
             self.transformer_infer_class = WanTransformerInferMagCaching
         else:
-            raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
+            raise NotImplementedError(f"Unsupported feature_caching type: {feature_caching}")
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)
@@ -327,7 +328,7 @@ class WanModel(BaseTransformerModel):
             self._init_offload_manager()
 
     def _should_init_empty_model(self):
-        if self.config.get("lora_configs") and self.config["lora_configs"] and self.config.get("lora_mode", "merge") != "separate":
+        if self.config.get("lora_configs") and self.config.get("lora_mode", "merge") != "separate":
             if self.model_type in ["wan2.1"]:
                 return True
             if self.model_type in ["wan2.2_moe_high_noise"]:
@@ -346,14 +347,14 @@ class WanModel(BaseTransformerModel):
 
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
         if x is None:
             return None
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             x = self._seq_parallel_post_process(x)
 
         noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
@@ -375,7 +376,7 @@ class WanModel(BaseTransformerModel):
 
         pre_infer_out.x = torch.chunk(x, world_size, dim=0)[cur_rank]
 
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
+        if self.config["model_cls"] == "wan2.2" and self.scheduler._uses_conditioned_latent_prefix():
             embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0
 
             padding_size = (world_size - (embed.shape[0] % world_size)) % world_size
@@ -405,9 +406,9 @@ class WanModel(BaseTransformerModel):
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
 
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
-            if self.config["cfg_parallel"]:
+            if self.config.get("cfg_parallel", False):
                 # ==================== CFG Parallel Processing ====================
                 cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
                 assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"

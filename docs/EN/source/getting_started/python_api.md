@@ -1,129 +1,82 @@
 # Python API
 
-Install LightX2V using the [quickstart](quickstart.md). The examples below run from the repository root; replace model, input and output paths with local paths.
+Install LightX2V using the [quickstart](quickstart.md). Run these examples from the repository root and replace model, input and output paths with local paths.
 
-## Create a pipeline and generate
+## Load a model and generate
+
+Pass a configuration dictionary to `LightX2VPipeline(config)`. Construction loads the model; repeated `generate()` calls reuse it. A context manager closes the runner when finished.
 
 ```python
+import json
+from pathlib import Path
+
 from lightx2v import LightX2VPipeline
 
-pipe = LightX2VPipeline(
-    model_path="/path/to/Wan2.1-T2V-1.3B",
-    model_cls="wan2.1",
-    task="t2v",
-)
-pipe.create_generator(config_json="configs/wan/wan_t2v.json")
-pipe.generate(
-    seed=42,
-    prompt="Two cats wearing boxing gloves on a stage.",
-    negative_prompt="blurry, low quality",
-    save_result_path="save_results/first_video.mp4",
-)
+config = json.loads(Path("configs/wan/wan_t2v.json").read_text())
+config.update({
+    "model_cls": "wan2.1",
+    "model_path": "/path/to/Wan2.1-T2V-1.3B",
+    "task": "t2v",
+})
+
+with LightX2VPipeline(config) as pipe:
+    result = pipe.generate(
+        seed=42,
+        prompt="Two cats wearing boxing gloves on a stage.",
+        negative_prompt="blurry, low quality",
+        save_result_path="save_results/first_video.mp4",
+    )
 ```
 
-Create the generator once, then call `generate()` repeatedly to reuse the loaded model. Each call supplies its own prompt, input paths, seed and output path. Select a task supported by the loaded model; `image_path`, `video_path`, `audio_path` and other inputs depend on that task.
+You can also construct the dictionary directly. Use the same deployment fields as the CLI and server. There are no separate sampling, quantization or offload function arguments.
 
-For ordinary models, an omitted or `None` seed defaults to 42. NeoPP instead continues the session RNG state. Most runners skip saving when `save_result_path` is omitted; WorldMirror writes to its default output directory. Return values and support for `return_result_tensor=True` are model-specific.
+## Configuration and request inputs
 
-## Configuration
+| Where | Contents |
+| --- | --- |
+| `config` | Model identity and paths, inference steps, CFG, default size/frame count, attention operators, quantization, offload, LoRA, caching and parallel settings |
+| `generate(**inputs)` | Task, prompts, input media, seed, output path and other request fields supported by the model's Spec |
 
-Use the same JSON as the CLI to align startup settings. JSON fields override matching constructor and `enable_*()` startup fields, except that `task` and an explicitly set `model_variant` retain their constructor settings. With `config_json`, the manual sampling arguments of `create_generator()` are not applied; `fps` is handled separately. An explicit non-`None` `fps` argument takes precedence over JSON; omitting it or passing `None` uses the JSON value when present. Configure the chosen mode in one place.
+Example scripts read inference settings from JSON and supplement model selection fields: `model_path`, `model_cls` and, when needed, `task` and `model_variant`. Configure sampling, component checkpoints and runtime options in the selected JSON. The model configuration loader combines checkpoint metadata with this deployment configuration. Pipeline adds no sampling defaults or model-specific parameter conversions.
 
-Alternatively, configure a new generator manually. This is the configuration used by the [Wan2.1 14B Python example](https://github.com/ModelTC/LightX2V/blob/main/scripts/wan/inference/wan_t2v.py); it differs from the 1.3B CLI example above:
-
-```python
-pipe.create_generator(
-    attn_mode="sage_attn2",
-    infer_steps=50,
-    size=(480, 832),
-    num_frames=81,
-    guidance_scale=5.0,
-    sample_shift=5.0,
-)
-```
-
-`size` is `(height, width)`. `guidance_scale`, `sample_shift`, `num_frames`, attention operators and distilled schedules must match the selected model. Do not call `create_generator()` twice on the same pipeline.
-
-The constructor accepts `dit_original_ckpt` for a separate DiT checkpoint, or `high_noise_original_ckpt` and `low_noise_original_ckpt` for Wan2.2 MoE. Distilled Wan models use `distill_method="dmd2"` where required. Model-specific instructions live beside the launchers below.
-
-### Saving image files
-
-Image generation, editing and image restoration/super-resolution use OpenCV to save files by default. Set `save_image_method` in the JSON passed to `config_json` to select a writer. CLI and server deployments use the same setting:
+For example, add these fields to the JSON to configure Wan DiT and T5 offload:
 
 ```json
 {
-  "save_image_method": "pil"
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "t5_cpu_offload": true,
+    "vae_cpu_offload": false
 }
 ```
 
-Supported values are `"opencv"` (default) and `"pil"`. Each model prepares a PIL image or a uint8 BGR/BGRA OpenCV array using its existing postprocessing rules. The shared file writer only creates the directory and writes the image. OpenCV avoids an intermediate PIL image except for required model-specific PIL resizing/editing. Each model keeps its existing normalization and rounding/truncation rules.
+Encoder settings use their actual deployment names, such as `t5_cpu_offload`, `qwen25vl_cpu_offload` or `gemma_cpu_offload`. Select a configuration matching the model instead of copying encoder fields between models.
 
-With `PROFILING_DEBUG_LEVEL>=1`, each save logs `Save Image (opencv)` or `Save Image (pil)` in milliseconds. Profiling lives in each model's saving entry point and covers tensor conversion, required postprocessing and file writing. Profiling adds no device synchronization; CPU transfer waits for the image data to be ready. This setting controls image files; in-memory PNG/Base64 encoding keeps its existing behavior.
+Quantization uses `dit_quantized`, `dit_quant_scheme` and the corresponding checkpoint paths. LoRA uses `lora_mode` and `lora_configs`. Parallel inference uses the `parallel` dictionary and a matching `torchrun` process count. Caches and lightweight VAEs likewise use their existing JSON fields. See [offload](../deploy_guides/for_low_resource.md), [quantization](../method_tutorials/quantization.md), [LoRA](../deploy_guides/lora_deploy.md), [parallel inference](../method_tutorials/parallel.md) and [cache](../method_tutorials/cache.md).
 
-## Optional startup settings
+Inspect the loaded configuration through `pipe.config`. To change startup settings, create a new pipeline with the desired config. Model-specific runtime operations are available on `pipe.runner`; for example, supported LoRA runners expose `switch_lora(...)`.
 
-Apply the following methods before `create_generator()`. Choose the settings supported by your model; these snippets describe separate options rather than one configuration to enable in full.
+## Requests and results
 
-### Offload
+Request fields come from the same Spec used by CLI and server. The runner validates the task and supported fields before creating InputInfo. `generate()` does not modify startup configuration.
 
-```python
-pipe.enable_offload(
-    cpu_offload=True,
-    offload_granularity="block",
-    text_encoder_offload=True,
-    image_encoder_offload=False,
-    vae_offload=False,
-)
-```
+A `task` explicitly included in the config is the default for requests that omit it. A request can choose another supported task without changing that default. Without a configured default, single-task runners select their only task; multi-task runners require a request task. NeoPP retains its runner-specific omitted-task behavior.
 
-Select the granularity and encoder/VAE offload settings for the model and available memory. See [offload](../deploy_guides/for_low_resource.md).
+Multi-input fields use lists, including for a single item. Size is `[height, width]`. Fields already supported as per-request overrides by the Spec retain that behavior.
 
-### Quantization
+For ordinary models, an omitted or `None` seed defaults to 42. NeoPP instead continues the session RNG state. Explicit negative prompts are ignored with a warning when CFG is disabled. Most runners skip saving when `save_result_path` is omitted; WorldMirror uses its default output directory. Return values and support for `return_result_tensor=True` remain model-specific.
 
-```python
-pipe.enable_quantize(
-    dit_quantized=True,
-    dit_quantized_ckpt="/path/to/quantized_model.safetensors",
-    quant_scheme="fp8-sgl",
-)
-```
+Use `with`, or call `pipe.close()` when finished. Cleanup releases runner resources and any distributed process group created by the pipeline. An existing caller-owned process group is kept.
 
-For Wan2.2 MoE use `high_noise_quantized_ckpt` and `low_noise_quantized_ckpt`. Encoder quantization uses `text_encoder_quantized`, `text_encoder_quantized_ckpt`, and, where supported, `text_encoder_quant_scheme`; image encoder equivalents are also available. Match checkpoint format and installed kernels to the quantization scheme. See [quantization](../method_tutorials/quantization.md).
+## Saving image files
 
-### LoRA
+Image generation, editing and super-resolution save through OpenCV by default. Set `save_image_method="pil"` in the config to select PIL. CLI and server use the same setting. Each model keeps its postprocessing and normalization rules.
 
-Set `lora_mode` in JSON or pass it to `enable_lora()` before creating the generator (`merge` is the default; H3 also supports `consumer`). Precision is controlled by `LORA_DTYPE`, defaulting to `DTYPE`. The loaded JSON takes precedence over Python startup settings.
-
-```python
-pipe.enable_lora(
-    [{"path": "/path/to/lora.safetensors", "strength": 1.0}],
-    lora_mode="separate",
-)
-```
-
-`lora_mode="merge"` (default) merges weights during loading. `separate` computes independent adapter branches; `consumer` fuses their addition into subsequent operators and is available only for MiniMax-H3. Both unmerged modes allow changing LoRA on a running pipeline through `switch_lora(lora_path=..., strength=...)`; see the [Qwen switch example](https://github.com/ModelTC/LightX2V/blob/main/scripts/qwen_image/inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py). Wan2.2 LoRA entries also name the `high_noise_model` or `low_noise_model` branch. See [LoRA deployment](../deploy_guides/lora_deploy.md).
-
-### Parallel inference
-
-```python
-pipe.enable_parallel(cfg_p_size=1, seq_p_size=4, seq_p_attn_type="ulysses")
-```
-
-```bash
-torchrun --standalone --nproc_per_node=4 your_script.py
-```
-
-The process count must match the selected parallel configuration. See [parallel inference](../method_tutorials/parallel.md) for model-specific restrictions.
-
-### Cache and lightweight VAE
-
-`enable_cache(cache_method="Tea", ...)` and `enable_cache(cache_method="Mag", ...)` take model-specific coefficients or calibration ratios. Reuse a matching configuration from `configs/caching` or `configs/hunyuan_video_15/cache`; see [cache](../method_tutorials/cache.md).
-
-`enable_lightvae(use_tae=True, tae_path="/path/to/tae.safetensors")` selects LightTAE. LightVAE uses `use_lightvae=True` and `vae_path`. Use weights for the selected model from the [Autoencoders collection](https://huggingface.co/lightx2v/Autoencoders).
+With `PROFILING_DEBUG_LEVEL>=1`, image-saving profiling includes tensor conversion, required postprocessing and file writing. This option controls saved image files; in-memory PNG/Base64 encoding keeps its existing behavior.
 
 ## Model examples
 
-Edit the selected Python file's model/input/output paths before running it. Keep the model, checkpoint, sampling parameters and attention implementation together when comparing results with a Shell launcher. For CFG-disabled requests, omit `negative_prompt`, including the empty string.
+Edit the selected Python file's model/input/output paths before running it. Keep the model, checkpoint, sampling parameters and attention implementation together when comparing results with a Shell launcher. For CFG-disabled requests, explicitly supplied `negative_prompt` values, including the empty string, are ignored with a warning.
 
 | Model or task | Entry |
 | --- | --- |
@@ -141,3 +94,5 @@ Edit the selected Python file's model/input/output paths before running it. Keep
 | WorldPlay | [scripts/worldplay](https://github.com/ModelTC/LightX2V/blob/main/scripts/worldplay/README.md) |
 
 For robotics inference and evaluation, see [RealtimeWAM](https://github.com/ModelTC/LightX2V/blob/main/scripts/realtimewam/README.md). Model launch instructions belong in `scripts/<model>/README*`; shared API and deployment instructions belong in this documentation.
+
+Multi-input fields take lists even for one input, for example `image_path=["a.png"]`. Use `image_path=["a.png", "b.png"]` only for models that support multiple images; single-image models still take a string. Strengths and frame indices also use lists, for example `image_strength=[1.0, 0.8]` and `image_frame_indices=[0, 32]`.

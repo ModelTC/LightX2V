@@ -68,7 +68,7 @@ class HidreamO1ImageDecoderBlockWeights(WeightModule):
         self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.mlp.up_proj.weight", None))
         self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.mlp.down_proj.weight", None))
         self.add_module("attn", ATTN_WEIGHT_REGISTER[attn_type]())
-        if config["seq_parallel"]:
+        if config.get("seq_parallel", False):
             self.add_module("attn_parallel", ATTN_WEIGHT_REGISTER[config["parallel"].get("seq_p_attn_type", "ulysses")]())
 
     def configure(self, text_config):

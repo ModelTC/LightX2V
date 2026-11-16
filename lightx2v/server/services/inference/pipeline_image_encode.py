@@ -126,7 +126,8 @@ def encode_pipeline_return_to_png_bytes(pipeline_return: Any) -> Optional[bytes]
             # e.g. BagelRunner returns (images, audio_or_none)
             pipeline_return = pipeline_return[0]
         if isinstance(pipeline_return, dict):
-            pipeline_return = pipeline_return.get("images")
+            # Image restoration runners can return their frame under "video".
+            pipeline_return = pipeline_return.get("images", pipeline_return.get("image", pipeline_return.get("video")))
         return _image_to_png_bytes(_first_image(pipeline_return))
     except Exception as e:
         logger.exception(f"Failed to encode pipeline output to PNG: {e}")

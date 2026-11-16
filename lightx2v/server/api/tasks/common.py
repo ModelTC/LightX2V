@@ -3,59 +3,15 @@ from pathlib import Path
 
 import torch
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, Response
 from loguru import logger
 
-from ...schema import StopTaskResponse
+from ...schema import StopTaskResponse, TaskResult, TaskResults
 from ...task_manager import TaskStatus, task_manager
 from ..deps import get_services
-from ..files import _get_mime_type
+from ..files import _stream_file_response
 
 router = APIRouter()
-
-
-def _stream_file_response(file_path: Path, filename: str | None = None) -> StreamingResponse:
-    services = get_services()
-    assert services.file_service is not None, "File service is not initialized"
-
-    try:
-        resolved_path = file_path.resolve()
-
-        output_root = services.file_service.output_video_dir.resolve()
-        try:
-            resolved_path.relative_to(output_root)
-        except ValueError:
-            raise HTTPException(status_code=403, detail="Access to this file is not allowed")
-
-        if not resolved_path.exists() or not resolved_path.is_file():
-            raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-
-        file_size = resolved_path.stat().st_size
-        actual_filename = filename or resolved_path.name
-
-        mime_type = _get_mime_type(actual_filename)
-
-        headers = {
-            "Content-Disposition": f'attachment; filename="{actual_filename}"',
-            "Content-Length": str(file_size),
-            "Accept-Ranges": "bytes",
-        }
-
-        def file_stream_generator(file_path: str, chunk_size: int = 1024 * 1024):
-            with open(file_path, "rb") as file:
-                while chunk := file.read(chunk_size):
-                    yield chunk
-
-        return StreamingResponse(
-            file_stream_generator(str(resolved_path)),
-            media_type=mime_type,
-            headers=headers,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error occurred while processing file stream response: {e}")
-        raise HTTPException(status_code=500, detail="File transfer failed")
 
 
 @router.get("/")
@@ -88,7 +44,6 @@ async def get_task_status(task_id: str):
 @router.get("/{task_id}/result")
 async def get_task_result(task_id: str):
     services = get_services()
-    assert services.video_service is not None, "Video service is not initialized"
     assert services.file_service is not None, "File service is not initialized"
 
     try:
@@ -115,6 +70,41 @@ async def get_task_result(task_id: str):
     except Exception as e:
         logger.error(f"Error occurred while getting task result: {e}")
         raise HTTPException(status_code=500, detail="Failed to get task result")
+
+
+def _completed_task(task_id):
+    task = task_manager.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != TaskStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail=task.error or "Task not completed")
+    return task
+
+
+@router.get("/{task_id}/results", response_model=TaskResults)
+async def get_task_results(task_id: str):
+    task = _completed_task(task_id)
+    return TaskResults(
+        task_id=task_id,
+        results=[TaskResult(name=output.name, type=output.type, media_type=output.media_type, url=f"/v1/tasks/{task_id}/results/{output.name}") for output in task.results],
+    )
+
+
+@router.get("/{task_id}/results/{name}")
+async def download_task_result(task_id: str, name: str):
+    task = _completed_task(task_id)
+    output = next((output for output in task.results if output.name == name), None)
+    if output is None:
+        raise HTTPException(status_code=404, detail="Result not found")
+    content = output.content
+    if content is not None:
+        return Response(content=content, media_type="image/png" if output.type == "image" else output.media_type)
+    if output.path is None:
+        raise HTTPException(status_code=410, detail="Result is no longer in memory; submit a new task to regenerate it")
+    path = Path(output.path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Result file not found")
+    return FileResponse(path, media_type=output.media_type, filename=path.name)
 
 
 @router.delete("/{task_id}", response_model=StopTaskResponse)

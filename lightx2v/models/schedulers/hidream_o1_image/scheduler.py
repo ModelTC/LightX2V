@@ -197,11 +197,11 @@ class HidreamO1ImageScheduler(BaseScheduler):
         self.timesteps = self.sched.timesteps
         self.infer_steps = len(self.timesteps)
         strength = self._get_i2i_denoise_strength(inputs)
-        if self.config["task"] == "i2i" and strength is not None:
+        if inputs["task"] == "i2i" and strength is not None:
             self.set_i2i_denoise_strength_timesteps(inputs)
         self.noise_scale_schedule = self._build_noise_scale_schedule(cfg, self.infer_steps)
         self.noise_pred = None
-        if self.config["task"] == "i2i" and strength is not None:
+        if inputs["task"] == "i2i" and strength is not None:
             self.prepare_i2i_denoise_strength_latents(inputs)
 
         torch.manual_seed(seed + 1)

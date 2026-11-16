@@ -1,17 +1,5 @@
 """Sphinx configuration for the PAPERS_ZH_CN documentation."""
 
-import ast
-from pathlib import Path
-
-# Read the package version without importing GPU dependencies.
-package_init = Path(__file__).resolve().parents[3] / "lightx2v" / "__init__.py"
-version = next(
-    ast.literal_eval(node.value)
-    for node in ast.parse(package_init.read_text(encoding="utf-8")).body
-    if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
-)
-release = version
-
 project = "LightX2V"
 copyright = "2026, LightX2V Team"
 author = "the LightX2V Team"

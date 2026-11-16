@@ -93,7 +93,7 @@ host 在同机同一 IPC 域共享一份兼容的 CPU 权重；NUMA 按参与 GP
   --image_path "${lightx2v_path}/assets/inputs/imgs/img_0.jpg" \
 ```
 
-Ref2AV 同类参考素材可用逗号分隔，音频必须搭配图片或视频。脚本不再自动填充参考图；切换任务时自行修改 `--prompt` 和 `--save_result_path`。
+Ref2AV 同类参考素材以空格分隔传入，音频必须搭配图片或视频。脚本不再自动填充参考图；切换任务时自行修改 `--prompt` 和 `--save_result_path`。
 
 ## 其他参数
 

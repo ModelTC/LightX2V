@@ -1,40 +1,27 @@
 """Audio-driven cropped-video editing on the native Wan2.2 dense lifecycle."""
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
 from loguru import logger
 
-from lightx2v.models.input_encoders.hubert.model import HubertAudioEncoder, load_audio
-from lightx2v.models.input_encoders.tbdub import continuation_frames, match_reference_colors, read_video, video_tensor
+from lightx2v.models.input_encoders.hf.hubert.model import HubertAudioEncoder, load_audio
+from lightx2v.models.input_encoders.hf.tbdub.video import continuation_frames, match_reference_colors, read_video, video_tensor
 from lightx2v.models.networks.wan.tbdub_model import TBDubModel
 from lightx2v.models.runners.base_runner import BaseRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.tbdub.scheduler import TBDubScheduler
 from lightx2v.models.video_encoders.hf.wan.tbdub_vae import TBDubVAE
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
-from lightx2v.utils.input_info import InputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
-
-
-@dataclass
-class TBDubInputInfo(InputInfo):
-    video_path: str = ""
-    audio_path: str = ""
-    num_frames: int | None = None
-    size: list = field(default_factory=list)
 
 
 @RUNNER_REGISTER("tbdub")
 class TBDubRunner(Wan22DenseRunner):
     supported_lora_modes = ("merge",)
 
-    input_info_cls_by_task = {"v2v": TBDubInputInfo}
-    supported_request_fields_by_task = {"v2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"video_path", "audio_path"}}
     # These are checkpoint temporal conventions, not the requested output length.
     clip_frames = 77
     motion_frames = 5
@@ -171,7 +158,7 @@ class TBDubRunner(Wan22DenseRunner):
         if manager is not None:
             manager.need_init_first_buffer = True
             actions.extend((f"synchronize {name}", getattr(manager, name).synchronize) for name in ("init_stream", "cuda_load_stream", "compute_stream"))
-        if self.config.get("cpu_offload"):
+        if self.config.get("cpu_offload", False):
             if self.config.get("offload_granularity") == "model":
                 actions.append(("offload DiT", self.model.to_cpu))
             else:

@@ -26,6 +26,17 @@ hf download Wan-AI/Wan2.1-T2V-1.3B --local-dir /path/to/models/Wan2.1-T2V-1.3B
 
 脚本选择 [wan_t2v.json](https://github.com/ModelTC/LightX2V/blob/main/configs/wan/wan_t2v.json)。采样步数、引导强度等启动设置在 JSON 中修改，请求参数在启动脚本中修改。
 
+指定模型、任务、模型路径和配置文件后，可以查看当前配置接受的输入参数：
+
+```bash
+python -m lightx2v.infer \
+  --model_cls wan2.1 --task t2v \
+  --model_path /path/to/models/Wan2.1-T2V-1.3B \
+  --config_json configs/wan/wan_t2v.json --help
+```
+
+帮助只读取配置和必要的模型元数据，不加载权重或初始化加速设备；当前配置禁用的输入参数不会显示。单独运行 `python -m lightx2v.infer --help` 可查看启动参数，加上 `--model_cls` 还可查看该模型支持的任务。
+
 脚本显式传入的 `--size`、`--num_frames` 会覆盖 JSON 中的同名默认值，因此仅修改 JSON 不会改变当前脚本的输出尺寸和帧数。请修改脚本中的这两个参数；若希望由 JSON 统一控制，先删除脚本中的这两个参数，再设置 JSON 的 `size`（`[高, 宽]`）和 `num_frames`。
 
 该 JSON 使用 `flash_attn3`，请根据显卡和安装环境选择支持的算子，见[注意力机制](../method_tutorials/attention.md)。需要降低显存占用时，参考[参数卸载](../deploy_guides/for_low_resource.md)。

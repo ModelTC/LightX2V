@@ -153,7 +153,7 @@ class NeoppAttentionWeights(WeightModule):
             )
 
         self.add_module("cross_attn", ATTN_WEIGHT_REGISTER[attn_type]())
-        if config["seq_parallel"]:
+        if config.get("seq_parallel", False):
             self.add_module(
                 "cross_attn_parallel",
                 ATTN_WEIGHT_REGISTER[config["parallel"].get("seq_p_attn_type", "ulysses")](),

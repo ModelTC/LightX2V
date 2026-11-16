@@ -1,21 +1,21 @@
 import asyncio
 import os
-import time
 from pathlib import Path
 from typing import Any, Dict
 
 import torch
 from loguru import logger
 
-from lightx2v.models.runners.runner_factory import build_runner
-from lightx2v.utils.set_config import build_startup_config, init_parallel
+from lightx2v.utils.parallel import init_parallel
+from lightx2v.utils.set_config import build_startup_config
 
-from ..distributed_utils import DistributedManager
 from .pipeline_image_encode import encode_pipeline_return_to_png_bytes
 
 
 class TorchrunInferenceWorker:
     def __init__(self):
+        from ..distributed_utils import DistributedManager
+
         self.rank = int(os.environ.get("LOCAL_RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.runner = None
@@ -26,6 +26,8 @@ class TorchrunInferenceWorker:
         self.current_lora_strength = None
 
     def init(self, args) -> bool:
+        from lightx2v.models.runners.runner_factory import build_runner
+
         try:
             if self.world_size > 1:
                 if not self.dist_manager.init_process_group():
@@ -55,7 +57,7 @@ class TorchrunInferenceWorker:
                 }
             )
 
-            if config["parallel"]:
+            if config.get("parallel", False):
                 init_parallel(config)
 
             if self.rank == 0:
@@ -75,6 +77,8 @@ class TorchrunInferenceWorker:
         error_msg = ""
         error_type = ""
         pipeline_return = None
+        outputs = []
+        usage = None
         task_id = task_data.get("task_id", "unknown")
 
         try:
@@ -88,8 +92,18 @@ class TorchrunInferenceWorker:
             lora_strength = task_data.pop("lora_strength", 1.0)
             reuse = task_data.pop("reuse", False)
             reuse_prefix_segments = task_data.pop("reuse_prefix_segments", 0)
+            output_dir = Path(task_data.pop("_output_dir"))
+            memory_result = task_data.pop("_prefer_memory_result", False)
 
             input_info = self.runner.prepare_request(task_data)
+            input_info.return_result_tensor = memory_result
+            output_path = Path(input_info.save_result_path or output_dir / "result")
+            if not output_path.is_absolute():
+                output_path = output_dir / output_path
+            if not output_path.suffix:
+                output_path = output_path.with_suffix(self.runner.get_output_extension(input_info))
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            input_info.save_result_path = str(output_path)
             if self.lora_dir:
                 self.switch_lora(lora_name, lora_strength)
 
@@ -107,6 +121,26 @@ class TorchrunInferenceWorker:
         if self.world_size > 1:
             self.dist_manager.barrier()
 
+        if self.rank == 0 and not has_error:
+            try:
+                outputs = self.runner.get_outputs(input_info, pipeline_return)
+                if memory_result and any(output.type == "image" for output in outputs):
+                    png = encode_pipeline_return_to_png_bytes(pipeline_return)
+                    if png is None:
+                        raise RuntimeError("Image inference did not return an encodable image.")
+                    image = next(output for output in outputs if output.type == "image")
+                    image.content = png
+                    usage = self.runner.compute_usage(
+                        prompt=getattr(input_info, "prompt", ""),
+                        size=getattr(input_info, "size", []),
+                        has_input_image=bool(getattr(input_info, "image_path", None)),
+                    )
+            except Exception as e:
+                has_error = True
+                error_msg = str(e)
+                error_type = type(e).__name__
+                logger.exception(f"Collecting inference results failed: {error_msg}")
+
         if self.rank == 0:
             if has_error:
                 return {
@@ -120,23 +154,10 @@ class TorchrunInferenceWorker:
                 out: Dict[str, Any] = {
                     "task_id": task_id,
                     "status": "success",
-                    "save_result_path": task_data.get("save_result_path"),
+                    "outputs": outputs,
+                    "usage": usage,
                     "message": "Inference completed",
                 }
-                if task_data.get("return_result_tensor"):
-                    encode_start = time.perf_counter()
-                    png = encode_pipeline_return_to_png_bytes(pipeline_return)
-                    encode_elapsed_ms = (time.perf_counter() - encode_start) * 1000
-                    logger.info(f"Task {task_id} encode result_png cost {encode_elapsed_ms:.2f} ms")
-                    if png:
-                        out["result_png"] = png
-                    usage = self.runner.compute_usage(
-                        prompt=task_data.get("prompt", ""),
-                        size=task_data.get("size", []),
-                        has_input_image=bool(task_data.get("image_path")),
-                    )
-                    if usage:
-                        out["usage"] = usage
                 return out
         else:
             return None

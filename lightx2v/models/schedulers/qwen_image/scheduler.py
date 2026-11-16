@@ -443,7 +443,7 @@ class QwenImageScheduler(BaseScheduler):
         self.sample_guide_scale = self.config.get("sample_guide_scale", None)
         self.zero_cond_t = config.get("zero_cond_t", False)
         self.rope_request_id = 0
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
@@ -692,7 +692,7 @@ class QwenImageScheduler(BaseScheduler):
         else:
             self.image_rotary_emb = (shared_img_freqs, image_rotary_emb[1])
 
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             negative_image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[1], device=AI_DEVICE)
             if isinstance(negative_image_rotary_emb, list):
                 self.negative_image_rotary_emb = [shared_img_freqs, negative_image_rotary_emb[1]]

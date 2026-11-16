@@ -114,7 +114,7 @@ def load_wan_text_encoder(config: Dict[str, Any]):
     from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 
     # offload config
-    t5_offload = config.get("t5_cpu_offload", config.get("cpu_offload"))
+    t5_offload = config.get("t5_cpu_offload", config.get("cpu_offload", False))
     if t5_offload:
         t5_device = torch.device("cpu")
     else:
@@ -215,7 +215,7 @@ def load_wan_vae_encoder(config: Dict[str, Any]):
         vae_cls = WanVAE
 
     # offload config
-    vae_offload = config.get("vae_cpu_offload", config.get("cpu_offload"))
+    vae_offload = config.get("vae_cpu_offload", config.get("cpu_offload", False))
     if vae_offload:
         vae_device = torch.device("cpu")
     else:
@@ -255,7 +255,7 @@ def load_wan_vae_decoder(config: Dict[str, Any]):
         tiny_vae_name = "taew2_1.pth"
 
     # offload config
-    vae_offload = config.get("vae_cpu_offload", config.get("cpu_offload"))
+    vae_offload = config.get("vae_cpu_offload", config.get("cpu_offload", False))
     if vae_offload:
         vae_device = torch.device("cpu")
     else:
@@ -285,7 +285,7 @@ def load_wan_transformer(config: Dict[str, Any]):
         % (
             config.get("model_cls"),
             config.get("model_path"),
-            AI_DEVICE if not config.get("cpu_offload") else "cpu",
+            AI_DEVICE if not config.get("cpu_offload", False) else "cpu",
             config.get("dit_quantized", False),
             config.get("lazy_load", False),
         ),
@@ -300,14 +300,14 @@ def load_wan_transformer(config: Dict[str, Any]):
         % (
             config.get("model_cls"),
             config.get("model_path"),
-            AI_DEVICE if not config.get("cpu_offload") else "cpu",
+            AI_DEVICE if not config.get("cpu_offload", False) else "cpu",
             config.get("dit_quantized", False),
             config.get("lazy_load", False),
         ),
         flush=True,
     )
 
-    if config["cpu_offload"]:
+    if config.get("cpu_offload", False):
         init_device = torch.device("cpu")
     else:
         init_device = torch.device(AI_DEVICE)

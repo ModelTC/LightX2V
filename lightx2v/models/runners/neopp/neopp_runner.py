@@ -10,11 +10,9 @@ from PIL import Image
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import NeoppInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -42,16 +40,6 @@ def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs
 @RUNNER_REGISTER("neopp")
 class NeoppRunner(DefaultRunner):
     supported_lora_modes = ("merge", "separate")
-
-    input_info_cls_by_task = {"t2i": NeoppInputInfo, "i2i": NeoppInputInfo}
-    supported_request_fields_by_task = {
-        "t2i": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"size"},
-        "i2i": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"size"},
-    }
-
-    def get_supported_tasks(self):
-        # LightLLM encodes both text and image conditioning into the injected KV.
-        return ("t2i", "i2i")
 
     def resolve_request_seed(self, request_data):
         # Preserve LightLLM's session RNG unless a seed is supplied.
@@ -81,10 +69,10 @@ class NeoppRunner(DefaultRunner):
         head_dim = llm_config["head_dim"]
         self.inv_freq_t = self._build_inv_freq(head_dim // 2, llm_config["rope_theta"])
         self.inv_freq_hw = self._build_inv_freq(head_dim // 4, llm_config["rope_theta_hw"])
-        self.enable_cfg = self.config.get("enable_cfg", True)
+        self.enable_cfg = self.config.get("enable_cfg", False)
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
@@ -322,3 +310,6 @@ class NeoppRunner(DefaultRunner):
         mean = torch.tensor(mean, device=x.device, dtype=x.dtype).view(1, 3, 1, 1)
         std = torch.tensor(std, device=x.device, dtype=x.dtype).view(1, 3, 1, 1)
         return (x * std + mean).clamp(0, 1)
+
+    def get_outputs(self, input_info, result):
+        return super().get_outputs(input_info, {"image": result})

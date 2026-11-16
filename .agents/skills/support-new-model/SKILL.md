@@ -15,7 +15,7 @@ Always map the upstream pipeline onto LightX2V's existing architecture:
 
 ```text
 CLI/config/script
-  -> build_cli_inputs / build_startup_config
+  -> parse_cli_inputs / build_startup_config
   -> runner_factory.build_runner (init_modules, optional warmup)
   -> prepare_request -> InputInfo -> run_request
   -> runner.run_pipeline
@@ -69,7 +69,10 @@ Before editing, inspect the current repo and the upstream model:
   - `lightx2v/utils/input_info.py`
   - `lightx2v/utils/registry_factory.py`
   - `lightx2v/models/runners/runner_factory.py`
-  - `lightx2v/models/runners/request_fields.py`
+  - `lightx2v/models/runners/registry.py`
+  - `lightx2v/models/runners/request_args.py`
+  - `lightx2v/utils/request_spec.py`
+  - nearest family's `lightx2v/models/runners/<family>/request_spec.py`
   - `lightx2v/models/runners/base_runner.py`
   - `lightx2v/models/runners/default_runner.py`
   - nearest family runner, for example `lightx2v/models/runners/wan/wan_runner.py`
@@ -155,8 +158,10 @@ Runner should follow the closest existing family style.
 
 Responsibilities:
 
-- register with `@RUNNER_REGISTER("<model_cls>")` and add its import path to `runner_factory.RUNNER_MODULES`
-- declare `supported_request_fields_by_task` using `request_fields.py` sets; add `input_info_cls_by_task` or `INPUT_INFO_TYPES` entries only when needed
+- register with `@RUNNER_REGISTER("<model_cls>")` and add a `ModelEntry` to `registry.RUNNER_MODULES`
+- declare tasks and arguments in the family's `request_spec.py` through `SPECS`, `RequestSpec` / `MultiTaskSpec` and `Argument`; write InputInfo defaults as values such as `input_info_default=[]` (copied for each InputInfo) and reuse common groups from `request_args.py`
+- let `BaseRunner` build InputInfo fields from the Spec; put model-specific runtime state in the family's `input_info.py` and select it through `input_info_state`, without repeating request fields
+- register saved artifacts through `record_output()` when producing multiple files or joint outputs
 - initialize/load modules
 - initialize scheduler(s)
 - bind `run_input_encoder`
@@ -195,14 +200,18 @@ Derive cache keys, reset boundaries and token ordering from the actual autoregre
 When adding `model_cls`:
 
 - register runner with `RUNNER_REGISTER`
-- add the runner module path to `lightx2v/models/runners/runner_factory.py:RUNNER_MODULES`; `build_runner()` imports that module lazily
-- `infer.py` uses `choices=RUNNER_MODULES`, so do not add eager runner imports or a second model choice list there
-- update task choices only if a new `--task` string is truly needed; wire its request fields and `InputInfo` as described above
+- add `ModelEntry("<runner module>", config="<configuration loader function>")` to `lightx2v/models/runners/registry.py:RUNNER_MODULES`; omit `config` when the shared checkpoint reader is sufficient
+- registration paths are relative to `lightx2v.models.runners`, for example `ModelEntry("minimax_h3.minimax_h3_runner", config="minimax_h3.config.load_config")`
+- a model's `load_config(deployment_config)` reads checkpoint metadata and paths, calls `merge_config(model_config, deployment_config)` for deployment overrides, applies necessary model-specific processing, and returns the final configuration; keep this logic in the model's directory without adding branches to `utils/set_config.py`
+- do not inject a global default configuration; read optional behavior flags with defaults at their consumers and keep required architecture settings in model metadata or deployment profiles
+- `utils/cli.py` uses `choices=RUNNER_MODULES`, so do not add eager runner imports or a second model choice list in `infer.py`
+- declare new tasks in the model's Spec and wire their `InputInfo` as described above; CLI task validation and request options come from that Spec
+- keep configuration loaders, `request_spec.py` and their package initializers free of inference runtime imports so `--help` can run without initializing a device
 - `configs/model_pipeline.json` is not consumed by the current `build_runner()` registration path; do not add entries as a native CLI registration step
 
 If the upstream config name says `i2av` but the actual infer mode is image-to-video-action, choose one LightX2V task name and keep it consistent. Prefer semantic names in code (`i2va`) and use config filenames only for compatibility if needed.
 
-When an error says `argument --model_cls: invalid choice`, check the model's entry in `runner_factory.RUNNER_MODULES` first. Do not rename the model to an unrelated existing `model_cls` just to pass argument parsing.
+When an error says `argument --model_cls: invalid choice`, check the model's entry in `registry.RUNNER_MODULES` first. Do not rename the model to an unrelated existing `model_cls` just to pass argument parsing.
 
 ## Parity And Porting Checks
 

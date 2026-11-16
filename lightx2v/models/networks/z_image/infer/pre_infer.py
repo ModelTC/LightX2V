@@ -59,7 +59,7 @@ class ZImagePreInfer:
 
         world_size = 1
         rank = 0
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             world_size = torch.distributed.get_world_size(seq_p_group)
             rank = torch.distributed.get_rank(seq_p_group)

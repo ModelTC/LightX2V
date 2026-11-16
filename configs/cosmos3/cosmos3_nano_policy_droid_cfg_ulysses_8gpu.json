@@ -1,4 +1,5 @@
 {
+    "model_variant": "policy",
     "infer_steps": 4,
     "sample_guide_scale": 3.0,
     "sample_shift": 5.0,

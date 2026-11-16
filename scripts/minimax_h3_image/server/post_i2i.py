@@ -17,8 +17,7 @@ if __name__ == "__main__":
     message = {
         "task": "i2i",
         "prompt": "Keep the scene in <Picture 1> and change the lighting to warm sunset light.",
-        # For multiple references, use a comma-separated server-local path string here.
-        "image_path": image_to_base64(image_path),
+        "image_path": [image_to_base64(image_path)],
         "seed": 1234,
         "size": [2048, 2048],
         "save_result_path": "./minimax_h3_image_i2i.png",
