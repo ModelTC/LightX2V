@@ -78,7 +78,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
     def load(self):
         if self.config.get("qwen25vl_quantized", False):
             assert self.config["qwen25vl_quant_scheme"] == "int4"
-            if self.config["cpu_offload"]:
+            if self.config.get("cpu_offload", False):
                 self.device_map = {
                     "lm_head": AI_DEVICE,
                     "model.visual": "cpu",

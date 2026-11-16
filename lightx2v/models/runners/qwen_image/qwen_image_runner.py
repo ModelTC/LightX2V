@@ -148,7 +148,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         self.input_info = input_info_cls(
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],
-            negative_prompt=" " if self.config["enable_cfg"] else None,
+            negative_prompt=" " if self.config.get("enable_cfg", False) else None,
             size=[height, width],
             return_result_tensor=True,
         )
@@ -384,7 +384,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             prompt_embeds, _, _ = self.text_encoders[0].infer([text])
             self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt])
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -395,7 +395,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
             text_encoder_output["image_info"] = image_info
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt], image_list)
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds

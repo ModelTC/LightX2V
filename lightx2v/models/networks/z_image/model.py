@@ -29,7 +29,7 @@ class ZImageTransformerModel(BaseTransformerModel):
         self._init_infer()
 
     def _init_infer_class(self):
-        if self.config["feature_caching"] == "NoCaching":
+        if self.config.get("feature_caching", "NoCaching") == "NoCaching":
             self.transformer_infer_class = ZImageTransformerInfer if not self.cpu_offload else ZImageOffloadTransformerInfer
         else:
             assert NotImplementedError
@@ -53,7 +53,7 @@ class ZImageTransformerModel(BaseTransformerModel):
             encoder_hidden_states=prompt_embeds,
         )
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         hidden_states = self.transformer_infer.infer(
@@ -61,7 +61,7 @@ class ZImageTransformerModel(BaseTransformerModel):
             pre_infer_out=pre_infer_out,
         )
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             hidden_states = self._seq_parallel_post_process(hidden_states, pre_infer_out.x_item_seqlens[0])
 
         noise_pred = self.post_infer.infer(
@@ -108,9 +108,9 @@ class ZImageTransformerModel(BaseTransformerModel):
         latents = self.scheduler.latents
         latents_input = latents
 
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
-            if self.config["cfg_parallel"]:
+            if self.config.get("cfg_parallel", False):
                 # ==================== CFG Parallel Processing ====================
                 cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
                 assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"

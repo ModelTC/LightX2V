@@ -334,10 +334,10 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         branch = inputs[name]
         cache = self.kv_cache_manager.get_self_attn_kv_cache(name)
         state = self.pre_infer.infer_target(self.pre_weight, self.scheduler.latents[0], branch["layout"])
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             state = self._seq_parallel_pre_process(state)
         hidden = self.transformer_infer.infer(self.transformer_weights, state, cache)
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             hidden = self._seq_parallel_post_process(hidden, state)
         noise = self.post_infer.infer(self.post_weight, hidden, state)
         return noise.unsqueeze(0)
@@ -346,7 +346,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
     def infer(self, inputs):
         if self.kv_cache_manager is None:
             raise RuntimeError("Condition KV must be prefilled before denoising")
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             positive = self._infer_cond_uncond(inputs, True)
             negative = self._infer_cond_uncond(inputs, False)
             self.scheduler.noise_pred = negative + self.scheduler.sample_guide_scale * (positive - negative)

@@ -157,7 +157,7 @@ class WorldPlayBIRunner(HunyuanVideo15Runner):
         from lightx2v.models.input_encoders.hf.hunyuan15.byt5.model import ByT5TextEncoder
         from lightx2v.models.input_encoders.hf.hunyuan15.qwen25.model import Qwen25VL_TextEncoder
 
-        qwen25vl_offload = self.config.get("qwen25vl_cpu_offload", self.config.get("cpu_offload"))
+        qwen25vl_offload = self.config.get("qwen25vl_cpu_offload", self.config.get("cpu_offload", False))
         if qwen25vl_offload:
             qwen25vl_device = torch.device("cpu")
         else:
@@ -178,7 +178,7 @@ class WorldPlayBIRunner(HunyuanVideo15Runner):
             qwen25vl_quant_ckpt=qwen25vl_quantized_ckpt,
         )
 
-        byt5_offload = self.config.get("byt5_cpu_offload", self.config.get("cpu_offload"))
+        byt5_offload = self.config.get("byt5_cpu_offload", self.config.get("cpu_offload", False))
         if byt5_offload:
             byt5_device = torch.device("cpu")
         else:

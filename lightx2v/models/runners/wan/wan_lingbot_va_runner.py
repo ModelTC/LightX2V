@@ -70,7 +70,6 @@ class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
     supported_lora_modes = ("merge",)
 
     def __init__(self, config):
-        config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)
         config["enable_action_cfg"] = config.get("enable_action_cfg", config.get("action_sample_guide_scale", 1.0) > 1)
         config["cfg_parallel"] = False
         super().__init__(config)

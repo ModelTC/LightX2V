@@ -15,7 +15,7 @@ def validate_numa_config(config, lora_path=None):
         raise ValueError("cpu_offload_numa must be a boolean")
     if not enabled:
         return
-    if not config.get("cpu_offload") or config.get("offload_granularity", "block") != "block":
+    if not config.get("cpu_offload", False) or config.get("offload_granularity", "block") != "block":
         raise ValueError("cpu_offload_numa requires CPU block offload")
     incompatible = ("shared_cpu_weights", "cpu_offload_block_contiguous", "lazy_load", "tensor_parallel", "weight_auto_quant", "lora_configs")
     if config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key) for key in incompatible) or lora_path:

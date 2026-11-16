@@ -56,7 +56,7 @@ class QwenImage21Runner(DefaultRunner):
         validate_lora_config(config)
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("qwen_image_21 supports model and block CPU offload")
-        if config.get("seq_parallel"):
+        if config.get("seq_parallel", False):
             parallel = config["parallel"]
             seq_p_size = int(parallel.get("seq_p_size", 1))
             seq_p_attn_type = parallel.get("seq_p_attn_type", "ulysses")
@@ -98,7 +98,7 @@ class QwenImage21Runner(DefaultRunner):
             raise ValueError("qwen_image_21 supports exact condition KV caching, not feature caching")
         if not config["causal_condition"]:
             raise ValueError("Condition KV caching requires causal_condition=true")
-        if config["enable_cfg"]:
+        if config.get("enable_cfg", False):
             assert config["sample_guide_scale"] > 1, "enable_cfg=true requires sample_guide_scale > 1"
         if config["infer_steps"] < 1:
             raise ValueError("infer_steps must be positive")
@@ -108,7 +108,7 @@ class QwenImage21Runner(DefaultRunner):
 
     @staticmethod
     def _validate_mps_streaming_config(config):
-        if not config.get("cpu_offload") or config.get("offload_granularity") != "block":
+        if not config.get("cpu_offload", False) or config.get("offload_granularity") != "block":
             raise ValueError("Qwen-Image-2.1 MPS streaming requires cpu_offload=true and offload_granularity=block")
         if not config.get("dit_disk_streaming") or not config.get("text_encoder_disk_streaming") or not config.get("text_encoder_cpu_offload"):
             raise ValueError("Qwen-Image-2.1 MPS streaming requires both DiT/text encoder disk streaming and text_encoder_cpu_offload=true")
@@ -216,7 +216,7 @@ class QwenImage21Runner(DefaultRunner):
         info = self.input_info
         outputs = {}
         branches = [("cond", info.prompt)]
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             branches.append(("uncond", info.negative_prompt or ""))
         encoder = self.text_encoders[0]
         offload = self.config.get("text_encoder_cpu_offload", False)

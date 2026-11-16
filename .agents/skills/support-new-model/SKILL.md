@@ -158,7 +158,7 @@ Runner should follow the closest existing family style.
 
 Responsibilities:
 
-- register with `@RUNNER_REGISTER("<model_cls>")` and add its import path to `registry.RUNNER_MODULES`
+- register with `@RUNNER_REGISTER("<model_cls>")` and add a `ModelEntry` to `registry.RUNNER_MODULES`
 - declare tasks and arguments in the family's `request_spec.py` through `SPECS`, `RequestSpec` / `MultiTaskSpec` and `Argument`; write InputInfo defaults as values such as `input_info_default=[]` (copied for each InputInfo) and reuse common groups from `request_args.py`
 - let `BaseRunner` build InputInfo fields from the Spec; put model-specific runtime state in the family's `input_info.py` and select it through `input_info_state`, without repeating request fields
 - register saved artifacts through `record_output()` when producing multiple files or joint outputs
@@ -200,10 +200,13 @@ Derive cache keys, reset boundaries and token ordering from the actual autoregre
 When adding `model_cls`:
 
 - register runner with `RUNNER_REGISTER`
-- add the runner module path to `lightx2v/models/runners/registry.py:RUNNER_MODULES`; `build_runner()` imports that module lazily
+- add `ModelEntry("<runner module>", config="<configuration loader function>")` to `lightx2v/models/runners/registry.py:RUNNER_MODULES`; omit `config` when the shared checkpoint reader is sufficient
+- registration paths are relative to `lightx2v.models.runners`, for example `ModelEntry("minimax_h3.minimax_h3_runner", config="minimax_h3.config.load_config")`
+- a model's `load_config(deployment_config)` reads checkpoint metadata and paths, calls `merge_config(model_config, deployment_config)` for deployment overrides, applies necessary model-specific processing, and returns the final configuration; keep this logic in the model's directory without adding branches to `utils/set_config.py`
+- do not inject a global default configuration; read optional behavior flags with defaults at their consumers and keep required architecture settings in model metadata or deployment profiles
 - `utils/cli.py` uses `choices=RUNNER_MODULES`, so do not add eager runner imports or a second model choice list in `infer.py`
 - declare new tasks in the model's Spec and wire their `InputInfo` as described above; CLI task validation and request options come from that Spec
-- keep `request_spec.py` and its package initializer free of inference runtime imports so `--help` can run without initializing a device
+- keep configuration loaders, `request_spec.py` and their package initializers free of inference runtime imports so `--help` can run without initializing a device
 - `configs/model_pipeline.json` is not consumed by the current `build_runner()` registration path; do not add entries as a native CLI registration step
 
 If the upstream config name says `i2av` but the actual infer mode is image-to-video-action, choose one LightX2V task name and keep it consistent. Prefer semantic names in code (`i2va`) and use config filenames only for compatibility if needed.

@@ -189,7 +189,7 @@ class ZImageRunner(DefaultRunner):
             # embedding_list[0] shape is (seq_len, hidden_dim), use shape[0] for sequence length
             self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt])
                 neg_prompt_embeds = neg_prompt_embeds_list[0]
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -203,7 +203,7 @@ class ZImageRunner(DefaultRunner):
                 self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
                 text_encoder_output["prompt_embeds"] = prompt_embeds
                 text_encoder_output["image_info"] = image_info
-                if self.config["enable_cfg"]:
+                if self.config.get("enable_cfg", False):
                     neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt], image_list)
                     neg_prompt_embeds = neg_prompt_embeds_list[0]
                     self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -214,7 +214,7 @@ class ZImageRunner(DefaultRunner):
                 prompt_embeds = prompt_embeds_list[0]
                 self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
                 text_encoder_output["prompt_embeds"] = prompt_embeds
-                if self.config["enable_cfg"]:
+                if self.config.get("enable_cfg", False):
                     neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt])
                     neg_prompt_embeds = neg_prompt_embeds_list[0]
                     self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -225,7 +225,7 @@ class ZImageRunner(DefaultRunner):
             prompt_embeds = prompt_embeds_list[0]
             self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt])
                 neg_prompt_embeds = neg_prompt_embeds_list[0]
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])

@@ -382,7 +382,7 @@ class LongCatImageScheduler(BaseScheduler):
         self.image_rotary_emb = self._seq_parallel_rope(self.image_rotary_emb, txt_seq_len)
 
         # Handle CFG: prepare negative embeddings rotary
-        if self.config.get("enable_cfg", True):
+        if self.config.get("enable_cfg", False):
             neg_txt_seq_len = input_info.txt_seq_lens[1] if len(input_info.txt_seq_lens) > 1 else txt_seq_len
             neg_txt_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=neg_txt_seq_len)
             neg_ids = torch.cat([neg_txt_ids, img_ids], dim=0).to(AI_DEVICE, dtype=torch.float32)
@@ -450,7 +450,7 @@ class LongCatImageScheduler(BaseScheduler):
         self.output_seq_len = self.latents.shape[1]
 
         # Handle CFG: prepare negative embeddings rotary
-        if self.config.get("enable_cfg", True):
+        if self.config.get("enable_cfg", False):
             neg_txt_seq_len = input_info.txt_seq_lens[1] if len(input_info.txt_seq_lens) > 1 else txt_seq_len
             neg_txt_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=neg_txt_seq_len)
             neg_ids = torch.cat([neg_txt_ids, combined_img_ids], dim=0).to(AI_DEVICE, dtype=torch.float32)

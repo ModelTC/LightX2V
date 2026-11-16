@@ -101,7 +101,7 @@ class HidreamO1ImageRunner(DefaultRunner):
         return {
             "num_inference_steps": self.config["infer_steps"],
             "guidance_scale": float(self.config.get("guidance_scale", 0.0 if is_dev else 5.0)),
-            "enable_cfg": self.config["enable_cfg"],
+            "enable_cfg": self.config.get("enable_cfg", False),
             "shift": float(self.config.get("shift", 1.0 if is_dev else 3.0)),
             "timesteps_list": self.config.get("timesteps_list", self.default_timesteps) if is_dev else None,
             "scheduler_type": self.config.get("scheduler_type", "flash" if is_dev else "default"),

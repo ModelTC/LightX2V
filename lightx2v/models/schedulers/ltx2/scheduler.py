@@ -374,7 +374,7 @@ class LTX2Scheduler(BaseScheduler):
 
     @property
     def needs_negative_prompt(self) -> bool:
-        if not self.config["enable_cfg"]:
+        if not self.config.get("enable_cfg", False):
             return False
         if not self.mm_guider_enabled:
             return True

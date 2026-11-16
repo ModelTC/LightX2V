@@ -74,3 +74,13 @@ def parse_cli_inputs(argv=None):
     request = {key: value for key, value in vars(args).items() if key in request_fields and value is not None}
     request["task"] = task
     return args, config, request
+
+
+def build_cli_inputs(args):
+    args_data = {key: value for key, value in vars(args).items() if value is not None}
+    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "task"}
+    startup_args = {key: value for key, value in args_data.items() if key in startup_fields}
+    request_data = {key: value for key, value in args_data.items() if key not in startup_fields}
+    request_data["task"] = args.task
+    startup_config = build_startup_config(startup_args)
+    return startup_config, request_data

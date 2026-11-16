@@ -38,7 +38,6 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
     supported_lora_modes = ("merge",)
 
     def __init__(self, config):
-        config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)
         super().__init__(config)
         self.vae_cls = WanVAE
         self.tiny_vae_cls = WanVAE_tiny
@@ -141,7 +140,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
         return image_encoder
 
     def load_text_encoder(self):
-        t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload"))
+        t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload", False))
         t5_device = torch.device("cpu") if t5_offload else torch.device(AI_DEVICE)
         t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
         t5_original_ckpt = self._resolve_wan_ckpt_file(t5_model_name)
@@ -168,7 +167,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
     def load_vae_encoder(self):
         if self.config["task"] not in ["i2va"]:
             return super().load_vae_encoder()
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         vae_device = torch.device("cpu") if vae_offload else torch.device(AI_DEVICE)
         vae_config = {
             "vae_path": self._resolve_wan_ckpt_file(self.vae_name),
@@ -195,7 +194,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
             return WanStreamingVAERunnerMixin.load_vae_decoder(self)
         if self.config["task"] not in ["i2va"]:
             return super().load_vae_decoder()
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         vae_device = torch.device("cpu") if vae_offload else torch.device(AI_DEVICE)
         if self.config.get("use_tae", False):
             tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)

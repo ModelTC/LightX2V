@@ -7,9 +7,11 @@ import torch
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
+from lightx2v.utils.config_logging import print_config
 from lightx2v.utils.input_info import InputInfo
+from lightx2v.utils.parallel import init_parallel
 from lightx2v.utils.profiler import *
-from lightx2v.utils.set_config import build_startup_config, init_parallel, print_config
+from lightx2v.utils.set_config import build_startup_config
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 

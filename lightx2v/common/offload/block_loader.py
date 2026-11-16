@@ -33,7 +33,7 @@ def validate_contiguous_config(config, lora_path=None):
     if not contiguous:
         return
     get_block_offload_backend()
-    if not config.get("cpu_offload") or config.get("offload_granularity", "block") != "block":
+    if not config.get("cpu_offload", False) or config.get("offload_granularity", "block") != "block":
         raise ValueError("contiguous layout requires CPU block offload")
     if bool(config.get("dit_quantized")) != (config.get("dit_quant_scheme", "Default") != "Default"):
         raise ValueError("dit_quantized must agree with dit_quant_scheme")

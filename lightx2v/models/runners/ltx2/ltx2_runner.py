@@ -197,7 +197,7 @@ class LTX2Runner(DefaultRunner):
             task=task,
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],
-            negative_prompt=" " if self.config["enable_cfg"] else "",
+            negative_prompt=" " if self.config.get("enable_cfg", False) else "",
             size=[height, width],
             num_frames=self.config["num_frames"],
         )

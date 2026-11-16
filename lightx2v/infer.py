@@ -11,13 +11,14 @@ def main():
     from loguru import logger
 
     from lightx2v.models.runners.runner_factory import build_runner
+    from lightx2v.utils.config_logging import print_config, print_request
+    from lightx2v.utils.parallel import configure_nccl_graph, init_parallel
     from lightx2v.utils.profiler import ProfilingContext4DebugL1
-    from lightx2v.utils.set_config import configure_nccl_graph, init_parallel, print_config, print_request
     from lightx2v.utils.utils import validate_config_paths
     from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
     configure_nccl_graph(startup_config)
-    if startup_config["parallel"]:
+    if startup_config.get("parallel", False):
         platform_device = PLATFORM_DEVICE_REGISTER[os.getenv("PLATFORM", "cuda")]
         platform_device.init_parallel_env()
         init_parallel(startup_config)

@@ -17,7 +17,7 @@ class EulerScheduler(WanScheduler):
         self.infer_condition = True  # cfg status
         self.keep_latents_dtype_in_scheduler = False
         self.sample_shift = self.config["sample_shift"]
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None

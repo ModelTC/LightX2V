@@ -32,7 +32,7 @@ class WanS2VModel(WanModel):
         self.transformer_infer_class = WanS2VTransformerInfer
 
     def _seq_p_group(self):
-        if not self.config.get("seq_parallel"):
+        if not self.config.get("seq_parallel", False):
             return None
         return self.config["device_mesh"].get_group(mesh_dim="seq_p")
 
@@ -86,12 +86,12 @@ class WanS2VModel(WanModel):
         self.scheduler.infer_condition = infer_condition
 
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             x = self._seq_parallel_post_process(x)
             global_seq_len = pre_infer_out.s2v_extra.get("global_original_seq_len", pre_infer_out.original_seq_len)
             x = self.transformer_infer.infer_non_blocks(self.transformer_weights, x, pre_infer_out.embed, global_seq_len)

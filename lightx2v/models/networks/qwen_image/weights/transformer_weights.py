@@ -38,11 +38,11 @@ class QwenImageTransformerWeights(WeightModule):
         )
         self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.add_module("blocks", blocks)
-        if config.get("cpu_offload") and config.get("offload_granularity", "block") == "block":
+        if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block":
             self.register_offload_group(self.blocks, self.offload_block_cuda_buffers, (f"transformer_blocks.{i}." for i in range(self.blocks_num)))
 
     def register_offload_buffers(self, config, lazy_load_path, lora_path):
-        if config["cpu_offload"]:
+        if config.get("cpu_offload", False):
             if config["offload_granularity"] == "block":
                 self.offload_blocks_num = 2
                 self.offload_block_cuda_buffers = WeightModuleList(
@@ -498,7 +498,7 @@ class QwenImageCrossAttention(WeightModule):
         # attn
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.add_module(
                 "calculate_parallel",
                 ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),

@@ -237,7 +237,7 @@ class EdenLiveRunner(RunnerLifecycleMixin):
                     self.run_generation(step_indices=(0,))
                 finally:
                     getattr(torch, AI_DEVICE).synchronize()
-                    if self.config["cpu_offload"] and self.config.get("offload_granularity", "block") == "model":
+                    if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                         self.model.to_cpu()
                     self.clear_warmup_state()
         finally:

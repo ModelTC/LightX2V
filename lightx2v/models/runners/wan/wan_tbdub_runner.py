@@ -158,7 +158,7 @@ class TBDubRunner(Wan22DenseRunner):
         if manager is not None:
             manager.need_init_first_buffer = True
             actions.extend((f"synchronize {name}", getattr(manager, name).synchronize) for name in ("init_stream", "cuda_load_stream", "compute_stream"))
-        if self.config.get("cpu_offload"):
+        if self.config.get("cpu_offload", False):
             if self.config.get("offload_granularity") == "model":
                 actions.append(("offload DiT", self.model.to_cpu))
             else:

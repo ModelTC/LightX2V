@@ -11,7 +11,7 @@ def build_runner(config):
     model_cls = config["model_cls"]
     if model_cls != "depth_anything3":
         import_module("lightx2v.common.ops")
-    import_module(RUNNER_MODULES[model_cls])
+    import_module(f".{RUNNER_MODULES[model_cls].runner}", __package__)
 
     torch.set_grad_enabled(False)
     runner = RUNNER_REGISTER[model_cls](config)

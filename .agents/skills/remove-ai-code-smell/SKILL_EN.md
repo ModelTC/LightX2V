@@ -16,7 +16,7 @@ First distinguish between two kinds of checks:
 
 Do not keep every guard merely because it appears safer. Determine what happens when it fails. If it only makes an internal error surface earlier and more verbosely, it is usually unnecessary. If execution would continue and silently produce an incorrect result, keep it.
 
-In LightX2V, startup JSON and request data are separate contracts. Inspect `build_cli_inputs()` / `build_startup_config()` in `lightx2v/utils/set_config.py` and `BaseRunner.prepare_request()` in `lightx2v/models/runners/base_runner.py`. Task/field validation at this public boundary is not redundant internal defense.
+In LightX2V, startup JSON and request data are separate contracts. Inspect argument splitting in `lightx2v/utils/cli.py`, `build_startup_config()` in `lightx2v/utils/set_config.py` and `BaseRunner.prepare_request()` in `lightx2v/models/runners/base_runner.py`. Task/field validation at this public boundary is not redundant internal defense.
 
 ## Review Workflow
 

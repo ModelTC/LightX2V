@@ -6,7 +6,8 @@ from typing import Any, Dict
 import torch
 from loguru import logger
 
-from lightx2v.utils.set_config import build_startup_config, init_parallel
+from lightx2v.utils.parallel import init_parallel
+from lightx2v.utils.set_config import build_startup_config
 
 from .pipeline_image_encode import encode_pipeline_return_to_png_bytes
 
@@ -56,7 +57,7 @@ class TorchrunInferenceWorker:
                 }
             )
 
-            if config["parallel"]:
+            if config.get("parallel", False):
                 init_parallel(config)
 
             if self.rank == 0:

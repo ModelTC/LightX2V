@@ -340,7 +340,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def load_text_encoder(self):
         # offload config
-        t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload"))
+        t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload", False))
         if t5_offload:
             t5_device = torch.device("cpu")
         else:
@@ -403,7 +403,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def load_vae_encoder(self):
         # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
@@ -431,7 +431,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def load_vae_decoder(self):
         # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
@@ -693,7 +693,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             for prompt in prompts:
                 monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
 
-        if self.config.get("enable_cfg", False) and self.config["cfg_parallel"]:
+        if self.config.get("enable_cfg", False) and self.config.get("cfg_parallel", False):
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
@@ -1113,7 +1113,7 @@ class MultiModelStruct:
     def get_current_model_index(self):
         if self.uses_high_noise_model():
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
@@ -1124,7 +1124,7 @@ class MultiModelStruct:
             self.cur_model_index = 0
         else:
             logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
@@ -1317,11 +1317,11 @@ class Wan22DenseRunner(WanRunner):
         }
 
     def load_vae_encoder(self):
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
 
     def load_vae_decoder(self):
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if self.config.get("use_tae", False):
             return self.load_tiny_vae_decoder()
         decoder = self.vae_cls(**self._build_wan22_vae_config(vae_offload))

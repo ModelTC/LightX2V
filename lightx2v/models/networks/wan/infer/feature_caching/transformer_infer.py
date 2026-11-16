@@ -26,14 +26,14 @@ class WanTransformerInferCaching(WanOffloadTransformerInfer):
 class WanTransformerInferTeaCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
-        self.teacache_thresh = config["teacache_thresh"]
+        self.teacache_thresh = config.get("teacache_thresh", 0.26)
         self.accumulated_rel_l1_distance_even = 0
         self.previous_e0_even = None
         self.previous_residual_even = None
         self.accumulated_rel_l1_distance_odd = 0
         self.previous_e0_odd = None
         self.previous_residual_odd = None
-        self.use_ret_steps = config["use_ret_steps"]
+        self.use_ret_steps = config.get("use_ret_steps", False)
         if self.use_ret_steps:
             self.coefficients = self.config["coefficients"][0]
             self.ret_steps = 5
@@ -66,7 +66,7 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
                     should_calc = True
                     self.accumulated_rel_l1_distance_even = 0
             self.previous_e0_even = modulated_inp.clone()
-            if self.config["cpu_offload"]:
+            if self.config.get("cpu_offload", False):
                 self.previous_e0_even = self.previous_e0_even.cpu()
 
         else:
@@ -83,10 +83,10 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
                     self.accumulated_rel_l1_distance_odd = 0
             self.previous_e0_odd = modulated_inp.clone()
 
-            if self.config["cpu_offload"]:
+            if self.config.get("cpu_offload", False):
                 self.previous_e0_odd = self.previous_e0_odd.cpu()
 
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             modulated_inp = modulated_inp.cpu()
             del modulated_inp
             torch.cuda.empty_cache()
@@ -135,14 +135,14 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
         x = super().infer_main_blocks(weights, pre_infer_out)
         if self.scheduler.infer_condition:
             self.previous_residual_even = x - ori_x
-            if self.config["cpu_offload"]:
+            if self.config.get("cpu_offload", False):
                 self.previous_residual_even = self.previous_residual_even.cpu()
         else:
             self.previous_residual_odd = x - ori_x
-            if self.config["cpu_offload"]:
+            if self.config.get("cpu_offload", False):
                 self.previous_residual_odd = self.previous_residual_odd.cpu()
 
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             ori_x = ori_x.to("cpu")
             del ori_x
             torch.cuda.empty_cache()
@@ -521,7 +521,7 @@ class WanTransformerInferCustomCaching(WanTransformerInferCaching, BaseTaylorCac
     def __init__(self, config):
         super().__init__(config)
         self.cnt = 0
-        self.teacache_thresh = config["teacache_thresh"]
+        self.teacache_thresh = config.get("teacache_thresh", 0.26)
         self.accumulated_rel_l1_distance_even = 0
         self.previous_e0_even = None
         self.previous_residual_even = None
@@ -530,7 +530,7 @@ class WanTransformerInferCustomCaching(WanTransformerInferCaching, BaseTaylorCac
         self.previous_residual_odd = None
         self.cache_even = {}
         self.cache_odd = {}
-        self.use_ret_steps = config["use_ret_steps"]
+        self.use_ret_steps = config.get("use_ret_steps", False)
         if self.use_ret_steps:
             self.coefficients = self.config["coefficients"][0]
             self.ret_steps = 5 * 2
@@ -1039,7 +1039,7 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
         x = super().infer_main_blocks(weights, pre_infer_out)
 
         previous_residual = x - ori_x
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             previous_residual = previous_residual.cpu()
 
         if self.config["magcache_calibration"] and step_index >= 1:
@@ -1054,7 +1054,7 @@ class WanTransformerInferMagCaching(WanTransformerInferCaching):
 
         self.residual_cache[infer_condition] = previous_residual
 
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             ori_x = ori_x.to("cpu")
             del ori_x
             torch.cuda.empty_cache()

@@ -37,7 +37,7 @@ def validate_config(config):
     backend = config.get("attention_backend", "triton")
     if backend not in LOCAL_ATTENTION_BACKENDS:
         raise ValueError(f"RelayVSR attention_backend must be one of {LOCAL_ATTENTION_BACKENDS}, got {backend!r}")
-    if config.get("cpu_offload") and config.get("offload_granularity", "block") != "block":
+    if config.get("cpu_offload", False) and config.get("offload_granularity", "block") != "block":
         raise ValueError("RelayVSR supports block weight offload only")
     parallel = config.get("parallel") or {}
     if parallel.get("seq_p_size", 1) not in (1, 2):
@@ -68,7 +68,7 @@ class RelayVSRRunner(DefaultRunner):
             raise ValueError("RelayVSR local attention requires a CUDA-compatible accelerator with BF16 or FP16")
         self.device = torch.device("cuda", torch.cuda.current_device())
         self.main_rank = not dist.is_initialized() or dist.get_rank() == 0
-        self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p") if config.get("seq_parallel") else None
+        self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p") if config.get("seq_parallel", False) else None
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         if world_size != (config.get("parallel") or {}).get("seq_p_size", 1):
             raise ValueError("RelayVSR world size must equal parallel.seq_p_size")

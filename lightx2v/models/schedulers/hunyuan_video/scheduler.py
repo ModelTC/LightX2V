@@ -17,7 +17,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         self.reorg_token = False
         self.keep_latents_dtype_in_scheduler = True
         self.sample_guide_scale = self.config["sample_guide_scale"]
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None

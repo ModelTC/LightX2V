@@ -44,7 +44,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             self.config_sr["is_sr_running"] = False
             self.config_sr["sample_shift"] = config["video_super_resolution"]["flow_shift"]  # for SR model
             self.config_sr["sample_guide_scale"] = config["video_super_resolution"]["guidance_scale"]  # for SR model
-            self.config_sr["enable_cfg"] = config["video_super_resolution"].get("enable_cfg", config["enable_cfg"])
+            self.config_sr["enable_cfg"] = config["video_super_resolution"].get("enable_cfg", config.get("enable_cfg", False))
             self.config_sr["infer_steps"] = config["video_super_resolution"]["num_inference_steps"]
 
         super().__init__(config)
@@ -65,7 +65,7 @@ class HunyuanVideo15Runner(DefaultRunner):
 
     def init_scheduler(self):
         distill_method = self.config.get("distill_method")
-        feature_caching = self.config["feature_caching"]
+        feature_caching = self.config.get("feature_caching", "NoCaching")
 
         if distill_method == "dmd2":
             if feature_caching != "NoCaching":
@@ -88,7 +88,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             self.scheduler_sr = None
 
     def load_text_encoder(self):
-        qwen25vl_offload = self.config.get("qwen25vl_cpu_offload", self.config.get("cpu_offload"))
+        qwen25vl_offload = self.config.get("qwen25vl_cpu_offload", self.config.get("cpu_offload", False))
         if qwen25vl_offload:
             qwen25vl_device = torch.device("cpu")
         else:
@@ -110,7 +110,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             qwen25vl_quant_ckpt=qwen25vl_quantized_ckpt,
         )
 
-        byt5_offload = self.config.get("byt5_cpu_offload", self.config.get("cpu_offload"))
+        byt5_offload = self.config.get("byt5_cpu_offload", self.config.get("cpu_offload", False))
         if byt5_offload:
             byt5_device = torch.device("cpu")
         else:
@@ -293,7 +293,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         neg_prompt = input_info.negative_prompt
 
         # run qwen25vl
-        if config.get("enable_cfg", False) and config["cfg_parallel"]:
+        if config.get("enable_cfg", False) and config.get("cfg_parallel", False):
             cfg_p_group = config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
@@ -319,7 +319,7 @@ class HunyuanVideo15Runner(DefaultRunner):
     def load_image_encoder(self):
         image_encoder = None
         if self.config["task"] in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
-            siglip_offload = self.config.get("siglip_cpu_offload", self.config.get("cpu_offload"))
+            siglip_offload = self.config.get("siglip_cpu_offload", self.config.get("cpu_offload", False))
             if siglip_offload:
                 siglip_device = torch.device("cpu")
             else:
@@ -334,7 +334,7 @@ class HunyuanVideo15Runner(DefaultRunner):
 
     def load_vae_encoder(self):
         # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
@@ -345,7 +345,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             "device": vae_device,
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
-            "parallel": self.config["parallel"],
+            "parallel": self.config.get("parallel", False),
         }
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
             return None
@@ -354,7 +354,7 @@ class HunyuanVideo15Runner(DefaultRunner):
 
     def load_vae_decoder(self):
         # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
@@ -365,7 +365,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             "device": vae_device,
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
-            "parallel": self.config["parallel"],
+            "parallel": self.config.get("parallel", False),
         }
         if self.config.get("use_tae", False):
             tae_path = self.config["tae_path"]

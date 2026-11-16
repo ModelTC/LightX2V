@@ -258,7 +258,7 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
         if signature != self._cache_signature:
             self.reset_cuda_graph()
             manager.self_attn_kv_caches.clear()
-            for branch in (True, False) if self.config["enable_cfg"] else (True,):
+            for branch in (True, False) if self.config.get("enable_cfg", False) else (True,):
                 pool = manager.create_self_attn_kv_cache(branch, signature[0], num_heads=signature[1])
                 if manager.key_only:
                     pool.configure_key_only(write_alignment=(chunk * frame_tokens,))

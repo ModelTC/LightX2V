@@ -9,7 +9,7 @@ class HidreamO1ImageTransformerInfer:
         self.config = config
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             parallel_config = self.config["parallel"]
             self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
@@ -34,7 +34,7 @@ class HidreamO1ImageTransformerInfer:
         self.scheduler = scheduler
 
     def infer(self, block_weights, pre_infer_out):
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             return self._infer_seq_parallel(block_weights, pre_infer_out)
 
         hidden_states = pre_infer_out.inputs_embeds

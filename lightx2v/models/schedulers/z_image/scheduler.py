@@ -269,7 +269,7 @@ class ZImageScheduler(BaseScheduler):
         self.dtype = torch.bfloat16
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.zero_cond_t = config.get("zero_cond_t", False)
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None

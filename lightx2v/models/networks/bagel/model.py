@@ -35,7 +35,7 @@ class BagelModel:
 
     def __init__(self, config):
         self.config = config
-        self.enable_cfg = config["enable_cfg"]
+        self.enable_cfg = config.get("enable_cfg", False)
         self.model_path = config["model_path"]
         self._validate_config()
         # init llm config

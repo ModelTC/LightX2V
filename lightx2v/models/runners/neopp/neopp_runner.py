@@ -69,10 +69,10 @@ class NeoppRunner(DefaultRunner):
         head_dim = llm_config["head_dim"]
         self.inv_freq_t = self._build_inv_freq(head_dim // 2, llm_config["rope_theta"])
         self.inv_freq_hw = self._build_inv_freq(head_dim // 4, llm_config["rope_theta_hw"])
-        self.enable_cfg = self.config.get("enable_cfg", True)
+        self.enable_cfg = self.config.get("enable_cfg", False)
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None

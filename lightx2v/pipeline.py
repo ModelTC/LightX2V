@@ -4,7 +4,8 @@ import torch
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
-from lightx2v.utils.set_config import build_startup_config, init_parallel
+from lightx2v.utils.parallel import init_parallel
+from lightx2v.utils.set_config import build_startup_config
 from lightx2v.utils.utils import validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
@@ -151,7 +152,7 @@ class LightX2VPipeline:
         self.model_path = config["model_path"]
         validate_config_paths(config)
 
-        if config["parallel"]:
+        if config.get("parallel", False):
             platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
             platform_device.init_parallel_env()
             init_parallel(config)

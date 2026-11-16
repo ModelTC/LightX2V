@@ -25,7 +25,7 @@ def get_wan_distill_method(config):
 
 
 def create_wan_scheduler(config):
-    feature_caching = config["feature_caching"]
+    feature_caching = config.get("feature_caching", "NoCaching")
     distill_method = get_wan_distill_method(config)
     if distill_method == "dmd2":
         if feature_caching != "NoCaching":

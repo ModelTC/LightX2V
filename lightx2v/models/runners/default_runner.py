@@ -198,7 +198,7 @@ class DefaultRunner(BaseRunner):
         self.config.lock()  # lock config to avoid modification
 
     def set_init_device(self):
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             self.init_device = torch.device("cpu")
         else:
             self.init_device = torch.device(AI_DEVICE)

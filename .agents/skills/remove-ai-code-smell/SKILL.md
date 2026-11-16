@@ -18,7 +18,7 @@ description: 审查并简化 AI 生成感较重的代码，重点移除内部配
 
 不要以“更安全”为由保留所有 guard。判断它失败时会发生什么：如果只是让内部错误更早并更啰嗦地报出，通常不值得；如果会继续运行并产生悄无声息的错误结果，就应保留。
 
-在 LightX2V 中，启动 JSON 与请求数据是两个不同契约。先检查 `lightx2v/utils/set_config.py` 的 `build_cli_inputs()` / `build_startup_config()`，以及 `lightx2v/models/runners/base_runner.py` 的 `prepare_request()`。该公共边界上的 task 和字段校验不属于冗余内部防御。
+在 LightX2V 中，启动 JSON 与请求数据是两个不同契约。先检查 `lightx2v/utils/cli.py` 的参数拆分、`lightx2v/utils/set_config.py` 的 `build_startup_config()`，以及 `lightx2v/models/runners/base_runner.py` 的 `prepare_request()`。该公共边界上的 task 和字段校验不属于冗余内部防御。
 
 ## 审查步骤
 

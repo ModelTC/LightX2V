@@ -24,7 +24,7 @@ class WanVaceTransformerWeights(WanTransformerWeights):
 
     def register_offload_buffers(self, config, lazy_load_path, lora_path):
         super().register_offload_buffers(config, lazy_load_path, lora_path)
-        if config["cpu_offload"]:
+        if config.get("cpu_offload", False):
             if config["offload_granularity"] == "block":
                 self.vace_offload_block_cuda_buffers = WeightModuleList(
                     [

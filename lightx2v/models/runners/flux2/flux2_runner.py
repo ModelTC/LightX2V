@@ -87,7 +87,7 @@ class Flux2Runner(DefaultRunner):
 
         text_encoder_output = {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
 
-        uses_cfg = self.config.get("enable_cfg", True)
+        uses_cfg = self.config.get("enable_cfg", False)
         if self.model_variant == "klein" and uses_cfg:
             neg_prompt_embeds_list, _ = self.text_encoders[0].infer([""])
             neg_prompt_embeds = neg_prompt_embeds_list[0].unsqueeze(0)
