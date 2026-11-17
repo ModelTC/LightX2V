@@ -16,7 +16,8 @@ def validate_recipe(config):
     dmd, matching = training["dmd"], model["capabilities"]["distribution_matching"]
     require(model["name"] == "minimax_h3_ref2av" and training["method"] == "dmd", "Use the Ref2AV DMD model")
     require(dmd["official_pdmd"] and matching["official_pdmd"] and matching["projected_dmd"], "Use official projected DMD")
-    require((dmd["num_inference_steps"], dmd["fake_update_ratio"], dmd["update_order"]) == (8, 5, "fake_first"), "Expected eight steps and fake5 -> student1")
+    require(dmd["num_inference_steps"] in (4, 8), "Expected four or eight rollout steps")
+    require((dmd["fake_update_ratio"], dmd["update_order"]) == (5, "fake_first"), "Expected fake5 -> student1")
     require((dmd["official_rollout_video_shift"], dmd["official_rollout_audio_shift"]) == (12, 3), "Rollout shifts must stay 12/3")
     require((matching["video_flow_shift"], matching["audio_flow_shift"]) == (12, 3), "Inference shifts must stay 12/3")
     require(matching["geometry_from_metadata"] and matching["allowed_resolutions"] == [] and dmd["generation_shapes"] is None, "Use cached target geometry")
@@ -136,7 +137,7 @@ def main(config_path):
                 "task": "ref2av",
                 "source": source_info,
                 "data": data,
-                "steps": 8,
+                "steps": config["training"]["dmd"]["num_inference_steps"],
                 "shifts": [12, 3],
                 "fake_per_student": 5,
                 "role_updates": updates,

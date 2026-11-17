@@ -4,6 +4,8 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -93,6 +95,30 @@ def test_recipe_accepts_student_only_source_and_rejects_fake_transfer(config):
     config["training"]["fake"]["checkpoint_path"] = str(source.parent)
     with pytest.raises(ValueError, match="Fresh fake"):
         preflight.validate_recipe(config)
+
+
+def test_four_step_recipe_loads_eight_step_cm_export(config, cm_export):
+    runtime = preflight.leaf("lightx2v_train/runtime/config.py", "_ref6k_four_step_config")
+    four_step = runtime.load_config(TRAIN_ROOT / "configs/train/dmd/minimax_h3_ref2av_pdmd4_gan_from_cm1500_ref6k_fsdp32.yaml")
+    expected = copy.deepcopy(config)
+    expected["config_path"] = four_step["config_path"]
+    expected["training"]["dmd"]["num_inference_steps"] = 4
+    assert four_step == expected
+    source, helper = preflight.validate_recipe(four_step)
+    info = preflight.validate_source(four_step, source, helper)
+    assert info["weights_only"] == ["student"]
+
+
+def test_four_step_launcher_selects_new_run_and_config():
+    env = {key: value for key, value in os.environ.items() if not key.startswith("H3_") and key not in {"KERNELS_CACHE", "LOCAL_KERNELS"}}
+    env.update(MASTER_ADDR="127.0.0.1", MASTER_PORT="23456", CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7")
+    result = subprocess.run(["bash", str(SCRIPT_ROOT / "run_minimax_h3_ref6k_pdmd4_gan_fsdp32_32gpu_acp.sh"), "--dry-run"], env=env, capture_output=True, text=True, check=True)
+    commands = result.stdout.splitlines()
+    assert len(commands) == 2
+    assert all("minimax_h3_ref2av_pdmd4_gan_from_cm1500_ref6k_fsdp32.yaml" in command for command in commands)
+    assert "--nproc_per_node=1" in commands[0] and "--nnodes=4" in commands[0]
+    assert "--nproc_per_node=8" in commands[1] and "--nnodes=4" in commands[1]
+    assert "--rdzv_id=h3_ref2av_pdmd4_gan_cm1500_ref6k_20261117 " in commands[1]
 
 
 @pytest.mark.parametrize("field,value", [("learning_rate", 2e-5), ("checkpoint_path", "/tmp/checkpoint-000001500")])

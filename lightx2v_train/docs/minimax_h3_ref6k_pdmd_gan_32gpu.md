@@ -1,13 +1,16 @@
-# Ref CM1500 → PDMD8 + GAN on 6k paired AV samples
+# Ref CM1500 → PDMD + GAN on 6k paired AV samples
 
 This recipe loads only the Ref dCM1500 student EMA. The full fake starts from the original Ref base, and the GAN head, optimizers and data cursors start fresh. All three roles use the original base without DeCFG. The source student's historical score-only DeCFG metadata is provenance, not a requirement to merge DeCFG into this run.
 
-Configuration: `configs/train/dmd/minimax_h3_ref2av_pdmd8_gan_from_cm1500_ref6k_fsdp32.yaml`.
+Configurations:
+
+- 8 steps: `configs/train/dmd/minimax_h3_ref2av_pdmd8_gan_from_cm1500_ref6k_fsdp32.yaml`.
+- 4 steps: `configs/train/dmd/minimax_h3_ref2av_pdmd4_gan_from_cm1500_ref6k_fsdp32.yaml`.
 
 | Setting | Value |
 |---|---|
 | Training | Official projected DMD + existing H3 adaptation of DMD2 GAN |
-| Rollout | 8 steps, video/audio shifts 12/3, no shift curriculum |
+| Rollout | 4 or 8 steps, video/audio shifts 12/3, no shift curriculum |
 | Updates | fake first, 5 fake then 1 student |
 | Student LoRA | 128/128; block AdaLN and `norm_out.linear` 16/16; FP32 masters |
 | Student LR | 5e-5 |
@@ -50,6 +53,17 @@ bash lightx2v_train/scripts/run_minimax_h3_ref6k_pdmd8_gan_fsdp32_32gpu_acp.sh
 ```
 
 Append `--dry-run` to print both distributed commands without reading data or loading models. Normal startup validates checkpoint and dataset receipts before GPU training. It checks that self-gen has at least 1,000 eligible single-image samples; it never silently substitutes multi-image samples or repeats examples.
+
+For the 4-step run, use the same environment and source/data paths above, replacing the output, rendezvous ID and launcher with:
+
+```bash
+H3_REF6K_OUTPUT=/mnt/devsft_afs_2/gushiqiao/outputs/h3_ref2av_pdmd4_gan_cm1500_ref6k_lr5e5_shift12_3_fake5_32gpu_20261117/train \
+H3_RDZV_ID=h3_ref2av_pdmd4_gan_cm1500_ref6k_20261117 \
+H3_REF6K_CONFIG="$PWD/lightx2v_train/configs/train/dmd/minimax_h3_ref2av_pdmd4_gan_from_cm1500_ref6k_fsdp32.yaml" \
+bash lightx2v_train/scripts/run_minimax_h3_ref6k_pdmd4_gan_fsdp32_32gpu_acp.sh
+```
+
+The 4-step launcher reuses the existing 8-step launch implementation for data preparation and torchrun, but selects its own configuration and new output by default. Sync both launchers and `scripts/minimax_h3_ref6k_pdmd_gan_preflight.py`. Both configurations retain `gan.student_recompute: true`. The CM1500 EMA contains step-independent LoRA weights; only these student weights are transferred, not the state of an 8-step PDMD run. Reuse the completed Ref6k cache. The 4-step physical sigma grids are video `[1, 0.972973, 0.923077, 0.8, 0]` and audio `[1, 0.9, 0.75, 0.5, 0]`. Evaluation must use four Euler steps with the same shifts.
 
 Logs: `$H3_REF6K_OUTPUT/logs/launch.<hostname>.<timestamp>.<pid>.log` and `$H3_REF6K_OUTPUT/train.log`. Checkpoints live directly under `$H3_REF6K_OUTPUT/checkpoint-*`. A fresh run may log “Starting from scratch” while resolving auto-resume; source student loading occurs afterward. This means fresh training state, not random student initialization.
 
