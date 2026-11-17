@@ -17,7 +17,8 @@ def fp8_packet_layout(rows: int, dim: int) -> tuple[int, int]:
 # The FP8 and FP32 views share storage. Keep them inside custom ops so
 # torch.compile cannot functionalize them into independent output buffers.
 @torch.library.custom_op("lightx2v::h3_causal_exchange_qkv_fp8", mutates_args=(), device_types="cuda")
-def exchange_qkv_fp8(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, group_name: str, size: int) -> torch.Tensor:
+def exchange_qkv_fp8(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, q_weight: torch.Tensor, k_weight: torch.Tensor, eps: float, group_name: str, size: int) -> torch.Tensor:
+    """Normalize Q/K with a shared epsilon, then pack and exchange FP8 QKV."""
     import triton
 
     from lightx2v.common.ops.attn.kernels import ulysses_layout as kernels
@@ -54,6 +55,9 @@ def exchange_qkv_fp8(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, group_na
         stride // 4,
         8,
         triton.next_power_of_2(dim),
+        q_weight=q_weight,
+        k_weight=k_weight,
+        eps=eps,
         num_warps=4,
     )
     received = torch.empty_like(packed)
@@ -62,7 +66,7 @@ def exchange_qkv_fp8(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, group_na
 
 
 @exchange_qkv_fp8.register_fake
-def exchange_qkv_fp8_fake(q, k, v, group_name, size):
+def exchange_qkv_fp8_fake(q, k, v, q_weight, k_weight, eps, group_name, size):
     rows = q.shape[0] * 3 * (q.shape[1] // size)
     _, stride = fp8_packet_layout(rows, q.shape[2])
     return q.new_empty((size, stride), dtype=torch.uint8)

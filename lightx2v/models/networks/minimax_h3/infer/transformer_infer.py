@@ -77,17 +77,17 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         dist.all_gather(gathered, tensor.contiguous(), group=self.tp_group)
         return torch.cat(gathered, dim=-1)
 
+    def project_qkv(self, weights, hidden_states):
+        """Project QKV before normalization and sequence exchange."""
+        if self.use_fused_qkv and weights.has_fused_qkv:
+            return weights.project_fused_qkv(hidden_states)
+        if self.use_fused_qkv:
+            _warn_fused_qkv_fallback_once()
+        return weights.to_q.apply(hidden_states), weights.to_k.apply(hidden_states), weights.to_v.apply(hidden_states)
+
     def _prepare_qkv(self, weights, hidden_states, rotary_emb):
         """Project QKV and return Q/K with normalization and RoPE applied."""
-        if self.use_fused_qkv and weights.has_fused_qkv:
-            q, k, v = weights.project_fused_qkv(hidden_states)
-        else:
-            if self.use_fused_qkv:
-                _warn_fused_qkv_fallback_once()
-            q = weights.to_q.apply(hidden_states)
-            k = weights.to_k.apply(hidden_states)
-            v = weights.to_v.apply(hidden_states)
-
+        q, k, v = self.project_qkv(weights, hidden_states)
         if self.use_fused_qkv_norm_rope and rotary_emb is not None:
             fused = self.qkv_norm_rope.apply(
                 q,
