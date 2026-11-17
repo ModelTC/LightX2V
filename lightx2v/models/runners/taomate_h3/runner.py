@@ -18,12 +18,10 @@ from lightx2v.models.networks.minimax_h3.taomate.model import TaoMateH3NativeMod
 from lightx2v.models.networks.minimax_h3.taomate.publication import TaoMateVideoPublication
 from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRunnerMixin
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.taomate_h3.geometry import request_plan
 from lightx2v.models.schedulers.taomate_h3.scheduler import TaoMateH3Scheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
-from lightx2v.utils.profiler import no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -34,7 +32,10 @@ _VIDEO_NOISE_REQUEST_STRIDE = 1_000_003
 class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     """Generate Base10 audio guides, then Stage3 video and audio in LightX2V."""
 
-    supported_request_fields_by_task = {"t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"}}
+    supported_lora_modes = ("separate",)
+
+    _WARMUP_SHAPES = (None,)  # Use the configured request size.
+    _WARMUP_PROMPTS = ("A red panda plays a small guitar on a quiet forest stage at sunrise.",)
     frames_per_request = 120
     max_continuous_requests = 12
 
@@ -61,9 +62,6 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         super().__init__(config)
         self.request_count = 1
 
-    def get_supported_tasks(self):
-        return ("t2av",)
-
     def init_scheduler(self):
         self.scheduler = TaoMateH3Scheduler(self.config)
 
@@ -82,16 +80,7 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     def run_warmup(self):
         """Warm the complete configured request, including Base10 and codecs."""
 
-        self.input_info = self.create_input_info(
-            {
-                "task": "t2av",
-                "prompt": self.config.get("prompt", "A red panda plays a small guitar on a quiet forest stage at sunrise."),
-                "seed": 8301,
-                "size": list(self.config["size"]),
-                "num_frames": self.config["num_frames"],
-                "return_result_tensor": True,
-            }
-        )
+        self._prepare_warmup_inputs(0)
         try:
             self.inputs = self._run_input_encoder_local_h3()
             self.run_main()
@@ -101,6 +90,19 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             self.model.reset_autoregressive_state()
             self.scheduler.clear()
             self.end_run()
+
+    def _prepare_warmup_inputs(self, warmup_index):
+        size = self._WARMUP_SHAPES[warmup_index] or self.config["size"]
+        self.input_info = self.create_input_info(
+            {
+                "task": "t2av",
+                "prompt": self.config.get("prompt", self._WARMUP_PROMPTS[warmup_index]),
+                "seed": 8301,
+                "size": list(size),
+                "num_frames": self.config["num_frames"],
+                "return_result_tensor": True,
+            }
+        )
 
     def _run_input_encoder_local_h3(self):
         if self.segment_prompts is not None:
@@ -141,7 +143,8 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     def _base10_config(self):
         config = dict(self.config)
         config["size"] = [self.request_height, self.request_width]
-        for option in ("lora_configs", "lora_dynamic_apply", "lora_path"):
+        config["lora_mode"] = "merge"
+        for option in ("lora_configs", "lora_path"):
             config.pop(option, None)
         # The Stage3 weights are already loaded. Keep Base10 blocks on the CPU
         # so the two full BF16 DiTs never occupy GPU memory simultaneously.
@@ -328,17 +331,16 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             # epoch before the next Stage3 phase, including warmed replays.
             self.model.transformer_infer.before_graph_capture = async_decoder.synchronize if async_decoder is not None and async_decoder.is_async else None
             audio_chunks = []
-            with no_sync_profiling(enabled=async_decoder is not None and async_decoder.is_async):
-                for request_index, current in enumerate(milestones):
-                    self.inputs = self._segment_inputs[request_index]
-                    self._prepare_stage3_request(current, request_index=request_index)
-                    _, audio_rows = self._run_stage3(request_index=request_index, video_decoder=video_decoder, async_decoder=async_decoder)
-                    audio_chunks.append(audio_rows.reshape(2, self.scheduler.plan.audio_latents, 32))
-                if async_decoder is not None:
-                    async_decoder.submit(self._finish_video_decode, video_decoder)
-                    video_chunks = [frames for output in async_decoder.finish() for frames in output]
-                    if publication is not None:
-                        publication.finish()
+            for request_index, current in enumerate(milestones):
+                self.inputs = self._segment_inputs[request_index]
+                self._prepare_stage3_request(current, request_index=request_index)
+                _, audio_rows = self._run_stage3(request_index=request_index, video_decoder=video_decoder, async_decoder=async_decoder)
+                audio_chunks.append(audio_rows.reshape(2, self.scheduler.plan.audio_latents, 32))
+            if async_decoder is not None:
+                async_decoder.submit(self._finish_video_decode, video_decoder)
+                video_chunks = [frames for output in async_decoder.finish() for frames in output]
+                if publication is not None:
+                    publication.finish()
             async_decoder = None
             self._log_cuda_graph()
             if self.config.get("cpu_offload", False):

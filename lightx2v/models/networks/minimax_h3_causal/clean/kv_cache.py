@@ -4,6 +4,7 @@ import torch
 
 from lightx2v.common.ops.rope.torch_rope import TorchRealRope
 
+from .fp8_communication import FP8QKV
 from .kv_cache_kernel import gather_rope_qkv
 from .streaming import CleanCacheKey, MiniMaxH3CleanStreamingPlan
 
@@ -77,26 +78,26 @@ class MiniMaxH3CleanKVCache:
         self._persist = persist
         self._generation += 1
 
-    def _write_slot(self, k, v, block_idx):
+    def _write_slot(self, shape, block_idx, *, device, dtypes):
         """Reserve raw KV independently of the mutable attention workspace."""
         kind = self._entry_key[0]
         if kind == "chunk":
-            if k.shape[0] > self._chunk_rows:
+            if shape[0] > self._chunk_rows:
                 raise ValueError("CleanAR chunk exceeds its reserved history slot")
             storage = self._chunk_storage[block_idx]
             if storage is None:
-                shape = (self._num_chunk_slots, self._chunk_rows, *k.shape[1:])
-                storage = self._chunk_storage[block_idx] = (k.new_empty(shape), v.new_empty(shape))
+                slot_shape = (self._num_chunk_slots, self._chunk_rows, *shape[1:])
+                storage = self._chunk_storage[block_idx] = tuple(torch.empty(slot_shape, device=device, dtype=dtype) for dtype in dtypes)
             slot = self._chunk_slots[self._entry_key]
-            target = tuple(value[slot, : k.shape[0]] for value in storage)
+            target = tuple(value[slot, : shape[0]] for value in storage)
         elif kind == "prompt":
             storage = self._prompt_storage[block_idx]
-            if storage is None or storage[0].shape[0] < k.shape[0]:
-                storage = self._prompt_storage[block_idx] = (k.new_empty(k.shape), v.new_empty(v.shape))
-            target = tuple(value[: k.shape[0]] for value in storage)
+            if storage is None or storage[0].shape[0] < shape[0]:
+                storage = self._prompt_storage[block_idx] = tuple(torch.empty(shape, device=device, dtype=dtype) for dtype in dtypes)
+            target = tuple(value[: shape[0]] for value in storage)
         else:
             # Fixed conditions are written once per request.
-            target = (k.new_empty(k.shape), v.new_empty(v.shape))
+            target = tuple(torch.empty(shape, device=device, dtype=dtype) for dtype in dtypes)
         self._buffers[block_idx][self._entry_key] = target
         return target
 
@@ -112,9 +113,7 @@ class MiniMaxH3CleanKVCache:
     @torch.compiler.disable
     def get_attention_qkv(
         self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
+        qkv: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | FP8QKV,
         block_idx: int,
         *,
         rope,
@@ -123,23 +122,31 @@ class MiniMaxH3CleanKVCache:
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Commit raw clean KV and return rotated Q/K and raw V for attention."""
         # Dictionary keys change at each chunk; keep session state outside Dynamo.
-        if k.ndim != 3 or q.shape != k.shape or k.shape != v.shape:
-            raise ValueError("H3 QKV tensors must have matching shape [L, H, D]")
+        if isinstance(qkv, FP8QKV):
+            shape, device, dtype = qkv.shape, qkv.data.device, qkv.dtype
+            dtypes = (dtype, dtype)
+        else:
+            q, k, v = qkv
+            if k.ndim != 3 or q.shape != k.shape or k.shape != v.shape:
+                raise ValueError("H3 QKV tensors must have matching shape [L, H, D]")
+            shape, device, dtype = k.shape, k.device, q.dtype
+            dtypes = (k.dtype, v.dtype)
         block = self._buffers[block_idx]
         start = sum(block[key][0].shape[0] for key in self._prefix_keys)
-        end = start + k.shape[0]
-        stored = self._write_slot(k, v, block_idx) if self._persist else None
+        end = start + shape[0]
+        stored = self._write_slot(shape, block_idx, device=device, dtypes=dtypes) if self._persist else None
         capacity = max(self._workspace_capacity, end)
         workspace = self._workspaces[block_idx]
         if workspace is None or workspace[0].shape[0] < capacity:
-            shape = (capacity, *k.shape[1:])
-            workspace = self._workspaces[block_idx] = (k.new_empty(shape), v.new_empty(shape))
+            workspace_shape = (capacity, *shape[1:])
+            workspace = self._workspaces[block_idx] = tuple(torch.empty(workspace_shape, device=device, dtype=value_dtype) for value_dtype in dtypes)
             self._workspace_generation[block_idx] = -1
         read_prefix = self._workspace_generation[block_idx] != self._generation
-        if k.is_cuda and q.dtype == k.dtype == v.dtype == torch.bfloat16 and isinstance(rope, TorchRealRope) and rope.compute_dtype == torch.bfloat16 and rope.layout == "split_half":
-            q = gather_rope_qkv(tuple(block[key] for key in self._prefix_keys), q, k, v, stored, workspace, key_freqs, read_prefix=read_prefix)
+        if device.type == "cuda" and dtype == dtypes[0] == dtypes[1] == torch.bfloat16 and isinstance(rope, TorchRealRope) and rope.compute_dtype == torch.bfloat16 and rope.layout == "split_half":
+            q = gather_rope_qkv(tuple(block[key] for key in self._prefix_keys), qkv, stored, workspace, key_freqs, read_prefix=read_prefix)
             key = workspace[0][:end]
         else:
+            q, k, v = qkv.unpack() if isinstance(qkv, FP8QKV) else qkv
             if stored is not None:
                 stored[0].copy_(k)
                 stored[1].copy_(v)

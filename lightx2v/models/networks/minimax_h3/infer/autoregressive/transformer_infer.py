@@ -48,8 +48,6 @@ class H3AutoregressiveTransformerInferMixin:
         self.use_sage_attention = config.get("attn_type", "flash_attn3") == "sage_attn2"
         self.cuda_graph_stack = AutoregressiveCUDAGraphStack() if config.get("use_cuda_graph", False) else None
         self.block_graph_pool = None
-        if self.use_compile and self.compile_backend == "default":
-            self.compile_options.setdefault("emulate_precision_casts", True)
         if self.cuda_graph_stack is not None:
             self.compile_options["triton.cudagraphs"] = False
 

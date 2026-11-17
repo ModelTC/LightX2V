@@ -127,7 +127,7 @@ class WanInfiniteTalkModel(WanModel):
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
 
-        if not self.config["enable_cfg"]:
+        if not self.config.get("enable_cfg", False):
             noise_pred_cond = self._infer_infinitetalk_branch(inputs, infer_condition=True, use_audio=True)
             noise_pred_guided = noise_pred_cond
             self.scheduler.noise_pred_uncond = None

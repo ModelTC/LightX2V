@@ -2,17 +2,15 @@
 
 import torch
 
-from lightx2v.models.input_encoders.matrix_game4 import MatrixGame4ControlStream, create_streaming_encoder, encode_reference_image
+from lightx2v.models.input_encoders.hf.matrix_game4.video import MatrixGame4ControlStream, create_streaming_encoder, encode_reference_image
 from lightx2v.models.networks.wan.matrix_game4_model import WanMatrixGame4Model
 from lightx2v.models.runners.base_runner import BaseRunner
-from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.runners.wan.autoregressive_runner import WanAutoregressiveRunnerMixin
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.matrix_game4 import WanMatrixGame4Scheduler
 from lightx2v.models.video_encoders.hf.wan.matrix_game4_vae import MatrixGame4TAEVAE, set_matrix_game4_vae_norm
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.input_info import MatrixGame4InputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -20,13 +18,19 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 @RUNNER_REGISTER("matrix_game4")
 class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
+    supported_lora_modes = ("merge",)
+
     _SUPPORTS_AUTOREGRESSIVE_WARMUP = True
     _WARMUP_TASKS = ("v2v",)
-    _WARMUP_RESOLUTIONS = ((256, 448), (480, 864))
+    _WARMUP_SHAPES = ((256, 448), (480, 864))
+    # Warmup also includes the configured request shape.
+    _WARMUP_PROMPTS = (
+        "A path through a forest.",
+        "Move along a dirt path through tall pine trees, passing a wooden fence as the trail curves toward a bridge over a shallow stream.",
+        "Move forward through a quiet forest from a first person perspective, following a winding dirt path between tall pine trees. Sunlight passes through the canopy onto patches of moss, the terrain slopes gently down toward a stream, and a small wooden bridge comes into view beyond the next bend.",
+    )
     # Short MG4 chunks dispatch faster when VAE kernel launches share the caller thread.
     vae_decode_in_worker = False
-    input_info_cls_by_task = {"v2v": MatrixGame4InputInfo}
-    supported_request_fields_by_task = {"v2v": VIDEO_REQUEST_FIELDS | {"video_path", "image_path"}}
 
     def __init__(self, config):
         if not config.get("ar_config"):
@@ -95,6 +99,7 @@ class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
 
     def prepare_request(self, request_data):
         input_info = BaseRunner.prepare_request(self, request_data)
+        self.check_num_frames_override(request_data)
         if not input_info.video_path:
             raise ValueError("Matrix-Game-4 v2v requires video_path")
         if not input_info.image_path:
@@ -130,8 +135,8 @@ class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
         _, stride_h, stride_w = self.config["vae_stride"]
         return [48, 1, target_height // stride_h, target_width // stride_w]
 
-    def prepare_warmup_inputs(self, height, width, latent_shape, text_output):
-        self.input_info = MatrixGame4InputInfo(task="v2v", prompt="warmup", size=[height, width])
+    def _prepare_warmup_inputs(self, height, width, latent_shape, prompt, text_output):
+        self.input_info = self.get_input_info_type("v2v")(task="v2v", prompt=prompt, size=[height, width])
         self.input_info.latent_shape = latent_shape
         encoder = create_streaming_encoder(self.vae_encoder)
         try:

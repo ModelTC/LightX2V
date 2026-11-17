@@ -1,5 +1,7 @@
 # LightX2V Compile Implementation Patterns
 
+简体中文 | [English](implementation-patterns_en.md)
+
 实现代码或选择缓存键时阅读本文件。路径反映当前仓库；先用 `rg` 确认，不要机械复制。
 
 ## 目录

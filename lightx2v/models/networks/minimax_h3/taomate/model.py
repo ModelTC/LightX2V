@@ -14,18 +14,20 @@ from lightx2v.models.networks.minimax_h3.infer.autoregressive.taomate.pre_infer 
 from lightx2v.models.networks.minimax_h3.infer.autoregressive.taomate.transformer_infer import TaoMateH3OffloadTransformerInfer, TaoMateH3TransformerInfer
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.taomate.weights import inspect_taomate_adapter, load_taomate_lora
+from lightx2v.utils.envs import GET_LORA_DTYPE
 
 
 class TaoMateH3NativeModel(H3AutoregressiveModel, MiniMaxH3Model):
     """Load FL2VA-equivalent base weights and apply the TaoMate LoRA bank."""
 
     def __init__(self, model_path, config, device):
+        if config.get("lora_mode", "merge") != "separate":
+            raise ValueError("TaoMate Stage3 requires lora_mode='separate'")
         self.adapter_info = inspect_taomate_adapter(config["adapter_path"])
         native_config = dict(config)
         # The refiner sees only a handful of text rows. Replicating it avoids
         # TP reduction rounding before the long autoregressive denoise loop.
         native_config.setdefault("text_refiner_tensor_parallel", False)
-        native_config["lora_dynamic_apply"] = True
         native_config["lora_configs"] = [
             {
                 "path": str(self.adapter_info.path / "adapter_model.safetensors"),
@@ -98,7 +100,7 @@ class TaoMateH3NativeModel(H3AutoregressiveModel, MiniMaxH3Model):
     def _load_lora_file(self, file_path, alpha=None):
         if alpha is not None and float(alpha) != self.adapter_info.alpha:
             raise ValueError("TaoMate-H3 Stage3 alpha differs from the released adapter")
-        weights = load_taomate_lora(self.adapter_info.path)
+        weights = load_taomate_lora(self.adapter_info.path, dtype=GET_LORA_DTYPE())
         self._pending_dynamic_lora_model_keys = {f"{name[: -len('.lora_down.weight')]}.weight" for name in weights if name.endswith(".lora_down.weight")}
         return weights
 

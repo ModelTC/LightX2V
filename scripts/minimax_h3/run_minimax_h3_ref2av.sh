@@ -22,7 +22,7 @@ export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 
 # Ref2AV uses transformer_ref/ weights and supports image, video, and audio references.
-# Pass multiple files of one type as comma-separated paths.
+# Pass multiple files of one type as separate command-line arguments.
 # Add --video_path "/path/to/reference.mp4" or --audio_path "/path/to/reference.wav" as needed.
 # Audio requires at least one image or video reference.
 python -m lightx2v.infer \

@@ -140,7 +140,7 @@ class StreamRenderH3TAEEncoder(nn.Module):
         if compiled is None:
             # Keep the original module types available to the causal queue;
             # only pure per-block arithmetic is compiled, never stream state.
-            compiled = torch.compile(block.forward, dynamic=None, options={"emulate_precision_casts": True})
+            compiled = torch.compile(block.forward, dynamic=None)
             self._compiled_blocks[index] = compiled
         return compiled(*inputs)
 

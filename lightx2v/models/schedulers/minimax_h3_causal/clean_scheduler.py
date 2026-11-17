@@ -12,8 +12,8 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 def build_renoise_schedule(config) -> tuple[torch.Tensor, torch.Tensor]:
     """Share the exact v0.1 schedule between inference and AdaLN cache building."""
-    if config.get("h3_step_update") != "renoise":
-        raise ValueError("H3 v0.1.0 requires h3_step_update='renoise'")
+    if config.get("scheduler_type") != "renoise":
+        raise ValueError("H3 v0.1.0 requires scheduler_type='renoise'")
     if config["infer_steps"] < 1:
         raise ValueError("infer_steps must be positive")
     # Construct on CUDA, as in Zoe; CPU schedules can round differently.

@@ -70,8 +70,7 @@ class MiniMaxH3ImageViTDecoder2d(nn.Module):
     def _run_block(self, index, block, hidden_states, rotary_emb):
         if self.use_compile:
             if index not in self.compiled_blocks:
-                # Preserve the reference block's explicit BF16 rounding.
-                self.compiled_blocks[index] = torch.compile(block, dynamic=None, options={"emulate_precision_casts": True})
+                self.compiled_blocks[index] = torch.compile(block, dynamic=None)
             block = self.compiled_blocks[index]
         return block(hidden_states, rotary_emb)
 

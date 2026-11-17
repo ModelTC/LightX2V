@@ -5,6 +5,8 @@ description: 为 LightX2V 新模型或新推理路径实现、审查、调试和
 
 # Support LightX2V Compile
 
+简体中文 | [English](SKILL_EN.md)
+
 ## 目标
 
 用最小改动让目标模型优先复用 LightX2V 的公共 block compile 机制，只支持 eager 已经可运行的模式，并保持 `use_compile=false` 的行为不变。

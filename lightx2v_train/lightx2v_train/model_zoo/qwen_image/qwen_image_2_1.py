@@ -1,3 +1,6 @@
+import math
+import os
+
 import torch
 from diffusers import AutoencoderKLQwenImage21, QwenImage21Pipeline, QwenImage21Transformer2DModel
 from diffusers.image_processor import VaeImageProcessor
@@ -43,12 +46,46 @@ class QwenImage21Model(QwenImageModel):
         )
 
     def load_transformer(self):
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if fsdp_config.get("sharded_load", False):
+            transformer_config = QwenImage21Transformer2DModel.load_config(model_path, subfolder="transformer")
+            with torch.device("meta"):
+                return QwenImage21Transformer2DModel.from_config(transformer_config)
+
         device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
         return QwenImage21Transformer2DModel.from_pretrained(
-            self.config["model"]["pretrained_model_name_or_path"],
+            model_path,
             subfolder="transformer",
             torch_dtype=self.transformer_param_dtype,
         ).to(device)
+
+    def load_deferred_transformer_weights(self):
+        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
+        if not fsdp_config.get("sharded_load", False):
+            return
+
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        self.load_sharded_transformer_weights(os.path.join(model_path, "transformer"))
+        self._materialize_qwen_image_21_buffers()
+
+    def _materialize_qwen_image_21_buffers(self):
+        time_proj = self.transformer.time_text_embed.time_proj
+        if time_proj.freqs.is_meta:
+            half = time_proj.timestep_dim // 2
+            time_proj.freqs = torch.exp(-math.log(10000) * torch.arange(half, dtype=torch.float32, device=self.device) / half)
+
+        rope = self.transformer.pos_embed
+        if any(freq.is_meta for freq in rope.freqs):
+            pos_index = torch.arange(8192)
+            neg_index = torch.arange(1024).flip(0) * -1 - 1
+            rope.freqs = [
+                torch.cat(
+                    [rope.rope_params(pos_index, dim, rope.theta), rope.rope_params(neg_index, dim, rope.theta)],
+                    dim=0,
+                ).to(self.device)
+                for dim in rope.axes_dim
+            ]
 
     def add_lora(self, rank, alpha, target_modules):
         super().add_lora(rank, alpha, target_modules or ["to_q", "to_k", "to_v", "to_out.0"])

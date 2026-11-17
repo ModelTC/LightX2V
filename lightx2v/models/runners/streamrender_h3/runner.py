@@ -16,9 +16,7 @@ from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl import MiniMaxH3Qwen3V
 from lightx2v.models.networks.minimax_h3.streamrender.model import StreamRenderH3Model
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRunnerMixin
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.runners.streamrender_h3.output import StreamRenderVideoOutput
-from lightx2v.models.runners.streamrender_h3.request import StreamRenderH3InputInfo
 from lightx2v.models.schedulers.streamrender_h3 import StreamRenderH3Scheduler
 from lightx2v.models.video_encoders.hf.streamrender_h3 import (
     StreamRenderH3CausalDecoder,
@@ -26,6 +24,7 @@ from lightx2v.models.video_encoders.hf.streamrender_h3 import (
     prepare_picture,
 )
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
+from lightx2v.utils.profiler import no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -42,11 +41,11 @@ _QWEN_SDPA_PRIORITY = [
 class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
     """Run the released two-step H3 student with native LightX2V modules."""
 
-    input_info_cls_by_task = {"refv2v": StreamRenderH3InputInfo}
-    supported_request_fields_by_task = {
-        "refv2v": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt", "image_path", "video_path"},
-    }
-    _WARMUP_SIZE = (256, 256)
+    _WARMUP_SHAPES = ((256, 256),)
+    _WARMUP_PROMPTS = (
+        "A presenter speaks to the camera.",
+        "A presenter speaks to the camera in a quiet studio, pausing naturally between sentences and occasionally gesturing with one hand. Keep the framing steady and preserve the facial features, clothing, and soft light from the reference throughout the clip.",
+    )
 
     def __init__(self, config):
         super().__init__(config)
@@ -58,9 +57,6 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         super().close()
         if self.text_encoder is not None:
             self.text_encoder.unload()
-
-    def get_supported_tasks(self):
-        return ("refv2v",)
 
     def init_modules(self):
         root = Path(self.config["model_path"])
@@ -87,6 +83,7 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         )
         self.text_encoder = MiniMaxH3Qwen3VLTextEncoder(text_config)
 
+    @no_sync_profiling()
     @torch.no_grad()
     def warmup(self):
         if not self.config.get("warmup", False):
@@ -94,9 +91,9 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         import av
         import numpy as np
 
-        sizes = dict.fromkeys((self._WARMUP_SIZE, tuple(self.config["size"])))
-        for height, width in sizes:
-            self.input_info = self.create_input_info({"task": "refv2v", "seed": 0, "size": [height, width], "num_frames": self.config["num_frames"]})
+        shapes = dict.fromkeys((*self._WARMUP_SHAPES, tuple(self.config["size"])))
+        for warmup_index, (height, width) in enumerate(shapes):
+            self._prepare_warmup_inputs(warmup_index, height, width)
             logger.info(f"Warmup refv2v: {height}x{width}x{self.input_info.num_frames}")
             try:
                 seed_all(self.input_info.seed)
@@ -139,6 +136,17 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         if dist.is_initialized():
             dist.barrier()
         self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, warmup_index, height, width):
+        self.input_info = self.create_input_info(
+            {
+                "task": "refv2v",
+                "prompt": self._WARMUP_PROMPTS[warmup_index],
+                "seed": 0,
+                "size": [height, width],
+                "num_frames": self.config["num_frames"],
+            }
+        )
 
     @staticmethod
     def _noise(shape, generator, device):

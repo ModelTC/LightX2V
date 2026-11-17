@@ -1,4 +1,4 @@
-"""Fused uint8 conversion with original sensitive-dtype rounding at each stage."""
+"""Fused uint8 conversion using the VAE's sensitive dtype."""
 
 import torch
 import triton
@@ -46,5 +46,5 @@ def to_uint8(video, mean, std, sensitive_dtype):
         raise ValueError("Expected [B,3,T,H,W] RGB")
     dtype = {torch.float32: tl.float32, torch.bfloat16: tl.bfloat16, torch.float16: tl.float16}[sensitive_dtype]
     output = torch.empty(video.shape, device=video.device, dtype=torch.uint8, memory_format=torch.channels_last_3d)
-    _rgb[(triton.cdiv(output.numel(), 1024),)](video, mean.to(video.device), std.to(video.device), output, output.numel(), *video.shape[2:], *video.stride(), dtype, 1024, enable_fp_fusion=False)
+    _rgb[(triton.cdiv(output.numel(), 1024),)](video, mean.to(video.device), std.to(video.device), output, output.numel(), *video.shape[2:], *video.stride(), dtype, 1024)
     return output

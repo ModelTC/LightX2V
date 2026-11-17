@@ -18,6 +18,7 @@ from transformers import AutoTokenizer
 
 from lightx2v.models.audio_encoders.hf.cosmos3.sound_tokenizer import Cosmos3SoundTokenizer
 from lightx2v.models.networks.cosmos3.model import Cosmos3TransformerModel
+from lightx2v.models.runners.cosmos3.input_info import Cosmos3State
 from lightx2v.models.runners.cosmos3.policy_runtime import (
     PolicySeedSequence,
     build_json_policy_prompt,
@@ -25,12 +26,10 @@ from lightx2v.models.runners.cosmos3.policy_runtime import (
     normalize_policy_prompt_format,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS, VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.cosmos3.scheduler import Cosmos3Scheduler
 from lightx2v.models.video_encoders.hf.cosmos3.vae import Cosmos3WanVAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import Cosmos3InputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
@@ -132,41 +131,7 @@ def compose_droid_policy_image(images):
 
 @RUNNER_REGISTER("cosmos3")
 class Cosmos3Runner(DefaultRunner):
-    input_info_cls_by_task = {task: Cosmos3InputInfo for task in ("t2i", "t2v", "i2v", "t2av", "i2av", "i2va", "v2av")}
-    supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"size"},
-        "t2v": VIDEO_REQUEST_FIELDS,
-        "i2v": VIDEO_REQUEST_FIELDS | {"image_path"},
-        "t2av": VIDEO_REQUEST_FIELDS,
-        "i2av": VIDEO_REQUEST_FIELDS | {"image_path"},
-        "i2va": COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "action_mode",
-            "action_path",
-            "domain_name",
-            "image_path",
-            "policy_image",
-            "policy_state",
-            "save_action_path",
-            "state_path",
-            "size",
-            "video_path",
-            "view_point",
-        },
-        "v2av": COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "action_mode",
-            "action_path",
-            "domain_name",
-            "image_path",
-            "save_action_path",
-            "size",
-            "video_path",
-            "view_point",
-        },
-    }
+    input_info_state = Cosmos3State
 
     model_cpu_offload_seq = "transformer->vae->sound_tokenizer"
     _callback_tensor_inputs = ["latents"]
@@ -178,6 +143,12 @@ class Cosmos3Runner(DefaultRunner):
         input_info.view_point = request_data.get("view_point", "")
         input_info.action_chunk_size = None
         input_info.raw_action_dim = None
+        if input_info.task == "t2i":
+            input_info.num_frames = 1
+        if input_info.task in ("t2av", "i2av") and not self.config.get("sound_gen", False):
+            raise ValueError("Cosmos3 audio-video tasks require a checkpoint with sound_gen=True.")
+        if input_info.task in ("i2va", "v2av") and not self.config.get("action_gen", False):
+            raise ValueError("Cosmos3 action tasks require a checkpoint with action_gen=True.")
         return input_info
 
     @ProfilingContext4DebugL2("Load models")
@@ -218,10 +189,6 @@ class Cosmos3Runner(DefaultRunner):
             assert self.config.get("cpu_offload", False)
         if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)
-        if self.config["task"] in ("t2av", "i2av") and not self.config.get("sound_gen", False):
-            raise ValueError("Cosmos3 sound generation requires a checkpoint with sound_gen=True.")
-        if (self.config.get("action_mode", "") or self.config["task"] in ("i2va", "v2av")) and not self.config.get("action_gen", False):
-            raise ValueError("Cosmos3 action generation requires a checkpoint with action_gen=True.")
         self.run_input_encoder = self._run_input_encoder_local
         self.run_dit = self._run_dit_local
         self.config.lock()
@@ -262,10 +229,9 @@ class Cosmos3Runner(DefaultRunner):
         return self._action_spec
 
     def _get_action_mode(self):
-        mode = getattr(self.input_info, "action_mode", None) or self.config.get("action_mode", "")
-        if self.config["task"] in ("i2va", "v2av") and not mode:
-            mode = "inverse_dynamics" if self.config["task"] == "v2av" else "forward_dynamics"
-        return mode or None
+        if self.input_info.task not in ("i2va", "v2av"):
+            return None
+        return self.input_info.action_mode or ("inverse_dynamics" if self.input_info.task == "v2av" else "forward_dynamics")
 
     def _get_action_value(self, key, default=None):
         value = getattr(self.input_info, key, None)
@@ -471,7 +437,7 @@ class Cosmos3Runner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Prepare i2v condition")
     def _prepare_i2v_condition_latents(self):
-        if self.config["task"] not in ("i2v", "i2av"):
+        if self.input_info.task not in ("i2v", "i2av"):
             return
         if self.input_info.vision_condition_latents is not None:
             return
@@ -884,6 +850,7 @@ class Cosmos3Runner(DefaultRunner):
         else:
             with open(save_action_path, "w") as f:
                 json.dump(action.tolist(), f)
+        self.record_output("action", save_action_path)
         logger.info(f"Action saved: {save_action_path}")
 
     def run(self, total_steps=None):
@@ -946,6 +913,7 @@ class Cosmos3Runner(DefaultRunner):
                 method=self.config.get("save_video_method", "ffmpeg"),
             )
             self._mux_generated_audio(save_path, sound)
+            self.record_output("video", save_path)
             logger.info(f"Video saved: {save_path}")
             return
         image_prefix, image_suffix = os.path.splitext(save_path)
@@ -959,6 +927,7 @@ class Cosmos3Runner(DefaultRunner):
                 pixels = (pixels * 255).round().astype(np.uint8)
                 image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
                 save_image(image, path, method)
+            self.record_output("image", path)
             logger.info(f"{log_prefix}: {path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None, sound=None, action=None):
@@ -982,7 +951,7 @@ class Cosmos3Runner(DefaultRunner):
         return outputs
 
     def _is_video_output(self, input_info):
-        return input_info.num_frames > 1
+        return input_info.task != "t2i"
 
     def end_run(self):
         if hasattr(self, "model") and self.model is not None:

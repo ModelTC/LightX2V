@@ -15,8 +15,6 @@
     "enable_cfg": false,
     "sample_guide_scale": 1.0,
     "warmup": true,
-    "lora_dynamic_apply": false,
-    "lora_merge_force_fp32": true,
     "lora_configs": [
         {
             "path": "/path/to/Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r256.safetensors",

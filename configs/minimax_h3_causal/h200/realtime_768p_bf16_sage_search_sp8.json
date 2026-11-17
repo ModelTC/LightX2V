@@ -25,7 +25,7 @@
   "vae_use_compile": true,
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
-  "h3_step_update": "training_euler",
+  "scheduler_type": "euler",
   "audio_sampling_rate": 32000,
   "dit_original_ckpt": "/path/to/h3_v003.pt",
   "ar_config": {

@@ -12,19 +12,25 @@ bash scripts/server/start_server.sh
 
 示例使用 Wan2.1 T2V、`configs/wan/wan_t2v.json`，监听 8000 端口。切换模型时，需要配套修改 `--model_cls`、`--task` 和 `--config_json`。`--max_queue_size` 默认为 10，统计等待中和执行中的任务总数。
 
+单任务服务在启动时绑定任务，JSON 和表单请求都不能包含 `task`。MiniMax-H3 等多任务服务则需要每次在原生请求中传入 `task`。运行中服务的 `/docs` 会展示对应的请求结构。
+
+统一入口 `POST /v1/tasks/` 支持图片、视频和 action，参数与文档只由当前模型的 Spec 决定。`POST /v1/tasks/form` 支持上传文件；上传字段按任务支持的输入生成。原有图片、视频和 OpenAI 图片接口继续兼容，共用同一个任务队列与推理服务。
+
+BAGEL、Flux2、HiDream-O1-Image、Z-Image、LingBot-Video、HunyuanImage3、LTX2/LTX2.5、Wan2.2 TI2V-5B 和 Cosmos3 Omni 支持请求级任务：启动时省略 `--task`，每次原生请求指定 `task`。HunyuanImage3 只开放图像任务；Cosmos3 在启动 JSON 中通过 `model_variant` 区分模型版本。
+
 ## 提交视频任务
 
 服务就绪后，在另一个终端提交请求。以下示例适用于默认 T2V 服务：
 
 ```bash
-curl -X POST http://localhost:8000/v1/tasks/video/ \
+curl -X POST http://localhost:8000/v1/tasks/ \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"Two cats boxing on a stage.","seed":42,"save_result_path":"cat_boxing_seed42.mp4"}'
 ```
 
 响应包含 `task_id`、`task_status: "pending"` 和 `save_result_path`。请保存任务 ID 用于轮询。I2V 需使用匹配的模型与配置启动服务，并提供 `image_path`，或通过 multipart 表单上传图片。本地输入路径指服务端文件系统中的路径。
 
-可选生成字段省略或传入 `null` 时继承启动默认值，同时仍需符合当前模型/任务支持的范围。关闭 CFG 时应省略 `negative_prompt`，空字符串也不应传入。JSON 中的 `size` 按 `[高, 宽]` 表示。
+可选生成字段省略或传入 `null` 时继承启动默认值，同时仍需符合当前模型/任务支持的范围。关闭 CFG 时，显式传入的 `negative_prompt`（包括空字符串）会被忽略，并记录警告。JSON 中的 `size` 按 `[高, 宽]` 表示。
 
 ## 查询、下载与取消
 
@@ -47,7 +53,15 @@ python scripts/server/check_status.py
 curl -f http://localhost:8000/v1/tasks/TASK_ID/result -o output.mp4
 ```
 
-结果接口仅提供服务配置的输出目录内的文件。使用上例中的相对输出文件名，可将结果保存在该目录中。
+旧 `/result` 接口继续下载单个主文件，并限制在服务输出目录内。完整结果列表与各产物的下载地址通过 `/results` 获取：
+
+```bash
+curl -f http://localhost:8000/v1/tasks/TASK_ID/results
+# 根据列表中返回的 url 下载具体产物，例如：
+curl -f http://localhost:8000/v1/tasks/TASK_ID/results/actions -o actions.npy
+```
+
+每项包含 `name`、`type`、`media_type`、`url`。联合输出会同时列出视频和 action，下载不会重新执行推理。未指定保存路径时，异步服务自动分配任务输出路径；`save_result_path` 继续表示主结果路径。内存图片保留现有缓存数量限制，已被回收的结果下载返回 HTTP 410。
 
 `GET /v1/service/status` 的 `busy` / `idle` 表示执行状态。只要队列还有容量，忙碌的服务也能接受新请求。`GET /v1/tasks/queue/status` 提供 `pending_count`、`active_count`（等待中与执行中之和）、`queue_size`、`queue_available`；队列满时提交请求返回 HTTP 503。
 
@@ -59,7 +73,7 @@ curl -X DELETE http://localhost:8000/v1/tasks/TASK_ID
 
 ## 图像请求
 
-图像模型以 `--task t2i` 或 `--task i2i` 启动后，使用 `/v1/tasks/image/`（JSON）或 `/v1/tasks/image/form`（multipart）。`/v1/tasks/image/sync` 等待完成，通常直接返回 PNG 字节；设置 `presigned_url` 时会上传结果并返回 JSON。该接口的查询参数 `timeout_seconds` 默认为 600。
+图像任务可以直接提交到统一入口。也可以继续使用 `/v1/tasks/image/`（JSON）或 `/v1/tasks/image/form`（multipart）。`/v1/tasks/image/sync` 等待完成，通常直接返回 PNG 字节；设置 `presigned_url` 时会上传结果并返回 JSON。该接口的查询参数 `timeout_seconds` 默认为 600。
 
 另提供 OpenAI 兼容接口 `/v1/images/generations` 和 `/v1/images/edits`。可在运行中服务的 `/docs` 查看请求结构，在 `/v1/service/metadata` 查看模型/任务能力。
 
@@ -93,12 +107,14 @@ if not available_urls:
 all_succeeded = process_tasks_async(messages, available_urls)
 ```
 
-该工具目前向视频任务的兼容路由 `POST /v1/tasks/` 提交请求，不能直接作为图像任务客户端使用。
+该工具向统一入口 `POST /v1/tasks/` 提交请求。切换模型时仍需按服务的任务选择规则和参数 Schema 构造请求。
 
 ## 接口索引
 
 | 接口 | 方法 | 用途 |
 |------|------|------|
+| `/v1/tasks/` | POST | 统一提交图片、视频和 action 任务 |
+| `/v1/tasks/form` | POST | 上传文件并统一提交任务 |
 | `/v1/tasks/video/` | POST | 通过 JSON 提交视频任务 |
 | `/v1/tasks/video/form` | POST | 通过 multipart 上传并提交视频任务 |
 | `/v1/tasks/image/` | POST | 通过 JSON 提交图像任务 |
@@ -107,6 +123,8 @@ all_succeeded = process_tasks_async(messages, available_urls)
 | `/v1/tasks/` | GET | 列出任务 |
 | `/v1/tasks/queue/status` | GET | 查询队列容量 |
 | `/v1/tasks/{task_id}/status` | GET | 查询单个任务 |
+| `/v1/tasks/{task_id}/results` | GET | 获取完整产物列表 |
+| `/v1/tasks/{task_id}/results/{name}` | GET | 下载指定产物 |
 | `/v1/tasks/{task_id}/result` | GET | 下载已完成且保存为文件的结果 |
 | `/v1/tasks/{task_id}` | DELETE | 取消单个任务 |
 | `/v1/tasks/all/running` | DELETE | 取消所有等待中/执行中的任务 |
@@ -116,4 +134,4 @@ all_succeeded = process_tasks_async(messages, available_urls)
 | `/v1/images/generations` | POST | OpenAI 兼容图像生成 |
 | `/v1/images/edits` | POST | OpenAI 兼容图像编辑 |
 
-`POST /v1/tasks/` 仍保留为视频提交的弃用别名。新客户端应选择明确的视频或图像路由；`/v1/tasks/form` 未注册。
+兼容入口保持现有请求和响应格式。`/image/` 与 `/video/` 要求实际产物包含对应类型，类型不匹配时在执行后将任务标记为失败；同步图片与 OpenAI 图片接口直接返回错误。统一入口不按静态输出声明筛选任务，也不要求传入输出类型。

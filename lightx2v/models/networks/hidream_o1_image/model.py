@@ -85,10 +85,10 @@ class HidreamO1ImageModel(BaseTransformerModel):
             precomputed_image_embeds=precomputed_image_embeds,
             precomputed_deepstack_image_embeds=precomputed_deepstack_image_embeds,
         )
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             pre_out = self._seq_parallel_pre_process(pre_out)
         transformer_out = self.transformer_infer.infer(self.transformer_weights, pre_out)
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             transformer_out = self._seq_parallel_post_process(transformer_out)
         x_pred = self.post_infer.infer(self.post_weight, transformer_out)
         return x_pred, pre_out.cond_image_embeds, pre_out.cond_deepstack_image_embeds

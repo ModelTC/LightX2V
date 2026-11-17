@@ -3,16 +3,6 @@
 import torch
 
 
-@torch.library.custom_op("lightx2v::rms_norm_native", mutates_args=(), device_types="cuda")
-def native_rms_norm(x: torch.Tensor, weight: torch.Tensor | None, eps: float) -> torch.Tensor:
-    return torch.nn.functional.rms_norm(x, (x.shape[-1],), weight=weight, eps=eps)
-
-
-@native_rms_norm.register_fake
-def native_rms_norm_fake(x, weight, eps):
-    return torch.nn.functional.rms_norm(x, (x.shape[-1],), weight=weight, eps=eps)
-
-
 @torch.library.custom_op("lightx2v::rms_norm_mean_square", mutates_args=(), device_types="cuda")
 def mean_square(x: torch.Tensor) -> torch.Tensor:
     return x.pow(2).mean(dim=-1, keepdim=True)

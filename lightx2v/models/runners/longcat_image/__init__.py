@@ -1,4 +1,10 @@
-# LongCat Image Runner
-from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner
-
 __all__ = ["LongCatImageRunner"]
+
+
+def __getattr__(name):
+    if name == "LongCatImageRunner":
+        from .longcat_image_runner import LongCatImageRunner
+
+        globals()[name] = LongCatImageRunner
+        return LongCatImageRunner
+    raise AttributeError(name)

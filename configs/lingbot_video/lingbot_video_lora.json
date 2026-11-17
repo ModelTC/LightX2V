@@ -9,7 +9,6 @@
     "attn_type": "flash_attn3",
     "moe_backend": "torch_grouped_mm",
     "cpu_offload": false,
-    "lora_dynamic_apply": false,
     "lora_configs": [
         {
             "path": "lightx2v/LightLingBot-Video/lightlingbot_video_moe30b_4steps_rank128_v2.safetensors",

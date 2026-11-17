@@ -12,7 +12,7 @@ export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 export PROFILING_DEBUG_LEVEL=0
 
-# Eight-GPU BF16 inference with the existing post_refa2av.py request.
+# --task: refa2av or refa2v; use the matching --config_json.
 python -m torch.distributed.run --standalone --nproc_per_node=8 -m lightx2v.server \
   --model_cls minimax_h3_causal \
   --task refa2av \

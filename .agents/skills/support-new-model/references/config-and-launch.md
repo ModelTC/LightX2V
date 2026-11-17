@@ -10,7 +10,7 @@ Do not hard-code local model roots, upstream source roots, adapter paths, audio 
 
 Do not add extra input JSON dependency files for a new model unless the existing LightX2V workflow already requires them. Keep structured model defaults in `configs/<family>/*.json`, and put per-run arguments in bash/CLI. A script can pass a JSON-valued config path, but it should not require a second model-private `input_json` just to provide prompt/audio/image paths that LightX2V already accepts.
 
-Do not add a model-local `_apply_default_config()` that silently fills many fields. Put required stable values in JSON, or inherit existing global defaults intentionally. If a field is required for correctness, fail early with a clear error instead of hiding it behind a private defaults function.
+Put checkpoint-derived paths, architecture field mapping and model defaults in the loader registered by the model's `ModelEntry`. Its `load_config(deployment_config)` reads metadata, calls `merge_config(model_config, deployment_config)`, applies necessary model-specific processing, and returns the final configuration. Keep profile settings in JSON. Do not inject a global default configuration or add a private defaults stage in the runner; read optional behavior flags with defaults where they are used.
 
 Prefer LightX2V naming:
 
@@ -77,14 +77,14 @@ Use `config_json` for stable profile config and bash for:
 When choosing config vs bash:
 
 - Put architecture and deployment fields in JSON: `size`, `num_frames`, `fps`, `infer_steps`, attention types, scheduler shift, offload/parallel settings, `use_compile`, and `warmup`. These are not all CLI request options.
-- `build_cli_inputs()` separates startup fields (`config_json`, `model_cls`, `model_variant`, `model_path`, `task`) from request fields. `prepare_request()` rejects fields not declared for that task; add new request fields consistently in CLI, `InputInfo`, runner declarations and Python API when applicable.
+- `utils/cli.py` separates startup fields (`config_json`, `model_cls`, `model_variant`, `model_path`, `task`) from request fields. `prepare_request()` rejects fields not declared for that task; declare request fields once in the model's `request_spec.py` for CLI, server and InputInfo.
 - `build_startup_config()` merges model defaults and deployment JSON, with explicit handling for task, variant and API fps. Read that function for precedence; do not assume every CLI argument overrides a JSON field.
 - Put run-local fields in bash/CLI: prompt, negative prompt, image/video/audio path, save path, visible devices, model class, task, and checkpoint path overrides that vary by machine or experiment.
 - Before adding a new argparse/config name, search for an existing equivalent and reuse it. For example, use `adapter_model_path` for model adapters and `audio_encoder_path` for audio encoders instead of adding model-specific aliases.
 
 For profiles copied from upstream names, keep filename compatibility if useful, but keep internal LightX2V semantics clear. Example: upstream may call a config `robotwin_i2av` while its actual `infer_mode` is `i2va`; in LightX2V the script can use `robotwin_i2av.json` while still passing `--task i2va`.
 
-When deciding whether a field can be removed from JSON because a model config exists under `model_path`, verify `set_config.py` loads that config for this `model_cls`. If it does not, either add the merge or keep the field. Do not assume `transformer/config.json` is loaded globally.
+When deciding whether a field can be removed from JSON because checkpoint metadata exists under `model_path`, inspect the configuration loader registered in `registry.RUNNER_MODULES[model_cls].config`. If it does not read that metadata, update the model's loader or keep the field. Do not assume `transformer/config.json` is loaded globally.
 
 ## Bash Script Conventions
 

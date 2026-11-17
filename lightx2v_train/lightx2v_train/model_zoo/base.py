@@ -2,6 +2,8 @@ import inspect
 import json
 import os
 from contextlib import contextmanager
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import torch
 from diffusers.models.modeling_utils import SAFETENSORS_WEIGHTS_NAME, SAFE_WEIGHTS_INDEX_NAME
@@ -29,6 +31,11 @@ from lightx2v_train.model_zoo.capability_adapters.common import (
 from lightx2v_train.runtime.backend import get_backend, get_device
 from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import is_fsdp2_module
+from lightx2v_train.runtime.sharded_loader import (
+    load_fsdp2_safetensors,
+    local_layout_from_template,
+    make_dtensor_from_template,
+)
 from lightx2v_train.utils.utils import get_running_dtype
 
 
@@ -90,6 +97,60 @@ class BaseModel(CapabilityProvider):
 
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
+
+    def load_deferred_transformer_weights(self):
+        """Finish loading weights staged by meta initialization after FSDP2 wraps the model."""
+        return None
+
+    @staticmethod
+    def resolve_sharded_checkpoint_key(checkpoint_key, state_templates):
+        if checkpoint_key in state_templates:
+            return checkpoint_key
+        suffix = checkpoint_key.rsplit(".", 1)[-1]
+        if suffix in {"weight", "bias"}:
+            prefix = checkpoint_key.rsplit(".", 1)[0]
+            candidate = f"{prefix}.base_layer.{suffix}"
+            if candidate in state_templates:
+                return candidate
+        return None
+
+    def initialize_missing_sharded_parameter(self, name, template):
+        if "lora_A" not in name and "lora_B" not in name:
+            return None
+        local_shape, _ = local_layout_from_template(template)
+        local_tensor = torch.empty(
+            local_shape,
+            device=self.device,
+            dtype=self.transformer_param_dtype,
+        )
+        if "lora_A" in name:
+            local_tensor.normal_(mean=0.0, std=0.02)
+        else:
+            local_tensor.zero_()
+        return make_dtensor_from_template(template, local_tensor)
+
+    def load_sharded_transformer_weights(self, checkpoint):
+        """Load FSDP2 shards from an indexed or single-file safetensors checkpoint."""
+        load_options = {
+            "key_resolver": self.resolve_sharded_checkpoint_key,
+            "initialize_missing": self.initialize_missing_sharded_parameter,
+            "device": self.device,
+            "dtype": self.transformer_param_dtype,
+        }
+        checkpoint = Path(checkpoint)
+        if any(checkpoint.glob("*.index.json")):
+            load_fsdp2_safetensors(self.denoiser_module(), checkpoint, **load_options)
+            return
+
+        weight_file = next(checkpoint.glob("*.safetensors")).resolve()
+        with safe_open(str(weight_file), framework="pt", device="cpu") as shard:
+            weight_map = {name: weight_file.name for name in shard.keys()}
+        with TemporaryDirectory() as temp_dir:
+            temp_dir = Path(temp_dir)
+            os.symlink(weight_file, temp_dir / weight_file.name)
+            index = temp_dir / "model.safetensors.index.json"
+            index.write_text(json.dumps({"weight_map": weight_map}), encoding="utf-8")
+            load_fsdp2_safetensors(self.denoiser_module(), temp_dir, **load_options)
 
     def add_lora(self, rank, alpha, target_modules):
         lora_config = LoraConfig(

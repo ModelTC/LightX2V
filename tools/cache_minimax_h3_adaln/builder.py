@@ -1,16 +1,6 @@
-"""Build a MiniMax-H3 AdaLN cache without loading the full model.
-
-ADALN CACHE SYNC CONTRACT:
-The calculations in ``build_cache_tables`` intentionally mirror the online mixed-precision
-path in ``infer/pre_infer.py``, ``infer/transformer_infer.py``, and
-``infer/post_infer.py``. If timestep embedding, time-MLP activation/dtype,
-AdaLN projection/reshape, final-norm modulation, or their checkpoint keys are
-changed online, update this builder and the cache tests in the same change.
-Regenerate the cache whenever its values can change.
-"""
-
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -20,6 +10,7 @@ from loguru import logger
 from safetensors import safe_open
 from safetensors.torch import save_file
 
+from lightx2v.common.ops.mm.mm_weight import MMWeight
 from lightx2v.models.networks.minimax_h3.adaln_cache import (
     _block_key,
     _expected_table_shape,
@@ -29,7 +20,10 @@ from lightx2v.models.networks.minimax_h3.adaln_cache import (
     checkpoint_files,
     resolve_adaln_cache,
 )
+from lightx2v.models.networks.minimax_h3.adaln_profiles import cache_plan
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import timestep_embedding
+from lightx2v.models.networks.minimax_h3.lora import merge_lora_weight
+from lightx2v.utils.envs import DTYPE_MAP
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -84,21 +78,6 @@ class _CheckpointTensors:
         return tensor.to(device=AI_DEVICE, dtype=dtype)
 
 
-def _quantized_projection(checkpoint, prefix, scheme):
-    """Use the online FP8 module, including its real activation quantizer."""
-    # Cache building also runs without the inference runner's module imports.
-    import lightx2v.common.ops.mm.mm_weight  # noqa: F401
-    from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
-
-    projection = MM_WEIGHT_REGISTER[scheme](f"{prefix}.weight", f"{prefix}.bias")
-    projection.set_config({"weight_auto_quant": False})
-    names = (f"{prefix}.weight", f"{prefix}.weight_scale", f"{prefix}.bias")
-    projection.load({name: checkpoint.get(name, dtype=None) for name in names})
-    # Do not enable F16 accumulation: the online AdaLN projection does not
-    # belong to that backend's QKV/output/FFN whitelist either.
-    return projection
-
-
 def _linear(
     input_tensor: torch.Tensor,
     weight: torch.Tensor,
@@ -115,12 +94,40 @@ def _linear(
     return torch.addmm(bias, input_tensor, weight.t(), out=output)
 
 
+def _modulation_projection(spec, checkpoint, prefix):
+    weight = checkpoint.get(f"{prefix}.weight")
+    bias = checkpoint.get(f"{prefix}.bias")
+    projection = MMWeight(f"{prefix}.weight", f"{prefix}.bias", lora_prefix=None)
+    projection.weight, projection.bias = weight.t(), bias
+    adapters = spec.get("lora_configs", [])
+    mode = spec.get("lora_mode", "merge")
+    if mode == "separate" and len(adapters) > 1:
+        raise ValueError("H3 separate/consumer cache requires a single LoRA")
+    for adapter in adapters:
+        if prefix not in adapter["alphas"]:
+            continue
+        with safe_open(adapter["path"], framework="pt", device="cpu") as source:
+            down = source.get_tensor(prefix + ".lora_A.default.weight")
+            up = source.get_tensor(prefix + ".lora_B.default.weight")
+        alpha = adapter["alphas"][prefix]
+        dtype = DTYPE_MAP[spec["lora_dtype"]]
+        if mode == "merge":
+            merge_lora_weight(weight, up, down, alpha, adapter["strength"], lora_dtype=dtype, device=spec["lora_merge_device"])
+        else:
+            projection.register_lora(
+                {
+                    prefix + ".lora_down.weight": down.to(dtype),
+                    prefix + ".lora_up.weight": up.to(dtype),
+                    prefix + ".alpha": torch.tensor(alpha, dtype=dtype),
+                },
+                adapter["strength"],
+            )
+    return projection
+
+
 @torch.inference_mode()
 def build_cache_tables(spec: dict, checkpoint: _CheckpointTensors) -> dict[str, torch.Tensor]:
     """Compute block AdaLN and final-norm tables, returning CPU tensors."""
-    contract = spec["projection_contract"]
-    quantized = contract["adaln_backend"] == "sgl_fp8_scaled_mm"
-
     # ADALN CACHE SYNC: Keep activation placement and casts aligned with
     # the three online infer modules named in this file's contract.
     time_weight_1 = checkpoint.get("time_embedder.linear_1.weight", dtype=torch.float32)
@@ -138,34 +145,22 @@ def build_cache_tables(spec: dict, checkpoint: _CheckpointTensors) -> dict[str, 
 
     del time_weight_1, time_bias_1, time_weight_2, time_bias_2
 
-    norm_out_weight = checkpoint.get("norm_out.linear.weight")
-    norm_out_bias = checkpoint.get("norm_out.linear.bias")
-    cache_tables = {
-        _norm_out_key(entry): _linear(
-            adaln_inputs[entry["name"]],
-            norm_out_weight,
-            norm_out_bias,
-        )
-        .to("cpu")
-        .contiguous()
-        for entry in spec["entries"]
-    }
-    del norm_out_weight, norm_out_bias
+    norm_out = _modulation_projection(spec, checkpoint, "norm_out.linear")
+    cache_tables = {_norm_out_key(entry): norm_out.apply(adaln_inputs[entry["name"]]).to("cpu").contiguous() for entry in spec["entries"]}
+    del norm_out
 
     # Only one full, unsharded block projection is resident at a time.
     for block_index in range(spec["num_layers"]):
         prefix = f"transformer_blocks.{block_index}.adaln_proj.linear"
-        projection = _quantized_projection(checkpoint, prefix, contract["scheme"]) if quantized else None
-        weight = None if quantized else checkpoint.get(f"{prefix}.weight")
-        bias = None if quantized else checkpoint.get(f"{prefix}.bias")
+        projection = _modulation_projection(spec, checkpoint, prefix)
         for entry in spec["entries"]:
             # Keep each unique-timestep batch separate, exactly as
             # online step_pre/clean_commit prepares it (one or two
             # rows for Stage3), rather than pooling entries together.
-            modulation = projection.apply(adaln_inputs[entry["name"]]) if quantized else _linear(adaln_inputs[entry["name"]], weight, bias)
+            modulation = projection.apply(adaln_inputs[entry["name"]])
             table = modulation.view(*_expected_table_shape(spec, entry))
             cache_tables[_block_key(block_index, entry)] = table.to("cpu").contiguous()
-        del weight, bias, modulation, table, projection
+        del projection, modulation, table
         logger.info(
             "Built MiniMax-H3 AdaLN cache block {}/{}",
             block_index + 1,
@@ -174,17 +169,30 @@ def build_cache_tables(spec: dict, checkpoint: _CheckpointTensors) -> dict[str, 
     return cache_tables
 
 
-def build_persistent_adaln_cache(config) -> Path:
+def _cache_exists_error(cache_path: Path) -> FileExistsError:
+    return FileExistsError(f"MiniMax-H3 AdaLN cache path already exists: {cache_path}. Use --overwrite to regenerate and replace the existing cache.")
+
+
+def _remove_existing_cache(cache_path: Path, overwrite: bool) -> None:
+    if not cache_path.exists():
+        return
+    if not overwrite:
+        raise _cache_exists_error(cache_path)
+    logger.warning("Removing existing AdaLN cache before regeneration with --overwrite: {}", cache_path)
+    shutil.rmtree(cache_path)
+
+
+def build_persistent_adaln_cache(config, *, overwrite: bool = False) -> Path:
     """Build the cache in this process for later inference processes to load."""
     cache_path, spec = resolve_adaln_cache(config)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    if cache_path.exists():
-        raise FileExistsError(f"MiniMax-H3 AdaLN cache path already exists: {cache_path}")
-    files = checkpoint_files(config[spec["projection_contract"]["checkpoint_source"]])
-    checkpoint = _CheckpointTensors(files, spec["projection_contract"]["checkpoint_layout"])
+    _remove_existing_cache(cache_path, overwrite)
+    plan = cache_plan(config)
+    files = checkpoint_files(config["dit_original_ckpt"])
+    checkpoint = _CheckpointTensors(files, plan.checkpoint_layout)
     logger.info("Building MiniMax-H3 AdaLN cache on {}: {}", AI_DEVICE, cache_path)
 
-    # Validate beside the destination, then publish with one atomic rename.
+    # Generate and validate in a temporary directory, then publish the cache.
     with tempfile.TemporaryDirectory(prefix=".building-", dir=cache_path.parent) as stage:
         stage_path = Path(stage)
         tables = build_cache_tables(spec, checkpoint)
@@ -193,6 +201,7 @@ def build_persistent_adaln_cache(config) -> Path:
             json.dump(spec, handle, ensure_ascii=False, indent=2, sort_keys=True)
         if not _validate_cache(stage_path, spec):
             raise RuntimeError(f"MiniMax-H3 AdaLN cache validation failed: {cache_path}")
+        _remove_existing_cache(cache_path, overwrite)
         os.replace(stage_path, cache_path)
 
     logger.info("MiniMax-H3 AdaLN cache is ready: {}", cache_path)

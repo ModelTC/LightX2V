@@ -12,11 +12,11 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.ernie_image.mistral3_model import ErnieImageTextEncoder
 from lightx2v.models.networks.ernie_image.model import ErnieImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.ernie_image.scheduler import ErnieImageScheduler
 from lightx2v.models.video_encoders.hf.ernie_image.vae import ErnieImageVAE
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -34,11 +34,9 @@ def calculate_dimensions(target_area, ratio, multiple_of):
 
 @RUNNER_REGISTER("ernie_image")
 class ErnieImageRunner(DefaultRunner):
+    input_info_state = ImageState
     model_cpu_offload_seq = "pe->text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-    supported_request_fields_by_task = {
-        "t2i": IMAGE_REQUEST_FIELDS,
-    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -204,6 +202,7 @@ class ErnieImageRunner(DefaultRunner):
                 pixels = (pixels * 255).round().astype(np.uint8)
                 image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
                 save_image(image, image_path, method)
+            self.record_output("image", image_path)
             logger.info(f"Image saved: {image_path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, revised_prompts, latents=None, generator=None):

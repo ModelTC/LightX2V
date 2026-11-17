@@ -13,12 +13,12 @@ from lightx2v.models.input_encoders.hf.minimax_h3_image import MiniMaxH3ImageTex
 from lightx2v.models.input_encoders.hf.minimax_h3_image.preprocess import get_image_canvas_size, image_to_tensor, prepare_reference_images
 from lightx2v.models.networks.minimax_h3_image.model import MiniMaxH3ImageModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.minimax_h3_image import MiniMaxH3ImageScheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_image import MiniMaxH3ImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_RECORDER_MODE
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, seed_all
@@ -27,8 +27,12 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 @RUNNER_REGISTER("minimax_h3_image")
 class MiniMaxH3ImageRunner(DefaultRunner):
-    supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS, "i2i": IMAGE_REQUEST_FIELDS | {"image_path"}}
-    _WARMUP_RESOLUTIONS = ((2048, 2048), (3552, 4736))
+    input_info_state = ImageState
+    _WARMUP_SHAPES = ((2048, 2048), (3552, 4736))
+    _WARMUP_PROMPTS = (
+        "A cinematic photograph of a mountain lake.",
+        "A wide cinematic photograph of a quiet mountain lake at dawn. A wooden rowboat rests beside a weathered dock in the foreground, with small ripples reflecting a pale orange sky. Across the water, a dark pine forest rises toward snow-covered peaks. Thin layers of mist drift between the trees and the shore. Soft morning light catches the reeds and smooth stones at the edge of the lake.",
+    )
 
     def __init__(self, config):
         if config.get("enable_cfg", False) or config.get("cfg_parallel", False):
@@ -41,9 +45,6 @@ class MiniMaxH3ImageRunner(DefaultRunner):
         if config.get("negative_prompt") or config.get("sample_guide_scale", 1.0) != 1.0:
             raise ValueError("MiniMax-H3-Image uses one positive branch without negative prompts or guidance")
         super().__init__(config)
-
-    def get_supported_tasks(self):
-        return super().get_supported_tasks() if self.config.get("task") is not None else ("t2i", "i2i")
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
@@ -61,21 +62,11 @@ class MiniMaxH3ImageRunner(DefaultRunner):
     @torch.inference_mode()
     def _run_warmup(self, tasks):
         for task in tasks:
-            for height, width in self._WARMUP_RESOLUTIONS:
+            for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
                 logger.info(f"Warmup MiniMax-H3-Image {task}: {height}x{width}")
                 try:
                     self.scheduler.generator = None
-                    request = {
-                        "task": task,
-                        "seed": 0,
-                        "prompt": "A cinematic photograph of a mountain lake.",
-                        "size": [height, width],
-                        "save_result_path": None,
-                        "return_result_tensor": False,
-                    }
-                    if task == "i2i":
-                        request["image_path"] = Image.new("RGB", (width, height))
-                    self.input_info = self.create_input_info(request)
+                    self._prepare_warmup_inputs(warmup_index, task, height, width)
                     seed_all(self.input_info.seed)
                     # Use the same attention dispatch as a formal request.
                     with sdpa_kernel([SDPBackend.CUDNN_ATTENTION, SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]):
@@ -102,6 +93,19 @@ class MiniMaxH3ImageRunner(DefaultRunner):
                     for name in ("inputs", "output_size", "request_height", "request_width"):
                         self.__dict__.pop(name, None)
         logger.info("[Warmup] Warmup completed")
+
+    def _prepare_warmup_inputs(self, warmup_index, task, height, width):
+        request = {
+            "task": task,
+            "seed": 0,
+            "prompt": self._WARMUP_PROMPTS[warmup_index],
+            "size": [height, width],
+            "save_result_path": None,
+            "return_result_tensor": False,
+        }
+        if task == "i2i":
+            request["image_path"] = [Image.new("RGB", (width, height))]
+        self.input_info = self.create_input_info(request)
 
     def init_scheduler(self):
         self.scheduler = MiniMaxH3ImageScheduler(self.config)

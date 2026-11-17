@@ -1,4 +1,5 @@
 {
+  "lora_mode": "separate",
   "model_variant": "fl2av",
   "infer_steps": 3,
   "num_frames": 240,

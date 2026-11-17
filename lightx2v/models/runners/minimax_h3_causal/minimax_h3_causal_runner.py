@@ -20,7 +20,6 @@ from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRun
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 from lightx2v.models.runners.minimax_h3_causal.motion import prepare_motions
 from lightx2v.models.runners.minimax_h3_causal.reference_cache import MiniMaxH3ReferenceCache
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3_causal.clean_scheduler import MiniMaxH3CleanScheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
@@ -41,7 +40,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     Both use the same motion prefill, clean KV history and video output path.
     """
 
-    supported_request_fields_by_task = {task: COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "audio_path", "prompt", "motions"} for task in ("refa2v", "refa2av")}
+    supported_lora_modes = ("merge",)
 
     def __init__(self, config):
         if config["task"] not in ("refa2v", "refa2av"):
@@ -89,9 +88,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     @property
     def live_stream(self):
         return self.input_info is not None and isinstance(self.input_info.audio_path, dict)
-
-    def get_supported_tasks(self):
-        return (self.config["task"],)
 
     def load_model(self):
         if self.reference_cache is not None:
@@ -177,11 +173,13 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             idle = info.stream_config.get("idle_prompt", "<Subject 1> waits quietly, keeps their mouth closed, and looks naturally at the camera. No speech.")
             motions = [{"frame": 0, "text": idle}]
         self.motion_by_chunk = prepare_motions(motions, prompt=info.prompt, num_frames=self.request_num_frames)
-        reference_sources = {"image": info.image_path}
+        image_paths = info.image_path if isinstance(info.image_path, (list, tuple)) else [info.image_path]
+        reference_sources = {"image": image_paths}
         if self.generate_audio:
-            reference_sources["audio"] = info.stream_config.get("reference_audio_path") if self.live_stream else info.audio_path
-            if not reference_sources["audio"]:
+            audio_path = info.stream_config.get("reference_audio_path") if self.live_stream else info.audio_path
+            if not audio_path:
                 raise ValueError("RefA2AV live input requires stream_config.reference_audio_path for the voice reference")
+            reference_sources["audio"] = [audio_path]
         self.prepared_references = self._prepare_references(reference_sources)
         if self.generate_audio and sum(reference.kind == "audio" for reference in self.prepared_references) != 1:
             raise ValueError("RefA2AV requires exactly one voice reference")
@@ -375,7 +373,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         # Validate on every rank before any reference encoder enters collectives.
         references, error = None, ""
         try:
-            references = self._prepare_references({"image": image_path})
+            references = self._prepare_references({"image": [image_path]})
             references.extend(ref for ref in self.prepared_references if ref.kind == "audio")
         except Exception as exc:
             error = str(exc) or type(exc).__name__

@@ -13,14 +13,12 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from loguru import logger
 
-from lightx2v.models.runners.runner_factory import build_runner
 from lightx2v.server.ws import session as ws_session
 from lightx2v.server.ws.protocol import ClientMessage, error_message
 from lightx2v.server.ws.session import LiveSession, apply_run_input, join_pipeline, launch_pipeline
-from lightx2v.utils.input_info import INPUT_INFO_TYPES
-from lightx2v.utils.set_config import build_startup_config, init_parallel, print_config
-from lightx2v.utils.utils import seed_all
-from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
+from lightx2v.utils.config_logging import print_config
+from lightx2v.utils.parallel import init_parallel
+from lightx2v.utils.set_config import build_startup_config
 
 WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
 RANK = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0")))
@@ -252,6 +250,11 @@ def main():
     global RANK, WORLD_SIZE, TARGET_RANK
     parser = build_parser()
     args = parser.parse_args()
+
+    from lightx2v.models.runners.runner_factory import build_runner
+    from lightx2v.utils.utils import seed_all, validate_config_paths
+    from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
+
     if args.aspect_ratios is not None:
         ws_session.ASPECT_RATIOS = ws_session.parse_aspect_ratios(args.aspect_ratios)
         logger.info(f"Using custom aspect_ratios: {ws_session.ASPECT_RATIOS}")
@@ -279,21 +282,26 @@ def main():
         WORLD_SIZE = dist.get_world_size()
         TARGET_RANK = int(os.getenv("WORKER_RANK", "0")) % WORLD_SIZE
 
-    print_config(config)
-    runner = build_runner(config)
-    input_info_cls = runner.input_info_cls_by_task.get(args.task) or INPUT_INFO_TYPES[args.task]
-    input_info = input_info_cls()
-    input_info.update({"task": args.task})
-    init_task_group()
+    print_config(config, title="Startup config")
+    validate_config_paths(config)
+    runner = None
+    try:
+        runner = build_runner(config)
+        input_info = runner.create_input_info({"task": args.task})
+        init_task_group()
 
-    if RANK != TARGET_RANK:
-        asyncio.run(follower_loop(runner, input_info))
-    else:
-        asyncio.run(run_websocket_server(args, runner, input_info))
-
-    if dist.is_initialized():
-        dist.destroy_process_group()
-        logger.info("Distributed process group cleaned up")
+        if RANK != TARGET_RANK:
+            asyncio.run(follower_loop(runner, input_info))
+        else:
+            asyncio.run(run_websocket_server(args, runner, input_info))
+    finally:
+        try:
+            if runner is not None:
+                runner.close()
+        finally:
+            if dist.is_initialized():
+                dist.destroy_process_group()
+                logger.info("Distributed process group cleaned up")
 
 
 if __name__ == "__main__":

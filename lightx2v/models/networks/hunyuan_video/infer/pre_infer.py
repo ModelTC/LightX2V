@@ -37,7 +37,7 @@ class HunyuanVideo15PreInfer:
         self.rope = None
         self.cos_sin = None
         self.grid_sizes = (0, 0, 0)  # (t, h, w)
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
@@ -48,7 +48,7 @@ class HunyuanVideo15PreInfer:
     def get_byt5_inputs(self, inputs):
         text_output = inputs["text_encoder_output"]
         features, mask = text_output["byt5_features"], text_output["byt5_masks"]
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             # The encoder packs unconditional features before conditional features.
             branch = 1 if self.scheduler.infer_condition else 0
             features = features.chunk(2, dim=0)[branch]

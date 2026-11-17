@@ -27,9 +27,9 @@ from lightx2v.models.networks.swiftvr import (
     padded_frame_count,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.input_info import SRState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_image
@@ -39,12 +39,11 @@ from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_
 class SwiftVRRunner(DefaultRunner):
     """Native LightX2V runner for SwiftVR image and video restoration."""
 
-    supported_request_fields_by_task = {
-        "sr": COMMON_REQUEST_FIELDS | {"image_path", "sr_ratio", "size", "video_path"},
-    }
+    input_info_state = SRState
 
     # Two spatial shapes trigger dynamic compilation before serving requests.
-    WARMUP_RESOLUTIONS = ((720, 1280), (2048, 1536))
+    _WARMUP_SHAPES = ((720, 1280), (2048, 1536))
+    _WARMUP_PROMPTS = ()
 
     def __init__(self, config):
         parallel = config.get("parallel") or {}
@@ -54,7 +53,7 @@ class SwiftVRRunner(DefaultRunner):
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         if self.chunk_p_size != world_size:
             raise ValueError(f"SwiftVR requires parallel.chunk_p_size ({self.chunk_p_size}) to match world_size ({world_size}).")
-        if config.get("cpu_offload"):
+        if config.get("cpu_offload", False):
             raise NotImplementedError("SwiftVR does not support CPU offload yet.")
         if config.get("queue_size", 3) <= 0:
             raise ValueError("SwiftVR queue_size must be positive.")
@@ -96,7 +95,7 @@ class SwiftVRRunner(DefaultRunner):
         # One first, middle, and one-frame last chunk cover the 7- and 6-latent DiT paths.
         chunks = build_video_chunks(2 * clip_length + 5, clip_length)
 
-        for height, width in self.WARMUP_RESOLUTIONS:
+        for height, width in self._WARMUP_SHAPES:
             padded_height = height + (-height) % 32
             padded_width = width + (-width) % 32
             logger.info(f"Warmup: {height}x{width}")
@@ -105,15 +104,7 @@ class SwiftVRRunner(DefaultRunner):
                 self.restorer.transformer.overlap = 0
                 self.restorer.autoencoder.chunk_p_group = self.chunk_p_group
                 for chunk in chunks:
-                    video = torch.zeros(
-                        1,
-                        chunk.frame_count,
-                        3,
-                        padded_height,
-                        padded_width,
-                        dtype=GET_DTYPE(),
-                        device=self.init_device,
-                    )
+                    video = self._prepare_warmup_inputs(padded_height, padded_width, chunk.frame_count)
                     restored = self.restorer.restore_chunk(video, chunk, clip_latents)
                     del video, restored
             finally:
@@ -123,6 +114,9 @@ class SwiftVRRunner(DefaultRunner):
 
         logger.info("[Warmup] Warmup completed")
         self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, height, width, frame_count):
+        return torch.zeros(1, frame_count, 3, height, width, dtype=GET_DTYPE(), device=self.init_device)
 
     @staticmethod
     def resolve_output_size(

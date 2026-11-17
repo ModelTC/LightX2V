@@ -31,16 +31,10 @@ def prepare_reference_images(image_paths):
         return []
     if isinstance(image_paths, (str, PathLike, Image.Image)):
         image_paths = [image_paths]
-    sources = []
-    for source in image_paths:
-        if isinstance(source, str):
-            sources.extend(path.strip() for path in source.split(",") if path.strip())
-        else:
-            sources.append(source)
-    if len(sources) > 16:
+    if len(image_paths) > 16:
         raise ValueError("MiniMax-H3-Image supports at most 16 reference images")
     references = []
-    for source in sources:
+    for source in image_paths:
         if isinstance(source, Image.Image):
             image = ImageOps.exif_transpose(source).convert("RGB")
         else:

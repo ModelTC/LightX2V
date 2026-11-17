@@ -6,15 +6,17 @@ inference path does not carry checkpoint-building concerns.
 
 import hashlib
 import json
-from importlib import metadata
 from pathlib import Path
 
 import torch
 from loguru import logger
 from safetensors import SafetensorError, safe_open
 
-from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
-from lightx2v.models.networks.minimax_h3.adaln_profiles import AdaLNCachePlan, cache_plan
+from lightx2v.models.networks.minimax_h3.adaln_cache_guide import get_adaln_cache_guide
+from lightx2v.models.networks.minimax_h3.adaln_profiles import cache_plan
+from lightx2v.models.networks.minimax_h3.lora import cached_modulation_shapes, read_lora_pairs
+from lightx2v.utils.envs import GET_LORA_DTYPE
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def checkpoint_files(checkpoint) -> list[Path]:
@@ -26,59 +28,13 @@ def checkpoint_files(checkpoint) -> list[Path]:
     return files
 
 
-def _projection_contract(config, plan: AdaLNCachePlan):
-    """Identify the actual modulation arithmetic and weight files."""
-    quantized = plan.quantized_projection
-    scheme = config.get("dit_quant_scheme", "Default") if quantized else "Default"
-    if scheme not in ("Default", "fp8-sgl", "fp8-f16-accum", "fp8-f32-accum"):
-        raise NotImplementedError(f"H3 AdaLN cache does not support {scheme!r}")
-    source = "dit_quantized_ckpt" if quantized else "dit_original_ckpt"
-    checkpoint = Path(config[source]).expanduser().resolve()
-    files = checkpoint_files(checkpoint)
-    indices = sorted(checkpoint.glob("*.safetensors.index.json")) if checkpoint.is_dir() else []
-    checkpoint_metadata = {}
-    if quantized:
-        for path in files:
-            with safe_open(path, framework="pt", device="cpu") as handle:
-                checkpoint_metadata[path.name] = handle.metadata() or {}
-    try:
-        sgl_version = metadata.version("sgl-kernel") if quantized else None
-    except metadata.PackageNotFoundError:
-        sgl_version = "unavailable"
-    return {
-        "checkpoint_source": source,
-        # Both accumulation modes leave AdaLN on the same SGL path.
-        "scheme": "fp8-f16-accum" if scheme == "fp8-f32-accum" else scheme,
-        "checkpoint_layout": plan.checkpoint_layout,
-        # AdaLN is intentionally absent from H3_PROJECTION_SUFFIXES.
-        # Its FP8-F16 profile therefore uses this same SGL per-token backend.
-        "adaln_backend": "sgl_fp8_scaled_mm" if quantized else "torch.addmm",
-        "activation_quantization": "sgl_per_token_quant_fp8" if quantized else None,
-        "activation_qmax": 448.0 if quantized else None,
-        "time_mlp_dtype": "fp32",
-        "modulation_dtype": "bf16",
-        "torch_version": str(torch.__version__),
-        "cuda_capability": list(torch.cuda.get_device_capability()) if torch.cuda.is_available() else None,
-        "float32_matmul_precision": torch.get_float32_matmul_precision(),
-        "allow_tf32": torch.backends.cuda.matmul.allow_tf32,
-        "allow_bf16_reduced_precision_reduction": torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction,
-        "sgl_kernel_version": sgl_version,
-        "checkpoint_metadata": checkpoint_metadata,
-        # Names/stat metadata survive a verified copy2 SHM cache. The index
-        # digest additionally binds shard/tensor mappings without rereading
-        # tens of GiB every time a runner validates its small AdaLN cache.
-        "checkpoint": [{"name": path.name, "size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns} for path in files],
-        "index_sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in indices},
-    }
-
-
 def validate_adaln_cache_config(config) -> None:
     """Reject modes whose AdaLN result cannot be represented by this cache."""
     if not config.get("use_adaln_cache", False):
         return
     cache_dir = config.get("adaln_cache_dir")
     if cache_dir is None or not str(cache_dir).strip():
-        message = f"\nMINIMAX-H3 ADALN CACHE CONFIGURATION ERROR\n\nuse_adaln_cache=true, but adaln_cache_dir is missing or empty.\n\n{ADALN_CACHE_GUIDE}"
+        message = f"\nMINIMAX-H3 ADALN CACHE CONFIGURATION ERROR\n\nuse_adaln_cache=true, but adaln_cache_dir is missing or empty.\n\n{get_adaln_cache_guide(config['model_cls'])}"
         logger.error(message)
         raise ValueError(message)
     if config.get("dummy_model", False):
@@ -98,17 +54,21 @@ def _timesteps_from_bits(bits: list[int], device="cpu") -> torch.Tensor:
     return torch.tensor(bits, dtype=torch.int32).view(torch.float32).to(device)
 
 
-def resolve_adaln_cache(config) -> tuple[Path, dict]:
-    """Resolve the cache directory and expected manifest from one model plan."""
-    if not config.get("use_adaln_cache", False):
-        raise ValueError("Building or loading an AdaLN cache requires use_adaln_cache=true")
-    validate_adaln_cache_config(config)
-    plan = cache_plan(config)
-    spec = {
-        "version": 2,
-        "model_cls": config["model_cls"],
-        "profiles": plan.profiles,
-        "projection_contract": _projection_contract(config, plan),
+def _image_cache_spec(config, plan) -> dict:
+    """Image modulation depends on PDD timesteps, without AV flow shifts."""
+    return {
+        "infer_steps": int(config["infer_steps"]),
+        "sigmas": list(plan.sigmas),
+        "num_layers": int(config.get("num_layers", 50)),
+        "hidden_size": int(config.get("hidden_size", 5376)),
+        "freq_dim": int(config.get("freq_dim", 256)),
+        "entries": [{"name": name, "timestep_bits": _float32_bits(values.tolist())} for name, values in plan.timesteps.items()],
+    }
+
+
+def _video_cache_spec(config, plan) -> dict:
+    """Video modulation follows the separate video and audio flow schedules."""
+    return {
         "infer_steps": int(config["infer_steps"]),
         "video_flow_shift": float(config.get("video_flow_shift", 12.0)),
         "audio_flow_shift": float(config.get("audio_flow_shift", 3.0)),
@@ -118,7 +78,59 @@ def resolve_adaln_cache(config) -> tuple[Path, dict]:
         "entries": [{"name": name, "timestep_bits": _float32_bits(values.tolist())} for name, values in plan.timesteps.items()],
     }
 
-    cache_path = _cache_root(config) / spec["model_cls"] / plan.cache_name
+
+def _file_identity(path) -> dict:
+    path = Path(path).expanduser().resolve()
+    stat = path.stat()
+    return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _modulation_loras(config) -> list[dict]:
+    shapes = cached_modulation_shapes(config)
+    adapters = []
+    for adapter in config.get("lora_configs") or []:
+        identity = _file_identity(adapter["path"])
+        with safe_open(identity["path"], framework="pt", device="cpu") as source:
+            pairs = read_lora_pairs(source, adapter.get("alpha"))
+            alphas = {}
+            for prefix, (down, up, alpha) in pairs.items():
+                if prefix + ".weight" not in shapes:
+                    continue
+                shape = (source.get_slice(up).get_shape()[0], source.get_slice(down).get_shape()[1])
+                if shape != shapes[prefix + ".weight"]:
+                    raise ValueError(f"Cached LoRA shape mismatch for {prefix}: {shape}")
+                alphas[prefix] = alpha
+        if alphas:
+            adapters.append({**identity, "strength": float(adapter.get("strength", 1.0)), "alphas": alphas})
+    return adapters
+
+
+def resolve_adaln_cache(config) -> tuple[Path, dict]:
+    """Resolve the cache directory and expected manifest from one model plan."""
+    if not config.get("use_adaln_cache", False):
+        raise ValueError("Building or loading an AdaLN cache requires use_adaln_cache=true")
+    validate_adaln_cache_config(config)
+    plan = cache_plan(config)
+    if config["model_cls"] == "minimax_h3_image":
+        spec = _image_cache_spec(config, plan)
+    else:
+        spec = _video_cache_spec(config, plan)
+    name = plan.cache_name
+    if config["model_cls"] == "minimax_h3":
+        spec["checkpoint"] = [_file_identity(path) for path in checkpoint_files(config["dit_original_ckpt"])]
+        spec["lora_configs"] = _modulation_loras(config)
+        if spec["lora_configs"]:
+            # Consumer and separate use identical arithmetic for modulation.
+            mode = config.get("lora_mode", "merge")
+            if mode not in ("merge", "separate", "consumer"):
+                raise ValueError(f"Unknown H3 lora_mode: {mode}")
+            spec["lora_mode"] = "merge" if mode == "merge" else "separate"
+            spec["lora_dtype"] = str(GET_LORA_DTYPE())
+            if mode == "merge":
+                spec["lora_merge_device"] = config.get("lora_merge_device", AI_DEVICE)
+        fingerprint = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
+        name += f"_{fingerprint}"
+    cache_path = _cache_root(config) / config["model_cls"] / name
     return cache_path, spec
 
 
@@ -176,18 +188,18 @@ def load_persistent_adaln_cache(
     """Load cached block AdaLN and final-norm modulation onto the device."""
     cache_path, spec = resolve_adaln_cache(config)
     if not _validate_cache(cache_path, spec):
+        config_summary = "".join(f"  {key}: {value}\n" for key, value in spec.items() if key not in {"entries", "checkpoint", "lora_configs"})
+        config_summary += "".join(f"  LoRA: {adapter['path']} (strength={adapter['strength']})\n" for adapter in spec.get("lora_configs", []))
         message = (
             "\nMINIMAX-H3 ADALN CACHE LOAD ERROR\n\n"
             "AdaLN cache is missing or does not match the current model, computation, or format.\n\n"
             "Inference config:\n"
             f"  Cache root (adaln_cache_dir): {_cache_root(config)}\n"
-            f"  infer_steps: {spec['infer_steps']}\n"
-            f"  video_flow_shift: {spec['video_flow_shift']}\n"
-            f"  audio_flow_shift: {spec['audio_flow_shift']}\n\n"
+            f"{config_summary}\n"
             "Expected cache files:\n"
             f"  {cache_path / 'manifest.json'}\n"
             f"  {cache_path / 'adaln_cache.safetensors'}\n\n"
-            f"{ADALN_CACHE_GUIDE}"
+            f"{get_adaln_cache_guide(config['model_cls'])}"
         )
         logger.error(message)
         raise FileNotFoundError(message)

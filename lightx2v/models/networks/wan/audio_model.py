@@ -142,7 +142,7 @@ class WanAudioARModel(WanAudioModel, WanAutoregressiveModel):
                 self.transformer_weights.non_block_weights_to_cuda()
 
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
-        if self.config["seq_parallel"] and not inputs.get("_ar_ref_prefill", False):
+        if self.config.get("seq_parallel", False) and not inputs.get("_ar_ref_prefill", False):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
@@ -150,7 +150,7 @@ class WanAudioARModel(WanAudioModel, WanAutoregressiveModel):
         if inputs.get("_ar_ref_prefill", False):
             noise_pred = None
         else:
-            if self.config["seq_parallel"]:
+            if self.config.get("seq_parallel", False):
                 x = self._seq_parallel_post_process(x)
             noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
             self.scheduler.noise_pred = noise_pred

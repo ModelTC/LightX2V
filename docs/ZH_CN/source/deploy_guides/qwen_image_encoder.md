@@ -126,7 +126,7 @@ python -m lightx2v.infer \
     --model_path /path/to/Qwen-Image-Edit-2511 \
     --config_json configs/qwen_image/qwen_image_i2i_2511_service.json \
     --prompt "Make the girl from Image 1 wear the black dress from Image 2..." \
-    --image_path "1.png,2.png,3.png" \
+    --image_path "1.png" "2.png" "3.png" \
     --save_result_path output.png
 ```
 

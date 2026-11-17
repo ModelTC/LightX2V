@@ -26,14 +26,13 @@ from lightx2v.models.networks.wan.infer.utils import image_latent_size
 from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler, get_wan_distill_method
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import ActionI2VInputInfo, T2VInputInfo, align_num_frames
+from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -46,7 +45,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
     if not lora_configs:
         return wan_module(**model_kwargs)
 
-    if config.get("lora_dynamic_apply", False):
+    if config.get("lora_mode", "merge") == "separate":
         model_kwargs["lora_path"] = lora_configs[0]["path"]
         model_kwargs["lora_strength"] = lora_configs[0]["strength"]
         model = wan_module(**model_kwargs)
@@ -67,11 +66,8 @@ def get_wan_model_class(distill_method):
 
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
-    supported_request_fields_by_task = {
-        "t2v": VIDEO_REQUEST_FIELDS,
-        "i2v": VIDEO_REQUEST_FIELDS | {"image_path"},
-        "flf2v": VIDEO_REQUEST_FIELDS | {"image_path", "last_frame_path"},
-    }
+    supported_lora_modes = ("merge", "separate")
+
     FIXED_FRAME_ATTENTION_TYPES = {
         "svg_attn",
         "radial_attn",
@@ -79,7 +75,11 @@ class WanRunner(DisaggMixin, DefaultRunner):
         "nbhd_attn_flashinfer",
         "general_sparse_attn",
     }
-    _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
+    _WARMUP_SHAPES = ((480, 480), (720, 1280))
+    _WARMUP_PROMPTS = (
+        "A boat crosses a lake.",
+        "A small wooden boat crosses a calm lake in the early morning as the camera tracks it from the shore. Ripples spread behind the hull, mist drifts near the far bank, and the pale sky gradually brightens above the trees.",
+    )
     _WARMUP_TASKS = ("t2v", "i2v", "flf2v")
     _SUPPORTS_GENERIC_WARMUP = True
 
@@ -91,16 +91,17 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
 
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("self_attn_1_type") in self.FIXED_FRAME_ATTENTION_TYPES:
-            supported_request_fields -= {"num_frames"}
-        return supported_request_fields
+    def check_num_frames_override(self, request_data):
+        attention_type = self.config.get("self_attn_1_type")
+        if attention_type in self.FIXED_FRAME_ATTENTION_TYPES and request_data.get("num_frames") is not None:
+            raise ValueError(f"Wan num_frames cannot be overridden with self_attn_1_type={attention_type!r}; set num_frames in the startup config or choose another attention backend.")
 
     def prepare_request(self, request_data):
         input_info = super().prepare_request(request_data)
+        self.check_num_frames_override(request_data)
+        fixed_frames = self.config.get("self_attn_1_type") in self.FIXED_FRAME_ATTENTION_TYPES
         num_frames = getattr(input_info, "num_frames", None)
-        if "num_frames" in self.get_supported_request_fields(input_info.task) and num_frames is not None:
+        if not fixed_frames and "num_frames" in self.get_supported_request_fields(input_info.task) and num_frames is not None:
             if num_frames < 1:
                 raise ValueError(f"num_frames must be positive, got {num_frames}")
             temporal_stride = int(self.config["vae_stride"][0])
@@ -113,7 +114,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("disagg_mode") in ("transformer", "decode"):
             return input_info
 
-        task = self.config["task"]
+        task = input_info.task
         if task == "i2v":
             if not input_info.image_path:
                 raise ValueError("Wan i2v requires image_path")
@@ -136,15 +137,15 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "infinitetalk",
         ):
             raise NotImplementedError("Wan reuse currently supports Wan2.1, Wan2.2, and InfiniteTalk only")
-        if model_cls != "infinitetalk" and self.config["task"] not in ("t2v", "i2v"):
-            raise NotImplementedError(f"Wan reuse does not support task: {self.config['task']}")
+        if model_cls != "infinitetalk" and any(task not in ("t2v", "i2v") for task in self.supported_tasks):
+            raise NotImplementedError(f"Wan reuse does not support tasks: {self.supported_tasks}")
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
         if not self.supports_generic_warmup():
             raise NotImplementedError(f"Wan warmup is not supported for {type(self).__name__}")
-        if self.config.get("task") not in self._WARMUP_TASKS:
-            raise NotImplementedError(f"Wan warmup does not support task: {self.config.get('task')}")
+        if any(task not in self._WARMUP_TASKS for task in self.supported_tasks):
+            raise NotImplementedError(f"Wan warmup does not support tasks: {self.supported_tasks}")
 
         if self.config.get("lazy_load", False):
             try:
@@ -158,21 +159,21 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
         self._maybe_freeze_gc()
 
-    def _run_warmup(self):
-        input_info = T2VInputInfo(prompt="warmup")
-        inputs = {"text_encoder_output": self.run_text_encoder(input_info)}
+    def _run_warmup(self, task=None):
+        task = self.config["task"] if task is None else task
+        text_encoder_cache = {}
         scheduler = self.model.scheduler
         original_guide_scale = scheduler.sample_guide_scale
 
         try:
-            for height, width in self._WARMUP_RESOLUTIONS:
+            for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
                 latent_shape = self.get_warmup_latent_shape(height, width)
                 logger.info(f"Warmup: {height}x{width}")
                 try:
-                    inputs["image_encoder_output"] = self.get_warmup_image_encoder_output(latent_shape)
+                    input_info, inputs = self._prepare_warmup_inputs(warmup_index, task, latent_shape, text_encoder_cache)
                     scheduler.generator = None
                     scheduler.prepare(seed=input_info.seed, latent_shape=latent_shape, image_encoder_output=inputs["image_encoder_output"])
-                    if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
+                    if self.config.get("model_cls") == "wan2.2" and task == "i2v":
                         inputs["image_encoder_output"]["vae_encoder_out"] = None
                     try:
                         previous_step_index = None
@@ -192,11 +193,25 @@ class WanRunner(DisaggMixin, DefaultRunner):
                     torch_device_module.synchronize()
                 finally:
                     self.clear_warmup_state()
-                    inputs.pop("image_encoder_output", None)
+                    inputs = None
         finally:
             scheduler.sample_guide_scale = original_guide_scale
 
         logger.info("[Warmup] Warmup completed")
+
+    def _prepare_warmup_inputs(self, warmup_index, task, latent_shape, text_encoder_cache):
+        prompt = self._WARMUP_PROMPTS[warmup_index]
+        input_info = self.get_input_info_type(task)(task=task, prompt=prompt)
+        self.input_info = input_info
+        self.model.scheduler.input_info = input_info
+        if prompt not in text_encoder_cache:
+            text_encoder_cache[prompt] = self.run_text_encoder(input_info)
+        inputs = {
+            "task": input_info.task,
+            "text_encoder_output": text_encoder_cache[prompt],
+            "image_encoder_output": self.get_warmup_image_encoder_output(latent_shape),
+        }
+        return input_info, inputs
 
     def supports_generic_warmup(self):
         # Specialized runners must opt in themselves; inherited support is not enough.
@@ -325,7 +340,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def load_text_encoder(self):
         # offload config
-        t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload"))
+        t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload", False))
         if t5_offload:
             t5_device = torch.device("cpu")
         else:
@@ -388,7 +403,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def load_vae_encoder(self):
         # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
@@ -416,7 +431,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def load_vae_decoder(self):
         # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
@@ -574,14 +589,15 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def reuse_key(self):
         reuse_key = {
+            "task": self.input_info.task,
             "prompt": self.input_info.prompt,
             "negative_prompt": self.input_info.negative_prompt,
             "num_frames": self.get_num_frames(),
         }
-        if "size" in self.get_supported_request_fields(self.config["task"]):
+        if "size" in self.get_supported_request_fields(self.input_info.task):
             reuse_key["size"] = list(self.get_target_size())
-        if self.config["task"] == "i2v":
-            reuse_key["image_path"] = self.input_info.image_path.split(",")
+        if self.input_info.task == "i2v":
+            reuse_key["image_path"] = self.input_info.image_path
         return reuse_key
 
     def reuse_input_info(self):
@@ -615,6 +631,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def _run_pipeline_disagg_transformer(self, request_config):
         self.inputs = self.receive_encoder_outputs(request_config)
+        self.inputs["task"] = self.input_info.task
         latent_shape = self.inputs.get("latent_shape")
         if latent_shape:
             self.input_info.latent_shape = latent_shape
@@ -676,7 +693,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             for prompt in prompts:
                 monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
 
-        if self.config.get("enable_cfg", False) and self.config["cfg_parallel"]:
+        if self.config.get("enable_cfg", False) and self.config.get("cfg_parallel", False):
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
@@ -1070,7 +1087,7 @@ class MultiModelStruct:
                     if not lora_configs:
                         high_noise_model = get_wan_model_class(self.distill_method)(**high_model_kwargs)
                     else:
-                        assert self.config.get("lora_dynamic_apply", False)
+                        assert self.config.get("lora_mode", "merge") == "separate"
                         high_noise_model = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
                     high_noise_model.set_scheduler(self.scheduler)
                     self.model[0] = high_noise_model
@@ -1086,7 +1103,7 @@ class MultiModelStruct:
                     if not lora_configs:
                         low_noise_model = get_wan_model_class(self.distill_method)(**low_model_kwargs)
                     else:
-                        assert self.config.get("lora_dynamic_apply", False)
+                        assert self.config.get("lora_mode", "merge") == "separate"
                         low_noise_model = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
                     low_noise_model.set_scheduler(self.scheduler)
                     self.model[1] = low_noise_model
@@ -1096,7 +1113,7 @@ class MultiModelStruct:
     def get_current_model_index(self):
         if self.uses_high_noise_model():
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
@@ -1107,7 +1124,7 @@ class MultiModelStruct:
             self.cur_model_index = 0
         else:
             logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
@@ -1202,8 +1219,6 @@ class Wan22MoeRunner(WanRunner):
         This method handles both high_noise_model and low_noise_model separately.
 
         Args:
-            lora_path: Path to the LoRA safetensors file (for backward compatibility)
-            strength: LoRA strength (default: 1.0) (for backward compatibility)
             high_lora_path: Path to the high_noise_model LoRA safetensors file
             high_lora_strength: High noise model LoRA strength (default: 1.0)
             low_lora_path: Path to the low_noise_model LoRA safetensors file
@@ -1212,6 +1227,8 @@ class Wan22MoeRunner(WanRunner):
         Returns:
             bool: True if LoRA was successfully switched, False otherwise
         """
+        if self.config.get("lora_mode", "merge") != "separate":
+            raise ValueError("switch_lora requires lora_mode='separate'")
         if not hasattr(self, "model") or self.model is None:
             logger.error("Model not loaded. Please load model first.")
             return False
@@ -1232,7 +1249,6 @@ class Wan22MoeRunner(WanRunner):
 
 @RUNNER_REGISTER("wan2.2")
 class Wan22DenseRunner(WanRunner):
-    supported_request_fields_by_task = {task: WanRunner.supported_request_fields_by_task[task] for task in ("t2v", "i2v")}
     _SUPPORTS_GENERIC_WARMUP = True
 
     def __init__(self, config):
@@ -1242,6 +1258,18 @@ class Wan22DenseRunner(WanRunner):
         self.tiny_vae_cls = Wan2_2_VAE_tiny
         self.vae_name = "Wan2.2_VAE.pth"
         self.tiny_vae_name = "taew2_2.pth"
+
+    def run_input_encoder(self):
+        if self.input_info.task == "i2v":
+            inputs = self._run_input_encoder_local_i2v()
+        else:
+            inputs = self._run_input_encoder_local_t2v()
+        inputs["task"] = self.input_info.task
+        return inputs
+
+    def _run_warmup(self):
+        for task in self.supported_tasks:
+            super()._run_warmup(task)
 
     def _resolve_wan22_vae_paths(self):
         requested_vae_type = str(self.config.get("vae_type", "wan2.2")).lower()
@@ -1289,21 +1317,18 @@ class Wan22DenseRunner(WanRunner):
         }
 
     def load_vae_encoder(self):
-        eden_video = self.config["task"] == "v2v" and "edenlive" in self.config.get("model_cls", "")
-        if not eden_video and self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v", "i2va"]:
-            return None
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
 
     def load_vae_decoder(self):
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if self.config.get("use_tae", False):
             return self.load_tiny_vae_decoder()
         decoder = self.vae_cls(**self._build_wan22_vae_config(vae_offload))
         return self._configure_vae_compile(decoder, components=("decoder",))
 
     def get_warmup_image_encoder_output(self, latent_shape):
-        if self.config["task"] == "t2v":
+        if self.input_info.task == "t2v":
             return None
 
         _, stride_h, stride_w = self.config["vae_stride"]
@@ -1362,11 +1387,6 @@ class Wan22DenseRunner(WanRunner):
 
 @RUNNER_REGISTER("lingbot_world")
 class LingbotRunner(Wan22MoeRunner):
-    input_info_cls_by_task = {"i2v": ActionI2VInputInfo}
-    supported_request_fields_by_task = {
-        "i2v": WanRunner.supported_request_fields_by_task["i2v"] | {"action_path", "pose"},
-    }
-
     def __init__(self, config):
         super().__init__(config)
         self.control_type = config.get("control_type", "cam")

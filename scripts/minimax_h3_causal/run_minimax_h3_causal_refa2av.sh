@@ -5,10 +5,10 @@ set -eo pipefail
 lightx2v_path=/data/zhangbilang/LightX2V
 model_path=/data/zhangbilang/models/MiniMaxAI/MiniMax-H3
 
-global_file=/data/zhangbilang/handoff/assets/global.txt
-motion_file=/data/zhangbilang/handoff/assets/motions.yaml
-image_path=/data/zhangbilang/handoff/assets/meinv_01.png
-audio_path=/data/zhangbilang/handoff/assets/meinv_01.wav
+global_file=/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/assets/refa2av/global.txt
+motion_file=/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/assets/refa2av/motions.yaml
+image_path=/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/assets/refa2av/image.png
+audio_path=/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/assets/refa2av/audio.wav
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 source "${lightx2v_path}/scripts/base/base.sh"
@@ -33,5 +33,5 @@ python -m torch.distributed.run --standalone --nproc_per_node=8 -m lightx2v.infe
   --motions "${motions}" \
   --seed 42 \
   --num_frames 957 \
-  --size 1376 768 \
+  --size 1344 768 \
   --save_result_path "${lightx2v_path}/save_results/minimax_h3_causal_refa2av.mp4"

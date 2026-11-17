@@ -89,7 +89,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             gate_msa,
         )
         x.add_(attn_out)
-        if self.config["seq_parallel"] and self.audio_sp_mode == "replicated":
+        if self.config.get("seq_parallel", False) and self.audio_sp_mode == "replicated":
             local_len = x.shape[0]
             token_count = self._seq_parallel_token_count(pre_infer_out)
             full_x = self._seq_parallel_gather_tokens(x)[:token_count]
@@ -116,7 +116,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         x_ref_attn_map = None
         if pre_infer_out.adapter_args.get("human_num", 1) > 1 and pre_infer_out.adapter_args.get("ref_target_masks") is not None:
             ref_target_masks = pre_infer_out.adapter_args["ref_target_masks"]
-            if self.config["seq_parallel"]:
+            if self.config.get("seq_parallel", False):
                 token_count = self._seq_parallel_token_count(pre_infer_out)
                 map_q = self._seq_parallel_gather_tokens(q)[:token_count]
                 map_k = self._seq_parallel_gather_tokens(k)[:token_count]
@@ -131,7 +131,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             "block_idx": self.block_idx,
             "scheduler": self.scheduler,
         }
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             attn_out, aux_attn_out = phase.self_attn_1_parallel.apply(
                 q=q,
                 k=k,
@@ -231,7 +231,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         grid_t, grid_h, grid_w = pre_infer_out.grid_sizes.tuple
         spatial_tokens = grid_h * grid_w
         frame_count = grid_t
-        sharded = self.config["seq_parallel"] and self.audio_sp_mode == "full"
+        sharded = self.config.get("seq_parallel", False) and self.audio_sp_mode == "full"
         use_frame_slices = False
 
         if sharded:

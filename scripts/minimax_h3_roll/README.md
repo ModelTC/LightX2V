@@ -1,5 +1,7 @@
 # MiniMax-H3 Roll: Low-cost candidate generation
 
+The example JSON configs set `lora_mode: "separate"`. Use the same config mode and `LORA_DTYPE` for cache export and inference (unset dtype follows `DTYPE`).
+
 [English](README.md) | [简体中文](README_zh.md)
 
 Generate low-resolution drafts to select prompts and seeds, then regenerate selected drafts at a higher resolution. Set `draft_steps` to reduce the cost of each draft further. Run the commands below from the repository root.
@@ -122,7 +124,7 @@ bash scripts/minimax_h3_roll/run_minimax_h3_ref2av_resample.sh
 
 The default outputs are `save_results/minimax_h3_roll_ref2av/draft.mp4` and `resample.mp4`. Both stages pass `--model-variant ref2av --task ref2av` and use the same `--image_path`, prompt, seed `42`, and frame count `124`. The draft uses `--size 480 864 --draft_steps 3`; regeneration uses `--size 768 1344 --resample_start_step 1` and runs the last 7 steps of the original 8-step schedule. Remove `--draft_steps 3` from the draft script to generate a full 8-step draft. For roughly 15 seconds, change `--num_frames` to `362` in both scripts. Each script loads the model separately.
 
-To use different references, update `--image_path` and the prompt in both scripts. You can also add `--video_path` / `--audio_path`, with comma-separated paths for multiple files of the same type; audio references require an image or video reference as well. Retain the original references during regeneration and pass the selected draft with audio as `--resample_source_video`. The `--video_path` argument supplies a reference video and does not replace that parameter.
+To use different references, update `--image_path` and the prompt in both scripts. You can also add `--video_path` / `--audio_path`, with space-separated paths for multiple files of the same type; audio references require an image or video reference as well. Retain the original references during regeneration and pass the selected draft with audio as `--resample_source_video`. The `--video_path` argument supplies a reference video and does not replace that parameter.
 
 ## Parameters and workflow
 
@@ -152,23 +154,29 @@ Video VAE encoding retains the existing seed-42 posterior sample. Audio VAE enco
 Run this Python example under eight-GPU `torchrun` with the matching config. `size` is `[height,width]`.
 
 ```python
+import json
+from pathlib import Path
+
 from lightx2v import LightX2VPipeline
 
-pipe = LightX2VPipeline(
-    model_path="/root/lightx2v_h3_world/models/MiniMax-H3-native",
-    model_cls="minimax_h3", model_variant="fl2av",
-)
-pipe.create_generator(config_json="configs/minimax_h3_roll/minimax_h3_bf16_8step.json")
-prompt = "A red fox walks through a snowy clearing, one locked-off shot. Sound: paws on snow and soft wind."
-pipe.generate(
-    task="t2av", prompt=prompt, seed=42, size=[480,864], num_frames=124,
-    save_result_path="/root/h3_example/draft.mp4",  # Full configured 8 steps.
-)
-pipe.generate(
-    task="t2av", prompt=prompt, seed=2026, size=[1088,1920], num_frames=124,
-    resample_source_video="/root/h3_example/draft.mp4",  # Default index 1: last 7 steps.
-    save_result_path="/root/h3_example/rgb.native.mp4",
-)
+config = json.loads(Path("configs/minimax_h3_roll/minimax_h3_bf16_8step.json").read_text())
+config.update({
+    "model_cls": "minimax_h3",
+    "model_path": "/root/lightx2v_h3_world/models/MiniMax-H3-native",
+    "model_variant": "fl2av",
+})
+
+with LightX2VPipeline(config) as pipe:
+    prompt = "A red fox walks through a snowy clearing, one locked-off shot. Sound: paws on snow and soft wind."
+    pipe.generate(
+        task="t2av", prompt=prompt, seed=42, size=[480,864], num_frames=124,
+        save_result_path="/root/h3_example/draft.mp4",  # Full configured 8 steps.
+    )
+    pipe.generate(
+        task="t2av", prompt=prompt, seed=2026, size=[1088,1920], num_frames=124,
+        resample_source_video="/root/h3_example/draft.mp4",  # Default index 1: last 7 steps.
+        save_result_path="/root/h3_example/rgb.native.mp4",
+    )
 ```
 
 With this config, omitting `draft_steps` from the first request produces a full 8-step draft. For a shorter draft, explicitly pass a positive integer below 8, such as `draft_steps=3`. `draft_steps=8` or larger still uses the original 8-step schedule. Using `[1088,1920]` for both stages skips RGB resizing but still performs VAE re-encoding and decoding. For FL2AV, pass `task="fl2av"`, `image_path`, and `last_frame_path` to both requests and explicitly specify their sizes.

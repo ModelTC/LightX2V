@@ -15,6 +15,8 @@ from loguru import logger
 from lightx2v.disagg.conn import MONITOR_POLLING_PORT, REQUEST_POLLING_PORT, ReqManager
 from lightx2v.disagg.monitor import Monitor, Reporter
 from lightx2v.disagg.workload import build_payload, current_stage, load_stage_specs, start_workload_clock
+from lightx2v.models.runners.registry import get_model_spec
+from lightx2v.utils.request_spec import is_list_type
 
 
 def _parse_gpus(raw: str) -> list[int]:
@@ -71,7 +73,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save_result_path", type=str, default="")
     parser.add_argument("--prompt", type=str, default=None)
     parser.add_argument("--negative_prompt", type=str, default=None)
-    parser.add_argument("--image_path", type=str, default="")
+    parser.add_argument("--image_path", nargs="+")
     parser.add_argument("--keep_parallel_config", action="store_true", default=True)
     parser.add_argument("--drop_parallel_config", action="store_true", default=False)
 
@@ -147,7 +149,7 @@ def _run_infer_once(args: argparse.Namespace, payload: dict[str, Any], worker_id
 
     image_path = payload.get("image_path")
     if image_path:
-        infer_argv.extend(["--image_path", str(image_path)])
+        infer_argv.extend(["--image_path", *(image_path if isinstance(image_path, list) else [image_path])])
 
     seed = payload.get("seed")
     if seed is not None:
@@ -549,7 +551,16 @@ def _controller_main(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    args = _make_parser().parse_args()
+    parser = _make_parser()
+    args = parser.parse_args()
+    if args.image_path:
+        argument = get_model_spec(args.model_cls).get_arguments(vars(args), args.task).get("image_path")
+        if argument is None:
+            parser.error(f"{args.model_cls} {args.task} does not accept image_path")
+        if not is_list_type(argument.type):
+            if len(args.image_path) != 1:
+                parser.error(f"{args.model_cls} {args.task} accepts one image_path")
+            args.image_path = args.image_path[0]
     if args.mode == "worker":
         _worker_main(args)
     else:

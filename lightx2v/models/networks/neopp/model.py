@@ -24,13 +24,13 @@ class NeoppModel(BaseTransformerModel):
         self._init_infer_class()
         self._init_infer()
         self._init_weights()
-        self.enable_cfg = self.config.get("enable_cfg", True)
+        self.enable_cfg = self.config.get("enable_cfg", False)
         self.cfg_interval = self.config.get("cfg_interval", (-1, 2))
         self.cfg_scale = self.config.get("cfg_scale", 4.0)
         self.cfg_norm = self.config.get("cfg_norm", "global")
         self.patch_size = self.config.get("patch_size", 16)
         self.merge_size = 2
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
