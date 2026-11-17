@@ -1,3 +1,5 @@
+from typing import NamedTuple
+
 import torch
 from loguru import logger
 
@@ -75,10 +77,43 @@ def sage_attn2_compiled_fake(q, k, v):
     return torch.empty_like(q)
 
 
+@torch.library.custom_op("lightx2v::sage_attn2_pretransposed_v", mutates_args=(), device_types="cuda")
+def sage_attn2_pretransposed_v(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    """SM120's ordinary SageAttention2 math, with V already padded and permuted."""
+    from sageattention import _fused, _qattn_sm89
+    from sageattention.quant import per_warp_int8
+
+    torch.cuda.set_device(q.device)
+    dim = q.shape[-1]
+    qi, qs, ki, ks = per_warp_int8(q, k, k.mean(dim=1, keepdim=True), tensor_layout="NHD", BLKQ=128, WARPQ=32, BLKK=64)
+    vf = torch.empty_like(v, dtype=torch.float8_e4m3fn)
+    vs = q.new_empty(q.shape[0], k.shape[2], dim, dtype=torch.float32)
+    _fused.scale_fuse_quant_cuda(v, vf, vs, k.shape[1], 2.25, 0)
+    output = torch.empty_like(q)
+    _qattn_sm89.qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(qi, ki, vf, output, qs, ks, vs, 0, 0, 2, dim**-0.5, 0)
+    return output
+
+
+@sage_attn2_pretransposed_v.register_fake
+def sage_attn2_pretransposed_v_fake(q, k, v):
+    return torch.empty_like(q)
+
+
+class SageTransposedV(NamedTuple):
+    """Cache-owned [B, D, Hkv, padded_K] storage, padded and permuted for Sage."""
+
+    data: torch.Tensor
+
+
 @ATTN_WEIGHT_REGISTER("sage_attn2")
 class SageAttn2Weight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
+
+    @staticmethod
+    def supports_pretransposed_v(device, dtype, head_dim):
+        """Eligibility of the cache layout; ordinary apply keeps Sage's dispatcher."""
+        return device.type == "cuda" and dtype in (torch.float16, torch.bfloat16) and head_dim in (64, 128) and torch.cuda.get_device_capability(device) == (12, 0)
 
     def apply(
         self,
@@ -91,17 +126,23 @@ class SageAttn2Weight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
-        q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        transposed_v = isinstance(v, SageTransposedV)
+        q, k = q.contiguous(), k.contiguous()
+        v = v.data if transposed_v else v.contiguous()
         if len(q.shape) == 3:
             bs = 1
-            q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+            q, k = q.unsqueeze(0), k.unsqueeze(0)
+            if not transposed_v:
+                v = v.unsqueeze(0)
         elif len(q.shape) == 4:
             bs = q.shape[0]
         if max_seqlen_q is None:
             max_seqlen_q = q.shape[-3]
         if max_seqlen_kv is None:
             max_seqlen_kv = k.shape[-3]
-        if magi_register_custom_op is not None and sageattn is not None:
+        if transposed_v:
+            x = sage_attn2_pretransposed_v(q, k, v).view(bs * max_seqlen_q, -1)
+        elif magi_register_custom_op is not None and sageattn is not None:
             x = torch.ops.lightx2v.sage_attn2(q, k, v).view(bs * max_seqlen_q, -1)
         elif torch.compiler.is_compiling():
             x = sage_attn2_compiled(q, k, v).view(bs * max_seqlen_q, -1)
