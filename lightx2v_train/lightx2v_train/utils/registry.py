@@ -4,10 +4,8 @@ from collections.abc import MutableMapping
 from lightx2v_train.utils.utils import is_cache_build
 
 
-def _source(target):
-    module = getattr(target, "__module__", type(target).__module__)
-    name = getattr(target, "__qualname__", type(target).__qualname__)
-    return f"{module}.{name}"
+def _qualified_name(target):
+    return f"{target.__module__}.{target.__qualname__}"
 
 
 class Register(MutableMapping):
@@ -29,16 +27,23 @@ class Register(MutableMapping):
         if key is None:
             key = target.__name__
 
-        self[key] = target
+        builtin_module = self._builtin_modules.get(key)
+        if builtin_module is not None and target.__module__ != builtin_module:
+            raise ValueError(
+                f"{key!r} belongs to built-in module {builtin_module!r}; "
+                f"cannot register {_qualified_name(target)}."
+            )
+        if key in self._dict:
+            previous = self._dict[key]
+            raise ValueError(
+                f"{key!r} is already registered by {_qualified_name(previous)}; "
+                f"cannot register {_qualified_name(target)}."
+            )
+        self._dict[key] = target
         return target
 
     def __setitem__(self, key, value):
-        builtin_module = self._builtin_modules.get(key)
-        if builtin_module is not None and getattr(value, "__module__", None) != builtin_module:
-            raise ValueError(f"{key!r} is reserved for built-in module {builtin_module!r}; cannot register {_source(value)}.")
-        if key in self._dict:
-            raise ValueError(f"{key!r} is already registered by {_source(self._dict[key])}; cannot register {_source(value)}.")
-        self._dict[key] = value
+        self.register(value, key)
 
     def __getitem__(self, key):
         return self._dict[key]
@@ -51,24 +56,6 @@ class Register(MutableMapping):
 
     def __len__(self):
         return len(self._dict)
-
-    def __contains__(self, key):
-        return key in self._dict
-
-    def __str__(self):
-        return str(self._dict)
-
-    def keys(self):
-        return self._dict.keys()
-
-    def values(self):
-        return self._dict.values()
-
-    def items(self):
-        return self._dict.items()
-
-    def get(self, key, default=None):
-        return self._dict.get(key, default)
 
     def merge(self, other_register):
         for key, value in other_register.items():
@@ -144,7 +131,7 @@ DATA_REGISTER = Register(builtin_modules=_DATA_MODULES)
 SAMPLE_PROCESSOR_REGISTER = Register(builtin_modules=_SAMPLE_PROCESSOR_MODULES)
 
 
-def _ensure_registered(name, register, module_map):
+def _load_builtin(name, register, module_map):
     if name in register:
         return
     module_name = module_map.get(name)
@@ -152,13 +139,9 @@ def _ensure_registered(name, register, module_map):
         importlib.import_module(module_name)
 
 
-def _ensure_data_registered(data_name):
-    _ensure_registered(data_name, DATA_REGISTER, _DATA_MODULES)
-
-
 def build_model(config):
     name = config["model"]["name"]
-    _ensure_registered(name, MODEL_REGISTER, _MODEL_MODULES)
+    _load_builtin(name, MODEL_REGISTER, _MODEL_MODULES)
     if name not in MODEL_REGISTER:
         available = ", ".join(sorted(MODEL_REGISTER.keys()))
         raise ValueError(f"Unknown model {name!r}. Available models: {available}")
@@ -167,7 +150,7 @@ def build_model(config):
 
 def build_trainer(config):
     name = "cache_build" if is_cache_build(config) else config["training"]["method"]
-    _ensure_registered(name, TRAINER_REGISTER, _TRAINER_MODULES)
+    _load_builtin(name, TRAINER_REGISTER, _TRAINER_MODULES)
     if name not in TRAINER_REGISTER:
         available = ", ".join(sorted(TRAINER_REGISTER.keys()))
         raise ValueError(f"Unknown trainer {name!r}. Available trainers: {available}")
@@ -176,7 +159,7 @@ def build_trainer(config):
 
 def build_inferencer(config):
     name = config["inference"]["method"]
-    _ensure_registered(name, INFERENCER_REGISTER, _INFERENCER_MODULES)
+    _load_builtin(name, INFERENCER_REGISTER, _INFERENCER_MODULES)
     if name not in INFERENCER_REGISTER:
         available = ", ".join(sorted(INFERENCER_REGISTER.keys()))
         raise ValueError(f"Unknown inferencer {name!r}. Available inferencers: {available}")
@@ -186,7 +169,7 @@ def build_inferencer(config):
 def build_sample_processor(config):
     processor_config = config.get("data", {}).get("processor", {})
     name = processor_config.get("name", config["model"]["name"])
-    _ensure_registered(name, SAMPLE_PROCESSOR_REGISTER, _SAMPLE_PROCESSOR_MODULES)
+    _load_builtin(name, SAMPLE_PROCESSOR_REGISTER, _SAMPLE_PROCESSOR_MODULES)
     if name not in SAMPLE_PROCESSOR_REGISTER:
         if "name" not in processor_config:
             return None
@@ -219,7 +202,7 @@ def build_data(config, train_or_val, sample_processor=None):
         generation_shapes = config.get("training", {}).get("dmd", {}).get("generation_shapes")
         if generation_shapes is not None:
             data_config_split["generation_shapes"] = generation_shapes
-    _ensure_data_registered(data_name)
+    _load_builtin(data_name, DATA_REGISTER, _DATA_MODULES)
     if data_name not in DATA_REGISTER:
         available_names = ", ".join(sorted(DATA_REGISTER.keys()))
         raise ValueError(f"Unknown data {data_name!r}. Available data: {available_names}")
