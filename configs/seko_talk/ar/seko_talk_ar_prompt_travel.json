@@ -1,10 +1,8 @@
 {
     "infer_steps": 4,
     "fps": 16,
-    "video_duration": 20,
     "audio_sr": 16000,
     "num_frames": 81,
-    "size": [832, 480],
     "ref_state": 1,
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
@@ -51,5 +49,9 @@
         "local_attn_size": 21,
         "kv_offload": false,
         "async_vae_decode": true
+    },
+    "request_defaults": {
+        "video_duration": 20,
+        "size": [832, 480]
     }
 }

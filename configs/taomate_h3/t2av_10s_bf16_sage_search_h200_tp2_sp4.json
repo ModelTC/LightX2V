@@ -2,11 +2,6 @@
   "lora_mode": "separate",
   "model_variant": "fl2av",
   "infer_steps": 3,
-  "num_frames": 240,
-  "size": [
-    1376,
-    768
-  ],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -57,5 +52,12 @@
   "use_fused_qkv": true,
   "text_refiner_tensor_parallel": false,
   "base10_share_weights": false,
-  "shared_cpu_weights": false
+  "shared_cpu_weights": false,
+  "request_defaults": {
+    "num_frames": 240,
+    "size": [
+      1376,
+      768
+    ]
+  }
 }

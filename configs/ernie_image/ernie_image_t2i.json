@@ -1,7 +1,6 @@
 {
     "infer_steps": 50,
     "resolution": 1024,
-    "aspect_ratio": "1:1",
     "attn_type": "torch_sdpa",
     "enable_cfg": true,
     "sample_guide_scale": 4.0,
@@ -10,5 +9,8 @@
     "pe_top_p": 0.95,
     "text_encoder_cpu_offload": true,
     "pe_cpu_offload": true,
-    "vae_cpu_offload": true
+    "vae_cpu_offload": true,
+    "request_defaults": {
+        "aspect_ratio": "1:1"
+    }
 }

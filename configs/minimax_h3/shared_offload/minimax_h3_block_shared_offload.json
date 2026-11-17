@@ -1,10 +1,5 @@
 {
   "infer_steps": 29,
-  "num_frames": 124,
-  "size": [
-    544,
-    960
-  ],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -37,5 +32,12 @@
   "vae_decode_parallel": true,
   "shared_cpu_weight_backend": "sysv",
   "shared_cpu_weight_strict_numa": true,
-  "shared_cpu_weight_register_chunk_mb": 128
+  "shared_cpu_weight_register_chunk_mb": 128,
+  "request_defaults": {
+    "num_frames": 124,
+    "size": [
+      544,
+      960
+    ]
+  }
 }

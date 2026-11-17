@@ -1,7 +1,5 @@
 {
   "infer_steps": 4,
-  "num_frames": 124,
-  "size": [768, 1344],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -39,5 +37,9 @@
     "seq_p_attn_type": "ulysses",
     "seq_p_a2a_backend": "torch",
     "tensor_p_size": 2
+  },
+  "request_defaults": {
+    "num_frames": 124,
+    "size": [768, 1344]
   }
 }

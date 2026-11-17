@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "size": [480, 832],
-    "num_frames": 121,
     "fps": 24,
     "sample_shift": 3.0,
     "sample_guide_scale": 1.0,
@@ -14,5 +12,9 @@
             "path": "lightx2v/LightLingBot-Video/lightlingbot_video_moe30b_4steps_rank128_v2.safetensors",
             "strength": 1.0
         }
-    ]
+    ],
+    "request_defaults": {
+        "size": [480, 832],
+        "num_frames": 121
+    }
 }

@@ -106,7 +106,9 @@ class BaseRunner(ABC):
         task = request_data["task"]
         input_info_cls = self.get_input_info_type(task)
         input_info = input_info_cls()
-        input_info.update(self.config)
+        # Fixed context fields and request defaults remain separate in config.
+        input_info.update(self.config, copy_nested=True)
+        input_info.update(self.config.get("request_defaults", {}), copy_nested=True)
         input_info.update(request_data)
 
         if "aspect_ratio" in request_data and "size" not in request_data:
@@ -124,7 +126,8 @@ class BaseRunner(ABC):
         return self._input_info_types[task]
 
     def resolve_request_seed(self, request_data):
-        return request_data.get("seed", 42)
+        default_seed = self.config.get("request_defaults", {}).get("seed")
+        return request_data.get("seed", 42 if default_seed is None else default_seed)
 
     def supports_negative_prompt(self):
         return self.config.get("enable_cfg", False)

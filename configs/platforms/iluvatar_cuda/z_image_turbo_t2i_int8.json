@@ -1,5 +1,4 @@
 {
-    "aspect_ratio": "16:9",
     "num_channels_latents": 16,
     "infer_steps": 9,
     "attn_type": "iluvatar_flash_attn",
@@ -10,5 +9,8 @@
     "rms_norm_type":"iluvatar_rms_norm",
     "dit_quantized": true,
     "dit_quant_scheme": "int8-iluvatar",
-    "dit_quantized_ckpt": ""
+    "dit_quantized_ckpt": "",
+    "request_defaults": {
+        "aspect_ratio": "16:9"
+    }
 }

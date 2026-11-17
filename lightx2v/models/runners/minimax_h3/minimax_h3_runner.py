@@ -51,6 +51,7 @@ from lightx2v.utils.input_info import AudioVideoState
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import resize_resampling_frames
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -326,11 +327,11 @@ class MiniMaxH3Runner(DefaultRunner):
             height, width = resolve_canvas_size(*geometry_image.size)
             self.input_info.size = [height, width]
         else:
-            height = int(self.config["size"][0])
-            width = int(self.config["size"][1])
+            height = int(get_input_value(self.config, "size")[0])
+            width = int(get_input_value(self.config, "size")[1])
             self.input_info.size = [height, width]
 
-        requested_frames = int(self.input_info.num_frames or self.config.get("num_frames", 124))
+        requested_frames = int(self.input_info.num_frames or get_input_value(self.config, "num_frames", 124))
         num_frames = align_num_frames(requested_frames)
         if num_frames != requested_frames:
             logger.warning(f"MiniMax-H3 frame count must be 17*n+5; aligning {requested_frames} upward to {num_frames}")
@@ -495,7 +496,7 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def _resample_option(self, key, default=None):
         value = getattr(self.input_info, key, None)
-        return self.config.get(key, default) if value is None else value
+        return get_input_value(self.config, key, default) if value is None else value
 
     def _prepare_resampling_source(self):
         """Resize source RGB to the target canvas, then encode clean AV.

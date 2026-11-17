@@ -1,8 +1,6 @@
 {
     "infer_steps": 50,
     "text_len": 512,
-    "num_frames": 120,
-    "size": [704, 1280],
     "cpu_offload": false,
     "offload_granularity": "block",
     "t5_cpu_offload": true,
@@ -25,5 +23,9 @@
         "tensor_p_size": 2,
         "tp_load_mode": "local",
         "cfg_p_size": 1
+    },
+    "request_defaults": {
+        "num_frames": 120,
+        "size": [704, 1280]
     }
 }

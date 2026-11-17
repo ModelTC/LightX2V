@@ -13,6 +13,7 @@ from lightx2v.models.video_encoders.hf.wan.matrix_game4_vae import MatrixGame4TA
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.profiler import ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -106,7 +107,7 @@ class WanMatrixGame4Runner(WanAutoregressiveRunnerMixin, Wan22DenseRunner):
             raise ValueError("Matrix-Game-4 requires an independent sink image_path")
         if input_info.num_frames is not None and input_info.num_frames < 1:
             raise ValueError("Matrix-Game-4 num_frames must be positive")
-        size = input_info.size or self.config["size"]
+        size = input_info.size or get_input_value(self.config, "size")
         if len(size) != 2 or any(value <= 0 or value % 32 for value in size):
             raise ValueError("Matrix-Game-4 size must contain height and width divisible by 32")
         return input_info

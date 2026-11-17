@@ -3,12 +3,8 @@
     "infer_steps": 4,
     "sample_guide_scale": 3.0,
     "sample_shift": 5.0,
-    "size": [544, 736],
     "fps": 15.0,
     "enable_cfg": true,
-    "action_mode": "policy",
-    "domain_name": "droid_lerobot",
-    "view_point": "concat_view",
     "action_chunk_size": 32,
     "raw_action_dim": 8,
     "policy_history_length": 1,
@@ -29,5 +25,11 @@
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses",
         "cfg_p_size": 2
+    },
+    "request_defaults": {
+        "size": [544, 736],
+        "action_mode": "policy",
+        "domain_name": "droid_lerobot",
+        "view_point": "concat_view"
     }
 }

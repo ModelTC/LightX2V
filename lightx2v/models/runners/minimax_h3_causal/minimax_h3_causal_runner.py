@@ -22,6 +22,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3_causal.vae_graph import MiniMa
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.video_writer import MiniMaxH3StreamingVideoWriter
 from lightx2v.utils.profiler import ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -96,9 +97,9 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self.scheduler = MiniMaxH3CleanScheduler(self.config)
 
     def _resolve_request_geometry(self, geometry_image=None):
-        self.request_height, self.request_width = map(int, self.input_info.size or self.config["size"])
+        self.request_height, self.request_width = map(int, self.input_info.size or get_input_value(self.config, "size"))
         num_frames = self.input_info.num_frames
-        self.request_num_frames = int(self.config["num_frames"] if num_frames is None else num_frames)
+        self.request_num_frames = int(get_input_value(self.config, "num_frames") if num_frames is None else num_frames)
         if self.request_num_frames < 22 or min(self.request_height, self.request_width) <= 0 or self.request_height % 32 or self.request_width % 32:
             raise ValueError("Causal H3 requires at least 22 frames and positive canvas dimensions divisible by 32")
         self.input_info.size = [self.request_height, self.request_width]

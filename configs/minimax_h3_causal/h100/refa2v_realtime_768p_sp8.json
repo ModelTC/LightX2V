@@ -1,7 +1,5 @@
 {
   "infer_steps": 4,
-  "num_frames": 974,
-  "size": [1344, 768],
   "fps": 24,
   "enable_cfg": false,
   "use_adaln_cache": true,
@@ -40,5 +38,9 @@
     "seq_p_attn_type": "ulysses"
   },
   "use_fused_qkv": true,
-  "loop_audio": true
+  "loop_audio": true,
+  "request_defaults": {
+    "num_frames": 974,
+    "size": [1344, 768]
+  }
 }

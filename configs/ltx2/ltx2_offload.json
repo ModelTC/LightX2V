@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 121,
-    "size": [512, 768],
     "attn_type": "sage_attn2",
     "sample_guide_scale": 4,
     "sample_shift": [2.05, 0.95],
@@ -13,5 +11,9 @@
     "fps": 24,
     "audio_mel_bins":16,
     "double_precision_rope": true,
-    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors"
+    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors",
+    "request_defaults": {
+        "num_frames": 121,
+        "size": [512, 768]
+    }
 }

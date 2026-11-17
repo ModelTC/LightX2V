@@ -1,7 +1,5 @@
 {
   "infer_steps": 29,
-  "num_frames": 124,
-  "size": [544, 960],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -26,5 +24,9 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-intel-xpu",
-  "dit_quantized_ckpt": "/path/to/minimax_h3_fp8_xpu.safetensors"
+  "dit_quantized_ckpt": "/path/to/minimax_h3_fp8_xpu.safetensors",
+  "request_defaults": {
+    "num_frames": 124,
+    "size": [544, 960]
+  }
 }

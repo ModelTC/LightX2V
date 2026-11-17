@@ -1,6 +1,7 @@
 from loguru import logger
 
 from lightx2v.common.magi_custom_op_mode import set_magi_custom_op_mode, use_magi_custom_ops  # noqa: F401
+from lightx2v.utils.request_defaults import get_input_value
 
 
 def get_qwen_image_size(config, size, aspect_ratio=None):
@@ -28,7 +29,7 @@ def get_qwen_image_size(config, size, aspect_ratio=None):
         logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
         return (width, height)
 
-    aspect_ratio = aspect_ratio if aspect_ratio else config.get("aspect_ratio", None)
+    aspect_ratio = aspect_ratio if aspect_ratio else get_input_value(config, "aspect_ratio", None)
     if aspect_ratio in as_maps:
         logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
         width, height = as_maps[aspect_ratio]

@@ -32,6 +32,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -217,7 +218,7 @@ class Cosmos3Runner(DefaultRunner):
     def _load_action_spec(self):
         if hasattr(self, "_action_spec"):
             return self._action_spec
-        action_path = getattr(self.input_info, "action_path", None) or self.config.get("action_path", None)
+        action_path = getattr(self.input_info, "action_path", None) or get_input_value(self.config, "action_path", None)
         self._action_spec = {}
         if action_path and os.path.isfile(action_path):
             with open(action_path, "r") as f:
@@ -240,7 +241,7 @@ class Cosmos3Runner(DefaultRunner):
         spec = self._load_action_spec()
         if key in spec and spec[key] not in (None, ""):
             return spec[key]
-        return self.config.get(key, default)
+        return get_input_value(self.config, key, default)
 
     def _prepare_action_context(self):
         if hasattr(self, "_action_spec"):
@@ -401,7 +402,7 @@ class Cosmos3Runner(DefaultRunner):
             height, width = self.input_info.size
             height, width = int(height), int(width)
         else:
-            height, width = map(int, self.config.get("size", (1024, 1024)))
+            height, width = map(int, get_input_value(self.config, "size", (1024, 1024)))
 
         spatial_scale = int(self.config.get("vae_scale_factor_spatial", self.config.get("vae_scale_factor", 16)))
         temporal_scale = int(self.config.get("vae_scale_factor_temporal", 4))
@@ -530,7 +531,7 @@ class Cosmos3Runner(DefaultRunner):
     def _load_policy_state(self, raw_action_dim):
         payload = getattr(self.input_info, "policy_state", None)
         if payload is None:
-            state_path = getattr(self.input_info, "state_path", None) or self.config.get("state_path", "")
+            state_path = getattr(self.input_info, "state_path", None) or get_input_value(self.config, "state_path", "")
             if not state_path or not os.path.isfile(state_path):
                 raise FileNotFoundError(f"Cosmos3 policy state_path does not exist: {state_path}")
 
@@ -593,7 +594,7 @@ class Cosmos3Runner(DefaultRunner):
             actions = spec["action_chunks"][chunk_index]
             actions_from_chunks = True
         if actions is None and "raw_actions" not in spec:
-            action_path = getattr(self.input_info, "action_path", None) or self.config.get("action_path", None)
+            action_path = getattr(self.input_info, "action_path", None) or get_input_value(self.config, "action_path", None)
             if action_path and os.path.isfile(action_path):
                 with open(action_path, "r") as f:
                     actions = json.load(f)
@@ -635,8 +636,8 @@ class Cosmos3Runner(DefaultRunner):
 
         height, width = self.input_info.size
         num_frames = self.input_info.num_frames
-        image_path = getattr(self.input_info, "image_path", None) or self.config.get("image_path", "")
-        video_path = self.input_info.video_path or self.config.get("video_path", "")
+        image_path = getattr(self.input_info, "image_path", None) or get_input_value(self.config, "image_path", "")
+        video_path = self.input_info.video_path or get_input_value(self.config, "video_path", "")
         policy_image = getattr(self.input_info, "policy_image", None)
 
         loaded_vae_here = not hasattr(self, "vae") or self.vae is None
@@ -1056,9 +1057,9 @@ class Cosmos3Policy:
     """
 
     def __init__(self, config, *, actions_per_plan=None, binarize_gripper=True):
-        if str(config.get("action_mode", "")).strip().lower() != "policy":
+        if str(get_input_value(config, "action_mode", "")).strip().lower() != "policy":
             raise ValueError("Cosmos3Policy requires action_mode='policy'.")
-        if str(config.get("domain_name", "")).strip().lower() != "droid_lerobot":
+        if str(get_input_value(config, "domain_name", "")).strip().lower() != "droid_lerobot":
             raise ValueError("Cosmos3Policy requires domain_name='droid_lerobot'.")
 
         self.config = config
@@ -1068,7 +1069,7 @@ class Cosmos3Policy:
         self.actions_per_plan = max(1, min(requested, self.action_chunk_size))
         self.binarize_gripper = bool(binarize_gripper)
         self.prompt_format = normalize_policy_prompt_format(config.get("policy_prompt_format", "official_text"))
-        self._seed_sequence = PolicySeedSequence(config.get("seed", 0))
+        self._seed_sequence = PolicySeedSequence(get_input_value(config, "seed", 0))
         self.pending_actions = deque()
 
         self.runner = Cosmos3Runner(config)
@@ -1088,7 +1089,7 @@ class Cosmos3Policy:
             "prompt": str(task_description),
             "action_mode": "policy",
             "domain_name": "droid_lerobot",
-            "view_point": str(self.config.get("view_point", "concat_view")),
+            "view_point": str(get_input_value(self.config, "view_point", "concat_view")),
             "return_result_tensor": True,
             "policy_image": compose_droid_policy_image(images),
             "policy_state": state,

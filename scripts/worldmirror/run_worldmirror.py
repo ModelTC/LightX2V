@@ -175,7 +175,10 @@ def build_config(args):
     ):
         val = getattr(args, key, None)
         if val is not None:
-            config_dict[key] = val
+            if key in {"save_rendered", "render_depth", "render_interp_per_pair"}:
+                config_dict.setdefault("request_defaults", {})[key] = val
+            else:
+                config_dict[key] = val
 
     return config_dict
 

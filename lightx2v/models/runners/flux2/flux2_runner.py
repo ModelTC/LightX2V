@@ -16,6 +16,7 @@ from lightx2v.utils.image_io import save_image
 from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -410,7 +411,7 @@ class Flux2Runner(DefaultRunner):
                 return (width, height)
             logger.warning(f"Invalid aspect ratio: {self.input_info.aspect_ratio}, not in {as_maps.keys()}")
 
-        width, height = as_maps[self.config.get("aspect_ratio", "16:9")]
+        width, height = as_maps[get_input_value(self.config, "aspect_ratio", "16:9")]
         return (width, height)
 
     def set_latent_shape(self):

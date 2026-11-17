@@ -2,7 +2,6 @@
     "infer_steps": 50,
     "sample_guide_scale": 5.0,
     "flow_shift": 1.0,
-    "size": [1024, 1024],
     "moe_backend": "multi_micro",
     "attn_impl": "torch_sdpa",
     "denoise_attn_impl": "flash_attn3",
@@ -63,5 +62,8 @@
     "text_sampling_impl": "topk_compact",
     "text_top_k": 1024,
     "text_top_p": 0.95,
-    "text_temperature": 0.6
+    "text_temperature": 0.6,
+    "request_defaults": {
+        "size": [1024, 1024]
+    }
 }

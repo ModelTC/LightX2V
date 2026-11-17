@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
@@ -10,5 +8,9 @@
     "enable_dynamic_cfg": true,
     "cfg_scale": 4.0,
     "cpu_offload": false,
-    "denoising_step_list": [1000, 750, 500, 250]
+    "denoising_step_list": [1000, 750, 500, 250],
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

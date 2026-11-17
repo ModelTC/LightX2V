@@ -34,6 +34,7 @@ from lightx2v.models.networks.wan.weights.transformer_weights import WanTransfor
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenEmbedRope
 from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
+from lightx2v.utils.request_defaults import get_input_value, get_request_default_arguments, set_input_value
 from lightx2v.utils.set_config import build_startup_config
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.offload import get_block_offload_backend
@@ -104,10 +105,10 @@ def build_wan_case(config, image_path=None):
         if image_path is None:
             raise ValueError("I2V measurement needs --image-path to match the inference aspect ratio")
         with Image.open(image_path) as image:
-            latent_h, latent_w = image_latent_size((image.height, image.width), config["size"], stride, patch)
+            latent_h, latent_w = image_latent_size((image.height, image.width), get_input_value(config, "size"), stride, patch)
     else:
-        latent_h, latent_w = config["size"][0] // stride[1], config["size"][1] // stride[2]
-    latent_t = (config["num_frames"] - 1) // stride[0] + 1
+        latent_h, latent_w = get_input_value(config, "size")[0] // stride[1], get_input_value(config, "size")[1] // stride[2]
+    latent_t = (get_input_value(config, "num_frames") - 1) // stride[0] + 1
     grid = (latent_t // patch[0], latent_h // patch[1], latent_w // patch[2])
     if min(grid) <= 0:
         raise ValueError(f"Input dimensions produce an empty block grid: {grid}")
@@ -156,7 +157,7 @@ def build_qwen_case(config, prompt, negative_prompt=" "):
     from transformers import Qwen2Tokenizer
 
     validate_qwen_residency_config(config)
-    size = get_qwen_image_size(config, config.get("size", []))
+    size = get_qwen_image_size(config, get_input_value(config, "size", []))
     if size is None:
         raise ValueError("Qwen measurement requires a valid aspect_ratio or size")
     width, height = size
@@ -219,7 +220,7 @@ def build_qwen_image_21_case(config, prompt, image_path=None):
     task = config["task"]
     if task not in ("t2i", "i2i"):
         raise ValueError("Qwen-Image-2.1 measurement supports t2i and i2i")
-    images, pixel_size = prepare_images(task, config["resolution"], config.get("size", []), config.get("aspect_ratio", ""), image_path)
+    images, pixel_size = prepare_images(task, get_input_value(config, "resolution"), get_input_value(config, "size", []), get_input_value(config, "aspect_ratio", ""), image_path)
     scale = config["vae_scale_factor"]
     shapes = [(1, image.height // scale, image.width // scale) for image in images] + [(1, pixel_size[0] // scale, pixel_size[1] // scale)]
     processor = Qwen3VLProcessor.from_pretrained(Path(config["model_path"]) / "processor", local_files_only=True)
@@ -285,10 +286,10 @@ def build_minimax_h3_case(config, prompt):
     text_tokens = len(tokenizer(prompt, add_special_tokens=False)["input_ids"])
     if text_tokens == 0:
         raise ValueError("MiniMax-H3 measurement requires a nonempty --prompt matching inference")
-    height, width = config["size"]
-    config["num_frames"] = align_num_frames(config["num_frames"])
+    height, width = get_input_value(config, "size")
+    set_input_value(config, "num_frames", align_num_frames(get_input_value(config, "num_frames")))
     scheduler = MiniMaxH3Scheduler(config)
-    scheduler.prepare(42, config["num_frames"], height, width, torch.full((text_tokens,), TEXT_TAG, dtype=torch.long))
+    scheduler.prepare(42, get_input_value(config, "num_frames"), height, width, torch.full((text_tokens,), TEXT_TAG, dtype=torch.long))
     sample_step = min(1, scheduler.infer_steps - 1)
     scheduler.step_pre(sample_step)
     layout = scheduler.layout
@@ -421,9 +422,14 @@ def main():
         deployment["offload_resident_blocks"] = count
         # Match normalized frame counts used to construct the measured input.
         if args.model_cls in ("wan2.1", "minimax_h3"):
-            deployment["num_frames"] = config["num_frames"]
+            if "num_frames" in get_request_default_arguments(config):
+                deployment.pop("num_frames", None)
+                deployment.setdefault("request_defaults", {})["num_frames"] = get_input_value(config, "num_frames")
+            else:
+                deployment["num_frames"] = get_input_value(config, "num_frames")
         elif args.model_cls == "qwen_image_21":
-            deployment["size"] = case.pixel_size
+            deployment.pop("size", None)
+            deployment.setdefault("request_defaults", {})["size"] = case.pixel_size
         report = {
             "model_cls": args.model_cls,
             "model_path": args.model_path,
@@ -454,7 +460,7 @@ def main():
         elif args.model_cls == "qwen_image_21":
             report.update(task=args.task, compute_phase="denoise", prefix_tokens=case.prefix_tokens, target_tokens=case.target_tokens, reference_image_sizes=case.reference_image_sizes)
         else:
-            report["num_frames"] = config["num_frames"]
+            report["num_frames"] = get_input_value(config, "num_frames")
         if args.model_cls == "minimax_h3":
             report.update(model_variant=config["model_variant"], video_tokens=case.video_tokens, audio_tokens=case.audio_tokens, sample_step=case.sample_step)
         write_json(output.with_suffix(".profile.json"), report)

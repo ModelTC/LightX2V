@@ -15,6 +15,7 @@ from lightx2v.models.video_encoders.hf.ltx2.model import LTX25AudioVAE, LTX25Vid
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.ltx2_media_io import encode_video_ltx25
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -92,7 +93,7 @@ class LTX25Runner(LTX2Runner):
             )
             source = "DurationHead"
         else:
-            configured = self.config.get("num_frames")
+            configured = get_input_value(self.config, "num_frames", None)
             if configured is None:
                 raise ValueError("LTX-2.5 auto_duration is disabled and no frame count was provided; pass num_frames/--num_frames or set num_frames in the profile")
             num_frames = int(configured)
@@ -111,8 +112,8 @@ class LTX25Runner(LTX2Runner):
                 raise ValueError(f"LTX-2.5 size must be [height, width], got {self.input_info.size}")
             final_height, final_width = map(int, self.input_info.size)
         else:
-            final_height = int(self.config["size"][0])
-            final_width = int(self.config["size"][1])
+            final_height = int(get_input_value(self.config, "size")[0])
+            final_width = int(get_input_value(self.config, "size")[1])
         if final_height % 64 != 0 or final_width % 64 != 0:
             raise ValueError(f"LTX-2.5 distilled two-stage output height and width must be divisible by 64, got {final_height}x{final_width}")
         self.input_info.size = [final_height, final_width]

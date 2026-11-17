@@ -15,6 +15,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.input_info import ShapeState
 from lightx2v.utils.profiler import *
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -222,13 +223,13 @@ class DefaultRunner(BaseRunner):
 
     def get_num_frames(self):
         value = getattr(self.input_info, "num_frames", None)
-        return int(self.config["num_frames"] if value is None else value)
+        return int(get_input_value(self.config, "num_frames") if value is None else value)
 
     def get_target_size(self):
         size = getattr(self.input_info, "size", None)
         if size:
             return int(size[0]), int(size[1])
-        return int(self.config["size"][0]), int(self.config["size"][1])
+        return int(get_input_value(self.config, "size")[0]), int(get_input_value(self.config, "size")[1])
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback

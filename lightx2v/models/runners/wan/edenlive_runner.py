@@ -16,6 +16,7 @@ from lightx2v.models.schedulers.wan.edenlive.scheduler import EdenLiveARSchedule
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -224,7 +225,7 @@ class EdenLiveRunner(RunnerLifecycleMixin):
             self.vae_encoder, self.vae_decoder = self.load_vae()
             self.image_encoder = self.load_image_encoder()
         latent_frames = self.config.get("ar_config", {}).get("local_attn_size", 3) + self.config.get("ar_config", {}).get("num_frame_per_chunk", 3) + 1
-        num_frames = self.config.get("num_frames")
+        num_frames = get_input_value(self.config, "num_frames", None)
         if num_frames is None:
             num_frames = (latent_frames - 1) * self.config["vae_stride"][0] + 1
         try:

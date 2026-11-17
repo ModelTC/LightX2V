@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -11,5 +9,9 @@
     "cpu_offload": true,
     "offload_granularity": "model",
     "dit_quantized": true,
-    "dit_quant_scheme": "gguf-Q4_K_S"
+    "dit_quant_scheme": "gguf-Q4_K_S",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

@@ -12,6 +12,7 @@ from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchE
 from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
 try:
@@ -320,7 +321,7 @@ class ZImageScheduler(BaseScheduler):
     def _get_i2i_denoise_strength(self, input_info):
         strength = getattr(input_info, "i2i_denoise_strength", None)
         if strength is None:
-            strength = self.config.get("i2i_denoise_strength")
+            strength = get_input_value(self.config, "i2i_denoise_strength", None)
         if strength is None:
             return None
         strength = float(strength)

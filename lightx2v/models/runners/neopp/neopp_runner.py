@@ -15,6 +15,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -43,7 +44,7 @@ class NeoppRunner(DefaultRunner):
 
     def resolve_request_seed(self, request_data):
         # Preserve LightLLM's session RNG unless a seed is supplied.
-        return request_data.get("seed")
+        return request_data.get("seed", self.config.get("request_defaults", {}).get("seed"))
 
     def prepare_request(self, request_data):
         if "target_shape" in request_data:
@@ -174,8 +175,8 @@ class NeoppRunner(DefaultRunner):
             }
 
     def get_latent_shape_with_target_hw(self):
-        target_height = self.input_info.size[0] if self.input_info.size and len(self.input_info.size) == 2 else self.config["size"][0]
-        target_width = self.input_info.size[1] if self.input_info.size and len(self.input_info.size) == 2 else self.config["size"][1]
+        target_height = self.input_info.size[0] if self.input_info.size and len(self.input_info.size) == 2 else get_input_value(self.config, "size")[0]
+        target_width = self.input_info.size[1] if self.input_info.size and len(self.input_info.size) == 2 else get_input_value(self.config, "size")[1]
         latent_shape = [1, 3, target_height, target_width]
         return latent_shape
 

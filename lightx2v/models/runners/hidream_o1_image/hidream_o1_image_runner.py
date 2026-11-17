@@ -16,6 +16,7 @@ from lightx2v.utils.image_io import save_image
 from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 
 
 def _get_tokenizer(processor):
@@ -199,7 +200,7 @@ class HidreamO1ImageRunner(DefaultRunner):
         return {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in sample.items()}
 
     def get_target_size(self):
-        size = self.input_info.size or self.config.get("size", (2048, 2048))
+        size = self.input_info.size or get_input_value(self.config, "size", (2048, 2048))
         if len(size) == 1:
             return (int(size[0]),) * 2
         return int(size[0]), int(size[1])

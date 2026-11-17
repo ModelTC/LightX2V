@@ -4,7 +4,6 @@
     "infer_steps": 4,
     "transformer_model_name": "480p_i2v",
     "action_ckpt": "/path/to/HY-WorldPlay/ar_distilled_action_model/diffusion_pytorch_model.safetensors",
-    "num_frames": 125,
     "aspect_ratio": "16:9",
     "vae_stride": [4, 16, 16],
     "sample_shift": 8.0,
@@ -17,5 +16,8 @@
     "cpu_offload": true,
     "offload_granularity": "block",
     "use_image_encoder": true,
-    "parallel": {}
+    "parallel": {},
+    "request_defaults": {
+        "num_frames": 125
+    }
 }

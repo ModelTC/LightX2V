@@ -5,13 +5,25 @@ from dataclasses import dataclass, field, fields, make_dataclass
 from typing import Any
 
 
+def _copy_input_containers(value):
+    if isinstance(value, dict):
+        return {key: _copy_input_containers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_copy_input_containers(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_copy_input_containers(item) for item in value)
+    return value
+
+
 @dataclass
 class InputInfo:
-    def update(self, values: Mapping[str, Any]) -> None:
+    def update(self, values: Mapping[str, Any], *, copy_nested: bool = False) -> None:
         for input_field in fields(self):
             if input_field.name in values:
                 value = values[input_field.name]
-                if isinstance(value, list):
+                if copy_nested:
+                    value = _copy_input_containers(value)
+                elif isinstance(value, list):
                     value = value.copy()
                 elif isinstance(value, dict):
                     value = dict(value)

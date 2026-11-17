@@ -4,7 +4,6 @@
     "text_encoder_dim": 3584,
     "text_len": 4096,
     "infer_steps": 50,
-    "aspect_ratio": "16:9",
     "max_custom_size": 3072,
     "attn_type": "flash_attn2",
     "enable_cfg": true,
@@ -12,7 +11,6 @@
     "vae_z_dim": 16,
     "vae_stride": [1, 8, 8],
     "num_frames": 1,
-    "size": [1536, 2752],
     "dit_original_ckpt": "/path/to/base_dit_info_v060_res2k_9k_3k_25kiter.safetensors",
     "disagg_config": {
         "bootstrap_addr": "127.0.0.1",
@@ -21,5 +19,9 @@
         "receiver_engine_rank": 1,
         "decoder_engine_rank": 2,
         "decoder_bootstrap_room": 2
+    },
+    "request_defaults": {
+        "aspect_ratio": "16:9",
+        "size": [1536, 2752]
     }
 }

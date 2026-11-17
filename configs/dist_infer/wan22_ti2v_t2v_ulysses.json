@@ -1,7 +1,5 @@
 {
     "infer_steps": 50,
-    "num_frames": 121,
-    "size": [704, 1280],
     "num_channels_latents": 48,
     "vae_stride": [
         4,
@@ -18,5 +16,9 @@
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "num_frames": 121,
+        "size": [704, 1280]
     }
 }

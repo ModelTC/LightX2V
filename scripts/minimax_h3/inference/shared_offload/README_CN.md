@@ -104,8 +104,8 @@ Ref2AV 同类参考素材以空格分隔传入，音频必须搭配图片或视�
 | JSON | `shared_cpu_weight_scope` | `host`（默认）或 `numa` |
 | 推理命令 | `--config_json` | 使用其他配置文件时修改此路径 |
 | JSON | `infer_steps` | `29` |
-| JSON | `size` | `[544, 960]`，顺序为高、宽 |
-| JSON | `num_frames`、`fps` | `124` 帧、`24` fps |
+| JSON | `request_defaults.size` | `[544, 960]`，顺序为高、宽 |
+| JSON | `request_defaults.num_frames`、`fps` | `124` 帧、`24` fps |
 | JSON | `adaln_cache_dir` | `~/.cache/lightx2v/adaln` |
 
 共享配置覆盖 DiT、文本主干和视频 VAE，并开启对应的 block offload。依赖 Linux SysV 共享内存和 CUDA pinned memory；GPU 激活和工作缓冲仍各自占用显存。当前共享路径不支持 TP、量化、LoRA、compile 或 lazy loading。

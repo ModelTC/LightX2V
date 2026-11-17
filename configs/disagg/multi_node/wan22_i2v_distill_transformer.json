@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
@@ -38,5 +36,9 @@
         "transformer_engine_rank": 1,
         "decoder_engine_rank": 2,
         "local_hostname": "192.168.0.166"
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
     }
 }

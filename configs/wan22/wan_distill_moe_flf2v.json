@@ -1,8 +1,6 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
     "text_len": 512,
-    "size": [720, 1280],
     "distill_method": "dmd2",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
@@ -25,5 +23,9 @@
         250
     ],
     "high_noise_original_ckpt": "/path/to/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors",
-    "low_noise_original_ckpt": "/path/to/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors"
+    "low_noise_original_ckpt": "/path/to/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [720, 1280]
+    }
 }

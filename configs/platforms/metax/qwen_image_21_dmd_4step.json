@@ -4,7 +4,6 @@
     "do_time_shift": true,
     "shift_terminal": null,
     "latent_dtype": "fp32",
-    "resolution": 1024,
     "attn_type": "metax_flash_attn2",
     "rope_type": "torch_real_rope",
     "rms_norm_type": "fp32_variance",
@@ -23,5 +22,8 @@
             "path": "/data/models/Qwen-Image-2.1-Lightning/pytorch_lora_weights.safetensors",
             "strength": 1.0
         }
-    ]
+    ],
+    "request_defaults": {
+        "resolution": 1024
+    }
 }

@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -23,5 +21,9 @@
     "use_tiling_vae": true,
     "use_tae": true,
     "tae_path": "/path/to/taew2_1.pth",
-    "lazy_load": true
+    "lazy_load": true,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

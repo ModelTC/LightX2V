@@ -34,10 +34,13 @@ with LightX2VPipeline(config) as pipe:
 
 | 位置 | 内容 |
 | --- | --- |
-| `config` | 模型名称和路径、推理步数、CFG、默认尺寸和帧数、注意力算子、量化、offload、LoRA、缓存、并行设置 |
+| `config` 顶层 | 模型名称和路径、推理步数、CFG、注意力算子、量化、offload、LoRA、缓存、并行设置，以及模型特有的固定输入 |
+| `config["request_defaults"]` | 模型支持的请求字段默认值，例如尺寸、帧数和 seed |
 | `generate(**inputs)` | 本次任务、提示词、输入媒体、随机种子、输出路径，以及模型 Spec 支持的其他请求字段 |
 
 示例脚本从 JSON 读取推理配置，补充用于选择模型的 `model_path`、`model_cls`，以及需要时的 `task` 和 `model_variant`。采样参数、组件权重路径和运行选项都在对应 JSON 中设置。模型配置加载器负责合并 checkpoint 元数据与部署配置，Pipeline 不再添加通用采样默认值或转换模型专属参数。
+
+例如，Wan 的默认输入可写成 `"request_defaults": {"size": [480, 832], "num_frames": 81, "seed": 42}`，通过 `generate(size=[768, 1344])` 仅覆盖一次请求的尺寸。加载器校验后仍保留子字典，通过 `pipe.config["request_defaults"]` 访问默认值；固定参数始终在顶层。CLI 和 HTTP 继续使用原有的逐字段请求参数。
 
 例如，在 JSON 中添加以下字段，配置 Wan 的 DiT 与 T5 offload：
 
@@ -64,7 +67,7 @@ config 中明确指定的 `task` 是请求的默认任务。请求可以选择�
 
 多输入字段使用列表，只有一个输入时也使用列表。尺寸顺序为 `[height, width]`。Spec 原本支持的逐请求覆盖字段继续有效。
 
-普通模型省略 seed 或传入 `None` 时使用 42；NeoPP 延续会话随机数状态。关闭 CFG 时，明确传入的 negative_prompt 会被警告并忽略。省略 save_result_path 时，大部分 runner 不保存文件，WorldMirror 使用默认输出目录。返回值及 `return_result_tensor=True` 的支持情况由具体模型决定。
+省略 seed 或传入 `None` 时使用配置默认值；没有配置 seed 时，普通模型使用 42，NeoPP 延续会话随机数状态。关闭 CFG 时，明确传入的 negative_prompt 会被警告并忽略。省略 save_result_path 时，大部分 runner 不保存文件，WorldMirror 使用默认输出目录。返回值及 `return_result_tensor=True` 的支持情况由具体模型决定。
 
 使用 `with`，或在使用结束后调用 `pipe.close()`。关闭时释放 runner 资源，以及 Pipeline 自己创建的分布式进程组；调用方已有的进程组会保留。
 
