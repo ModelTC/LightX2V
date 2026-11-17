@@ -2,7 +2,6 @@
     "infer_steps": 50,
     "sample_guide_scale": 5.0,
     "flow_shift": 1.0,
-    "image_size": "auto",
     "moe_backend": "flashinfer",
     "attn_impl": "torch_sdpa",
     "flashinfer_autotune_mode": "auto",

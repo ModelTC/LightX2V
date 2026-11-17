@@ -80,11 +80,11 @@ host 在同机同一 IPC 域按兼容的 TP 分片共享 transformer block CPU �
 
 3. 修改 `--prompt` 为编辑指令，并修改 `--save_result_path`。
 
-不改 JSON、也不传 `--size` 时，TI2I 仍输出 **1024×1024**，不会自动使用参考图的尺寸。若需按参考图对齐输出尺寸，可删除 JSON 中的 `size`，添加 `"image_size": "auto"` 和 `"align_image_size": true`。
+不改 JSON、也不传 `--size` 时，TI2I 仍使用配置中的 **1024×1024**。可通过 CLI 的 `--size 高 宽` 或 POST 的 `"size": [高, 宽]` 覆盖配置默认值。若配置和请求都未指定 `size`，TI2I／I2I 自动使用处理后的第一张参考图尺寸，T2I 默认使用 **1024×1024**。若需按参考图对齐输出尺寸，可删除 JSON 中的 `size`，添加 `"align_image_size": true`，并且请求不传 `size`。
 
 建议为 TI2I 使用独立的 `flashinfer_autotune_cache` 路径，例如默认八卡使用 `save_results/hunyuan_image3_flashinfer_autotune_ti2i_tp2_sp2_cfg2.json`。这用于区分任务的调优缓存，任务选择本身由 `--task` 决定。
 
-切回默认 T2I 时，将 `--task` 改回 `t2i`，删除 `--image_path`。若调整过 JSON，删除 `image_size`、`align_image_size`，恢复 `"size": [1024, 1024]`，并使用对应的 T2I 缓存路径。
+切回默认 T2I 时，将 `--task` 改回 `t2i`，删除 `--image_path`。若调整过 JSON，删除 `align_image_size`，恢复 `"size": [1024, 1024]`，并使用对应的 T2I 缓存路径。
 
 ## 其他参数
 

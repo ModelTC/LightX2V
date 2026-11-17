@@ -80,11 +80,11 @@ Host scope shares compatible TP shards of transformer block CPU weights within t
 
 3. Set `--prompt` to your editing instruction and update `--save_result_path`.
 
-With the JSON unchanged and no `--size` argument, TI2I still outputs **1024×1024**; it does not automatically adopt the reference image dimensions. To align the output size with the reference, you can remove `size` from the JSON and add `"image_size": "auto"` and `"align_image_size": true`.
+With the JSON unchanged and no `--size` argument, TI2I uses the configured **1024×1024** size. Override that default with CLI `--size HEIGHT WIDTH` or POST `"size": [HEIGHT, WIDTH]`. When neither the configuration nor the request specifies `size`, TI2I/I2I uses the first processed reference image's dimensions, while T2I defaults to **1024×1024**. To align the output size with the reference, remove `size` from the JSON, add `"align_image_size": true`, and omit `size` from the request.
 
 Use a separate `flashinfer_autotune_cache` path for TI2I, such as `save_results/hunyuan_image3_flashinfer_autotune_ti2i_tp2_sp2_cfg2.json` for the default eight-GPU layout. This keeps task-specific tuning caches separate; the task itself is selected by `--task`.
 
-To return to default T2I, change `--task` back to `t2i` and remove `--image_path`. If you changed the JSON, remove `image_size` and `align_image_size`, restore `"size": [1024, 1024]`, and select the T2I cache path.
+To return to default T2I, change `--task` back to `t2i` and remove `--image_path`. If you changed the JSON, remove `align_image_size`, restore `"size": [1024, 1024]`, and select the T2I cache path.
 
 ## Other options
 
