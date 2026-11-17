@@ -4,9 +4,17 @@ from collections.abc import MutableMapping
 from lightx2v_train.utils.utils import is_cache_build
 
 
+def _source(target):
+    module = getattr(target, "__module__", type(target).__module__)
+    name = getattr(target, "__qualname__", type(target).__qualname__)
+    return f"{module}.{name}"
+
+
 class Register(MutableMapping):
-    def __init__(self, *args, **kwargs):
-        self._dict = dict(*args, **kwargs)
+    def __init__(self, *args, builtin_modules=None, **kwargs):
+        self._dict = {}
+        self._builtin_modules = builtin_modules or {}
+        self.update(dict(*args, **kwargs))
 
     def __call__(self, target_or_name):
         if callable(target_or_name):
@@ -21,13 +29,15 @@ class Register(MutableMapping):
         if key is None:
             key = target.__name__
 
-        if key in self._dict:
-            raise Exception(f"{key} already exists.")
-
         self[key] = target
         return target
 
     def __setitem__(self, key, value):
+        builtin_module = self._builtin_modules.get(key)
+        if builtin_module is not None and getattr(value, "__module__", None) != builtin_module:
+            raise ValueError(f"{key!r} is reserved for built-in module {builtin_module!r}; cannot register {_source(value)}.")
+        if key in self._dict:
+            raise ValueError(f"{key!r} is already registered by {_source(self._dict[key])}; cannot register {_source(value)}.")
         self._dict[key] = value
 
     def __getitem__(self, key):
@@ -62,16 +72,7 @@ class Register(MutableMapping):
 
     def merge(self, other_register):
         for key, value in other_register.items():
-            if key in self._dict:
-                raise Exception(f"{key} already exists in target register.")
             self[key] = value
-
-
-MODEL_REGISTER = Register()
-TRAINER_REGISTER = Register()
-INFERENCER_REGISTER = Register()
-DATA_REGISTER = Register()
-SAMPLE_PROCESSOR_REGISTER = Register()
 
 
 _MODEL_MODULES = {
@@ -129,6 +130,20 @@ _SAMPLE_PROCESSOR_MODULES = {
 }
 
 
+_DATA_MODULES = {
+    "image_dataset": "lightx2v_train.data.image_dataset",
+    "cache_dataset": "lightx2v_train.data.cache_dataset",
+    "prompt_dataset": "lightx2v_train.data.video_dataset",
+    "video_dataset": "lightx2v_train.data.video_dataset",
+}
+
+MODEL_REGISTER = Register(builtin_modules=_MODEL_MODULES)
+TRAINER_REGISTER = Register(builtin_modules=_TRAINER_MODULES)
+INFERENCER_REGISTER = Register(builtin_modules=_INFERENCER_MODULES)
+DATA_REGISTER = Register(builtin_modules=_DATA_MODULES)
+SAMPLE_PROCESSOR_REGISTER = Register(builtin_modules=_SAMPLE_PROCESSOR_MODULES)
+
+
 def _ensure_registered(name, register, module_map):
     if name in register:
         return
@@ -138,14 +153,7 @@ def _ensure_registered(name, register, module_map):
 
 
 def _ensure_data_registered(data_name):
-    if data_name in DATA_REGISTER:
-        return
-    if data_name == "image_dataset":
-        import lightx2v_train.data.image_dataset  # noqa: F401
-    elif data_name == "cache_dataset":
-        import lightx2v_train.data.cache_dataset  # noqa: F401
-    elif data_name in {"prompt_dataset", "video_dataset"}:
-        import lightx2v_train.data.video_dataset  # noqa: F401
+    _ensure_registered(data_name, DATA_REGISTER, _DATA_MODULES)
 
 
 def build_model(config):

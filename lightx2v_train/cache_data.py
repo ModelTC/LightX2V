@@ -1,9 +1,8 @@
 import argparse
 
-from loguru import logger
-
 from lightx2v_train.data import build_data, build_sample_processor
 from lightx2v_train.model_zoo import build_model
+from lightx2v_train.plugins import load_plugins
 from lightx2v_train.runtime import (
     cleanup_distributed,
     init_distributed,
@@ -12,6 +11,7 @@ from lightx2v_train.runtime import (
 )
 from lightx2v_train.runtime.precision import configure_precision
 from lightx2v_train.trainers import build_trainer
+from loguru import logger
 
 
 def parse_args():
@@ -33,6 +33,7 @@ def parse_args():
 def main():
     args = parse_args()
     config = load_config(args.config)
+    load_plugins(config.get("plugins", []))
     configure_precision(config)
     data_split = str(args.data_split)
 
