@@ -1,10 +1,5 @@
 {
   "infer_steps": 4,
-  "num_frames": 124,
-  "size": [
-    768,
-    1344
-  ],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -61,5 +56,12 @@
   "use_fused_qkv": true,
   "async_vae_decode": true,
   "load_from_rank0": false,
-  "allow_online_adaln_offload": true
+  "allow_online_adaln_offload": true,
+  "request_defaults": {
+    "num_frames": 124,
+    "size": [
+      768,
+      1344
+    ]
+  }
 }

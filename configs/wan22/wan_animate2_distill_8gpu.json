@@ -27,8 +27,6 @@
     ],
     "num_channels_latents": 16,
     "text_len": 512,
-    "num_frames": 81,
-    "size": [1280, 720],
     "fps": 24,
     "audio_mux_prefer_copy": false,
     "sample_shift": 5.0,
@@ -63,5 +61,9 @@
     "t5_original_ckpt": "/path/to/models_t5_umt5-xxl-enc-bf16.pth",
     "t5_tokenizer_path": "/path/to/umt5-xxl",
     "clip_original_ckpt": "/path/to/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
-    "vae_path": "/path/to/vae.pth"
+    "vae_path": "/path/to/vae.pth",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [1280, 720]
+    }
 }

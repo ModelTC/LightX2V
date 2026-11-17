@@ -1,12 +1,14 @@
 {
     "infer_steps": 40,
-    "size": [480, 832],
-    "num_frames": 81,
     "fps": 24,
     "sample_shift": 3.0,
     "sample_guide_scale": 3.0,
     "enable_cfg": true,
     "attn_type": "flash_attn3",
     "moe_backend": "torch_grouped_mm",
-    "cpu_offload": false
+    "cpu_offload": false,
+    "request_defaults": {
+        "size": [480, 832],
+        "num_frames": 81
+    }
 }

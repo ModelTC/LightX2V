@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
@@ -38,5 +36,9 @@
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses",
         "cfg_p_size": 2
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
     }
 }

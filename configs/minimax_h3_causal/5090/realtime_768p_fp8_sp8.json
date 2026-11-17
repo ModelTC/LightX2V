@@ -1,7 +1,5 @@
 {
   "infer_steps": 4,
-  "num_frames": 974,
-  "size": [1376, 768],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": false,
@@ -77,5 +75,9 @@
   },
   "use_fused_qkv": true,
   "refiner_attn_type": "sage_attn2",
-  "warmup": false
+  "warmup": false,
+  "request_defaults": {
+    "num_frames": 974,
+    "size": [1376, 768]
+  }
 }

@@ -1,9 +1,7 @@
 {
     "infer_steps": 2,
     "fps": 16,
-    "video_duration": 5,
     "audio_sr": 16000,
-    "num_frames": 81,
     "self_attn_1_type": "spas_sage_attn3",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -34,5 +32,9 @@
         "seq_p_tensor_fusion": false,
         "seq_p_head_parallel": false,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "video_duration": 5,
+        "num_frames": 81
     }
 }

@@ -1,8 +1,6 @@
 {
     "infer_steps": 20,
-    "num_frames": 33,
     "text_len": 512,
-    "size": [480, 832],
     "self_attn_1_type": "intel_xpu_flash_attn",
     "cross_attn_1_type": "intel_xpu_flash_attn",
     "sample_guide_scale": 6,
@@ -17,5 +15,9 @@
     "rms_norm_type": "torch",
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-intel-xpu",
-    "t5_quantized_ckpt": "models_t5_umt5-xxl-enc-fp8.pth"
+    "t5_quantized_ckpt": "models_t5_umt5-xxl-enc-fp8.pth",
+    "request_defaults": {
+        "num_frames": 33,
+        "size": [480, 832]
+    }
 }

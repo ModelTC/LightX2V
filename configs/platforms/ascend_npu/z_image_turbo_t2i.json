@@ -1,5 +1,4 @@
 {
-    "aspect_ratio": "16:9",
     "num_channels_latents": 16,
     "infer_steps": 9,
     "attn_type": "npu_flash_attn",
@@ -11,5 +10,8 @@
     "modulate_type": "torch",
     "rope_type": "torch_real_rope",
     "layer_norm_type": "torch",
-    "rms_norm_type": "torch"
+    "rms_norm_type": "torch",
+    "request_defaults": {
+        "aspect_ratio": "16:9"
+    }
 }

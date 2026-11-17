@@ -1,8 +1,6 @@
 {
   "lora_mode": "consumer",
   "infer_steps": 8,
-  "num_frames": 362,
-  "size": [768, 1344],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -26,5 +24,9 @@
       "path": "/path/to/minimax_h3_fl2v_turbo_8step_v1.2_768p_bf16.safetensors",
       "strength": 1.0
     }
-  ]
+  ],
+  "request_defaults": {
+    "num_frames": 362,
+    "size": [768, 1344]
+  }
 }

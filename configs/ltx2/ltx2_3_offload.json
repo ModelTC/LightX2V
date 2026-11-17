@@ -1,7 +1,5 @@
 {
     "infer_steps": 30,
-    "num_frames": 241,
-    "size": [512, 768],
     "attn_type": "sage_attn2",
     "sample_guide_scale": 3.0,
     "sample_shift": [2.05, 0.95],
@@ -36,5 +34,9 @@
             "rescale_scale": 0.7,
             "skip_step": 0
         }
+    },
+    "request_defaults": {
+        "num_frames": 241,
+        "size": [512, 768]
     }
 }

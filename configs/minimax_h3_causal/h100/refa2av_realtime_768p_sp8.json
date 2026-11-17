@@ -1,7 +1,5 @@
 {
   "infer_steps": 4,
-  "num_frames": 957,
-  "size": [1344, 768],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": false,
@@ -49,5 +47,9 @@
     "seq_p_size": 8,
     "seq_p_attn_type": "ulysses"
   },
-  "use_fused_qkv": true
+  "use_fused_qkv": true,
+  "request_defaults": {
+    "num_frames": 957,
+    "size": [1344, 768]
+  }
 }

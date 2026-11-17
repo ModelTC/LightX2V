@@ -3,8 +3,6 @@
     "infer_steps": 35,
     "sample_guide_scale": 6.0,
     "sample_shift": 10.0,
-    "size": [720, 1280],
-    "num_frames": 189,
     "fps": 24.0,
     "enable_cfg": true,
     "rms_norm_type": "one-pass",
@@ -15,5 +13,9 @@
     "add_resolution_template": false,
     "add_duration_template": false,
     "vae_cpu_offload": false,
-    "cpu_offload": false
+    "cpu_offload": false,
+    "request_defaults": {
+        "size": [720, 1280],
+        "num_frames": 189
+    }
 }

@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "sparge_attn",
     "sparge_attn_setting": {
         "sparsity_ratio": 0.8
@@ -11,5 +9,9 @@
     "sample_guide_scale": 5,
     "sample_shift": 3,
     "enable_cfg": true,
-    "cpu_offload": false
+    "cpu_offload": false,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

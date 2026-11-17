@@ -2,12 +2,8 @@
     "model_variant": "omni",
     "infer_steps": 30,
     "sample_shift": 10.0,
-    "size": [720, 640],
     "fps": 10.0,
     "enable_cfg": false,
-    "action_mode": "forward_dynamics",
-    "domain_name": "agibotworld",
-    "view_point": "concat_view",
     "action_chunk_size": 16,
     "action_chunk_index": 0,
     "rms_norm_type": "one-pass",
@@ -17,5 +13,11 @@
     "causal_self_attn_type": "flash_attn3",
     "use_system_prompt": false,
     "vae_cpu_offload": false,
-    "cpu_offload": false
+    "cpu_offload": false,
+    "request_defaults": {
+        "size": [720, 640],
+        "action_mode": "forward_dynamics",
+        "domain_name": "agibotworld",
+        "view_point": "concat_view"
+    }
 }

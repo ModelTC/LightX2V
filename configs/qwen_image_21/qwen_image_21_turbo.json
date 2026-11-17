@@ -2,7 +2,6 @@
     "infer_steps": 8,
     "sigmas": [1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568],
     "do_time_shift": false,
-    "resolution": 2048,
     "attn_type": "flash_attn3",
     "rope_type": "flashinfer_rope",
     "rms_norm_type": "fp32_variance",
@@ -13,5 +12,8 @@
     "fused_block_min_tokens": 1024,
     "enable_cfg": false,
     "sample_guide_scale": 1.0,
-    "warmup": true
+    "warmup": true,
+    "request_defaults": {
+        "resolution": 2048
+    }
 }

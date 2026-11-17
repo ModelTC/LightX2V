@@ -1,6 +1,5 @@
 {
     "infer_steps": 40,
-    "resolution": 1024,
     "vae_scale_factor": 16,
     "attn_type": "sage_attn2_amd_rocm",
     "rope_type": "torch_real_rope",
@@ -15,5 +14,8 @@
     "text_encoder_cpu_offload": true,
     "dit_quantized": true,
     "dit_quant_scheme": "int8-rocm",
-    "use_compile": true
+    "use_compile": true,
+    "request_defaults": {
+        "resolution": 1024
+    }
 }

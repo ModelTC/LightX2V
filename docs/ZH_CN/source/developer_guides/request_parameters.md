@@ -46,6 +46,24 @@ Spec 只声明对外提供的任务。例如 HunyuanImage3 的文本生成用于
 
 CLI/server 未提交的字段仍为 `None`，表示不覆盖启动配置；不会直接使用 `Argument.input_info_default` 作为请求覆盖值。
 
+在启动 JSON 的 `request_defaults` 子字典中设置请求默认值。例如 Qwen-Image-2.1：
+
+```json
+{
+    "infer_steps": 40,
+    "request_defaults": {
+        "resolution": 1024,
+        "seed": 42
+    }
+}
+```
+
+这里只放当前模型的 CLI 和 HTTP 共同支持的可序列化请求字段。模型名称、`task`、采样步数、CFG、算子、量化、offload 和并行配置保留顶层。受启动模式限制的固定字段也保留顶层，例如固定帧数 attention 下的 Wan `num_frames`。同一个字段不能同时出现在顶层和 `request_defaults` 中。
+
+模型配置加载器校验字段名称和类型，始终将这些值保留在 `request_defaults` 中。checkpoint 元数据中的同类请求默认值也归入这个子字典。`runner.config`、`pipe.config` 保持相同的结构：固定参数在顶层，请求默认值在子字典；初始化和预热显式读取子字典。这些默认值不会被加入显式请求字典，因此保留 LTX-2.5 自动时长和 Cosmos3 动作文件的优先级。配置中显式的 `null` 保留原值，包括 EdenLive 的自动帧数标记。
+
+CLI 和 POST 请求格式保持不变，例如 `--resolution 768` 和 `{"resolution": 768}`，POST 不包裹 `request_defaults`。显式请求值覆盖配置默认值；请求省略字段或传入 `None` 时保留默认值。创建每次请求时会复制列表和字典。
+
 公共的 `ShapeState`、`ImageState`、`AudioVideoState` 和 `SRState` 放在 `lightx2v/utils/input_info.py`。模型专属运行状态放在自己的 runner 目录，例如：
 
 ```python
@@ -69,9 +87,9 @@ class ModelRunner(DefaultRunner):
 resolution = self.input_info.resolution
 ```
 
-继续读取 `self.config["resolution"]` 会拿到启动值，无法应用请求覆盖。Qwen-Image-2.1 在 `run_input_encoder()` 中读取并校验这个值，用于参考图缩放和自动输出尺寸。
+配置默认值位于 `self.config["request_defaults"]["resolution"]`，推理时直接读取它会忽略请求覆盖。实际计算应读取 `self.input_info.resolution`。Qwen-Image-2.1 在 `run_input_encoder()` 中读取并校验这个有效值，用于参考图缩放和自动输出尺寸。
 
-`BaseRunner` 先应用启动配置，再应用非 `None` 的请求值。例如启动配置为 `resolution=1024`：
+`BaseRunner` 先初始化固定上下文字段，再应用 `request_defaults`，最后应用非 `None` 的请求值。例如启动配置包含 `"request_defaults": {"resolution": 1024}`：
 
 | 本次请求 | 模型读到的值 |
 |---|---|

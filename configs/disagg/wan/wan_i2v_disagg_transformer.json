@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -19,5 +17,9 @@
         "receiver_engine_rank": 1,
         "decoder_engine_rank": 2,
         "decoder_bootstrap_room": 3
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
     }
 }

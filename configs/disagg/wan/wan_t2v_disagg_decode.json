@@ -1,7 +1,5 @@
 {
     "infer_steps": 50,
-    "num_frames": 81,
-    "size": [480, 832],
     "cpu_offload": false,
     "fps": 16,
     "disagg_mode": "decode",
@@ -10,5 +8,9 @@
         "bootstrap_room": 1,
         "sender_engine_rank": 1,
         "receiver_engine_rank": 2
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
     }
 }

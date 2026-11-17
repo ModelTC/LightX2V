@@ -1,7 +1,5 @@
 {
     "infer_steps": 50,
-    "num_frames": 121,
-    "size": [704, 1280],
     "num_channels_latents": 48,
     "vae_stride": [
         4,
@@ -18,5 +16,9 @@
     "use_image_encoder": false,
     "parallel": {
         "cfg_p_size": 2
+    },
+    "request_defaults": {
+        "num_frames": 121,
+        "size": [704, 1280]
     }
 }

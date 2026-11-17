@@ -3,8 +3,6 @@
     "task": "s2v",
     "model_path": "/path/to/Wan2.1-R2V721-Audio-14B-720P",
     "infer_steps": 3,
-    "num_frames": 33,
-    "resize_mode": "adaptive",
     "fps": 16,
     "audio_sr": 16000,
     "self_attn_1_type": "flash_attn3",
@@ -25,5 +23,9 @@
     "offload_ratio": 1,
     "use_tiling_vae": true,
     "audio_encoder_cpu_offload": true,
-    "audio_adapter_cpu_offload": false
+    "audio_adapter_cpu_offload": false,
+    "request_defaults": {
+        "num_frames": 33,
+        "resize_mode": "adaptive"
+    }
 }

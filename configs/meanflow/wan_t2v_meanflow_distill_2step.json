@@ -1,7 +1,5 @@
 {
     "infer_steps": 2,
-    "num_frames": 81,
-    "size": [480, 832],
     "distill_method": "mean_flow",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
@@ -13,5 +11,9 @@
     "denoising_step_list": [
         1000,
         500
-    ]
+    ],
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

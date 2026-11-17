@@ -1,8 +1,6 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
     "text_len": 512,
-    "size": [720, 1280],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "sample_guide_scale": [
@@ -14,5 +12,9 @@
     "cpu_offload": false,
     "offload_granularity": "model",
     "boundary": 0.900,
-    "use_image_encoder": false
+    "use_image_encoder": false,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [720, 1280]
+    }
 }

@@ -1,6 +1,5 @@
 {
     "infer_steps": 40,
-    "resolution": 1024,
     "vae_scale_factor": 16,
     "use_tiling_vae": true,
     "vae_tile_size": 1024,
@@ -19,5 +18,8 @@
     "fused_block_ops": false,
     "enable_cfg": false,
     "sample_guide_scale": 1.0,
-    "warmup": false
+    "warmup": false,
+    "request_defaults": {
+        "resolution": 1024
+    }
 }

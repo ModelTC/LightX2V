@@ -80,11 +80,11 @@ Host scope shares compatible TP shards of transformer block CPU weights within t
 
 3. Set `--prompt` to your editing instruction and update `--save_result_path`.
 
-With the JSON unchanged and no `--size` argument, TI2I uses the configured **1024×1024** size. Override that default with CLI `--size HEIGHT WIDTH` or POST `"size": [HEIGHT, WIDTH]`. When neither the configuration nor the request specifies `size`, TI2I/I2I uses the first processed reference image's dimensions, while T2I defaults to **1024×1024**. To align the output size with the reference, remove `size` from the JSON, add `"align_image_size": true`, and omit `size` from the request.
+With the JSON unchanged and no `--size` argument, TI2I uses the configured **1024×1024** size. Override that default with CLI `--size HEIGHT WIDTH` or POST `"size": [HEIGHT, WIDTH]`. When neither the configuration nor the request specifies `size`, TI2I/I2I uses the first processed reference image's dimensions, while T2I defaults to **1024×1024**. To align the output size with the reference, remove `request_defaults.size` from the JSON, set `request_defaults.align_image_size=true`, and omit `size` from the request.
 
 Use a separate `flashinfer_autotune_cache` path for TI2I, such as `save_results/hunyuan_image3_flashinfer_autotune_ti2i_tp2_sp2_cfg2.json` for the default eight-GPU layout. This keeps task-specific tuning caches separate; the task itself is selected by `--task`.
 
-To return to default T2I, change `--task` back to `t2i` and remove `--image_path`. If you changed the JSON, remove `align_image_size`, restore `"size": [1024, 1024]`, and select the T2I cache path.
+To return to default T2I, change `--task` back to `t2i` and remove `--image_path`. If you changed the JSON, remove `request_defaults.align_image_size`, restore `request_defaults.size=[1024, 1024]`, and select the T2I cache path.
 
 ## Other options
 
@@ -94,7 +94,7 @@ To return to default T2I, change `--task` back to `t2i` and remove `--image_path
 | Inference command | `--prompt`, `--save_result_path`, `--seed` | Prompt, output file, random seed (default 42) |
 | JSON | `shared_cpu_weight_scope` | `host` (default) or `numa` |
 | Inference command | `--config_json` | Path to another configuration file |
-| JSON | `infer_steps`, `size` | 50 steps, default T2I size `[1024, 1024]` in height/width order |
+| JSON | `infer_steps`, `request_defaults.size` | 50 steps, default T2I size `[1024, 1024]` in height/width order |
 | JSON | `bot_task`, `max_new_tokens` | `"think_recaption"`, `2048`; longer reasoning text increases runtime |
 | JSON | `flashinfer_autotune_cache` | Cache file matching the task and TP/SP/CFG layout |
 

@@ -1,6 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
     "text_len": 512,
     "auto_target_shape": false,
     "size": [1280, 720],
@@ -24,5 +23,8 @@
         "path": "lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
         "strength": 1.0
         }
-    ]
+    ],
+    "request_defaults": {
+        "num_frames": 81
+    }
 }

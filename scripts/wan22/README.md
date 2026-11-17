@@ -40,7 +40,7 @@ and LoRA paths in the selected JSON to the downloaded local files.
 bash scripts/wan22/run_wan22_moe_t2v.sh
 ```
 
-Edit inputs, prompts, seed, and output paths in the script; edit inference settings in the JSON selected by `--config_json`. `size` uses `[height, width]`.
+Edit inputs, prompts, seed, and output paths in the script; edit inference settings in the JSON selected by `--config_json`. Request defaults belong in the JSON `request_defaults` object; `size` uses `[height, width]`.
 
 When switching to a preset with `enable_cfg: false`, remove `--negative_prompt` from the script. Also omit `negative_prompt` from service requests, including empty strings.
 

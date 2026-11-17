@@ -16,6 +16,7 @@ from lightx2v.models.runners.wan.input_info import WanPolicyState
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 
 AGENTVIEW_IMAGE_NAME = "agentview_image.png"
 WRIST_IMAGE_NAME = "wrist_image.png"
@@ -187,7 +188,7 @@ class FastWAMPolicy:
             action_infer_steps=config.get("action_infer_steps", 20),
             action_dim=config.get("action_dim", 7),
             robot_state_dim=config.get("robot_state_dim", 8),
-            seed=config.get("seed", 0),
+            seed=get_input_value(config, "seed", 0),
             binarize_gripper=config.get("binarize_gripper", True),
             default_prompt=config.get("default_prompt"),
             camera_size=config.get("camera_size", 224),

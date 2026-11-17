@@ -34,10 +34,13 @@ You can also construct the dictionary directly. Use the same deployment fields a
 
 | Where | Contents |
 | --- | --- |
-| `config` | Model identity and paths, inference steps, CFG, default size/frame count, attention operators, quantization, offload, LoRA, caching and parallel settings |
+| `config` top level | Model identity and paths, inference steps, CFG, attention operators, quantization, offload, LoRA, caching, parallel settings and model-specific fixed inputs |
+| `config["request_defaults"]` | Defaults for request fields supported by the model, such as size, frame count and seed |
 | `generate(**inputs)` | Task, prompts, input media, seed, output path and other request fields supported by the model's Spec |
 
 Example scripts read inference settings from JSON and supplement model selection fields: `model_path`, `model_cls` and, when needed, `task` and `model_variant`. Configure sampling, component checkpoints and runtime options in the selected JSON. The model configuration loader combines checkpoint metadata with this deployment configuration. Pipeline adds no sampling defaults or model-specific parameter conversions.
+
+For example, configure Wan request defaults as `"request_defaults": {"size": [480, 832], "num_frames": 81, "seed": 42}`. `generate(size=[768, 1344])` overrides the configured size for one request. The loader validates the defaults and keeps them nested: access them through `pipe.config["request_defaults"]`. Fixed settings remain at the top level. CLI and HTTP continue accepting the same individual request parameters.
 
 For example, add these fields to the JSON to configure Wan DiT and T5 offload:
 
@@ -64,7 +67,7 @@ A `task` explicitly included in the config is the default for requests that omit
 
 Multi-input fields use lists, including for a single item. Size is `[height, width]`. Fields already supported as per-request overrides by the Spec retain that behavior.
 
-For ordinary models, an omitted or `None` seed defaults to 42. NeoPP instead continues the session RNG state. Explicit negative prompts are ignored with a warning when CFG is disabled. Most runners skip saving when `save_result_path` is omitted; WorldMirror uses its default output directory. Return values and support for `return_result_tensor=True` remain model-specific.
+An omitted or `None` seed uses the configured default. Without a configured seed, ordinary models use 42 and NeoPP continues the session RNG state. Explicit negative prompts are ignored with a warning when CFG is disabled. Most runners skip saving when `save_result_path` is omitted; WorldMirror uses its default output directory. Return values and support for `return_result_tensor=True` remain model-specific.
 
 Use `with`, or call `pipe.close()` when finished. Cleanup releases runner resources and any distributed process group created by the pipeline. An existing caller-owned process group is kept.
 

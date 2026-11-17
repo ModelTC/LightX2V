@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
@@ -33,5 +31,9 @@
             "path": "/path/to/Wan2.2-Distill-Loras/wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors",
             "strength": 1.0
         }
-    ]
+    ],
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

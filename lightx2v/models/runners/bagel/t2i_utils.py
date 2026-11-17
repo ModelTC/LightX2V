@@ -1,4 +1,7 @@
 import os
+from collections.abc import Mapping
+
+from lightx2v.utils.request_defaults import get_input_value
 
 BAGEL_T2I_ASPECT_RATIOS = {
     "1:1": (1024, 1024),
@@ -10,6 +13,8 @@ BAGEL_T2I_ASPECT_RATIOS = {
 
 
 def get_config_value(config, key, default=None):
+    if isinstance(config, Mapping):
+        return get_input_value(config, key, default)
     if hasattr(config, "get"):
         return config.get(key, default)
     return getattr(config, key, default)

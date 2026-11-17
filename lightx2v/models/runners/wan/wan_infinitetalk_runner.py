@@ -27,6 +27,7 @@ from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process, save_to_video, wan_vae_to_comfy
 from lightx2v.utils.va_controller import VAController
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -142,7 +143,7 @@ class InfiniteTalkRunner(WanRunner):
     @ProfilingContext4DebugL1("Warmup")
     @torch.no_grad()
     def run_warmup(self):
-        num_frames = int(self.config["num_frames"])
+        num_frames = int(get_input_value(self.config, "num_frames"))
         model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model"
         numpy_rng, python_rng = np.random.get_state(), random.getstate()
         try:
@@ -318,9 +319,9 @@ class InfiniteTalkRunner(WanRunner):
                 else:
                     cond_audio = {f"person{idx + 1}": path for idx, path in enumerate(audio_path)}
 
-            cond_video = self.input_info.video_path or self.input_info.image_path or self.config.get("cond_video", "") or self.config.get("image_path", "")
+            cond_video = self.input_info.video_path or self.input_info.image_path or self.config.get("cond_video", "") or get_input_value(self.config, "image_path", "")
             data = {
-                "prompt": getattr(self.input_info, "prompt", "") or self.config.get("prompt", ""),
+                "prompt": getattr(self.input_info, "prompt", "") or get_input_value(self.config, "prompt", ""),
                 "cond_video": cond_video,
                 "cond_audio": cond_audio,
             }
@@ -993,7 +994,7 @@ class InfiniteTalkRunner(WanRunner):
     def _resolve_video_duration(self):
         video_duration = self.input_info.video_duration
         if video_duration is None:
-            video_duration = self.config.get("video_duration", None)
+            video_duration = get_input_value(self.config, "video_duration", None)
         if video_duration is None:
             return None
         return float(video_duration)
@@ -1001,7 +1002,7 @@ class InfiniteTalkRunner(WanRunner):
     def resolve_frame_num(self):
         frame_num = self.input_info.num_frames
         if frame_num is None or frame_num <= 0:
-            frame_num = self.config["num_frames"]
+            frame_num = get_input_value(self.config, "num_frames")
         return int(frame_num)
 
     def _resolve_expected_frames(self):
@@ -1270,7 +1271,7 @@ class InfiniteTalkRunner(WanRunner):
         if self.reuse_prefix_segments:
             logger.info(f"[Reuse] Saved regenerated InfiniteTalk suffix to {out_path}")
             return {"video": None}
-        audio_input = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
+        audio_input = getattr(self.input_info, "audio_path", None) or get_input_value(self.config, "audio_path", "")
         mux_audio = self._resolve_mux_audio_path()
         if not mux_audio or not os.path.isfile(mux_audio):
             self._remove_video_audio_path()
@@ -1363,7 +1364,7 @@ class InfiniteTalkRunner(WanRunner):
                 out_path = self.input_info.save_result_path
                 mux_audio = self._resolve_mux_audio_path()
                 if not mux_audio or not os.path.isfile(mux_audio):
-                    audio_input = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
+                    audio_input = getattr(self.input_info, "audio_path", None) or get_input_value(self.config, "audio_path", "")
                     raise FileNotFoundError(f"InfiniteTalk mux audio is unavailable for audio input: {audio_input}")
                 if not os.path.isfile(out_path):
                     raise FileNotFoundError(f"InfiniteTalk stream video is unavailable for audio mux: {out_path}")

@@ -49,12 +49,14 @@
         "cfg_mode": "serial"
     },
     "enable_cfg": true,
-    "align_image_size": true,
     "bot_task": "think_recaption",
     "use_system_prompt": "en_unified",
     "max_new_tokens": 2048,
     "text_do_sample": true,
     "text_top_k": 1024,
     "text_top_p": 0.95,
-    "text_temperature": 0.6
+    "text_temperature": 0.6,
+    "request_defaults": {
+        "align_image_size": true
+    }
 }

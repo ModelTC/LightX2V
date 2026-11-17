@@ -1,9 +1,7 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
     "motion_frame": 9,
     "fps": 25,
-    "video_duration": 300,
     "in_dim": 36,
     "infinitetalk_mode": "single",
     "infinitetalk_size": "infinitetalk-720",
@@ -53,5 +51,9 @@
     },
     "t5_rms_norm_type": "torch",
     "use_compile": true,
-    "compile_backend": "default"
+    "compile_backend": "default",
+    "request_defaults": {
+        "num_frames": 81,
+        "video_duration": 300
+    }
 }

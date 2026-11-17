@@ -41,7 +41,7 @@ hf download lightx2v/Encoders --include "models_t5_umt5-xxl-enc-fp8.pth" --local
 bash scripts/wan22/run_wan22_moe_t2v.sh
 ```
 
-输入、提示词、seed 和输出路径在脚本中修改；推理设置在 `--config_json` 指定的 JSON 中修改。`size` 为 `[高, 宽]`。
+输入、提示词、seed 和输出路径在脚本中修改；推理设置在 `--config_json` 指定的 JSON 中修改。请求默认值放在 JSON 的 `request_defaults` 子字典中，`size` 为 `[高, 宽]`。
 
 切换到 `enable_cfg: false` 的配置时，移除脚本中的 `--negative_prompt`；服务请求也不传 `negative_prompt`，包括空字符串。
 

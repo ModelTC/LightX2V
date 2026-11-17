@@ -1,8 +1,6 @@
 {
     "lora_mode": "separate",
     "infer_steps": 8,
-    "num_frames": 362,
-    "size": [480, 864],
     "fps": 24,
     "enable_cfg": false,
     "cpu_offload": true,
@@ -33,5 +31,9 @@
     "parallel": {
       "seq_p_size": 8,
       "seq_p_attn_type": "ulysses"
-  }
+  },
+    "request_defaults": {
+        "num_frames": 362,
+        "size": [480, 864]
+    }
 }

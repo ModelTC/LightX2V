@@ -26,6 +26,7 @@ from lightx2v.disagg.utils import (
     read_image_input,
 )
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -439,7 +440,7 @@ class EncoderService(BaseService):
     def _get_latent_shape_with_lat_hw(self, latent_h, latent_w):
         return [
             self.config.get("num_channels_latents", 16),
-            (self.config["num_frames"] - 1) // self.config["vae_stride"][0] + 1,
+            (get_input_value(self.config, "num_frames") - 1) // self.config["vae_stride"][0] + 1,
             latent_h,
             latent_w,
         ]
@@ -447,7 +448,7 @@ class EncoderService(BaseService):
     def _compute_latent_shape_from_image(self, image_tensor: torch.Tensor):
         h, w = image_tensor.shape[2:]
         aspect_ratio = h / w
-        max_area = self.config["size"][0] * self.config["size"][1]
+        max_area = get_input_value(self.config, "size")[0] * get_input_value(self.config, "size")[1]
 
         latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
         latent_w = round(np.sqrt(max_area / aspect_ratio) // self.config["vae_stride"][2] // self.config["patch_size"][2] * self.config["patch_size"][2])
@@ -460,7 +461,7 @@ class EncoderService(BaseService):
 
         msk = torch.ones(
             1,
-            self.config["num_frames"],
+            get_input_value(self.config, "num_frames"),
             latent_h,
             latent_w,
             device=torch.device(AI_DEVICE),
@@ -473,7 +474,7 @@ class EncoderService(BaseService):
         vae_input = torch.concat(
             [
                 torch.nn.functional.interpolate(first_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                torch.zeros(3, self.config["num_frames"] - 1, h, w),
+                torch.zeros(3, get_input_value(self.config, "num_frames") - 1, h, w),
             ],
             dim=1,
         ).to(AI_DEVICE)
@@ -513,7 +514,7 @@ class EncoderService(BaseService):
         """
         Generates encoder outputs from prompt and image input.
         """
-        seed_all(config["seed"])
+        seed_all(get_input_value(config, "seed"))
         self.logger.info("Starting processing in EncoderService...")
         room = int(config.get("data_bootstrap_room", 0))
         encoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("encoder", {})
@@ -522,7 +523,7 @@ class EncoderService(BaseService):
         room_buffers = self._rdma_buffers.get(room)
         sender = self.data_sender.get(room)
 
-        prompt = config.get("prompt")
+        prompt = get_input_value(config, "prompt", None)
         if prompt is None:
             raise ValueError("prompt is required in config.")
 
@@ -533,7 +534,7 @@ class EncoderService(BaseService):
         context = torch.stack([torch.cat([u, u.new_zeros(text_len - u.size(0), u.size(1))]) for u in context])
 
         if config.get("enable_cfg", False):
-            context_null = self.text_encoder.infer([config.get("negative_prompt") or ""])
+            context_null = self.text_encoder.infer([get_input_value(config, "negative_prompt", None) or ""])
             context_null = torch.stack([torch.cat([u, u.new_zeros(text_len - u.size(0), u.size(1))]) for u in context_null])
         else:
             context_null = None
@@ -547,17 +548,17 @@ class EncoderService(BaseService):
         clip_encoder_out = None
 
         if task == "t2v":
-            latent_h = config["size"][0] // config["vae_stride"][1]
-            latent_w = config["size"][1] // config["vae_stride"][2]
+            latent_h = get_input_value(config, "size")[0] // config["vae_stride"][1]
+            latent_w = get_input_value(config, "size")[1] // config["vae_stride"][2]
             latent_shape = [
                 config.get("num_channels_latents", 16),
-                (config["num_frames"] - 1) // config["vae_stride"][0] + 1,
+                (get_input_value(config, "num_frames") - 1) // config["vae_stride"][0] + 1,
                 latent_h,
                 latent_w,
             ]
             image_encoder_output = None
         elif task == "i2v":
-            image_path = config.get("image_path")
+            image_path = get_input_value(config, "image_path", None)
             if image_path is None:
                 raise ValueError("image_path is required for i2v task.")
 

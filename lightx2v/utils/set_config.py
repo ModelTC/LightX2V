@@ -5,9 +5,10 @@ import os
 
 from loguru import logger
 
-from lightx2v.models.runners.registry import get_model_config_loader
+from lightx2v.models.runners.registry import RUNNER_MODULES, get_model_config_loader
 from lightx2v.utils.image_io import validate_save_image_method
 from lightx2v.utils.lockable_dict import LockableDict
+from lightx2v.utils.request_defaults import get_request_default_arguments, validate_request_defaults
 
 
 def build_startup_config(config_data, *, configure_runtime=True):
@@ -33,7 +34,18 @@ def build_startup_config(config_data, *, configure_runtime=True):
 
 
 def merge_config(model_config, deployment_config):
-    config = LockableDict(model_config | deployment_config)
+    context = model_config | deployment_config
+    arguments = get_request_default_arguments(context) if context.get("model_cls") in RUNNER_MODULES else {}
+    defaults = validate_request_defaults(deployment_config, arguments=arguments)
+    misplaced = deployment_config.keys() & arguments.keys()
+    if misplaced:
+        raise ValueError(f"Configure request fields under request_defaults: {', '.join(sorted(misplaced))}")
+    model_config = dict(model_config)
+    model_defaults = dict(model_config.pop("request_defaults", {}))
+    for name in arguments:
+        if name in model_config:
+            model_defaults[name] = model_config.pop(name)
+    config = LockableDict(model_config | deployment_config | {"request_defaults": model_defaults | defaults})
     validate_save_image_method(config.get("save_image_method", "opencv"))
     if "infer_steps" not in config and "num_inference_steps" in config:
         config["infer_steps"] = config["num_inference_steps"]

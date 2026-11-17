@@ -6,7 +6,6 @@
     "text_encoder_dim": 3584,
     "text_len": 4096,
     "infer_steps": 50,
-    "aspect_ratio": "16:9",
     "max_custom_size": 3072,
     "vae_z_dim": 16,
     "vae_stride": [1, 8, 8],
@@ -25,5 +24,8 @@
         "rdma_phase1_handshake_port": 5567,
         "rdma_buffer_slots": 128,
         "rdma_buffer_slot_size": 4096
+    },
+    "request_defaults": {
+        "aspect_ratio": "16:9"
     }
 }

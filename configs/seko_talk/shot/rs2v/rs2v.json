@@ -3,8 +3,6 @@
     "task": "rs2v",
     "model_path": "/path/to/SekoTalk-v2.7_beta2-bf16-step4",
     "infer_steps": 4,
-    "num_frames": 81,
-    "resize_mode": "adaptive",
     "fps": 16,
     "audio_sr": 16000,
     "self_attn_1_type": "flash_attn3",
@@ -15,5 +13,9 @@
     "sample_shift": 5,
     "enable_cfg": false,
     "use_31_block": true,
-    "prev_frame_length": 0
+    "prev_frame_length": 0,
+    "request_defaults": {
+        "num_frames": 81,
+        "resize_mode": "adaptive"
+    }
 }

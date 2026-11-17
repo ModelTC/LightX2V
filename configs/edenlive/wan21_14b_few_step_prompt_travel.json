@@ -1,10 +1,5 @@
 {
-    "size": [
-        480,
-        832
-    ],
     "fps": 16,
-    "num_frames": 121,
     "infer_steps": 4,
     "sample_shift": 5,
     "sample_guide_scale": 1,
@@ -46,5 +41,12 @@
             48,
             96
         ]
+    },
+    "request_defaults": {
+        "size": [
+            480,
+            832
+        ],
+        "num_frames": 121
     }
 }

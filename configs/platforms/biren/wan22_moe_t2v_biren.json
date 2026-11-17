@@ -1,8 +1,6 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
     "text_len": 512,
-    "size": [1280, 720],
     "self_attn_1_type": "biren_fmha_attn",
     "cross_attn_1_type": "biren_fmha_attn",
     "cross_attn_2_type": "biren_fmha_attn",
@@ -25,5 +23,9 @@
         "seq_p_size": 4,
         "seq_p_attn_type": "biren_ulysses",
         "vae_parallel": false
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [1280, 720]
     }
 }

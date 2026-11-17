@@ -1,6 +1,5 @@
 {
     "infer_steps": 20,
-    "num_frames": 77,
     "text_len": 512,
     "size": [720, 1280],
     "self_attn_1_type": "flash_attn3",
@@ -13,5 +12,8 @@
     "cpu_offload": false,
     "refert_num": 1,
     "fps": 30,
-    "replace_flag": true
+    "replace_flag": true,
+    "request_defaults": {
+        "num_frames": 77
+    }
 }
