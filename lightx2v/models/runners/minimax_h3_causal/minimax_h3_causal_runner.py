@@ -56,18 +56,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             raise ValueError(f"Causal H3 does not support {unsupported}")
         if self.generate_audio and self.reuse_input_audio:
             raise ValueError("RefA2AV generates audio; reuse_input_audio is only supported by RefA2V")
-        if config.get("dit_quantized", False) and config.get("dit_quant_scheme") != "fp8-f32-accum":
-            raise ValueError("Causal H3 DiT quantization requires dit_quant_scheme='fp8-f32-accum'")
-        if config.get("text_encoder_quantized", False) and config.get("text_encoder_quant_scheme") != "fp8-sgl":
-            raise ValueError("Causal H3 text encoder quantization requires text_encoder_quant_scheme='fp8-sgl'")
-        if config.get("video_vae_quantized", False) and config.get("video_vae_quant_scheme") != "fp8-f32-accum":
-            raise ValueError("Causal H3 video VAE quantization requires video_vae_quant_scheme='fp8-f32-accum'")
-        if config.get("fps", 24) != 24:
-            raise ValueError("Causal H3 requires fps=24")
-        if config.get("vae_sensitive_layer_dtype", "fp32") != "fp32":
-            raise ValueError("Causal H3 VAE sensitive layers require vae_sensitive_layer_dtype='fp32'")
-        if config.get("lora_configs"):
-            raise ValueError("Causal H3 loads the distilled checkpoint directly; released H3 LoRA adapters are not supported")
 
         self.reference_cache = MiniMaxH3ReferenceCache() if config.get("reference_condition_cache", False) else None
         self.driving_audio = None
