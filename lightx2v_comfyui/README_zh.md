@@ -12,16 +12,19 @@
 | ----------------------- | ----------------------------------------------- | --------------------------------- |
 | LightX2V Service        | 源码、模型、config、task、GPU → `LX2V_SERVER`           | 描述服务；执行推理时才加载模型；浏览/编辑 config、释放服务 |
 | LightX2V Generate Video | server、prompt、尺寸、帧数、seed、可选首尾 `IMAGE` → `VIDEO` | H3、Wan 等视频生成                      |
+| LightX2V Generate Video Batch | Generate Video 输入、batch_size → `VIDEO` 列表 | 使用连续 seed，顺序生成候选视频 |
+| LightX2V Select Video | `VIDEO` 列表 → `VIDEO` | 在画布预览并点击选择；同步相连重生成节点的对应参数 |
+| LightX2V Regenerate Video | server、prompt、尺寸、seed、源 `VIDEO`、起点、可选首尾 `IMAGE` → `VIDEO` | H3 重生成；自动读取源视频帧数 |
 | LightX2V Generate Image | server、prompt、尺寸、seed、可选 `IMAGE` → `IMAGE`      | 文生图或单图编辑                          |
 | LightX2V Upscale Video  | server、`VIDEO`、scale、seed → `VIDEO`             | 视频超分                              |
 
-四类节点统一显示蓝底 `LightX2V-Server: 类型` 标签。图片/视频的加载、保存和预览使用 Comfy 原生节点。
+所有节点统一显示蓝底 `LightX2V-Server: 类型` 标签。图片/视频的加载、保存和预览使用 Comfy 原生节点。
 
 ```text
 lightx2v_comfyui/
 ├── __init__.py                  # Comfy 入口、节点与路由注册、WEB_DIRECTORY
 ├── lightx2v_comfy_server/
-│   ├── nodes.py                 # 四类节点、IMAGE/VIDEO 与文件转换
+│   ├── nodes.py                 # 节点、IMAGE/VIDEO 与文件转换
 │   ├── service.py               # 启动参数、配置指纹、服务身份和启动命令
 │   ├── manager.py               # HTTP 请求、服务池、执行锁、取消和空闲释放
 │   ├── supervisor.py            # 独立进程守护、父进程退出检测、进程树清理
@@ -29,8 +32,8 @@ lightx2v_comfyui/
 │   ├── gpus.py                  # GPU 占用查询、编号与 UUID 归一化
 │   ├── files.py                 # 路径、文件浏览、JSON 校验、备份与原子保存
 │   └── routes.py                # Comfy 的 /lightx2v/* HTTP 接口
-├── web/                         # Service、GPU、文件浏览、Config 编辑界面
-├── examples/                    # 10 个画布工作流 JSON；不放模型 config
+├── web/                         # Service、GPU、文件/Config 编辑、视频选择界面
+├── examples/                    # 画布工作流 JSON；不放模型 config
 ├── README.md
 └── README_zh.md
 ```
@@ -150,12 +153,13 @@ python main.py --cpu --listen 0.0.0.0 --port 8188
 
 ## 工作流与其他模型
 
-本目录保留 10 个 `*_workflow.json` 画布文件，可直接拖入 ComfyUI 打开、编辑和运行。以 `/path/to/` 开头的路径和 Load Image/Video 文件名都是占位值，需要替换。
+`examples/*_workflow.json` 是画布文件，可直接拖入 ComfyUI 打开、编辑和运行。以 `/path/to/` 开头的路径和 Load Image/Video 文件名都是占位值，需要替换。
 
 | 画布                                                 | 模型 / task                        | 配置来源                                                                   |
 | -------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------- |
 | [H3 → 预览 → Relay](examples/h3_relay_workflow.json) | minimax_h3/t2av + relayvsr_x4/sr | h3.json + relay.json                                                   |
 | [H3 连续生成](examples/h3_t2av_workflow.json)          | minimax_h3/t2av                  | h3.json                                                                |
+| [H3 四个草片 → 选择 → 重生成](examples/h3_draft_select_regenerate_workflow.json) | minimax_h3/t2av | [H3 Roll 8 步配置](../configs/minimax_h3_roll/minimax_h3_bf16_8step.json) |
 | [H3 首尾帧](examples/h3_fl2av_workflow.json)          | minimax_h3/fl2av                 | h3.json                                                                |
 | [H3 参考图](examples/h3_ref2av_workflow.json)         | minimax_h3/ref2av                | h3-ref2av.json                                                         |
 | [H3 Image 文生图](examples/h3_image_t2i_workflow.json) | minimax_h3_image/t2i | [minimax_h3_image.json](../configs/minimax_h3_image/minimax_h3_image.json) |
