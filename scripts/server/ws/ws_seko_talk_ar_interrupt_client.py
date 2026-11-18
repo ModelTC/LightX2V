@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Interrupt/resume test client for seko_talk_ar websocket live inference.
+"""Interrupt/resume and image-switch test client for websocket live inference.
 
 Flow:
   1. Start + send full audio once
   2. Wait 10s (keep draining server messages)
-  3. Send Interrupt (clear audio buffer), then send a duration=-1 SetPrompt and the action SetPrompt back to back
+  3. Send Interrupt, then SetImage when --switch_image is given; otherwise send the idle and action SetPrompt
   4. Wait 15s (keep draining)
   5. Send full audio again
   6. Exit after receiving STOP_SPEAKING twice, then disconnect and mux output
@@ -24,11 +24,12 @@ from lightx2v.server.ws.protocol import (
     Interrupt,
     ServerEvent,
     ServerMessage,
+    SetImage,
     SetPrompt,
     Start,
 )
 
-DEFAULT_GLOBAL_PROMPT = "保持状态，不要乱晃。"
+DEFAULT_IDLE_PROMPT = "保持状态，不要乱晃。"
 DEFAULT_ACTION_PROMPT = "<Subject 1> crosses both wrists in front of her chest into a clear X and holds the crossed wrists toward the camera. Her elbows stay bent and her feet stay planted. The feet stay planted and the torso does not shift, lean, or walk."
 
 
@@ -61,14 +62,16 @@ def _try_recv(ws, chunks, size, timeout=0.01):
     msg = ServerMessage.parse(bytes(raw))
     which = msg.which()
     if which == "error":
-        raise RuntimeError(f"server error {msg.error.code}: {msg.error.message}")
+        raise RuntimeError(f"server error {msg.error.code}: {msg.error.message} request_id={msg.error.request_id} command_id={msg.error.command_id}")
     if which == "video_start":
         size[0] = msg.video_start.video_width
         size[1] = msg.video_start.video_height
         print(f"video_start {size[0]}x{size[1]}")
     elif which == "event":
-        name = {ServerEvent.START_SPEAKING: "START_SPEAKING", ServerEvent.STOP_SPEAKING: "STOP_SPEAKING", ServerEvent.PROMPT_UPDATE: "PROMPT_UPDATE"}.get(msg.event.type, str(msg.event.type))
-        print(f"event {name} {msg.event.message}")
+        name = {ServerEvent.START_SPEAKING: "START_SPEAKING", ServerEvent.STOP_SPEAKING: "STOP_SPEAKING", ServerEvent.PROMPT_UPDATE: "PROMPT_UPDATE", ServerEvent.IMAGE_UPDATE: "IMAGE_UPDATE"}.get(
+            msg.event.type, str(msg.event.type)
+        )
+        print(f"event {name} {msg.event.message} request_id={msg.event.request_id} command_id={msg.event.command_id}")
         if msg.event.type == ServerEvent.STOP_SPEAKING:
             return "stop_speaking"
     elif which == "video":
@@ -150,9 +153,11 @@ def recv_until_stop_count(ws, chunks, size, target: int, stop_counter: list) -> 
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="LightX2V seko_talk_ar interrupt/resume websocket test client")
+    parser = argparse.ArgumentParser(description="LightX2V interrupt/resume and H3 image-switch websocket test client")
     parser.add_argument("--url", type=str, default="ws://127.0.0.1:8765/v1/live")
-    parser.add_argument("--image", type=str, required=True)
+    parser.add_argument("--image", type=str, required=True, help="initial reference image for Start")
+    parser.add_argument("--switch_image", type=str, default="", help="replacement image for SetImage; omit to test SetPrompt")
+    parser.add_argument("--global_prompt", type=str, default="", help="global conditioning prompt for SetImage; empty keeps the current prompt")
     parser.add_argument("--audio", type=str, required=True, help="16-bit mono 16kHz wav")
     parser.add_argument("--output", type=str, default="save_results/seko_talk_ar_ws_interrupt.mp4")
     parser.add_argument("--request_id", type=str, default="ws-interrupt-client")
@@ -182,6 +187,15 @@ def main():
     args = parse_args()
     with open(args.image, "rb") as f:
         image_data = f.read()
+    image_update = None
+    if args.switch_image:
+        with open(args.switch_image, "rb") as f:
+            image_update = SetImage(
+                image_data=f.read(),
+                image_format=os.path.splitext(args.switch_image)[1].lstrip(".") or "jpg",
+                global_prompt=args.global_prompt,
+                command_id=f"{args.request_id}:image",
+            )
     pcm = read_wav_pcm16_mono(args.audio)
     ext = os.path.splitext(args.image)[1].lstrip(".") or "jpg"
     audio_secs = len(pcm) / 16000.0 / 2
@@ -218,15 +232,19 @@ def main():
 
         drain_for(ws, chunks, size, args.wait_before_interrupt, stop_counter)
 
-        ws.send(ClientMessage(interrupt=Interrupt(reason="test interrupt")).serialize())
-        print("Interrupt sent")
+        ws.send(ClientMessage(interrupt=Interrupt(reason="test interrupt", command_id=f"{args.request_id}:interrupt")).serialize())
+        print(f"Interrupt sent: command_id={args.request_id}:interrupt")
 
         drain_for(ws, chunks, size, 3, stop_counter)
 
-        ws.send(ClientMessage(set_prompt=SetPrompt(prompt=DEFAULT_GLOBAL_PROMPT, duration=-1)).serialize())
-        print(f"SetPrompt sent: {DEFAULT_GLOBAL_PROMPT} duration=-1")
-        ws.send(ClientMessage(set_prompt=SetPrompt(prompt=args.action_prompt, duration=args.action_duration)).serialize())
-        print(f"SetPrompt sent: {args.action_prompt} duration={args.action_duration}")
+        if image_update is not None:
+            ws.send(ClientMessage(set_image=image_update).serialize())
+            print(f"SetImage sent: {args.switch_image} global_prompt={args.global_prompt!r} command_id={image_update.command_id}")
+        else:
+            ws.send(ClientMessage(set_prompt=SetPrompt(prompt=DEFAULT_IDLE_PROMPT, duration=-1, command_id=f"{args.request_id}:idle")).serialize())
+            print(f"SetPrompt sent: {DEFAULT_IDLE_PROMPT} duration=-1 command_id={args.request_id}:idle")
+            ws.send(ClientMessage(set_prompt=SetPrompt(prompt=args.action_prompt, duration=args.action_duration, command_id=f"{args.request_id}:action")).serialize())
+            print(f"SetPrompt sent: {args.action_prompt} duration={args.action_duration} command_id={args.request_id}:action")
 
         drain_for(ws, chunks, size, args.wait_after_interrupt, stop_counter)
 

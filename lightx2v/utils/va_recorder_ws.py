@@ -18,7 +18,7 @@ IMAGE_UPDATE = 3
 class H264AnnexBEncoder:
     """Stateful libx264 encoder that emits concatenated Annex-B access units."""
 
-    def __init__(self, width: int, height: int, fps: float, gop_size: int = 8):
+    def __init__(self, width: int, height: int, fps: float, gop_size: int = 24):
         if width % 2 or height % 2:
             raise ValueError(f"H.264 yuv420p requires even size, got {width}x{height}")
         self.width = width
@@ -39,6 +39,7 @@ class H264AnnexBEncoder:
             "repeat-headers": "1",
             "annexb": "1",
             "bf": "0",
+            "x264-params": "scenecut=0",
         }
         self.ctx.open()
         self.pts = 0
@@ -53,7 +54,7 @@ class H264AnnexBEncoder:
             vf = vf.reformat(format="yuv420p")
             vf.pts = self.pts
             vf.time_base = self.ctx.time_base
-            if i == 0:
+            if self.pts == 0:
                 # FFmpeg AV_PICTURE_TYPE_I = 1; older PyAV rejects the string "I"
                 vf.pict_type = 1
             self.pts += 1
@@ -118,7 +119,7 @@ class WsVideoChunkRecorder:
         frames = int(chunk_frames or self.stream_config.get("chunk_frames") or 8)
         self.send_slices = max(1, math.ceil(frames / max(self.slice_frame, 1)))
         self.encoder: Optional[H264AnnexBEncoder] = None
-        self.gop_size = max(1, frames)
+        self.gop_size = 24  # Keyframe interval is independent of the WS fragment size.
 
     def start(self, width: int, height: int):
         self.set_video_size(width, height)

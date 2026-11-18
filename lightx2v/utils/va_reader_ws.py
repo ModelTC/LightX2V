@@ -140,11 +140,11 @@ class WsAudioSource:
                 idle = config.get("idle_prompt") or "<Subject 1> waits quietly, with a relaxed expression and closed mouth. No speech."
                 self.action_switch = {"prompt": str(idle), "duration": 0, "command_id": command_id}
 
-    def on_image_switch(self, image_path: str, command_id: str = ""):
+    def on_image_switch(self, image_path: str, command_id: str = "", global_prompt: str = ""):
         if not Path(image_path).is_file():
             raise ValueError("Reference image is missing")
         with self._lock:
-            self.image_switch = {"image_path": str(image_path), "command_id": command_id}
+            self.image_switch = {"image_path": str(image_path), "command_id": command_id, "global_prompt": global_prompt}
 
     def on_action_switch(self, prompt: str, duration: float = 0, command_id: str = ""):
         prompt = str(prompt).strip()

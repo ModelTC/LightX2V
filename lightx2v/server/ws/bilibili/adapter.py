@@ -428,15 +428,15 @@ class BiliLiveChatAdapter(WsAudioSource):
         if loop is not None and turn_task is not None:
             loop.call_soon_threadsafe(turn_task.cancel)
 
-    def on_image_switch(self, image_path: str, command_id: str = "") -> None:
-        self.set_image_switch(image_path, command_id=command_id)
+    def on_image_switch(self, image_path: str, command_id: str = "", global_prompt: str = "") -> None:
+        self.set_image_switch(image_path, command_id=command_id, global_prompt=global_prompt)
 
-    def set_image_switch(self, image_path: str, command_id: str = "") -> None:
+    def set_image_switch(self, image_path: str, command_id: str = "", global_prompt: str = "") -> None:
         image_path = str(image_path)
         if not Path(image_path).is_file():
             raise ValueError("Generated reference image is missing")
         with self._lock:
-            self.image_switch = {"image_path": image_path, "command_id": command_id}
+            self.image_switch = {"image_path": image_path, "command_id": command_id, "global_prompt": global_prompt}
             self.pending_image_path = image_path
             self.requested_image_path = image_path
             if self.recorder is not None:

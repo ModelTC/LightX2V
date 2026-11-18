@@ -46,8 +46,8 @@ class BiliLiveOmniVAReader(MinimaxH3CausalWSReader):
     def on_clear_audio(self, note: str = "", command_id: str = "") -> None:
         self._control_adapter().on_clear_audio(note, command_id=command_id)
 
-    def on_image_switch(self, image_path: str, command_id: str = "") -> None:
-        self._control_adapter().on_image_switch(image_path, command_id=command_id)
+    def on_image_switch(self, image_path: str, command_id: str = "", global_prompt: str = "") -> None:
+        self._control_adapter().on_image_switch(image_path, command_id=command_id, global_prompt=global_prompt)
 
     def on_image_switched(self, image_path: str, error: str = "") -> None:
         if self.rank == self.target_rank and self.chat_adapter is not None:

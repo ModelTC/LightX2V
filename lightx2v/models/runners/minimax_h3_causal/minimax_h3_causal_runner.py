@@ -240,7 +240,8 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             live_stream=self.live_stream,
             stream_start_idx=stream_start_idx,
         )
-        logger.info(f"{self.config['task']}: {self.request_num_frames} frames, {self.scheduler.plan.num_chunks} DiT chunks, first motion encoded; later motions encode at chunk boundaries")
+        if is_main_process():
+            logger.info(f"{self.config['task']}: {self.request_num_frames} frames, {self.scheduler.plan.num_chunks} DiT chunks, first motion encoded; later motions encode at chunk boundaries")
         self.init_video_writer()
 
     def prefill_clean_condition(self, entry_key, text):
@@ -358,7 +359,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         if self.va_controller.ws_output is not None and recorder is not None:
             recorder.emit_prompt_update(prompt, command_id=command_id)
 
-    def _switch_live_image(self, image_path, chunk_index, *, command_id):
+    def _switch_live_image(self, image_path, chunk_index, *, command_id, global_prompt=""):
         # Validate on every rank before any reference encoder enters collectives.
         references, error = None, ""
         try:
@@ -380,6 +381,8 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                 recorder.emit_error("set_image_failed", "Reference image update failed", command_id=command_id)
             return False
         self.input_info.image_path = image_path
+        if global_prompt.strip():
+            self.input_info.prompt = global_prompt
         self.prepared_references = references
         self.inputs["text_encoder_output"] = self._encode_reference_conditions()
         self.model.reset_autoregressive_state()
@@ -389,7 +392,8 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self._prefill_live_conditions()
         if notify is not None:
             notify(image_path)
-        logger.info("H3 reference image switched at live chunk {} | command_id={}", chunk_index, command_id)
+        if is_main_process():
+            logger.info("H3 reference image switched at live chunk {} | command_id={} | global_prompt={}", chunk_index, command_id, self.input_info.prompt)
         if self.va_controller.ws_output is not None and recorder is not None:
             recorder.emit_image_update(command_id=command_id)
         return True
@@ -458,7 +462,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                     local_index = chunk_index - stream_start_idx
 
                     if control.action == "switch_image":
-                        if self._switch_live_image(control.data["image_path"], chunk_index, command_id=control.data["command_id"]):
+                        if self._switch_live_image(control.data["image_path"], chunk_index, command_id=control.data["command_id"], global_prompt=control.data["global_prompt"]):
                             stream_start_idx = chunk_index
                             # Empty embeddings carry dtype/device only; recreate
                             # after global reference conditioning changes.
@@ -477,7 +481,8 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                         elif duration > 0 and control.data.get("superseded_prompt"):
                             origin_motion = None, control.data["superseded_prompt"], control.data["superseded_command_id"]
                         restore_at = chunk_index + max(1, math.ceil(duration * FPS / FRAMES_PER_CHUNK)) if duration > 0 else -1
-                        logger.info("H3 live motion switched at chunk {} for {}s | command_id={}", chunk_index, duration, command_id)
+                        if is_main_process():
+                            logger.info("H3 live motion switched at chunk {} for {}s | command_id={}", chunk_index, duration, command_id)
                         continue
 
                     if restore_at >= 0 and chunk_index >= restore_at:

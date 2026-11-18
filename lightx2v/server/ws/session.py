@@ -425,7 +425,7 @@ class LiveSession:
             image_file.write(data)
             image_path = image_file.name
         try:
-            handler(image_path, command_id=message.command_id)
+            handler(image_path, command_id=message.command_id, global_prompt=message.global_prompt)
         except Exception:
             os.unlink(image_path)
             raise

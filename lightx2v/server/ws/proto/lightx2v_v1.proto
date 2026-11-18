@@ -85,6 +85,7 @@ message SetImage {
   bytes image_data = 1;
   string image_format = 2;
   string command_id = 3;
+  string global_prompt = 4; // 非空时随参考图更新 Start.prompt；空值保留原全局 prompt
 }
 
 message Failure {
