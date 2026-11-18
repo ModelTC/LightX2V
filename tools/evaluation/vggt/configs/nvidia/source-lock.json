@@ -1,6 +1,6 @@
 {
   "lightx2v-vggt": {
-    "git_head": "11064a2667ababd7ec27a2b80c33a3bb8bc605ed",
+    "git_head": "bc15e3bdbca84602951193e07f237b6f2f4015a3",
     "files": [
       {"path": ".agents/README.md","bytes": 3372,"sha256": "5a2ff75e7ea60f5c65d74d675528ac36c7d08ef6f1714cbf6255d923fcd9cdaa"},
       {"path": ".agents/skills/lightx2v-kernel-skills/intel-xpu/integration-skills/sycl-esimd-to-python-wheel/SKILL.md","bytes": 13564,"sha256": "c5918fb2cedb3e961e0e7720273fa26b56e89bfef2dc8819753c15206de07eb9"},
@@ -1479,7 +1479,7 @@
       {"path": "lightx2v/models/networks/vggt/heads/head_act.py","bytes": 2585,"sha256": "dcd07b21be4de2b16d9d466129c3fb698d83ae48aaf27a6a1126f4134acea52c"},
       {"path": "lightx2v/models/networks/vggt/heads/utils.py","bytes": 2225,"sha256": "561b59f2f37eb8b8940daf27acb148559dba850f9aa6cb93eb1171179738f588"},
       {"path": "lightx2v/models/networks/vggt/infer/__init__.py","bytes": 0,"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
-      {"path": "lightx2v/models/networks/vggt/infer/transformer_infer.py","bytes": 19115,"sha256": "fc015174efe3f5419ca67b50b84394ec5d4591813319e09f2fe73c882e7c9b8c"},
+      {"path": "lightx2v/models/networks/vggt/infer/transformer_infer.py","bytes": 21481,"sha256": "2a54bb9305f78011f924fa1f1f165c55a235a9d4df6244d514d6e058831fc0f3"},
       {"path": "lightx2v/models/networks/vggt/model.py","bytes": 921,"sha256": "f5966b3c03f397e1990dd27e693a24dbe3443e9d0e71b82eb16860449af0a541"},
       {"path": "lightx2v/models/networks/vggt/utils/__init__.py","bytes": 0,"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
       {"path": "lightx2v/models/networks/vggt/utils/image_processor.py","bytes": 1620,"sha256": "12c2a677b85bda007c46f8f362307230c110503238dd8c43a00f0a0204050815"},
@@ -3395,6 +3395,6 @@
       {"path": "tools/profile/analyze_torch_trace_gap.py","bytes": 10245,"sha256": "c60400ebc1e6816f3598fddffb5cbfc04e8d975474534d2414f0e68c28309f55"}
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "11064a2667ababd7ec27a2b80c33a3bb8bc605ed"
+    "revision": "bc15e3bdbca84602951193e07f237b6f2f4015a3"
   }
 }

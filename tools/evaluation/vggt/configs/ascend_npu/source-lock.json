@@ -1,6 +1,6 @@
 {
   "lightx2v-vggt": {
-    "git_head": "4221eed2f9a2f05c439e67b11dbd0bca2a5af936",
+    "git_head": "bc15e3bdbca84602951193e07f237b6f2f4015a3",
     "files": [
       {
         "path": ".agents/README.md",
@@ -3298,11 +3298,6 @@
         "sha256": "80c34d84fc8e82c87f2012f80fafaab4a41cc15805024fa0094e4ee6add0f40e"
       },
       {
-        "path": "configs/platforms/mlu/vggt_recon_bf16.json",
-        "bytes": 201,
-        "sha256": "6a1bb2ce670c63b8a36360115dc1837f9226fae91eb6aabcec59afe427c95769"
-      },
-      {
         "path": "configs/platforms/mlu/wan_animate.json",
         "bytes": 773,
         "sha256": "e1970add41767cf6d0c8c67e69c100a1080491b57e7b251c99b10e57b32ee971"
@@ -3401,11 +3396,6 @@
         "path": "configs/platforms/nvidia/qwen_image_i2i_2511.json",
         "bytes": 654,
         "sha256": "992a24fdf28a4d4a5934bc438f0d2f251968a9bffd01b1a07c57516b34d3b1ea"
-      },
-      {
-        "path": "configs/platforms/nvidia/vggt_recon_bf16.json",
-        "bytes": 202,
-        "sha256": "c7b52c35955c15943f469c137ecae6e409e0519e2684b48720c9496e583e7019"
       },
       {
         "path": "configs/platforms/nvidia/wan_t2v.json",
@@ -4434,8 +4424,8 @@
       },
       {
         "path": "dockerfiles/platforms/Dockerfile_cambricon_mlu590",
-        "bytes": 735,
-        "sha256": "f26bc876e61e5dd0e7744bdd03acf3a91ba48858275764504bafdbdec809c6d9"
+        "bytes": 4958,
+        "sha256": "e868c475fbffe0d88e140028f326bc39cde84d4a53a02e457beb5556d40feeb4"
       },
       {
         "path": "dockerfiles/platforms/Dockerfile_mi350",
@@ -7359,8 +7349,8 @@
       },
       {
         "path": "lightx2v/models/networks/vggt/heads/utils.py",
-        "bytes": 2183,
-        "sha256": "4fd1a530b664d2d90f4bbf9c47bf2a3c646284d87f8a947e2c1e5ff8e5966583"
+        "bytes": 2225,
+        "sha256": "561b59f2f37eb8b8940daf27acb148559dba850f9aa6cb93eb1171179738f588"
       },
       {
         "path": "lightx2v/models/networks/vggt/infer/__init__.py",
@@ -7369,8 +7359,8 @@
       },
       {
         "path": "lightx2v/models/networks/vggt/infer/transformer_infer.py",
-        "bytes": 18812,
-        "sha256": "35c4ba187c38caebae60159a6742e06a1059b0a740dc838a84189ee66a4e9182"
+        "bytes": 21481,
+        "sha256": "2a54bb9305f78011f924fa1f1f165c55a235a9d4df6244d514d6e058831fc0f3"
       },
       {
         "path": "lightx2v/models/networks/vggt/model.py",
@@ -7409,8 +7399,8 @@
       },
       {
         "path": "lightx2v/models/networks/vggt/weights/loader.py",
-        "bytes": 1431,
-        "sha256": "94db605296adf304f8bbb9698e0b9bf2d44ac4d18063fc843874fb66c6bd4cc3"
+        "bytes": 1771,
+        "sha256": "5801ac4d24cf783733982a7262fd87d35b876401d067c409ea08b0da2a964bca"
       },
       {
         "path": "lightx2v/models/networks/vggt/weights/transformer_weights.py",
@@ -13324,8 +13314,8 @@
       },
       {
         "path": "pyproject.toml",
-        "bytes": 2561,
-        "sha256": "e08a47226df88a8353e24d22202d0775ef5dc2001be014e017fd963cee0ef75b"
+        "bytes": 2575,
+        "sha256": "e5e5e2fa891adcb8678f587cd0bbc70ed8e7bf7e5993f202a9fa20586d7009eb"
       },
       {
         "path": "requirements-docs.txt",
@@ -13334,8 +13324,8 @@
       },
       {
         "path": "requirements.txt",
-        "bytes": 502,
-        "sha256": "f729742d98a17d58eb3bb730faf6877dbfe662e22445d1d7c13e3f91d5d545ba"
+        "bytes": 509,
+        "sha256": "078ef3b410436225bd92e7fd61defd48dfd80d537237cddbfaf7baa241edd80c"
       },
       {
         "path": "requirements_animate.txt",
@@ -15023,11 +15013,6 @@
         "sha256": "fceb2a4f4a6cf721979e858b7b8214277f33b7aca6b9098fcb3ff781e80a95ea"
       },
       {
-        "path": "scripts/platforms/mlu/run_vggt.sh",
-        "bytes": 579,
-        "sha256": "126768091f943d10620e942a56b96b4520f9dbb4c2eb6a222215d66dc75566d0"
-      },
-      {
         "path": "scripts/platforms/mlu/run_wan21_t2v.sh",
         "bytes": 1145,
         "sha256": "f2ec2d5e843f856d5c416f4fd2dd7cab196656405a7f51122162bc998d4f0e5e"
@@ -15141,11 +15126,6 @@
         "path": "scripts/platforms/nvidia/qwen_image_i2i_2511.sh",
         "bytes": 670,
         "sha256": "6d234de5d210c7b2a5fd922ebcc7062669d777b27a7116de5c8a4ac0bb0970ef"
-      },
-      {
-        "path": "scripts/platforms/nvidia/run_vggt.sh",
-        "bytes": 417,
-        "sha256": "842f1382bbceeb3eb4fc632ed2f078669757a9e9537c3067f00019629ae5d0ea"
       },
       {
         "path": "scripts/platforms/nvidia/run_wan21_t2v.sh",
@@ -16038,14 +16018,9 @@
         "sha256": "1dd7f02ce9e7114cd93ae490bc23848cc864f258d5d4c7d1d02dd544e061c319"
       },
       {
-        "path": "scripts/vggt/requirements-mlu.txt",
-        "bytes": 247,
-        "sha256": "dcda584db64439b6e0f1b0ecbd1dd49d646bde963e0586c486ef97615a021e85"
-      },
-      {
         "path": "scripts/vggt/run_vggt.sh",
-        "bytes": 1150,
-        "sha256": "0adb153c59351b4cc187ba82b17b15e8b0a12a084b8affcb97439042ac4d3747"
+        "bytes": 1241,
+        "sha256": "f9403b03c32b98a060491dfab99ea83996162162c26ab1b157365397de0908ef"
       },
       {
         "path": "scripts/wan/README.md",
@@ -16934,6 +16909,6 @@
       }
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "4221eed2f9a2f05c439e67b11dbd0bca2a5af936"
+    "revision": "bc15e3bdbca84602951193e07f237b6f2f4015a3"
   }
 }
