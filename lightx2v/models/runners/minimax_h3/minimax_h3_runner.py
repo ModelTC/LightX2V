@@ -122,6 +122,11 @@ class MiniMaxH3Runner(DefaultRunner):
             self.model.post_weight.to_cuda()
             logger.info("MiniMax-H3 pre/post weights will remain on the accelerator across requests")
 
+    def get_warmup_feature_caching_modes(self):
+        if self.config["model_cls"] == "minimax_h3":
+            return ("NoCaching", "DPCache")
+        return super().get_warmup_feature_caching_modes()
+
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
         task = self.config["model_variant"]
@@ -143,7 +148,7 @@ class MiniMaxH3Runner(DefaultRunner):
                 self.init_run()
 
                 for step_index in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
-                    self.scheduler.step_pre(step_index)
+                    self.scheduler.step_pre(step_index, warmup=True)
                     self.model.infer(self.inputs)
                     self.scheduler.step_post()
                 video_rows = self.scheduler.video_latents
