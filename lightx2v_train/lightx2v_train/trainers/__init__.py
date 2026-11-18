@@ -18,6 +18,7 @@ _LAZY_EXPORTS = {
         ".flow_matching",
         "FlowMatchingTrainer",
     ),
+    "PDMDTrainer": (".pdmd_trainers.trainer", "PDMDTrainer"),
     "PhasedDmdTrainer": (
         ".phased_dmd.trainer",
         "PhasedDmdTrainer",

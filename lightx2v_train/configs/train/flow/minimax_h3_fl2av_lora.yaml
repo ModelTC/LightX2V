@@ -1,5 +1,5 @@
 model:
-    name: minimax_h3_t2av
+    name: minimax_h3_fl2av
     # Converted Diffusers model root containing transformer/config.json.
     pretrained_model_name_or_path: /path/to/models/MiniMax-H3
     running_dtype: bf16
@@ -46,7 +46,7 @@ data:
     train:
         name: video_dataset
         data_path:
-            - /path/to/datasets/minimax_h3_t2av/train.jsonl
+            - /path/to/datasets/minimax_h3/train.jsonl
         video_column: video
         audio_column: audio
         prompt_column: prompt
@@ -100,7 +100,7 @@ training:
         adam_beta2: 0.999
         weight_decay: 0.01
         adam_epsilon: 0.00000001
-    output_dir: ./output_train/minimax_h3_t2av_lora
+    output_dir: ./output_train/minimax_h3_fl2av_lora
 
 inference:
     method: none

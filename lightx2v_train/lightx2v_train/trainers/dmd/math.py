@@ -2,6 +2,31 @@ import torch
 import torch.nn.functional as F
 
 
+def pdmd_critic_loss(prediction, target, clamp_max=5.0):
+    return F.mse_loss(prediction.float(), target.detach().float()).clamp(max=clamp_max)
+
+
+def pdmd_loss_with_stats(latents, fake_x0, teacher_x0, *, normalizer_floor=1e-5, projection_epsilon=1e-8, clamp_max=5.0):
+    """Compute the projected endpoint surrogate independently for each batch item."""
+    if latents.ndim < 2 or not (latents.shape == fake_x0.shape == teacher_x0.shape):
+        raise ValueError("PDMD requires equal endpoint shapes with a batch dimension.")
+    dims = tuple(range(1, latents.ndim))
+    with torch.no_grad():
+        student = latents.float()
+        teacher_residual = student - teacher_x0.float()
+        fake_residual = student - fake_x0.float()
+        delta = teacher_residual - fake_residual
+        dot = (delta * fake_residual).sum(dim=dims, keepdim=True)
+        norm_sq = fake_residual.square().sum(dim=dims, keepdim=True)
+        delta = delta - dot / (norm_sq + projection_epsilon) * fake_residual
+        normalizer = teacher_residual.abs().mean(dim=dims, keepdim=True).clamp_min(normalizer_floor)
+        update = delta / normalizer
+        nonfinite = (~torch.isfinite(update)).sum()
+        update = torch.nan_to_num(update, nan=0.0, posinf=0.0, neginf=0.0)
+        target = student - update
+    return pdmd_critic_loss(latents, target, clamp_max), normalizer.mean(), update.square().mean().sqrt(), nonfinite
+
+
 def expand_sigma(sigma, ndim):
     """Expand a batch sigma vector across non-batch tensor dimensions."""
     if sigma.ndim == 0:

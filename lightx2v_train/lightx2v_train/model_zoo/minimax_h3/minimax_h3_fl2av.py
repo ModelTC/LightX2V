@@ -1,7 +1,8 @@
-"""LightX2V-Train wrapper for the trainable MiniMax-H3 T2AV DiT."""
+"""MiniMax-H3 FL2AV transformer with T2AV, I2AV, and FL2AV conditioning."""
 
 from collections.abc import Mapping
 from contextlib import contextmanager, nullcontext
+from math import prod
 from pathlib import Path
 
 import torch
@@ -19,18 +20,20 @@ from lightx2v_train.model_zoo.native.minimax_h3 import (
     load_minimax_h3_transformer,
     resolve_transformer_dir,
 )
+from lightx2v_train.runtime.fsdp import fsdp2_enabled
+from lightx2v_train.runtime.sharded_loader import local_layout_from_template, make_dtensor_from_template
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
 from ..base import BaseModel
 from .condition_encoder import MiniMaxH3ConditionEncoder
+from .lora import load_h3_lora
 
 
-@MODEL_REGISTER("minimax_h3_t2av")
-class MiniMaxH3T2AVModel(BaseModel):
-    """A standard trainable wrapper around Diffusers' MiniMax-H3 module."""
-
+@MODEL_REGISTER("minimax_h3_fl2av")
+class MiniMaxH3FL2AVModel(BaseModel):
     pipeline_cls = None
+    transformer_component = "transformer"
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -45,7 +48,7 @@ class MiniMaxH3T2AVModel(BaseModel):
         }
         if unsupported_capabilities:
             names = ", ".join(sorted(unsupported_capabilities))
-            raise ValueError(f"MiniMax-H3 currently supports only SFT (flow_matching) and DMD (distribution_matching); unsupported model capabilities: {names}.")
+            raise ValueError(f"Unsupported MiniMax-H3 model capabilities: {names}.")
         self.capabilities.register(
             FlowMatchingSFTCapability,
             MiniMaxH3FlowMatchingCapability(
@@ -71,13 +74,14 @@ class MiniMaxH3T2AVModel(BaseModel):
         config = self.config["model"]
         self.pretrained_model_path = config["pretrained_model_name_or_path"]
         fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
-        sharded_load = fsdp_config.get("sharded_load", False)
+        self.defer_transformer_weights = load_transformer and fsdp_config.get("sharded_load", False) and fsdp2_enabled(self.config)
         self.latent_dtype = get_running_dtype(config.get("latent_dtype", "fp32"))
         self.patch_size = tuple(int(value) for value in config.get("patch_size", (1, 2, 2)))
         if len(self.patch_size) != 3:
             raise ValueError(f"model.patch_size must contain three integers, got {self.patch_size}.")
         self.video_latent_channels = int(config.get("video_latent_channels", 24))
         self.audio_latent_channels = int(config.get("audio_latent_channels", 32))
+        self.text_dim = config.get("text_dim", 5120)
         self.vae_spatial_scale_factor = int(config.get("vae_spatial_scale_factor", 16))
         self.audio_sampling_rate = int(config.get("audio_sampling_rate", 32000))
         if self.video_latent_channels <= 0 or self.audio_latent_channels <= 0 or self.vae_spatial_scale_factor <= 0 or self.audio_sampling_rate <= 0:
@@ -116,20 +120,27 @@ class MiniMaxH3T2AVModel(BaseModel):
         if load_transformer:
             self.transformer = load_minimax_h3_transformer(
                 self.pretrained_model_path,
+                component=self.transformer_component,
                 torch_dtype=self.transformer_param_dtype,
                 local_files_only=bool(config.get("local_files_only", True)),
                 attention_backend=config.get("attention_backend"),
-                defer_weights=sharded_load,
+                defer_weights=self.defer_transformer_weights,
             )
-            if not sharded_load:
+            if not self.defer_transformer_weights:
                 self.transformer.to(self.device)
 
     def load_deferred_transformer_weights(self):
-        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
-        if not fsdp_config.get("sharded_load", False):
+        if not self.defer_transformer_weights:
             return
-        self.load_sharded_transformer_weights(resolve_transformer_dir(self.pretrained_model_path))
+        self.load_sharded_transformer_weights(
+            resolve_transformer_dir(self.pretrained_model_path, self.transformer_component),
+            preserve_parameter_dtypes=True,
+        )
         self._materialize_h3_rope()
+        remaining = [name for name, param in self.transformer.named_parameters() if param.is_meta]
+        if remaining:
+            raise RuntimeError(f"H3 transformer checkpoint missing parameters: {remaining[:5]}.")
+        self.defer_transformer_weights = False
 
     def _materialize_h3_rope(self):
         rope = self.transformer.rope
@@ -264,14 +275,19 @@ class MiniMaxH3T2AVModel(BaseModel):
             return torch.autocast("cuda", dtype=self.running_dtype)
         return nullcontext()
 
-    def add_lora(self, rank, alpha, target_modules):
+    def _lora_init_weights(self):
+        return True if self.config.get("training", {}).get("method") in {"dcm", "pdmd"} else "gaussian"
+
+    def add_lora(self, rank, alpha, target_modules, *, rank_pattern=None, alpha_pattern=None):
         if not target_modules:
             target_modules = MiniMaxH3DistributionMatchingCapability._DEFAULT_LORA_TARGETS
         lora_config = LoraConfig(
             r=rank,
             lora_alpha=alpha,
-            init_lora_weights="gaussian",
+            init_lora_weights=self._lora_init_weights(),
             target_modules=target_modules,
+            rank_pattern=rank_pattern or {},
+            alpha_pattern=alpha_pattern or {},
         )
         try:
             self.transformer = inject_adapter_in_model(
@@ -282,7 +298,21 @@ class MiniMaxH3T2AVModel(BaseModel):
         except TypeError:
             self.transformer = inject_adapter_in_model(lora_config, self.transformer)
 
-    def prepare_text_condition(self, condition):
+    def initialize_missing_sharded_parameter(self, name, template):
+        if self._lora_init_weights() is not True or ".lora_A." not in name:
+            return super().initialize_missing_sharded_parameter(name, template)
+        local_shape, _ = local_layout_from_template(template)
+        value = torch.empty(local_shape, device=self.device, dtype=template.dtype)
+        bound = template.shape[1] ** -0.5
+        return make_dtensor_from_template(template, value.uniform_(-bound, bound))
+
+    def load_lora_weights_for_resume(self, lora_path, adapter_name=None, weights_subdir=None):
+        path = Path(lora_path)
+        if weights_subdir:
+            path /= weights_subdir
+        load_h3_lora(self.denoiser_module(), path, adapter_name or "default")
+
+    def _prepare_text_rows(self, condition):
         if not isinstance(condition, dict):
             raise TypeError(f"MiniMax-H3 cached condition must be a dict, got {type(condition)!r}.")
         missing = {"prompt_embeds", "text_token_tags"} - condition.keys()
@@ -296,17 +326,51 @@ class MiniMaxH3T2AVModel(BaseModel):
             raise TypeError("MiniMax-H3 prompt_embeds and text_token_tags must be tensors.")
         if prompt_embeds.ndim == 2:
             prompt_embeds = prompt_embeds.unsqueeze(0)
-        if prompt_embeds.ndim != 3 or prompt_embeds.shape[0] != 1:
-            raise ValueError(f"MiniMax-H3 prompt_embeds must have shape [1, tokens, dim], got {tuple(prompt_embeds.shape)}.")
+        if prompt_embeds.ndim != 3 or prompt_embeds.shape[0] != 1 or prompt_embeds.shape[-1] != self.text_dim:
+            raise ValueError(f"MiniMax-H3 prompt_embeds must have shape [1, tokens, {self.text_dim}], got {tuple(prompt_embeds.shape)}.")
         if text_token_tags.ndim == 2:
             if text_token_tags.shape[0] != 1:
                 raise ValueError("MiniMax-H3 currently requires data.train.batch_size=1.")
             text_token_tags = text_token_tags[0]
         if text_token_tags.ndim != 1 or text_token_tags.shape[0] != prompt_embeds.shape[1]:
             raise ValueError(f"MiniMax-H3 text_token_tags must contain one tag per prompt embedding row; got {tuple(text_token_tags.shape)} for {prompt_embeds.shape[1]} rows.")
+        if bool(((text_token_tags != 0) & (text_token_tags != 1)).any()):
+            raise ValueError("MiniMax-H3 prompt rows must have image or text tags (0 or 1).")
         return {
             "prompt_embeds": prompt_embeds.to(self.device, dtype=self.running_dtype),
-            "text_token_tags": text_token_tags.to(self.device, dtype=torch.long),
+            "text_token_tags": text_token_tags.to(dtype=torch.long, device="cpu"),
+        }
+
+    def prepare_text_condition(self, condition):
+        prepared = self._prepare_text_rows(condition)
+        task = condition.get("task", "t2av")
+        if task == "t2av":
+            if bool((prepared["text_token_tags"] != 1).any()):
+                raise ValueError("T2AV prompt conditioning must contain text-only rows.")
+            return prepared
+
+        anchors = {
+            "i2av": ("first",),
+            "l2av": ("last",),
+            "fl2av": ("first", "last"),
+        }[task]
+        cached_anchors = tuple(condition["keyframe_anchors"].tolist())
+        if cached_anchors != tuple(int(anchor == "last") for anchor in anchors):
+            raise ValueError(f"{task} cache requires {anchors} in that order.")
+        height, width = condition["target_height"], condition["target_width"]
+        latent_h, latent_w = height // self.vae_spatial_scale_factor, width // self.vae_spatial_scale_factor
+        _, patch_h, patch_w = self.patch_size
+        rows = condition["condition_video_latents"]
+        expected = (len(anchors) * (latent_h // patch_h) * (latent_w // patch_w), self.video_latent_channels * prod(self.patch_size))
+        if rows.shape != expected:
+            raise ValueError(f"{task} cache requires keyframe rows shaped {expected}, got {tuple(rows.shape)}.")
+        return {
+            **prepared,
+            "keyframe_anchors": anchors,
+            "condition_video_latents": rows.to(self.device, dtype=torch.float32),
+            "target_height": height,
+            "target_width": width,
+            "target_num_frames": condition["target_num_frames"],
         }
 
     def encode_prompt_condition(self, prompt):

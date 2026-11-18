@@ -19,7 +19,7 @@ from lightx2v_train.utils.registry import DATA_REGISTER
 
 
 class CacheDataset(Dataset):
-    """Load the common ``cache_data.jsonl`` format for every model family."""
+    """Load cached training data indexed by JSON or JSONL."""
 
     uses_cache_dataset = True
 
@@ -64,7 +64,7 @@ class CacheDataset(Dataset):
             cache_path = record["training_cache"]
 
         cache = torch.load(cache_path, map_location="cpu", weights_only=True)
-        self._validate_cache(cache, cache_path, record["prompt"])
+        self._prepare_cache(cache, cache_path, record)
         if generation_shape is not None:
             cache["generation_shape"] = generation_shape
 
@@ -78,49 +78,51 @@ class CacheDataset(Dataset):
         return cache
 
     def _read_manifest(self, metadata_path):
-        if metadata_path.suffix.lower() != ".jsonl":
-            raise ValueError(f"Training-cache manifests must be .jsonl files, got: {metadata_path}")
-        records = []
         with metadata_path.open("r", encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                if not line.strip():
-                    continue
-                record = json.loads(line)
-                prompt = record.get("prompt")
-                record_path = f"{metadata_path}:{line_number}"
-                if prompt is None:
-                    raise ValueError(f"Training-cache record {record_path} must include prompt.")
+            if metadata_path.suffix.lower() == ".json":
+                entries = json.load(handle)
+                if not isinstance(entries, list):
+                    raise ValueError(f"Training-cache metadata must be a JSON array: {metadata_path}")
+                rows = enumerate(entries, start=1)
+            elif metadata_path.suffix.lower() == ".jsonl":
+                rows = ((line_number, json.loads(line)) for line_number, line in enumerate(handle, start=1) if line.strip())
+            else:
+                raise ValueError(f"Training-cache metadata must be .json or .jsonl: {metadata_path}")
+            for row_number, record in rows:
+                prepared = self._prepare_record(record, metadata_path, f"{metadata_path}:{row_number}")
+                if prepared is not None:
+                    yield prepared
 
-                if self.has_multiple_generation_shapes:
-                    cache_paths = record.get("training_caches")
-                    if not isinstance(cache_paths, dict):
-                        raise ValueError(f"Training-cache record {record_path} must include a training_caches mapping; rebuild the cache.")
-                    actual_keys = set(cache_paths)
-                    expected_keys = set(self.generation_shape_keys)
-                    if actual_keys != expected_keys:
-                        missing = sorted(expected_keys - actual_keys)
-                        extra = sorted(actual_keys - expected_keys)
-                        raise ValueError(f"Training-cache record {record_path} does not match configured generation shapes: missing={missing}, extra={extra}. Rebuild the cache.")
-                    resolved_paths = {}
-                    for shape_key in self.generation_shape_keys:
-                        cache_path = cache_paths[shape_key]
-                        if not str(cache_path).strip():
-                            raise ValueError(f"Training-cache record {record_path} has an empty path for shape {shape_key}.")
-                        cache_path = Path(cache_path)
-                        if not cache_path.is_absolute():
-                            cache_path = metadata_path.parent / cache_path
-                        resolved_paths[shape_key] = cache_path
-                    records.append({"prompt": str(prompt), "training_caches": resolved_paths})
-                    continue
+    def _prepare_record(self, record, metadata_path, record_path):
+        prompt = record.get("prompt")
+        if prompt is None:
+            raise ValueError(f"Training-cache record {record_path} must include prompt.")
 
-                cache_path = record.get("training_cache")
-                if cache_path is None or not str(cache_path).strip():
-                    raise ValueError(f"Training-cache record {record_path} must include training_cache.")
-                cache_path = Path(cache_path)
-                if not cache_path.is_absolute():
-                    cache_path = metadata_path.parent / cache_path
-                records.append({"prompt": str(prompt), "training_cache": cache_path})
-        return records
+        if self.has_multiple_generation_shapes:
+            cache_paths = record.get("training_caches")
+            if not isinstance(cache_paths, dict):
+                raise ValueError(f"Training-cache record {record_path} must include a training_caches mapping; rebuild the cache.")
+            actual_keys = set(cache_paths)
+            expected_keys = set(self.generation_shape_keys)
+            if actual_keys != expected_keys:
+                missing = sorted(expected_keys - actual_keys)
+                extra = sorted(actual_keys - expected_keys)
+                raise ValueError(f"Training-cache record {record_path} does not match configured generation shapes: missing={missing}, extra={extra}. Rebuild the cache.")
+            resolved_paths = {}
+            for shape_key in self.generation_shape_keys:
+                cache_path = cache_paths[shape_key]
+                if not str(cache_path).strip():
+                    raise ValueError(f"Training-cache record {record_path} has an empty path for shape {shape_key}.")
+                resolved_paths[shape_key] = metadata_path.parent / cache_path
+            return {"prompt": str(prompt), "training_caches": resolved_paths}
+
+        cache_path = record.get("training_cache")
+        if cache_path is None or not str(cache_path).strip():
+            raise ValueError(f"Training-cache record {record_path} must include training_cache.")
+        return {"prompt": str(prompt), "training_cache": metadata_path.parent / cache_path}
+
+    def _prepare_cache(self, cache, path, record):
+        self._validate_cache(cache, path, record["prompt"])
 
     def _validate_cache(self, cache, path, prompt):
         required = {"inputs", "conditioning", "meta"}
@@ -133,7 +135,7 @@ class CacheDataset(Dataset):
         if "positive" not in conditioning:
             raise ValueError(f"Invalid training cache at {path}: conditioning.positive is missing.")
         if conditioning.get("prompt") != prompt:
-            raise ValueError(f"Prompt in {path} does not match cache_data.jsonl. Rebuild the training cache.")
+            raise ValueError(f"Prompt in {path} does not match the cache metadata. Rebuild the training cache.")
 
 
 @DATA_REGISTER("cache_dataset")
@@ -149,7 +151,7 @@ def build_cache_dataset(
     if isinstance(data_paths, (str, Path)):
         data_paths = [data_paths]
 
-    dataset = CacheDataset(
+    dataset_kwargs = dict(
         metadata_paths=data_paths,
         prompt_dropout_rate=data_config_split.get("prompt_dropout_rate", 0.0),
         unconditional_prompt=unconditional_prompt,
@@ -157,11 +159,23 @@ def build_cache_dataset(
         train_or_val=train_or_val,
         generation_shapes=data_config_split.get("generation_shapes"),
     )
+    build_dataset = getattr(sample_processor, "build_cache_dataset", None)
+    dataset = CacheDataset(**dataset_kwargs) if build_dataset is None else build_dataset(data_config_split, **dataset_kwargs)
     world_size = get_data_parallel_world_size()
     shuffle = data_config_split.get("shuffle", train_or_val == "train")
     drop_last = data_config_split.get("drop_last", False)
     sampler = None
-    if train_or_val == "train" and dataset.has_multiple_generation_shapes:
+    build_sampler = getattr(dataset, "build_sampler", None)
+    if train_or_val == "train" and build_sampler is not None:
+        sampler = build_sampler(
+            num_replicas=world_size,
+            rank=get_data_parallel_rank(),
+            shuffle=shuffle,
+            drop_last=drop_last,
+            seed=data_config_split.get("seed", 42),
+        )
+        drop_last = False
+    elif train_or_val == "train" and dataset.has_multiple_generation_shapes:
         sampler = GenerationShapeSampler(
             dataset,
             num_replicas=world_size,

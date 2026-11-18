@@ -218,11 +218,15 @@ class CommonTrainableCapability(BoundCapability, TrainableModelCapability):
     def configure(self, train_type: str, lora_config: Mapping[str, Any]) -> None:
         if train_type == "lora":
             rank = int(lora_config.get("rank", 16))
+            patterns = {key: lora_config[key] for key in ("rank_pattern", "alpha_pattern") if key in lora_config}
             self.model.add_lora(
                 rank,
                 int(lora_config.get("alpha", rank)),
                 lora_config.get("target_modules"),
+                **patterns,
             )
+            if lora_config.get("param_dtype") is not None:
+                self.model.set_lora_param_dtype(lora_config["param_dtype"])
             self.model.set_lora_trainable()
             return
         if train_type != "full":

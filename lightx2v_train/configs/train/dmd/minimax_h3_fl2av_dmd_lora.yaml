@@ -1,8 +1,8 @@
 model:
-    name: minimax_h3_t2av
+    name: minimax_h3_fl2av
     # This must be the converted Diffusers model root containing
     # transformer/config.json (MiniMaxH3Transformer3DModel).
-    pretrained_model_name_or_path: /data/nvme6/gushiqiao/models/MiniMax-H3
+    pretrained_model_name_or_path: ${oc.env:H3_MODEL_PATH}
     running_dtype: bf16
     local_files_only: true
     patch_size: [1, 2, 2]
@@ -46,9 +46,9 @@ distributed:
 
 data:
     train:
-        name: prompt_dataset
-        data_path:
-            - /path/to/datasets/minimax_h3_t2av/prompts.txt
+        name: cache_dataset
+        data_path: ${oc.env:H3_TRAIN_META}
+        tasks: ${oc.decode:${oc.env:H3_TASKS,'[]'}}
         num_workers: 2
         pin_memory: true
         shuffle: true
@@ -77,9 +77,8 @@ training:
         # Four student model evaluations; the terminal zero sigma is added internally.
         num_inference_steps: 4
         fake_update_ratio: 5
-        # 124 = 17*7+5, about 5.17 seconds at H3's fixed 24 fps.
-        generation_shapes:
-            - {value: [124, 768, 1344]}
+        gan:
+            enabled: false
         score_sampling:
             type: continuous_uniform
         # Do not apply the generic scheduler shift before H3's modality shifts.
@@ -112,7 +111,7 @@ training:
     teacher:
         guidance_scale: 1.0
         cfg_norm: none
-    output_dir: ./output_train/minimax_h3_t2av_dmd_zoe_fake_full
+    output_dir: ./output_train/minimax_h3_fl2av_dmd
 
 inference:
     method: none

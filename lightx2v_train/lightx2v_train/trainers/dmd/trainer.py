@@ -1,8 +1,10 @@
 import copy
 import os
 from functools import partial
+from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import (
@@ -104,27 +106,46 @@ class DmdTrainer(_DmdRuntime):
         self.fake_real_train_type = self.fake_train_type
         self.fake_real_lora_config = copy.deepcopy(self.fake_lora_config)
         self.fake_real_optimizer_config = copy.deepcopy(self.fake_optimizer_config)
+        self.gan = None
+        self.gan_cursor = 0
+        self.gan_enabled = self.dmd_config.get("gan", {}).get("enabled", False)
+        if self.gan_enabled and self.trainer_name not in {"dmd", "pdmd", "autoregressive_dmd"}:
+            raise ValueError(f"GAN is not wired into the {self.trainer_name} update loop.")
+        if self.gan_enabled and config.get("distributed", {}).get("sequence_parallel", {}).get("enabled", False):
+            raise ValueError("GAN requires independent samples per rank; disable sequence parallelism.")
+        if self.gan_enabled and self.trainer_name != "pdmd" and self.dmd_config["gan"].get("student_recompute", False):
+            raise ValueError("GAN student_recompute requires the PDMD trajectory.")
+
+    def set_data(self, dataloader_train, dataloader_val=None):
+        super().set_data(dataloader_train, dataloader_val)
+        dataset = dataloader_train.dataset
+        if self.gan_enabled and hasattr(dataset, "validate_gan_targets"):
+            dataset.validate_gan_targets()
 
     def setup(self, resume_ckpt_path=None):
+        warmstart_adapter = None
         if resume_ckpt_path is None and self.student_checkpoint_path:
-            self._load_student_checkpoint(self.student_checkpoint_path, strict=self.student_checkpoint_strict)
+            path = Path(self.student_checkpoint_path)
+            if path.is_dir() and (path / "pytorch_lora_weights.safetensors").is_file():
+                warmstart_adapter = path
+            else:
+                self._load_student_checkpoint(self.student_checkpoint_path, strict=self.student_checkpoint_strict)
         super().setup(resume_ckpt_path=None)
+        if warmstart_adapter is not None:
+            self._load_model_weights(self.model, str(warmstart_adapter), role="student")
+            logger.info("[train] loaded student LoRA weights from {}", warmstart_adapter)
         self._setup_fake_real_resources()
+        if self.gan_enabled:
+            from ..gan import GanObjective
+
+            self.gan = GanObjective(self)
+            logger.info("[gan] feature_block={} generator_weight={} discriminator_weight={}", self.gan.feature_block, self.gan.generator_weight, self.gan.discriminator_weight)
+        if resume_ckpt_path is None or self.trainer_name == "pdmd":
+            student_steps, fake_steps = self._optimizer_steps()
+            self.lr_scheduler = self._build_lr_scheduler(self.optimizer, num_training_steps=student_steps)
+            self.fake_lr_scheduler = self._build_lr_scheduler(self.fake_optimizer, num_warmup_steps=0, num_training_steps=fake_steps)
         if resume_ckpt_path is not None:
             self._load_resume_state(resume_ckpt_path)
-        if resume_ckpt_path is None:
-            self.lr_scheduler = self._build_lr_scheduler(
-                self.optimizer,
-                num_training_steps=max(1, self.max_train_iters),
-            )
-            self.fake_lr_scheduler = self._build_lr_scheduler(
-                self.fake_optimizer,
-                num_warmup_steps=0,
-                num_training_steps=max(
-                    1,
-                    self.max_train_iters * self.fake_update_ratio,
-                ),
-            )
 
         time_shift_settings = self.config["scheduler"].get("time_shift_settings", {})
         self.denoising_scheduler = DMDFlowMatchingScheduler(self.config)
@@ -132,6 +153,9 @@ class DmdTrainer(_DmdRuntime):
         if not self._dynamic_denoising_shift:
             self._prepare_timestep_lookup()
         self.real_data_fake_trick.setup(self._real_data_fake_setup_context())
+
+    def _optimizer_steps(self):
+        return max(1, self.max_train_iters), max(1, self.max_train_iters * self.fake_update_ratio)
 
     def _setup_fake_real_resources(self):
         self.fake_real_model = None
@@ -240,6 +264,7 @@ class DmdTrainer(_DmdRuntime):
 
         max_train_iters = self.max_train_iters
         grad_accum_iters = max(1, int(self.gradient_accumulation_iters))
+        self.gan_cursor = current_iter * self.fake_update_ratio * grad_accum_iters
         save_every_iters = self.save_every_iters
         save_total_limit = self.save_total_limit
 
@@ -276,26 +301,37 @@ class DmdTrainer(_DmdRuntime):
             if current_iter == 0:
                 self.run_inference(current_iter)
 
+        sampler = getattr(self.dataloader_train, "sampler", None)
+        if hasattr(sampler, "set_start"):
+            sampler.set_start(current_iter * (1 + self.fake_update_ratio) * grad_accum_iters)
         samples = self._iter_train_samples()
         while current_iter < max_train_iters:
+            kwargs = {"iteration": current_iter} if self.gan_enabled else {}
             student_result = self._train_one_stage(
                 samples,
                 stage="student",
                 grad_accum_iters=grad_accum_iters,
+                **kwargs,
             )
             loss_dmd_value = student_result["dmd"]
             loss_div_value = student_result["div_loss"]
             loss_real_dmd_value = student_result["real_dmd"]
             loss_fake_value = 0.0
             loss_fake_real_value = 0.0
+            fake_gan_metrics = {}
             for _ in range(self.fake_update_ratio):
                 fake_result = self._train_one_stage(
                     samples,
                     stage="fake",
                     grad_accum_iters=grad_accum_iters,
+                    **kwargs,
                 )
                 loss_fake_value += fake_result["loss"]
                 loss_fake_real_value += fake_result["fake_real"]
+                if self.gan is not None:
+                    for name, value in fake_result.items():
+                        if name.startswith("gan_"):
+                            fake_gan_metrics[name] = fake_gan_metrics.get(name, 0.0) + value / self.fake_update_ratio
             loss_fake_value /= self.fake_update_ratio
             loss_fake_real_value /= self.fake_update_ratio
 
@@ -328,6 +364,11 @@ class DmdTrainer(_DmdRuntime):
                 }
                 if display_dmd is not None:
                     metrics["train/dmd"] = display_dmd
+                if self.gan is not None:
+                    for result in (student_result, fake_gan_metrics):
+                        for name, value in result.items():
+                            if name.startswith("gan_"):
+                                metrics[f"train/{name}"] = reduce_mean(value)
                 self.log_metrics(metrics, step=current_iter)
 
             if save_every_iters and current_iter % save_every_iters == 0:
@@ -343,6 +384,7 @@ class DmdTrainer(_DmdRuntime):
         samples,
         stage,
         grad_accum_iters,
+        iteration=0,
     ):
         if stage == "student":
             optimizer = self.optimizer
@@ -375,12 +417,16 @@ class DmdTrainer(_DmdRuntime):
             latent_shape = self._latent_shape(sample)
             initial_noise = self.sample_initial_latents(latent_shape)
             set_sync((stage == "student" and use_real_data_fake) or micro_idx == grad_accum_iters - 1)
+            kwargs = {"return_generated": True} if self.gan is not None else {}
             result = self.forward_loss(
                 latent_shape,
                 conditions,
                 stage=stage,
                 initial_noise=initial_noise,
+                **kwargs,
             )
+            if self.gan is not None:
+                result, generated = result
             if isinstance(result, dict):
                 loss = result["loss"]
                 for name, value in result.items():
@@ -391,9 +437,24 @@ class DmdTrainer(_DmdRuntime):
                 del result
             else:
                 loss = result
-            (loss / grad_accum_iters).backward()
-            loss_value += loss.item() / grad_accum_iters
+            if self.gan is not None and stage == "student":
+                with self.gan.frozen_critic():
+                    gan_loss, gan_metrics = self.gan.generator(generated, conditions[0], iteration, micro_idx)
+                    loss = loss + gan_loss
+                    (loss / grad_accum_iters).backward()
+            else:
+                (loss / grad_accum_iters).backward()
+                gan_metrics = {}
+            loss_value += loss.detach().item() / grad_accum_iters
             del loss
+            if self.gan is not None:
+                if stage == "fake":
+                    gan_loss, gan_metrics = self.gan.backward_discriminator(generated, conditions[0], sample, self.gan_cursor, self.gan_cursor, micro_idx, 1 / grad_accum_iters)
+                    self.gan_cursor += 1
+                    loss_value += float(gan_loss) / grad_accum_iters
+                for name, value in gan_metrics.items():
+                    metric_values[name] = metric_values.get(name, 0.0) + float(value) / grad_accum_iters
+                del generated
             if stage == "student" and self.diversity_trick.enabled:
                 div_raw, _ = self._backward_diversity_loss(
                     initial_noise,
@@ -425,7 +486,14 @@ class DmdTrainer(_DmdRuntime):
                 del fake_real_result
 
         self._sync_sequence_parallel_grads(params)
-        torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
+        if self.gan is not None and stage == "fake":
+            norm = self.gan.clip_discriminator_gradients(self.max_grad_norm)
+            self._check_finite_gradients(norm, loss_value)
+            self.gan.step()
+        else:
+            norm = torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
+            if self.gan is not None:
+                self._check_finite_gradients(norm, loss_value)
         optimizer.step()
         if stage == "student":
             self._after_student_optimizer_step("main")
@@ -446,6 +514,15 @@ class DmdTrainer(_DmdRuntime):
                 **metric_values,
             }
         return loss_value
+
+    def _check_finite_gradients(self, norm, loss):
+        if hasattr(norm, "full_tensor"):
+            norm = norm.full_tensor()
+        finite = (torch.isfinite(norm) & torch.isfinite(norm.new_tensor(loss))).to(torch.int32)
+        if dist.is_initialized():
+            dist.all_reduce(finite, op=dist.ReduceOp.MIN)
+        if not bool(finite):
+            raise FloatingPointError("Nonfinite loss or gradient norm.")
 
     def _prepare_timestep_lookup(self, latent_hw=None, num_steps=None):
         """Refresh the dense lookup used by score windows and real-data noise."""
@@ -575,6 +652,8 @@ class DmdTrainer(_DmdRuntime):
         conditions,
         stage,
         initial_noise=None,
+        *,
+        return_generated=False,
     ):
         condition, negative_condition = conditions
         (
@@ -618,10 +697,11 @@ class DmdTrainer(_DmdRuntime):
                 condition,
             )
             velocity_gt = self.student.training_target(generated, noise)
-            return self.student.regression_loss(
+            loss = self.student.regression_loss(
                 velocity_fake,
                 velocity_gt,
             )
+            return (loss, generated) if return_generated else loss
 
         with torch.no_grad():
             self.fake.set_training(False)
@@ -657,10 +737,11 @@ class DmdTrainer(_DmdRuntime):
             x_pred_fake,
             x_pred_teacher,
         )
-        return {
+        result = {
             "loss": loss_dmd,
             "dmd": loss_dmd.detach(),
         }
+        return (result, generated) if return_generated else result
 
     def sample_end_step(self):
         return self._sample_synced_int(
