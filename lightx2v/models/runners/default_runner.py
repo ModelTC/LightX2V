@@ -156,7 +156,7 @@ class DefaultRunner(BaseRunner):
             raise NotImplementedError("Warmup does not support disaggregated inference")
         if self.config.get("unload_modules", False):
             raise NotImplementedError("Warmup does not support unload_modules")
-        if self.config.get("feature_caching", "NoCaching") != "NoCaching":
+        if self.config.get("feature_caching", "NoCaching") not in self.get_warmup_feature_caching_modes():
             raise NotImplementedError("Warmup does not support feature caching")
 
         self.run_warmup()
@@ -164,6 +164,9 @@ class DefaultRunner(BaseRunner):
         torch_device_module.synchronize()
         if dist.is_initialized() and dist.get_world_size() > 1:
             dist.barrier()
+
+    def get_warmup_feature_caching_modes(self):
+        return ("NoCaching",)
 
     def run_warmup(self):
         raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
