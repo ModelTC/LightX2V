@@ -263,7 +263,7 @@ class LightX2VUpscaleVideo:
             "required": {
                 "server": ("LX2V_SERVER",),
                 "video": ("VIDEO",),
-                "scale": ([2, 4], {"default": 2}),
+                "scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.1, "tooltip": "Output scale, including fractional values. relayvsr_x4 supports 1–4; relayvsr_x2 supports 1–2."}),
                 "seed": ("INT", {"default": 42, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
             }
         }
@@ -273,12 +273,17 @@ class LightX2VUpscaleVideo:
     FUNCTION = "upscale"
     CATEGORY = "LightX2V/Server"
 
-    def upscale(self, server, video, scale=2, seed=42):
+    def upscale(self, server, video, scale=2.0, seed=42):
         settings = server.resolve()
         if settings.settings["task"] != "sr":
             raise ValueError("Set task=sr on the Service connected to Upscale Video")
-        if settings.settings["model_cls"] == "relayvsr_x2" and scale != 2:
-            raise ValueError("relayvsr_x2 only supports scale 2")
+        model = settings.settings["model_cls"]
+        max_scale = 2 if model == "relayvsr_x2" else 4
+        if not 1 <= scale <= max_scale:
+            raise ValueError(f"{model} scale must be between 1 and {max_scale}, got {scale}")
+        width, height = (int(size * scale) for size in video.get_dimensions())
+        if width % 2 or height % 2:
+            raise ValueError(f"RelayVSR video output must have even dimensions; scale {scale} produces {width}x{height}. Choose another scale.")
         runtime = manager()
         path = video_to_file(video, runtime.root / "inputs")
         payload = {"task": "sr", "video_path": str(path), "sr_ratio": scale, "seed": seed}
