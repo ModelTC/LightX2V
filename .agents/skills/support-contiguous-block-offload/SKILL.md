@@ -1,52 +1,52 @@
 ---
 name: support-contiguous-block-offload
-description: 为 LightX2V 模型接入、审查和调试 cpu_offload_block_contiguous=true。覆盖公共 block 声明、算子存储契约、NVIDIA CUDA 与 Ascend NPU 平台隔离、baseline/contiguous 入口和正确性验证；用于持久连续 pinned 权重布局，不自动扩展到多进程共享权重或运行时打包。
+description: Integrate, review, and debug cpu_offload_block_contiguous=true for LightX2V models. Covers common block declarations, operator storage contracts, NVIDIA CUDA and Ascend NPU isolation, baseline/contiguous entry points, and correctness validation. Intended for persistent contiguous pinned weights, without automatically adding multiprocess weight sharing or runtime packing.
 ---
 
-# 连续 CPU Block Offload 接入
+# Integrating Contiguous CPU Block Offload
 
-简体中文 | [English](SKILL_EN.md)
+English | [简体中文](SKILL.md)
 
-## 目标与范围
+## Purpose and scope
 
-复用项目公共基建：加载时将每个 block 的主体权重写入最终连续 CPU pinned 存储，设备侧用同一布局建立 tensor views，推理时整 block H2D，并沿用模型已有计算和双缓冲调度。推理阶段不反复 pack 或分配 staging buffer。
+Reuse the common infrastructure. During loading, write each block's main weights into their final contiguous pinned CPU storage. Create device tensor views with the same layout, transfer the entire block during inference, and preserve the model's existing computation and double-buffer scheduling. Inference does not repeatedly pack weights or allocate staging buffers.
 
-连续指 block 内虚拟地址连续；block 之间不要求相邻，不保证物理页连续。它不消除权重传输，也不保证推理提速。辅助设备状态可能仍需单独复制。
+Contiguity refers to virtual addresses within a block. Separate blocks need not be adjacent, and physical pages need not be contiguous. This does not eliminate weight transfers or guarantee faster inference. Auxiliary device state may still require separate copies.
 
-按用户范围工作：分析请求只给方案；局部修复不重做完整模型接入。完整双平台任务检查 NVIDIA GPU 和 Ascend NPU 两套入口，分别报告实现与验证状态；用户限定单平台时保持该范围。硬件缺失时继续可完成的代码和本地验证，并明确未验证项。
+Follow the user's scope. Analysis requests produce proposals only; a local fix does not require repeating a complete model integration. For tasks covering both platforms, check NVIDIA GPU and Ascend NPU entry points and report implementation and validation status separately. Respect tasks limited to one platform. When hardware is unavailable, complete the feasible code and local checks and identify what remains unverified.
 
-本 skill 聚焦 rank 内私有连续权重。涉及共享权重、host/NUMA 副本时再参考 [support-cpu-block-offload](../support-cpu-block-offload/SKILL.md)，不继承其完整共享接入的交付要求。
+This skill focuses on private contiguous weights within each rank. Consult [support-cpu-block-offload](../support-cpu-block-offload/SKILL_EN.md) only when shared weights or host/NUMA replicas are in scope; do not inherit its delivery requirements for a complete shared-weight integration.
 
-## 按任务读取
+## Read according to the task
 
-- 修改 block 声明、加载或调度：读 [公共接入](references/common-integration.md)。
-- 接入 CUDA 或修改两平台共用代码：读 [NVIDIA GPU](references/cuda.md)。
-- 接入 Ascend：读 [Ascend NPU](references/ascend-npu.md)，涉及共用代码时同时检查 CUDA 回归要求。
-- 借鉴模型定义与配置：读 [Wan、Qwen 与 H3 案例](references/model-examples.md) 的对应部分。
-- 选择测试或分析结果：读 [验证](references/validation.md)。
+- Changing block declarations, loading, or scheduling: read [Common integration](references/common-integration_en.md).
+- Integrating CUDA or changing code shared by both platforms: read [NVIDIA GPU](references/cuda_en.md).
+- Integrating Ascend: read [Ascend NPU](references/ascend-npu_en.md), including CUDA regression requirements when shared code changes.
+- Reusing model definitions and configurations: read the relevant sections of [Wan, Qwen and H3 examples](references/model-examples_en.md).
+- Selecting tests or interpreting results: read [Validation](references/validation_en.md).
 
-引用源码时以当前函数和文件为准，不依赖历史行号。仓库路径链接相对于包含链接的 Markdown 文件。
+Use current source files and function names instead of historical line numbers. Repository links in this skill and its references are relative to the document containing each link.
 
-## 接入流程
+## Integration workflow
 
-1. 从用户脚本追踪最终配置、runner、checkpoint 加载、weights、infer 和 offload manager。确认精度、任务及文本编码器、VAE 等组件范围。
-2. 检查模型是否已有原生 block offload、两个设备 slots 和稳定的 block 粒度。记录 CPU block、slot、checkpoint 前缀以及每个权重算子的存储契约。
-3. 将缺口放到所属层：模型声明 block；算子描述和绑定自身状态；公共层规划布局并管理生命周期；平台层实现分配、复制和特殊格式。
-4. 先验证普通 per-tensor block baseline，再接连续布局。模型已有 block offload 且算子契约齐全时，优先仅补 block 注册；否则明确补齐缺失契约，不能声称注册 block 就能适配任意模型。
-5. 提供任务要求的平台入口，执行与改动对应的测试和真实推理对照。最终说明改动、验证证据、限制及未完成的平台验证。
+1. Trace the user's launcher through the effective configuration, runner, checkpoint loading, weights, inference, and offload manager. Confirm precision, task, and the scope of components such as the text encoder and VAE.
+2. Check whether the model already has native block offload, two device slots, and a stable block definition. Identify CPU blocks, slots, checkpoint prefixes, and the storage contract of each weight operator.
+3. Address gaps in the layer that owns them. Models declare blocks; operators describe and bind their state; common code plans layouts and manages lifetimes; platform code handles allocation, copying, and special formats.
+4. Validate the ordinary per-tensor block baseline before enabling contiguous storage. If native block offload and operator contracts already exist, prefer adding only block registration. Otherwise, explicitly implement missing contracts; block registration alone does not adapt an arbitrary model.
+5. Provide the platform entry points requested by the task and run relevant tests and real inference comparisons. Report changes, validation evidence, restrictions, and any platform validation still outstanding.
 
-## 架构约束
+## Architecture constraints
 
-- 使用 [WeightModule.register_offload_group](../../../lightx2v/common/modules/weight_module.py)、公共 [block_loader.py](../../../lightx2v/common/offload/block_loader.py) 和 [block_layout.py](../../../lightx2v/common/offload/block_layout.py)。不复制 Wan 专用 layout loader 为新模型建立第二套加载系统。
-- 每个权重容器和 manager 只持有一个 group，CPU blocks 和设备 slots 的布局必须兼容。权重所有权不能重叠，未描述的权重或有状态算子不能静默跳过。
-- 优先复用算子 `load(BlockLoadContext)`；仅在需要特殊绑定时增加 `bind_storage()`，不新增纯转发包装。
-- 算子选择由配置决定。设备能力通过现有平台注册机制声明；不在模型或公共 loader 中增加逐芯片分支，也不为 Wan/Qwen 新建平台适配模块。
-- NVIDIA 默认算子、精度和未开启连续布局时的行为应保持不变。平台特殊处理放到 `lightx2v_platform`，验证 CUDA 导入隔离和数值回归。
-- 保持源存储存活、slot 覆盖依赖和当前 transfer 的关闭语义；不能只检查单次 H2D。
+- Use [WeightModule.register_offload_group](../../../lightx2v/common/modules/weight_module.py), the common [block_loader.py](../../../lightx2v/common/offload/block_loader.py), and [block_layout.py](../../../lightx2v/common/offload/block_layout.py). Do not copy the former Wan-specific layout loader into a second loading system for another model.
+- Each weight container and manager owns one group. CPU blocks and device slots must have compatible layouts. Weight ownership must not overlap, and undescribed weights or stateful operators must not be silently skipped.
+- Prefer reusing an operator's `load(BlockLoadContext)`. Add `bind_storage()` only when special binding is needed; avoid wrappers that merely forward calls.
+- Operator selection belongs in configuration. Declare device capabilities through the existing platform registration mechanism. Do not add per-chip branches to models or the common loader, or create platform adapter modules specifically for Wan/Qwen.
+- Preserve NVIDIA's default operators, precision, and behavior when contiguous layout is disabled. Keep platform-specific handling in `lightx2v_platform` and check CUDA import isolation and numerical regressions.
+- Preserve source storage lifetimes, dependencies before overwriting slots, and cleanup of the current transfer. A single successful H2D copy is insufficient validation.
 
-## 双平台交付
+## Delivering both platform paths
 
-Wan、Qwen Image 和 MiniMax H3 当前使用以下目录。新模型沿用所在家族的结构；已有文件保留用户设置，仅修改任务需要的部分：
+Wan, Qwen Image and MiniMax H3 currently use the layout below. Follow the target family for new models; preserve user settings and change only what the task requires:
 
 ```text
 scripts/<model>/inference/offload_layout/
@@ -63,8 +63,8 @@ configs/<model>/layout/
   contiguous_npu.json
 ```
 
-同一平台的 baseline/contiguous 保持模型、checkpoint、精度、输入、seed、采样、组件 offload 和计算算子一致，将 `cpu_offload_block_contiguous` 从 baseline 的 `false` 改为 `true`。该字段只接受布尔值，省略时默认为 `false`，与常驻数量独立。脚本和配置文件统一使用 `contiguous` 命名。
+Within each platform, keep baseline and contiguous variants identical in model, checkpoint, precision, input, seed, sampling, component offload, and compute operators. Change `cpu_offload_block_contiguous` from `false` in the baseline to `true`. This field accepts only booleans, defaults to `false` when omitted, and is independent of the resident count. Use `contiguous` consistently in script and configuration filenames.
 
-脚本保持简洁，明确模型路径、设备选择和结果路径；不把开发机绝对路径当成通用要求。文档给出实际命令和精度要求。计时工具、下载、提交或推送仅在用户要求时处理。
+Keep scripts simple and make model paths, device selection, and output paths explicit. Do not treat development-machine absolute paths as universal requirements. Document actual commands and precision requirements. Handle timing tools, downloads, commits, or pushes only when requested.
 
-交付时列出每个平台的入口、配置、实际使用的算子、验证范围和证据。区分“已添加入口”“存储/传输测试通过”“完整生成通过”“性能已测量”，不要用测试数量或旧版本记录代替当前版本的支持结论。
+Report each platform's entry points, configurations, actual operators, validation scope, and evidence. Distinguish entry points being added, storage/transfer tests passing, complete generation passing, and performance being measured. Test counts or results from older versions do not establish support in the current version.
