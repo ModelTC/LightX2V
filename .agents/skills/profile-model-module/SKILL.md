@@ -1,40 +1,40 @@
 ---
 name: profile-model-module
-description: 对 LightX2V 模型中的真实函数或模块采集并解释性能，按需截取输入、建立重放、关联计算量并分析多 rank 通信；适用于 transformer 层、attention、encoder、VAE 等范围的成本定位。后端竞速和完整模块并行方案排名使用 benchmark 工具。
+description: Profile real functions or modules in LightX2V models and explain their performance. Capture inputs, set up replay, correlate operation counts, and analyze multi-rank communication as needed. Use for transformer layers, attention, encoders, and VAEs. Use benchmark tools to compare backend speed or rank parallel configurations for a full module.
 ---
 
-# 模型模块性能分析
+# Profile a Model Module
 
-先读[工具导航](../../../tools/AGENTS.md)与[Profiler Agent 指南](../../../tools/profile/AGENTS.md)，按[README](../../../tools/profile/README.md)选择 CLI 或 API。范围可以是单个同步函数或模块，也可以是多 rank 的同一生产调用；按当前疑问选择最小充分范围。
+Read the tool navigation and Profiler Agent Guide first. Use the README to choose the CLI or API. Choose the smallest scope that answers the question. This can be one synchronous function or module, or the same production call across ranks. [Tool navigation](../../../tools/AGENTS.md) · [Profiler Agent Guide](../../../tools/profile/AGENTS.md) · [README](../../../tools/profile/README.md)
 
-只需 host 观测或单独算量时，按 README 选择 `--observe-only` 或 `--stats-only`，二者均不启动 profiler；需要时间线时再选择下述干净或联合采集。
+For host-only observation or standalone operation counts, use `--observe-only` or `--stats-only`, respectively, as described in the README. Both modes skip profiler startup. Use a clean or joint capture when you need a timeline.
 
-## 组织真实调用
+## Set Up the Production Call
 
-1. 从模型脚本追到实际加载的权重、配置、输入和目标调用。先核已有请求成本或正常测量，避免把标准合成层当真实模型；用户只要求局部分析时保持该范围。
-2. 若需重放，保存真实 tensor、权重/量化表示、必要状态和捕获位置；在 buffer 被覆盖前取值，重建实际生产调用及并行组。任务侧提供加载与 reset，先比较原调用和重放输出；shape、路由摘要或相同 seed 不能替代真实输入。
-3. 核入口能在同一进程提供足够的真实调用与状态恢复，再选择 `Capture` CLI/API。scheduler warmup 不提供跨进程预热；CLI 包装能力及不安全导入限制以 README 为准，有状态调用不能暗中重复执行。
+1. Trace the model script to the loaded weights, configuration, inputs, and target call. Check existing request costs or normal measurements first. Verify that measurements attributed to the model came from its real execution and identify any standard synthetic layers as such. Stay within the scope of a local analysis if that is what the user requested.
+2. For replay, save the actual tensors, weights or quantized representation, necessary state, and capture point. Capture values before buffers are overwritten, then reconstruct the production call and its parallel groups. Provide loading and reset logic for the task and compare outputs from the original call and replay first. Use the captured tensors as replay inputs and treat shapes, routing summaries, and seeds as supporting metadata.
+3. Verify that the entry point can make enough real calls and restore state within the same process before choosing the `Capture` CLI or API. The profiler scheduler's warmup applies within that process. Check the README for CLI wrapping limits and import safety. Make any repeat execution of a stateful call explicit.
 
-## 采集与解释
+## Capture and Interpret
 
-| 当前需要 | 选择 |
+| What you need | Capture mode |
 |---|---|
-| 正常时间线、空隙与同步疑点 | 干净 `Capture`，关闭计算量统计与 `record_shapes` |
-| 同次 shape、计算量、实际稀疏区域和 kernel 归属 | 独立联合采集，再用 `trace_report` 分析 |
-| 多 rank 的同一模块与通信 | 各 rank 独立目录，记录共同身份/批次和实际 TP/SP 组，用 `parallel_report` |
+| Normal timeline, gaps, and possible synchronization issues | Clean `Capture` with operation counting and `record_shapes` disabled |
+| Shapes, operation counts, actual sparse regions, and kernel attribution from the same call | Run a separate joint capture, then use `trace_report` |
+| The same module across ranks and its communication | Use a separate directory for each rank, record the shared run or batch identity and actual TP/SP groups, then use `parallel_report` |
 
-普通单卡 trace 也使用 `trace_report`。加载和 reset 在目标外时，按 active 调用的实际 scope 分析；GPU 异步尾部不能按 host 返回截断。多 rank 不从 WORLD_SIZE 猜 TP/SP，也不拼不同配置或批次。
+Use `trace_report` for ordinary single-GPU traces as well. When loading and reset are outside the target, analyze the actual scope of the active calls. Include asynchronous GPU activity that continues after the host call returns. For multi-rank analysis, get TP/SP groups from actual group metadata and use `WORLD_SIZE` only as a rank count. Combine captures only from the same configuration and batch.
 
-计算量来自 owning core/backend 的同次事实，不开启 `record_shapes` 猜算量。编译图、未接入入口或缺最终区域时保留缺口；另跑 eager 统计可辅助理解，但不能冒充与原 trace 逐次绑定。高空隙先核同进程预热和采集扰动，再沿 CPU 等待与 GPU 活动追实际依赖。
+Get operation counts from facts recorded by the owning core or backend during the same call. Reserve `record_shapes` for shape debugging. Record coverage gaps for compiled graphs, uninstrumented entry points, or missing final regions. A separate eager statistics run can add context. Claim per-call attribution only for facts collected with the original trace. For large gaps, check same-process warmup and capture overhead first, then trace the actual dependencies behind CPU waits and GPU activity.
 
-正式性能比较仍使用无 profiler 的 benchmark，干净时间线与联合采样各自保留来源。
+Use benchmarks with the profiler disabled for formal performance comparisons. Preserve the provenance of both the clean timeline and the joint capture.
 
-执行、进程收尾和中断恢复遵循 Profiler 指南及[资源指南](../../../tools/runtime/AGENTS.md)，先核已有进程、产物和身份再重试，受扰计时保留并作废。
+Follow the Profiler Agent Guide and resource guide for execution, process cleanup, and recovery after an interruption. Verify existing processes, artifacts, and run identity before retrying. Keep timings affected by interference and mark them invalid. [Resource guide](../../../tools/runtime/AGENTS.md)
 
-## 交付
+## Deliverables
 
-采到 trace 时，单卡和多卡均按[模块报告共同结构](../../../tools/profile/MODULE_PROFILE_REPORT_TEMPLATE.md)及[主体计算表约定](../../../tools/profile/CORE_COMPUTE_TABLE.md)呈现；多卡再增加[通信分析](../../../tools/profile/PARALLEL_REPORT_TEMPLATE.md)，保留原有计算、搬运、空隙和同步分析。提供一个已核可访问的 TensorBoard 原始入口，详细证据放 facts。
+When a trace is available, follow the shared module report structure and core compute table conventions for both single-GPU and multi-GPU reports. Add communication analysis for multi-GPU runs alongside computation, data movement, gaps, and synchronization. Provide one verified, accessible TensorBoard entry point for the raw capture. Keep detailed evidence in the facts artifacts. [Shared module report structure](../../../tools/profile/MODULE_PROFILE_REPORT_TEMPLATE.md) · [Core compute table conventions](../../../tools/profile/CORE_COMPUTE_TABLE.md) · [Communication analysis](../../../tools/profile/PARALLEL_REPORT_TEMPLATE.md)
 
-仅 host 观测或单独算量时，交付实际产生的 session/calls 或统计产物及其范围；不生成缺少时间线依据的 GPU 分析或 TensorBoard 入口，也不为填满模板追加采集。
+For host-only observation or standalone operation counts, deliver the session and call records or statistics artifacts that were produced, and state their scope. Include GPU timeline analysis and a TensorBoard entry only when supported by a trace. Collect additional data only when the task calls for it.
 
-区分工具事实、Agent 归因、任务补写接线与实际验证范围。新模型需要的捕获/重建脚本由任务补齐；稳定可复用能力随所属代码交付，不承诺任意模型零接线重放。
+Attribute measurements to the tools and interpretations to the agent. Report any task-specific wiring and what you actually verified. Supply any capture or reconstruction scripts the new model needs as part of the task. Deliver stable, reusable functionality with the code it belongs to. Base replay support claims on the wiring actually provided.
