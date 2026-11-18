@@ -5,7 +5,7 @@
   "historical_suite_sha256": "4530c60cfe2a69178ca9f450ddc9030beac3e0dbf658eadfa547b6a0957fc45d",
   "historical_source_lock_sha256": "d707f1dbd9c43cbc5313e3090981c4df947b93ccdf4e67e273709ace407d50e9",
   "project_suite_sha256": "d36a1d75b43c0b63757d56687368f6ce6267e71de07a885fbd3cb2681c84379e",
-  "project_source_lock_sha256": "cfbe10e29c6af0e793ab274cffaf8e304ad2f2e5d145bdb4563bdbe1503ce193",
+  "project_source_lock_sha256": "11e6442b5057b227d771f49608d398894c864b5d6a57e9a290502d580f4390c4",
   "historic_evaluation_code_sha256": "2ed33f2955542cba62ffce0dca4f6675f55b26f72e8d886c3ab65c4ddb6115e0",
   "reports": {
     "encoder-diagnostic.json": "f8d13c70a361c2f454798012acd5384a0c6093e9e122d3ff9b48c52b074444b7",

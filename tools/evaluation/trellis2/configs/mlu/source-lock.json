@@ -1,6 +1,6 @@
 {
   "lightx2v-trellis2": {
-    "git_head": "d57f724383d328a2530f310cb5c8de4c26460c21",
+    "git_head": "5217e0153856751391088caf3126af853cd0cb52",
     "files": [
       {"path": ".agents/README.md","bytes": 3372,"sha256": "5a2ff75e7ea60f5c65d74d675528ac36c7d08ef6f1714cbf6255d923fcd9cdaa"},
       {"path": ".agents/skills/lightx2v-kernel-skills/intel-xpu/integration-skills/sycl-esimd-to-python-wheel/SKILL.md","bytes": 13564,"sha256": "c5918fb2cedb3e961e0e7720273fa26b56e89bfef2dc8819753c15206de07eb9"},
@@ -587,7 +587,7 @@
       {"path": "configs/offload/disk/wan_i2v_phase_lazy_load_720p.json","bytes": 849,"sha256": "2fba9bb2338a51bcf992377e80561a6cdd31b5a8817330386e57a47960123ec1"},
       {"path": "configs/offload/phase/wan_i2v_phase.json","bytes": 630,"sha256": "7860f712fee7e95ca91b165408ddc1d47f216520cadf33d6501fa044c251531d"},
       {"path": "configs/offload/phase/wan_t2v_phase.json","bytes": 517,"sha256": "9507c3cf900da6e6abcadae863f786b0837427b72feda612e87f77862fadd5c7"},
-      {"path": "configs/platform/ascend_npu/trellis2_i23d_bf16.json","bytes": 281,"sha256": "d0b6dc23a987238f6c28fce5cc4170f0be5a00563f0fff8392aa0a3c51a93fbf"},
+      {"path": "configs/platform/ascend_npu/trellis2_i23d_bf16.json","bytes": 317,"sha256": "1e54d39e65dc8eb21abccc4665eb52780a32e891ab021c330b41dfa25ba9fbf8"},
       {"path": "configs/platform/metax/trellis2_i23d_bf16.json","bytes": 281,"sha256": "d0b6dc23a987238f6c28fce5cc4170f0be5a00563f0fff8392aa0a3c51a93fbf"},
       {"path": "configs/platform/mlu/trellis2_i23d_bf16.json","bytes": 308,"sha256": "cb00943247ad3b0a004b4adc3e896742404aaab5f906beeb383eeef9ccad2b49"},
       {"path": "configs/platforms/amd_rocm/qwen_image_21_bf16.json","bytes": 422,"sha256": "ff3c75b535f564065435f30831c04238f0e9f69ce3983f4fb237eb4ace34ecf3"},
@@ -1045,7 +1045,7 @@
       {"path": "lightx2v/common/ops/conv/__init__.py","bytes": 90,"sha256": "b8e3f1ea881254577e5c079467b76f45aa509ff83711a48481886968ce9a5774"},
       {"path": "lightx2v/common/ops/conv/conv2d.py","bytes": 3443,"sha256": "fd16060f22115acf02cd0152f14ff757abdd24435ffc1557cd1a73c9f5e5dba7"},
       {"path": "lightx2v/common/ops/conv/conv3d.py","bytes": 4083,"sha256": "0c244468148bb73238e754e65a10b85b31c79bb7b200dbbe80ef686a4343d08b"},
-      {"path": "lightx2v/common/ops/conv/deform_conv2d.py","bytes": 3559,"sha256": "dce393ef5dd6f48c3b80ee61dc68df2992a32f42a66eaeac0a2b694782e9d281"},
+      {"path": "lightx2v/common/ops/conv/deform_conv2d.py","bytes": 4050,"sha256": "33b96c1f78aabbfc087f0ba3b142024d1238ea513cc0829a6a7c803aa532f7fa"},
       {"path": "lightx2v/common/ops/embedding/__init__.py","bytes": 32,"sha256": "94b93b2549857c9ccc40c88de94a9b27de4d4d50882538a5c5233d54232a04d2"},
       {"path": "lightx2v/common/ops/embedding/embedding_weight.py","bytes": 5497,"sha256": "6835c7c9b477658a5a408c761813cd5a47674b3b7c8fdb03a0341ec90b71ff63"},
       {"path": "lightx2v/common/ops/inference_module.py","bytes": 5421,"sha256": "1c4b04d40b205aee49c99b2a8b604d7806ab0d72f08c476c93f4ededd108a55d"},
@@ -1076,14 +1076,14 @@
       {"path": "lightx2v/common/ops/sparse/attention/modules.py","bytes": 5335,"sha256": "19fb40356795393b73656c1356e217ee8c21fdf07671d2b3889eafebe3b4fe4c"},
       {"path": "lightx2v/common/ops/sparse/attention/packed.py","bytes": 2732,"sha256": "88f13879f20f9239c9e456c36ffd81a61a05a14ff488a620cfccd3b1e8ad1087"},
       {"path": "lightx2v/common/ops/sparse/attention/rope.py","bytes": 2654,"sha256": "a3d42a4bd06444a37944134cd5ed7b7de8c2af8c25ad92d48a93b21ed6bb82d9"},
-      {"path": "lightx2v/common/ops/sparse/basic.py","bytes": 19544,"sha256": "9cc1ddfec3629c7fe4b64a105f650e13e0b7bc374a93b28d687689804155e12e"},
+      {"path": "lightx2v/common/ops/sparse/basic.py","bytes": 19758,"sha256": "230c268de34d712bcfe7618e92538c7573ec7b8805cdbb19baa0f03e2807de47"},
       {"path": "lightx2v/common/ops/sparse/dense_spatial.py","bytes": 1640,"sha256": "167f575ab8b13db0be2952ff1988a3b2ce1d8d4f47b418bccbbd93ced0592004"},
       {"path": "lightx2v/common/ops/sparse/linear.py","bytes": 949,"sha256": "b07f941afef0fec171b5e1ab0fb881970efc21cb0301025853f4d2c4363a5549"},
-      {"path": "lightx2v/common/ops/sparse/neighbor_map.py","bytes": 2305,"sha256": "a12f2c508f01466cee7f72280457baa31139c79507360d926a5e98f10bc2abbd"},
+      {"path": "lightx2v/common/ops/sparse/neighbor_map.py","bytes": 2299,"sha256": "eb706a2aff29b7bc0ba89704ed87358adb85b4defe036205c7a89ac61e8162ad"},
       {"path": "lightx2v/common/ops/sparse/nonlinearity.py","bytes": 344,"sha256": "c7371563322f684f5b6cff835576cf9fca8dab79987076804a4b627e771ee504"},
       {"path": "lightx2v/common/ops/sparse/spatial/__init__.py","bytes": 54,"sha256": "f9db474a21e7599d04c09b9ca492f80ac3095a86dd7f0ce751573191baa4be30"},
       {"path": "lightx2v/common/ops/sparse/spatial/channel_to_spatial.py","bytes": 1538,"sha256": "b1383741f85efd942c148378dd24d835fe2bfb513f1f473aeb308c3384abb556"},
-      {"path": "lightx2v/common/ops/sparse/submanifold_conv.py","bytes": 2855,"sha256": "17dc20d7ef86f0fb43e0ff80b85b60975f055d4febe8fabcd36193df072b732e"},
+      {"path": "lightx2v/common/ops/sparse/submanifold_conv.py","bytes": 4504,"sha256": "04bfaeb6d20b67842353acf424f1ee2e604d702d44e6f4b19930ea99123ded40"},
       {"path": "lightx2v/common/ops/tensor/__init__.py","bytes": 34,"sha256": "98f5be2a2564215a457d2671aef0289e4f28f4cad9e5dcbc60f940255fc18390"},
       {"path": "lightx2v/common/ops/tensor/tensor.py","bytes": 5851,"sha256": "c23d6d93d90fe8ed2ca08207528593261bcc2427ef73340d5e1f0eb75aeeffa8"},
       {"path": "lightx2v/common/ops/utils.py","bytes": 17017,"sha256": "6e3de2f7a35fe4f8bdc2b3eb7fc6a3fe8119744f4a4832070c2ea74bd9c2a406"},
@@ -1197,7 +1197,7 @@
       {"path": "lightx2v/models/input_encoders/hf/seko_audio/audio_adapter.py","bytes": 18253,"sha256": "7066f1eba2325379cace7c8704f12bbabc15c2447461ea0094d0b41d4fbc182f"},
       {"path": "lightx2v/models/input_encoders/hf/seko_audio/audio_encoder.py","bytes": 2702,"sha256": "14e1520a33c6ca43b26b3912eef7b4ccbdef0176dbdb8fbfa24fd2dc839ed45f"},
       {"path": "lightx2v/models/input_encoders/hf/trellis2/__init__.py","bytes": 0,"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
-      {"path": "lightx2v/models/input_encoders/hf/trellis2/encoder.py","bytes": 3902,"sha256": "8421d8887af683d51ecdce7dbca639fc41565e9ec923a956247d574dfdd70e79"},
+      {"path": "lightx2v/models/input_encoders/hf/trellis2/encoder.py","bytes": 4592,"sha256": "ba642b78b76400938832c473b4dd126916802b565ac40a145f4019bc25042b20"},
       {"path": "lightx2v/models/input_encoders/hf/vace/vace_processor.py","bytes": 7990,"sha256": "028002afcb3f93f037a402639f8e1150ed7731a5c1630a3aafb5c75ff9cd4e3d"},
       {"path": "lightx2v/models/input_encoders/hf/wan/matrix_game2/__init__.py","bytes": 0,"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
       {"path": "lightx2v/models/input_encoders/hf/wan/matrix_game2/clip.py","bytes": 10945,"sha256": "26ee887a840923da153682ff5d18e111c9fa534e473fcb863396d4185f9d6909"},
@@ -2112,8 +2112,8 @@
       {"path": "lightx2v_kernel/nvidia/csrc/quantization/convrot_gelu_quant.cu","bytes": 7679,"sha256": "f8f0a5ae75fe40cebb4d51781a8476b3c41963b516b6e8cc9d946021bcbb5455"},
       {"path": "lightx2v_kernel/nvidia/docs/en_US/mx_formats_quantization_basics.md","bytes": 2498,"sha256": "d37c0280df82033aa54ed6d62b4962849b110cca338d82265d0951be8e3089a1"},
       {"path": "lightx2v_kernel/nvidia/docs/en_US/nvfp4_quantization_basics.md","bytes": 2600,"sha256": "f04c6e131cc05cb6d03a92ee5671c0b45aa2da418accad9ac96a9384c0a3f013"},
-      {"path": "lightx2v_kernel/nvidia/docs/zh_CN/mx_formats\u91cf\u5316\u57fa\u7840.md","bytes": 2148,"sha256": "cef965d1e54c263ac4c462646d8547f380e98a015614da42abf8a745a4a6307c"},
-      {"path": "lightx2v_kernel/nvidia/docs/zh_CN/nvfp4\u91cf\u5316\u57fa\u7840.md","bytes": 2245,"sha256": "d284f80c746cf82cf06f59ef6cccb4a2e0b90a345d83312fc1b30821cefc3c94"},
+      {"path": "lightx2v_kernel/nvidia/docs/zh_CN/mx_formats量化基础.md","bytes": 2148,"sha256": "cef965d1e54c263ac4c462646d8547f380e98a015614da42abf8a745a4a6307c"},
+      {"path": "lightx2v_kernel/nvidia/docs/zh_CN/nvfp4量化基础.md","bytes": 2245,"sha256": "d284f80c746cf82cf06f59ef6cccb4a2e0b90a345d83312fc1b30821cefc3c94"},
       {"path": "lightx2v_kernel/nvidia/include/lightx2v_kernel_ops.h","bytes": 4750,"sha256": "e57ead946789e8025087b0d0fcba033e5231b7625a4d26bc088f41fbd734f7fc"},
       {"path": "lightx2v_kernel/nvidia/include/utils.h","bytes": 16917,"sha256": "1ccaebee4537ab5be956410f5b269f7316fb8b4c3b3c1f2b65b419ff081712b5"},
       {"path": "lightx2v_kernel/nvidia/pyproject.toml","bytes": 789,"sha256": "66a86e7abf6afe8e2001bfb235f7a606bada8762a3ae98db04d1b3d4c4cd4292"},
@@ -3429,6 +3429,6 @@
       {"path": "tools/profile/analyze_torch_trace_gap.py","bytes": 10245,"sha256": "c60400ebc1e6816f3598fddffb5cbfc04e8d975474534d2414f0e68c28309f55"}
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "d57f724383d328a2530f310cb5c8de4c26460c21"
+    "revision": "5217e0153856751391088caf3126af853cd0cb52"
   }
 }

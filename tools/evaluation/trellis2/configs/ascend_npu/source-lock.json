@@ -1,6 +1,6 @@
 {
   "lightx2v-trellis2": {
-    "git_head": "d57f724383d328a2530f310cb5c8de4c26460c21",
+    "git_head": "5217e0153856751391088caf3126af853cd0cb52",
     "files": [
       {
         "path": ".agents/README.md",
@@ -2929,8 +2929,8 @@
       },
       {
         "path": "configs/platform/ascend_npu/trellis2_i23d_bf16.json",
-        "bytes": 281,
-        "sha256": "d0b6dc23a987238f6c28fce5cc4170f0be5a00563f0fff8392aa0a3c51a93fbf"
+        "bytes": 317,
+        "sha256": "1e54d39e65dc8eb21abccc4665eb52780a32e891ab021c330b41dfa25ba9fbf8"
       },
       {
         "path": "configs/platform/metax/trellis2_i23d_bf16.json",
@@ -5219,8 +5219,8 @@
       },
       {
         "path": "lightx2v/common/ops/conv/deform_conv2d.py",
-        "bytes": 3559,
-        "sha256": "dce393ef5dd6f48c3b80ee61dc68df2992a32f42a66eaeac0a2b694782e9d281"
+        "bytes": 4050,
+        "sha256": "33b96c1f78aabbfc087f0ba3b142024d1238ea513cc0829a6a7c803aa532f7fa"
       },
       {
         "path": "lightx2v/common/ops/embedding/__init__.py",
@@ -5374,8 +5374,8 @@
       },
       {
         "path": "lightx2v/common/ops/sparse/basic.py",
-        "bytes": 19544,
-        "sha256": "9cc1ddfec3629c7fe4b64a105f650e13e0b7bc374a93b28d687689804155e12e"
+        "bytes": 19758,
+        "sha256": "230c268de34d712bcfe7618e92538c7573ec7b8805cdbb19baa0f03e2807de47"
       },
       {
         "path": "lightx2v/common/ops/sparse/dense_spatial.py",
@@ -5389,8 +5389,8 @@
       },
       {
         "path": "lightx2v/common/ops/sparse/neighbor_map.py",
-        "bytes": 2305,
-        "sha256": "a12f2c508f01466cee7f72280457baa31139c79507360d926a5e98f10bc2abbd"
+        "bytes": 2299,
+        "sha256": "eb706a2aff29b7bc0ba89704ed87358adb85b4defe036205c7a89ac61e8162ad"
       },
       {
         "path": "lightx2v/common/ops/sparse/nonlinearity.py",
@@ -5409,8 +5409,8 @@
       },
       {
         "path": "lightx2v/common/ops/sparse/submanifold_conv.py",
-        "bytes": 2855,
-        "sha256": "17dc20d7ef86f0fb43e0ff80b85b60975f055d4febe8fabcd36193df072b732e"
+        "bytes": 4504,
+        "sha256": "04bfaeb6d20b67842353acf424f1ee2e604d702d44e6f4b19930ea99123ded40"
       },
       {
         "path": "lightx2v/common/ops/tensor/__init__.py",
@@ -5979,8 +5979,8 @@
       },
       {
         "path": "lightx2v/models/input_encoders/hf/trellis2/encoder.py",
-        "bytes": 3902,
-        "sha256": "8421d8887af683d51ecdce7dbca639fc41565e9ec923a956247d574dfdd70e79"
+        "bytes": 4592,
+        "sha256": "ba642b78b76400938832c473b4dd126916802b565ac40a145f4019bc25042b20"
       },
       {
         "path": "lightx2v/models/input_encoders/hf/vace/vace_processor.py",
@@ -17129,6 +17129,6 @@
       }
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "d57f724383d328a2530f310cb5c8de4c26460c21"
+    "revision": "5217e0153856751391088caf3126af853cd0cb52"
   }
 }
