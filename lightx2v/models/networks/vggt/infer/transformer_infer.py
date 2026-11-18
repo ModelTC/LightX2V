@@ -36,6 +36,34 @@ def custom_interpolate(x: torch.Tensor, size: Tuple[int, int] = None, scale_fact
         interpolated_chunks = [nn.functional.interpolate(chunk, size=size, mode=mode, align_corners=align_corners) for chunk in chunks]
         x = torch.cat(interpolated_chunks, dim=0)
         return x.contiguous()
+    if x.device.type == "npu" and mode == "bilinear":
+        # The PyTorch bilinear decomposition uses advanced indexing for its
+        # four corner gathers. On Ascend that path falls back to AiCPU; use
+        # index_select (NPU-native) for the same align-corners interpolation.
+        in_h, in_w = x.shape[-2:]
+        out_h, out_w = size
+
+        def axis_indices(input_size, output_size):
+            if align_corners:
+                scale = (input_size - 1) / max(output_size - 1, 1)
+                coord = torch.arange(output_size, device=x.device, dtype=torch.float32) * scale
+            else:
+                scale = input_size / output_size
+                coord = (torch.arange(output_size, device=x.device, dtype=torch.float32) + 0.5) * scale - 0.5
+                coord = coord.clamp_min(0)
+            lower = coord.floor().to(torch.long)
+            upper = (lower + 1).clamp_max(input_size - 1)
+            weight = (coord - lower.to(coord.dtype)).to(x.dtype)
+            return lower, upper, weight
+
+        y0, y1, wy = axis_indices(in_h, out_h)
+        x0, x1, wx = axis_indices(in_w, out_w)
+        top = torch.index_select(x, -2, y0)
+        bottom = torch.index_select(x, -2, y1)
+        rows = top + (bottom - top) * wy.view(1, 1, out_h, 1)
+        left = torch.index_select(rows, -1, x0)
+        right = torch.index_select(rows, -1, x1)
+        return left + (right - left) * wx.view(1, 1, 1, out_w)
     else:
         return nn.functional.interpolate(x, size=size, mode=mode, align_corners=align_corners)
 
@@ -284,6 +312,21 @@ class VGGTTransformerInfer(BaseTransformerInfer):
         """Apply positional embedding to tensor x."""
         patch_w = x.shape[-1]
         patch_h = x.shape[-2]
+        if x.device.type == "npu":
+            cache = getattr(self, "_npu_dpt_position_cache", None)
+            if cache is None:
+                cache = self._npu_dpt_position_cache = {}
+            cache_key = (patch_w, patch_h, x.shape[1], W / H, x.dtype, x.device, ratio)
+            pos_embed = cache.get(cache_key)
+            if pos_embed is None:
+                # These small fixed grids are reused across DPT stages. Generate
+                # their sinusoidal embedding on CPU to avoid repeated AiCPU trig.
+                grid = create_uv_grid(patch_w, patch_h, aspect_ratio=W / H, dtype=x.dtype, device=torch.device("cpu"))
+                pos_embed = position_grid_to_embed(grid, x.shape[1])
+                pos_embed = (pos_embed * ratio).permute(2, 0, 1).to(x.device)
+                cache[cache_key] = pos_embed
+            pos_embed = pos_embed[None].expand(x.shape[0], -1, -1, -1)
+            return x + pos_embed
         pos_embed = create_uv_grid(patch_w, patch_h, aspect_ratio=W / H, dtype=x.dtype, device=x.device)
         pos_embed = position_grid_to_embed(pos_embed, x.shape[1])
         pos_embed = pos_embed * ratio
