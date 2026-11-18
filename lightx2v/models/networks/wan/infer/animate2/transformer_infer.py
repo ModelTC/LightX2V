@@ -4,6 +4,8 @@ from lightx2v.common.ops.attn.flex_attn import FlexAttnWeight
 from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 
+from .attention import PartitionedFlexAttnWeight
+
 
 class WanAnimate2TransformerInfer(WanOffloadTransformerInfer):
     """Wan transformer with a static driving-reference branch per clip."""
@@ -15,13 +17,14 @@ class WanAnimate2TransformerInfer(WanOffloadTransformerInfer):
         if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "phase":
             raise NotImplementedError("Wan-Animate-2 supports model/block offload, not phase offload.")
         if config.get("use_compile", False):
-            raise NotImplementedError("Wan-Animate-2 block compilation is disabled; its FlexAttention kernel is compiled internally.")
+            raise NotImplementedError("Wan-Animate-2 block compilation is not supported.")
         if self.seq_parallel and self.seq_p_attn_type != "ulysses":
             raise NotImplementedError("Wan-Animate-2 sequence parallelism currently requires Ulysses.")
         if self.seq_parallel and (self.seq_p_quant_scheme is not None or self.seq_p_head_parallel):
             raise NotImplementedError("Wan-Animate-2 does not support quantized SP communication or head-parallel SP.")
 
-        self.flex_attn = FlexAttnWeight()
+        generation_type = config.get("generation_attn_type", "flex_attn")
+        self.flex_attn = FlexAttnWeight() if generation_type == "flex_attn" else PartitionedFlexAttnWeight(generation_type)
         self.log_scale = float(config.get("log_scale", 0.0))
         self.mode = "generation"
         self.reference_kv_cache = None

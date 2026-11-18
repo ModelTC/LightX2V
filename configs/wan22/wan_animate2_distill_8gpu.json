@@ -38,6 +38,7 @@
     "refer_offset_w": -1,
     "refer_stride": 1,
     "self_attn_1_type": "sage_attn2",
+    "generation_attn_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
     "rms_norm_type": "sgl-kernel",
