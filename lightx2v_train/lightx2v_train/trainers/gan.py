@@ -13,7 +13,7 @@ from torch.distributed.tensor import DTensor
 from lightx2v_train.runtime.distributed import get_rank, get_world_size
 from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
 
-from .latent_ops import fork_rng, noise_like, seed_generator, seed_rng, stream_seed
+from .pdmd_trainers.utils import fork_rng, noise_like, seed_generator, seed_rng, stream_seed
 
 
 class GanHead(nn.Module):
@@ -41,7 +41,7 @@ class GanObjective:
         self.generator_weight = float(self.config.get("generator_weight", 0.005))
         self.discriminator_weight = float(self.config.get("discriminator_weight", 0.01))
         self.sigma_max = float(self.config.get("sigma_max", 0.999))
-        self.feature_block = self.config.get("feature_block", 49)
+        self.feature_block = self.config["feature_block"]
         if not 0 < self.sigma_max < 1 or any(not isfinite(weight) or weight <= 0 for weight in (self.generator_weight, self.discriminator_weight)):
             raise ValueError("GAN requires positive finite loss weights and a sigma_max in (0, 1).")
         if not hasattr(trainer.fake, "predict_gan_features"):
@@ -88,7 +88,8 @@ class GanObjective:
         trainer = self.trainer
         device = trainer.student.device
         seed = (self.seed, iteration, get_rank(), micro, branch)
-        sigma = torch.randint(1000, (1,), generator=seed_generator(*seed, "gan_sigma")).float() * (self.sigma_max / 999)
+        steps = trainer.num_train_timestep
+        sigma = torch.randint(steps, (1,), generator=seed_generator(*seed, "gan_sigma")).float() * (self.sigma_max / max(1, steps - 1))
         sigma = sigma.to(device)
         if not torch.is_tensor(clean):
             sigma = sigma.expand(2).contiguous()

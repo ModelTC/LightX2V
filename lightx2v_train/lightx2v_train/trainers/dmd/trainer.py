@@ -12,6 +12,7 @@ from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict,
 )
+from torch.distributed.tensor import DTensor
 
 from lightx2v_train.model_capabilities import (
     DistributionMatchingCapability,
@@ -508,21 +509,17 @@ class DmdTrainer(_DmdRuntime):
             self.fake_real_optimizer.step()
             self.fake_real_lr_scheduler.step()
             self.fake_real_optimizer.zero_grad(set_to_none=True)
-        if metric_values:
-            return {
-                "loss": loss_value,
-                **metric_values,
-            }
-        return loss_value
+        return {"loss": loss_value, **metric_values}
 
     def _check_finite_gradients(self, norm, loss):
-        if hasattr(norm, "full_tensor"):
+        if isinstance(norm, DTensor):
             norm = norm.full_tensor()
         finite = (torch.isfinite(norm) & torch.isfinite(norm.new_tensor(loss))).to(torch.int32)
         if dist.is_initialized():
             dist.all_reduce(finite, op=dist.ReduceOp.MIN)
         if not bool(finite):
             raise FloatingPointError("Nonfinite loss or gradient norm.")
+        return norm
 
     def _prepare_timestep_lookup(self, latent_hw=None, num_steps=None):
         """Refresh the dense lookup used by score windows and real-data noise."""

@@ -20,7 +20,8 @@ export PLATFORM=nvidia
 export PYTHONPATH="$train_dir:${train_dir%/*}${PYTHONPATH:+:$PYTHONPATH}"
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 export H3_DCM_OUTPUT="$H3_OUTPUT_DIR/dcm" H3_PDMD_OUTPUT="$H3_OUTPUT_DIR/pdmd${steps}"
-checkpoint=$H3_DCM_OUTPUT/checkpoint-000001500
+export H3_DCM_TRAIN_ITERS=${H3_DCM_TRAIN_ITERS:-1500}
+printf -v checkpoint '%s/checkpoint-%09d' "$H3_DCM_OUTPUT" "$H3_DCM_TRAIN_ITERS"
 export H3_STUDENT_INIT="$checkpoint/student_ema"
 
 nnodes=${NNODES:-4}

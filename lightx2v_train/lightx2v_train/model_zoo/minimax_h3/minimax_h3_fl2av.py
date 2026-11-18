@@ -1,12 +1,18 @@
 """MiniMax-H3 FL2AV transformer with T2AV, I2AV, and FL2AV conditioning."""
 
+import json
+import re
 from collections.abc import Mapping
 from contextlib import contextmanager, nullcontext
 from math import prod
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from peft import LoraConfig, inject_adapter_in_model
+from safetensors import safe_open
+from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
+from torch.distributed.tensor import DTensor
 
 from lightx2v_train.model_capabilities import (
     DistributionMatchingCapability,
@@ -27,7 +33,16 @@ from lightx2v_train.utils.utils import get_running_dtype
 
 from ..base import BaseModel
 from .condition_encoder import MiniMaxH3ConditionEncoder
-from .lora import load_h3_lora
+
+
+def _lora_checkpoint_key(name, adapter_name):
+    return (
+        name.removeprefix("transformer.")
+        .replace(".lora.down.weight", ".lora_A.weight")
+        .replace(".lora.up.weight", ".lora_B.weight")
+        .replace(f".lora_A.{adapter_name}.weight", ".lora_A.weight")
+        .replace(f".lora_B.{adapter_name}.weight", ".lora_B.weight")
+    )
 
 
 @MODEL_REGISTER("minimax_h3_fl2av")
@@ -289,14 +304,7 @@ class MiniMaxH3FL2AVModel(BaseModel):
             rank_pattern=rank_pattern or {},
             alpha_pattern=alpha_pattern or {},
         )
-        try:
-            self.transformer = inject_adapter_in_model(
-                lora_config,
-                self.transformer,
-                adapter_name="default",
-            )
-        except TypeError:
-            self.transformer = inject_adapter_in_model(lora_config, self.transformer)
+        self.transformer = inject_adapter_in_model(lora_config, self.transformer)
 
     def initialize_missing_sharded_parameter(self, name, template):
         if self._lora_init_weights() is not True or ".lora_A." not in name:
@@ -306,11 +314,62 @@ class MiniMaxH3FL2AVModel(BaseModel):
         bound = template.shape[1] ** -0.5
         return make_dtensor_from_template(template, value.uniform_(-bound, bound))
 
+    def _validate_lora_checkpoint(self, directory, adapter_name, parameters):
+        preset = directory / "training_adapter.json"
+        if preset.is_file() and json.loads(preset.read_text()).get("inference_requires_preset", False):
+            raise ValueError("This H3 LoRA requires a different frozen student base.")
+
+        config_path = directory / "adapter_config.json"
+        if not config_path.is_file():
+            return
+        config = json.loads(config_path.read_text())
+        denoiser = self.denoiser_module()
+
+        def pattern_value(pattern, name, default):
+            return next((value for key, value in config.get(pattern, {}).items() if re.fullmatch(rf"(.*\.)?({key})", name)), config[default])
+
+        suffix = f".lora_A.{adapter_name}.weight"
+        for parameter_name, _ in parameters:
+            if not parameter_name.endswith(suffix):
+                continue
+            name = parameter_name.removesuffix(suffix)
+            module = denoiser.get_submodule(name)
+            rank = pattern_value("rank_pattern", name, "r")
+            alpha = pattern_value("alpha_pattern", name, "lora_alpha")
+            scale = alpha / (rank**0.5 if config.get("use_rslora", False) else rank)
+            if rank != module.r[adapter_name] or scale != module.scaling[adapter_name]:
+                raise ValueError(f"H3 LoRA rank/alpha mismatch for {name} in {config_path}.")
+
+    @torch.no_grad()
     def load_lora_weights_for_resume(self, lora_path, adapter_name=None, weights_subdir=None):
         path = Path(lora_path)
         if weights_subdir:
             path /= weights_subdir
-        load_h3_lora(self.denoiser_module(), path, adapter_name or "default")
+        file = path / "pytorch_lora_weights.safetensors" if path.is_dir() else path
+        adapter_name = adapter_name or "default"
+        denoiser = self.denoiser_module()
+        suffixes = tuple(f".lora_{matrix}.{adapter_name}.weight" for matrix in ("A", "B"))
+        expected = {_lora_checkpoint_key(key, adapter_name): (key, parameter) for key, parameter in denoiser.named_parameters() if key.endswith(suffixes)}
+
+        with safe_open(str(file), framework="pt", device="cpu") as weights:
+            file_keys = weights.keys()
+            checkpoint_keys = {_lora_checkpoint_key(key, adapter_name): key for key in file_keys}
+            if not expected or len(checkpoint_keys) != len(file_keys) or checkpoint_keys.keys() != expected.keys():
+                missing = sorted(expected.keys() - checkpoint_keys.keys())
+                extra = sorted(checkpoint_keys.keys() - expected.keys())
+                raise ValueError(f"H3 LoRA keys do not match {file}: missing={missing[:5]}, extra={extra[:5]}.")
+            self._validate_lora_checkpoint(file.parent, adapter_name, expected.values())
+            for key, (_, parameter) in expected.items():
+                if tuple(weights.get_slice(checkpoint_keys[key]).get_shape()) != tuple(parameter.shape):
+                    raise ValueError(f"H3 LoRA tensor {key} has a different rank or shape in {file}.")
+
+            if any(isinstance(parameter, DTensor) for _, parameter in expected.values()):
+                state = {name: weights.get_tensor(checkpoint_keys[key]) for key, (name, _) in expected.items()} if dist.get_rank() == 0 else {}
+                options = StateDictOptions(full_state_dict=True, broadcast_from_rank0=True, strict=False)
+                set_model_state_dict(denoiser, state, options=options)
+            else:
+                for key, (_, parameter) in expected.items():
+                    parameter.copy_(weights.get_tensor(checkpoint_keys[key]))
 
     def _prepare_text_rows(self, condition):
         if not isinstance(condition, dict):

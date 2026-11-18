@@ -4,7 +4,7 @@ from dataclasses import dataclass, fields, is_dataclass
 
 import torch
 
-from ..latent_ops import map_latents
+from .utils import map_latents, pdmd_critic_loss, pdmd_loss_with_stats
 
 
 def is_student_update(iteration, fake_steps):
@@ -53,7 +53,7 @@ class Trajectory:
 @torch.no_grad()
 def full_rollout(student, noise, conditions, sigmas):
     student.set_training(False)
-    states = [map_latents(noise, lambda value, _: value.detach().float())]
+    states = [map_latents(noise, lambda value: value.detach().float())]
     # H3 AV velocities point toward clean, while tensor-only flow uses noise minus clean.
     tensor_only = torch.is_tensor(noise)
     if tensor_only:
@@ -79,7 +79,11 @@ def critic_objective(trainer, trajectory, sigmas, noise):
     trainer.fake.set_training(False)
     velocity = trainer.fake.predict_velocity(query, sigmas, trajectory.conditions[0])
     target = trainer.student.training_target(clean, noise)
-    return trainer.student.regression_loss(velocity, target)
+    if torch.is_tensor(clean):
+        return trainer.student.regression_loss(velocity, target)
+    video_loss = pdmd_critic_loss(velocity.video, target.video)
+    audio_loss = pdmd_critic_loss(velocity.audio, target.audio)
+    return trainer.student.video_weight * video_loss + trainer.student.audio_weight * audio_loss
 
 
 def student_prediction(student, trajectory, index):
@@ -95,7 +99,7 @@ def student_objective(trainer, trajectory, index, ratio, *, recompute=False):
     with torch.set_grad_enabled(not recompute):
         velocity, clean = student_prediction(student, trajectory, index)
     if recompute:
-        clean = map_latents(clean, lambda value, _: value.detach().requires_grad_(True))
+        clean = map_latents(clean, lambda value: value.detach().requires_grad_(True))
 
     start = trajectory.states[index]
     sigmas, next_sigmas = trajectory.sigmas[index : index + 2]
@@ -118,10 +122,24 @@ def student_objective(trainer, trajectory, index, ratio, *, recompute=False):
         fake_clean = student.x0_from_velocity(query, fake_velocity, query_sigmas)
         teacher_clean = student.x0_from_velocity(query, teacher_velocity, query_sigmas)
 
-    loss = student.dmd_loss(clean, fake_clean, teacher_clean)
-    metrics = {"pdmd_loss": loss.detach(), "student_exit_index": index, "score_sigma_video": query_sigmas[0]}
-    if hasattr(student, "dmd_metrics"):
-        metrics.update(student.dmd_metrics())
+    metrics = {"student_exit_index": index, "score_sigma_video": query_sigmas[0]}
+    if torch.is_tensor(clean):
+        loss = student.dmd_loss(clean, fake_clean, teacher_clean)
+    else:
+        video, video_normalizer, video_rms, video_nonfinite = pdmd_loss_with_stats(clean.video, fake_clean.video, teacher_clean.video)
+        audio, audio_normalizer, audio_rms, audio_nonfinite = pdmd_loss_with_stats(clean.audio, fake_clean.audio, teacher_clean.audio)
+        video, audio = student.video_weight * video, student.audio_dmd_weight * audio
+        loss = video + audio
+        metrics.update(
+            dmd_video=video.detach(),
+            dmd_audio=audio.detach(),
+            dmd_video_normalizer=video_normalizer,
+            dmd_audio_normalizer=audio_normalizer,
+            dmd_video_direction_rms=video_rms,
+            dmd_audio_direction_rms=audio_rms,
+            dmd_nonfinite_update=video_nonfinite + audio_nonfinite,
+        )
+    metrics["pdmd_loss"] = loss.detach()
     if len(query_sigmas) == 2:
         metrics["score_sigma_audio"] = query_sigmas[1]
     return loss, clean, metrics

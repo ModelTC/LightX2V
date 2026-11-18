@@ -115,7 +115,8 @@ Set `H3_DCM_TEACHER_PATH` to use a separate teacher model directory.
 After dCM finishes, point `H3_STUDENT_INIT` to its final EMA and start PDMD on every node.
 
 ```bash
-export H3_STUDENT_INIT="$H3_DCM_OUTPUT/checkpoint-000001500/student_ema"
+printf -v dcm_step '%09d' "${H3_DCM_TRAIN_ITERS:-1500}"
+export H3_STUDENT_INIT="$H3_DCM_OUTPUT/checkpoint-$dcm_step/student_ema"
 
 torchrun --nnodes=4 --nproc-per-node=8 \
     --node-rank="$NODE_RANK" --master-addr="$MASTER_ADDR" --master-port=29501 \
@@ -124,4 +125,4 @@ torchrun --nnodes=4 --nproc-per-node=8 \
 
 Each stage writes `train.log` and checkpoints to its output directory.
 
-The [FL2AV DMD config](../configs/train/dmd/minimax_h3_fl2av_dmd_lora.yaml) uses the same `cache_dataset` loader. Enable the shared GAN plugin with `training.dmd.gan.enabled` when the fake model exposes GAN features and the data provides paired targets.
+The [FL2AV DMD config](../configs/train/dmd/minimax_h3_fl2av_dmd_lora.yaml) uses the same `cache_dataset` loader. Set `training.dmd.gan.enabled` to `true` and specify the fake-model block in `training.dmd.gan.feature_block`. GAN training requires paired targets.

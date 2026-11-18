@@ -7,11 +7,10 @@ import torch
 from loguru import logger
 
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
-from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_main_process, reduce_mean
+from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_main_process, is_sequence_parallel_enabled, reduce_mean
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from ..dmd.trainer import DmdTrainer
-from ..latent_ops import fork_rng, map_latents, noise_like, seed_generator, seed_rng, stream_seed
 from .core import (
     critic_objective,
     critic_sigmas,
@@ -23,6 +22,7 @@ from .core import (
     student_objective,
     student_prediction,
 )
+from .utils import fork_rng, map_latents, noise_like, seed_generator, seed_rng, stream_seed
 
 
 @TRAINER_REGISTER("pdmd")
@@ -36,7 +36,7 @@ class PDMDTrainer(DmdTrainer):
         super().__init__(config)
         if self.random_schedule_enabled or self.warp_denoising_step:
             raise ValueError("PDMD uses an explicit physical rollout grid.")
-        if config.get("distributed", {}).get("sequence_parallel", {}).get("enabled", False):
+        if is_sequence_parallel_enabled():
             raise ValueError("PDMD requires independent trajectories per rank; disable sequence parallelism.")
         self.seed = int(config.get("seed", 42))
         self.fake_steps = self.fake_update_ratio
@@ -138,7 +138,7 @@ class PDMDTrainer(DmdTrainer):
             (loss / self.accum).backward()
             loss_value = loss.detach()
             if recompute:
-                gradients = map_latents(clean, lambda value, _: value.grad.detach())
+                gradients = map_latents(clean, lambda value: value.grad.detach())
                 del loss, clean, gan_loss
                 # Replay after releasing the critic graph, with the original RNG state.
                 with fork_rng(self.student.device):
@@ -204,12 +204,9 @@ class PDMDTrainer(DmdTrainer):
             for key, value in dict(loss=loss, **metrics).items():
                 totals[key] = totals.get(key, 0.0) + float(value) / self.accum
 
-        self._sync_sequence_parallel_grads(params)
         gan_update = self.gan is not None and not student_update
         norm = self.gan.clip_discriminator_gradients(self.max_grad_norm) if gan_update else torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
-        if hasattr(norm, "full_tensor"):
-            norm = norm.full_tensor()
-        self._check_finite_gradients(norm, totals["loss"])
+        norm = self._check_finite_gradients(norm, totals["loss"])
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)

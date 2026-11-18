@@ -223,7 +223,6 @@ class _DmdRuntime(BaseTrainer):
         self.teacher_model.reuse_frozen_components_from(self.model)
         self.teacher = self.teacher_model.capabilities.require(DistributionMatchingCapability)
         self.teacher.denoiser().requires_grad_(False)
-        self.teacher.set_training(False)
         self.teacher_model.capabilities.require(ParallelCapability).apply(self.config)
         self.teacher_model.load_deferred_transformer_weights()
         self.teacher.set_training(False)

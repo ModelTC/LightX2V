@@ -24,7 +24,6 @@ from lightx2v_train.model_zoo.native.minimax_h3 import (
     patchify_video_latents,
     video_latent_num_frames,
 )
-from lightx2v_train.trainers.dmd.math import pdmd_critic_loss, pdmd_loss_with_stats
 from lightx2v_train.utils.generation_shapes import resolve_generation_shape
 
 from .common import MiniMaxH3JointLatents, MiniMaxH3LatentShape
@@ -97,9 +96,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         self.audio_dmd_weight = self.audio_weight if options.audio_dmd_loss_weight is None else options.audio_dmd_loss_weight
         self.video_shift = options.video_flow_shift
         self.audio_shift = options.audio_flow_shift
-        self.pdmd = model.config.get("training", {}).get("method") == "pdmd"
         self._layout_cache = OrderedDict()
-        self._dmd_metrics = {}
 
     @property
     def profile(self) -> DistributionMatchingProfile:
@@ -334,29 +331,11 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         )
 
     def regression_loss(self, prediction, target):
-        if self.pdmd:
-            video_loss = pdmd_critic_loss(prediction.video, target.video)
-            audio_loss = pdmd_critic_loss(prediction.audio, target.audio)
-        else:
-            video_loss = F.mse_loss(prediction.video.float(), target.video.float())
-            audio_loss = F.mse_loss(prediction.audio.float(), target.audio.float())
+        video_loss = F.mse_loss(prediction.video.float(), target.video.float())
+        audio_loss = F.mse_loss(prediction.audio.float(), target.audio.float())
         return self.video_weight * video_loss + self.audio_weight * audio_loss
 
     def dmd_loss(self, latents, fake_x0, teacher_x0):
-        if self.pdmd:
-            video, video_normalizer, video_rms, video_nonfinite = pdmd_loss_with_stats(latents.video, fake_x0.video, teacher_x0.video)
-            audio, audio_normalizer, audio_rms, audio_nonfinite = pdmd_loss_with_stats(latents.audio, fake_x0.audio, teacher_x0.audio)
-            video, audio = self.video_weight * video, self.audio_dmd_weight * audio
-            self._dmd_metrics = {
-                "dmd_video": video.detach(),
-                "dmd_audio": audio.detach(),
-                "dmd_video_normalizer": video_normalizer,
-                "dmd_audio_normalizer": audio_normalizer,
-                "dmd_video_direction_rms": video_rms,
-                "dmd_audio_direction_rms": audio_rms,
-                "dmd_nonfinite_update": video_nonfinite + audio_nonfinite,
-            }
-            return video + audio
         return self.video_weight * super().dmd_loss(
             latents.video,
             fake_x0.video,
@@ -366,9 +345,6 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
             fake_x0.audio,
             teacher_x0.audio,
         )
-
-    def dmd_metrics(self):
-        return self._dmd_metrics
 
     @staticmethod
     def detach(value):

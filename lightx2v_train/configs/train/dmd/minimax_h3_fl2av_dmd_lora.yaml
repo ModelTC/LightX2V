@@ -79,6 +79,7 @@ training:
         fake_update_ratio: 5
         gan:
             enabled: false
+            feature_block: 49
         score_sampling:
             type: continuous_uniform
         # Do not apply the generic scheduler shift before H3's modality shifts.

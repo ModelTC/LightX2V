@@ -15,7 +15,7 @@ from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from ..base import BaseTrainer
-from ..latent_ops import fork_rng, seed_rng
+from ..pdmd_trainers.utils import fork_rng, seed_rng
 
 _MODALITIES = ("video", "audio")
 

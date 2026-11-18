@@ -10,6 +10,7 @@ from pathlib import Path
 from torch.utils.data import Sampler
 
 from lightx2v_train.data.cache_dataset import CacheDataset
+from lightx2v_train.model_zoo.native.minimax_h3.packing import FPS
 
 FL2AV_TASKS = ("t2av", "i2av", "fl2av")
 _GEOMETRY = ("num_frames", "target_height", "target_width")
@@ -38,14 +39,12 @@ class MiniMaxH3CacheDataset(CacheDataset):
         self.groups = defaultdict(list)
         self.real_by_geometry = defaultdict(list)
         self.geometries = set()
-        self.real_indices = []
         fingerprint = hashlib.sha256()
         for index, record in enumerate(self.samples):
             self.groups[record[self.group_key]].append(index)
             geometry = _geometry(record)
             self.geometries.add(geometry)
             if record["has_targets"] or record.get("video_latent_path"):
-                self.real_indices.append(index)
                 self.real_by_geometry[geometry].append(index)
             fingerprint.update(json.dumps(record, sort_keys=True, default=str).encode())
         self.fingerprint = fingerprint.hexdigest()
@@ -56,8 +55,8 @@ class MiniMaxH3CacheDataset(CacheDataset):
             return None
         if task == "ref2av":
             count = record["ref_image_count"]
-            if not 1 <= count <= 6:
-                raise ValueError(f"{record_path} must have 1–6 reference images.")
+            if count < 1:
+                raise ValueError(f"{record_path} needs at least one reference image.")
             if count not in self.ref_counts:
                 return None
         video, audio = (record.get(key) for key in _TARGET_PATHS)
@@ -68,8 +67,8 @@ class MiniMaxH3CacheDataset(CacheDataset):
             raise ValueError(f"{record_path} must choose embedded or separate AV targets.")
         if self.require_targets and not (video or embedded):
             return None
-        if min(_geometry(record)) < 1 or record.get("fps", 24) != 24:
-            raise ValueError(f"{record_path} requires positive target dimensions and 24 fps.")
+        if min(_geometry(record)) < 1 or record.get("fps", FPS) != FPS:
+            raise ValueError(f"{record_path} requires positive target dimensions and {FPS} fps.")
         prepared = super()._prepare_record(record, metadata_path, record_path)
         if video:
             prepared.update({key: str(metadata_path.parent / record[key]) for key in _TARGET_PATHS})
@@ -102,8 +101,8 @@ class MiniMaxH3CacheDataset(CacheDataset):
     def build_sampler(self, **kwargs):
         return MiniMaxH3Sampler(self, **kwargs)
 
-    def gan_sample(self, index, geometry=None):
-        indices = self.real_indices if geometry is None else self.real_by_geometry.get(geometry)
+    def gan_sample(self, index, geometry):
+        indices = self.real_by_geometry.get(geometry)
         if not indices:
             raise ValueError(f"GAN requires paired AV targets for geometry {geometry}.")
         return self[random.Random(index).choice(indices)]

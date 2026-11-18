@@ -48,7 +48,7 @@ training:
     method: dcm
     train_type: lora
     output_dir: ${oc.env:H3_DCM_OUTPUT,./output_train/h3_fl2av_dcm}
-    max_train_iters: 1500
+    max_train_iters: ${oc.decode:${oc.env:H3_DCM_TRAIN_ITERS,1500}}
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
     max_grad_norm: 1.0
