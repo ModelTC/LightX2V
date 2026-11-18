@@ -200,6 +200,10 @@ class VarLenTensor:
             raise ValueError(f"Unsupported reduce operation: {op}")
         if dim is None or 0 in dim:
             return red
+        if len(self.layout) == 1:
+            # A single sequence is a regular reduction; avoid segment_reduce,
+            # which currently falls back to CPU on Ascend.
+            return getattr(red, op)(dim=0)
         red = torch.segment_reduce(red, reduce=op, lengths=self.seqlen)
         return red
 

@@ -47,10 +47,39 @@ class SparseConv3d(nn.Module):
             return x.replace(output)
         features = x.feats.to(self.weight.dtype)
         output = features.new_zeros((features.shape[0], self.out_channels))
-        for (kx, ky, kz), indices in self.neighbor_map(x.coords.to(features.device), self.kernel_size, self.dilation):
+        cache_key = f"torch_SubMConv3d_neighbor_cache_{self.kernel_size}_dilation{self.dilation}"
+        neighbors = x.get_spatial_cache(cache_key)
+        if neighbors is None:
+            neighbors = self.neighbor_map(x.coords.to(features.device), self.kernel_size, self.dilation)
+            x.register_spatial_cache(cache_key, neighbors)
+        if features.device.type == "npu":
+            stacked_key = f"{cache_key}_stacked"
+            stacked_neighbors = x.get_spatial_cache(stacked_key)
+            if stacked_neighbors is None:
+                offsets = tuple(offset for offset, _ in neighbors)
+                indices = torch.stack([indices for _, indices in neighbors]).to(features.device)
+                stacked_neighbors = (offsets, indices)
+                x.register_spatial_cache(stacked_key, stacked_neighbors)
+
+            offsets, indices = stacked_neighbors
+            weights = self.weight.permute(1, 2, 3, 4, 0).reshape(-1, features.shape[1], self.out_channels)
+            chunk_size = 3
+            for start in range(0, len(offsets), chunk_size):
+                end = min(start + chunk_size, len(offsets))
+                chunk_indices = indices[start:end]
+                valid = chunk_indices >= 0
+                gathered = features.index_select(0, chunk_indices.clamp_min(0).reshape(-1))
+                gathered = gathered.reshape(end - start, features.shape[0], features.shape[1])
+                gathered.mul_(valid.to(dtype=gathered.dtype).unsqueeze(-1))
+                contribution = torch.bmm(gathered, weights[start:end]).sum(dim=0)
+                output.add_(contribution)
+                del gathered, contribution
+            if self.bias is not None:
+                output.add_(self.bias)
+            return x.replace(output)
+
+        for (kx, ky, kz), indices in neighbors:
             valid = indices >= 0
-            if not valid.any():
-                continue
             indices = indices.clamp_min(0).to(features.device)
             gathered = features.index_select(0, indices)
             contribution = gathered @ self.weight[:, kx, ky, kz, :].transpose(0, 1)

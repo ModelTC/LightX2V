@@ -27,34 +27,44 @@ def deformable_columns(input_tensor, offset, mask, kernel_size, stride, padding,
 class DeformConv2dWeight(Conv2dWeightTemplate):
     """FP32 interpolation followed by a registered BF16 projection GEMM."""
 
-    def __init__(self, weight_name, bias_name, stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1, linear_backend="Default", tile_size=4096):
+    def __init__(self, weight_name, bias_name, stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1, linear_backend="Default", tile_size=4096, projection_dtype=torch.bfloat16):
         super().__init__(weight_name, bias_name, stride, padding, dilation, groups)
         if groups != 1:
             raise ValueError("torch_deform_bf16 supports one weight group and one offset group")
         self.projection = MM_WEIGHT_REGISTER[linear_backend](weight_name, bias_name)
         self.tile_size = tile_size
+        self.projection_dtype = projection_dtype
 
     def load(self, weight_dict):
         weight = weight_dict[self.weight_name]
         self.kernel_size = tuple(weight.shape[-2:])
         self.out_channels = weight.shape[0]
-        tensors = {self.weight_name: weight.flatten(1)}
+        tensors = {self.weight_name: weight.to(self.projection_dtype).flatten(1)}
         if self.bias_name is not None:
-            tensors[self.bias_name] = weight_dict[self.bias_name]
+            tensors[self.bias_name] = weight_dict[self.bias_name].to(self.projection_dtype)
         self.projection.load(tensors)
-        if self.projection.weight.dtype != torch.bfloat16:
-            raise ValueError("Deformable convolution requires BF16 projection weights")
+        if self.projection.weight.dtype != self.projection_dtype:
+            raise ValueError(f"Deformable convolution requires {self.projection_dtype} projection weights")
 
     def apply(self, input_tensor, offset, mask=None):
         batch = input_tensor.shape[0]
         out_h, out_w = offset.shape[-2:]
-        output = input_tensor.new_empty((batch, self.out_channels, out_h * out_w), dtype=torch.bfloat16)
-        # Interpolation is coordinate math; all projection operands are BF16.
+        output = input_tensor.new_empty((batch, self.out_channels, out_h * out_w), dtype=self.projection_dtype)
+        # Interpolation is coordinate math; only projection operands are cast.
         with torch.autocast(input_tensor.device.type, enabled=False):
             values = input_tensor.float()
             for start in range(0, out_h * out_w, self.tile_size):
                 stop = min(start + self.tile_size, out_h * out_w)
                 columns = deformable_columns(values, offset, mask, self.kernel_size, self.stride, self.padding, self.dilation, start, stop)
-                projected = self.projection.apply(columns.to(torch.bfloat16).contiguous())
+                projected = self.projection.apply(columns.to(self.projection_dtype).contiguous())
                 output[:, :, start:stop] = projected.reshape(batch, stop - start, self.out_channels).transpose(1, 2)
         return output.reshape(batch, self.out_channels, out_h, out_w)
+
+
+@CONV2D_WEIGHT_REGISTER("torch_deform_fp32")
+class DeformConv2dWeightFp32(DeformConv2dWeight):
+    """FP32 interpolation and projection for precision-preserving NPU fallback."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs["projection_dtype"] = torch.float32
+        super().__init__(*args, **kwargs)

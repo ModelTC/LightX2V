@@ -32,13 +32,23 @@ class BiRefDeformConv(torch.nn.Module):
 
 class TrellisImageEncoder:
     def __init__(self, dino_path, rembg_path, device, linear_backend="Default", deform_conv_backend="original"):
-        if linear_backend != "Default" or deform_conv_backend != "original":
+        if linear_backend != "Default" or deform_conv_backend not in {"original", "torch_deform_bf16", "torch_deform_fp32"}:
             raise NotImplementedError("Precision-aligned TRELLIS.2 requires the original image encoder operators")
         self.device = device
         self.dino = DINOv3ViTModel.from_pretrained(dino_path, local_files_only=True).eval().to(device)
         self.rembg = AutoModelForImageSegmentation.from_pretrained(rembg_path, trust_remote_code=True, local_files_only=True).eval().to(device)
+        if deform_conv_backend in {"torch_deform_bf16", "torch_deform_fp32"}:
+            self._replace_deform_convs(self.rembg, deform_conv_backend, linear_backend)
         self.normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         self.rembg_transform = transforms.Compose([transforms.Resize((1024, 1024)), transforms.ToTensor(), self.normalize])
+
+    @staticmethod
+    def _replace_deform_convs(module, deform_conv_backend, linear_backend):
+        for name, child in list(module.named_children()):
+            if all(hasattr(child, attr) for attr in ("offset_conv", "modulator_conv", "regular_conv")):
+                setattr(module, name, BiRefDeformConv(child, deform_conv_backend, linear_backend))
+            else:
+                TrellisImageEncoder._replace_deform_convs(child, deform_conv_backend, linear_backend)
 
     def preprocess(self, image):
         has_alpha = image.mode == "RGBA" and not np.all(np.asarray(image)[:, :, 3] == 255)

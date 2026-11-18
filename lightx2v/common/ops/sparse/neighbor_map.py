@@ -40,7 +40,7 @@ def sorted_neighbors(coords, kernel_size, dilation):
         # Out-of-grid queries can collide after linearization. Compare full rows.
         hit = (keys[position] == query_keys) & (coords[candidate] == query).all(dim=1)
         indices = torch.where(hit, candidate, torch.full_like(candidate, -1))
-        maps.append((offset, indices.cpu()))
+        maps.append((offset, indices))
     return maps
 
 
