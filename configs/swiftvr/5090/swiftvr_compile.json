@@ -1,4 +1,5 @@
 {
+  "png_compress_level": 1,
   "attention_backend": "sage_attn2",
   "cross_attention_backend": "sage_attn2",
   "rope_type": "flashinfer_rope",

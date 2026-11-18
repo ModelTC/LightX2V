@@ -29,6 +29,7 @@ from lightx2v.models.networks.swiftvr import (
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.image_io import validate_png_compress_level
 from lightx2v.utils.input_info import SRState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -46,6 +47,7 @@ class SwiftVRRunner(DefaultRunner):
     _WARMUP_PROMPTS = ()
 
     def __init__(self, config):
+        validate_png_compress_level(config.get("png_compress_level"))
         parallel = config.get("parallel") or {}
         self.chunk_p_size = parallel.get("chunk_p_size", 1)
         if any(parallel.get(name, 1) != 1 for name in ("seq_p_size", "cfg_p_size", "tensor_p_size")):
@@ -352,7 +354,7 @@ class SwiftVRRunner(DefaultRunner):
         if input_info.return_result_tensor:
             images = images.to(device="cpu", dtype=torch.float32)
         else:
-            save_to_image(images, output_path, method=self.config.get("save_image_method", "opencv"))
+            save_to_image(images, output_path, method=self.config.get("save_image_method", "opencv"), png_compress_level=self.config.get("png_compress_level"))
             images = None
 
         elapsed = time.perf_counter() - started_at

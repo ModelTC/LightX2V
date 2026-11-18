@@ -352,17 +352,19 @@ def save_to_video(
         raise ValueError(f"Unknown save method: {method}")
 
 
-def save_to_image(images: torch.Tensor, output_path: str, method: str = "opencv") -> None:
+def save_to_image(images: torch.Tensor, output_path: str, method: str = "opencv", *, png_compress_level: Optional[int] = None) -> None:
     """Save the first frame of ComfyUI tensor ``[N, H, W, C]`` (values in ``[0, 1]``) as a static image.
 
     Used for ``task=sr`` when conditioning comes from ``image_path`` only (no ``video_path``).
+    ``png_compress_level`` is 0-9 for PNG output only; None keeps the encoder's default.
+    Lower levels reduce encoding work at the cost of larger files, without changing pixels.
     """
     assert images.dim() == 4 and images.shape[-1] == 3, "Input must be [N, H, W, C] with C=3"
     with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {output_path}", time_unit="ms"):
         frame = images[0].clamp(0, 1).to(device="cpu", dtype=torch.float32).numpy()
         pixels = (frame * 255.0).round().astype(np.uint8)
         image = Image.fromarray(pixels) if method == "pil" else cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
-        save_image(image, output_path, method)
+        save_image(image, output_path, method, png_compress_level=png_compress_level)
 
 
 def mux_audio_from_video(

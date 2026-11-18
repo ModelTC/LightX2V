@@ -19,7 +19,7 @@ from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.image_io import save_image
+from lightx2v.utils.image_io import save_image, validate_png_compress_level
 from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 
@@ -73,6 +73,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     _WARMUP_TASKS = ("t2i", "i2i")
 
     def __init__(self, config):
+        validate_png_compress_level(config.get("png_compress_level"))
         super().__init__(config)
         self.is_layered = self.config.get("layered", False)
         if self.is_layered:
@@ -540,7 +541,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 else:
                     conversion = cv2.COLOR_RGBA2BGRA if pixels.shape[-1] == 4 else cv2.COLOR_RGB2BGR
                     image = cv2.cvtColor(pixels, conversion)
-                save_image(image, path, method)
+                save_image(image, path, method, png_compress_level=self.config.get("png_compress_level"))
             self.record_output("image", path)
             logger.info(f"{log_prefix}: {path}")
 
