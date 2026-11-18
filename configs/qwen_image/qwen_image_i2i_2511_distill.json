@@ -17,5 +17,6 @@
     "cpu_offload": true,
     "cpu_offload_numa": true,
     "vae_cpu_offload": false,
-    "offload_granularity": "block"
+    "offload_granularity": "block",
+    "offload_resident_blocks": 15
 }

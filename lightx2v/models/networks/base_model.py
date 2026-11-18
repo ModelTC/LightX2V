@@ -413,6 +413,9 @@ class BaseTransformerModel(ABC):
         Args:
             weight_dict: Optional weight dictionary to apply
         """
+        resident = getattr(getattr(self, "transformer_infer", None), "resident_blocks", None)
+        if resident is not None and resident.active:
+            raise RuntimeError("Release resident blocks before replacing their CPU weight masters.")
         if weight_dict is not None:
             self.original_weight_dict = weight_dict
             if self._checkpoint_metadata is not None:
@@ -506,6 +509,8 @@ class BaseTransformerModel(ABC):
     def _update_lora(self, lora_path, strength):
         if self.config.get("cpu_offload_numa") and self.config.get("lora_configs"):
             raise ValueError("Cannot switch LoRA after merging it into NUMA-local weights at startup")
+        if getattr(getattr(self, "transformer_infer", None), "resident_blocks", None) is not None:
+            raise ValueError("Static block residency does not support runtime LoRA switching.")
         if isinstance(lora_path, dict):
             lora_weight = lora_path
         else:
@@ -518,6 +523,8 @@ class BaseTransformerModel(ABC):
     def _remove_lora(self):
         if self.config.get("cpu_offload_numa") and self.config.get("lora_configs"):
             raise ValueError("Cannot remove LoRA after merging it into NUMA-local weights at startup")
+        if getattr(getattr(self, "transformer_infer", None), "resident_blocks", None) is not None:
+            raise ValueError("Static block residency does not support runtime LoRA removal.")
         self.pre_weight.remove_lora()
         self.transformer_weights.remove_lora()
         if hasattr(self, "post_weight"):

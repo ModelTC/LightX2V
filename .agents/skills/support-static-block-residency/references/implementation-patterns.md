@@ -109,6 +109,6 @@ Wan、Qwen Image、Qwen-Image-2.1 和 MiniMax-H3 在配置包含 `offload_reside
 
 ## 当前配置边界
 
-公共 `validate_residency_config()` 要求 CPU block offload、`AI_DEVICE` 为 `cuda` 或 `npu`，以及单设备 eager、固定权重/分辨率、`NoCaching`。当前拒绝 lazy loading、共享 CPU 权重、并行、LoRA/adapter、变分辨率、compile 和 CUDA Graph 等组合；具体字段以函数为准。
+公共 `validate_residency_config()` 要求 CPU block offload、`AI_DEVICE` 为 `cuda` 或 `npu`，以及单设备 eager、固定权重/分辨率、`NoCaching`。当前拒绝 lazy loading、共享 CPU 权重、并行、LoRA/adapter、变分辨率、compile 和 CUDA Graph 等组合；具体字段以函数为准。模型级适配器可对已在算子加载前合并、不会再变更的静态 LoRA 作有生命周期与 owner 保护的例外；估测 producer 仍需独立核权重和输入表示，不能继承运行时的支持声明。
 
 模型校验另负责模型名、任务和 conditioning。新模型保留已有配置的行为，仅在选择事件/常驻路径时做相应校验。当前限制描述实现范围，不代表原理上永远无法组合；扩展兼容性须有对应实现和验证，不能绕过校验即可宣称支持。

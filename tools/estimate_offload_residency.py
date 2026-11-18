@@ -154,6 +154,10 @@ def build_wan_case(config, image_path=None):
 
 def build_qwen_case(config, prompt, negative_prompt=" "):
     """Use real block weights, tokenizer lengths and production RoPE with synthetic activations."""
+    # This producer builds one image grid and one timestep embedding, and loads
+    # unmerged checkpoint weights. Do not silently measure a different workload.
+    if config["task"] != "t2i" or config.get("zero_cond_t", False) or config.get("lora_configs"):
+        raise ValueError("Qwen block measurement supports t2i without zero_cond_t or LoRA; runtime residency has a wider scope")
     from transformers import Qwen2Tokenizer
 
     validate_qwen_residency_config(config)
