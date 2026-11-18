@@ -1,36 +1,54 @@
-"""Register a CPU ``PLATFORM`` so the MiniMax-H3-Image tests run without an accelerator.
+"""Register a test-only CPU backend through platform plugin discovery."""
 
-LightX2V binds ``AI_DEVICE`` once, when ``lightx2v`` is first imported, so this
-module must be imported before anything from ``lightx2v``. ``torch.cpu`` lacks
-a few of the device-module helpers the runners call; they get no-op stand-ins.
-"""
-
+import importlib.metadata
 import os
+from unittest.mock import patch
 
 import torch
 
 os.environ["PLATFORM"] = "cpu"
 
-from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER  # noqa: E402
 
-if "cpu" not in PLATFORM_DEVICE_REGISTER:
+class CpuDevice:
+    name = "cpu"
 
-    @PLATFORM_DEVICE_REGISTER("cpu")
-    class CpuDevice:
-        name = "cpu"
+    @staticmethod
+    def init_device_env():
+        pass
 
-        @staticmethod
-        def init_device_env():
-            pass
+    @staticmethod
+    def is_available():
+        return True
 
-        @staticmethod
-        def is_available():
-            return True
+    @staticmethod
+    def get_device():
+        return "cpu"
 
-        @staticmethod
-        def get_device():
-            return "cpu"
 
+class CpuPlugin:
+    name = "cpu"
+
+    @staticmethod
+    def load():
+        def register():
+            from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
+
+            PLATFORM_DEVICE_REGISTER("cpu")(CpuDevice)
+
+        return register
+
+
+original_entry_points = importlib.metadata.entry_points
+
+
+def entry_points(*args, **kwargs):
+    if kwargs.get("group") == "lightx2v.platform_plugins":
+        return [CpuPlugin()]
+    return original_entry_points(*args, **kwargs)
+
+
+with patch("importlib.metadata.entry_points", entry_points):
+    import lightx2v_platform  # noqa: F401
 
 for _name, _value in (
     ("manual_seed", torch.manual_seed),

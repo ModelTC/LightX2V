@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .model import TaoMateBase10Model
@@ -45,7 +46,6 @@ class TaoMateBase10Producer:
             weight_auto_quant=False,
             adapter_model_path=None,
             lora_configs=None,
-            lora_dynamic_apply=False,
         )
         device = "cpu" if config.get("cpu_offload", False) else AI_DEVICE
         if self.shared_base is None:
@@ -69,7 +69,7 @@ class TaoMateBase10Producer:
         previous request's last milestone, including both stereo channels.
         """
         model = self.load()
-        height, width = self.config["size"]
+        height, width = get_input_value(self.config, "size")
         scheduler = self.scheduler
         scheduler.prepare_request(
             text_token_tags=text_tags,

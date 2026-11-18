@@ -1,7 +1,6 @@
 {
     "infer_steps": 40,
     "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "general_sparse_attn",
     "general_sparse_attn_setting": {
         "sparse_mask_generator": "sparge_mask_generator",
@@ -15,5 +14,8 @@
     "sample_guide_scale": 5,
     "sample_shift": 5,
     "enable_cfg": true,
-    "cpu_offload": false
+    "cpu_offload": false,
+    "request_defaults": {
+        "size": [480, 832]
+    }
 }

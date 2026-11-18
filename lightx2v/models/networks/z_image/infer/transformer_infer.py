@@ -12,7 +12,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.zero_cond_t = config.get("zero_cond_t", False)
         self.n_heads = config.get("n_heads", config.get("num_attention_heads", 24))
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             parallel_config = self.config["parallel"]
             self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
@@ -81,7 +81,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             query, key = attn_phase.rope.apply(query, key, freqs_cis, positions=rope_positions)
 
         total_seq_len = query.shape[0]
-        if self.config["seq_parallel"] and image_tokens_len is not None:
+        if self.config.get("seq_parallel", False) and image_tokens_len is not None:
             world_size = torch.distributed.get_world_size(self.seq_p_group)
             num_heads = query.shape[1]
             if num_heads % world_size != 0:

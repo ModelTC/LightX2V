@@ -19,7 +19,7 @@ class PipelineComm:
 
     CUDA-only: receive buffers are allocated on the current CUDA device via
     ``torch.cuda.current_device()``. PipeFusion is gated to CUDA at config time
-    (see ``set_config._validate_pipefusion_config``), so this is not reachable
+    (see ``parallel._validate_pipefusion_config``), so this is not reachable
     on XPU/NPU platforms.
     """
 

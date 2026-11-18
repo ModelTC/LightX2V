@@ -19,7 +19,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--controller_request_port", type=int, default=REQUEST_POLLING_PORT - 2)
     parser.add_argument("--max_requests", type=int, default=0, help="0 means no hard cap")
     parser.add_argument("--sleep_min_ms", type=float, default=5.0, help="minimum loop sleep in ms")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--prompt", type=str)
     parser.add_argument("--negative_prompt", type=str)
     parser.add_argument("--image_path", type=str)

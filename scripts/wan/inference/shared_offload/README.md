@@ -86,6 +86,6 @@ The shared adapter requires FP8-vLLM block weights. Changing only the task name 
 | Inference command | `--save_result_path`, `--seed` | Output file and random seed (default 42) |
 | JSON | `shared_cpu_weight_scope` | `numa` (default) or `host` |
 | Inference command | `--config_json` | Configuration file path |
-| JSON | `infer_steps`, `num_frames`, `size` | 40 steps, 81 frames, `[480, 832]` in height/width order |
+| JSON | `infer_steps`, `request_defaults.num_frames`, `request_defaults.size` | 40 steps, 81 frames, `[480, 832]` in height/width order |
 
 Sharing requires Linux SysV shared memory and CUDA pinned memory. Strict NUMA binding failures raise an error. The current shared path does not support TP, LoRA, or lazy loading. CPU weight sharing is not enabled for T5, CLIP, or the VAE. GPU activations and work buffers remain private to each process.

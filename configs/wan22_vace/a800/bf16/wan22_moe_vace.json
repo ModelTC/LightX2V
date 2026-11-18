@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "sample_guide_scale": [
@@ -14,5 +12,9 @@
     "offload_granularity": "model",
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
-    "boundary": 0.900
+    "boundary": 0.900,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

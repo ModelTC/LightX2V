@@ -5,6 +5,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from loguru import logger
 
+from lightx2v.common.ops.mm.lora_consumer import ProjectionParts, base_projection, gated_residual_consumer, project_parts, swiglu_consumer
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
 from lightx2v.models.networks.minimax_h3.infer import fused_qkv  # noqa: F401 - registers the Triton backend
@@ -42,6 +43,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self.num_heads = self.global_num_heads // self.tp_size
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.infer_dtype = GET_DTYPE()
+        self.use_lora_consumer = config.get("lora_mode", "merge") == "consumer"
         self.use_fused_qkv = bool(config.get("use_fused_qkv", False))
         self.use_fused_qkv_norm_rope = bool(config.get("use_fused_qkv_norm_rope", False))
         self.qkv_norm_rope_type = config.get("qkv_norm_rope_type", "triton")
@@ -75,17 +77,17 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         dist.all_gather(gathered, tensor.contiguous(), group=self.tp_group)
         return torch.cat(gathered, dim=-1)
 
+    def project_qkv(self, weights, hidden_states):
+        """Project QKV before normalization and sequence exchange."""
+        if self.use_fused_qkv and weights.has_fused_qkv:
+            return weights.project_fused_qkv(hidden_states)
+        if self.use_fused_qkv:
+            _warn_fused_qkv_fallback_once()
+        return weights.to_q.apply(hidden_states), weights.to_k.apply(hidden_states), weights.to_v.apply(hidden_states)
+
     def _prepare_qkv(self, weights, hidden_states, rotary_emb):
         """Project QKV and return Q/K with normalization and RoPE applied."""
-        if self.use_fused_qkv and weights.has_fused_qkv:
-            q, k, v = weights.project_fused_qkv(hidden_states)
-        else:
-            if self.use_fused_qkv:
-                _warn_fused_qkv_fallback_once()
-            q = weights.to_q.apply(hidden_states)
-            k = weights.to_k.apply(hidden_states)
-            v = weights.to_v.apply(hidden_states)
-
+        q, k, v = self.project_qkv(weights, hidden_states)
         if self.use_fused_qkv_norm_rope and rotary_emb is not None:
             fused = self.qkv_norm_rope.apply(
                 q,
@@ -115,7 +117,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
         return q, k, v
 
-    def _attention(self, weights, hidden_states, pre_infer_out):
+    def _attention(self, weights, hidden_states, pre_infer_out, base_out=None):
         q, k, v = self._prepare_qkv(weights, hidden_states, pre_infer_out.rotary_emb)
         sp_state = pre_infer_out.sequence_parallel_state
         attention_kwargs = {
@@ -138,6 +140,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
         else:
             aux_length = sp_state.aux_length
+            parallel_kwargs = {} if sp_state.valid_seq_len is None else {"valid_seq_len": sp_state.valid_seq_len}
             out, aux_out = weights.calculate_parallel.apply(
                 q=q[aux_length:].contiguous(),
                 k=k[aux_length:].contiguous(),
@@ -154,17 +157,32 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.seq_p_head_parallel,
                 aux_first=True,
                 attention_kwargs=attention_kwargs,
+                **parallel_kwargs,
             )
             if aux_out is not None:
                 out = torch.cat((aux_out, out), dim=0)
-        return weights.to_out.apply(out.to(self.infer_dtype))
+        out = out.to(self.infer_dtype)
+        return project_parts(weights.to_out, out, base_out) if self.use_lora_consumer else weights.to_out.apply(out)
 
-    @staticmethod
-    def _ff(weights, hidden_states):
+    def _ff(self, weights, hidden_states, base_in=None, base_out=None):
+        if self.use_lora_consumer:
+            parts = project_parts(weights.in_proj, hidden_states, base_in)
+            if weights.out_proj.has_lora_branch:
+                return project_parts(weights.out_proj, swiglu_consumer(parts), base_out)
+            # Without an output adapter, retain the backend's fused activation
+            # quantizer and its rounding order.
+            value, gate = parts.materialize().chunk(2, dim=-1)
+            return ProjectionParts(weights.apply_swiglu(value, gate))
         value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
         return weights.apply_swiglu(value, gate)
 
-    def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None):
+    @staticmethod
+    def _modulated_norm(norm, hidden_states, shift, scale, indices):
+        normed = norm.apply(hidden_states)
+        normed = normed * (1.0 + scale.index_select(0, indices))
+        return normed + shift.index_select(0, indices)
+
+    def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None, base_projections=None):
         # Keep the Python cache lookup outside the compiled block.
         if modulation is None:
             modulation = self._compute_adaln_table(weights, pre_infer_out)
@@ -172,16 +190,14 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         indices = pre_infer_out.adaln_indices
 
         residual = hidden_states
-        normed = weights.norm1.apply(hidden_states)
-        normed = normed * (1.0 + scale_msa.index_select(0, indices))
-        normed = normed + shift_msa.index_select(0, indices)
-        hidden_states = residual + gate_msa.index_select(0, indices) * self._attention(weights.attn, normed, pre_infer_out)
+        normed = self._modulated_norm(weights.norm1, hidden_states, shift_msa, scale_msa, indices)
+        attention = self._attention(weights.attn, normed, pre_infer_out, base_projections[0]) if self.use_lora_consumer else self._attention(weights.attn, normed, pre_infer_out)
+        hidden_states = gated_residual_consumer(attention, residual, gate_msa, indices) if self.use_lora_consumer else residual + gate_msa.index_select(0, indices) * attention
 
         residual = hidden_states
-        normed = weights.norm2.apply(hidden_states)
-        normed = normed * (1.0 + scale_mlp.index_select(0, indices))
-        normed = normed + shift_mlp.index_select(0, indices)
-        hidden_states = residual + gate_mlp.index_select(0, indices) * self._ff(weights.ff, normed)
+        normed = self._modulated_norm(weights.norm2, hidden_states, shift_mlp, scale_mlp, indices)
+        feed_forward = self._ff(weights.ff, normed, *base_projections[1:]) if self.use_lora_consumer else self._ff(weights.ff, normed)
+        hidden_states = gated_residual_consumer(feed_forward, residual, gate_mlp, indices) if self.use_lora_consumer else residual + gate_mlp.index_select(0, indices) * feed_forward
         return hidden_states
 
     def _compute_adaln_table(self, weights, pre_infer_out):
@@ -219,10 +235,11 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         raise RuntimeError("Persistent MiniMax-H3 AdaLN cache was not prepared")
 
     def run_block(self, block_idx, block, hidden_states, pre_infer_out):
-        if self.use_adaln_cache:
-            adaln_table = self._get_cached_adaln(block_idx)
-            return super().run_block(block_idx, block, hidden_states, pre_infer_out, adaln_table)
-        return super().run_block(block_idx, block, hidden_states, pre_infer_out)
+        adaln_table = self._get_cached_adaln(block_idx) if self.use_adaln_cache else None
+        # Keep Python views outside Dynamo; refresh after offload/switching so
+        # each view shares the current tensors without mutating the LoRA branch.
+        base_projections = tuple(base_projection(module) for module in (block.attn.to_out, block.ff.in_proj, block.ff.out_proj)) if self.use_lora_consumer else None
+        return super().run_block(block_idx, block, hidden_states, pre_infer_out, adaln_table, base_projections)
 
     def infer_without_offload(self, blocks, hidden_states, pre_infer_out):
         for block_index, block in enumerate(blocks):

@@ -2,6 +2,7 @@
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 
@@ -46,7 +47,7 @@ def split_tensor_parallel_weight(key, tensor, tp_size, tp_rank, *, text_refiner_
     return torch.chunk(tensor, tp_size, dim=0)[tp_rank].contiguous()
 
 
-def shard_packed_sequence(pre, group, *, allow_media_prefix=False):
+def shard_packed_sequence(pre, group):
     world_size, rank = dist.get_world_size(group), dist.get_rank(group)
     total_length = pre.hidden_states.shape[0]
     text_length = pre.text_indices.numel()
@@ -54,16 +55,10 @@ def shard_packed_sequence(pre, group, *, allow_media_prefix=False):
     if not torch.equal(pre.text_indices, expected_text_indices):
         raise ValueError("MiniMax-H3 sequence parallel requires the conditioner rows to be a contiguous prefix")
     remainder = total_length % world_size
-    if text_length < remainder and not allow_media_prefix:
+    if text_length < remainder:
         raise ValueError(f"MiniMax-H3 cannot split packed length {total_length} over {world_size} ranks with only {text_length} prefix rows")
     aux_length = text_length - ((text_length - remainder) % world_size)
-    if allow_media_prefix:
-        # Dense attention treats media rows in the replicated prefix exactly
-        # like text rows, so short prompts need neither padding nor a mask.
-        aux_length = max(aux_length, remainder)
     main_length = total_length - aux_length
-    if main_length == 0 and allow_media_prefix:
-        return pre
     if main_length <= 0 or main_length % world_size:
         raise ValueError(f"MiniMax-H3 sequence split is invalid: total={total_length}, aux={aux_length}, seq_p_size={world_size}")
     main_shard_length = main_length // world_size
@@ -73,12 +68,34 @@ def shard_packed_sequence(pre, group, *, allow_media_prefix=False):
     def shard(tensor):
         return torch.cat((tensor[:aux_length], tensor[shard_start:shard_end]), dim=0)
 
+    return _apply_sequence_shard(pre, shard, aux_length=aux_length, main_shard_length=main_shard_length)
+
+
+def shard_full_packed_sequence(pre, group):
+    world_size, rank = dist.get_world_size(group), dist.get_rank(group)
+    total_length = pre.hidden_states.shape[0]
+    if total_length == 0:
+        raise ValueError("MiniMax-H3 cannot shard an empty packed sequence")
+    shard_length = (total_length + world_size - 1) // world_size
+    shard_start = rank * shard_length
+    shard_end = shard_start + shard_length
+
+    def shard(tensor):
+        rows = tensor[shard_start:shard_end]
+        padding = shard_length - rows.shape[0]
+        return F.pad(rows, (0, 0) * (tensor.ndim - 1) + (0, padding)) if padding else rows
+
+    return _apply_sequence_shard(pre, shard, aux_length=0, main_shard_length=shard_length, valid_seq_len=total_length)
+
+
+def _apply_sequence_shard(pre, shard, *, aux_length, main_shard_length, valid_seq_len=None):
     pre.sequence_parallel_state = MiniMaxH3SequenceParallelState(
         aux_length=aux_length,
         main_shard_length=main_shard_length,
         timestep_indices=pre.timestep_indices,
         adaln_indices=pre.adaln_indices,
         rotary_emb=pre.rotary_emb,
+        valid_seq_len=valid_seq_len,
     )
     pre.hidden_states = shard(pre.hidden_states)
     pre.timestep_indices = shard(pre.timestep_indices)
@@ -101,4 +118,4 @@ def gather_packed_sequence(output, pre, group):
     pre.adaln_indices = state.adaln_indices
     pre.rotary_emb = state.rotary_emb
     pre.sequence_parallel_state = None
-    return output
+    return output[: state.valid_seq_len] if state.valid_seq_len is not None else output

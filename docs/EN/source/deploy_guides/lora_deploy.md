@@ -1,5 +1,7 @@
 # LoRA Model Deployment and Related Tools
 
+`lora_mode` accepts `merge` (default), `separate`, and `consumer`. `separate` computes independent base/adapter branches and supports runtime adapter switching on supported models. `consumer` fuses their addition into MiniMax-H3's activation and residual kernels; other models reject it. H3 consumer supports CUDA eager and `use_compile: true`, including sequence parallelism, but not tensor parallelism or GEMM calibration. Modes are never switched automatically.
+
 LoRA (Low-Rank Adaptation) is an efficient model fine-tuning technique that significantly reduces the number of trainable parameters through low-rank matrix decomposition. LightX2V fully supports LoRA technology, including LoRA inference, LoRA extraction, and LoRA merging functions.
 
 ## 🎯 LoRA Technical Features
@@ -17,6 +19,7 @@ Specify LoRA path in configuration file:
 
 ```json
 {
+  "lora_mode": "merge",
   "lora_configs": [
     {
       "path": "/path/to/your/lora.safetensors",
@@ -30,7 +33,29 @@ Specify LoRA path in configuration file:
 
 - `lora_configs[].path`: Weight file path in each LoRA entry; static merging supports multiple entries
 - `lora_configs[].strength`: LoRA strength coefficient, controls LoRA's influence on the original model
-- `lora_merge_force_fp32`: Defaults to `false`, preserving the existing merge precision. When `true`, load LoRA weights, compute deltas, and add them to base weights in FP32, then cast back to each layer's original dtype. This only affects static merging; dynamic LoRA (`lora_dynamic_apply=true`) is unchanged. Merging uses additional temporary memory per layer. Multiple LoRAs are merged and cast back individually in configuration order.
+
+Execution mode is configured through **`lora_mode` in JSON**: `merge` (default), `separate`, or `consumer`. It is a startup setting shared by inference, the server, and cache export. Precision remains controlled by the `LORA_DTYPE` environment variable.
+
+### LoRA precision
+
+Use the environment variable `LORA_DTYPE=BF16|FP16|FP32` for all three modes. When unset, it follows `DTYPE` (normally BF16), independently of `SENSITIVE_LAYER_DTYPE`.
+
+```bash
+export DTYPE=BF16
+export SENSITIVE_LAYER_DTYPE=FP32
+export LORA_DTYPE=FP32
+# Launch inference/server as usual; all torchrun ranks inherit these settings.
+```
+
+| Mode | What `LORA_DTYPE` controls | What keeps its existing dtype |
+|---|---|---|
+| `merge` | A/B weights, low-rank delta computation, and addition with the base (without lowering the base precision) | Stored merged base weights |
+| `separate` | A/B weights and both LoRA GEMMs; add the result to the base output before rounding back | Base GEMM, quantization scheme, and layer output |
+| `consumer` | Same branch precision and output-rounding boundary as `separate`; the sum is fused into its consumer | Base GEMM and downstream activation/residual precision |
+
+FP32 LoRA does **not** make the whole model FP32. FP32 merge still rounds back to the stored base dtype, so it is not numerically equivalent to keeping a separate branch. FP32 branches require more memory/compute; no speedup or quality gain is guaranteed. For merge, multiple adapters are applied and rounded back individually in configuration order.
+
+The JSON flag `lora_merge_force_fp32` has been removed: replace its former `true` setting with `export LORA_DTYPE=FP32`. Do not add `lora_dtype` to JSON. Set the environment before starting the process; changing it requires a restart. Standalone conversion tools retain their own dtype options.
 
 ### Command Line Method
 
@@ -51,6 +76,7 @@ To use multiple LoRAs with different strengths, specify them in the config JSON 
 
 ```json
 {
+  "lora_mode": "merge",
   "lora_configs": [
     {
       "path": "/path/to/first_lora.safetensors",
@@ -66,7 +92,7 @@ To use multiple LoRAs with different strengths, specify them in the config JSON 
 
 ### Wan compatibility and Wan2.2 names
 
-The JSON blocks on this page are fragments to merge into a complete model config. Wan defaults to static merging, which cannot be combined with `dit_quantized` or `lazy_load`. With `lora_dynamic_apply=true`, each submodel uses only the first matching LoRA entry; the multi-entry example does not imply dynamic stacking.
+The JSON blocks on this page are fragments to merge into a complete model config. Wan defaults to static merging, which cannot be combined with `dit_quantized` or `lazy_load`. With `lora_mode: "separate"`, each submodel uses only the first matching LoRA entry; the multi-entry example does not imply dynamic stacking.
 
 Wan2.2 MoE requires `name` to assign LoRA weights to the high-noise and low-noise models:
 
@@ -86,6 +112,14 @@ Wan2.2 MoE requires `name` to assign LoRA weights to the high-noise and low-nois
     ]
 }
 ```
+
+### MiniMax-H3 native LoRAs
+
+The published non-ComfyUI H3 Turbo files use `*.lora_A.default.weight` / `*.lora_B.default.weight`. Alpha priority is **per-layer alpha tensor → file metadata alpha → `lora_configs[].alpha`**. Config alpha is ignored where embedded alpha exists. Logs report source, value, and layer count. Rank is read from the factors; AdaLN and `norm_out.linear` need no separate settings. Files without any embedded alpha require config alpha.
+
+H3 supports a single active adapter in `separate`/`consumer`, including FP8/INT8 base GEMMs; these modes do not merge into quantized weights. Consumer compatibility does not imply every quantization backend has been benchmarked. Compile compatibility also depends on the selected GEMM/attention backend.
+
+When using persistent AdaLN caching, export with the same LoRA, strength, alpha, scheduler, **`lora_mode`**, and **`LORA_DTYPE`** as inference. Separate and consumer share modulation arithmetic/cache; merge uses a different cache. The cache fingerprint includes resolved alpha and LoRA dtype, and cached modulation updates are not applied twice. Prepare the replacement/base cache before switching/removing an adapter. See [H3 inference and cache commands](https://github.com/ModelTC/LightX2V/blob/main/scripts/minimax_h3/README.md).
 
 ### Supported LoRA Formats
 

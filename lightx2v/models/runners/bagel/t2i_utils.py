@@ -1,4 +1,7 @@
 import os
+from collections.abc import Mapping
+
+from lightx2v.utils.request_defaults import get_input_value
 
 BAGEL_T2I_ASPECT_RATIOS = {
     "1:1": (1024, 1024),
@@ -10,6 +13,8 @@ BAGEL_T2I_ASPECT_RATIOS = {
 
 
 def get_config_value(config, key, default=None):
+    if isinstance(config, Mapping):
+        return get_input_value(config, key, default)
     if hasattr(config, "get"):
         return config.get(key, default)
     return getattr(config, key, default)
@@ -65,7 +70,7 @@ def validate_bagel_model_assets(config, model_path):
         "visual_gen",
     ]
     missing = [key for key in required_keys if key not in config]
-    if get_config_value(config, "task", None) == "i2i" or get_config_value(config, "enable_vision_context", False):
+    if get_config_value(config, "enable_vision_context", True):
         i2i_required_keys = ["vit_config", "vit_max_num_patch_per_side", "connector_act", "visual_und"]
         missing.extend([key for key in i2i_required_keys if key not in config])
     if missing:

@@ -2,9 +2,11 @@
 
 import torch
 
+from lightx2v.common.ops.attn.sage_attn import SageAttn2Weight, SageTransposedV
 from lightx2v.common.ops.rope.torch_rope import TorchRealRope
 
-from .kv_cache_kernel import gather_rope_qkv
+from .fp8_communication import FP8QKV
+from .kv_cache_kernel import gather_rope_qkv, gather_transposed_v
 from .streaming import CleanCacheKey, MiniMaxH3CleanStreamingPlan
 
 
@@ -28,6 +30,8 @@ class MiniMaxH3CleanKVCache:
         self.plan = plan
         self._buffers: list[dict["CleanCacheKey", tuple[torch.Tensor, torch.Tensor]]] = [{} for _ in range(num_blocks)]
         self._prefix_keys: tuple["CleanCacheKey", ...] = ()
+        self._prefix_sizes: tuple[int, ...] = ()
+        self._prefix_lengths: torch.Tensor | None = None
         self._entry_key: "CleanCacheKey" | None = None
         self._persist = False
         self._chunk_rows = max(plan.chunk_row_slice(index).stop - plan.chunk_row_slice(index).start for index in range(plan.num_chunks))
@@ -77,26 +81,26 @@ class MiniMaxH3CleanKVCache:
         self._persist = persist
         self._generation += 1
 
-    def _write_slot(self, k, v, block_idx):
+    def _write_slot(self, shape, block_idx, *, device, dtypes):
         """Reserve raw KV independently of the mutable attention workspace."""
         kind = self._entry_key[0]
         if kind == "chunk":
-            if k.shape[0] > self._chunk_rows:
+            if shape[0] > self._chunk_rows:
                 raise ValueError("CleanAR chunk exceeds its reserved history slot")
             storage = self._chunk_storage[block_idx]
             if storage is None:
-                shape = (self._num_chunk_slots, self._chunk_rows, *k.shape[1:])
-                storage = self._chunk_storage[block_idx] = (k.new_empty(shape), v.new_empty(shape))
+                slot_shape = (self._num_chunk_slots, self._chunk_rows, *shape[1:])
+                storage = self._chunk_storage[block_idx] = tuple(torch.empty(slot_shape, device=device, dtype=dtype) for dtype in dtypes)
             slot = self._chunk_slots[self._entry_key]
-            target = tuple(value[slot, : k.shape[0]] for value in storage)
+            target = tuple(value[slot, : shape[0]] for value in storage)
         elif kind == "prompt":
             storage = self._prompt_storage[block_idx]
-            if storage is None or storage[0].shape[0] < k.shape[0]:
-                storage = self._prompt_storage[block_idx] = (k.new_empty(k.shape), v.new_empty(v.shape))
-            target = tuple(value[: k.shape[0]] for value in storage)
+            if storage is None or storage[0].shape[0] < shape[0]:
+                storage = self._prompt_storage[block_idx] = tuple(torch.empty(shape, device=device, dtype=dtype) for dtype in dtypes)
+            target = tuple(value[: shape[0]] for value in storage)
         else:
             # Fixed conditions are written once per request.
-            target = (k.new_empty(k.shape), v.new_empty(v.shape))
+            target = tuple(torch.empty(shape, device=device, dtype=dtype) for dtype in dtypes)
         self._buffers[block_idx][self._entry_key] = target
         return target
 
@@ -112,47 +116,71 @@ class MiniMaxH3CleanKVCache:
     @torch.compiler.disable
     def get_attention_qkv(
         self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
+        qkv: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | FP8QKV,
         block_idx: int,
         *,
+        attention,
         rope,
         query_freqs,
         key_freqs,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Commit raw clean KV and return rotated Q/K and raw V for attention."""
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | SageTransposedV]:
+        """Commit clean KV and return Q/K/V in the attention backend's layout."""
         # Dictionary keys change at each chunk; keep session state outside Dynamo.
-        if k.ndim != 3 or q.shape != k.shape or k.shape != v.shape:
-            raise ValueError("H3 QKV tensors must have matching shape [L, H, D]")
+        if isinstance(qkv, FP8QKV):
+            shape, device, dtype = qkv.shape, qkv.data.device, qkv.dtype
+            dtypes = (dtype, dtype)
+        else:
+            q, k, v = qkv
+            if k.ndim != 3 or q.shape != k.shape or k.shape != v.shape:
+                raise ValueError("H3 QKV tensors must have matching shape [L, H, D]")
+            shape, device, dtype = k.shape, k.device, q.dtype
+            dtypes = (k.dtype, v.dtype)
         block = self._buffers[block_idx]
-        start = sum(block[key][0].shape[0] for key in self._prefix_keys)
-        end = start + k.shape[0]
-        stored = self._write_slot(k, v, block_idx) if self._persist else None
+        prefix_sizes = tuple(block[key][0].shape[0] for key in self._prefix_keys)
+        start = sum(prefix_sizes)
+        end = start + shape[0]
+        stored = self._write_slot(shape, block_idx, device=device, dtypes=dtypes) if self._persist else None
+        transposed_v = isinstance(attention, SageAttn2Weight) and dtype == dtypes[0] == dtypes[1] and attention.supports_pretransposed_v(device, dtype, shape[2])
         capacity = max(self._workspace_capacity, end)
         workspace = self._workspaces[block_idx]
-        if workspace is None or workspace[0].shape[0] < capacity:
-            shape = (capacity, *k.shape[1:])
-            workspace = self._workspaces[block_idx] = (k.new_empty(shape), v.new_empty(shape))
+        if workspace is None or workspace[0].shape[0] < capacity or (workspace[1].ndim == 4) != transposed_v:
+            workspace_shape = (capacity, *shape[1:])
+            value_shape = (1, shape[2], shape[1], (capacity + 63) // 64 * 64) if transposed_v else workspace_shape
+            workspace = self._workspaces[block_idx] = (
+                torch.empty(workspace_shape, device=device, dtype=dtypes[0]),
+                torch.empty(value_shape, device=device, dtype=dtypes[1]),
+            )
             self._workspace_generation[block_idx] = -1
         read_prefix = self._workspace_generation[block_idx] != self._generation
-        if k.is_cuda and q.dtype == k.dtype == v.dtype == torch.bfloat16 and isinstance(rope, TorchRealRope) and rope.compute_dtype == torch.bfloat16 and rope.layout == "split_half":
-            q = gather_rope_qkv(tuple(block[key] for key in self._prefix_keys), q, k, v, stored, workspace, key_freqs, read_prefix=read_prefix)
+        fused = device.type == "cuda" and dtype == dtypes[0] == dtypes[1] == torch.bfloat16 and isinstance(rope, TorchRealRope) and rope.compute_dtype == torch.bfloat16 and rope.layout == "split_half"
+        if fused or transposed_v:
+            if self._prefix_lengths is None or self._prefix_sizes != prefix_sizes:
+                # Share length metadata across layers and denoising steps. Device
+                # values avoid Triton's specialization of integer tuple elements.
+                self._prefix_lengths = torch.tensor(prefix_sizes, dtype=torch.int32, device=device)
+                self._prefix_sizes = prefix_sizes
+        if fused:
+            q = gather_rope_qkv(tuple(block[key] for key in self._prefix_keys), qkv, stored, workspace, key_freqs, prefix_lengths=self._prefix_lengths, read_prefix=read_prefix)
             key = workspace[0][:end]
         else:
+            q, k, v = qkv.unpack() if isinstance(qkv, FP8QKV) else qkv
             if stored is not None:
                 stored[0].copy_(k)
                 stored[1].copy_(v)
             if read_prefix:
                 torch.cat([*(block[key][0] for key in self._prefix_keys), k], out=workspace[0][:end])
-                torch.cat([*(block[key][1] for key in self._prefix_keys), v], out=workspace[1][:end])
             else:
                 workspace[0][start:end].copy_(k)
+            if transposed_v:
+                gather_transposed_v(tuple(block[key][1] for key in self._prefix_keys), v, workspace[1], prefix_lengths=self._prefix_lengths, read_prefix=read_prefix)
+            elif read_prefix:
+                torch.cat([*(block[key][1] for key in self._prefix_keys), v], out=workspace[1][:end])
+            else:
                 workspace[1][start:end].copy_(v)
             q = rope.apply_single(q, query_freqs, rotary_dim=query_freqs[0].shape[-1])
             key = rope.apply_single(workspace[0][:end], key_freqs, rotary_dim=key_freqs[0].shape[-1])
         self._workspace_generation[block_idx] = self._generation
-        return q, key, workspace[1][:end]
+        return q, key, SageTransposedV(workspace[1]) if transposed_v else workspace[1][:end]
 
     def finalize_condition(self) -> None:
         """Release condition entries disabled by the attention policy."""
@@ -182,5 +210,7 @@ class MiniMaxH3CleanKVCache:
         self._workspace_generation.clear()
         self._chunk_slots.clear()
         self._prefix_keys = ()
+        self._prefix_sizes = ()
+        self._prefix_lengths = None
         self._entry_key = None
         self._persist = False

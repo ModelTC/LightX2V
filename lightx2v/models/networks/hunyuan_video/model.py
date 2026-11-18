@@ -26,13 +26,14 @@ class HunyuanVideo15Model(BaseTransformerModel):
         self._init_infer()
 
     def _init_infer_class(self):
+        feature_caching = self.config.get("feature_caching", "NoCaching")
         self.pre_infer_class = HunyuanVideo15PreInfer
         self.post_infer_class = HunyuanVideo15PostInfer
-        if self.config["feature_caching"] == "NoCaching":
+        if feature_caching == "NoCaching":
             self.transformer_infer_class = HunyuanVideo15TransformerInfer if not self.cpu_offload else HunyuanVideo15OffloadTransformerInfer
-        elif self.config["feature_caching"] == "Mag":
+        elif feature_caching == "Mag":
             self.transformer_infer_class = HunyuanVideo15TransformerInferMagCaching
-        elif self.config["feature_caching"] == "Tea":
+        elif feature_caching == "Tea":
             self.transformer_infer_class = HunyuanTransformerInferTeaCaching
         else:
             raise NotImplementedError
@@ -51,12 +52,12 @@ class HunyuanVideo15Model(BaseTransformerModel):
 
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             x = self._seq_parallel_post_process(x)
 
         noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
@@ -93,9 +94,9 @@ class HunyuanVideo15Model(BaseTransformerModel):
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
 
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
-            if self.config["cfg_parallel"]:
+            if self.config.get("cfg_parallel", False):
                 # ==================== CFG Parallel Processing ====================
                 cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
                 assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"

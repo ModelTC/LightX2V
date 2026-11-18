@@ -1,6 +1,5 @@
 {
   "sr_segment_length": 81,
-  "size": [1440, 2560],
   "infer_steps": 1,
   "fps": 16,
   "model_size": "3b",
@@ -13,7 +12,6 @@
   "vae_sp_color_chunk_size": 4,
   "stream_save_video": true,
   "cpu_offload": true,
-  "match_target_size": false,
   "color_fix": "gpu",
   "load_from_rank0": true,
   "dit_quantized_ckpt": "path/to/seedvr2_ema_3b_fp8.safetensors",
@@ -23,5 +21,9 @@
     "seq_p_size": 8,
     "seq_p_attn_type": "ulysses-4090",
     "vae_parallel": true
+  },
+  "request_defaults": {
+    "size": [1440, 2560],
+    "match_target_size": false
   }
 }

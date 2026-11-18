@@ -1,10 +1,5 @@
 {
-    "size": [
-        480,
-        832
-    ],
     "fps": 16,
-    "num_frames": 81,
     "infer_steps": 30,
     "sample_shift": 3.0,
     "sample_guide_scale": 3.0,
@@ -21,5 +16,12 @@
     "rope_type": "flashinfer_rope",
     "modulate_type": "triton",
     "cpu_offload": false,
-    "mxfp8_fuse_enable": false
+    "mxfp8_fuse_enable": false,
+    "request_defaults": {
+        "size": [
+            480,
+            832
+        ],
+        "num_frames": 81
+    }
 }

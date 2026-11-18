@@ -3,7 +3,6 @@
     "model_variant": "dev",
     "task": "t2i",
     "infer_steps": 50,
-    "aspect_ratio": "16:9",
     "sample_guide_scale": 4.0,
     "vae_scale_factor": 16,
     "feature_caching": "None",
@@ -22,5 +21,8 @@
     "modulate_type": "torch",
     "rope_type": "npu_rope",
     "layer_norm_type": "npu_layer_norm",
-    "rms_norm_type": "npu_rms_norm"
+    "rms_norm_type": "npu_rms_norm",
+    "request_defaults": {
+        "aspect_ratio": "16:9"
+    }
 }

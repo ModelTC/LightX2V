@@ -1,6 +1,5 @@
 {
     "infer_steps": 50,
-    "aspect_ratio": "16:9",
     "attn_type": "npu_flash_attn",
     "enable_cfg": true,
     "sample_guide_scale": 4.0,
@@ -11,5 +10,8 @@
     "rms_norm_type": "torch",
     "modulate_type": "torch",
     "rope_type": "torch_real_rope",
-    "layer_norm_type": "torch"
+    "layer_norm_type": "torch",
+    "request_defaults": {
+        "aspect_ratio": "16:9"
+    }
 }

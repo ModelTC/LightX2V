@@ -13,13 +13,24 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.requests import Request
 
+from lightx2v.models.runners.registry import get_model_spec
 from lightx2v.server.api import openai_images
-from lightx2v.server.api.tasks import image as image_api
-from lightx2v.server.schema import ImageTaskRequest
+from lightx2v.server.api.tasks import sync as image_api
+from lightx2v.server.schema import build_task_request
 from lightx2v.server.services.file_service import FileService
 from lightx2v.server.services.inference.pipeline_image_encode import encode_pipeline_return_to_image_bytes
 from lightx2v.server.task_manager import TaskManager
 from lightx2v.utils.image_output import image_format_for_bytes
+from lightx2v.utils.outputs import Output
+from lightx2v.utils.request_spec import create_request_model
+
+CONFIG = {"model_cls": "minimax_h3_image", "task": "t2i"}
+ImageTaskRequest = build_task_request(CONFIG)
+ARGS = get_model_spec("minimax_h3_image").get_arguments(CONFIG, "t2i")
+GenerationRequest = create_request_model(
+    "TestGeneration", {k: v for k, v in ARGS.items() if k != "task" and k not in openai_images.OpenAIImageGenerationRequest.model_fields}, base=openai_images.OpenAIImageGenerationRequest
+)
+EditRequest = create_request_model("TestEdit", {k: v for k, v in ARGS.items() if k != "task" and k not in openai_images.OpenAIImageEditRequest.model_fields}, base=openai_images.OpenAIImageEditRequest)
 
 
 @pytest.fixture
@@ -43,7 +54,7 @@ def test_encodes_selected_format_and_quality(image, suffix, fmt, quality):
         assert encoded == expected.getvalue()
 
 
-@pytest.mark.parametrize("schema", [ImageTaskRequest, openai_images.OpenAIImageGenerationRequest, openai_images.OpenAIImageEditRequest])
+@pytest.mark.parametrize("schema", [ImageTaskRequest, GenerationRequest, EditRequest])
 @pytest.mark.parametrize("value", [-1, 101, True, 1.5, "1.5"])
 def test_rejects_invalid_quality(schema, value):
     with pytest.raises(ValidationError, match="output_compression"):
@@ -53,10 +64,10 @@ def test_rejects_invalid_quality(schema, value):
 def test_form_integer_and_request_forwarding():
     from lightx2v.server.api.request_parsing import parse_form_request
 
-    body = parse_form_request(openai_images.OpenAIImageEditRequest, {"prompt": "edit", "save_result_path": "out.webp", "output_compression": "0"})
-    message = openai_images._build_image_task_request(body, task="i2i")
+    body = parse_form_request(EditRequest, {"prompt": "edit", "save_result_path": "out.webp", "output_compression": "0"})
+    message = openai_images._build_image_task_request(body, ImageTaskRequest)
     assert message.save_result_path == "out.webp" and message.output_compression == 0
-    assert "output_compression" not in openai_images._build_image_task_request(openai_images.OpenAIImageGenerationRequest(prompt="x"), task="t2i").model_fields_set
+    assert "output_compression" not in openai_images._build_image_task_request(GenerationRequest(prompt="x"), ImageTaskRequest).model_fields_set
 
 
 @pytest.mark.parametrize("fmt", ["png", "jpeg", "webp"])
@@ -84,42 +95,46 @@ def test_response_download_and_upload_match_encoded_bytes(tmp_path, monkeypatch,
     message = ImageTaskRequest(presigned_url="https://example.com/upload")
     asyncio.run(image_api._upload_sync_result_if_needed(message, raw))
     assert uploads["file_content"] == raw and uploads["content_type"] == "image/" + fmt
-    manager = TaskManager(result_image_keep_count=1)
+    assert Output("image", "image", content=raw).media_type == "image/" + fmt
+    manager = TaskManager(result_png_keep_count=1)
     task_id = manager.create_task(message)
-    manager.complete_task(task_id, result_image=raw)
-    assert manager.get_task_result_image(task_id) == raw
+    manager.complete_task(task_id, results=[Output("image", "image", content=raw)])
+    assert manager.get_task_result_png(task_id) == raw
 
 
 def test_generation_endpoint_encodes_requested_format(monkeypatch, image):
-    async def run(request, message):
+    async def run(request, message, **kwargs):
         return encode_pipeline_return_to_image_bytes({"images": [image]}, message.save_result_path, message.output_compression), None
 
-    monkeypatch.setattr(openai_images, "_run_sync_image_task", run)
+    monkeypatch.setattr(openai_images, "run_image_task", run)
     app = FastAPI()
-    app.include_router(openai_images.router, prefix="/v1/images")
+    app.include_router(openai_images.create_router(CONFIG, ImageTaskRequest), prefix="/v1/images")
     client = TestClient(app)
     result = client.post("/v1/images/generations", json={"prompt": "x", "save_result_path": "out.webp", "output_compression": 20})
+    assert client.post("/v1/images/generations", json={"prompt": "x", "save_result_path": "out.gif"}).status_code == 400
     assert result.status_code == 200
     body = result.json()
     assert body["output_format"] == "webp"
     assert image_format_for_bytes(base64.b64decode(body["data"][0]["b64_json"])) == "webp"
     assert client.post("/v1/images/generations", json={"prompt": "x", "output_compression": -1}).status_code == 422
-    assert client.post("/v1/images/generations", json={"prompt": "x", "save_result_path": "out.gif"}).status_code == 400
 
 
 @pytest.mark.parametrize("suffix,fmt", [(".jpg", "jpeg"), (".webp", "webp"), (".png", "png")])
-def test_worker_uses_effective_request_quality(image, suffix, fmt):
+def test_worker_uses_effective_request_quality(tmp_path, image, suffix, fmt):
     from lightx2v.server.services.inference.worker import TorchrunInferenceWorker
 
     class Runner:
         def prepare_request(self, data):
-            return SimpleNamespace(output_compression=0)
+            return SimpleNamespace(output_compression=0, save_result_path=data["save_result_path"])
 
         def set_reuse(self, *args):
             pass
 
         def run_request(self, input_info):
             return {"images": [image]}
+
+        def get_outputs(self, *args):
+            return [Output("image", "image")]
 
         def compute_usage(self, **kwargs):
             return None
@@ -129,10 +144,10 @@ def test_worker_uses_effective_request_quality(image, suffix, fmt):
     worker.rank = 0
     worker.lora_dir = None
     worker.runner = Runner()
-    result = asyncio.run(worker.process_request({"task_id": "test", "return_result_tensor": True, "save_result_path": "out" + suffix}))
+    result = asyncio.run(worker.process_request({"task_id": "test", "_output_dir": str(tmp_path), "_prefer_memory_result": True, "save_result_path": "out" + suffix}))
     assert result["status"] == "success"
     expected = encode_pipeline_return_to_image_bytes({"images": [image]}, "out" + suffix, 0)
-    assert result["result_image"] == expected and image_format_for_bytes(result["result_image"]) == fmt
+    assert result["outputs"][0].content == expected and image_format_for_bytes(result["outputs"][0].content) == fmt
 
 
 @pytest.mark.parametrize("suffix,fmt", [(".jpg", "JPEG"), (".webp", "WEBP")])
@@ -245,3 +260,21 @@ def test_openai_url_download_serves_actual_image_type(tmp_path, monkeypatch, ima
     assert downloaded.content == raw
     assert generated.output_format == fmt
     assert downloaded.headers["content-disposition"].endswith(f'download-test.{fmt}"')
+
+
+@pytest.mark.parametrize("task", ["t2i", "i2i"])
+def test_runner_quality_defaults_and_reset(task):
+    from lightx2v.models.runners.minimax_h3_image.minimax_h3_image_runner import MiniMaxH3ImageRunner
+
+    runner = MiniMaxH3ImageRunner.__new__(MiniMaxH3ImageRunner)
+    runner.config = {"model_cls": "minimax_h3_image", "task": task, "request_defaults": {"output_compression": 31}}
+    runner.supported_tasks = (task,)
+    runner._input_info_types = {}
+    assert runner.prepare_request({}).output_compression == 31
+    assert runner.prepare_request({"output_compression": 0}).output_compression == 0
+    assert runner.prepare_request({}).output_compression == 31
+    runner.config["request_defaults"] = {}
+    assert runner.prepare_request({}).output_compression == 95
+    for quality in (-1, 101, True, 1.5, "95"):
+        with pytest.raises(ValueError, match="output_compression"):
+            runner.prepare_request({"output_compression": quality})

@@ -37,6 +37,7 @@ from lightx2v.disagg.conn import (
     DisaggregationPhase,
 )
 from lightx2v.disagg.rdma_buffer import RDMABuffer, RDMABufferDescriptor
+from lightx2v.utils.request_defaults import get_input_value
 
 try:
     from lightx2v.disagg.rdma_client import RDMAClient
@@ -81,8 +82,8 @@ def _estimate_encoder_buffer_sizes(config) -> List[int]:
     vae_stride = config.get("vae_stride", (4, 8, 8))
     stride_t, stride_h, stride_w = int(vae_stride[0]), int(vae_stride[1]), int(vae_stride[2])
 
-    num_frames = int(config.get("num_frames", 81))
-    target_height, target_width = map(int, config.get("size", (480, 832)))
+    num_frames = int(get_input_value(config, "num_frames", 81))
+    target_height, target_width = map(int, get_input_value(config, "size", (480, 832)))
 
     t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))
@@ -356,12 +357,12 @@ class DisaggMixin:
     def resolve_request_seed(self, request_data):
         # CLI preparation can precede init_disagg; dispatched requests already carry the upstream seed.
         request_config = getattr(self, "_disagg_request_config", None)
-        if request_config is None or "seed" not in request_config:
+        if request_config is None or get_input_value(request_config, "seed", None) is None:
             if self.config.get("disagg_mode") in ("transformer", "decode"):
                 # Static workers receive the resolved seed with the tensor metadata.
                 return None
             return super().resolve_request_seed(request_data)
-        return request_config["seed"]
+        return get_input_value(request_config, "seed")
 
     def build_disagg_request_config(self, input_info, request_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Build the generation and routing state for one Disagg request."""
@@ -386,8 +387,10 @@ class DisaggMixin:
     def _disagg_effective_config(self, request_config: Dict[str, Any]) -> Dict[str, Any]:
         config = dict(self.config)
         request_config = dict(request_config)
+        defaults = dict(self.config.get("request_defaults", {})) | dict(request_config.pop("request_defaults", {}))
         request_disagg_cfg = request_config.pop("disagg_config", None)
         config.update(request_config)
+        config["request_defaults"] = defaults
         if request_disagg_cfg is not None:
             config["disagg_config"] = {**dict(self.config.get("disagg_config", {})), **dict(request_disagg_cfg)}
         return config
@@ -404,8 +407,9 @@ class DisaggMixin:
             "controller_result_port",
             "size",
         ):
-            if key in config and config.get(key) is not None:
-                payload[key] = self._disagg_json_safe_value(config.get(key))
+            value = get_input_value(config, key, None)
+            if value is not None:
+                payload[key] = self._disagg_json_safe_value(value)
 
         phase1_receiver_rank = config.get("disagg_phase1_receiver_engine_rank")
         if phase1_receiver_rank is not None:
@@ -773,8 +777,8 @@ class DisaggMixin:
 
         vae_stride = config.get("vae_stride", (4, 8, 8))
         stride_t, stride_h, stride_w = int(vae_stride[0]), int(vae_stride[1]), int(vae_stride[2])
-        num_frames = int(config.get("num_frames", 81))
-        target_height, target_width = map(int, config.get("size", (480, 832)))
+        num_frames = int(get_input_value(config, "num_frames", 81))
+        target_height, target_width = map(int, get_input_value(config, "size", (480, 832)))
 
         t_prime = 1 + (num_frames - 1) // stride_t
         h_prime = int(math.ceil(target_height / stride_h))
@@ -939,8 +943,8 @@ class DisaggMixin:
         z_dim = int(config.get("vae_z_dim", 16))
 
         vae_stride = config.get("vae_stride", (4, 8, 8))
-        num_frames = int(config.get("num_frames", 81))
-        target_height, target_width = map(int, config.get("size", (480, 832)))
+        num_frames = int(get_input_value(config, "num_frames", 81))
+        target_height, target_width = map(int, get_input_value(config, "size", (480, 832)))
 
         t_prime = 1 + (num_frames - 1) // int(vae_stride[0])
         h_prime = int(math.ceil(target_height / int(vae_stride[1])))

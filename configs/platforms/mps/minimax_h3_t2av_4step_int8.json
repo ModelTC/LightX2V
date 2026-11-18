@@ -1,10 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 124,
-    "size": [
-        544,
-        960
-    ],
     "fps": 24,
     "enable_cfg": false,
     "cpu_offload": false,
@@ -17,7 +12,7 @@
     "use_compile": false,
     "video_flow_shift": 6.0,
     "audio_flow_shift": 3.0,
-    "h3_step_update": "training_euler",
+    "scheduler_type": "euler",
     "local_files_only": true,
     "mps_sdpa_query_chunk_size": 512,
     "rope_compute_dtype": "bf16",
@@ -30,5 +25,12 @@
     "vae_encoder_conv_mode": "torch",
     "vae_sensitive_layer_dtype": "fp32",
     "vae_attn_type": "torch_sdpa",
-    "dit_quantized_ckpt": "/path/to/MiniMax-H3-Turbo-INT8/transformer"
+    "dit_quantized_ckpt": "/path/to/MiniMax-H3-Turbo-INT8/transformer",
+    "request_defaults": {
+        "num_frames": 124,
+        "size": [
+            544,
+            960
+        ]
+    }
 }

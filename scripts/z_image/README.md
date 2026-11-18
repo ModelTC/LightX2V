@@ -26,7 +26,7 @@ The basic text-to-image example saves to `save_results/z_image_turbo.png`; chang
 
 ## Python API
 
-[z_image_turbo.py](inference/z_image_turbo.py) uses FP8 DiT weights and CPU offload. Also download `z_image_turbo_scaled_fp8_e4m3fn.safetensors` from [Z-Image-Turbo-Quantized](https://huggingface.co/lightx2v/Z-Image-Turbo-Quantized), then edit `model_path`, `dit_quantized_ckpt`, and `save_result_path` in the example.
+[z_image_turbo.py](inference/z_image_turbo.py) reads the [FP8 configuration](../../configs/z_image/z_image_turbo_t2i_fp8.json). Download FP8 weights from [Z-Image-Turbo-Quantized](https://huggingface.co/lightx2v/Z-Image-Turbo-Quantized), then set `dit_quantized_ckpt` in that JSON. Set `model_path` and `save_result_path` in the script; configure offload in the JSON if needed.
 
 ```bash
 python scripts/z_image/inference/z_image_turbo.py

@@ -15,13 +15,12 @@ from lightx2v.models.networks.qwen_image.infer.offload.transformer_infer import 
 from lightx2v.models.networks.qwen_image.infer.utils import get_qwen_image_size
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
-from lightx2v.utils.input_info import I2IInputInfo, T2IInputInfo
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 
 # from lightx2v.utils.torch_trace_profiler import TorchTraceProfileContext
@@ -42,9 +41,9 @@ def calculate_dimensions(target_area, ratio):
 
 
 def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_configs):
-    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
+    use_lora_branch = config.get("lora_mode", "merge") == "separate"
 
-    if lora_dynamic_apply:
+    if use_lora_branch:
         lora_path = lora_configs[0]["path"]
         lora_strength = lora_configs[0]["strength"]
         model_kwargs["lora_path"] = lora_path
@@ -61,6 +60,9 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 
 @RUNNER_REGISTER("qwen_image")
 class QwenImageRunner(DisaggMixin, DefaultRunner):
+    input_info_state = ImageState
+    supported_lora_modes = ("merge", "separate")
+
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     _WARMUP_SHAPES = ((480, 480), (832, 1248))
@@ -69,16 +71,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         "A still life photograph of ripe pears on a ceramic plate beside a folded linen napkin. Soft afternoon light enters from the left, revealing the speckled skin of the fruit, the glazed rim of the plate, and the grain of the wooden table.",
     )
     _WARMUP_TASKS = ("t2i", "i2i")
-    supported_request_fields_by_task = {
-        "t2i": IMAGE_REQUEST_FIELDS,
-        "i2i": IMAGE_REQUEST_FIELDS | {"i2i_denoise_strength", "image_path"},
-    }
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if task == "i2i" and self.config.get("layered", False):
-            supported_request_fields -= {"i2i_denoise_strength"}
-        return supported_request_fields
 
     def __init__(self, config):
         super().__init__(config)
@@ -92,6 +84,12 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
+
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if self.config.get("layered", False) and request_data.get("i2i_denoise_strength") is not None:
+            raise ValueError("Qwen-Image i2i_denoise_strength is not supported with layered=true; omit it or disable layered generation.")
+        return input_info
 
     def check_reuse_support(self):
         pass
@@ -146,11 +144,11 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
     def _prepare_warmup_inputs(self, warmup_index, height, width, t2i_text_cache):
         task = self.config["task"]
-        input_info_cls = T2IInputInfo if task == "t2i" else I2IInputInfo
+        input_info_cls = self.get_input_info_type(task)
         self.input_info = input_info_cls(
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],
-            negative_prompt=" " if self.config["enable_cfg"] else None,
+            negative_prompt=" " if self.config.get("enable_cfg", False) else None,
             size=[height, width],
             return_result_tensor=True,
         )
@@ -351,7 +349,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
         self.input_info.original_size.clear()
-        image_paths_list = self.input_info.image_path.split(",")
+        image_paths_list = self.input_info.image_path
         images_list = []
         for image_path in image_paths_list:
             _, image = self.read_image_input(image_path)
@@ -386,7 +384,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             prompt_embeds, _, _ = self.text_encoders[0].infer([text])
             self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt])
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -397,7 +395,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
             text_encoder_output["image_info"] = image_info
-            if self.config["enable_cfg"]:
+            if self.config.get("enable_cfg", False):
                 neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt], image_list)
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -543,6 +541,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                     conversion = cv2.COLOR_RGBA2BGRA if pixels.shape[-1] == 4 else cv2.COLOR_RGB2BGR
                     image = cv2.cvtColor(pixels, conversion)
                 save_image(image, path, method)
+            self.record_output("image", path)
             logger.info(f"{log_prefix}: {path}")
 
     def _finalize_pipeline_outputs(self, input_info, images, latents=None, generator=None):
@@ -563,7 +562,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             "negative_prompt": self.input_info.negative_prompt,
         }
         if self.config["task"] == "i2i":
-            reuse_key["image_path"] = self.input_info.image_path.split(",")
+            reuse_key["image_path"] = self.input_info.image_path
         return reuse_key
 
     def reuse_input_info(self):

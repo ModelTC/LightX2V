@@ -10,6 +10,7 @@ from loguru import logger
 from safetensors import safe_open
 from safetensors.torch import save_file
 
+from lightx2v.common.ops.mm.mm_weight import MMWeight
 from lightx2v.models.networks.minimax_h3.adaln_cache import (
     _block_key,
     _expected_table_shape,
@@ -21,6 +22,8 @@ from lightx2v.models.networks.minimax_h3.adaln_cache import (
 )
 from lightx2v.models.networks.minimax_h3.adaln_profiles import cache_plan
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import timestep_embedding
+from lightx2v.models.networks.minimax_h3.lora import merge_lora_weight
+from lightx2v.utils.envs import DTYPE_MAP
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -91,6 +94,37 @@ def _linear(
     return torch.addmm(bias, input_tensor, weight.t(), out=output)
 
 
+def _modulation_projection(spec, checkpoint, prefix):
+    weight = checkpoint.get(f"{prefix}.weight")
+    bias = checkpoint.get(f"{prefix}.bias")
+    projection = MMWeight(f"{prefix}.weight", f"{prefix}.bias", lora_prefix=None)
+    projection.weight, projection.bias = weight.t(), bias
+    adapters = spec.get("lora_configs", [])
+    mode = spec.get("lora_mode", "merge")
+    if mode == "separate" and len(adapters) > 1:
+        raise ValueError("H3 separate/consumer cache requires a single LoRA")
+    for adapter in adapters:
+        if prefix not in adapter["alphas"]:
+            continue
+        with safe_open(adapter["path"], framework="pt", device="cpu") as source:
+            down = source.get_tensor(prefix + ".lora_A.default.weight")
+            up = source.get_tensor(prefix + ".lora_B.default.weight")
+        alpha = adapter["alphas"][prefix]
+        dtype = DTYPE_MAP[spec["lora_dtype"]]
+        if mode == "merge":
+            merge_lora_weight(weight, up, down, alpha, adapter["strength"], lora_dtype=dtype, device=spec["lora_merge_device"])
+        else:
+            projection.register_lora(
+                {
+                    prefix + ".lora_down.weight": down.to(dtype),
+                    prefix + ".lora_up.weight": up.to(dtype),
+                    prefix + ".alpha": torch.tensor(alpha, dtype=dtype),
+                },
+                adapter["strength"],
+            )
+    return projection
+
+
 @torch.inference_mode()
 def build_cache_tables(spec: dict, checkpoint: _CheckpointTensors) -> dict[str, torch.Tensor]:
     """Compute block AdaLN and final-norm tables, returning CPU tensors."""
@@ -111,33 +145,22 @@ def build_cache_tables(spec: dict, checkpoint: _CheckpointTensors) -> dict[str, 
 
     del time_weight_1, time_bias_1, time_weight_2, time_bias_2
 
-    norm_out_weight = checkpoint.get("norm_out.linear.weight")
-    norm_out_bias = checkpoint.get("norm_out.linear.bias")
-    cache_tables = {
-        _norm_out_key(entry): _linear(
-            adaln_inputs[entry["name"]],
-            norm_out_weight,
-            norm_out_bias,
-        )
-        .to("cpu")
-        .contiguous()
-        for entry in spec["entries"]
-    }
-    del norm_out_weight, norm_out_bias
+    norm_out = _modulation_projection(spec, checkpoint, "norm_out.linear")
+    cache_tables = {_norm_out_key(entry): norm_out.apply(adaln_inputs[entry["name"]]).to("cpu").contiguous() for entry in spec["entries"]}
+    del norm_out
 
     # Only one full, unsharded block projection is resident at a time.
     for block_index in range(spec["num_layers"]):
         prefix = f"transformer_blocks.{block_index}.adaln_proj.linear"
-        weight = checkpoint.get(f"{prefix}.weight")
-        bias = checkpoint.get(f"{prefix}.bias")
+        projection = _modulation_projection(spec, checkpoint, prefix)
         for entry in spec["entries"]:
             # Keep each unique-timestep batch separate, exactly as
             # online step_pre/clean_commit prepares it (one or two
             # rows for Stage3), rather than pooling entries together.
-            modulation = _linear(adaln_inputs[entry["name"]], weight, bias)
+            modulation = projection.apply(adaln_inputs[entry["name"]])
             table = modulation.view(*_expected_table_shape(spec, entry))
             cache_tables[_block_key(block_index, entry)] = table.to("cpu").contiguous()
-        del weight, bias, modulation, table
+        del projection, modulation, table
         logger.info(
             "Built MiniMax-H3 AdaLN cache block {}/{}",
             block_index + 1,

@@ -18,16 +18,16 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.infinitetalk.audio_encoder import InfiniteTalkAudioEncoder
 from lightx2v.models.networks.wan.infinitetalk_model import WanInfiniteTalkModel
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
+from lightx2v.models.runners.wan.input_info import WanAudioState
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
-from lightx2v.utils.input_info import S2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process, save_to_video, wan_vae_to_comfy
 from lightx2v.utils.va_controller import VAController
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -107,24 +107,15 @@ def _is_video(path):
 
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
+    input_info_state = WanAudioState
+    supported_lora_modes = ("merge",)
+
     _WARMUP_SHAPES = ((480, 480), (544, 960))
     _WARMUP_PROMPTS = (
         "A speaker addresses the camera.",
         "The speaker talks in a relaxed manner, matching their mouth movements to the rhythm of the supplied audio. They occasionally blink, glance to one side, and make a small hand gesture before returning their attention to the camera, with the background remaining steady.",
     )
     _WARMUP_STEP_COUNT = 2
-
-    supported_request_fields_by_task = {
-        "s2v": COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "audio_path",
-            "image_path",
-            "num_frames",
-            "video_duration",
-            "video_path",
-        },
-    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -152,7 +143,7 @@ class InfiniteTalkRunner(WanRunner):
     @ProfilingContext4DebugL1("Warmup")
     @torch.no_grad()
     def run_warmup(self):
-        num_frames = int(self.config["num_frames"])
+        num_frames = int(get_input_value(self.config, "num_frames"))
         model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model"
         numpy_rng, python_rng = np.random.get_state(), random.getstate()
         try:
@@ -195,7 +186,7 @@ class InfiniteTalkRunner(WanRunner):
         self._maybe_freeze_gc()
 
     def _prepare_warmup_inputs(self, warmup_index, height, width, num_frames):
-        self.input_info = S2VInputInfo(
+        self.input_info = self.get_input_info_type("s2v")(
             task="s2v",
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],
@@ -322,16 +313,15 @@ class InfiniteTalkRunner(WanRunner):
             if cond_audio is not None:
                 cond_audio = dict(cond_audio)
             else:
-                audio_path = getattr(self.input_info, "audio_path", "") or self.config.get("audio_path", "")
-                if audio_path and os.path.isdir(audio_path):
-                    cond_audio, mask_files, bbox = self._load_directory_audio_input(audio_path)
+                audio_path = self.input_info.audio_path
+                if len(audio_path) == 1 and os.path.isdir(audio_path[0]):
+                    cond_audio, mask_files, bbox = self._load_directory_audio_input(audio_path[0])
                 else:
-                    audio_paths = [item.strip() for item in str(audio_path).split(",") if item.strip()]
-                    cond_audio = {f"person{idx + 1}": path for idx, path in enumerate(audio_paths)}
+                    cond_audio = {f"person{idx + 1}": path for idx, path in enumerate(audio_path)}
 
-            cond_video = self.input_info.video_path or self.input_info.image_path or self.config.get("cond_video", "") or self.config.get("image_path", "")
+            cond_video = self.input_info.video_path or self.input_info.image_path or self.config.get("cond_video", "") or get_input_value(self.config, "image_path", "")
             data = {
-                "prompt": getattr(self.input_info, "prompt", "") or self.config.get("prompt", ""),
+                "prompt": getattr(self.input_info, "prompt", "") or get_input_value(self.config, "prompt", ""),
                 "cond_video": cond_video,
                 "cond_audio": cond_audio,
             }
@@ -1004,7 +994,7 @@ class InfiniteTalkRunner(WanRunner):
     def _resolve_video_duration(self):
         video_duration = self.input_info.video_duration
         if video_duration is None:
-            video_duration = self.config.get("video_duration", None)
+            video_duration = get_input_value(self.config, "video_duration", None)
         if video_duration is None:
             return None
         return float(video_duration)
@@ -1012,7 +1002,7 @@ class InfiniteTalkRunner(WanRunner):
     def resolve_frame_num(self):
         frame_num = self.input_info.num_frames
         if frame_num is None or frame_num <= 0:
-            frame_num = self.config["num_frames"]
+            frame_num = get_input_value(self.config, "num_frames")
         return int(frame_num)
 
     def _resolve_expected_frames(self):
@@ -1281,7 +1271,7 @@ class InfiniteTalkRunner(WanRunner):
         if self.reuse_prefix_segments:
             logger.info(f"[Reuse] Saved regenerated InfiniteTalk suffix to {out_path}")
             return {"video": None}
-        audio_input = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
+        audio_input = getattr(self.input_info, "audio_path", None) or get_input_value(self.config, "audio_path", "")
         mux_audio = self._resolve_mux_audio_path()
         if not mux_audio or not os.path.isfile(mux_audio):
             self._remove_video_audio_path()
@@ -1299,14 +1289,10 @@ class InfiniteTalkRunner(WanRunner):
         cond_audio = input_data.get("cond_audio", {}) if isinstance(input_data, dict) else {}
         person_count = len(cond_audio) if isinstance(cond_audio, dict) else 0
         audio_input = self.input_info.audio_path
-        if audio_input is None:
-            audio_input = self.config.get("audio_path", "")
         if person_count <= 1 and audio_input:
-            audio_input = str(audio_input)
-            if not os.path.isdir(audio_input):
-                original_audio = audio_input.split(",")[0].strip()
-                if original_audio and os.path.isfile(original_audio):
-                    return original_audio
+            original_audio = audio_input[0]
+            if os.path.isfile(original_audio):
+                return original_audio
         return self.video_audio_path
 
     @staticmethod
@@ -1378,7 +1364,7 @@ class InfiniteTalkRunner(WanRunner):
                 out_path = self.input_info.save_result_path
                 mux_audio = self._resolve_mux_audio_path()
                 if not mux_audio or not os.path.isfile(mux_audio):
-                    audio_input = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
+                    audio_input = getattr(self.input_info, "audio_path", None) or get_input_value(self.config, "audio_path", "")
                     raise FileNotFoundError(f"InfiniteTalk mux audio is unavailable for audio input: {audio_input}")
                 if not os.path.isfile(out_path):
                     raise FileNotFoundError(f"InfiniteTalk stream video is unavailable for audio mux: {out_path}")

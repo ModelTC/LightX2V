@@ -1,7 +1,5 @@
 {
   "infer_steps": 29,
-  "num_frames": 124,
-  "size": [544, 960],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -27,5 +25,9 @@
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
   "audio_sampling_rate": 32000,
-  "keep_latents_dtype_in_scheduler": true
+  "keep_latents_dtype_in_scheduler": true,
+  "request_defaults": {
+    "num_frames": 124,
+    "size": [544, 960]
+  }
 }

@@ -193,6 +193,10 @@ python scripts/minimax_h3/server/post_t2av.py
 
 修改 [请求脚本](scripts/minimax_h3/server/post_t2av.py) 中的提示词即可生成自己的内容。请求异步执行，结果默认保存到仓库下的 `save_results/server_cache/outputs/` 目录。
 
+### ComfyUI 集成
+
+通过 ComfyUI 节点调用 LightX2V Server，支持图片/视频生成、视频超分、模型常驻复用和多卡选择。部署与示例工作流见 [ComfyUI 集成文档](lightx2v_comfyui/README_zh.md)。
+
 ## 🤖 支持的模型生态
 
 LightX2V 支持多种图像、视频与世界模型，并提供量化权重、蒸馏模型和轻量自编码器。
@@ -323,7 +327,7 @@ LightX2V 支持多种图像、视频与世界模型，并提供量化权重、�
 | 环境安装与配置 | [快速入门指南](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html) |
 | 模型准备与加载 | [MiniMax-H3](scripts/minimax_h3/README_zh.md) · [Wan2.1 / VACE](scripts/wan/README_zh.md) · [模型格式与加载](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/model_structure.html) |
 | 服务部署与 API 调用 | [服务部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_service.html) · [API 参考](lightx2v/server/README.md) |
-| 交互界面与工作流集成 | [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) · [ComfyUI](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_comfyui.html) |
+| 交互界面与工作流集成 | [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) · [ComfyUI](lightx2v_comfyui/README_zh.md) |
 | Windows 本地部署 | [Windows 部署指南](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_local_windows.html) |
 | 低资源与低延迟部署 | [低资源部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_resource.html) · [低延迟部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_latency.html) |
 | 模型量化与 LoRA 部署 | [模型量化](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/quantization.html) · [LoRA 部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/lora_deploy.html) |

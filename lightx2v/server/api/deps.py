@@ -3,13 +3,13 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
+from fastapi import HTTPException
 from loguru import logger
 
 from ..services import (
     DistributedInferenceService,
     FileService,
-    ImageGenerationService,
-    VideoGenerationService,
+    GenerationService,
 )
 
 
@@ -19,8 +19,7 @@ class ServiceContainer:
     def __init__(self):
         self.file_service: Optional[FileService] = None
         self.inference_service: Optional[DistributedInferenceService] = None
-        self.video_service: Optional[VideoGenerationService] = None
-        self.image_service: Optional[ImageGenerationService] = None
+        self.generation_service: Optional[GenerationService] = None
         self.max_queue_size: int = 10
 
     @classmethod
@@ -32,8 +31,7 @@ class ServiceContainer:
     def initialize(self, cache_dir: Path, inference_service: DistributedInferenceService, max_queue_size: int = 10):
         self.file_service = FileService(cache_dir)
         self.inference_service = inference_service
-        self.video_service = VideoGenerationService(self.file_service, inference_service)
-        self.image_service = ImageGenerationService(self.file_service, inference_service)
+        self.generation_service = GenerationService(self.file_service, inference_service)
         self.max_queue_size = max_queue_size
 
 
@@ -57,3 +55,12 @@ async def validate_url_async(url: str) -> bool:
     except Exception as e:
         logger.warning(f"URL validation failed for {url}: {str(e)}")
         return False
+
+
+async def validate_image_urls(message):
+    for field in ("image_path", "image_mask_path"):
+        value = message.get(field)
+        paths = value if isinstance(value, list) else [value]
+        for path in paths:
+            if path and path.startswith("http") and not await validate_url_async(path):
+                raise HTTPException(status_code=400, detail=f"Image URL is not accessible: {path}")

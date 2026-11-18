@@ -1,6 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
     "text_len": 512,
     "auto_target_shape": false,
     "size": [1280, 720],
@@ -28,5 +27,8 @@
     "parallel": {
         "seq_p_size": 2,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "num_frames": 81
     }
 }

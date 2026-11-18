@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [1280, 720],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
@@ -15,5 +13,9 @@
         [-114.36346466, 65.26524496, -18.82220707, 4.91518089, -0.23412683]
     ],
     "use_ret_steps": true,
-    "teacache_thresh": 0.26
+    "teacache_thresh": 0.26,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [1280, 720]
+    }
 }

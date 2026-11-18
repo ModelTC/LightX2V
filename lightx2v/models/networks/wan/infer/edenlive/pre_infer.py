@@ -60,7 +60,7 @@ class EdenLivePreInfer(WanPreInfer):
             type(scheduler) is not EdenLiveARScheduler
             or not isinstance(getattr(scheduler, "generator", None), torch.Generator)
             or config.get("lora_configs")
-            or config.get("lora_dynamic_apply", False)
+            or self.config.get("lora_mode", "merge") == "separate"
         ):
             self.clear_projection_cache()
             return False

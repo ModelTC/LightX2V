@@ -67,7 +67,7 @@ class WanAnimate2Model(WanModel):
                 self.transformer_weights.non_block_weights_to_cuda()
         try:
             pre_infer_out = self.pre_infer.infer_reference(self.pre_weight, inputs)
-            if self.config["seq_parallel"]:
+            if self.config.get("seq_parallel", False):
                 pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
             self.transformer_infer.infer_reference(self.transformer_weights, pre_infer_out)
         finally:

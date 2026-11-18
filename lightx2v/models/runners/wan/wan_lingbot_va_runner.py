@@ -11,7 +11,7 @@ from loguru import logger
 
 from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.lingbot_va_model import WanLingbotVAModel
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
+from lightx2v.models.runners.wan.input_info import WanPolicyState
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.lingbot_va.scheduler import LingbotVAFlowMatchScheduler
@@ -19,7 +19,6 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import count_conv3d, patchify
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
-from lightx2v.utils.input_info import I2VAInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
@@ -67,12 +66,10 @@ class _StreamingVAEEncoder:
 
 @RUNNER_REGISTER("lingbot_va")
 class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
-    supported_request_fields_by_task = {
-        "i2va": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path"},
-    }
+    input_info_state = WanPolicyState
+    supported_lora_modes = ("merge",)
 
     def __init__(self, config):
-        config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)
         config["enable_action_cfg"] = config.get("enable_action_cfg", config.get("action_sample_guide_scale", 1.0) > 1)
         config["cfg_parallel"] = False
         super().__init__(config)
@@ -454,12 +451,12 @@ class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
         image_path = getattr(self.input_info, "image_path", "")
         if not image_path:
             raise ValueError("LingBot-VA requires image_path from input_info.")
-        image_path = os.path.expanduser(str(image_path))
+        image_path = [os.path.expanduser(path) for path in image_path]
         cam_keys = self.config["obs_cam_keys"]
-        if os.path.isdir(image_path):
-            image_files = [os.path.join(image_path, f"{key}.png") for key in cam_keys]
+        if len(image_path) == 1 and os.path.isdir(image_path[0]):
+            image_files = [os.path.join(image_path[0], f"{key}.png") for key in cam_keys]
         else:
-            image_files = [item.strip() for item in image_path.split(",") if item.strip()]
+            image_files = image_path
             if len(image_files) != len(cam_keys):
                 raise ValueError(f"Expected {len(cam_keys)} camera images, got {len(image_files)} from image_path={image_path}")
         obs = {}
@@ -508,6 +505,8 @@ class LingbotVARunner(WanStreamingVAERunnerMixin, Wan22DenseRunner):
         save_to_video(self.gen_video_final, video_path, fps=self.config.get("fps", 10), method=self.config.get("save_video_method", "imageio"))
         os.makedirs(os.path.dirname(action_path) or ".", exist_ok=True)
         np.save(action_path, self.pred_action.flatten(1).numpy())
+        self.record_output("video", video_path)
+        self.record_output("action", action_path)
         logger.info("Saved LingBot-VA video to {}", video_path)
         logger.info("Saved LingBot-VA actions to {}", action_path)
         if self.input_info.return_result_tensor:
@@ -684,7 +683,7 @@ class LingbotVAPolicy:
 
     def _start_episode(self, images, task_description, seed):
         initial_observation = self._format_observation(images)
-        input_info = I2VAInputInfo(
+        input_info = self.runner.get_input_info_type("i2va")(
             seed=int(seed),
             prompt=str(task_description),
             negative_prompt="",

@@ -1,8 +1,6 @@
 {
     "infer_steps": 50,
-    "num_frames": 121,
     "text_len": 512,
-    "size": [704, 1280],
     "num_channels_latents": 48,
     "vae_stride": [
         4,
@@ -20,5 +18,9 @@
     "offload_granularity": "model",
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
-    "vae_offload_cache": true
+    "vae_offload_cache": true,
+    "request_defaults": {
+        "num_frames": 121,
+        "size": [704, 1280]
+    }
 }

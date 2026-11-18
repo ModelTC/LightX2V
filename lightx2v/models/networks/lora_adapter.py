@@ -14,11 +14,12 @@ class LoraAdapter:
         self.model = model
         self.lora_metadata = {}
         self.lora_loader = LoRALoader(model_prefix=model_prefix)
-        self.merge_force_fp32 = self.model.config.get("lora_merge_force_fp32", False)
+        self.lora_dtype = GET_LORA_DTYPE()
+        logger.info("LoRA merge computation dtype: {}", self.lora_dtype)
         self.device = torch.device(AI_DEVICE) if not self.model.config.get("cpu_offload", False) else torch.device("cpu")
 
     def _load_lora_file(self, file_path):
-        dtype = torch.float32 if self.merge_force_fp32 else GET_DTYPE()
+        dtype = self.lora_dtype
         with safe_open(file_path, framework="pt") as f:
             tensor_dict = {key: f.get_tensor(key).to(dtype).to(self.device) for key in f.keys()}
         return tensor_dict
@@ -35,7 +36,7 @@ class LoraAdapter:
                 weight_dict=self.model.original_weight_dict,
                 lora_weights=lora_weights,
                 strength=lora_strength,
-                force_fp32=self.merge_force_fp32,
+                lora_dtype=self.lora_dtype,
             )
             if model_type is not None:
                 logger.info(f"Successfully applied LoRA to {model_type} model: {lora_config['path']} (strength: {lora_strength})")

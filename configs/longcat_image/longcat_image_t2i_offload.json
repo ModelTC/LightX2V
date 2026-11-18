@@ -1,6 +1,5 @@
 {
     "infer_steps": 50,
-    "aspect_ratio": "16:9",
     "attn_type": "sage_attn2",
     "enable_cfg": true,
     "sample_guide_scale": 4.0,
@@ -10,5 +9,8 @@
     "dit_quant_scheme": "Default",
     "rms_norm_type": "sgl-kernel",
     "cpu_offload": true,
-    "offload_granularity": "block"
+    "offload_granularity": "block",
+    "request_defaults": {
+        "aspect_ratio": "16:9"
+    }
 }

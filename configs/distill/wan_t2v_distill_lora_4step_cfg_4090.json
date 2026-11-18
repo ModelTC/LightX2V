@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
@@ -16,11 +14,14 @@
     "dit_quant_scheme": "fp8-q8f",
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-q8f",
-    "lora_dynamic_apply": true,
     "lora_configs": [
         {
             "path": "/path/to/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors",
             "strength": 1.0
         }
-    ]
+    ],
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

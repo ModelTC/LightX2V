@@ -18,6 +18,7 @@ from lightx2v.disagg.services.base import BaseService
 from lightx2v.disagg.services.data_mgr_sidecar import DataMgrSidecar
 from lightx2v.disagg.utils import estimate_transformer_buffer_sizes, load_wan_vae_decoder
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import save_to_video, seed_all, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -189,11 +190,11 @@ class DecoderService(BaseService):
         return MemoryHandle(buffers=buffers)
 
     def process(self, config):
-        save_result_path = config.get("save_result_path")
+        save_result_path = get_input_value(config, "save_result_path", None)
         if not save_result_path:
             raise ValueError("save_result_path is required for disaggregated generation requests")
 
-        seed_all(config["seed"])
+        seed_all(get_input_value(config, "seed"))
         self.logger.info("Starting processing in DecoderService...")
         room = config.get("data_bootstrap_room", 0)
         decoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("decoder", {})
@@ -242,8 +243,8 @@ class DecoderService(BaseService):
             stride_t = int(vae_stride[0])
             stride_h = int(vae_stride[1])
             stride_w = int(vae_stride[2])
-            num_frames = int(config.get("num_frames", 81))
-            target_height, target_width = map(int, config.get("size", (480, 832)))
+            num_frames = int(get_input_value(config, "num_frames", 81))
+            target_height, target_width = map(int, get_input_value(config, "size", (480, 832)))
 
             t_prime = 1 + (num_frames - 1) // stride_t
             h_prime = int(math.ceil(target_height / stride_h))

@@ -1,5 +1,6 @@
 import { api } from "../../scripts/api.js";
 import { openFileBrowser } from "./files_ui.js";
+import { selectedGpuCount, setParallelConfig } from "./gpu_ui.js";
 
 const style = document.createElement("style");
 style.textContent = `
@@ -45,6 +46,15 @@ export function openConfigEditor(node) {
     text.spellcheck = false;
     const message = el("div", "Loading config…", "lx-message");
     message.setAttribute("role", "status");
+    const parallel = el("details");
+    parallel.open = true;
+    parallel.append(el("summary", "Parallel — edits update the same JSON"));
+    const parallelControls = el("div", "", "lx-row");
+    const single = el("button", "Single GPU"), selected = el("button", "Use selected GPUs for SP");
+    parallelControls.append(single, selected);
+    const parallelStatus = el("div", "", "lx-message");
+    parallelStatus.setAttribute("role", "status");
+    parallel.append(parallelControls, parallelStatus);
     const loras = el("details");
     loras.open = true;
     loras.append(el("summary", "LoRA — edits update the same JSON"));
@@ -57,8 +67,18 @@ export function openConfigEditor(node) {
     footer.append(save, close);
     dialog.append(el("h2", "Browse / Edit config"), pathRow,
         el("p", "Browse selects the config file for this Service. Save writes your edits to that file; changes apply on the next run."),
-        text, loras, message, footer);
+        text, loras, parallel, message, footer);
     let original = null, baseline = "", pending = false, loraError = "";
+    const dimensions = ["tensor_p_size", "seq_p_size", "cfg_p_size", "pp_size"];
+    function parallelFields(data) { return data.parallel?.chunk_p_size != null ? ["chunk_p_size"] : dimensions; }
+    function processCount(data) { return parallelFields(data).reduce((size, key) => size * (data.parallel?.[key] ?? 1), 1); }
+    function updateParallelStatus(data) {
+        const count = processCount(data), selected = selectedGpuCount(node);
+        const linked = node.inputs?.some(input => input.name === "CUDA_VISIBLE_DEVICES" && input.link != null);
+        parallelStatus.textContent = `Config: ${count} process(es). ${linked ? "GPUs come from a connected input." : `Service: ${selected} GPU(s) selected.`}`;
+        if (!linked && count !== selected) parallelStatus.textContent += " Select matching GPUs or adjust Parallel before running.";
+        parallelStatus.style.color = !linked && count !== selected ? "#edbb72" : "";
+    }
     function selectPath(value) {
         if (widget.value === value) return;
         const graph = node.graph;
@@ -81,19 +101,38 @@ export function openConfigEditor(node) {
         if (data.lora_configs != null && (!Array.isArray(data.lora_configs) || data.lora_configs.some(l => !l || Array.isArray(l) || typeof l !== "object"))) {
             throw new Error("lora_configs must be an array of objects");
         }
+        if (data.parallel && (typeof data.parallel !== "object" || Array.isArray(data.parallel))) throw new Error("parallel must be an object or false");
+        for (const key of parallelFields(data)) {
+            const value = data.parallel?.[key] ?? 1;
+            if (!Number.isInteger(value) || value < 1) throw new Error(`parallel.${key} must be a positive integer`);
+        }
         return data;
     }
     function validate() {
         let valid = false;
-        try { if (loraError) throw new Error(loraError); parsed(); valid = true; message.textContent = text.value === baseline ? "File loaded." : "Valid JSON · unsaved changes"; }
+        try {
+            if (loraError) throw new Error(loraError);
+            const data = parsed(); updateParallelStatus(data);
+            valid = true; message.textContent = text.value === baseline ? "File loaded." : "Valid JSON · unsaved changes";
+        }
         catch (error) { message.textContent = error.message; }
         save.disabled = !valid || !original || pending;
         add.disabled = !valid || !original || pending;
         browse.disabled = pending;
         text.disabled = !original || pending;
         for (const input of table.querySelectorAll("input, button")) input.disabled = pending;
+        single.disabled = !valid || !original || pending;
+        selected.disabled = single.disabled || node.inputs?.some(input => input.name === "CUDA_VISIBLE_DEVICES" && input.link != null);
         return valid;
     }
+    function updateParallel(count) {
+        const data = parsed();
+        setParallelConfig(data, count);
+        text.value = JSON.stringify(data, null, 2) + "\n";
+        validate();
+    }
+    single.onclick = () => updateParallel(1);
+    selected.onclick = () => updateParallel(selectedGpuCount(node));
     function renderLoras() {
         loraError = "";
         table.replaceChildren();
@@ -184,7 +223,7 @@ export function openConfigEditor(node) {
             message.textContent = `Saved. Changes apply on the next run.${data.backup ? `\nBackup: ${data.backup}` : ""}`;
         } catch (error) { pending = false; validate(); message.textContent = error.message; }
     }
-    text.oninput = renderLoras;
+    text.oninput = () => { loraError = ""; renderLoras(); };
     add.onclick = () => { const data = parsed(); (data.lora_configs ||= []).push({path: "", strength: 1}); text.value = JSON.stringify(data, null, 2) + "\n"; renderLoras(); };
     save.onclick = persist;
     browse.onclick = () => {

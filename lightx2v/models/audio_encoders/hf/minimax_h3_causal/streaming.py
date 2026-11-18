@@ -1,58 +1,61 @@
 """Overlap-save waveform decode matching the H3 v0.1.0 reference."""
 
-import math
-
 import torch
 
 from lightx2v.models.networks.minimax_h3.packing import unpack_audio_tokens
 
+# decoder_context_latents gives 29 latents on either side plus one of margin.
+AUDIO_DECODER_CONTEXT_LATENTS = 30
+
 
 def decoder_context_latents(audio_vae) -> int:
-    """Conservative input receptive-field radius of the BigVGAN decoder."""
+    """Recalculate the fixed context from the decoder's integer index support.
+
+    Streaming and CUDA Graph setup use the constant above. One output hop
+    covers every upsampling phase, independently of the audio content.
+    This follows the BigVGAN operator layout; recheck both the traversal and
+    the constant when that layout changes.
+    """
     decoder = audio_vae.decoder
 
-    def conv_radius(conv, step: float) -> float:
-        kernel = int(conv.kernel_size[0])
-        dilation = int(conv.dilation[0])
-        return (kernel - 1) * dilation * step / 2
+    def conv_bounds(bounds, conv):
+        left, right = bounds
+        stride, padding = conv.stride[0], conv.padding[0]
+        return left * stride - padding, right * stride - padding + (conv.kernel_size[0] - 1) * conv.dilation[0]
 
-    def activation_radius(activation, step: float) -> float:
+    def transpose_bounds(bounds, kernel, stride, padding=0):
+        left, right = bounds
+        # Input i writes outputs [i * stride - padding, ... + kernel - 1].
+        return -((kernel - 1 - left - padding) // stride), (right + padding) // stride
+
+    def activation_bounds(bounds, activation):
         upsample = activation.upsample
         downsample = activation.downsample.lowpass
-        ratio = int(upsample.stride)
-        up_kernel = int(upsample.filter.shape[-1])
-        down_kernel = int(downsample.filter.shape[-1])
-        # Treat transposed convolution as a full-resolution convolution.
-        # This deliberately overestimates its dependency radius.
-        return (up_kernel - 1) * step / 2 + (down_kernel - 1) * step / ratio / 2
+        left = bounds[0] * downsample.stride - downsample.pad_left
+        right = bounds[1] * downsample.stride - downsample.pad_left + downsample.filter.shape[-1] - 1
+        # Undo the upsampler's output crop, transposed convolution and input pad.
+        left, right = transpose_bounds((left + upsample.pad_left, right + upsample.pad_left), upsample.filter.shape[-1], upsample.stride)
+        return left - upsample.pad, right - upsample.pad
 
-    radius = conv_radius(decoder.conv_pre, 1.0)
-    step = 1.0
-    for stage, wrapped_upsampler in enumerate(decoder.ups):
-        upsampler = wrapped_upsampler[0]
-        radius += conv_radius(upsampler, step)
-        step /= int(upsampler.stride[0])
-        stage_radius = 0.0
+    # The union of one hop's phases (800 for v0.1) can be propagated as one interval.
+    bounds = conv_bounds((0, audio_vae.hop_length - 1), decoder.conv_post)
+    bounds = activation_bounds(bounds, decoder.activation_post)
+    for stage in reversed(range(decoder.num_upsamples)):
+        branches = []
         offset = stage * decoder.num_kernels
         for block in decoder.resblocks[offset : offset + decoder.num_kernels]:
-            block_radius = 0.0
-            for conv1, conv2, act1, act2 in zip(
-                block.convs1,
-                block.convs2,
-                block.activations[::2],
-                block.activations[1::2],
-                strict=True,
-            ):
-                block_radius += activation_radius(act1, step)
-                block_radius += conv_radius(conv1, step)
-                block_radius += activation_radius(act2, step)
-                block_radius += conv_radius(conv2, step)
-            stage_radius = max(stage_radius, block_radius)
-        radius += stage_radius
-    radius += activation_radius(decoder.activation_post, step)
-    radius += conv_radius(decoder.conv_post, step)
-    # One additional latent covers asymmetric padding/cropping roundoff.
-    return math.ceil(radius) + 1
+            branch = bounds
+            layers = zip(block.convs1, block.convs2, block.activations[::2], block.activations[1::2], strict=True)
+            for conv1, conv2, act1, act2 in reversed(tuple(layers)):
+                residual = activation_bounds(conv_bounds(branch, conv2), act2)
+                residual = activation_bounds(conv_bounds(residual, conv1), act1)
+                branch = min(branch[0], residual[0]), max(branch[1], residual[1])
+            branches.append(branch)
+        bounds = min(left for left, _ in branches), max(right for _, right in branches)
+        upsampler = decoder.ups[stage][0]
+        bounds = transpose_bounds(bounds, upsampler.kernel_size[0], upsampler.stride[0], upsampler.padding[0])
+    bounds = conv_bounds(conv_bounds(bounds, decoder.conv_pre), audio_vae.dec_in_proj)
+    return max(-bounds[0], bounds[1]) + 1
 
 
 class MiniMaxH3StreamingAudioDecoder:
@@ -63,7 +66,7 @@ class MiniMaxH3StreamingAudioDecoder:
         self.decode_graph = decode_graph
         self.pending = None
         self.num_audio_latents = num_audio_latents
-        self.context_latents = decoder_context_latents(audio_vae)
+        self.context_latents = AUDIO_DECODER_CONTEXT_LATENTS
         self.hop_length = int(audio_vae.hop_length)
         self._latents: torch.Tensor | None = None
         self._buffer_start = 0

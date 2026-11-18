@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
@@ -15,5 +13,9 @@
     "dit_quantized": true,
     "dit_quantized_ckpt": "/path/to/Wan2.1-Distill-Models/wan2.1_i2v_480p_scaled_fp8_e4m3_lightx2v_4step.safetensors",
     "dit_quant_scheme": "fp8-sgl",
-    "use_tiling_vae": true
+    "use_tiling_vae": true,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

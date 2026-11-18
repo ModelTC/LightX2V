@@ -127,14 +127,14 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             action_start_frame_offset=getattr(self.scheduler, "action_start_frame_offset", 1),
             raw_action_dim=getattr(self.scheduler, "raw_action_dim", None),
         )
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         transformer_out = self.transformer_infer.infer(
             block_weights=self.transformer_weights,
             pre_infer_out=pre_infer_out,
         )
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             transformer_out = self._seq_parallel_post_process(transformer_out, pre_infer_out)
 
         return self.post_infer.infer(self.post_weight, transformer_out, pre_infer_out)
@@ -146,7 +146,7 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             self.post_weight.to_cuda()
 
         text_encoder_output = inputs["text_encoder_output"]
-        do_cfg = self.config.get("enable_cfg", True)
+        do_cfg = self.config.get("enable_cfg", False)
         if do_cfg:
             assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
             if self.config.get("cfg_parallel", False):

@@ -63,7 +63,7 @@ class ZImageTransformerWeights(WeightModule):
         )
 
     def register_offload_buffers(self, config, lazy_load_path, lora_path):
-        if config["cpu_offload"]:
+        if config.get("cpu_offload", False):
             if config["offload_granularity"] == "block":
                 self.offload_blocks_num = 2
                 self.offload_block_cuda_buffers = WeightModuleList(
@@ -375,7 +375,7 @@ class ZImageAttention(WeightModule):
         # Attention computation
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.add_module(
                 "calculate_parallel",
                 ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),

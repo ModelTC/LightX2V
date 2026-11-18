@@ -2,10 +2,6 @@
   "infer_steps": 50,
   "sample_guide_scale": 5.0,
   "flow_shift": 1.0,
-  "size": [
-    1024,
-    1024
-  ],
   "moe_backend": "flashinfer",
   "attn_impl": "torch_sdpa",
   "flashinfer_autotune_mode": "auto",
@@ -57,5 +53,11 @@
   "shared_cpu_weight_scope": "host",
   "shared_cpu_weight_backend": "sysv",
   "shared_cpu_weight_strict_numa": true,
-  "shared_cpu_weight_register_chunk_mb": 128
+  "shared_cpu_weight_register_chunk_mb": 128,
+  "request_defaults": {
+    "size": [
+      1024,
+      1024
+    ]
+  }
 }

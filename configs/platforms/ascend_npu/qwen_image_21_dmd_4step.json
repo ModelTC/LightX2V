@@ -4,7 +4,6 @@
     "do_time_shift": true,
     "shift_terminal": null,
     "latent_dtype": "fp32",
-    "resolution": 1024,
     "attn_type": "npu_flash_attn",
     "rope_type": "torch_real_rope",
     "rms_norm_type": "fp32_variance",
@@ -17,11 +16,13 @@
     "cpu_offload": true,
     "offload_granularity": "model",
     "text_encoder_cpu_offload": true,
-    "lora_dynamic_apply": false,
     "lora_configs": [
         {
             "path": "Qwen-Image-2.1-Lightning/pytorch_lora_weights.safetensors",
             "strength": 1.0
         }
-    ]
+    ],
+    "request_defaults": {
+        "resolution": 1024
+    }
 }

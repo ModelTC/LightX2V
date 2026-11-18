@@ -1,8 +1,6 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
     "text_len": 512,
-    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "dynamic_sparse_attn",
     "dynamic_sparse_attn_setting": {
@@ -31,5 +29,9 @@
     "high_noise_quantized_ckpt": "/path/to/Wan2.2-T2V-A14B/high_nvfp4.safetensors",
     "low_noise_quantized_ckpt": "/path/to/Wan2.2-T2V-A14B/low_nvfp4.safetensors",
     "high_noise_original_ckpt": null,
-    "low_noise_original_ckpt": null
+    "low_noise_original_ckpt": null,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

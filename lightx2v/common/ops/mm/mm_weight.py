@@ -19,7 +19,7 @@ from lightx2v.common.ops.mm.fp8_f16_accum import (
     fp8_f16_accum_linear,
     validate_fp8_f16_accum_qmax,
 )
-from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_per_token_quant, sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
+from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_per_token_quant, sgl_fp8_scaled_mm, sgl_scaled_mm_meta
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.core_op_stats import CoreOpStatistics
 from lightx2v.utils.envs import *
@@ -117,7 +117,7 @@ if magi_register_custom_op is not None and sgl_kernel is not None:
 
     @magi_register_custom_op(
         "lightx2v::fp8_scaled_mm",
-        infer_output_meta_fn=sgl_fp8_scaled_mm_meta,
+        infer_output_meta_fn=sgl_scaled_mm_meta,
         is_subgraph_boundary=True,
     )
     def _fp8_scaled_mm(
@@ -237,24 +237,29 @@ class MMWeightTemplate(CoreOpStatistics, metaclass=ABCMeta):
     def _get_actual_weight(self):
         if not hasattr(self, "weight_diff"):
             return self.weight
-        return self.weight + self.weight_diff
+        return (self.weight + self.weight_diff).to(self.weight.dtype)
 
     def _get_actual_bias(self, bias=None):
         if bias is not None:
             if not hasattr(self, "bias_diff"):
                 return bias
-            return bias + self.bias_diff
+            return (bias + self.bias_diff).to(bias.dtype)
         else:
             if not hasattr(self, "bias") or self.bias is None:
                 return None
             if not hasattr(self, "bias_diff"):
                 return self.bias
-            return self.bias + self.bias_diff
+            return (self.bias + self.bias_diff).to(self.bias.dtype)
 
     def apply_lora(self, input_tensor):
-        h = torch.mm(input_tensor, self.lora_down.t())
-        out = torch.mm(h, self.lora_up.t())
-        return self.lora_strength * self.lora_scale * out
+        with torch.autocast(device_type=input_tensor.device.type, enabled=False):
+            h = torch.mm(input_tensor.to(self.lora_down.dtype), self.lora_down.t())
+            out = torch.mm(h, self.lora_up.t())
+            return self.lora_strength * self.lora_scale * out
+
+    def add_lora(self, output, input_tensor):
+        # Keep the base GEMM output contract, including for quantized kernels.
+        return (output + self.apply_lora(input_tensor)).to(output.dtype)
 
     def _get_lora_target_device(self):
         if hasattr(self, "weight") and self.weight is not None:
@@ -415,8 +420,8 @@ class MMWeight(FloatingWeightStorage, MMWeightTemplate):
             return torch.mm(input_tensor, self._get_actual_weight(), out=output_tensor)
         else:
             if hasattr(self, "bias") and self.bias is not None:
-                return torch.addmm(self._get_actual_bias(), input_tensor, self._get_actual_weight(), out=output_tensor) + self.apply_lora(input_tensor)
-            return torch.mm(input_tensor, self._get_actual_weight(), out=output_tensor) + self.apply_lora(input_tensor)
+                return self.add_lora(torch.addmm(self._get_actual_bias(), input_tensor, self._get_actual_weight(), out=output_tensor), input_tensor)
+            return self.add_lora(torch.mm(input_tensor, self._get_actual_weight(), out=output_tensor), input_tensor)
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
         if self.has_lora_branch or self.has_diff:
@@ -813,7 +818,7 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
             bias,
         )
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -872,7 +877,7 @@ class MMWeightWint8channelAint8channeldynamicVllm(MMWeightQuantTemplate):
             self._get_actual_bias(),
         )
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -927,7 +932,7 @@ class MMWeightInt8Metal(MMWeightQuantTemplate):
 
     def apply(self, input_tensor):
         output = self._gemm(input_tensor, self.weight, self.weight_scale, self._get_actual_bias())
-        return output + self.apply_lora(input_tensor) if self.has_lora_branch else output
+        return self.add_lora(output, input_tensor) if self.has_lora_branch else output
 
 
 @MM_WEIGHT_REGISTER("mxfp4")
@@ -983,7 +988,7 @@ class MMWeightWmxfp4Amxfp4dynamic(MMWeightQuantTemplate):
             bias=self._get_actual_bias(),
         )
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -1040,7 +1045,7 @@ class MMWeightWmxfp6Amxfp8dynamic(MMWeightQuantTemplate):
             bias=self._get_actual_bias(),
         )
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -1097,7 +1102,7 @@ class MMWeightWmxfp8Amxfp8dynamic(MMWeightQuantTemplate):
             bias=self._get_actual_bias(),
         )
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -1383,7 +1388,7 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             alpha=self.alpha,
             bias=self.bias,
         )
-        return output_tensor
+        return self.add_lora(output_tensor, input_tensor) if self.has_lora_branch else output_tensor
 
     def to_cuda(self, non_blocking=False):
         self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
@@ -1513,7 +1518,8 @@ class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
                     bias=bias,
                 )
             )
-        return torch.cat(outputs, dim=-1)
+        output = torch.cat(outputs, dim=-1)
+        return self.add_lora(output, input_tensor) if self.has_lora_branch else output
 
 
 @MM_WEIGHT_REGISTER("CalibMax")
@@ -1702,7 +1708,7 @@ class MMWeightWfp8channelAfp8channeldynamicQ8F(MMWeightQuantTemplate):
             out_dtype=self.infer_dtype,
         )
         if self.has_lora_branch:
-            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor.squeeze(0), input_tensor) if len(output_tensor.shape) == 3 else self.add_lora(output_tensor, input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
@@ -1763,7 +1769,7 @@ class MMWeightWint8channelAint8channeldynamicQ8F(MMWeightQuantTemplate):
             out_dtype=self.infer_dtype,
         )
         if self.has_lora_branch:
-            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + +self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor.squeeze(0), input_tensor) if len(output_tensor.shape) == 3 else self.add_lora(output_tensor, input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
@@ -1831,7 +1837,7 @@ class MMWeightWfp8channelAfp8channeldynamicTriton(MMWeightQuantTemplate):
                 output_dtype=self.infer_dtype,
             )
         if self.has_lora_branch:
-            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + +self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor.squeeze(0), input_tensor) if len(output_tensor.shape) == 3 else self.add_lora(output_tensor, input_tensor)
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
 
@@ -1899,7 +1905,7 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
                 output_dtype=self.infer_dtype,
             )
         if self.has_lora_branch:
-            return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + +self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor.squeeze(0), input_tensor) if len(output_tensor.shape) == 3 else self.add_lora(output_tensor, input_tensor)
 
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
 
@@ -2003,7 +2009,7 @@ class MMWeightWint8ConvRot(MMWeightQuantTemplate):
             self._convrot_groupsize,
         )
         if self.has_lora_branch:
-            output_tensor = output_tensor + self.apply_lora(input_tensor)
+            output_tensor = self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -2060,7 +2066,7 @@ class MMWeightWfp8block128Afp8channelgroup128dynamicDeepgemmActSgl(MMWeightQuant
         if hasattr(self, "bias") and self.bias is not None:
             output_tensor.add_(self._get_actual_bias())
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -2124,7 +2130,7 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
                 self._get_actual_bias(),
             )
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -2155,7 +2161,7 @@ class MMWeightWfp8channelAfp8channelF16Accum(MMWeightWfp8channelAfp8channeldynam
             self.fp8_gemm,
         )
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -2229,7 +2235,7 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
             self._get_actual_bias(),
         )
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -2284,7 +2290,7 @@ class MMWeightWfp8channelAfp8channeldynamicTorchao(MMWeightQuantTemplate):
             use_fast_accum=True,
         )
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -2339,7 +2345,7 @@ class MMWeightWint8channelAint8channeldynamicTorchao(MMWeightQuantTemplate):
             output_tensor.add_(self._get_actual_bias())
 
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -2466,7 +2472,7 @@ class MMWeightGGUFTemplate(MMWeightTemplate):
     def apply(self, input_tensor):
         weight, bias = self.cast_bias_weight(input_tensor)
         if self.has_lora_branch:
-            return torch.nn.functional.linear(input_tensor, weight, self._get_actual_bias(bias)) + self.apply_lora(input_tensor)
+            return self.add_lora(torch.nn.functional.linear(input_tensor, weight, self._get_actual_bias(bias)), input_tensor)
         return torch.nn.functional.linear(input_tensor, weight, self._get_actual_bias(bias))
 
 
@@ -2603,7 +2609,7 @@ class MMWeightWint4group128Marlin(MMWeightQuantTemplate):
         if hasattr(self, "bias") and self.bias is not None:
             output_tensor.add_(self._get_actual_bias())
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -2743,7 +2749,7 @@ class MMWeightWfp8tensorAfp8tensordynamic(MMWeightQuantTemplate):
         if use_bf16_accum:
             output_tensor = output_tensor.to(dtype)
         if self.has_lora_branch:
-            return output_tensor + self.apply_lora(input_tensor)
+            return self.add_lora(output_tensor, input_tensor)
         return output_tensor
 
 
@@ -2951,7 +2957,7 @@ class MMWeightTPReplicatedRow(MMWeightTP):
         else:
             output = torch.mm(full_input, self._mm._get_actual_weight())
         if self._mm.has_lora_branch:
-            output = output + self._mm.apply_lora(full_input)
+            output = self._mm.add_lora(output, full_input)
         return output
 
 

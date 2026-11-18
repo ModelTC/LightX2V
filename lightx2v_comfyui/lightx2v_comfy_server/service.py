@@ -129,7 +129,7 @@ class ServerSettings:
         return argv
 
 
-def server_reference(lightx2v_path, model_path, model_cls, config_json, task="t2av", model_variant="", CUDA_VISIBLE_DEVICES="0", nproc_per_node=1) -> ServerRef:
+def server_reference(lightx2v_path, model_path, model_cls, config_json, task="t2av", model_variant="", CUDA_VISIBLE_DEVICES="0", nproc_per_node=None) -> ServerRef:
     raw = {
         "lightx2v_path": lightx2v_path.strip(),
         "model_path": model_path.strip(),
@@ -138,9 +138,25 @@ def server_reference(lightx2v_path, model_path, model_cls, config_json, task="t2
         "task": task.strip(),
         "model_variant": model_variant.strip(),
         "CUDA_VISIBLE_DEVICES": CUDA_VISIBLE_DEVICES.strip(),
-        "nproc_per_node": nproc_per_node,
     }
+    if nproc_per_node is not None:
+        raw["nproc_per_node"] = nproc_per_node
     return ServerRef(_json(raw))
+
+
+def parallel_size(config: dict) -> int:
+    parallel = config.get("parallel") or {}
+    if not isinstance(parallel, dict):
+        raise ValueError("config.parallel must be an object or false")
+    # SwiftVR declares chunk parallelism instead of the standard model mesh.
+    fields = ("chunk_p_size",) if "chunk_p_size" in parallel else ("tensor_p_size", "seq_p_size", "cfg_p_size", "pp_size")
+    size = 1
+    for field in fields:
+        value = parallel.get(field, 1)
+        if type(value) is not int or value < 1:
+            raise ValueError(f"parallel.{field} must be a positive integer")
+        size *= value
+    return size
 
 
 def resolve_server(raw: dict) -> ServerSettings:
@@ -149,7 +165,6 @@ def resolve_server(raw: dict) -> ServerSettings:
         raise ValueError("Unknown server settings: " + str(sorted(set(raw) - allowed)))
     s = {
         "python": os.environ.get("LIGHTX2V_COMFY_PYTHON") or sys.executable,
-        "nproc_per_node": 1,
         "CUDA_VISIBLE_DEVICES": "0",
         "model_variant": "",
         "task": "t2av",
@@ -185,15 +200,15 @@ def resolve_server(raw: dict) -> ServerSettings:
         if s["model_variant"] and s["model_variant"] != variant:
             raise ValueError("H3 task does not match model_variant")
         s["model_variant"] = variant
-    if type(s["nproc_per_node"]) is not int or s["nproc_per_node"] < 1:
-        raise ValueError("nproc_per_node must be a positive integer")
-    if s["nproc_per_node"] > 1 and not sys.platform.startswith("linux"):
-        raise ValueError("Multi-GPU process-tree cleanup requires Linux child subreaper support")
     if not isinstance(s["CUDA_VISIBLE_DEVICES"], str) or not s["CUDA_VISIBLE_DEVICES"]:
         raise ValueError("CUDA_VISIBLE_DEVICES must be a nonempty string")
     s["CUDA_VISIBLE_DEVICES"] = normalize_devices(s["CUDA_VISIBLE_DEVICES"])
-    if len(s["CUDA_VISIBLE_DEVICES"].split(",")) < s["nproc_per_node"]:
-        raise ValueError("nproc_per_node exceeds the configured GPU count")
+    gpu_count = len(s["CUDA_VISIBLE_DEVICES"].split(","))
+    if "nproc_per_node" in s and (type(s["nproc_per_node"]) is not int or s["nproc_per_node"] != gpu_count):
+        raise ValueError("nproc_per_node must match the number of selected GPUs; omit it to select automatically")
+    s["nproc_per_node"] = gpu_count
+    if gpu_count > 1 and not sys.platform.startswith("linux"):
+        raise ValueError("Multi-GPU process-tree cleanup requires Linux child subreaper support")
     for key in ("startup_timeout", "task_timeout", "http_timeout", "poll_interval", "cancel_grace", "stop_grace"):
         value = s[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
@@ -202,6 +217,13 @@ def resolve_server(raw: dict) -> ServerSettings:
         raise ValueError("idle_ttl must be finite and nonnegative")
     with Path(s["config_json"]).open("rb") as handle:
         config = _expand(validate_config(handle.read(MAX_CONFIG_BYTES + 1)))
+    required_gpus = parallel_size(config)
+    if required_gpus != gpu_count:
+        raise ValueError(
+            f"Selected {gpu_count} GPU(s), but config.parallel requires {required_gpus}. "
+            "Select matching GPUs or edit Parallel in Browse / Edit config. "
+            "For the standard layout, GPU count = tensor_p_size × seq_p_size × cfg_p_size × pp_size."
+        )
     for lora in config.get("lora_configs") or []:
         lora_path = local_path(lora["path"], Path(s["lightx2v_path"]))
         if not lora_path.is_file():

@@ -13,21 +13,22 @@ from lightx2v.models.input_encoders.hf.minimax_h3_image import MiniMaxH3ImageTex
 from lightx2v.models.input_encoders.hf.minimax_h3_image.preprocess import get_image_canvas_size, image_to_tensor, prepare_reference_images
 from lightx2v.models.networks.minimax_h3_image.model import MiniMaxH3ImageModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.minimax_h3_image import MiniMaxH3ImageScheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_image import MiniMaxH3ImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_RECORDER_MODE
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process, seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 @RUNNER_REGISTER("minimax_h3_image")
 class MiniMaxH3ImageRunner(DefaultRunner):
-    supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS | {"output_compression"}, "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "output_compression"}}
+    input_info_state = ImageState
     _WARMUP_SHAPES = ((2048, 2048), (3552, 4736))
     _WARMUP_PROMPTS = (
         "A cinematic photograph of a mountain lake.",
@@ -42,12 +43,9 @@ class MiniMaxH3ImageRunner(DefaultRunner):
                 raise ValueError(f"MiniMax-H3-Image does not support {option}")
         if config.get("feature_caching", "NoCaching") != "NoCaching":
             raise ValueError("MiniMax-H3-Image requires feature_caching='NoCaching'")
-        if config.get("negative_prompt") or config.get("sample_guide_scale", 1.0) != 1.0:
+        if get_input_value(config, "negative_prompt", None) or config.get("sample_guide_scale", 1.0) != 1.0:
             raise ValueError("MiniMax-H3-Image uses one positive branch without negative prompts or guidance")
         super().__init__(config)
-
-    def get_supported_tasks(self):
-        return super().get_supported_tasks() if self.config.get("task") is not None else ("t2i", "i2i")
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
@@ -114,7 +112,7 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             "return_result_tensor": False,
         }
         if task == "i2i":
-            request["image_path"] = Image.new("RGB", (width, height))
+            request["image_path"] = [Image.new("RGB", (width, height))]
         self.input_info = self.create_input_info(request)
 
     def init_scheduler(self):
@@ -196,10 +194,10 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             ratio_width, ratio_height = (float(value) for value in dimensions)
             if not all(math.isfinite(value) and value > 0 for value in (ratio_width, ratio_height)):
                 raise ValueError("MiniMax-H3-Image aspect_ratio dimensions must be positive and finite")
-            base_height, base_width = self.config["size"]
+            base_height, base_width = get_input_value(self.config, "size")
             area = base_height * base_width
             size = [max(32, round(math.sqrt(area * ratio_height / ratio_width))), max(32, round(math.sqrt(area * ratio_width / ratio_height)))]
-        size = size or self.config["size"]
+        size = size or get_input_value(self.config, "size")
         if len(size) != 2 or any(type(value) is not int or value <= 0 for value in size):
             raise ValueError("MiniMax-H3-Image size must be [positive height, positive width]")
         self.output_size = tuple(size)

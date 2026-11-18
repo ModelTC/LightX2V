@@ -1,9 +1,7 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
     "motion_frame": 9,
     "fps": 25,
-    "video_duration": 300,
     "infinitetalk_mode": "multi",
     "audio_type": "para",
     "infinitetalk_size": "infinitetalk-720",
@@ -48,5 +46,9 @@
         "seq_p_size": 8,
         "seq_p_attn_type": "ulysses-4090",
         "seq_p_tensor_fusion": true
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "video_duration": 300
     }
 }

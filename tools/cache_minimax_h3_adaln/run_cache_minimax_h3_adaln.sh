@@ -60,5 +60,5 @@ source "${lightx2v_path}/scripts/base/base.sh"
 python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
   --model_cls minimax_h3 \
   --model_path "${model_path}" \
-  --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3.json" \
+  --config_json "${lightx2v_path}/configs/minimax_h3/distill/8steps/minimax_h3_bf16_8step.json" \
   --model-variant fl2av

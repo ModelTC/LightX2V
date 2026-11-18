@@ -75,7 +75,7 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
         previous_residual = infer_module_out.img - ori_img
         previous_residual_txt = infer_module_out.txt - ori_txt
 
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             previous_residual = previous_residual.cpu()
             previous_residual_txt = previous_residual_txt.cpu()
 
@@ -92,7 +92,7 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
         self.residual_cache[infer_condition] = previous_residual
         self.residual_cache_txt[infer_condition] = previous_residual_txt
 
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             ori_img = ori_img.to("cpu")
             ori_txt = ori_txt.to("cpu")
             del ori_img, ori_txt
@@ -134,7 +134,7 @@ class HunyuanVideo15TransformerInferMagCaching(HunyuanVideo15OffloadTransformerI
 class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
-        self.teacache_thresh = self.config["teacache_thresh"]
+        self.teacache_thresh = self.config.get("teacache_thresh", 0.26)
         self.coefficients = self.config["coefficients"]
 
         self.accumulated_rel_l1_distance_odd = 0
@@ -149,7 +149,7 @@ class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
         inp = img.clone()
         vec_ = vec.clone()
         img_mod_layer = block.img_branch.img_mod
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             img_mod_layer.to_cuda()
 
         img_mod1_shift, img_mod1_scale, _, _, _, _ = img_mod_layer.apply(vec_).chunk(6, dim=-1)

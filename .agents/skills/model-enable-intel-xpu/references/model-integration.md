@@ -100,6 +100,7 @@ touch lightx2v/models/schedulers/$MODEL/__init__.py
 | `video_encoders/hf/{model}/vae.py` | 包装 diffusers AutoencoderKL* |
 | `input_encoders/hf/{model}/text_encoder.py` | 包装 T5 / CLIP / Qwen 等 |
 | `runners/{model}/{model}_runner.py` | Runner 注册（见第七步） |
+| `runners/{model}/request_spec.py` | 任务及请求参数声明（见第七步） |
 | `schedulers/{model}/{model}_scheduler.py` | Flow Matching / DDIM 等 |
 
 ---
@@ -227,7 +228,6 @@ def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
 ```python
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 
 @RUNNER_REGISTER("{model_cls}")
 class MyModelRunner(DefaultRunner):
@@ -235,17 +235,26 @@ class MyModelRunner(DefaultRunner):
         return MyModel(self.config["model_path"], self.config, self.init_device)
     def load_text_encoder(self):
         return [MyTextEncoder(self.config)]
-    supported_request_fields_by_task = {"t2v": VIDEO_REQUEST_FIELDS}
-
     def load_vae(self):
         return None, MyVAE(self.config)  # T2V 示例；有图像输入时还需 encoder
     def init_scheduler(self):
         self.scheduler = MyScheduler(self.config)
 ```
 
-在 `lightx2v/models/runners/runner_factory.py:RUNNER_MODULES` 中添加 `model_cls → runner 模块路径`；`build_runner()` 延迟导入，CLI 的 choices 直接使用该表，不要在 `infer.py` 再添加 eager import 或重复 choices。
+在 `runners/{model}/request_spec.py` 中声明任务和请求参数：
 
-同时核对 `supported_request_fields_by_task`、`InputInfo` 与实际任务；上面的类仅展示关键 hook，不是可独立运行的完整模型。`configs/model_pipeline.json` 不参与当前 `build_runner()` 的原生 CLI 注册。
+```python
+from lightx2v.models.runners.request_args import VIDEO
+from lightx2v.utils.request_spec import RequestSpec, TaskSpec
+
+SPECS = {"{model_cls}": RequestSpec({"t2v": TaskSpec(VIDEO, outputs=("video",))})}
+```
+
+模型专属参数直接在这个文件中通过 `Argument` 声明。`BaseRunner` 从 Spec 校验任务和字段，CLI 也从同一份声明生成参数和帮助。
+
+在 `lightx2v/models/runners/registry.py:RUNNER_MODULES` 中添加 `model_cls → runner 模块路径`；`build_runner()` 延迟导入，CLI 的 choices 直接使用该表，不要在 `infer.py` 再添加 eager import 或重复 choices。
+
+同时核对模型 Spec、`InputInfo` 与实际任务；上面的类仅展示关键 hook，不是可独立运行的完整模型。`configs/model_pipeline.json` 不参与当前 `build_runner()` 的原生 CLI 注册。
 
 ---
 

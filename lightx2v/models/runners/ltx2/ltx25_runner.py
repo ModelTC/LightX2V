@@ -9,13 +9,13 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.ltx2.duration_head import LTX25DurationPredictor
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX25TextEncoder
 from lightx2v.models.networks.ltx2.ltx25_model import LTX25Model
-from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner, _ltx2_parse_image_paths, _ltx2_resolve_pixel_frame_indices
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
+from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner, _ltx2_resolve_pixel_frame_indices
 from lightx2v.models.schedulers.ltx2.ltx25_scheduler import LTX25Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX25AudioVAE, LTX25VideoVAE
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.ltx2_media_io import encode_video_ltx25
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -37,10 +37,6 @@ class LTX25Runner(LTX2Runner):
     text_encoder_root_key = "text_encoder_original_ckpt"
     video_vae_checkpoint_key = "video_vae_original_ckpt"
     audio_vae_checkpoint_key = "audio_vae_original_ckpt"
-    supported_request_fields_by_task = {
-        "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"},
-        "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_frame_indices", "image_path", "image_strength", "prompt"},
-    }
 
     def __init__(self, config):
         if config.get("enable_cfg", False) or float(config.get("sample_guide_scale", 1.0)) != 1.0:
@@ -97,7 +93,7 @@ class LTX25Runner(LTX2Runner):
             )
             source = "DurationHead"
         else:
-            configured = self.config.get("num_frames")
+            configured = get_input_value(self.config, "num_frames", None)
             if configured is None:
                 raise ValueError("LTX-2.5 auto_duration is disabled and no frame count was provided; pass num_frames/--num_frames or set num_frames in the profile")
             num_frames = int(configured)
@@ -116,8 +112,8 @@ class LTX25Runner(LTX2Runner):
                 raise ValueError(f"LTX-2.5 size must be [height, width], got {self.input_info.size}")
             final_height, final_width = map(int, self.input_info.size)
         else:
-            final_height = int(self.config["size"][0])
-            final_width = int(self.config["size"][1])
+            final_height = int(get_input_value(self.config, "size")[0])
+            final_width = int(get_input_value(self.config, "size")[1])
         if final_height % 64 != 0 or final_width % 64 != 0:
             raise ValueError(f"LTX-2.5 distilled two-stage output height and width must be divisible by 64, got {final_height}x{final_width}")
         self.input_info.size = [final_height, final_width]
@@ -169,11 +165,11 @@ class LTX25Runner(LTX2Runner):
     def _run_input_encoder_local_i2av(self):
         self._clear_ltx2_reference_audio_state()
         self._clear_ltx2_reference_video_state()
-        self._normalize_i2av_input_fields()
+        self._validate_i2av_input_fields()
         self.prepare_stage1_size()
         text_encoder_output = self.run_text_encoder(self.input_info)
         num_frames = self._resolve_num_frames(text_encoder_output)
-        image_paths = _ltx2_parse_image_paths(self.input_info.image_path or "")
+        image_paths = self.input_info.image_path
         frame_indices = _ltx2_resolve_pixel_frame_indices(self.input_info.image_frame_indices, len(image_paths), num_frames)
         guiding_keyframes = sum(frame_idx != 0 for frame_idx in frame_indices)
         self._validate_sequence_parallel_shape(num_frames, guiding_keyframes)

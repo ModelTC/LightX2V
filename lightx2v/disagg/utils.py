@@ -8,6 +8,7 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.request_defaults import get_input_value, get_request_default_arguments
 from lightx2v.utils.set_config import build_startup_config
 from lightx2v.utils.utils import find_torch_model_path
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -107,6 +108,9 @@ def set_config(
             args_dict.setdefault("modulate_type", "torch")
 
     args_dict.update(kwargs)
+    for name in get_request_default_arguments(args_dict):
+        if name in args_dict:
+            args_dict.setdefault("request_defaults", {}).setdefault(name, args_dict.pop(name))
     return build_startup_config(args_dict)
 
 
@@ -114,7 +118,7 @@ def load_wan_text_encoder(config: Dict[str, Any]):
     from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 
     # offload config
-    t5_offload = config.get("t5_cpu_offload", config.get("cpu_offload"))
+    t5_offload = config.get("t5_cpu_offload", config.get("cpu_offload", False))
     if t5_offload:
         t5_device = torch.device("cpu")
     else:
@@ -215,7 +219,7 @@ def load_wan_vae_encoder(config: Dict[str, Any]):
         vae_cls = WanVAE
 
     # offload config
-    vae_offload = config.get("vae_cpu_offload", config.get("cpu_offload"))
+    vae_offload = config.get("vae_cpu_offload", config.get("cpu_offload", False))
     if vae_offload:
         vae_device = torch.device("cpu")
     else:
@@ -255,7 +259,7 @@ def load_wan_vae_decoder(config: Dict[str, Any]):
         tiny_vae_name = "taew2_1.pth"
 
     # offload config
-    vae_offload = config.get("vae_cpu_offload", config.get("cpu_offload"))
+    vae_offload = config.get("vae_cpu_offload", config.get("cpu_offload", False))
     if vae_offload:
         vae_device = torch.device("cpu")
     else:
@@ -285,7 +289,7 @@ def load_wan_transformer(config: Dict[str, Any]):
         % (
             config.get("model_cls"),
             config.get("model_path"),
-            AI_DEVICE if not config.get("cpu_offload") else "cpu",
+            AI_DEVICE if not config.get("cpu_offload", False) else "cpu",
             config.get("dit_quantized", False),
             config.get("lazy_load", False),
         ),
@@ -300,14 +304,14 @@ def load_wan_transformer(config: Dict[str, Any]):
         % (
             config.get("model_cls"),
             config.get("model_path"),
-            AI_DEVICE if not config.get("cpu_offload") else "cpu",
+            AI_DEVICE if not config.get("cpu_offload", False) else "cpu",
             config.get("dit_quantized", False),
             config.get("lazy_load", False),
         ),
         flush=True,
     )
 
-    if config["cpu_offload"]:
+    if config.get("cpu_offload", False):
         init_device = torch.device("cpu")
     else:
         init_device = torch.device(AI_DEVICE)
@@ -388,8 +392,8 @@ def estimate_encoder_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     stride_h = int(vae_stride[1])
     stride_w = int(vae_stride[2])
 
-    num_frames = int(config.get("num_frames", 81))
-    target_height, target_width = map(int, config.get("size", (480, 832)))
+    num_frames = int(get_input_value(config, "num_frames", 81))
+    target_height, target_width = map(int, get_input_value(config, "size", (480, 832)))
 
     t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))
@@ -427,8 +431,8 @@ def estimate_transformer_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     stride_h = int(vae_stride[1])
     stride_w = int(vae_stride[2])
 
-    num_frames = int(config.get("num_frames", 81))
-    target_height, target_width = map(int, config.get("size", (480, 832)))
+    num_frames = int(get_input_value(config, "num_frames", 81))
+    target_height, target_width = map(int, get_input_value(config, "size", (480, 832)))
 
     t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))

@@ -11,6 +11,7 @@ from lightx2v.disagg.utils import (
 )
 from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import save_to_video, seed_all, wan_vae_to_comfy
 
 # Setup basic logging
@@ -98,11 +99,11 @@ def main():
 
     # Calculate latent shape
     # Logic from DefaultRunner.get_latent_shape_with_target_hw
-    latent_h = config["size"][0] // config["vae_stride"][1]
-    latent_w = config["size"][1] // config["vae_stride"][2]
+    latent_h = get_input_value(config, "size")[0] // config["vae_stride"][1]
+    latent_w = get_input_value(config, "size")[1] // config["vae_stride"][2]
     latent_shape = [
         config.get("num_channels_latents", 16),
-        (config["num_frames"] - 1) // config["vae_stride"][0] + 1,
+        (get_input_value(config, "num_frames") - 1) // config["vae_stride"][0] + 1,
         latent_h,
         latent_w,
     ]

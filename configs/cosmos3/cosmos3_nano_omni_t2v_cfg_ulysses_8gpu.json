@@ -1,9 +1,8 @@
 {
+    "model_variant": "omni",
     "infer_steps": 35,
     "sample_guide_scale": 6.0,
     "sample_shift": 10.0,
-    "size": [720, 1280],
-    "num_frames": 189,
     "fps": 24.0,
     "enable_cfg": true,
     "rms_norm_type": "one-pass",
@@ -21,5 +20,9 @@
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses",
         "cfg_p_size": 2
+    },
+    "request_defaults": {
+        "size": [720, 1280],
+        "num_frames": 189
     }
 }

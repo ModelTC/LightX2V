@@ -3,8 +3,7 @@
     "infer_steps": 28,
     "guidance_scale": 0.0,
     "shift": 1.0,
-    "scheduler_name": "flash",
-    "size": [2048, 2048],
+    "scheduler_type": "flash",
     "torch_dtype": "bfloat16",
     "enable_cfg": false,
     "cpu_offload": false,
@@ -15,5 +14,8 @@
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "size": [2048, 2048]
     }
 }

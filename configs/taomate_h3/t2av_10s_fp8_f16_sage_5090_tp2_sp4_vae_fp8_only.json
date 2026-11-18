@@ -1,11 +1,7 @@
 {
+  "lora_mode": "separate",
   "model_variant": "fl2av",
   "infer_steps": 3,
-  "num_frames": 240,
-  "size": [
-    1376,
-    768
-  ],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": false,
@@ -51,5 +47,12 @@
   "shared_cpu_weights": false,
   "video_vae_quantized": true,
   "video_vae_quant_scheme": "fp8-f16-accum",
-  "video_vae_quantized_ckpt": "/path/to/models/H3/MiniMax-H3-video-vae-fp8-f16-accum/minimax_h3_video_vae_fp8_f16_accum_bias_fp16.safetensors"
+  "video_vae_quantized_ckpt": "/path/to/models/H3/MiniMax-H3-video-vae-fp8-f16-accum/minimax_h3_video_vae_fp8_f16_accum_bias_fp16.safetensors",
+  "request_defaults": {
+    "num_frames": 240,
+    "size": [
+      1376,
+      768
+    ]
+  }
 }

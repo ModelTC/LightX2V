@@ -15,6 +15,7 @@ from lightx2v.disagg.utils import (
 )
 from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import save_to_video, seed_all, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -25,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 def get_latent_shape_with_lat_hw(config, latent_h, latent_w):
     return [
         config.get("num_channels_latents", 16),
-        (config["num_frames"] - 1) // config["vae_stride"][0] + 1,
+        (get_input_value(config, "num_frames") - 1) // config["vae_stride"][0] + 1,
         latent_h,
         latent_w,
     ]
@@ -34,7 +35,7 @@ def get_latent_shape_with_lat_hw(config, latent_h, latent_w):
 def compute_latent_shape_from_image(config, image_tensor):
     h, w = image_tensor.shape[2:]
     aspect_ratio = h / w
-    max_area = config["size"][0] * config["size"][1]
+    max_area = get_input_value(config, "size")[0] * get_input_value(config, "size")[1]
 
     latent_h = round(np.sqrt(max_area * aspect_ratio) // config["vae_stride"][1] // config["patch_size"][1] * config["patch_size"][1])
     latent_w = round(np.sqrt(max_area / aspect_ratio) // config["vae_stride"][2] // config["patch_size"][2] * config["patch_size"][2])
@@ -48,7 +49,7 @@ def get_vae_encoder_output(vae_encoder, config, first_frame, latent_h, latent_w)
 
     msk = torch.ones(
         1,
-        config["num_frames"],
+        get_input_value(config, "num_frames"),
         latent_h,
         latent_w,
         device=torch.device(AI_DEVICE),
@@ -61,7 +62,7 @@ def get_vae_encoder_output(vae_encoder, config, first_frame, latent_h, latent_w)
     vae_input = torch.concat(
         [
             torch.nn.functional.interpolate(first_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-            torch.zeros(3, config["num_frames"] - 1, h, w),
+            torch.zeros(3, get_input_value(config, "num_frames") - 1, h, w),
         ],
         dim=1,
     ).to(AI_DEVICE)

@@ -44,7 +44,7 @@ Set prompts, input images, seed, and output path in the command. Select a [confi
 Image editing accepts multiple inputs, corresponding to Image 1, Image 2, and so on in the prompt:
 
 ```bash
---image_path "/path/to/1.png,/path/to/2.png,/path/to/3.png"
+--image_path "/path/to/1.png" "/path/to/2.png" "/path/to/3.png"
 ```
 
 ## Server and requests
@@ -140,26 +140,25 @@ Scripts default to BF16 LoRA or distilled weights. For FP8, use the same script 
 ## Python API examples
 
 See the [Python API guide](../../docs/EN/source/getting_started/python_api.md) for
-generator setup, configuration precedence, offload and repeated generation.
-Edit paths in the selected file, then run it from the repository root after installation.
-These examples retain their own model, sampling and attention settings; using a
-Shell launcher's JSON is an explicit change of configuration.
+pipeline setup, offload and repeated generation. Scripts only supplement the model
+path, model class and task. Sampling, attention and checkpoint settings come from
+the selected JSON. Edit weight paths in that JSON and input/output paths in the
+script, then run it from the repository root after installation.
 
 | Use case | Steps | Python entry |
 | --- | --- | --- |
-| Edit 2511 FP8 | 4 | [qwen_2511_fp8.py](inference/qwen_2511_fp8.py) |
-| Edit 2511 LoRA | 4 | [qwen_2511_with_distill_lora.py](inference/qwen_2511_with_distill_lora.py) |
-| Edit 2511 FP8 + dynamic LoRA | 4 | [qwen_2511_with_distill_lora_dynamic.py](inference/qwen_2511_with_distill_lora_dynamic.py) |
+| Edit 2511 FP8 | 8 | [qwen_2511_fp8.py](inference/qwen_2511_fp8.py) |
+| Edit 2511 LoRA | 8 | [qwen_2511_with_distill_lora.py](inference/qwen_2511_with_distill_lora.py) |
+| Edit 2511 FP8 + dynamic LoRA | 8 | [qwen_2511_with_distill_lora_dynamic.py](inference/qwen_2511_with_distill_lora_dynamic.py) |
 | Edit 2511 switch LoRA | 8 | [qwen_2511_with_distill_lora_dynamic_switch_lora.py](inference/qwen_2511_with_distill_lora_dynamic_switch_lora.py) |
-| 2512 FP8 | 4 | [qwen_2512_fp8.py](inference/qwen_2512_fp8.py) |
-| 2512 LoRA | 4 | [qwen_2512_with_distill_lora.py](inference/qwen_2512_with_distill_lora.py) |
-| 2512 FP8 + dynamic LoRA | 4 | [qwen_2512_with_distill_lora_dynamic.py](inference/qwen_2512_with_distill_lora_dynamic.py) |
+| 2512 FP8 | 8 | [qwen_2512_fp8.py](inference/qwen_2512_fp8.py) |
+| 2512 LoRA | 8 | [qwen_2512_with_distill_lora.py](inference/qwen_2512_with_distill_lora.py) |
+| 2512 FP8 + dynamic LoRA | 8 | [qwen_2512_with_distill_lora_dynamic.py](inference/qwen_2512_with_distill_lora_dynamic.py) |
 | Qwen Image dynamic LoRA | 4 | [qwen_image_with_distill_lora_dynamic.py](inference/qwen_image_with_distill_lora_dynamic.py) |
 
-The four-step examples use the released four-step weights, following the
-[official inference examples](https://github.com/ModelTC/LightX2V-Qwen-Image-Lightning#run-4-step-edit-2511-model).
-The LoRA-switching example uses local LoRA placeholders; choose two LoRAs compatible
-with its eight-step settings. The eight-step Shell presets above use their matching weights.
+The Edit-2511 and 2512 examples use the matching eight-step JSON presets and weights.
+The original Qwen Image dynamic LoRA example uses a four-step preset. Choose LoRAs
+matching the configured step count when switching adapters at runtime.
 
 ### Recorded DiT timing comparison
 

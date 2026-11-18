@@ -1,14 +1,7 @@
 {
     "infer_steps": 2,
     "fps": 25,
-    "video_duration": 1,
     "audio_sr": 16000,
-    "num_frames": 25,
-    "resize_mode": "fixed_shape",
-    "size": [
-        192,
-        320
-    ],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
@@ -22,5 +15,14 @@
         "scale": 2.0,
         "seed": 0,
         "model_path": "/path/to/FlashVSR"
+    },
+    "request_defaults": {
+        "video_duration": 1,
+        "num_frames": 25,
+        "resize_mode": "fixed_shape",
+        "size": [
+            192,
+            320
+        ]
     }
 }

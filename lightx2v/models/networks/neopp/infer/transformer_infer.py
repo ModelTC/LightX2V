@@ -112,7 +112,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
                 )
         else:
             self._mlp_forward = self._dense_mlp
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             parallel_config = self.config["parallel"]
             self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
@@ -336,7 +336,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         seq_len_q = query_states.shape[0]
         seq_len_k = key_states.shape[0]
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             kvcache_len = seq_len_k - seq_len_q
             attn_output, aux_attn_output = attn_w.cross_attn_parallel.apply(
                 q=query_states,

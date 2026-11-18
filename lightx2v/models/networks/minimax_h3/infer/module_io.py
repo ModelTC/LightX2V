@@ -12,6 +12,7 @@ class MiniMaxH3SequenceParallelState:
     timestep_indices: torch.Tensor
     adaln_indices: torch.Tensor
     rotary_emb: tuple[torch.Tensor, torch.Tensor]
+    valid_seq_len: int | None = None
 
 
 @dataclass

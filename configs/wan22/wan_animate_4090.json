@@ -1,6 +1,5 @@
 {
     "infer_steps": 20,
-    "num_frames": 77,
     "text_len": 512,
     "size": [720, 1280],
     "self_attn_1_type": "sage_attn2",
@@ -20,5 +19,8 @@
     "t5_quantized": true,
     "t5_quant_scheme": "fp8",
     "clip_quantized": true,
-    "clip_quant_scheme": "fp8"
+    "clip_quant_scheme": "fp8",
+    "request_defaults": {
+        "num_frames": 77
+    }
 }

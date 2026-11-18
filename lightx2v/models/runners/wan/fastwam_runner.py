@@ -12,10 +12,11 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.networks.wan.fastwam_model import FastWAMNativeModel
 from lightx2v.models.runners.base_runner import BaseRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
+from lightx2v.models.runners.wan.input_info import WanPolicyState
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 
 AGENTVIEW_IMAGE_NAME = "agentview_image.png"
 WRIST_IMAGE_NAME = "wrist_image.png"
@@ -187,7 +188,7 @@ class FastWAMPolicy:
             action_infer_steps=config.get("action_infer_steps", 20),
             action_dim=config.get("action_dim", 7),
             robot_state_dim=config.get("robot_state_dim", 8),
-            seed=config.get("seed", 0),
+            seed=get_input_value(config, "seed", 0),
             binarize_gripper=config.get("binarize_gripper", True),
             default_prompt=config.get("default_prompt"),
             camera_size=config.get("camera_size", 224),
@@ -379,11 +380,12 @@ class FastWAMPolicy:
 
 @RUNNER_REGISTER("fastwam")
 class FastWAMRunner(BaseRunner):
+    input_info_state = WanPolicyState
+
     policy_class = FastWAMPolicy
 
-    supported_request_fields_by_task = {
-        "i2va": COMMON_REQUEST_FIELDS | {"image_path", "prompt", "save_action_path", "state_path"},
-    }
+    def get_output_extension(self, input_info):
+        return ".npy"
 
     def init_modules(self):
         logger.info("Loading {}...", self.policy_class.__name__)
@@ -403,15 +405,15 @@ class FastWAMRunner(BaseRunner):
         if not image_path:
             raise ValueError("FastWAM requires `image_path`.")
 
-        image_path = os.path.expanduser(str(image_path))
-        if os.path.isdir(image_path):
+        image_path = [os.path.expanduser(path) for path in image_path]
+        if len(image_path) == 1 and os.path.isdir(image_path[0]):
+            image_path = image_path[0]
             agentview = os.path.join(image_path, AGENTVIEW_IMAGE_NAME)
             wrist = os.path.join(image_path, WRIST_IMAGE_NAME)
         else:
-            items = [item.strip() for item in image_path.split(",") if item.strip()]
-            if len(items) != 2:
-                raise ValueError("FastWAM `image_path` must be a directory or two comma-separated image paths.")
-            agentview, wrist = items
+            if len(image_path) != 2:
+                raise ValueError("FastWAM image_path requires two camera images or one directory.")
+            agentview, wrist = image_path
 
         return self._load_rgb(agentview), self._load_rgb(wrist)
 
@@ -456,6 +458,9 @@ class FastWAMRunner(BaseRunner):
                 json.dump(actions.tolist(), f, ensure_ascii=False, indent=2)
         else:
             np.save(action_path, actions)
+            if not action_path.endswith(".npy"):
+                action_path += ".npy"
+        self.record_output("action", action_path)
         logger.info("Saved FastWAM actions to {}", action_path)
 
     def run_pipeline(self, input_info):

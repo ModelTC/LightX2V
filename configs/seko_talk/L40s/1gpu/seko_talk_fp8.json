@@ -1,10 +1,7 @@
 {
     "infer_steps": 4,
     "fps": 16,
-    "video_duration": 360,
     "audio_sr": 16000,
-    "num_frames": 81,
-    "resize_mode": "adaptive",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -24,5 +21,10 @@
     "clip_cpu_offload": true,
     "vae_cpu_offload": true,
     "audio_encoder_cpu_offload": true,
-    "audio_adapter_cpu_offload": true
+    "audio_adapter_cpu_offload": true,
+    "request_defaults": {
+        "video_duration": 360,
+        "num_frames": 81,
+        "resize_mode": "adaptive"
+    }
 }

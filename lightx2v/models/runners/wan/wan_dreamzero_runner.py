@@ -15,7 +15,7 @@ from safetensors import safe_open
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.wan.dreamzero_model import DreamZeroModel
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
+from lightx2v.models.runners.wan.input_info import WanPolicyState
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.dreamzero.scheduler import DreamZeroFlowUniPCScheduler
@@ -34,12 +34,10 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("dreamzero")
 class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
-    supported_request_fields_by_task = {
-        "i2va": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "save_action_path", "state_path"},
-    }
+    input_info_state = WanPolicyState
+    supported_lora_modes = ("merge",)
 
     def __init__(self, config):
-        config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)
         super().__init__(config)
         self.vae_cls = WanVAE
         self.tiny_vae_cls = WanVAE_tiny
@@ -142,7 +140,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
         return image_encoder
 
     def load_text_encoder(self):
-        t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload"))
+        t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload", False))
         t5_device = torch.device("cpu") if t5_offload else torch.device(AI_DEVICE)
         t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
         t5_original_ckpt = self._resolve_wan_ckpt_file(t5_model_name)
@@ -169,7 +167,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
     def load_vae_encoder(self):
         if self.config["task"] not in ["i2va"]:
             return super().load_vae_encoder()
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         vae_device = torch.device("cpu") if vae_offload else torch.device(AI_DEVICE)
         vae_config = {
             "vae_path": self._resolve_wan_ckpt_file(self.vae_name),
@@ -196,7 +194,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
             return WanStreamingVAERunnerMixin.load_vae_decoder(self)
         if self.config["task"] not in ["i2va"]:
             return super().load_vae_decoder()
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         vae_device = torch.device("cpu") if vae_offload else torch.device(AI_DEVICE)
         if self.config.get("use_tae", False):
             tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
@@ -325,10 +323,11 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
         return np.stack(frames, axis=0)
 
     def _resolve_camera_files(self, image_path):
-        image_path = os.path.expanduser(str(image_path))
+        image_path = [os.path.expanduser(path) for path in image_path]
         cam_keys = self.config["obs_cam_keys"]
         aliases = self.config.get("obs_cam_aliases", {})
-        if os.path.isdir(image_path):
+        if len(image_path) == 1 and os.path.isdir(image_path[0]):
+            image_path = image_path[0]
             files = []
             for key in cam_keys:
                 stems = [key, key.replace("video.", ""), aliases.get(key, "")]
@@ -347,7 +346,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
                     raise FileNotFoundError(f"Could not find camera input for {key} under {image_path}")
                 files.append(found)
             return files
-        files = [item.strip() for item in image_path.split(",") if item.strip()]
+        files = image_path
         if len(files) != len(cam_keys):
             raise ValueError(f"Expected {len(cam_keys)} camera files, got {len(files)} from image_path={image_path}")
         return files
@@ -355,7 +354,7 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
     def _load_camera_sequences(self):
         image_path = getattr(self.input_info, "image_path", "")
         if not image_path:
-            raise ValueError("DreamZero i2va requires image_path as a directory or comma-separated camera files.")
+            raise ValueError("DreamZero i2va requires image_path as camera file paths or one directory.")
         sequences = []
         for file_path in self._resolve_camera_files(image_path):
             ext = os.path.splitext(file_path)[1].lower()
@@ -690,6 +689,8 @@ class WanDreamZeroRunner(WanStreamingVAERunnerMixin, WanRunner):
         save_to_video(self.gen_video_final, video_path, fps=self.config.get("fps", 10), method=self.config.get("save_video_method", "imageio"))
         os.makedirs(os.path.dirname(action_path) or ".", exist_ok=True)
         np.save(action_path, self.pred_action.numpy())
+        self.record_output("video", video_path)
+        self.record_output("action", action_path if action_path.endswith(".npy") else action_path + ".npy")
         logger.info("Saved DreamZero video to {}", video_path)
         logger.info("Saved DreamZero actions to {}", action_path)
         if self.input_info.return_result_tensor:

@@ -25,7 +25,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
         self.task = config["task"]
-        self.seq_parallel = config["seq_parallel"]
+        self.seq_parallel = config.get("seq_parallel", False)
         self.has_image_context = has_image_context(config)
         self.blocks_num = config["num_layers"]
         self.phases_num = 3

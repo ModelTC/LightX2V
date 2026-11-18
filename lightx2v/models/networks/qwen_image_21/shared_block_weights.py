@@ -60,8 +60,10 @@ class QwenImage21SharedBlockAdapter:
         validate_shared_weight_config(self.config)
         if not self.model.block_offload:
             raise ValueError("Qwen-Image-2.1 shared_cpu_weights requires cpu_offload=true and offload_granularity='block'")
-        unsupported = ("tensor_parallel", "lazy_load", "unload_modules", "weight_auto_quant", "dummy_model", "lora_dynamic_apply", "lora_configs", "adapter_model_path")
+        unsupported = ("tensor_parallel", "lazy_load", "unload_modules", "weight_auto_quant", "dummy_model", "lora_configs", "adapter_model_path")
         enabled = [key for key in unsupported if self.config.get(key)]
+        if self.config.get("lora_mode", "merge") == "separate":
+            enabled.append("lora_mode")
         if enabled:
             raise ValueError(f"Qwen-Image-2.1 shared CPU weights do not support {enabled}")
         if AI_DEVICE != "cuda":

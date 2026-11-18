@@ -1,10 +1,5 @@
 {
   "infer_steps": 29,
-  "num_frames": 362,
-  "size": [
-    768,
-    1344
-  ],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -56,5 +51,12 @@
   "dpcache_last_steps": 1,
   "dpcache_budget": 14,
   "dpcache_cost_path": "~/.cache/lightx2v/dpcache_h3/cost.npz",
-  "dpcache_calibration": true
+  "dpcache_calibration": true,
+  "request_defaults": {
+    "num_frames": 362,
+    "size": [
+      768,
+      1344
+    ]
+  }
 }

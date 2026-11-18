@@ -43,7 +43,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         self._init_infer()
 
     def _apply_weights(self, weight_dict=None):
-        if self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_mode", "merge") == "separate":
             source = weight_dict if weight_dict is not None else self.original_weight_dict
             self._lora_weight_shapes = {key: tuple(tensor.shape) for key, tensor in source.items() if tensor.ndim == 2}
         return super()._apply_weights(weight_dict)
@@ -55,8 +55,8 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         self._update_lora(lora_path, strength)
 
     def _update_lora(self, lora_path, strength):
-        if not self.config.get("lora_dynamic_apply", False) or isinstance(lora_path, dict):
-            raise ValueError("Qwen-Image-2.1 dynamic LoRA requires lora_dynamic_apply=true and one checkpoint path")
+        if self.config.get("lora_mode", "merge") != "separate" or isinstance(lora_path, dict):
+            raise ValueError("Qwen-Image-2.1 dynamic LoRA requires lora_mode='separate' and one checkpoint path")
         strength = float(strength)
         if not math.isfinite(strength):
             raise ValueError("Qwen-Image-2.1 LoRA strength must be finite")
@@ -334,10 +334,10 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         branch = inputs[name]
         cache = self.kv_cache_manager.get_self_attn_kv_cache(name)
         state = self.pre_infer.infer_target(self.pre_weight, self.scheduler.latents[0], branch["layout"])
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             state = self._seq_parallel_pre_process(state)
         hidden = self.transformer_infer.infer(self.transformer_weights, state, cache)
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             hidden = self._seq_parallel_post_process(hidden, state)
         noise = self.post_infer.infer(self.post_weight, hidden, state)
         return noise.unsqueeze(0)
@@ -346,7 +346,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
     def infer(self, inputs):
         if self.kv_cache_manager is None:
             raise RuntimeError("Condition KV must be prefilled before denoising")
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             positive = self._infer_cond_uncond(inputs, True)
             negative = self._infer_cond_uncond(inputs, False)
             self.scheduler.noise_pred = negative + self.scheduler.sample_guide_scale * (positive - negative)

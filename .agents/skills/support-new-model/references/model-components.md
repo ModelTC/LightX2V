@@ -43,7 +43,7 @@ Rules:
 - If the upstream checkpoint is diffusers format, ask/expect the user to convert it first, or add a conversion script if explicitly requested.
 - If the user says weights are already converted to x2v format, trust that and make the loader match x2v keys instead of falling back to diffusers modules.
 - Use conversion scripts and existing weight mapping rules as reference.
-- The model config may live under `model_path/config.json`, `model_path/transformer/config.json`, `low_noise_model/config.json`, etc. Verify `set_config.py` actually loads that path for the new `model_cls`.
+- The model config may live under `model_path/config.json`, `model_path/transformer/config.json`, `low_noise_model/config.json`, etc. Verify the configuration module registered for this model actually loads that path.
 - If LightX2V does not load the upstream `transformer/config.json` for this model class, either add a model-class-specific merge or keep required structure fields in `configs/<family>/*.json`.
 - For image models, LightX2V may already support diffusers-style loading; inspect the closest image runner before forcing x2v conversion.
 

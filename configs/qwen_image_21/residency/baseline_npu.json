@@ -11,11 +11,6 @@
         0.414568
     ],
     "do_time_shift": false,
-    "resolution": 2048,
-    "size": [
-        2048,
-        2048
-    ],
     "attn_type": "npu_flash_attn",
     "rope_type": "torch_real_rope",
     "rms_norm_type": "fp32_variance",
@@ -32,5 +27,12 @@
     "cpu_offload_block_contiguous": false,
     "offload_resident_blocks": 0,
     "text_encoder_cpu_offload": true,
-    "feature_caching": "NoCaching"
+    "feature_caching": "NoCaching",
+    "request_defaults": {
+        "resolution": 2048,
+        "size": [
+            2048,
+            2048
+        ]
+    }
 }

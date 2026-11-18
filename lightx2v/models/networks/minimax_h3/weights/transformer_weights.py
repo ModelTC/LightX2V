@@ -164,7 +164,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
     def project_fused_qkv(self, hidden_states):
         base = self.to_qkv.apply(hidden_states).chunk(3, dim=-1)
         projections = tuple(unwrap_tp_weight(module) for module in (self.to_q, self.to_k, self.to_v))
-        return tuple(output + projection.apply_lora(hidden_states) if projection.has_lora_branch else output for output, projection in zip(base, projections))
+        return tuple(projection.add_lora(output, hidden_states) if projection.has_lora_branch else output for output, projection in zip(base, projections))
 
 
 class MiniMaxH3FeedForwardWeights(WeightModule):

@@ -31,6 +31,7 @@ class AutoregressiveRunnerMixin(RunnerLifecycleMixin):
         path = path.get("data") if isinstance(path, dict) else path
         return path if path and not str(path).startswith(("http://", "https://", "rtmp://")) else None
 
+    @no_sync_profiling()
     def run_request(self, input_info):
         original_path = input_info.save_result_path
         output_path = self.get_stream_output_path(input_info)
@@ -107,8 +108,7 @@ class AutoregressiveRunnerMixin(RunnerLifecycleMixin):
         )
         first_error = None
         try:
-            with no_sync_profiling(enabled=decoder.is_async):
-                yield decoder
+            yield decoder
         except BaseException as error:
             first_error = error
             raise
@@ -131,6 +131,10 @@ class AutoregressiveRunnerMixin(RunnerLifecycleMixin):
                 torch.cuda.synchronize()
             reset()
         super().close()
+
+    @no_sync_profiling()
+    def warmup(self):
+        return super().warmup()
 
     def validate_warmup(self):
         if not self.supports_generic_warmup() or self.config["task"] not in self._WARMUP_TASKS:

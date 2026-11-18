@@ -26,6 +26,7 @@ from lightx2v.disagg.utils import (
 )
 from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -543,7 +544,7 @@ class TransformerService(BaseService):
         """
         Executes the diffusion process and video decoding.
         """
-        seed = config["seed"]
+        seed = get_input_value(config, "seed")
         seed_all(seed)
         self.logger.info("Starting processing in TransformerService...")
         # Re-sync scheduler with the current request to avoid cross-request config bleed.

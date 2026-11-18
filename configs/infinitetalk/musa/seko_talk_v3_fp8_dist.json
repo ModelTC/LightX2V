@@ -1,10 +1,8 @@
 {
     "infer_steps": 4,
     "warmup": true,
-    "num_frames": 81,
     "motion_frame": 9,
     "fps": 25,
-    "video_duration": 300,
     "in_dim": 36,
     "infinitetalk_mode": "single",
     "infinitetalk_size": "infinitetalk-720",
@@ -48,5 +46,9 @@
     "parallel": {
         "seq_p_size": 8,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "video_duration": 300
     }
 }

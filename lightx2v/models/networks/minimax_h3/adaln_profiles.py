@@ -20,8 +20,11 @@ class AdaLNCachePlan:
 
 def _scheduled_timesteps(config, profiles):
     infer_steps = int(config["infer_steps"])
-    _, video = _make_schedule(infer_steps, float(config.get("video_flow_shift", 12.0)), "cpu")
-    _, audio = _make_schedule(infer_steps, float(config.get("audio_flow_shift", 3.0)), "cpu")
+    sigmas = config.get("distilled_sigma_values")
+    if config.get("scheduler_type") == "lcm" and sigmas is None:
+        raise ValueError("MiniMax-H3 lcm requires distilled_sigma_values")
+    _, video = _make_schedule(infer_steps, float(config.get("video_flow_shift", 12.0)), "cpu", sigmas)
+    _, audio = _make_schedule(infer_steps, float(config.get("audio_flow_shift", 3.0)), "cpu", sigmas)
     batches = {}
     for profile in profiles:
         for step, (video_t, audio_t) in enumerate(zip(video.tolist(), audio.tolist())):

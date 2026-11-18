@@ -1,4 +1,4 @@
-SUPPORTED_TASKS = {"t2t", "t2i", "ti2t", "ti2i", "i2i"}
+SUPPORTED_TASKS = {"t2i", "ti2i", "i2i"}
 SUPPORTED_BOT_TASKS = {"image", "auto", "think", "recaption", "think_recaption"}
 
 
@@ -157,7 +157,7 @@ def normalize_hunyuan_image3_phase_parallel(config, parallel_config):
     return True
 
 
-def _normalize_parallel_config(config, parallel_config, task):
+def _normalize_parallel_config(config, parallel_config):
     phase_aware = normalize_hunyuan_image3_phase_parallel(config, parallel_config)
     tensor_p_size = int(parallel_config.get("tensor_p_size", 1))
     cfg_p_size = int(parallel_config.get("cfg_p_size", 1))
@@ -196,8 +196,6 @@ def _normalize_parallel_config(config, parallel_config, task):
             raise ValueError("HunyuanImage3 tensor parallel requires parallel.pipeline_parallel=false.")
     if cfg_p_size == 2 and not config.get("enable_cfg", False):
         raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires enable_cfg=true.")
-    if task in {"t2t", "ti2t"} and cfg_p_size != 1:
-        raise ValueError(f"HunyuanImage3 task={task} requires parallel.cfg_p_size=1.")
 
     parallel_config.update(
         tensor_p_size=tensor_p_size,
@@ -231,20 +229,14 @@ def _normalize_parallel_config(config, parallel_config, task):
 
 def normalize_hunyuan_image3_config(config):
     moe_backend = config["moe_backend"]
-    task = str(config.get("task", "t2i")).strip().lower()
-    if task not in SUPPORTED_TASKS:
+    task = config.get("task")
+    if task is not None and task not in SUPPORTED_TASKS:
         raise ValueError(f"HunyuanImage3 task must be one of {sorted(SUPPORTED_TASKS)}, got {task!r}.")
 
     bot_task = str(config.get("bot_task", "image")).strip().lower()
     if bot_task not in SUPPORTED_BOT_TASKS:
         raise ValueError(f"HunyuanImage3 bot_task must be one of {sorted(SUPPORTED_BOT_TASKS)}, got {bot_task!r}.")
     config["bot_task"] = bot_task
-
-    if task in {"t2t", "ti2t"}:
-        if config.get("enable_cfg", False):
-            raise ValueError(f"HunyuanImage3 task={task} does not support diffusion CFG; set enable_cfg=false.")
-        if bot_task == "image":
-            raise ValueError(f"HunyuanImage3 task={task} requires a text bot_task such as 'auto' or 'think_recaption'.")
 
     if "vae_scale_factor" not in config:
         vae_downsample_factor = config.get("vae_downsample_factor")
@@ -260,7 +252,7 @@ def normalize_hunyuan_image3_config(config):
         return config
 
     parallel_config = dict(parallel_config)
-    phase_aware, pipeline_parallel, cfg_mode = _normalize_parallel_config(config, parallel_config, task)
+    phase_aware, pipeline_parallel, cfg_mode = _normalize_parallel_config(config, parallel_config)
     _validate_ar_cuda_graph(config, phase_aware=phase_aware)
     _validate_ar_custom_all_reduce(config, phase_aware=phase_aware, parallel_config=parallel_config)
     config["parallel"] = parallel_config
