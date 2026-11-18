@@ -11,6 +11,7 @@
     "enable_cfg": false,
     "cpu_offload": true,
     "offload_granularity": "block",
+    "animate_vae_terminal_prefix": true,
     "refert_num": 1,
     "replace_flag": false,
     "fps": 30,
