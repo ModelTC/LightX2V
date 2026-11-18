@@ -47,12 +47,6 @@ class HunyuanImage3Runner(DefaultRunner):
         super().__init__(config)
         self._close_after_run = self._is_offline_infer_entrypoint() and not self._is_multi_run_benchmark(config)
 
-    def prepare_request(self, request_data):
-        input_info = super().prepare_request(request_data)
-        if self.config.get("image_size") and request_data.get("size") is not None:
-            raise ValueError("HunyuanImage3 size conflicts with the startup image_size setting; remove image_size from the config to use request size, or omit size.")
-        return input_info
-
     @staticmethod
     def _is_offline_infer_entrypoint():
         main_module = sys.modules.get("__main__")
@@ -324,14 +318,17 @@ class HunyuanImage3Runner(DefaultRunner):
         self.vision_model = vision_model.to(device=vision_device, dtype=vision_dtype)
         self.vision_aligner = vision_aligner.to(device=vision_device, dtype=vision_dtype)
 
-    def _resolve_image_size(self, input_info):
-        if self.config.get("image_size"):
-            return self.config["image_size"]
-        size = getattr(input_info, "size", None) or self.config.get("size")
+    def _resolve_image_size(self, input_info, batch_cond_images=None):
+        size = input_info.size
         if size:
-            if len(size) >= 2:
-                return int(size[-2]), int(size[-1])
-        return tuple(map(int, self.config.get("size", (1024, 1024))))
+            if not isinstance(size, (list, tuple)) or len(size) != 2 or any(type(dim) is not int or dim <= 0 for dim in size):
+                raise ValueError("HunyuanImage3 size must contain two positive integers: [height, width]")
+            return tuple(size)
+        if batch_cond_images and batch_cond_images[0]:
+            vae_image = self._cond_vae_image(batch_cond_images[0][0])
+            if hasattr(vae_image, "i"):
+                return int(vae_image.i.image_height), int(vae_image.i.image_width)
+        return (1024, 1024)
 
     def _build_batch_rope_image_info(self, output, sections):
         if self.hunyuan_config.rope_type == "default":
@@ -1175,17 +1172,6 @@ class HunyuanImage3Runner(DefaultRunner):
     def _cond_vit_image(self, cond_image):
         return cond_image.vit_image if getattr(cond_image, "section_type", None) == "cond_joint_image" else cond_image
 
-    def _resolve_ti2i_image_size(self, requested_image_size, batch_cond_images):
-        if requested_image_size != "auto":
-            return requested_image_size
-        if not batch_cond_images or not batch_cond_images[0]:
-            return tuple(map(int, self.config.get("size", (1024, 1024))))
-        first_cond_image = batch_cond_images[0][0]
-        vae_image = self._cond_vae_image(first_cond_image)
-        if hasattr(vae_image, "i"):
-            return int(vae_image.i.image_height), int(vae_image.i.image_width)
-        return tuple(map(int, self.config.get("size", (1024, 1024))))
-
     def _vae_encode_cond_tensor(self, image_tensor, generator=None):
         self._ensure_vae()
         vae = self.vae_decoder
@@ -1541,7 +1527,7 @@ class HunyuanImage3Runner(DefaultRunner):
         align_image_size = bool(input_info.align_image_size)
 
         batch_cond_images = self._build_batch_cond_images(image_paths, align_image_size)
-        image_size = self._resolve_ti2i_image_size(self._resolve_image_size(input_info), batch_cond_images)
+        image_size = self._resolve_image_size(input_info, batch_cond_images)
 
         text_cond_inputs = self._prepare_cond_inputs(batch_cond_images, cfg_factor=1, seed=seed)
         cot_text = self._generate_cot_text(prompt, image_size, batch_cond_images=batch_cond_images, cond_inputs=text_cond_inputs)

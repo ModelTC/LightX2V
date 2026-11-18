@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 import torchaudio
 
-from lightx2v.models.audio_encoders.hf.minimax_h3.audio_vae import MiniMaxH3AudioEncoderPrefixCache
+from lightx2v.models.audio_encoders.hf.minimax_h3.audio_vae import MiniMaxH3AudioEncoderCache
 from lightx2v.models.networks.minimax_h3.packing import audio_latent_num_frames
 
 
@@ -26,8 +26,7 @@ class MiniMaxH3DrivingAudio:
         if loop and waveform.shape[-1] < samples:
             waveform = waveform.repeat(1, math.ceil(samples / waveform.shape[-1]))
         self.waveform = F.pad(waveform[..., :samples], (0, max(0, samples - waveform.shape[-1]))).contiguous()
-        self.encoder_cache = MiniMaxH3AudioEncoderPrefixCache(vae.encoder)
-        self.window_start = 0
+        self.encoder_cache = MiniMaxH3AudioEncoderCache(vae.encoder)
 
     def encode(self, audio_slice):
         window_latents = 15 * self.vae.sampling_rate // self.vae.hop_length
@@ -36,13 +35,8 @@ class MiniMaxH3DrivingAudio:
         return self._encode_window(waveform, audio_slice, window_start)
 
     def _encode_window(self, waveform, audio_slice, window_start):
-        if window_start != self.window_start:
-            # Shifting the left boundary changes convolution padding; cached
-            # features from the previous window cannot be reused unchanged.
-            self.encoder_cache.stable_features = None
-            self.window_start = window_start
         waveform = waveform[:1] if self.mono else waveform
-        latents = self.vae.encode(waveform, return_cpu=False, encoder_cache=self.encoder_cache)
+        latents = self.vae.encode(waveform, return_cpu=False, encoder_cache=self.encoder_cache, window_start=window_start)
         if latents.shape[0] == 1:
             latents = latents.expand(2, -1, -1)
         chunk = latents[..., audio_slice.start - window_start : audio_slice.stop - window_start]
@@ -56,7 +50,7 @@ class MiniMaxH3StreamingDrivingAudio(MiniMaxH3DrivingAudio):
         self.vae = vae
         self.mono = mono
         self.waveform = torch.empty((1 if mono else 2, 0), dtype=torch.float32)
-        self.encoder_cache = MiniMaxH3AudioEncoderPrefixCache(vae.encoder)
+        self.encoder_cache = MiniMaxH3AudioEncoderCache(vae.encoder)
         self.window_start = self.received_latents = 0
 
     def encode(self, audio_slice, waveform, *, sample_rate=None):
@@ -79,4 +73,5 @@ class MiniMaxH3StreamingDrivingAudio(MiniMaxH3DrivingAudio):
         drop = (window_start - self.window_start) * self.vae.hop_length
         self.waveform = torch.cat((self.waveform, waveform), dim=-1)[..., drop:].contiguous()
         self.received_latents = audio_slice.stop
+        self.window_start = window_start
         return self._encode_window(self.waveform, audio_slice, window_start)

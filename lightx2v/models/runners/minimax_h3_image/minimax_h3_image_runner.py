@@ -21,6 +21,7 @@ from lightx2v.utils.image_io import save_image
 from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process, seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -42,7 +43,7 @@ class MiniMaxH3ImageRunner(DefaultRunner):
                 raise ValueError(f"MiniMax-H3-Image does not support {option}")
         if config.get("feature_caching", "NoCaching") != "NoCaching":
             raise ValueError("MiniMax-H3-Image requires feature_caching='NoCaching'")
-        if config.get("negative_prompt") or config.get("sample_guide_scale", 1.0) != 1.0:
+        if get_input_value(config, "negative_prompt", None) or config.get("sample_guide_scale", 1.0) != 1.0:
             raise ValueError("MiniMax-H3-Image uses one positive branch without negative prompts or guidance")
         super().__init__(config)
 
@@ -186,10 +187,10 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             ratio_width, ratio_height = (float(value) for value in dimensions)
             if not all(math.isfinite(value) and value > 0 for value in (ratio_width, ratio_height)):
                 raise ValueError("MiniMax-H3-Image aspect_ratio dimensions must be positive and finite")
-            base_height, base_width = self.config["size"]
+            base_height, base_width = get_input_value(self.config, "size")
             area = base_height * base_width
             size = [max(32, round(math.sqrt(area * ratio_height / ratio_width))), max(32, round(math.sqrt(area * ratio_width / ratio_height)))]
-        size = size or self.config["size"]
+        size = size or get_input_value(self.config, "size")
         if len(size) != 2 or any(type(value) is not int or value <= 0 for value in size):
             raise ValueError("MiniMax-H3-Image size must be [positive height, positive width]")
         self.output_size = tuple(size)

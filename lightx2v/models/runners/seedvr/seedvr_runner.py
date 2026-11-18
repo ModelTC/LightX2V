@@ -146,7 +146,7 @@ class SeedVRRunner(DefaultRunner):
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
-        if "size" in request_data or "size" in self.config:
+        if "size" in request_data or "size" in self.config.get("request_defaults", {}):
             size = input_info.size
             if not isinstance(size, (list, tuple)) or len(size) != 2 or any(type(dim) is not int or dim <= 0 for dim in size):
                 raise ValueError("SeedVR size must contain two positive integers: [height, width]")

@@ -8,6 +8,7 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.request_defaults import get_input_value, get_request_default_arguments
 from lightx2v.utils.set_config import build_startup_config
 from lightx2v.utils.utils import find_torch_model_path
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -107,6 +108,9 @@ def set_config(
             args_dict.setdefault("modulate_type", "torch")
 
     args_dict.update(kwargs)
+    for name in get_request_default_arguments(args_dict):
+        if name in args_dict:
+            args_dict.setdefault("request_defaults", {}).setdefault(name, args_dict.pop(name))
     return build_startup_config(args_dict)
 
 
@@ -388,8 +392,8 @@ def estimate_encoder_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     stride_h = int(vae_stride[1])
     stride_w = int(vae_stride[2])
 
-    num_frames = int(config.get("num_frames", 81))
-    target_height, target_width = map(int, config.get("size", (480, 832)))
+    num_frames = int(get_input_value(config, "num_frames", 81))
+    target_height, target_width = map(int, get_input_value(config, "size", (480, 832)))
 
     t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))
@@ -427,8 +431,8 @@ def estimate_transformer_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     stride_h = int(vae_stride[1])
     stride_w = int(vae_stride[2])
 
-    num_frames = int(config.get("num_frames", 81))
-    target_height, target_width = map(int, config.get("size", (480, 832)))
+    num_frames = int(get_input_value(config, "num_frames", 81))
+    target_height, target_width = map(int, get_input_value(config, "size", (480, 832)))
 
     t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))

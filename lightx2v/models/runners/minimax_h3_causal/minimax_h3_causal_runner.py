@@ -27,6 +27,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3_causal.vae_graph import MiniMa
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.video_writer import MiniMaxH3StreamingVideoWriter
 from lightx2v.utils.profiler import ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process
 from lightx2v.utils.va_controller import VAController
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -61,18 +62,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             raise ValueError(f"Causal H3 does not support {unsupported}")
         if self.generate_audio and self.reuse_input_audio:
             raise ValueError("RefA2AV generates audio; reuse_input_audio is only supported by RefA2V")
-        if config.get("dit_quantized", False) and config.get("dit_quant_scheme") != "fp8-f32-accum":
-            raise ValueError("Causal H3 DiT quantization requires dit_quant_scheme='fp8-f32-accum'")
-        if config.get("text_encoder_quantized", False) and config.get("text_encoder_quant_scheme") != "fp8-sgl":
-            raise ValueError("Causal H3 text encoder quantization requires text_encoder_quant_scheme='fp8-sgl'")
-        if config.get("video_vae_quantized", False) and config.get("video_vae_quant_scheme") != "fp8-f32-accum":
-            raise ValueError("Causal H3 video VAE quantization requires video_vae_quant_scheme='fp8-f32-accum'")
-        if config.get("fps", 24) != 24:
-            raise ValueError("Causal H3 requires fps=24")
-        if config.get("vae_sensitive_layer_dtype", "fp32") != "fp32":
-            raise ValueError("Causal H3 VAE sensitive layers require vae_sensitive_layer_dtype='fp32'")
-        if config.get("lora_configs"):
-            raise ValueError("Causal H3 loads the distilled checkpoint directly; released H3 LoRA adapters are not supported")
 
         self.reference_cache = MiniMaxH3ReferenceCache() if config.get("reference_condition_cache", False) else None
         self.driving_audio = None
@@ -121,9 +110,9 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self.scheduler = MiniMaxH3CleanScheduler(self.config)
 
     def _resolve_request_geometry(self, geometry_image=None):
-        self.request_height, self.request_width = map(int, self.input_info.size or self.config["size"])
+        self.request_height, self.request_width = map(int, self.input_info.size or get_input_value(self.config, "size"))
         num_frames = self.input_info.num_frames
-        self.request_num_frames = int(self.config["num_frames"] if num_frames is None else num_frames)
+        self.request_num_frames = int(get_input_value(self.config, "num_frames") if num_frames is None else num_frames)
         if self.request_num_frames < 22 or min(self.request_height, self.request_width) <= 0 or self.request_height % 32 or self.request_width % 32:
             raise ValueError("Causal H3 requires at least 22 frames and positive canvas dimensions divisible by 32")
         self.input_info.size = [self.request_height, self.request_width]

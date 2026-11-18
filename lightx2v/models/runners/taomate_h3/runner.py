@@ -23,6 +23,7 @@ from lightx2v.models.schedulers.taomate_h3.scheduler import TaoMateH3Scheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value, set_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 _VIDEO_NOISE_REQUEST_STRIDE = 1_000_003
@@ -52,7 +53,7 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                 raise ValueError("TaoMate-H3 prompt_json requires a nonempty prompts list")
             if seeds is not None and (not isinstance(seeds, list) or len(seeds) != len(prompts) or any(type(seed) is not int or seed < 0 for seed in seeds)):
                 raise ValueError("TaoMate-H3 prompt_json seeds must be one nonnegative integer per prompt")
-            if int(config["num_frames"]) != len(prompts) * self.frames_per_request:
+            if int(get_input_value(config, "num_frames")) != len(prompts) * self.frames_per_request:
                 raise ValueError("TaoMate-H3 prompt_json needs one prompt per 120 output frames")
             self.segment_prompts = tuple(prompt.strip() for prompt in prompts)
             self.segment_seeds = tuple(seeds) if seeds is not None else None
@@ -92,14 +93,14 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             self.end_run()
 
     def _prepare_warmup_inputs(self, warmup_index):
-        size = self._WARMUP_SHAPES[warmup_index] or self.config["size"]
+        size = self._WARMUP_SHAPES[warmup_index] or get_input_value(self.config, "size")
         self.input_info = self.create_input_info(
             {
                 "task": "t2av",
-                "prompt": self.config.get("prompt", self._WARMUP_PROMPTS[warmup_index]),
+                "prompt": get_input_value(self.config, "prompt", self._WARMUP_PROMPTS[warmup_index]),
                 "seed": 8301,
                 "size": list(size),
-                "num_frames": self.config["num_frames"],
+                "num_frames": get_input_value(self.config, "num_frames"),
                 "return_result_tensor": True,
             }
         )
@@ -124,10 +125,10 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         return int(self.input_info.seed) if self.segment_seeds is None else self.segment_seeds[request_index]
 
     def _resolve_request_geometry(self, geometry_image=None):
-        requested_frames = int(self.input_info.num_frames or self.config["num_frames"])
+        requested_frames = int(self.input_info.num_frames or get_input_value(self.config, "num_frames"))
         if requested_frames <= 0 or requested_frames % self.frames_per_request:
             raise ValueError("TaoMate-H3 publishes 120 frames per request; num_frames must be a positive multiple of 120")
-        size = self.input_info.size or self.config["size"]
+        size = self.input_info.size or get_input_value(self.config, "size")
         if len(size) != 2:
             raise ValueError("TaoMate-H3 size must be [height, width]")
         height, width = map(int, size)
@@ -142,7 +143,7 @@ class TaoMateH3Runner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
 
     def _base10_config(self):
         config = dict(self.config)
-        config["size"] = [self.request_height, self.request_width]
+        set_input_value(config, "size", [self.request_height, self.request_width])
         config["lora_mode"] = "merge"
         for option in ("lora_configs", "lora_path"):
             config.pop(option, None)

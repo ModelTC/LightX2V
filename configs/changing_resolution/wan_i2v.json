@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
@@ -11,5 +9,9 @@
     "cpu_offload": false,
     "changing_resolution": true,
     "resolution_rate": [0.75],
-    "changing_resolution_steps": [20]
+    "changing_resolution_steps": [20],
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

@@ -1,7 +1,5 @@
 {
     "infer_steps": 30,
-    "aspect_ratio": "16:9",
-    "size": [720, 1280],
     "prompt_template_encode": "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
     "prompt_template_encode_start_idx": 34,
     "attn_type": "supa_sdpa",
@@ -17,5 +15,9 @@
     "latent_noise_device": "cpu",
     "parallel": {
         "tensor_p_size": 1
+    },
+    "request_defaults": {
+        "aspect_ratio": "16:9",
+        "size": [720, 1280]
     }
 }

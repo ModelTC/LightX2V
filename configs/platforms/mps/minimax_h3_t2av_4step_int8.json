@@ -1,10 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 124,
-    "size": [
-        544,
-        960
-    ],
     "fps": 24,
     "enable_cfg": false,
     "cpu_offload": false,
@@ -30,5 +25,12 @@
     "vae_encoder_conv_mode": "torch",
     "vae_sensitive_layer_dtype": "fp32",
     "vae_attn_type": "torch_sdpa",
-    "dit_quantized_ckpt": "/path/to/MiniMax-H3-Turbo-INT8/transformer"
+    "dit_quantized_ckpt": "/path/to/MiniMax-H3-Turbo-INT8/transformer",
+    "request_defaults": {
+        "num_frames": 124,
+        "size": [
+            544,
+            960
+        ]
+    }
 }

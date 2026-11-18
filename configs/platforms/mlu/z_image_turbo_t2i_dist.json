@@ -1,5 +1,4 @@
 {
-    "aspect_ratio": "16:9",
     "num_channels_latents": 16,
     "infer_steps": 9,
     "attn_type": "mlu_flash_attn",
@@ -11,5 +10,8 @@
     "parallel": {
         "seq_p_size": 2,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "aspect_ratio": "16:9"
     }
 }

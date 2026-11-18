@@ -6,8 +6,10 @@
     "scheduler_type": "default",
     "attn_type": "flash_attn3",
     "rope_type": "flashinfer_rope",
-    "size": [2048, 2048],
-    "keep_aspect_ratio": true,
     "torch_dtype": "bfloat16",
-    "enable_cfg": true
+    "enable_cfg": true,
+    "request_defaults": {
+        "size": [2048, 2048],
+        "keep_aspect_ratio": true
+    }
 }

@@ -19,6 +19,7 @@ from lightx2v.utils.image_io import save_image
 from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -300,7 +301,7 @@ class ZImageRunner(DefaultRunner):
             logger.info(f"Z Image Runner got i2i source image shape: {width}x{height}")
             return (width, height)
 
-        aspect_ratio = self.config.get("aspect_ratio", None)
+        aspect_ratio = get_input_value(self.config, "aspect_ratio", None)
         if aspect_ratio in as_maps:
             logger.info(f"Z Image Runner got aspect ratio: {aspect_ratio}")
             width, height = as_maps[aspect_ratio]

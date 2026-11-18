@@ -9,6 +9,7 @@ import torch
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -515,14 +516,14 @@ class Cosmos3Scheduler(BaseScheduler):
     def prepare_latents(self, input_info):
         shape = tuple(input_info.latent_shape)
         num_frames = getattr(input_info, "num_frames", None)
-        num_frames = int(self.config.get("num_frames", 1) if num_frames is None else num_frames)
+        num_frames = int(get_input_value(self.config, "num_frames", 1) if num_frames is None else num_frames)
         condition_latents = getattr(input_info, "vision_condition_latents", None)
         condition_frame_indexes = getattr(input_info, "vision_condition_frame_indexes", None)
         if condition_latents is not None:
             shape = tuple(condition_latents.shape)
             input_info.latent_shape = shape
         if not shape:
-            height, width = map(int, self.config.get("size", (1024, 1024)))
+            height, width = map(int, get_input_value(self.config, "size", (1024, 1024)))
             scale = int(self.config.get("vae_scale_factor_spatial", self.config.get("vae_scale_factor", 16)))
             channels = int(self.config.get("latent_channel", 48))
             temporal_scale = int(self.config.get("vae_scale_factor_temporal", 4))

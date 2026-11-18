@@ -1,10 +1,5 @@
 {
   "infer_steps": 29,
-  "num_frames": 362,
-  "size": [
-    768,
-    1344
-  ],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -46,5 +41,12 @@
     "seq_p_head_parallel": true,
     "seq_p_quant_scheme": "fp8"
   },
-  "text_encoder_tensor_parallel": true
+  "text_encoder_tensor_parallel": true,
+  "request_defaults": {
+    "num_frames": 362,
+    "size": [
+      768,
+      1344
+    ]
+  }
 }

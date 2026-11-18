@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "flash_attn_hygon_dcu",
     "cross_attn_1_type": "flash_attn_hygon_dcu",
     "cross_attn_2_type": "flash_attn_hygon_dcu",
@@ -15,5 +13,9 @@
     "rms_norm_type": "torch",
     "dit_quantized": true,
     "dit_quant_scheme": "int8-vllm-hygon-dcu",
-    "dit_quantized_ckpt": ""
+    "dit_quantized_ckpt": "",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

@@ -1,7 +1,6 @@
 {
     "infer_steps": 2,
     "sample_shift": 1.0,
-    "size": [512, 512],
     "fps": 25,
     "dim": 3072,
     "ffn_dim": 14336,
@@ -35,5 +34,8 @@
     "use_compile": false,
     "replace_border_latents": true,
     "border_width": 1,
-    "color_correction": true
+    "color_correction": true,
+    "request_defaults": {
+        "size": [512, 512]
+    }
 }

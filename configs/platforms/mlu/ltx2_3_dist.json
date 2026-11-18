@@ -1,7 +1,5 @@
 {
     "infer_steps": 30,
-    "num_frames": 121,
-    "size": [512, 768],
     "attn_type": "torch_sdpa",
     "rope_type": "torch_real_rope",
     "layer_norm_type": "torch",
@@ -43,5 +41,9 @@
     "parallel": {
         "seq_p_size": 8,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "num_frames": 121,
+        "size": [512, 768]
     }
 }

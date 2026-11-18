@@ -19,6 +19,7 @@ from lightx2v.utils.image_io import save_image
 from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -40,7 +41,7 @@ class ErnieImageRunner(DefaultRunner):
 
     def __init__(self, config):
         super().__init__(config)
-        self.resolution = config.get("resolution", 1024)
+        self.resolution = get_input_value(config, "resolution", 1024)
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -134,7 +135,7 @@ class ErnieImageRunner(DefaultRunner):
         if len(self.input_info.size) == 2:
             height, width = [int(v) for v in self.input_info.size]
         else:
-            aspect_ratio = self.input_info.aspect_ratio or self.config.get("aspect_ratio", "1:1")
+            aspect_ratio = self.input_info.aspect_ratio or get_input_value(self.config, "aspect_ratio", "1:1")
             if ":" in aspect_ratio:
                 w_ratio, h_ratio = [float(item) for item in aspect_ratio.split(":", 1)]
                 ratio = w_ratio / h_ratio

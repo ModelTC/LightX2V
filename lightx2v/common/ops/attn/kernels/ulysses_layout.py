@@ -13,6 +13,7 @@ The public pre/post wrappers each launch one Triton kernel on the hot path.
 import torch
 import triton
 import triton.language as tl
+from triton.language.extra.cuda import libdevice
 
 # Validation and launch-shape helpers
 
@@ -365,6 +366,9 @@ def _qkv_pre_fp8_kernel(
     scale_elems_per_rank: tl.constexpr,
     block_m: tl.constexpr,
     block_d: tl.constexpr,
+    q_weight=None,
+    k_weight=None,
+    eps: tl.constexpr = 1e-5,
 ):
     # One program handles the q/k/v triplet for one [dst_rank, local_s, shard_head].
     # That keeps the output layout unchanged while cutting launch work from 3 rows to 1.
@@ -389,6 +393,15 @@ def _qkv_pre_fp8_kernel(
     q_vals = tl.load(q + q_offsets, mask=mask, other=0.0).to(tl.float32)
     k_vals = tl.load(k + k_offsets, mask=mask, other=0.0).to(tl.float32)
     v_vals = tl.load(v + v_offsets, mask=mask, other=0.0).to(tl.float32)
+
+    if q_weight is not None:
+        qw = tl.load(q_weight + cols, col_mask, 0).to(tl.float32)
+        kw = tl.load(k_weight + cols, col_mask, 0).to(tl.float32)
+        q_rms = libdevice.rsqrt(tl.sum(q_vals * q_vals, axis=1) / hidden_dims + eps)
+        k_rms = libdevice.rsqrt(tl.sum(k_vals * k_vals, axis=1) / hidden_dims + eps)
+        # Preserve the RMSNorm output rounding before communication quantization.
+        q_vals = (q_vals * q_rms[:, None] * qw[None, :]).to(q.dtype.element_ty).to(tl.float32)
+        k_vals = (k_vals * k_rms[:, None] * kw[None, :]).to(k.dtype.element_ty).to(tl.float32)
 
     q_scale = tl.maximum(tl.max(tl.abs(q_vals), axis=1), 0.001953125) / 448.0
     k_scale = tl.maximum(tl.max(tl.abs(k_vals), axis=1), 0.001953125) / 448.0

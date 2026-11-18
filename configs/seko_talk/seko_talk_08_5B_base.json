@@ -1,9 +1,6 @@
 {
     "infer_steps": 4,
-    "video_duration": 360,
     "audio_sr": 16000,
-    "num_frames": 121,
-    "resize_mode": "adaptive",
     "text_len": 512,
     "num_channels_latents": 48,
     "vae_stride": [
@@ -27,5 +24,10 @@
             "path": "/path/to/lora_model.safetensors",
             "strength": 0.125
         }
-    ]
+    ],
+    "request_defaults": {
+        "video_duration": 360,
+        "num_frames": 121,
+        "resize_mode": "adaptive"
+    }
 }

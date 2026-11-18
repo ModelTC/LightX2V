@@ -1,14 +1,7 @@
 {
     "infer_steps": 4,
     "fps": 16,
-    "video_duration": 20,
     "audio_sr": 16000,
-    "num_frames": 81,
-    "resize_mode": "fixed_shape",
-    "size": [
-        832,
-        480
-    ],
     "self_attn_1_type": "sage_attn3",
     "cross_attn_1_type": "sage_attn3",
     "cross_attn_2_type": "sage_attn3",
@@ -39,5 +32,14 @@
         "seq_p_quant_scheme": "fp8",
         "seq_p_head_parallel": true,
         "seq_p_tensor_fusion": false
+    },
+    "request_defaults": {
+        "video_duration": 20,
+        "num_frames": 81,
+        "resize_mode": "fixed_shape",
+        "size": [
+            832,
+            480
+        ]
     }
 }

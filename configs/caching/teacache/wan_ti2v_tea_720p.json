@@ -1,8 +1,6 @@
 {
     "infer_steps": 50,
-    "num_frames": 121,
     "text_len": 512,
-    "size": [704, 1280],
     "num_channels_latents": 48,
     "vae_stride": [4, 16, 16],
     "self_attn_1_type": "flash_attn3",
@@ -19,5 +17,9 @@
     ],
     "use_ret_steps": false,
     "teacache_thresh": 0.26,
-    "use_image_encoder": false
+    "use_image_encoder": false,
+    "request_defaults": {
+        "num_frames": 121,
+        "size": [704, 1280]
+    }
 }

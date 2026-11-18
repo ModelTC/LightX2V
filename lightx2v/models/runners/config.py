@@ -5,6 +5,7 @@ import os
 
 from loguru import logger
 
+from lightx2v.utils.request_defaults import get_input_value, set_input_value
 from lightx2v.utils.set_config import merge_config
 
 CHECKPOINT_SUBFOLDERS = ("", "low_noise_model", "distill_models/low_noise_model", "original", "transformer")
@@ -47,13 +48,14 @@ def load_checkpoint_config(deployment_config):
 def normalize_num_frames(config):
     if config.get("task") not in ("i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"):
         return
-    if config.get("num_frames") is None or "vae_stride" not in config:
+    num_frames = get_input_value(config, "num_frames", None)
+    if num_frames is None or "vae_stride" not in config:
         return
     temporal_stride = int(config["vae_stride"][0])
-    if (config["num_frames"] - 1) % temporal_stride != 0:
-        original_length = config["num_frames"]
-        config["num_frames"] = original_length // temporal_stride * temporal_stride + 1
-        logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {config['num_frames']} instead of {original_length}.")
+    if (num_frames - 1) % temporal_stride != 0:
+        aligned = num_frames // temporal_stride * temporal_stride + 1
+        set_input_value(config, "num_frames", aligned)
+        logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {aligned} instead of {num_frames}.")
 
 
 def load_config(deployment_config):

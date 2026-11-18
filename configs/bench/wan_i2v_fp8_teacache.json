@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -19,5 +17,9 @@
     ],
     "use_ret_steps": false,
     "teacache_thresh": 0.2,
-    "use_tiling_vae": true
+    "use_tiling_vae": true,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

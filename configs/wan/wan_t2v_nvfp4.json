@@ -1,11 +1,6 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
     "text_len": 512,
-    "size": [
-        480,
-        832
-    ],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "sample_guide_scale": 1.0,
@@ -19,5 +14,12 @@
     "dit_quantized_ckpt": "lightx2v/Wan-NVFP4/wan2.1_t2v_1_3b_nvfp4_lightx2v_4step.safetensors",
     "t5_quantized": false,
     "clip_quantized": false,
-    "cross_attn_2_type": "sage_attn2"
+    "cross_attn_2_type": "sage_attn2",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [
+            480,
+            832
+        ]
+    }
 }

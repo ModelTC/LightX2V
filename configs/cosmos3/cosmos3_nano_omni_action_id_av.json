@@ -2,12 +2,8 @@
     "model_variant": "omni",
     "infer_steps": 30,
     "sample_shift": 10.0,
-    "size": [480, 832],
     "fps": 10.0,
     "enable_cfg": false,
-    "action_mode": "inverse_dynamics",
-    "domain_name": "av",
-    "view_point": "ego_view",
     "action_chunk_size": 60,
     "rms_norm_type": "one-pass",
     "attn_rms_norm_type": "one-pass",
@@ -16,5 +12,11 @@
     "causal_self_attn_type": "flash_attn3",
     "use_system_prompt": false,
     "vae_cpu_offload": false,
-    "cpu_offload": false
+    "cpu_offload": false,
+    "request_defaults": {
+        "size": [480, 832],
+        "action_mode": "inverse_dynamics",
+        "domain_name": "av",
+        "view_point": "ego_view"
+    }
 }

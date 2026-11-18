@@ -1,6 +1,5 @@
 {
     "infer_steps": 40,
-    "resolution": 1024,
     "attn_type": "torch_sdpa",
     "rope_type": "torch_real_rope",
     "rms_norm_type": "fp32_variance",
@@ -10,5 +9,8 @@
     "fused_block_ops": false,
     "enable_cfg": false,
     "sample_guide_scale": 1.0,
-    "warmup": true
+    "warmup": true,
+    "request_defaults": {
+        "resolution": 1024
+    }
 }

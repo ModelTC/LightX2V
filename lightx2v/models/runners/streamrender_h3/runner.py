@@ -26,6 +26,7 @@ from lightx2v.models.video_encoders.hf.streamrender_h3 import (
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.profiler import no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -91,7 +92,7 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         import av
         import numpy as np
 
-        shapes = dict.fromkeys((*self._WARMUP_SHAPES, tuple(self.config["size"])))
+        shapes = dict.fromkeys((*self._WARMUP_SHAPES, tuple(get_input_value(self.config, "size"))))
         for warmup_index, (height, width) in enumerate(shapes):
             self._prepare_warmup_inputs(warmup_index, height, width)
             logger.info(f"Warmup refv2v: {height}x{width}x{self.input_info.num_frames}")
@@ -144,7 +145,7 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
                 "prompt": self._WARMUP_PROMPTS[warmup_index],
                 "seed": 0,
                 "size": [height, width],
-                "num_frames": self.config["num_frames"],
+                "num_frames": get_input_value(self.config, "num_frames"),
             }
         )
 
@@ -211,7 +212,7 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
 
     def _prepare_inference(self, input_info):
         root = Path(self.config["model_path"])
-        height, width = map(int, input_info.size or self.config["size"])
+        height, width = map(int, input_info.size or get_input_value(self.config, "size"))
         reference_size = tuple(self.config.get("reference_size", (480, 832)))
         picture_path = input_info.image_path or root / self.assets["reference_image"]
         prompt = input_info.prompt or self.assets["prompt"]
@@ -231,7 +232,7 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         finally:
             self.text_encoder.to_cpu()
             self.text_encoder.unload_vision_encoder()
-        frames_total = int(input_info.num_frames or self.config["num_frames"])
+        frames_total = int(input_info.num_frames or get_input_value(self.config, "num_frames"))
         self.scheduler.prepare_request(
             num_frames=frames_total,
             height=height,
@@ -258,8 +259,8 @@ class StreamRenderH3Runner(H3AutoregressiveRunnerMixin, BaseRunner):
         source_path = Path(input_info.video_path)
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
-        height, width = map(int, input_info.size or self.config["size"])
-        frames_total = int(input_info.num_frames or self.config["num_frames"])
+        height, width = map(int, input_info.size or get_input_value(self.config, "size"))
+        frames_total = int(input_info.num_frames or get_input_value(self.config, "num_frames"))
         picture, text, reference_size, generator = self._prepare_inference(input_info)
         encoder_stream = self.video_encoder.create_stream()
         output_rank = not dist.is_initialized() or dist.get_rank() == 0

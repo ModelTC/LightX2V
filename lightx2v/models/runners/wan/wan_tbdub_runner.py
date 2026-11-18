@@ -14,6 +14,7 @@ from lightx2v.models.schedulers.wan.tbdub.scheduler import TBDubScheduler
 from lightx2v.models.video_encoders.hf.wan.tbdub_vae import TBDubVAE
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -87,7 +88,7 @@ class TBDubRunner(Wan22DenseRunner):
             raise ValueError("audio_path must be a media file (for example WAV), not an unframed NumPy waveform")
         if inputs.num_frames is not None and inputs.num_frames < 1:
             raise ValueError("num_frames must be positive; omit it to follow the driving audio")
-        if list(inputs.size or self.config["size"]) != [512, 512]:
+        if list(inputs.size or get_input_value(self.config, "size")) != [512, 512]:
             raise ValueError("The released TBDub student edits 512x512 face crops")
         if not inputs.return_result_tensor and not inputs.save_result_path:
             raise ValueError("TBDub requires save_result_path or return_result_tensor=true")

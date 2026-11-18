@@ -38,7 +38,7 @@ and LoRA paths in the selected JSON to the downloaded local files.
 bash scripts/wan/run_wan_t2v.sh
 ```
 
-Edit inputs, prompts, seed, and output paths in the shell script, and sampling parameters in the JSON selected by `--config_json`. The JSON fields `num_frames` and `size` supply defaults when omitted from the command or request. `size` is `[height, width]`.
+Edit inputs, prompts, seed, and output paths in the shell script, and sampling parameters in the JSON selected by `--config_json`. The JSON fields `request_defaults.num_frames` and `request_defaults.size` supply defaults when omitted from the command or request. `size` is `[height, width]`.
 
 ## Server
 

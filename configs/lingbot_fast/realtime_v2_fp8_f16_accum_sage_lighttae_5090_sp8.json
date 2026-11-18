@@ -32,10 +32,6 @@
   "t5_rms_norm_type": "torch",
   "vae_path": "/path/to/models/Wan2.1-T2V-14B/Wan2.1_VAE.pth",
   "num_frames": 269,
-  "size": [
-    464,
-    832
-  ],
   "control_type": "cam",
   "dit_original_ckpt": "/path/to/models/lingbot-world-v2-14b-causal-fast/transformers",
   "dit_quantized_ckpt": "/path/to/models/lingbot-world-v2-14b-causal-fast/quantized/lingbot_fast_v2_fp8_f16_accum_qmax14.safetensors",
@@ -67,5 +63,11 @@
     "tp_load_mode": "local",
     "vae_parallel": true
   },
-  "causal_rope_compute_dtype": "float32"
+  "causal_rope_compute_dtype": "float32",
+  "request_defaults": {
+    "size": [
+      464,
+      832
+    ]
+  }
 }

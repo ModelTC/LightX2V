@@ -5,7 +5,14 @@ REFERENCE_IMAGE = {
     "image_path": Argument(input_info_default=[], type=list[str], help="Input image paths."),
     "align_image_size": Argument(type=bool, help="Align HunyuanImage3 reference image sizes during inference."),
 }
-IMAGE_OUTPUT = {"prompt": Argument(input_info_default="", help="Text prompt."), "size": Argument(input_info_default=[], type=list[int], help="Output size in pixels: HEIGHT WIDTH")}
+IMAGE_OUTPUT = {
+    "prompt": Argument(input_info_default="", help="Text prompt."),
+    "size": Argument(
+        input_info_default=[],
+        type=list[int],
+        help=("Output size in pixels: HEIGHT WIDTH. Omit to use the startup size; without a startup size, ti2i/i2i use the first processed reference image's dimensions and t2i uses 1024x1024."),
+    ),
+}
 
 SPECS = {
     "hunyuan_image3": MultiTaskSpec(

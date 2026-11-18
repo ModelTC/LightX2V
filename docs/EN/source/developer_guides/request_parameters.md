@@ -60,6 +60,24 @@ For a supported `negative_prompt` supplied while CFG is disabled, log a warning 
 
 Omitted CLI/server fields still use `None` to mean no override. They do not use `Argument.input_info_default` as a request override.
 
+Put configured request defaults in the startup JSON's `request_defaults` object. For Qwen-Image-2.1:
+
+```json
+{
+    "infer_steps": 40,
+    "request_defaults": {
+        "resolution": 1024,
+        "seed": 42
+    }
+}
+```
+
+Only serializable fields shared by the deployed model's CLI and HTTP tasks belong here. Keep model identity, `task`, sampling steps, CFG, operators, quantization, offload and parallel settings at the top level. Fields fixed by a startup mode also stay at the top level, such as Wan `num_frames` with fixed-frame attention. A field must not appear both at the top level and inside `request_defaults`.
+
+The model configuration loader validates the names and types and keeps the values inside `request_defaults`. Request defaults found in checkpoint metadata also go into this namespace. `runner.config` and `pipe.config` retain the same separation: fixed settings at the top level and request defaults in the nested object. Initialization and warmup read the nested defaults explicitly. These values are not added to the explicit request dictionary: LTX-2.5 automatic duration and Cosmos3 action-file precedence retain their existing behavior. Explicit configuration `null` values are retained, including EdenLive's automatic frame-count sentinel.
+
+CLI options and POST bodies remain unchanged, for example `--resolution 768` and `{"resolution": 768}`. Do not wrap a POST request in `request_defaults`. Explicit requests override configured defaults; omitted or `None` request values keep them. Lists and dictionaries are copied when constructing each request.
+
 Shared `ShapeState`, `ImageState`, `AudioVideoState` and `SRState` classes live in `lightx2v/utils/input_info.py`. Put model-specific runtime state in its runner directory:
 
 ```python
@@ -83,9 +101,9 @@ Read the request value where computation uses it:
 resolution = self.input_info.resolution
 ```
 
-Reading `self.config["resolution"]` would use the startup value and miss the request override. Qwen-Image-2.1 reads and validates the value in `run_input_encoder()` for reference-image resizing and automatic output dimensions.
+The configured default is `self.config["request_defaults"]["resolution"]`; reading it during generation would miss the request override. Use `self.input_info.resolution` for the effective value. Qwen-Image-2.1 reads and validates that value in `run_input_encoder()` for reference-image resizing and automatic output dimensions.
 
-`BaseRunner` applies startup configuration, then non-`None` request values. For a startup configuration containing `resolution=1024`:
+`BaseRunner` initializes fixed context fields, applies `request_defaults`, then applies non-`None` request values. For a startup configuration containing `"request_defaults": {"resolution": 1024}`:
 
 | Request | Value seen by the model |
 |---|---|

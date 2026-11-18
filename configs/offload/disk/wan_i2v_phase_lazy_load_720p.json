@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [1280, 720],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -24,5 +22,9 @@
     "tae_path": "/path/to/taew2_1.pth",
     "lazy_load": true,
     "rope_chunk": true,
-    "clean_cuda_cache": true
+    "clean_cuda_cache": true,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [1280, 720]
+    }
 }

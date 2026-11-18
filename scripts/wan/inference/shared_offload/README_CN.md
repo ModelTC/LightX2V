@@ -86,6 +86,6 @@ host 在同机同一 IPC 域共享一份兼容的 DiT block CPU 权重；NUMA �
 | 推理命令 | `--save_result_path`、`--seed` | 输出文件和随机种子（默认 42） |
 | JSON | `shared_cpu_weight_scope` | `numa`（默认）或 `host` |
 | 推理命令 | `--config_json` | 配置文件路径 |
-| JSON | `infer_steps`、`num_frames`、`size` | 40 步、81 帧、`[480, 832]`（高、宽） |
+| JSON | `infer_steps`、`request_defaults.num_frames`、`request_defaults.size` | 40 步、81 帧、`[480, 832]`（高、宽） |
 
 共享依赖 Linux SysV 和 CUDA pinned memory，严格 NUMA 绑定失败时会报错。当前共享路径不支持 TP、LoRA 或 lazy loading；T5、CLIP 和 VAE 未开启 CPU 权重共享，各 GPU 的激活和工作缓冲仍独立占用显存。

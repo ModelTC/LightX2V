@@ -1,6 +1,5 @@
 {
     "infer_steps": 40,
-    "resolution": 2048,
     "attn_type": "sage_attn2",
     "rope_type": "flashinfer_rope",
     "rms_norm_type": "fp32_variance",
@@ -34,5 +33,8 @@
         "seq_p_head_parallel": true,
         "seq_p_head_parallel_group_size": 4,
         "seq_p_quant_scheme": "fp8"
+    },
+    "request_defaults": {
+        "resolution": 2048
     }
 }

@@ -33,9 +33,6 @@
     "compress_pts_voxel_size": 0.002,
     "max_resolution": 1920,
     "compress_gs_max_points": 5000000,
-    "save_rendered": false,
-    "render_interp_per_pair": 15,
-    "render_depth": false,
     "log_time": true,
     "cpu_offload": false,
     "lazy_load": false,
@@ -46,5 +43,10 @@
     "use_fp32_fc2": true,
     "use_fp32_fc1": true,
     "fp32_attn_proj_first_n_blocks": 0,
-    "fp32_attn_proj_last_n_blocks": 6
+    "fp32_attn_proj_last_n_blocks": 6,
+    "request_defaults": {
+        "save_rendered": false,
+        "render_interp_per_pair": 15,
+        "render_depth": false
+    }
 }

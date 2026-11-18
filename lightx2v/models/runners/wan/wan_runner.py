@@ -35,6 +35,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import FIXED_FRAME_ATTENTION_TYPES
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -68,13 +69,7 @@ def get_wan_model_class(distill_method):
 class WanRunner(DisaggMixin, DefaultRunner):
     supported_lora_modes = ("merge", "separate")
 
-    FIXED_FRAME_ATTENTION_TYPES = {
-        "svg_attn",
-        "radial_attn",
-        "nbhd_attn",
-        "nbhd_attn_flashinfer",
-        "general_sparse_attn",
-    }
+    FIXED_FRAME_ATTENTION_TYPES = FIXED_FRAME_ATTENTION_TYPES
     _WARMUP_SHAPES = ((480, 480), (720, 1280))
     _WARMUP_PROMPTS = (
         "A boat crosses a lake.",

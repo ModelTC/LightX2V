@@ -104,8 +104,8 @@ Ref2AV accepts space-separated paths for multiple references of the same type. A
 | JSON | `shared_cpu_weight_scope` | `host` (default) or `numa` |
 | Inference command | `--config_json` | Path to another configuration file |
 | JSON | `infer_steps` | `29` |
-| JSON | `size` | `[544, 960]`, in height/width order |
-| JSON | `num_frames`, `fps` | `124` frames, `24` fps |
+| JSON | `request_defaults.size` | `[544, 960]`, in height/width order |
+| JSON | `request_defaults.num_frames`, `fps` | `124` frames, `24` fps |
 | JSON | `adaln_cache_dir` | `~/.cache/lightx2v/adaln` |
 
 The shared configuration covers the DiT, text backbone, and video VAE, with block offload enabled for each. Sharing requires Linux SysV shared memory and CUDA pinned memory. GPU activations and work buffers remain private to each process. The current shared path does not support TP, quantization, LoRA, compile, or lazy loading.

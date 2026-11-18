@@ -1,6 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 77,
     "text_len": 512,
     "size": [720, 1280],
     "self_attn_1_type": "flash_attn3",
@@ -19,5 +18,8 @@
         "path": "/path/to/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
         "strength": 1.0
         }
-    ]
+    ],
+    "request_defaults": {
+        "num_frames": 77
+    }
 }

@@ -1,10 +1,5 @@
 {
   "infer_steps": 40,
-  "num_frames": 81,
-  "size": [
-    480,
-    832
-  ],
   "self_attn_1_type": "flash_attn3",
   "cross_attn_1_type": "flash_attn3",
   "cross_attn_2_type": "flash_attn3",
@@ -26,5 +21,12 @@
   "clip_cpu_offload": false,
   "cpu_offload_block_contiguous": false,
   "offload_resident_blocks": 0,
-  "t5_quantized_ckpt": "models/Wan2.1-I2V-14B-720P-Lightx2v/fp8/models_t5_umt5-xxl-enc-fp8.pth"
+  "t5_quantized_ckpt": "models/Wan2.1-I2V-14B-720P-Lightx2v/fp8/models_t5_umt5-xxl-enc-fp8.pth",
+  "request_defaults": {
+    "num_frames": 81,
+    "size": [
+      480,
+      832
+    ]
+  }
 }

@@ -11,7 +11,6 @@
         0.414568
     ],
     "do_time_shift": false,
-    "resolution": 1024,
     "vae_scale_factor": 16,
     "use_tiling_vae": true,
     "vae_tile_size": 1024,
@@ -32,5 +31,8 @@
     "sample_guide_scale": 1,
     "warmup": false,
     "dit_quantized": true,
-    "dit_quant_scheme": "int8-metal"
+    "dit_quant_scheme": "int8-metal",
+    "request_defaults": {
+        "resolution": 1024
+    }
 }
