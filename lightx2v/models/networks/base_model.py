@@ -504,6 +504,8 @@ class BaseTransformerModel(ABC):
         self.transformer_weights.register_diff(lora_weight)
 
     def _update_lora(self, lora_path, strength):
+        if self.config.get("cpu_offload_numa") and self.config.get("lora_configs"):
+            raise ValueError("Cannot switch LoRA after merging it into NUMA-local weights at startup")
         if isinstance(lora_path, dict):
             lora_weight = lora_path
         else:
@@ -514,6 +516,8 @@ class BaseTransformerModel(ABC):
             self.post_weight.update_lora(lora_weight, strength)
 
     def _remove_lora(self):
+        if self.config.get("cpu_offload_numa") and self.config.get("lora_configs"):
+            raise ValueError("Cannot remove LoRA after merging it into NUMA-local weights at startup")
         self.pre_weight.remove_lora()
         self.transformer_weights.remove_lora()
         if hasattr(self, "post_weight"):

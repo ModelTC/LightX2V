@@ -77,7 +77,11 @@ Marlin and `fp8-pertensor` use specialized loading/storage paths that require
 separate adaptations and are rejected before checkpoint loading. Ordinary
 backend hardware and checkpoint requirements still apply. The
 option defaults to false and requires static CPU block offload;
-lazy loading, TP, LoRA, shared weights and contiguous offload are rejected.
+lazy loading, TP, shared weights and contiguous offload are rejected.
+For non-layered Qwen Image T2I/I2I with an unquantized DiT, the loader can
+merge `lora_configs` into CPU weights at startup before placing them in the
+arena. These adapters stay fixed for the lifetime of the runner. Other LoRA
+loading modes, including `lora_mode="separate"` and `lora_mode="consumer"`, are unsupported.
 Call `runner.close()` after serving stops to retire transfers and release the arena.
 For the Python pipeline, call `pipeline.runner.close()` in a `finally` block.
 The InfiniteTalk/Wan model constructor and runner factory also release adopted

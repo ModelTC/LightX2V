@@ -44,7 +44,7 @@ On Linux CUDA hosts with known GPU NUMA topology, static block offload can optio
 }
 ```
 
-This option defaults to `false`. It rejects lazy loading, tensor parallelism, LoRA, shared weights, contiguous offload, and specialized NVFP4/GGUF/Marlin/`fp8-pertensor` storage paths. Ordinary backend hardware and checkpoint requirements still apply.
+This option defaults to `false`. Non-layered Qwen Image T2I/I2I with an unquantized DiT can merge LoRA into CPU weights at startup and then place the merged weights in the NUMA arena. The adapters stay fixed across requests. Other LoRA modes, lazy loading, tensor parallelism, shared weights, contiguous offload, and specialized NVFP4/GGUF/Marlin/`fp8-pertensor` storage paths are unsupported. Ordinary backend hardware and checkpoint requirements still apply.
 
 Release resources with `runner.close()` after use, or `pipeline.runner.close()` in a `finally` block. See the [server's NUMA reference](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/server/README.md#numa-local-cpu-offload-weights) for the implementation constraints.
 

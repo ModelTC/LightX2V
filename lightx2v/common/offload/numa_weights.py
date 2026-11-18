@@ -17,9 +17,14 @@ def validate_numa_config(config, lora_path=None):
         return
     if not config.get("cpu_offload", False) or config.get("offload_granularity", "block") != "block":
         raise ValueError("cpu_offload_numa requires CPU block offload")
-    incompatible = ("shared_cpu_weights", "cpu_offload_block_contiguous", "lazy_load", "tensor_parallel", "weight_auto_quant", "lora_configs")
-    if config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key) for key in incompatible) or lora_path:
-        raise ValueError("cpu_offload_numa requires static rank-local weights without lazy loading, TP, LoRA, shared or contiguous offload")
+    incompatible = ("shared_cpu_weights", "cpu_offload_block_contiguous", "lazy_load", "tensor_parallel", "weight_auto_quant")
+    if config.get("lora_mode", "merge") != "merge" or any(config.get(key) for key in incompatible) or lora_path:
+        raise ValueError("cpu_offload_numa requires static rank-local weights without lazy loading, TP, auto-quantization, dynamic LoRA, shared or contiguous offload")
+    # Qwen merges adapters into CPU weights before creating the NUMA arena.
+    if config.get("lora_configs"):
+        qwen_image_task = config.get("model_cls") == "qwen_image" and config.get("task") in ("t2i", "i2i")
+        if not qwen_image_task or config.get("layered") or config.get("dit_quantized"):
+            raise ValueError("cpu_offload_numa supports startup LoRA merging only for non-layered Qwen Image T2I/I2I with an unquantized DiT")
     for key in ("dit_quant_scheme", "adapter_quant_scheme"):
         scheme = config.get(key, "Default")
         # These loaders allocate private storage or perform extra conversions
