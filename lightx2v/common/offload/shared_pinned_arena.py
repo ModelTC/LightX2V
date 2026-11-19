@@ -1154,7 +1154,7 @@ class SharedPinnedArena:
                 lifetime.close(remove=True, synchronize_cuda=False)
             except BaseException as cleanup_error:
                 _QUARANTINED_LIFETIMES.append(lifetime)
-                error.add_note(f"arena cleanup also failed: {cleanup_error!r}")
+                raise SharedPinnedArenaError(f"Failed to release new arena after {error!r}") from cleanup_error
             raise
 
     @classmethod

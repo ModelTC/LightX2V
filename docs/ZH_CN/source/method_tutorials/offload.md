@@ -44,7 +44,7 @@ Wan 静态 LoRA 合并不能与 `lazy_load` 或量化 DiT 同时使用。组合�
 }
 ```
 
-该选项默认为 `false`。普通（非分层）Qwen Image T2I/I2I 使用非量化 DiT 时，可在启动时将 LoRA 在线合并到 CPU 权重，再将合并结果放入 NUMA 本地内存。同一进程的后续请求复用这组权重。其他 LoRA 模式、lazy loading、张量并行、共享权重、contiguous offload 及 NVFP4/GGUF/Marlin/`fp8-pertensor` 特殊存储路径暂不支持。仍需满足对应后端的硬件和权重要求。
+设为 `true` 时必须成功绑定 NUMA 节点。Qwen 蒸馏预设使用 `"auto"`，在无法获取 GPU NUMA 拓扑或节点绑定失败时回落到普通 CPU block offload。默认值为 `false`。普通（非分层）Qwen Image T2I/I2I 使用非量化 DiT 时，可在启动时将 LoRA 在线合并到 CPU 权重，再将合并结果放入 NUMA 本地内存。同一进程的后续请求复用这组权重。其他 LoRA 模式、lazy loading、张量并行、共享权重、contiguous offload 及 NVFP4/GGUF/Marlin/`fp8-pertensor` 特殊存储路径暂不支持。仍需满足对应后端的硬件和权重要求。
 
 使用结束后调用 `runner.close()`；Python pipeline 可在 `finally` 中调用 `pipeline.runner.close()`。具体约束见[服务端 NUMA 说明](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/server/README.md#numa-local-cpu-offload-weights)。
 

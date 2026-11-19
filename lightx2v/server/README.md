@@ -76,7 +76,8 @@ reference the registered arena and rejects undeclared CPU state. NVFP4, GGUF,
 Marlin and `fp8-pertensor` use specialized loading/storage paths that require
 separate adaptations and are rejected before checkpoint loading. Ordinary
 backend hardware and checkpoint requirements still apply. The
-option defaults to false and requires static CPU block offload;
+option defaults to false and requires static CPU block offload. Use `true` to require
+NUMA placement or `"auto"` to fall back when topology or NUMA binding is unavailable;
 lazy loading, TP, shared weights and contiguous offload are rejected.
 For non-layered Qwen Image T2I/I2I with an unquantized DiT, the loader can
 merge `lora_configs` into CPU weights at startup before placing them in the
