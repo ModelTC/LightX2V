@@ -2,10 +2,11 @@
 
 English | [简体中文](README_zh.md)
 
-`skills/` contains 12 top-level groups and 28 skill entry points for model integration, performance tooling, and Intel GPU kernels. The two Intel XPU subskills and the kernel skills live in nested directories. Each entry point's directory name matches its frontmatter `name`. Detailed workflows, examples, and historical assets are available as needed in each skill's `references/` and `assets/` directories.
+`skills/` contains 13 top-level groups and 29 skill entry points for code contributions, model integration, performance tooling, and Intel GPU kernels. The two Intel XPU subskills and the kernel skills live in nested directories. Each entry point's directory name matches its frontmatter `name`. Detailed workflows, examples, and historical assets are available as needed in each skill's `references/` and `assets/` directories.
 
 ```text
 skills/
+├── contribute-code/
 ├── support-model-warmup/
 ├── model-enable-intel-xpu/
 ├── lightx2v-kernel-skills/
@@ -20,11 +21,13 @@ skills/
 └── support-model-compile/
 ```
 
-The 24 upstream skill entries use `policy.allow_implicit_invocation: false` and can be invoked explicitly with `$skill-name`. `support-static-block-residency` and the three performance tools use the default policy, which allows automatic selection and explicit invocation.
+The 24 upstream skill entries use `policy.allow_implicit_invocation: false` and can be invoked explicitly with `$skill-name`. `contribute-code`, `support-static-block-residency`, and the three performance tools allow automatic selection and explicit invocation.
 
 In Codex CLI or the IDE extension, use `/skills` to browse skills or type `$skill-name` to invoke one explicitly. In the ChatGPT desktop app, open Skills in the sidebar. [Official invocation guide](https://learn.chatgpt.com/docs/build-skills#how-chatgpt-and-codex-use-skills)
 
 Codex scans `.agents/skills` in each directory from the working directory up to the Git repository root. Set the working directory to the LightX2V repository root or one of its subdirectories to use these skills. If an update does not appear, restart Codex. [Official discovery rules](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)
+
+Follow the contribution guidelines when changing LightX2V code. [contribute-code](skills/contribute-code/SKILL.md)
 
 ## Performance tools
 
