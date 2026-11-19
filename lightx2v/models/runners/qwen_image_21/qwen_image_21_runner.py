@@ -194,6 +194,13 @@ class QwenImage21Runner(DefaultRunner):
         self.text_encoders = self.load_text_encoder()
         self.vae = self.load_vae()
 
+    def create_input_info(self, request_data):
+        info = super().create_input_info(request_data)
+        # Older startup configs expose the nested default only on the runner config.
+        if info.resolution is None:
+            info.resolution = self.config.get("request_defaults", {}).get("resolution")
+        return info
+
     @ProfilingContext4DebugL2("Run Encoders")
     def run_input_encoder(self):
         info = self.input_info

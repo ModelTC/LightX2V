@@ -46,13 +46,7 @@ class QwenImage21NpuRmsNormWeight(RMSWeightTemplate):
 
     def apply(self, input_tensor):
         weight = self._get_actual_weight()
-        if (
-            torch_npu is None
-            or not hasattr(torch_npu, "npu_rms_norm")
-            or weight is None
-            or not _is_npu_tensor(input_tensor)
-            or input_tensor.dtype != weight.dtype
-        ):
+        if torch_npu is None or not hasattr(torch_npu, "npu_rms_norm") or weight is None or not _is_npu_tensor(input_tensor) or input_tensor.dtype != weight.dtype:
             return self._fallback(input_tensor, weight)
 
         unit_weight = getattr(self, "_unit_weight", None)

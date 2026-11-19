@@ -57,11 +57,7 @@ class QwenImage21NpuRope(NpuRope):
         if cos.shape[0] != seq_len:
             raise ValueError(f"QwenImage21NpuRope expects one frequency row per token, got tokens={seq_len}, freqs={cos.shape[0]}.")
 
-        if (
-            torch_npu is None
-            or not hasattr(torch_npu, "npu_rotary_mul")
-            or not (_is_npu_tensor(xq) and _is_npu_tensor(xk))
-        ):
+        if torch_npu is None or not hasattr(torch_npu, "npu_rotary_mul") or not (_is_npu_tensor(xq) and _is_npu_tensor(xk)):
             return self._fallback(xq, cos, sin), self._fallback(xk, cos, sin)
 
         # The Ascend operator consumes SBND activations and S11D tables.  Keep
