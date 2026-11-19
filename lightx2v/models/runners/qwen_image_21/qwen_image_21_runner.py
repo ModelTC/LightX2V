@@ -103,8 +103,11 @@ class QwenImage21Runner(DefaultRunner):
 
     @staticmethod
     def _validate_mxfp8_npu_config(config):
-        if AI_DEVICE != "npu":
-            raise ValueError("qwen_image_21 mxfp8-npu requires an Ascend NPU device")
+        from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
+
+        backend = MM_WEIGHT_REGISTER.get("mxfp8-npu")
+        if backend is None:
+            raise ValueError("qwen_image_21 mxfp8-npu requires a registered Ascend NPU backend")
         for key in ("cpu_offload", "tensor_parallel", "seq_parallel", "shared_cpu_weights", "dit_disk_streaming"):
             if config.get(key):
                 raise ValueError(f"qwen_image_21 mxfp8-npu does not support {key}")
@@ -112,6 +115,7 @@ class QwenImage21Runner(DefaultRunner):
             raise ValueError("qwen_image_21 mxfp8-npu does not support LoRA")
         if config.get("attn_type") == "npu_quant_flash_attn":
             raise ValueError("qwen_image_21 mxfp8-npu must be evaluated independently of quantized attention")
+        backend.validate_runtime()
 
     @staticmethod
     def _validate_mps_streaming_config(config):
