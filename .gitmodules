@@ -13,4 +13,4 @@
 	url = https://github.com/ModelTC/RoboLab.git
 [submodule "third_party/verl-omni"]
 	path = third_party/verl-omni
-	url = https://github.com/verl-project/verl-omni.git
+	url = https://github.com/ModelTC/verl-omni.git

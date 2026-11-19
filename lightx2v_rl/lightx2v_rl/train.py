@@ -7,7 +7,7 @@ from pathlib import Path
 
 from omegaconf import OmegaConf
 
-from lightx2v_rl.backends.verl_omni.runtime import DEFAULT_CHECKOUT, prepare_runtime
+from lightx2v_rl.backends.verl_omni.runtime import DEFAULT_CHECKOUT, validate_runtime
 from lightx2v_rl.paths import resolve_runtime_paths
 from lightx2v_rl.training.config import (
     REWARD_RECIPES,
@@ -51,7 +51,7 @@ def main(argv=None):
             return
         if sys.version_info < (3, 11):
             raise RuntimeError("The pinned verl-omni training runtime requires Python >= 3.11.")
-        checkout = prepare_runtime(args.checkout, check_only=True)
+        checkout = validate_runtime(args.checkout)
         installed = importlib.util.find_spec("verl_omni")
         if installed is None or Path(installed.origin).resolve().parent != checkout / "verl_omni":
             raise RuntimeError("Install the pinned checkout editable in the training environment: pip install -e third_party/verl-omni")

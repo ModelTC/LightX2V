@@ -21,7 +21,6 @@ uv pip install --python "$RL_PYTHON" --torch-backend=auto \
     --reinstall-package diffusers \
     --override lightx2v_rl/requirements/qwen_image21.txt \
     -e 'third_party/verl-omni[gpu]' -e lightx2v_rl
-"$RL_PYTHON" lightx2v_rl/scripts/setup/prepare_verl_omni.py
 "$RL_PYTHON" - <<'PY'
 import sys
 from importlib.metadata import version
@@ -31,8 +30,10 @@ import transformers
 from diffusers import QwenImage21Pipeline, QwenImage21Transformer2DModel
 from verl_omni.workers.rollout.vllm_rollout.vllm_omni_async_server import vLLMOmniHttpServer  # noqa: F401
 
+from lightx2v_rl.backends.verl_omni.runtime import validate_runtime
 from lightx2v_rl.models.qwen_image import rollout_registration  # noqa: F401
 
+validate_runtime()
 print('Python:', sys.executable)
 print('Torch:', torch.__version__, 'CUDA:', torch.version.cuda, 'available:', torch.cuda.is_available())
 print('Transformers:', transformers.__version__)
