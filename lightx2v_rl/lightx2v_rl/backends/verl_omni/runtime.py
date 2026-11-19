@@ -17,6 +17,7 @@ VALIDATION_REWARD_PATCH = PACKAGE_ROOT / "patches" / "0006-validation-reward-det
 ADVANTAGE_PATCH = PACKAGE_ROOT / "patches" / "0007-custom-advantage-function.patch"
 VALIDATION_MEDIA_PATCH = PACKAGE_ROOT / "patches" / "0008-custom-validation-media.patch"
 ROLLOUT_BATCH_VALIDATOR_PATCH = PACKAGE_ROOT / "patches" / "0009-rollout-batch-validator.patch"
+MODELTC_ROLLOUT_CLI_PATCH = PACKAGE_ROOT / "patches" / "0010-modeltc-rollout-cli.patch"
 
 
 def prepare_runtime(checkout: Path = DEFAULT_CHECKOUT, *, check_only: bool = False) -> Path:
@@ -78,7 +79,7 @@ def prepare_runtime(checkout: Path = DEFAULT_CHECKOUT, *, check_only: bool = Fal
         raise RuntimeError(f"Expected verl-omni commit {VERL_OMNI_COMMIT}; refusing to patch another revision.")
     pending = []
     applied_patches = []
-    for patch in (PATCH, MEDIA_PATCH, ENGINE_DEFAULTS_PATCH, ROLLOUT_PORT_PATCH, TRACKING_PATCH, VALIDATION_REWARD_PATCH, ADVANTAGE_PATCH, VALIDATION_MEDIA_PATCH, ROLLOUT_BATCH_VALIDATOR_PATCH):
+    for patch in (PATCH, MEDIA_PATCH, ENGINE_DEFAULTS_PATCH, ROLLOUT_PORT_PATCH, TRACKING_PATCH, VALIDATION_REWARD_PATCH, ADVANTAGE_PATCH, VALIDATION_MEDIA_PATCH, ROLLOUT_BATCH_VALIDATOR_PATCH, MODELTC_ROLLOUT_CLI_PATCH):
         if not patch.is_file():
             raise RuntimeError(f"Missing runtime extension patch: {patch}")
         if git("apply", "--reverse", "--check", str(patch)).returncode == 0:

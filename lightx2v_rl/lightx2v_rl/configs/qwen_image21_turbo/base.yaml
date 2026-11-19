@@ -34,6 +34,10 @@ actor_rollout_ref:
       forward_prefetch: false
   rollout:
     external_lib: lightx2v_rl.models.qwen_image.rollout_registration
+    # Keep the native fork pipeline and its media hooks separate from RL.
+    engine_kwargs:
+      vllm_omni:
+        model_class_name: LightX2VQwenImage21RLPipeline
     tensor_model_parallel_size: 1
     max_num_seqs: 1
     max_prompt_embed_length: 4096

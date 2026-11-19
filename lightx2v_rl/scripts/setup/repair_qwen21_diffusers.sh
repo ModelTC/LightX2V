@@ -12,8 +12,8 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-$PWD/lightx2v_rl/models/.uv-cache}"
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PWD/lightx2v_rl/models/.pip-cache}"
 export HF_HOME="${HF_HOME:-$PWD/lightx2v_rl/models/.hf-runtime}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-RL_DIFFUSERS_REV=62cde2b0115d57492d2f5ecefab54994797df2e3
-RL_DIFFUSERS_WHEEL="lightx2v_rl/models/.runtime-wheels/diffusers-$RL_DIFFUSERS_REV/diffusers-0.41.0.dev0-py3-none-any.whl"
+RL_DIFFUSERS_REV=95f9b8925c34469ccac829866d7ad4e3fca1bd89
+RL_DIFFUSERS_WHEEL="lightx2v_rl/models/.runtime-wheels/diffusers-$RL_DIFFUSERS_REV/diffusers-0.42.0-py3-none-any.whl"
 
 "$RL_PYTHON" - <<'PY'
 import sys
@@ -38,7 +38,7 @@ if (manifest['revision'] != sys.argv[2] or manifest['wheel'] != wheel.name
 PY
     RL_DIFFUSERS_SPEC="$RL_DIFFUSERS_WHEEL"
 else
-    RL_DIFFUSERS_SPEC="diffusers @ git+https://github.com/huggingface/diffusers.git@$RL_DIFFUSERS_REV"
+    RL_DIFFUSERS_SPEC="diffusers==0.42.0"
 fi
 if command -v uv >/dev/null 2>&1; then
     uv pip install --python "$RL_PYTHON" --no-deps --reinstall-package diffusers "$RL_DIFFUSERS_SPEC"
