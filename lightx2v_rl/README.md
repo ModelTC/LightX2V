@@ -289,7 +289,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash lightx2v_rl/scripts/train/train_qwen21.sh \
 | `qwen_image21_turbo_geo_40gpu` | 5 | 32 | 6 UR + 2 HPSv3 |
 | `qwen_image21_4step_geo_6nodes` | 6 | 32 | 12 UR + 4 HPSv3 |
 | `qwen_image21_4step_geo_7nodes_hps02` | 7 | 32 | 20 UR + 4 HPSv3 |
-| `qwen_image21_4step_geo_7nodes_ur_only` | 7 | 32 | 24 UR |
 
 Turbo 五节点也提供 CPS / Flow-GRPO 对应配方。五节点启动示例：
 
@@ -313,7 +312,7 @@ bash lightx2v_rl/scripts/train/train_qwen21_4step_7nodes.sh \
   trainer.default_local_dir=lightx2v_rl/outputs/qwen_4step_geo
 ```
 
-四步平台配方按 `T2I → 单 ref → T2I → 多 ref` 轮换，使用 1024×1024 画布、每 iter 64 个 prompt × 8 候选。七节点混合 reward 配方使用 UR 27B，T2I / I2I 的 HPS 权重分别为 0.5 / 0.2；只使用 UR 时改用 `train_qwen21_4step_7nodes_ur_only.sh`。每个作业使用不同 rendezvous ID。`MASTER_PORT` 须与 Ray 的 6379 不同。
+四步平台配方按 `T2I → 单 ref → T2I → 多 ref` 轮换，使用 1024×1024 画布、每 iter 64 个 prompt × 8 候选。七节点混合 reward 配方使用 UR 27B，T2I / I2I 的 HPS 权重分别为 0.5 / 0.2。每个作业使用不同 rendezvous ID。`MASTER_PORT` 须与 Ray 的 6379 不同。
 
 非自动分发平台可使用 `scripts/train/qwen21_cluster.sh head|worker|train` 和 `scripts/rewards/start_qwen21_reward_pool.sh` 手动部署；必需环境变量与节点布局见各脚本的 `--help`。
 

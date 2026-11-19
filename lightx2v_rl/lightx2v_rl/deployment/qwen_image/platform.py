@@ -33,9 +33,7 @@ TORCHRUN_VARIABLES = {
 }
 RECIPES = {f"qwen_image21_turbo_{algorithm}_{nodes * 8}gpu": nodes for algorithm in ("geo", "cps", "flow_grpo") for nodes in (4, 5)}
 RECIPES.update(qwen_image21_4step_geo_6nodes=6, qwen_image21_4step_geo_48gpu=6)
-RECIPES["qwen_image21_4step_geo_6nodes_hps02"] = 6
 RECIPES["qwen_image21_4step_geo_7nodes_hps02"] = 7
-RECIPES["qwen_image21_4step_geo_7nodes_ur_only"] = 7
 
 
 def recipe_node_count(env):
@@ -93,7 +91,8 @@ def discover_address(env):
 
 
 def child_environment(env, addresses, rank):
-    validate_addresses(addresses, recipe_node_count(env))
+    nodes = recipe_node_count(env)
+    validate_addresses(addresses, nodes)
     training_nodes = recipe_training_node_count(env)
     reward_addresses = addresses[training_nodes:]
     result = {key: value for key, value in env.items() if key not in TORCHRUN_VARIABLES and not key.startswith("TORCHELASTIC_")}
@@ -104,7 +103,7 @@ def child_environment(env, addresses, rank):
             "LIGHTX2V_REWARD_HOST": reward_addresses[0],
             "LIGHTX2V_REWARD_HOSTS": ",".join(reward_addresses),
             "LIGHTX2V_TRAIN_NODES": str(training_nodes),
-            "LIGHTX2V_REWARD_POOL_LAYOUT": ("8+0" if env.get("LIGHTX2V_RL_CONFIG") == "qwen_image21_4step_geo_7nodes_ur_only" else "7+1" if recipe_node_count(env) == 7 and rank in (4, 5) else "6+2"),
+            "LIGHTX2V_REWARD_POOL_LAYOUT": "7+1" if nodes == 7 and rank in (4, 5) else "6+2",
             "LIGHTX2V_RL_CONFIG": env.get("LIGHTX2V_RL_CONFIG", "qwen_image21_turbo_geo_40gpu"),
             "RAY_ADDRESS": f"{addresses[0]}:6379",
         }

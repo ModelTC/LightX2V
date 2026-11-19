@@ -18,7 +18,6 @@ For four/five nodes, the last rank runs six UnifiedReward and two HPSv3 services
 For six nodes, ranks 4 and 5 each run six UnifiedReward and two HPSv3 services.
 For the seven-node HPS recipe, ranks 4..5 run 7 UR + 1 HPS; rank 6 runs 6 UR + 2 HPS.
   qwen_image21_4step_geo_7nodes_hps02: 4 Ray nodes + 3 reward nodes (27B).
-  qwen_image21_4step_geo_7nodes_ur_only: 4 Ray nodes + 3 reward nodes (8 UR each).
 Only rank 0 starts the training driver. The GPU suffix includes reward GPUs.
 
 Optional environment:
@@ -26,8 +25,7 @@ Optional environment:
   LIGHTX2V_RL_CONFIG    qwen_image21_turbo_geo_40gpu (default),
                        qwen_image21_turbo_{geo,cps,flow_grpo}_{32,40}gpu,
                        qwen_image21_4step_geo_6nodes (alias *_48gpu),
-                       qwen_image21_4step_geo_6nodes_hps02,
-                       qwen_image21_4step_geo_7nodes_{hps02,ur_only}
+                       qwen_image21_4step_geo_7nodes_hps02
   LIGHTX2V_RL_DATA_DIR  Four-step train.jsonl, val.jsonl and val_preview.jsonl directory
                        (default: lightx2v_rl/data/opengpt4o_multiref)
   LIGHTX2V_RDZV_ID      Shared job-specific rendezvous ID (default: 5236)
@@ -59,8 +57,8 @@ export LIGHTX2V_RL_CONFIG="${LIGHTX2V_RL_CONFIG:-qwen_image21_turbo_geo_40gpu}"
 case "$LIGHTX2V_RL_CONFIG" in
     qwen_image21_turbo_geo_32gpu|qwen_image21_turbo_cps_32gpu|qwen_image21_turbo_flow_grpo_32gpu) RL_PLATFORM_NODES=4 ;;
     qwen_image21_turbo_geo_40gpu|qwen_image21_turbo_cps_40gpu|qwen_image21_turbo_flow_grpo_40gpu) RL_PLATFORM_NODES=5 ;;
-    qwen_image21_4step_geo_6nodes|qwen_image21_4step_geo_48gpu|qwen_image21_4step_geo_6nodes_hps02) RL_PLATFORM_NODES=6 ;;
-    qwen_image21_4step_geo_7nodes_hps02|qwen_image21_4step_geo_7nodes_ur_only) RL_PLATFORM_NODES=7 ;;
+    qwen_image21_4step_geo_6nodes|qwen_image21_4step_geo_48gpu) RL_PLATFORM_NODES=6 ;;
+    qwen_image21_4step_geo_7nodes_hps02) RL_PLATFORM_NODES=7 ;;
     *) printf 'This launcher requires a supported Qwen multi-node recipe (32gpu, 40gpu, six-node or seven-node 4-step recipe).\n' >&2; exit 2 ;;
 esac
 
