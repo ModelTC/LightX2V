@@ -21,9 +21,7 @@ RECIPE_ALIASES = {
     "qwen_image21_agent": "qwen_image21_turbo/agent",
     "qwen_image21_4step_geo_6nodes": "qwen_image21_4step/geo_6nodes",
     "qwen_image21_4step_geo_48gpu": "qwen_image21_4step/geo_6nodes",
-    "qwen_image21_4step_geo_6nodes_hps02": "qwen_image21_4step/geo_6nodes_hps02",
     "qwen_image21_4step_geo_7nodes_hps02": "qwen_image21_4step/geo_7nodes_hps02",
-    "qwen_image21_4step_geo_7nodes_ur_only": "qwen_image21_4step/geo_7nodes_ur_only",
 }
 
 

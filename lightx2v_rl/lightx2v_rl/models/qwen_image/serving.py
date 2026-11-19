@@ -175,7 +175,7 @@ def register_serving_architecture():
     from vllm_omni.diffusion.registry import register_diffusion_model
 
     register_diffusion_model(
-        "QwenImage21Pipeline",
+        "LightX2VQwenImage21RLPipeline",
         __name__,
         "GeoQwenImage21Serving",
     )

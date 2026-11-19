@@ -25,7 +25,6 @@ For four training nodes + two reward nodes, use qwen_image21_4step_geo_6nodes
 For four training + three reward nodes, use qwen_image21_4step_geo_7nodes_hps02;
 use the 27B profile and LIGHTX2V_REWARD_POOL_LAYOUT=7+1 on the first two pools,
 6+2 on the third pool. The platform launcher sets these layouts automatically.
-The qwen_image21_4step_geo_7nodes_ur_only recipe uses 8+0 on all three pools.
 Four-step recipes read manifests from LIGHTX2V_RL_DATA_DIR (default:
 lightx2v_rl/data/opengpt4o_multiref).
 Default: qwen_image21_turbo_geo_40gpu; the suffix includes the reward GPUs.
@@ -62,8 +61,8 @@ export RAY_ADDRESS="$LIGHTX2V_HEAD_IP:6379"
 case "$LIGHTX2V_RL_CONFIG" in
     qwen_image21_turbo_geo_32gpu|qwen_image21_turbo_cps_32gpu|qwen_image21_turbo_flow_grpo_32gpu) LIGHTX2V_TRAIN_NODES=3; RL_REWARD_NODES=1 ;;
     qwen_image21_turbo_geo_40gpu|qwen_image21_turbo_cps_40gpu|qwen_image21_turbo_flow_grpo_40gpu) LIGHTX2V_TRAIN_NODES=4; RL_REWARD_NODES=1 ;;
-    qwen_image21_4step_geo_6nodes|qwen_image21_4step_geo_48gpu|qwen_image21_4step_geo_6nodes_hps02) LIGHTX2V_TRAIN_NODES=4; RL_REWARD_NODES=2 ;;
-    qwen_image21_4step_geo_7nodes_hps02|qwen_image21_4step_geo_7nodes_ur_only) LIGHTX2V_TRAIN_NODES=4; RL_REWARD_NODES=3 ;;
+    qwen_image21_4step_geo_6nodes|qwen_image21_4step_geo_48gpu) LIGHTX2V_TRAIN_NODES=4; RL_REWARD_NODES=2 ;;
+    qwen_image21_4step_geo_7nodes_hps02) LIGHTX2V_TRAIN_NODES=4; RL_REWARD_NODES=3 ;;
     *) printf 'This launcher requires a supported Qwen multi-node recipe (32gpu, 40gpu, six-node or seven-node 4-step recipe).\n' >&2; exit 2 ;;
 esac
 export LIGHTX2V_TRAIN_NODES

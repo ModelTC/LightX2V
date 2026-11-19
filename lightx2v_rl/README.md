@@ -71,23 +71,14 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 uv --version
 
+git submodule sync -- third_party/verl-omni
 git submodule update --init third_party/verl-omni
 bash lightx2v_rl/scripts/setup/setup_qwen21_env.sh
 ```
 
 安装脚本创建 `.venv-rl`，安装固定的 verl-omni / vLLM-Omni、模型依赖覆盖和本模块，并检查 CUDA 与 QwenImage21 导入。Wan 适配复用此训练环境。依赖以 [qwen_image21.txt](requirements/qwen_image21.txt) 和安装脚本为准；仅 `pip install -e lightx2v_rl` 不包含完整 GPU 训练栈。
 
-安装时会应用 `patches/` 中的通用扩展接口补丁，不改变 submodule 的 Git 版本。可单独检查或在补丁更新后重新应用：
-
-```bash
-# 只检查，不修改文件。
-lightx2v_rl/.venv-rl/bin/python lightx2v_rl/scripts/setup/prepare_verl_omni.py --check
-
-# 首次准备或补丁更新时应用。
-lightx2v_rl/.venv-rl/bin/python lightx2v_rl/scripts/setup/prepare_verl_omni.py
-```
-
-这些补丁是运行依赖。使用父仓库记录的 submodule 版本，保留应用补丁后的工作区差异。
+训练使用 LightX2V 固定的 verl-omni 子模块提交。已有 checkout 更新后，先同步子模块 URL，再初始化到固定版本。
 
 ### 安装 reward 环境
 
@@ -298,7 +289,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash lightx2v_rl/scripts/train/train_qwen21.sh \
 | `qwen_image21_turbo_geo_40gpu` | 5 | 32 | 6 UR + 2 HPSv3 |
 | `qwen_image21_4step_geo_6nodes` | 6 | 32 | 12 UR + 4 HPSv3 |
 | `qwen_image21_4step_geo_7nodes_hps02` | 7 | 32 | 20 UR + 4 HPSv3 |
-| `qwen_image21_4step_geo_7nodes_ur_only` | 7 | 32 | 24 UR |
 
 Turbo 五节点也提供 CPS / Flow-GRPO 对应配方。五节点启动示例：
 
@@ -322,7 +312,7 @@ bash lightx2v_rl/scripts/train/train_qwen21_4step_7nodes.sh \
   trainer.default_local_dir=lightx2v_rl/outputs/qwen_4step_geo
 ```
 
-四步平台配方按 `T2I → 单 ref → T2I → 多 ref` 轮换，使用 1024×1024 画布、每 iter 64 个 prompt × 8 候选。七节点混合 reward 配方使用 UR 27B，T2I / I2I 的 HPS 权重分别为 0.5 / 0.2；只使用 UR 时改用 `train_qwen21_4step_7nodes_ur_only.sh`。每个作业使用不同 rendezvous ID。`MASTER_PORT` 须与 Ray 的 6379 不同。
+四步平台配方按 `T2I → 单 ref → T2I → 多 ref` 轮换，使用 1024×1024 画布、每 iter 64 个 prompt × 8 候选。七节点混合 reward 配方使用 UR 27B，T2I / I2I 的 HPS 权重分别为 0.5 / 0.2。每个作业使用不同 rendezvous ID。`MASTER_PORT` 须与 Ray 的 6379 不同。
 
 非自动分发平台可使用 `scripts/train/qwen21_cluster.sh head|worker|train` 和 `scripts/rewards/start_qwen21_reward_pool.sh` 手动部署；必需环境变量与节点布局见各脚本的 `--help`。
 
@@ -393,11 +383,10 @@ lightx2v_rl/
 │   ├── deployment/          # 集群启动与健康检查
 │   └── configs/             # 算法、模型、reward 和部署配方
 ├── scripts/{setup,assets,rewards,train}/
-├── requirements/
-└── patches/                 # 固定 verl-omni 的通用扩展补丁
+└── requirements/
 ```
 
-顶层 `models/`、`data/` 是资源目录，Python 包内同名目录存放代码。新增模型需实现 learner 重算、rollout、条件输入和配置校验，在 `models/registry.py` 注册 `ModelSpec`，由 `actor_rollout_ref.model.rl_adapter` 选择。模型特有的 timestep / sigma / 参考图逻辑留在模型目录；共享算法和 reward 不依赖具体模型。submodule 仅维护必要的通用接口补丁。
+顶层 `models/`、`data/` 是资源目录，Python 包内同名目录存放代码。新增模型需实现 learner 重算、rollout、条件输入和配置校验，在 `models/registry.py` 注册 `ModelSpec`，由 `actor_rollout_ref.model.rl_adapter` 选择。模型特有的 timestep / sigma / 参考图逻辑留在模型目录；共享算法和 reward 不依赖具体模型。通用训练接口由 verl-omni 子模块提供。
 
 ## 常见问题
 
@@ -406,7 +395,7 @@ lightx2v_rl/
 | `Python.h` 缺失 | 在运行节点安装与解释器匹配的 `python3.x-dev` |
 | `ensurepip` 缺失 | 安装 uv 后重新运行环境脚本，或安装匹配的 `python3.x-venv` |
 | 无法导入 `QwenImage21Pipeline` | 运行 `scripts/setup/repair_qwen21_diffusers.sh` 恢复固定官方 Diffusers |
-| submodule 补丁检查失败 | 保持父仓库固定版本，运行 `prepare_verl_omni.py` 应用补丁 |
+| verl-omni 版本不匹配 | 同步子模块 URL，并用 `git submodule update --init third_party/verl-omni` 检出固定版本 |
 | startup 等待评分服务 | 检查对应 `reward.log` 与实例日志；健康接口正常后仍需通过实际评分预检 |
 | rendezvous 断连 | 先定位最早的训练或服务异常，断连通常是作业退出的后续现象 |
 | 资源或 manifest 缺失 | 检查相对链接、下载完成状态，保留资产清单 |
