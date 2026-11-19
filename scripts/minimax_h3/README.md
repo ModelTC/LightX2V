@@ -321,6 +321,6 @@ python scripts/minimax_h3/server/post_ref2av.py
 ## Request and startup settings
 
 - **Startup and requests**: set model paths, variant, weights/LoRA, kernels, offload, parallelism, compile, and warmup at startup. Pass `prompt`, media paths, `seed`, and the output path through Python, CLI, or POST.
-- **Output settings**: The JSON `request_defaults` object provides defaults for `num_frames` and `size`; requests can override them. `size` is `[height, width]`, with both dimensions divisible by 32. Frame counts round up to `17*n+5` and must fall within 124–362 after alignment, e.g. 125 → 141. Output is MP4 with 24 FPS video and 32 kHz stereo audio.
+- **Output settings**: The JSON `request_defaults` object provides defaults for `num_frames` and `size`; requests can override them. `size` is `[height, width]`, with both dimensions divisible by 32. Frame counts round up to `17*n+5` (e.g. 125 → 141). The aligned count must be 22–362 frames. Output is MP4 with 24 FPS video and 32 kHz stereo audio.
 - **Random seed**: an omitted or `null` `seed` uses 42. You can specify any non-negative integer, including 0.
 - **Saving results**: CLI skips saving when no output path is supplied. For service requests, prefer a relative `save_result_path` such as `./minimax_h3_t2av.mp4`, resolved under the service output directory. Omitted or `null` paths skip saving; saved results can be downloaded.
