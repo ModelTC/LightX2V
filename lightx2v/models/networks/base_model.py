@@ -155,6 +155,7 @@ class BaseTransformerModel(ABC):
             "mxfp4",
             "mxfp6-mxfp8",
             "mxfp8",
+            "mxfp8-npu",
             "int8-tmo",
             "gguf-Q8_0",
             "gguf-Q6_K",
