@@ -89,7 +89,7 @@ class NeoppPreInfer:
     def __init__(self, config):
         self.config = config
         self.patch_size = self.config.get("patch_size", 16)
-        self.merge_size = 2
+        self.merge_size = 1 if self.config.get("gen_image_arch") == "patch2d16" else 2
         self.embed_dim = config["vision_config"]["hidden_size"]
         self.add_noise_scale_embedding = config.get("add_noise_scale_embedding", True)
         self.noise_scale_max_value = config.get("noise_scale_max_value", 8.0)
@@ -159,6 +159,17 @@ class NeoppPreInfer:
         """
         Apply 2D Rotary Position Embedding to the patch embeddings.
         """
+        if self.config.get("hf_generation_bf16") and self.config.get("gen_image_arch") == "patch2d16":
+            # The trained GEN16 encoder builds FP32 rotary tables on the
+            # activation device. CPU cos/sin differs at BF16 rounding ties.
+            if getattr(self, "_gen16_rope_device", None) != patch_embeds.device:
+                vision = self.config["vision_config"]
+                self.cos_cached_x, self.sin_cached_x = precompute_rope_freqs_sincos(
+                    self.rope_dim_part, vision["max_position_embeddings_vision"],
+                    base=vision["rope_theta_vision"], device=patch_embeds.device,
+                )
+                self.cos_cached_y, self.sin_cached_y = self.cos_cached_x, self.sin_cached_x
+                self._gen16_rope_device = patch_embeds.device
         abs_pos_x, abs_pos_y = build_abs_positions_from_grid_hw(grid_hw, device=patch_embeds.device)
         embeddings = apply_2d_rotary_pos_emb(
             rope,
@@ -174,11 +185,14 @@ class NeoppPreInfer:
 
     def extract_feature(self, weights, pixel_values: torch.FloatTensor, grid_hw=None) -> torch.Tensor:
         patch_embedding = weights.vision_model_mot_gen_patch_embedding
+        gen16 = self.config.get("gen_image_arch") == "patch2d16"
+        pixel_values = pixel_values.to(patch_embedding.weight.dtype)
+        activation = F.silu if gen16 else F.gelu
         if self.use_conv_as_gemm:
-            patch_embeds = F.gelu(conv_as_gemm(patch_embedding, pixel_values.view(-1, patch_embedding.weight[0].numel())))  # [28072, 768] -> [28072, 1024]
+            patch_embeds = activation(conv_as_gemm(patch_embedding, pixel_values.view(-1, patch_embedding.weight[0].numel())))  # [28072, 768] -> [28072, 1024]
         else:
             pixel_values = pixel_values.view(-1, 3, self.patch_size, self.patch_size)  # [28072, 768] -> [28072, 3, 16, 16]
-            patch_embeds = F.gelu(patch_embedding.apply(pixel_values)).view(-1, self.embed_dim)
+            patch_embeds = activation(patch_embedding.apply(pixel_values)).view(-1, self.embed_dim)
         self.cos_cached_x = self.cos_cached_x.to(patch_embeds.device)
         self.sin_cached_x = self.sin_cached_x.to(patch_embeds.device)
         self.cos_cached_y = self.cos_cached_y.to(patch_embeds.device)
@@ -192,7 +206,7 @@ class NeoppPreInfer:
         cur_position = 0
         for i in range(grid_hw.shape[0]):
             h, w = grid_hw[i].tolist()
-            if self.use_conv_as_gemm:
+            if self.use_conv_as_gemm and not gen16:
                 assert h % m == 0 and w % m == 0
                 windows = patch_embeds[cur_position : cur_position + h * w].view(h // m, m, w // m, m, -1).permute(0, 2, 4, 1, 3)  # (h/m, w/m, C, m, m)
                 patches_list.append(conv_as_gemm(dense_embedding, windows.reshape(-1, dense_embedding.weight[0].numel())))

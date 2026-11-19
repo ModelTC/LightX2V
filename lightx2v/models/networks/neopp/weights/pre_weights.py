@@ -25,12 +25,15 @@ class NeoppPreWeights(WeightModule):
             ),
         )
 
+        gen16 = config.get("gen_image_arch") == "patch2d16"
+        spatial_name = "spatial_embedding" if gen16 else "dense_embedding"
         self.add_module(
             "vision_model_mot_gen_dense_embedding",
             CONV2D_WEIGHT_REGISTER["Default"](
-                "fm_modules.vision_model_mot_gen.embeddings.dense_embedding.weight",
-                "fm_modules.vision_model_mot_gen.embeddings.dense_embedding.bias",
-                stride=self.merge_size,
+                f"fm_modules.vision_model_mot_gen.embeddings.{spatial_name}.weight",
+                f"fm_modules.vision_model_mot_gen.embeddings.{spatial_name}.bias",
+                stride=1 if gen16 else self.merge_size,
+                padding=1 if gen16 else 0,
             ),
         )
 

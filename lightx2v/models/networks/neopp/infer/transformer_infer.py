@@ -17,6 +17,7 @@ except ImportError:
 
 from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.models.networks.neopp.infer.gen_loop import generation_layers, hy4_readout, ihc_read, ihc_write
 from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
 from lightx2v.utils.profiler import *
 
@@ -81,19 +82,36 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         self.config = config
         llm_config = config["llm_config"]
         self.num_layers = llm_config["num_hidden_layers"]
+        self.generation_layers = generation_layers(llm_config)
+        self.hc_streams = llm_config.get("hc_streams", 0)
+        self._ihc_read, self._ihc_write = ihc_read, ihc_write
+        if config.get("use_triton_ihc", False):
+            if self.hc_streams != 2 or llm_config.get("hc_type") != "ihc":
+                raise ValueError("use_triton_ihc requires two-stream iHC")
+            from lightx2v.models.networks.neopp.infer import ihc_triton
+            self._ihc_read, self._ihc_write = ihc_triton.read, ihc_triton.write
+        if llm_config.get("loop_split") is not None:
+            logger.info(f"NeoPP generation: {self.num_layers} physical layers, {len(self.generation_layers)} layer calls, "
+                        f"split={llm_config['loop_split']}, hc={llm_config.get('hc_type', 'none')}")
         self.hidden_size = llm_config["hidden_size"]
         self.num_heads = llm_config["num_attention_heads"]
         self.num_kv_heads = llm_config["num_key_value_heads"]
         self.head_dim = llm_config["head_dim"]
         self.num_key_value_groups = self.num_heads // self.num_kv_heads
         self.scaling = self.head_dim**-0.5
+        self.hf_dense_fa2_limit = int(config.get("hf_generation_dense_fa2_max_tokens", 0))
+        if self.hf_dense_fa2_limit > 0:
+            if config.get("attn_type") != "flash_attn2" or config.get("seq_parallel", False):
+                raise ValueError("HF dense FA2 requires flash_attn2 and non-sequence-parallel execution")
+            from flash_attn import flash_attn_func
+            self._hf_dense_fa2 = flash_attn_func
         self.use_triton_qknorm_rope = config.get("use_triton_qknorm_rope", True)
         self.version = config.get("version", "moe")
         # Conv "pixel head" variant. patch_size/merge_size mirror NeoppPreInfer so the
         # conv head can reshape tokens -> 2D map and re-patchify back to token space.
         self.use_pixel_head = config.get("use_pixel_head", False)
         self.patch_size = config.get("patch_size", 16)
-        self.merge_size = 2
+        self.merge_size = 1 if self.config.get("gen_image_arch") == "patch2d16" else 2
         self.fi_moe_autotune = MoeFiAutotune.from_neopp_config(config)
         if self.version == "moe":
             self.num_experts_per_tok = llm_config["num_experts_per_tok"]
@@ -166,9 +184,29 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         self.kv_cache.prepare(past_key_values, seq_len_q)
 
         kv_buf = self.kv_cache._kv_buf
-        for layer_idx, block_weight in enumerate(blocks):
-            hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
+        for layer_idx in self.generation_layers:
+            # A repeated core layer overwrites only the query tail in its
+            # physical KV slot; each pass attends to the same immutable prefix.
+            block_weight = blocks[layer_idx]
+            if hasattr(block_weight, "hc_attn_mot_gen"):
+                hidden_states = self._decoder_layer_ihc(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
+            else:
+                if hasattr(block_weight, "hc_readout_mot_gen"):
+                    hidden_states = hy4_readout(hidden_states, block_weight.hc_readout_mot_gen)
+                hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
         return hidden_states
+
+    def _decoder_layer_ihc(self, block, layer_idx, states, cos_sin, kv_buf):
+        if states.ndim == 2:
+            states = states.unsqueeze(-2).expand(-1, self.hc_streams, -1)
+        read, post = self._ihc_read(states, block.hc_attn_mot_gen)
+        normed = block.input_layernorm_mot_gen.apply(read)
+        update = self._self_attn(block.self_attn, layer_idx, normed, cos_sin, kv_buf)
+        states = self._ihc_write(states, update, post)
+        read, post = self._ihc_read(states, block.hc_ffn_mot_gen)
+        normed = block.post_attention_layernorm_mot_gen.apply(read)
+        update = self._mlp_forward(block.mlp_mot_gen, normed)
+        return self._ihc_write(states, update, post)
 
     if magi_compile is not None:
 
@@ -292,6 +330,20 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         cos_w : [1, seq, quarter] (cat(freqs_w, freqs_w); unique part is [:eighth])
         """
         cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
+        if self.config.get("hf_generation_bf16", False):
+            # HF Qwen rounds each rotary product to BF16 before adding them.
+            # Keep cos/sin in the projection dtype, matching Qwen3RotaryEmbedding.
+            def rotate(x, c, s):
+                first, second = x.chunk(2, dim=-1)
+                return x * c.transpose(0, 1) + torch.cat((-second, first), dim=-1) * s.transpose(0, 1)
+
+            def norm_rope(x, norm_t, norm_hw):
+                xt, xhw = x.chunk(2, dim=-1)
+                h, w = norm_hw.apply(xhw).chunk(2, dim=-1)
+                return torch.cat((rotate(norm_t.apply(xt), cos_t, sin_t), rotate(h, cos_h, sin_h), rotate(w, cos_w, sin_w)), dim=-1)
+
+            return norm_rope(query_states, attn_w.q_norm_mot_gen, attn_w.q_norm_hw_mot_gen), norm_rope(key_states, attn_w.k_norm_mot_gen, attn_w.k_norm_hw_mot_gen)
+
         half = self.head_dim // 2
         quarter = self.head_dim // 4
         eighth = self.head_dim // 8
@@ -356,6 +408,13 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             )
             if aux_attn_output is not None:
                 raise RuntimeError("NeoPP q-only cached-prefix attention received an unexpected auxiliary output.")
+        elif 0 < seq_len_k <= self.hf_dense_fa2_limit:
+            # Match the checkpoint's single-batch FA2 route only within the
+            # configured bound. Retain the upstream long-KV fallback outside it.
+            attn_output = self._hf_dense_fa2(
+                query_states.unsqueeze(0), key_states.unsqueeze(0), value_states.unsqueeze(0),
+                softmax_scale=self.scaling, causal=False,
+            ).reshape(seq_len_q, -1)
         else:
             attn_output = attn_w.cross_attn.apply(
                 q=query_states,
@@ -402,6 +461,12 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         """
         # [L, hidden] -> [1, hidden, token_h, token_w]
         x = hidden_states.view(token_h, token_w, -1).permute(2, 0, 1).unsqueeze(0).contiguous()
+        if self.config.get("gen_image_arch") == "patch2d16":
+            x = F.silu(fm_head_w.conv0.apply(x))
+            x = F.silu(fm_head_w.conv1.apply(F.pixel_shuffle(x, 2)))
+            x = F.silu(fm_head_w.conv2.apply(F.pixel_shuffle(x, 2)))
+            x = fm_head_w.to_rgb.apply(F.pixel_shuffle(x, 4))
+            return self._patchify_pixels(x, self.patch_size).squeeze(0)
         # ConvDecoder: ps(2) -> conv1 -> gelu -> ps(2) -> conv2 -> ps(8) == x32 upsample
         x = F.pixel_shuffle(x, 2)
         x = fm_head_w.conv1.apply(x)

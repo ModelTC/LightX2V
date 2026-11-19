@@ -18,10 +18,13 @@ class NeoppMoeScheduler(BaseScheduler):
         self.noise_scale_base_image_seq_len = self.config.get("noise_scale_base_image_seq_len", 64)
         self.noise_scale_max_value = self.config.get("noise_scale_max_value", 8.0)
         self.patch_size = self.config.get("patch_size", 16)
-        self.merge_size = 2
+        self.merge_size = 1 if self.config.get("gen_image_arch") == "patch2d16" else 2
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
-        self.prepare_latents(seed, latent_shape)
+        # Native UND prefill returns an FP32 final hidden state for this
+        # checkpoint. Its sampler uses that dtype for noise and Euler updates.
+        dtype = torch.float32 if self.config.get("gen_image_arch") == "patch2d16" else torch.bfloat16
+        self.prepare_latents(seed, latent_shape, dtype=dtype)
         self.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.timestep_shift)
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.bfloat16):
