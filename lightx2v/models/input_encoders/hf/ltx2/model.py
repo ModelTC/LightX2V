@@ -148,8 +148,7 @@ class LTX2TextEncoder:
         """
         config = self.loader.metadata(self.checkpoint_path)
         if self.offload_granularity == "block":
-            # Avoid constructing ~12 GiB of temporary FP32 random auxiliary
-            # weights. assign=True below materializes the released CPU tensors.
+            # load_state_dict(assign=True) materializes these weights directly from the checkpoint.
             with torch.device("meta"):
                 model = GemmaTextEncoderConfigurator.from_config(config)
         else:
@@ -192,11 +191,7 @@ class LTX2TextEncoder:
         if self.offload_granularity == "block":
             from lightx2v.models.input_encoders.hf.ltx2.gemma.block_offload import encode_with_block_offload
 
-            result = []
-            for prompt in prompts:
-                v_context, a_context, _ = encode_with_block_offload(self.text_encoder, prompt, torch.device(AI_DEVICE))
-                result.append((v_context, a_context))
-            return result
+            return [encode_with_block_offload(self.text_encoder, prompt, AI_DEVICE)[:2] for prompt in prompts]
         if self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
         result = []

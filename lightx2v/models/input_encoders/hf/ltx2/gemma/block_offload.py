@@ -18,15 +18,14 @@ def _staged_modules(modules, device):
             raise RuntimeError("A staged text module cannot be entered recursively")
         active.add(module)
         weights, _ = states[module]
-        weights.activate(tuple(weights.sources), device)
+        weights.activate(weights.sources.keys(), device)
 
     def restore(module, *_args):
         if module not in active:
             return
         if device.type != "cpu":
             getattr(torch, device.type).current_stream(device).synchronize()
-        # Restore original Parameter/buffer objects, rather than creating new
-        # Parameters through ModuleCPUWeights.restore(). No D2H copy is needed.
+        # Tied weights must point back to their original CPU Parameter objects.
         for name, tensor in states[module][1].items():
             parent_name, _, leaf = name.rpartition(".")
             parent = module.get_submodule(parent_name)
@@ -55,7 +54,7 @@ def encode_with_block_offload(encoder, text, device, padding_side="left"):
     text-only path skips the unused vocabulary logits, vision tower, and KV cache.
     """
     gemma = encoder.model
-    if getattr(getattr(gemma, "config", None), "model_type", None) != "gemma3":
+    if gemma.config.model_type != "gemma3":
         raise ValueError("Gemma block offload currently supports the LTX-2/2.3 Gemma 3 text encoder only")
     if getattr(encoder, "_block_offload_active", False):
         raise RuntimeError("The text encoder already has an active staged request")
@@ -65,8 +64,7 @@ def encode_with_block_offload(encoder, text, device, padding_side="left"):
     modules = [*language_model.layers, language_model.norm]
     pairs = encoder.tokenizer.tokenize_with_weights(text)["gemma"]
     input_ids = torch.tensor([[pair[0] for pair in pairs]], device="cpu")
-    # Match Wan T5: keep the vocabulary on CPU and transfer selected vectors.
-    # Preserve HF Gemma's OOV image-token substitution and scaled embedding.
+    # Gemma maps an out-of-vocabulary image token to zero before embedding lookup.
     if gemma.config.image_token_id >= backbone.vocab_size:
         input_ids.masked_fill_(input_ids == gemma.config.image_token_id, 0)
     attention_mask = torch.tensor([[pair[1] for pair in pairs]], device=device)
