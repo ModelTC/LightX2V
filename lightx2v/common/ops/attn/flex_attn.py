@@ -1,5 +1,6 @@
 import math
 from functools import lru_cache, partial
+from typing import NamedTuple
 
 import torch
 
@@ -45,33 +46,46 @@ def _mask_mod(q_limit: int, ref_limit: int, q_total: int, hw: int):
     return attention_mask
 
 
+class Animate2TokenLayout(NamedTuple):
+    frame_tokens: int
+    query_tokens: int
+    reference_tokens: int
+    padded_query_tokens: int
+    padded_reference_tokens: int
+
+
+def animate2_token_layout(origin_len: int, origin_area) -> Animate2TokenLayout:
+    """Packed token counts used by the native Flex and dense partition backends."""
+    width, height = (int(value) for value in origin_area)
+    frames = int(origin_len) // 4 + 1
+    area = width * height // 256
+    if frames < 1 or area < 1:
+        raise ValueError("Positive frame/area geometry required")
+    query, reference = (frames + 1) * area, frames * area
+    return Animate2TokenLayout(area, query, reference, math.ceil(query / 128) * 128, math.ceil(reference / 128) * 128)
+
+
 class _FlexMaskCache:
     def __init__(self):
         self._cache = {}
 
     def get(self, origin_len: int, origin_area, device):
-        width, height = (int(value) for value in origin_area)
-        key = (int(origin_len), width, height, str(device))
+        layout = animate2_token_layout(origin_len, origin_area)
+        key = (layout, str(device))
         cached = self._cache.get(key)
         if cached is not None:
             return cached
 
-        latent_frames = int(origin_len) // 4 + 1
-        hw = width * height // 256
-        q_limit = (latent_frames + 1) * hw
-        ref_limit = latent_frames * hw
-        q_total = math.ceil(q_limit / 128) * 128
-        ref_total = math.ceil(ref_limit / 128) * 128
         block_mask = create_block_mask(
-            _mask_mod(q_limit, ref_limit, q_total, hw),
+            _mask_mod(layout.query_tokens, layout.reference_tokens, layout.padded_query_tokens, layout.frame_tokens),
             B=None,
             H=None,
-            Q_LEN=q_total,
-            KV_LEN=q_total + ref_total,
+            Q_LEN=layout.padded_query_tokens,
+            KV_LEN=layout.padded_query_tokens + layout.padded_reference_tokens,
             device=device,
             _compile=True,
         )
-        cached = (block_mask, q_total, ref_total, hw)
+        cached = (block_mask, layout.padded_query_tokens, layout.padded_reference_tokens, layout.frame_tokens)
         self._cache[key] = cached
         return cached
 

@@ -1,6 +1,6 @@
 import torch
 
-from lightx2v.common.ops.attn.flex_attn import FlexAttnWeight
+from lightx2v.common.ops.attn.flex_attn import FlexAttnWeight, animate2_token_layout
 from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 
@@ -191,7 +191,8 @@ class WanAnimate2TransformerInfer(WanOffloadTransformerInfer):
         reference_k = self.reference_kv_cache.k_cache(self.block_idx)
         reference_v = self.reference_kv_cache.v_cache(self.block_idx)
 
-        _, q_total, reference_total, frame_capacity = self.flex_attn.mask_layout(args["origin_len"], args["origin_area"], q.device)
+        layout = animate2_token_layout(args["origin_len"], args["origin_area"])
+        q_total, reference_total, frame_capacity = layout.padded_query_tokens, layout.padded_reference_tokens, layout.frame_tokens
         q_padding = q[int(pre_infer_out.valid_token_len) :].clone()
         q_packed = self._pack_stream(q, grid, frame_capacity, q_total)
         k_packed = self._pack_stream(k, grid, frame_capacity, q_total + reference_total)
