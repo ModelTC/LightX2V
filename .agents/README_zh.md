@@ -2,10 +2,11 @@
 
 [English](README.md) | 简体中文
 
-`skills/` 共 12 个顶层分组、28 个可调用 skill 入口，包括模型接入、性能工具流程与 Intel GPU 内核。Intel XPU 的两个子入口和内核 skills 保持嵌套组织。每个可调用入口的目录名与 frontmatter 的 `name` 一致。详细流程、示例和历史资产保留在各 skill 的 `references/`、`assets/` 中，按任务需要读取。
+`skills/` 共 13 个顶层分组、29 个可调用 skill 入口，包括代码贡献、模型接入、性能工具流程与 Intel GPU 内核。Intel XPU 的两个子入口和内核 skills 保持嵌套组织。每个可调用入口的目录名与 frontmatter 的 `name` 一致。详细流程、示例和历史资产保留在各 skill 的 `references/`、`assets/` 中，按任务需要读取。
 
 ```text
 skills/
+├── contribute-code/
 ├── support-model-warmup/
 ├── model-enable-intel-xpu/
 ├── lightx2v-kernel-skills/
@@ -20,11 +21,13 @@ skills/
 └── support-model-compile/
 ```
 
-上游的 24 个 skill 入口沿用 `policy.allow_implicit_invocation: false`，通过 `$skill-name` 显式调用。`support-static-block-residency` 和三个性能工具 skill 保留默认自动选择，也支持显式调用。
+上游的 24 个 skill 入口沿用 `policy.allow_implicit_invocation: false`，通过 `$skill-name` 显式调用。`contribute-code`、`support-static-block-residency` 和三个性能工具 skill 支持自动选择和显式调用。
 
 在 Codex CLI 或 IDE 扩展中，可用 `/skills` 查看 skills，或输入 `$skill-name` 显式调用。ChatGPT 桌面端可从 Skills 侧栏查看。[官方调用说明](https://learn.chatgpt.com/docs/build-skills#how-chatgpt-and-codex-use-skills)
 
 Codex 从当前工作目录向上扫描各级目录的 `.agents/skills`，直到 Git 仓库根目录。使用 LightX2V 的 skills 时，将工作目录设为本仓库根目录或其子目录。更新未显示时可重启 Codex。[官方加载规则](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)
+
+修改 LightX2V 代码时可参考代码贡献指南。[contribute-code](skills/contribute-code/SKILL.md)
 
 ## 性能工具
 
