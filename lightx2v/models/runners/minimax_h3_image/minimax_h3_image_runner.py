@@ -146,6 +146,8 @@ class MiniMaxH3ImageRunner(DefaultRunner):
                 attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
                 use_compile=self.config.get("vae_use_compile", False),
             )
+            if self.config.get("vae_decode_cuda_graph", False):
+                self.vae.enable_decode_cuda_graph()
         except Exception as exc:
             error = exc
         if self.vae_encode_parallel or self.vae_decode_parallel:
@@ -354,7 +356,7 @@ class MiniMaxH3ImageRunner(DefaultRunner):
 
     def _prepare_output_image(self, value, method):
         # The reference pipeline quantizes before resizing with PIL LANCZOS.
-        pixels = value[0, :, 0].float().clamp(0, 1).permute(1, 2, 0).mul(255).to(torch.uint8).cpu().numpy()
+        pixels = value[0, :, 0].float().clamp(0, 1).permute(1, 2, 0).mul(255).to(torch.uint8).contiguous().cpu().numpy()
         height, width = self.output_size
         needs_resize = pixels.shape[:2] != (height, width)
         if method == "pil" or needs_resize:
