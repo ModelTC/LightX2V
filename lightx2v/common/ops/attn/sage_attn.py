@@ -19,20 +19,11 @@ except ImportError:
     logger.info("sageattn3_sparse not found, please install sageattn3_sparse first")
     sage3_block_sparse_attn = None
 
-capability = torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None
-# Keep the legacy SM89 override; SM120 follows SageAttention's dispatcher.
-if capability == (8, 9):
-    try:
-        from sageattention import sageattn_qk_int8_pv_fp16_triton as sageattn
-    except ImportError:
-        logger.info("sageattn not found, please install sageattention first")
-        sageattn = None
-else:
-    try:
-        from sageattention import sageattn
-    except ImportError:
-        logger.info("sageattn not found, please install sageattention first")
-        sageattn = None
+try:
+    from sageattention import sageattn
+except ImportError:
+    logger.info("sageattn not found, please install sageattention first")
+    sageattn = None
 
 
 if magi_register_custom_op is not None and sageattn is not None:
