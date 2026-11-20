@@ -40,7 +40,9 @@ def sorted_neighbors(coords, kernel_size, dilation):
         # Out-of-grid queries can collide after linearization. Compare full rows.
         hit = (keys[position] == query_keys) & (coords[candidate] == query).all(dim=1)
         indices = torch.where(hit, candidate, torch.full_like(candidate, -1))
-        maps.append((offset, indices))
+        # Keep indices on NPU to avoid the host round-trip in the Ascend
+        # sparse-convolution path. Preserve the established CPU map elsewhere.
+        maps.append((offset, indices if coords.device.type == "npu" else indices.cpu()))
     return maps
 
 

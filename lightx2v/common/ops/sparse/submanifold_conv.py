@@ -47,12 +47,12 @@ class SparseConv3d(nn.Module):
             return x.replace(output)
         features = x.feats.to(self.weight.dtype)
         output = features.new_zeros((features.shape[0], self.out_channels))
-        cache_key = f"torch_SubMConv3d_neighbor_cache_{self.kernel_size}_dilation{self.dilation}"
-        neighbors = x.get_spatial_cache(cache_key)
-        if neighbors is None:
-            neighbors = self.neighbor_map(x.coords.to(features.device), self.kernel_size, self.dilation)
-            x.register_spatial_cache(cache_key, neighbors)
         if features.device.type == "npu":
+            cache_key = f"torch_SubMConv3d_neighbor_cache_{self.kernel_size}_dilation{self.dilation}"
+            neighbors = x.get_spatial_cache(cache_key)
+            if neighbors is None:
+                neighbors = self.neighbor_map(x.coords.to(features.device), self.kernel_size, self.dilation)
+                x.register_spatial_cache(cache_key, neighbors)
             stacked_key = f"{cache_key}_stacked"
             stacked_neighbors = x.get_spatial_cache(stacked_key)
             if stacked_neighbors is None:
@@ -77,6 +77,8 @@ class SparseConv3d(nn.Module):
             if self.bias is not None:
                 output.add_(self.bias)
             return x.replace(output)
+
+        neighbors = self.neighbor_map(x.coords.to(features.device), self.kernel_size, self.dilation)
 
         if self.backend == "torch_cached":
             cache_key = ("torch_cached_neighbor_map", self.kernel_size, self.dilation, self.neighbor_map)
