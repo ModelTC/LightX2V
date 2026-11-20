@@ -1,6 +1,6 @@
 {
   "lightx2v-vggt": {
-    "git_head": "bc15e3bdbca84602951193e07f237b6f2f4015a3",
+    "git_head": "10976b85403e86f8b53277e48a15a50942088670",
     "files": [
       {
         "path": ".agents/README.md",
@@ -10363,12 +10363,12 @@
         "sha256": "f04c6e131cc05cb6d03a92ee5671c0b45aa2da418accad9ac96a9384c0a3f013"
       },
       {
-        "path": "lightx2v_kernel/nvidia/docs/zh_CN/mx_formats量化基础.md",
+        "path": "lightx2v_kernel/nvidia/docs/zh_CN/mx_formats\u91cf\u5316\u57fa\u7840.md",
         "bytes": 2148,
         "sha256": "cef965d1e54c263ac4c462646d8547f380e98a015614da42abf8a745a4a6307c"
       },
       {
-        "path": "lightx2v_kernel/nvidia/docs/zh_CN/nvfp4量化基础.md",
+        "path": "lightx2v_kernel/nvidia/docs/zh_CN/nvfp4\u91cf\u5316\u57fa\u7840.md",
         "bytes": 2245,
         "sha256": "d284f80c746cf82cf06f59ef6cccb4a2e0b90a345d83312fc1b30821cefc3c94"
       },
@@ -16909,6 +16909,6 @@
       }
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "bc15e3bdbca84602951193e07f237b6f2f4015a3"
+    "revision": "10976b85403e86f8b53277e48a15a50942088670"
   }
 }
