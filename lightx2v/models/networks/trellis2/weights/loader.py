@@ -49,7 +49,7 @@ def load_component(path, device, neighbor_map="sorted", attention_backend="torch
     for layer in model.modules():
         if isinstance(layer, SparseConv3d):
             layer.neighbor_map = NEIGHBOR_MAPS[neighbor_map]
-            if sparse_conv_backend not in ("flex_gemm", "torch"):
+            if sparse_conv_backend not in ("flex_gemm", "torch", "torch_cached"):
                 raise ValueError(f"Unsupported sparse convolution backend: {sparse_conv_backend}")
             layer.backend = sparse_conv_backend
         elif isinstance(layer, InferenceAttention):

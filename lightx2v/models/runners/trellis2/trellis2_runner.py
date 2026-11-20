@@ -96,7 +96,7 @@ class Trellis2Runner(BaseRunner):
             decoder.resolution = 512
             meshes, subdivisions = decoder(shape, return_subs=True)
             voxels = self.models["tex_slat_decoder"](texture, guide_subs=subdivisions) * 0.5 + 0.5
-        vertices, faces = fill_mesh_holes(*meshes[0])
+        vertices, faces = fill_mesh_holes(*meshes[0], backend=self.config.get("mesh_hole_fill_backend", "cumesh"))
         if input_info.save_result_path:
             import trimesh
 

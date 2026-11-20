@@ -78,13 +78,32 @@ class SparseConv3d(nn.Module):
                 output.add_(self.bias)
             return x.replace(output)
 
-        for (kx, ky, kz), indices in neighbors:
-            valid = indices >= 0
-            indices = indices.clamp_min(0).to(features.device)
-            gathered = features.index_select(0, indices)
-            contribution = gathered @ self.weight[:, kx, ky, kz, :].transpose(0, 1)
-            contribution.mul_(valid.to(device=features.device, dtype=contribution.dtype).unsqueeze(1))
-            output.add_(contribution)
+        if self.backend == "torch_cached":
+            cache_key = ("torch_cached_neighbor_map", self.kernel_size, self.dilation, self.neighbor_map)
+            cached = x.get_spatial_cache(cache_key)
+            if cached is None:
+                cached = []
+                for offset, indices in neighbors:
+                    indices = indices.to(features.device)
+                    valid = indices >= 0
+                    if valid.any():
+                        cached.append((offset, indices.clamp_min(0), valid))
+                x.register_spatial_cache(cache_key, cached)
+            for (kx, ky, kz), indices, valid in cached:
+                gathered = features.index_select(0, indices)
+                contribution = gathered @ self.weight[:, kx, ky, kz, :].transpose(0, 1)
+                contribution.mul_(valid.to(device=features.device, dtype=contribution.dtype).unsqueeze(1))
+                output.add_(contribution)
+        else:
+            for (kx, ky, kz), indices in neighbors:
+                valid = indices >= 0
+                if not valid.any():
+                    continue
+                indices = indices.clamp_min(0).to(features.device)
+                gathered = features.index_select(0, indices)
+                contribution = gathered @ self.weight[:, kx, ky, kz, :].transpose(0, 1)
+                contribution.mul_(valid.to(device=features.device, dtype=contribution.dtype).unsqueeze(1))
+                output.add_(contribution)
         if self.bias is not None:
             output.add_(self.bias)
         return x.replace(output)

@@ -18,19 +18,99 @@ _QUAD_SPLIT_1 = torch.tensor([0, 1, 2, 0, 2, 3], dtype=torch.long)
 _QUAD_SPLIT_2 = torch.tensor([0, 1, 3, 3, 1, 2], dtype=torch.long)
 
 
-def fill_mesh_holes(vertices, faces, max_hole_perimeter=3e-2):
-    """Apply the upstream TRELLIS.2 CuMesh hole-filling sequence."""
-    from lightx2v_platform.base.global_var import AI_DEVICE
+def _fill_mesh_holes_torch(vertices, faces, max_hole_perimeter):
+    """CPU/Torch equivalent of CuMesh's center-fan boundary-loop fill."""
+    device = vertices.device
+    verts = vertices.detach().to(device="cpu", dtype=torch.float32)
+    tris = faces.detach().to(device="cpu", dtype=torch.int64)
+    if tris.numel() == 0:
+        return vertices, faces
 
+    edge_rows = torch.cat((tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]), dim=0)
+    edge_rows = torch.sort(edge_rows, dim=1).values
+    # Encode each sorted undirected edge as an exact int64 key. For nonnegative
+    # vertex indices this preserves lexicographic ordering while avoiding the
+    # expensive two-dimensional ``unique(dim=0)`` path on large CPU meshes.
+    vertex_count = verts.shape[0]
+    if vertex_count > 3037000499:
+        raise ValueError("Mesh vertex count exceeds int64 edge-key capacity")
+    edge_keys, counts = torch.unique(
+        edge_rows[:, 0] * vertex_count + edge_rows[:, 1], return_counts=True
+    )
+    edges = torch.stack((edge_keys // vertex_count, edge_keys % vertex_count), dim=1)
+    boundary_edges = edges[counts == 1]
+    if boundary_edges.numel() == 0:
+        return vertices, faces
+
+    # CuMesh only fills closed manifold boundary loops. A boundary vertex with
+    # anything other than two boundary neighbors is not part of such a loop.
+    adjacency = [[] for _ in range(verts.shape[0])]
+    for edge_id, (v0, v1) in enumerate(boundary_edges.tolist()):
+        adjacency[v0].append(edge_id)
+        adjacency[v1].append(edge_id)
+
+    eligible = {i for i, edge in enumerate(boundary_edges.tolist())
+                if len(adjacency[edge[0]]) == 2 and len(adjacency[edge[1]]) == 2}
+    loops = []
+    while eligible:
+        first_edge = min(eligible)
+        start, current = boundary_edges[first_edge].tolist()
+        loop_edges = [first_edge]
+        loop_vertices = [start, current]
+        previous_edge = first_edge
+        while current != start:
+            choices = [edge_id for edge_id in adjacency[current]
+                       if edge_id != previous_edge and edge_id in eligible]
+            if len(choices) != 1:
+                break
+            previous_edge = choices[0]
+            a, b = boundary_edges[previous_edge].tolist()
+            current = b if a == current else a
+            if current != start:
+                loop_vertices.append(current)
+            loop_edges.append(previous_edge)
+        if current == start and len(loop_edges) == len(loop_vertices):
+            perimeter = torch.linalg.vector_norm(
+                verts[boundary_edges[loop_edges, 0]] - verts[boundary_edges[loop_edges, 1]],
+                dim=1,
+            ).sum().item()
+            if perimeter < max_hole_perimeter:
+                loops.append(loop_edges)
+        eligible.difference_update(loop_edges)
+
+    if not loops:
+        return vertices, faces
+
+    new_vertices = []
+    new_faces = []
+    vertex_count = verts.shape[0]
+    for loop_id, loop_edges in enumerate(loops):
+        loop = boundary_edges[loop_edges]
+        midpoint_positions = (verts[loop[:, 0]] + verts[loop[:, 1]]) * 0.5
+        new_vertices.append(midpoint_positions.mean(dim=0))
+        center_id = vertex_count + loop_id
+        new_faces.append(torch.cat((loop, torch.full((len(loop), 1), center_id, dtype=torch.int64)), dim=1))
+
+    filled_vertices = torch.cat((verts, torch.stack(new_vertices)), dim=0).to(device=device)
+    filled_faces = torch.cat((tris, *new_faces), dim=0).to(device=device, dtype=faces.dtype)
+    return filled_vertices, filled_faces
+
+
+def fill_mesh_holes(vertices, faces, max_hole_perimeter=3e-2, backend="cumesh"):
+    """Fill small boundary loops with CuMesh, the MLU kernel, or MetaX-safe Torch."""
+    if backend == "torch":
+        return _fill_mesh_holes_torch(vertices, faces, max_hole_perimeter)
+    if backend != "cumesh":
+        raise ValueError(f"Unsupported mesh hole filling backend: {backend}")
+
+    from lightx2v_platform.base.global_var import AI_DEVICE
     if torch.device(AI_DEVICE).type == "mlu":
         from lightx2v_platform.ops.mesh.cambricon_mlu import fill_mesh_holes as mlu_fill_mesh_holes
-
         device = vertices.device
         result = mlu_fill_mesh_holes(vertices.to(AI_DEVICE), faces.to(AI_DEVICE), max_hole_perimeter)
         return tuple(value.to(device) for value in result)
 
     import cumesh
-
     device = vertices.device
     mesh = cumesh.CuMesh()
     mesh.init(vertices.float().cuda(), faces.int().cuda())
