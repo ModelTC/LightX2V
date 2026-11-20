@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
     pip install --no-cache-dir \
     ftfy \
     imageio \
+    "pillow-heif>=1.0" \
+    "av>=17" \
     imageio-ffmpeg \
     loguru \
     aiohttp \

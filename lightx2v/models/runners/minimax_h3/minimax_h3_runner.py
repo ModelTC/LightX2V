@@ -5,7 +5,7 @@ from contextlib import suppress
 import numpy as np
 import torch
 import torch.distributed as dist
-from PIL import Image, ImageOps
+from PIL import Image
 from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
@@ -47,6 +47,7 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
+from lightx2v.utils.image_io import load_rgb_image
 from lightx2v.utils.input_info import AudioVideoState
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -358,14 +359,6 @@ class MiniMaxH3Runner(DefaultRunner):
             logger.warning("MiniMax-H3 is guidance-distilled; negative_prompt is ignored")
         return self.text_encoders[0].infer(input_info.prompt, image_list=keyframes, references=references)
 
-    @staticmethod
-    def _load_rgb_image(value):
-        if isinstance(value, Image.Image):
-            image = value
-        else:
-            image = Image.open(value)
-        return ImageOps.exif_transpose(image).convert("RGB")
-
     def _prepare_keyframes(self):
         task = self.input_info.task
         if task == "i2av":
@@ -382,7 +375,7 @@ class MiniMaxH3Runner(DefaultRunner):
             values, anchors = [self.input_info.image_path, self.input_info.last_frame_path], ("first", "last")
         else:
             return [], ()
-        images = [self._load_rgb_image(value) for value in values]
+        images = [load_rgb_image(value) for value in values]
         self._resolve_request_geometry(images[0])
         images = [prepare_keyframe_image(image, self.request_height, self.request_width, stretch=index == 0) for index, image in enumerate(images)]
         return images, anchors
@@ -409,7 +402,7 @@ class MiniMaxH3Runner(DefaultRunner):
         max_duration = self.request_num_frames / 24.0
         for entry, kind in zip(entries, kinds):
             if kind == "image":
-                image = self._load_rgb_image(entry["image"])
+                image = load_rgb_image(entry["image"])
                 height, width = resolve_reference_image_size(
                     *image.size,
                     target_width=self.request_width,
