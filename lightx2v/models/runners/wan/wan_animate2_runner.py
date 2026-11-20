@@ -1,3 +1,4 @@
+import inspect
 import math
 import os
 import socket
@@ -179,6 +180,13 @@ class WanAnimate2Runner(WanRunner):
     """
 
     def __init__(self, config):
+        if config.get("generation_attn_type", "flex_attn") == "flash_attn3":
+            from lightx2v.common.ops.attn.flash_attn import flash_attn_func_v3
+
+            if flash_attn_func_v3 is None:
+                raise ImportError("Wan-Animate-2 generation_attn_type='flash_attn3' requires FlashAttention3. Install an LSE-capable build or use generation_attn_type='flex_attn'.")
+            if "return_attn_probs" not in inspect.signature(flash_attn_func_v3).parameters:
+                raise ValueError("Wan-Animate-2 generation attention requires flash_attn_func(..., return_attn_probs=True) for LSE. Update FlashAttention3 or use generation_attn_type='flex_attn'.")
         super().__init__(config)
         if self.config.get("disagg_mode"):
             raise NotImplementedError("Wan-Animate-2 does not support disaggregated inference yet.")

@@ -33,6 +33,8 @@ To switch to other types, simply replace the corresponding values with the type 
 
 For Wan, `cross_attn_2_type` selects image cross-attention. Keep it in Wan2.1 I2V/FLF2V and Wan2.2 Animate/Animate2 configs; T2V/VACE and Wan2.2 MoE, TI2V, and S2V configs with the image encoder disabled do not need it.
 
+For Wan-Animate-2, `generation_attn_type="flash_attn3"` requires a build whose `flash_attn_interface.flash_attn_func(..., return_attn_probs=True)` returns the output and per-query log-sum-exp in `[batch, heads, tokens]` order. The upstream Hopper interface at tag v2.8.3 can run dense attention but lacks this argument. Use `flex_attn` (the Animate2 default) or `sage_attn2` (the eight-GPU 4090D preset) with that build. [Hopper v2.8.3 interface](https://github.com/Dao-AILab/flash-attention/blob/v2.8.3/hopper/flash_attn_interface.py#L487-L502)
+
 Tips: radial_attn can only be used in self attention due to the limitations of its sparse algorithm principle.
 
 For further customization of attention mechanism behavior, please refer to the official documentation or implementation code of each attention library.
