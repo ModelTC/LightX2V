@@ -53,8 +53,15 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = qwen_module(**model_kwargs)
-        lora_adapter = LoraAdapter(model)
-        lora_adapter.apply_lora(lora_configs)
+        try:
+            LoraAdapter(model).apply_lora(lora_configs)
+        except BaseException as error:
+            # The runner does not own the model yet if loading the merged weights fails.
+            try:
+                model.close_numa_cpu_weights()
+            except BaseException as cleanup_error:
+                raise error from cleanup_error
+            raise
     return model
 
 

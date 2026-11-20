@@ -102,7 +102,7 @@ class BaseTransformerModel(ABC):
         from lightx2v.common.offload.numa_weights import validate_numa_config
 
         validate_numa_config(self.config, lora_path)
-        if self.config.get("cpu_offload_numa", False) and AI_DEVICE != "cuda":
+        if self.config.get("cpu_offload_numa", False) is True and AI_DEVICE != "cuda":
             raise ValueError("cpu_offload_numa requires CUDA")
         self._checkpoint_metadata = None
         if self.cpu_offload and self.offload_granularity == "block":
@@ -431,7 +431,8 @@ class BaseTransformerModel(ABC):
                 validate_group_checkpoints(group, self._checkpoint_metadata)
 
         numa_map = None
-        if self.config.get("cpu_offload_numa", False):
+        numa_mode = self.config.get("cpu_offload_numa", False)
+        if numa_mode and AI_DEVICE == "cuda":
             from lightx2v.common.offload.numa_weights import materialize_numa_weights
 
             if self.__dict__.get("_numa_cpu_weight_owner") is not None:
@@ -439,9 +440,10 @@ class BaseTransformerModel(ABC):
             roots = [self.pre_weight, self.transformer_weights]
             if hasattr(self, "post_weight"):
                 roots.append(self.post_weight)
-            numa_map = materialize_numa_weights(self.original_weight_dict, roots)
-            self._numa_cpu_weight_owner = numa_map.owner
-            self.original_weight_dict = numa_map
+            numa_map = materialize_numa_weights(self.original_weight_dict, roots, required=numa_mode is True)
+            if numa_map is not None:
+                self._numa_cpu_weight_owner = numa_map.owner
+                self.original_weight_dict = numa_map
 
         # Load weights into containers
         self.pre_weight.load(self.original_weight_dict)
@@ -504,6 +506,8 @@ class BaseTransformerModel(ABC):
         self.transformer_weights.register_diff(lora_weight)
 
     def _update_lora(self, lora_path, strength):
+        if self.__dict__.get("_numa_cpu_weight_owner") is not None and self.config.get("lora_configs"):
+            raise ValueError("Cannot switch LoRA after merging it into NUMA-local weights at startup")
         if isinstance(lora_path, dict):
             lora_weight = lora_path
         else:
@@ -514,6 +518,8 @@ class BaseTransformerModel(ABC):
             self.post_weight.update_lora(lora_weight, strength)
 
     def _remove_lora(self):
+        if self.__dict__.get("_numa_cpu_weight_owner") is not None and self.config.get("lora_configs"):
+            raise ValueError("Cannot remove LoRA after merging it into NUMA-local weights at startup")
         self.pre_weight.remove_lora()
         self.transformer_weights.remove_lora()
         if hasattr(self, "post_weight"):
