@@ -40,14 +40,12 @@ def prepare_reference_images(image_paths):
         else:
             with Image.open(source) as opened:
                 image = ImageOps.exif_transpose(opened).convert("RGB")
-        if min(image.size) < 32:
+        short_edge = min(image.size)
+        if short_edge < 32:
             raise ValueError(f"MiniMax-H3-Image references need at least 32 pixels on each side, got {image.size}")
-        references.append(
-            ReferenceImage(
-                qwen_image=_bound_short_edge(image, 1024, 1024),
-                vae_image=_bound_short_edge(image, 1024, 2048),
-            )
-        )
+        qwen_image = _bound_short_edge(image, 1024, 1024)
+        vae_image = qwen_image if short_edge <= 1024 else _bound_short_edge(image, 1024, 2048)
+        references.append(ReferenceImage(qwen_image=qwen_image, vae_image=vae_image))
     return references
 
 
