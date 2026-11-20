@@ -8,7 +8,8 @@ from loguru import logger
 
 from lightx2v.utils.request_spec import is_list_type
 
-from ..media import is_base64_audio, is_base64_image, save_base64_audio, save_base64_image
+from ..media.audio import resolve_audio_path
+from ..media.image import resolve_image_path
 from .file_service import FileService
 from .inference import DistributedInferenceService
 
@@ -21,17 +22,9 @@ class GenerationService:
     async def _resolve_image_path(self, image_path: str | list[str]) -> str | list[str]:
         if isinstance(image_path, list):
             return [await self._resolve_image_path(path) for path in image_path]
-        if not image_path:
-            return ""
-
         if image_path.startswith("http"):
-            downloaded_path = await self.file_service.download_image(image_path)
-            return str(downloaded_path)
-        elif is_base64_image(image_path):
-            saved_path = save_base64_image(image_path, str(self.file_service.input_image_dir))
-            return str(saved_path)
-        else:
-            return image_path
+            return str(await self.file_service.download_image(image_path))
+        return resolve_image_path(image_path, self.file_service.input_image_dir)
 
     def _pack_image_and_mask_as_dir(self, task_data: Dict[str, Any]) -> None:
         image_path = task_data.get("image_path", "")
@@ -77,9 +70,7 @@ class GenerationService:
             return [await self._resolve_audio_path(path) for path in audio_path]
         if audio_path.startswith("http"):
             return str(await self.file_service.download_audio(audio_path))
-        if is_base64_audio(audio_path):
-            return str(save_base64_audio(audio_path, str(self.file_service.input_audio_dir)))
-        return audio_path
+        return resolve_audio_path(audio_path, self.file_service.input_audio_dir)
 
     async def _process_talk_objects(self, talk_objects: list, task_data: Dict[str, Any], *, multiple=False) -> None:
         task_data["talk_objects"] = [{"audio": await self._resolve_audio_path(obj.audio), "mask": await self._resolve_image_path(obj.mask)} for obj in talk_objects]

@@ -220,7 +220,7 @@ sequenceDiagram
         FS->>FS: HTTP download<br/>with retry
         FS-->>GS: image_path
     else Image is Base64
-        GS->>GS: save_base64_image()
+        GS->>GS: resolve_image_path()
         GS-->>GS: image_path
     else Image is local path
         GS->>GS: use existing path
@@ -231,7 +231,7 @@ sequenceDiagram
         FS->>FS: HTTP download<br/>with retry
         FS-->>GS: audio_path
     else Audio is Base64
-        GS->>GS: save_base64_audio()
+        GS->>GS: resolve_audio_path()
         GS-->>GS: audio_path
     end
 

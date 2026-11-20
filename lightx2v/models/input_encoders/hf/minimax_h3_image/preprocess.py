@@ -1,12 +1,14 @@
 """Reference-image preparation shared by H3-Image's two image encoders."""
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from os import PathLike
 
 import numpy as np
 import torch
-from PIL import Image, ImageOps
+from PIL import Image
+
+from lightx2v.utils.image_io import load_rgb_image
 
 
 @dataclass(frozen=True)
@@ -29,17 +31,13 @@ def prepare_reference_images(image_paths):
     """Read references in prompt order, retaining each reference's own geometry."""
     if image_paths is None:
         return []
-    if isinstance(image_paths, (str, PathLike, Image.Image)):
-        image_paths = [image_paths]
+    if isinstance(image_paths, (str, bytes)) or not isinstance(image_paths, Sequence):
+        image_paths = (image_paths,)
     if len(image_paths) > 16:
         raise ValueError("MiniMax-H3-Image supports at most 16 reference images")
     references = []
     for source in image_paths:
-        if isinstance(source, Image.Image):
-            image = ImageOps.exif_transpose(source).convert("RGB")
-        else:
-            with Image.open(source) as opened:
-                image = ImageOps.exif_transpose(opened).convert("RGB")
+        image = load_rgb_image(source)
         short_edge = min(image.size)
         if short_edge < 32:
             raise ValueError(f"MiniMax-H3-Image references need at least 32 pixels on each side, got {image.size}")
