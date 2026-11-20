@@ -117,7 +117,8 @@ class RelayVSRRunner(DefaultRunner):
 
     def create_input_info(self, request_data):
         info = super().create_input_info(request_data)
-        self.geometry.validate_sr_ratio(info.sr_ratio)
+        if not info.size:
+            self.geometry.validate_sr_ratio(info.sr_ratio)
         return info
 
     def output_size(self, input_info, height, width):

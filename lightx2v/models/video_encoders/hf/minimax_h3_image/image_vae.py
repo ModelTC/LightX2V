@@ -11,6 +11,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from loguru import logger
 
+from lightx2v.common.transformer_infer.autoregressive_cuda_graph import AutoregressiveCUDAGraphStack
 from lightx2v.models.video_encoders.hf.minimax_h3.video_vae import (
     MINIMAX_H3_PIXEL_MEAN,
     MINIMAX_H3_PIXEL_STD,
@@ -107,6 +108,7 @@ class MiniMaxH3ImageVAE(nn.Module):
         self.cpu_offload = cpu_offload
         self.encode_parallel = self.decode_parallel = False
         self.parallel_group = None
+        self._decoder_graph = None
         channels = int(config.get("latent_channels", 24))
         spatial_factors = tuple(config.get("spatial_downsample_factors", (2, 2, 2, 2, 1, 1)))
         self.spatial_compression_ratio = math.prod(spatial_factors)
@@ -169,6 +171,8 @@ class MiniMaxH3ImageVAE(nn.Module):
         return self.execution_device
 
     def offload(self):
+        if self._decoder_graph is not None:
+            self._decoder_graph.clear()
         for module in (self.encoder, self.quant_conv, self.post_quant_conv, self.decoder):
             module.to(device="cpu")
 
@@ -188,6 +192,11 @@ class MiniMaxH3ImageVAE(nn.Module):
         self._enable_parallel()
         self.decode_parallel = True
 
+    def enable_decode_cuda_graph(self):
+        if self.execution_device.type != "cuda" or self.cpu_offload:
+            raise ValueError("vae_decode_cuda_graph requires a resident CUDA VAE decoder")
+        self._decoder_graph = AutoregressiveCUDAGraphStack()
+
     def _tile_layout(self, tensor, encode):
         ratio = self.spatial_compression_ratio
         height, width = tensor.shape[-2:]
@@ -203,7 +212,13 @@ class MiniMaxH3ImageVAE(nn.Module):
     def _forward_tile(self, tile, encode):
         if encode:
             return self.quant_conv(self.encoder(tile))
-        return self.decoder(self.post_quant_conv(tile[:, :, 0])).unsqueeze(2)
+        projected = self.post_quant_conv(tile[:, :, 0])
+        if self._decoder_graph is not None:
+            # Each tile must own its result until collection and stitching finish.
+            output = self._decoder_graph.run(self.decoder, self.decoder, (projected,)).clone()
+        else:
+            output = self.decoder(projected)
+        return output.unsqueeze(2)
 
     def _tiled_forward(self, tensor, encode):
         slices, y_overlaps, x_overlaps = self._tile_layout(tensor, encode)

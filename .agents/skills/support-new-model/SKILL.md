@@ -1,251 +1,52 @@
 ---
 name: support-new-model
-description: "Add native LightX2V support for a new model or task from an upstream inference implementation. Map runner/model/weight/infer/scheduler components, add configs and launchers, implement required offload or parallel paths, and verify output parity."
+description: Add native LightX2V support for a new inference model or task, including checkpoint loading, runner and request wiring, model and sampling implementation, CPU weight offload, multi-device parallel inference, torch.compile, built-in warmup, and validation against upstream.
 ---
 
-# LightX2V Native Model Porting
+# Integrate a Model into LightX2V
 
-Goal: build a **native LightX2V runner** whose output matches the upstream model inference. Do not wrap the upstream repo at runtime unless the user explicitly asks for a temporary bridge.
+## Choose an Integration Path
 
-Hard rule: do **not** depend on diffusers/transformers/third-party model or pipeline classes to execute the core model. Rebuild the model structure with LightX2V's data structures and ops (`weights`, `infer`, `common/ops/mm`, norm, attention, conv, scheduler, KV cache), or reuse an existing LightX2V implementation that already does so.
+- Start from a runnable upstream inference entry point and the target checkpoint. Verify the task, weight variant, metadata, sharding, and the names, shapes, and precision of key tensors. Trace conditioning, prediction, and sampling through to the output. Identify mixed-precision regions from the upstream forward pass, including autocast scopes, explicit casts such as `.float()`, higher-precision reductions or accumulations, and where results change dtype again.
+- Select reusable components based on the DiT blocks, conditioning inputs, token layout, and sampling semantics. The runner, weight loader, encoder, VAE, and scheduler can come from different model families. [Wan, Qwen-Image, and MiniMax-H3 implementation reference](references/model-components.md)
+- Run the native LightX2V core model through the standard entry points. Use the upstream pipeline and DiT as references for parity. Reuse compatible encoder, VAE, and solver wrappers and their existing dependencies.
 
-## Core Principle
+## Wire Startup and Requests
 
-Always map the upstream pipeline onto LightX2V's existing architecture:
+Startup assembles the model through `build_startup_config()` → `build_runner()`. Each request reaches inference through `prepare_request()` → `run_request()`. [Runner factory](../../../lightx2v/models/runners/runner_factory.py)
 
-```text
-CLI/config/script
-  -> parse_cli_inputs / build_startup_config
-  -> runner_factory.build_runner (init_modules, optional warmup)
-  -> prepare_request -> InputInfo -> run_request
-  -> runner.run_pipeline
-  -> input encoder(s)
-  -> scheduler.step_pre()
-  -> model.infer()
-       -> pre_infer
-       -> transformer_infer
-       -> post_infer
-       -> weights/common ops
-  -> scheduler.step_post()
-  -> VAE decode/postprocess/save
-```
+1. Add a `ModelEntry` to `RUNNER_MODULES` with a module path relative to `lightx2v.models.runners`. Register the runner with `@RUNNER_REGISTER` and declare `SPECS` in a `request_spec.py` alongside it. Use the same `model_cls` in all three places. The CLI and HTTP API derive request fields from the same spec. Keep the spec, loader, and parent packages' `__init__.py` files lightweight so `--help` only reads configuration and metadata. [Registry](../../../lightx2v/models/runners/registry.py) · [CLI](../../../lightx2v/utils/cli.py)
+2. Check which checkpoint metadata the shared loader actually reads. If the model needs variant selection, partition selection, or architecture field mapping, register a model-specific `load_config()` through `ModelEntry.config` and apply deployment overrides with `merge_config()`. Reuse existing path fields where their meaning matches. Follow `build_startup_config()` for startup parameter precedence. [Shared loader](../../../lightx2v/models/runners/config.py) · [Startup configuration](../../../lightx2v/utils/set_config.py)
+3. Use `Argument` in the spec to declare public fields for each task and reuse common fields from `request_args.py`. Use `RequestSpec` when startup fixes the task. Use `MultiTaskSpec` when the same loaded model can switch tasks. Dispatch on `input_info.task` and check compatibility with the loaded weights at the request boundary. `BaseRunner` generates request fields. Declare only additional runtime state in `input_info_state`. [Spec definitions](../../../lightx2v/utils/request_spec.py) · [Common request fields](../../../lightx2v/models/runners/request_args.py)
+4. Put deployment settings and fixed constraints at the top level of the startup JSON, such as `num_frames` for fixed-frame attention. Use `request_defaults` for overridable fields shared by CLI and HTTP, such as `size` in `[height, width]` order. Configure each field in one place. Read effective values from `input_info` during inference and use `get_input_value()` as needed during initialization and warmup. Explicit values override defaults. Treat `None` as omitted and preserve `0`, `False`, and empty containers as explicit values. [Default validation](../../../lightx2v/utils/request_defaults.py) · [Request merging](../../../lightx2v/models/runners/base_runner.py)
 
-Prefer reusing existing LightX2V families (`wan`, `qwen_image`, `hunyuan_video`, `ltx2`, etc.) over creating a parallel implementation. New code should look like a small specialization of an existing family, not a copied upstream pipeline.
+## Implement Inference
 
-For a new DiT/video model, the desired ownership chain is strict:
+- **Runner** Reuse `DefaultRunner` or the closest existing runner. Load components and attach the scheduler with `model.set_scheduler()`. Handle request encoding, denoising, VAE decoding, and output. Keep applicable cancellation and cleanup hooks in custom flows, including request cleanup on errors. Release long-lived runner resources with `close()`. Use `record_output()` to register the actual artifacts when saving multiple outputs or changing the output path. [DefaultRunner](../../../lightx2v/models/runners/default_runner.py)
+- **Model and weights** Prefer the loading logic in `BaseTransformerModel`. Use `WeightModule` to bind registered operators such as matrix multiplication, normalization, and attention. Load compatible checkpoints directly. Put any required reordering or conversion in the loading layer or a conversion tool. Organize `pre_infer`, `transformer_infer`, and `post_infer` around the model's actual stages. [BaseTransformerModel](../../../lightx2v/models/networks/base_model.py) · [WeightModule](../../../lightx2v/common/modules/weight_module.py)
+- **Inference** Call `.apply()` on registered operators and follow the device and precision conventions of the execution path. Check axis order and dtype for latents, tokens, Q/K/V, masks, RoPE, and predictions. Preserve conditioning token positions, residual connections, modulation, and precision for numerically sensitive operations. Match the target model's CFG branch count, combination formula, and normalization. Write custom computation only where the model differs from reusable code.
+- **Mixed precision** For each sensitive region, map the upstream function and its input, compute/accumulation, and output dtypes to the corresponding LightX2V code. Use `GET_SENSITIVE_DTYPE()` for configurable sensitive operations and `GET_DTYPE()` for the main path. When the startup environment variable `SENSITIVE_LAYER_DTYPE` is unset or set to `None`, the sensitive dtype follows `DTYPE`. Match floating-point weights and inputs where required. Preserve any accumulation precision required by the algorithm, including in fused kernels, and cast the result to the dtype expected by its consumer. [Upstream-to-LightX2V example](references/model-components.md#混合精度)
+- **Scheduler** Manage initial noise, latents, timesteps, sigmas, and solver history. A typical denoising loop runs `step_pre → model.infer → step_post`, with the model writing the predictions that the scheduler consumes. Follow the concrete scheduler's `prepare()` signature, step range, and cleanup behavior. Before reusing a scheduler, check prediction type, update direction, timesteps, and the rules for updating conditioned regions. [BaseScheduler](../../../lightx2v/models/schedulers/scheduler.py)
 
-```text
-new runner
-  -> creates/owns scheduler(s)
-  -> loads new model
-new model
-  -> owns new/reused weights
-  -> owns new/reused infer modules
-weights
-  -> describe x2v tensor layout using common ops
-infer
-  -> executes DiT math with those weights
-```
+Every new model must implement CPU weight offload, multi-device parallel inference, compilation, and built-in startup warmup on its production inference path. When adding a task to an existing model, reuse or adapt these capabilities for the new task. Quantization and caching follow the task's requirements. Verify inherited capabilities on the actual execution path and reject incompatible configurations at startup.
 
-Read model paths from startup config in the loader; do not hard-code them in a runner. Do not put checkpoint mapping in infer. Do not call the upstream repo from runner/model to get a result. The result should come from LightX2V-native modules.
+- **CPU offload** Connect `cpu_offload` to the core model's weight loading and execution. Choose a granularity suited to the model, such as block offload for a DiT. Specify which weights stay on the CPU and when device buffers can be reused or released.
+- **Multi-device inference** Split a single request across devices using at least one strategy suited to the model, such as sequence, tensor, or CFG parallelism. Use the configured `parallel` groups for the computation and communication assigned to each rank. [Parallelism, offload, and caching examples](references/model-components.md#并行offload-与缓存)
+- **Compilation** Make `use_compile=true` run a core computation used by real requests through `torch.compile`. For transformer blocks, reuse `BaseTransformerInfer.init_compile()` and call `run_block()` from the production loop. Keep offload transfers and buffer swaps outside the graph. With `use_compile=false`, run the same computation eagerly. [Compile integration](../support-model-compile/SKILL.md)
+- **Startup warmup** Use the runner's initialization hook to warm up once when `warmup=true`, before the first request. On a `DefaultRunner` subclass, implement or reuse `run_warmup()`. Exercise the task's actual stages with representative shapes and branches. Isolate warmup RNG state and clean up temporary inputs and solver history even on failure. Retain reusable compiled graphs. The two startup switches default to false and can be enabled independently. [Warmup integration](../support-model-warmup/SKILL.md)
 
-Treat base inference as the first milestone, not the finish line. When a model family supports block/model offload, sequence parallel, or CFG parallel, the new model should support the corresponding LightX2V modes too unless there is a specific architectural blocker documented in the final report. Verify inherited support against custom blocks and state; do not assume the whole family matrix works without validation.
+## Verify and Deliver
 
-Native means:
+When integrating a new model end to end, provide a configuration that matches the checkpoint and task, and create `scripts/<model>/`. Put CLI Bash scripts, the English `README.md`, and the Chinese `README_zh.md` at the root of that directory. Put Bash server launch scripts and runnable request scripts such as `post_<task>.py` in `server/`. The request scripts submit minimal valid requests based on the current spec. Both READMEs explain how to prepare weights and configuration, use the CLI, start the server, run the request scripts, and retrieve results. [English example](../../../scripts/minimax_h3_image/README.md) · [Chinese example](../../../scripts/minimax_h3_image/README_zh.md) · [Request script example](../../../scripts/minimax_h3_image/server/post_t2i.py)
 
-- model parameters are loaded into LightX2V weight wrappers
-- linear projections use LightX2V MM ops, not upstream `nn.Linear` modules
-- normalization/attention/conv use LightX2V common ops or existing family wrappers
-- scheduler state is managed by LightX2V scheduler classes
-- third-party libraries may be used for tokenizers, file IO, or conversion scripts when necessary, but not as the runtime DiT/pipeline implementation
+Put editable paths at the top of each Bash script and set only the environment variables needed to run it. Use project configuration for deployment defaults and put detailed setup instructions in the READMEs. CLI and server scripts invoke `python -m lightx2v.infer` and `python -m lightx2v.server`, respectively. Provide runnable configurations for all four capabilities. In both READMEs, document the commands, offload granularity, parallel strategy and device count, and how to set `use_compile` and `warmup` independently in the startup JSON. Launch multi-device inference with `torchrun`.
 
-## First Inspection
+For mixed-precision models, show the `DTYPE` and `SENSITIVE_LAYER_DTYPE` settings that reproduce the upstream precision choices in the launch example.
 
-Before editing, inspect the current repo and the upstream model:
-
-- LightX2V entrypoints:
-  - `lightx2v/infer.py`
-  - `lightx2v/utils/set_config.py`
-  - `lightx2v/utils/input_info.py`
-  - `lightx2v/utils/registry_factory.py`
-  - `lightx2v/models/runners/runner_factory.py`
-  - `lightx2v/models/runners/registry.py`
-  - `lightx2v/models/runners/request_args.py`
-  - `lightx2v/utils/request_spec.py`
-  - nearest family's `lightx2v/models/runners/<family>/request_spec.py`
-  - `lightx2v/models/runners/base_runner.py`
-  - `lightx2v/models/runners/default_runner.py`
-  - nearest family runner, for example `lightx2v/models/runners/wan/wan_runner.py`
-- Model implementation:
-  - `lightx2v/models/networks/<family>/model.py`
-  - `lightx2v/models/networks/<family>/weights/`
-  - `lightx2v/models/networks/<family>/infer/`
-  - `lightx2v/models/schedulers/<family>/`
-  - `lightx2v/common/ops/`
-  - `lightx2v/common/kvcache/`
-- Upstream repo:
-  - README model list and quickstart
-  - config registry and launch scripts
-  - model definition
-  - weight loading path and checkpoint format
-  - scheduler/solver code
-  - CFG logic
-  - KV cache logic
-  - input preprocessing and output postprocessing
-
-Use `rg` first. Do not guess from filenames when config files or README disagree.
-
-When upstream has several config names or model names, cross-check:
-
-- README model table and release notes
-- config registry, for example `VA_CONFIGS`
-- per-config camera keys, action channel ids, normalization stats, resolution, and chunk settings
-- local model directory contents
-- actual launch script defaults
-
-Treat edited local paths as weak evidence. Dataset/domain fields and README model descriptions are stronger evidence for deciding which weight belongs to which task.
-
-## Model Components
-
-Read the reference for the component being implemented; keep these constraints in view:
-
-| Component and reference | Key constraints |
-| --- | --- |
-| [Base family](references/model-components.md#decide-the-base-family) | Choose the nearest architectural family from tensor layout, attention, conditioning and scheduling; similar model names are insufficient. |
-| [Weights](references/model-components.md#weight-strategy) | Keep checkpoint mapping in converters/loaders and weight containers. Inspect real checkpoint keys and preserve required non-quantized dtypes before choosing conversion or direct loading. |
-| [DiT tensor layout](references/model-components.md#dit-tensor-layout) | Follow the selected family's weight/infer/attention contract. Wan-style DiTs use unbatched token tensors; Bagel and SeedVR have different layouts, so this is not a repository-wide batch prohibition. |
-| [Input encoders](references/model-components.md#input-encoders) | Reuse the family's encoder interfaces and reproduce upstream conditioning, masks and sequence order. |
-| [VAE and decoding](references/model-components.md#vae-and-decoding) | Match latent scaling, layout, temporal behavior and output decoding to the source pipeline. |
-| [Model layout](references/model-components.md#model-layout) | Keep orchestration in the model, weight storage/loading in weights, and tensor math in infer. Reuse family modules rather than calling the upstream pipeline for the result. |
-| [Infer implementation](references/model-components.md#infer-implementation) | Match source math and branch ordering first; use the family's registered operators and preserve offload/parallel boundaries. |
-| [CFG](references/model-components.md#cfg) | For Wan-style unbatched DiTs, preserve serial conditional/unconditional execution and the scheduler's guidance semantics; add family-supported CFG parallelism with output parity. |
-
-## Offload And Parallel Support
-
-After the single-device serial path matches upstream, add the same execution modes that the base family supports. For Wan-derived models, this normally means block/model offload, sequence parallel and CFG parallel. Configure `parallel.seq_p_size`, `parallel.cfg_p_size` and, when applicable, `parallel.tensor_p_size`; `init_parallel()` derives the runtime `seq_parallel` / `cfg_parallel` flags.
-
-Rules:
-
-- Reuse the base family offload and distributed machinery before adding model-private code.
-- For Wan-derived transformer infer, prefer inheriting or composing with existing Wan offload infer classes such as `WanOffloadTransformerInfer` when the phase order is compatible.
-- Implement block offload for every custom weight/block phase introduced by the new model:
-  - create matching CUDA block buffers such as `offload_block_cuda_buffers`
-  - create lazy CPU-side buffers when the base weight class uses them
-  - move non-block weights through the existing `non_block_weights_to_cuda/cpu` hooks
-- Support model-level offload when the parent model already provides `to_cuda`/`to_cpu` style movement. Do not special-case devices in runner hot loops.
-- Reject phase offload clearly if the new model has a custom phase order and phase offload has not been mapped yet. Do not silently reuse Wan phase offload for a different phase graph.
-- For sequence parallel:
-  - reuse existing process groups and helpers such as `seq_p_group`, sequence chunking, all-gather, and parallel attention ops
-  - use the base self-attention parallel kernel when tensor layout matches
-  - if a custom module needs the full token grid, gather full tokens for that module and chunk the result back to the local rank
-  - for custom reference maps or multi-human masks, gather `q/k` before computing a full attention map when local chunks are insufficient
-- For CFG parallel:
-  - keep CFG branch orchestration in `model.infer`, not runner
-  - for Wan-style unbatched DiTs, distribute branches across ranks instead of concatenating a batch dimension; preserve the supported tensor layout for other families
-  - build an explicit branch list, for example `cond`, `drop_text`, `drop_audio`, `uncond`
-  - support the actual branch count needed by the model, including 2-branch and 3-branch CFG
-  - gather branch predictions and combine them with the same formula as serial CFG
-  - make text/audio encoders produce every embedding needed by each rank; do not assume Wan's default rank0 prompt / rank1 negative split is enough for multi-branch CFG
-- Keep serial, offload, SP, CFG parallel, and combined modes numerically aligned with the same seed/config whenever practical.
-
-## Scheduler
-
-Keep timestep, latent and solver state in the selected scheduler. LingBot-VA's optional `prepare_loop`/`bind_step_inputs` hooks are not `BaseScheduler` APIs; see [scheduler preparation and stepping](references/scheduler-and-cache.md#scheduler) when adapting a denoise loop.
-
-## Runner
-
-Runner should follow the closest existing family style.
-
-Responsibilities:
-
-- register with `@RUNNER_REGISTER("<model_cls>")` and add a `ModelEntry` to `registry.RUNNER_MODULES`
-- declare tasks and arguments in the family's `request_spec.py` through `SPECS`, `RequestSpec` / `MultiTaskSpec` and `Argument`; write InputInfo defaults as values such as `input_info_default=[]` (copied for each InputInfo) and reuse common groups from `request_args.py`
-- let `BaseRunner` build InputInfo fields from the Spec; put model-specific runtime state in the family's `input_info.py` and select it through `input_info_state`, without repeating request fields
-- register saved artifacts through `record_output()` when producing multiple files or joint outputs
-- initialize/load modules
-- initialize scheduler(s)
-- bind `run_input_encoder`
-- prepare per-run state in `init_run`
-- run the denoise loop
-- decode/save outputs
-- clear caches and modules in `end_run`
-
-Rules:
-
-- Inherit `DefaultRunner` or nearest family runner.
-- Do not put transformer math in runner.
-- Do not put scheduler stepping inside model unless existing family requires it.
-- Use `self.model.set_scheduler(self.scheduler)` before infer loop.
-- For multi-stage models, it is fine to have multiple schedulers, for example video scheduler and action scheduler, but keep both using the same `step_pre -> infer -> step_post` pattern.
-- Avoid fallback output paths like `train_out`; require or use `input_info.save_result_path`.
-- Input paths such as `image_path` should come from `input_info`, not config defaults.
-- `init_modules()` should follow the parent style: load modules, set scheduler on model, bind `run_input_encoder`, lock config, optionally compile.
-- `init_run()` should prepare per-run state, KV cache manager, prompt embeds from `self.inputs`, action masks/stats, and AR dimensions.
-- `run_segment()` or equivalent should only orchestrate scheduler loops and postprocess outputs.
-- `end_run()` should clear request state and release transient/lazy-loaded modules through the existing cleanup hooks. Preserve reusable compiled graphs and apply the family's allocator policy; do not add unconditional `empty_cache()` to every eager request.
-
-## KV Cache
-
-Derive cache keys, reset boundaries and token ordering from the actual autoregressive task. Validate segment transitions and repeated requests rather than inferring cache correctness from one output. Use the [KV cache integration rules](references/scheduler-and-cache.md#kv-cache) when adding or adapting a cache scheme.
-
-## Config And Launch
-
-| Task and reference | Key constraints |
-| --- | --- |
-| [Configure startup and requests](references/config-and-launch.md#config-conventions) | Use current startup fields and request contracts: `size=[height,width]`, `fps` and parallel sizes. `build_startup_config` determines precedence; `prepare_request` rejects undeclared task fields. Avoid duplicate aliases and model-local fallback defaults. |
-| [Add launch scripts](references/config-and-launch.md#bash-script-conventions) | Use the family's existing layout and `scripts/base/base.sh` contract. Keep machine paths editable and quoted, run from the repository root, and separate startup JSON from supported request arguments. |
-
-## Registry And CLI Choices
-
-When adding `model_cls`:
-
-- register runner with `RUNNER_REGISTER`
-- add `ModelEntry("<runner module>", config="<configuration loader function>")` to `lightx2v/models/runners/registry.py:RUNNER_MODULES`; omit `config` when the shared checkpoint reader is sufficient
-- registration paths are relative to `lightx2v.models.runners`, for example `ModelEntry("minimax_h3.minimax_h3_runner", config="minimax_h3.config.load_config")`
-- a model's `load_config(deployment_config)` reads checkpoint metadata and paths, calls `merge_config(model_config, deployment_config)` for deployment overrides, applies necessary model-specific processing, and returns the final configuration; keep this logic in the model's directory without adding branches to `utils/set_config.py`
-- do not inject a global default configuration; read optional behavior flags with defaults at their consumers and keep required architecture settings in model metadata or deployment profiles
-- `utils/cli.py` uses `choices=RUNNER_MODULES`, so do not add eager runner imports or a second model choice list in `infer.py`
-- declare new tasks in the model's Spec and wire their `InputInfo` as described above; CLI task validation and request options come from that Spec
-- keep configuration loaders, `request_spec.py` and their package initializers free of inference runtime imports so `--help` can run without initializing a device
-- `configs/model_pipeline.json` is not consumed by the current `build_runner()` registration path; do not add entries as a native CLI registration step
-
-If the upstream config name says `i2av` but the actual infer mode is image-to-video-action, choose one LightX2V task name and keep it consistent. Prefer semantic names in code (`i2va`) and use config filenames only for compatibility if needed.
-
-When an error says `argument --model_cls: invalid choice`, check the model's entry in `registry.RUNNER_MODULES` first. Do not rename the model to an unrelated existing `model_cls` just to pass argument parsing.
-
-## Parity And Porting Checks
-
-| Check and reference | Key constraints |
-| --- | --- |
-| [Source parity](references/numerical-validation.md#source-parity-checklist) | Compare conditioning, timestep mapping, latent scaling, CFG, attention layout, cache and decoding with the upstream source before claiming native parity. |
-| [Numerical alignment](references/numerical-validation.md#numerical-alignment-workflow) | Find the first divergent intermediate under matching inputs and precision. Record tolerances and evidence; a visually plausible output is insufficient. |
-| [Wan-derived porting](references/numerical-validation.md#wan-derived-porting-checklist) | For Wan-derived models, follow the staged checklist through the family's offload and parallel modes; base inference alone is not complete delivery. |
-| [Common pitfalls](references/numerical-validation.md#common-pitfalls) | Check upstream naming, key mapping, tensor layout, scheduler state and generated output before adding special cases. |
-
-## Verification
-
-Select checks for the files changed. Run syntax and reference checks for documentation-only maintenance; CLI import checks require the project environment:
-
-```bash
-cd <LightX2V repo root>
-python3 -m py_compile <changed python files>
-bash -n <changed scripts>
-python3 -m json.tool <one changed config>
-python -m lightx2v.infer --help
-```
-
-Run inference when weights and inputs are available. Confirm:
-
-- output video/image exists
-- action file exists if applicable
-- output length matches `num_chunks`, chunk size, VAE stride, and FPS
-- no unwanted batch dimension appears in debug shapes
-- no unexpected diffusers/transformers runtime model dependency
-- results are visually/numerically close to upstream with the same seed/config
-- saved intermediate tensors show close parity at preprocessing, scheduler, `pre_infer`, block 0, and full DiT boundaries when upstream is available
-- sparse-frame contact sheets or equivalent artifacts show every expected region, view, or modality is stable and in the correct location
-- block/model offload mode completes and produces the same shape/duration as local mode
-- CFG parallel returns the same branch-combined prediction shape and comparable output as serial CFG
-- sequence parallel preserves token counts and reconstructs full-output shapes after all-gather/chunk operations
-
-Report skipped checks clearly.
+1. Run `bash -n` on each Bash script and verify commands, paths, and arguments in both READMEs. Run `python -m lightx2v.infer --help`, then add `--model_cls`, `--task`, `--model_path`, `--config_json`, and any required variant arguments to check task-specific `--help`. Verify defaults, explicit overrides, and rejection of undeclared fields. Confirm the supplied parameters affect computation.
+2. Use available weights and minimal valid inputs to run the CLI scripts and verify the server with the delivered request scripts. Check generated tensors or artifacts, output dimensions, and frame count, FPS, and sample rate where applicable. Run consecutive requests on the same runner to check seed handling, state reset, and supported task switches.
+3. Use a single-device eager run with offload and warmup disabled as the baseline when it fits. Otherwise use a verified reference for the same inputs and state its limits. Run CPU offload and parallel inference separately with the same checkpoint, inputs, precision, and initial noise (where applicable). For offload, verify weight transfers and record peak device memory for comparison. For parallel inference, run one request on at least two devices and verify each rank's share of the computation. Output shapes should match the baseline. Check predictions for unexpected NaNs or infinities and assess numerical differences in light of the actual operators, dtypes, and task-level quality. Apply the same comparison to combined offload and parallelism or to task-specific optimizations when you document support for them.
+4. Limit compile and warmup validation to `use_compile=false, warmup=false` (eager baseline) and `use_compile=true, warmup=true`. Reuse the baseline results from step 3 when the configuration, inputs, and seed match. Use identical inputs and seed in both configurations, run two consecutive requests on each runner, and compare the corresponding outputs. Expect zero warmup passes in the baseline and one at startup with both switches enabled. In the enabled run, use compiler logs or counters to confirm that the first request executes the graph built during warmup for the covered input signature. Time startup warmup, the first request, and subsequent requests separately, attributing compilation cost to the stage where it occurs. [Wan configuration and implementation](references/model-components.md#编译与启动预热)
+5. Compare with upstream on representative inputs for the active conditioning branches, using the same checkpoint, precision settings, and actual initial noise where applicable. Replacement kernels can change rounding or reduction order. Allow elementwise differences and judge their impact using an existing model quality metric or representative outputs. For a configurable sensitive operation, use a small input to check the effective compute dtype and the dtype received by the next operation. If unexpected NaN/Inf, unexplained drift, or a quality regression appears, inspect the affected conditioning, model prediction, scheduler update, or decode stage to localize it.
+6. Before handing over the code, delete all temporary files and scripts created for testing or debugging this integration. Review the deliverables with `git status --short --untracked-files=all`.
+7. Report the verified commands and configurations, actual kernels and dtypes, output quality, and any representative numerical differences. If weights, an upstream environment, or enough devices are unavailable, deliver all four implementations and their runnable configurations, mark the affected runs as unverified, and give the commands and prerequisites needed to finish validation.

@@ -3,10 +3,14 @@ import { api } from "../../scripts/api.js";
 import { openConfigEditor } from "./config_ui.js";
 import { fetchJSON, openFileBrowser } from "./files_ui.js";
 import { configureGpuChoices } from "./gpu_ui.js";
+import { configureVideoSelector } from "./video_ui.js";
 
 const nodeTypes = {
     LightX2VServer: "Service",
     LightX2VGenerateVideo: "Generate Video",
+    LightX2VRegenerateVideo: "Regenerate Video",
+    LightX2VGenerateVideoBatch: "Generate Video Batch",
+    LightX2VSelectVideo: "Select Video",
     LightX2VGenerateImage: "Generate Image",
     LightX2VUpscaleVideo: "Upscale Video",
 };
@@ -205,9 +209,19 @@ async function releaseService(node) {
     }
 }
 
+function configureSeed(node) {
+    const seed = node.widgets?.find(w => w.name === "seed");
+    if (!seed) return;
+    seed.options = {...seed.options, min: 0, max: 0xFFFFFFFF};
+    // Older workflows may contain seeds randomized with the former 64-bit range.
+    if (Number.isFinite(seed.value)) seed.value = seed.value >>> 0;
+}
+
 function configureNode(node) {
     if (!ownNodes.has(node.comfyClass)) return;
+    configureSeed(node);
     configureTypeBadge(node);
+    if (node.comfyClass === "LightX2VSelectVideo") configureVideoSelector(node);
     node.properties ||= {};
     node.properties.lightx2v_ui_version = 7;
     if (node.comfyClass === "LightX2VServer") configureModelChoices(node);
@@ -258,6 +272,24 @@ app.registerExtension({
         api.addEventListener("execution_error", ({detail}) => showExecutionError(detail));
     },
     beforeRegisterNodeDef(nodeType, nodeData) {
+        const batch = nodeData.name === "LightX2VGenerateVideoBatch";
+        if (ownNodes.has(nodeData.name) && nodeData.input.required?.seed) {
+            const original = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function(info) {
+                const result = original?.apply(this, arguments);
+                const values = info.widgets_values;
+                if (batch && Array.isArray(values)) {
+                    // Restore older saved widget orders without changing their values.
+                    const negative = typeof values[6] === "string" ? 6 : typeof values[7] === "string" ? 7 : -1;
+                    const moved = negative >= 0 ? {draft_steps: values[negative === 6 ? 7 : 6], batch_size: values[8], negative_prompt: values[negative]} : {};
+                    for (const widget of this.widgets || []) {
+                        if (Object.hasOwn(moved, widget.name)) widget.value = moved[widget.name];
+                    }
+                }
+                configureSeed(this);
+                return result;
+            };
+        }
         if (nodeData.name === "LightX2VServer") {
             // UI-only combo: the backend and saved workflow keep the STRING contract.
             const device = nodeData.input.optional?.CUDA_VISIBLE_DEVICES;

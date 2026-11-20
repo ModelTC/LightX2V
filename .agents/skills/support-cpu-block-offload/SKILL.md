@@ -1,31 +1,31 @@
 ---
 name: support-cpu-block-offload
-description: 为 LightX2V 模型接入、审查和调试 CPU block offload 与多进程 CPU 权重共享（shared_cpu_weights）。用于权重适配器、共享加载、GPU 缓冲调度、异步复制生命周期，以及 host／NUMA 启动入口和验证；按用户范围处理局部审查或完整接入。
+description: Integrate, review, and debug CPU block offload and multiprocess CPU weight sharing (shared_cpu_weights) for LightX2V models. Use for weight adapters, shared loading, GPU buffer scheduling, asynchronous copy lifetimes, and host/NUMA launchers and validation. Follow the user's scope for a focused review or a complete integration.
 ---
 
-# LightX2V CPU Block Offload 与权重共享接入
+# Integrating CPU Block Offload and Weight Sharing in LightX2V
 
-简体中文 | [English](SKILL_EN.md)
+English | [简体中文](SKILL.md)
 
-## 目标与职责
+## Purpose and responsibilities
 
-沿用模型的正式推理路径，实现 CPU 常驻权重、GPU block 缓冲复用，以及多进程共享 CPU 权重。完整接入须沿用模型现有共享 offload 目录，交付支持 host、NUMA 两种模式的可运行脚本和配置，不能只增加开关或加载接口。
+Use the model's production inference path to implement CPU-resident weights, reusable GPU block buffers, and CPU weight sharing across processes. A complete integration must deliver runnable scripts and configurations in the model's existing shared-offload directory for both host and NUMA modes. Adding only a flag or a loading interface is insufficient.
 
-block offload 减少 GPU 权重驻留；CPU 权重共享减少同一共享域内的 CPU 权重副本。每个 rank 仍持有自己的 GPU staging buffer，仍需 H2D 复制。不要将其描述为 activation offload、GPU 权重共享或消除权重传输。
+Block offload reduces GPU weight residency; CPU weight sharing reduces duplicate CPU weights within a sharing domain. Each rank still owns its GPU staging buffers and performs H2D copies. Do not describe this as activation offload, GPU weight sharing, or elimination of weight transfers.
 
-当前公共共享后端依赖 Linux SysV shared memory 与 CUDA host registration。普通 block offload 的设备适配范围更广；不能据此宣称共享后端已支持 XPU 或其他设备。
+The current common sharing backend requires Linux SysV shared memory and CUDA host registration. Ordinary block offload supports a broader set of devices; that does not establish XPU or other device support for the sharing backend.
 
-按任务读取参考资料：
+Read references according to the task:
 
-- 接通加载、算子绑定或推理调度：读 [implementation-patterns.md](references/implementation-patterns.md) 对应部分。
-- 复用 Wan、Qwen Image、MiniMax H3、Hunyuan Image 3.0：读 [model-adapters.md](references/model-adapters.md) 对应模型，区分现有条件和通用约束。
-- 选择测试、验证内存收益或定位故障：读 [validation-and-debugging.md](references/validation-and-debugging.md)。
+- Loading, operator binding, or inference scheduling: read the relevant sections of [implementation-patterns_en.md](references/implementation-patterns_en.md).
+- Reusing Wan, Qwen Image, MiniMax H3, or Hunyuan Image 3.0: read the model's section in [model-adapters_en.md](references/model-adapters_en.md), distinguishing existing restrictions from common constraints.
+- Selecting tests, validating memory savings, or investigating failures: read [validation-and-debugging_en.md](references/validation-and-debugging_en.md).
 
-模型尚未具备原生推理骨架时，结合 [support-new-model](../support-new-model/SKILL.md)；任务包含 compile 或 warmup 时，分别结合 [support-model-compile](../support-model-compile/SKILL.md)、[support-model-warmup](../support-model-warmup/SKILL.md)。不要仅因新增 offload 就顺带实现这些功能。纯解释、审查、定位或明确限定为私有 block 的任务按用户范围执行，不自动扩展为完整共享接入。
+If the model lacks a native inference implementation, also consult [support-new-model](../support-new-model/SKILL.md). If the task includes compile or warmup, consult [support-model-compile](../support-model-compile/SKILL.md) or [support-model-warmup](../support-model-warmup/SKILL.md), respectively. Do not add those capabilities merely because offload is being introduced. Keep explanations, reviews, investigations, and tasks explicitly limited to private block offload within the user's scope; do not automatically expand them into a full sharing integration.
 
-## 1. 从启动脚本闭合调用链
+## 1. Trace the complete call chain from the launcher
 
-依次检查脚本、最终配置、runner、model、weights、infer 和 offload manager。配置包含 JSON、模型配置、CLI 覆盖及 `DTYPE`、`SENSITIVE_LAYER_DTYPE` 等环境设置。
+Inspect the script, effective configuration, runner, model, weights, inference code, and offload manager in order. Configuration includes JSON, model configuration, CLI overrides, and environment settings such as `DTYPE` and `SENSITIVE_LAYER_DTYPE`.
 
 ```bash
 model=wan
@@ -37,98 +37,98 @@ rg -n 'prefetch|swap_blocks|wait_ready|record_free|close_shared_cpu_weights' \
   lightx2v/common/offload "lightx2v/models/networks/${model}"
 ```
 
-按实际任务补读文本编码器、VAE 和 runner；不要假定 `shared_cpu_weights=true` 会共享整个 pipeline。逐组件记录：
+Inspect the text encoder, VAE, and runner as needed. Do not assume that `shared_cpu_weights=true` shares the entire pipeline. Record each component separately:
 
-| 组件 | 权重格式与推理 dtype | CPU 常驻范围／私有范围 | block 类型及 GPU 缓冲 | 共享加载／关闭入口 |
+| Component | Weight format and inference dtype | CPU-resident and private weights | Block types and GPU buffers | Shared loading and closing entry points |
 |---|---|---|---|---|
-| DiT | 据源码填写 | 据源码填写 | 数量、schema、stride | 调用者与 owner |
-| 文本编码器、VAE 等任务内组件 | 分别填写 | 分别填写 | 整体、分块或不 offload | 各组件独立核对 |
+| DiT | Determine from source | Determine from source | Count, schema, stride | Callers and owner |
+| Text encoder, VAE, and other in-scope components | Record separately | Record separately | Whole module, blocks, or no offload | Check each component independently |
 
-同时建立支持矩阵：普通路径、私有 CPU block、共享 host、共享 NUMA，以及任务实际涉及的 SP、TP、量化、LoRA、compile 等组合。每项区分“已验证”“明确不支持”“尚未验证”，附代码或运行依据；配置可解析不等于实现闭合。
+Build a support matrix covering ordinary execution, private CPU blocks, shared host mode, shared NUMA mode, and the SP, TP, quantization, LoRA, compile, or other combinations relevant to the task. Mark each item as validated, explicitly unsupported, or unvalidated, with code or runtime evidence. A configuration that parses does not prove a complete implementation.
 
-先复现同 task、checkpoint、输入和精度的基线。全量 GPU 驻留无法运行时，可用已验证的私有 CPU block 路径作基线，说明比较边界。不要删掉用户要求的量化、LoRA 或并行设置来制造成功结果。
+First reproduce a baseline with the same task, checkpoint, inputs, and precision. If full GPU residency is not feasible, use a validated private CPU block path as the baseline and state the comparison's limits. Do not remove requested quantization, LoRA, or parallel settings to manufacture a successful result.
 
-## 2. 接通私有权重的 block offload
+## 2. Connect block offload for private weights
 
-明确 block 的计算入口、CPU 权重来源和 GPU slot 的 schema。多种 block 类型分别规划兼容的缓冲，不假定全模型所有层同构。
+Identify the block execution entry point, CPU weight source, and GPU slot schema. Plan compatible buffers separately for different block types; do not assume every layer has the same structure.
 
-- LightX2V `WeightModule` 路径：沿用 `state_dict()`、`load_state_dict()`、`offload_block_cuda_buffers` 和 `_init_offload_manager()`。
-- 原生 `nn.Module` 路径：优先使用 `ModuleCPUWeights`、`NativeModuleBlockSource`、`NativeModuleBlockSlot`，保留参数别名及运行时 buffer 的处理。
-- 优先复用模型已有 `WeightAsyncStreamManager` 调度。需要固定 slot 的 ready/free 事件协议时，采用 `EventSlotWeightAsyncStreamManager`；不为风格统一重写已正确的模型循环。
+- For LightX2V `WeightModule` paths, reuse `state_dict()`, `load_state_dict()`, `offload_block_cuda_buffers`, and `_init_offload_manager()`.
+- For native `nn.Module` paths, prefer `ModuleCPUWeights`, `NativeModuleBlockSource`, and `NativeModuleBlockSlot`, preserving parameter aliases and runtime buffer handling.
+- Prefer the model's existing `WeightAsyncStreamManager` scheduling. Use `EventSlotWeightAsyncStreamManager` when fixed slots need a ready/free event protocol; do not rewrite a correct model loop just for consistency of style.
 
-检查首块加载、末块处理、下一个 denoise step、调用方 stream 与 compute stream 的依赖，以及输出交回调用方时的同步。GPU slot 的复用要保持 shape、dtype、stride 和算子所需布局。
+Check first-block loading, last-block handling, the next denoising step, dependencies between the caller and compute streams, and synchronization when returning outputs to the caller. Slot reuse must preserve shape, dtype, stride, and operator-specific layouts.
 
-## 3. 接入共享 CPU 权重
+## 3. Integrate shared CPU weights
 
-模型 adapter 负责 checkpoint schema、tensor 选择、精度转换和权重签名；公共 coordinator 负责拓扑分组、创建、挂接、注册和错误传播。
+The model adapter owns checkpoint schemas, tensor selection, precision conversions, and weight signatures. The common coordinator owns topology grouping, creation, attachment, registration, and error propagation.
 
-1. 通过 header/index 和 meta tensor 构造 manifest，区分共享 tensor 与 rank 私有 tensor。不要先让所有 rank 完整加载一份共享 payload。
-2. 将最终运行 dtype、布局及影响数值的转换策略纳入适配器契约；量化 scale 的转换顺序必须与基线一致。
-3. 所有 rank 以相同组件顺序调用 `materialize_shared_weight_arena()`，只由每个 replica 的 leader 填充共享 payload。
-4. 返回 `SharedWeightViewMap`，让消费者通过 `consume_weight()` 直接采用共享 view；支持多个消费者引用同一共享权重。
-5. 在模型或组件上保存 owner，绑定后检查共享 view 的消费完整性、CPU 地址、dtype、shape、stride 和 pinned 状态。
+1. Build the manifest from headers, indexes, and meta tensors, separating shared tensors from rank-private tensors. Do not first load a full shared payload privately on every rank.
+2. Include final runtime dtypes, layouts, and numerically significant conversions in the adapter contract. Quantization scale conversion order must match the baseline.
+3. Have every rank call `materialize_shared_weight_arena()` in the same component order. Only each replica's leader populates the shared payload.
+4. Return a `SharedWeightViewMap` so consumers adopt shared views directly through `consume_weight()`. Allow multiple consumers to reference the same shared weight.
+5. Retain the owner on the model or component. After binding, check consumption completeness, CPU addresses, dtype, shape, stride, and pinned status.
 
-共享 view 进入消费路径后，禁止以无条件 `clone()`、`contiguous()`、dtype 转换、重新 pin 等方式生成私有副本。需要物化的转换放在 leader 填充阶段；允许保持存储身份的转置等 view 操作。
+Once a shared view enters the consumer path, do not create private copies through unconditional `clone()`, `contiguous()`, dtype conversions, or repinning. Perform materializing conversions during leader population. View operations such as transpose are allowed when they preserve storage identity.
 
-各进程映射的虚拟地址可以不同。验证使用本地 arena 基址和 manifest 布局，不能比较跨进程 `data_ptr()` 是否相等。
+Processes may map the same storage at different virtual addresses. Validate against each process's local arena base address and manifest layout; do not compare `data_ptr()` values across processes for equality.
 
-`host` 按 host、IPC namespace、权重签名建立副本；`numa` 进一步按参与 rank 对应的 NUMA node 分组。每组 leader 和副本数由实际拓扑决定，不能写死为 rank 0、8 卡或两个 NUMA 节点。
+`host` groups replicas by host, IPC namespace, and weight signature. `numa` additionally groups by the NUMA node associated with each participating rank. Actual topology determines leaders and replica counts; do not hard-code rank 0, eight GPUs, or two NUMA nodes.
 
-当前模型对 TP、LoRA、量化、AdaLN cache 等条件的限制见案例文件。只为已确认不兼容的组合增加明确检查，不把某个 adapter 的限制复制成所有模型的禁令。
+See the model case studies for current TP, LoRA, quantization, AdaLN cache, and other restrictions. Add explicit checks only for confirmed incompatible combinations. Do not turn one adapter's restrictions into bans for every model.
 
-## 4. 明确生命周期
+## 4. Define lifetimes explicitly
 
-- 共享 CPU 源保持不可变；请求状态、KV cache 和可变运行时 buffer 留在各 rank 本地。
-- GPU slot 覆盖前等待消费者完成；计算前等待 H2D 完成。reset 事件记账不能替代等待上一请求或 tile 的完成事件。
-- 临时 weight map 销毁后 owner 仍须存在。关闭 arena 前，所有使用者必须停止访问，所有相关 DMA 必须完成。
-- GPU 缓冲的阶段释放与 CPU arena 的最终关闭分开。释放后，下一请求应能从原 CPU 源重建 GPU 缓冲。
-- 多组件共享初始化保持所有 rank 的组件与状态交换顺序一致。当前 CPU 加载状态通过分布式 Store 协调，不为等待 CPU 加载发起 NCCL collective。局部 preflight／绑定错误使用现有协调机制传播，释放已创建的本地资源。
+- Keep shared CPU sources immutable. Request state, KV caches, and mutable runtime buffers remain local to each rank.
+- Wait for consumers before overwriting a GPU slot, and wait for H2D completion before computation. Resetting event bookkeeping does not replace waiting for the previous request or tile to finish.
+- Keep the owner alive after temporary weight maps are destroyed. Before closing an arena, stop all accesses and complete all relevant DMA.
+- Separate phase-specific GPU buffer release from final CPU arena closure. A later request must be able to rebuild GPU buffers from the original CPU sources.
+- Keep component and status-exchange order identical across ranks during shared initialization. CPU loading status currently uses the distributed Store; waiting for CPU loading does not enqueue NCCL collectives. Propagate local preflight and binding failures through the existing coordination mechanism and release local resources already created.
 
-修改 stream、释放或重建路径时，验证连续请求和异常路径。不要依靠 Python GC 的偶然时机保证设备操作安全。
+When changing streams, release paths, or reconstruction, validate consecutive requests and failure paths. Do not rely on incidental Python GC timing for device-operation safety.
 
-## 5. 交付统一启动入口
+## 5. Deliver a consistent launch entry point
 
-沿用模型已有目录，不强制迁移为同一种结构。每个入口保留一个共享脚本、一份受版本管理的 JSON 和中英文 README：
+Keep one directly editable launcher, a version-controlled JSON configuration, and `README.md` / `README_CN.md` in the model's existing layout:
 
-脚本和共享配置使用任务无关的文件名，沿用模型现有命名；通过命令中的 `--task` 选择模型已支持的任务。
+Use task-neutral script and shared-configuration filenames, preserving the model's existing naming. Select supported tasks through the command's `--task` argument.
 
-| 模型 | 脚本目录 | 配置 |
+| Model | Script directory | Configuration |
 |---|---|---|
 | Wan | `scripts/wan/inference/shared_offload/` | `configs/offload/block/wan_block_shared.json` |
 | Qwen Image | `scripts/qwen_image/inference/shared_offload/` | `configs/qwen_image/shared_offload/qwen_image_2512_block_shared.json` |
 | MiniMax H3 | `scripts/minimax_h3/inference/shared_offload/` | `configs/minimax_h3/shared_offload/minimax_h3_block_shared_offload.json` |
 | Hunyuan Image 3 | `scripts/hunyuan_image3/offload/` | `configs/hunyuan_image3/offload/hunyuan_image3_block_shared.json` |
 
-各目录的 `README.md` / `README_CN.md` 和 [模型案例](references/model-adapters.md) 给出脚本名与任务范围；默认任务为 H3 `t2av`、Qwen/Hunyuan `t2i`、Wan `i2v`。
+See each directory's READMEs and [model examples](references/model-adapters_en.md) for script names and supported tasks. Defaults are H3 `t2av`, Qwen/Hunyuan `t2i`, and Wan `i2v`. Do not move existing files just to standardize the layout.
 
-当前四个示例默认 8 卡，脚本显式设置 `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7` 和 `--nproc_per_node=8`。Hunyuan 的默认布局是 TP2 × SP2 × CFG2，其余三个是 SP8。
+The four current examples default to eight GPUs, explicitly setting `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7` and `--nproc_per_node=8`. Hunyuan defaults to TP2 × SP2 × CFG2; the other three use SP8.
 
-共享方式由 JSON 中的 `shared_cpu_weight_scope` 选择，属于启动配置，不作为 CLI 或单次请求参数。当前 Wan 配置使用 `numa`，其余三个模型使用 `host`；切换共享方式时直接修改该字段。JSON 未设置此字段时，内部默认仍为 `auto`。区分各示例的默认值与内部 `auto` 默认。
+Select scope with `shared_cpu_weight_scope` in the JSON configuration. This is a startup setting, not a CLI or per-request option. Wan currently uses `numa`; the other three models use `host`. Change this field to switch sharing modes. If the field is absent from JSON, the internal default remains `auto`. Distinguish each example's default from the internal `auto` default.
 
-当前脚本不读取 `TASK`、`CONFIG_JSON`、`SHARED_CPU_WEIGHT_SCOPE` 等环境变量来覆盖命令，也不转发 `bash script.sh` 后追加的参数或自动推导卡数。修改路径、显卡、task 和输入时，编辑脚本中的完整命令；共享范围和并行参数在 JSON 中修改。若要在不修改脚本的情况下调整命令行参数，直接执行完整 Python 命令。不要重新引入环境变量包装器、临时 JSON 生成器或重复的 scope／卡数／任务启动脚本。
+The current scripts do not use `TASK`, `CONFIG_JSON`, `SHARED_CPU_WEIGHT_SCOPE`, or similar environment variables to override their commands. They do not forward arguments appended to `bash script.sh` or infer GPU counts. Edit the full command to change paths, GPUs, task, and inputs; update the JSON to change sharing scope and parallel settings. To change command-line options without editing the script, run the full Python command directly. Do not reintroduce environment-variable wrappers, temporary JSON generators, or duplicate launchers for scope, GPU count, or task.
 
-默认共享配置包含 `cpu_offload=true`、`offload_granularity="block"`、`shared_cpu_weights=true`、`shared_cpu_weight_scope`（取上述模型对应默认值）、`shared_cpu_weight_backend="sysv"`、`shared_cpu_weight_strict_numa=true`、`shared_cpu_weight_register_chunk_mb=128`、`lazy_load=false`。额外组件仅开启已接通的对应共享开关。私有 block 基线可用于验证，不因该用途在共享入口目录新增永久脚本或专用配置；已有的其他入口不属于自动清理范围。
+Default shared configurations include `cpu_offload=true`, `offload_granularity="block"`, `shared_cpu_weights=true`, `shared_cpu_weight_scope` (using the model's default above), `shared_cpu_weight_backend="sysv"`, `shared_cpu_weight_strict_numa=true`, `shared_cpu_weight_register_chunk_mb=128`, and `lazy_load=false`. Enable additional component-sharing flags only when their paths are implemented. Private block baselines may be used for validation; that alone does not justify new permanent scripts or dedicated configurations in the shared entry directory. Existing entry points elsewhere are not an automatic cleanup target.
 
-脚本和配置还须满足：
+Scripts and configurations must also follow these constraints:
 
-- 同一任务切换 host／NUMA 时使用同一 checkpoint、task、输入、shape、steps、seed、dtype、算子和并行规模，切换仅改变共享 scope。
-- 在脚本顶部填写 `lightx2v_path`、`model_path`；遵循 `scripts/base/base.sh` 的变量契约，用当前环境的 `python -m torch.distributed.run ... -m lightx2v.infer ...` 启动。从仓库根目录运行；JSON 中的相对 checkpoint 路径也以工作目录为准。
-- 手动保持显卡列表、`--nproc_per_node` 和 JSON 拓扑一致。进程数须等于有效配置中的 `tensor_p_size * cfg_p_size * seq_p_size`；缺省维度按 1 计。不要静默覆盖用户指定的并行参数。
-- 先读默认值，再决定是否保留环境设置。当前四个入口沿用 `base.sh` 的 `DTYPE=BF16`、`SENSITIVE_LAYER_DTYPE=None`；`None` 表示跟随主 dtype。外部已设置的值会被保留，因此比较结果时记录有效 dtype。Wan 从旧 FP16 示例改为默认 BF16 后，不能沿用旧 FP16 验证结论。
-- `torchrun` 只在多进程且环境未设置时默认 `OMP_NUM_THREADS=1`。Hunyuan runner 会根据 `HUNYUAN_IMAGE3_REPO_PATH` 补充上游导入路径，不需在脚本中重复追加该 `PYTHONPATH`。不为模板统一增加重复 export 或 `set -e`；确有语义需要的设置单独说明。
-- 显式 NUMA 模式不能静默退回 host；未知拓扑、严格 NUMA 绑定失败应报错。可见卡数仍受模型注意力头和并行实现限制。
-- 两份 README 写清默认任务、`--task` 支持范围及输入要求、NUMA 切换、其他卡数、配置位置、参数默认值与优先级、环境及资产要求、组件共享范围。修改 task 时同步输入参数、模型 variant、缓存和输出；不能只改任务名。使用说明中不堆放实验报告。
+- When switching the same task between host and NUMA, keep checkpoint, task, inputs, shape, steps, seed, dtype, operators, and parallel scale identical. Change only the sharing scope.
+- Set `lightx2v_path` and `model_path` at the top of the script, follow the variable contract of `scripts/base/base.sh`, and launch with the current environment's `python -m torch.distributed.run ... -m lightx2v.infer ...`. Run from the repository root; relative checkpoint paths in JSON also depend on the working directory.
+- Manually keep the GPU list, `--nproc_per_node`, and JSON topology consistent. The process count must equal `tensor_p_size * cfg_p_size * seq_p_size` in the effective configuration, treating missing dimensions as 1. Do not silently replace the user's parallel settings.
+- Read defaults before retaining environment assignments. The four current launchers inherit `DTYPE=BF16` and `SENSITIVE_LAYER_DTYPE=None` from `base.sh`; `None` follows the main dtype. Existing environment values are preserved, so record effective dtypes when comparing results. Old FP16 validation does not establish BF16 correctness after Wan's default changes.
+- `torchrun` defaults to `OMP_NUM_THREADS=1` only for multiple processes when the environment has not set it. The Hunyuan runner adds the upstream import path using `HUNYUAN_IMAGE3_REPO_PATH`; the launcher need not append that directory to `PYTHONPATH` again. Do not add redundant exports or `set -e` just to standardize a template. Explain settings required for actual semantics separately.
+- Explicit NUMA mode must not silently fall back to host. Unknown topology and strict NUMA binding failures must raise errors. GPU counts remain constrained by attention heads and the parallel implementation.
+- Both READMEs must explain default tasks, supported `--task` values and inputs, NUMA selection, other GPU counts, configuration locations, defaults and precedence, environment and asset requirements, and component-sharing scope. When changing tasks, update inputs, model variant, caches, and outputs together; changing the task name alone is insufficient. Keep experimental reports out of usage guides.
 
-## 6. 验证与交付
+## 6. Validate and deliver
 
-按 [validation-and-debugging.md](references/validation-and-debugging.md) 选择与改动相关的测试：先验证 schema／存储身份／同步契约，再分别运行 host 和 NUMA 的真实入口。多 rank 共享与注册必须有相应运行证据；CPU mock 通过不能替代设备验收。
+Choose checks relevant to the change using [validation-and-debugging_en.md](references/validation-and-debugging_en.md). Validate schema, storage identity, and synchronization contracts first, then run the real host and NUMA entry points. Sharing and registration across ranks require corresponding runtime evidence; CPU mocks do not replace device validation.
 
-最终交付包括：
+A final delivery includes:
 
-1. 组件范围、支持矩阵、关键调用链和仍存在的限制。
-2. 权重 adapter、调度与生命周期改动，以及对应聚焦测试结果。
-3. 模型现有共享目录下支持 host／NUMA 的统一脚本、一份共享配置和中英文 README。
-4. 同配置私有／共享结果对比、连续请求验证、共享存储及内存证据。
-5. 如任务要求性能，分别报告加载／注册、首次请求、稳定推理的时间与内存。
+1. Component scope, support matrix, key call chains, and remaining limitations.
+2. Weight-adapter, scheduling, and lifetime changes, with focused validation results.
+3. One host/NUMA launcher in the model's existing shared-offload directory, one shared configuration, and English and Chinese READMEs.
+4. Private/shared comparisons under matched configurations, consecutive-request checks, and evidence of shared storage and memory use.
+5. If performance is in scope, separate time and memory measurements for loading/registration, the first request, and steady inference.
 
-只完成接口、未接通任一 scope 的运行方式，不算完整接入。资产或硬件不足时保留已完成的交付，明确标注未验证项和所缺条件；不能将脚本存在、mock 通过或小 shape smoke test 写成目标路径验收通过。
+An interface without a working route for either scope is not a complete integration. If assets or hardware are missing, retain completed work and identify unvalidated items and missing prerequisites. Do not describe the existence of a script, successful mocks, or a small-shape smoke test as acceptance of the target path.
