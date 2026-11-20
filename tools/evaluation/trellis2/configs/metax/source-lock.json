@@ -1,6 +1,6 @@
 {
   "lightx2v-trellis2": {
-    "git_head": "5217e0153856751391088caf3126af853cd0cb52",
+    "git_head": "5c8e917710e1a2f6869d4dee57f5538cc705c64a",
     "files": [
       {
         "path": ".agents/README.md",
@@ -4454,8 +4454,8 @@
       },
       {
         "path": "dockerfiles/platforms/Dockerfile_metax_trellis2",
-        "bytes": 7272,
-        "sha256": "b7f0e0fca61244f1795bb13d4f5240c1fa43ba428daa47886afd34b70d38dd38"
+        "bytes": 7504,
+        "sha256": "a0546c0dc9d1b861af9ed5528e26f6c752be75dd44b5c011514a324619cd11e6"
       },
       {
         "path": "dockerfiles/platforms/Dockerfile_mi350",
@@ -5409,8 +5409,8 @@
       },
       {
         "path": "lightx2v/common/ops/sparse/submanifold_conv.py",
-        "bytes": 4504,
-        "sha256": "04bfaeb6d20b67842353acf424f1ee2e604d702d44e6f4b19930ea99123ded40"
+        "bytes": 5547,
+        "sha256": "ad4f208300ee72436b0cc09e6f67ede20b4c0a4bf5b1f43d8137d201c612bc1d"
       },
       {
         "path": "lightx2v/common/ops/tensor/__init__.py",
@@ -7484,8 +7484,8 @@
       },
       {
         "path": "lightx2v/models/networks/trellis2/weights/loader.py",
-        "bytes": 3305,
-        "sha256": "79e0917fb11c88143f158a2c42ae0e98f1765bdac96e8710e1ef9fa1089a0391"
+        "bytes": 3321,
+        "sha256": "d91deb43b19e30dae2ec5320b1c3c487323105582c81590054331b783f663da7"
       },
       {
         "path": "lightx2v/models/networks/trellis2/weights/transformer_weights.py",
@@ -8704,8 +8704,8 @@
       },
       {
         "path": "lightx2v/models/runners/trellis2/trellis2_runner.py",
-        "bytes": 6044,
-        "sha256": "cd2159a8230eb22100ffd239fade1ca201577a2a4bc6b77c7f0c0dd3868bbed0"
+        "bytes": 6105,
+        "sha256": "72f5da162a033e0e34c99dbc1ffb70d74cf8e6cf975b1bb7eedd9298fbf64352"
       },
       {
         "path": "lightx2v/models/runners/vsr/utils/TCDecoder.py",
@@ -9699,8 +9699,8 @@
       },
       {
         "path": "lightx2v/models/video_encoders/hf/trellis2/mesh_extraction.py",
-        "bytes": 5945,
-        "sha256": "5cffa2ea30034ef0fa87f5d50f94adda8ab08170665b0b7fa18135d69d577006"
+        "bytes": 9746,
+        "sha256": "37a6a486a3fc61745db6eef82f4c9cd9b2db5cfb658d66f61f312ca6180781ef"
       },
       {
         "path": "lightx2v/models/video_encoders/hf/vid_recon.py",
@@ -10553,12 +10553,12 @@
         "sha256": "f04c6e131cc05cb6d03a92ee5671c0b45aa2da418accad9ac96a9384c0a3f013"
       },
       {
-        "path": "lightx2v_kernel/nvidia/docs/zh_CN/mx_formats量化基础.md",
+        "path": "lightx2v_kernel/nvidia/docs/zh_CN/mx_formats\u91cf\u5316\u57fa\u7840.md",
         "bytes": 2148,
         "sha256": "cef965d1e54c263ac4c462646d8547f380e98a015614da42abf8a745a4a6307c"
       },
       {
-        "path": "lightx2v_kernel/nvidia/docs/zh_CN/nvfp4量化基础.md",
+        "path": "lightx2v_kernel/nvidia/docs/zh_CN/nvfp4\u91cf\u5316\u57fa\u7840.md",
         "bytes": 2245,
         "sha256": "d284f80c746cf82cf06f59ef6cccb4a2e0b90a345d83312fc1b30821cefc3c94"
       },
@@ -17129,6 +17129,6 @@
       }
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "5217e0153856751391088caf3126af853cd0cb52"
+    "revision": "5c8e917710e1a2f6869d4dee57f5538cc705c64a"
   }
 }

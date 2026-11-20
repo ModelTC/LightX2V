@@ -7,5 +7,7 @@
   "neighbor_map": "sorted",
   "ln_norm_type": "torch",
   "conv_type": "Default",
-  "dit_quant_scheme": "Default"
+  "dit_quant_scheme": "Default",
+  "sparse_conv_backend": "torch_cached",
+  "mesh_hole_fill_backend": "torch"
 }
