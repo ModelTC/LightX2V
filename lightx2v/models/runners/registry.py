@@ -29,6 +29,7 @@ RUNNER_MODULES = {
     "lingbot_world_fast": ModelEntry("wan.wan_lingbot_fast_runner", config="wan.config.load_config"),
     "matrix_game4": ModelEntry("wan.wan_matrix_game4_runner", config="wan.matrix_game4_config.load_config"),
     "longcat_image": ModelEntry("longcat_image.longcat_image_runner", config="longcat_image.config.load_config"),
+    "longcat_video_avatar": ModelEntry("longcat_video_avatar.longcat_video_avatar_runner", config="longcat_video_avatar.config.load_config"),
     "ltx2": ModelEntry("ltx2.ltx2_runner", config="ltx2.config.load_config"),
     "ltx2_5": ModelEntry("ltx2.ltx25_runner", config="ltx2.config.load_config"),
     "minimax_h3": ModelEntry("minimax_h3.minimax_h3_runner", config="minimax_h3.config.load_config"),

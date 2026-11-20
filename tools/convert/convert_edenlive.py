@@ -87,7 +87,8 @@ def convert_encoder(source, output, kind, overwrite):
     import torch
     from safetensors.torch import load_file
 
-    from tools.convert.edenlive_weights import remap_hf_clip_vision_weights, remap_hf_umt5_weights
+    from lightx2v.models.input_encoders.hf.wan.t5.checkpoint import remap_hf_umt5_weights
+    from tools.convert.edenlive_weights import remap_hf_clip_vision_weights
 
     destination = output / "model.safetensors"
     key = "token_embedding.weight" if kind == "t5" else "visual.patch_embedding.weight"
@@ -96,7 +97,7 @@ def convert_encoder(source, output, kind, overwrite):
     state = load_file(str(source / "model.safetensors"))
     config = json.loads((source / "config.json").read_text())
     if kind == "t5":
-        weights = remap_hf_umt5_weights(state)
+        weights = remap_hf_umt5_weights(state, config["num_layers"])
     else:
         weights = {"visual." + name: tensor for name, tensor in remap_hf_clip_vision_weights(state, config["num_hidden_layers"]).items()}
         # The vision-only HF checkpoint has no contrastive text/image temperature.

@@ -6,6 +6,7 @@ from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+from .audio_windows import pack_later_audio_windows
 from .rope import RotaryPositionalEmbedding1D
 
 
@@ -83,19 +84,8 @@ class WanInfiniteTalkPreInfer(WanPreInfer):
 
     def _append_audio_adapter_args(self, weights, inputs, pre_out):
         audio_cond = inputs["audio_encoder_output"].to(device=AI_DEVICE, dtype=GET_DTYPE())
-        first_frame_audio = audio_cond[:, :1]
-        latter_audio = audio_cond[:, 1:]
-        if latter_audio.shape[1] % self.vae_scale != 0:
-            raise ValueError(f"audio frames after the first frame must be divisible by {self.vae_scale}, got {latter_audio.shape[1]}")
-
-        latter_audio = rearrange(latter_audio, "b (n_t n) w s c -> b n_t n w s c", n=self.vae_scale)
-        middle_index = self.audio_window // 2
-        latter_first = rearrange(latter_audio[:, :, :1, : middle_index + 1], "b n_t n w s c -> b n_t (n w) s c")
-        latter_middle = rearrange(latter_audio[:, :, 1:-1, middle_index : middle_index + 1], "b n_t n w s c -> b n_t (n w) s c")
-        latter_last = rearrange(latter_audio[:, :, -1:, middle_index:], "b n_t n w s c -> b n_t (n w) s c")
-        latter_frame_audio = torch.concat([latter_first, latter_middle, latter_last], dim=2)
-
-        audio_embedding = self._audio_proj(weights, first_frame_audio, latter_frame_audio)
+        latter_frame_audio = pack_later_audio_windows(audio_cond, self.vae_scale, self.audio_window)
+        audio_embedding = self._audio_proj(weights, audio_cond[:, :1], latter_frame_audio)
         human_num = audio_embedding.shape[0]
         audio_embedding = torch.concat(audio_embedding.split(1, dim=0), dim=2).squeeze(0).to(GET_DTYPE())
         pre_out.adapter_args["audio_embedding"] = audio_embedding
