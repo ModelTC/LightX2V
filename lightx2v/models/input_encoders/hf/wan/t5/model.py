@@ -522,10 +522,19 @@ class T5Encoder(nn.Module):
 
         if cpu_offload:
             self.offload_manager = WeightAsyncStreamManager(offload_granularity="block")
-            self.blocks_weights = T5OffloadBlocksWeights(num_layers, quant_scheme, lazy_load, lazy_load_path, rms_norm_type=rms_norm_type)
+            mm_type = {"fp8": "fp8-sgl", "int8": "int8-vllm"}.get(quant_scheme, quant_scheme)
+            self.blocks_weights = T5OffloadBlocksWeights(num_layers, mm_type, lazy_load, lazy_load_path, rms_norm_type=rms_norm_type)
             self.offload_manager.init_cuda_buffer(self.blocks_weights.offload_block_buffers, None)
             if lazy_load:
                 self.offload_manager.init_cpu_buffer(self.blocks_weights.offload_block_cpu_buffers)
+            # Offloaded T5 activations use the encoder dtype until the final output cast.
+            slots = self.offload_manager.cuda_buffers + (self.offload_manager.cpu_buffers if lazy_load else [])
+            for slot in slots:
+                for _, weight in slot.named_weight_leaves():
+                    if hasattr(weight, "infer_dtype"):
+                        weight.infer_dtype = dtype
+                if os.getenv("SENSITIVE_LAYER_DTYPE", "None") == "None":
+                    slot.norm1.sensitive_layer_dtype = slot.norm2.sensitive_layer_dtype = dtype
             self.blocks = self.blocks_weights.blocks
         else:
             self.blocks = nn.ModuleList(
@@ -557,6 +566,16 @@ class T5Encoder(nn.Module):
                     if isinstance(linear, F16AccumQuantLinearFp8):
                         linear.enable_fp8_f16_accum(ACTIVATION_QMAX)
 
+    def init_dummy_offload_blocks(self):
+        with torch.device("cpu"):
+            for index, block in enumerate(self.blocks):
+                dummy_block = T5SelfAttention(self.dim, self.dim_attn, self.dim_ffn, self.num_heads, self.num_buckets, self.shared_pos, dtype=self.token_embedding.weight.dtype)
+                weights = dummy_block.state_dict(prefix=f"blocks.{index}.")
+                del dummy_block
+                if index == 0:
+                    self.offload_manager.cuda_buffers[0].load(weights)
+                block.load(weights)
+
     def forward_without_offload(self, ids, mask=None):
         x = self.token_embedding(ids)
         x = self.dropout(x)
@@ -572,9 +591,10 @@ class T5Encoder(nn.Module):
         context = x if context is None else context
         b, n, c = x.size(0), self.num_heads, self.dim_attn // self.num_heads
         # compute query, key, value
-        q = attn_phase.attn_q.apply(x.squeeze(0)).view(b, -1, n, c)
-        k = attn_phase.attn_k.apply(context.squeeze(0)).view(b, -1, n, c)
-        v = attn_phase.attn_v.apply(context.squeeze(0)).view(b, -1, n, c)
+        context = context.flatten(0, 1)
+        q = attn_phase.attn_q.apply(x.flatten(0, 1)).view(b, -1, n, c)
+        k = attn_phase.attn_k.apply(context).view(b, -1, n, c)
+        v = attn_phase.attn_v.apply(context).view(b, -1, n, c)
         # attention bias
         attn_bias = x.new_zeros(b, n, q.size(1), k.size(1))
         if pos_bias is not None:
@@ -588,15 +608,15 @@ class T5Encoder(nn.Module):
         attn = torch.einsum("binc,bjnc->bnij", q, k) + attn_bias
         attn = F.softmax(attn.float(), dim=-1).type_as(attn)
         x = torch.einsum("bnij,bjnc->binc", attn, v)
-        x = x.reshape(b, -1, n * c)
-        x = attn_phase.attn_o.apply(x.squeeze(0)).unsqueeze(0)
-        return x
+        x = x.reshape(-1, n * c)
+        return attn_phase.attn_o.apply(x).unflatten(0, (b, q.size(1)))
 
     def forward_ffn_with_offload(self, x, ffn_phase):
-        x = x.squeeze(0)
+        batch, seq_len = x.shape[:2]
+        x = x.flatten(0, 1)
         x = ffn_phase.ffn_fc1.apply(x) * ffn_phase.gelu(ffn_phase.ffn_gate_0.apply(x))
         x = ffn_phase.ffn_fc2.apply(x)
-        return x.unsqueeze(0)
+        return x.unflatten(0, (batch, seq_len))
 
     def forward_block_with_offload(self, block, x, mask=None, pos_bias=None):
         if self.shared_pos:
@@ -855,6 +875,8 @@ class T5EncoderModel:
         else:
             self.checkpoint_path = checkpoint_path
         self.tokenizer_path = tokenizer_path
+        if dummy_model and cpu_offload and (t5_quantized or lazy_load):
+            raise ValueError("T5 dummy_model with CPU offload requires t5_quantized=false and t5_lazy_load=false")
         if t5_quantized and quant_scheme == "fp8-f16-accum" and not dummy_model:
             validate_checkpoint(self.checkpoint_path, profile=T5_QUANTIZATION_PROFILE)
 
@@ -890,6 +912,9 @@ class T5EncoderModel:
                 if lazy_load:
                     model.blocks_weights.load({})
                 else:
+                    if not t5_quantized:
+                        for key in block_weights_dict:
+                            block_weights_dict[key] = block_weights_dict[key].to(dtype)
                     model.blocks_weights.load(block_weights_dict)
                 del block_weights_dict
                 gc.collect()
@@ -899,6 +924,8 @@ class T5EncoderModel:
             gc.collect()
         else:
             logger.info("[DummyModel] Skipping T5 weight loading, using random init")
+            if cpu_offload:
+                model.init_dummy_offload_blocks()
 
         self.model = model
         if shard_fn is not None:
