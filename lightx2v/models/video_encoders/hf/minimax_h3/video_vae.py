@@ -1249,26 +1249,30 @@ class MiniMaxH3VideoVAE(nn.Module):
         return task_counts
 
     @staticmethod
-    def _gather_tiles(local_tiles: list[torch.Tensor], task_counts: list[int], group=None) -> list[torch.Tensor] | None:
-        """Collect tile results on rank 0 in global tile order."""
+    def _gather_tiles(local_tiles: list[torch.Tensor], task_counts: list[int], group=None, output_rank=0) -> list[torch.Tensor] | None:
+        """Collect tiles in logical-rank order, starting at the output rank."""
         rank = dist.get_rank(group)
+        world_size = len(task_counts)
+        if not 0 <= output_rank < world_size:
+            raise ValueError("output_rank must belong to the decode process group")
         # Each active worker sends once; idle ranks have no P2P operations.
-        # Rank 0 always owns the first tile and keeps its local list.
-        if rank != 0:
+        # Logical rank zero owns the first tile, even with fewer tiles than ranks.
+        if rank != output_rank:
             if not local_tiles:
                 return None
             # Match the receive buffers even when tile outputs are channels-last.
             local_tile_batch = torch.stack(local_tiles).contiguous()
-            send_op = dist.P2POp(dist.isend, local_tile_batch, 0, group=group)
+            send_op = dist.P2POp(dist.isend, local_tile_batch, output_rank, group=group)
             for request in dist.batch_isend_irecv([send_op]):
                 request.wait()
             return None
 
         receive_buffers = []
         receive_ops = []
-        for source_rank, task_count in enumerate(task_counts[1:], start=1):
+        for source_index, task_count in enumerate(task_counts[1:], start=1):
             if task_count == 0:
                 continue
+            source_rank = (output_rank + source_index) % world_size
             receive_buffer = local_tiles[0].new_empty((task_count, *local_tiles[0].shape))
             receive_buffers.append(receive_buffer)
             receive_ops.append(dist.P2POp(dist.irecv, receive_buffer, source_rank, group=group))
@@ -1284,19 +1288,23 @@ class MiniMaxH3VideoVAE(nn.Module):
     def _decode_parallel(
         self,
         all_tiles: list[torch.Tensor],
+        output_rank=0,
     ) -> list[torch.Tensor] | None:
-        """Decode balanced tiles and gather them on rank 0 in global order."""
+        """Decode balanced tiles and gather them on the requested output rank."""
         rank = dist.get_rank()
         world_size = dist.get_world_size()
+        if not 0 <= output_rank < world_size:
+            raise ValueError("output_rank must belong to the decode process group")
+        logical_rank = (rank - output_rank) % world_size
 
         num_tiles = len(all_tiles)
         task_counts = self._balanced_task_counts(num_tiles, world_size)
-        local_start = sum(task_counts[:rank])
-        local_end = local_start + task_counts[rank]
+        local_start = sum(task_counts[:logical_rank])
+        local_end = local_start + task_counts[logical_rank]
         local_tiles = all_tiles[local_start:local_end]
         local_tiles = [self.decoder(self.post_quant_conv(tile)) for tile in local_tiles]
 
-        return self._gather_tiles(local_tiles, task_counts, self.decode_group)
+        return self._gather_tiles(local_tiles, task_counts, self.decode_group, output_rank=output_rank)
 
     def _decode(self, latents: torch.Tensor) -> torch.Tensor | None:
         """Decode tiled latents and assemble the full video on rank 0.

@@ -34,8 +34,14 @@ class MiniMaxH3CleanScheduler(BaseScheduler):
         self.cache = None
         self.prepared_rope = None
         self.audio_embedding = None
+        self.live_stream = False
+        self.stream_start_idx = 0
 
-    def prepare(self, seed, num_frames, height, width, text_token_tags, *, condition_video_latents, condition_audio_latents, references, segment_starts):
+    def prepare(self, seed, num_frames, height, width, text_token_tags, *, condition_video_latents, condition_audio_latents, references, segment_starts, live_stream=False, stream_start_idx=0):
+        self.live_stream = bool(live_stream)
+        self.stream_start_idx = int(stream_start_idx)
+        if self.live_stream and self.stream_start_idx < 0:
+            raise ValueError("Live H3 requires a non-negative stream_start_idx")
         self.num_frames = num_frames
         self.num_latent_frames = video_latent_num_frames(num_frames)
         self.latent_height, self.latent_width = height // 16, width // 16
@@ -50,9 +56,13 @@ class MiniMaxH3CleanScheduler(BaseScheduler):
         self.condition_audio = (
             torch.cat([value.transpose(1, 2).reshape(-1, 32) for value in condition_audio_latents]).to(AI_DEVICE) if condition_audio_latents else self.condition_video.new_empty((0, 32))
         )
-        video_noise = torch.randn((1, 24, self.num_latent_frames, self.latent_height, self.latent_width), generator=self.generator, device=AI_DEVICE, dtype=torch.float32)
-        self.video_noise = patchify_video_latents(video_noise).cpu()
-        self.audio_noise = torch.randn((1, 2 * self.num_audio_latents, 32), generator=self.generator, device=AI_DEVICE, dtype=torch.float32)[0].cpu()
+        if self.live_stream:
+            # An unbounded session draws one media chunk at a time.
+            self.video_noise = self.audio_noise = None
+        else:
+            video_noise = torch.randn((1, 24, self.num_latent_frames, self.latent_height, self.latent_width), generator=self.generator, device=AI_DEVICE, dtype=torch.float32)
+            self.video_noise = patchify_video_latents(video_noise).cpu()
+            self.audio_noise = torch.randn((1, 2 * self.num_audio_latents, 32), generator=self.generator, device=AI_DEVICE, dtype=torch.float32)[0].cpu()
         self.plan = build_clean_streaming_plan_from_geometry(
             text_token_tags=tuple(tags.cpu() for tags in text_token_tags),
             references=[reference for reference in references if reference.kind == "image"],
@@ -63,6 +73,8 @@ class MiniMaxH3CleanScheduler(BaseScheduler):
             num_audio_latents=self.num_audio_latents,
             segment_starts=tuple(segment_starts),
             policy=self.policy,
+            live_stream=self.live_stream,
+            stream_start_idx=self.stream_start_idx,
         )
         self.cache = MiniMaxH3CleanKVCache(num_blocks=self.config["num_layers"], plan=self.plan)
 
@@ -91,6 +103,12 @@ class MiniMaxH3CleanScheduler(BaseScheduler):
         self.plan = self.plan.append_motion(chunk_index, token_tags)
         self.cache.plan = self.plan
 
+    def prepare_live_chunk(self, index, audio_latents=None, *, clean=False):
+        """Prepare one epoch-local chunk without resetting its absolute audio phase."""
+        if not self.live_stream:
+            raise RuntimeError("prepare_live_chunk requires live_stream=True")
+        self.prepare_chunk(index, clean=clean, audio_latents=audio_latents)
+
     def prepare_chunk(self, index, *, clean=False, audio_latents=None):
         # Positions stay fixed across denoising steps, but clean history uses
         # a different prefix and motion updates can change its length.
@@ -100,9 +118,21 @@ class MiniMaxH3CleanScheduler(BaseScheduler):
         if not clean:
             self.audio_embedding = None
             video, audio = self.plan.chunk_slices(index)
-            self.video_latents = self.video_noise[video].to(AI_DEVICE)
+            if self.live_stream:
+                frame_start, frame_end, _, _ = self.plan.chunk_spec(index)
+                noise = torch.randn((1, 24, frame_end - frame_start, self.latent_height, self.latent_width), generator=self.generator, device=AI_DEVICE, dtype=torch.float32)
+                self.video_latents = patchify_video_latents(noise)
+                # Draw joint stereo audio for RefA2AV; RefA2V consumes the same
+                # random draw but conditions on the supplied clean audio.
+                chunk_audio_noise = torch.randn((2 * (audio.stop - audio.start), 32), generator=self.generator, device=AI_DEVICE, dtype=torch.float32)
+            else:
+                self.video_latents = self.video_noise[video].to(AI_DEVICE)
             if self.generate_audio:
-                self.audio_latents = torch.cat((self.audio_noise[audio], self.audio_noise[self.num_audio_latents + audio.start : self.num_audio_latents + audio.stop])).to(AI_DEVICE)
+                self.audio_latents = (
+                    chunk_audio_noise
+                    if self.live_stream
+                    else torch.cat((self.audio_noise[audio], self.audio_noise[self.num_audio_latents + audio.start : self.num_audio_latents + audio.stop])).to(AI_DEVICE)
+                )
             else:
                 if audio_latents is None or audio_latents.shape != (2 * (audio.stop - audio.start), 32):
                     raise ValueError("RefA2V requires this chunk's clean stereo audio latents")
@@ -145,6 +175,8 @@ class MiniMaxH3CleanScheduler(BaseScheduler):
             self.audio_latents = updated[1]
 
     def clear(self):
+        self.live_stream = False
+        self.stream_start_idx = 0
         if self.cache is not None:
             self.cache.clear()
         for name in (

@@ -34,8 +34,9 @@ class MiniMaxH3CleanKVCache:
         self._prefix_lengths: torch.Tensor | None = None
         self._entry_key: "CleanCacheKey" | None = None
         self._persist = False
-        self._chunk_rows = max(plan.chunk_row_slice(index).stop - plan.chunk_row_slice(index).start for index in range(plan.num_chunks))
-        self._num_chunk_slots = plan.policy.sink_chunk_num + plan.policy.latest_chunk_num
+        self._chunk_rows = plan.max_chunk_rows
+        latest_slots = max(plan.policy.latest_chunk_num, 2) if plan.live_stream else plan.policy.latest_chunk_num
+        self._num_chunk_slots = plan.policy.sink_chunk_num + latest_slots
         self._chunk_slots: dict["CleanCacheKey", int] = {}
         self._next_chunk_slot = 0
         self._chunk_storage = [None] * num_blocks
@@ -195,7 +196,10 @@ class MiniMaxH3CleanKVCache:
 
     def finish_chunk(self, chunk_index: int) -> None:
         next_chunk = chunk_index + 1
-        keep_chunks = set(self.plan.clean_history_indices(next_chunk)) if next_chunk < self.plan.num_chunks else set()
+        keep_chunks = set(self.plan.clean_history_indices(next_chunk)) if self.plan.live_stream or next_chunk < self.plan.num_chunks else set()
+        if self.plan.live_stream:
+            # The next motion is unknown until its chunk begins; retain its bridge.
+            keep_chunks.add(chunk_index)
         for block in self._buffers:
             for key in tuple(block):
                 if key[0] == "chunk" and key[1] not in keep_chunks:

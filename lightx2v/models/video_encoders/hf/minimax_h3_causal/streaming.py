@@ -11,7 +11,10 @@ class MiniMaxH3StreamingVideoDecoder:
     Keep 2 latents between windows; finish() emits the final 5 frames.
     """
 
-    def __init__(self, vae, num_frames, *, output_uint8=False, decode_graph=None, output_writer=None):
+    def __init__(self, vae, num_frames, *, output_uint8=False, decode_graph=None, output_writer=None, output_rank=0):
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        if not 0 <= output_rank < world_size:
+            raise ValueError("Video decoder output_rank must identify a rank in the process group")
         self.vae = vae
         self.num_frames = num_frames
         self.output_uint8 = output_uint8
@@ -21,6 +24,7 @@ class MiniMaxH3StreamingVideoDecoder:
         self.decode_graph = decode_graph
         self.pending_decode = None
         self.output_writer = output_writer
+        self.output_rank = output_rank
         # Compact asynchronous tile outputs before cloning, gathering and stitching.
         # Synchronous decoding retains the original 28-frame layout.
         self.output_frame_indices = torch.tensor([*range(3, 20), *range(23, 28)], device=decode_graph.device) if decode_graph is not None else None
@@ -48,6 +52,8 @@ class MiniMaxH3StreamingVideoDecoder:
         matching the causal checkpoint's VAE path.
         """
         vae = self.vae
+        if not vae.decode_parallel and dist.is_initialized() and dist.get_rank() != self.output_rank:
+            return None
         try:
             device = vae._activate()
             latents = vae.denormalize_latents(latents.to(device)).to(vae.infer_dtype)
@@ -55,7 +61,7 @@ class MiniMaxH3StreamingVideoDecoder:
                 layout = vae._spatial_tile_layout(latents)
                 tiles = vae._get_all_tiles(latents, 1, layout)
                 if vae.decode_parallel:
-                    decoded = vae._decode_parallel(tiles)
+                    decoded = vae._decode_parallel(tiles, output_rank=self.output_rank)
                     if decoded is None:
                         return None
                 else:
@@ -74,7 +80,7 @@ class MiniMaxH3StreamingVideoDecoder:
             layout = vae._spatial_tile_layout(latents)
             tiles = vae._get_all_tiles(latents, 1, layout)
             counts = vae._balanced_task_counts(len(tiles), dist.get_world_size())
-            rank = dist.get_rank()
+            rank = (dist.get_rank() - self.output_rank) % len(counts)
             start = sum(counts[:rank])
             local = [self.decode_graph(vae.post_quant_conv(tile), frame_indices=self.output_frame_indices) for tile in tiles[start : start + counts[rank]]]
         return local, counts, layout
@@ -101,7 +107,7 @@ class MiniMaxH3StreamingVideoDecoder:
         for tile in local:
             tile.record_stream(current)
         # Gather stays on the caller's stream, ordered with DiT collectives.
-        tiles = self.vae._gather_tiles(local, counts)
+        tiles = self.vae._gather_tiles(local, counts, output_rank=self.output_rank)
         self.pending_decode = None
         if tiles is None:
             return None
