@@ -13,5 +13,7 @@
       ],
     "request_defaults": {
         "aspect_ratio": "16:9"
-    }
+    },
+    "cpu_offload": true,
+    "offload_granularity": "block"
 }

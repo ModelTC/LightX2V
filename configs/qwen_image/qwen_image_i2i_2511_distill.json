@@ -12,5 +12,7 @@
           "path": "/path/to/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors",
           "strength": 1.0
         }
-      ]
+      ],
+    "cpu_offload": true,
+    "offload_granularity": "block"
 }
