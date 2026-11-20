@@ -13,6 +13,7 @@
   "vae_cpu_offload": true,
   "use_compile": true,
   "vae_use_compile": true,
+  "warmup": true,
   "vae_attn_type": "torch_sdpa",
   "attn_type": "sage_attn2",
   "rms_type": "torch_native",
