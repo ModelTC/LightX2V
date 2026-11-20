@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 import torch
 
@@ -296,14 +297,19 @@ class LTX2AudioVAE:
 
         return encoder, decoder, vocoder
 
-    def encode(self, audio_spectrogram: torch.Tensor) -> torch.Tensor:
+    @contextmanager
+    def active_encoder(self) -> Iterator[AudioEncoder]:
         try:
             if self.cpu_offload:
                 self.encoder = self.encoder.to(AI_DEVICE)
-            return self.encoder(audio_spectrogram)
+            yield self.encoder
         finally:
             if self.cpu_offload:
                 self.encoder = self.encoder.to("cpu")
+
+    def encode(self, audio_spectrogram: torch.Tensor) -> torch.Tensor:
+        with self.active_encoder() as encoder:
+            return encoder(audio_spectrogram)
 
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         try:

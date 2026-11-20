@@ -1,5 +1,6 @@
 import os
 import time
+from contextlib import closing
 from math import gcd as _gcd
 
 import torch
@@ -13,6 +14,7 @@ from lightx2v.models.schedulers.ltx2.scheduler import LTX2Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.audio_vae import encode_audio
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2Upsampler, LTX2VideoVAE
+from lightx2v.models.video_encoders.hf.ltx2.video_vae import TilingConfig, get_video_chunks_number
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import AudioVideoState, align_num_frames
@@ -320,6 +322,7 @@ class LTX2Runner(DefaultRunner):
             dtype=GET_DTYPE(),
             cpu_offload=text_encoder_offload,
             gemma_attn_implementation=self.config.get("gemma_attn_implementation"),
+            offload_granularity=self.config.get("gemma_offload_granularity", "model"),
         )
 
         # Apply LoRA to text encoder if configured
@@ -652,10 +655,10 @@ class LTX2Runner(DefaultRunner):
             raise ValueError(f"ltx2_s2v: failed to decode audio from {ap!r}.")
         decoded = _ltx2_audio_to_stereo(decoded)
 
-        with torch.no_grad():
+        with torch.no_grad(), self.audio_vae.active_encoder() as encoder:
             encoded = encode_audio(
                 decoded,
-                self.audio_vae.encoder,
+                encoder,
                 use_real_mel_spectrogram=use_real_mel_spectrogram,
             )
         if encoded.dim() == 4:
@@ -1114,13 +1117,16 @@ class LTX2Runner(DefaultRunner):
                 if self.input_info.task == "ltx2_s2v" and getattr(self, "_ltx2_s2v_mux_audio", None) is not None:
                     save_audio = self._ltx2_s2v_mux_audio
                 out_path = self.input_info.save_result_path
-                save_video(
-                    video=self.gen_video_final,
-                    fps=self.config.get("fps", 24),
-                    audio=save_audio,
-                    output_path=out_path,
-                    video_chunks_number=1,
-                )
+                num_frames = self.input_info.num_frames or get_input_value(self.config, "num_frames")
+                tiling = TilingConfig.default() if self.config.get("use_tiling_vae", False) else None
+                with closing(self.gen_video_final) as video:
+                    save_video(
+                        video=video,
+                        fps=self.config.get("fps", 24),
+                        audio=save_audio,
+                        output_path=out_path,
+                        video_chunks_number=get_video_chunks_number(num_frames, tiling),
+                    )
 
                 mux_src = (getattr(self.input_info, "mux_audio_video_path", None) or "").strip()
                 if self.input_info.task == "v2av" and mux_src:
