@@ -2,7 +2,7 @@ from contextlib import suppress
 
 import torch
 
-from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager
+from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager, record_stream
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.common.offload.resident import ResidentBlocks, uniform_resident_indices, validate_residency_config
 from lightx2v.models.networks.qwen_image_21.infer.transformer_infer import QwenImage21TransformerInfer
@@ -10,14 +10,6 @@ from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
-
-
-def _record_stream(value, stream):
-    if isinstance(value, tuple):
-        for item in value:
-            _record_stream(item, stream)
-    elif value is not None:
-        value.record_stream(stream)
 
 
 def validate_qwen_image_21_residency_config(config, lora_path=None):
@@ -66,8 +58,7 @@ class QwenImage21OffloadTransformerInfer(QwenImage21TransformerInfer):
         if self.resident_blocks is not None:
             # Called first by prefill, then reused by every denoising step.
             self.resident_blocks.prepare(blocks)
-            for tensor in (hidden_states, *inputs):
-                _record_stream(tensor, self.offload_manager.compute_stream)
+            record_stream((hidden_states, *inputs), self.offload_manager.compute_stream)
             try:
                 hidden_states = self.offload_manager.run_blocks(blocks, self.resident_blocks.indices, hidden_states, run_block)
             except BaseException:

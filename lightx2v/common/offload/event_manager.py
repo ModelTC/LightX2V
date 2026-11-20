@@ -7,6 +7,14 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
+def record_stream(value, stream):
+    if isinstance(value, tuple):
+        for item in value:
+            record_stream(item, stream)
+    elif value is not None:
+        value.record_stream(stream)
+
+
 class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
     """Weight offload with reusable buffers protected by device events."""
 
