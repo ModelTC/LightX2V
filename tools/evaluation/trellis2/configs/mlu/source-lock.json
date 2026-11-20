@@ -1,6 +1,6 @@
 {
   "lightx2v-trellis2": {
-    "git_head": "5217e0153856751391088caf3126af853cd0cb52",
+    "git_head": "a608f8e8dc526d517d984db27b358267533dcd4f",
     "files": [
       {"path": ".agents/README.md","bytes": 3372,"sha256": "5a2ff75e7ea60f5c65d74d675528ac36c7d08ef6f1714cbf6255d923fcd9cdaa"},
       {"path": ".agents/skills/lightx2v-kernel-skills/intel-xpu/integration-skills/sycl-esimd-to-python-wheel/SKILL.md","bytes": 13564,"sha256": "c5918fb2cedb3e961e0e7720273fa26b56e89bfef2dc8819753c15206de07eb9"},
@@ -1076,14 +1076,14 @@
       {"path": "lightx2v/common/ops/sparse/attention/modules.py","bytes": 5335,"sha256": "19fb40356795393b73656c1356e217ee8c21fdf07671d2b3889eafebe3b4fe4c"},
       {"path": "lightx2v/common/ops/sparse/attention/packed.py","bytes": 2732,"sha256": "88f13879f20f9239c9e456c36ffd81a61a05a14ff488a620cfccd3b1e8ad1087"},
       {"path": "lightx2v/common/ops/sparse/attention/rope.py","bytes": 2654,"sha256": "a3d42a4bd06444a37944134cd5ed7b7de8c2af8c25ad92d48a93b21ed6bb82d9"},
-      {"path": "lightx2v/common/ops/sparse/basic.py","bytes": 19758,"sha256": "230c268de34d712bcfe7618e92538c7573ec7b8805cdbb19baa0f03e2807de47"},
+      {"path": "lightx2v/common/ops/sparse/basic.py","bytes": 19788,"sha256": "5214f49f1cff7c4752dc7c9b8d53e52b44a43f3ae92478812206895d0687f28e"},
       {"path": "lightx2v/common/ops/sparse/dense_spatial.py","bytes": 1640,"sha256": "167f575ab8b13db0be2952ff1988a3b2ce1d8d4f47b418bccbbd93ced0592004"},
       {"path": "lightx2v/common/ops/sparse/linear.py","bytes": 949,"sha256": "b07f941afef0fec171b5e1ab0fb881970efc21cb0301025853f4d2c4363a5549"},
-      {"path": "lightx2v/common/ops/sparse/neighbor_map.py","bytes": 2299,"sha256": "eb706a2aff29b7bc0ba89704ed87358adb85b4defe036205c7a89ac61e8162ad"},
+      {"path": "lightx2v/common/ops/sparse/neighbor_map.py","bytes": 2501,"sha256": "ed33b5b4b56dad50078597c98c44fb22a29f9d3680798c3c44d19a12220663d3"},
       {"path": "lightx2v/common/ops/sparse/nonlinearity.py","bytes": 344,"sha256": "c7371563322f684f5b6cff835576cf9fca8dab79987076804a4b627e771ee504"},
       {"path": "lightx2v/common/ops/sparse/spatial/__init__.py","bytes": 54,"sha256": "f9db474a21e7599d04c09b9ca492f80ac3095a86dd7f0ce751573191baa4be30"},
       {"path": "lightx2v/common/ops/sparse/spatial/channel_to_spatial.py","bytes": 1538,"sha256": "b1383741f85efd942c148378dd24d835fe2bfb513f1f473aeb308c3384abb556"},
-      {"path": "lightx2v/common/ops/sparse/submanifold_conv.py","bytes": 4504,"sha256": "04bfaeb6d20b67842353acf424f1ee2e604d702d44e6f4b19930ea99123ded40"},
+      {"path": "lightx2v/common/ops/sparse/submanifold_conv.py","bytes": 5669,"sha256": "449c983d2d5ca1b287e0ff6da16ed628fa46c7575d84ab7fe0d0b07bcc2a88f1"},
       {"path": "lightx2v/common/ops/tensor/__init__.py","bytes": 34,"sha256": "98f5be2a2564215a457d2671aef0289e4f28f4cad9e5dcbc60f940255fc18390"},
       {"path": "lightx2v/common/ops/tensor/tensor.py","bytes": 5851,"sha256": "c23d6d93d90fe8ed2ca08207528593261bcc2427ef73340d5e1f0eb75aeeffa8"},
       {"path": "lightx2v/common/ops/utils.py","bytes": 17017,"sha256": "6e3de2f7a35fe4f8bdc2b3eb7fc6a3fe8119744f4a4832070c2ea74bd9c2a406"},
@@ -3429,6 +3429,6 @@
       {"path": "tools/profile/analyze_torch_trace_gap.py","bytes": 10245,"sha256": "c60400ebc1e6816f3598fddffb5cbfc04e8d975474534d2414f0e68c28309f55"}
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "5217e0153856751391088caf3126af853cd0cb52"
+    "revision": "a608f8e8dc526d517d984db27b358267533dcd4f"
   }
 }
