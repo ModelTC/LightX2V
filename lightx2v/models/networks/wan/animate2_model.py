@@ -48,6 +48,16 @@ class WanAnimate2Model(WanModel):
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
         return self._normalize_checkpoint_keys(super()._load_quant_ckpt(unified_dtype, sensitive_layer))
 
+    def _read_safetensors_metadata(self, file_path):
+        metadata = super()._read_safetensors_metadata(file_path)
+        if self.use_tp:
+            # The dummy loader allocates on the target device directly from these shapes.
+            for key, info in metadata.items():
+                shards = self._split_tensor_for_tp(key, torch.empty(info["shape"], device="meta"))
+                if shards is not None:
+                    info["shape"] = shards[self.tp_rank].shape
+        return metadata
+
     def _load_dummy_ckpt(self, unified_dtype, sensitive_layer):
         return self._normalize_checkpoint_keys(super()._load_dummy_ckpt(unified_dtype, sensitive_layer))
 

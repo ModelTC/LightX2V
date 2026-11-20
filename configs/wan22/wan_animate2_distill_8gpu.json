@@ -49,13 +49,17 @@
     "use_image_encoder": true,
     "use_31_block": true,
     "cpu_offload": false,
-    "t5_cpu_offload": false,
-    "clip_cpu_offload": false,
-    "vae_cpu_offload": false,
+    "t5_cpu_offload": true,
+    "clip_cpu_offload": true,
+    "vae_cpu_offload": true,
     "vae_dtype": "torch.bfloat16",
+    "use_tiling_vae": true,
+    "serialize_load": true,
     "parallel": {
-        "seq_p_size": 8,
-        "seq_p_attn_type": "ulysses"
+        "seq_p_size": 1,
+        "seq_p_attn_type": "ulysses",
+        "tensor_p_size": 8,
+        "tp_load_mode": "local"
     },
     "dit_original_ckpt": "/path/to/wan_animate_2_bf16_distillation.safetensors",
     "t5_original_ckpt": "/path/to/models_t5_umt5-xxl-enc-bf16.pth",
