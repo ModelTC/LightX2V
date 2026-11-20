@@ -4,9 +4,12 @@ This example demonstrates how to use LightX2V with Qwen-Image-Edit model for I2I
 """
 
 import json
+import os
 from pathlib import Path
 
 from lightx2v import LightX2VPipeline
+
+os.environ.setdefault("LORA_DTYPE", "FP32")
 
 config = json.loads((Path(__file__).resolve().parents[3] / "configs/qwen_image/qwen_image_i2i_2511_distill.json").read_text())
 config.update(

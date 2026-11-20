@@ -76,8 +76,16 @@ reference the registered arena and rejects undeclared CPU state. NVFP4, GGUF,
 Marlin and `fp8-pertensor` use specialized loading/storage paths that require
 separate adaptations and are rejected before checkpoint loading. Ordinary
 backend hardware and checkpoint requirements still apply. The
-option defaults to false and requires static CPU block offload;
-lazy loading, TP, LoRA, shared weights and contiguous offload are rejected.
+option defaults to false and requires static CPU block offload. Use `true` to require
+NUMA placement. With `"auto"`, the loader falls back to ordinary block offload
+when GPU NUMA topology, node binding or System V IPC is unavailable, or when
+IPC permissions or segment limits prevent allocation. Out-of-memory, attach,
+CUDA registration and cleanup errors propagate. Lazy loading, TP, shared weights
+and contiguous offload are unsupported.
+For non-layered Qwen Image T2I/I2I with an unquantized DiT, the loader can
+merge `lora_configs` into CPU weights at startup before placing them in the
+arena. These adapters stay fixed for the lifetime of the runner. Other LoRA
+loading modes, including `lora_mode="separate"` and `lora_mode="consumer"`, are unsupported.
 Call `runner.close()` after serving stops to retire transfers and release the arena.
 For the Python pipeline, call `pipeline.runner.close()` in a `finally` block.
 The InfiniteTalk/Wan model constructor and runner factory also release adopted

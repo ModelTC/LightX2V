@@ -1,8 +1,10 @@
+import inspect
 import math
 import os
 import socket
 import subprocess
 from copy import deepcopy
+from datetime import timedelta
 
 import cv2
 import numpy as np
@@ -178,6 +180,13 @@ class WanAnimate2Runner(WanRunner):
     """
 
     def __init__(self, config):
+        if config.get("generation_attn_type", "flex_attn") == "flash_attn3":
+            from lightx2v.common.ops.attn.flash_attn import flash_attn_func_v3
+
+            if flash_attn_func_v3 is None:
+                raise ImportError("Wan-Animate-2 generation_attn_type='flash_attn3' requires FlashAttention3. Install an LSE-capable build or use generation_attn_type='flex_attn'.")
+            if "return_attn_probs" not in inspect.signature(flash_attn_func_v3).parameters:
+                raise ValueError("Wan-Animate-2 generation attention requires flash_attn_func(..., return_attn_probs=True) for LSE. Update FlashAttention3 or use generation_attn_type='flex_attn'.")
         super().__init__(config)
         if self.config.get("disagg_mode"):
             raise NotImplementedError("Wan-Animate-2 does not support disaggregated inference yet.")
@@ -197,12 +206,42 @@ class WanAnimate2Runner(WanRunner):
             raise ValueError("Wan-Animate-2 requires both use_image_encoder=true and use_img_emb=true.")
         if not self.config.get("use_31_block", True):
             raise ValueError("Wan-Animate-2 requires use_31_block=true for its CLIP image features.")
+        serialize_across_ranks = self.config.get("serialize_load", False) and dist.is_initialized() and dist.get_world_size() > 1
+        if serialize_across_ranks and (
+            (self.config.get("parallel") or {}).get("tp_load_mode") != "local"
+            or any(self.config.get(key, False) for key in ("cpu_offload", "load_from_rank0", "shared_cpu_weights", "unload_modules", "video_super_resolution"))
+        ):
+            raise ValueError("Animate2 serialize_load requires a resident DiT and rank-local loading without weight collectives or module unloading.")
 
     def init_scheduler(self):
         if self.config.get("disagg_mode") == "decode":
             return super().init_scheduler()
         self.scheduler = WanAnimate2Scheduler(self.config)
         logger.info("Using WanAnimate2Scheduler")
+
+    def load_model(self):
+        if not self.config.get("serialize_load", False):
+            return super().load_model()
+        if not dist.is_initialized() or dist.get_world_size() == 1:
+            return super().load_model()
+        # CPU collectives keep waiting ranks out of NCCL during slow loading.
+        group = dist.new_group(backend="gloo", timeout=timedelta(hours=1))
+        try:
+            for rank in range(dist.get_world_size()):
+                error = None
+                status = [None]
+                if dist.get_rank() == rank:
+                    try:
+                        super().load_model()
+                        getattr(torch, AI_DEVICE).synchronize()
+                    except Exception as exc:
+                        error = exc
+                        status[0] = f"{type(exc).__name__}: {exc}"
+                dist.broadcast_object_list(status, src=rank, group=group)
+                if status[0] is not None:
+                    raise RuntimeError(f"Animate2 model loading failed on rank {rank}: {status[0]}") from error
+        finally:
+            dist.destroy_process_group(group)
 
     def load_transformer(self):
         model_kwargs = {

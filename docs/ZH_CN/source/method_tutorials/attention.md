@@ -33,6 +33,8 @@
 
 Wan 的 `cross_attn_2_type` 用于图像交叉注意力。Wan2.1 的 I2V/FLF2V 和 Wan2.2 的 Animate/Animate2 配置需要保留；T2V/VACE，以及关闭图像编码器的 Wan2.2 MoE、TI2V 和 S2V 配置无需此字段。
 
+Wan-Animate-2 的 `generation_attn_type="flash_attn3"` 要求 `flash_attn_interface.flash_attn_func(..., return_attn_probs=True)` 同时返回注意力输出和按 `[batch, heads, tokens]` 排列的每个 query 的 log-sum-exp。上游 v2.8.3 标签的 Hopper 接口可以运行普通稠密注意力，但缺少该参数。使用该版本时可选 `flex_attn`（Animate2 默认值）或 `sage_attn2`（八卡 4090D 预设）。[Hopper v2.8.3 接口](https://github.com/Dao-AILab/flash-attention/blob/v2.8.3/hopper/flash_attn_interface.py#L487-L502)
+
 tips: radial_attn因为稀疏算法原理的限制只能用在self attention
 
 如需进一步定制注意力机制的行为，请参考各注意力库的官方文档或实现代码。

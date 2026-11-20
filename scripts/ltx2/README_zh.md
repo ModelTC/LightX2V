@@ -16,8 +16,12 @@
 
 下载对应的 [LTX-2](https://huggingface.co/Lightricks/LTX-2)、[LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) 或 [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) 权重。在所选 Shell 脚本中设置 `lightx2v_path`、`model_path` 和 `CUDA_VISIBLE_DEVICES`，并修改提示词和输入路径。
 
-- **LTX-2 / LTX-2.3**：本地 `model_path` 目录还需包含 Gemma 文本编码器权重、tokenizer 和 processor 文件；缺少时将 [Gemma 3](https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized) 下载到其子目录。在所选 JSON 中将 `dit_original_ckpt` 指向对应权重文件。LTX-2.3 脚本沿用 LTX-2 目录中的 Gemma，通过 JSON 选择 LTX-2.3 权重。
+- **LTX-2 / LTX-2.3**：在所选 JSON 中将 `dit_original_ckpt` 指向对应权重文件，将 `gemma_original_ckpt` 指向完整的 [Gemma 3](https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized) HF 目录，包含权重、tokenizer 和 processor。未配置该字段时，加载器会在 `model_path` 下查找 Gemma 资产。
 - **LTX-2.5**：在所选 JSON 中设置各组件权重路径，包括 Transformer、文本编码器、视频 / 音频 VAE、时长预测器和上采样器。启动脚本使用 [ltx2_5_distilled_8gpu.json](../../configs/ltx2/ltx2_5_distilled_8gpu.json)。
+
+启动前先准备模型架构配置：LTX-2 可使用官方的 `transformer/config.json`；没有独立配置的一体式 LTX-2.3 权重，应从对应 checkpoint metadata 一次性导出 Transformer 及音视频启动参数，保存为 `model_path` 下的 `config.json`。模型目录须与 checkpoint 版本对应，不要将 LTX-2 配置直接用于 LTX-2.3。现有目录加载器读取配置，显式部署参数最后生效。Gemma 仍是独立资产，通过 `gemma_original_ckpt` 指定。
+
+LTX-2 / LTX-2.3 的 Gemma 3 可设置 `gemma_cpu_offload=true`、`gemma_offload_granularity="block"`，词表保留在 CPU，只搬运选中的 token embedding，并分阶段搬运 decoder 层、final norm、projection 和音视频 connectors。该开关独立于 DiT 的 `offload_granularity`。同步搬运保留原 CPU 权重存储，不 pin 或预取权重；默认 `"model"` 保持整模块 offload。同一 encoder 只支持串行调用，直接 API 多线程共享 encoder 的并发调用尚不支持。LTX-2.5 设置 Gemma block offload 时会在加载前报错。
 
 ## 运行
 

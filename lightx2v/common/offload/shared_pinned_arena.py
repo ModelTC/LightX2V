@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import errno
 import hashlib
 import json
 import math
@@ -57,8 +58,16 @@ class SysVSharedMemoryError(SharedPinnedArenaError):
     """A System V shared-memory operation failed."""
 
 
+class SysVAllocationUnavailableError(SysVSharedMemoryError):
+    """System V IPC policy or limits prevented the creation of a segment."""
+
+
 class NumaBindingError(SharedPinnedArenaError):
     """Installing a NUMA policy failed."""
+
+    def __init__(self, message: str, *, error_number: int | None = None) -> None:
+        super().__init__(message)
+        self.errno = error_number
 
 
 class CudaHostRegistrationError(SharedPinnedArenaError):
@@ -669,7 +678,11 @@ class SysVSegment:
         libc = _load_libc()
         shmid = libc.shmget(IPC_PRIVATE, ctypes.c_size_t(size), permissions | IPC_CREAT | IPC_EXCL)
         if shmid < 0:
-            raise SysVSharedMemoryError(_errno_message(f"shmget({size})"))
+            error = ctypes.get_errno()
+            message = _errno_message(f"shmget({size})")
+            if error in (errno.EACCES, errno.EPERM, errno.EINVAL, errno.ENOSPC, errno.ENOSYS):
+                raise SysVAllocationUnavailableError(message)
+            raise SysVSharedMemoryError(message)
         address = None
         segment = None
         try:
@@ -821,9 +834,10 @@ def bind_address_to_numa(address: int, size: int, numa_node: int, *, strict: boo
     if result == 0:
         return True
 
+    error = ctypes.get_errno()
     message = _errno_message(f"mbind({address:#x}, {size}, node={numa_node})")
     if strict:
-        raise NumaBindingError(message)
+        raise NumaBindingError(message, error_number=error)
     warnings.warn(message, RuntimeWarning, stacklevel=2)
     return False
 
@@ -1154,7 +1168,7 @@ class SharedPinnedArena:
                 lifetime.close(remove=True, synchronize_cuda=False)
             except BaseException as cleanup_error:
                 _QUARANTINED_LIFETIMES.append(lifetime)
-                error.add_note(f"arena cleanup also failed: {cleanup_error!r}")
+                raise SharedPinnedArenaError(f"Failed to release new arena after {error!r}") from cleanup_error
             raise
 
     @classmethod

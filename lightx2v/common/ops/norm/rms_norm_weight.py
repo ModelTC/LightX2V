@@ -143,11 +143,11 @@ class RMSWeightTemplate(FloatingWeightStorage, metaclass=ABCMeta):
                 weight_dict,
                 self.lazy_load,
                 self.lazy_load_file,
-                use_infer_dtype=True,
+                dtype=self.infer_dtype,
             )
             self.weight_cuda_buffer = result.get("weight")
         elif self.create_cpu_buffer:
-            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, use_infer_dtype=True)
+            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, dtype=self.infer_dtype)
             self.pin_weight = result.get("weight")
             self.weight = None
 

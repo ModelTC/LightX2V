@@ -49,7 +49,9 @@ CUDA 配置中的 `dit_quantized_ckpt`、`t5_quantized_ckpt`、`clip_quantized_c
 - [估测工具](../../../../tools/estimate_offload_residency.py)：`build_qwen_case()`，加载前缀 `transformer_blocks.0.`。
 - [infer/utils.py](../../../../lightx2v/models/networks/qwen_image/infer/utils.py)：`get_qwen_image_size()`，由估测与 runner 共同使用。
 
-当前范围为 `model_cls="qwen_image"`、`task="t2i"`，不含 layered、编辑任务、Magi compile、`zero_cond_t` 或 `use_layer3d_rope`；同时遵守公共静态常驻校验。普通 CFG 的两路顺序计算与被拒绝的多设备 CFG parallel 是不同条件。
+运行时准入为非 layered 的 `model_cls="qwen_image"`、`task="t2i"/"i2i"`；仅 I2I 可用 `zero_cond_t`，仍拒绝 Magi compile、`use_layer3d_rope` 及公共校验的其他不兼容路径。静态 LoRA 可在算子加载前合并为最终 CPU 主权重；此例外不允许动态适配。包含常驻字段时，model owner 拒绝运行时 LoRA 更新/移除，活动常驻期间也拒绝替换主权重。普通 CFG 的两路顺序计算与被拒绝的多设备 CFG parallel 是不同条件。
+
+估测 producer 的范围独立：`build_qwen_case()` 只构造普通 T2I 单图网格和单路 timestep，且不做 LoRA 合并，因此在资产读取前明确拒绝 I2I、`zero_cond_t` 和非空 `lora_configs`。其 CPU 权重使用常规内存分配，只支持省略 `cpu_offload_numa` 或设为 `false`。运行时支持不证明估测器已正确表示负载。为编辑/静态合并权重补 case 时，须核变换后的目标及参考网格、文本长度、两路 timestep embedding、modulation index，并在算子转换/转置/pinning 之前应用与正式初始化相同的合并；不能仅删字段后直接测未合并 checkpoint。当前新增静态合并 T2I/I2I 的完整请求证据限 CUDA BF16 代表负载，不外推 NPU、量化或其他输入。
 
 图像网格由有效尺寸、VAE scale 和 patch 规则推导。`Qwen2Tokenizer` 使用正式 prompt template 计算长度并扣除模板前缀；修改正负提示词须同步估测与推理。CFG 开启时当前实现选较短文本分支作为代表，因为通常计算预算更少；这是一种代表输入选择，不是对任意算子的耗时上下界证明。
 
