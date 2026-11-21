@@ -2928,6 +2928,21 @@
         "sha256": "9507c3cf900da6e6abcadae863f786b0837427b72feda612e87f77862fadd5c7"
       },
       {
+        "path": "configs/platform/ascend_npu/vggt_recon_bf16.json",
+        "bytes": 201,
+        "sha256": "6a1bb2ce670c63b8a36360115dc1837f9226fae91eb6aabcec59afe427c95769"
+      },
+      {
+        "path": "configs/platform/metax/vggt_recon_bf16.json",
+        "bytes": 201,
+        "sha256": "6a1bb2ce670c63b8a36360115dc1837f9226fae91eb6aabcec59afe427c95769"
+      },
+      {
+        "path": "configs/platform/mlu/vggt_recon_bf16.json",
+        "bytes": 201,
+        "sha256": "6a1bb2ce670c63b8a36360115dc1837f9226fae91eb6aabcec59afe427c95769"
+      },
+      {
         "path": "configs/platforms/amd_rocm/qwen_image_21_bf16.json",
         "bytes": 422,
         "sha256": "ff3c75b535f564065435f30831c04238f0e9f69ce3983f4fb237eb4ace34ecf3"
@@ -4028,6 +4043,11 @@
         "sha256": "6e448e38973b4f9c1ca1d7c7adae90a5bea4df0c80016515b9c5695564cb60ba"
       },
       {
+        "path": "configs/vggt/vggt_recon_bf16.json",
+        "bytes": 201,
+        "sha256": "6a1bb2ce670c63b8a36360115dc1837f9226fae91eb6aabcec59afe427c95769"
+      },
+      {
         "path": "configs/volcengine_voices_list.json",
         "bytes": 113672,
         "sha256": "3945e942f3f37c0e2d390d292708add5b14913dc19ddbd8f614c0e757aa609b9"
@@ -4423,9 +4443,19 @@
         "sha256": "65750796d251c3d895bdf9b1c2dc2385095805e3b6e956b9395e265a368b68c4"
       },
       {
+        "path": "dockerfiles/platforms/Dockerfile_ascend_vggt",
+        "bytes": 2537,
+        "sha256": "d9445f3c2041be1e7f0c48cd4060a679c89697f0827e75dc016c2b249ff8fb51"
+      },
+      {
         "path": "dockerfiles/platforms/Dockerfile_cambricon_mlu590",
         "bytes": 4958,
         "sha256": "e868c475fbffe0d88e140028f326bc39cde84d4a53a02e457beb5556d40feeb4"
+      },
+      {
+        "path": "dockerfiles/platforms/Dockerfile_metax_vggt",
+        "bytes": 7299,
+        "sha256": "aa61efb216ba5ea1cf1d3e1414b066a1a43df13e9e2b01ab8ad909b5f392196e"
       },
       {
         "path": "dockerfiles/platforms/Dockerfile_mi350",
@@ -14683,6 +14713,21 @@
         "sha256": "fd3be515a08b3ae5d8c4f57cbfc2ed9a9daf1c19b74e7407ebe0f2b0345c14cd"
       },
       {
+        "path": "scripts/platform/ascend_npu/run_vggt.sh",
+        "bytes": 1372,
+        "sha256": "845d6244f1875124e72046488c198cd7c4715de80c51a829d51edc2428ef6986"
+      },
+      {
+        "path": "scripts/platform/metax/run_vggt.sh",
+        "bytes": 1627,
+        "sha256": "c2dd548c60060f4b8d53af9c8c40f8960464dd699fc28c3f760224c3ce744803"
+      },
+      {
+        "path": "scripts/platform/mlu/run_vggt.sh",
+        "bytes": 1495,
+        "sha256": "9d9d53e05f4754f1a29065a95f8feb6ffd084aa59b95db47addc2c54a1b1f9d0"
+      },
+      {
         "path": "scripts/platforms/amd_rocm/qwen_image_21_r9700_t2i.sh",
         "bytes": 623,
         "sha256": "de1da89ca66ece702a66abfb627a1eb7ab418b06a3b1ecbd14bb9b6da208be55"
@@ -16016,6 +16061,11 @@
         "path": "scripts/swiftvr/server/start_server_4gpu.sh",
         "bytes": 588,
         "sha256": "1dd7f02ce9e7114cd93ae490bc23848cc864f258d5d4c7d1d02dd544e061c319"
+      },
+      {
+        "path": "scripts/vggt/README.md",
+        "bytes": 5349,
+        "sha256": "1c49fb2787b3837ad8a285656aa4bbd5f9189494c9fbbbeb881babaf37b684ac"
       },
       {
         "path": "scripts/vggt/run_vggt.sh",

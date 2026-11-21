@@ -1,6 +1,6 @@
 {
   "lightx2v-vggt": {
-    "git_head": "bc15e3bdbca84602951193e07f237b6f2f4015a3",
+    "git_head": "10976b85403e86f8b53277e48a15a50942088670",
     "files": [
       {"path": ".agents/README.md","bytes": 3372,"sha256": "5a2ff75e7ea60f5c65d74d675528ac36c7d08ef6f1714cbf6255d923fcd9cdaa"},
       {"path": ".agents/skills/lightx2v-kernel-skills/intel-xpu/integration-skills/sycl-esimd-to-python-wheel/SKILL.md","bytes": 13564,"sha256": "c5918fb2cedb3e961e0e7720273fa26b56e89bfef2dc8819753c15206de07eb9"},
@@ -587,6 +587,9 @@
       {"path": "configs/offload/disk/wan_i2v_phase_lazy_load_720p.json","bytes": 849,"sha256": "2fba9bb2338a51bcf992377e80561a6cdd31b5a8817330386e57a47960123ec1"},
       {"path": "configs/offload/phase/wan_i2v_phase.json","bytes": 630,"sha256": "7860f712fee7e95ca91b165408ddc1d47f216520cadf33d6501fa044c251531d"},
       {"path": "configs/offload/phase/wan_t2v_phase.json","bytes": 517,"sha256": "9507c3cf900da6e6abcadae863f786b0837427b72feda612e87f77862fadd5c7"},
+      {"path": "configs/platform/ascend_npu/vggt_recon_bf16.json","bytes": 201,"sha256": "6a1bb2ce670c63b8a36360115dc1837f9226fae91eb6aabcec59afe427c95769"},
+      {"path": "configs/platform/metax/vggt_recon_bf16.json","bytes": 201,"sha256": "6a1bb2ce670c63b8a36360115dc1837f9226fae91eb6aabcec59afe427c95769"},
+      {"path": "configs/platform/mlu/vggt_recon_bf16.json","bytes": 201,"sha256": "6a1bb2ce670c63b8a36360115dc1837f9226fae91eb6aabcec59afe427c95769"},
       {"path": "configs/platforms/amd_rocm/qwen_image_21_bf16.json","bytes": 422,"sha256": "ff3c75b535f564065435f30831c04238f0e9f69ce3983f4fb237eb4ace34ecf3"},
       {"path": "configs/platforms/amd_rocm/qwen_image_21_r9700_fp8.json","bytes": 518,"sha256": "caca0683510e97305d24cae32cb129bcdee3237ba4f11ff82ef6e8f0e0b4edf2"},
       {"path": "configs/platforms/amd_rocm/qwen_image_21_w7900_int8.json","bytes": 519,"sha256": "887911527f71ee984ccd678a24cf201da197ada51d77b610844c389565d77019"},
@@ -807,6 +810,7 @@
       {"path": "configs/swiftvr/h100/swiftvr.json","bytes": 298,"sha256": "7b0caf938170d388d3fc331a240c4516c3813370e0b8c0d7fe7e1020d656d085"},
       {"path": "configs/swiftvr/h100/swiftvr_compile.json","bytes": 339,"sha256": "f39584f4c5450599d459ac7212053691c9a51abd79513eee30a412ff6ba34ae9"},
       {"path": "configs/swiftvr/h100/swiftvr_parallel.json","bytes": 382,"sha256": "6e448e38973b4f9c1ca1d7c7adae90a5bea4df0c80016515b9c5695564cb60ba"},
+      {"path": "configs/vggt/vggt_recon_bf16.json","bytes": 201,"sha256": "6a1bb2ce670c63b8a36360115dc1837f9226fae91eb6aabcec59afe427c95769"},
       {"path": "configs/volcengine_voices_list.json","bytes": 113672,"sha256": "3945e942f3f37c0e2d390d292708add5b14913dc19ddbd8f614c0e757aa609b9"},
       {"path": "configs/wan/layout/baseline.json","bytes": 760,"sha256": "f318b194b026b160430345aa96dd1a450a7d98218cc7490b667780ed3be15e2e"},
       {"path": "configs/wan/layout/baseline_npu.json","bytes": 638,"sha256": "fcf8fb74f87940e7977aa94ac58e4ab2ae9c3254dcf4fd79df32c364a16c9417"},
@@ -886,7 +890,9 @@
       {"path": "dockerfiles/Dockerfile_isaac","bytes": 652,"sha256": "86968e388c62b054b039c0aec55bd535fbe66eb4c19c8888cb64582eb92c938b"},
       {"path": "dockerfiles/build_deploy.sh","bytes": 1287,"sha256": "dd227b81a60bf88e8ebcf7102f32f368c5952a58eedec33010f67340cbdfa1d8"},
       {"path": "dockerfiles/platforms/Dockerfile_ascend_910b","bytes": 998,"sha256": "65750796d251c3d895bdf9b1c2dc2385095805e3b6e956b9395e265a368b68c4"},
+      {"path": "dockerfiles/platforms/Dockerfile_ascend_vggt","bytes": 2537,"sha256": "d9445f3c2041be1e7f0c48cd4060a679c89697f0827e75dc016c2b249ff8fb51"},
       {"path": "dockerfiles/platforms/Dockerfile_cambricon_mlu590","bytes": 4958,"sha256": "e868c475fbffe0d88e140028f326bc39cde84d4a53a02e457beb5556d40feeb4"},
+      {"path": "dockerfiles/platforms/Dockerfile_metax_vggt","bytes": 7299,"sha256": "aa61efb216ba5ea1cf1d3e1414b066a1a43df13e9e2b01ab8ad909b5f392196e"},
       {"path": "dockerfiles/platforms/Dockerfile_mi350","bytes": 1697,"sha256": "ffcccdbb09a698b0215d8b0defc36a0b3eb45046fc92fb55c6bfa55c659211a1"},
       {"path": "dockerfiles/platforms/Dockerfile_ppu","bytes": 1337,"sha256": "84145dce9f146a67b9a33367263522bdda8987da776e510a9d7c6e3d80bdb938"},
       {"path": "docs/EN/.readthedocs.yaml","bytes": 257,"sha256": "db0c7892d53c839fca088f418f25af60941aecd32899ce5531b3d121609428c4"},
@@ -2938,6 +2944,9 @@
       {"path": "scripts/neopp/run_neopp_moe_t2i_1k.sh","bytes": 737,"sha256": "1d75405e0bad770ae77cfa6b2e008c7c389b96ef99c558426de88852076381dd"},
       {"path": "scripts/neopp/run_neopp_moe_t2i_1k_cfg2.sh","bytes": 791,"sha256": "28129c8df8e42587d484bf496ac9692a28842e96c9f9905e6a195c54e1fb84ed"},
       {"path": "scripts/neopp/run_neopp_moe_t2i_512.sh","bytes": 736,"sha256": "fd3be515a08b3ae5d8c4f57cbfc2ed9a9daf1c19b74e7407ebe0f2b0345c14cd"},
+      {"path": "scripts/platform/ascend_npu/run_vggt.sh","bytes": 1372,"sha256": "845d6244f1875124e72046488c198cd7c4715de80c51a829d51edc2428ef6986"},
+      {"path": "scripts/platform/metax/run_vggt.sh","bytes": 1627,"sha256": "c2dd548c60060f4b8d53af9c8c40f8960464dd699fc28c3f760224c3ce744803"},
+      {"path": "scripts/platform/mlu/run_vggt.sh","bytes": 1495,"sha256": "9d9d53e05f4754f1a29065a95f8feb6ffd084aa59b95db47addc2c54a1b1f9d0"},
       {"path": "scripts/platforms/amd_rocm/qwen_image_21_r9700_t2i.sh","bytes": 623,"sha256": "de1da89ca66ece702a66abfb627a1eb7ab418b06a3b1ecbd14bb9b6da208be55"},
       {"path": "scripts/platforms/amd_rocm/qwen_image_21_w7900_t2i.sh","bytes": 624,"sha256": "3d8dca6b4c5bed0680e26b4aa3a402d3af5f86e6768a0d6421995fd9682cf8f2"},
       {"path": "scripts/platforms/amd_rocm/qwen_image_i2i_2511.sh","bytes": 694,"sha256": "99cc1790a34899be68596638b3707feb2349832ab89a2ecf260cad513b07b0eb"},
@@ -3205,6 +3214,7 @@
       {"path": "scripts/swiftvr/server/post_video.py","bytes": 533,"sha256": "e1cf90a8c41632d19bb9f666e50b7fcee2f1aebfb079bd53c812862e56ea3d11"},
       {"path": "scripts/swiftvr/server/start_server.sh","bytes": 580,"sha256": "2d3cbfbed7c3024fcc491d0f1f426bc2c3d6dd55e99be129e469b00f03bdf5e9"},
       {"path": "scripts/swiftvr/server/start_server_4gpu.sh","bytes": 588,"sha256": "1dd7f02ce9e7114cd93ae490bc23848cc864f258d5d4c7d1d02dd544e061c319"},
+      {"path": "scripts/vggt/README.md","bytes": 5349,"sha256": "1c49fb2787b3837ad8a285656aa4bbd5f9189494c9fbbbeb881babaf37b684ac"},
       {"path": "scripts/vggt/run_vggt.sh","bytes": 1241,"sha256": "f9403b03c32b98a060491dfab99ea83996162162c26ab1b157365397de0908ef"},
       {"path": "scripts/wan/README.md","bytes": 6700,"sha256": "1dfaa9892ede924c6ffd9cefc60e15be5a2af129272a3d007a96f13de7732beb"},
       {"path": "scripts/wan/README_zh.md","bytes": 6109,"sha256": "584452ccbf4d802c086ed8d9e13fd6ff9664675ff940178da136c2aed4dc80d5"},
@@ -3385,6 +3395,6 @@
       {"path": "tools/profile/analyze_torch_trace_gap.py","bytes": 10245,"sha256": "c60400ebc1e6816f3598fddffb5cbfc04e8d975474534d2414f0e68c28309f55"}
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "bc15e3bdbca84602951193e07f237b6f2f4015a3"
+    "revision": "10976b85403e86f8b53277e48a15a50942088670"
   }
 }

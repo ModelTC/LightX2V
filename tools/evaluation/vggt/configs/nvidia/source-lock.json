@@ -1,6 +1,6 @@
 {
   "lightx2v-vggt": {
-    "git_head": "bc15e3bdbca84602951193e07f237b6f2f4015a3",
+    "git_head": "10976b85403e86f8b53277e48a15a50942088670",
     "files": [
       {"path": ".agents/README.md","bytes": 3372,"sha256": "5a2ff75e7ea60f5c65d74d675528ac36c7d08ef6f1714cbf6255d923fcd9cdaa"},
       {"path": ".agents/skills/lightx2v-kernel-skills/intel-xpu/integration-skills/sycl-esimd-to-python-wheel/SKILL.md","bytes": 13564,"sha256": "c5918fb2cedb3e961e0e7720273fa26b56e89bfef2dc8819753c15206de07eb9"},
@@ -892,7 +892,7 @@
       {"path": "dockerfiles/platforms/Dockerfile_ascend_910b","bytes": 998,"sha256": "65750796d251c3d895bdf9b1c2dc2385095805e3b6e956b9395e265a368b68c4"},
       {"path": "dockerfiles/platforms/Dockerfile_ascend_vggt","bytes": 2537,"sha256": "d9445f3c2041be1e7f0c48cd4060a679c89697f0827e75dc016c2b249ff8fb51"},
       {"path": "dockerfiles/platforms/Dockerfile_cambricon_mlu590","bytes": 4958,"sha256": "e868c475fbffe0d88e140028f326bc39cde84d4a53a02e457beb5556d40feeb4"},
-      {"path": "dockerfiles/platforms/Dockerfile_metax_vggt","bytes": 7067,"sha256": "d0c1ac5bcee1500cfa732b795b22a65d83dd10be965b27301793a1d65f35c402"},
+      {"path": "dockerfiles/platforms/Dockerfile_metax_vggt","bytes": 7299,"sha256": "aa61efb216ba5ea1cf1d3e1414b066a1a43df13e9e2b01ab8ad909b5f392196e"},
       {"path": "dockerfiles/platforms/Dockerfile_mi350","bytes": 1697,"sha256": "ffcccdbb09a698b0215d8b0defc36a0b3eb45046fc92fb55c6bfa55c659211a1"},
       {"path": "dockerfiles/platforms/Dockerfile_ppu","bytes": 1337,"sha256": "84145dce9f146a67b9a33367263522bdda8987da776e510a9d7c6e3d80bdb938"},
       {"path": "docs/EN/.readthedocs.yaml","bytes": 257,"sha256": "db0c7892d53c839fca088f418f25af60941aecd32899ce5531b3d121609428c4"},
@@ -3395,6 +3395,6 @@
       {"path": "tools/profile/analyze_torch_trace_gap.py","bytes": 10245,"sha256": "c60400ebc1e6816f3598fddffb5cbfc04e8d975474534d2414f0e68c28309f55"}
     ],
     "repository": "https://github.com/LancelottJ/LightX2V.git",
-    "revision": "bc15e3bdbca84602951193e07f237b6f2f4015a3"
+    "revision": "10976b85403e86f8b53277e48a15a50942088670"
   }
 }
