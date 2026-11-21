@@ -64,7 +64,7 @@ class LongCatImageTransformerModel(BaseTransformerModel):
             encoder_hidden_states=prompt_embeds,
         )
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         hidden_states = self.transformer_infer.infer(
@@ -74,7 +74,7 @@ class LongCatImageTransformerModel(BaseTransformerModel):
 
         noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.temb)
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             noise_pred = self._seq_parallel_post_process(noise_pred)
 
         return noise_pred
@@ -117,7 +117,7 @@ class LongCatImageTransformerModel(BaseTransformerModel):
 
         latents = self.scheduler.latents
 
-        if self.config.get("enable_cfg", True):
+        if self.config.get("enable_cfg", False):
             assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
             # Check if CFG parallel should be used
             # Note: I2I task may have different sequence lengths for positive/negative prompts,

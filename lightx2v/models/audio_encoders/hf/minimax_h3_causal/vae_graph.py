@@ -3,7 +3,7 @@ import math
 import torch
 from torch.nn.utils.parametrize import is_parametrized, remove_parametrizations
 
-from lightx2v.models.audio_encoders.hf.minimax_h3_causal.streaming import decoder_context_latents
+from lightx2v.models.audio_encoders.hf.minimax_h3_causal.streaming import AUDIO_DECODER_CONTEXT_LATENTS
 from lightx2v.models.networks.minimax_h3.packing import FPS, FRAMES_PER_CHUNK
 
 
@@ -18,7 +18,7 @@ class MiniMaxH3AudioDecoderGraph:
         self.device = vae.execution_device
         self.stream = torch.cuda.Stream(device=self.device)
         self.entries = {}
-        context = decoder_context_latents(vae)
+        context = AUDIO_DECODER_CONTEXT_LATENTS
         chunk = FRAMES_PER_CHUNK * vae.sampling_rate / (FPS * vae.hop_length)
         self.window_lengths = {2 * context + math.floor(chunk), 2 * context + math.ceil(chunk)}
         # Evaluate fixed parametrizations once, on the same device and in FP32.

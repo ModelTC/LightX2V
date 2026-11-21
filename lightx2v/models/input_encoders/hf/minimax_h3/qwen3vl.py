@@ -122,7 +122,7 @@ class _Qwen3VLVocabParallelEmbedding(_EmbeddingWeight):
         outside = (input_indices < self.vocab_start) | (input_indices >= self.vocab_end)
         local_indices = (input_indices - self.vocab_start).masked_fill(outside, 0)
         output = super().apply(local_indices)
-        output = output.masked_fill(outside.unsqueeze(-1), 0)
+        output = output.masked_fill(outside.unsqueeze(-1), 0).to(AI_DEVICE, non_blocking=True)
         dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
         return output
 
@@ -556,15 +556,11 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
             caller_stream.wait_event(self._offload_completion_event)
         manager.reset_slots()
 
-        # Start layer 0 while the large embedding table is copied and applied
-        # on the caller's stream. Only the embedding is temporarily resident.
+        # Look up the current tokens on the host while layer 0 is prefetched.
+        # Only their embeddings cross to the device, not the vocabulary table.
         try:
             manager.prefetch_to_slot(0, 0, self.layers)
-            self.embed_tokens.to_cuda(non_blocking=True)
-            try:
-                hidden_states = self.embed_tokens.apply(input_ids)
-            finally:
-                self.embed_tokens.weight = self.embed_tokens.pin_weight
+            hidden_states = self.embed_tokens.apply(input_ids).to(AI_DEVICE, non_blocking=True)
             hidden_states = self._inject_vision_embeds(hidden_states, vision_mask, vision_embeds)
             position_embeddings = self._position_embeddings(hidden_states, position_ids)
 
@@ -1320,7 +1316,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 # configured to release them after text encoding.
                 self.text_encoder.init_block_offload()
             device = self.text_encoder.device
-            input_ids = input_ids.to(device)
+            if not self.block_offload:
+                input_ids = input_ids.to(device)
             prompt_embeds = self.text_encoder.forward(
                 input_ids,
                 None if position_ids is None else position_ids.to(device),

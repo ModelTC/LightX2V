@@ -12,6 +12,7 @@ from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchE
 from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
 try:
@@ -269,7 +270,7 @@ class ZImageScheduler(BaseScheduler):
         self.dtype = torch.bfloat16
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.zero_cond_t = config.get("zero_cond_t", False)
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
@@ -320,7 +321,7 @@ class ZImageScheduler(BaseScheduler):
     def _get_i2i_denoise_strength(self, input_info):
         strength = getattr(input_info, "i2i_denoise_strength", None)
         if strength is None:
-            strength = self.config.get("i2i_denoise_strength")
+            strength = get_input_value(self.config, "i2i_denoise_strength", None)
         if strength is None:
             return None
         strength = float(strength)
@@ -427,7 +428,7 @@ class ZImageScheduler(BaseScheduler):
         self.timesteps = timesteps
         self.infer_steps = num_inference_steps
 
-        if self.config["task"] == "i2i":
+        if self.input_info.task == "i2i":
             strength = self._get_i2i_denoise_strength(self.input_info)
             if strength is not None:
                 timesteps, num_inference_steps = self.get_timesteps(num_inference_steps, strength)
@@ -446,7 +447,7 @@ class ZImageScheduler(BaseScheduler):
         self.prepare_latents(input_info)
         self.set_timesteps()
         strength = self._get_i2i_denoise_strength(input_info)
-        if self.config["task"] == "i2i" and strength is not None:
+        if self.input_info.task == "i2i" and strength is not None:
             self.prepare_i2i_denoise_strength_latents(input_info)
 
         if self.zero_cond_t:

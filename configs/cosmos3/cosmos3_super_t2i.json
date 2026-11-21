@@ -1,8 +1,8 @@
 {
+    "model_variant": "t2i",
     "infer_steps": 50,
     "sample_guide_scale": 4.0,
     "sample_shift": 3.0,
-    "size": [1024, 1024],
     "num_frames": 1,
     "enable_cfg": true,
     "rms_norm_type": "one-pass",
@@ -11,5 +11,8 @@
     "self_attn_type": "flash_attn3",
     "causal_self_attn_type": "flash_attn3",
     "vae_cpu_offload": false,
-    "cpu_offload": false
+    "cpu_offload": false,
+    "request_defaults": {
+        "size": [1024, 1024]
+    }
 }

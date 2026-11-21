@@ -77,6 +77,7 @@ class MiniMaxH3ImageScheduler(BaseScheduler):
         self.generator = None
         self.latents = self.video_latents = self.video_noise_pred = None
         self.layout = self.layout_cpu = self.reference_anchors = None
+        self.refined_text_embeds = self.rotary_emb = None
         self.unique_timesteps = self.unique_timesteps_cpu = self.timestep_indices = None
         self.num_condition_video_rows = 0
         self.step_index = 0

@@ -1,15 +1,25 @@
-__version__ = "0.5.0"
-__author__ = "LightX2V Contributors"
-__license__ = "Apache 2.0"
+import os
 
-import lightx2v_platform.set_ai_device
 from lightx2v import common, models, utils
-from lightx2v.pipeline import LightX2VPipeline
+
+os.environ.setdefault("PROFILING_DEBUG_LEVEL", "2")
+os.environ.setdefault("DTYPE", "BF16")
+os.environ.setdefault("SENSITIVE_LAYER_DTYPE", "None")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
+
+def __getattr__(name):
+    if name == "LightX2VPipeline":
+        from lightx2v.pipeline import LightX2VPipeline
+
+        globals()[name] = LightX2VPipeline
+        return LightX2VPipeline
+    raise AttributeError(name)
+
 
 __all__ = [
-    "__version__",
-    "__author__",
-    "__license__",
     "models",
     "common",
     "utils",

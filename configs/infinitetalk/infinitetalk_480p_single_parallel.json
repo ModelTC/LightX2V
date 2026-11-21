@@ -1,9 +1,7 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
     "motion_frame": 9,
     "fps": 25,
-    "video_duration": 10,
     "infinitetalk_mode": "single",
     "infinitetalk_size": "infinitetalk-480",
     "adapter_model_path": "/path/to/infinitetalk.safetensors",
@@ -35,5 +33,9 @@
         "cfg_p_size": 2,
         "seq_p_size": 2,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "video_duration": 10
     }
 }

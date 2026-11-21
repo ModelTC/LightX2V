@@ -1,8 +1,6 @@
 {
     "infer_steps": 8,
-    "num_frames": 241,
     "auto_duration": false,
-    "size": [1024, 1536],
     "fps": 24,
     "attn_type": "sage_attn2",
     "rms_norm_type": "ltx25_fast",
@@ -35,5 +33,9 @@
     "video_vae_original_ckpt": "/path/to/ltx-2.5-video-vae-bf16.safetensors",
     "audio_vae_original_ckpt": "/path/to/ltx-2.5-audio-vae-bf16.safetensors",
     "duration_head_original_ckpt": "/path/to/ltx-2.5-duration-head-bf16.safetensors",
-    "upsampler_original_ckpt": "/path/to/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+    "upsampler_original_ckpt": "/path/to/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+    "request_defaults": {
+        "num_frames": 241,
+        "size": [1024, 1536]
+    }
 }

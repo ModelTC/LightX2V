@@ -151,14 +151,15 @@ class MiniMaxH3AudioEncoder(nn.Module):
         return self.block(hidden_states)
 
 
-class MiniMaxH3AudioEncoderPrefixCache:
-    """Reuse convolution features for one append-only waveform request.
+class MiniMaxH3AudioEncoderCache:
+    """Reuse convolution features for one growing or sliding waveform request.
 
     The encoder has symmetric convolutions: its right boundary changes as
     samples arrive. Cache only features whose receptive field is complete,
     and recompute the boundary with hop-aligned left context. The attention
-    projection still sees the complete, current-prefix feature sequence.
-    ``encode()`` supplies FP32 prefixes under no_grad; the runner creates a
+    projection still sees the complete, current-window feature sequence.
+    ``window_start`` advances in audio latent frames (one encoder hop each).
+    ``encode()`` supplies FP32 windows under no_grad; the runner creates a
     fresh cache for each request using the same encoder and waveform batch.
     """
 
@@ -174,8 +175,22 @@ class MiniMaxH3AudioEncoderPrefixCache:
                 self.right_context += (module.dilation[0] * (module.kernel_size[0] - 1) - module.padding[0]) * self.hop_length
                 self.hop_length *= module.stride[0]
         self.stable_features = None
+        self.window_start = 0
 
-    def __call__(self, waveform: torch.Tensor, *, valid_samples: int) -> torch.Tensor:
+    def __call__(self, waveform: torch.Tensor, *, valid_samples: int, window_start: int) -> torch.Tensor:
+        shift = window_start - self.window_start
+        self.window_start = window_start
+        if shift and self.stable_features is not None:
+            self.stable_features = self.stable_features[..., shift:]
+            left = math.ceil(self.left_context / self.hop_length)
+            if self.stable_features.shape[-1] > left:
+                # Only these outputs depend on the window's new left padding.
+                # Include their complete right receptive field before cropping.
+                samples = (left + math.ceil(self.right_context / self.hop_length)) * self.hop_length
+                head = self.encoder(waveform[..., :samples])[..., :left]
+                self.stable_features = torch.cat((head, self.stable_features[..., left:]), dim=-1)
+            else:
+                self.stable_features = None
         stable = 0 if self.stable_features is None else self.stable_features.shape[-1]
         start = max(0, stable * self.hop_length - self.left_context) // self.hop_length * self.hop_length
         tail = self.encoder(waveform[..., start:])
@@ -299,13 +314,20 @@ class MiniMaxH3AudioDownSample1d(nn.Module):
 
 
 class MiniMaxH3AudioActivation1d(nn.Module):
+    """Anti-aliased activation with a fused path for 2x, 12-tap SnakeBeta."""
+
     def __init__(self, activation: nn.Module, ratio: int = 2, kernel_size: int = 12) -> None:
         super().__init__()
         self.act = activation
         self.upsample = MiniMaxH3AudioUpSample1d(ratio, kernel_size)
         self.downsample = MiniMaxH3AudioDownSample1d(ratio, kernel_size)
+        self.use_fused = isinstance(activation, MiniMaxH3AudioSnakeBeta) and ratio == 2 and kernel_size == 12
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.use_fused and hidden_states.is_cuda:
+            from .triton_ops import anti_alias_activation
+
+            return anti_alias_activation(hidden_states, self.upsample.filter, self.downsample.lowpass.filter, self.act.alpha, self.act.beta)
         hidden_states = self.upsample(hidden_states)
         hidden_states = self.act(hidden_states)
         return self.downsample(hidden_states)
@@ -505,8 +527,8 @@ class MiniMaxH3AudioVAE(nn.Module):
         std = self.latents_std.to(device=latents.device).view(1, -1, 1)
         return (latents.float() - mean) / std
 
-    def encode(self, waveform: torch.Tensor, *, return_cpu: bool = True, encoder_cache: MiniMaxH3AudioEncoderPrefixCache | None = None) -> torch.Tensor:
-        """Encode stereo as two mono batch items and return normalized posterior means."""
+    def encode(self, waveform: torch.Tensor, *, return_cpu: bool = True, encoder_cache: MiniMaxH3AudioEncoderCache | None = None, window_start: int = 0) -> torch.Tensor:
+        """Return normalized posterior means; window_start is in audio latent frames."""
         try:
             if waveform.ndim == 2:
                 waveform = waveform.unsqueeze(1)
@@ -519,7 +541,7 @@ class MiniMaxH3AudioVAE(nn.Module):
             if right_pad:
                 waveform = F.pad(waveform, (0, right_pad))
             with torch.no_grad():
-                hidden_states = self.encoder(waveform) if encoder_cache is None else encoder_cache(waveform, valid_samples=valid_samples)
+                hidden_states = self.encoder(waveform) if encoder_cache is None else encoder_cache(waveform, valid_samples=valid_samples, window_start=window_start)
                 hidden_states = self.pre_block(hidden_states.transpose(1, 2)).transpose(1, 2)
                 mean = self.mean_proj(hidden_states).float()
                 # The released Ref2AV path consumes posterior.mode(); logs_proj

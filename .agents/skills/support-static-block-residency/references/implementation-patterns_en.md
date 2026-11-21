@@ -109,6 +109,6 @@ The next request prepares from the same CPU masters; verify release → prepare 
 
 ## Current config boundaries
 
-Common `validate_residency_config()` requires CPU block offload, `AI_DEVICE` of `cuda` or `npu`, and single-device eager execution with fixed weights/resolution and `NoCaching`. It currently rejects combinations including lazy loading, shared CPU weights, parallelism, LoRA/adapters, changing resolution, compile, and CUDA Graphs. Consult the function for exact fields.
+Common `validate_residency_config()` requires CPU block offload, `AI_DEVICE` of `cuda` or `npu`, and single-device eager execution with fixed weights/resolution and `NoCaching`. It currently rejects combinations including lazy loading, shared CPU weights, parallelism, LoRA/adapters, changing resolution, compile, and CUDA Graphs. Consult the function for exact fields. A model adapter may make a guarded exception for immutable static LoRAs merged before operator loading, with owner and lifecycle protections; the measurement producer must separately represent the final weights and inputs rather than inherit runtime support claims.
 
 Model validators additionally check model identity, task, and conditioning. Preserve existing configuration behavior for new models and apply relevant checks only when the event/residency path is selected. These limits describe current implementation coverage, not fundamental impossibility. Extending compatibility requires implementation and validation; bypassing a guard does not establish support.

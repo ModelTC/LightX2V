@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [720, 1280],
     "distill_method": "dmd2",
     "rainfusion_attn_setting": {
         "pool_size": 128,
@@ -39,5 +37,9 @@
     "parallel": {
         "seq_p_size": 2,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [720, 1280]
     }
 }

@@ -1,5 +1,4 @@
 {
-    "aspect_ratio": "3:4",
     "num_channels_latents": 16,
     "infer_steps": 9,
     "attn_type": "torch_sdpa",
@@ -8,5 +7,8 @@
     "patch_size": 2,
     "rope_type": "torch_real_rope",
     "layer_norm_type": "torch",
-    "rms_norm_type": "torch"
+    "rms_norm_type": "torch",
+    "request_defaults": {
+        "aspect_ratio": "3:4"
+    }
 }

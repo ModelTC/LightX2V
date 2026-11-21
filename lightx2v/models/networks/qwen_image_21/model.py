@@ -14,7 +14,7 @@ from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from .infer.offload import QwenImage21OffloadTransformerInfer
 from .infer.offload.transformer_infer import validate_qwen_image_21_residency_config
 from .infer.post_infer import QwenImage21PostInfer
-from .infer.pre_infer import QwenImage21PreInfer
+from .infer.pre_infer import QwenImage21PreInfer, _slice_rotary
 from .infer.transformer_infer import QwenImage21TransformerInfer
 from .lora import prepare_lora_weights
 from .weights.post_weights import QwenImage21PostWeights
@@ -240,6 +240,9 @@ class QwenImage21TransformerModel(BaseTransformerModel):
             }
 
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        if self.config.get("dit_quant_scheme") == "mxfp8-npu" and not self.config.get("dit_quantized_ckpt"):
+            # Online MXFP8 consumes BF16/FP16 weights, so honor original-checkpoint overrides.
+            return self._load_ckpt(unified_dtype, sensitive_layer)
         if not self.use_tp:
             return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
         checkpoint_path = self.config["dit_quantized_ckpt"]
@@ -284,7 +287,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         end = begin + local_length
         state.hidden_states = state.hidden_states[begin:end].contiguous()
         if state.rotary_positions is None:
-            state.rotary = state.rotary[begin:end].contiguous()
+            state.rotary = _slice_rotary(state.rotary, begin, end, contiguous=True)
         else:
             # FlashInfer keeps the full lookup table and indexes the rank-local
             # target positions from it.
@@ -334,10 +337,10 @@ class QwenImage21TransformerModel(BaseTransformerModel):
         branch = inputs[name]
         cache = self.kv_cache_manager.get_self_attn_kv_cache(name)
         state = self.pre_infer.infer_target(self.pre_weight, self.scheduler.latents[0], branch["layout"])
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             state = self._seq_parallel_pre_process(state)
         hidden = self.transformer_infer.infer(self.transformer_weights, state, cache)
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             hidden = self._seq_parallel_post_process(hidden, state)
         noise = self.post_infer.infer(self.post_weight, hidden, state)
         return noise.unsqueeze(0)
@@ -346,7 +349,7 @@ class QwenImage21TransformerModel(BaseTransformerModel):
     def infer(self, inputs):
         if self.kv_cache_manager is None:
             raise RuntimeError("Condition KV must be prefilled before denoising")
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             positive = self._infer_cond_uncond(inputs, True)
             negative = self._infer_cond_uncond(inputs, False)
             self.scheduler.noise_pred = negative + self.scheduler.sample_guide_scale * (positive - negative)

@@ -58,8 +58,6 @@ def resolve_bagel_i2i_image_shape(input_info, config, input_image_size):
 def load_bagel_i2i_input_image(image_path):
     if not image_path:
         raise ValueError("BAGEL I2I requires `image_path`.")
-    if isinstance(image_path, str) and "," in image_path:
-        raise NotImplementedError("BAGEL I2I MVP supports exactly one input image; comma-separated `image_path` values are not supported.")
     if os.path.isdir(image_path):
         raise NotImplementedError("BAGEL I2I MVP supports a single image file; directory `image_path` is not supported.")
     if not os.path.exists(image_path):

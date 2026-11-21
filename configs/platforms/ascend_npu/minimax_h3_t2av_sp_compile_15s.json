@@ -1,7 +1,5 @@
 {
     "infer_steps": 29,
-    "num_frames": 362,
-    "size": [768, 1344],
     "fps": 24,
     "enable_cfg": false,
     "cpu_offload": false,
@@ -28,5 +26,9 @@
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses",
         "seq_p_a2a_backend": "hccl_eager"
+    },
+    "request_defaults": {
+        "num_frames": 362,
+        "size": [768, 1344]
     }
 }

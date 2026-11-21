@@ -1,14 +1,14 @@
 {
     "infer_steps": 8,
-    "num_frames": 241,
-    "size": [1024, 1536],
     "attn_type": "sage_attn2",
     "sample_guide_scale": 1,
     "sample_shift": [2.05, 0.95],
     "enable_cfg": false,
     "cpu_offload": true,
     "offload_granularity": "block",
-    "vae_cpu_offload": false,
+    "vae_cpu_offload": true,
+    "use_tiling_vae": true,
+    "gemma_offload_granularity": "block",
     "num_channels_latents": 128,
     "fps": 24,
     "audio_mel_bins":16,
@@ -21,5 +21,9 @@
     "apply_gated_attention": true,
     "use_upsampler": true,
     "upsampler_original_ckpt": "Lightricks/LTX-2.3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
-    "distilled_sigma_values_upsample": [0.909375, 0.725, 0.421875, 0.0]
+    "distilled_sigma_values_upsample": [0.909375, 0.725, 0.421875, 0.0],
+    "request_defaults": {
+        "num_frames": 241,
+        "size": [1024, 1536]
+    }
 }

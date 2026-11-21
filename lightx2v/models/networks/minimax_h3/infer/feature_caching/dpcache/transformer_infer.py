@@ -88,6 +88,10 @@ class MiniMaxH3TransformerInferDPCaching(MiniMaxH3TransformerInfer):
         self.sample_indices = None
 
     def infer(self, block_weights, pre_infer_out):
+        if self.scheduler.is_warmup_step:
+            # Synthetic warmup inputs do not represent a calibrated trajectory.
+            return super().infer(block_weights, pre_infer_out)
+
         step = self.scheduler.step_index
         if step == 0:
             self._reset()

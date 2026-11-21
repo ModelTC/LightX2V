@@ -129,7 +129,7 @@ class WanTransformerWeights(WeightModule):
             assert config.get("dit_quantized") is True
         if config.get("do_mm_calib", False):
             self.mm_type = "Calib"
-            assert not config["cpu_offload"]
+            assert not config.get("cpu_offload", False)
         self.lazy_load = self.config.get("lazy_load", False)
         self.blocks = WeightModuleList(
             [
@@ -149,7 +149,7 @@ class WanTransformerWeights(WeightModule):
         )
         self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.add_module("blocks", self.blocks)
-        if config.get("cpu_offload") and config.get("offload_granularity", "block") == "block":
+        if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block":
             self.register_offload_group(self.blocks, self.offload_block_cuda_buffers, (f"blocks.{i}." for i in range(self.blocks_num)))
 
         # non blocks weights
@@ -165,7 +165,7 @@ class WanTransformerWeights(WeightModule):
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
     def register_offload_buffers(self, config, lazy_load_path, lora_path):
-        if config["cpu_offload"]:
+        if config.get("cpu_offload", False):
             if config["offload_granularity"] == "block":
                 self.offload_blocks_num = 2
                 self.offload_block_cuda_buffers = WeightModuleList(
@@ -574,7 +574,7 @@ class WanSelfAttention(WeightModule):
             attention_weight.set_config(self.config.get("sol_attn_setting", {}))
         self.add_module("self_attn_1", attention_weight)
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.add_module(
                 "self_attn_1_parallel",
                 ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),

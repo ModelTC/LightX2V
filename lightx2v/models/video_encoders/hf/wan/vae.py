@@ -1,5 +1,7 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 
+from contextlib import contextmanager
+
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -7,6 +9,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from loguru import logger
 
+from lightx2v.models.video_encoders.hf.wan.checkpoint import remap_diffusers_wan_vae_weights
 from lightx2v.utils.envs import GET_USE_CHANNELS_LAST_3D
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -554,6 +557,8 @@ class WanVAE_(nn.Module):
             dropout,
             pruning_rate,
         )
+        self._conv_num = count_conv3d(self.decoder)
+        self.clear_decode_cache()
 
     def forward(self, x):
         mu, log_var = self.encode(x)
@@ -751,23 +756,17 @@ class WanVAE_(nn.Module):
         return out
 
     def decode_stream(self, z, scale):
-        self.clear_decode_cache()
+        # Each stream retains its temporal history when spatial tiles are interleaved.
+        feat_cache = [None] * self._conv_num
 
         # z: [b,c,t,h,w]
         if isinstance(scale[0], torch.Tensor):
             z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(1, self.z_dim, 1, 1, 1)
         else:
             z = z / scale[1] + scale[0]
-        iter_ = z.shape[2]
         x = self.conv2(z)
-        for i in range(iter_):
-            self._conv_idx = [0]
-            out = self.decoder(
-                x[:, :, i : i + 1, :, :],
-                feat_cache=self._feat_map,
-                feat_idx=self._conv_idx,
-            )
-            yield out
+        for i in range(x.shape[2]):
+            yield self.decoder(x[:, :, i : i + 1], feat_cache=feat_cache, feat_idx=[0])
 
     def cached_decode(self, z, scale):
         # z: [b,c,t,h,w]
@@ -827,7 +826,6 @@ class WanVAE_(nn.Module):
         self.clear_decode_cache()
 
     def clear_decode_cache(self):
-        self._conv_num = count_conv3d(self.decoder)
         self._conv_idx = [0]
         self._feat_map = [None] * self._conv_num
 
@@ -883,6 +881,8 @@ def _video_vae(pretrained_path=None, z_dim=None, device="cpu", cpu_offload=False
 
         # load checkpoint
         weights_dict = load_weights(pretrained_path, cpu_offload=cpu_offload, load_from_rank0=load_from_rank0)
+        if "encoder.down_blocks.0.conv1.weight" in weights_dict:
+            weights_dict = remap_diffusers_wan_vae_weights(weights_dict)
         for k in weights_dict.keys():
             if weights_dict[k].dtype != dtype:
                 weights_dict[k] = weights_dict[k].to(dtype)
@@ -1232,34 +1232,43 @@ class WanVAE:
             cur_rank_w,
         )
 
+    @contextmanager
+    def _active_model(self, clear_cache):
+        try:
+            if self.cpu_offload:
+                self.to_cuda()
+            yield
+        except BaseException:
+            # A failed forward can leave feature tensors in the model's Python lists.
+            clear_cache()
+            raise
+        finally:
+            if self.cpu_offload:
+                self.to_cpu()
+
     def encode_local_2d(self, video_chunk, chunk_h, chunk_w, padding_size, world_size_h, world_size_w, cur_rank_h, cur_rank_w):
         """Encode a spatially sharded video prepared by the runner."""
-        if self.cpu_offload:
-            self.to_cuda()
-
-        video_chunk = video_chunk.to(device=self.current_device(), dtype=self.dtype)
-        out = self._encode_dist_2d_local_chunk(
-            video_chunk,
-            chunk_h,
-            chunk_w,
-            padding_size,
-            world_size_h,
-            world_size_w,
-            cur_rank_h,
-            cur_rank_w,
-        )
-
-        if self.cpu_offload:
-            self.to_cpu()
-        return out
+        with self._active_model(self.model.clear_encode_cache):
+            video_chunk = video_chunk.to(device=self.current_device(), dtype=self.dtype)
+            return self._encode_dist_2d_local_chunk(
+                video_chunk,
+                chunk_h,
+                chunk_w,
+                padding_size,
+                world_size_h,
+                world_size_w,
+                cur_rank_h,
+                cur_rank_w,
+            )
 
     def encode(self, video, world_size_h=None, world_size_w=None):
         """
         video: one video with shape [1, C, T, H, W].
         """
-        if self.cpu_offload:
-            self.to_cuda()
+        with self._active_model(self.model.clear_encode_cache):
+            return self._encode(video, world_size_h, world_size_w)
 
+    def _encode(self, video, world_size_h, world_size_w):
         if self.parallel:
             world_size = dist.get_world_size()
             cur_rank = dist.get_rank()
@@ -1291,8 +1300,6 @@ class WanVAE:
             else:
                 out = self.model.encode(video, self.scale).squeeze(0)
 
-        if self.cpu_offload:
-            self.to_cpu()
         return out
 
     def decode_dist(self, zs, world_size, cur_rank, split_dim):
@@ -1589,9 +1596,11 @@ class WanVAE:
         return images
 
     def decode(self, zs):
-        if self.cpu_offload:
-            self.to_cuda()
+        with self._active_model(self.model.clear_decode_cache):
+            images = self._decode(zs)
+            return images.cpu() if self.cpu_offload else images
 
+    def _decode(self, zs):
         if self.parallel:
             world_size = dist.get_world_size()
             cur_rank = dist.get_rank()
@@ -1614,10 +1623,6 @@ class WanVAE:
         else:
             decode_func = self.model.tiled_decode if self.use_tiling else self.model.decode
             images = decode_func(zs.unsqueeze(0), self.scale).clamp_(-1, 1)
-
-        if self.cpu_offload:
-            images = images.cpu()
-            self.to_cpu()
 
         return images
 
@@ -1664,22 +1669,19 @@ class WanVAE:
         if self.cpu_offload:
             self.to_cuda()
 
-        if self.parallel:
-            world_size = dist.get_world_size()
-            cur_rank = dist.get_rank()
-            latent_height, latent_width = zs.shape[2], zs.shape[3]
-
-            world_size_h, world_size_w = self.calculate_2d_grid(latent_height, latent_width, world_size)
-            cur_rank_h = cur_rank // world_size_w
-            cur_rank_w = cur_rank % world_size_w
-            for images in self.decode_dist_2d_stream(zs, world_size_h, world_size_w, cur_rank_h, cur_rank_w):
-                yield images
-        else:
-            for image in self.model.decode_stream(zs.unsqueeze(0), self.scale):
-                yield image.clamp_(-1, 1)
-
-        if self.cpu_offload:
-            self.to_cpu()
+        try:
+            if self.parallel:
+                world_size = dist.get_world_size()
+                cur_rank = dist.get_rank()
+                world_size_h, world_size_w = self.calculate_2d_grid(zs.shape[2], zs.shape[3], world_size)
+                cur_rank_h, cur_rank_w = divmod(cur_rank, world_size_w)
+                yield from self.decode_dist_2d_stream(zs, world_size_h, world_size_w, cur_rank_h, cur_rank_w)
+            else:
+                for image in self.model.decode_stream(zs.unsqueeze(0), self.scale):
+                    yield image.clamp_(-1, 1)
+        finally:
+            if self.cpu_offload:
+                self.to_cpu()
 
     def encode_video(self, vid):
         return self.model.encode_video(vid)

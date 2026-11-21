@@ -25,7 +25,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
         self.task = config["task"]
-        self.seq_parallel = config["seq_parallel"]
+        self.seq_parallel = config.get("seq_parallel", False)
         self.has_image_context = has_image_context(config)
         self.blocks_num = config["num_layers"]
         self.phases_num = 3
@@ -326,7 +326,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                 tensor_fusion=self.seq_p_tensor_fusion,
                 head_parallel=self.seq_p_head_parallel,
                 attention_kwargs=attn_running_args,
-                valid_len=self.seq_p_valid_len,
+                valid_seq_len=self.seq_p_valid_len,
             )
             if aux_attn_out is not None:
                 raise RuntimeError("Wan self-attention does not have an auxiliary token output.")

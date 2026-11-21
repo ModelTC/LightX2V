@@ -1,8 +1,11 @@
+from lightx2v.utils.request_defaults import get_input_value
+
+
 class RunnerLifecycleMixin:
     """Share warmup shape ordering and model request-state cleanup."""
 
     def get_warmup_resolutions(self):
-        target = tuple(self.config["size"])
+        target = tuple(get_input_value(self.config, "size"))
         return tuple(size for size in self._WARMUP_SHAPES if size != target) + (target,)
 
     def reset_model_request_state(self):

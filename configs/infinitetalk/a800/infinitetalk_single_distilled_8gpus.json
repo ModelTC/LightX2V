@@ -3,7 +3,6 @@
     "num_frames": 81,
     "motion_frame": 9,
     "fps": 25,
-    "video_duration": 300,
     "infinitetalk_mode": "single",
     "infinitetalk_size": "infinitetalk-720",
     "dit_quantized_ckpt": "/path/to/InfiniteTalk-4StepDistill-Mean-w-ITAudioAdaptorV6.1-int8.safetensors",
@@ -58,5 +57,8 @@
     "use_compile": true,
     "warmup": true,
     "vae_use_compile": true,
-    "cache_condition_encoders": true
+    "cache_condition_encoders": true,
+    "request_defaults": {
+        "video_duration": 300
+    }
 }

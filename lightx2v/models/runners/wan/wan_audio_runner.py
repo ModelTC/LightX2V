@@ -23,7 +23,7 @@ from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdap
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioARModel, WanAudioModel
 from lightx2v.models.runners.autoregressive_runner import AutoregressiveRunnerMixin
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
+from lightx2v.models.runners.wan.input_info import WanAudioState
 from lightx2v.models.runners.wan.streaming_vae import WanStreamingVAERunnerMixin
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler, WanAudioARScheduler
@@ -31,9 +31,9 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import SekoTalkRS2VInputInfo, SekoTalkS2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import fixed_shape_resize, isotropic_crop_resize, load_weights, wan_vae_to_comfy
 from lightx2v.utils.va_controller import VAController
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -281,28 +281,13 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 
 @RUNNER_REGISTER("seko_talk")
 class WanAudioRunner(WanRunner):  # type:ignore
+    input_info_state = WanAudioState
     _WARMUP_SHAPES = ((480, 480), (544, 960))
     _WARMUP_PROMPTS = (
         "A person speaks calmly.",
         "A person speaks naturally to the camera at a kitchen table. Their lips follow the supplied audio, their gaze stays mostly on the lens, and they make small movements with their hands and shoulders as the light from a nearby window falls across their face.",
     )
     _WARMUP_STEP_COUNT = 2
-
-    input_info_cls_by_task = {"s2v": SekoTalkS2VInputInfo, "rs2v": SekoTalkRS2VInputInfo}
-    supported_request_fields_by_task = {
-        task: COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "audio_path",
-            "image_path",
-            "num_frames",
-            "video_duration",
-            "resize_mode",
-            "fixed_area",
-            "size",
-        }
-        for task in ("s2v", "rs2v")
-    }
 
     def create_input_info(self, request_data):
         input_info = super().create_input_info(request_data)
@@ -321,7 +306,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.name = self.config.get("name", "WanAudioRunner")
         self.task = self.config.get("task", "i2v")
         self.prev_frame_length = self.config.get("prev_frame_length", 5)
-        self.video_duration = self.config.get("video_duration", 5)
+        self.video_duration = get_input_value(self.config, "video_duration", 5)
         self.frame_preprocessor = FramePreprocessorTorchVersion()
 
     def init_scheduler(self):
@@ -333,7 +318,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if self.config["model_cls"] != "seko_talk" or self.task != "rs2v":
             return super().run_warmup()
 
-        num_frames = self.config["num_frames"]
+        num_frames = get_input_value(self.config, "num_frames")
         model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model"
         for warmup_index, (height, width) in enumerate(self._WARMUP_SHAPES):
             logger.info(f"Warmup rs2v: {height}x{width}x{num_frames}, first and continuation segments")
@@ -385,7 +370,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self._maybe_freeze_gc()
 
     def _prepare_warmup_inputs(self, warmup_index, height, width, num_frames):
-        self.input_info = SekoTalkRS2VInputInfo(
+        self.input_info = self.get_input_info_type("rs2v")(
             task="rs2v",
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],
@@ -455,7 +440,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={video_duration}")
 
         # Segment audio (CLI / input_info wins over config_json; num_frames is not merged into config)
-        num_frames = self.config.get("num_frames", 81)
+        num_frames = get_input_value(self.config, "num_frames", 81)
         request_frames = self.input_info.num_frames
         if request_frames is not None and request_frames > 0:
             num_frames = request_frames
@@ -496,7 +481,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             "resize_mode": self.input_info.resize_mode,
             "bucket_shape": self.config.get("bucket_shape", None),
             "fixed_area": self.input_info.fixed_area,
-            "size": self.input_info.size or self.config.get("size"),
+            "size": self.input_info.size or get_input_value(self.config, "size", None),
         }
 
     def _resolve_patched_spatial_size(self, h, w):
@@ -646,7 +631,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         tgt_h, tgt_w = self.input_info.size[0], self.input_info.size[1]
         num_frames = self.input_info.num_frames
         if num_frames is None or num_frames <= 0:
-            num_frames = self.config["num_frames"]
+            num_frames = get_input_value(self.config, "num_frames")
         prev_frames = torch.zeros((1, 3, num_frames, tgt_h, tgt_w), device=AI_DEVICE)
 
         if prev_video is not None:
@@ -950,7 +935,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.audio_adapter = self.load_audio_adapter()
 
     def get_latent_shape_with_lat_hw(self, latent_h, latent_w, num_frames=None):
-        num_frames = num_frames if num_frames is not None and num_frames > 0 else self.config["num_frames"]
+        num_frames = num_frames if num_frames is not None and num_frames > 0 else get_input_value(self.config, "num_frames")
         latent_shape = [
             self.config.get("num_channels_latents", 16),
             (num_frames - 1) // self.config["vae_stride"][0] + 1,
@@ -1026,12 +1011,14 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
 @RUNNER_REGISTER("seko_talk_ar")
 class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, WanAudioRunner):
-    supported_request_fields_by_task = {
-        "rs2v": WanAudioRunner.supported_request_fields_by_task["rs2v"] - {"num_frames", "resize_mode", "fixed_area"},
-    }
-
     _WARMUP_SHAPES = ()
     _WARMUP_PROMPTS = ("A person speaks calmly to the camera.",)
+
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if self.config.get("prompt_travel") and request_data.get("prompt") is not None:
+            raise ValueError("SekoTalk AR prompt cannot be overridden while prompt_travel is configured; edit prompt_travel_text or remove prompt_travel to use a single prompt.")
+        return input_info
 
     def get_stream_output_path(self, input_info):
         # Live audio uses VAController's editable publication buffer for
@@ -1070,8 +1057,8 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
 
     def _prepare_warmup_inputs(self, warmup_index, height, width, latent_shape):
         prompt = self._WARMUP_PROMPTS[warmup_index]
-        text_output = self.run_text_encoder(SekoTalkRS2VInputInfo(task="rs2v", prompt=prompt))
-        self.input_info = SekoTalkRS2VInputInfo(task="rs2v", prompt=prompt, seed=0, size=[height, width])
+        text_output = self.run_text_encoder(self.get_input_info_type("rs2v")(task="rs2v", prompt=prompt))
+        self.input_info = self.get_input_info_type("rs2v")(task="rs2v", prompt=prompt, seed=0, size=[height, width])
         self.input_info.latent_shape = latent_shape
         reference = torch.zeros(1, 3, height, width, device=AI_DEVICE)
         self.inputs = {
@@ -1088,12 +1075,6 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
         self.model.transformer_infer.reset_kv_cache()
         self.input_info = None
         self.inputs = {}
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("prompt_travel"):
-            supported_request_fields -= {"prompt"}
-        return supported_request_fields
 
     @dataclass(frozen=True)
     class PromptTravelSegment:
@@ -1144,7 +1125,7 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
             identity = image.mode, image.size, hashlib.sha256(image.tobytes()).hexdigest()
         else:
             return None
-        return (identity, tuple(self.input_info.size or self.config["size"]), id(self.image_encoder), id(self.vae_encoder), self.config.get("use_image_encoder", True))
+        return (identity, tuple(self.input_info.size or get_input_value(self.config, "size")), id(self.image_encoder), id(self.vae_encoder), self.config.get("use_image_encoder", True))
 
     def _prepare_reference_condition(self):
         key = self._reference_condition_key()
@@ -1206,7 +1187,7 @@ class WanAudioARRunner(AutoregressiveRunnerMixin, WanStreamingVAERunnerMixin, Wa
             ref_img = load_image(img_path)
 
         input_size = self.input_info.size
-        target_h, target_w = self.config.get("size", (480, 832))
+        target_h, target_w = get_input_value(self.config, "size", (480, 832))
         if input_size is not None and len(input_size) >= 2:
             target_h = input_size[0] or target_h
             target_w = input_size[1] or target_w

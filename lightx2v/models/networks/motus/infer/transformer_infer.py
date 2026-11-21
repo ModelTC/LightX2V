@@ -29,7 +29,7 @@ class MotusTransformerInfer(BaseTransformerInfer):
         self.head_dim = config["dim"] // config["num_heads"]
         self.modulate_func = fuse_scale_shift_kernel if config.get("modulate_type", "triton") == "triton" else modulate
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
             self.seq_p_tensor_fusion = self.config["parallel"].get("seq_p_tensor_fusion", False)

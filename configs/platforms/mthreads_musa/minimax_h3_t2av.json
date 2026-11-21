@@ -1,7 +1,5 @@
 {
   "infer_steps": 29,
-  "num_frames": 124,
-  "size": [544, 960],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -28,5 +26,9 @@
   "video_codec_options": {
     "preset": "ultrafast",
     "crf": "18"
+  },
+  "request_defaults": {
+    "num_frames": 124,
+    "size": [544, 960]
   }
 }

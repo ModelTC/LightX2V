@@ -13,7 +13,6 @@ from lightx2v.models.input_encoders.hf.hunyuan15.qwen25.model import Qwen25VL_Te
 from lightx2v.models.input_encoders.hf.hunyuan15.siglip.model import SiglipVisionEncoder
 from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.schedulers.hunyuan_video.feature_caching.scheduler import HunyuanVideo15SchedulerCaching
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15SRScheduler, HunyuanVideo15Scheduler
 from lightx2v.models.schedulers.hunyuan_video.step_distill.scheduler import HunyuanVideo15StepDistillScheduler
@@ -30,17 +29,6 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("hunyuan_video_1.5")
 class HunyuanVideo15Runner(DefaultRunner):
-    supported_request_fields_by_task = {
-        "t2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"num_frames"},
-        "i2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "num_frames"},
-    }
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.sr_version is not None and self.config_sr["enable_cfg"]:
-            supported_request_fields |= {"negative_prompt"}
-        return supported_request_fields
-
     def __init__(self, config):
         config["is_sr_running"] = False
 
@@ -56,7 +44,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             self.config_sr["is_sr_running"] = False
             self.config_sr["sample_shift"] = config["video_super_resolution"]["flow_shift"]  # for SR model
             self.config_sr["sample_guide_scale"] = config["video_super_resolution"]["guidance_scale"]  # for SR model
-            self.config_sr["enable_cfg"] = config["video_super_resolution"].get("enable_cfg", config["enable_cfg"])
+            self.config_sr["enable_cfg"] = config["video_super_resolution"].get("enable_cfg", config.get("enable_cfg", False))
             self.config_sr["infer_steps"] = config["video_super_resolution"]["num_inference_steps"]
 
         super().__init__(config)
@@ -71,9 +59,13 @@ class HunyuanVideo15Runner(DefaultRunner):
         self.vae_cls = HunyuanVideo15VAE
         self.tae_cls = LightTaeHy15
 
+    def supports_negative_prompt(self):
+        sr = self.config.get("video_super_resolution", {})
+        return super().supports_negative_prompt() or (sr.get("sr_version") is not None and sr.get("enable_cfg", self.config.get("enable_cfg", False)))
+
     def init_scheduler(self):
         distill_method = self.config.get("distill_method")
-        feature_caching = self.config["feature_caching"]
+        feature_caching = self.config.get("feature_caching", "NoCaching")
 
         if distill_method == "dmd2":
             if feature_caching != "NoCaching":
@@ -96,7 +88,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             self.scheduler_sr = None
 
     def load_text_encoder(self):
-        qwen25vl_offload = self.config.get("qwen25vl_cpu_offload", self.config.get("cpu_offload"))
+        qwen25vl_offload = self.config.get("qwen25vl_cpu_offload", self.config.get("cpu_offload", False))
         if qwen25vl_offload:
             qwen25vl_device = torch.device("cpu")
         else:
@@ -118,7 +110,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             qwen25vl_quant_ckpt=qwen25vl_quantized_ckpt,
         )
 
-        byt5_offload = self.config.get("byt5_cpu_offload", self.config.get("cpu_offload"))
+        byt5_offload = self.config.get("byt5_cpu_offload", self.config.get("cpu_offload", False))
         if byt5_offload:
             byt5_device = torch.device("cpu")
         else:
@@ -301,7 +293,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         neg_prompt = input_info.negative_prompt
 
         # run qwen25vl
-        if config.get("enable_cfg", False) and config["cfg_parallel"]:
+        if config.get("enable_cfg", False) and config.get("cfg_parallel", False):
             cfg_p_group = config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
@@ -327,7 +319,7 @@ class HunyuanVideo15Runner(DefaultRunner):
     def load_image_encoder(self):
         image_encoder = None
         if self.config["task"] in ["i2v", "flf2v"] and self.config.get("use_image_encoder", True):
-            siglip_offload = self.config.get("siglip_cpu_offload", self.config.get("cpu_offload"))
+            siglip_offload = self.config.get("siglip_cpu_offload", self.config.get("cpu_offload", False))
             if siglip_offload:
                 siglip_device = torch.device("cpu")
             else:
@@ -342,7 +334,7 @@ class HunyuanVideo15Runner(DefaultRunner):
 
     def load_vae_encoder(self):
         # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
@@ -353,7 +345,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             "device": vae_device,
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
-            "parallel": self.config["parallel"],
+            "parallel": self.config.get("parallel", False),
         }
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v"]:
             return None
@@ -362,7 +354,7 @@ class HunyuanVideo15Runner(DefaultRunner):
 
     def load_vae_decoder(self):
         # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
+        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         if vae_offload:
             vae_device = torch.device("cpu")
         else:
@@ -373,7 +365,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             "device": vae_device,
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
-            "parallel": self.config["parallel"],
+            "parallel": self.config.get("parallel", False),
         }
         if self.config.get("use_tae", False):
             tae_path = self.config["tae_path"]

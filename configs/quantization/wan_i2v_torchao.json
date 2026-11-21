@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -14,5 +12,9 @@
     "t5_quantized": true,
     "t5_quant_scheme": "int8-torchao",
     "clip_quantized": true,
-    "clip_quant_scheme": "int8-torchao"
+    "clip_quant_scheme": "int8-torchao",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

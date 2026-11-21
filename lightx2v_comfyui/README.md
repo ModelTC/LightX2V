@@ -12,16 +12,19 @@ This directory can be symlinked into `ComfyUI/custom_nodes`.
 | --- | --- | --- |
 | LightX2V Service | Source, model, config, task, GPU → `LX2V_SERVER` | Describe a service; load only when inference runs; browse/edit config and release the service |
 | LightX2V Generate Video | server, prompt, dimensions, frames, seed, optional first/last `IMAGE` → `VIDEO` | H3, Wan and compatible video models |
+| LightX2V Generate Video Batch | Generate Video inputs, batch_size → `VIDEO` list | Generate candidates sequentially with consecutive seeds |
+| LightX2V Select Video | `VIDEO` list → `VIDEO` | Preview candidates on the canvas and click to select; fills matching fields in the connected Regenerate Video node |
+| LightX2V Regenerate Video | server, prompt, dimensions, seed, source `VIDEO`, start step, optional first/last `IMAGE` → `VIDEO` | H3 regeneration; reads frame count from the source |
 | LightX2V Generate Image | server, prompt, dimensions, seed, optional `IMAGE` → `IMAGE` | Text-to-image or single-image editing |
 | LightX2V Upscale Video | server, `VIDEO`, scale, seed → `VIDEO` | Video upscaling |
 
-All four use the same blue `LightX2V-Server: type` badge. Use native Comfy nodes to load, save and preview media.
+All nodes use the same blue `LightX2V-Server: type` badge. Use native Comfy nodes to load, save and preview media.
 
 ```text
 lightx2v_comfyui/
 ├── __init__.py                  # Comfy entry point, nodes, routes, WEB_DIRECTORY
 ├── lightx2v_comfy_server/
-│   ├── nodes.py                 # Four nodes and IMAGE/VIDEO file conversion
+│   ├── nodes.py                 # Nodes and IMAGE/VIDEO file conversion
 │   ├── service.py               # Startup settings, fingerprints, identity, commands
 │   ├── manager.py               # HTTP, service pool, execution lock, cancellation, TTL
 │   ├── supervisor.py            # Parent death detection and process-tree cleanup
@@ -29,8 +32,8 @@ lightx2v_comfyui/
 │   ├── gpus.py                  # GPU usage, device indices and UUID normalization
 │   ├── files.py                 # Paths, browsing, JSON validation, backups, atomic saves
 │   └── routes.py                # Comfy /lightx2v/* HTTP endpoints
-├── web/                         # Service, GPU, file browser and config editor UI
-├── examples/                    # Ten canvas workflows; no model configs
+├── web/                         # Service, GPU, file/config editors and video selection UI
+├── examples/                    # Canvas workflows; no model configs
 ├── README.md
 └── README_zh.md
 ```
@@ -150,12 +153,13 @@ Press `Ctrl+C` in the container shell to stop Comfy, then run `exit` to leave an
 
 ## Workflows and other models
 
-This directory contains ten `*_workflow.json` canvas files. Drag them into ComfyUI to open, edit and run them. Paths beginning with `/path/to/` and Load Image/Video filenames are placeholders and need to be replaced.
+Drag the `examples/*_workflow.json` canvas files into ComfyUI to open, edit and run them. Paths beginning with `/path/to/` and Load Image/Video filenames are placeholders and need to be replaced.
 
 | Canvas | Model / task | Config source |
 | --- | --- | --- |
 | [H3 → preview → Relay](examples/h3_relay_workflow.json) | minimax_h3/t2av + relayvsr_x4/sr | h3.json + relay.json |
 | [Repeated H3 generation](examples/h3_t2av_workflow.json) | minimax_h3/t2av | h3.json |
+| [Four H3 drafts → select → regenerate](examples/h3_draft_select_regenerate_workflow.json) | minimax_h3/t2av | [H3 Roll 8-step](../configs/minimax_h3_roll/minimax_h3_bf16_8step.json) |
 | [H3 first/last frames](examples/h3_fl2av_workflow.json) | minimax_h3/fl2av | h3.json |
 | [H3 reference image](examples/h3_ref2av_workflow.json) | minimax_h3/ref2av | h3-ref2av.json |
 | [H3 Image text-to-image](examples/h3_image_t2i_workflow.json) | minimax_h3_image/t2i | [minimax_h3_image.json](../configs/minimax_h3_image/minimax_h3_image.json) |

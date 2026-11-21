@@ -1,11 +1,8 @@
 {
     "infer_steps": 4,
     "fps": 16,
-    "video_duration": 360,
     "audio_sr": 16000,
-    "num_frames": 17,
     "prev_frame_length": 1,
-    "resize_mode": "adaptive",
     "bucket_shape": {
         "0.667": [
             [
@@ -60,5 +57,10 @@
     "adapter_quantized": true,
     "adapter_quant_scheme": "fp8-sgl",
     "t5_quantized": true,
-    "t5_quant_scheme": "fp8-sgl"
+    "t5_quant_scheme": "fp8-sgl",
+    "request_defaults": {
+        "video_duration": 360,
+        "num_frames": 17,
+        "resize_mode": "adaptive"
+    }
 }

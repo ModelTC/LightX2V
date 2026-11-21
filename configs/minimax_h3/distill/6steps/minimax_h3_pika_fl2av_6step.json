@@ -2,8 +2,6 @@
   "lora_mode": "consumer",
   "model_variant": "fl2av",
   "infer_steps": 6,
-  "num_frames": 124,
-  "size": [768, 1344],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -29,5 +27,9 @@
       "strength": 1.0,
       "alpha": 128
     }
-  ]
+  ],
+  "request_defaults": {
+    "num_frames": 124,
+    "size": [768, 1344]
+  }
 }

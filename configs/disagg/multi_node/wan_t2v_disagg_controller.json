@@ -1,7 +1,5 @@
 {
     "infer_steps": 50,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "sample_guide_scale": 5,
@@ -18,5 +16,9 @@
         "transformer_engine_rank": 1,
         "decoder_engine_rank": 2,
         "local_hostname": "localhost"
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
     }
 }

@@ -65,7 +65,7 @@ class MiniMaxH3Model(BaseTransformerModel):
                 raise ValueError("LoRA consumer fusion requires minimax_h3 on CUDA")
             if config.get("tensor_parallel"):
                 raise ValueError("LoRA consumer fusion does not support tensor parallel reductions; use sequence parallelism")
-            if config.get("do_mm_calib"):
+            if config.get("do_mm_calib", False):
                 raise ValueError("LoRA consumer fusion does not support GEMM calibration")
         validate_minimax_h3_residency_config(config)
         self.lora_alpha = lora_alpha

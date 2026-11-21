@@ -1,25 +1,39 @@
 """Rank-local NUMA placement using the existing shared pinned arena backend."""
 
+import errno
 from dataclasses import dataclass
 
 import torch
 from loguru import logger
 
-from lightx2v.common.offload.shared_pinned_arena import SharedPinnedArena, SharedWeightManifest, TopologyRecord
+from lightx2v.common.offload.shared_pinned_arena import (
+    CudaRuntime,
+    NumaBindingError,
+    SharedPinnedArena,
+    SharedPinnedArenaError,
+    SharedWeightManifest,
+    SysVAllocationUnavailableError,
+    discover_gpu_numa_node,
+)
 from lightx2v.common.offload.shared_weight_map import PinnedWeightViewMap, validate_shared_operator_views
 
 
 def validate_numa_config(config, lora_path=None):
     enabled = config.get("cpu_offload_numa", False)
-    if type(enabled) is not bool:
-        raise ValueError("cpu_offload_numa must be a boolean")
+    if type(enabled) is not bool and enabled != "auto":
+        raise ValueError('cpu_offload_numa must be true, false, or "auto"')
     if not enabled:
         return
-    if not config.get("cpu_offload") or config.get("offload_granularity", "block") != "block":
+    if not config.get("cpu_offload", False) or config.get("offload_granularity", "block") != "block":
         raise ValueError("cpu_offload_numa requires CPU block offload")
-    incompatible = ("shared_cpu_weights", "cpu_offload_block_contiguous", "lazy_load", "tensor_parallel", "weight_auto_quant", "lora_configs")
-    if config.get("lora_mode", "merge") in ("separate", "consumer") or any(config.get(key) for key in incompatible) or lora_path:
-        raise ValueError("cpu_offload_numa requires static rank-local weights without lazy loading, TP, LoRA, shared or contiguous offload")
+    incompatible = ("shared_cpu_weights", "cpu_offload_block_contiguous", "lazy_load", "tensor_parallel", "weight_auto_quant")
+    if config.get("lora_mode", "merge") != "merge" or any(config.get(key) for key in incompatible) or lora_path:
+        raise ValueError("cpu_offload_numa requires static rank-local weights without lazy loading, TP, auto-quantization, dynamic LoRA, shared or contiguous offload")
+    # Qwen merges adapters into CPU weights before creating the NUMA arena.
+    if config.get("lora_configs"):
+        qwen_image_task = config.get("model_cls") == "qwen_image" and config.get("task") in ("t2i", "i2i")
+        if not qwen_image_task or config.get("layered") or config.get("dit_quantized"):
+            raise ValueError("cpu_offload_numa supports startup LoRA merging only for non-layered Qwen Image T2I/I2I with an unquantized DiT")
     for key in ("dit_quant_scheme", "adapter_quant_scheme"):
         scheme = config.get(key, "Default")
         # These loaders allocate private storage or perform extra conversions
@@ -84,22 +98,37 @@ class LocalPinnedWeights:
         self.arena.close()
 
 
-def materialize_numa_weights(weights, roots):
-    """Preserve the normal model/adapter loaders; replace only CPU storage.
-
-    Each rank owns one arena without a distributed sharing rendezvous. SysV,
-    mbind-before-first-touch, tensor-aware CUDA registration and rollback all
-    come from SharedPinnedArena, exactly as in the shared-weight path.
-    """
+def materialize_numa_weights(weights, roots, *, required=True):
+    """Move rank-local CPU weights into pinned memory on the current GPU's NUMA node."""
     if not torch.cuda.is_available():
-        raise ValueError("cpu_offload_numa requires CUDA")
-    topology = TopologyRecord.discover(rank=0, weight_signature="rank-local-pinned-v1")
-    if topology.numa_node is None:
-        raise ValueError("cpu_offload_numa requires a known GPU NUMA node")
+        if required:
+            raise ValueError("cpu_offload_numa requires CUDA")
+        return None
+    cuda_device = torch.cuda.current_device()
+    try:
+        runtime = CudaRuntime.load()
+        pci_bus_id = runtime.device_pci_bus_id(cuda_device)
+        numa_node = discover_gpu_numa_node(pci_bus_id)
+    except SharedPinnedArenaError as exc:
+        if required:
+            raise
+        logger.warning("GPU NUMA topology unavailable; using ordinary CPU block offload: {}", exc)
+        return None
+    if numa_node is None:
+        if required:
+            raise ValueError("cpu_offload_numa requires a known GPU NUMA node")
+        logger.info("GPU has no known NUMA node; using ordinary CPU block offload")
+        return None
     metadata = describe_cpu_weights(weights, roots)
     manifest = SharedWeightManifest.from_tensors(metadata, weight_signature="rank-local-pinned-v1", alignment=4096)
-    arena = SharedPinnedArena.create(manifest=manifest, numa_node=topology.numa_node, cuda_device=topology.cuda_device, auto_remove=True)
-    owner = LocalPinnedWeights(arena, topology.numa_node)
+    try:
+        arena = SharedPinnedArena.create(manifest=manifest, numa_node=numa_node, cuda_device=cuda_device, cuda_runtime=runtime, auto_remove=True)
+    except (NumaBindingError, SysVAllocationUnavailableError) as exc:
+        if required or (isinstance(exc, NumaBindingError) and exc.errno not in (None, errno.EACCES, errno.EPERM, errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP)):
+            raise
+        logger.warning("Cannot create pinned weights on NUMA node {}; using ordinary CPU block offload: {}", numa_node, exc)
+        return None
+    owner = LocalPinnedWeights(arena, numa_node)
     try:
         views = arena.tensor_views()
         for name, destination in views.items():
@@ -115,9 +144,9 @@ def materialize_numa_weights(weights, roots):
         raise
     logger.info(
         "[NUMAWeights] GPU={} PCI={} node={} tensors={} arena={:.3f} GiB address={:#x}",
-        topology.cuda_device,
-        topology.pci_bus_id,
-        topology.numa_node,
+        cuda_device,
+        pci_bus_id,
+        numa_node,
         len(views),
         arena.nbytes / 1024**3,
         arena.address,

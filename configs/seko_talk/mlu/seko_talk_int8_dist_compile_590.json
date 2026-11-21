@@ -4,10 +4,7 @@
     "model_path": "/data/models/seko/seko_v2.7_int8",
     "infer_steps": 4,
     "fps": 16,
-    "video_duration": 5,
     "audio_sr": 16000,
-    "num_frames": 81,
-    "resize_mode": "adaptive",
     "self_attn_1_type": "mlu_sage_attn",
     "cross_attn_1_type": "mlu_sage_attn",
     "cross_attn_2_type": "mlu_sage_attn",
@@ -38,5 +35,10 @@
     "prev_frame_length": 0,
     "use_compile": true,
     "compile_backend": "default",
-    "audio_attn_type": "mlu_flash_attn"
+    "audio_attn_type": "mlu_flash_attn",
+    "request_defaults": {
+        "video_duration": 5,
+        "num_frames": 81,
+        "resize_mode": "adaptive"
+    }
 }

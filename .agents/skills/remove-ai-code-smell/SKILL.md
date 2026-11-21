@@ -1,38 +1,36 @@
 ---
 name: remove-ai-code-smell
-description: 审查并简化 AI 生成感较重的代码，重点移除内部配置路径中的过度防御、输入格式穷举、无依据的能力拦截、冗余异常和模板化注释，同时保留防止静默错误的算法与领域边界。用于用户要求“去 AI 味”、简化代码、删除过度防御、按项目约定而非不可信输入编程，或逐处审查可疑 guard、validation 和 comment 时。
+description: Review and simplify code that looks overengineered or AI-generated. Remove excessive defensive logic in internal configuration paths, exhaustive handling of impossible input formats, unjustified capability guards, redundant exceptions, and boilerplate comments while preserving algorithmic and domain checks that prevent silent failures. Use when asked to remove AI code smell, simplify code, eliminate over-defensive checks, rely on project contracts instead of treating trusted inputs as hostile, or audit suspicious guards, validations, and comments.
 ---
 
-# 去 AI 味代码审查
+# Remove AI Code Smells
 
-英文版见 [SKILL_EN.md](SKILL_EN.md)。
+## Core Principles
 
-## 核心原则
+Trust verified caller contracts. Do not treat internal project configuration as an untrusted public API, and do not enumerate formats that callers never provide.
 
-相信已经确认的调用契约。不要把项目内部配置当成不可信的公共 API，也不要为调用方不会传入的格式穷举分支。
+First distinguish between two kinds of checks:
 
-先区分两类检查：
+- **Format defenses**: Handling `None`, capitalization variants, `bool`, arbitrary invalid types, or configuration combinations the project never produces. Remove these checks; when necessary, state the input contract in one sentence.
+- **Real boundaries**: Preventing division by zero, out-of-bounds access, duplicate indices, silent selection of the wrong strategy, data corruption, or resource safety issues. Preserve these checks.
 
-- **格式防御**：兼容 `None`、大小写变体、`bool`、任意错误类型或项目不会产生的配置组合。删除这类检查；必要时用一句话写明输入约定。
-- **真实边界**：防止除零、越界、重复索引、静默选择错误策略、数据损坏或资源安全问题。保留这类检查。
+Do not keep every guard merely because it appears safer. Determine what happens when it fails. If it only makes an internal error surface earlier and more verbosely, it is usually unnecessary. If execution would continue and silently produce an incorrect result, keep it.
 
-不要以“更安全”为由保留所有 guard。判断它失败时会发生什么：如果只是让内部错误更早并更啰嗦地报出，通常不值得；如果会继续运行并产生悄无声息的错误结果，就应保留。
+In LightX2V, startup JSON and request data are separate contracts. Inspect argument splitting in `lightx2v/utils/cli.py`, `build_startup_config()` in `lightx2v/utils/set_config.py` and `BaseRunner.prepare_request()` in `lightx2v/models/runners/base_runner.py`. Task/field validation at this public boundary is not redundant internal defense.
 
-在 LightX2V 中，启动 JSON 与请求数据是两个不同契约。先检查 `lightx2v/utils/set_config.py` 的 `build_cli_inputs()` / `build_startup_config()`，以及 `lightx2v/models/runners/base_runner.py` 的 `prepare_request()`。该公共边界上的 task 和字段校验不属于冗余内部防御。
+## Review Workflow
 
-## 审查步骤
+1. Inspect call sites, configuration files, and defaults to determine who controls each input.
+2. Find `isinstance` chains, `None` fallbacks, case normalization, repeated `hasattr` checks, capability-combination guards, and long exception messages.
+3. Check that optional configuration reads such as `config.get` provide an explicit, appropriate default consistent with the setting's semantics, caller contract, and existing behavior when omitted. Use `config[key]` for required settings; do not hide missing settings with arbitrary defaults or use `or default` to replace valid `False`, `0`, or other falsy values.
+4. Remove branches outside the actual input space so the code directly expresses the normal path.
+5. For stable but non-obvious contracts, keep at most one short comment. Do not restate the code in comments.
+6. Preserve the minimum boundary checks needed to prevent silent errors.
+7. Keep changes local, then run the relevant syntax checks, lint checks, and focused tests.
 
-1. 查看调用点、配置文件和默认值，确认输入由谁控制。
-2. 找出 `isinstance` 链、`None` 回退、大小写归一化、重复 `hasattr`、能力组合拦截和长异常信息。
-3. 检查 `config.get` 等可选配置读取是否显式提供符合配置语义、调用契约和现有缺省行为的默认值。必填配置使用 `config[key]`，不要用任意默认值掩盖缺失，也不要用 `or default` 覆盖合法的 `False`、`0` 等值。
-4. 删除不属于实际输入空间的分支，让代码直接表达正常路径。
-5. 对不明显但稳定的约定，只留一句简短注释；不要用注释复述代码。
-6. 保留会阻止静默错误的最小边界检查。
-7. 保持改动局部，运行对应的语法、lint 和聚焦测试。
+## Common Simplifications
 
-## 常见简化
-
-将内部配置的格式穷举：
+Replace exhaustive handling of internal configuration formats:
 
 ```python
 if value is None:
@@ -47,28 +45,28 @@ else:
     count = value
 ```
 
-改成契约加正常路径：
+with a clear contract and the normal path:
 
 ```python
 # Resident block counts are integers or "all".
 count = num_blocks if value == "all" else value
 ```
 
-某个组合尚未使用或测试，不代表调用方不能选择它。保护计算语义或资源生命周期的不支持模式检查应保留，不能用注释代替。
+An untested configuration combination is not proof that callers cannot select it. Keep explicit unsupported-mode guards when they protect computation or resource lifetimes.
 
-## 应当保留的检查
+## Checks to Preserve
 
-保留由算法本身要求的边界。例如 resident block 数量超过总层数会产生重复索引或错误布局，因此范围检查不是过度防御：
+Keep boundaries required by the algorithm itself. For example, a resident block count greater than the total number of layers can produce duplicate indices or an invalid layout, so the range check is not excessive:
 
 ```python
 if not 0 <= count <= num_blocks:
     raise ValueError(...)
 ```
 
-同样保留以下检查：
+Also preserve:
 
-- 公共 API、用户输入、网络数据和不可信文件的校验。
-- 分布式 collective、显存容量、文件覆盖和数据持久化等安全边界。
-- 错误输入会被继续接受并产生错误结果的策略或枚举检查。
+- Validation at public API boundaries and for user input, network data, and untrusted files.
+- Safety boundaries around distributed collectives, VRAM capacity, file overwrites, and data persistence.
+- Strategy or enum checks where invalid input would otherwise be accepted and produce incorrect results.
 
-不要机械删除防御。先证明调用契约，再精简代码。
+Do not remove defensive checks mechanically. Prove the caller contract first, then simplify the code.

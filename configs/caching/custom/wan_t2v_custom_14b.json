@@ -1,8 +1,6 @@
 {
     "infer_steps": 50,
-    "num_frames": 81,
     "text_len": 512,
-    "size": [480, 832],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "sample_guide_scale": 6,
@@ -15,5 +13,9 @@
         [-5784.54975374, 5449.50911966, -1811.16591783, 256.27178429, -13.02252404]
     ],
     "use_ret_steps": false,
-    "teacache_thresh": 0.26
+    "teacache_thresh": 0.26,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

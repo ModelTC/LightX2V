@@ -17,11 +17,11 @@ from lightx2v.models.networks.qwen_image_21.input_utils import prepare_images
 from lightx2v.models.networks.qwen_image_21.lora import QwenImage21LoraAdapter, validate_lora_config
 from lightx2v.models.networks.qwen_image_21.model import QwenImage21TransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Scheduler
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.fp8_f16_accum_checkpoint import ACTIVATION_QMAX, QWEN_IMAGE_21_QUANTIZATION_PROFILE, validate_checkpoint
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -31,6 +31,7 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
+    input_info_state = ImageState
     supported_lora_modes = ("merge", "separate")
 
     _WARMUP_SHAPES = ((1024, 1024), (768, 960))
@@ -38,7 +39,6 @@ class QwenImage21Runner(DefaultRunner):
         "A red bicycle beside a wall.",
         "An eye level photograph of a red bicycle leaning against a pale brick wall on a quiet street. A wire basket holds a few flowers, leaves cast soft shadows across the pavement, and a small cafe window reflects the late afternoon sky.",
     )
-    supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS | {"resolution"}, "i2i": IMAGE_REQUEST_FIELDS | {"image_path", "resolution"}}
 
     def __init__(self, config):
         unsupported = (
@@ -56,7 +56,7 @@ class QwenImage21Runner(DefaultRunner):
         validate_lora_config(config)
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("qwen_image_21 supports model and block CPU offload")
-        if config.get("seq_parallel"):
+        if config.get("seq_parallel", False):
             parallel = config["parallel"]
             seq_p_size = int(parallel.get("seq_p_size", 1))
             seq_p_attn_type = parallel.get("seq_p_attn_type", "ulysses")
@@ -84,21 +84,23 @@ class QwenImage21Runner(DefaultRunner):
             if parallel.get("seq_p_quant_scheme") not in (None, "fp8", "fp4"):
                 raise ValueError("qwen_image_21 seq_p_quant_scheme supports only fp8 and fp4")
         if config.get("dit_quantized"):
-            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum", "fp8-rocm", "int8-rocm", "int8-metal"):
-                raise ValueError("qwen_image_21 DiT quantization supports fp8-sgl, fp8-f16-accum, fp8-rocm, int8-rocm and int8-metal")
-            # fp8-rocm / int8-rocm quantize the released BF16 weights on load, no prequantized checkpoint.
+            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum", "fp8-rocm", "int8-rocm", "int8-metal", "mxfp8-npu"):
+                raise ValueError("qwen_image_21 DiT quantization supports fp8-sgl, fp8-f16-accum, fp8-rocm, int8-rocm, int8-metal and mxfp8-npu")
+            # fp8-rocm / int8-rocm / mxfp8-npu quantize BF16 weights on load, no prequantized checkpoint.
             # int8-metal loads prequantized weights from model_path/transformer by default.
-            if config["dit_quant_scheme"] not in ("fp8-rocm", "int8-rocm", "int8-metal") and not config.get("dit_quantized_ckpt"):
+            if config["dit_quant_scheme"] not in ("fp8-rocm", "int8-rocm", "int8-metal", "mxfp8-npu") and not config.get("dit_quantized_ckpt"):
                 raise ValueError("qwen_image_21 quantization requires dit_quantized_ckpt")
             if config["dit_quant_scheme"] == "fp8-f16-accum":
                 validate_fp8_f16_accum_qmax(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
+            elif config["dit_quant_scheme"] == "mxfp8-npu":
+                self._validate_mxfp8_npu_config(config)
         elif config.get("dit_quant_scheme", "Default") != "Default":
             raise ValueError("dit_quant_scheme requires dit_quantized=true")
         if config.get("feature_caching", "NoCaching") != "NoCaching":
             raise ValueError("qwen_image_21 supports exact condition KV caching, not feature caching")
         if not config["causal_condition"]:
             raise ValueError("Condition KV caching requires causal_condition=true")
-        if config["enable_cfg"]:
+        if config.get("enable_cfg", False):
             assert config["sample_guide_scale"] > 1, "enable_cfg=true requires sample_guide_scale > 1"
         if config["infer_steps"] < 1:
             raise ValueError("infer_steps must be positive")
@@ -107,8 +109,24 @@ class QwenImage21Runner(DefaultRunner):
         super().__init__(config)
 
     @staticmethod
+    def _validate_mxfp8_npu_config(config):
+        from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
+
+        backend = MM_WEIGHT_REGISTER.get("mxfp8-npu")
+        if backend is None:
+            raise ValueError("qwen_image_21 mxfp8-npu requires a registered Ascend NPU backend")
+        for key in ("cpu_offload", "tensor_parallel", "seq_parallel", "shared_cpu_weights", "dit_disk_streaming"):
+            if config.get(key):
+                raise ValueError(f"qwen_image_21 mxfp8-npu does not support {key}")
+        if config.get("lora_configs"):
+            raise ValueError("qwen_image_21 mxfp8-npu does not support LoRA")
+        if config.get("attn_type") == "npu_quant_flash_attn":
+            raise ValueError("qwen_image_21 mxfp8-npu must be evaluated independently of quantized attention")
+        backend.validate_runtime()
+
+    @staticmethod
     def _validate_mps_streaming_config(config):
-        if not config.get("cpu_offload") or config.get("offload_granularity") != "block":
+        if not config.get("cpu_offload", False) or config.get("offload_granularity") != "block":
             raise ValueError("Qwen-Image-2.1 MPS streaming requires cpu_offload=true and offload_granularity=block")
         if not config.get("dit_disk_streaming") or not config.get("text_encoder_disk_streaming") or not config.get("text_encoder_cpu_offload"):
             raise ValueError("Qwen-Image-2.1 MPS streaming requires both DiT/text encoder disk streaming and text_encoder_cpu_offload=true")
@@ -117,11 +135,6 @@ class QwenImage21Runner(DefaultRunner):
         for key in ("warmup", "text_encoder_quantized", "tensor_parallel", "text_encoder_tensor_parallel", "seq_parallel", "shared_cpu_weights"):
             if config.get(key):
                 raise ValueError(f"Qwen-Image-2.1 MPS streaming does not support {key}")
-
-    def get_supported_tasks(self):
-        if self.config.get("task") is not None:
-            return super().get_supported_tasks()
-        return ("t2i", "i2i")
 
     @torch.inference_mode()
     @ProfilingContext4DebugL1("Warmup")
@@ -166,7 +179,7 @@ class QwenImage21Runner(DefaultRunner):
         request = {"task": task, "prompt": self._WARMUP_PROMPTS[warmup_index], "seed": 0, "size": [height, width]}
         if task == "i2i":
             Image.new("RGBA", (width, height), color=(0, 0, 0, 255)).save(image_path)
-            request["image_path"] = str(image_path)
+            request["image_path"] = [str(image_path)]
         # Internal warmup covers both paths even for a single-task runner.
         self.input_info = self.create_input_info(request)
 
@@ -204,6 +217,13 @@ class QwenImage21Runner(DefaultRunner):
         self.text_encoders = self.load_text_encoder()
         self.vae = self.load_vae()
 
+    def create_input_info(self, request_data):
+        info = super().create_input_info(request_data)
+        # Older startup configs expose the nested default only on the runner config.
+        if info.resolution is None:
+            info.resolution = self.config.get("request_defaults", {}).get("resolution")
+        return info
+
     @ProfilingContext4DebugL2("Run Encoders")
     def run_input_encoder(self):
         info = self.input_info
@@ -221,7 +241,7 @@ class QwenImage21Runner(DefaultRunner):
         info = self.input_info
         outputs = {}
         branches = [("cond", info.prompt)]
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             branches.append(("uncond", info.negative_prompt or ""))
         encoder = self.text_encoders[0]
         offload = self.config.get("text_encoder_cpu_offload", False)

@@ -1,7 +1,5 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
-    "size": [720, 1280],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "sample_guide_scale": [
@@ -18,5 +16,9 @@
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses"
+    },
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [720, 1280]
     }
 }

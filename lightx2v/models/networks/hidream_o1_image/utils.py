@@ -1,6 +1,5 @@
 import json
 import math
-import os
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
@@ -67,12 +66,11 @@ DEFAULT_COLORS = [
 ]
 
 
-def load_layout_bboxes(layout_bboxes: str) -> Any:
-    """Load layout boxes from either a JSON string or a JSON file path."""
-    if os.path.exists(layout_bboxes):
+def load_layout_bboxes(layout_bboxes: str | list | dict) -> Any:
+    if isinstance(layout_bboxes, str):
         with open(layout_bboxes, "r", encoding="utf-8") as f:
             return json.load(f)
-    return json.loads(layout_bboxes)
+    return layout_bboxes
 
 
 def _unwrap_boxes(data: Any) -> Any:

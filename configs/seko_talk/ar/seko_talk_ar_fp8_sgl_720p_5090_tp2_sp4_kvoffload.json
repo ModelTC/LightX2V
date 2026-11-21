@@ -1,13 +1,8 @@
 {
   "infer_steps": 4,
   "fps": 16,
-  "video_duration": 15.0,
   "audio_sr": 16000,
   "num_frames": 240,
-  "size": [
-    720,
-    1280
-  ],
   "ref_state": 1,
   "self_attn_1_type": "sage_attn2",
   "cross_attn_1_type": "sage_attn2",
@@ -74,5 +69,12 @@
   "rope_type": "flashinfer_rope",
   "modulate_type": "triton",
   "empty_cache_min_free_gib": 0,
-  "load_from_rank0": false
+  "load_from_rank0": false,
+  "request_defaults": {
+    "video_duration": 15.0,
+    "size": [
+      720,
+      1280
+    ]
+  }
 }

@@ -27,10 +27,43 @@ class APIError(RuntimeError):
         super().__init__(f"LightX2V HTTP {status}: {body[:2000]}")
 
 
+def _task_payload(openapi: dict, path: str, request: dict) -> dict:
+    """Adapt task selection and input cardinality to the deployed server's schema."""
+
+    def resolve(schema):
+        while "$ref" in schema:
+            schema = openapi["components"]["schemas"][schema["$ref"].rsplit("/", 1)[-1]]
+        return schema
+
+    schema = resolve(openapi["paths"][path]["post"]["requestBody"]["content"]["application/json"]["schema"])
+    variants = schema.get("oneOf", schema.get("anyOf"))
+    if variants:
+        for variant in variants:
+            candidate = resolve(variant)
+            task = resolve(candidate["properties"].get("task", {}))
+            if request.get("task") == task.get("const") or request.get("task") in task.get("enum", []):
+                schema = candidate
+                break
+        else:
+            raise ValueError(f"Server does not accept task {request.get('task')!r} at {path}")
+    fields = schema["properties"]
+    payload = dict(request)
+    # Single-task schemas use the startup task and forbid an HTTP task override.
+    if "task" not in fields:
+        payload.pop("task", None)
+    for name, value in payload.items():
+        field_schema = resolve(fields.get(name, {}))
+        types = {resolve(option).get("type") for option in field_schema.get("anyOf", [field_schema])}
+        if name.endswith("_path") and isinstance(value, str) and "array" in types and "string" not in types:
+            payload[name] = [value]
+    return payload
+
+
 class Client:
     def __init__(self, port: int, timeout: float = 5):
         self.url = f"http://127.0.0.1:{port}"
         self.timeout = timeout
+        self.openapi = None
         # Local video prompts and paths must never go through HTTP_PROXY.
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -45,6 +78,11 @@ class Client:
         if not isinstance(result, dict):
             raise ValueError("Expected a JSON object from LightX2V")  # noqa: TRY004 - invalid HTTP payload
         return result
+
+    def task_payload(self, path: str, request: dict) -> dict:
+        if self.openapi is None:
+            self.openapi = self.request("GET", "/openapi.json")
+        return _task_payload(self.openapi, path, request)
 
 
 @dataclass
@@ -323,9 +361,10 @@ class Manager:
             relative = task_id + extensions[media_type]
             output_root = instance.directory / "cache" / "outputs"
             expected = (output_root / relative).resolve()
-            payload = dict(request, task_id=task_id, save_result_path=relative)
+            endpoint = f"/v1/tasks/{media_type}/"
+            payload = instance.client.task_payload(endpoint, dict(request, task_id=task_id, save_result_path=relative))
             try:
-                response = instance.client.request("POST", f"/v1/tasks/{media_type}/", payload)
+                response = instance.client.request("POST", endpoint, payload)
                 if response.get("task_id") != task_id:
                     raise RuntimeError("Task submission returned an unexpected ID")
             except TRANSIENT:

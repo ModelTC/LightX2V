@@ -1,8 +1,6 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
     "text_len": 512,
-    "size": [720, 1280],
     "self_attn_1_type": "npu_flash_attn",
     "cross_attn_1_type": "npu_flash_attn",
     "sample_guide_scale": [
@@ -19,5 +17,9 @@
     "modulate_type": "torch",
     "rope_type": "torch_real_rope",
     "layer_norm_type": "torch",
-    "rms_norm_type": "torch"
+    "rms_norm_type": "torch",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [720, 1280]
+    }
 }

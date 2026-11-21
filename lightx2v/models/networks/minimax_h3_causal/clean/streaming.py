@@ -21,8 +21,8 @@ class CleanAttentionPolicy:
     media_origin: int = 30000
 
     def __post_init__(self):
-        if self.num_frame_per_chunk != 5 or self.sink_chunk_num != 1 or self.latest_chunk_num != 2:
-            raise ValueError("H3 v0.1.0 requires chunk=5, sink=1, latest=2")
+        if self.num_frame_per_chunk != 5 or self.sink_chunk_num != 1 or self.latest_chunk_num < 1:
+            raise ValueError("H3 v0.1.0 requires chunk=5, sink=1, latest>=1")
         if self.motion_prompt_origin is None or self.media_origin is None:
             raise ValueError("On-demand motion encoding requires fixed motion_prompt_origin and media_origin")
         if self.kv_cache_max_t_rope < self.sink_chunk_num + self.latest_chunk_num - 1:
@@ -257,10 +257,12 @@ class MiniMaxH3CleanStreamingPlan:
 
     def clean_history_indices(self, chunk_index: int) -> tuple[int, ...]:
         segment = self.segment_index(chunk_index)
-        history = {index for index in self.segment_sink_indices(segment) if index < chunk_index}
+        sinks = self.segment_sink_indices(segment)
+        history = {index for index in sinks if index < chunk_index}
+        # Grow history within this motion, retaining only its bridge from the previous one.
         history.update(
             range(
-                max(0, chunk_index - self.policy.latest_chunk_num + 1),
+                max(sinks[0], chunk_index - self.policy.latest_chunk_num + 1),
                 chunk_index,
             )
         )

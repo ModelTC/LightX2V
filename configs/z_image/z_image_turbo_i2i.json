@@ -3,5 +3,7 @@
     "attn_type": "flash_attn3",
     "enable_cfg": false,
     "sample_guide_scale": 0.0,
-    "i2i_denoise_strength": 1.0
+    "request_defaults": {
+        "i2i_denoise_strength": 1.0
+    }
 }

@@ -32,7 +32,9 @@
 
 ## 🧾 Community Code Contribution Guidelines
 
-Before submitting, please ensure that the code format conforms to the project standard. You can use the following execution command to ensure the consistency of project code format.
+For code contributions, see the [contribute-code skill](.agents/skills/contribute-code/SKILL.md).
+
+Before delivery, run the full `pre-commit` check from the repository root.
 
 ```bash
 pip install ruff pre-commit

@@ -1,8 +1,10 @@
 import torch
 
-from lightx2v.common.ops.attn.flex_attn import FlexAttnWeight
+from lightx2v.common.ops.attn.flex_attn import FlexAttnWeight, animate2_token_layout
 from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
+
+from .attention import PartitionedFlexAttnWeight
 
 
 class WanAnimate2TransformerInfer(WanOffloadTransformerInfer):
@@ -15,13 +17,14 @@ class WanAnimate2TransformerInfer(WanOffloadTransformerInfer):
         if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "phase":
             raise NotImplementedError("Wan-Animate-2 supports model/block offload, not phase offload.")
         if config.get("use_compile", False):
-            raise NotImplementedError("Wan-Animate-2 block compilation is disabled; its FlexAttention kernel is compiled internally.")
+            raise NotImplementedError("Wan-Animate-2 block compilation is not supported.")
         if self.seq_parallel and self.seq_p_attn_type != "ulysses":
             raise NotImplementedError("Wan-Animate-2 sequence parallelism currently requires Ulysses.")
         if self.seq_parallel and (self.seq_p_quant_scheme is not None or self.seq_p_head_parallel):
             raise NotImplementedError("Wan-Animate-2 does not support quantized SP communication or head-parallel SP.")
 
-        self.flex_attn = FlexAttnWeight()
+        generation_type = config.get("generation_attn_type", "flex_attn")
+        self.flex_attn = FlexAttnWeight() if generation_type == "flex_attn" else PartitionedFlexAttnWeight(generation_type)
         self.log_scale = float(config.get("log_scale", 0.0))
         self.mode = "generation"
         self.reference_kv_cache = None
@@ -188,7 +191,8 @@ class WanAnimate2TransformerInfer(WanOffloadTransformerInfer):
         reference_k = self.reference_kv_cache.k_cache(self.block_idx)
         reference_v = self.reference_kv_cache.v_cache(self.block_idx)
 
-        _, q_total, reference_total, frame_capacity = self.flex_attn.mask_layout(args["origin_len"], args["origin_area"], q.device)
+        layout = animate2_token_layout(args["origin_len"], args["origin_area"])
+        q_total, reference_total, frame_capacity = layout.padded_query_tokens, layout.padded_reference_tokens, layout.frame_tokens
         q_padding = q[int(pre_infer_out.valid_token_len) :].clone()
         q_packed = self._pack_stream(q, grid, frame_capacity, q_total)
         k_packed = self._pack_stream(k, grid, frame_capacity, q_total + reference_total)

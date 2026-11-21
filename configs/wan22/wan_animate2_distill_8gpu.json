@@ -27,8 +27,6 @@
     ],
     "num_channels_latents": 16,
     "text_len": 512,
-    "num_frames": 81,
-    "size": [1280, 720],
     "fps": 24,
     "audio_mux_prefer_copy": false,
     "sample_shift": 5.0,
@@ -40,6 +38,7 @@
     "refer_offset_w": -1,
     "refer_stride": 1,
     "self_attn_1_type": "sage_attn2",
+    "generation_attn_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
     "rms_norm_type": "sgl-kernel",
@@ -51,17 +50,25 @@
     "use_image_encoder": true,
     "use_31_block": true,
     "cpu_offload": false,
-    "t5_cpu_offload": false,
-    "clip_cpu_offload": false,
-    "vae_cpu_offload": false,
+    "t5_cpu_offload": true,
+    "clip_cpu_offload": true,
+    "vae_cpu_offload": true,
     "vae_dtype": "torch.bfloat16",
+    "use_tiling_vae": true,
+    "serialize_load": true,
     "parallel": {
-        "seq_p_size": 8,
-        "seq_p_attn_type": "ulysses"
+        "seq_p_size": 1,
+        "seq_p_attn_type": "ulysses",
+        "tensor_p_size": 8,
+        "tp_load_mode": "local"
     },
     "dit_original_ckpt": "/path/to/wan_animate_2_bf16_distillation.safetensors",
     "t5_original_ckpt": "/path/to/models_t5_umt5-xxl-enc-bf16.pth",
     "t5_tokenizer_path": "/path/to/umt5-xxl",
     "clip_original_ckpt": "/path/to/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
-    "vae_path": "/path/to/vae.pth"
+    "vae_path": "/path/to/vae.pth",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [1280, 720]
+    }
 }

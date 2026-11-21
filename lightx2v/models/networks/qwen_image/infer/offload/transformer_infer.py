@@ -1,6 +1,6 @@
 import torch
 
-from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager
+from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager, record_stream
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.common.offload.resident import ResidentBlocks, uniform_resident_indices, validate_residency_config
 from lightx2v.models.networks.qwen_image.infer.transformer_infer import (
@@ -15,11 +15,16 @@ def validate_qwen_residency_config(config):
     if "offload_resident_blocks" not in config:
         return
     uniform_resident_indices(config["num_layers"], config["offload_resident_blocks"])
-    if config["model_cls"] != "qwen_image" or config["task"] != "t2i" or config.get("layered", False):
-        raise ValueError("Static Qwen residency currently supports Qwen Image t2i")
-    validate_residency_config(config)
-    if config.get("use_magi_compile", False) or config.get("zero_cond_t", False) or config.get("use_layer3d_rope", False):
-        raise ValueError("Static Qwen residency requires eager execution with standard t2i conditioning and RoPE")
+    if config["model_cls"] != "qwen_image" or config["task"] not in ("t2i", "i2i") or config.get("layered", False):
+        raise ValueError("Static Qwen residency supports non-layered Qwen Image t2i/i2i")
+    # Qwen's static LoRAs are merged before operator loading; residency uses
+    # those final CPU masters. Dynamic adapters still fail the shared guard.
+    fixed_config = config
+    if config.get("lora_configs") and config.get("lora_mode", "merge") == "merge":
+        fixed_config = {**config, "lora_configs": None}
+    validate_residency_config(fixed_config)
+    if config.get("use_magi_compile", False) or (config.get("zero_cond_t", False) and config["task"] != "i2i") or config.get("use_layer3d_rope", False):
+        raise ValueError("Static Qwen residency requires eager execution with standard RoPE; zero_cond_t requires i2i")
 
 
 class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
@@ -171,9 +176,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                 return self.run_block(index, block, image, text, temb_img_silu, temb_txt_silu, image_rotary_emb, image_rotary_positions, modulate_index)
 
             # Keep caller-owned inputs alive until their compute-stream consumers finish.
-            for tensor in (hidden_states, encoder_hidden_states, temb_img_silu, temb_txt_silu, *image_rotary_emb, *image_rotary_positions, modulate_index):
-                if tensor is not None:
-                    tensor.record_stream(self.offload_manager.compute_stream)
+            record_stream((hidden_states, encoder_hidden_states, temb_img_silu, temb_txt_silu, image_rotary_emb, image_rotary_positions, modulate_index), self.offload_manager.compute_stream)
             try:
                 encoder_hidden_states, hidden_states = self.offload_manager.run_blocks(blocks, self.resident_blocks.indices, (encoder_hidden_states, hidden_states), run_block)
             except BaseException:

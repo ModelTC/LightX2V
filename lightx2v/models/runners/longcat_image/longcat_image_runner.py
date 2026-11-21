@@ -11,14 +11,15 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.longcat.longcat_text_encoder import LongCatImageTextEncoder
 from lightx2v.models.networks.longcat_image.model import LongCatImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, IMAGE_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.schedulers.longcat_image.scheduler import LongCatImageScheduler
 from lightx2v.models.video_encoders.hf.longcat_image.vae import LongCatImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.image_io import save_image
+from lightx2v.utils.input_info import ImageState
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -55,12 +56,9 @@ def calculate_target_dimensions_from_image(image_size, target_area=1024 * 1024, 
 
 @RUNNER_REGISTER("longcat_image")
 class LongCatImageRunner(DefaultRunner):
+    input_info_state = ImageState
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-    supported_request_fields_by_task = {
-        "t2i": IMAGE_REQUEST_FIELDS,
-        "i2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path"},
-    }
 
     def load_transformer(self):
         model = LongCatImageTransformerModel(os.path.join(self.config["model_path"], "transformer"), self.config, self.init_device)
@@ -217,7 +215,7 @@ class LongCatImageRunner(DefaultRunner):
         text_encoder_output["prompt_embeds"] = prompt_embeds
 
         # Encode negative prompt with image
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer_with_image([neg_prompt], prompt_image)
             self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
             text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -248,7 +246,7 @@ class LongCatImageRunner(DefaultRunner):
         self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
         text_encoder_output["prompt_embeds"] = prompt_embeds
 
-        if self.config["enable_cfg"]:
+        if self.config.get("enable_cfg", False):
             neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer([neg_prompt])
             self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
             text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -322,7 +320,7 @@ class LongCatImageRunner(DefaultRunner):
                 return (width, height)
             logger.warning(f"Invalid aspect ratio: {self.input_info.aspect_ratio}, not in {as_maps.keys()}")
 
-        width, height = as_maps[self.config.get("aspect_ratio", "16:9")]
+        width, height = as_maps[get_input_value(self.config, "aspect_ratio", "16:9")]
         return (width, height)
 
     def set_latent_shape(self):

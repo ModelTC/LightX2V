@@ -315,7 +315,11 @@ class SolAttnWeight(AttnWeightTemplate):
             step_index = getattr(scheduler, "step_index", None)
             if step_index is None:
                 return True, "scheduler.step_index is unavailable"
-            if int(step_index) < self.dense_steps:
+            dense_steps = self.dense_steps
+            if getattr(scheduler, "is_warmup_step", False) and dense_steps < scheduler.infer_steps:
+                # Cover dense then sparse attention within the two synthetic DiT steps.
+                dense_steps = 1
+            if int(step_index) < dense_steps:
                 return True, "warmup_step"
 
         if self.dense_layers:

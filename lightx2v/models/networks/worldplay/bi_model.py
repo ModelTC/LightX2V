@@ -48,10 +48,11 @@ class WorldPlayBIModel(HunyuanVideo15Model):
 
     def _init_infer_class(self):
         """Initialize WorldPlay BI-specific inference classes."""
+        feature_caching = self.config.get("feature_caching", "NoCaching")
         self.pre_infer_class = WorldPlayPreInfer
         self.post_infer_class = WorldPlayPostInfer
 
-        if self.config["feature_caching"] == "NoCaching":
+        if feature_caching == "NoCaching":
             self.transformer_infer_class = WorldPlayBITransformerInfer
         else:
             # Fall back to base transformer for caching modes
@@ -60,12 +61,12 @@ class WorldPlayBIModel(HunyuanVideo15Model):
                 HunyuanVideo15TransformerInferMagCaching,
             )
 
-            if self.config["feature_caching"] == "Mag":
+            if feature_caching == "Mag":
                 self.transformer_infer_class = HunyuanVideo15TransformerInferMagCaching
-            elif self.config["feature_caching"] == "Tea":
+            elif feature_caching == "Tea":
                 self.transformer_infer_class = HunyuanTransformerInferTeaCaching
             else:
-                raise NotImplementedError(f"Feature caching {self.config['feature_caching']} not supported")
+                raise NotImplementedError(f"Feature caching {feature_caching} not supported")
 
     def _init_weights(self):
         """Initialize weights including action conditioning weights.

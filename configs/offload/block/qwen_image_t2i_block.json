@@ -1,5 +1,4 @@
 {
-    "aspect_ratio": "3:4",
     "num_channels_latents": 16,
     "infer_steps": 50,
     "prompt_template_encode": "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
@@ -7,5 +6,8 @@
     "attn_type": "flash_attn3",
     "enable_cfg": false,
     "cpu_offload": true,
-    "offload_granularity": "block"
+    "offload_granularity": "block",
+    "request_defaults": {
+        "aspect_ratio": "3:4"
+    }
 }

@@ -2,7 +2,6 @@
     "infer_steps": 50,
     "transformer_model_name": "480p_t2v",
     "fps": 24,
-    "num_frames": 121,
     "aspect_ratio": "16:9",
     "vae_stride": [4, 16, 16],
     "sample_shift": 7.0,
@@ -10,5 +9,8 @@
     "enable_cfg": true,
     "attn_type": "flash_attn3",
     "use_tae": true,
-    "tae_path": "/path/to/lighttae"
+    "tae_path": "/path/to/lighttae",
+    "request_defaults": {
+        "num_frames": 121
+    }
 }

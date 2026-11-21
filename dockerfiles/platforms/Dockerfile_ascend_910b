@@ -10,6 +10,8 @@ ENV PATH=${PATH}:/usr/local/go/bin:/usr/local/python3.11.13/bin/
 RUN apt-get update && apt-get install ffmpeg -y && \
     pip install --no-cache-dir \
         imageio \
+        "pillow-heif>=1.0" \
+        "av>=17" \
         imageio-ffmpeg \
         ftfy \
         aiohttp \

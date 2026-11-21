@@ -6,6 +6,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.runners.vsr.vsr_wrapper import compute_scaled_and_target_dims
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -45,7 +46,7 @@ class VAController:
 
         self.audio_sr = config.get("audio_sr", 16000)
         self.target_fps = config.get("fps", 16)
-        self.max_num_frames = config.get("num_frames", 81)
+        self.max_num_frames = get_input_value(config, "num_frames", 81)
         self.prev_frame_length = config.get("prev_frame_length", 5)
 
         self.record_fps = config.get("record_fps", self.target_fps)

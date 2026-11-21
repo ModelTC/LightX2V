@@ -35,7 +35,7 @@ def resolve_block_name(name, block_index, adapter_block_index=None, is_post_adap
         return re.sub(r"\.\d+", lambda m: f".{block_index}", name, count=1)
 
 
-def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32):
+def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32, *, dtype=None):
     """Get the source tensor from either weight dictionary or lazy loading safetensors file.
 
     Args:
@@ -46,6 +46,7 @@ def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_i
         use_infer_dtype: Whether to convert tensor to inference dtype
         scale_force_fp32: Whether to force weight_scale tensors to float32
         bias_force_fp32: Whether to force bias tensors to float32
+        dtype: Explicit output dtype, overriding the global inference dtype when supplied
 
     Returns:
         The target tensor retrieved from the source with appropriate dtype conversion applied
@@ -59,21 +60,17 @@ def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_i
                 f"block_{source_name.split('.')[1]}.safetensors",
             )
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-            if use_infer_dtype:
-                return lazy_load_file.get_tensor(source_name).to(GET_DTYPE())
-            elif scale_force_fp32 and "weight_scale" in source_name:
-                return lazy_load_file.get_tensor(source_name).to(torch.float32)
-            elif bias_force_fp32 and "bias" in source_name:
-                return lazy_load_file.get_tensor(source_name).to(torch.float32)
-            return lazy_load_file.get_tensor(source_name)
+            tensor = lazy_load_file.get_tensor(source_name)
     else:
-        if use_infer_dtype:
-            return weight_dict[source_name].to(GET_DTYPE())
-        elif scale_force_fp32 and "weight_scale" in source_name:
-            return weight_dict[source_name].to(torch.float32)
-        elif bias_force_fp32 and "bias" in source_name:
-            return weight_dict[source_name].to(torch.float32)
-        return weight_dict[source_name]
+        tensor = weight_dict[source_name]
+
+    if dtype is not None:
+        return tensor.to(dtype)
+    if use_infer_dtype:
+        return tensor.to(GET_DTYPE())
+    if (scale_force_fp32 and "weight_scale" in source_name) or (bias_force_fp32 and "bias" in source_name):
+        return tensor.to(torch.float32)
+    return tensor
 
 
 def create_pin_tensor(tensor, transpose=False, dtype=None):
@@ -122,7 +119,7 @@ def get_lazy_load_file_path(lazy_load_file, weight_name_for_block=None):
         )
 
 
-def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_infer_dtype=None, scale_force_fp32=False, bias_force_fp32=False):
+def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_infer_dtype=None, scale_force_fp32=False, bias_force_fp32=False, *, dtype=None):
     """Create tensor buffers and move them to CUDA device (specified by AI_DEVICE).
 
     Args:
@@ -134,6 +131,7 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
         use_infer_dtype: Whether to convert tensors to inference dtype (optional)
         scale_force_fp32: Whether to force weight_scale tensors to float32 (optional)
         bias_force_fp32: Whether to force bias tensors to float32 (optional)
+        dtype: Explicit output dtype, overriding the global inference dtype when supplied
 
     Returns:
         dict: {attr_name: tensor, ...} Dictionary of tensors located on CUDA device
@@ -142,7 +140,7 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
         return {attr: weight_dict.take(name, transpose) for name, attr, transpose in base_attrs}
     result = {}
     for name, attr_name, transpose in base_attrs:
-        tensor = get_source_tensor(name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32)
+        tensor = get_source_tensor(name, weight_dict, lazy_load, lazy_load_file, use_infer_dtype, scale_force_fp32, bias_force_fp32, dtype=dtype)
         if transpose:
             tensor = tensor.t()
         result[attr_name] = tensor.to(AI_DEVICE)
@@ -150,7 +148,7 @@ def create_cuda_buffers(base_attrs, weight_dict, lazy_load, lazy_load_file, use_
     return result
 
 
-def create_cpu_buffers(base_attrs, lazy_load_file, use_infer_dtype=False, scale_force_fp32=False, bias_force_fp32=False):
+def create_cpu_buffers(base_attrs, lazy_load_file, use_infer_dtype=False, scale_force_fp32=False, bias_force_fp32=False, *, dtype=None):
     """Create pinned memory tensor buffers on CPU for lazy loading scenario.
 
     Args:
@@ -160,6 +158,7 @@ def create_cpu_buffers(base_attrs, lazy_load_file, use_infer_dtype=False, scale_
         use_infer_dtype: Whether to convert tensors to inference dtype (optional)
         scale_force_fp32: Whether to force weight_scale tensors to float32 (optional)
         bias_force_fp32: Whether to force bias tensors to float32 (optional)
+        dtype: Explicit output dtype, overriding the global inference dtype when supplied
 
     Returns:
         dict: {attr_name: tensor, ...} Dictionary of pinned memory tensors on CPU
@@ -168,7 +167,9 @@ def create_cpu_buffers(base_attrs, lazy_load_file, use_infer_dtype=False, scale_
 
     # Use get_source_tensor to load the tensor (weight_dict is not required when lazy_load=True)
     for name, attr_name, transpose in base_attrs:
-        tensor = get_source_tensor(name, {}, lazy_load=True, lazy_load_file=lazy_load_file, use_infer_dtype=use_infer_dtype, scale_force_fp32=scale_force_fp32, bias_force_fp32=bias_force_fp32)
+        tensor = get_source_tensor(
+            name, {}, lazy_load=True, lazy_load_file=lazy_load_file, use_infer_dtype=use_infer_dtype, scale_force_fp32=scale_force_fp32, bias_force_fp32=bias_force_fp32, dtype=dtype
+        )
         result[attr_name] = create_pin_tensor(tensor, transpose=transpose)
 
     return result

@@ -43,6 +43,7 @@ dependencies = [
     "accelerate",
     "safetensors",
     "opencv-python",
+    "pillow-heif>=1.0",
     "imageio",
     "imageio-ffmpeg",
     "einops",
@@ -75,6 +76,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tbdub = ["scikit-image"]
+longcat-avatar = ["librosa>=0.11", "onnxruntime>=1.20"]
 
 [project.urls]
 Homepage = "https://github.com/ModelTC/LightX2V"

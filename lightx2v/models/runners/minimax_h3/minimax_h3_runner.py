@@ -5,7 +5,7 @@ from contextlib import suppress
 import numpy as np
 import torch
 import torch.distributed as dist
-from PIL import Image, ImageOps
+from PIL import Image
 from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
@@ -41,17 +41,18 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     trim_reference_num_frames,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, RESAMPLING_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
 from lightx2v.models.schedulers.minimax_h3.resampling import validate_draft_steps, validate_resample_start_step
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
-from lightx2v.utils.input_info import INPUT_INFO_TYPES
+from lightx2v.utils.image_io import load_rgb_image
+from lightx2v.utils.input_info import AudioVideoState
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import resize_resampling_frames
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -94,6 +95,8 @@ class MiniMaxH3Runner(DefaultRunner):
     graph.
     """
 
+    input_info_state = AudioVideoState
+
     supported_lora_modes = ("merge", "separate", "consumer")
 
     _WARMUP_SHAPES = (
@@ -105,28 +108,12 @@ class MiniMaxH3Runner(DefaultRunner):
         "A camera glides along the edge of a mountain lake at sunrise. Thin clouds drift over the peaks and their reflections ripple across the water. A small wooden boat creaks against the dock as birds call from a stand of pines on the far shore.",
     )
     _WARMUP_STEP_COUNT = 2
-    supported_request_fields_by_task = {
-        "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"prompt"},
-        "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"image_path", "prompt"},
-        "l2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"last_frame_path", "prompt"},
-        "fl2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"image_path", "last_frame_path", "prompt"},
-        "ref2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | RESAMPLING_FIELDS | {"audio_path", "image_path", "prompt", "video_path"},
-    }
 
     def __init__(self, config):
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
         self.loaded_transformer_partition = "transformer_ref" if config.get("model_variant") == "ref2av" else "transformer"
-
-    def get_supported_tasks(self):
-        """Return tasks supported by the loaded transformer weights."""
-        if self.config.get("text_encoder_disk_streaming", False):
-            return ("t2av",)
-        if self.config["model_variant"] == "ref2av":
-            return ("ref2av",)
-        # Allow ref2av requests to use the base transformer for better visual quality.
-        return ("t2av", "i2av", "l2av", "fl2av", "ref2av")
 
     def init_modules(self):
         super().init_modules()
@@ -135,6 +122,11 @@ class MiniMaxH3Runner(DefaultRunner):
             self.model.pre_weight.to_cuda()
             self.model.post_weight.to_cuda()
             logger.info("MiniMax-H3 pre/post weights will remain on the accelerator across requests")
+
+    def get_warmup_feature_caching_modes(self):
+        if self.config["model_cls"] == "minimax_h3":
+            return ("NoCaching", "DPCache")
+        return super().get_warmup_feature_caching_modes()
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
@@ -157,7 +149,7 @@ class MiniMaxH3Runner(DefaultRunner):
                 self.init_run()
 
                 for step_index in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
-                    self.scheduler.step_pre(step_index)
+                    self.scheduler.step_pre(step_index, warmup=True)
                     self.model.infer(self.inputs)
                     self.scheduler.step_post()
                 video_rows = self.scheduler.video_latents
@@ -179,7 +171,7 @@ class MiniMaxH3Runner(DefaultRunner):
         self._maybe_freeze_gc()
 
     def _prepare_warmup_inputs(self, warmup_index, task, height, width, num_frames):
-        self.input_info = INPUT_INFO_TYPES[task](
+        self.input_info = self.get_input_info_type(task)(
             task=task,
             seed=0,
             prompt=self._WARMUP_PROMPTS[warmup_index],
@@ -189,7 +181,7 @@ class MiniMaxH3Runner(DefaultRunner):
         )
         image = Image.new("RGB", (width, height), color=0)
         if task in ("i2av", "fl2av", "ref2av"):
-            self.input_info.image_path = image
+            self.input_info.image_path = [image] if task == "ref2av" else image
         if task in ("l2av", "fl2av"):
             self.input_info.last_frame_path = image.copy() if task == "fl2av" else image
 
@@ -341,11 +333,11 @@ class MiniMaxH3Runner(DefaultRunner):
             height, width = resolve_canvas_size(*geometry_image.size)
             self.input_info.size = [height, width]
         else:
-            height = int(self.config["size"][0])
-            width = int(self.config["size"][1])
+            height = int(get_input_value(self.config, "size")[0])
+            width = int(get_input_value(self.config, "size")[1])
             self.input_info.size = [height, width]
 
-        requested_frames = int(self.input_info.num_frames or self.config.get("num_frames", 124))
+        requested_frames = int(self.input_info.num_frames or get_input_value(self.config, "num_frames", 124))
         num_frames = align_num_frames(requested_frames)
         if num_frames != requested_frames:
             logger.warning(f"MiniMax-H3 frame count must be 17*n+5; aligning {requested_frames} upward to {num_frames}")
@@ -367,14 +359,6 @@ class MiniMaxH3Runner(DefaultRunner):
             logger.warning("MiniMax-H3 is guidance-distilled; negative_prompt is ignored")
         return self.text_encoders[0].infer(input_info.prompt, image_list=keyframes, references=references)
 
-    @staticmethod
-    def _load_rgb_image(value):
-        if isinstance(value, Image.Image):
-            image = value
-        else:
-            image = Image.open(value)
-        return ImageOps.exif_transpose(image).convert("RGB")
-
     def _prepare_keyframes(self):
         task = self.input_info.task
         if task == "i2av":
@@ -391,37 +375,13 @@ class MiniMaxH3Runner(DefaultRunner):
             values, anchors = [self.input_info.image_path, self.input_info.last_frame_path], ("first", "last")
         else:
             return [], ()
-        if any(isinstance(value, str) and "," in value for value in values):
-            raise ValueError(f"MiniMax-H3 {task} accepts one file per frame argument, not comma-separated lists")
-        images = [self._load_rgb_image(value) for value in values]
+        images = [load_rgb_image(value) for value in values]
         self._resolve_request_geometry(images[0])
         images = [prepare_keyframe_image(image, self.request_height, self.request_width, stretch=index == 0) for index, image in enumerate(images)]
         return images, anchors
 
-    @staticmethod
-    def _split_reference_paths(value):
-        """Normalize the shared media CLI fields into individual references."""
-        if value is None:
-            return []
-        if isinstance(value, str):
-            return [path.strip() for path in value.split(",") if path.strip()]
-        if isinstance(value, (list, tuple)):
-            paths = []
-            for path in value:
-                if path is None:
-                    continue
-                if isinstance(path, str):
-                    path = path.strip()
-                    if not path:
-                        continue
-                paths.append(path)
-            return paths
-        return [value]
-
     def _prepare_references(self, sources):
-        entries = []
-        for kind, value in sources.items():
-            entries.extend({kind: path} for path in self._split_reference_paths(value))
+        entries = [{kind: path} for kind, paths in sources.items() for path in paths]
         if not entries:
             raise ValueError("MiniMax-H3 ref2av requires --image_path, --video_path, or --audio_path")
         if len(entries) > MAX_REFERENCES:
@@ -442,7 +402,7 @@ class MiniMaxH3Runner(DefaultRunner):
         max_duration = self.request_num_frames / 24.0
         for entry, kind in zip(entries, kinds):
             if kind == "image":
-                image = self._load_rgb_image(entry["image"])
+                image = load_rgb_image(entry["image"])
                 height, width = resolve_reference_image_size(
                     *image.size,
                     target_width=self.request_width,
@@ -534,7 +494,7 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def _resample_option(self, key, default=None):
         value = getattr(self.input_info, key, None)
-        return self.config.get(key, default) if value is None else value
+        return get_input_value(self.config, key, default) if value is None else value
 
     def _prepare_resampling_source(self):
         """Resize source RGB to the target canvas, then encode clean AV.

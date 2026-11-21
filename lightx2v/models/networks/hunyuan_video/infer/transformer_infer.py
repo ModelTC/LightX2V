@@ -44,7 +44,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         self.config = config
         self.double_blocks_num = config["mm_double_blocks_depth"]
         self.heads_num = config["heads_num"]
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             parallel_config = self.config["parallel"]
             self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
@@ -169,7 +169,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
     @torch.no_grad()
     def _infer_attn(self, weights, img_q, img_k, img_v, txt_q, txt_k, txt_v):
         img_seqlen = img_q.shape[1]
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             img_attn, txt_attn = weights.self_attention_parallel.apply(
                 q=img_q,
                 k=img_k,
@@ -186,7 +186,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=False,
                 attention_kwargs={},
-                valid_len=self.seq_p_valid_len,
+                valid_seq_len=self.seq_p_valid_len,
             )
             if txt_attn is None:
                 raise RuntimeError("HunyuanVideo-1.5 joint attention expected a text auxiliary output.")

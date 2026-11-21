@@ -25,7 +25,7 @@ def request_t2i_sync(
     timeout_seconds: int,
     poll_interval_seconds: float,
 ) -> bytes:
-    endpoint = f"{base_url.rstrip('/')}/v1/tasks/image/sync?timeout_seconds={timeout_seconds}&poll_interval_seconds={poll_interval_seconds}"
+    endpoint = f"{base_url.rstrip('/')}/v1/tasks/sync?timeout_seconds={timeout_seconds}&poll_interval_seconds={poll_interval_seconds}"
     response = requests.post(endpoint, json=payload, timeout=timeout_seconds + 30)
     if response.status_code != 200:
         raise RuntimeError(f"Sync t2i failed ({response.status_code}): {response.text}")
@@ -40,7 +40,7 @@ def save_result(content: bytes, output_path: str) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Call /v1/tasks/image/sync for T2I and save final image.")
+    parser = argparse.ArgumentParser(description="Call /v1/tasks/sync for T2I and save final image.")
     parser.add_argument("--url", type=str, default="http://127.0.0.1:8000", help="Server base url")
     parser.add_argument("--prompt", type=str, required=True, help="Prompt text")
     parser.add_argument("--negative_prompt", type=str, default=None, help="Negative prompt text")

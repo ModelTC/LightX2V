@@ -33,7 +33,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.zero_cond_t = config.get("zero_cond_t", False)
-        self.seq_parallel = config["seq_parallel"]
+        self.seq_parallel = config.get("seq_parallel", False)
         if self.seq_parallel:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             parallel_config = self.config["parallel"]
@@ -204,7 +204,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=True,
                 attention_kwargs={},
-                valid_len=self.seq_p_valid_len,
+                valid_seq_len=self.seq_p_valid_len,
             )
             if txt_attn_output is None:
                 raise RuntimeError("Qwen image joint attention expected a text auxiliary output.")

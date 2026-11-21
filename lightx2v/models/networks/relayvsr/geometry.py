@@ -38,8 +38,18 @@ class RelayVSRGeometry:
             raise ValueError(f"relayvsr_x{self.scale} sr_ratio must be between 1 and {self.scale}, got {sr_ratio}")
 
     def output_size(self, request, height, width):
-        self.validate_sr_ratio(request.sr_ratio)
-        target = (int(height * request.sr_ratio), int(width * request.sr_ratio))
+        size = getattr(request, "size", None)
+        if size:
+            # An explicit [height, width] resizes the native result to exactly that size,
+            # scaling each axis independently; sr_ratio is ignored.
+            if self.scale == 2:
+                raise ValueError("relayvsr_x2 has an exact 2x output and does not accept size")
+            if len(size) != 2:
+                raise ValueError(f"RelayVSR size must be [height, width], got {list(size)}")
+            target = (int(size[0]), int(size[1]))
+        else:
+            self.validate_sr_ratio(request.sr_ratio)
+            target = (int(height * request.sr_ratio), int(width * request.sr_ratio))
         if min(target) <= 0:
             raise ValueError("RelayVSR output dimensions must be positive")
         return target

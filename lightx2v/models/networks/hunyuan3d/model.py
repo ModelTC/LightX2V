@@ -164,7 +164,7 @@ class Hunyuan3DDiTModel(BaseTransformerModel):
         do_cfg = inputs.get("do_classifier_free_guidance", False)
 
         if do_cfg:
-            if self.config.get("cfg_parallel"):
+            if self.config.get("cfg_parallel", False):
                 cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
                 assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
                 cfg_p_rank = dist.get_rank(cfg_p_group)

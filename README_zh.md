@@ -32,7 +32,9 @@
 
 ## 🧾 社区代码贡献指南
 
-在提交之前，请确保代码格式符合项目规范。可以使用如下执行命令，确保项目代码格式的一致性。
+贡献代码时可参考 [contribute-code 技能](.agents/skills/contribute-code/SKILL.md)。
+
+交付前，在仓库根目录运行全量 `pre-commit` 检查。
 
 ```bash
 pip install ruff pre-commit
