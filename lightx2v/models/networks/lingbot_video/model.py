@@ -84,7 +84,7 @@ class LingBotVideoTransformerModel(BaseTransformerModel):
         latents_input = self.scheduler.latents
         prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
 
-        if self.config.get("enable_cfg", True):
+        if self.config.get("enable_cfg", False):
             negative_prompt_embeds = inputs["text_encoder_output"]["negative_prompt_embeds"]
             noise_pred_cond = self._infer_cond_uncond(latents_input, prompt_embeds, infer_condition=True)
             noise_pred_uncond = self._infer_cond_uncond(latents_input, negative_prompt_embeds, infer_condition=False)

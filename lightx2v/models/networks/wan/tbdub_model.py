@@ -16,11 +16,11 @@ class TBDubModel(WanModel):
     transformer_weight_class = TBDubTransformerWeights
 
     def __init__(self, model_path, config, device, model_type="wan2.2", **kwargs):
-        if config.get("enable_cfg") or config.get("cfg_parallel"):
+        if config.get("enable_cfg", False) or config.get("cfg_parallel", False):
             raise ValueError("TBDub student uses one conditional branch; CFG and CFG parallelism are not applicable")
         if config.get("tensor_parallel"):
             raise NotImplementedError("TBDub audio projections have not been mapped for tensor parallelism; use sequence parallelism")
-        if config.get("cpu_offload") and config.get("offload_granularity", "block") not in ("block", "model"):
+        if config.get("cpu_offload", False) and config.get("offload_granularity", "block") not in ("block", "model"):
             raise NotImplementedError("TBDub supports block/model offload, not phase offload")
         if config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("TBDub reference/audio conditioning has not been validated with feature caching")

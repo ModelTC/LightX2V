@@ -2,7 +2,6 @@
     "infer_steps": 4,
     "num_frames": 161,
     "text_len": 512,
-    "size": [720, 1280],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "sample_shift": 10.0,
@@ -20,5 +19,8 @@
         "sink_size": 3,
         "kv_offload": false
     },
-    "causal_rope_type": "wan_causal_rope"
+    "causal_rope_type": "wan_causal_rope",
+    "request_defaults": {
+        "size": [720, 1280]
+    }
 }

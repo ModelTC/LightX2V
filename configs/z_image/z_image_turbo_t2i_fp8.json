@@ -1,10 +1,12 @@
 {
-    "aspect_ratio": "16:9",
     "infer_steps": 9,
     "attn_type": "flash_attn3",
     "enable_cfg": false,
     "sample_guide_scale": 0.0,
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-sgl",
-    "dit_quantized_ckpt": "/path/to/z_image_turbo_fp8.safetensors"
+    "dit_quantized_ckpt": "/path/to/z_image_turbo_fp8.safetensors",
+    "request_defaults": {
+        "aspect_ratio": "16:9"
+    }
 }

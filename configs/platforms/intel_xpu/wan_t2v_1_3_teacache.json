@@ -1,8 +1,6 @@
 {
     "infer_steps": 20,
-    "num_frames": 33,
     "text_len": 512,
-    "size": [480, 832],
     "self_attn_1_type": "torch_sdpa",
     "cross_attn_1_type": "torch_sdpa",
     "sample_guide_scale": 6,
@@ -34,5 +32,9 @@
         ]
     ],
     "use_ret_steps": true,
-    "teacache_thresh": 0.26
+    "teacache_thresh": 0.26,
+    "request_defaults": {
+        "num_frames": 33,
+        "size": [480, 832]
+    }
 }

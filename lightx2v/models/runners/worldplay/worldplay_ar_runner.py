@@ -7,10 +7,10 @@ from loguru import logger
 from lightx2v.models.networks.worldplay.ar_model import WorldPlayARModel
 from lightx2v.models.networks.worldplay.pose_utils import load_pose, pose_to_input
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner
+from lightx2v.models.runners.worldplay.input_info import WorldPlayState
 from lightx2v.models.schedulers.worldplay.ar_scheduler import WorldPlayARScheduler
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.input_info import WorldPlayI2VInputInfo, WorldPlayT2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -30,9 +30,9 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     - Memory window selection for long videos
     """
 
+    input_info_state = WorldPlayState
+
     scheduler_class = WorldPlayARScheduler
-    input_info_cls_by_task = {"t2v": WorldPlayT2VInputInfo, "i2v": WorldPlayI2VInputInfo}
-    supported_request_fields_by_task = {task: request_fields | {"pose"} for task, request_fields in HunyuanVideo15Runner.supported_request_fields_by_task.items()}
 
     def __init__(self, config):
         # AR-specific parameters

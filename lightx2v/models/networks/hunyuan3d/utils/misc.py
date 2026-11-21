@@ -14,7 +14,6 @@ def get_config_from_file(config_file: str) -> Union[DictConfig, ListConfig]:
     if "base_config" in config_file.keys():
         if config_file["base_config"] == "default_base":
             base_config = OmegaConf.create()
-            # base_config = get_default_config()
         elif config_file["base_config"].endswith(".yaml"):
             base_config = get_config_from_file(config_file["base_config"])
         else:

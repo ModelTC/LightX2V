@@ -1,10 +1,7 @@
 {
     "infer_steps": 4,
     "fps": 16,
-    "video_duration": 360,
     "audio_sr": 16000,
-    "num_frames": 81,
-    "resize_mode": "adaptive",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -29,5 +26,10 @@
     "vae_cpu_offload": false,
     "use_tiling_vae": false,
     "dit_quantized": true,
-    "dit_quant_scheme": "fp8-q8f"
+    "dit_quant_scheme": "fp8-q8f",
+    "request_defaults": {
+        "video_duration": 360,
+        "num_frames": 81,
+        "resize_mode": "adaptive"
+    }
 }

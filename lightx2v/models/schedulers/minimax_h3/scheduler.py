@@ -74,6 +74,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.infer_steps = int(self.video_timesteps.numel())
         self.start_step_index = 0
         self.draft_steps = None
+        self.is_warmup_step = False
         self.video_latents = None
         self.audio_latents = None
         self.video_noise_pred = None
@@ -208,8 +209,9 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.video_noise_pred = None
         self.audio_noise_pred = None
 
-    def step_pre(self, step_index):
+    def step_pre(self, step_index, *, warmup=False):
         self.step_index = int(step_index)
+        self.is_warmup_step = warmup
         video_timestep = float(self.video_timesteps[self.step_index])
         audio_timestep = float(self.audio_timesteps[self.step_index])
         unique, inverse = build_row_timesteps(self.layout_cpu, video_timestep, audio_timestep)
@@ -309,6 +311,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.start_step_index = 0
         self.step_index = 0
         self.draft_steps = None
+        self.is_warmup_step = False
         for name in (
             "video_latents",
             "audio_latents",

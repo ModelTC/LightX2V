@@ -1,8 +1,6 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
     "text_len": 512,
-    "size": [720, 1280],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "sample_guide_scale": [
@@ -17,5 +15,9 @@
     "vae_cpu_offload": false,
     "boundary": 0.875,
     "enable_reuse": true,
-    "reuse_cache_path": "save_results/reuse_cache/wan22_moe_t2v"
+    "reuse_cache_path": "save_results/reuse_cache/wan22_moe_t2v",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [720, 1280]
+    }
 }

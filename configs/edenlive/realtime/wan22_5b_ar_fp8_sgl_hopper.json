@@ -1,8 +1,4 @@
 {
-    "size": [
-        704,
-        1280
-    ],
     "fps": 24,
     "infer_steps": 4,
     "sample_shift": 5,
@@ -43,5 +39,11 @@
     "t5_quant_scheme": "fp8-sgl",
     "t5_rms_norm_type": "torch",
     "t5_quantized_ckpt": "/path/to/EdenLive-x2v/quantized/t5-fp8.safetensors",
-    "use_cuda_graph": true
+    "use_cuda_graph": true,
+    "request_defaults": {
+        "size": [
+            704,
+            1280
+        ]
+    }
 }

@@ -1,7 +1,5 @@
 {
   "infer_steps": 29,
-  "num_frames": 124,
-  "size": [544, 960],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -20,5 +18,9 @@
   "vae_spatial_scale_factor": 16,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-sgl",
-  "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors"
+  "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors",
+  "request_defaults": {
+    "num_frames": 124,
+    "size": [544, 960]
+  }
 }

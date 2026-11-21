@@ -24,9 +24,8 @@ if __name__ == "__main__":
     motions = yaml.safe_load(Path(motion_file).read_text(encoding="utf-8"))
 
     message = {
-        "task": "refa2av",
         "prompt": prompt,
-        "image_path": file_to_base64(image_path),
+        "image_path": [file_to_base64(image_path)],
         "audio_path": file_to_base64(audio_path),
         "motions": motions,
         "seed": 42,

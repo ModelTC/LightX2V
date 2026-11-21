@@ -3,27 +3,6 @@
 import torch
 
 
-def remap_hf_umt5_weights(state):
-    replacements = (
-        ("encoder.block.", "blocks."),
-        (".layer.0.SelfAttention.relative_attention_bias.", ".pos_embedding.embedding."),
-        (".layer.0.SelfAttention.", ".attn."),
-        (".layer.0.layer_norm.", ".norm1."),
-        (".layer.1.layer_norm.", ".norm2."),
-        (".layer.1.DenseReluDense.wi_0.", ".ffn.gate.0."),
-        (".layer.1.DenseReluDense.wi_1.", ".ffn.fc1."),
-        (".layer.1.DenseReluDense.wo.", ".ffn.fc2."),
-        ("encoder.final_layer_norm.", "norm."),
-        ("shared.weight", "token_embedding.weight"),
-    )
-    mapped = {}
-    for key, value in state.items():
-        for original, native in replacements:
-            key = key.replace(original, native)
-        mapped[key] = value
-    return mapped
-
-
 def remap_hf_clip_vision_weights(state, num_layers):
     mapped = {
         "cls_embedding": state["vision_model.embeddings.class_embedding"].view(1, 1, -1),

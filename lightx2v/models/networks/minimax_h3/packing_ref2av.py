@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import torch
 from PIL import Image
+from loguru import logger
 
 from .packing import (
     AUDIO_CHANNELS,
@@ -61,6 +62,29 @@ class MiniMaxH3PreparedReference:
         return self.num_audio_latents * AUDIO_CHANNELS
 
 
+def _decode_skipping_invalid_packets(av, container, stream):
+    """Decode one stream, dropping packets the decoder rejects as invalid data.
+
+    User uploads are sometimes not clean single files, e.g. two MP3 files joined
+    byte for byte, which leaves an ID3 tag in the middle of the stream. The
+    decoder rejects that one packet with InvalidDataError ("Header missing").
+    ffmpeg logs and drops such packets and keeps decoding; do the same so one
+    bad packet does not fail the whole request. Callers still fail when no
+    frame decodes at all.
+    """
+
+    skipped = 0
+    for packet in container.demux(stream):
+        try:
+            frames = packet.decode()
+        except av.error.InvalidDataError:
+            skipped += 1
+            continue
+        yield from frames
+    if skipped:
+        logger.warning("Skipped {} undecodable {} packet(s) in MiniMax-H3 reference {}", skipped, stream.type, container.name)
+
+
 def _decode_reference_soundtrack(av, container, stream) -> tuple[torch.Tensor, int]:
     """Decode one container stream as planar float at its native rate."""
 
@@ -71,7 +95,7 @@ def _decode_reference_soundtrack(av, container, stream) -> tuple[torch.Tensor, i
         rate=sample_rate,
     )
     chunks = []
-    for frame in container.decode(stream):
+    for frame in _decode_skipping_invalid_packets(av, container, stream):
         chunks.extend(torch.from_numpy(value.to_ndarray()) for value in resampler.resample(frame))
     chunks.extend(torch.from_numpy(value.to_ndarray()) for value in resampler.resample(None))
     if not chunks:
@@ -95,7 +119,7 @@ def decode_reference_video(media) -> tuple[np.ndarray, float, tuple[torch.Tensor
             raise ValueError(f"No video stream to decode in {path}")
         stream = container.streams.video[0]
         frames, rotation = [], 0.0
-        for frame in container.decode(stream):
+        for frame in _decode_skipping_invalid_packets(av, container, stream):
             rotation = frame.rotation
             frames.append(frame.to_ndarray(format="rgb24"))
         frame_rate = float(stream.average_rate or stream.guessed_rate)

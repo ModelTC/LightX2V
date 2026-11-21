@@ -77,17 +77,17 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         dist.all_gather(gathered, tensor.contiguous(), group=self.tp_group)
         return torch.cat(gathered, dim=-1)
 
+    def project_qkv(self, weights, hidden_states):
+        """Project QKV before normalization and sequence exchange."""
+        if self.use_fused_qkv and weights.has_fused_qkv:
+            return weights.project_fused_qkv(hidden_states)
+        if self.use_fused_qkv:
+            _warn_fused_qkv_fallback_once()
+        return weights.to_q.apply(hidden_states), weights.to_k.apply(hidden_states), weights.to_v.apply(hidden_states)
+
     def _prepare_qkv(self, weights, hidden_states, rotary_emb):
         """Project QKV and return Q/K with normalization and RoPE applied."""
-        if self.use_fused_qkv and weights.has_fused_qkv:
-            q, k, v = weights.project_fused_qkv(hidden_states)
-        else:
-            if self.use_fused_qkv:
-                _warn_fused_qkv_fallback_once()
-            q = weights.to_q.apply(hidden_states)
-            k = weights.to_k.apply(hidden_states)
-            v = weights.to_v.apply(hidden_states)
-
+        q, k, v = self.project_qkv(weights, hidden_states)
         if self.use_fused_qkv_norm_rope and rotary_emb is not None:
             fused = self.qkv_norm_rope.apply(
                 q,
@@ -140,6 +140,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
         else:
             aux_length = sp_state.aux_length
+            parallel_kwargs = {} if sp_state.valid_seq_len is None else {"valid_seq_len": sp_state.valid_seq_len}
             out, aux_out = weights.calculate_parallel.apply(
                 q=q[aux_length:].contiguous(),
                 k=k[aux_length:].contiguous(),
@@ -156,6 +157,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.seq_p_head_parallel,
                 aux_first=True,
                 attention_kwargs=attention_kwargs,
+                **parallel_kwargs,
             )
             if aux_out is not None:
                 out = torch.cat((aux_out, out), dim=0)
@@ -174,6 +176,12 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
         return weights.apply_swiglu(value, gate)
 
+    @staticmethod
+    def _modulated_norm(norm, hidden_states, shift, scale, indices):
+        normed = norm.apply(hidden_states)
+        normed = normed * (1.0 + scale.index_select(0, indices))
+        return normed + shift.index_select(0, indices)
+
     def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None, base_projections=None):
         # Keep the Python cache lookup outside the compiled block.
         if modulation is None:
@@ -182,16 +190,12 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         indices = pre_infer_out.adaln_indices
 
         residual = hidden_states
-        normed = weights.norm1.apply(hidden_states)
-        normed = normed * (1.0 + scale_msa.index_select(0, indices))
-        normed = normed + shift_msa.index_select(0, indices)
+        normed = self._modulated_norm(weights.norm1, hidden_states, shift_msa, scale_msa, indices)
         attention = self._attention(weights.attn, normed, pre_infer_out, base_projections[0]) if self.use_lora_consumer else self._attention(weights.attn, normed, pre_infer_out)
         hidden_states = gated_residual_consumer(attention, residual, gate_msa, indices) if self.use_lora_consumer else residual + gate_msa.index_select(0, indices) * attention
 
         residual = hidden_states
-        normed = weights.norm2.apply(hidden_states)
-        normed = normed * (1.0 + scale_mlp.index_select(0, indices))
-        normed = normed + shift_mlp.index_select(0, indices)
+        normed = self._modulated_norm(weights.norm2, hidden_states, shift_mlp, scale_mlp, indices)
         feed_forward = self._ff(weights.ff, normed, *base_projections[1:]) if self.use_lora_consumer else self._ff(weights.ff, normed)
         hidden_states = gated_residual_consumer(feed_forward, residual, gate_mlp, indices) if self.use_lora_consumer else residual + gate_mlp.index_select(0, indices) * feed_forward
         return hidden_states

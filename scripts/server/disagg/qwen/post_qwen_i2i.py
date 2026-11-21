@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
     payload = {
         "prompt": "Change the person to a standing position, bending over to hold the dog's front paws.",
-        "image_path": image_to_base64(IMAGE_PATH),
+        "image_path": [image_to_base64(IMAGE_PATH)],
         "seed": 42,
         "save_result_path": "save_results/qwen_i2i_disagg_3way.png",
         "aspect_ratio": "16:9",

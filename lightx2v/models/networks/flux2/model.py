@@ -381,7 +381,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
             img_ids=img_ids,
         )
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
         hidden_states = self.transformer_infer.infer(
@@ -391,7 +391,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
 
         noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.timestep)
 
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             noise_pred = self._seq_parallel_post_process(noise_pred)
 
         noise_pred = noise_pred[:, :orig_seq_len, :]
@@ -449,7 +449,7 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
     @torch.no_grad()
     def infer(self, inputs):
         latents = self.scheduler.latents
-        do_cfg = self.config.get("enable_cfg", True)
+        do_cfg = self.config.get("enable_cfg", False)
 
         if do_cfg:
             assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"

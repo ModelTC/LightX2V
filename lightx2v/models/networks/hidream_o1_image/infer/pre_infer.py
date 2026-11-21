@@ -27,7 +27,7 @@ class HidreamO1ImagePreInfer:
         self._idx_ar_cache = {}
         self._idx_gen_cache = {}
         self._seq_p_rope_cache = {}
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None

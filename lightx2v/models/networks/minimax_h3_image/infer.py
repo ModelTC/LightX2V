@@ -7,12 +7,14 @@ from lightx2v.utils.envs import GET_DTYPE
 
 class MiniMaxH3ImagePreInfer(MiniMaxH3PreInfer):
     def prepare_inputs(self, weights, prompt_embeds):
-        layout = self.scheduler.layout
-        text_embeds = weights.context_embedder.apply(prompt_embeds.to(GET_DTYPE()))
-        text_embeds = self._refine_text(weights, text_embeds)
-        image_embeds = weights.proj_in.apply(self.scheduler.video_latents.float()).to(GET_DTYPE())
-        hidden_states = torch.cat((text_embeds, image_embeds), dim=0)
-        return hidden_states, self._rotary_embedding(layout.position_ids)
+        scheduler = self.scheduler
+        if scheduler.refined_text_embeds is None:
+            # Text conditioning and token positions are fixed for all six PDD steps.
+            text_embeds = weights.context_embedder.apply(prompt_embeds.to(GET_DTYPE()))
+            scheduler.refined_text_embeds = self._refine_text(weights, text_embeds)
+            scheduler.rotary_emb = self._rotary_embedding(scheduler.layout.position_ids)
+        image_embeds = weights.proj_in.apply(scheduler.video_latents.float()).to(GET_DTYPE())
+        return torch.cat((scheduler.refined_text_embeds, image_embeds), dim=0), scheduler.rotary_emb
 
 
 class MiniMaxH3ImagePostInfer(MiniMaxH3PostInfer):

@@ -2,7 +2,6 @@
     "infer_steps": 4,
     "transformer_model_name": "480p_t2v",
     "fps": 16,
-    "num_frames": 81,
     "distill_method": "dmd2",
     "aspect_ratio": "16:9",
     "vae_stride": [4, 16, 16],
@@ -16,5 +15,8 @@
         750,
         500,
         250
-    ]
+    ],
+    "request_defaults": {
+        "num_frames": 81
+    }
 }

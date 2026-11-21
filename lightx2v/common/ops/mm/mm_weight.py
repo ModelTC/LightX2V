@@ -362,6 +362,8 @@ class MMWeightTemplate(CoreOpStatistics, metaclass=ABCMeta):
 
 @MM_WEIGHT_REGISTER("Default")
 class MMWeight(FloatingWeightStorage, MMWeightTemplate):
+    infer_dtype = None
+
     def __init__(
         self,
         weight_name,
@@ -388,7 +390,8 @@ class MMWeight(FloatingWeightStorage, MMWeightTemplate):
 
     def describe_storage(self, metadata):
         self.validate_checkpoint(metadata)
-        return StorageDescription(tuple(WeightStorage(name, attr, metadata[name].shape, GET_DTYPE(), transpose) for name, attr, transpose in self.base_attrs))
+        dtype = self.infer_dtype or GET_DTYPE()
+        return StorageDescription(tuple(WeightStorage(name, attr, metadata[name].shape, dtype, transpose) for name, attr, transpose in self.base_attrs))
 
     def load(self, weight_dict):
         if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
@@ -398,11 +401,11 @@ class MMWeight(FloatingWeightStorage, MMWeightTemplate):
             self.pin_weight = pin_tensors.get("weight")
             self.pin_bias = pin_tensors.get("bias")
         elif self.create_cuda_buffer:
-            result = create_cuda_buffers(self.base_attrs, weight_dict, self.lazy_load, self.lazy_load_file)
+            result = create_cuda_buffers(self.base_attrs, weight_dict, self.lazy_load, self.lazy_load_file, dtype=self.infer_dtype)
             self.weight_cuda_buffer = result.get("weight")
             self.bias_cuda_buffer = result.get("bias")
         elif self.create_cpu_buffer:
-            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file)
+            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, dtype=self.infer_dtype)
             self.pin_weight = result.get("weight")
             self.pin_bias = result.get("bias")
             self.weight = None

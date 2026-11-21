@@ -1,9 +1,7 @@
 {
     "infer_steps": 40,
-    "num_frames": 81,
     "motion_frame": 9,
     "fps": 25,
-    "video_duration": 300,
     "infinitetalk_mode": "multi",
     "audio_type": "para",
     "infinitetalk_size": "infinitetalk-480",
@@ -32,5 +30,9 @@
     "mxfp8_fuse_enable": false,
     "use_timestep_transform": true,
     "enable_reuse": true,
-    "reuse_cache_path": "save_results/reuse_cache/infinitetalk_480p_multi_reuse"
+    "reuse_cache_path": "save_results/reuse_cache/infinitetalk_480p_multi_reuse",
+    "request_defaults": {
+        "num_frames": 81,
+        "video_duration": 300
+    }
 }

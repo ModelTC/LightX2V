@@ -1,7 +1,5 @@
 {
   "infer_steps": 8,
-  "num_frames": 241,
-  "size": [768, 1280],
   "attn_type": "sage_attn2",
   "sample_guide_scale": 1,
   "sample_shift": [2.05, 0.95],
@@ -31,5 +29,9 @@
   "upsampler_original_ckpt": "Lightricks/LTX-2.3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
   "distilled_sigma_values_upsample": [0.909375, 0.725, 0.421875, 0.0],
   "ref_downscale_factor": 0.5,
-  "reference_video_strength": 1.0
+  "request_defaults": {
+    "num_frames": 241,
+    "size": [768, 1280],
+    "reference_video_strength": 1.0
+  }
 }

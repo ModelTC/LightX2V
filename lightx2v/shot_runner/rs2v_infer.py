@@ -10,9 +10,11 @@ from loguru import logger
 from lightx2v.shot_runner.shot_base import ClipConfig, ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
 from lightx2v.utils.audio_io import load_audio_file
+from lightx2v.utils.cli import build_cli_inputs
 from lightx2v.utils.input_info import calculate_num_frames_from_duration
+from lightx2v.utils.parallel import init_parallel
 from lightx2v.utils.profiler import *
-from lightx2v.utils.set_config import build_cli_inputs, init_parallel
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process, seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace
 from lightx2v.utils.va_controller import VAController
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
@@ -166,7 +168,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             clip_input_info.num_frames = calculate_num_frames_from_duration(segment_duration, target_fps)
             logger.info(f"Auto-calculated num_frames={clip_input_info.num_frames} from video_duration={clip_input_info.video_duration}s (segment={segment_duration}s)")
         elif clip_input_info.num_frames is None:
-            clip_input_info.num_frames = rs2v.config.get("num_frames", 81)
+            clip_input_info.num_frames = get_input_value(rs2v.config, "num_frames", 81)
 
         num_frames = clip_input_info.num_frames
         base_seed = clip_input_info.seed
@@ -269,7 +271,7 @@ def main():
 
     if args.model_path is not None:
         startup_config, request_data = build_cli_inputs(args)
-        if startup_config["parallel"]:
+        if startup_config.get("parallel", False):
             platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
             platform_device.init_parallel_env()
             init_parallel(startup_config)

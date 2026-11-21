@@ -33,7 +33,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.zero_cond_t = config.get("zero_cond_t", False)
-        self.seq_parallel = config["seq_parallel"]
+        self.seq_parallel = config.get("seq_parallel", False)
         if self.seq_parallel:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             parallel_config = self.config["parallel"]

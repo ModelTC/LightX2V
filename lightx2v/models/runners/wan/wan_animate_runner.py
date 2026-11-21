@@ -1,4 +1,5 @@
 import gc
+import math
 from copy import deepcopy
 
 import cv2
@@ -17,8 +18,8 @@ except ImportError:
 from lightx2v.models.input_encoders.hf.animate.face_encoder import FaceEncoder
 from lightx2v.models.input_encoders.hf.animate.motion_encoder import Generator
 from lightx2v.models.networks.wan.animate_model import WanAnimateModel
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
+from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
@@ -29,23 +30,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 @RUNNER_REGISTER("wan2.2_animate")
 class WanAnimateRunner(WanRunner):
-    supported_request_fields_by_task = {
-        "animate": COMMON_REQUEST_FIELDS
-        | PROMPT_FIELDS
-        | {
-            "face_video_path",
-            "pose_video_path",
-            "ref_image_paths",
-            "num_frames",
-        },
-    }
-
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("replace_flag", False):
-            return supported_request_fields | {"mask_path", "background_video_path"}
-        return supported_request_fields
-
     def __init__(self, config):
         super().__init__(config)
         assert self.config["task"] == "animate"
@@ -319,7 +303,9 @@ class WanAnimateRunner(WanRunner):
 
         pose_video_path = self.input_info.pose_video_path
         face_video_path = self.input_info.face_video_path
-        src_ref_path = self.input_info.ref_image_paths
+        if len(self.input_info.ref_image_paths) != 1:
+            raise ValueError("Wan-Animate requires exactly one ref_image_paths entry.")
+        src_ref_path = self.input_info.ref_image_paths[0]
         self.cond_images, self.face_images, self.refer_images = self.prepare_source(pose_video_path, face_video_path, src_ref_path)
         self.refer_pixel_values = torch.tensor(self.refer_images / 127.5 - 1, dtype=GET_DTYPE(), device=AI_DEVICE).permute(2, 0, 1)  # chw
         self.latent_t = num_frames // self.config["vae_stride"][0] + 1
@@ -366,7 +352,23 @@ class WanAnimateRunner(WanRunner):
     def run_vae_decoder(self, latents):
         if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             self.vae_decoder = self.load_vae_decoder()
-        images = self.vae_decoder.decode(latents[:, 1:].to(GET_DTYPE()))
+        decode_latents = latents[:, 1:]
+        if (
+            self.config.get("animate_vae_terminal_prefix", False)
+            and len(self.all_out_frames) == self.video_segment_num - 1
+            and isinstance(self.vae_decoder, WanVAE)
+            and not self.config.get("use_lightvae", False)
+            and not self.vae_decoder.parallel
+            and not self.vae_decoder.use_tiling
+        ):
+            # Include the overlap that end_run_segment removes after decoding.
+            keep_frames = self.real_frame_len - sum(video.shape[2] for video in self.all_out_frames) + self.mask_reft_len
+            if keep_frames <= 0:
+                raise ValueError("Animate terminal prefix has no remaining frames")
+            # The first latent yields one frame, each later latent one temporal stride.
+            latent_count = 1 + math.ceil((keep_frames - 1) / self.config["vae_stride"][0])
+            decode_latents = decode_latents[:, :latent_count]
+        images = self.vae_decoder.decode(decode_latents.to(GET_DTYPE()))
         if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             del self.vae_decoder
             torch.cuda.empty_cache()

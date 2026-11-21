@@ -1,6 +1,5 @@
 {
     "infer_steps": 50,
-    "aspect_ratio": "16:9",
     "attn_type": "flash_attn3",
     "enable_cfg": true,
     "sample_guide_scale": 4.0,
@@ -8,5 +7,8 @@
     "cfg_renorm_min": 0.0,
     "axes_dims_rope": [16, 56, 56],
     "dit_quant_scheme": "Default",
-    "rms_norm_type": "sgl-kernel"
+    "rms_norm_type": "sgl-kernel",
+    "request_defaults": {
+        "aspect_ratio": "16:9"
+    }
 }

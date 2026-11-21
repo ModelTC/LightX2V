@@ -20,9 +20,9 @@ def prepare_images(task, resolution, size=None, aspect_ratio=None, image_path=No
     images = []
     if task == "i2i":
         if not image_path:
-            raise ValueError("Image editing requires --image_path (comma separated for multiple images)")
-        for path in image_path.split(","):
-            with Image.open(path.strip()) as image:
+            raise ValueError("Image editing requires one or more --image_path values")
+        for path in image_path:
+            with Image.open(path) as image:
                 image = image.convert("RGBA")
                 dimensions = image_dimensions(resolution, image.width / image.height)
                 images.append(image.resize(dimensions, Image.Resampling.LANCZOS))

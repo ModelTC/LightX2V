@@ -15,7 +15,6 @@ from lightx2v.models.runners.h3.autoregressive_runner import H3AutoregressiveRun
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 from lightx2v.models.runners.minimax_h3_causal.motion import prepare_motions
 from lightx2v.models.runners.minimax_h3_causal.reference_cache import MiniMaxH3ReferenceCache
-from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3_causal.clean_scheduler import MiniMaxH3CleanScheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
@@ -23,6 +22,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3_causal.vae_graph import MiniMa
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.video_writer import MiniMaxH3StreamingVideoWriter
 from lightx2v.utils.profiler import ProfilingContext4DebugL2, no_sync_profiling
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -36,8 +36,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
     """
 
     supported_lora_modes = ("merge",)
-
-    supported_request_fields_by_task = {task: COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "audio_path", "prompt", "motions"} for task in ("refa2v", "refa2av")}
 
     def __init__(self, config):
         if config["task"] not in ("refa2v", "refa2av"):
@@ -58,18 +56,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             raise ValueError(f"Causal H3 does not support {unsupported}")
         if self.generate_audio and self.reuse_input_audio:
             raise ValueError("RefA2AV generates audio; reuse_input_audio is only supported by RefA2V")
-        if config.get("dit_quantized", False) and config.get("dit_quant_scheme") != "fp8-f32-accum":
-            raise ValueError("Causal H3 DiT quantization requires dit_quant_scheme='fp8-f32-accum'")
-        if config.get("text_encoder_quantized", False) and config.get("text_encoder_quant_scheme") != "fp8-sgl":
-            raise ValueError("Causal H3 text encoder quantization requires text_encoder_quant_scheme='fp8-sgl'")
-        if config.get("video_vae_quantized", False) and config.get("video_vae_quant_scheme") != "fp8-f32-accum":
-            raise ValueError("Causal H3 video VAE quantization requires video_vae_quant_scheme='fp8-f32-accum'")
-        if config.get("fps", 24) != 24:
-            raise ValueError("Causal H3 requires fps=24")
-        if config.get("vae_sensitive_layer_dtype", "fp32") != "fp32":
-            raise ValueError("Causal H3 VAE sensitive layers require vae_sensitive_layer_dtype='fp32'")
-        if config.get("lora_configs"):
-            raise ValueError("Causal H3 loads the distilled checkpoint directly; released H3 LoRA adapters are not supported")
 
         self.reference_cache = MiniMaxH3ReferenceCache() if config.get("reference_condition_cache", False) else None
         self.driving_audio = None
@@ -80,9 +66,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         # Called on rank 0 with (RGB [1,3,F,H,W], start_frame, is_final).
         # With streaming encoding, RGB is borrowed until the callback returns.
         self.stream_callback = None
-
-    def get_supported_tasks(self):
-        return (self.config["task"],)
 
     def load_model(self):
         if self.reference_cache is not None:
@@ -114,9 +97,9 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self.scheduler = MiniMaxH3CleanScheduler(self.config)
 
     def _resolve_request_geometry(self, geometry_image=None):
-        self.request_height, self.request_width = map(int, self.input_info.size or self.config["size"])
+        self.request_height, self.request_width = map(int, self.input_info.size or get_input_value(self.config, "size"))
         num_frames = self.input_info.num_frames
-        self.request_num_frames = int(self.config["num_frames"] if num_frames is None else num_frames)
+        self.request_num_frames = int(get_input_value(self.config, "num_frames") if num_frames is None else num_frames)
         if self.request_num_frames < 22 or min(self.request_height, self.request_width) <= 0 or self.request_height % 32 or self.request_width % 32:
             raise ValueError("Causal H3 requires at least 22 frames and positive canvas dimensions divisible by 32")
         self.input_info.size = [self.request_height, self.request_width]
@@ -164,7 +147,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self.motion_by_chunk = prepare_motions(info.motions, prompt=info.prompt, num_frames=self.request_num_frames)
         reference_sources = {"image": info.image_path}
         if self.generate_audio:
-            reference_sources["audio"] = info.audio_path
+            reference_sources["audio"] = [info.audio_path]
         self.prepared_references = self._prepare_references(reference_sources)
         if self.generate_audio and sum(reference.kind == "audio" for reference in self.prepared_references) != 1:
             raise ValueError("RefA2AV requires exactly one voice reference")

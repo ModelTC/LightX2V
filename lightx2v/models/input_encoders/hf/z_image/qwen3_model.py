@@ -44,8 +44,7 @@ class Qwen3Model_TextEncoder:
         qwen3_tokenizer_path = self.config.get("qwen3_tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
         self.tokenizer = Qwen2Tokenizer.from_pretrained(qwen3_tokenizer_path)
 
-        if self.config["task"] == "i2i":
-            self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
 
     def preprocess_image(self, image):
         if isinstance(image, Image.Image):
@@ -85,7 +84,7 @@ class Qwen3Model_TextEncoder:
             extracted = prompt_embeds[i][prompt_masks[i]]
             embedding_list.append(extracted)
         image_info = {}
-        if self.config["task"] == "i2i" and image_list is not None:
+        if image_list is not None:
             vae_image_list = []
             for image in image_list:
                 preprocessed_image = self.preprocess_image(image)

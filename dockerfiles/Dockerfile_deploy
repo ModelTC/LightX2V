@@ -5,7 +5,7 @@ RUN mkdir /workspace/LightX2V
 WORKDIR /workspace/LightX2V
 ENV PYTHONPATH=/workspace/LightX2V
 
-RUN pip install diffusers==0.37.1 librosa
+RUN pip install diffusers==0.37.1 librosa "pillow-heif>=1.0" "av>=17"
 
 COPY tools tools
 COPY assets assets

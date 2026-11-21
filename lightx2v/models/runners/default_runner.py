@@ -13,7 +13,9 @@ from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.global_paras import CALIB
+from lightx2v.utils.input_info import ShapeState
 from lightx2v.utils.profiler import *
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -21,6 +23,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class DefaultRunner(BaseRunner):
+    input_info_state = ShapeState
+
     def __init__(self, config):
         super().__init__(config)
         self.progress_callback = None
@@ -152,7 +156,7 @@ class DefaultRunner(BaseRunner):
             raise NotImplementedError("Warmup does not support disaggregated inference")
         if self.config.get("unload_modules", False):
             raise NotImplementedError("Warmup does not support unload_modules")
-        if self.config.get("feature_caching", "NoCaching") != "NoCaching":
+        if self.config.get("feature_caching", "NoCaching") not in self.get_warmup_feature_caching_modes():
             raise NotImplementedError("Warmup does not support feature caching")
 
         self.run_warmup()
@@ -160,6 +164,9 @@ class DefaultRunner(BaseRunner):
         torch_device_module.synchronize()
         if dist.is_initialized() and dist.get_world_size() > 1:
             dist.barrier()
+
+    def get_warmup_feature_caching_modes(self):
+        return ("NoCaching",)
 
     def run_warmup(self):
         raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
@@ -172,7 +179,7 @@ class DefaultRunner(BaseRunner):
             assert self.config.get("cpu_offload", False)
         if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)  # set scheduler to model
-        task = self.config.get("task")
+        task = self.supported_tasks[0] if len(self.supported_tasks) == 1 else None
         if task == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
         elif task == "flf2v":
@@ -195,7 +202,7 @@ class DefaultRunner(BaseRunner):
         self.config.lock()  # lock config to avoid modification
 
     def set_init_device(self):
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             self.init_device = torch.device("cpu")
         else:
             self.init_device = torch.device(AI_DEVICE)
@@ -219,13 +226,13 @@ class DefaultRunner(BaseRunner):
 
     def get_num_frames(self):
         value = getattr(self.input_info, "num_frames", None)
-        return int(self.config["num_frames"] if value is None else value)
+        return int(get_input_value(self.config, "num_frames") if value is None else value)
 
     def get_target_size(self):
         size = getattr(self.input_info, "size", None)
         if size:
             return int(size[0]), int(size[1])
-        return int(self.config["size"][0]), int(self.config["size"][1])
+        return int(get_input_value(self.config, "size")[0]), int(get_input_value(self.config, "size")[1])
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
@@ -377,7 +384,7 @@ class DefaultRunner(BaseRunner):
         src_video, src_mask, src_ref_images = self.prepare_source(
             [self.input_info.video_path or None],
             [self.input_info.mask_path or None],
-            [ref_images.split(",") if ref_images else None],
+            [ref_images or None],
             (target_width, target_height),
         )
         self.src_ref_images = src_ref_images
@@ -405,8 +412,9 @@ class DefaultRunner(BaseRunner):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
 
+        self.model.scheduler.input_info = self.input_info
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, image_encoder_output=self.inputs["image_encoder_output"])
-        if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
+        if self.config.get("model_cls") == "wan2.2" and self.input_info.task in ["i2v", "s2v", "rs2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
         if hasattr(self, "sr_version") and self.sr_version is not None:
@@ -496,7 +504,7 @@ class DefaultRunner(BaseRunner):
         out_path = self.input_info.save_result_path
         img_in = (getattr(self.input_info, "image_path", None) or "").strip()
         vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
-        sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
+        sr_from_image_only = self.input_info.task == "sr" and bool(img_in) and not bool(vid_in)
 
         if sr_from_image_only:
             logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
@@ -506,7 +514,7 @@ class DefaultRunner(BaseRunner):
             logger.info(f"🎬 Start to save video 🎬")
 
             save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
-            if self.config.get("task") in ("sr", "animate"):
+            if self.input_info.task in ("sr", "animate"):
                 input_video_path = getattr(self.input_info, "video_path", "")
                 if input_video_path:
                     muxed_path = mux_audio_from_video(

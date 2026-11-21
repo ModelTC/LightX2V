@@ -56,6 +56,8 @@ FP32 LoRA **不会把整个模型转成 FP32**。FP32 merge 最后仍会转回�
 
 旧 JSON 字段 `lora_merge_force_fp32` 已移除；原来设为 `true` 的场景改用 `export LORA_DTYPE=FP32`，JSON 中不新增 `lora_dtype`。环境变量需在启动前设置，修改后重启进程。独立权重转换工具仍使用各自的 dtype 参数。
 
+通过自定义 CLI、Python 或服务入口启动 Qwen Image 2512 T2I、Qwen Image Edit 2511 I2I 或 Wan Animate 的 LoRA 预设时，请在启动前设置 `LORA_DTYPE=FP32`，以复现 CPU 合并精度。
+
 ### 命令行方式
 
 先将上面的 `lora_configs` 字段合并到完整的 Wan 配置中，再通过 `--config_json` 启动。当前 CLI 不提供单独的 LoRA 路径或强度选项：

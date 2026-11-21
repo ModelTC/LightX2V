@@ -36,7 +36,7 @@ hf download lightx2v/Wan2.1-Distill-Loras --local-dir lightx2v/Wan2.1-Distill-Lo
 bash scripts/wan/run_wan_t2v.sh
 ```
 
-输入、提示词、seed 和输出路径在 sh 中修改；采样参数在 `--config_json` 指定的 JSON 中修改。`num_frames`、`size` 是未传入时的默认值，`size` 为 `[高, 宽]`。
+输入、提示词、seed 和输出路径在 sh 中修改；采样参数在 `--config_json` 指定的 JSON 中修改。`request_defaults.num_frames`、`request_defaults.size` 是未传入时的默认值，`size` 为 `[高, 宽]`。
 
 ## Server 服务
 

@@ -1,12 +1,14 @@
 """Reference-image preparation shared by H3-Image's two image encoders."""
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from os import PathLike
 
 import numpy as np
 import torch
-from PIL import Image, ImageOps
+from PIL import Image
+
+from lightx2v.utils.image_io import load_rgb_image
 
 
 @dataclass(frozen=True)
@@ -29,31 +31,19 @@ def prepare_reference_images(image_paths):
     """Read references in prompt order, retaining each reference's own geometry."""
     if image_paths is None:
         return []
-    if isinstance(image_paths, (str, PathLike, Image.Image)):
-        image_paths = [image_paths]
-    sources = []
-    for source in image_paths:
-        if isinstance(source, str):
-            sources.extend(path.strip() for path in source.split(",") if path.strip())
-        else:
-            sources.append(source)
-    if len(sources) > 16:
+    if isinstance(image_paths, (str, bytes)) or not isinstance(image_paths, Sequence):
+        image_paths = (image_paths,)
+    if len(image_paths) > 16:
         raise ValueError("MiniMax-H3-Image supports at most 16 reference images")
     references = []
-    for source in sources:
-        if isinstance(source, Image.Image):
-            image = ImageOps.exif_transpose(source).convert("RGB")
-        else:
-            with Image.open(source) as opened:
-                image = ImageOps.exif_transpose(opened).convert("RGB")
-        if min(image.size) < 32:
+    for source in image_paths:
+        image = load_rgb_image(source)
+        short_edge = min(image.size)
+        if short_edge < 32:
             raise ValueError(f"MiniMax-H3-Image references need at least 32 pixels on each side, got {image.size}")
-        references.append(
-            ReferenceImage(
-                qwen_image=_bound_short_edge(image, 1024, 1024),
-                vae_image=_bound_short_edge(image, 1024, 2048),
-            )
-        )
+        qwen_image = _bound_short_edge(image, 1024, 1024)
+        vae_image = qwen_image if short_edge <= 1024 else _bound_short_edge(image, 1024, 2048)
+        references.append(ReferenceImage(qwen_image=qwen_image, vae_image=vae_image))
     return references
 
 

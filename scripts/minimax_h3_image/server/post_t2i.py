@@ -8,7 +8,7 @@ if __name__ == "__main__":
         "task": "t2i",
         "prompt": "A photorealistic photograph of a cat sitting by a sunlit window.",
         "seed": 42,
-        "size": [2048, 2048],
+        "size": [4096, 4096],
         "save_result_path": "./minimax_h3_image_t2i.png",
     }
 

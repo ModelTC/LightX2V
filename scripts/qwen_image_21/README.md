@@ -66,7 +66,7 @@ Edit `--prompt`, `--image_path`, `--size`, `--seed`, and `--save_result_path` di
 
 Use `--size HEIGHT WIDTH`. Both dimensions must be at least 32; non-multiples of 32 are rounded down automatically.
 
-For image-to-image, remove the script's `--size` argument to determine the output size from the reference image's aspect ratio. The pixel count is approximately `resolution²` (`resolution` defaults to `1024` in the config), with each dimension rounded to the nearest multiple of 32.
+For image-to-image, remove the script's `--size` argument to determine the output size from the reference image's aspect ratio. The pixel count is approximately `resolution²` (`request_defaults.resolution` defaults to `1024` in the config), with each dimension rounded to the nearest multiple of 32.
 
 Pass `--resolution 2048` to override the config for one request; omit it to use the config. The value must be a positive integer. It controls reference-image resizing and automatic output sizing; an explicit `--size` still determines the output dimensions.
 

@@ -32,10 +32,6 @@
   "t5_rms_norm_type": "torch",
   "vae_path": "/path/to/models/Wan2.1-T2V-14B/Wan2.1_VAE.pth",
   "num_frames": 105,
-  "size": [
-    480,
-    832
-  ],
   "vae_dtype": "FP16",
   "vae_weight_dtype": "FP16",
   "dit_original_ckpt": "/path/to/checkpoints/krea-realtime-video-14b.safetensors",
@@ -65,5 +61,11 @@
     "tp_load_mode": "local"
   },
   "load_from_rank0": false,
-  "causal_rope_compute_dtype": "float32"
+  "causal_rope_compute_dtype": "float32",
+  "request_defaults": {
+    "size": [
+      480,
+      832
+    ]
+  }
 }

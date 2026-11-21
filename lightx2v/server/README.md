@@ -16,7 +16,7 @@ server/
 ├── main.py                  # Server startup
 ├── config.py                # Configuration
 ├── task_manager.py          # Task management
-├── schema.py                # Data models (VideoTaskRequest, ImageTaskRequest)
+├── schema.py                # Service envelopes and Spec-generated request models
 ├── api/
 │   ├── __init__.py
 │   ├── router.py            # Main router aggregation
@@ -28,7 +28,10 @@ server/
 │   └── tasks/
 │       ├── __init__.py
 │       ├── common.py        # Common task operations
-│       ├── video.py         # POST /v1/tasks/video
+│       ├── generation.py    # Unified task submission and synchronous generation
+│       ├── submission.py    # Shared admission and image waiting
+│       ├── sync.py          # Shared synchronous image routes
+│       ├── video.py         # Compatibility: POST /v1/tasks/video
 │       └── image.py         # POST /v1/tasks/image
 ├── services/
 │   ├── __init__.py
@@ -38,11 +41,7 @@ server/
 │   │   ├── __init__.py
 │   │   ├── worker.py        # TorchrunInferenceWorker
 │   │   └── service.py       # DistributedInferenceService
-│   └── generation/
-│       ├── __init__.py
-│       ├── base.py          # Base generation service
-│       ├── video.py         # VideoGenerationService
-│       └── image.py         # ImageGenerationService
+│   └── generation.py       # Shared GenerationService
 ├── media/
 │   ├── __init__.py
 │   ├── base.py              # MediaHandler base class
@@ -77,8 +76,16 @@ reference the registered arena and rejects undeclared CPU state. NVFP4, GGUF,
 Marlin and `fp8-pertensor` use specialized loading/storage paths that require
 separate adaptations and are rejected before checkpoint loading. Ordinary
 backend hardware and checkpoint requirements still apply. The
-option defaults to false and requires static CPU block offload;
-lazy loading, TP, LoRA, shared weights and contiguous offload are rejected.
+option defaults to false and requires static CPU block offload. Use `true` to require
+NUMA placement. With `"auto"`, the loader falls back to ordinary block offload
+when GPU NUMA topology, node binding or System V IPC is unavailable, or when
+IPC permissions or segment limits prevent allocation. Out-of-memory, attach,
+CUDA registration and cleanup errors propagate. Lazy loading, TP, shared weights
+and contiguous offload are unsupported.
+For non-layered Qwen Image T2I/I2I with an unquantized DiT, the loader can
+merge `lora_configs` into CPU weights at startup before placing them in the
+arena. These adapters stay fixed for the lifetime of the runner. Other LoRA
+loading modes, including `lora_mode="separate"` and `lora_mode="consumer"`, are unsupported.
 Call `runner.close()` after serving stops to retire transfers and release the arena.
 For the Python pipeline, call `pipeline.runner.close()` in a `finally` block.
 The InfiniteTalk/Wan model constructor and runner factory also release adopted
@@ -97,6 +104,10 @@ flowchart TB
         Router --> FileRoutes[File APIs]
         Router --> ServiceRoutes[Service Status APIs]
 
+        TaskRoutes --> CreateTask["POST /v1/tasks/ - Create Task"]
+        TaskRoutes --> CreateTaskForm["POST /v1/tasks/form - Upload and Create Task"]
+        TaskRoutes --> CreateTaskSync["POST /v1/tasks/sync - Generate Image Synchronously"]
+        TaskRoutes --> GetTaskResults["GET /v1/tasks/{id}/results - List All Artifacts"]
         TaskRoutes --> CreateVideoTask["POST /v1/tasks/video - Create Video Task"]
         TaskRoutes --> CreateImageTask["POST /v1/tasks/image - Create Image Task"]
         TaskRoutes --> CreateVideoTaskForm["POST /v1/tasks/video/form - Form Create Video"]
@@ -120,6 +131,7 @@ flowchart TB
 
         CreateVideoTask --> TaskManager
         CreateImageTask --> TaskManager
+        CreateTaskSync --> TaskManager
         TaskManager --> TaskQueue
         TaskManager --> TaskStatus
         TaskManager --> TaskResult
@@ -154,13 +166,8 @@ flowchart TB
         ProcessingThread --> ProcessTask
     end
 
-    subgraph Generation Services
-        VideoService[VideoGenerationService]
-        ImageService[ImageGenerationService]
-        BaseService[BaseGenerationService]
-
-        BaseService --> VideoService
-        BaseService --> ImageService
+    subgraph GenerationLayer[Generation Service]
+        Generation[GenerationService]
     end
 
     subgraph Distributed Inference Service
@@ -177,14 +184,11 @@ flowchart TB
     end
 
     TaskQueue --> ProcessingThread
-    ProcessTask --> VideoService
-    ProcessTask --> ImageService
-    VideoService --> InferenceService
-    ImageService --> InferenceService
+    ProcessTask --> Generation
+    Generation --> InferenceService
     GetTaskResult --> FileService
     DownloadFile --> FileService
-    VideoService --> FileService
-    ImageService --> FileService
+    Generation --> FileService
     FileService --> MediaHandler
 ```
 
@@ -196,13 +200,13 @@ sequenceDiagram
     participant API as API Server
     participant TM as TaskManager
     participant PT as Processing Thread
-    participant GS as GenerationService<br/>(Video/Image)
+    participant GS as GenerationService
     participant FS as FileService
     participant DIS as DistributedInferenceService
     participant TIW0 as TorchrunInferenceWorker<br/>(Rank 0)
     participant TIW1 as TorchrunInferenceWorker<br/>(Rank 1..N)
 
-    C->>API: POST /v1/tasks/video<br/>or /v1/tasks/image
+    C->>API: POST /v1/tasks/<br/>or a compatibility endpoint
     API->>TM: create_task()
     TM->>TM: Generate task_id
     TM->>TM: Add to queue<br/>(status: PENDING)
@@ -224,7 +228,7 @@ sequenceDiagram
         FS->>FS: HTTP download<br/>with retry
         FS-->>GS: image_path
     else Image is Base64
-        GS->>GS: save_base64_image()
+        GS->>GS: resolve_image_path()
         GS-->>GS: image_path
     else Image is local path
         GS->>GS: use existing path
@@ -235,7 +239,7 @@ sequenceDiagram
         FS->>FS: HTTP download<br/>with retry
         FS-->>GS: audio_path
     else Audio is Base64
-        GS->>GS: save_base64_audio()
+        GS->>GS: resolve_audio_path()
         GS-->>GS: audio_path
     end
 
@@ -311,13 +315,19 @@ stateDiagram-v2
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/v1/tasks/` | POST | Submit image, video or action tasks |
+| `/v1/tasks/form` | POST | Upload files and submit a task |
+| `/v1/tasks/sync` | POST | Generate an image synchronously; return PNG or a presigned upload receipt |
 | `/v1/tasks/video` | POST | Create video generation task |
 | `/v1/tasks/video/form` | POST | Create video task with form data |
 | `/v1/tasks/image` | POST | Create image generation task |
 | `/v1/tasks/image/form` | POST | Create image task with form data |
+| `/v1/tasks/image/sync` | POST | Compatibility endpoint for synchronous image generation |
 | `/v1/tasks` | GET | List all tasks |
 | `/v1/tasks/queue/status` | GET | Get queue status |
 | `/v1/tasks/{task_id}/status` | GET | Get task status |
+| `/v1/tasks/{task_id}/results` | GET | List all generated artifacts |
+| `/v1/tasks/{task_id}/results/{name}` | GET | Download one artifact |
 | `/v1/tasks/{task_id}/result` | GET | Get task result (stream) |
 | `/v1/tasks/{task_id}` | DELETE | Cancel task |
 | `/v1/tasks/all/running` | DELETE | Cancel all running tasks |
@@ -337,57 +347,52 @@ stateDiagram-v2
 
 ## Request Models
 
-### VideoTaskRequest
+Submit image, video and action requests through `POST /v1/tasks/`, or upload files with `POST /v1/tasks/form`. Each task can produce multiple named artifacts. The server uses the runner's actual result records; Specs contain only tasks and input arguments.
 
-```python
-class VideoTaskRequest(BaseTaskRequest):
-    num_frames: Optional[int] = Field(
-        None,
-        description="Number of output frames; defaults to the startup config",
-    )
-    reuse_prefix_segments: int = Field(0, ge=0)
-    video_path: str = ""
-    sr_ratio: float = Field(2.0, gt=0)
-    audio_path: str = ""
-    video_duration: int = 5
-    resize_mode: Optional[str] = None
-    fixed_area: Optional[str] = None
-    talk_objects: Optional[list[TalkObject]] = None
-    ref_image_paths: list[str] = Field(default_factory=list)
-```
+Use `POST /v1/tasks/sync` to wait for image generation and receive PNG bytes. This endpoint currently supports image output and uses the same Spec-generated request body as the asynchronous endpoint. Multi-task services require `task` in the request; single-task services omit it. Query parameters `timeout_seconds` and `poll_interval_seconds` default to `600` and `0.5`. Supplying `presigned_url` uploads the PNG to that URL and returns a JSON receipt instead. The legacy `/v1/tasks/image/sync` uses the same handler.
 
-### ImageTaskRequest
+Legacy `/v1/tasks/image/`, `/v1/tasks/video/`, their form endpoints, `/v1/tasks/image/sync`, and OpenAI image APIs remain compatible. They call the same internal submission and generation services. A legacy image/video request fails after execution if the required artifact was not produced.
 
-```python
-class ImageTaskRequest(BaseTaskRequest):
-    aspect_ratio: str = "16:9"
-```
+Model inference fields are declared once in each model's `request_spec.py` Spec. At startup, the server uses these definitions to generate Pydantic request models and OpenAPI documentation for its supported tasks. The CLI uses the same types, descriptions, choices and numeric constraints.
 
-### BaseTaskRequest (Common Fields)
+`TaskRequest` contains service fields such as task IDs, uploads, LoRA controls and reuse settings. They do not maintain a second collection of model input fields. Python-only callbacks and tensor-return controls are excluded through `server=False`.
 
-```python
-class BaseTaskRequest(BaseModel):
-    task_id: str  # auto-generated
-    prompt: str = ""
-    negative_prompt: Optional[str] = ""
-    image_path: str = ""  # URL, base64, or local path
-    save_result_path: Optional[str] = None  # omitted/null: do not save a file
-    seed: Optional[int]  # non-negative; omitted/null: 42
-```
+To add an inference parameter, declare an `Argument` in the model's Spec, add it to the model's `InputInfo` if needed, and implement its use in the runner. JSON and form endpoints pick it up automatically; the OpenAI image adapter also reuses these fields while keeping its own protocol conventions.
 
-To download an asynchronous task's file result, provide `save_result_path` in the request. Omitting it or passing null skips file saving. Synchronous image APIs return the image from memory.
+Asynchronous tasks receive an output path automatically when no path is configured or supplied. `save_result_path` remains the primary artifact path. Synchronous image APIs keep PNG results in memory.
 
-Omitted or null `negative_prompt` defaults to `""`. Explicit strings, including `""`, require model support. Empty text can still use model templates and does not disable CFG.
+`GET /v1/tasks/{task_id}/results` returns a list of `name`, `type`, `media_type` and `url` records. Download one through `GET /v1/tasks/{task_id}/results/{name}`. DreamZero, Cosmos3 joint modes, Motus and LingBot-VA can expose video and action under one task ID. Action files retain the runner's NPY or JSON format. The legacy singular `/result` endpoint keeps its primary-file behavior and output-directory restriction. In-memory result URLs return HTTP 410 after cache eviction.
 
-Single-task services use the task selected by `--task` at startup, so POST requests can omit `task`. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively.
+Single-file image/video runners reuse `BaseRunner.get_outputs()`. Multi-file runners call `record_output(type, path)` after saving each artifact, preserving their existing Python/CLI return values.
+
+Omitted or null `negative_prompt` uses startup/default values. The field must be supported by the selected model/task. When CFG is disabled, explicitly supplied values, including `""`, are ignored with a warning. With CFG enabled, empty text can still use model templates and does not disable CFG.
+
+Single-task services use their startup task and do not expose a `task` request field; including it in JSON or form data is rejected with HTTP 422. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively, and supply the selector internally only for multi-task services.
+
+Multi-task services include BAGEL, Flux2, HiDream-O1-Image, Z-Image, LingBot-Video, HunyuanImage3 (image tasks only), LTX2/LTX2.5, Wan2.2 TI2V-5B and Cosmos3 Omni. They can start without `--task`; CLI inference still selects one task with `--task`. LTX2's specialized `ltx2_s2v` and `v2av` deployments retain their startup task and dedicated configs. Cosmos3 uses an explicit `model_variant` in the startup config; see [Cosmos3 examples](../../scripts/cosmos3/README.md).
 
 Native image and video request schemas accept the inference fields supported by their runners, including animation conditions, action/state paths, LTX reference controls, and image-edit options. The runner validates whether a field is supported by the selected model, task, and startup configuration. Unknown JSON or form fields are rejected with HTTP 422; startup settings such as `infer_steps` and `warmup` belong in the startup configuration.
 
 Only `seko_talk` tasks `s2v` and `rs2v` support `resize_mode` and `fixed_area` requests for image and mask resizing. Omitted or null values use the startup config. A `size` request for these tasks requires the configured or requested `resize_mode` to be `fixed_shape`.
 
-The `/form` endpoints accept the same named request fields as the JSON endpoints, alongside their existing file uploads. Encode structured values such as `size`, `image_frame_indices`, `image_strength` lists, `ref_image_paths`, `talk_objects`, and WorldPlay `pose` objects as JSON strings. For example, use `size='[480,832]'`. Text fields, including prompts and `layout_bboxes`, retain their submitted text.
+The `/form` endpoints accept the same named request fields as the JSON endpoints, alongside their existing file uploads. Encode structured values such as `size`, `image_frame_indices`, `image_strength` lists, `ref_image_paths`, `talk_objects`, and WorldPlay `pose` objects as JSON strings. For example, use `size='[480,832]'`. Prompts retain their submitted text. `layout_bboxes` accepts JSON arrays/objects or a JSON file path.
 
 Video, pose-video, mask-video, action, and state paths refer to files or directories on the server. Image and audio inputs retain their existing URL, Base64, and local-path handling. Python-only inputs such as callbacks and in-memory policy tensors are not exposed as JSON fields; synchronous image APIs select tensor output internally.
+
+### Presigned sync image client
+
+`scripts/server/post_sync_i2i_presigned.py` reads the running service's `/openapi.json` to select the request schema and image type. `--task` defaults to `i2i`; the client includes it only for multi-task services. Single-image fields receive a string, while multi-image fields receive a list even for one image.
+
+```bash
+python scripts/server/post_sync_i2i_presigned.py \
+  --url http://localhost:8000 \
+  --task i2i \
+  --prompt "Change the background to a beach." \
+  --image_path input.png \
+  --presigned_url "https://storage.example/upload-presigned-url"
+```
+
+Replace the image path and presigned upload URL. Use `--task t2i` without image inputs for a multi-task service's text-to-image request. Single-task services keep their startup task.
 
 ## Configuration
 
@@ -447,12 +452,12 @@ torchrun --nproc_per_node=2 -m lightx2v.server \
 - **File validation** and format detection
 - **Unified media handling** via MediaHandler pattern
 
-### 4. Separate Video/Image Endpoints
+### 4. Unified Generation Endpoints
 
-- **Dedicated endpoints** for video and image generation
-- **Type-specific request models** (VideoTaskRequest, ImageTaskRequest)
-- **Automatic service routing** based on task type
-- **Backward compatible** with legacy `/v1/tasks` endpoint
+- **One submission API** for image, video and action tasks
+- **Model-specific request schemas** generated from Specs
+- **One result list** for every task's generated artifacts
+- **Compatible image/video and OpenAI image APIs** sharing the same backend
 
 ## Performance Considerations
 
@@ -493,3 +498,7 @@ The server uses `loguru` for structured logging. Logs include:
 ## License
 
 See the main project LICENSE file for licensing information.
+
+## Multi-input parameters
+
+List-valued fields use JSON arrays, including for one input: `"image_path": ["a.png", "b.png"]`. Single-image fields still use strings. Check the running service's OpenAPI schema for each model/task's types. Forms submit lists and objects as JSON text. For list-valued upload fields, repeat the same file field (for example `image_file`); uploaded paths stay ordered lists. The OpenAI image edit adapter uses the selected model's single-image or multi-image definition.

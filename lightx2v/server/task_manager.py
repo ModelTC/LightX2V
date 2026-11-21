@@ -9,6 +9,8 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
+from lightx2v.utils.outputs import Output
+
 from .metrics import monitor_cli
 from .schema import Usage
 
@@ -47,6 +49,7 @@ class TaskInfo:
     error_type: Optional[str] = None
     save_result_path: Optional[str] = None
     result_png: Optional[bytes] = None
+    results: list[Output] = field(default_factory=list)
     usage: Usage | dict | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     thread: Optional[threading.Thread] = None
@@ -110,7 +113,7 @@ class TaskManager:
         self,
         task_id: str,
         save_result_path: Optional[str] = None,
-        result_png: Optional[bytes] = None,
+        results: list[Output] | None = None,
         usage: Usage | dict | None = None,
     ):
         with self._lock:
@@ -119,13 +122,16 @@ class TaskManager:
                 return
 
             task = self._tasks[task_id]
+            if task.status == TaskStatus.CANCELLED:
+                return
             task.status = TaskStatus.COMPLETED
             task.end_time = datetime.now()
             task.save_result_path = save_result_path
-            task.result_png = result_png
+            task.results = results or []
+            task.result_png = next((output.content for output in task.results if output.type == "image" and output.content is not None), None)
             task.usage = usage
 
-            if result_png is not None:
+            if task.result_png is not None:
                 self._evict_old_result_png_unlocked()
 
             self.completed_tasks += 1
@@ -138,6 +144,8 @@ class TaskManager:
                 return
 
             task = self._tasks[task_id]
+            if task.status == TaskStatus.CANCELLED:
+                return
             task.status = TaskStatus.FAILED
             task.end_time = datetime.now()
             task.error = error
@@ -313,6 +321,8 @@ class TaskManager:
 
         oldest_id, oldest = min(blob_tasks, key=lambda x: x[1].end_time or x[1].start_time)
         oldest.result_png = None
+        for output in oldest.results:
+            output.content = None
         logger.debug(f"Evicted oldest result_png blob (task {oldest_id}), keeping {keep} most recent")
 
     def _emit_queue_metrics_unlocked(self):

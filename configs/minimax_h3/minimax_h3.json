@@ -1,7 +1,5 @@
 {
   "infer_steps": 29,
-  "num_frames": 124,
-  "size": [544, 960],
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
@@ -17,5 +15,9 @@
   "use_compile": false,
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
-  "vae_spatial_scale_factor": 16
+  "vae_spatial_scale_factor": 16,
+  "request_defaults": {
+    "num_frames": 124,
+    "size": [544, 960]
+  }
 }

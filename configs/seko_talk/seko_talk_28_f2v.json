@@ -1,11 +1,8 @@
 {
     "infer_steps": 4,
     "fps": 16,
-    "video_duration": 12,
     "audio_sr": 16000,
-    "num_frames": 81,
     "prev_frame_length": 1,
-    "resize_mode": "adaptive",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
@@ -21,5 +18,10 @@
         "path": "lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
         "strength": 1.0
         }
-    ]
+    ],
+    "request_defaults": {
+        "video_duration": 12,
+        "num_frames": 81,
+        "resize_mode": "adaptive"
+    }
 }

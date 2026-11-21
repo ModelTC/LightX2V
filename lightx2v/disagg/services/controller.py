@@ -22,6 +22,7 @@ from lightx2v.disagg.rdma_buffer import RDMABuffer
 from lightx2v.disagg.rdma_server import RDMAServer
 from lightx2v.disagg.scheduler.round_robin import RoundRobinPolicy
 from lightx2v.disagg.services.base import BaseService
+from lightx2v.utils.request_defaults import get_input_value
 
 
 class ControllerService(BaseService):
@@ -197,7 +198,9 @@ class ControllerService(BaseService):
             output_dir = Path(output_dir_raw)
         else:
             base_save_path = (
-                instance_cfg.get("save_result_path") or (self._runtime_config or {}).get("save_result_path") or str(Path(__file__).resolve().parents[3] / "save_results" / "wan22_i2v_dynamic.mp4")
+                get_input_value(instance_cfg, "save_result_path", None)
+                or get_input_value(self._runtime_config or {}, "save_result_path", None)
+                or str(Path(__file__).resolve().parents[3] / "save_results" / "wan22_i2v_dynamic.mp4")
             )
             output_dir = Path(str(base_save_path)).parent / "nsys"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -2074,9 +2077,12 @@ class ControllerService(BaseService):
                     workload_config = dict(request_data or {})
                     generated_request_count += 1
 
+                workload_config = self._to_plain(workload_config)
                 request_config = dict(config)
+                defaults = dict(config.get("request_defaults", {})) | dict(workload_config.get("request_defaults", {}))
                 request_config.update(self._to_plain(workload_config))
-                seed = workload_config.get("seed")
+                request_config["request_defaults"] = defaults
+                seed = get_input_value(workload_config, "seed", get_input_value(config, "seed", None))
                 request_config["seed"] = 42 if seed is None else seed
 
                 room = request_config.get("data_bootstrap_room", next_room)
@@ -2102,7 +2108,7 @@ class ControllerService(BaseService):
                     metrics["stages"] = {}
                 request_config["request_metrics"] = metrics
 
-                save_result_path = workload_config.get("save_result_path")
+                save_result_path = get_input_value(request_config, "save_result_path", None)
                 if not save_result_path:
                     error = "save_result_path is required for disaggregated generation requests"
                     if not load_from_user:
@@ -2129,7 +2135,7 @@ class ControllerService(BaseService):
                 self.logger.info(
                     "Dispatched request room=%s save_result_path=%s",
                     room,
-                    request_config.get("save_result_path"),
+                    get_input_value(request_config, "save_result_path", None),
                 )
                 expected_rooms.add(room)
 

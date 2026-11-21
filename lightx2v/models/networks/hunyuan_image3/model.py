@@ -456,7 +456,7 @@ class HunyuanImage3Model(BaseTransformerModel):
         return weight_dict
 
     def _init_infer_class(self):
-        if self.config["feature_caching"] != "NoCaching":
+        if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("HunyuanImage3 native feature caching is not implemented yet.")
         self.pre_infer_class = HunyuanImage3PreInfer
         self.transformer_infer_class = HunyuanImage3TransformerInfer

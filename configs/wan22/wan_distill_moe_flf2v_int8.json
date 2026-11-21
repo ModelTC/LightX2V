@@ -1,8 +1,6 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
     "text_len": 512,
-    "size": [720, 1280],
     "distill_method": "dmd2",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
@@ -27,5 +25,9 @@
     "dit_quantized": true,
     "dit_quant_scheme": "int8-vllm",
     "t5_quantized": true,
-    "t5_quant_scheme": "int8"
+    "t5_quant_scheme": "int8",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [720, 1280]
+    }
 }

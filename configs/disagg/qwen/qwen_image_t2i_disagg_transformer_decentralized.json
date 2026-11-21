@@ -5,7 +5,6 @@
     "text_encoder_dim": 3584,
     "text_len": 4096,
     "infer_steps": 50,
-    "aspect_ratio": "16:9",
     "max_custom_size": 3072,
     "attn_type": "flash_attn2",
     "enable_cfg": true,
@@ -13,7 +12,6 @@
     "vae_z_dim": 16,
     "vae_stride": [1, 8, 8],
     "num_frames": 1,
-    "size": [1664, 1664],
     "disagg_config": {
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 0,
@@ -30,5 +28,9 @@
         "rdma_phase2_handshake_port": 5568,
         "rdma_buffer_slots": 128,
         "rdma_buffer_slot_size": 4096
+    },
+    "request_defaults": {
+        "aspect_ratio": "16:9",
+        "size": [1664, 1664]
     }
 }

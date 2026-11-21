@@ -94,7 +94,7 @@ def build_sync_payload(args: argparse.Namespace, presigned_url: str = "") -> Dic
 
 
 def call_sync(base_url: str, payload: Dict[str, Any], timeout_seconds: int, poll_interval_seconds: float) -> requests.Response:
-    endpoint = f"{base_url.rstrip('/')}/v1/tasks/image/sync?timeout_seconds={timeout_seconds}&poll_interval_seconds={poll_interval_seconds}"
+    endpoint = f"{base_url.rstrip('/')}/v1/tasks/sync?timeout_seconds={timeout_seconds}&poll_interval_seconds={poll_interval_seconds}"
     return requests.post(endpoint, json=payload, timeout=timeout_seconds + 30)
 
 

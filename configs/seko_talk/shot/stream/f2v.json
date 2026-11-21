@@ -3,8 +3,6 @@
     "task": "s2v",
     "model_path": "/path/to/Wan2.1-i2V1202-Audio-14B-720P",
     "infer_steps": 4,
-    "num_frames": 33,
-    "resize_mode": "adaptive",
     "fps": 16,
     "audio_sr": 16000,
     "self_attn_1_type": "flash_attn3",
@@ -32,5 +30,9 @@
         "path": "/path/to/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
         "strength": 1.0
         }
-    ]
+    ],
+    "request_defaults": {
+        "num_frames": 33,
+        "resize_mode": "adaptive"
+    }
 }

@@ -1,7 +1,5 @@
 {
     "infer_steps": 4,
-    "num_frames": 81,
-    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "sample_guide_scale": 5,
@@ -11,5 +9,9 @@
     "t5_quantized": true,
     "t5_quant_scheme": "fp8-sgl",
     "unload_modules": false,
-    "use_tiling_vae": false
+    "use_tiling_vae": false,
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
 }

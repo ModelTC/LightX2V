@@ -15,6 +15,9 @@ from loguru import logger
 from lightx2v.disagg.conn import MONITOR_POLLING_PORT, REQUEST_POLLING_PORT, ReqManager
 from lightx2v.disagg.monitor import Monitor, Reporter
 from lightx2v.disagg.workload import build_payload, current_stage, load_stage_specs, start_workload_clock
+from lightx2v.models.runners.registry import get_model_spec
+from lightx2v.utils.request_defaults import get_input_value, get_request_default_arguments
+from lightx2v.utils.request_spec import is_list_type
 
 
 def _parse_gpus(raw: str) -> list[int]:
@@ -71,7 +74,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save_result_path", type=str, default="")
     parser.add_argument("--prompt", type=str, default=None)
     parser.add_argument("--negative_prompt", type=str, default=None)
-    parser.add_argument("--image_path", type=str, default="")
+    parser.add_argument("--image_path", nargs="+")
     parser.add_argument("--keep_parallel_config", action="store_true", default=True)
     parser.add_argument("--drop_parallel_config", action="store_true", default=False)
 
@@ -102,6 +105,10 @@ def _write_request_config(payload: dict[str, Any], request_id: int, keep_paralle
     request_config.pop("negative_prompt", None)
     if not keep_parallel_config:
         request_config.pop("parallel", None)
+    if request_config.get("model_cls"):
+        for name in get_request_default_arguments(request_config):
+            if name in request_config:
+                request_config.setdefault("request_defaults", {})[name] = request_config.pop(name)
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(request_config, f, ensure_ascii=False, indent=2)
@@ -118,8 +125,9 @@ def _run_infer_once(args: argparse.Namespace, payload: dict[str, Any], worker_id
     request_id = int(request_metrics.get("request_id", int(time.time() * 1000)))
 
     keep_parallel = _effective_keep_parallel(args)
-    temp_dir, config_json = _write_request_config(payload, request_id, keep_parallel_config=keep_parallel)
-    save_result_path = payload.get("save_result_path")
+    profile = {"model_cls": args.model_cls, "task": args.task} | payload
+    temp_dir, config_json = _write_request_config(profile, request_id, keep_parallel_config=keep_parallel)
+    save_result_path = get_input_value(payload, "save_result_path", None)
     if not save_result_path:
         save_dir = Path(args.save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -137,19 +145,19 @@ def _run_infer_once(args: argparse.Namespace, payload: dict[str, Any], worker_id
         "--config_json",
         config_json,
         "--prompt",
-        payload.get("prompt") or "",
+        get_input_value(payload, "prompt", None) or "",
         "--save_result_path",
         str(save_result_path),
     ]
 
-    if payload.get("negative_prompt") is not None:
-        infer_argv.extend(["--negative_prompt", payload["negative_prompt"]])
+    if get_input_value(payload, "negative_prompt", None) is not None:
+        infer_argv.extend(["--negative_prompt", get_input_value(payload, "negative_prompt")])
 
-    image_path = payload.get("image_path")
+    image_path = get_input_value(payload, "image_path", None)
     if image_path:
-        infer_argv.extend(["--image_path", str(image_path)])
+        infer_argv.extend(["--image_path", *(image_path if isinstance(image_path, list) else [image_path])])
 
-    seed = payload.get("seed")
+    seed = get_input_value(payload, "seed", None)
     if seed is not None:
         infer_argv.extend(["--seed", str(int(seed))])
 
@@ -549,7 +557,16 @@ def _controller_main(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    args = _make_parser().parse_args()
+    parser = _make_parser()
+    args = parser.parse_args()
+    if args.image_path:
+        argument = get_model_spec(args.model_cls).get_arguments(vars(args), args.task).get("image_path")
+        if argument is None:
+            parser.error(f"{args.model_cls} {args.task} does not accept image_path")
+        if not is_list_type(argument.type):
+            if len(args.image_path) != 1:
+                parser.error(f"{args.model_cls} {args.task} accepts one image_path")
+            args.image_path = args.image_path[0]
     if args.mode == "worker":
         _worker_main(args)
     else:

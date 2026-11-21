@@ -27,7 +27,7 @@ class WanS2VTransformerInfer(WanTransformerInfer):
         self.reset_infer_states(pre_infer_out.x[0], pre_infer_out.context[0])
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         global_seq_len = pre_infer_out.s2v_extra.get("global_original_seq_len", pre_infer_out.original_seq_len)
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             return x
         return self.infer_non_blocks(weights, x, pre_infer_out.embed, global_seq_len)
 
@@ -78,7 +78,7 @@ class WanS2VTransformerInfer(WanTransformerInfer):
             self.block_idx = block_idx
             x = self.infer_s2v_block(blocks[block_idx], x, pre_infer_out)
             if block_idx in self.injected_block_id:
-                if self.config["seq_parallel"]:
+                if self.config.get("seq_parallel", False):
                     x_full = self._gather_along_seq(x)
                     x_full = apply_audio_inject(blocks[block_idx], x_full, pre_infer_out, self.config)
                     x = self._chunk_along_seq(x_full)
@@ -87,7 +87,7 @@ class WanS2VTransformerInfer(WanTransformerInfer):
         return x
 
     def _s2v_self_attn(self, phase0, norm_x, seq_lens, freqs):
-        if self.config["seq_parallel"]:
+        if self.config.get("seq_parallel", False):
             b, s, n, d = norm_x.size(0), norm_x.size(1), self.num_heads, self.head_dim
             q = wan_rms_norm(phase0.self_attn_norm_q, mm_weight_autocast_nd(phase0.self_attn_q, norm_x)).view(b, s, n, d)
             k = wan_rms_norm(phase0.self_attn_norm_k, mm_weight_autocast_nd(phase0.self_attn_k, norm_x)).view(b, s, n, d)

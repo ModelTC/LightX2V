@@ -197,7 +197,7 @@ The pipeline is split by `disagg_mode` into three roles, with two Mooncake phase
 
 ## 2. Configuration
 
-Set routing and queue parameters in `disagg_config`. Mooncake reads the file selected by `MOONCAKE_CONFIG_PATH` (`configs/mooncake_config.json` in the scripts); corresponding `MOONCAKE_*` environment variables take precedence.
+Set routing and queue parameters in `disagg_config`. Mooncake reads the file selected by `MOONCAKE_CONFIG_PATH` (`configs/mooncake/mooncake_config.json` in the scripts); corresponding `MOONCAKE_*` environment variables take precedence.
 
 ### 2.1 T2V (Wan)
 
@@ -325,7 +325,7 @@ Encoder, Transformer, and Decoder select queue communication with `decentralized
 
 The internal request snapshot in `DisaggMixin` uses `data_bootstrap_room` to identify a transfer room and can carry `disagg_phase1_receiver_engine_rank` to select a Transformer rank; `save_result_path` specifies the output path. These are internal configuration/dispatch fields, not automatically HTTP request fields.
 
-The current [HTTP schema](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/server/schema.py) forbids extra fields, and `ImageTaskRequest` does not declare the room and rank fields above. For HTTP, use the existing request scripts in section 3. Queue-mode completion reporting, polling endpoints, and Decoder result delivery still need validation with a complete worker implementation.
+The current [HTTP schema](https://github.com/ModelTC/LightX2V/blob/main/lightx2v/server/schema.py) forbids extra fields, and `TaskRequest` does not declare the room and rank fields above. For HTTP, use the existing request scripts in section 3. Queue-mode completion reporting, polling endpoints, and Decoder result delivery still need validation with a complete worker implementation.
 
 ## 5. RDMA vs TCP
 
