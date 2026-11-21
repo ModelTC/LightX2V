@@ -125,6 +125,7 @@ class DmdCheckpointManager:
             runtime.optimizer.load_state_dict(state[runtime.spec.optimizer_attribute])
             runtime.scheduler.load_state_dict(state[runtime.spec.scheduler_attribute])
             logger.info("[checkpoint][resume][role] role={} model=restored optimizer=restored scheduler=restored", role)
+        self._restore_gan(state)
         logger.info("Restored training state from {} at iteration {}", state_path, state["iteration"])
 
     def _load_distributed_state(self, resume_ckpt_path):
@@ -162,13 +163,27 @@ class DmdCheckpointManager:
             set_state_dict(module, runtime.optimizer, model_state_dict=role_state["model"], optim_state_dict=role_state["optimizer"], options=options)
         for _, runtime in roles.items():
             runtime.scheduler.load_state_dict(trainer_state[runtime.spec.scheduler_attribute])
+        self._restore_gan(trainer_state)
         logger.info("Restored distributed DMD training state from {}", resume_ckpt_path)
 
-    def save_checkpoint(self, iteration, save_total_limit):
+    def _restore_gan(self, state):
+        gan = getattr(self, "gan", None)
+        if (gan is None) != ("gan" not in state):
+            raise ValueError("Checkpoint and current run have different GAN settings.")
+        if gan is not None:
+            gan.load_state_dict(state["gan"])
+
+    def _save_gan_state(self, state):
+        gan = getattr(self, "gan", None)
+        if gan is not None and is_main_process():
+            state["gan"] = gan.state_dict()
+
+    def save_checkpoint(self, iteration, save_total_limit, *, save_dir=None):
         if is_main_process():
             prune_checkpoints(self.output_train_dir, save_total_limit)
 
-        save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
+        if save_dir is None:
+            save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
         active_roles = ["student", "fake"]
         if getattr(self, "fake_real_model", None) is not None:
             active_roles.append("fake_real")
@@ -255,6 +270,7 @@ class DmdCheckpointManager:
             training_state["fake_real_optimizer"] = self.fake_real_optimizer.state_dict()
             training_state["fake_real_lr_scheduler"] = self.fake_real_lr_scheduler.state_dict()
         training_state.update(self._trick_checkpoint_metadata())
+        self._save_gan_state(training_state)
         if is_main_process():
             torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
         barrier()
@@ -297,6 +313,7 @@ class DmdCheckpointManager:
             trainer_state["fake_real_train_type"] = self.fake_real_train_type
             trainer_state["fake_real_lr_scheduler"] = self.fake_real_lr_scheduler.state_dict()
         trainer_state.update(self._trick_checkpoint_metadata())
+        self._save_gan_state(trainer_state)
         if is_main_process():
             os.makedirs(dist_state_path, exist_ok=True)
             torch.save(

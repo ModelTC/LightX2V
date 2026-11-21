@@ -10,7 +10,8 @@ _LAZY_EXPORTS = {
     "LingBotVideoModel": (".wan.lingbot_video", "LingBotVideoModel"),
     "LongCatImageModel": (".longcat_image.longcat_image", "LongCatImageModel"),
     "LongCatImageEditModel": (".longcat_image.longcat_image_edit", "LongCatImageEditModel"),
-    "MiniMaxH3T2AVModel": (".minimax_h3.minimax_h3_t2av", "MiniMaxH3T2AVModel"),
+    "MiniMaxH3FL2AVModel": (".minimax_h3.minimax_h3_fl2av", "MiniMaxH3FL2AVModel"),
+    "MiniMaxH3Ref2AVModel": (".minimax_h3.minimax_h3_ref2av", "MiniMaxH3Ref2AVModel"),
     "QwenImageModel": (".qwen_image.qwen_image", "QwenImageModel"),
     "QwenImage21Model": (".qwen_image.qwen_image_2_1", "QwenImage21Model"),
     "QwenImageEditModel": (".qwen_image.qwen_image_edit", "QwenImageEditModel"),
@@ -59,6 +60,7 @@ __all__ = [
     "Flux2KleinModel",
     "Flux2KleinEditModel",
     "LingBotVideoModel",
-    "MiniMaxH3T2AVModel",
+    "MiniMaxH3FL2AVModel",
+    "MiniMaxH3Ref2AVModel",
     "WanT2VModel",
 ]
