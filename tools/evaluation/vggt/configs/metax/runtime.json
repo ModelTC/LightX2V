@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "platform": "metax",
+  "device_type": "cuda",
+  "container_image": "lightx2v-vggt-metax-standalone:latest",
+  "python_executable": "python",
+  "environment": {
+    "PLATFORM": "metax_cuda",
+    "DTYPE": "BF16",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "HF_HUB_DISABLE_XET": "1",
+    "MACA_PATH": "/opt/maca",
+    "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"
+  },
+  "model_path_environment": {},
+  "docker_devices": [
+    "/dev/mxcd",
+    "/dev/dri"
+  ],
+  "visibility_environment": {
+    "MACA_VISIBLE_DEVICES": "{card}",
+    "CUDA_VISIBLE_DEVICES": "{card}",
+    "EVAL_PHYSICAL_CARD": "{card}"
+  },
+  "monitor_command": [
+    "python3",
+    "{project}/scripts/platform/metax/monitor.py",
+    "--card",
+    "{card}"
+  ],
+  "torch_namespace": "cuda",
+  "registration_modules": [],
+  "monitor_parser": "json",
+  "card_index_environment": "METAX_CARD",
+  "default_card": 0,
+  "autocast_dtype": "bfloat16",
+  "version_packages": [
+    "torch",
+    "transformers",
+    "numpy",
+    "scipy",
+    "Pillow",
+    "timm",
+    "kornia",
+    "trimesh",
+    "diffusers"
+  ],
+  "validation_status": "latest_evaluator_metax_smoke_pending",
+  "docker_device_args": [
+    "--device",
+    "/dev/mxcd",
+    "--device",
+    "/dev/dri",
+    "--mount",
+    "type=bind,src=/mnt/afs/jhz-high-eff-eva-mlu/models,dst=/mnt/afs/jhz-high-eff-eva-mlu/models,readonly",
+    "--mount",
+    "type=bind,src=/mnt/afs/jhz-high-eff-eva-mlu/deps,dst=/mnt/afs/jhz-high-eff-eva-mlu/deps,readonly"
+  ],
+  "idle_memory_mib_max": 900,
+  "requirements_file": "configs/metax/runtime-requirements.txt"
+}

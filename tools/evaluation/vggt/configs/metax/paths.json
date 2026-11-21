@@ -1,0 +1,7 @@
+{
+  "host_data_root": "/root/jianghaozhe/high-eff-eva/upstream/GSO",
+  "container_data_root": "/data",
+  "weights": {
+    "vggt": "models/facebook--VGGT-1B/860abec7937da0a4c03c41d3c269c366e82abdf9"
+  }
+}

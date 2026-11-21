@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "platform": "nvidia",
+  "device_type": "cuda",
+  "container_image": "",
+  "python_executable": "python",
+  "environment": {
+    "PLATFORM": "cuda",
+    "DTYPE": "BF16",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "HF_HUB_DISABLE_XET": "1"
+  },
+  "model_path_environment": {},
+  "docker_devices": [],
+  "visibility_environment": {
+    "CUDA_VISIBLE_DEVICES": "0",
+    "EVAL_PHYSICAL_CARD": "{card}"
+  },
+  "monitor_command": [
+    "python3",
+    "{project}/scripts/platform/nvidia/monitor.py",
+    "--card",
+    "{card}"
+  ],
+  "torch_namespace": "cuda",
+  "registration_modules": [],
+  "monitor_parser": "json",
+  "card_index_environment": "CUDA_CARD",
+  "default_card": 0,
+  "autocast_dtype": "bfloat16",
+  "version_packages": [
+    "torch",
+    "transformers",
+    "numpy",
+    "scipy",
+    "Pillow",
+    "timm",
+    "kornia",
+    "trimesh",
+    "diffusers"
+  ],
+  "docker_device_args": [
+    "--gpus",
+    "device={card}"
+  ],
+  "validation_status": "template_requires_nvidia_smoke"
+}
