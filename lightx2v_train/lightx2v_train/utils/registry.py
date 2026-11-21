@@ -17,12 +17,15 @@ class Register(MutableMapping):
     def __call__(self, target_or_name):
         if callable(target_or_name):
             return self.register(target_or_name)
-        else:
-            return lambda x: self.register(x, key=target_or_name)
+
+        def decorate(target):
+            return self.register(target, key=target_or_name)
+
+        return decorate
 
     def register(self, target, key=None):
         if not callable(target):
-            raise Exception(f"Error: {target} must be callable!")
+            raise TypeError(f"{target!r} must be callable.")
 
         if key is None:
             key = target.__name__
@@ -58,8 +61,7 @@ class Register(MutableMapping):
         return len(self._dict)
 
     def merge(self, other_register):
-        for key, value in other_register.items():
-            self[key] = value
+        self.update(other_register)
 
 
 _MODEL_MODULES = {
@@ -116,7 +118,6 @@ _SAMPLE_PROCESSOR_MODULES = {
     "qwen_image_2_1": "lightx2v_train.model_zoo.qwen_image.data_process",
 }
 
-
 _DATA_MODULES = {
     "image_dataset": "lightx2v_train.data.image_dataset",
     "cache_dataset": "lightx2v_train.data.cache_dataset",
@@ -143,7 +144,7 @@ def build_model(config):
     name = config["model"]["name"]
     _load_builtin(name, MODEL_REGISTER, _MODEL_MODULES)
     if name not in MODEL_REGISTER:
-        available = ", ".join(sorted(MODEL_REGISTER.keys()))
+        available = ", ".join(sorted(MODEL_REGISTER))
         raise ValueError(f"Unknown model {name!r}. Available models: {available}")
     return MODEL_REGISTER[name](config)
 
@@ -152,7 +153,7 @@ def build_trainer(config):
     name = "cache_build" if is_cache_build(config) else config["training"]["method"]
     _load_builtin(name, TRAINER_REGISTER, _TRAINER_MODULES)
     if name not in TRAINER_REGISTER:
-        available = ", ".join(sorted(TRAINER_REGISTER.keys()))
+        available = ", ".join(sorted(TRAINER_REGISTER))
         raise ValueError(f"Unknown trainer {name!r}. Available trainers: {available}")
     return TRAINER_REGISTER[name](config)
 
@@ -161,7 +162,7 @@ def build_inferencer(config):
     name = config["inference"]["method"]
     _load_builtin(name, INFERENCER_REGISTER, _INFERENCER_MODULES)
     if name not in INFERENCER_REGISTER:
-        available = ", ".join(sorted(INFERENCER_REGISTER.keys()))
+        available = ", ".join(sorted(INFERENCER_REGISTER))
         raise ValueError(f"Unknown inferencer {name!r}. Available inferencers: {available}")
     return INFERENCER_REGISTER[name](config)
 
@@ -173,7 +174,7 @@ def build_sample_processor(config):
     if name not in SAMPLE_PROCESSOR_REGISTER:
         if "name" not in processor_config:
             return None
-        available = ", ".join(sorted(SAMPLE_PROCESSOR_REGISTER.keys()))
+        available = ", ".join(sorted(SAMPLE_PROCESSOR_REGISTER))
         raise ValueError(f"Unknown sample processor {name!r}. Available processors: {available}")
     return SAMPLE_PROCESSOR_REGISTER[name](config)
 
@@ -181,42 +182,38 @@ def build_sample_processor(config):
 def build_data(config, train_or_val, sample_processor=None):
     data_config = config.get("data", {})
     if train_or_val not in data_config:
-        available_splits = ", ".join(repr(k) for k in sorted(data_config.keys()))
+        available_splits = ", ".join(repr(k) for k in sorted(data_config))
         raise ValueError(f"config['data'] has no key {train_or_val!r}. Available keys: {available_splits}")
-    data_config_split = dict(data_config[train_or_val])
+    split_config = dict(data_config[train_or_val])
+
     if is_cache_build(config):
-        data_config_split.update(
+        split_config.update(
             prompt_dropout_rate=0.0,
             dataset_repeat=1,
             shuffle=False,
             drop_last=False,
             decode_retries=1,
         )
-        # Cache construction may target val/test. Those splits normally do not
-        # use a distributed sampler, but caching must still partition work
-        # across data-parallel ranks.
-        data_config_split["distributed_cache_build"] = True
-        data_config_split.pop("max_samples", None)
-    data_name = data_config_split.get("name", "image_dataset")
+        # Validation cache building also needs to partition samples across ranks.
+        split_config["distributed_cache_build"] = True
+        split_config.pop("max_samples", None)
+
+    data_name = split_config.get("name", "image_dataset")
     if train_or_val == "train" and data_name in {"prompt_dataset", "cache_dataset"}:
         generation_shapes = config.get("training", {}).get("dmd", {}).get("generation_shapes")
         if generation_shapes is not None:
-            data_config_split["generation_shapes"] = generation_shapes
+            split_config["generation_shapes"] = generation_shapes
+
     _load_builtin(data_name, DATA_REGISTER, _DATA_MODULES)
     if data_name not in DATA_REGISTER:
-        available_names = ", ".join(sorted(DATA_REGISTER.keys()))
+        available_names = ", ".join(sorted(DATA_REGISTER))
         raise ValueError(f"Unknown data {data_name!r}. Available data: {available_names}")
-    kwargs = (
-        {
-            "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
-            "sample_processor": sample_processor,
-        }
-        if data_name == "cache_dataset"
-        else {
+
+    kwargs = {}
+    if data_name in {"cache_dataset", "image_dataset", "video_dataset"}:
+        kwargs = {
             "sample_processor": sample_processor,
             "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
         }
-        if data_name in {"image_dataset", "video_dataset"}
-        else {}
-    )
-    return DATA_REGISTER[data_name](data_config_split, train_or_val=train_or_val, **kwargs)
+
+    return DATA_REGISTER[data_name](split_config, train_or_val=train_or_val, **kwargs)
