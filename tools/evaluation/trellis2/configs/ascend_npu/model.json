@@ -8,5 +8,6 @@
     "ln_norm_type": "torch",
     "conv_type": "Default",
     "dit_quant_scheme": "Default",
-    "sparse_conv_backend": "torch"
+    "sparse_conv_backend": "torch",
+    "mesh_hole_fill_backend": "torch"
 }
