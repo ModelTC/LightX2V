@@ -8,6 +8,7 @@ This module handles AMD-specific optimizations including:
 """
 
 import sys
+import types
 
 import torch
 import torch.distributed as dist
@@ -49,7 +50,7 @@ class AiterSglKernelCompat:
         self._rms_norm = aiter_module.rms_norm
         logger.info("Using aiter as sgl_kernel backend (AMD ROCm optimized)")
 
-    def rmsnorm(self, input, weight, eps):
+    def rmsnorm(self, input, weight, eps, enable_pdl=False):
         """RMSNorm compatible with sgl_kernel.rmsnorm(input, weight, eps)"""
         return self._rms_norm(input, weight, eps)
 
@@ -126,6 +127,8 @@ class AmdRocmDevice:
         sgl_kernel = _get_aiter_sgl_kernel()
         if sgl_kernel is not None:
             sys.modules["sgl_kernel"] = sgl_kernel
+            # rms_norm_weight imports sgl_kernel.utils.is_arch_support_pdl; PDL is CUDA-only.
+            sys.modules["sgl_kernel.utils"] = types.SimpleNamespace(is_arch_support_pdl=lambda: False)
             # Update any module that already imported sgl_kernel. torch.ops and
             # torch.classes are ModuleType subclasses living in sys.modules whose
             # attributes are operator namespaces rather than imported modules, so
