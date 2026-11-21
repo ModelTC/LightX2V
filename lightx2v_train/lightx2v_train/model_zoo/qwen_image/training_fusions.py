@@ -33,6 +33,7 @@ class QwenTrainingAttnProcessor(QwenDoubleStreamAttnProcessor2_0):
         self.deterministic = deterministic
 
     def __call__(self, attn, hidden_states, encoder_hidden_states=None, encoder_hidden_states_mask=None, attention_mask=None, image_rotary_emb=None):
+        supported_backend = self._attention_backend in (None, "native") or (self.deterministic and self._attention_backend == "flash")
         if (
             not attn.training
             or not hidden_states.is_cuda
@@ -45,7 +46,7 @@ class QwenTrainingAttnProcessor(QwenDoubleStreamAttnProcessor2_0):
             or encoder_hidden_states_mask is not None
             or attention_mask is not None
             or self._parallel_config is not None
-            or self._attention_backend not in (None, "native")
+            or not supported_backend
         ):
             return super().__call__(attn, hidden_states, encoder_hidden_states, encoder_hidden_states_mask, attention_mask, image_rotary_emb)
 

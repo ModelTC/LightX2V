@@ -32,16 +32,10 @@ class Register(MutableMapping):
 
         builtin_module = self._builtin_modules.get(key)
         if builtin_module is not None and target.__module__ != builtin_module:
-            raise ValueError(
-                f"{key!r} belongs to built-in module {builtin_module!r}; "
-                f"cannot register {_qualified_name(target)}."
-            )
+            raise ValueError(f"{key!r} belongs to built-in module {builtin_module!r}; cannot register {_qualified_name(target)}.")
         if key in self._dict:
             previous = self._dict[key]
-            raise ValueError(
-                f"{key!r} is already registered by {_qualified_name(previous)}; "
-                f"cannot register {_qualified_name(target)}."
-            )
+            raise ValueError(f"{key!r} is already registered by {_qualified_name(previous)}; cannot register {_qualified_name(target)}.")
         self._dict[key] = target
         return target
 
