@@ -1,5 +1,7 @@
 import argparse
 
+from loguru import logger
+
 from lightx2v_train.data import build_data, build_sample_processor
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.plugins import load_plugins
@@ -12,7 +14,6 @@ from lightx2v_train.runtime import (
 from lightx2v_train.runtime.precision import configure_precision
 from lightx2v_train.trainers import build_trainer
 from lightx2v_train.utils.utils import check_val_is_enabled, is_train_cache_dataset
-from loguru import logger
 
 
 def parse_args():
