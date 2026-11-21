@@ -4454,8 +4454,8 @@
       },
       {
         "path": "dockerfiles/platforms/Dockerfile_metax_trellis2",
-        "bytes": 7272,
-        "sha256": "b7f0e0fca61244f1795bb13d4f5240c1fa43ba428daa47886afd34b70d38dd38"
+        "bytes": 7504,
+        "sha256": "a0546c0dc9d1b861af9ed5528e26f6c752be75dd44b5c011514a324619cd11e6"
       },
       {
         "path": "dockerfiles/platforms/Dockerfile_mi350",
@@ -7484,8 +7484,8 @@
       },
       {
         "path": "lightx2v/models/networks/trellis2/weights/loader.py",
-        "bytes": 3305,
-        "sha256": "79e0917fb11c88143f158a2c42ae0e98f1765bdac96e8710e1ef9fa1089a0391"
+        "bytes": 3321,
+        "sha256": "d91deb43b19e30dae2ec5320b1c3c487323105582c81590054331b783f663da7"
       },
       {
         "path": "lightx2v/models/networks/trellis2/weights/transformer_weights.py",
@@ -8704,8 +8704,8 @@
       },
       {
         "path": "lightx2v/models/runners/trellis2/trellis2_runner.py",
-        "bytes": 6044,
-        "sha256": "cd2159a8230eb22100ffd239fade1ca201577a2a4bc6b77c7f0c0dd3868bbed0"
+        "bytes": 6105,
+        "sha256": "72f5da162a033e0e34c99dbc1ffb70d74cf8e6cf975b1bb7eedd9298fbf64352"
       },
       {
         "path": "lightx2v/models/runners/vsr/utils/TCDecoder.py",
@@ -9699,8 +9699,8 @@
       },
       {
         "path": "lightx2v/models/video_encoders/hf/trellis2/mesh_extraction.py",
-        "bytes": 5945,
-        "sha256": "5cffa2ea30034ef0fa87f5d50f94adda8ab08170665b0b7fa18135d69d577006"
+        "bytes": 9746,
+        "sha256": "37a6a486a3fc61745db6eef82f4c9cd9b2db5cfb658d66f61f312ca6180781ef"
       },
       {
         "path": "lightx2v/models/video_encoders/hf/vid_recon.py",
