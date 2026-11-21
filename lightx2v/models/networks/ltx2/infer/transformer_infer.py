@@ -311,7 +311,7 @@ class LTX2TransformerInfer(BaseTransformerInfer):
                 tensor_fusion=False,
                 head_parallel=False,
                 attention_kwargs={},
-                valid_len=self.seq_p_valid_len,
+                valid_seq_len=self.seq_p_valid_len,
             )
             if aux_out is not None:
                 raise RuntimeError("LTX2 video self-attention received an unexpected auxiliary output.")
