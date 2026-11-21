@@ -1,0 +1,107 @@
+[
+  {
+    "path": "deps/ZhengPeng7--BiRefNet/BiRefNet_config.py",
+    "bytes": 298,
+    "sha256": "e7b8c2a74f6cea6a59553d517f71d47f2c1d90e670a13416af17c25fe2f3dc52"
+  },
+  {
+    "path": "deps/ZhengPeng7--BiRefNet/birefnet.py",
+    "bytes": 91896,
+    "sha256": "208771ae626f653d64128fbf2d6ac9f8e645c5cc5e286258a73ec3322bbfe5ef"
+  },
+  {
+    "path": "deps/ZhengPeng7--BiRefNet/config.json",
+    "bytes": 405,
+    "sha256": "c97ea21569daf66b205491a4635147dd3bc42c7c168b89d7d75b53f67ef548ae"
+  },
+  {
+    "path": "deps/ZhengPeng7--BiRefNet/handler.py",
+    "bytes": 4762,
+    "sha256": "b95f5806bfcd575ccff2a9f08816ae0e5d4df1e81b48797f9997f68b531404a5"
+  },
+  {
+    "path": "deps/ZhengPeng7--BiRefNet/model.safetensors",
+    "bytes": 444473596,
+    "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154"
+  },
+  {
+    "path": "deps/camenduru--dinov3-vitl16-pretrain-lvd1689m/config.json",
+    "bytes": 745,
+    "sha256": "135ecd23e34a70b6fbed8b083fdecb319b7e3a54e3d849258bbe4ddcf1783bb5"
+  },
+  {
+    "path": "deps/camenduru--dinov3-vitl16-pretrain-lvd1689m/model.safetensors",
+    "bytes": 1212559808,
+    "sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179"
+  },
+  {
+    "path": "deps/camenduru--dinov3-vitl16-pretrain-lvd1689m/preprocessor_config.json",
+    "bytes": 585,
+    "sha256": "960c41d1f3a7778b936365769a2d90550b318a6c0a53a0296957adacfe5e0dd7"
+  },
+  {
+    "path": "models/microsoft--TRELLIS-image-large/459ee480d7545f873a0768364bc5f5443eb1ff5e/ckpts/ss_dec_conv3d_16l8_fp16.json",
+    "bytes": 245,
+    "sha256": "646781293f1cda74720de85d1cef50a957fb4aebd9a4bd014e454e32f2330ac5"
+  },
+  {
+    "path": "models/microsoft--TRELLIS-image-large/459ee480d7545f873a0768364bc5f5443eb1ff5e/ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
+    "bytes": 147591972,
+    "sha256": "1c76d4a40519aa2d711cc263a8404105231ac26db31d946bed48b84fee79009a"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/shape_dec_next_dc_f16c32_fp16.json",
+    "bytes": 678,
+    "sha256": "5f1b856dffce79466fb18f5f0eefc08f08c673b24b3c05b20359c0b6d318a209"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/shape_dec_next_dc_f16c32_fp16.safetensors",
+    "bytes": 948490494,
+    "sha256": "e3b718d3e43e4f8780e9a24ac6fff231811a67e3b058e336e10fe654c911d581"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/slat_flow_img2shape_dit_1_3B_512_bf16.json",
+    "bytes": 458,
+    "sha256": "ddbd7a1d34ce9a8e7af2f6ef9ae686d9ab49f69e62dacb98d8409b511cdbd5e2"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/slat_flow_img2shape_dit_1_3B_512_bf16.safetensors",
+    "bytes": 2584574424,
+    "sha256": "ec5e0917ef9b7e25ad51dffc7d19687a42019871f94239f2fa7f86264c55b70f"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/slat_flow_imgshape2tex_dit_1_3B_512_bf16.json",
+    "bytes": 458,
+    "sha256": "3093796257a62f838d2e5578ac4580ca3b7d88d10b87d348065d3fdfcc4c2077"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/slat_flow_imgshape2tex_dit_1_3B_512_bf16.safetensors",
+    "bytes": 2584672728,
+    "sha256": "8371aa1c5d13be79dcd5ddfd2cf3835e902e204dc34427169a1c702828e1a94d"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/ss_flow_img_dit_1_3B_64_bf16.json",
+    "bytes": 467,
+    "sha256": "6cdfb636854f60ffcadd8c49244169cd449f34c5ccdb55b5ff7c04678f9c399e"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/ss_flow_img_dit_1_3B_64_bf16.safetensors",
+    "bytes": 2584426920,
+    "sha256": "ca01377c485bec418076d38ee80166d32dc776d744f2553b835cba1e97a7abf6"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/tex_dec_next_dc_f16c32_fp16.json",
+    "bytes": 705,
+    "sha256": "22074e4ab5b28e2b72d33a3fe61bf416134b89e12d0fc5c729f37da75da0c4d1"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/tex_dec_next_dc_f16c32_fp16.safetensors",
+    "bytes": 948458812,
+    "sha256": "97ea69addea2ecd9312910f5f548234665eef51c088386180b7cd5b258645e3c"
+  },
+  {
+    "path": "models/microsoft--TRELLIS.2-4B/af44b45f2e35a493886929c6d786e563ec68364d/pipeline.json",
+    "bytes": 4186,
+    "sha256": "222c359ab1ed9bc6735a640a34f95d47f8681b9bc4aaa101bfb80274676253c6"
+  }
+]

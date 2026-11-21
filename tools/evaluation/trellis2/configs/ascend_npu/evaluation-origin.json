@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "model": "trellis2",
+  "platform": "ascend_npu",
+  "status": "not_yet_evaluated",
+  "runs": {},
+  "project_source_lock_sha256": "1282e36e05f335ff481e1df1771f2739fd4c409dd2481083574b614f9fae7f03"
+}

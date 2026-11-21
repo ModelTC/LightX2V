@@ -1,0 +1,13 @@
+# Local history and generated/dependency assets must never enter evaluation PRs.
+/history/
+/artifacts/
+/cache/
+/runtime/
+/sources/
+/data/
+/WORK_LOG.md
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
