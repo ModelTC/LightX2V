@@ -186,7 +186,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=False,
                 attention_kwargs={},
-                valid_len=self.seq_p_valid_len,
+                valid_seq_len=self.seq_p_valid_len,
             )
             if txt_attn is None:
                 raise RuntimeError("HunyuanVideo-1.5 joint attention expected a text auxiliary output.")

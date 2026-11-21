@@ -131,7 +131,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=True,
                 attention_kwargs={"model_cls": model_cls},
-                valid_len=self.seq_p_valid_len,
+                valid_seq_len=self.seq_p_valid_len,
             )
             if txt_attn_output is None:
                 raise RuntimeError("Flux2 double-stream attention expected a text auxiliary output.")
@@ -241,7 +241,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=True,
                 attention_kwargs={"model_cls": model_cls},
-                valid_len=self.seq_p_valid_len,
+                valid_seq_len=self.seq_p_valid_len,
             )
             if txt_attn_output is None:
                 raise RuntimeError("Flux2 single-stream attention expected a text auxiliary output.")

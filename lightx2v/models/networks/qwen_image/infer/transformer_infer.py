@@ -204,7 +204,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 head_parallel=self.enable_head_parallel,
                 aux_first=True,
                 attention_kwargs={},
-                valid_len=self.seq_p_valid_len,
+                valid_seq_len=self.seq_p_valid_len,
             )
             if txt_attn_output is None:
                 raise RuntimeError("Qwen image joint attention expected a text auxiliary output.")

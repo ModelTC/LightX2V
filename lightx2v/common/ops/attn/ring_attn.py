@@ -59,7 +59,7 @@ class RingAttnWeight(AttnWeightTemplate):
         head_parallel=False,
         aux_first=False,
         attention_kwargs=None,
-        valid_len=None,
+        valid_seq_len=None,
     ):
         """Run dense Ring attention over one local main sequence.
 
@@ -68,7 +68,7 @@ class RingAttnWeight(AttnWeightTemplate):
         ``aux_*`` tensors are optional replicated auxiliary regions. Packed-varlen,
         causal, masked, and general cross-attention layouts are not supported.
         ``tensor_fusion`` packs K/V into one Ring communication payload.
-        ``valid_len`` is the number of real tokens in the global main sequence
+        ``valid_seq_len`` is the number of real tokens in the global main sequence
         when the caller padded it to a multiple of the group size; the trailing
         padding is then excluded from attention keys and values.
         """
@@ -100,7 +100,7 @@ class RingAttnWeight(AttnWeightTemplate):
             aux_first=aux_first,
             kv_fusion=tensor_fusion,
             quant_scheme=quant_scheme,
-            valid_len=valid_len,
+            valid_seq_len=valid_seq_len,
         )
         aux_len = 0 if aux_q is None else aux_q.shape[0]
         main_output, aux_output = split_main_aux_output(output, q.shape[0], aux_len, aux_first)
@@ -223,7 +223,7 @@ class RingAttnWeight(AttnWeightTemplate):
         aux_first,
         kv_fusion,
         quant_scheme,
-        valid_len=None,
+        valid_seq_len=None,
     ):
         q = q.contiguous()
         k = k.contiguous()
@@ -246,8 +246,8 @@ class RingAttnWeight(AttnWeightTemplate):
         comm = RingComm(seq_p_group)
         world_size = comm.world_size
         local_len = k.shape[0]
-        if valid_len is not None and not 0 < valid_len <= local_len * world_size:
-            raise ValueError(f"valid_len must be in [1, {local_len * world_size}], got {valid_len}.")
+        if valid_seq_len is not None and not 0 < valid_seq_len <= local_len * world_size:
+            raise ValueError(f"valid_seq_len must be in [1, {local_len * world_size}], got {valid_seq_len}.")
         out = None
         lse = None
         for step in range(world_size):
@@ -263,10 +263,10 @@ class RingAttnWeight(AttnWeightTemplate):
                 comm.commit()
 
             block_k, block_v = current_k, current_v
-            if valid_len is not None:
+            if valid_seq_len is not None:
                 # The block received at this step was produced by rank (rank - step).
                 source_rank = (comm.rank - step) % world_size
-                block_valid = max(0, min(local_len, valid_len - source_rank * local_len))
+                block_valid = max(0, min(local_len, valid_seq_len - source_rank * local_len))
                 block_k, block_v = block_k[:block_valid], block_v[:block_valid]
             if step + 1 == world_size and aux_k is not None:
                 block_k = torch.cat((block_k, aux_k), dim=0)
