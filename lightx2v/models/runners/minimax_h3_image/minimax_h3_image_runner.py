@@ -47,6 +47,13 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             raise ValueError("MiniMax-H3-Image uses one positive branch without negative prompts or guidance")
         super().__init__(config)
 
+    def create_input_info(self, request_data):
+        input_info = super().create_input_info(request_data)
+        quality = input_info.output_compression
+        if type(quality) is not int or not 0 <= quality <= 100:
+            raise ValueError("output_compression must be an integer between 0 and 100")
+        return input_info
+
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
         if type(self) is not MiniMaxH3ImageRunner or self.config.get("model_cls") != "minimax_h3_image":
@@ -376,7 +383,7 @@ class MiniMaxH3ImageRunner(DefaultRunner):
             method = self.config.get("save_image_method", "opencv")
             with no_sync_profiling(), ProfilingContext4DebugL1(f"Save Image ({method}): {output_path}", time_unit="ms"):
                 image = self._prepare_output_image(value, method)
-                save_image(image, output_path, method)
+                save_image(image, output_path, method, output_compression=self.input_info.output_compression)
             logger.info(f"✅ Image saved successfully to: {output_path} ✅")
         return {"images": None}
 

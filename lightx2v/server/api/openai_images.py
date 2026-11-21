@@ -10,6 +10,7 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 from lightx2v.models.runners.registry import get_model_spec
+from lightx2v.utils.image_output import image_format_for_bytes, image_format_for_path
 from lightx2v.utils.request_spec import create_request_model, is_list_type
 
 from ..schema import TaskRequest, Usage, hide_request_defaults
@@ -64,7 +65,7 @@ def _build_url_response(request: Request, task_id: str, image_bytes: bytes) -> s
     services = get_services()
     assert services.file_service is not None, "File service is not initialized"
 
-    file_name = f"{task_id}.png"
+    file_name = f"{task_id}.{image_format_for_bytes(image_bytes)}"
     output_path = services.file_service.output_video_dir / file_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(image_bytes)
@@ -80,23 +81,27 @@ def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, r
         base64_start = time.perf_counter()
         b64_json = base64.b64encode(image_bytes).decode("utf-8")
         base64_elapsed_ms = (time.perf_counter() - base64_start) * 1000
-        response = OpenAIImageResponse(created=int(time.time()), data=[{"b64_json": b64_json}], output_format="png", usage=usage_obj, size=size)
+        response = OpenAIImageResponse(created=int(time.time()), data=[{"b64_json": b64_json}], output_format=image_format_for_bytes(image_bytes), usage=usage_obj, size=size)
         total_elapsed_ms = (time.perf_counter() - total_start) * 1000
         logger.info(
-            f"Task {task_id} OpenAI image response build cost total={total_elapsed_ms:.2f} ms base64={base64_elapsed_ms:.2f} ms format=b64_json png_bytes={len(image_bytes)} b64_chars={len(b64_json)}"
+            f"Task {task_id} OpenAI image response build cost total={total_elapsed_ms:.2f} ms base64={base64_elapsed_ms:.2f} ms format=b64_json image_bytes={len(image_bytes)} b64_chars={len(b64_json)}"
         )
         return response
 
     url_start = time.perf_counter()
     url = _build_url_response(request, task_id, image_bytes)
     url_elapsed_ms = (time.perf_counter() - url_start) * 1000
-    response = OpenAIImageResponse(created=int(time.time()), data=[{"url": url}], output_format="png", usage=usage_obj, size=size)
+    response = OpenAIImageResponse(created=int(time.time()), data=[{"url": url}], output_format=image_format_for_bytes(image_bytes), usage=usage_obj, size=size)
     total_elapsed_ms = (time.perf_counter() - total_start) * 1000
-    logger.info(f"Task {task_id} OpenAI image response build cost total={total_elapsed_ms:.2f} ms url_write={url_elapsed_ms:.2f} ms format=url png_bytes={len(image_bytes)}")
+    logger.info(f"Task {task_id} OpenAI image response build cost total={total_elapsed_ms:.2f} ms url_write={url_elapsed_ms:.2f} ms format=url image_bytes={len(image_bytes)}")
     return response
 
 
 def _build_image_task_request(body: OpenAIImageRequest, request_type, *, task: str | None = None) -> TaskRequest:
+    try:
+        image_format_for_path(getattr(body, "save_result_path", None))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if body.n != 1:
         raise HTTPException(status_code=400, detail="Only n=1 is currently supported")
     if not body.prompt.strip():

@@ -9,7 +9,7 @@ from loguru import logger
 from lightx2v.utils.parallel import init_parallel
 from lightx2v.utils.set_config import build_startup_config
 
-from .pipeline_image_encode import encode_pipeline_return_to_png_bytes
+from .pipeline_image_encode import encode_pipeline_return_to_image_bytes
 
 
 class TorchrunInferenceWorker:
@@ -125,7 +125,7 @@ class TorchrunInferenceWorker:
             try:
                 outputs = self.runner.get_outputs(input_info, pipeline_return)
                 if memory_result and any(output.type == "image" for output in outputs):
-                    png = encode_pipeline_return_to_png_bytes(pipeline_return)
+                    png = encode_pipeline_return_to_image_bytes(pipeline_return, input_info.save_result_path, getattr(input_info, "output_compression", 95))
                     if png is None:
                         raise RuntimeError("Image inference did not return an encodable image.")
                     image = next(output for output in outputs if output.type == "image")
