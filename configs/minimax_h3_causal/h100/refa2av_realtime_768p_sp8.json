@@ -27,7 +27,9 @@
   "scheduler_type": "renoise",
   "dit_original_ckpt": "/data/zhangbilang/models/MiniMaxAI/minimax_h3_causal/SekoTalk-H3-v0.1.0.pt",
   "ar_config": {
-    "kv_cache_max_t_rope": 7,
+    "latest_chunk_num": 2,
+    "audio_latest_chunk_num": 9,
+    "kv_cache_max_t_rope": 9,
     "sink_text_condition": true,
     "sink_ref_condition": true,
     "motion_prompt_origin": 20480,

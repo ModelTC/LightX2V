@@ -14,19 +14,20 @@ class CleanAttentionPolicy:
     num_frame_per_chunk: int = 5
     sink_chunk_num: int = 1
     latest_chunk_num: int = 2
-    kv_cache_max_t_rope: int = 7
+    audio_latest_chunk_num: int = 9
+    kv_cache_max_t_rope: int = 9
     sink_text_condition: bool = True
     sink_ref_condition: bool = True
     motion_prompt_origin: int = 20480
     media_origin: int = 30000
 
     def __post_init__(self):
-        if self.num_frame_per_chunk != 5 or self.sink_chunk_num != 1 or self.latest_chunk_num < 1:
-            raise ValueError("H3 v0.1.0 requires chunk=5, sink=1, latest>=1")
+        if self.num_frame_per_chunk != 5 or self.sink_chunk_num != 1:
+            raise ValueError("H3 v0.1.0 requires chunk=5 and sink=1")
         if self.motion_prompt_origin is None or self.media_origin is None:
             raise ValueError("On-demand motion encoding requires fixed motion_prompt_origin and media_origin")
-        if self.kv_cache_max_t_rope < self.sink_chunk_num + self.latest_chunk_num - 1:
-            raise ValueError("CleanAR rolling RoPE must keep sink and recent slots disjoint")
+        if not 1 <= self.latest_chunk_num <= self.audio_latest_chunk_num <= self.kv_cache_max_t_rope:
+            raise ValueError("H3 history requires 1 <= latest_chunk_num <= audio_latest_chunk_num <= kv_cache_max_t_rope")
 
 
 def build_chunk_specs(num_latent_frames, num_audio_latents, policy):
@@ -125,6 +126,10 @@ class MiniMaxH3CleanStreamingPlan:
             video.stop + AUDIO_CHANNELS * audio.stop,
         )
 
+    def chunk_video_rows(self, chunk_index: int) -> int:
+        video, _ = self.chunk_slices(chunk_index)
+        return video.stop - video.start
+
     def entry_position_ids(self, key: CleanCacheKey) -> torch.Tensor:
         kind, index = key
         if key == GLOBAL_KEY:
@@ -183,8 +188,7 @@ class MiniMaxH3CleanStreamingPlan:
 
     def chunk_layout(self, chunk_index: int) -> MiniMaxH3PackedSequence:
         positions = self.chunk_position_ids(chunk_index, chunk_index)
-        video_slice, _ = self.chunk_slices(chunk_index)
-        video_rows = video_slice.stop - video_slice.start
+        video_rows = self.chunk_video_rows(chunk_index)
         count = positions.shape[0]
         return MiniMaxH3PackedSequence(
             sequence_length=count,
@@ -219,9 +223,11 @@ class MiniMaxH3CleanStreamingPlan:
         origin_chunk = sinks[0]
         return sinks, origin_chunk, current_chunk_index - origin_chunk
 
-    def chunk_position_ids(self, chunk_index: int, current_chunk_index: int) -> torch.Tensor:
+    def chunk_position_ids(self, chunk_index: int, current_chunk_index: int, *, audio_only: bool = False) -> torch.Tensor:
         """Map one media chunk onto the active segment's bounded RoPE clock."""
         positions = self.entry_position_ids(chunk_key(chunk_index))
+        if audio_only:
+            positions = positions[self.chunk_video_rows(chunk_index) :]
         sinks, origin_chunk, current_local_index = self._segment_rope_window(current_chunk_index)
         source_origin = self.entry_position_ids(chunk_key(origin_chunk))[0, 0]
         target_origin = self.entry_position_ids(chunk_key(0))[0, 0]
@@ -250,30 +256,33 @@ class MiniMaxH3CleanStreamingPlan:
         keys: tuple[CleanCacheKey, ...],
         current_chunk_index: int,
     ) -> torch.Tensor:
-        positions = [self.chunk_position_ids(key[1], current_chunk_index) if key[0] == "chunk" else self.entry_position_ids(key) for key in keys]
+        positions = []
+        for key in keys:
+            kind, index = key
+            if kind in {"chunk", "audio_chunk"}:
+                positions.append(self.chunk_position_ids(index, current_chunk_index, audio_only=kind == "audio_chunk"))
+            else:
+                positions.append(self.entry_position_ids(key))
         if positions:
             return torch.cat(positions)
         return self.global_position_ids.new_empty((0, 3))
 
-    def clean_history_indices(self, chunk_index: int) -> tuple[int, ...]:
-        segment = self.segment_index(chunk_index)
-        sinks = self.segment_sink_indices(segment)
-        history = {index for index in sinks if index < chunk_index}
-        # Grow history within this motion, retaining only its bridge from the previous one.
-        history.update(
-            range(
-                max(sinks[0], chunk_index - self.policy.latest_chunk_num + 1),
-                chunk_index,
-            )
-        )
-        return tuple(sorted(history))
+    def media_prefix_keys(self, chunk_index: int) -> tuple[CleanCacheKey, ...]:
+        """Keep the full motion bridge, then recent chunks in chronological order."""
+        if chunk_index == 0:
+            return ()
+        (bridge,) = self.segment_sink_indices(self.segment_index(chunk_index))
+        audio_start = max(bridge + 1, chunk_index - self.policy.audio_latest_chunk_num + 1)
+        video_start = chunk_index - self.policy.latest_chunk_num + 1
+        recent = (("chunk" if index >= video_start else "audio_chunk", index) for index in range(audio_start, chunk_index))
+        return (chunk_key(bridge), *recent)
 
     def clean_prefix_keys(self, chunk_index: int) -> tuple[CleanCacheKey, ...]:
-        return self.fixed_keys() + tuple(chunk_key(index) for index in self.clean_history_indices(chunk_index))
+        return self.fixed_keys() + self.media_prefix_keys(chunk_index)
 
     def noisy_prefix_keys(self, chunk_index: int) -> tuple[CleanCacheKey, ...]:
         segment = self.segment_index(chunk_index)
-        return self.fixed_keys() + (prompt_key(segment),) + tuple(chunk_key(index) for index in self.clean_history_indices(chunk_index))
+        return self.fixed_keys() + (prompt_key(segment),) + self.media_prefix_keys(chunk_index)
 
 
 def build_clean_streaming_plan_from_geometry(

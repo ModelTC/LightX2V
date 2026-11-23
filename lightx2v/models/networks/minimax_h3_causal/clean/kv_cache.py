@@ -4,6 +4,7 @@ import torch
 
 from lightx2v.common.ops.attn.sage_attn import SageAttn2Weight, SageTransposedV
 from lightx2v.common.ops.rope.torch_rope import TorchRealRope
+from lightx2v.models.networks.minimax_h3.packing import AUDIO_CHANNELS
 
 from .fp8_communication import FP8QKV
 from .kv_cache_kernel import gather_rope_qkv, gather_transposed_v
@@ -43,10 +44,14 @@ class MiniMaxH3CleanKVCache:
         self._workspaces = [None] * num_blocks
         self._workspace_generation = [-1] * num_blocks
         self._generation = 0
-        self._fixed_rows = plan.global_position_ids.shape[0] + plan.reference_position_ids.shape[0]
+        _, _, audio_start, audio_end = plan.chunk_specs.unbind(dim=1)
+        max_audio_rows = AUDIO_CHANNELS * int((audio_end - audio_start).max())
+        extra_audio_rows = (plan.policy.audio_latest_chunk_num - plan.policy.latest_chunk_num) * max_audio_rows
+        fixed_rows = plan.global_position_ids.shape[0] + plan.reference_position_ids.shape[0]
+        self._base_capacity = fixed_rows + self._num_chunk_slots * self._chunk_rows + extra_audio_rows
         # Only the first motion prompt is encoded here. Later prompts can grow
         # the workspace when their chunk begins.
-        self._workspace_capacity = self._fixed_rows + plan.prompt_position_ids[0].shape[0] + self._num_chunk_slots * self._chunk_rows
+        self._workspace_capacity = self._base_capacity + plan.prompt_position_ids[0].shape[0]
 
     def prepare(
         self,
@@ -72,10 +77,10 @@ class MiniMaxH3CleanKVCache:
                         self._next_chunk_slot = (slot + 1) % self._num_chunk_slots
                         break
                 else:
-                    raise RuntimeError("CleanAR has no free history slot; finish the previous chunk before committing another")
+                    raise RuntimeError("CleanAR has no free history slot for the current chunk")
             elif is_prompt:
                 rows = self.plan.entry_position_ids(entry_key).shape[0]
-                self._workspace_capacity = max(self._workspace_capacity, self._fixed_rows + rows + self._num_chunk_slots * self._chunk_rows)
+                self._workspace_capacity = max(self._workspace_capacity, self._base_capacity + rows)
         self._prefix_keys = prefix_keys
         self._entry_key = entry_key
         self._persist = persist
@@ -193,14 +198,21 @@ class MiniMaxH3CleanKVCache:
         self._entry_key = None
         self._persist = False
 
-    def finish_chunk(self, chunk_index: int) -> None:
-        next_chunk = chunk_index + 1
-        keep_chunks = set(self.plan.clean_history_indices(next_chunk)) if next_chunk < self.plan.num_chunks else set()
+    def retain_history_for(self, chunk_index: int) -> None:
+        keep = set(self.plan.media_prefix_keys(chunk_index))
+        for key in self._chunk_slots.keys() - keep:
+            audio_key = ("audio_chunk", key[1])
+            if audio_key in keep:
+                # The full slot will be reused. Only its stereo audio suffix survives.
+                start = self.plan.chunk_video_rows(key[1])
+                for block in self._buffers:
+                    block[audio_key] = tuple(tensor[start:].clone() for tensor in block[key])
+            del self._chunk_slots[key]
+
         for block in self._buffers:
             for key in tuple(block):
-                if key[0] == "chunk" and key[1] not in keep_chunks:
+                if key[0] in {"chunk", "audio_chunk"} and key not in keep:
                     del block[key]
-        self._chunk_slots = {key: slot for key, slot in self._chunk_slots.items() if key[1] in keep_chunks}
 
     def clear(self) -> None:
         self._buffers.clear()
