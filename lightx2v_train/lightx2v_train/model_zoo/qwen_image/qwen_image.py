@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import torch
 from diffusers import AutoencoderKLQwenImage, QwenImagePipeline, QwenImageTransformer2DModel
 from diffusers.image_processor import VaeImageProcessor
+from torch.utils.checkpoint import checkpoint
 
 from lightx2v_train.model_capabilities import ConsistencyModelCapability, DistributionMatchingCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
@@ -15,6 +16,14 @@ from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
 from ..base import BaseModel
+
+
+def _block_indices(indices, block_count, option):
+    if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < block_count for i in indices):
+        raise ValueError(f"{option} must be a list of zero-based block indices below {block_count}.")
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"{option} contains duplicate block indices.")
+    return set(indices)
 
 
 @dataclass
@@ -161,18 +170,40 @@ class QwenImageModel(BaseModel):
         # the corresponding velocity noise - x_0.
         return "velocity"
 
+    def set_lora_trainable(self):
+        super().set_lora_trainable()
+        ops = self.config.get("runtime", {}).get("ops", {})
+        attention = ops.get("attention")
+        deterministic = isinstance(attention, dict) and attention.get("deterministic", False)
+        fusions = ops.get("qwen_image_fusions", [])
+        if (fusions or deterministic) and self.config["model"]["name"] == "qwen_image" and get_backend().name == "metax_cuda":
+            from .training_fusions import configure_training_fusions
+
+            configure_training_fusions(self.transformer, fusions, deterministic)
+
+    def enable_gradient_checkpointing(self):
+        indices = self.config.get("training", {}).get("gradient_checkpointing_blocks")
+        if indices is None:
+            return super().enable_gradient_checkpointing()
+
+        blocks = self.transformer.transformer_blocks
+        selected = {blocks[i] for i in _block_indices(indices, len(blocks), "gradient_checkpointing_blocks")}
+
+        def checkpoint_selected(block, *args, **kwargs):
+            # Both paths run Module.__call__, including FSDP's unshard hooks.
+            if block in selected:
+                return checkpoint(block, *args, use_reentrant=False, **kwargs)
+            return block(*args, **kwargs)
+
+        self.transformer.enable_gradient_checkpointing(gradient_checkpointing_func=checkpoint_selected)
+
     def fsdp2_shard_plan(self, fsdp_config):
         reshard_config = fsdp_config["reshard_after_forward"]
-        return [
-            {
-                "modules": self.transformer.transformer_blocks,
-                "reshard_after_forward": reshard_config["block_reshard"],
-            },
-            {
-                "module": self.transformer,
-                "reshard_after_forward": reshard_config["root_reshard"],
-            },
-        ]
+        blocks = self.transformer.transformer_blocks
+        keep = _block_indices(reshard_config.get("keep_unsharded_blocks", []), len(blocks), "keep_unsharded_blocks")
+        plan = [{"module": block, "reshard_after_forward": False if index in keep else reshard_config["block_reshard"]} for index, block in enumerate(blocks)]
+        plan.append({"module": self.transformer, "reshard_after_forward": reshard_config["root_reshard"]})
+        return plan
 
     def _latent_statistics(self, latents):
         config = self.vae.config
