@@ -32,6 +32,7 @@ from .official_pdmd_core import (
     student_objective,
     student_prediction,
 )
+from .rollout_schedule import rollout_shifts, validate_rollout_schedule
 
 
 def move_tensors(value, device):
@@ -97,6 +98,7 @@ def validate_official_pdmd_config(config):
     from .dmd2_gan import validate_gan_config
 
     validate_gan_config(config)
+    validate_rollout_schedule(config)
 
 
 class OfficialH3PdmdTraining:
@@ -109,6 +111,7 @@ class OfficialH3PdmdTraining:
         self.accum = int(trainer.gradient_accumulation_iters)
         self.seed = int(trainer.config.get("seed", 42))
         self.cached = []
+        self.active_rollout_shifts = None
         self.consumed_microbatches = 0
         self.route_loss_scale = lambda microbatch: 1.0
         self.gan = None
@@ -196,8 +199,33 @@ class OfficialH3PdmdTraining:
         os.replace(pending, directory / f"official_pdmd.rank{self.rank():05d}.pt")
         barrier()
         if is_main_process():
+            if self.dmd.get("rollout_shift_schedule"):
+                (directory / "rollout_schedule.json").write_text(json.dumps({
+                    "completed_updates": iteration,
+                    "num_inference_steps": t.num_inference_steps,
+                    "last_update_shifts": self.active_rollout_shifts,
+                    "next_update_shifts": rollout_shifts(self.dmd, iteration),
+                    "schedule": self.dmd["rollout_shift_schedule"],
+                }, indent=2) + "\n", encoding="utf-8")
             (directory / "official_pdmd.complete").write_text(f"{iteration}\n", encoding="utf-8")
         barrier()
+
+    def _set_rollout_schedule(self, completed_updates):
+        shifts = rollout_shifts(self.dmd, completed_updates)
+        if shifts == self.active_rollout_shifts:
+            return
+        if self.active_rollout_shifts is not None and self.cached:
+            raise RuntimeError("Cannot replace a rollout schedule while a student trajectory is pending")
+        t = self.trainer
+        self.video_grid = rollout_grid(t.num_inference_steps, shifts[0], t.student.device,
+                                       sigmas=self.dmd.get("official_rollout_sigmas"))
+        self.audio_grid = rollout_grid(t.num_inference_steps, shifts[1], t.student.device)
+        if self.dmd.get("rollout_shift_schedule"):
+            # Export/validate the shifts used by this checkpoint without changing
+            # the immutable config that identifies the full training recipe.
+            t.student.video_shift, t.student.audio_shift = shifts
+            logger.info("[pdmd_official][schedule] next_update={} video_shift={} audio_shift={}", completed_updates + 1, *shifts)
+        self.active_rollout_shifts = shifts
 
     def _trajectory(self, sample, iteration, slot):
         t = self.trainer
@@ -421,6 +449,9 @@ class OfficialH3PdmdTraining:
             raise ValueError("official PDMD requires a sampler with an explicit microbatch cursor")
         sampler.configure_from_microbatch_offset(start_microbatch=self.consumed_microbatches, gradient_accumulation_iters=self.accum, fake_update_ratio=self.critic_steps)
         self.route_loss_scale = getattr(sampler, "cursor_microbatch_loss_scale", self.route_loss_scale)
+        # A saved checkpoint describes the last completed update. Select that
+        # phase before restoring metadata, then advance before the next update.
+        self._set_rollout_schedule(max(0, iteration - 1))
         t.setup(resume_ckpt_path=checkpoint)
         if self.gan_real_stream is not None:
             from .dmd2_gan import Dmd2GanObjective
@@ -435,10 +466,6 @@ class OfficialH3PdmdTraining:
             )
         self._validate_wan_residency()
         self.cached = move_tensors(self.cached, t.student.device)
-        self.video_grid = rollout_grid(
-            t.num_inference_steps, float(self.dmd.get("official_rollout_video_shift", 1.0)),
-            t.student.device, sigmas=self.dmd.get("official_rollout_sigmas"))
-        self.audio_grid = rollout_grid(t.num_inference_steps, float(self.dmd.get("official_rollout_audio_shift", 1.0)), t.student.device)
         if getattr(t, "infer_every_iters", None):
             t.inferencer.set_data(t.dataloader_val)
             if iteration == 0 and getattr(t, "infer_config", {}).get("run_at_start", False):
@@ -463,6 +490,7 @@ class OfficialH3PdmdTraining:
         samples = t._iter_train_samples()
         last_saved = iteration if checkpoint is not None else -1
         while iteration < t.max_train_iters:
+            self._set_rollout_schedule(iteration)
             t.student.on_iteration_start(iteration)
             role, metrics = self._update(samples, iteration)
             iteration += 1
