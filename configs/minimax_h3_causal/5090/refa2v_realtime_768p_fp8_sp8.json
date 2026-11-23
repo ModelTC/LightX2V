@@ -40,7 +40,9 @@
   "video_vae_quant_scheme": "fp8-f16-accum",
   "video_vae_quantized_ckpt": "/data/zhangbilang/models/minimax_h3_causal/minimax_h3_video_vae_fp8_f16_accum_bias_fp16.safetensors",
   "ar_config": {
-    "kv_cache_max_t_rope": 7,
+    "latest_chunk_num": 2,
+    "audio_latest_chunk_num": 9,
+    "kv_cache_max_t_rope": 9,
     "sink_text_condition": true,
     "sink_ref_condition": true,
     "motion_prompt_origin": 20480,
