@@ -448,7 +448,14 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             self.driving_audio = MiniMaxH3StreamingDrivingAudio(self.audio_vae, mono=self.config.get("audio_mono", False))
         emitted_chunk = 0
         with ExitStack() as decoders:
-            video_decoder = MiniMaxH3StreamingVideoDecoder(self.video_vae, self.request_num_frames, output_uint8=False, decode_graph=self.video_decode_graph, output_rank=output_rank)
+            video_decoder = MiniMaxH3StreamingVideoDecoder(
+                self.video_vae,
+                self.request_num_frames,
+                output_uint8=True,
+                pinned_memory=self.config.get("vae_rgb_pinned_memory", False),
+                decode_graph=self.video_decode_graph,
+                output_rank=output_rank,
+            )
             decoders.callback(video_decoder.close)
             audio_decoder = None
             if is_recorder_rank and not self.reuse_input_audio:

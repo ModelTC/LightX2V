@@ -112,13 +112,20 @@ class BiliLiveVARecorder(VARecorder):
         if padding is None:
             return frames
         if self.text_mode == "overlay":
-            padding = padding.to(device=frames.device, dtype=frames.dtype)
-            alpha = alpha.to(device=frames.device, dtype=frames.dtype)
+            dtype = torch.float32 if frames.dtype == torch.uint8 else frames.dtype
+            padding = padding.to(device=frames.device, dtype=dtype)
+            alpha = alpha.to(device=frames.device, dtype=dtype)
             height, width = padding.shape[1:3]
             output = frames.clone()
             region = output[:, self.overlay_y : self.overlay_y + height, self.overlay_x : self.overlay_x + width]
-            region.copy_(region * (1 - alpha) + padding * alpha)
+            if frames.dtype == torch.uint8:
+                blended = region.float().div_(255) * (1 - alpha) + padding * alpha
+                region.copy_((blended * 255).clamp_(0, 255).to(torch.uint8))
+            else:
+                region.copy_(region * (1 - alpha) + padding * alpha)
             return output
+        if frames.dtype == torch.uint8:
+            padding = padding * 255
         padding = padding.to(device=frames.device, dtype=frames.dtype).expand(frames.shape[0], -1, -1, -1)
         dimension = 2 if self.padding_direction in {"left", "right"} else 1
         items = [padding, frames] if self.padding_direction in {"left", "top"} else [frames, padding]

@@ -136,10 +136,11 @@ class VARecorder:
                         logger.info("Video thread received stop signal")
                         break
 
-                    # Convert to numpy and scale to [0, 255], convert RGB to BGR for OpenCV/FFmpeg
+                    # Keep uint8 RGB as-is; scale normalized floating-point input.
                     for i in range(data.shape[0]):
                         t0 = time.time()
-                        frame = (data[i] * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
+                        frame = data[i] if data.dtype == torch.uint8 else (data[i] * 255).clamp(0, 255).to(torch.uint8)
+                        frame = frame.cpu().numpy()
                         try:
                             self.video_conn.send(frame.tobytes())
                         except (BrokenPipeError, OSError, ConnectionResetError) as e:

@@ -11,13 +11,14 @@ class MiniMaxH3StreamingVideoDecoder:
     Keep 2 latents between windows; finish() emits the final 5 frames.
     """
 
-    def __init__(self, vae, num_frames, *, output_uint8=False, decode_graph=None, output_writer=None, output_rank=0):
+    def __init__(self, vae, num_frames, *, output_uint8=False, pinned_memory=False, decode_graph=None, output_writer=None, output_rank=0):
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         if not 0 <= output_rank < world_size:
             raise ValueError("Video decoder output_rank must identify a rank in the process group")
         self.vae = vae
         self.num_frames = num_frames
         self.output_uint8 = output_uint8
+        self.pinned_memory = pinned_memory
         self.latents = None
         self.overlap = None
         self.emitted_frames = 0
@@ -43,6 +44,13 @@ class MiniMaxH3StreamingVideoDecoder:
         if self.output_writer is not None:
             self.output_writer.write(video)
             return None
+        if self.pinned_memory and video.is_cuda:
+            # Live recorders retain frame views asynchronously. Each output owns
+            # its storage until those views are released, rather than reusing it.
+            output = torch.empty(video.shape, dtype=video.dtype, device="cpu", pin_memory=True, memory_format=torch.channels_last_3d)
+            output.copy_(video, non_blocking=True)
+            torch.cuda.current_stream(video.device).synchronize()
+            return output
         return video.cpu()
 
     def _decode_window(self, latents: torch.Tensor) -> torch.Tensor | None:

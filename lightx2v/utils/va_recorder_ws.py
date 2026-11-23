@@ -46,7 +46,8 @@ class H264AnnexBEncoder:
 
     def encode(self, images: torch.Tensor) -> bytes:
         t0 = time.perf_counter()
-        frames = (images * 255).clamp(0, 255).to(torch.uint8).contiguous().cpu().numpy()
+        frames = images if images.dtype == torch.uint8 else (images * 255).clamp(0, 255).to(torch.uint8)
+        frames = frames.contiguous().cpu().numpy()
         raw_bytes = frames.nbytes
         out = bytearray()
         for i in range(frames.shape[0]):
