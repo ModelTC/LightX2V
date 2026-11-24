@@ -42,6 +42,7 @@ RUNNER_MODULES = {
     "realtimewam": ModelEntry("wan.realtimewam_runner", config="wan.config.load_config"),
     "relayvsr_x2": ModelEntry("relayvsr.relayvsr_runner"),
     "relayvsr_x4": ModelEntry("relayvsr.relayvsr_runner"),
+    "sdxl": ModelEntry("sdxl.sdxl_runner", config="sdxl.config.load_config"),
     "seedvr2": ModelEntry("seedvr.seedvr_runner"),
     "seko_talk": ModelEntry("wan.wan_audio_runner", config="wan.config.load_config"),
     "seko_talk_ar": ModelEntry("wan.wan_audio_runner", config="wan.config.load_config"),
