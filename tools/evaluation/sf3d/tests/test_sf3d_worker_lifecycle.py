@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,27 @@ WORKER = Path(__file__).resolve().parents[1] / "scripts/platform/nvidia/worker.p
 
 
 class WorkerLifecycleTests(unittest.TestCase):
+    def test_requested_cuda_context_precedes_workload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ready = root / "cuda-ready"
+            (root / "torch.py").write_text(
+                "from pathlib import Path\nclass CUDA:\n def device_count(self): return 1\n def init(self): Path(" + repr(str(ready)) + ").write_text('ready')\ncuda = CUDA()\n"
+            )
+            script = root / "task.py"
+            script.write_text("from pathlib import Path\nassert Path(" + repr(str(ready)) + ").read_text() == 'ready'\n")
+            complete, release = root / "complete.json", root / "release.json"
+            release.write_text("{}")
+            result = subprocess.run(
+                [sys.executable, str(WORKER), "--completion", str(complete), "--release", str(release), "--initialize-cuda", "--", str(script)],
+                env=dict(os.environ, PYTHONPATH=str(root), CUDA_VISIBLE_DEVICES="GPU-cpu-test"),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(complete.exists())
+
     def test_completed_work_keeps_pid_alive_until_post_sample_acknowledgement(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
