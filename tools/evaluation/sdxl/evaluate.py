@@ -410,7 +410,8 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
         completion = evidence / "completion.json"
         release = evidence / "release.json"
         bootstrap = HERE / "scripts/platform/nvidia/worker.py"
-        worker_command = [command[0], str(bootstrap), "--completion", str(completion), "--release", str(release), "--", *command[1:]]
+        cuda_startup = ["--initialize-cuda"] if len(command) > 2 and command[2] == "run" else []
+        worker_command = [command[0], str(bootstrap), "--completion", str(completion), "--release", str(release), *cuda_startup, "--", *command[1:]]
 
         def latest():
             path = evidence / "watch/samples.jsonl"
