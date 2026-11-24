@@ -385,8 +385,17 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
 
         evidence.mkdir(parents=True, exist_ok=False)
         capture_log = (evidence / "capture.log").open("x")
+        backend = os.environ.get("LIGHTX2V_EVAL_RESOURCE_BACKEND", "xml")
+        resource_python = os.environ.get("LIGHTX2V_EVAL_RESOURCE_PYTHON", python)
+        sampler = HERE.parents[1] / "runtime/nvml_capture.py"
+        if backend == "nvml":
+            watch_command = [resource_python, str(sampler), "--policy", str(watch_tool)]
+        elif backend == "xml":
+            watch_command = [python, str(watch_tool)]
+        else:
+            raise ValueError("Resource backend must be xml or nvml")
         capture = subprocess.Popen(
-            [python, str(watch_tool), "capture", "--devices", gpu, "--output", str(evidence / "watch"), "--seconds", "3500", "--interval", "0.25", "--query-timeout", "2.5"],
+            [*watch_command, "capture", "--devices", gpu, "--output", str(evidence / "watch"), "--seconds", "3500", "--interval", "0.25", "--query-timeout", "2.5"],
             stdout=capture_log,
             stderr=subprocess.STDOUT,
         )
@@ -430,7 +439,13 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
                     "argv": command,
                     "worker_argv": worker_command,
                     "bootstrap_sha256": sha256(bootstrap),
-                    "resource_capture": {"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0},
+                    "resource_capture": {
+                        "interval_s": 0.25,
+                        "query_timeout_s": 2.5,
+                        "max_gap_s": 3.0,
+                        "backend": backend,
+                        "sampler_sha256": sha256(sampler) if backend == "nvml" else sha256(watch_tool),
+                    },
                     "environment": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS")},
                 },
             )
@@ -487,7 +502,7 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
                 task.setdefault("end", time.monotonic())
                 write_json(evidence / "task.json", task)
         checked = subprocess.run(
-            [python, str(watch_tool), "check", "--samples", str(evidence / "watch/samples.jsonl"), "--task", str(evidence / "task.json"), "--max-gap", "3"], text=True, capture_output=True, timeout=30
+            [*watch_command, "check", "--samples", str(evidence / "watch/samples.jsonl"), "--task", str(evidence / "task.json"), "--max-gap", "3"], text=True, capture_output=True, timeout=30
         )
         result = json.loads(checked.stdout)
         try:
@@ -501,7 +516,7 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
             timed_out=timed_out,
             completion_handshake=True,
             bootstrap_sha256=sha256(bootstrap),
-            resource_capture={"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0},
+            resource_capture={"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0, "backend": backend, "sampler_sha256": sha256(sampler) if backend == "nvml" else sha256(watch_tool)},
         )
         write_json(evidence / "resources.json", result)
         if checked.returncode or process.returncode or not clean:
