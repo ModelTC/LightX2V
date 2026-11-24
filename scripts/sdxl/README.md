@@ -21,3 +21,5 @@ bash scripts/platforms/nvidia/run_sdxl.sh
 
 A100 单卡已实现；MLU、MetaX、Ascend 脚本与 JSON 为明确占位。暂不支持
 refiner、LoRA、量化、并行、offload 或 feature cache。
+
+Both CLIP encoders use Transformers’ existing `CLIPTokenizerFast` implementation. Its Rust normalization matches the CLIP tokenizer used by the Transformers 5 CLIP tokenizer, including Unicode punctuation and literal HTML entities; the model does not maintain a separate tokenizer implementation.

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import torch
-from transformers import CLIPTokenizer
+from transformers import CLIPTokenizerFast
 
 from lightx2v.models.networks.native_components.clip import CLIPTextInfer
 from lightx2v.models.schedulers.sdxl import SDXLEulerScheduler
@@ -15,7 +15,7 @@ class SDXLModel:
         self.config = config
         self.weights = SDXLWeights(config["model_path"])
         root = Path(config["model_path"])
-        self.tokenizers = [CLIPTokenizer.from_pretrained(root / name, local_files_only=True) for name in ("tokenizer", "tokenizer_2")]
+        self.tokenizers = [CLIPTokenizerFast.from_pretrained(root / name, local_files_only=True) for name in ("tokenizer", "tokenizer_2")]
         self.text_infers = [CLIPTextInfer(self.weights.configs[name]) for name in ("text_encoder", "text_encoder_2")]
         self.unet_infer = SDXLUNetInfer(self.weights.configs["unet"])
         self.vae_infer = SDXLVAEInfer()
