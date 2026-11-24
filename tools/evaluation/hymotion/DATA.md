@@ -15,3 +15,5 @@ Qwen3-8B and CLIP ViT-L/14 need complete tokenizer/config/safetensors trees. Hum
 
 
 Quality protocol: Authors’ Momask/HumanML3D evaluator: R-Precision@1/2/3, matching score, FID, diversity. Native fixed-skeleton FK, linear 30→20 FPS resampling and authors’ canonical 263-D extraction. Paired central crop to min(prediction, reference, 196), multiple of 4; original evaluator normalization; retrieval batch size 32 including last batch; diversity seed 42, 300 pairs. Length exclusions are explicit, never removed from generation coverage.
+
+Duration-to-frame conversion follows the original Python expression `int(round(duration_s * 30))`, followed by its 20–360 clamp. Do not substitute a theoretically rounded precomputed frame field: binary floating-point values such as 4.15 and 2.05 can differ by one frame. The reference environment follows the original requirements without optional ftfy; the inference configuration explicitly selects its matching `clip_text_cleanup: basic`, reusing Transformers BasicTokenizer.

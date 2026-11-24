@@ -17,5 +17,6 @@
   "request_defaults": {
     "seed": 42,
     "num_frames": 120
-  }
+  },
+  "clip_text_cleanup": "basic"
 }

@@ -160,7 +160,7 @@ def environment():
     import torch
 
     versions = {}
-    for package in ("torch", "transformers", "diffusers", "numpy", "Pillow", "trimesh", "rembg", "open-clip-torch", "scipy"):
+    for package in ("torch", "transformers", "tokenizers", "ftfy", "diffusers", "numpy", "Pillow", "trimesh", "rembg", "open-clip-torch", "scipy"):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -629,7 +629,7 @@ def load_adapter(backend, paths):
         runner = build_runner(build_startup_config(config))
 
         def infer(item, artifact):
-            request = dict(prompt=item["prompt"], seed=42, num_frames=item["expected_output_frames_30fps"], save_result_path=str(artifact))
+            request = dict(prompt=item["prompt"], seed=42, num_frames=int(round(item["duration_s"] * 30)), save_result_path=str(artifact))
             runner.run_request(runner.prepare_request(request))
 
         return infer
@@ -668,8 +668,9 @@ def validate_output(path, fixture):
             if np.issubdtype(data[key].dtype, np.number) and not np.isfinite(data[key]).all():
                 raise ValueError("Non-finite motion")
         frames = len(data["poses"])
-    if abs(frames - fixture["native_expected_output_frames_30fps"]) > 2:
-        raise ValueError("Wrong generated sequence length")
+    native_expected = max(20, min(360, int(round(fixture["duration_s"] * 30))))
+    if frames != native_expected:
+        raise ValueError("Wrong generated sequence length for the original duration-to-frame rule")
     return {"finite": True, "frames": frames, "requested_frames": fixture["expected_output_frames_30fps"], "requested_length_complete": abs(frames - fixture["expected_output_frames_30fps"]) <= 2}
 
 
