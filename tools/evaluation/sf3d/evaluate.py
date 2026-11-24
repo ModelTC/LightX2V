@@ -507,7 +507,7 @@ def checked_worker_script(paths):
     worker = Path(paths.get("worker_script", str(HERE / "evaluate.py"))).resolve()
     if worker == (HERE / "evaluate.py").resolve():
         return worker
-    excluded = {"observed_execution", "campaign", "checked_worker_script"}
+    excluded = {"observed_execution", "campaign", "checked_worker_script", "main"}
 
     def contract(path):
         tree = ast.parse(path.read_text())
