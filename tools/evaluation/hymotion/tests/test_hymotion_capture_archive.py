@@ -44,7 +44,7 @@ class CaptureArchiveTests(unittest.TestCase):
             evidence, artifact, scratch = root / "result", root / "artifact", root / "local"
             artifact.mkdir()
             env = dict(os.environ, CUDA_VISIBLE_DEVICES="", PLATFORM="cuda", DTYPE="BF16", HF_HUB_OFFLINE="1", CUBLAS_WORKSPACE_CONFIG=":4096:8", OMP_NUM_THREADS="1")
-            with patch.dict(os.environ, {"LIGHTX2V_EVAL_RESOURCE_SCRATCH": str(scratch)}):
+            with patch.dict(os.environ, {"LIGHTX2V_EVAL_RESOURCE_SCRATCH": str(scratch), "LIGHTX2V_EVAL_RESOURCE_BACKEND": "xml"}):
                 arguments = ([sys.executable, str(task)], env, sys.executable, watch, evidence, artifact, "GPU-00000000-0000-0000-0000-000000000001")
                 if fail_copy:
                     with patch("shutil.copytree", side_effect=OSError("synthetic archive storage failure")), self.assertRaises(OSError):
