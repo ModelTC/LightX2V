@@ -598,7 +598,11 @@ def campaign(args, paths):
                 raise ValueError(f"Invalid recorded chunk range: {chunk}")
             if chunk.name != f"{begin:06d}" or metadata["model"] != MODEL or metadata["dataset"] != args.dataset or metadata["backend"] != backend:
                 raise ValueError(f"Mixed recorded campaign: {chunk}")
-            if metadata["evaluation_sha256"] != sha256(worker_script) or metadata["source_lock"] != read_json(HERE / "configs/nvidia/source-lock.json") or metadata["manifest_sha256"] != suite()["datasets"][args.dataset]["sha256"]:
+            if (
+                metadata["evaluation_sha256"] != sha256(worker_script)
+                or metadata["source_lock"] != read_json(HERE / "configs/nvidia/source-lock.json")
+                or metadata["manifest_sha256"] != suite()["datasets"][args.dataset]["sha256"]
+            ):
                 raise ValueError(f"Recorded worker/source/fixture differs: {chunk}")
             logged = rows(chunk / "samples.jsonl")
             if [row["id"] for row in logged] != [row["id"] for row in records[begin : begin + length]] or any(row["status"] != "SUCCESS" for row in logged):
@@ -620,9 +624,21 @@ def campaign(args, paths):
                     cursor += 1
                 chunk = root / backend / "chunks" / f"{begin:06d}"
                 command = [
-                    paths[backend + "_python"], str(worker_script), "run", "--paths", str(args.paths.resolve()),
-                    "--dataset", args.dataset, "--backend", backend, "--output", str(chunk),
-                    "--start", str(begin), "--count", str(cursor - begin),
+                    paths[backend + "_python"],
+                    str(worker_script),
+                    "run",
+                    "--paths",
+                    str(args.paths.resolve()),
+                    "--dataset",
+                    args.dataset,
+                    "--backend",
+                    backend,
+                    "--output",
+                    str(chunk),
+                    "--start",
+                    str(begin),
+                    "--count",
+                    str(cursor - begin),
                 ]
                 observed_execution(command, env, sys.executable, watch_tool, root / "resources" / f"{backend}-{begin:06d}", chunk, args.gpu)
                 covered[backend].update(range(begin, cursor))

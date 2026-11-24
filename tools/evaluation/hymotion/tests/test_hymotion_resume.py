@@ -1,4 +1,5 @@
 """Changed worker bounds must preserve successful inputs and reject invalid history."""
+
 import argparse
 import importlib.util
 import json
@@ -31,7 +32,20 @@ class ResumeTests(unittest.TestCase):
             def history(backend, start, count):
                 folder = output / backend / "chunks" / f"{start:06d}"
                 folder.mkdir(parents=True)
-                M.write_json(folder / "run.json", {"model": M.MODEL, "dataset": dataset, "backend": backend, "start": start, "count": count, "status": "COMPLETE", "evaluation_sha256": fingerprint, "source_lock": M.read_json(ROOT / "configs/nvidia/source-lock.json"), "manifest_sha256": M.suite()["datasets"][dataset]["sha256"]})
+                M.write_json(
+                    folder / "run.json",
+                    {
+                        "model": M.MODEL,
+                        "dataset": dataset,
+                        "backend": backend,
+                        "start": start,
+                        "count": count,
+                        "status": "COMPLETE",
+                        "evaluation_sha256": fingerprint,
+                        "source_lock": M.read_json(ROOT / "configs/nvidia/source-lock.json"),
+                        "manifest_sha256": M.suite()["datasets"][dataset]["sha256"],
+                    },
+                )
                 M.write_json(folder / "resources.json", {"resources_clear": not invalid, "task_cleanup_verified": True, "returncode": 0})
                 (folder / "samples.jsonl").write_text("".join(json.dumps({"id": str(i), "status": "SUCCESS"}) + "\n" for i in range(start, start + count)))
 
@@ -43,10 +57,18 @@ class ResumeTests(unittest.TestCase):
             observed = []
 
             def workload(command, *unused):
-                value = lambda flag: command[command.index(flag) + 1]
+                def value(flag):
+                    return command[command.index(flag) + 1]
+
                 observed.append((value("--backend"), int(value("--start")), int(value("--count"))))
 
-            with patch.object(M, "inputs", return_value=records), patch.object(M, "check_inputs"), patch.object(M, "verify_source"), patch.object(M, "checked_worker_script", return_value=ROOT / "evaluate.py"), patch.object(M, "observed_execution", side_effect=workload):
+            with (
+                patch.object(M, "inputs", return_value=records),
+                patch.object(M, "check_inputs"),
+                patch.object(M, "verify_source"),
+                patch.object(M, "checked_worker_script", return_value=ROOT / "evaluate.py"),
+                patch.object(M, "observed_execution", side_effect=workload),
+            ):
                 if invalid or overlap:
                     with self.assertRaises(ValueError):
                         M.campaign(args, paths)
