@@ -32,3 +32,5 @@ Each evaluation capture stages an immutable sampler copy alongside its evidence.
 The NVML adapter keeps one CPU-only query process for each capture and initializes the binding once. Every request still has the original hard deadline; a stalled/erroring query invalidates timing, and capture exit closes and reaps the observer. This avoids repeated driver initialization during model execution.
 
 Observer IPC diagnostics use the local resource scratch directory (default `/tmp`), independently of a process-wide `TMPDIR` that may point at network storage.
+
+Evaluation controllers default to a 2.5 s query deadline and 3 s maximum completed-sample gap. Explicit host overrides are `LIGHTX2V_EVAL_RESOURCE_QUERY_TIMEOUT` and `LIGHTX2V_EVAL_RESOURCE_MAX_GAP` (for example, `5` and `8` on a shared host with slow driver queries). Both the capture/check arguments and archived resource metadata record these actual values; sampling interval, PID attribution, idle checks and MPS/MIG exclusions remain independently enforced. Select and report one observer profile for the comparison; earlier accepted stricter-profile chunks retain their original metadata.
