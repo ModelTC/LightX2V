@@ -1,0 +1,8 @@
+# Install upstream dependencies first; validated native Python 3.10 pins.
+torch==2.5.1
+torchvision==0.20.1
+transformers==4.53.3
+numpy==1.26.4
+scipy==1.15.3
+torchdiffeq==0.2.5
+pyarrow==25.0.1

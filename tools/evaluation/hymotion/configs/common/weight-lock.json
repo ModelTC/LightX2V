@@ -1,0 +1,276 @@
+{
+  "model": "tencent/HY-Motion-1.0",
+  "revision": "620dd559f8d964aac2f82f1204fe6a35ad8ad14d",
+  "files": [
+    {
+      "root": "weights",
+      "path": "HY-Motion-1.0/config.yml",
+      "bytes": 956,
+      "sha256": "ed90095c0d6a8032520ebdd14a2294adb43a19916dd84d4751e36dcecb5c6427"
+    },
+    {
+      "root": "weights",
+      "path": "HY-Motion-1.0/latest.ckpt",
+      "bytes": 4171703514,
+      "sha256": "4fa91c6085f30c49bccda150b28d6c8d0887dc07e6d5d4ec0055482732635f10"
+    },
+    {
+      "root": "clip",
+      "path": "config.json",
+      "bytes": 4519,
+      "sha256": "8a09b467700c58138c29d53c605b34ebc69beaadd13274a8a2af8ad2c2f4032a"
+    },
+    {
+      "root": "clip",
+      "path": "merges.txt",
+      "bytes": 524619,
+      "sha256": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a"
+    },
+    {
+      "root": "clip",
+      "path": "model.safetensors",
+      "bytes": 1710540580,
+      "sha256": "a2bf730a0c7debf160f7a6b50b3aaf3703e7e88ac73de7a314903141db026dcb"
+    },
+    {
+      "root": "clip",
+      "path": "preprocessor_config.json",
+      "bytes": 316,
+      "sha256": "910e70b3956ac9879ebc90b22fb3bc8a75b6a0677814500101a4c072bd7857bd"
+    },
+    {
+      "root": "clip",
+      "path": "special_tokens_map.json",
+      "bytes": 389,
+      "sha256": "f8c0d6c39aee3f8431078ef6646567b0aba7f2246e9c54b8b99d55c22b707cbf"
+    },
+    {
+      "root": "clip",
+      "path": "tokenizer.json",
+      "bytes": 2224003,
+      "sha256": "a83e0809aa4c3af7208b2df632a7a69668c6d48775b3c3fe4e1b1199d1f8b8f4"
+    },
+    {
+      "root": "clip",
+      "path": "tokenizer_config.json",
+      "bytes": 905,
+      "sha256": "deef455e52fa5e8151e339add0582e4235f066009601360999d3a9cda83b1129"
+    },
+    {
+      "root": "clip",
+      "path": "vocab.json",
+      "bytes": 961143,
+      "sha256": "3f0c4f7d2086b61b38487075278ea9ed04edb53a03cbb045b86c27190fa8fb69"
+    },
+    {
+      "root": "qwen",
+      "path": "config.json",
+      "bytes": 728,
+      "sha256": "f7c4eadfbbf522470667b797a3c89be2524832d2d599797248dc304fff447c30"
+    },
+    {
+      "root": "qwen",
+      "path": "generation_config.json",
+      "bytes": 239,
+      "sha256": "2325da0f15bb848e018c5ae071b7943332e9f871d6b60e2ed22ca97d4cb993d2"
+    },
+    {
+      "root": "qwen",
+      "path": "merges.txt",
+      "bytes": 1671853,
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+    },
+    {
+      "root": "qwen",
+      "path": "model-00001-of-00005.safetensors",
+      "bytes": 3996250744,
+      "sha256": "31d6a825ae35f11fb85b195b4c42c146c051e446433125a215336abdf95cbf5f"
+    },
+    {
+      "root": "qwen",
+      "path": "model-00002-of-00005.safetensors",
+      "bytes": 3993160032,
+      "sha256": "5991236cea6fe21f3d43cab0f0e84448734fbbe0789816202989f2ddc9d18282"
+    },
+    {
+      "root": "qwen",
+      "path": "model-00003-of-00005.safetensors",
+      "bytes": 3959604768,
+      "sha256": "c5185c4794be2d8a9784d5753c9922db38df478ce11f9ed0b415b7304d896836"
+    },
+    {
+      "root": "qwen",
+      "path": "model-00004-of-00005.safetensors",
+      "bytes": 3187841392,
+      "sha256": "b5ee7de71fbf17db3d5704e0c8f2bc7d005ca9e1d7ca2aeb19827b0cfcaa917a"
+    },
+    {
+      "root": "qwen",
+      "path": "model-00005-of-00005.safetensors",
+      "bytes": 1244659840,
+      "sha256": "20c2d6366ab85c90786ccdd829cd2b9e7d30ef3b2ebbb998280e7e4014b542ff"
+    },
+    {
+      "root": "qwen",
+      "path": "model.safetensors.index.json",
+      "bytes": 32878,
+      "sha256": "f9fdbcb91c23971c13ec5d5f2573d2349e8f61f2f049371ec699281748fdb1bc"
+    },
+    {
+      "root": "qwen",
+      "path": "tokenizer.json",
+      "bytes": 11422654,
+      "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+    },
+    {
+      "root": "qwen",
+      "path": "tokenizer_config.json",
+      "bytes": 9732,
+      "sha256": "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101"
+    },
+    {
+      "root": "qwen",
+      "path": "vocab.json",
+      "bytes": 2776833,
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    },
+    {
+      "root": "metric_assets",
+      "path": "Comp_v6_KLD005/meta/mean.npy",
+      "bytes": 2232,
+      "sha256": "0bdb5ba69a3a9e34d71990db15bc535ebc024c8d95ddb5574196f96058faa7d3"
+    },
+    {
+      "root": "metric_assets",
+      "path": "Comp_v6_KLD005/meta/std.npy",
+      "bytes": 2232,
+      "sha256": "6a5f7d60301c9465972fc225f8ad0ee8f957e7720431189123eb6d15873a9557"
+    },
+    {
+      "root": "metric_assets",
+      "path": "glove/our_vab_data.npy",
+      "bytes": 10077728,
+      "sha256": "73ed9b73ee5bc5ab683661c132b9f98fe305672dffdf70ceeac1bc447543d668"
+    },
+    {
+      "root": "metric_assets",
+      "path": "glove/our_vab_idx.pkl",
+      "bytes": 79811,
+      "sha256": "d85dce83d2c27a92bb94bb51dc1f55a04fcaa328c359d23eccf648e296c16493"
+    },
+    {
+      "root": "metric_assets",
+      "path": "glove/our_vab_words.pkl",
+      "bytes": 67470,
+      "sha256": "fac88da1be6f00d36b72b88c9745c8ac35a94a7bd6ccf1fa3bab380faf8c2e0d"
+    },
+    {
+      "root": "metric_assets",
+      "path": "text_mot_match/model/finest.tar",
+      "bytes": 245580211,
+      "sha256": "881e45bea6fb84b15eca6e7cdd75d602b58a72f2038c223ee96ab75d4f684ada"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/Boy_lambert4_BaseColor.webp",
+      "bytes": 228228,
+      "sha256": "aaed26cb89635f9d995c9c373919185c412f00f6b4a903873ac75ccd7a549439"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/Boy_lambert4_Normal.webp",
+      "bytes": 30430,
+      "sha256": "fe4bd8b80aadf6e414c3c07acc57532cda754deb93f0cdc6f211387b8beca97d"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/Boy_lambert4_OcclusionRoughnessMetallic.webp",
+      "bytes": 206722,
+      "sha256": "9ad8bd31dfda3a8356ac5c9d6bdc7457f0197ae23754f9ac196f86d872b26781"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/faces.bin",
+      "bytes": 290376,
+      "sha256": "777b0806d2843c797ed18644eecc11466ff822b33b02d263c22f8ad3730e9bb5"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/j_template.bin",
+      "bytes": 624,
+      "sha256": "4f488cc9d0b650a816f5a8eda49eda7bc796f490e9130a6e0dec5be137d7b929"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/joint_names.json",
+      "bytes": 698,
+      "sha256": "f29139c07a3e8c160cb3512428aac6e272697ade096a7e682024c47424e064d1"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/joints.ply",
+      "bytes": 782,
+      "sha256": "c79d5fea33e386c803816584c47eef2b023cac7fee6b7476fd6e7a602f00a853"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/keypoints.bin",
+      "bytes": 624,
+      "sha256": "4f488cc9d0b650a816f5a8eda49eda7bc796f490e9130a6e0dec5be137d7b929"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/kintree.bin",
+      "bytes": 208,
+      "sha256": "98a20fa3b53193790b63d9ac3a9c917f2f70fbe6e053dca495c75317ff4b756a"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/skinIndice.bin",
+      "bytes": 194048,
+      "sha256": "846794fb90ea01e069435ad242caefb3d5c2f913fef3255c247f48836ddc1bda"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/skinWeights.bin",
+      "bytes": 388096,
+      "sha256": "343eac2902627ee6b45b547eb7d9f1526562eca7ba178d1dc71f9e466f307a77"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/uvs.bin",
+      "bytes": 194048,
+      "sha256": "23c92c60b609261d927990d31cbf6ace0c14cb70a5ac753a5f3927cb8c5c8191"
+    },
+    {
+      "root": "native",
+      "path": "scripts/gradio/static/assets/dump_wooden/v_template.bin",
+      "bytes": 291072,
+      "sha256": "b9fbe1f34bfe8a07442d11166e169318022a18da8bc62ce0a9930dfdb3171050"
+    },
+    {
+      "root": "data",
+      "path": "bench/humanml3d/TeoGchx/data/test-00000-of-00002.parquet",
+      "bytes": 327023649,
+      "sha256": "b659b9452b842e0ee5606889a7d589d30e7c4adbaa37048e721ad5f5a3d31329"
+    },
+    {
+      "root": "data",
+      "path": "bench/humanml3d/TeoGchx/data/test-00001-of-00002.parquet",
+      "bytes": 327024002,
+      "sha256": "1c7b5bf6d8a3610601b2ce3ae368385021c6ae6b07955d5bb962ceab1a14696b"
+    },
+    {
+      "root": "native",
+      "path": "stats/Mean.npy",
+      "bytes": 1736,
+      "sha256": "a4bbe5f68881fe793d509f262ad3dc698a91f79158a9bde9d6f24d46ef9652bd"
+    },
+    {
+      "root": "native",
+      "path": "stats/Std.npy",
+      "bytes": 1736,
+      "sha256": "6cc86d1ca4b47fbd0e84b677c4397e51b6615abcb34e38fdd9daabbe6a5685cc"
+    }
+  ]
+}
