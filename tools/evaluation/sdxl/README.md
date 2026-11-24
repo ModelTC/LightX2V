@@ -9,6 +9,7 @@ Use Python 3.10 on an otherwise idle NVIDIA A100 40 GB. Native and LightX2V can 
 ```bash
 EVAL=tools/evaluation/sdxl
 python3 "$EVAL/evaluate.py" prepare-sources --workspace /absolute/eval-sources
+python3 "$EVAL/prepare_assets.py" --source-root /absolute/eval-sources/geneval
 # Provision weights/data/evaluator assets according to DATA.md, install the
 # native upstream dependencies plus runtime-requirements-native.txt.
 # For LightX2V use the pinned inference source's scripts/sdxl/install_a100.sh.
