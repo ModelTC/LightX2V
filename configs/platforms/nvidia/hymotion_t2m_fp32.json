@@ -12,6 +12,7 @@
   "dit_quant_scheme": "Default",
   "infer_steps": 50,
   "cfg_scale": 5.0,
+  "clip_text_cleanup": "basic",
   "fps": 30,
   "enable_cfg": true,
   "request_defaults": {

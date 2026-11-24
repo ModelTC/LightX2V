@@ -36,3 +36,5 @@ bash scripts/platforms/nvidia/run_hymotion.sh --num_frames 120
 
 目前支持 NVIDIA A100 单卡、不量化、无 offload/cache。MLU、MetaX、Ascend 的 JSON
 与同名脚本是显式占位，执行会说明未实现并退出。
+
+CLIP 文本清理默认为 `clip_text_cleanup: basic`，复用 Transformers 的 BasicTokenizer，与原项目仅安装其 requirements.txt、没有额外 ftfy 时的行为一致。这样，其他模型安装 ftfy 不会悄然改变弯引号等 Unicode 输入的输出。若参考原项目环境显式安装了 ftfy，可在模型配置中设置 `clip_text_cleanup: ftfy` 对齐该清理方式。

@@ -34,6 +34,8 @@ def load_hymotion(config):
     bind_modules(weights.motion_transformer)
     weights.requires_grad_(False)
     text = HYTextWeights(
-        config.get("qwen_model_path", os.getenv("QWEN_MODEL_PATH", str(root / "Qwen3-8B"))), config.get("clip_model_path", os.getenv("CLIP_MODEL_PATH", str(root / "clip-vit-large-patch14")))
+        config.get("qwen_model_path", os.getenv("QWEN_MODEL_PATH", str(root / "Qwen3-8B"))),
+        config.get("clip_model_path", os.getenv("CLIP_MODEL_PATH", str(root / "clip-vit-large-patch14"))),
+        clip_text_cleanup=config.get("clip_text_cleanup", "basic"),
     )
     return weights, text
