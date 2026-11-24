@@ -381,7 +381,13 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
 
     def execute(evidence):
         """Wire one bounded host task to the existing gpu_watch capture/check CLI."""
+        import math
         import signal
+
+        query_timeout = float(os.environ.get("LIGHTX2V_EVAL_RESOURCE_QUERY_TIMEOUT", "2.5"))
+        max_gap = float(os.environ.get("LIGHTX2V_EVAL_RESOURCE_MAX_GAP", "3"))
+        if not all(math.isfinite(value) and value > 0 for value in (query_timeout, max_gap)) or max_gap < query_timeout + 0.25:
+            raise ValueError("Resource max gap must cover the positive query timeout and sampling interval")
 
         evidence.mkdir(parents=True, exist_ok=False)
         capture_log = (evidence / "capture.log").open("x")
@@ -400,7 +406,7 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
         else:
             raise ValueError("Resource backend must be xml or nvml")
         capture = subprocess.Popen(
-            [*watch_command, "capture", "--devices", gpu, "--output", str(evidence / "watch"), "--seconds", "3500", "--interval", "0.25", "--query-timeout", "2.5"],
+            [*watch_command, "capture", "--devices", gpu, "--output", str(evidence / "watch"), "--seconds", "3500", "--interval", "0.25", "--query-timeout", str(query_timeout)],
             stdout=capture_log,
             stderr=subprocess.STDOUT,
         )
@@ -447,8 +453,8 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
                     "bootstrap_sha256": sha256(bootstrap),
                     "resource_capture": {
                         "interval_s": 0.25,
-                        "query_timeout_s": 2.5,
-                        "max_gap_s": 3.0,
+                        "query_timeout_s": query_timeout,
+                        "max_gap_s": max_gap,
                         "backend": backend,
                         "sampler_sha256": sha256(sampler) if backend == "nvml" else sha256(watch_tool),
                     },
@@ -464,7 +470,7 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
                 task = {"pid": process.pid, "start_ticks": ticks, "start": start, "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(), "devices": [gpu]}
                 while process.poll() is None:
                     point = latest()
-                    if not point or point.get("error") or capture.poll() is not None or time.monotonic() - point["end"] > 3:
+                    if not point or point.get("error") or capture.poll() is not None or time.monotonic() - point["end"] > max_gap:
                         raise RuntimeError("Resource monitoring became unavailable")
                     for device in point["gpus"]:
                         for app in device["processes"]:
@@ -508,7 +514,7 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
                 task.setdefault("end", time.monotonic())
                 write_json(evidence / "task.json", task)
         checked = subprocess.run(
-            [*watch_command, "check", "--samples", str(evidence / "watch/samples.jsonl"), "--task", str(evidence / "task.json"), "--max-gap", "3"], text=True, capture_output=True, timeout=30
+            [*watch_command, "check", "--samples", str(evidence / "watch/samples.jsonl"), "--task", str(evidence / "task.json"), "--max-gap", str(max_gap)], text=True, capture_output=True, timeout=30
         )
         result = json.loads(checked.stdout)
         try:
@@ -522,7 +528,13 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
             timed_out=timed_out,
             completion_handshake=True,
             bootstrap_sha256=sha256(bootstrap),
-            resource_capture={"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0, "backend": backend, "sampler_sha256": sha256(sampler) if backend == "nvml" else sha256(watch_tool)},
+            resource_capture={
+                "interval_s": 0.25,
+                "query_timeout_s": query_timeout,
+                "max_gap_s": max_gap,
+                "backend": backend,
+                "sampler_sha256": sha256(sampler) if backend == "nvml" else sha256(watch_tool),
+            },
         )
         write_json(evidence / "resources.json", result)
         if checked.returncode or process.returncode or not clean:

@@ -6,7 +6,7 @@ import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 FILE = Path(__file__).resolve().parents[1] / "nvml_capture.py"
 SPEC = importlib.util.spec_from_file_location("nvml_capture_tests", FILE)
@@ -179,6 +179,20 @@ class PersistentQueryTests(unittest.TestCase):
                 client.close()
                 self.fail("Fake query process did not reach its controlled wait point")
             time.sleep(0.01)
+
+    def test_interrupted_close_clears_state_and_reaps_its_child(self):
+        client = M.NVMLQueryProcess()
+        process, directory = MagicMock(), MagicMock()
+        process.wait.side_effect = [KeyboardInterrupt(), 0]
+        process.poll.return_value = None
+        client.process, client.directory = process, directory
+        with self.assertRaises(KeyboardInterrupt):
+            client.close()
+        self.assertIsNone(client.process)
+        self.assertIsNone(client.directory)
+        process.kill.assert_called_once()
+        process.stdout.close.assert_called_once()
+        directory.cleanup.assert_called_once()
 
     def test_multiple_queries_use_one_cpu_process(self):
         import tempfile

@@ -163,28 +163,46 @@ class NVMLQueryProcess:
             if sorted(gpu["uuid"] for gpu in gpus) != sorted(devices):
                 raise ValueError("Incomplete NVML device inventory")
             return gpus
-        except BaseException:
-            # This CPU observer is our own subprocess, never a GPU workload PID.
-            self.close()
+        except BaseException as error:
+            if isinstance(error, subprocess.TimeoutExpired):
+                print(str(error), file=sys.stderr, flush=True)
+            self.close(force=True)
             raise
 
-    def close(self):
-        if self.process is not None:
-            try:
-                self.process.stdin.close()
-            except BrokenPipeError:
-                pass
-            try:
-                self.process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=1)
-            self.process.stdout.close()
-            self.process = None
-        if self.directory is not None:
-            self.directory.cleanup()
-            self.directory = None
+    def close(self, force=False):
+        process, directory = self.process, self.directory
+        # Clear shared state before any wait can be interrupted by capture SIGTERM.
+        self.process = None
+        self.directory = None
         self.buffer = b""
+        try:
+            if process is not None:
+                if force:
+                    process.kill()
+                else:
+                    try:
+                        process.stdin.close()
+                    except BrokenPipeError:
+                        pass
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+        except BaseException:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=1)
+            raise
+        finally:
+            if process is not None:
+                try:
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass
+                process.stdout.close()
+            if directory is not None:
+                directory.cleanup()
 
 
 def serve(devices):
