@@ -124,7 +124,15 @@ class NVMLAcquisitionTests(unittest.TestCase):
         self.assertEqual(result[0]["processes"][0]["ancestors"], [])
 
     def test_query_deadline_failure_is_not_swallowed(self):
-        with patch.object(M.subprocess, "check_output", side_effect=subprocess.TimeoutExpired("probe", 2.5)), self.assertRaises(subprocess.TimeoutExpired):
+        with patch.object(M.subprocess, "check_output", side_effect=subprocess.TimeoutExpired("probe", 2.5)), self.assertRaisesRegex(RuntimeError, "Python startup/imports"):
+            M.bounded_sample([UUID], 2.5, SimpleNamespace())
+
+    def test_timeout_identifies_last_started_api(self):
+        def timeout_at_init(*args, **kwargs):
+            Path(kwargs["env"]["LIGHTX2V_NVML_QUERY_STAGE"]).write_text("nvmlInit")
+            raise subprocess.TimeoutExpired("probe", kwargs["timeout"])
+
+        with patch.object(M.subprocess, "check_output", side_effect=timeout_at_init), self.assertRaisesRegex(RuntimeError, "last stage: nvmlInit"):
             M.bounded_sample([UUID], 2.5, SimpleNamespace())
 
     def test_incomplete_device_inventory_is_rejected(self):
