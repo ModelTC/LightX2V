@@ -1,0 +1,143 @@
+{
+  "model": "sf3d",
+  "platform": "NVIDIA A100-SXM4-40GB",
+  "datasets": {
+    "gso": {
+      "model": "sf3d",
+      "dataset": "gso",
+      "coverage": 1023,
+      "repetitions": 1,
+      "output_difference_count": 0,
+      "output_difference_ids": [],
+      "native_quality": {
+        "count": 1023,
+        "chamfer_l1": 0.12193696565243449,
+        "chamfer_l2": 0.02448242520975491,
+        "fscore_1pct": 0.054853470908283734,
+        "fscore_2pct": 0.12438044093196933,
+        "fscore_5pct": 0.28981513026287126,
+        "pointcloud_iou32": 0.06699366652315883
+      },
+      "lightx2v_quality": {
+        "count": 1023,
+        "chamfer_l1": 0.12193696565243449,
+        "chamfer_l2": 0.02448242520975491,
+        "fscore_1pct": 0.054853470908283734,
+        "fscore_2pct": 0.12438044093196933,
+        "fscore_5pct": 0.28981513026287126,
+        "pointcloud_iou32": 0.06699366652315883
+      },
+      "quality_aligned": true,
+      "native_latency": {
+        "count": 1023,
+        "mean_s": 1.0580420470414165,
+        "median_s": 0.9610272370046005,
+        "p95_s": 1.5562831867835485
+      },
+      "lightx2v_latency": {
+        "count": 1023,
+        "mean_s": 1.0070424239174622,
+        "median_s": 0.9372478219447657,
+        "p95_s": 1.4378155573620461
+      },
+      "latency_ratios": {
+        "mean_s": 0.9517981130650114,
+        "median_s": 0.975256252742688,
+        "p95_s": 0.9238778453513042
+      },
+      "latency_gate": {
+        "mean_ratio_max": 1.25,
+        "p95_ratio_max": 1.5
+      },
+      "latency_aligned": true,
+      "status": "PASS"
+    }
+  },
+  "environments": {
+    "gso/native": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.42.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-15906396-a9f4-ac97-178a-456434ca6eed",
+      "cudnn": 90100,
+      "deterministic": true,
+      "tf32_matmul": false,
+      "tf32_cudnn": true
+    },
+    "gso/lightx2v": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-15906396-a9f4-ac97-178a-456434ca6eed",
+      "cudnn": 90100,
+      "deterministic": true,
+      "tf32_matmul": false,
+      "tf32_cudnn": true
+    }
+  },
+  "resources": {
+    "gso/native": {
+      "verified_chunks": 4,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "peak_torch_allocated_vram_bytes": 6453279232
+    },
+    "gso/lightx2v": {
+      "verified_chunks": 4,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "peak_torch_allocated_vram_bytes": 6834263040
+    }
+  },
+  "invalid_attempts": [
+    {
+      "namespace": "sf3d-adapted-000512-exit-lineage",
+      "discarded_timing_attempts": 256,
+      "reason": "Own GPU worker disappeared from /proc during CUDA process teardown; required lineage attribution became unavailable. Model outputs complete, timing interval not admissible. Preserve all raw evidence and replay only this adapted chunk.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sf3d-gso-lightx2v-000768-nvml-timeout",
+      "discarded_timing_attempts": 226,
+      "reason": "nvidia-smi resource query timed out after 2 seconds; strict resource evidence unavailable. Completed timing records excluded, all raw partial outputs retained. Replay only this interrupted batch; valid earlier batches remain accepted.",
+      "accepted_formal_repetitions": 1
+    }
+  ],
+  "measurement_worker_sha256": "588e7742b769a5a0f606428abcf52247236b77646a1f5feab11d13d3cd50e949",
+  "final_controller_sha256": "851081db0549958f11936f4a39bb4dfbd43c11f88f690221c359dbe565b81030",
+  "source_lock": {
+    "lightx2v": {
+      "repository": "https://github.com/ModelTC/LightX2V.git",
+      "revision": "63b592222d8f8b9d5d7f090fa3f601295d7ea962",
+      "pull_request": 1753
+    },
+    "native": {
+      "repository": "https://github.com/Stability-AI/stable-fast-3d.git",
+      "revision": "ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2"
+    }
+  },
+  "weight_lock_sha256": "e486ec3997b72d3e3eceb3169d8bfab8da96bf81ff196ab19e3c5422ed93d1cd",
+  "raw_evidence_manifest_sha256": "851a0c61d8ebab75783740df73975c143683ed5ca57b34b415f11819a4249e82",
+  "raw_evidence_file_count": 2662,
+  "raw_evidence_namespace": "lightx2v-evaluation-20261124",
+  "formal_repetitions_per_input_per_backend": 1,
+  "worker_recovery": "Request/timing/metric AST and configs identical to final code; original worker source fingerprints retained. Controller-only recovery uses explicit post-workload sample acknowledgement."
+}
