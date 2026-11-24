@@ -1,0 +1,10 @@
+artifacts/
+cache/
+runtime/
+sources/
+data/
+history/
+WORK_LOG.md
+*.local.json
+__pycache__/
+.pytest_cache/

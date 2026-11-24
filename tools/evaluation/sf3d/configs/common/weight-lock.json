@@ -1,0 +1,66 @@
+{
+  "model": "stabilityai/stable-fast-3d",
+  "revision": "f0c9a8ffd62cb1bbc8a7a53c9f87a0be1b6be778",
+  "files": [
+    {
+      "root": "weights",
+      "path": "model.safetensors",
+      "bytes": 4024289892,
+      "sha256": "a3416e1cf654e7d4f5e75f116cec2c3f0a14501a77d30c2f6068bbda178de388"
+    },
+    {
+      "root": "weights",
+      "path": "config.upstream.yaml",
+      "bytes": 2405,
+      "sha256": "5e880cfec3dec28d4e20afe07bfa1799c8a561f56f0532ebf1b4022ae4ddc8e4"
+    },
+    {
+      "root": "weights",
+      "path": "config.yaml",
+      "bytes": 2405,
+      "sha256": "5e880cfec3dec28d4e20afe07bfa1799c8a561f56f0532ebf1b4022ae4ddc8e4"
+    },
+    {
+      "root": "native",
+      "path": "demo_files/examples/tree.png",
+      "bytes": 692620,
+      "sha256": "b258278b4d85a75f9ea3f795d3692fc58304a1a3a7daf8935a9549107bfee170"
+    },
+    {
+      "root": "native",
+      "path": "load/tets/160_tets.npz",
+      "bytes": 15408790,
+      "sha256": "1f4be37efc604d28d55a1a78c2aabefeeab7e63149f541aa45f9dd858ee35bb9"
+    },
+    {
+      "root": "dino",
+      "path": "config.json",
+      "bytes": 549,
+      "sha256": "12df51c069a2dc1305e34ba71ef58bc2407ea553b75f4722a1715c1bce3bbed0"
+    },
+    {
+      "root": "dino",
+      "path": "model.safetensors",
+      "bytes": 1217522888,
+      "sha256": "399fba97a95f22c36834418bc69373364a99af3a1153da1c0fb31db567c92e23"
+    },
+    {
+      "root": "dino",
+      "path": "preprocessor_config.json",
+      "bytes": 436,
+      "sha256": "14e780d86fa1861f8751f868d7f45425b5feb55c38ca26f152ca5097ab30f828"
+    },
+    {
+      "root": "openclip",
+      "path": "open_clip_pytorch_model.bin",
+      "bytes": 605219813,
+      "sha256": "1bd3c7172de5b207ceac554f5ab5266166f3b9baccc9af5989bc801016d080ad"
+    },
+    {
+      "root": "rembg",
+      "path": "u2net.onnx",
+      "bytes": 175997641,
+      "sha256": "8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491"
+    }
+  ]
+}

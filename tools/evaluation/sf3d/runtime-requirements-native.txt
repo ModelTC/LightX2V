@@ -1,0 +1,9 @@
+# Install upstream dependencies first; validated native Python 3.10 pins.
+torch==2.6.0
+torchvision==0.21.0
+transformers==4.42.3
+numpy==1.26.4
+trimesh==4.4.1
+open-clip-torch==2.24.0
+rembg==2.0.57
+onnxruntime==1.23.2
