@@ -13,10 +13,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--completion", type=Path, required=True)
     parser.add_argument("--release", type=Path, required=True)
+    parser.add_argument("--initialize-cuda", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     sys.argv = command
+    if args.initialize_cuda:
+        import torch
+
+        if torch.cuda.device_count() != 1 or not os.environ.get("CUDA_VISIBLE_DEVICES"):
+            raise RuntimeError("Early CUDA initialization requires one explicitly visible GPU")
+        # Use this worker's normal primary context before CPU model preparation.
+        # RNG setup, model loading, warmup and request timing remain downstream.
+        torch.cuda.init()
     try:
         runpy.run_path(command[0], run_name="__main__")
     except SystemExit as error:
