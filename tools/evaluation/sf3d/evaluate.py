@@ -389,6 +389,11 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
         resource_python = os.environ.get("LIGHTX2V_EVAL_RESOURCE_PYTHON", python)
         sampler = HERE.parents[1] / "runtime/nvml_capture.py"
         if backend == "nvml":
+            source_sampler = sampler
+            sampler = evidence / "nvml_capture.py"
+            shutil.copy2(source_sampler, sampler)
+            if sha256(sampler) != sha256(source_sampler):
+                raise ValueError("Resource sampler changed while staging")
             watch_command = [resource_python, str(sampler), "--policy", str(watch_tool)]
         elif backend == "xml":
             watch_command = [python, str(watch_tool)]

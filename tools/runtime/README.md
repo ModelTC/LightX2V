@@ -26,3 +26,5 @@ python3 -m venv /absolute/monitor-env
 ```
 
 每次 NVML 获取在独立 CPU 子进程中，沿用 capture 的查询超时；不创建 CUDA 上下文。绑定版本固定，缺失/不支持的接口会使采样失败。该入口不启动、终止、调度或预约 GPU 工作负载。原 XML 入口和所有判定参数保持可选且独立。
+
+Each evaluation capture stages an immutable sampler copy alongside its evidence. Timed-out NVML queries report the last started API (or Python startup/imports); the query deadline and resource policy are unchanged.

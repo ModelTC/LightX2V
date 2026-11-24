@@ -122,7 +122,7 @@
     }
   ],
   "measurement_worker_sha256": "588e7742b769a5a0f606428abcf52247236b77646a1f5feab11d13d3cd50e949",
-  "final_controller_sha256": "b50c2f2eb64c6db9911bcab8bfed8a4752147bf2080b1b22e53b14daced832ce",
+  "final_controller_sha256": "a5a14cca57db7dba7f6499032e835f520cae8cc5436c43acc390ee3f90d32223",
   "source_lock": {
     "lightx2v": {
       "repository": "https://github.com/ModelTC/LightX2V.git",
