@@ -417,7 +417,8 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
         release = evidence / "release.json"
         bootstrap = HERE / "scripts/platform/nvidia/worker.py"
         cuda_startup = ["--initialize-cuda"] if len(command) > 2 and command[2] == "run" else []
-        worker_command = [command[0], str(bootstrap), "--completion", str(completion), "--release", str(release), *cuda_startup, "--", *command[1:]]
+        inline_score = ["--inline-geneval"] if len(command) > 2 and command[2] == "score" and "--dataset" in command and command[command.index("--dataset") + 1] == "geneval" else []
+        worker_command = [command[0], str(bootstrap), "--completion", str(completion), "--release", str(release), *cuda_startup, *inline_score, "--", *command[1:]]
 
         def latest():
             path = evidence / "watch/samples.jsonl"
@@ -710,7 +711,8 @@ def campaign(args, paths):
         output = root / backend
         if (output / "quality.json").exists():
             continue
-        command = [paths["metric_python"], str(worker_script), "score", "--paths", str(args.paths.resolve()), "--dataset", args.dataset, "--backend", backend, "--run", str(output)]
+        metric_python = paths["geneval_python"] if args.dataset == "geneval" else paths["metric_python"]
+        command = [metric_python, str(worker_script), "score", "--paths", str(args.paths.resolve()), "--dataset", args.dataset, "--backend", backend, "--run", str(output)]
         observed_execution(command, env, sys.executable, watch_tool, root / "resources" / f"{backend}-score", output, args.gpu)
     args.native_run, args.lightx2v_run = root / "native", root / "lightx2v"
     args.output = root / "comparison.json"

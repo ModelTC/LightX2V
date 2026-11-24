@@ -14,6 +14,7 @@ def main():
     parser.add_argument("--completion", type=Path, required=True)
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--initialize-cuda", action="store_true")
+    parser.add_argument("--inline-geneval", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -27,7 +28,12 @@ def main():
         # RNG setup, model loading, warmup and request timing remain downstream.
         torch.cuda.init()
     try:
-        runpy.run_path(command[0], run_name="__main__")
+        if args.inline_geneval:
+            from geneval_inline import run_score_in_process
+
+            run_score_in_process(command)
+        else:
+            runpy.run_path(command[0], run_name="__main__")
     except SystemExit as error:
         if error.code not in (None, 0):
             raise
