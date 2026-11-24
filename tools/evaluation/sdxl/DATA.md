@@ -17,3 +17,5 @@ GenEval requires a separate legacy metric environment (Python 3.10, torch2.1.0+c
 Quality protocol: GenEval: six published dimension accuracies and their unweighted mean, using the official Mask2Former/CLIP evaluator. Parti and COCO: OpenAI CLIP ViT-L/14 FP32 normalized cosine ×100 and 2.5×max(cosine,0). Native and adapted images are scored with the same metric runtime and weights. This is not FID.
 
 GenEval also reads its external `evaluation/object_names.txt` vocabulary. Run `python prepare_assets.py --source-root /absolute/eval-sources/geneval` after source preparation. This downloads only that small file from the same pinned commit and verifies configs/common/evaluator-assets.json. For an existing installation use `--check-only --report /absolute/results/evaluator-assets.json` before scoring. The vocabulary is not copied into the PR.
+
+The original Transformers 5 CLIP tokenizers use the Rust backend. The pinned inference source reuses Transformers 4 `CLIPTokenizerFast` for the same normalization and token IDs, including Unicode punctuation and literal HTML entities. No benchmark prompt rewriting is applied.

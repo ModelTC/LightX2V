@@ -545,7 +545,8 @@ def campaign(args, paths):
         raise ValueError("Chunk size must be in [1,256]")
     watch_tool = Path(paths["lightx2v"]) / "tools/runtime/gpu_watch.py"
     verify_source(Path(paths["lightx2v"]), read_json(HERE / "configs/nvidia/source-lock.json")["lightx2v"])
-    count = len(inputs(args.dataset))
+    records = inputs(args.dataset)
+    count = len(records)
     check_inputs(paths)
     worker_script = checked_worker_script(paths)
     root = args.output.resolve()
@@ -560,9 +561,15 @@ def campaign(args, paths):
         "paths": {key: value for key, value in paths.items() if key != "worker_script"},
     }
     identity_path = root / "campaign.json"
-    if identity_path.exists() and read_json(identity_path) != identity:
-        raise ValueError("Resume identity differs; preserve old evidence and use a new campaign directory")
-    write_json(identity_path, identity)
+    if identity_path.exists():
+        previous = read_json(identity_path)
+        if {k: v for k, v in previous.items() if k != "chunk_size"} != {k: v for k, v in identity.items() if k != "chunk_size"}:
+            raise ValueError("Resume identity differs; preserve old evidence and use a new campaign directory")
+    else:
+        write_json(identity_path, identity)
+    # Chunk size bounds process lifetime, not the per-input request or timer.
+    # Preserve the first plan and log each subsequent controller invocation.
+    write_json(root / f"controller-plan-{time.time_ns()}.json", {"controller_sha256": sha256(__file__), "requested_chunk_size": args.count, "worker_sha256": sha256(worker_script)})
     env = dict(
         os.environ,
         CUDA_VISIBLE_DEVICES=args.gpu,
@@ -579,34 +586,46 @@ def campaign(args, paths):
         PYTHONDONTWRITEBYTECODE="1",
         TOKENIZERS_PARALLELISM="false",
     )
+    covered = {backend: set() for backend in ("native", "lightx2v")}
+    for backend in covered:
+        for chunk in sorted((root / backend / "chunks").glob("*")):
+            metadata = read_json(chunk / "run.json")
+            resource = read_json(chunk / "resources.json")
+            if metadata["status"] != "COMPLETE" or not resource["resources_clear"] or not resource.get("task_cleanup_verified") or resource.get("returncode") != 0:
+                raise ValueError(f"Existing incomplete/invalid chunk requires investigation: {chunk}")
+            begin, length = metadata["start"], metadata["count"]
+            if not (type(begin) is int and type(length) is int and 0 <= begin < count and 1 <= length <= 256 and begin + length <= count):
+                raise ValueError(f"Invalid recorded chunk range: {chunk}")
+            if chunk.name != f"{begin:06d}" or metadata["model"] != MODEL or metadata["dataset"] != args.dataset or metadata["backend"] != backend:
+                raise ValueError(f"Mixed recorded campaign: {chunk}")
+            if metadata["evaluation_sha256"] != sha256(worker_script) or metadata["source_lock"] != read_json(HERE / "configs/nvidia/source-lock.json") or metadata["manifest_sha256"] != suite()["datasets"][args.dataset]["sha256"]:
+                raise ValueError(f"Recorded worker/source/fixture differs: {chunk}")
+            logged = rows(chunk / "samples.jsonl")
+            if [row["id"] for row in logged] != [row["id"] for row in records[begin : begin + length]] or any(row["status"] != "SUCCESS" for row in logged):
+                raise ValueError(f"Incomplete/failed recorded inputs: {chunk}")
+            indices = set(range(begin, begin + length))
+            if covered[backend] & indices:
+                raise ValueError(f"Overlapping recorded chunks: {chunk}")
+            covered[backend].update(indices)
     for start in range(0, count, args.count):
+        stop = min(count, start + args.count)
         for backend in ("native", "lightx2v"):
-            chunk = root / backend / "chunks" / f"{start:06d}"
-            if chunk.exists():
-                metadata = read_json(chunk / "run.json")
-                resource = read_json(chunk / "resources.json")
-                if metadata["status"] != "COMPLETE" or not resource["resources_clear"] or not resource["task_cleanup_verified"]:
-                    raise ValueError(f"Existing incomplete/invalid chunk requires investigation: {chunk}")
-                continue
-            python = paths[backend + "_python"]
-            command = [
-                python,
-                str(worker_script),
-                "run",
-                "--paths",
-                str(args.paths.resolve()),
-                "--dataset",
-                args.dataset,
-                "--backend",
-                backend,
-                "--output",
-                str(chunk),
-                "--start",
-                str(start),
-                "--count",
-                str(args.count),
-            ]
-            observed_execution(command, env, sys.executable, watch_tool, root / "resources" / f"{backend}-{start:06d}", chunk, args.gpu)
+            cursor = start
+            while cursor < stop:
+                if cursor in covered[backend]:
+                    cursor += 1
+                    continue
+                begin = cursor
+                while cursor < stop and cursor not in covered[backend]:
+                    cursor += 1
+                chunk = root / backend / "chunks" / f"{begin:06d}"
+                command = [
+                    paths[backend + "_python"], str(worker_script), "run", "--paths", str(args.paths.resolve()),
+                    "--dataset", args.dataset, "--backend", backend, "--output", str(chunk),
+                    "--start", str(begin), "--count", str(cursor - begin),
+                ]
+                observed_execution(command, env, sys.executable, watch_tool, root / "resources" / f"{backend}-{begin:06d}", chunk, args.gpu)
+                covered[backend].update(range(begin, cursor))
     if args.skip_score:
         return
     for backend in ("native", "lightx2v"):
