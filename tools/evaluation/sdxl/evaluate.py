@@ -388,6 +388,10 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
     process = None
     task = None
     timed_out = False
+    completion = evidence / "completion.json"
+    release = evidence / "release.json"
+    bootstrap = HERE / "scripts/platform/nvidia/worker.py"
+    worker_command = [command[0], str(bootstrap), "--completion", str(completion), "--release", str(release), "--", *command[1:]]
 
     def latest():
         path = evidence / "watch/samples.jsonl"
@@ -417,17 +421,21 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
             raise RuntimeError("Selected GPU did not become idle; no workload started")
         write_json(
             evidence / "command.json",
-            {"argv": command, "environment": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS")}},
+            {
+                "argv": command,
+                "worker_argv": worker_command,
+                "bootstrap_sha256": sha256(bootstrap),
+                "environment": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS")},
+            },
         )
         with (evidence / "worker.log").open("x") as log:
             start = time.monotonic()
             # GNU timeout supervises this exclusive process group. The Python
             # watchdog also observes telemetry and enforces a 3300-second limit.
-            process = subprocess.Popen(["timeout", "--kill-after=20s", "3300s", *command], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            process = subprocess.Popen(["timeout", "--kill-after=20s", "3300s", *worker_command], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             ticks = int(Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
             task = {"pid": process.pid, "start_ticks": ticks, "start": start, "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(), "devices": [gpu]}
             while process.poll() is None:
-                time.sleep(1)
                 point = latest()
                 if not point or point.get("error") or capture.poll() is not None or time.monotonic() - point["end"] > 3:
                     raise RuntimeError("Resource monitoring became unavailable")
@@ -435,10 +443,24 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
                     for app in device["processes"]:
                         if app["type"] in ("M", "M+C") or [process.pid, ticks] not in app["ancestors"]:
                             raise RuntimeError("Foreign/MPS GPU process observed; timing invalid")
+                if completion.exists():
+                    marker = read_json(completion)
+                    worker_fields = Path(f"/proc/{marker['pid']}/stat").read_text().rsplit(")", 1)[1].split()
+                    if int(worker_fields[19]) != marker["start_ticks"] or os.getpgid(marker["pid"]) != process.pid:
+                        raise RuntimeError("Completion marker does not belong to this live task")
+                    if not start < marker["end"] <= time.monotonic():
+                        raise RuntimeError("Invalid workload completion time")
+                    if point["start"] >= marker["end"]:
+                        task["end"] = marker["end"]
+                        write_json(release, {"post_workload_sample_end": point["end"]})
+                        process.wait(timeout=25)
+                        break
                 if time.monotonic() - start > 3330:
                     timed_out = True
                     raise RuntimeError("Task deadline exceeded")
-            task["end"] = time.monotonic()
+                time.sleep(0.2)
+            if "end" not in task:
+                raise RuntimeError("Worker exited without an acknowledged completion boundary")
         time.sleep(2)
     finally:
         if process is not None:
@@ -465,12 +487,41 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
         clean = False
     except ProcessLookupError:
         clean = True
-    result.update(task_cleanup_verified=clean, returncode=process.returncode, timed_out=timed_out)
+    result.update(task_cleanup_verified=clean, returncode=process.returncode, timed_out=timed_out, completion_handshake=True, bootstrap_sha256=sha256(bootstrap))
     write_json(evidence / "resources.json", result)
     if artifact.exists():
         write_json(artifact / "resources.json", result)
     if checked.returncode or process.returncode or not clean:
         raise RuntimeError(f"Invalid execution: {result}; see {evidence}")
+
+
+def checked_worker_script(paths):
+    """Resume archived measurement code only when worker logic/configs are identical.
+
+    Controller fixes may change process supervision without changing any request,
+    math, timer, export, validation or metric function. Old run fingerprints are
+    retained; this never relabels their measurements as a new worker version.
+    """
+    import ast
+
+    worker = Path(paths.get("worker_script", str(HERE / "evaluate.py"))).resolve()
+    if worker == (HERE / "evaluate.py").resolve():
+        return worker
+    excluded = {"observed_execution", "campaign", "checked_worker_script", "main"}
+
+    def contract(path):
+        tree = ast.parse(path.read_text())
+        tree.body = [node for node in tree.body if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name not in excluded]
+        return ast.dump(tree, include_attributes=False)
+
+    if contract(worker) != contract(HERE / "evaluate.py"):
+        raise ValueError("Archived worker changes request, timing or metric behavior")
+    for local in (HERE / "configs").rglob("*"):
+        if local.is_file() and local.suffix in (".json", ".jsonl"):
+            archived = worker.parent / local.relative_to(HERE)
+            if not archived.is_file() or sha256(archived) != sha256(local):
+                raise ValueError("Archived worker configuration differs")
+    return worker
 
 
 def campaign(args, paths):
@@ -484,9 +535,18 @@ def campaign(args, paths):
     verify_source(Path(paths["lightx2v"]), read_json(HERE / "configs/nvidia/source-lock.json")["lightx2v"])
     count = len(inputs(args.dataset))
     check_inputs(paths)
+    worker_script = checked_worker_script(paths)
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    identity = {"model": MODEL, "dataset": args.dataset, "gpu": args.gpu, "count": count, "chunk_size": args.count, "evaluate_sha256": sha256(__file__), "paths": paths}
+    identity = {
+        "model": MODEL,
+        "dataset": args.dataset,
+        "gpu": args.gpu,
+        "count": count,
+        "chunk_size": args.count,
+        "evaluate_sha256": sha256(worker_script),
+        "paths": {key: value for key, value in paths.items() if key != "worker_script"},
+    }
     identity_path = root / "campaign.json"
     if identity_path.exists() and read_json(identity_path) != identity:
         raise ValueError("Resume identity differs; preserve old evidence and use a new campaign directory")
@@ -519,7 +579,7 @@ def campaign(args, paths):
             python = paths[backend + "_python"]
             command = [
                 python,
-                str(HERE / "evaluate.py"),
+                str(worker_script),
                 "run",
                 "--paths",
                 str(args.paths.resolve()),
@@ -541,7 +601,7 @@ def campaign(args, paths):
         output = root / backend
         if (output / "quality.json").exists():
             continue
-        command = [paths["metric_python"], str(HERE / "evaluate.py"), "score", "--paths", str(args.paths.resolve()), "--dataset", args.dataset, "--backend", backend, "--run", str(output)]
+        command = [paths["metric_python"], str(worker_script), "score", "--paths", str(args.paths.resolve()), "--dataset", args.dataset, "--backend", backend, "--run", str(output)]
         observed_execution(command, env, sys.executable, watch_tool, root / "resources" / f"{backend}-score", output, args.gpu)
     args.native_run, args.lightx2v_run = root / "native", root / "lightx2v"
     args.output = root / "comparison.json"
@@ -701,6 +761,14 @@ def main():
         compare(args)
         return
     paths = read_json(args.paths)
+    if args.command in ("run", "score") and "worker_script" in paths:
+        import runpy
+
+        worker = checked_worker_script(paths)
+        if worker != Path(__file__).resolve():
+            sys.argv = [str(worker), *sys.argv[1:]]
+            runpy.run_path(str(worker), run_name="__main__")
+            return
     if args.command == "check-inputs":
         check_inputs(paths)
     elif args.command == "campaign":
