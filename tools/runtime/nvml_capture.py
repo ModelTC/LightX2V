@@ -8,9 +8,11 @@ import importlib.metadata
 import importlib.util
 import json
 import os
+import selectors
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 BINDING_VERSION = "12.550.52"
@@ -26,15 +28,22 @@ def text_string(value):
     return value.decode() if isinstance(value, bytes) else value
 
 
-def sample_nvml(devices, nvml=None):
+def load_binding():
+    trace_stage("binding metadata")
+    if importlib.metadata.version("nvidia-ml-py") != BINDING_VERSION:
+        raise ValueError("Install the pinned nvidia-ml-py binding")
+    trace_stage("import pynvml")
+    import pynvml
+
+    return pynvml
+
+
+def sample_nvml(devices, nvml=None, initialized=False):
     if nvml is None:
-        trace_stage("binding metadata")
-        if importlib.metadata.version("nvidia-ml-py") != BINDING_VERSION:
-            raise ValueError("Install the pinned nvidia-ml-py binding")
-        trace_stage("import pynvml")
-        import pynvml as nvml
-    trace_stage("nvmlInit")
-    nvml.nvmlInit()
+        nvml = load_binding()
+    if not initialized:
+        trace_stage("nvmlInit")
+        nvml.nvmlInit()
     try:
         result = []
         for device in devices:
@@ -87,24 +96,118 @@ def sample_nvml(devices, nvml=None):
             )
         return result
     finally:
+        if not initialized:
+            trace_stage("nvmlShutdown")
+            nvml.nvmlShutdown()
+
+
+class NVMLQueryTimeout(subprocess.TimeoutExpired):
+    """Keep the original gpu_watch error contract and include acquisition stage."""
+
+    def __init__(self, command, timeout, stage):
+        super().__init__(command, timeout)
+        self.stage = stage
+
+    def __str__(self):
+        return f"{super().__str__()}; last stage: {self.stage}"
+
+
+class NVMLQueryProcess:
+    """One CPU-only NVML session; every request still has a hard deadline."""
+
+    def __init__(self, helper=None):
+        self.helper = Path(helper or __file__).resolve()
+        self.process = None
+        self.directory = None
+        self.buffer = b""
+
+    def _start(self, devices):
+        self.directory = tempfile.TemporaryDirectory(prefix="lightx2v-nvml-query-", dir=os.environ.get("LIGHTX2V_EVAL_RESOURCE_SCRATCH", "/tmp"))
+        self.stage = Path(self.directory.name) / "stage"
+        self.stage.write_text("Python startup/imports")
+        self.devices = list(devices)
+        self.command = [sys.executable, str(self.helper), "serve", *devices]
+        self.process = subprocess.Popen(
+            self.command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            env=dict(os.environ, LIGHTX2V_NVML_QUERY_STAGE=str(self.stage)),
+            bufsize=0,
+        )
+        os.set_blocking(self.process.stdout.fileno(), False)
+
+    def query(self, devices, timeout):
+        deadline = time.monotonic() + timeout
+        try:
+            if self.process is None:
+                self._start(devices)
+            if list(devices) != self.devices:
+                raise ValueError("Cannot change NVML capture devices")
+            self.process.stdin.write(b"sample\n")
+            self.process.stdin.flush()
+            with selectors.DefaultSelector() as selector:
+                selector.register(self.process.stdout, selectors.EVENT_READ)
+                while b"\n" not in self.buffer:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not selector.select(remaining):
+                        raise NVMLQueryTimeout(self.command, timeout, self.stage.read_text())
+                    block = os.read(self.process.stdout.fileno(), 65536)
+                    if not block:
+                        raise ValueError(f"NVML query process exited; last stage: {self.stage.read_text()}")
+                    self.buffer += block
+            line, self.buffer = self.buffer.split(b"\n", 1)
+            response = json.loads(line)
+            if "error" in response:
+                raise ValueError(f"NVML inventory unavailable: {response['error']}")
+            gpus = response["gpus"]
+            if sorted(gpu["uuid"] for gpu in gpus) != sorted(devices):
+                raise ValueError("Incomplete NVML device inventory")
+            return gpus
+        except BaseException:
+            # This CPU observer is our own subprocess, never a GPU workload PID.
+            self.close()
+            raise
+
+    def close(self):
+        if self.process is not None:
+            try:
+                self.process.stdin.close()
+            except BrokenPipeError:
+                pass
+            try:
+                self.process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=1)
+            self.process.stdout.close()
+            self.process = None
+        if self.directory is not None:
+            self.directory.cleanup()
+            self.directory = None
+        self.buffer = b""
+
+
+def serve(devices):
+    nvml = load_binding()
+    trace_stage("nvmlInit")
+    nvml.nvmlInit()
+    try:
+        for request in sys.stdin:
+            try:
+                if request.strip() != "sample":
+                    raise ValueError("Unknown NVML query request")
+                response = {"gpus": sample_nvml(devices, nvml, initialized=True)}
+            except Exception as error:
+                response = {"error": f"{type(error).__name__}: {error}"}
+            print(json.dumps(response, allow_nan=False), flush=True)
+            trace_stage("awaiting query")
+    finally:
         trace_stage("nvmlShutdown")
         nvml.nvmlShutdown()
 
 
-def bounded_sample(devices, timeout, policy):
-    # A fresh CPU-only query process preserves the existing hard query deadline,
-    # including a native NVML call that fails to return. It creates no CUDA context.
-    with tempfile.TemporaryDirectory(prefix="lightx2v-nvml-query-") as directory:
-        stage = Path(directory) / "stage"
-        stage.write_text("Python startup/imports")
-        env = dict(os.environ, LIGHTX2V_NVML_QUERY_STAGE=str(stage))
-        try:
-            raw = subprocess.check_output([sys.executable, str(Path(__file__).resolve()), "sample", *devices], timeout=timeout, env=env)
-        except subprocess.TimeoutExpired as error:
-            raise RuntimeError(f"NVML acquisition exceeded {timeout}s; last stage: {stage.read_text()}") from error
-    gpus = json.loads(raw)
-    if sorted(gpu["uuid"] for gpu in gpus) != sorted(devices):
-        raise ValueError("Incomplete NVML device inventory")
+def sample_with_policy(client, devices, timeout, policy):
+    gpus = client.query(devices, timeout)
     for gpu in gpus:
         for process in gpu["processes"]:
             process["ancestors"] = policy.lineage(process["pid"])
@@ -114,8 +217,10 @@ def bounded_sample(devices, timeout, policy):
 def main():
     arguments = sys.argv[1:]
     if arguments and arguments[0] == "sample":
-        trace_stage("Python module loaded")
         print(json.dumps(sample_nvml(arguments[1:]), allow_nan=False))
+        return 0
+    if arguments and arguments[0] == "serve":
+        serve(arguments[1:])
         return 0
     if len(arguments) < 3 or arguments[0] != "--policy":
         raise ValueError("Use --policy /path/to/gpu_watch.py capture|check ...")
@@ -123,13 +228,17 @@ def main():
     spec = importlib.util.spec_from_file_location("lightx2v_gpu_watch_policy", path)
     policy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(policy)
+    client = NVMLQueryProcess()
 
     def acquire(devices, timeout):
-        return bounded_sample(devices, timeout, policy)
+        return sample_with_policy(client, devices, timeout, policy)
 
     policy.sample = acquire
     sys.argv = [str(path), *arguments[2:]]
-    return policy.main()
+    try:
+        return policy.main()
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":
