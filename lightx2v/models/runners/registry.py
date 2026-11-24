@@ -45,6 +45,7 @@ RUNNER_MODULES = {
     "seedvr2": ModelEntry("seedvr.seedvr_runner"),
     "seko_talk": ModelEntry("wan.wan_audio_runner", config="wan.config.load_config"),
     "seko_talk_ar": ModelEntry("wan.wan_audio_runner", config="wan.config.load_config"),
+    "sf3d": ModelEntry("sf3d.sf3d_runner", config="sf3d.config.load_config"),
     "taomate_h3": ModelEntry("taomate_h3.runner", config="minimax_h3.config.load_config"),
     "streamrender_h3": ModelEntry("streamrender_h3.runner", config="h3.config.load_config"),
     "swiftvr": ModelEntry("swiftvr.swiftvr_runner"),

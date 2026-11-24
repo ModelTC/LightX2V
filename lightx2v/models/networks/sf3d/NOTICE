@@ -1,0 +1,4 @@
+Source port from Stability AI stable-fast-3d commit ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2.
+See LICENSE.md. DINOv2-L architecture portions: Copyright Meta AI and Hugging Face, Apache-2.0.
+OpenCLIP architecture: Copyright OpenCLIP contributors, MIT license.
+Neural inference is local to LightX2V; texture_baker and uv_unwrapper are separately installed geometry dependencies.
