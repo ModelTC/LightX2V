@@ -1,0 +1,26 @@
+# Install torch 2.6.0 + CUDA 12.4 and torchvision 0.21.0 first.
+# These are the runtime packages used by the three native adapters; the parent
+# repository's optional video/distributed/quantization extras are not needed.
+numpy==1.26.4
+scipy==1.15.3
+transformers==4.53.3
+tokenizers==0.21.4
+safetensors==0.8.0
+einops==0.7.0
+loguru==0.8.0
+gguf==0.19.0
+opencv-python-headless==4.11.0.86
+imageio==2.37.4
+imageio-ffmpeg==0.8.1
+omegaconf==2.3.0
+jaxtyping==0.2.31
+trimesh==4.4.1
+rembg==2.0.57
+onnxruntime==1.23.2
+gpytoolbox==0.2.0
+pynanoinstantmeshes==0.0.3
+ftfy==6.3.1
+pydantic>=2,<3
+pillow-heif>=1.0
+# SF3D's two geometry extensions require a separate local CUDA/C++ build.
+# See scripts/sf3d/README.md. No upstream neural model package is installed.

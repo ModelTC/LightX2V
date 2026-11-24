@@ -90,6 +90,11 @@ include-package-data = true
 include = ["lightx2v*"]
 exclude = ["lightx2v_kernel*"]
 
+[tool.setuptools.package-data]
+"lightx2v.models.networks.hymotion" = ["LICENSE.txt", "NOTICE", "utils/assets/dump_wooden/*.bin", "utils/assets/dump_wooden/*.json", "utils/assets/stats/*.npy"]
+"lightx2v.models.networks.sf3d" = ["LICENSE.md", "NOTICE", "THIRD_PARTY_LICENSES.txt"]
+"lightx2v.models.networks.sdxl" = ["LICENSE", "NOTICE"]
+
 [tool.ruff]
 exclude = [
     ".git",
