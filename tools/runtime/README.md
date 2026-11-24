@@ -25,6 +25,10 @@ python3 -m venv /absolute/monitor-env
 /absolute/monitor-env/bin/python tools/runtime/nvml_capture.py --policy tools/runtime/gpu_watch.py check --samples /absolute/watch/samples.jsonl --task /absolute/task.json
 ```
 
-每次 NVML 获取在独立 CPU 子进程中，沿用 capture 的查询超时；不创建 CUDA 上下文。绑定版本固定，缺失/不支持的接口会使采样失败。该入口不启动、终止、调度或预约 GPU 工作负载。原 XML 入口和所有判定参数保持可选且独立。
+每次 capture 使用一个独立 CPU 子进程，初始化 NVML 一次后逐次处理查询；每次查询仍沿用 capture 的超时，不创建 CUDA 上下文。绑定版本固定，缺失/不支持的接口会使采样失败。该入口不启动、终止、调度或预约 GPU 工作负载。原 XML 入口和所有判定参数保持可选且独立。
 
 Each evaluation capture stages an immutable sampler copy alongside its evidence. Timed-out NVML queries report the last started API (or Python startup/imports); the query deadline and resource policy are unchanged.
+
+The NVML adapter keeps one CPU-only query process for each capture and initializes the binding once. Every request still has the original hard deadline; a stalled/erroring query invalidates timing, and capture exit closes and reaps the observer. This avoids repeated driver initialization during model execution.
+
+Observer IPC diagnostics use the local resource scratch directory (default `/tmp`), independently of a process-wide `TMPDIR` that may point at network storage.
