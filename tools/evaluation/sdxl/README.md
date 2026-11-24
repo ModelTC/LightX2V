@@ -41,3 +41,5 @@ The comparison requires complete one-to-one coverage, verified resource isolatio
 NVIDIA A100 wiring is implemented. MLU, MetaX and Ascend NPU are explicit placeholders whose launchers exit 2; see PLATFORMS.md. No target-device results are inferred from A100.
 
 Resource completion uses an explicit worker/controller acknowledgement: after all work and outputs complete, the worker retains its PID until capture obtains a post-workload sample. Process/CUDA teardown then occurs with separate cleanup verification. This prevents disappearing /proc lineage at interpreter exit from being mistaken for a competing process; unknown lineage within the measured workload still fails. The acknowledgement wait is outside per-input end-to-end latency.
+
+NVIDIA capture uses a 0.25 s polling interval and a bounded 2.5 s query budget; the maximum accepted completed-sample gap remains 3 s. Query failures, missing coverage and unknown process ancestry invalidate that attempt; partial timing records are retained separately.

@@ -383,7 +383,9 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
     evidence.mkdir(parents=True, exist_ok=False)
     capture_log = (evidence / "capture.log").open("x")
     capture = subprocess.Popen(
-        [python, str(watch_tool), "capture", "--devices", gpu, "--output", str(evidence / "watch"), "--seconds", "3500", "--interval", "0.5"], stdout=capture_log, stderr=subprocess.STDOUT
+        [python, str(watch_tool), "capture", "--devices", gpu, "--output", str(evidence / "watch"), "--seconds", "3500", "--interval", "0.25", "--query-timeout", "2.5"],
+        stdout=capture_log,
+        stderr=subprocess.STDOUT,
     )
     process = None
     task = None
@@ -425,6 +427,7 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
                 "argv": command,
                 "worker_argv": worker_command,
                 "bootstrap_sha256": sha256(bootstrap),
+                "resource_capture": {"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0},
                 "environment": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS")},
             },
         )
@@ -480,14 +483,23 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
         if task is not None:
             task.setdefault("end", time.monotonic())
             write_json(evidence / "task.json", task)
-    checked = subprocess.run([python, str(watch_tool), "check", "--samples", str(evidence / "watch/samples.jsonl"), "--task", str(evidence / "task.json")], text=True, capture_output=True, timeout=30)
+    checked = subprocess.run(
+        [python, str(watch_tool), "check", "--samples", str(evidence / "watch/samples.jsonl"), "--task", str(evidence / "task.json"), "--max-gap", "3"], text=True, capture_output=True, timeout=30
+    )
     result = json.loads(checked.stdout)
     try:
         os.killpg(process.pid, 0)
         clean = False
     except ProcessLookupError:
         clean = True
-    result.update(task_cleanup_verified=clean, returncode=process.returncode, timed_out=timed_out, completion_handshake=True, bootstrap_sha256=sha256(bootstrap))
+    result.update(
+        task_cleanup_verified=clean,
+        returncode=process.returncode,
+        timed_out=timed_out,
+        completion_handshake=True,
+        bootstrap_sha256=sha256(bootstrap),
+        resource_capture={"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0},
+    )
     write_json(evidence / "resources.json", result)
     if artifact.exists():
         write_json(artifact / "resources.json", result)
