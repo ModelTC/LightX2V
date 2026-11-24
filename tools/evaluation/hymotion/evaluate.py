@@ -377,134 +377,163 @@ def quality_aligned(first, second):
 
 
 def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu):
-    """Wire one bounded host task to the existing gpu_watch capture/check CLI."""
-    import signal
+    """Capture on local storage; archive evidence before publishing admissibility."""
 
-    evidence.mkdir(parents=True, exist_ok=False)
-    capture_log = (evidence / "capture.log").open("x")
-    capture = subprocess.Popen(
-        [python, str(watch_tool), "capture", "--devices", gpu, "--output", str(evidence / "watch"), "--seconds", "3500", "--interval", "0.25", "--query-timeout", "2.5"],
-        stdout=capture_log,
-        stderr=subprocess.STDOUT,
-    )
-    process = None
-    task = None
-    timed_out = False
-    completion = evidence / "completion.json"
-    release = evidence / "release.json"
-    bootstrap = HERE / "scripts/platform/nvidia/worker.py"
-    worker_command = [command[0], str(bootstrap), "--completion", str(completion), "--release", str(release), "--", *command[1:]]
+    def execute(evidence):
+        """Wire one bounded host task to the existing gpu_watch capture/check CLI."""
+        import signal
 
-    def latest():
-        path = evidence / "watch/samples.jsonl"
-        if not path.exists():
-            return None
-        lines = path.read_text().splitlines()
-        if not lines:
-            return None
-        try:
-            return json.loads(lines[-1])
-        except json.JSONDecodeError:
-            return json.loads(lines[-2]) if len(lines) > 1 else None
-
-    try:
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            point = latest()
-            if point:
-                if point.get("error"):
-                    raise RuntimeError(point["error"])
-                if all(not device["processes"] and device["utilization_pct"] == 0 and device["memory_mib"] <= 256 for device in point["gpus"]):
-                    break
-            if capture.poll() is not None:
-                raise RuntimeError("Resource capture stopped before workload")
-            time.sleep(0.5)
-        else:
-            raise RuntimeError("Selected GPU did not become idle; no workload started")
-        write_json(
-            evidence / "command.json",
-            {
-                "argv": command,
-                "worker_argv": worker_command,
-                "bootstrap_sha256": sha256(bootstrap),
-                "resource_capture": {"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0},
-                "environment": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS")},
-            },
+        evidence.mkdir(parents=True, exist_ok=False)
+        capture_log = (evidence / "capture.log").open("x")
+        capture = subprocess.Popen(
+            [python, str(watch_tool), "capture", "--devices", gpu, "--output", str(evidence / "watch"), "--seconds", "3500", "--interval", "0.25", "--query-timeout", "2.5"],
+            stdout=capture_log,
+            stderr=subprocess.STDOUT,
         )
-        with (evidence / "worker.log").open("x") as log:
-            start = time.monotonic()
-            # GNU timeout supervises this exclusive process group. The Python
-            # watchdog also observes telemetry and enforces a 3300-second limit.
-            process = subprocess.Popen(["timeout", "--kill-after=20s", "3300s", *worker_command], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            ticks = int(Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
-            task = {"pid": process.pid, "start_ticks": ticks, "start": start, "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(), "devices": [gpu]}
-            while process.poll() is None:
-                point = latest()
-                if not point or point.get("error") or capture.poll() is not None or time.monotonic() - point["end"] > 3:
-                    raise RuntimeError("Resource monitoring became unavailable")
-                for device in point["gpus"]:
-                    for app in device["processes"]:
-                        if app["type"] in ("M", "M+C") or [process.pid, ticks] not in app["ancestors"]:
-                            raise RuntimeError("Foreign/MPS GPU process observed; timing invalid")
-                if completion.exists():
-                    marker = read_json(completion)
-                    worker_fields = Path(f"/proc/{marker['pid']}/stat").read_text().rsplit(")", 1)[1].split()
-                    if int(worker_fields[19]) != marker["start_ticks"] or os.getpgid(marker["pid"]) != process.pid:
-                        raise RuntimeError("Completion marker does not belong to this live task")
-                    if not start < marker["end"] <= time.monotonic():
-                        raise RuntimeError("Invalid workload completion time")
-                    if point["start"] >= marker["end"]:
-                        task["end"] = marker["end"]
-                        write_json(release, {"post_workload_sample_end": point["end"]})
-                        process.wait(timeout=25)
-                        break
-                if time.monotonic() - start > 3330:
-                    timed_out = True
-                    raise RuntimeError("Task deadline exceeded")
-                time.sleep(0.2)
-            if "end" not in task:
-                raise RuntimeError("Worker exited without an acknowledged completion boundary")
-        time.sleep(2)
-    finally:
-        if process is not None:
-            # All members of this newly created process group belong to this
-            # task; never signal a GPU PID obtained from telemetry.
+        process = None
+        task = None
+        timed_out = False
+        completion = evidence / "completion.json"
+        release = evidence / "release.json"
+        bootstrap = HERE / "scripts/platform/nvidia/worker.py"
+        worker_command = [command[0], str(bootstrap), "--completion", str(completion), "--release", str(release), "--", *command[1:]]
+
+        def latest():
+            path = evidence / "watch/samples.jsonl"
+            if not path.exists():
+                return None
+            lines = path.read_text().splitlines()
+            if not lines:
+                return None
             try:
-                os.killpg(process.pid, signal.SIGTERM)
-                time.sleep(0.2)
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait(timeout=25)
-        if capture.poll() is None:
-            capture.terminate()
-        capture.wait(timeout=20)
-        capture_log.close()
-        if task is not None:
-            task.setdefault("end", time.monotonic())
-            write_json(evidence / "task.json", task)
-    checked = subprocess.run(
-        [python, str(watch_tool), "check", "--samples", str(evidence / "watch/samples.jsonl"), "--task", str(evidence / "task.json"), "--max-gap", "3"], text=True, capture_output=True, timeout=30
-    )
-    result = json.loads(checked.stdout)
+                return json.loads(lines[-1])
+            except json.JSONDecodeError:
+                return json.loads(lines[-2]) if len(lines) > 1 else None
+
+        try:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                point = latest()
+                if point:
+                    if point.get("error"):
+                        raise RuntimeError(point["error"])
+                    if all(not device["processes"] and device["utilization_pct"] == 0 and device["memory_mib"] <= 256 for device in point["gpus"]):
+                        break
+                if capture.poll() is not None:
+                    raise RuntimeError("Resource capture stopped before workload")
+                time.sleep(0.5)
+            else:
+                raise RuntimeError("Selected GPU did not become idle; no workload started")
+            write_json(
+                evidence / "command.json",
+                {
+                    "argv": command,
+                    "worker_argv": worker_command,
+                    "bootstrap_sha256": sha256(bootstrap),
+                    "resource_capture": {"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0},
+                    "environment": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS")},
+                },
+            )
+            with (evidence / "worker.log").open("x") as log:
+                start = time.monotonic()
+                # GNU timeout supervises this exclusive process group. The Python
+                # watchdog also observes telemetry and enforces a 3300-second limit.
+                process = subprocess.Popen(["timeout", "--kill-after=20s", "3300s", *worker_command], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                ticks = int(Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+                task = {"pid": process.pid, "start_ticks": ticks, "start": start, "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(), "devices": [gpu]}
+                while process.poll() is None:
+                    point = latest()
+                    if not point or point.get("error") or capture.poll() is not None or time.monotonic() - point["end"] > 3:
+                        raise RuntimeError("Resource monitoring became unavailable")
+                    for device in point["gpus"]:
+                        for app in device["processes"]:
+                            if app["type"] in ("M", "M+C") or [process.pid, ticks] not in app["ancestors"]:
+                                raise RuntimeError("Foreign/MPS GPU process observed; timing invalid")
+                    if completion.exists():
+                        marker = read_json(completion)
+                        worker_fields = Path(f"/proc/{marker['pid']}/stat").read_text().rsplit(")", 1)[1].split()
+                        if int(worker_fields[19]) != marker["start_ticks"] or os.getpgid(marker["pid"]) != process.pid:
+                            raise RuntimeError("Completion marker does not belong to this live task")
+                        if not start < marker["end"] <= time.monotonic():
+                            raise RuntimeError("Invalid workload completion time")
+                        if point["start"] >= marker["end"]:
+                            task["end"] = marker["end"]
+                            write_json(release, {"post_workload_sample_end": point["end"]})
+                            process.wait(timeout=25)
+                            break
+                    if time.monotonic() - start > 3330:
+                        timed_out = True
+                        raise RuntimeError("Task deadline exceeded")
+                    time.sleep(0.2)
+                if "end" not in task:
+                    raise RuntimeError("Worker exited without an acknowledged completion boundary")
+            time.sleep(2)
+        finally:
+            if process is not None:
+                # All members of this newly created process group belong to this
+                # task; never signal a GPU PID obtained from telemetry.
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    time.sleep(0.2)
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=25)
+            if capture.poll() is None:
+                capture.terminate()
+            capture.wait(timeout=20)
+            capture_log.close()
+            if task is not None:
+                task.setdefault("end", time.monotonic())
+                write_json(evidence / "task.json", task)
+        checked = subprocess.run(
+            [python, str(watch_tool), "check", "--samples", str(evidence / "watch/samples.jsonl"), "--task", str(evidence / "task.json"), "--max-gap", "3"], text=True, capture_output=True, timeout=30
+        )
+        result = json.loads(checked.stdout)
+        try:
+            os.killpg(process.pid, 0)
+            clean = False
+        except ProcessLookupError:
+            clean = True
+        result.update(
+            task_cleanup_verified=clean,
+            returncode=process.returncode,
+            timed_out=timed_out,
+            completion_handshake=True,
+            bootstrap_sha256=sha256(bootstrap),
+            resource_capture={"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0},
+        )
+        write_json(evidence / "resources.json", result)
+        if checked.returncode or process.returncode or not clean:
+            raise RuntimeError(f"Invalid execution: {result}; see {evidence}")
+
+    import shutil
+    import tempfile
+
+    destination = Path(evidence)
+    destination.mkdir(parents=True, exist_ok=False)
+    scratch = Path(os.environ.get("LIGHTX2V_EVAL_RESOURCE_SCRATCH", "/tmp"))
+    scratch.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f"lightx2v-{MODEL}-watch-", dir=str(scratch)))
+    local = staging / "evidence"
+    manifest = {"state": "RUNNING", "directory": str(local), "storage": "local_capture_then_archive", "controller_pid": os.getpid()}
+    write_json(destination / "staging.json", manifest)
     try:
-        os.killpg(process.pid, 0)
-        clean = False
-    except ProcessLookupError:
-        clean = True
-    result.update(
-        task_cleanup_verified=clean,
-        returncode=process.returncode,
-        timed_out=timed_out,
-        completion_handshake=True,
-        bootstrap_sha256=sha256(bootstrap),
-        resource_capture={"interval_s": 0.25, "query_timeout_s": 2.5, "max_gap_s": 3.0},
-    )
-    write_json(evidence / "resources.json", result)
-    if artifact.exists():
-        write_json(artifact / "resources.json", result)
-    if checked.returncode or process.returncode or not clean:
-        raise RuntimeError(f"Invalid execution: {result}; see {evidence}")
+        execute(local)
+    finally:
+        try:
+            if local.exists():
+                shutil.copytree(local, destination, dirs_exist_ok=True)
+                # A completed chunk becomes resumable only after its original
+                # resource evidence has reached the configured result storage.
+                if (local / "resources.json").exists() and artifact.exists():
+                    write_json(artifact / "resources.json", read_json(local / "resources.json"))
+            write_json(destination / "staging.json", {**manifest, "state": "ARCHIVED"})
+        except BaseException:
+            print(f"Local resource evidence retained at {local}", file=sys.stderr)
+            raise
+        else:
+            shutil.rmtree(staging)
 
 
 def checked_worker_script(paths):
