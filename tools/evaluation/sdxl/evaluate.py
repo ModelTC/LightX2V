@@ -1,0 +1,730 @@
+"""Developer evaluation; inference and metric networks remain external dependencies."""
+
+import argparse
+import hashlib
+import importlib.metadata
+import json
+import os
+import random
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+MODEL = "sdxl"
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text())
+
+
+def write_json(path, value):
+    path = Path(path)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+    temporary.replace(path)
+
+
+def rows(path):
+    return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def suite():
+    return read_json(HERE / "configs/common/suite.json")
+
+
+def inputs(dataset):
+    specification = suite()["datasets"][dataset]
+    path = HERE / specification["manifest"]
+    if sha256(path) != specification["sha256"]:
+        raise ValueError("Input manifest was modified")
+    records = rows(path)
+    ids = [entry["id"] for entry in records]
+    if len(records) != specification["count"] or len(set(ids)) != len(ids):
+        raise ValueError("Wrong input coverage or duplicate IDs")
+    if any(Path(name).name != name or name in (".", "..") for name in ids):
+        raise ValueError("Unsafe sample ID")
+    return records
+
+
+def resolve(paths, key, relative="", allow_symlinks=False):
+    root = Path(paths[key]).resolve()
+    lexical = Path(os.path.abspath(root / relative))
+    result = lexical.resolve()
+    if not lexical.is_relative_to(root) or (not allow_symlinks and not result.is_relative_to(root)):
+        raise ValueError("Path escapes configured root")
+    return result
+
+
+def verify_source(root, specification):
+    if "files" in specification:
+        for entry in specification["files"]:
+            if sha256(root / entry["path"]) != entry.get("runtime_sha256", entry["sha256"]):
+                raise ValueError(f"Source file mismatch: {root / entry['path']}")
+        return
+    actual = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    if actual != specification["revision"]:
+        raise ValueError(f"Wrong source revision: {root}: {actual}")
+    # LFS binaries can appear dirty before git-lfs smudging. Executable tracked
+    # source must still exactly match the pinned tree.
+    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--", "*.py", "*.sh", "*.json", "*.yaml", "*.yml", "*.toml"], check=True, stdout=subprocess.DEVNULL)
+
+
+def prepare_sources(destination):
+    destination.mkdir(parents=True, exist_ok=True)
+    for name, specification in read_json(HERE / "configs/nvidia/source-lock.json").items():
+        if "files" in specification:
+            import re
+            import urllib.request
+
+            root = destination / name
+            root.mkdir(exist_ok=True)
+            for entry in specification["files"]:
+                target = root / entry["path"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                expected = entry.get("runtime_sha256", entry["sha256"])
+                if target.is_file() and sha256(target) == expected:
+                    continue
+                url = f"https://raw.githubusercontent.com/{specification['repo']}/{specification['revision']}/{entry['path']}"
+                content = urllib.request.urlopen(url, timeout=30).read()
+                if hashlib.sha256(content).hexdigest() != entry["sha256"]:
+                    raise ValueError(f"Downloaded source mismatch: {url}")
+                if "runtime_sha256" in entry:
+                    source = content.decode()
+                    if "numpy" in entry.get("patch", "").lower():
+                        source = re.sub(r"np\.float\b", "np.float64", source)
+                    else:
+                        source = source.replace("np.sqrt(d1 + d2 + d3)", "np.sqrt(np.maximum(d1 + d2 + d3, 0.0))")
+                    content = source.encode()
+                target.write_bytes(content)
+                if sha256(target) != expected:
+                    raise ValueError("Compatibility patch differs from lock")
+            verify_source(root, specification)
+            continue
+        if "repository" not in specification:
+            continue
+        root = destination / name
+        if not root.exists():
+            root.mkdir()
+            subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "remote", "add", "origin", specification["repository"]], check=True)
+            env = dict(os.environ, GIT_LFS_SKIP_SMUDGE="1")
+            subprocess.run(["git", "-C", str(root), "fetch", "--depth=1", "origin", specification["revision"]], check=True, env=env)
+            subprocess.run(["git", "-C", str(root), "checkout", "--detach", "FETCH_HEAD"], check=True, env=env)
+        verify_source(root, specification)
+    print(json.dumps({"sources": str(destination), "status": "PREPARED", "note": "Install dependencies and provision locked LFS/weight assets per DATA.md before running."}))
+
+
+def check_inputs(paths):
+    for dataset in suite()["datasets"]:
+        records = inputs(dataset)
+        for entry in records:
+            for name in ("input", "gt", "source"):
+                if name not in entry:
+                    continue
+                path = resolve(paths, "data", entry[name])
+                if not path.is_file():
+                    raise FileNotFoundError(path)
+                expected = entry.get(name + "_sha256")
+                if expected and sha256(path) != expected:
+                    raise ValueError(f"Corrupt input: {path}")
+    for entry in read_json(HERE / "configs/common/weight-lock.json")["files"]:
+        # A prepared weight overlay can link a checksum-locked checkpoint in
+        # another storage root. Input/output traversal remains strict.
+        path = resolve(paths, entry["root"], entry["path"], allow_symlinks=True)
+        if not path.is_file() or path.stat().st_size != entry["bytes"] or sha256(path) != entry["sha256"]:
+            raise ValueError(f"Weight/asset mismatch: {path}")
+    print("All datasets, weights and evaluator assets verified")
+
+
+def seed_all():
+    import numpy as np
+    import torch
+
+    random.seed(42)
+    np.random.seed(42)
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
+
+
+def environment():
+    import torch
+
+    versions = {}
+    for package in ("torch", "transformers", "diffusers", "numpy", "Pillow", "trimesh", "rembg", "open-clip-torch", "scipy"):
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    return {
+        "python": sys.executable,
+        "versions": versions,
+        "cuda": torch.version.cuda,
+        "gpu": torch.cuda.get_device_name(0),
+        "visible_device": os.environ["CUDA_VISIBLE_DEVICES"],
+        "cudnn": torch.backends.cudnn.version(),
+        "deterministic": torch.are_deterministic_algorithms_enabled(),
+        "tf32_matmul": torch.backends.cuda.matmul.allow_tf32,
+        "tf32_cudnn": torch.backends.cudnn.allow_tf32,
+    }
+
+
+def generate(args, paths):
+    import torch
+
+    if args.count < 1 or args.start < 0:
+        raise ValueError("Invalid chunk")
+    if torch.cuda.device_count() != 1 or not os.environ.get("CUDA_VISIBLE_DEVICES"):
+        raise RuntimeError("Exactly one explicitly visible GPU is required")
+    torch.set_grad_enabled(False)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    if MODEL == "sf3d":
+        torch.use_deterministic_algorithms(True)
+    source_lock = read_json(HERE / "configs/nvidia/source-lock.json")
+    key = "lightx2v" if args.backend == "lightx2v" else "native"
+    if key in source_lock and "repository" in source_lock[key]:
+        verify_source(Path(paths[key]), source_lock[key])
+    elif key in source_lock and "package" in source_lock[key]:
+        package = source_lock[key]
+        if importlib.metadata.version(package["package"]) != package["version"]:
+            raise ValueError("Native package version mismatch")
+        distribution = importlib.metadata.distribution(package["package"])
+        for entry in package["package_files"]:
+            if sha256(distribution.locate_file(entry["path"])) != entry["sha256"]:
+                raise ValueError("Modified native package source")
+    records = inputs(args.dataset)
+    selected = records[args.start : args.start + args.count]
+    if not selected:
+        raise ValueError("Empty chunk")
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    provenance = {
+        "model": MODEL,
+        "dataset": args.dataset,
+        "backend": args.backend,
+        "start": args.start,
+        "count": len(selected),
+        "seed": 42,
+        "evaluation_sha256": sha256(__file__),
+        "suite_sha256": sha256(HERE / "configs/common/suite.json"),
+        "source_lock": source_lock,
+        "manifest_sha256": suite()["datasets"][args.dataset]["sha256"],
+        "weight_lock_sha256": sha256(HERE / "configs/common/weight-lock.json"),
+        "paths": paths,
+        "timing": suite()["timing"],
+        "status": "STARTED",
+    }
+    write_json(output / "run.json", provenance)
+    seed_all()
+    load_start = time.perf_counter()
+    adapter = load_adapter(args.backend, paths)
+    torch.cuda.synchronize()
+    provenance["load_s"] = time.perf_counter() - load_start
+    provenance["environment"] = environment()
+    # A separate synthetic/upstream demo input never contributes to dataset coverage.
+    warmup = output / "warmup"
+    warmup.mkdir()
+    seed_all()
+    with torch.inference_mode():
+        adapter(warmup_input(paths), warmup / ("output." + EXTENSION))
+    torch.cuda.synchronize()
+    failed = 0
+    with (output / "samples.jsonl").open("x") as log:
+        for index, fixture in enumerate(selected, args.start):
+            directory = output / fixture["id"]
+            directory.mkdir()
+            artifact = directory / ("output." + EXTENSION)
+            seed_all()
+            torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
+            started = time.perf_counter()
+            record = {"id": fixture["id"], "index": index, "status": "FAILED"}
+            try:
+                # Deserialize the request inside the timed boundary; manifest locking,
+                # RNG reset and directory creation are harness preparation.
+                request = json.loads(json.dumps(fixture))
+                if "input" in request:
+                    request["input"] = str(resolve(paths, "data", request["input"]))
+                with torch.inference_mode():
+                    adapter(request, artifact)
+                with artifact.open("rb") as stream:
+                    os.fsync(stream.fileno())
+                torch.cuda.synchronize()
+                record["e2e_latency_s"] = time.perf_counter() - started
+                record["peak_vram_bytes"] = torch.cuda.max_memory_allocated()
+                record.update(validate_output(artifact, fixture))
+                record.update(status="SUCCESS", artifact=str(artifact.relative_to(output)), sha256=sha256(artifact))
+            except Exception as error:
+                torch.cuda.synchronize()
+                record.update(error=f"{type(error).__name__}: {error}", elapsed_until_failure_s=time.perf_counter() - started)
+                failed += 1
+            log.write(json.dumps(record, allow_nan=False) + "\n")
+            log.flush()
+            print(json.dumps({"index": index, "id": fixture["id"], "status": record["status"]}), flush=True)
+    provenance.update(status="COMPLETE" if not failed else "FAILED", failed=failed)
+    write_json(output / "run.json", provenance)
+    if failed:
+        raise RuntimeError(f"{failed} failed requests; retained in denominator")
+
+
+def completed_runs(root, dataset, backend, verify_artifacts=True):
+    expected = inputs(dataset)
+    indexed = {}
+    versions = set()
+    for metadata_path in sorted(Path(root).glob("chunks/*/run.json")):
+        metadata = read_json(metadata_path)
+        if metadata["dataset"] != dataset or metadata["backend"] != backend or metadata["model"] != MODEL:
+            raise ValueError("Mixed campaigns")
+        versions.add((metadata["evaluation_sha256"], metadata["manifest_sha256"], metadata["weight_lock_sha256"], json.dumps(metadata["source_lock"], sort_keys=True)))
+        if metadata["status"] != "COMPLETE":
+            raise ValueError(f"Unfinished/failed chunk: {metadata_path}")
+        if metadata["manifest_sha256"] != suite()["datasets"][dataset]["sha256"] or metadata["source_lock"] != read_json(HERE / "configs/nvidia/source-lock.json"):
+            raise ValueError("Execution used a different dataset or source lock")
+        resources = read_json(metadata_path.parent / "resources.json")
+        if not resources["resources_clear"] or not resources.get("task_cleanup_verified") or resources.get("returncode") != 0:
+            raise ValueError("Unverified resources or cleanup; latency inadmissible")
+        output_rows = rows(metadata_path.parent / "samples.jsonl")
+        if len(output_rows) != metadata["count"]:
+            raise ValueError("Missing chunk records")
+        for record in output_rows:
+            if record["id"] in indexed or record["status"] != "SUCCESS":
+                raise ValueError("Repeated or failed sample")
+            path = resolve({"chunk": str(metadata_path.parent)}, "chunk", record["artifact"])
+            if verify_artifacts and sha256(path) != record["sha256"]:
+                raise ValueError("Modified output artifact")
+            record["path"] = str(path)
+            record["gpu"] = metadata["environment"]["visible_device"]
+            indexed[record["id"]] = record
+    if len(versions) != 1 or set(indexed) != {entry["id"] for entry in expected}:
+        raise ValueError("Incomplete coverage or mixed source/fixture versions")
+    if len({entry["gpu"] for entry in indexed.values()}) != 1:
+        raise ValueError("A model-dataset campaign used multiple GPUs")
+    return expected, indexed
+
+
+def latency_summary(records):
+    import numpy as np
+
+    values = [entry["e2e_latency_s"] for entry in records.values()]
+    if not values or not np.isfinite(values).all() or min(values) <= 0:
+        raise ValueError("Invalid latency")
+    return {"count": len(values), "mean_s": float(np.mean(values)), "median_s": float(np.median(values)), "p95_s": float(np.percentile(values, 95))}
+
+
+def compare(args):
+    import numpy as np
+
+    _, native = completed_runs(args.native_run, args.dataset, "native")
+    _, adapted = completed_runs(args.lightx2v_run, args.dataset, "lightx2v")
+    if {entry["gpu"] for entry in native.values()} != {entry["gpu"] for entry in adapted.values()}:
+        raise ValueError("Native and LightX2V latency must use the same physical GPU")
+    differences = []
+    for name, item in native.items():
+        if not outputs_equal(Path(item["path"]), Path(adapted[name]["path"])):
+            differences.append(name)
+    native_quality = read_json(args.native_run / "quality.json")
+    adapted_quality = read_json(args.lightx2v_run / "quality.json")
+    metrics_equal = quality_aligned(native_quality, adapted_quality)
+    reference, candidate = latency_summary(native), latency_summary(adapted)
+    ratios = {stat: candidate[stat] / reference[stat] for stat in ("mean_s", "median_s", "p95_s")}
+    timing_ok = ratios["mean_s"] <= args.mean_ratio and ratios["p95_s"] <= args.p95_ratio
+    result = {
+        "model": MODEL,
+        "dataset": args.dataset,
+        "coverage": len(native),
+        "repetitions": 1,
+        "output_difference_count": len(differences),
+        "output_difference_ids": differences,
+        "native_quality": native_quality,
+        "lightx2v_quality": adapted_quality,
+        "quality_aligned": metrics_equal,
+        "native_latency": reference,
+        "lightx2v_latency": candidate,
+        "latency_ratios": ratios,
+        "latency_gate": {"mean_ratio_max": args.mean_ratio, "p95_ratio_max": args.p95_ratio},
+        "latency_aligned": timing_ok,
+        "status": "PASS" if metrics_equal and not differences and timing_ok else "FAIL",
+    }
+    if not all(np.isfinite(list(ratios.values()))):
+        raise ValueError("Non-finite latency ratio")
+    write_json(args.output, result)
+    print(json.dumps(result, indent=2))
+    if result["status"] != "PASS":
+        raise SystemExit(1)
+
+
+def quality_aligned(first, second):
+    """Fixed absolute tolerances only for scorer roundoff; exact outputs checked separately."""
+    import math
+
+    if isinstance(first, dict) and isinstance(second, dict):
+        return first.keys() == second.keys() and all(quality_aligned(first[key], second[key]) for key in first)
+    if isinstance(first, list) and isinstance(second, list):
+        return len(first) == len(second) and all(quality_aligned(a, b) for a, b in zip(first, second))
+    if isinstance(first, (float, int)) and isinstance(second, (float, int)):
+        return math.isfinite(first) and math.isfinite(second) and math.isclose(first, second, rel_tol=0, abs_tol=1e-5)
+    return first == second
+
+
+def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu):
+    """Wire one bounded host task to the existing gpu_watch capture/check CLI."""
+    import signal
+
+    evidence.mkdir(parents=True, exist_ok=False)
+    capture_log = (evidence / "capture.log").open("x")
+    capture = subprocess.Popen(
+        [python, str(watch_tool), "capture", "--devices", gpu, "--output", str(evidence / "watch"), "--seconds", "3500", "--interval", "0.5"], stdout=capture_log, stderr=subprocess.STDOUT
+    )
+    process = None
+    task = None
+    timed_out = False
+
+    def latest():
+        path = evidence / "watch/samples.jsonl"
+        if not path.exists():
+            return None
+        lines = path.read_text().splitlines()
+        if not lines:
+            return None
+        try:
+            return json.loads(lines[-1])
+        except json.JSONDecodeError:
+            return json.loads(lines[-2]) if len(lines) > 1 else None
+
+    try:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            point = latest()
+            if point:
+                if point.get("error"):
+                    raise RuntimeError(point["error"])
+                if all(not device["processes"] and device["utilization_pct"] == 0 and device["memory_mib"] <= 256 for device in point["gpus"]):
+                    break
+            if capture.poll() is not None:
+                raise RuntimeError("Resource capture stopped before workload")
+            time.sleep(0.5)
+        else:
+            raise RuntimeError("Selected GPU did not become idle; no workload started")
+        write_json(
+            evidence / "command.json",
+            {"argv": command, "environment": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS")}},
+        )
+        with (evidence / "worker.log").open("x") as log:
+            start = time.monotonic()
+            # GNU timeout supervises this exclusive process group. The Python
+            # watchdog also observes telemetry and enforces a 3300-second limit.
+            process = subprocess.Popen(["timeout", "--kill-after=20s", "3300s", *command], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            ticks = int(Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+            task = {"pid": process.pid, "start_ticks": ticks, "start": start, "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(), "devices": [gpu]}
+            while process.poll() is None:
+                time.sleep(1)
+                point = latest()
+                if not point or point.get("error") or capture.poll() is not None or time.monotonic() - point["end"] > 3:
+                    raise RuntimeError("Resource monitoring became unavailable")
+                for device in point["gpus"]:
+                    for app in device["processes"]:
+                        if app["type"] in ("M", "M+C") or [process.pid, ticks] not in app["ancestors"]:
+                            raise RuntimeError("Foreign/MPS GPU process observed; timing invalid")
+                if time.monotonic() - start > 3330:
+                    timed_out = True
+                    raise RuntimeError("Task deadline exceeded")
+            task["end"] = time.monotonic()
+        time.sleep(2)
+    finally:
+        if process is not None:
+            # All members of this newly created process group belong to this
+            # task; never signal a GPU PID obtained from telemetry.
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                time.sleep(0.2)
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=25)
+        if capture.poll() is None:
+            capture.terminate()
+        capture.wait(timeout=20)
+        capture_log.close()
+        if task is not None:
+            task.setdefault("end", time.monotonic())
+            write_json(evidence / "task.json", task)
+    checked = subprocess.run([python, str(watch_tool), "check", "--samples", str(evidence / "watch/samples.jsonl"), "--task", str(evidence / "task.json")], text=True, capture_output=True, timeout=30)
+    result = json.loads(checked.stdout)
+    try:
+        os.killpg(process.pid, 0)
+        clean = False
+    except ProcessLookupError:
+        clean = True
+    result.update(task_cleanup_verified=clean, returncode=process.returncode, timed_out=timed_out)
+    write_json(evidence / "resources.json", result)
+    if artifact.exists():
+        write_json(artifact / "resources.json", result)
+    if checked.returncode or process.returncode or not clean:
+        raise RuntimeError(f"Invalid execution: {result}; see {evidence}")
+
+
+def campaign(args, paths):
+    import uuid
+
+    if not args.gpu or not args.gpu.startswith("GPU-") or str(uuid.UUID(args.gpu[4:])) != args.gpu[4:]:
+        raise ValueError("Pass exactly one full GPU UUID")
+    if not 1 <= args.count <= 256:
+        raise ValueError("Chunk size must be in [1,256]")
+    watch_tool = Path(paths["lightx2v"]) / "tools/runtime/gpu_watch.py"
+    verify_source(Path(paths["lightx2v"]), read_json(HERE / "configs/nvidia/source-lock.json")["lightx2v"])
+    count = len(inputs(args.dataset))
+    check_inputs(paths)
+    root = args.output.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    identity = {"model": MODEL, "dataset": args.dataset, "gpu": args.gpu, "count": count, "chunk_size": args.count, "evaluate_sha256": sha256(__file__), "paths": paths}
+    identity_path = root / "campaign.json"
+    if identity_path.exists() and read_json(identity_path) != identity:
+        raise ValueError("Resume identity differs; preserve old evidence and use a new campaign directory")
+    write_json(identity_path, identity)
+    env = dict(
+        os.environ,
+        CUDA_VISIBLE_DEVICES=args.gpu,
+        PLATFORM="cuda",
+        DTYPE="BF16",
+        HF_HUB_OFFLINE="1",
+        TRANSFORMERS_OFFLINE="1",
+        CUBLAS_WORKSPACE_CONFIG=":4096:8",
+        OMP_NUM_THREADS="4",
+        OPENBLAS_NUM_THREADS="1",
+        MKL_NUM_THREADS="4",
+        PROFILING_DEBUG_LEVEL="0",
+        PYTHONUNBUFFERED="1",
+        PYTHONDONTWRITEBYTECODE="1",
+        TOKENIZERS_PARALLELISM="false",
+    )
+    for start in range(0, count, args.count):
+        for backend in ("native", "lightx2v"):
+            chunk = root / backend / "chunks" / f"{start:06d}"
+            if chunk.exists():
+                metadata = read_json(chunk / "run.json")
+                resource = read_json(chunk / "resources.json")
+                if metadata["status"] != "COMPLETE" or not resource["resources_clear"] or not resource["task_cleanup_verified"]:
+                    raise ValueError(f"Existing incomplete/invalid chunk requires investigation: {chunk}")
+                continue
+            python = paths[backend + "_python"]
+            command = [
+                python,
+                str(HERE / "evaluate.py"),
+                "run",
+                "--paths",
+                str(args.paths.resolve()),
+                "--dataset",
+                args.dataset,
+                "--backend",
+                backend,
+                "--output",
+                str(chunk),
+                "--start",
+                str(start),
+                "--count",
+                str(args.count),
+            ]
+            observed_execution(command, env, sys.executable, watch_tool, root / "resources" / f"{backend}-{start:06d}", chunk, args.gpu)
+    if args.skip_score:
+        return
+    for backend in ("native", "lightx2v"):
+        output = root / backend
+        if (output / "quality.json").exists():
+            continue
+        command = [paths["metric_python"], str(HERE / "evaluate.py"), "score", "--paths", str(args.paths.resolve()), "--dataset", args.dataset, "--backend", backend, "--run", str(output)]
+        observed_execution(command, env, sys.executable, watch_tool, root / "resources" / f"{backend}-score", output, args.gpu)
+    args.native_run, args.lightx2v_run = root / "native", root / "lightx2v"
+    args.output = root / "comparison.json"
+    compare(args)
+
+
+EXTENSION = "png"
+
+
+def warmup_input(paths):
+    return {"prompt": "A small red wooden cube on a plain gray background."}
+
+
+def load_adapter(backend, paths):
+    import torch
+
+    if backend == "lightx2v":
+        sys.path.insert(0, paths["lightx2v"])
+        from lightx2v.models.runners.runner_factory import build_runner
+        from lightx2v.utils.set_config import build_startup_config
+
+        config = read_json(HERE / "configs/nvidia/model.json")
+        config["model_path"] = paths["weights"]
+        runner = build_runner(build_startup_config(config))
+
+        def infer(item, artifact):
+            request = dict(prompt=item["prompt"], seed=42, size=[1024, 1024], save_result_path=str(artifact))
+            runner.run_request(runner.prepare_request(request))
+
+        return infer
+    from diffusers import StableDiffusionXLPipeline
+
+    if importlib.metadata.version("diffusers") != "0.40.0":
+        raise ValueError("Native Diffusers must match pinned 0.40.0")
+    pipeline = StableDiffusionXLPipeline.from_pretrained(paths["weights"], variant="fp16", torch_dtype=torch.float16, use_safetensors=True, local_files_only=True).to("cuda")
+    pipeline.set_progress_bar_config(disable=True)
+
+    def require_finite(module, inputs, output):
+        if not torch.isfinite(output).all():
+            raise FloatingPointError("Native SDXL decoded non-finite values")
+
+    pipeline.vae.decoder.register_forward_hook(require_finite)
+
+    def infer(item, artifact):
+        image = pipeline(prompt=item["prompt"], num_inference_steps=30, guidance_scale=5.0, generator=torch.Generator(device="cuda").manual_seed(42), height=1024, width=1024).images[0]
+        image.save(artifact)
+
+    return infer
+
+
+def validate_output(path, fixture):
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(path) as image:
+        pixels = np.asarray(image.convert("RGB"))
+        if image.size != (1024, 1024) or not np.isfinite(pixels).all():
+            raise ValueError("Invalid SDXL image")
+    return {"finite_serialized_output": True, "size": [1024, 1024]}
+
+
+def outputs_equal(first, second):
+    return sha256(first) == sha256(second)
+
+
+def score(expected, generated, paths, output):
+    if "metadata" in expected[0] and "tag" in expected[0]["metadata"]:
+        directory = output / "geneval"
+        directory.mkdir(exist_ok=False)
+        for item in expected:
+            sample = directory / item["id"] / "samples"
+            sample.mkdir(parents=True)
+            (sample.parent / "metadata.jsonl").write_text(json.dumps(item["metadata"]) + "\n")
+            (sample / "0.png").symlink_to(Path(generated[item["id"]]["path"]))
+        report = output / "geneval-scores.jsonl"
+        repo = Path(paths["geneval"])
+        verify_source(repo, read_json(HERE / "configs/nvidia/source-lock.json")["geneval"])
+        # The official CLI has no CLIP cache option. Route this constructor's
+        # existing cache_dir parameter without changing evaluator mathematics.
+        launcher = """import functools, runpy, sys, open_clip
+cache, script, *arguments = sys.argv[1:]
+open_clip.create_model_and_transforms = functools.partial(open_clip.create_model_and_transforms, cache_dir=cache)
+sys.argv = [script, *arguments]
+runpy.run_path(script, run_name='__main__')
+"""
+        subprocess.run(
+            [
+                paths["geneval_python"],
+                "-c",
+                launcher,
+                paths["geneval_clip"],
+                str(repo / "evaluation/evaluate_images.py"),
+                str(directory.resolve()),
+                "--outfile",
+                str(report.resolve()),
+                "--model-path",
+                paths["geneval_weights"],
+                "--model-config",
+                paths["geneval_config"],
+            ],
+            check=True,
+            timeout=3300,
+        )
+        entries = rows(report)
+        if len(entries) != len(expected) or len({entry["filename"] for entry in entries}) != len(expected):
+            raise ValueError("Incomplete or repeated GenEval scores")
+        groups = {}
+        for entry in entries:
+            groups.setdefault(entry["tag"], []).append(bool(entry["correct"]))
+        if set(groups) != {"single_object", "two_object", "counting", "colors", "position", "color_attr"}:
+            raise ValueError("Missing GenEval dimensions")
+        dimensions = {key: sum(values) / len(values) for key, values in sorted(groups.items())}
+        return {"count": len(expected), "geneval_by_dimension": dimensions, "geneval_overall": sum(dimensions.values()) / 6}
+    import numpy as np
+    import torch
+    from PIL import Image
+    from transformers import CLIPModel, CLIPProcessor
+
+    model = CLIPModel.from_pretrained(paths["clip"], torch_dtype=torch.float32, local_files_only=True).cuda().eval()
+    processor = CLIPProcessor.from_pretrained(paths["clip"], local_files_only=True)
+    values = []
+    with (output / "clip-scores.jsonl").open("x") as log, torch.inference_mode():
+        for item in expected:
+            with Image.open(generated[item["id"]]["path"]) as image:
+                tensors = processor(text=[item["prompt"]], images=[image.convert("RGB")], return_tensors="pt", padding=True, truncation=True, max_length=77)
+            result = model(**{key: value.cuda() for key, value in tensors.items()})
+            cosine = float((result.image_embeds.float() * result.text_embeds.float()).sum(-1).item())
+            if not np.isfinite(cosine):
+                raise ValueError("Non-finite CLIP score")
+            values.append(cosine)
+            log.write(json.dumps({"id": item["id"], "clip_cosine_x100": 100 * cosine, "clipscore_2_5_relu_cosine": 2.5 * max(0, cosine)}) + "\n")
+    return {"count": len(values), "clip_cosine_x100_mean": float(np.mean(values) * 100), "clipscore_2_5_relu_cosine_mean": float(np.mean(np.maximum(values, 0)) * 2.5)}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign"])
+    parser.add_argument("--paths", type=Path)
+    parser.add_argument("--workspace", type=Path)
+    parser.add_argument("--dataset", choices=list(suite()["datasets"]))
+    parser.add_argument("--backend", choices=["native", "lightx2v"])
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--run", type=Path)
+    parser.add_argument("--native-run", type=Path)
+    parser.add_argument("--lightx2v-run", type=Path)
+    parser.add_argument("--start", type=int, default=0)
+    parser.add_argument("--count", type=int, default=256)
+    parser.add_argument("--mean-ratio", type=float, default=1.25)
+    parser.add_argument("--p95-ratio", type=float, default=1.5)
+    parser.add_argument("--gpu")
+    parser.add_argument("--skip-score", action="store_true")
+    args = parser.parse_args()
+    if args.command == "prepare-sources":
+        prepare_sources(args.workspace.resolve())
+        return
+    if args.command == "compare":
+        compare(args)
+        return
+    paths = read_json(args.paths)
+    if args.command == "check-inputs":
+        check_inputs(paths)
+    elif args.command == "campaign":
+        campaign(args, paths)
+    elif args.command == "run":
+        generate(args, paths)
+    elif args.command == "score":
+        expected, generated = completed_runs(args.run, args.dataset, args.backend)
+        quality = score(expected, generated, paths, args.run)
+        write_json(args.run / "quality.json", quality)
+        write_json(
+            args.run / "quality-provenance.json",
+            {
+                "evaluation_sha256": sha256(__file__),
+                "source_lock_sha256": sha256(HERE / "configs/nvidia/source-lock.json"),
+                "weight_lock_sha256": sha256(HERE / "configs/common/weight-lock.json"),
+                "manifest_sha256": suite()["datasets"][args.dataset]["sha256"],
+                "quality_sha256": sha256(args.run / "quality.json"),
+                "outputs_sha256": hashlib.sha256(json.dumps([(item["id"], generated[item["id"]]["sha256"]) for item in expected]).encode()).hexdigest(),
+                "python": sys.executable,
+            },
+        )
+        write_json(args.run / "latency.json", latency_summary(generated))
+
+
+if __name__ == "__main__":
+    main()

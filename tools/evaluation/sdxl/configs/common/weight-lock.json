@@ -1,0 +1,210 @@
+{
+  "model": "stabilityai/stable-diffusion-xl-base-1.0",
+  "revision": "462165984030d82259a11f4367a4eed129e94a7b",
+  "files": [
+    {
+      "root": "weights",
+      "path": "model_index.json",
+      "bytes": 609,
+      "sha256": "6d7b93508390ab91ac5bfbe4aeb4dc2d83f7bb1b05fb069d714b5b0c75f70d44"
+    },
+    {
+      "root": "weights",
+      "path": "scheduler/scheduler_config.json",
+      "bytes": 479,
+      "sha256": "af3e45a949aff8b8341ab8b811429ec03fee857a700a1d9477363e4fff9666e2"
+    },
+    {
+      "root": "weights",
+      "path": "text_encoder/config.json",
+      "bytes": 565,
+      "sha256": "39b8b2e4b1949e36969caa425b6c81c68bace99198dd9078ce05d16ad401fe7f"
+    },
+    {
+      "root": "weights",
+      "path": "text_encoder/model.fp16.safetensors",
+      "bytes": 246144152,
+      "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd"
+    },
+    {
+      "root": "weights",
+      "path": "text_encoder_2/config.json",
+      "bytes": 575,
+      "sha256": "a892d1c3a69a7e9247a24de2bc1d5891e3109a54696e53be20093af671072c34"
+    },
+    {
+      "root": "weights",
+      "path": "text_encoder_2/model.fp16.safetensors",
+      "bytes": 1389382176,
+      "sha256": "ec310df2af79c318e24d20511b601a591ca8cd4f1fce1d8dff822a356bcdb1f4"
+    },
+    {
+      "root": "weights",
+      "path": "tokenizer/merges.txt",
+      "bytes": 524619,
+      "sha256": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a"
+    },
+    {
+      "root": "weights",
+      "path": "tokenizer/special_tokens_map.json",
+      "bytes": 472,
+      "sha256": "c4864a9376a8401918425bed71fc14fc0e81f9b59ec45c1cf96cccb2df508eac"
+    },
+    {
+      "root": "weights",
+      "path": "tokenizer/tokenizer_config.json",
+      "bytes": 737,
+      "sha256": "19d7b034cb0cc3ce9766c2231373ab8aa8991fc72e2c8f76558bfaae3de0d563"
+    },
+    {
+      "root": "weights",
+      "path": "tokenizer/vocab.json",
+      "bytes": 1059962,
+      "sha256": "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349"
+    },
+    {
+      "root": "weights",
+      "path": "tokenizer_2/merges.txt",
+      "bytes": 524619,
+      "sha256": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a"
+    },
+    {
+      "root": "weights",
+      "path": "tokenizer_2/special_tokens_map.json",
+      "bytes": 460,
+      "sha256": "f118ab3a983206e4f32583448de6bd6aae4ee21869135cef1f5848a753cdaab6"
+    },
+    {
+      "root": "weights",
+      "path": "tokenizer_2/tokenizer_config.json",
+      "bytes": 725,
+      "sha256": "c9d23941f76a41cbd50eda9290f57be7828f0a7a677939e9ef181f7e12bd1bdf"
+    },
+    {
+      "root": "weights",
+      "path": "tokenizer_2/vocab.json",
+      "bytes": 1059962,
+      "sha256": "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349"
+    },
+    {
+      "root": "weights",
+      "path": "unet/config.json",
+      "bytes": 1680,
+      "sha256": "30ebc70750223e59006f7f2b4e1e6c102570aa19a9c4ae3e1fbe7591332dbae6"
+    },
+    {
+      "root": "weights",
+      "path": "unet/diffusion_pytorch_model.fp16.safetensors",
+      "bytes": 5135149760,
+      "sha256": "83e012a805b84c7ca28e5646747c90a243c65c8ba4f070e2d7ddc9d74661e139"
+    },
+    {
+      "root": "weights",
+      "path": "vae/config.json",
+      "bytes": 642,
+      "sha256": "0b331c8ac22ded5f9997a144a575c1d113d6169aff262c353f39015bd24a6264"
+    },
+    {
+      "root": "weights",
+      "path": "vae/diffusion_pytorch_model.fp16.safetensors",
+      "bytes": 167335342,
+      "sha256": "bcb60880a46b63dea58e9bc591abe15f8350bde47b405f9c38f4be70c6161e68"
+    },
+    {
+      "root": "clip",
+      "path": "config.json",
+      "bytes": 4519,
+      "sha256": "8a09b467700c58138c29d53c605b34ebc69beaadd13274a8a2af8ad2c2f4032a"
+    },
+    {
+      "root": "clip",
+      "path": "merges.txt",
+      "bytes": 524619,
+      "sha256": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a"
+    },
+    {
+      "root": "clip",
+      "path": "model.safetensors",
+      "bytes": 1710540580,
+      "sha256": "a2bf730a0c7debf160f7a6b50b3aaf3703e7e88ac73de7a314903141db026dcb"
+    },
+    {
+      "root": "clip",
+      "path": "preprocessor_config.json",
+      "bytes": 316,
+      "sha256": "910e70b3956ac9879ebc90b22fb3bc8a75b6a0677814500101a4c072bd7857bd"
+    },
+    {
+      "root": "clip",
+      "path": "special_tokens_map.json",
+      "bytes": 389,
+      "sha256": "f8c0d6c39aee3f8431078ef6646567b0aba7f2246e9c54b8b99d55c22b707cbf"
+    },
+    {
+      "root": "clip",
+      "path": "tokenizer.json",
+      "bytes": 2224003,
+      "sha256": "a83e0809aa4c3af7208b2df632a7a69668c6d48775b3c3fe4e1b1199d1f8b8f4"
+    },
+    {
+      "root": "clip",
+      "path": "tokenizer_config.json",
+      "bytes": 905,
+      "sha256": "deef455e52fa5e8151e339add0582e4235f066009601360999d3a9cda83b1129"
+    },
+    {
+      "root": "clip",
+      "path": "vocab.json",
+      "bytes": 961143,
+      "sha256": "3f0c4f7d2086b61b38487075278ea9ed04edb53a03cbb045b86c27190fa8fb69"
+    },
+    {
+      "root": "geneval_weights",
+      "path": "mask2former_swin-s-p4-w7-224_lsj_8x2_50e_coco.pth",
+      "bytes": 275630991,
+      "sha256": "743b7d99015f1224c6d57fd4b14d04b15cc8ec72ae7ee7831e7c71d8873b7a54"
+    },
+    {
+      "root": "geneval_configs",
+      "path": "configs/_base_/datasets/coco_panoptic.py",
+      "bytes": 2079,
+      "sha256": "3593f1e78cf0e1fea61db7b466276a8e5a98e8aeabc49442cc783a73b2fff6ad"
+    },
+    {
+      "root": "geneval_configs",
+      "path": "configs/_base_/default_runtime.py",
+      "bytes": 791,
+      "sha256": "9a6abfe8d66001e7d5757ea543ebb04f989613cc669935dfc3ce1b404e1e7667"
+    },
+    {
+      "root": "geneval_configs",
+      "path": "configs/mask2former/mask2former_r50_lsj_8x2_50e_coco-panoptic.py",
+      "bytes": 8600,
+      "sha256": "113fca77d3a9ec8940f9d06e9144e83ca0c6e1d879dc604c7008d312581ee729"
+    },
+    {
+      "root": "geneval_configs",
+      "path": "configs/mask2former/mask2former_r50_lsj_8x2_50e_coco.py",
+      "bytes": 2781,
+      "sha256": "48fd0b34abbe6f0bff0c8243a5daa4e3a0c4de4648a838bb94c6a85a8ff3bb95"
+    },
+    {
+      "root": "geneval_configs",
+      "path": "configs/mask2former/mask2former_swin-s-p4-w7-224_lsj_8x2_50e_coco.py",
+      "bytes": 1457,
+      "sha256": "9074c4681870644756c0c5b813995bc06749844be8f24fb2eca3e494d5b9eadb"
+    },
+    {
+      "root": "geneval_configs",
+      "path": "configs/mask2former/mask2former_swin-t-p4-w7-224_lsj_8x2_50e_coco.py",
+      "bytes": 2056,
+      "sha256": "741352d9f904cabd61fdc58cf3742887de289f72791ec4c38c565d113695c301"
+    },
+    {
+      "root": "geneval_clip",
+      "path": "ViT-L-14.pt",
+      "bytes": 932768134,
+      "sha256": "b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836"
+    }
+  ]
+}
