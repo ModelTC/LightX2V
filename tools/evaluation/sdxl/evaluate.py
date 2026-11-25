@@ -197,10 +197,7 @@ def environment():
         "cudnn_deterministic": torch.backends.cudnn.deterministic,
         "cudnn_benchmark": torch.backends.cudnn.benchmark,
         "cpu_threads": torch.get_num_threads(),
-        "generation_environment": {
-            key: os.environ.get(key)
-            for key in read_json(HERE / "configs/nvidia/runtime.json")["generation_environment"]
-        },
+        "generation_environment": {key: os.environ.get(key) for key in read_json(HERE / "configs/nvidia/runtime.json")["generation_environment"]},
     }
 
 
@@ -211,10 +208,7 @@ def generate(args, paths):
         raise ValueError("Invalid chunk")
     if torch.cuda.device_count() != 1 or not os.environ.get("CUDA_VISIBLE_DEVICES"):
         raise RuntimeError("Exactly one explicitly visible GPU is required")
-    verify_generation_environment({
-        key: os.environ.get(key)
-        for key in read_json(HERE / "configs/nvidia/runtime.json")["generation_environment"]
-    })
+    verify_generation_environment({key: os.environ.get(key) for key in read_json(HERE / "configs/nvidia/runtime.json")["generation_environment"]})
     torch.set_grad_enabled(False)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
@@ -491,7 +485,10 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
                         "backend": backend,
                         "sampler_sha256": sha256(sampler) if backend == "nvml" else sha256(watch_tool),
                     },
-                    "environment": {key: env.get(key) for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")},
+                    "environment": {
+                        key: env.get(key)
+                        for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+                    },
                 },
             )
             with (evidence / "worker.log").open("x") as log:

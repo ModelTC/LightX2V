@@ -1,10 +1,10 @@
 import importlib.util
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,15 +18,28 @@ class GenerationEnvironmentTests(unittest.TestCase):
         with patch.dict(os.environ, {"CUBLAS_WORKSPACE_CONFIG": ":4096:8", "CUDA_VISIBLE_DEVICES": "stale-device"}):
             env = M.generation_environment("GPU-explicit")
             self.assertEqual(os.environ["CUBLAS_WORKSPACE_CONFIG"], ":4096:8")
-            actual = json.loads(subprocess.check_output([
-                sys.executable, "-c",
-                "import json,os; print(json.dumps({k:os.environ.get(k) for k in "
-                "['CUDA_VISIBLE_DEVICES','CUBLAS_WORKSPACE_CONFIG','OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS']}))",
-            ], env=env, text=True))
-        self.assertEqual(actual, {
-            "CUDA_VISIBLE_DEVICES": "GPU-explicit", "CUBLAS_WORKSPACE_CONFIG": None,
-            "OMP_NUM_THREADS": "8", "MKL_NUM_THREADS": "8", "OPENBLAS_NUM_THREADS": "1",
-        })
+            actual = json.loads(
+                subprocess.check_output(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import json,os; print(json.dumps({k:os.environ.get(k) for k in "
+                        "['CUDA_VISIBLE_DEVICES','CUBLAS_WORKSPACE_CONFIG','OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS']}))",
+                    ],
+                    env=env,
+                    text=True,
+                )
+            )
+        self.assertEqual(
+            actual,
+            {
+                "CUDA_VISIBLE_DEVICES": "GPU-explicit",
+                "CUBLAS_WORKSPACE_CONFIG": None,
+                "OMP_NUM_THREADS": "8",
+                "MKL_NUM_THREADS": "8",
+                "OPENBLAS_NUM_THREADS": "1",
+            },
+        )
 
     def test_missing_profile_cannot_be_accepted_as_default(self):
         with self.assertRaises(ValueError):
