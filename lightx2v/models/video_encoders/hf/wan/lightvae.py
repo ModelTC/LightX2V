@@ -7,7 +7,7 @@ from safetensors import safe_open
 class WanLightVAEDecoder(torch.nn.Module):
     """Adapt the pip-installed LightVAE TLR decoder to normalized Wan latents."""
 
-    def __init__(self, vae_path, scale=None, family="wan22", dtype=torch.bfloat16, device="cuda", cpu_offload=False):
+    def __init__(self, vae_path, scale=None, family="wan22", dtype=torch.bfloat16, device="cuda", cpu_offload=False, *, polyphase_upsample=False, upsample_mode=None, channels_last_norm=False):
         super().__init__()
         from lightvae.modules import Decoder
 
@@ -24,6 +24,12 @@ class WanLightVAEDecoder(torch.nn.Module):
         self.device = torch.device(device)
         self.cpu_offload = cpu_offload
         self.to(device="cpu" if cpu_offload else self.device, dtype=dtype)
+        upsample_mode = upsample_mode or ("polyphase" if polyphase_upsample else "default")
+        if upsample_mode != "default" or channels_last_norm:
+            optimize = getattr(self.model, "optimize_inference", None)
+            if optimize is None:
+                raise RuntimeError("The selected LightVAE optimizations require a LightVAE version with Decoder.optimize_inference")
+            optimize(upsample=upsample_mode, channels_last=channels_last_norm)
         self.eval().requires_grad_(False)
 
     def compile_decoder(self):

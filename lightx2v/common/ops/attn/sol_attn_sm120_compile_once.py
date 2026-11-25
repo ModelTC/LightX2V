@@ -152,8 +152,10 @@ def _prepare_diag_impl(
     tau: float,
     scale: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    batch, tokens, heads, head_dim = q.shape
-    blocks = triton.cdiv(tokens, BLOCK_SIZE)
+    batch, query_tokens, heads, head_dim = q.shape
+    kv_tokens = k.shape[1]
+    blocks = triton.cdiv(kv_tokens, BLOCK_SIZE)
+    query_blocks = triton.cdiv(query_tokens, BLOCK_SIZE)
     kc = torch.empty(
         (batch, blocks, heads, head_dim),
         device=q.device,
@@ -165,7 +167,7 @@ def _prepare_diag_impl(
         v,
         kc,
         vc,
-        tokens,
+        kv_tokens,
         blocks,
         H=heads,
         D=head_dim,
@@ -194,19 +196,19 @@ def _prepare_diag_impl(
     )
 
     threshold = torch.empty(
-        (batch, blocks, heads),
+        (batch, query_blocks, heads),
         device=q.device,
         dtype=torch.float32,
     )
-    _diag_threshold_kernel[(blocks, batch_heads)](
+    _diag_threshold_kernel[(query_blocks, batch_heads)](
         q,
         kc_mean,
         kc_var_diag,
         threshold,
         scale,
         tau,
-        tokens,
-        blocks,
+        query_tokens,
+        query_blocks,
         H=heads,
         D=head_dim,
         BLOCK=BLOCK_SIZE,
@@ -452,14 +454,18 @@ def sol_attn_sm120_compile_once(
     _load_sol_attn()
     import sol_attn.interface as interface
 
-    arch = interface._validate_inputs(
-        q,
-        k,
-        v,
-        thresh_type,
-        sink_tokens,
-        sink_start,
-    )
+    validation_q = q
+    if q.shape != k.shape:
+        from sol_attn.sm120 import mainloop
+
+        if not getattr(mainloop, "SUPPORTS_RECTANGULAR_QKV", False):
+            raise RuntimeError("Rectangular Sol-Attn requires an SM120 kernel with separate query and KV lengths")
+        if q.ndim != 4 or q.shape[0] != k.shape[0] or q.shape[2:] != k.shape[2:] or q.shape[1] == 0:
+            raise ValueError("Rectangular Sol-Attn requires matching batch, head count, and head dimensions")
+        if q.device != k.device or q.dtype != k.dtype or not q.is_contiguous():
+            raise ValueError("Rectangular Sol-Attn requires contiguous Q on the same device and dtype as K")
+        validation_q = k
+    arch = interface._validate_inputs(validation_q, k, v, thresh_type, sink_tokens, sink_start)
     if arch != (12, 0):
         raise RuntimeError(f"sm120_compile_once requires an RTX 50-series SM120 GPU; got SM{arch[0]}{arch[1]}")
     if thresh_type != "diag":
@@ -479,7 +485,7 @@ def sol_attn_sm120_compile_once(
             scale=scale,
             tau=tau,
         )
-        output = torch.empty_like(v)
+        output = torch.empty_like(q)
         lse = torch.empty(
             (batch, tokens, heads),
             device=q.device,
@@ -487,7 +493,7 @@ def sol_attn_sm120_compile_once(
         )
         stream = interface._stream(q.device)
         sink_start_block, sink_end_block = interface._sink_block_range(
-            tokens,
+            k.shape[1],
             sink_start,
             sink_tokens,
         )

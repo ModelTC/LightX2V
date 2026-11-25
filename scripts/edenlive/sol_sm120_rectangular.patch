@@ -1,0 +1,16 @@
+--- a/sol_attn/sm120/mainloop.py
++++ b/sol_attn/sm120/mainloop.py
+@@ -95,7 +95,7 @@
+         num_blocks = mKC.shape[0]
+         num_route_groups = cute.ceil_div(num_blocks, N)
+         q_start = q_tile_idx * M
+-        q_len = token_count - q_start
++        q_len = mQ.shape[0] - q_start
+         if q_len > M:
+             q_len = cutlass.Int32(M)
+         threshold = cutlass.Float32(
+@@ -1172 +1172,4 @@
+ __all__ = ["SolAttnForwardSm120"]
++
++# Backend marker for separate query and KV sequence lengths.
++SUPPORTS_RECTANGULAR_QKV = True

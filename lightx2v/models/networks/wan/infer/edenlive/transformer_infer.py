@@ -224,13 +224,14 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
 
     def __init__(self, config):
         super().__init__(config)
-        if config["self_attn_1_type"] in ("flash_attn2", "flash_attn3"):
+        if config["self_attn_1_type"] in ("flash_attn2", "flash_attn3", "spas_sage_attn2", "sage_attn3", "sol_attn"):
             self.self_attn_backend = PhysicalRoPERingAttention()
         elif config["self_attn_1_type"] == "sage_attn2":
             self.self_attn_backend = SageRoPERingAttention(profile="edenlive")
         else:
-            raise ValueError("EdenLive AR requires SageAttention2 or FlashAttention2/3")
+            raise ValueError("Unsupported EdenLive AR self-attention backend")
         self.cache_pools = {}
+        self.before_graph_capture = None
         self.kv_cache_manager.key_only = isinstance(self.self_attn_backend, SageRoPERingAttention)
         self._cache_signature = None
         self._graph_cross_generation = 0
@@ -410,24 +411,43 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
             for index, block in enumerate(blocks):
                 x = self.run_block(index, block, x, pre_infer_out)
             return x
-        graph_blocks = blocks[:-1] if self.cache_update_only else blocks
+        merge_commit = self.cache_update_only and self.config.get("edenlive_merge_commit_graph", False) and self.can_use_cuda_graph(blocks, x, pre_infer_out)
+        graph_blocks = blocks if merge_commit or not self.cache_update_only else blocks[:-1]
         if graph_blocks:
             grid = pre_infer_out.grid_sizes.tuple
             pool = self.cache_pools[self.scheduler.infer_condition]
             caches = tuple(self.prepare_rope_cache(block.compute_phases[0], x, grid, index) for index, block in enumerate(graph_blocks))
             pool.upload_write_metadata()
-            cross_kv = tuple(self.get_block_cross_kv(block, pre_infer_out.context, index) for index, block in enumerate(graph_blocks))
-            x = self.run_prepared_blocks(graph_blocks, x, pre_infer_out, caches, cross_kv, tuple(range(len(graph_blocks))), variant="cache_commit" if self.cache_update_only else "denoise")
+            full_blocks = graph_blocks[:-1] if merge_commit else graph_blocks
+            cross_kv = tuple(self.get_block_cross_kv(block, pre_infer_out.context, index) for index, block in enumerate(full_blocks))
+            x = self.run_prepared_blocks(
+                graph_blocks, x, pre_infer_out, caches, cross_kv, tuple(range(len(graph_blocks))),
+                variant="cache_commit" if self.cache_update_only else "denoise",
+                kv_tail=merge_commit,
+            )
             for index in range(len(graph_blocks)):
                 self.finish_rope_cache(pool, index, grid)
-        if self.cache_update_only:
+        if merge_commit:
+            self.cache_update_done = True
+        elif self.cache_update_only:
             last = len(blocks) - 1
             x = self.run_block(last, blocks[last], x, pre_infer_out)
         return x
 
-    def run_prepared_blocks(self, blocks, x, pre_infer_out, caches, cross_kv, layer_ids, *, variant):
-        functions = tuple(self.get_compiled_block(layer, block) if self.use_compile else partial(self.infer_block, block) for layer, block in zip(layer_ids, blocks))
-        runner = partial(self.infer_blocks, pre_infer_out=pre_infer_out, functions=functions, caches=caches)
+    def run_prepared_blocks(self, blocks, x, pre_infer_out, caches, cross_kv, layer_ids, *, variant, kv_tail=False):
+        full_blocks = blocks[:-1] if kv_tail else blocks
+        functions = tuple(self.get_compiled_block(layer, block) if self.use_compile else partial(self.infer_block, block) for layer, block in zip(layer_ids, full_blocks))
+        infer_layers = partial(self.infer_blocks, pre_infer_out=pre_infer_out, functions=functions, caches=caches)
+        if kv_tail:
+
+            def runner(value, embed0, *cross_inputs):
+                value = infer_layers(value, embed0, *cross_inputs)
+                return self.infer_cache_commit(
+                    value, embed0, block_idx=layer_ids[-1], block=blocks[-1],
+                    pre_infer_out=pre_infer_out, cache=caches[-1],
+                )
+        else:
+            runner = infer_layers
         inputs = x, pre_infer_out.embed0, *(tensor for cross in cross_kv for tensor in cross)
         if not self.can_use_cuda_graph(blocks, x, pre_infer_out):
             return runner(*inputs)
@@ -437,7 +457,7 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
         cross_version = branch, self.cross_attn_kv_cache.generation, self._graph_cross_generation
         kinds = ("text", "image") if self.has_image_context else ("text",)
         cross_versions = []
-        for layer in layer_ids:
+        for layer in layer_ids[: len(full_blocks)]:
             for kind in kinds:
                 cached = kind == "text" and self.cross_attn_kv_cache.get((branch, kind), layer) is not None
                 for projection in range(2):
@@ -459,8 +479,9 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
             bindings=bindings,
             mutated_buffers=mutated,
             input_versions=(None, None, *cross_versions),
-            variant=(branch, variant, layout),
+            variant=(branch, variant, layout, kv_tail),
             memory_pool=self.get_cuda_graph_pool(x.device),
+            on_capture=self.before_graph_capture,
         )
 
     def infer_cache_commit(self, x, embed0, *, block_idx, block, pre_infer_out, cache):
@@ -487,6 +508,7 @@ class EdenLiveARTransformerInfer(EdenLiveTransformerInfer, WanCausalTransformerI
                     mutated_buffers=self.self_attn_backend.write_views((branch, block_idx)),
                     variant=(branch, "cache_kv", grid, self.get_attention_frames(grid[0]), getattr(cache, "graph_key", None)),
                     memory_pool=self.get_cuda_graph_pool(x.device),
+                    on_capture=self.before_graph_capture,
                 )
             else:
                 x = runner(x, pre_infer_out.embed0)

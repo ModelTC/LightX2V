@@ -405,10 +405,10 @@ class SolAttnWeight(AttnWeightTemplate):
             return _dense_attention(q, k, v, **dense_kwargs)
 
     @staticmethod
-    def _ineligibility_reason(q, k, v, *, drop_rate, attn_mask, causal, cu_seqlens_q, cu_seqlens_kv):
+    def _ineligibility_reason(q, k, v, *, drop_rate, attn_mask, causal, cu_seqlens_q, cu_seqlens_kv, allow_rectangular=False):
         if q.ndim not in (3, 4):
             return f"expected [T,H,D] or [B,T,H,D], got q.ndim={q.ndim}"
-        if q.shape != k.shape or q.shape != v.shape:
+        if k.shape != v.shape or (q.shape != k.shape and not allow_rectangular):
             return "q, k, and v must have the same shape (Sol-Attn is self-attention only)"
         if q.shape[-1] != HEAD_DIM:
             return f"head dimension must be {HEAD_DIM}, got {q.shape[-1]}"
@@ -504,6 +504,7 @@ class SolAttnWeight(AttnWeightTemplate):
             causal=causal,
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_kv=cu_seqlens_kv,
+            allow_rectangular=self.compile_mode == "sm120_compile_once" and self.reorder == "none",
         )
         if reason is not None:
             return self._fallback_or_raise(reason, q, k, v, dense_kwargs)

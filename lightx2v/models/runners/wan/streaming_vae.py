@@ -35,6 +35,9 @@ class WanStreamingVAERunnerMixin:
             dtype=GET_DTYPE(),
             device=AI_DEVICE,
             cpu_offload=self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False)),
+            polyphase_upsample=self.config.get("lightvae_polyphase_upsample", False),
+            upsample_mode=self.config.get("lightvae_upsample_mode"),
+            channels_last_norm=self.config.get("lightvae_channels_last_norm", False),
         )
         return self._configure_vae_compile(decoder, components=("decoder",))
 

@@ -47,3 +47,30 @@ CUDA_VISIBLE_DEVICES=0 bash scripts/edenlive/run_5090.sh
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 官方源码 BF16 / RTX 5090 | 13.4663 | 11.6319 | 9083.1971 | 908.8465 | 2.0633 | 21.3601 | 25.3223 |
 | LightX2V FP8 / RTX 5090 | **25.2811** | **25.1732** | **509.6956** | **511.9061** | **0.9534** | **23.3308** | **24.9082** |
+
+## SOL + NVFP4 + LightVAE Lite 复测
+
+使用 CUDA 13 的 RTX 5090 环境及支持 `Decoder.optimize_inference()` 的 LightVAE。复测入口读取 `configs/edenlive/realtime/wan22_5b_ar_sol_nvfp4_lightvae_5090.json`，启用异步 VAE 和合并的 KV commit graph。每块在 commit 完成后提交解码。测试为 1280×704、24 FPS、717 帧、四步去噪，整段使用固定 prompt。
+
+将权重和输入按以下结构放置。路径可通过 `EDEN_MODEL_PATH`、`EDEN_REPRO_DATA`、`EDEN_LIGHTVAE_REPO` 和 `EDEN_OUTPUT_DIR` 覆盖。
+
+```text
+vast/
+  LightX2V/
+  LightVAE/
+  EdenLive-x2v/
+  edenlive_repro/
+    deps/
+    input/{cover.png,recording.mp4,prompt.txt}
+    weights/{dit-5b-nvfp4-dynamic.safetensors,lightvae-lite-wan22-decoder.safetensors}
+```
+
+SOL 使用 Dockerfile 中固定的 Sana 提交 `71350faed59a6865173ddfd5a7d4471da4bde328`。将该提交的 `techniques/sparse_backends` 安装到 `edenlive_repro/deps`，然后在该依赖目录执行 `patch -p1 < /path/to/LightX2V/scripts/edenlive/sol_sm120_rectangular.patch`，为 SM120 内核启用 EdenLive 的长短 Q/KV。运行环境也需要可导入的 `comfy_kitchen` 和 `pillow_heif`。如需重建 DiT 权重，可从 LightX2V 根目录运行下面的转换。
+
+```bash
+PYTHONPATH="$PWD:${PYTHONPATH:-}" python scripts/edenlive/convert_nvfp4.py \
+  ../EdenLive-x2v ../edenlive_repro/weights/dit-5b-nvfp4-dynamic.safetensors
+bash scripts/edenlive/run_sol_nvfp4_5090.sh
+```
+
+入口会先预热，再输出 DiT 四步、KV commit、VAE CUDA 事件和 GPU RGB 出块统计，最后单独导出 MP4。默认输出写入 `edenlive_repro/run`。

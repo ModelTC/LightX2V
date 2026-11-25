@@ -367,6 +367,9 @@ class EdenLiveARRunner(WanStreamingVAERunnerMixin, AutoregressiveRunnerMixin, Ed
         on_chunk = partial(self.on_decoded_chunk, num_chunks=num_chunks) if self.chunk_callback is not None else None
         try:
             with self.streaming_decode(on_chunk=on_chunk) as decoder:
+                overlap_commit = decoder.is_async and self.config.get("edenlive_overlap_vae_commit", False)
+                if overlap_commit:
+                    infer.before_graph_capture = decoder.synchronize
                 for start in range(0, total, chunk):
                     logger.info(f"start chunk {start // chunk + 1}/{num_chunks}")
                     chunk_profile = ProfilingContext4DebugL1(f"chunk {start // chunk + 1}/{num_chunks} end_to_end") if not decoder.is_async else nullcontext()
@@ -374,10 +377,18 @@ class EdenLiveARRunner(WanStreamingVAERunnerMixin, AutoregressiveRunnerMixin, Ed
                         frames = min(chunk, total - start)
                         segment_idx = start // chunk
                         self.run_segment(segment_idx, step_indices=step_indices)
-                        self.run_cache_commit(segment_idx)
-                        decoder.submit(self.decode_segment_latents, segment_idx, self.scheduler.latents[:, start : start + frames])
+                        latents = self.scheduler.latents[:, start : start + frames]
+                        if overlap_commit and segment_idx > 0:
+                            # Steady commit reads these latents. Chunk zero also
+                            # writes the conditioned frame, so decode it afterwards.
+                            decoder.submit(self.decode_segment_latents, segment_idx, latents)
+                            self.run_cache_commit(segment_idx)
+                        else:
+                            self.run_cache_commit(segment_idx)
+                            decoder.submit(self.decode_segment_latents, segment_idx, latents)
                 decoded_chunks = decoder.finish()
         finally:
+            infer.before_graph_capture = None
             try:
                 if ar.get("kv_offload", False):
                     for pool in pools.values():
