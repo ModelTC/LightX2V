@@ -12,14 +12,10 @@ spec.loader.exec_module(evaluation)
 
 class ProtocolTests(unittest.TestCase):
     def test_locked_complete_unique_fixtures(self):
+        self.assertEqual({name: entry["count"] for name, entry in evaluation.suite()["datasets"].items()}, {"geneval": 553, "parti": 1632, "coco": 5000})
         for dataset, entry in evaluation.suite()["datasets"].items():
             records = evaluation.inputs(dataset)
             self.assertEqual(len(records), entry["count"])
-            if dataset == "gso":
-                self.assertEqual(len({r["object_id"] for r in records}), 1023)
-                self.assertTrue(all(r["view"] == 0 and r["input"].endswith(".thumbnail_0.jpg") for r in records))
-            if dataset == "humanml3d":
-                self.assertEqual(sum(r["evaluator_eligible"] for r in records), 4198)
         self.assertEqual(evaluation.suite()["repetitions"], 1)
 
     def test_path_escape_rejected(self):
@@ -28,9 +24,9 @@ class ProtocolTests(unittest.TestCase):
                 evaluation.resolve({"root": root}, "root", "../secret")
 
     def test_quality_nonfinite_and_mismatch_rejected(self):
-        self.assertFalse(evaluation.quality_aligned({"fid": float("nan")}, {"fid": float("nan")}))
-        self.assertFalse(evaluation.quality_aligned({"fid": 0.5}, {"fid": 0.51}))
-        self.assertTrue(evaluation.quality_aligned({"fid": 0.5}, {"fid": 0.5000001}))
+        self.assertFalse(evaluation.quality_aligned({"clip_score": float("nan")}, {"clip_score": float("nan")}))
+        self.assertFalse(evaluation.quality_aligned({"clip_score": 0.5}, {"clip_score": 0.51}))
+        self.assertTrue(evaluation.quality_aligned({"clip_score": 0.5}, {"clip_score": 0.5000001}))
 
     def test_incomplete_campaign_rejected(self):
         dataset = next(iter(evaluation.suite()["datasets"]))
