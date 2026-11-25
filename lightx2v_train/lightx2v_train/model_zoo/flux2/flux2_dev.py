@@ -5,6 +5,7 @@ from lightx2v_train.model_capabilities import ConsistencyModelCapability, Distri
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.flux2.capability_adapters import Flux2ConsistencyModelCapability
+from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from .common import Flux2ModelBase
@@ -41,6 +42,19 @@ class Flux2DevModel(Flux2ModelBase):
 
     def _reuse_model_state_from(self, source):
         self.guidance_scale = source.guidance_scale
+
+    def set_lora_trainable(self):
+        super().set_lora_trainable()
+        ops = self.config.get("runtime", {}).get("ops", {})
+        attention = ops.get("attention", {})
+        deterministic = isinstance(attention, dict) and attention.get("deterministic", False)
+        fusions = ops.get("flux2_fusions", [])
+        if fusions != [] or deterministic:
+            if get_backend().name != "metax_cuda":
+                raise ValueError("Flux2 training fusions and deterministic FA2 require the metax_cuda backend.")
+            from .training_fusions import configure_training_fusions
+
+            configure_training_fusions(self.transformer, fusions, deterministic)
 
     def denoise(self, denoiser_input, timestep_or_sigma, condition):
         guidance = torch.full(
