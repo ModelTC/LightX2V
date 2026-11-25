@@ -1,0 +1,15 @@
+{
+  "model_cls": "seedvc",
+  "model_variant": "svc",
+  "cpu_offload": false,
+  "use_compile": false,
+  "warmup": false,
+  "parallel": {
+    "tensor_p_size": 2,
+    "seq_p_size": 1,
+    "cfg_p_size": 1
+  },
+  "request_defaults": {
+    "seed": 2026
+  }
+}
