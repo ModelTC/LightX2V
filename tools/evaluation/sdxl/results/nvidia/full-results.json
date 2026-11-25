@@ -1,0 +1,777 @@
+{
+  "model": "sdxl",
+  "platform": "NVIDIA A100-SXM4-40GB",
+  "datasets": {
+    "geneval": {
+      "model": "sdxl",
+      "dataset": "geneval",
+      "coverage": 553,
+      "repetitions": 1,
+      "output_difference_count": 0,
+      "output_difference_ids": [],
+      "native_quality": {
+        "count": 553,
+        "geneval_by_dimension": {
+          "color_attr": 0.15,
+          "colors": 0.8191489361702128,
+          "counting": 0.3875,
+          "position": 0.08,
+          "single_object": 0.95,
+          "two_object": 0.7171717171717171
+        },
+        "geneval_overall": 0.517303442223655
+      },
+      "lightx2v_quality": {
+        "count": 553,
+        "geneval_by_dimension": {
+          "color_attr": 0.15,
+          "colors": 0.8191489361702128,
+          "counting": 0.3875,
+          "position": 0.08,
+          "single_object": 0.95,
+          "two_object": 0.7171717171717171
+        },
+        "geneval_overall": 0.517303442223655
+      },
+      "quality_aligned": true,
+      "native_latency": {
+        "count": 553,
+        "mean_s": 3.862536209258192,
+        "median_s": 3.8642842730041593,
+        "p95_s": 3.983674519206397
+      },
+      "lightx2v_latency": {
+        "count": 553,
+        "mean_s": 3.8365923042531644,
+        "median_s": 3.836837598006241,
+        "p95_s": 3.979299205262214
+      },
+      "latency_ratios": {
+        "mean_s": 0.9932831943574167,
+        "median_s": 0.9928973457802625,
+        "p95_s": 0.9989016888997612
+      },
+      "latency_gate": {
+        "mean_ratio_max": 1.25,
+        "p95_ratio_max": 1.5
+      },
+      "latency_aligned": true,
+      "status": "PASS"
+    },
+    "parti": {
+      "model": "sdxl",
+      "dataset": "parti",
+      "coverage": 1632,
+      "repetitions": 1,
+      "output_difference_count": 0,
+      "output_difference_ids": [],
+      "native_quality": {
+        "count": 1632,
+        "clip_cosine_x100_mean": 27.582458617147427,
+        "clipscore_2_5_relu_cosine_mean": 0.6895614654286857
+      },
+      "lightx2v_quality": {
+        "count": 1632,
+        "clip_cosine_x100_mean": 27.582458617147427,
+        "clipscore_2_5_relu_cosine_mean": 0.6895614654286857
+      },
+      "quality_aligned": true,
+      "native_latency": {
+        "count": 1632,
+        "mean_s": 3.8372496416590116,
+        "median_s": 3.8412490244954824,
+        "p95_s": 3.9685159621061756
+      },
+      "lightx2v_latency": {
+        "count": 1632,
+        "mean_s": 3.8122578455058473,
+        "median_s": 3.813641713524703,
+        "p95_s": 3.9463732646952847
+      },
+      "latency_ratios": {
+        "mean_s": 0.9934870549255276,
+        "median_s": 0.9928129338153479,
+        "p95_s": 0.9944204086307519
+      },
+      "latency_gate": {
+        "mean_ratio_max": 1.25,
+        "p95_ratio_max": 1.5
+      },
+      "latency_aligned": true,
+      "status": "PASS"
+    },
+    "coco": {
+      "model": "sdxl",
+      "dataset": "coco",
+      "coverage": 5000,
+      "repetitions": 1,
+      "output_difference_count": 0,
+      "output_difference_ids": [],
+      "native_quality": {
+        "count": 5000,
+        "clip_cosine_x100_mean": 26.64686366200447,
+        "clipscore_2_5_relu_cosine_mean": 0.6661715915501119
+      },
+      "lightx2v_quality": {
+        "count": 5000,
+        "clip_cosine_x100_mean": 26.64686366200447,
+        "clipscore_2_5_relu_cosine_mean": 0.6661715915501119
+      },
+      "quality_aligned": true,
+      "native_latency": {
+        "count": 5000,
+        "mean_s": 3.817050132400845,
+        "median_s": 3.8102741600596346,
+        "p95_s": 3.9721012548252475
+      },
+      "lightx2v_latency": {
+        "count": 5000,
+        "mean_s": 3.788369460161007,
+        "median_s": 3.7831511214608327,
+        "p95_s": 3.9316517516970637
+      },
+      "latency_ratios": {
+        "mean_s": 0.9924861683119162,
+        "median_s": 0.9928816044569408,
+        "p95_s": 0.9898165981848911
+      },
+      "latency_gate": {
+        "mean_ratio_max": 1.25,
+        "p95_ratio_max": 1.5
+      },
+      "latency_aligned": true,
+      "status": "PASS"
+    }
+  },
+  "environments": {
+    "geneval/native": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "5.17.0",
+        "diffusers": "0.40.0",
+        "numpy": "2.2.6",
+        "Pillow": "12.3.0"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-6d13b72c-2bac-94a2-f839-27bb7ce8f91d",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true,
+      "cudnn_deterministic": true,
+      "cudnn_benchmark": false,
+      "cpu_threads": 8,
+      "generation_environment": {
+        "PLATFORM": "cuda",
+        "DTYPE": "BF16",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "CUBLAS_WORKSPACE_CONFIG": null,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PROFILING_DEBUG_LEVEL": "0",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      }
+    },
+    "geneval/lightx2v": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-6d13b72c-2bac-94a2-f839-27bb7ce8f91d",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true,
+      "cudnn_deterministic": true,
+      "cudnn_benchmark": false,
+      "cpu_threads": 8,
+      "generation_environment": {
+        "PLATFORM": "cuda",
+        "DTYPE": "BF16",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "CUBLAS_WORKSPACE_CONFIG": null,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PROFILING_DEBUG_LEVEL": "0",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      }
+    },
+    "parti/native": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "5.17.0",
+        "diffusers": "0.40.0",
+        "numpy": "2.2.6",
+        "Pillow": "12.3.0"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-6d13b72c-2bac-94a2-f839-27bb7ce8f91d",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true,
+      "cudnn_deterministic": true,
+      "cudnn_benchmark": false,
+      "cpu_threads": 8,
+      "generation_environment": {
+        "PLATFORM": "cuda",
+        "DTYPE": "BF16",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "CUBLAS_WORKSPACE_CONFIG": null,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PROFILING_DEBUG_LEVEL": "0",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      }
+    },
+    "parti/lightx2v": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-6d13b72c-2bac-94a2-f839-27bb7ce8f91d",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true,
+      "cudnn_deterministic": true,
+      "cudnn_benchmark": false,
+      "cpu_threads": 8,
+      "generation_environment": {
+        "PLATFORM": "cuda",
+        "DTYPE": "BF16",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "CUBLAS_WORKSPACE_CONFIG": null,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PROFILING_DEBUG_LEVEL": "0",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      }
+    },
+    "coco/native": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "5.17.0",
+        "diffusers": "0.40.0",
+        "numpy": "2.2.6",
+        "Pillow": "12.3.0"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-15906396-a9f4-ac97-178a-456434ca6eed",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true,
+      "cudnn_deterministic": true,
+      "cudnn_benchmark": false,
+      "cpu_threads": 8,
+      "generation_environment": {
+        "PLATFORM": "cuda",
+        "DTYPE": "BF16",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "CUBLAS_WORKSPACE_CONFIG": null,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PROFILING_DEBUG_LEVEL": "0",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      }
+    },
+    "coco/lightx2v": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-15906396-a9f4-ac97-178a-456434ca6eed",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true,
+      "cudnn_deterministic": true,
+      "cudnn_benchmark": false,
+      "cpu_threads": 8,
+      "generation_environment": {
+        "PLATFORM": "cuda",
+        "DTYPE": "BF16",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "CUBLAS_WORKSPACE_CONFIG": null,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PROFILING_DEBUG_LEVEL": "0",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      }
+    }
+  },
+  "resources": {
+    "geneval/native": {
+      "verified_chunks": 3,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 4
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 11259353088
+    },
+    "geneval/lightx2v": {
+      "verified_chunks": 3,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 4
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 11105277440
+    },
+    "parti/native": {
+      "verified_chunks": 7,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 8
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 11259353088
+    },
+    "parti/lightx2v": {
+      "verified_chunks": 7,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 8
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 11105277440
+    },
+    "coco/native": {
+      "verified_chunks": 20,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 21
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 11259353088
+    },
+    "coco/lightx2v": {
+      "verified_chunks": 20,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 21
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 11105277440
+    }
+  },
+  "invalid_attempts": [
+    {
+      "namespace": "sdxl-coco-enospc-20261125-lightx2v1024",
+      "discarded_timing_attempts": 44,
+      "reason": "Resource monitoring became unavailable after system /tmp filesystem ENOSPC; task interval and cleanup proof could not be sealed. Preserve/exclude this entire incomplete batch; do not admit its timing or output as a formal sample.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-gpu2-superseded-return-valid-gpu7",
+      "discarded_timing_attempts": 0,
+      "reason": "GPU2actuallyidleandauthorized;restoreverified128native+128adaptedrecordsforoneconsistentGPU2completecohort. AllartifactSHAandresourcesverifiedagain. GPU7cohortpreservedandexcluded;nomixing.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-gpu7-superseded-for-authorized-gpu2",
+      "discarded_timing_attempts": 768,
+      "reason": "ValidGPU7prefix384pairsretainedbutexcludedbecauseGPU7remainedoccupied;GPU2actuallyidleanduserpermitsanytwoidleGPUs. UseuniformGPU2cohortthroughcompletion,noGPUmix. Prioreventsretained.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-lightx2v-000032-foreign4048628",
+      "discarded_timing_attempts": 5,
+      "reason": "UnknownGPUprocess4048628enteredGPU2andGPU5simultaneously; ownworkerstopped,unknownprocessnotkilledandlaterabsent. Priorverifiedchunksretained.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-lightx2v-000128-monitoring-gap-wave5",
+      "discarded_timing_attempts": 81,
+      "reason": "Simultaneous telemetry gap exceeded3sec (GenEval/Parti no failed query row, maxcompletedgap~4.6sec; COCOquery2.5sec timeout). CPUlimit counters show no throttling. Unfinishedworker timing excluded; fullrawoutputs andevidence retained. Move high-frequency telemetry/handshake tolocal/tmpthenarchive; noresourcecriterionrelaxed.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-lightx2v-000128-monitoring-startup",
+      "discarded_timing_attempts": 0,
+      "reason": "NVML2.5sec query timeout during startup of next worker (GenEval before workload; COCO/Parti during interpreter startup). No new complete dataset timing logged. Native192+adapted128 verified records retained. Long-dataset future worker bound raisedto128 to reduce reloads; starts staggered; max-gap3sec unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-lightx2v-000128-nvml-query-timeout-5s-20261125",
+      "discarded_timing_attempts": 28,
+      "reason": "NVML query exceeded explicit5s deadline; current batch lacks full resource coverage. Controller stopped and known task PIDs absent. Preserve all emitted outputs; retain prior resource-sealed chunks unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-lightx2v-000256-nvml-timeout-second-wave",
+      "discarded_timing_attempts": 229,
+      "reason": "Resource query timed out after2s; original3s resource coverage requirement retained. Replay this interrupted batch only; all valid batches remain accepted. Query budget now2.5s and interval0.25s, still maxgap3s.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-lightx2v-000256-nvml-timeout-third-wave",
+      "discarded_timing_attempts": 133,
+      "reason": "NVML query timed out after2.5sec; entire interrupted worker excluded from accepted timing. No model failure recorded; raw partial outputs and monitoring evidence retained. Future workers use smaller chunks without relaxing3sec coverage policy.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-native-000032-nvml-timeout-load-v2",
+      "discarded_timing_attempts": 0,
+      "reason": "NVMLquery2.5stimeout before newmodelworker enteredCUDA orformalinputs. First32native/adaptedpairssealedandretained.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-native-000096-foreign91683",
+      "discarded_timing_attempts": 0,
+      "reason": "ForeignImgEditJudgeprocess91683withdevice-mapautoenteredGPU2duringCPUmodel-loadbeforeformalinputs. Ownworkercleaned;foreignnotkilled. Native96/adapted96acceptedrecordsretained.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-native-000128-cutover-1795540436674361495",
+      "discarded_timing_attempts": 0,
+      "reason": "ForeignGPUprocessenteredmodel-preparation; accepted128pairsretained.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-native-000256-nvml-timeout",
+      "discarded_timing_attempts": 17,
+      "reason": "nvidia-smi resource query timed out after 2 seconds; strict resource evidence unavailable. Completed timing records excluded, all raw partial outputs retained. Replay only this interrupted batch; valid earlier batches remain accepted.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-native-000384-nvml-query-timeout-v1",
+      "discarded_timing_attempts": 92,
+      "reason": "Concurrent NVML acquisition query timeout2.5s; task, controller and all observed own children terminal. Source/timer unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-native-000384-nvml-timeout-local-capture",
+      "discarded_timing_attempts": 70,
+      "reason": "Full nvidia-smi XML query timedout2.5sec evenwithlocal/tmptelemetry. Allunfinishedworker timings excluded. Investigate minimalNVML acquisition withoutrelaxing3sec coverage orPID/MPS/MIG checks.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-native-000384-xml-query-timeout-final",
+      "discarded_timing_attempts": 89,
+      "reason": "XML resource query unavailable; task/controller and all observed own GPU children terminal; valid previous chunks unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-coco-superseded-tokenizer-v1",
+      "discarded_timing_attempts": 768,
+      "reason": "Superseded complete prefix after switching adapted CLIP tokenizer to existing Rust fast backend, matching native Transformers5.17 on all7185 prompts including12 previously different Parti cases. Previous native source and GenEval/COCO token IDs were unaffected; these valid old timings are excluded to retain one strictly source-locked formal cohort, not reclassified as resource-invalid. Full original prefixes and verified resource evidence preserved.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-lightx2v-000000-nvml-timeout-second-wave",
+      "discarded_timing_attempts": 79,
+      "reason": "Resource query timed out after2s; original3s resource coverage requirement retained. Replay this interrupted batch only; all valid batches remain accepted. Query budget now2.5s and interval0.25s, still maxgap3s.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-lightx2v-000000-nvml-timeout-third-wave",
+      "discarded_timing_attempts": 138,
+      "reason": "NVML query timed out after2.5sec; entire interrupted worker excluded from accepted timing. No model failure recorded; raw partial outputs and monitoring evidence retained. Future workers use smaller chunks without relaxing3sec coverage policy.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-lightx2v-000128-monitoring-startup",
+      "discarded_timing_attempts": 0,
+      "reason": "NVML2.5sec query timeout during startup of next worker (GenEval before workload; COCO/Parti during interpreter startup). No new complete dataset timing logged. Native192+adapted128 verified records retained. Long-dataset future worker bound raisedto128 to reduce reloads; starts staggered; max-gap3sec unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-lightx2v-000192-monitoring-gap-wave5",
+      "discarded_timing_attempts": 30,
+      "reason": "Simultaneous telemetry gap exceeded3sec (GenEval/Parti no failed query row, maxcompletedgap~4.6sec; COCOquery2.5sec timeout). CPUlimit counters show no throttling. Unfinishedworker timing excluded; fullrawoutputs andevidence retained. Move high-frequency telemetry/handshake tolocal/tmpthenarchive; noresourcecriterionrelaxed.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-lightx2v-000384-nvml-timeout-local-capture",
+      "discarded_timing_attempts": 45,
+      "reason": "Full nvidia-smi XML query timedout2.5sec evenwithlocal/tmptelemetry. Allunfinishedworker timings excluded. Investigate minimalNVML acquisition withoutrelaxing3sec coverage orPID/MPS/MIG checks.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-lightx2v-000448-persistent-observer-close-v1",
+      "discarded_timing_attempts": 36,
+      "reason": "Resource monitor unavailable; SIGTERM interrupted query process cleanup and closed-pipe final sampling failed. Original evidence retained; all observedownworkers terminal. Defaultsquery2.5/maxgap3 notmet, no timingsadmitted.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-native-000256-nvml-timeout",
+      "discarded_timing_attempts": 17,
+      "reason": "nvidia-smi resource query timed out after 2 seconds; strict resource evidence unavailable. Completed timing records excluded, all raw partial outputs retained. Replay only this interrupted batch; valid earlier batches remain accepted.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-native-000448-foreign-load-nvml",
+      "discarded_timing_attempts": 0,
+      "reason": "Foreign GPU PID3845433 entered GPU3 at model-load; own workload stopped before any formal sample. No foreign process killed.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-native-000448-nvml-init-timeout",
+      "discarded_timing_attempts": 17,
+      "reason": "Query stage diagnostic identified nvmlInit exceeding2.5s. Capture stopped, own workload cleaned; prior448native/adaptedverifiedrecordsretained.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-native-000448-xml-query-timeout-final",
+      "discarded_timing_attempts": 30,
+      "reason": "XML resource query unavailable; task/controller and all observed own GPU children terminal; valid previous chunks unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-native-score-child-teardown-v1",
+      "discarded_timing_attempts": 0,
+      "reason": "PinnedlegacyGenEvalchildcompleted553scores,butNVMLprocess-nameinventoryreturnedNoDataatGPUchildexitbeforeouterworkercompletedaggregate. Generated553x2images/timingsuntouched. Preserveoldscorefileasreference;rerunonlyofficialscoringinheldlegacyPID.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-native-score-controller-sigterm-v2",
+      "discarded_timing_attempts": 0,
+      "reason": "Tooldriver/controllerprocessgroupterminatedSIGTERMbeforecompletionack;monitoredworkerwasindependentprocessgroup. AllknownowntaskPIDsnowterminal. Missingtailmonitorcoverageinadmissible;1106generationoutputs/timingsuntouched.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-superseded-prefix",
+      "discarded_timing_attempts": 512,
+      "reason": "GPU0 is now occupied by a foreign task. Preserve the earlier valid256+256 prefix, but establish the complete single-card comparison afresh on currently idleGPU3; do not combine timings from different physical cards.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-geneval-superseded-tokenizer-v1",
+      "discarded_timing_attempts": 256,
+      "reason": "Superseded complete prefix after switching adapted CLIP tokenizer to existing Rust fast backend, matching native Transformers5.17 on all7185 prompts including12 previously different Parti cases. Previous native source and GenEval/COCO token IDs were unaffected; these valid old timings are excluded to retain one strictly source-locked formal cohort, not reclassified as resource-invalid. Full original prefixes and verified resource evidence preserved.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-parti-lightx2v-000000-nvml-timeout-second-wave",
+      "discarded_timing_attempts": 19,
+      "reason": "Resource query timed out after2s; original3s resource coverage requirement retained. Replay this interrupted batch only; all valid batches remain accepted. Query budget now2.5s and interval0.25s, still maxgap3s.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-parti-lightx2v-000000-nvml-timeout-third-wave",
+      "discarded_timing_attempts": 132,
+      "reason": "NVML query timed out after2.5sec; entire interrupted worker excluded from accepted timing. No model failure recorded; raw partial outputs and monitoring evidence retained. Future workers use smaller chunks without relaxing3sec coverage policy.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-parti-lightx2v-000128-foreign-after-idle300",
+      "discarded_timing_attempts": 0,
+      "reason": "ForeignGPU4process3462604entered duringadaptedweightload after300secidlepreflight. OwnGPUworker3464645andtimeoutroot3464644stopped; no dataset inference record completed. Allnative256/adapted128 validprefix remains. OptionalGPUreservation question pending; GenEval/COCO continue.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-parti-lightx2v-000128-foreign-preflight",
+      "discarded_timing_attempts": 0,
+      "reason": "GPU4foreignprocess3224093 alreadyheld16GBatpreworkloadidlecheck; noactualmodelworkerlaunched. LocaltelemetryandAFSarchiveworked, noqueryfailures. Preservevalidnative256/adapted128. A separateforegroundPartidriver waitsfor5continuousidleminutes before retry; GenEval/COCO persist unaffected.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-parti-lightx2v-000128-monitoring-gap-wave5",
+      "discarded_timing_attempts": 61,
+      "reason": "Simultaneous telemetry gap exceeded3sec (GenEval/Parti no failed query row, maxcompletedgap~4.6sec; COCOquery2.5sec timeout). CPUlimit counters show no throttling. Unfinishedworker timing excluded; fullrawoutputs andevidence retained. Move high-frequency telemetry/handshake tolocal/tmpthenarchive; noresourcecriterionrelaxed.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-parti-lightx2v-000128-monitoring-startup",
+      "discarded_timing_attempts": 0,
+      "reason": "NVML2.5sec query timeout during startup of next worker (GenEval before workload; COCO/Parti during interpreter startup). No new complete dataset timing logged. Native192+adapted128 verified records retained. Long-dataset future worker bound raisedto128 to reduce reloads; starts staggered; max-gap3sec unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-parti-lightx2v-000128-nvml-query-timeout-v1",
+      "discarded_timing_attempts": 88,
+      "reason": "Concurrent NVML acquisition query timeout2.5s; task, controller and all observed own children terminal. Source/timer unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "sdxl-parti-superseded-tokenizer-v1",
+      "discarded_timing_attempts": 256,
+      "reason": "Superseded complete prefix after switching adapted CLIP tokenizer to existing Rust fast backend, matching native Transformers5.17 on all7185 prompts including12 previously different Parti cases. Previous native source and GenEval/COCO token IDs were unaffected; these valid old timings are excluded to retain one strictly source-locked formal cohort, not reclassified as resource-invalid. Full original prefixes and verified resource evidence preserved.",
+      "accepted_formal_repetitions": 1
+    }
+  ],
+  "measurement_cohort": "full-v3",
+  "superseded_profiles": [
+    {
+      "namespace": "full-v1/sdxl-coco",
+      "reason": "Superseded numerical profile: explicit cuBLAS workspace and four OMP/MKL threads",
+      "accepted_in_current_profile": 0
+    },
+    {
+      "namespace": "full-v1/sdxl-geneval",
+      "reason": "Superseded numerical profile: explicit cuBLAS workspace and four OMP/MKL threads",
+      "accepted_in_current_profile": 0
+    },
+    {
+      "namespace": "full-v1/sdxl-parti",
+      "reason": "Superseded numerical profile: explicit cuBLAS workspace and four OMP/MKL threads",
+      "accepted_in_current_profile": 0
+    }
+  ],
+  "measurement_worker_sha256": "42efed9fdc2ea0226890663186312e25c63d628026d6abb87e5cd6d12a781e8b",
+  "final_controller_sha256": "0cb223e30e41afb3e4cd731687ceee5da6286ebf3e91f339e3de388e9b4a4f8b",
+  "source_lock": {
+    "lightx2v": {
+      "repository": "https://github.com/ModelTC/LightX2V.git",
+      "revision": "b008e1cf276a5ed0914c22f0124e98a265a3498c",
+      "pull_request": 1754
+    },
+    "native": {
+      "package": "diffusers",
+      "version": "0.40.0",
+      "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+      "package_files": [
+        {
+          "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+          "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+        },
+        {
+          "path": "diffusers/models/unets/unet_2d_condition.py",
+          "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+        },
+        {
+          "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+          "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+        },
+        {
+          "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+          "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+        }
+      ]
+    },
+    "geneval": {
+      "repo": "djghosh13/geneval",
+      "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+      "files": [
+        {
+          "path": "evaluation/evaluate_images.py",
+          "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+        },
+        {
+          "path": "evaluation/summary_scores.py",
+          "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+        }
+      ]
+    }
+  },
+  "weight_lock_sha256": "5e96e8b0d2f8928721e3dcb753df8e7000cc446cc1a576a31694d25f2c64fb70",
+  "raw_evidence_manifest_sha256": "5df565c49c9f9c28b41109b64ac0335297f94382885f01861847b58d42eff975",
+  "raw_evidence_file_count": 33597,
+  "raw_evidence_namespace": "lightx2v-evaluation-20261124",
+  "formal_repetitions_per_input_per_backend": 1,
+  "worker_recovery": "Request/timing/metric AST and configs identical to final code; original worker source fingerprints retained. Controller-only recovery uses explicit post-workload sample acknowledgement."
+}
