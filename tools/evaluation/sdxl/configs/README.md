@@ -8,4 +8,6 @@ For GenEval, geneval_python selects the legacy detector environment; geneval_wei
 
 Other platform JSONs are explicit unimplemented slots. There is no claim that their original reference runtime or operators have been validated.
 
+`nvidia/runtime.json` also pins `generation_environment` for both implementations. String values are exported before worker/CUDA startup; `null` removes a variable, including any inherited value. The explicit campaign GPU overrides a parent device selection. In particular, SDXL uses the upstream default cuBLAS workspace and eight OMP/MKL threads. Actual values are retained in worker provenance and checked before generation and before accepting completed results. A numerical environment change requires a new campaign and fresh timings.
+
 For recovery of an interrupted campaign after a controller-only fix, an ignored local paths file may optionally set `worker_script` to the archived measured evaluate.py. The controller requires identical non-controller Python AST and identical JSON/JSONL configurations, retains that worker’s original SHA in measurement records and campaign identity, and records the new resource-bootstrap SHA separately. Changed model, timing, input or metric functions are rejected. This option does not rewrite or rebrand previous measurements. Fresh campaigns use the submitted evaluate.py itself.

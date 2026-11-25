@@ -156,6 +156,25 @@ def seed_all():
     torch.cuda.manual_seed_all(42)
 
 
+def generation_environment(gpu):
+    """Apply the pinned numerical profile before either CUDA worker starts."""
+    env = dict(os.environ)
+    profile = read_json(HERE / "configs/nvidia/runtime.json")["generation_environment"]
+    for key, value in profile.items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
+    env["CUDA_VISIBLE_DEVICES"] = gpu
+    return env
+
+
+def verify_generation_environment(actual):
+    expected = read_json(HERE / "configs/nvidia/runtime.json")["generation_environment"]
+    if actual != expected:
+        raise ValueError("Generation environment differs from the pinned runtime profile")
+
+
 def environment():
     import torch
 
@@ -175,6 +194,13 @@ def environment():
         "deterministic": torch.are_deterministic_algorithms_enabled(),
         "tf32_matmul": torch.backends.cuda.matmul.allow_tf32,
         "tf32_cudnn": torch.backends.cudnn.allow_tf32,
+        "cudnn_deterministic": torch.backends.cudnn.deterministic,
+        "cudnn_benchmark": torch.backends.cudnn.benchmark,
+        "cpu_threads": torch.get_num_threads(),
+        "generation_environment": {
+            key: os.environ.get(key)
+            for key in read_json(HERE / "configs/nvidia/runtime.json")["generation_environment"]
+        },
     }
 
 
@@ -185,6 +211,10 @@ def generate(args, paths):
         raise ValueError("Invalid chunk")
     if torch.cuda.device_count() != 1 or not os.environ.get("CUDA_VISIBLE_DEVICES"):
         raise RuntimeError("Exactly one explicitly visible GPU is required")
+    verify_generation_environment({
+        key: os.environ.get(key)
+        for key in read_json(HERE / "configs/nvidia/runtime.json")["generation_environment"]
+    })
     torch.set_grad_enabled(False)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
@@ -231,6 +261,7 @@ def generate(args, paths):
     torch.cuda.synchronize()
     provenance["load_s"] = time.perf_counter() - load_start
     provenance["environment"] = environment()
+    verify_generation_environment(provenance["environment"]["generation_environment"])
     # A separate synthetic/upstream demo input never contributes to dataset coverage.
     warmup = output / "warmup"
     warmup.mkdir()
@@ -288,6 +319,7 @@ def completed_runs(root, dataset, backend, verify_artifacts=True):
         versions.add((metadata["evaluation_sha256"], metadata["manifest_sha256"], metadata["weight_lock_sha256"], json.dumps(metadata["source_lock"], sort_keys=True)))
         if metadata["status"] != "COMPLETE":
             raise ValueError(f"Unfinished/failed chunk: {metadata_path}")
+        verify_generation_environment(metadata["environment"].get("generation_environment"))
         if metadata["manifest_sha256"] != suite()["datasets"][dataset]["sha256"] or metadata["source_lock"] != read_json(HERE / "configs/nvidia/source-lock.json"):
             raise ValueError("Execution used a different dataset or source lock")
         resources = read_json(metadata_path.parent / "resources.json")
@@ -459,7 +491,7 @@ def observed_execution(command, env, python, watch_tool, evidence, artifact, gpu
                         "backend": backend,
                         "sampler_sha256": sha256(sampler) if backend == "nvml" else sha256(watch_tool),
                     },
-                    "environment": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS")},
+                    "environment": {key: env.get(key) for key in ("CUDA_VISIBLE_DEVICES", "PLATFORM", "DTYPE", "HF_HUB_OFFLINE", "CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")},
                 },
             )
             with (evidence / "worker.log").open("x") as log:
@@ -633,22 +665,7 @@ def campaign(args, paths):
     # Chunk size bounds process lifetime, not the per-input request or timer.
     # Preserve the first plan and log each subsequent controller invocation.
     write_json(root / f"controller-plan-{time.time_ns()}.json", {"controller_sha256": sha256(__file__), "requested_chunk_size": args.count, "worker_sha256": sha256(worker_script)})
-    env = dict(
-        os.environ,
-        CUDA_VISIBLE_DEVICES=args.gpu,
-        PLATFORM="cuda",
-        DTYPE="BF16",
-        HF_HUB_OFFLINE="1",
-        TRANSFORMERS_OFFLINE="1",
-        CUBLAS_WORKSPACE_CONFIG=":4096:8",
-        OMP_NUM_THREADS="4",
-        OPENBLAS_NUM_THREADS="1",
-        MKL_NUM_THREADS="4",
-        PROFILING_DEBUG_LEVEL="0",
-        PYTHONUNBUFFERED="1",
-        PYTHONDONTWRITEBYTECODE="1",
-        TOKENIZERS_PARALLELISM="false",
-    )
+    env = generation_environment(args.gpu)
     covered = {backend: set() for backend in ("native", "lightx2v")}
     for backend in covered:
         for chunk in sorted((root / backend / "chunks").glob("*")):

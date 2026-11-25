@@ -31,7 +31,10 @@ class EvidenceTests(unittest.TestCase):
             "source_lock": self.source_lock,
             "status": "COMPLETE",
             "count": 2,
-            "environment": {"visible_device": "GPU-fixed"},
+            "environment": {
+                "visible_device": "GPU-fixed",
+                "generation_environment": EVALUATION.read_json(ROOT / "configs/nvidia/runtime.json")["generation_environment"],
+            },
         }
         self.resources = {"resources_clear": True, "task_cleanup_verified": True, "returncode": 0}
         self.records = []
@@ -91,6 +94,16 @@ class EvidenceTests(unittest.TestCase):
                 self.save()
                 with self.assertRaises(ValueError):
                     self.verify()
+
+    def test_changed_numerical_environment_is_rejected(self):
+        for key, value in (("CUBLAS_WORKSPACE_CONFIG", ":4096:8"), ("OMP_NUM_THREADS", "4"), ("MKL_NUM_THREADS", "4")):
+            with self.subTest(key=key):
+                original = copy.deepcopy(self.metadata)
+                self.metadata["environment"]["generation_environment"][key] = value
+                self.save()
+                with self.assertRaises(ValueError):
+                    self.verify()
+                self.metadata = original
 
     def test_different_cards_for_one_dataset_are_rejected(self):
         self.metadata["count"] = 1
