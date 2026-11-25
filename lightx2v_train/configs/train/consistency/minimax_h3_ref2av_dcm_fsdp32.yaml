@@ -1,0 +1,87 @@
+seed: 42
+model:
+    name: minimax_h3_ref2av
+    pretrained_model_name_or_path: ${oc.env:H3_MODEL_PATH}
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    latent_dtype: fp32
+    local_files_only: true
+    use_autocast: false
+    attention_backend: _flash_3_hub
+    teacher:
+        pretrained_model_name_or_path: ${oc.env:H3_DCM_TEACHER_PATH,${model.pretrained_model_name_or_path}}
+
+distributed:
+    backend: nccl
+    timeout_minutes: 180
+    sequence_parallel: {enabled: false, size: 1}
+    fsdp2:
+        enabled: true
+        size: 32
+        sharded_load: true
+        reshard_after_forward: {root_reshard: false, block_reshard: true}
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: cache_dataset
+        data_path: ${oc.env:H3_TRAIN_META}
+        tasks: [ref2av]
+        ref_image_counts: ${oc.decode:${oc.env:H3_REF_IMAGE_COUNTS,'[1,2,3,4,5,6]'}}
+        require_targets: true
+        batch_size: 1
+        num_workers: 8
+        seed: 42
+        shuffle: true
+        pin_memory: true
+        drop_last: true
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_sigma: 0.0
+    max_sigma: 1.0
+    time_shift_settings: {do_time_shift: false}
+
+training:
+    method: dcm
+    train_type: lora
+    output_dir: ${oc.env:H3_DCM_OUTPUT,./output_train/h3_ref_dcm}
+    max_train_iters: ${oc.decode:${oc.env:H3_DCM_TRAIN_ITERS,1500}}
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    allow_tf32: true
+    lr_scheduler: constant
+    lr_warmup_iters: 0
+    save_every_iters: 500
+    save_total_limit: 2
+    dcm:
+        video_shift: 12.0
+        audio_shift: 3.0
+        total_steps: 48
+        skip_steps: 1
+        loss_scale: 100.0
+        ema_decay: 0.999
+        video_loss_weight: 0.8
+        audio_loss_weight: 0.8
+    lora:
+        rank: 128
+        alpha: 128
+        param_dtype: fp32
+        target_modules: [to_q, to_k, to_v, to_out.0, ff.net.0.proj, ff.net.2, adaln_proj.linear, norm_out.linear]
+        rank_pattern: {adaln_proj.linear: 16, norm_out.linear: 16}
+        alpha_pattern: {adaln_proj.linear: 16, norm_out.linear: 16}
+    optimizer:
+        learning_rate: 2.0e-5
+        adam_beta1: 0.0
+        adam_beta2: 0.999
+        weight_decay: 0.01
+        adam_epsilon: 1.0e-8
+
+inference: {method: none}
+logging: {rank_zero_only: true, train_log_every_iters: 1}
+resume: {auto_resume: true}

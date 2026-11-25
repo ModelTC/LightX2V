@@ -203,6 +203,7 @@ class _DmdRuntime(BaseTrainer):
         self.fake = self.fake_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(self.fake_model, role="fake")
         self.fake_model.capabilities.require(ParallelCapability).apply(self.config)
+        self.fake_model.load_deferred_transformer_weights()
         if self.gradient_checkpointing:
             self.fake_model.capabilities.require(TrainableModelCapability).enable_gradient_checkpointing()
 
@@ -222,8 +223,8 @@ class _DmdRuntime(BaseTrainer):
         self.teacher_model.reuse_frozen_components_from(self.model)
         self.teacher = self.teacher_model.capabilities.require(DistributionMatchingCapability)
         self.teacher.denoiser().requires_grad_(False)
-        self.teacher.set_training(False)
         self.teacher_model.capabilities.require(ParallelCapability).apply(self.config)
+        self.teacher_model.load_deferred_transformer_weights()
         self.teacher.set_training(False)
         if self.quant_config is not None:
             for role, denoiser in (("student", self.student.denoiser()), ("fake", self.fake.denoiser()), ("teacher", self.teacher.denoiser())):
