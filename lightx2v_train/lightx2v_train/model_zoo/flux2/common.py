@@ -8,10 +8,11 @@ from loguru import logger
 from torch.utils.checkpoint import checkpoint
 
 from lightx2v_train.runtime.attention import prepare_diffusers_attention
+from lightx2v_train.runtime.config import validate_block_indices
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
-from ..base import BaseModel, validate_block_indices
+from ..base import BaseModel
 
 
 @dataclass
@@ -148,19 +149,6 @@ class Flux2ModelBase(BaseModel):
                 self.transformer.disable_gradient_checkpointing()
 
         logger.info("[train] Flux2 {}={} (double-stream blocks first)", option, sorted(selected))
-
-    def fsdp2_shard_plan(self, fsdp_config):
-        reshard_config = fsdp_config["reshard_after_forward"]
-        blocks = self._transformer_blocks()
-        option = "keep_unsharded_blocks"
-        keep = validate_block_indices(reshard_config.get(option, []), len(blocks), option)
-        logger.info("[train] Flux2 {}={} (double-stream blocks first)", option, sorted(keep))
-        plan = [
-            {"module": block, "reshard_after_forward": False if index in keep else reshard_config["block_reshard"]}
-            for index, block in enumerate(blocks)
-        ]
-        plan.append({"module": self.transformer, "reshard_after_forward": reshard_config["root_reshard"]})
-        return plan
 
     @property
     def vae_scale_factor(self):

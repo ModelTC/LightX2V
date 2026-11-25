@@ -11,12 +11,14 @@ from lightx2v_train.model_capabilities import ConsistencyModelCapability, Distri
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyModelCapability
+from lightx2v_train.runtime.attention import configured_attention_backend, deterministic_training_attention_requested, prepare_diffusers_attention
 from lightx2v_train.runtime.backend import get_backend
+from lightx2v_train.runtime.config import validate_block_indices
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
-from ..base import BaseModel, validate_block_indices
+from ..base import BaseModel
 
 
 @dataclass
@@ -125,20 +127,29 @@ class QwenImageModel(BaseModel):
             with torch.device("meta"):
                 # FSDP2 must wrap this skeleton before rank-local weights can load.
                 transformer = QwenImageTransformer2DModel.from_config(transformer_config)
-                self._configure_attention_backend(transformer)
-                return transformer
+        else:
+            device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
+            transformer = QwenImageTransformer2DModel.from_pretrained(
+                model_path,
+                subfolder="transformer",
+                torch_dtype=self.transformer_param_dtype,
+            ).to(device)
 
-        device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
-        transformer = QwenImageTransformer2DModel.from_pretrained(
-            model_path,
-            subfolder="transformer",
-            torch_dtype=self.transformer_param_dtype,
-        ).to(device)
         self._configure_attention_backend(transformer)
+        self._apply_training_fusions(transformer)
         return transformer
 
+    def _apply_training_fusions(self, transformer):
+        fusions = self._configured_training_fusions("qwen_image_fusions")
+        deterministic = deterministic_training_attention_requested(self.config)
+        if (fusions or deterministic) and self.config["model"]["name"] == "qwen_image" and get_backend().name == "metax_cuda":
+            from .training_fusions import configure_training_fusions
+
+            deterministic = deterministic or self.config.get("training", {}).get("attention_backend") == "flash_deterministic"
+            configure_training_fusions(transformer, fusions, deterministic)
+
     def _configure_attention_backend(self, transformer):
-        """Select the benchmark attention implementation before FSDP wrapping.
+        """Apply the selected attention backend before FSDP wrapping.
 
         Diffusers' Qwen processor dispatches through its attention registry.  The
         stock FlashAttention 2 entry does not expose the deterministic backward
@@ -148,6 +159,8 @@ class QwenImageModel(BaseModel):
         """
         backend = self.config.get("training", {}).get("attention_backend")
         if backend != "flash_deterministic":
+            if configured_attention_backend(self.config) is not None:
+                prepare_diffusers_attention(transformer, self.config)
             return
 
         try:
@@ -226,28 +239,19 @@ class QwenImageModel(BaseModel):
     def denoiser_module(self):
         return self.transformer
 
+    def _transformer_blocks(self):
+        return self.transformer.transformer_blocks
+
     def denoiser_prediction_type(self):
         # Qwen-Image follows x_t = (1 - t) * x_0 + t * noise and predicts
         # the corresponding velocity noise - x_0.
         return "velocity"
 
-    def set_lora_trainable(self):
-        super().set_lora_trainable()
-        ops = self.config.get("runtime", {}).get("ops", {})
-        attention = ops.get("attention")
-        deterministic = isinstance(attention, dict) and attention.get("deterministic", False)
-        fusions = ops.get("qwen_image_fusions", [])
-        if (fusions or deterministic) and self.config["model"]["name"] == "qwen_image" and get_backend().name == "metax_cuda":
-            from .training_fusions import configure_training_fusions
-
-            deterministic = deterministic or self.config.get("training", {}).get("attention_backend") == "flash_deterministic"
-            configure_training_fusions(self.transformer, fusions, deterministic)
-
     def enable_gradient_checkpointing(self):
         """Use a list of block indices or a half-open start/end range."""
         option = "gradient_checkpointing_blocks"
         indices = self.config.get("training", {}).get(option)
-        blocks = self.transformer.transformer_blocks
+        blocks = self._transformer_blocks()
         if isinstance(indices, dict):
             start = int(indices.get("start", 0))
             end = int(indices.get("end", len(blocks)))
@@ -275,14 +279,6 @@ class QwenImageModel(BaseModel):
 
         self.transformer._lightx2v_gradient_checkpointing_blocks = selected_indices
         logger.info("[train] gradient_checkpointing blocks={} count={} use_reentrant=false", selected_indices, len(selected_indices))
-
-    def fsdp2_shard_plan(self, fsdp_config):
-        reshard_config = fsdp_config["reshard_after_forward"]
-        blocks = self.transformer.transformer_blocks
-        keep = validate_block_indices(reshard_config.get("keep_unsharded_blocks", []), len(blocks), "keep_unsharded_blocks")
-        plan = [{"module": block, "reshard_after_forward": False if index in keep else reshard_config["block_reshard"]} for index, block in enumerate(blocks)]
-        plan.append({"module": self.transformer, "reshard_after_forward": reshard_config["root_reshard"]})
-        return plan
 
     def _latent_statistics(self, latents):
         config = self.vae.config

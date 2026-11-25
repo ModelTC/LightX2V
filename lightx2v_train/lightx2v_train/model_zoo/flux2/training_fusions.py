@@ -6,9 +6,7 @@ import torch
 from diffusers.models.transformers import transformer_flux2 as flux_layers
 from loguru import logger
 
-from ..qwen_image.modulated_layer_norm import _ModulatedLayerNorm
 from ..qwen_image.shared_qkv_input import project_image_qkv
-from .training_ops import JointRoPE, can_rotate
 
 
 FUSIONS = {"joint_rope", "modulated_layer_norm", "shared_qkv_input"}
@@ -25,8 +23,11 @@ def _bf16_training(module, states):
 
 
 def _rotate(q, k, text_q, text_k, frequencies, fused):
-    if fused and can_rotate(q, k, text_q, text_k, frequencies):
-        return JointRoPE.apply(q, k, text_q, text_k, *frequencies)
+    if fused:
+        from .training_ops import JointRoPE, can_rotate
+
+        if can_rotate(q, k, text_q, text_k, frequencies):
+            return JointRoPE.apply(q, k, text_q, text_k, *frequencies)
     if text_q is not None:
         q, k = torch.cat((text_q, q), dim=1), torch.cat((text_k, k), dim=1)
     if frequencies is not None:
@@ -48,7 +49,7 @@ class _TrainingAttention:
             _bf16_training(attn, hidden_states)
             and attention_mask is None
             and self._parallel_config is None
-            and (not self.deterministic or self._attention_backend in (None, "native"))
+            and (not self.deterministic or self._attention_backend in (None, "native", "flash"))
         )
 
     def attend(self, q, k, v):
@@ -118,6 +119,8 @@ def _modulate(norm, states, shift, scale):
         and shift.shape == scale.shape == (1, 1, states.size(-1))
         and all(t.dtype == torch.bfloat16 and t.is_contiguous() for t in (states, shift, scale))
     ):
+        from ..qwen_image.modulated_layer_norm import _ModulatedLayerNorm
+
         return _ModulatedLayerNorm.apply(states, scale, shift, norm.eps, torch.float32)
     return norm(states) * (1 + scale) + shift
 

@@ -2,6 +2,7 @@ import torch
 from loguru import logger
 
 from lightx2v_train.runtime.backend import get_backend
+from lightx2v_train.runtime.config import validate_block_indices
 from lightx2v_train.runtime.distributed import get_data_parallel_world_size, get_device_mesh, is_distributed
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -49,6 +50,20 @@ def _fully_shard_module(module, mesh, mp_policy, reshard_after_forward):
         mp_policy=mp_policy,
         reshard_after_forward=reshard_after_forward,
     )
+
+
+def build_block_shard_plan(root, blocks, fsdp_config):
+    """Shard blocks in forward execution order, then shard the enclosing module."""
+    reshard = fsdp_config["reshard_after_forward"]
+    keep = validate_block_indices(reshard.get("keep_unsharded_blocks", []), len(blocks), "keep_unsharded_blocks")
+    if keep:
+        logger.info("[train] fsdp2 keep_unsharded_blocks={}", sorted(keep))
+    plan = [
+        {"module": block, "reshard_after_forward": False if index in keep else reshard["block_reshard"]}
+        for index, block in enumerate(blocks)
+    ]
+    plan.append({"module": root, "reshard_after_forward": reshard["root_reshard"]})
+    return plan
 
 
 def _iter_shard_plan(plan):

@@ -13,10 +13,11 @@ from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.longcat_image.capability_adapters import LongCatImageConsistencyModelCapability
 from lightx2v_train.runtime.attention import prepare_diffusers_attention
+from lightx2v_train.runtime.config import validate_block_indices
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
-from ..base import BaseModel, validate_block_indices
+from ..base import BaseModel
 
 
 @dataclass
@@ -124,12 +125,15 @@ class LongCatImageModel(BaseModel):
             ).to(self.device)
 
         transformer = prepare_diffusers_attention(transformer, self.config)
-        fusions = self.config.get("runtime", {}).get("ops", {}).get("longcat_image_fusions", [])
+        self._apply_training_fusions(transformer)
+        return transformer
+
+    def _apply_training_fusions(self, transformer):
+        fusions = self._configured_training_fusions("longcat_image_fusions", full_sft_default=True)
         if fusions != []:
             from .training_fusions import configure_training_fusions
 
             configure_training_fusions(transformer, fusions)
-        return transformer
 
     def load_deferred_transformer_weights(self):
         """Read the base transformer after FSDP2 has created its local shards."""
@@ -143,31 +147,22 @@ class LongCatImageModel(BaseModel):
     def denoiser_module(self):
         return self.transformer
 
+    def _transformer_blocks(self):
+        return (*self.transformer.transformer_blocks, *self.transformer.single_transformer_blocks)
+
     def enable_gradient_checkpointing(self):
-        """Index double-stream blocks first, then single-stream blocks in execution order."""
-        double_count = len(self.transformer.transformer_blocks)
-        block_count = double_count + len(self.transformer.single_transformer_blocks)
+        blocks = self._transformer_blocks()
         option = "gradient_checkpointing_blocks"
         indices = self.config.get("training", {}).get(option)
-        selected = validate_block_indices(indices, block_count, option) if indices is not None else set(range(block_count))
+        selected = validate_block_indices(indices, len(blocks), option) if indices is not None else set(range(len(blocks)))
         if selected:
             super().enable_gradient_checkpointing()
         else:
             self.transformer.disable_gradient_checkpointing()
-        self.transformer.use_checkpoint = [i in selected for i in range(double_count)]
-        self.transformer.use_single_checkpoint = [i in selected for i in range(double_count, block_count)]
+        checkpointed = {blocks[index] for index in selected}
+        self.transformer.use_checkpoint = [block in checkpointed for block in self.transformer.transformer_blocks]
+        self.transformer.use_single_checkpoint = [block in checkpointed for block in self.transformer.single_transformer_blocks]
         logger.info("[train] gradient_checkpointing blocks={} count={}", sorted(selected), len(selected))
-
-    def fsdp2_shard_plan(self, fsdp_config):
-        reshard_config = fsdp_config["reshard_after_forward"]
-        blocks = (*self.transformer.transformer_blocks, *self.transformer.single_transformer_blocks)
-        option = "keep_unsharded_blocks"
-        keep = validate_block_indices(reshard_config.get(option, []), len(blocks), option)
-        if keep:
-            logger.info("[train] fsdp2 keep_unsharded_blocks={}", sorted(keep))
-        plan = [{"module": block, "reshard_after_forward": False if index in keep else reshard_config["block_reshard"]} for index, block in enumerate(blocks)]
-        plan.append({"module": self.transformer, "reshard_after_forward": reshard_config["root_reshard"]})
-        return plan
 
     @property
     def vae_scale_factor(self):

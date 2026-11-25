@@ -6,17 +6,17 @@ import torch
 from diffusers.models.attention_dispatch import dispatch_attention_fn
 from diffusers.models.transformers.transformer_qwenimage import QwenDoubleStreamAttnProcessor2_0, QwenImageTransformerBlock, apply_rotary_emb_qwen
 
-from .joint_rope import JointRoPE, supports_joint_rope
-from .modulated_layer_norm import forward_with_modulated_norm
-from .qk_rms_norm import normalize_image_qk
 from .shared_qkv_input import project_image_qkv
 
 
 def _rotate_and_join(image_q, image_k, text_q, text_k, frequencies, fused):
     if frequencies is not None:
         image_freqs, text_freqs = frequencies
-        if fused and supports_joint_rope(image_q, image_k, text_q, text_k, image_freqs, text_freqs):
-            return JointRoPE.apply(text_q, text_k, image_q, image_k, text_freqs, image_freqs)
+        if fused:
+            from .joint_rope import JointRoPE, supports_joint_rope
+
+            if supports_joint_rope(image_q, image_k, text_q, text_k, image_freqs, text_freqs):
+                return JointRoPE.apply(text_q, text_k, image_q, image_k, text_freqs, image_freqs)
         image_q = apply_rotary_emb_qwen(image_q, image_freqs, use_real=False)
         image_k = apply_rotary_emb_qwen(image_k, image_freqs, use_real=False)
         text_q = apply_rotary_emb_qwen(text_q, text_freqs, use_real=False)
@@ -57,7 +57,13 @@ class QwenTrainingAttnProcessor(QwenDoubleStreamAttnProcessor2_0):
         text_k = attn.add_k_proj(encoder_hidden_states).unflatten(-1, (-1, head_dim))
         text_v = attn.add_v_proj(encoder_hidden_states).unflatten(-1, (-1, head_dim))
 
-        image_q, image_k = normalize_image_qk(image_q, image_k, attn.norm_q, attn.norm_k, fused="qk_rms_norm" in self.fusions)
+        if "qk_rms_norm" in self.fusions:
+            from .qk_rms_norm import normalize_image_qk
+
+            image_q, image_k = normalize_image_qk(image_q, image_k, attn.norm_q, attn.norm_k, fused=True)
+        else:
+            image_q = attn.norm_q(image_q) if attn.norm_q is not None else image_q
+            image_k = attn.norm_k(image_k) if attn.norm_k is not None else image_k
         text_q = attn.norm_added_q(text_q) if attn.norm_added_q is not None else text_q
         text_k = attn.norm_added_k(text_k) if attn.norm_added_k is not None else text_k
 
@@ -86,6 +92,8 @@ def configure_training_fusions(transformer, fusions, deterministic):
         if type(block) is not QwenImageTransformerBlock:
             continue
         if "modulated_layer_norm" in features and "forward" not in vars(block):
+            from .modulated_layer_norm import forward_with_modulated_norm
+
             block.forward = MethodType(forward_with_modulated_norm, block)
         if (deterministic or features - {"modulated_layer_norm"}) and type(block.attn.processor) is QwenDoubleStreamAttnProcessor2_0:
             processor = QwenTrainingAttnProcessor(block.attn.processor, features, deterministic)

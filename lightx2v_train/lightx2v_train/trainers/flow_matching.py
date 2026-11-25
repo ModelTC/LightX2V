@@ -1,5 +1,4 @@
 import os
-import time
 
 import torch
 from loguru import logger
@@ -8,7 +7,6 @@ from lightx2v_train.model_capabilities import (
     FlowMatchingSFTCapability,
     SFTStepContext,
 )
-from lightx2v_train.runtime.backend import get_backend
 from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, reduce_mean
 from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value, sync_sequence_parallel_gradients
 from lightx2v_train.utils.registry import TRAINER_REGISTER
@@ -101,21 +99,8 @@ class FlowMatchingTrainer(BaseTrainer):
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad()
 
-                # Ensure every rank has completed its GPU work before rank 0
-                # records the completion timestamp.  Adjacent timestamps are
-                # the benchmark's end-to-end iteration intervals.
-                get_backend().synchronize()
-                barrier()
-
                 current_iter += 1
                 self.current_train_iteration = current_iter
-                completion_ms = time.time_ns() // 1_000_000
-                logger.info(
-                    "[iter-complete] iter={}/{} completion_ms={}",
-                    current_iter,
-                    max_train_iters,
-                    completion_ms,
-                )
                 display_loss = reduce_mean(running_loss)
                 current_lr = self.lr_scheduler.get_last_lr()[0]
                 if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
