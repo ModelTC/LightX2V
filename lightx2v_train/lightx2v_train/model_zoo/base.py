@@ -39,6 +39,14 @@ from lightx2v_train.runtime.sharded_loader import (
 from lightx2v_train.utils.utils import get_running_dtype
 
 
+def validate_block_indices(indices, block_count, option):
+    if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < block_count for i in indices):
+        raise ValueError(f"{option} must be a list of zero-based block indices below {block_count}.")
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"{option} contains duplicate block indices.")
+    return set(indices)
+
+
 class BaseModel(CapabilityProvider):
     default_unconditional_prompt = " "
     shared_condition_keys = ()

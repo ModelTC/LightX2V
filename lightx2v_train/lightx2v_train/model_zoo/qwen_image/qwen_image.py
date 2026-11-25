@@ -16,15 +16,7 @@ from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
-from ..base import BaseModel
-
-
-def _block_indices(indices, block_count, option):
-    if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < block_count for i in indices):
-        raise ValueError(f"{option} must be a list of zero-based block indices below {block_count}.")
-    if len(set(indices)) != len(indices):
-        raise ValueError(f"{option} contains duplicate block indices.")
-    return set(indices)
+from ..base import BaseModel, validate_block_indices
 
 
 @dataclass
@@ -267,7 +259,7 @@ class QwenImageModel(BaseModel):
             selected_indices = tuple(range(len(blocks)))
             super().enable_gradient_checkpointing()
         else:
-            selected_indices = tuple(sorted(_block_indices(indices, len(blocks), option)))
+            selected_indices = tuple(sorted(validate_block_indices(indices, len(blocks), option)))
             selected = {blocks[i] for i in selected_indices}
 
             def checkpoint_selected(block, *args, **kwargs):
@@ -287,7 +279,7 @@ class QwenImageModel(BaseModel):
     def fsdp2_shard_plan(self, fsdp_config):
         reshard_config = fsdp_config["reshard_after_forward"]
         blocks = self.transformer.transformer_blocks
-        keep = _block_indices(reshard_config.get("keep_unsharded_blocks", []), len(blocks), "keep_unsharded_blocks")
+        keep = validate_block_indices(reshard_config.get("keep_unsharded_blocks", []), len(blocks), "keep_unsharded_blocks")
         plan = [{"module": block, "reshard_after_forward": False if index in keep else reshard_config["block_reshard"]} for index, block in enumerate(blocks)]
         plan.append({"module": self.transformer, "reshard_after_forward": reshard_config["root_reshard"]})
         return plan

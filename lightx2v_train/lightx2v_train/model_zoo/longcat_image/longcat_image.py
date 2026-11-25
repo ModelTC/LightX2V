@@ -6,6 +6,7 @@ from diffusers import AutoencoderKL, LongCatImagePipeline
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.transformers import LongCatImageTransformer2DModel
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import prepare_pos_ids
+from loguru import logger
 
 from lightx2v_train.model_capabilities import ConsistencyModelCapability, DistributionMatchingCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
@@ -15,7 +16,7 @@ from lightx2v_train.runtime.attention import prepare_diffusers_attention
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
-from ..base import BaseModel
+from ..base import BaseModel, validate_block_indices
 
 
 @dataclass
@@ -115,14 +116,20 @@ class LongCatImageModel(BaseModel):
             transformer_config = LongCatImageTransformer2DModel.load_config(model_path, subfolder="transformer")
             with torch.device("meta"):
                 transformer = LongCatImageTransformer2DModel.from_config(transformer_config)
-            return prepare_diffusers_attention(transformer, self.config)
+        else:
+            transformer = LongCatImageTransformer2DModel.from_pretrained(
+                model_path,
+                subfolder="transformer",
+                torch_dtype=self.transformer_param_dtype,
+            ).to(self.device)
 
-        transformer = LongCatImageTransformer2DModel.from_pretrained(
-            model_path,
-            subfolder="transformer",
-            torch_dtype=self.transformer_param_dtype,
-        ).to(self.device)
-        return prepare_diffusers_attention(transformer, self.config)
+        transformer = prepare_diffusers_attention(transformer, self.config)
+        fusions = self.config.get("runtime", {}).get("ops", {}).get("longcat_image_fusions", [])
+        if fusions != []:
+            from .training_fusions import configure_training_fusions
+
+            configure_training_fusions(transformer, fusions)
+        return transformer
 
     def load_deferred_transformer_weights(self):
         """Read the base transformer after FSDP2 has created its local shards."""
@@ -136,22 +143,31 @@ class LongCatImageModel(BaseModel):
     def denoiser_module(self):
         return self.transformer
 
+    def enable_gradient_checkpointing(self):
+        """Index double-stream blocks first, then single-stream blocks in execution order."""
+        double_count = len(self.transformer.transformer_blocks)
+        block_count = double_count + len(self.transformer.single_transformer_blocks)
+        option = "gradient_checkpointing_blocks"
+        indices = self.config.get("training", {}).get(option)
+        selected = validate_block_indices(indices, block_count, option) if indices is not None else set(range(block_count))
+        if selected:
+            super().enable_gradient_checkpointing()
+        else:
+            self.transformer.disable_gradient_checkpointing()
+        self.transformer.use_checkpoint = [i in selected for i in range(double_count)]
+        self.transformer.use_single_checkpoint = [i in selected for i in range(double_count, block_count)]
+        logger.info("[train] gradient_checkpointing blocks={} count={}", sorted(selected), len(selected))
+
     def fsdp2_shard_plan(self, fsdp_config):
         reshard_config = fsdp_config["reshard_after_forward"]
-        return [
-            {
-                "modules": self.transformer.transformer_blocks,
-                "reshard_after_forward": reshard_config["block_reshard"],
-            },
-            {
-                "modules": self.transformer.single_transformer_blocks,
-                "reshard_after_forward": reshard_config["block_reshard"],
-            },
-            {
-                "module": self.transformer,
-                "reshard_after_forward": reshard_config["root_reshard"],
-            },
-        ]
+        blocks = (*self.transformer.transformer_blocks, *self.transformer.single_transformer_blocks)
+        option = "keep_unsharded_blocks"
+        keep = validate_block_indices(reshard_config.get(option, []), len(blocks), option)
+        if keep:
+            logger.info("[train] fsdp2 keep_unsharded_blocks={}", sorted(keep))
+        plan = [{"module": block, "reshard_after_forward": False if index in keep else reshard_config["block_reshard"]} for index, block in enumerate(blocks)]
+        plan.append({"module": self.transformer, "reshard_after_forward": reshard_config["root_reshard"]})
+        return plan
 
     @property
     def vae_scale_factor(self):
