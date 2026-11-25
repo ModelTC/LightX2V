@@ -616,19 +616,19 @@ class CLIPModel:
             logger.info("[DummyModel] Skipping CLIP weight loading, using random init")
 
     def visual(self, videos):
-        if self.cpu_offload:
-            self.to_cuda()
-        # preprocess
-        size = (self.model.image_size,) * 2
-        videos = torch.cat([F.interpolate(u, size=size, mode="bicubic", align_corners=False) for u in videos])
-        videos = self.transforms.transforms[-1](videos.mul_(0.5).add_(0.5))
-        # forward
-        with torch.amp.autocast(str(AI_DEVICE), dtype=self.dtype):
-            out = self.model.visual(videos, use_31_block=self.use_31_block)
-
-        if self.cpu_offload:
-            self.to_cpu()
-        return out
+        try:
+            if self.cpu_offload:
+                self.to_cuda()
+            # preprocess
+            size = (self.model.image_size,) * 2
+            videos = torch.cat([F.interpolate(u, size=size, mode="bicubic", align_corners=False) for u in videos])
+            videos = self.transforms.transforms[-1](videos.mul_(0.5).add_(0.5))
+            # forward
+            with torch.amp.autocast(str(AI_DEVICE), dtype=self.dtype):
+                return self.model.visual(videos, use_31_block=self.use_31_block)
+        finally:
+            if self.cpu_offload:
+                self.to_cpu()
 
     def to_cuda(self):
         self.model = self.model.to(AI_DEVICE)

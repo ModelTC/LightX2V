@@ -43,7 +43,7 @@ RUN cd decord \
     && cd ../python && pip install --no-cache-dir --no-deps --no-build-isolation -e .
 ENV DECORD_LIBRARY_PATH=/app/decord/build
 
-RUN pip install --no-cache-dir torchao modelscope Pillow omegaconf librosa scipy debugpy
+RUN pip install --no-cache-dir torchao modelscope Pillow "pillow-heif>=1.0" omegaconf librosa scipy debugpy
 
 RUN pip install --no-cache-dir jsonschema pymongo mooncake-transfer-engine tos zmq graphviz pybind11
 

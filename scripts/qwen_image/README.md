@@ -128,6 +128,8 @@ For text to image, add these fields to the compile config above and set `reuse` 
 
 Scripts default to BF16 LoRA or distilled weights. For FP8, use the same script and switch `--config_json` to the matching config. Keep `model_path` pointing to the complete base model directory and set local weight paths in `lora_configs`, `dit_original_ckpt`, or `dit_quantized_ckpt` as required by the selected JSON. Omit `negative_prompt`, including empty strings, when `enable_cfg` is `false`.
 
+For single-GPU RTX 4090D inference or serving, use `--config_json` to select the [T2I preset](../../configs/qwen_image/4090d/qwen_image_t2i_2512_distill.json) (22 resident DiT blocks at 1664×928) or the [I2I preset](../../configs/qwen_image/4090d/qwen_image_i2i_2511_distill.json) (15 at 1376×768).
+
 ### Other acceleration options
 
 | Feature | Usage |

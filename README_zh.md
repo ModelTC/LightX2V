@@ -1,5 +1,4 @@
 <div align="center" style="font-family: charter;">
-  <h1>⚡️ LightX2V:<br> 轻量级视频生成推理框架</h1>
 
 <img alt="logo" src="assets/img_lightx2v.png" width=75%></img>
 
@@ -7,6 +6,8 @@
 [![Doc](https://img.shields.io/badge/docs-English-99cc2)](https://lightx2v-en.readthedocs.io/en/latest)
 [![Doc](https://img.shields.io/badge/文档-中文-99cc2)](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/lightx2v/lightx2v/tags)
+[![LightX2V Studio](https://img.shields.io/badge/LightX2V-Studio-8A2BE2)](https://x2v.light-ai.top/)
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-lightx2v-FFD21E?logo=huggingface)](https://huggingface.co/lightx2v)
 
 **\[ [English](README.md) | 中文 \]**
 
@@ -14,7 +15,7 @@
 
 --------------------------------------------------------------------------------
 
-**LightX2V** 是一个先进的轻量级图像视频生成推理框架，专为提供高效、高性能的图像视频生成解决方案而设计。该统一平台集成了多种前沿的图像视频生成技术，支持文本生成视频(T2V)和图像生成视频(I2V)，文本生成图像(T2I)，图像编辑(I2I)等多样化生成任务。**X2V 表示将不同的输入模态(X，如文本或图像)转换为视觉输出(Vision)**。
+**LightX2V** 是一个面向图像、视频及多模态模型的轻量级、高性能推理框架，支持图像与视频的生成、编辑、修复及超分辨率，并覆盖音视频生成、世界模型、机器人与三维任务。通过少步推理、量化、特征缓存、权重卸载和并行推理等技术，LightX2V 可在多种硬件平台上加速推理、降低显存占用，实现高效部署。**X2V** 代表 **X-to-Vision**，即将文本、图像等不同模态的输入转换为视觉内容。
 
 [快速开始](#-快速开始) · [模型生态](#-支持的模型生态) · [文档与部署](#-文档与部署)
 

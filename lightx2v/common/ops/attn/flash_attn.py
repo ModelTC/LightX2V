@@ -114,6 +114,9 @@ class FlashAttn2Weight(AttnWeightTemplate):
                 causal=False,
                 return_attn_probs=True,
             )
+            # Older FA2 varlen kernels keep the singleton batch axis on LSE.
+            if lse.ndim == 3:
+                lse = lse.squeeze(0)
             return output.reshape(q.shape[1], -1), lse.transpose(0, 1)
 
         output, lse, *_ = flash_attn_func_v2(

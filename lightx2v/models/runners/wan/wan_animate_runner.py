@@ -1,4 +1,5 @@
 import gc
+import math
 from copy import deepcopy
 
 import cv2
@@ -18,6 +19,7 @@ from lightx2v.models.input_encoders.hf.animate.face_encoder import FaceEncoder
 from lightx2v.models.input_encoders.hf.animate.motion_encoder import Generator
 from lightx2v.models.networks.wan.animate_model import WanAnimateModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
+from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
@@ -350,7 +352,23 @@ class WanAnimateRunner(WanRunner):
     def run_vae_decoder(self, latents):
         if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             self.vae_decoder = self.load_vae_decoder()
-        images = self.vae_decoder.decode(latents[:, 1:].to(GET_DTYPE()))
+        decode_latents = latents[:, 1:]
+        if (
+            self.config.get("animate_vae_terminal_prefix", False)
+            and len(self.all_out_frames) == self.video_segment_num - 1
+            and isinstance(self.vae_decoder, WanVAE)
+            and not self.config.get("use_lightvae", False)
+            and not self.vae_decoder.parallel
+            and not self.vae_decoder.use_tiling
+        ):
+            # Include the overlap that end_run_segment removes after decoding.
+            keep_frames = self.real_frame_len - sum(video.shape[2] for video in self.all_out_frames) + self.mask_reft_len
+            if keep_frames <= 0:
+                raise ValueError("Animate terminal prefix has no remaining frames")
+            # The first latent yields one frame, each later latent one temporal stride.
+            latent_count = 1 + math.ceil((keep_frames - 1) / self.config["vae_stride"][0])
+            decode_latents = decode_latents[:, :latent_count]
+        images = self.vae_decoder.decode(decode_latents.to(GET_DTYPE()))
         if (self.config["lazy_load"] if "lazy_load" in self.config else False) or (self.config["unload_modules"] if "unload_modules" in self.config else False):
             del self.vae_decoder
             torch.cuda.empty_cache()

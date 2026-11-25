@@ -121,7 +121,7 @@ class BaseModel(CapabilityProvider):
         local_tensor = torch.empty(
             local_shape,
             device=self.device,
-            dtype=self.transformer_param_dtype,
+            dtype=template.dtype,
         )
         if "lora_A" in name:
             local_tensor.normal_(mean=0.0, std=0.02)
@@ -129,13 +129,13 @@ class BaseModel(CapabilityProvider):
             local_tensor.zero_()
         return make_dtensor_from_template(template, local_tensor)
 
-    def load_sharded_transformer_weights(self, checkpoint):
+    def load_sharded_transformer_weights(self, checkpoint, *, preserve_parameter_dtypes=False):
         """Load FSDP2 shards from an indexed or single-file safetensors checkpoint."""
         load_options = {
             "key_resolver": self.resolve_sharded_checkpoint_key,
             "initialize_missing": self.initialize_missing_sharded_parameter,
             "device": self.device,
-            "dtype": self.transformer_param_dtype,
+            "dtype": None if preserve_parameter_dtypes else self.transformer_param_dtype,
         }
         checkpoint = Path(checkpoint)
         if any(checkpoint.glob("*.index.json")):
@@ -152,14 +152,22 @@ class BaseModel(CapabilityProvider):
             index.write_text(json.dumps({"weight_map": weight_map}), encoding="utf-8")
             load_fsdp2_safetensors(self.denoiser_module(), temp_dir, **load_options)
 
-    def add_lora(self, rank, alpha, target_modules):
+    def add_lora(self, rank, alpha, target_modules, *, rank_pattern=None, alpha_pattern=None):
         lora_config = LoraConfig(
             r=rank,
             lora_alpha=alpha,
             init_lora_weights="gaussian",
             target_modules=target_modules,
+            rank_pattern=rank_pattern or {},
+            alpha_pattern=alpha_pattern or {},
         )
         self.denoiser_module().add_adapter(lora_config)
+
+    def set_lora_param_dtype(self, dtype):
+        dtype = get_running_dtype(dtype)
+        for name, parameter in self.denoiser_module().named_parameters():
+            if ".lora_A." in name or ".lora_B." in name:
+                parameter.data = parameter.data.to(dtype)
 
     def set_lora_trainable(self):
         denoiser = self.denoiser_module()
@@ -396,6 +404,8 @@ class BaseModel(CapabilityProvider):
             self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True, **save_kwargs)
         else:
             save_file(lora_state_dict, os.path.join(output_dir, "pytorch_lora_weights.safetensors"))
+            config = self.denoiser_module().peft_config[adapter_name or "default"]
+            config.save_pretrained(output_dir)
         if auxiliary_state_dict:
             if not auxiliary_weights_name:
                 raise ValueError("auxiliary_weights_name is required when auxiliary parameters are saved.")

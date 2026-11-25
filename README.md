@@ -1,5 +1,4 @@
 <div align="center" style="font-family: charter;">
-  <h1>⚡️ LightX2V:<br> Light Video Generation Inference Framework</h1>
 
 <img alt="logo" src="assets/img_lightx2v.png" width=75%></img>
 
@@ -7,6 +6,8 @@
 [![Doc](https://img.shields.io/badge/docs-English-99cc2)](https://lightx2v-en.readthedocs.io/en/latest)
 [![Doc](https://img.shields.io/badge/文档-中文-99cc2)](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/lightx2v/lightx2v/tags)
+[![LightX2V Studio](https://img.shields.io/badge/LightX2V-Studio-8A2BE2)](https://x2v.light-ai.top/)
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-lightx2v-FFD21E?logo=huggingface)](https://huggingface.co/lightx2v)
 
 **\[ English | [中文](README_zh.md) \]**
 
@@ -14,7 +15,7 @@
 
 --------------------------------------------------------------------------------
 
-**LightX2V** is an advanced lightweight image/video generation inference framework engineered to deliver efficient, high-performance image/video synthesis solutions. This unified platform integrates multiple state-of-the-art image/video generation techniques, supporting diverse generation tasks including text-to-video (T2V), image-to-video (I2V), text-to-image (T2I), image-editing (I2I). **X2V represents the transformation of different input modalities (X, such as text or images) into vision output (Vision)**.
+**LightX2V** is a lightweight, high-performance inference framework for image, video, and multimodal models. It supports image and video generation, editing, restoration, and super-resolution, with support extending to audio-video generation, world models, robotics, and 3D tasks. Through few-step inference, quantization, caching, offloading, and parallel execution, it enables faster inference and more memory-efficient deployment across diverse hardware platforms. **X2V** stands for **X-to-Vision**: transforming diverse inputs, such as text and images, into visual content.
 
 [Quick Start](#-quick-start) · [Models](#-supported-model-ecosystem) · [Documentation & Deployment](#-documentation--deployment)
 

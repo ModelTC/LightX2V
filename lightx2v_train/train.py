@@ -1,5 +1,11 @@
 import argparse
+import os
+import random
+import sys
+import traceback
 
+import numpy as np
+import torch
 from loguru import logger
 
 from lightx2v_train.data import build_data, build_sample_processor
@@ -10,6 +16,7 @@ from lightx2v_train.runtime import (
     load_config,
     setup_logger,
 )
+from lightx2v_train.runtime.distributed import get_rank, is_distributed
 from lightx2v_train.runtime.precision import configure_precision
 from lightx2v_train.trainers import build_trainer
 from lightx2v_train.utils.utils import check_val_is_enabled, is_train_cache_dataset
@@ -26,6 +33,11 @@ def main():
     config = load_config(args.config)
     configure_precision(config)
     init_distributed(config)
+    if "seed" in config:
+        seed = int(config["seed"]) + get_rank()
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
     setup_logger(config)
 
     try:
@@ -49,6 +61,12 @@ def main():
 
         trainer.train()
     except Exception:
+        if is_distributed() and config["training"]["method"] in {"dcm", "pdmd"}:
+            # Report the failing rank before its peers enter collective teardown.
+            print(f"[rank{get_rank()}] Training failed", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            sys.stderr.flush()
+            os._exit(1)
         logger.exception("Training failed")
         raise
     finally:

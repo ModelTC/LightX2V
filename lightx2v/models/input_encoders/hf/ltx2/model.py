@@ -83,6 +83,7 @@ class LTX2TextEncoder:
         dtype: torch.dtype = torch.bfloat16,
         cpu_offload: bool = False,
         gemma_attn_implementation: str | None = None,
+        offload_granularity: str = "model",
     ):
         """
         Initialize the simplified text encoder loader.
@@ -96,6 +97,9 @@ class LTX2TextEncoder:
                 override. Registered platform backends such as
                 ``"mlu_flash_attn"`` are scoped to Gemma text layers. When
                 omitted, Transformers keeps its native default (currently SDPA).
+            offload_granularity: ``"model"`` retains whole-model movement;
+                ``"block"`` stages Gemma 3 text layers and each auxiliary phase
+                from immutable CPU weights without moving the entire wrapper.
         """
         self.checkpoint_path = checkpoint_path
         self.gemma_root = gemma_root
@@ -103,6 +107,11 @@ class LTX2TextEncoder:
         self.dtype = dtype
         self.cpu_offload = cpu_offload
         self.gemma_attn_implementation = gemma_attn_implementation
+        if offload_granularity not in ("model", "block"):
+            raise ValueError(f"Unsupported Gemma offload granularity: {offload_granularity!r}")
+        if offload_granularity == "block" and (not cpu_offload or torch.device(device).type != "cpu"):
+            raise ValueError("Gemma block offload requires cpu_offload=True and CPU model initialization")
+        self.offload_granularity = offload_granularity
         self.loader = SafetensorsModelStateDictLoader()
         self.text_encoder = self.load()
 
@@ -115,6 +124,8 @@ class LTX2TextEncoder:
         }
         if self.gemma_attn_implementation is not None:
             kwargs["attn_implementation"] = self.gemma_attn_implementation
+        if self.offload_granularity == "block":
+            kwargs.update(device_map="cpu", low_cpu_mem_usage=True)
         return Gemma3ForConditionalGeneration.from_pretrained(gemma_path, **kwargs)
 
     def _load_tokenizer(self) -> LTXVGemmaTokenizer:
@@ -136,7 +147,12 @@ class LTX2TextEncoder:
             GemmaTextEncoder: The fully initialized text encoder model
         """
         config = self.loader.metadata(self.checkpoint_path)
-        model = GemmaTextEncoderConfigurator.from_config(config)
+        if self.offload_granularity == "block":
+            # load_state_dict(assign=True) materializes these weights directly from the checkpoint.
+            with torch.device("meta"):
+                model = GemmaTextEncoderConfigurator.from_config(config)
+        else:
+            model = GemmaTextEncoderConfigurator.from_config(config)
 
         # Latest LTX-2 loads the Gemma backbone from gemma_root
         model.model = self._load_gemma_model()
@@ -154,6 +170,10 @@ class LTX2TextEncoder:
         if self.dtype is not None:
             state_dict = {key: value.to(dtype=self.dtype) for key, value in state_dict.items()}
         model.load_state_dict(state_dict, strict=False, assign=True)
+        if self.offload_granularity == "block":
+            unmaterialized = [name for name, value in (*model.named_parameters(), *model.named_buffers()) if value.is_meta]
+            if unmaterialized:
+                raise ValueError(f"Gemma block offload checkpoint left unmaterialized tensors: {', '.join(unmaterialized[:8])}")
         model = model.to(self.device).eval()
         return model
 
@@ -168,6 +188,10 @@ class LTX2TextEncoder:
         Returns:
             List of tuples, each containing (v_context, a_context) tensors for each prompt.
         """
+        if self.offload_granularity == "block":
+            from lightx2v.models.input_encoders.hf.ltx2.gemma.block_offload import encode_with_block_offload
+
+            return [encode_with_block_offload(self.text_encoder, prompt, AI_DEVICE)[:2] for prompt in prompts]
         if self.cpu_offload:
             self.text_encoder = self.text_encoder.to(AI_DEVICE)
         result = []
@@ -276,6 +300,8 @@ class LTX25TextEncoder(LTX2TextEncoder):
     """
 
     def load(self) -> GemmaTextEncoder:
+        if self.offload_granularity == "block":
+            raise ValueError("Gemma block offload is implemented for LTX-2/2.3 Gemma 3 only; LTX-2.5 requires gemma_offload_granularity='model'")
         from lightx2v.models.input_encoders.hf.ltx2.gemma.assets import (
             LTX25_EMBEDDINGS_KEY_OPS,
             LTX25_GEMMA_KEY_OPS,

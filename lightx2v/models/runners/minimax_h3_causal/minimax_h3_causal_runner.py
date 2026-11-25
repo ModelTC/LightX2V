@@ -264,7 +264,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         if self.live_stream or index + 1 < scheduler.plan.num_chunks:
             scheduler.prepare_chunk(index, clean=True)
             self.model.infer(media_inputs)
-        scheduler.cache.finish_chunk(index)
 
     def run_segment(self, segment_idx=0):
         with no_sync_profiling(self.video_decode_graph is not None), ExitStack() as decoders:
@@ -308,12 +307,13 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
 
                 for index in range(scheduler.plan.num_chunks):
                     self.check_stop()
-                    if index == 0:
-                        self.prefill_clean_condition(prompt_key(0), self.inputs["motion_text_output"])
-                    elif index in self.motion_by_chunk:
-                        text = self.text_encoders[0].infer(self.motion_by_chunk[index])
-                        scheduler.append_motion(index, text["text_token_tags"])
-                        self.prefill_clean_condition(prompt_key(scheduler.plan.segment_index(index)), text)
+                    motion_text = self.inputs["motion_text_output"] if index == 0 else None
+                    if index > 0 and index in self.motion_by_chunk:
+                        motion_text = self.text_encoders[0].infer(self.motion_by_chunk[index])
+                        scheduler.append_motion(index, motion_text["text_token_tags"])
+                    scheduler.cache.retain_history_for(index)
+                    if motion_text is not None:
+                        self.prefill_clean_condition(prompt_key(scheduler.plan.segment_index(index)), motion_text)
                     self._run_dit_chunk(index, media_inputs, audio_decoder)
                     num_latent_frames = int(scheduler.plan.chunk_specs[index, 1] - scheduler.plan.chunk_specs[index, 0])
                     latents = unpatchify_video_tokens(scheduler.video_latents, num_latent_frames, scheduler.latent_height, scheduler.latent_width)
@@ -353,6 +353,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
 
     def _commit_live_motion(self, text, local_index, *, prompt, command_id):
         self.scheduler.append_motion(local_index, text["text_token_tags"])
+        self.scheduler.cache.retain_history_for(local_index)
         self.inputs["motion_text_output"] = text
         self.prefill_clean_condition(prompt_key(self.scheduler.plan.segment_index(local_index)), text)
         recorder = self.va_controller.recorder
@@ -512,6 +513,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                         if is_recorder_rank and self.reuse_input_audio:
                             audio_buffer = np.concatenate((audio_buffer, self._resample_live_audio(waveform, sample_rate=self.va_controller.audio_sr)))
 
+                    self.scheduler.cache.retain_history_for(local_index)
                     self._run_dit_chunk(local_index, media_inputs, audio_decoder, audio_latents=audio_latents)
                     spec = self.scheduler.plan.chunk_spec(local_index)
                     video = unpatchify_video_tokens(self.scheduler.video_latents, spec[1] - spec[0], self.scheduler.latent_height, self.scheduler.latent_width)

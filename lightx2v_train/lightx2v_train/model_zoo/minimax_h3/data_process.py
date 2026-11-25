@@ -1,32 +1,41 @@
-"""Raw T2AV sample preparation for MiniMax-H3 cache construction."""
+"""Raw sample and cached-data preparation for MiniMax-H3."""
 
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 
+from lightx2v_train.data.cache_dataset import CacheDataset
 from lightx2v_train.model_zoo.native.minimax_h3 import audio_latent_num_frames, video_latent_num_frames
+from lightx2v_train.model_zoo.native.minimax_h3.packing import AUDIO_LATENTS_PER_SECOND, FPS
 from lightx2v_train.utils.registry import SAMPLE_PROCESSOR_REGISTER
 
+from .capability_adapters.data import MiniMaxH3CacheDataset
 
-class MiniMaxH3T2AVProcessor:
-    """Prepare synchronized RGB video and stereo audio for the H3 VAEs."""
+
+class MiniMaxH3DataProcessor:
+    """Provide H3 cache sampling and synchronize raw T2AV clips for the VAEs."""
 
     unconditional_prompt = " "
     requires_audio = True
 
     def __init__(self, config):
         model_config = config["model"]
-        self.video_fps = int(model_config.get("video_fps", 24))
+        self.reference = model_config["name"] == "minimax_h3_ref2av"
+        self.video_fps = int(model_config.get("video_fps", FPS))
         self.audio_sample_rate = int(model_config.get("audio_sampling_rate", 32000))
-        self.audio_latents_per_second = int(model_config.get("audio_latents_per_second", 40))
-        if self.video_fps <= 0 or self.audio_sample_rate <= 0 or self.audio_latents_per_second <= 0:
-            raise ValueError("MiniMax-H3 video/audio rates must be positive.")
-        if self.video_fps != 24 or self.audio_latents_per_second != 40:
-            raise ValueError("MiniMax-H3 T2AV requires video_fps=24 and audio_latents_per_second=40.")
-        if self.audio_sample_rate % self.audio_latents_per_second:
-            raise ValueError("MiniMax-H3 audio_sampling_rate must be divisible by audio_latents_per_second.")
+        self.audio_latents_per_second = int(model_config.get("audio_latents_per_second", AUDIO_LATENTS_PER_SECOND))
+        if self.video_fps != FPS or self.audio_latents_per_second != AUDIO_LATENTS_PER_SECOND:
+            raise ValueError(f"MiniMax-H3 requires video_fps={FPS} and audio_latents_per_second={AUDIO_LATENTS_PER_SECOND}.")
+        if self.audio_sample_rate <= 0 or self.audio_sample_rate % self.audio_latents_per_second:
+            raise ValueError("MiniMax-H3 audio_sampling_rate must be positive and divisible by audio_latents_per_second.")
         self.audio_hop_length = self.audio_sample_rate // self.audio_latents_per_second
+
+    def build_cache_dataset(self, data_config_split, **kwargs):
+        metadata_paths = kwargs["metadata_paths"]
+        if "tasks" in data_config_split or any(Path(path).suffix.lower() == ".json" for path in metadata_paths):
+            return MiniMaxH3CacheDataset(data_config_split, reference=self.reference, **kwargs)
+        return CacheDataset(**kwargs)
 
     def __call__(self, sample):
         video = sample.get("inputs", {}).get("video")
@@ -93,6 +102,7 @@ class MiniMaxH3T2AVProcessor:
         return waveform.contiguous()
 
 
-@SAMPLE_PROCESSOR_REGISTER("minimax_h3_t2av")
-def build_minimax_h3_t2av_processor(config):
-    return MiniMaxH3T2AVProcessor(config)
+@SAMPLE_PROCESSOR_REGISTER("minimax_h3_fl2av")
+@SAMPLE_PROCESSOR_REGISTER("minimax_h3_ref2av")
+def build_minimax_h3_processor(config):
+    return MiniMaxH3DataProcessor(config)

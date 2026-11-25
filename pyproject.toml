@@ -43,6 +43,7 @@ dependencies = [
     "accelerate",
     "safetensors",
     "opencv-python",
+    "pillow-heif>=1.0",
     "imageio",
     "imageio-ffmpeg",
     "einops",

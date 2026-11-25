@@ -1,86 +1,65 @@
 import base64
-import os
 import re
 import uuid
-from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, Optional, Tuple
-
-from loguru import logger
 
 
-class MediaHandler(ABC):
-    @abstractmethod
-    def get_media_signatures(self) -> Dict[bytes, str]:
-        """Return the binary signatures of this media type and their corresponding file extensions."""
-        pass
+class MediaHandler:
+    data_url_prefix: str
+    data_url_header: re.Pattern[str]
+    signatures: dict[bytes, str]
+    default_extension: str
 
-    @abstractmethod
-    def get_data_url_prefix(self) -> str:
-        """Return the data URL prefix, e.g. 'data:image/' or 'data:audio/'."""
-        pass
-
-    @abstractmethod
-    def get_data_url_pattern(self) -> str:
-        """Return the regex pattern for data URL."""
-        pass
-
-    @abstractmethod
-    def get_default_extension(self) -> str:
-        """Return the default extension for this media type."""
-        pass
-
-    def is_base64(self, data: str) -> bool:
-        if data.startswith(self.get_data_url_prefix()):
-            return True
-
-        try:
-            if len(data) % 4 == 0:
-                base64.b64decode(data, validate=True)
-                decoded = base64.b64decode(data[:100])
-                for signature in self.get_media_signatures().keys():
-                    if decoded.startswith(signature):
-                        return True
-        except Exception as e:
-            logger.warning(f"Error checking base64 {self.__class__.__name__}: {e}")
-            return False
-
-        return False
-
-    def extract_base64_data(self, data: str) -> Tuple[str, Optional[str]]:
-        if data.startswith("data:"):
-            match = re.match(self.get_data_url_pattern(), data)
-            if match:
-                format_type = match.group(1)
-                base64_data = match.group(2)
-                return base64_data, format_type
-
-        return data, None
+    def _extension_from_signature(self, data: bytes) -> str | None:
+        for signature, extension in self.signatures.items():
+            if data.startswith(signature):
+                return extension
+        return None
 
     def detect_extension(self, data: bytes) -> str:
-        for signature, ext in self.get_media_signatures().items():
-            if data.startswith(signature):
-                return ext
-        return self.get_default_extension()
+        return self._extension_from_signature(data) or self.default_extension
 
-    def save_base64(self, base64_data: str, output_dir: str) -> str:
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-        data, format_type = self.extract_base64_data(base64_data)
-        file_id = str(uuid.uuid4())
-
+    def _decode_bare(self, value: str) -> tuple[bytes, str] | None:
         try:
-            media_data = base64.b64decode(data)
-        except Exception as e:
-            raise ValueError(f"Invalid base64 data: {e}")
+            data = base64.b64decode(value, validate=True)
+        except ValueError:
+            return None
+        extension = self._extension_from_signature(data)
+        return (data, extension) if extension else None
 
-        if format_type:
-            ext = format_type
-        else:
-            ext = self.detect_extension(media_data)
+    def is_base64(self, data: str) -> bool:
+        if data.startswith("data:"):
+            return self.data_url_header.match(data) is not None
+        return self._decode_bare(data) is not None
 
-        file_path = os.path.join(output_dir, f"{file_id}.{ext}")
-        with open(file_path, "wb") as f:
-            f.write(media_data)
+    def resolve_path(self, value: str, output_dir: str | Path) -> str:
+        """Cache an inline reference or return the local path."""
+        if value.startswith(self.data_url_prefix):
+            return self.save_base64(value, output_dir)
+        media = self._decode_bare(value)
+        if media is None:
+            return value
+        data, extension = media
+        return _write_media(data, extension, output_dir)
 
-        return file_path
+    def save_base64(self, base64_data: str, output_dir: str | Path) -> str:
+        extension = None
+        if base64_data.startswith("data:"):
+            header = self.data_url_header.match(base64_data)
+            if header is None:
+                raise ValueError("Invalid base64 media URL")
+            extension = header[1]
+            base64_data = base64_data[header.end() :]
+
+        data = base64.b64decode("".join(base64_data.split()), validate=True)
+        if not data:
+            raise ValueError("Empty base64 media data")
+        return _write_media(data, extension or self.detect_extension(data), output_dir)
+
+
+def _write_media(data: bytes, extension: str, output_dir: str | Path) -> str:
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{uuid.uuid4()}.{extension}"
+    path.write_bytes(data)
+    return str(path)

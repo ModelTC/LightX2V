@@ -126,6 +126,8 @@ python scripts/qwen_image/server/post_i2i_reuse.py
 
 脚本默认使用 BF16 LoRA 或蒸馏权重。FP8 使用同一脚本，将 `--config_json` 切换到对应配置。`model_path` 保持为完整基础模型目录，按所选 JSON 设置 `lora_configs`、`dit_original_ckpt` 或 `dit_quantized_ckpt` 中的本地权重路径。`enable_cfg: false` 的配置不传 `negative_prompt`，包括空字符串。
 
+在单张 RTX 4090D 上推理或启动服务时，通过 `--config_json` 选择 [T2I 配置](../../configs/qwen_image/4090d/qwen_image_t2i_2512_distill.json)（1664×928 实测常驻 22 个 DiT block）或 [I2I 配置](../../configs/qwen_image/4090d/qwen_image_i2i_2511_distill.json)（1376×768 实测常驻 15 个）。
+
 ### 其他加速方式
 
 | 功能 | 用法 |
