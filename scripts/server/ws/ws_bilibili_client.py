@@ -35,12 +35,13 @@ def main() -> None:
         # 主播对话模型在这里改；当前示例通过 SenseNova 调用 DeepSeek。
         # 优先于服务端 SENSENOVA_MODEL；删除此项则使用服务端设置。
         "llm_model": "sensenova-6.8-flash-lite",
-        "silence_duration": 60,
-        "chat_history_max_length": 20,
-        "event_batch_seconds": 2,
+        "silence_duration": 30,
+        "chat_history_max_length": 256,
+        "event_batch_seconds": 0,
         "max_dm": 100,
         # RefA2AV 使用 --reference_audio /path/on/client/voice_reference.wav 上传声音参考。
-        # RefA2AV 在没有新台词或动作结束后恢复此 motion；全局 prompt 描述人物和场景。
+        # RefA2V 在音频接收结束且被 Reader 取完后、RefA2AV 在台词结束后恢复此 motion。
+        # RefA2V 可通过 speaking_prompt 自定义说话动作，不需要台词或 <Audio 1>。
         "idle_prompt": "<Subject 1> waits quietly, keeps their mouth closed, and looks naturally at the camera. No speech.",
         # 旧版补边示例（已注释）：扩大画布，在画面左侧添加说明区域。
         # 切回补边时，用这段配置替换下面的 overlay 配置。

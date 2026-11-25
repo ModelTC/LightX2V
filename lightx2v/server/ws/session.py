@@ -14,7 +14,7 @@ import torch
 from PIL import Image
 from loguru import logger
 
-from lightx2v.server.ws.bilibili.config import BilibiliConfig, is_bilibili_input
+from lightx2v.server.ws.bilibili.config import DEFAULT_IDLE_PROMPT, BilibiliConfig, is_bilibili_input
 from lightx2v.server.ws.protocol import (
     AudioChunk,
     ClientMessage,
@@ -129,6 +129,7 @@ def parse_stream_config(config_json, runner, task) -> dict:
     config["video_input"] = uses_video_input(runner, task)
     config["no_output_audio"] = uses_no_output_audio(runner)
     if is_bilibili_input(config):
+        config.setdefault("idle_prompt", DEFAULT_IDLE_PROMPT)
         if runner.config.get("model_cls") != "minimax_h3_causal":
             raise ValueError("Bilibili input requires model_cls=minimax_h3_causal")
         if not output_url or not output_url.startswith("rtmp://"):

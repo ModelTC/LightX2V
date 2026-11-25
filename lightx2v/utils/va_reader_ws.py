@@ -274,10 +274,6 @@ class MinimaxH3CausalWSReader(SekoARWSReader):
         super().__init__(*args, **kwargs)
         logger.info(f"MinimaxH3CausalWSReader sample_rate={self.sample_rate} segment_duration={self.segment_duration}s samples={self.all_seg_sample_count}")
 
-    def motion_update(self, old_prompt=None, new_prompt=None):
-        """Plain WS input has no background reply scheduler to update."""
-        pass
-
     def start(self):
         if self.rank == self.target_rank:
             if self._preset_audio_source is not None:

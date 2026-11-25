@@ -158,7 +158,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         if not info.image_path or not info.audio_path or not info.prompt.strip():
             raise ValueError("Causal H3 requires image_path, audio_path, and a global prompt")
         motions = info.motions
-        if self.live_stream and self.generate_audio and motions is None:
+        if self.live_stream and motions is None and (self.generate_audio or "idle_prompt" in info.stream_config):
             idle = info.stream_config.get("idle_prompt", "<Subject 1> waits quietly, keeps their mouth closed, and looks naturally at the camera. No speech.")
             motions = [{"frame": 0, "text": idle}]
         self.motion_by_chunk = prepare_motions(motions, prompt=info.prompt, num_frames=self.request_num_frames)
@@ -370,13 +370,10 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         ready = torch.tensor([not error], dtype=torch.int32, device=AI_DEVICE)
         if dist.is_initialized():
             dist.all_reduce(ready, op=dist.ReduceOp.MIN)
-        notify = getattr(self.va_controller.reader, "on_image_switched", None)
         recorder = self.va_controller.recorder
         if not ready.item():
             error = error or "Reference image is unavailable on another rank"
             logger.warning("H3 reference image switch rejected | command_id={} | {}", command_id, error)
-            if notify is not None:
-                notify(image_path, error=error)
             if self.va_controller.ws_output is not None and recorder is not None:
                 recorder.emit_error("set_image_failed", "Reference image update failed", command_id=command_id)
             return False
@@ -390,8 +387,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         # and absolute action deadlines remain on the original live timeline.
         self.init_run(stream_start_idx=chunk_index)
         self._prefill_live_conditions()
-        if notify is not None:
-            notify(image_path)
         if is_main_process():
             logger.info("H3 reference image switched at live chunk {} | command_id={} | global_prompt={}", chunk_index, command_id, self.input_info.prompt)
         if self.va_controller.ws_output is not None and recorder is not None:
@@ -481,7 +476,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                         command_id = control.data["command_id"]
                         text = self.text_encoders[0].infer(prompt)
                         self._commit_live_motion(text, local_index, prompt=prompt, command_id=command_id)
-                        self.va_controller.reader.motion_update(old_prompt=active_prompt, new_prompt=prompt)
                         active_prompt = prompt
                         if duration == -1:
                             origin_motion = text, prompt, command_id
@@ -499,7 +493,6 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                             text = self.text_encoders[0].infer(prompt)
                             origin_motion = text, prompt, origin_command_id
                         self._commit_live_motion(text, local_index, prompt=prompt, command_id=origin_command_id)
-                        self.va_controller.reader.motion_update(old_prompt=active_prompt, new_prompt=prompt)
                         active_prompt = prompt
                         restore_at = -1
 
@@ -547,12 +540,8 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
                             emitted_chunk += 1
                     chunk_index += 1
             finally:
-                try:
-                    if active_prompt is not None:
-                        self.va_controller.reader.motion_update(old_prompt=active_prompt, new_prompt=None)
-                finally:
-                    # Decoders hold tensors used by the VAE streams.
-                    torch.cuda.synchronize()
+                # Decoders hold tensors used by the VAE streams.
+                torch.cuda.synchronize()
 
     def run_vae_decoder(self, video, audio_rows):
         # Local work was drained by run_segment; rendezvous before saving.

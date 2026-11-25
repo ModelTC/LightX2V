@@ -198,7 +198,6 @@ class VAController:
                 target_rank=self.target_reader_rank,
                 model_runner=model_runner,
                 stream_config=self.stream_config,
-                va_recorder=self.recorder,
             )
             return
         audio_type = self.audio_path.get("type")

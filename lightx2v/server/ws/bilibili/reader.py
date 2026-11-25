@@ -10,7 +10,7 @@ from .config import BilibiliConfig
 
 
 class BiliLiveOmniVAReader(MinimaxH3CausalWSReader):
-    def __init__(self, *args, stream_config=None, va_recorder=None, **kwargs):
+    def __init__(self, *args, stream_config=None, **kwargs):
         self.started_event = threading.Event()
         super().__init__(*args, stream_config=dict(stream_config or {}), **kwargs)
         task = self.model_runner.config.get("task")
@@ -25,7 +25,6 @@ class BiliLiveOmniVAReader(MinimaxH3CausalWSReader):
                 work_dir=work_dir,
                 model_runner=self.model_runner,
             )
-            self.chat_adapter.recorder = va_recorder
             # Reuse the base reader's binding logic without accepting a source
             # from the session or serializing runtime objects in input_info.
             self._preset_audio_source = self.chat_adapter
@@ -49,16 +48,8 @@ class BiliLiveOmniVAReader(MinimaxH3CausalWSReader):
     def on_image_switch(self, image_path: str, command_id: str = "", global_prompt: str = "") -> None:
         self._control_adapter().on_image_switch(image_path, command_id=command_id, global_prompt=global_prompt)
 
-    def on_image_switched(self, image_path: str, error: str = "") -> None:
-        if self.rank == self.target_rank and self.chat_adapter is not None:
-            self.chat_adapter.on_image_switched(image_path, error)
-
     def on_action_switch(self, prompt: str, duration: float = 0, command_id: str = "") -> None:
         self._control_adapter().on_action_switch(prompt, duration, command_id=command_id)
-
-    def motion_update(self, old_prompt=None, new_prompt=None) -> None:
-        if self.rank == self.target_rank and self.chat_adapter is not None:
-            self.chat_adapter.motion_update(old_prompt, new_prompt)
 
     def _control_adapter(self) -> BiliLiveChatAdapter:
         if not self.started_event.is_set() or self.chat_adapter is None:

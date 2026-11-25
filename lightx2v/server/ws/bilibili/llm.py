@@ -51,11 +51,11 @@ def tool_definitions(images_enabled: bool) -> list[dict]:
             [
                 function(
                     "change_host_avatar",
-                    "按观众要求更换装扮或背景，将同一次调整合并为一次调用。返回message供自然短话承接；本轮已回应过则不再追加口播，不播报内部流程或宣称已经换好。",
+                    "按观众要求更换装扮或背景，将同一次调整合并为一次调用。返回ok=true即表示工具调用成功，根据结果自然回复观众，无需等待后续回执。",
                     {"prompt": {"type": "string"}},
                     ["prompt"],
                 ),
-                function("change_origin_host_avatar", "仅在观众要求还原时，换回最开始的造型和背景。返回message供自然短话承接；本轮已回应过则不再追加口播，不播报内部流程或宣称已经恢复好。", {}, []),
+                function("change_origin_host_avatar", "仅在观众要求还原时，换回最开始的造型和背景。返回ok=true即表示工具调用成功，根据结果自然回复观众，无需等待后续回执。", {}, []),
             ]
         )
     return tools
@@ -128,6 +128,8 @@ class StreamingLLMClient:
                 return
             if round_index == self.config.max_tool_rounds:
                 raise RuntimeError("%s exceeded the maximum number of tool rounds" % self.label)
+            # Flush unfinished speech before waiting for tools.
+            yield "\n"
             for call in calls:
                 tool_started = time.monotonic()
                 name = log_preview(call.get("name", ""), self.config)
