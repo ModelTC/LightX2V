@@ -470,7 +470,7 @@ class BaseTransformerModel(ABC):
             self._checkpoint_metadata.clear()
         device_module = getattr(torch, AI_DEVICE, None)
         if device_module is not None and hasattr(device_module, "empty_cache"):
-            device_module.empty_cache()
+            torch_device_module.empty_cache()
         gc.collect()
 
     def _load_lora_file(self, file_path, dtype=None):
@@ -754,7 +754,7 @@ class BaseTransformerModel(ABC):
         """
         logger.info("Loading distributed weights")
         global_src_rank = 0
-        target_device = "cpu" if self.cpu_offload else "cuda"
+        target_device = "cpu" if self.cpu_offload else AI_DEVICE
 
         if is_weight_loader:
             meta_dict = {}
@@ -775,6 +775,8 @@ class BaseTransformerModel(ABC):
 
         if target_device == "cuda":
             dist.barrier(device_ids=[torch.cuda.current_device()])
+        elif target_device != "cpu":
+            dist.barrier()
 
         for key in sorted(synced_meta_dict.keys()):
             if is_weight_loader:
@@ -782,25 +784,25 @@ class BaseTransformerModel(ABC):
 
             if target_device == "cpu":
                 if is_weight_loader:
-                    gpu_tensor = distributed_weight_dict[key].cuda()
+                    gpu_tensor = distributed_weight_dict[key].to(AI_DEVICE)
                     dist.broadcast(gpu_tensor, src=global_src_rank)
                     distributed_weight_dict[key].copy_(gpu_tensor.cpu(), non_blocking=True)
                     del gpu_tensor
-                    torch.cuda.empty_cache()
+                    torch_device_module.empty_cache()
                 else:
-                    gpu_tensor = torch.empty_like(distributed_weight_dict[key], device="cuda")
+                    gpu_tensor = torch.empty_like(distributed_weight_dict[key], device=AI_DEVICE)
                     dist.broadcast(gpu_tensor, src=global_src_rank)
                     distributed_weight_dict[key].copy_(gpu_tensor.cpu(), non_blocking=True)
                     del gpu_tensor
-                    torch.cuda.empty_cache()
+                    torch_device_module.empty_cache()
 
                 if distributed_weight_dict[key].is_pinned():
                     distributed_weight_dict[key].copy_(distributed_weight_dict[key], non_blocking=True)
             else:
                 dist.broadcast(distributed_weight_dict[key], src=global_src_rank)
 
-        if target_device == "cuda":
-            torch.cuda.synchronize()
+        if target_device != "cpu":
+            torch_device_module.synchronize()
         else:
             for tensor in distributed_weight_dict.values():
                 if tensor.is_pinned():
