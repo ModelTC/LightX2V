@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import re
 import threading
 import time
 from collections import Counter, OrderedDict, deque
@@ -23,26 +22,19 @@ from .logging_utils import log_preview
 from .tts import VolcTTSClient
 
 
-async def speech_sentences(deltas: AsyncIterator[str], max_chars: int) -> AsyncIterator[str]:
-    """Buffer text until punctuation (or 64 chars); keep draining LLM after the speech limit."""
-    pending = ""
+async def speech_chunks(deltas: AsyncIterator[str | None], max_chars: int) -> AsyncIterator[str | None]:
+    """Forward text immediately; None ends a speech segment without ending the LLM turn."""
     used = 0
     async for delta in deltas:
+        if delta is None:
+            yield None
+            continue
         text = delta.replace("*", "").replace("`", "")[: max(0, max_chars - used)]
         used += len(text)
-        pending += text
-        while pending:
-            match = re.search(r"[。！？!?；;\n]|(?<!\d)\.(?=\s|$)", pending)
-            end = match.end() if match else len(pending) if used >= max_chars else 0
-            if len(pending) >= 64 and (not end or end > 64):
-                end = 64
-            if not end:
-                break
-            sentence, pending = pending[:end].strip(), pending[end:]
-            if any(char.isalnum() for char in sentence):
-                yield sentence
-    if any(char.isalnum() for char in pending):
-        yield pending.strip()
+        if text:
+            yield text
+            if used == max_chars:
+                yield None
 
 
 class BiliLiveChatAdapter(WsAudioSource):
@@ -213,51 +205,57 @@ class BiliLiveChatAdapter(WsAudioSource):
         self._reply_serial += 1
         reply_id = self._reply_serial
         started = time.monotonic()
-        sentence_count = pcm_bytes = 0
+        text_chars = pcm_bytes = 0
         logger.info("[Bili] 回复 #{} 开始 | llm={}/{}", reply_id, log_preview(self.config.llm_provider, self.config), log_preview(self.config.llm_model, self.config))
         generation = self._generation
         started_audio = False
-        sentences: asyncio.Queue[str | None] = asyncio.Queue(maxsize=8)
+        end = object()
+        texts = asyncio.Queue(maxsize=8)
 
         async def produce_text():
-            nonlocal sentence_count
+            nonlocal text_chars
             stream = self._llm.stream_reply(prompt, tool_definitions(self._images.enabled), self.execute_tool)
             try:
-                async for sentence in speech_sentences(stream, self.config.max_reply_chars):
-                    await sentences.put(sentence)
-                    sentence_count += 1
-                await sentences.put(None)
+                async for text in speech_chunks(stream, self.config.max_reply_chars):
+                    await texts.put(text)
+                    if text is not None:
+                        text_chars += len(text)
+                await texts.put(end)
             finally:
                 await stream.aclose()
 
+        async def text_stream():
+            while (text := await texts.get()) is not end:
+                yield text
+
         async def produce_audio():
             nonlocal started_audio, pcm_bytes
-            while (sentence := await sentences.get()) is not None:
-                if generation != self._generation:
-                    return
-                stream = self._tts.synthesize(sentence)
-                try:
-                    async for pcm in stream:
-                        if not pcm:
-                            continue
-                        with self._lock:
-                            if generation != self._generation or self._stopping.is_set():
-                                return
+            stream = self._tts.synthesize(text_stream())
+            try:
+                async for pcm in stream:
+                    with self._lock:
+                        if generation != self._generation or self._stopping.is_set():
+                            return
+                        if pcm is None:
+                            if started_audio:
+                                self.on_audio_end()
+                                started_audio = False
+                        elif pcm:
                             if not started_audio:
                                 self.on_audio_start()
                                 started_audio = True
                             self.on_audio_chunk(pcm)
-                        pcm_bytes += len(pcm)
-                finally:
-                    await stream.aclose()
+                            pcm_bytes += len(pcm)
+            finally:
+                await stream.aclose()
 
         tasks = [asyncio.create_task(produce_text()), asyncio.create_task(produce_audio())]
         try:
             await asyncio.gather(*tasks)
             logger.info(
-                "[Bili] 回复 #{} 完成 | sentences={} | pcm_bytes={} | audio={:.2f}s | elapsed={:.2f}s",
+                "[Bili] 回复 #{} 完成 | text_chars={} | pcm_bytes={} | audio={:.2f}s | elapsed={:.2f}s",
                 reply_id,
-                sentence_count,
+                text_chars,
                 pcm_bytes,
                 pcm_bytes / (2 * self.config.tts_sample_rate),
                 time.monotonic() - started,

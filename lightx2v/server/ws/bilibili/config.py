@@ -74,7 +74,7 @@ class BilibiliConfig:
     llm_provider: str = "volcengine"
     llm_base_url: str = LLM_PROVIDERS["volcengine"]["base_url"]
     llm_model: str = LLM_PROVIDERS["volcengine"]["model"]
-    tts_url: str = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+    tts_url: str = "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
     tts_resource_id: str = "seed-tts-2.0"
     tts_voice: str = "zh_female_vv_uranus_bigtts"
     tts_sample_rate: int = 16000

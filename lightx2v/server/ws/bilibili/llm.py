@@ -74,7 +74,7 @@ class StreamingLLMClient:
     def request_url(self) -> str:
         return self.config.llm_base_url.rstrip("/") + self.api_path
 
-    async def stream_reply(self, prompt: str, tools: list[dict], execute: ToolHandler) -> AsyncIterator[str]:
+    async def stream_reply(self, prompt: str, tools: list[dict], execute: ToolHandler) -> AsyncIterator[str | None]:
         turn = [{"role": "user", "content": prompt}]
         prefix = [{"role": "system", "content": self.config.system_prompt}]
         for previous in self.history:
@@ -128,8 +128,8 @@ class StreamingLLMClient:
                 return
             if round_index == self.config.max_tool_rounds:
                 raise RuntimeError("%s exceeded the maximum number of tool rounds" % self.label)
-            # Flush unfinished speech before waiting for tools.
-            yield "\n"
+            # End the TTS segment before waiting for tools.
+            yield None
             for call in calls:
                 tool_started = time.monotonic()
                 name = log_preview(call.get("name", ""), self.config)
