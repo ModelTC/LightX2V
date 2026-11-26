@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from PIL import Image
 
 from lightx2v.models.networks.lora_adapter import LoraAdapter
+from lightx2v.models.networks.neopp.infer.gen_loop import generation_layers
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
@@ -179,11 +180,18 @@ class NeoppRunner(DefaultRunner):
                     cos_t_full = _pad_and_chunk(cos_t_full)
                     sin_t_full = _pad_and_chunk(sin_t_full)
 
+            llm_config = self.config["llm_config"]
+            num_loops = self.input_info.num_loops
+            layers = generation_layers(llm_config, num_loops)
+            effective_loops = llm_config.get("num_loops", 1) if num_loops is None else num_loops
+            logger.info(f"Neo generation request: num_loops={effective_loops}, layer_calls={len(layers)}")
             return {
+                "generation_layers": layers,
                 "image_guidance_scale": self.image_guidance_scale,
                 "fully_unconditioned": (
                     {
                         "past_key_values_uncond": self.full_uncond_kv,
+                        "generation_layers": layers,
                         "cos_sin_uncond": (cos_t_full, sin_t_full, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
                     }
                     if self.full_uncond_kv is not None

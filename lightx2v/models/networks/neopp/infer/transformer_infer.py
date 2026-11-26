@@ -169,13 +169,13 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         cos_sin = inputs[f"cos_sin_{pass_key}"]
         hidden_states = pre_infer_out.image_embeds.squeeze(0)  # [seq, hidden]
 
-        hidden_states = self.infer_without_offload(weights.blocks, hidden_states, cos_sin, past_key_values)
+        hidden_states = self.infer_without_offload(weights.blocks, hidden_states, cos_sin, past_key_values, inputs.get("generation_layers"))
 
         hidden_states = weights.norm_mot_gen.apply(hidden_states)
         hidden_states = self._fm_head(weights.fm_head, hidden_states, pre_infer_out.token_h, pre_infer_out.token_w)
         return hidden_states.unsqueeze(0)
 
-    def infer_without_offload(self, blocks, hidden_states, cos_sin, past_key_values):
+    def infer_without_offload(self, blocks, hidden_states, cos_sin, past_key_values, layers=None):
         seq_len_q = hidden_states.shape[0]
         kvcache_len = past_key_values.shape[2]
 
@@ -185,7 +185,9 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         self.kv_cache.prepare(past_key_values, seq_len_q)
 
         kv_buf = self.kv_cache._kv_buf
-        for layer_idx in self.generation_layers:
+        if layers is None:
+            layers = self.generation_layers
+        for layer_idx in layers:
             # A repeated core layer overwrites only the query tail in its
             # physical KV slot; each pass attends to the same immutable prefix.
             block_weight = blocks[layer_idx]

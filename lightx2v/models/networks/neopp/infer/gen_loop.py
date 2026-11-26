@@ -4,9 +4,11 @@ import torch
 import torch.nn.functional as F
 
 
-def generation_layers(config):
+def generation_layers(config, num_loops=None):
     layers = config["num_hidden_layers"]
-    loops = config.get("num_loops", 1)
+    if num_loops is not None and (type(num_loops) is not int or not 1 <= num_loops <= 16):
+        raise ValueError("Request num_loops must be an integer between 1 and 16")
+    loops = config.get("num_loops", 1) if num_loops is None else num_loops
     split = config.get("loop_split")
     if type(loops) is not int or loops < 1:
         raise ValueError(f"Expected a positive integer num_loops, got {loops!r}")
