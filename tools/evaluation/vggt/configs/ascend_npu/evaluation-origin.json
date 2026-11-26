@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "model": "vggt",
+  "platform": "ascend_npu",
+  "status": "not_yet_evaluated",
+  "runs": {},
+  "project_source_lock_sha256": "a2f8e3179d6cdc6f63951a3a17e29bc72e696ad734025992039c0a5aa82c4b55"
+}
