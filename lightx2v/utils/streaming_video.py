@@ -1,13 +1,14 @@
 """Bounded, incremental local video output for autoregressive requests."""
 
+import math
 import queue
 import subprocess
 import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-import numpy as np
 import torch
 
 
@@ -24,13 +25,14 @@ class StreamingVideoWriter:
         self.temporary_path = self.path.with_name(f".{self.path.stem}.{uuid4().hex}.streaming.mp4")
         self.fps = fps
         self.frames = 0
-        self._shape = None
+        self._frame_size = None
         self._queue = queue.Queue(maxsize=queue_size)
         self._thread = None
         self._process = None
         self._error = None
         self._closed = False
         self._audio = None
+        self._expected_frames = None
 
     def _raise_error(self):
         if self._error is not None:
@@ -45,34 +47,36 @@ class StreamingVideoWriter:
             except queue.Full:
                 continue
 
+    def start(self, height, width):
+        """Start the encoder for frames of the given height and width."""
+        if self._closed:
+            raise RuntimeError("Streaming video writer is closed")
+        frame_size = (height, width)
+        if self._frame_size == frame_size:
+            return
+        if self._frame_size is not None:
+            raise ValueError("Video geometry changed during streaming output")
+        if height % 2 or width % 2:
+            raise ValueError("H.264 yuv420p output requires even height and width")
+        self._frame_size = frame_size
+        self._thread = threading.Thread(target=self._encode, name="ar-video-writer", daemon=True)
+        self._thread.start()
+
     def submit(self, frames):
-        """Accept immutable uint8 [frames,height,width,RGB] CPU chunks."""
+        """Queue an owned copy of a uint8 [frames,height,width,RGB] CPU chunk."""
         if self._closed:
             raise RuntimeError("Streaming video writer is closed")
         if frames.device.type != "cpu" or frames.dtype != torch.uint8 or frames.ndim != 4 or frames.shape[-1] != 3:
             raise ValueError("Streaming video frames must be CPU uint8 [F,H,W,3]")
         if not frames.shape[0]:
             return
-        shape = tuple(frames.shape[1:])
-        if self._shape is None:
-            if shape[0] % 2 or shape[1] % 2:
-                raise ValueError("H.264 yuv420p output requires even height and width")
-            self._shape = shape
-            self._thread = threading.Thread(target=self._encode, name="ar-video-writer", daemon=True)
-            self._thread.start()
-        elif self._shape != shape:
-            raise ValueError("Video geometry changed during streaming output")
-        self._put(frames.contiguous().clone())
+        self.start(*frames.shape[1:3])
+        self._put(frames.clone(memory_format=torch.contiguous_format))
         self.frames += frames.shape[0]
 
     def _encode(self):
-        height, width, _ = self._shape
-        command = [
-            "ffmpeg",
-            "-nostdin",
-            "-v",
-            "error",
-            "-y",
+        height, width = self._frame_size
+        video_input = [
             "-f",
             "rawvideo",
             "-pixel_format",
@@ -83,7 +87,8 @@ class StreamingVideoWriter:
             str(self.fps),
             "-i",
             "pipe:0",
-            "-an",
+        ]
+        video_codec = [
             "-c:v",
             "libx264",
             "-preset",
@@ -102,17 +107,11 @@ class StreamingVideoWriter:
             "1",
             "-pix_fmt",
             "yuv420p",
-            "-movflags",
-            "+frag_keyframe+empty_moov+default_base_moof",
-            "-frag_duration",
-            "1000000",
-            "-flush_packets",
-            "1",
-            str(self.temporary_path),
         ]
         process = None
         try:
-            with tempfile.TemporaryFile() as errors:
+            with self._mux_options(self._expected_frames) as (audio_input, output), tempfile.TemporaryFile() as errors:
+                command = ["ffmpeg", "-nostdin", "-v", "error", "-y", *video_input, *audio_input, *video_codec, *output, str(self.temporary_path)]
                 process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errors)
                 self._process = process
                 try:
@@ -137,82 +136,67 @@ class StreamingVideoWriter:
                     process.kill()
                     process.wait()
 
-    def set_audio(self, waveform, sample_rate):
+    def set_audio(self, waveform, sample_rate, *, num_frames=None):
+        """Supply the final frame count before starting the encoder to mux audio in one pass."""
+        if self._thread is not None and (self._expected_frames is not None or num_frames is not None):
+            raise RuntimeError("Single-pass audio must be set before the encoder starts")
         if sample_rate <= 0:
             raise ValueError("Audio sample rate must be positive")
-        waveform = waveform.detach().float().cpu()
+        waveform = waveform.detach()
         if waveform.ndim == 3 and waveform.shape[0] == 1:
             waveform = waveform[0]
         if waveform.ndim == 1:
             waveform = waveform.unsqueeze(0)
         if waveform.ndim != 2 or waveform.shape[0] not in (1, 2):
             raise ValueError("Streaming audio must have shape [channels,samples], with one or two channels")
-        self._audio = waveform.contiguous(), sample_rate
+        if num_frames is not None:
+            waveform = waveform[:, : math.ceil(num_frames * sample_rate / self.fps)]
+        # Copy a trimmed soundtrack so the writer can release the full recording.
+        samples = waveform.T.to(device="cpu", dtype=torch.float32, memory_format=torch.contiguous_format, copy=num_frames is not None)
+        self._audio = samples, sample_rate
+        self._expected_frames = num_frames
 
-    def _mux_audio(self):
-        waveform, sample_rate = self._audio
-        # Trim audio only. Global -shortest/-t can discard reordered video
-        # packets and lose the final frames of an otherwise complete stream.
-        duration = self.frames / self.fps
-        muxed_path = self.temporary_path.with_suffix(".mux.mp4")
+    @contextmanager
+    def _mux_options(self, num_frames):
+        if num_frames is None:
+            yield [], ["-an", "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-frag_duration", "1000000", "-flush_packets", "1"]
+            return
+
+        samples, sample_rate = self._audio
         with tempfile.TemporaryDirectory(prefix="lightx2v-audio-", dir=self.path.parent) as temporary:
             audio_path = Path(temporary) / "audio.f32"
-            waveform.T.contiguous().numpy().astype(np.float32, copy=False).tofile(audio_path)
-            try:
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-nostdin",
-                        "-v",
-                        "error",
-                        "-y",
-                        "-i",
-                        str(self.temporary_path),
-                        "-f",
-                        "f32le",
-                        "-ar",
-                        str(sample_rate),
-                        "-ac",
-                        str(waveform.shape[0]),
-                        "-i",
-                        str(audio_path),
-                        "-map",
-                        "0:v:0",
-                        "-map",
-                        "1:a:0",
-                        "-c:v",
-                        "copy",
-                        "-c:a",
-                        "aac",
-                        "-af",
-                        f"apad,atrim=duration={duration},asetpts=PTS-STARTPTS",
-                        "-movflags",
-                        "+faststart",
-                        str(muxed_path),
-                    ],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                )
-                muxed_path.replace(self.path)
-            finally:
-                muxed_path.unlink(missing_ok=True)
-        self.temporary_path.unlink()
+            samples.numpy().tofile(audio_path)
+            audio_input = ["-f", "f32le", "-ar", str(sample_rate), "-ac", str(samples.shape[1]), "-i", str(audio_path)]
+            # Trim only audio so the final video packets are always retained.
+            audio_filter = f"apad,atrim=duration={num_frames / self.fps},asetpts=PTS-STARTPTS"
+            yield audio_input, ["-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-af", audio_filter, "-movflags", "+faststart"]
 
     def close(self):
         if self._closed:
             self._raise_error()
             return
         self._closed = True
+        if self._thread is not None:
+            self._put(None)
+            self._thread.join()
+            self._raise_error()
+        if self._expected_frames is not None and self.frames != self._expected_frames:
+            self.temporary_path.unlink(missing_ok=True)
+            self._error = ValueError(f"Expected {self._expected_frames} video frames, received {self.frames}")
+            raise self._error
         if self._thread is None:
             return
-        self._put(None)
-        self._thread.join()
-        self._raise_error()
-        if self._audio is None:
-            self.temporary_path.replace(self.path)
-        else:
-            self._mux_audio()
+        if self._audio is not None and self._expected_frames is None:
+            # Some runners produce the soundtrack only after video encoding.
+            muxed_path = self.temporary_path.with_suffix(".mux.mp4")
+            try:
+                with self._mux_options(self.frames) as (audio_input, output):
+                    command = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(self.temporary_path), *audio_input, "-c:v", "copy", *output, str(muxed_path)]
+                    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                muxed_path.replace(self.temporary_path)
+            finally:
+                muxed_path.unlink(missing_ok=True)
+        self.temporary_path.replace(self.path)
 
     def abort(self):
         self._closed = True
@@ -235,9 +219,9 @@ class StreamingVideoWriter:
         self.temporary_path.unlink(missing_ok=True)
 
 
-def video_chunk_to_uint8(pixels, *, layout="BCTHW", value_range=(-1, 1)):
-    """Normalize one decoded chunk on CPU without expanding a full GPU clip."""
-    pixels = pixels.detach().cpu()
+def video_chunk_to_uint8(pixels, *, layout="BCTHW", value_range=(-1, 1), device="cpu"):
+    """Normalize a decoded chunk on the given device and return contiguous CPU RGB frames."""
+    pixels = pixels.detach().to(device)
     if layout == "BCTHW":
         if pixels.ndim != 5 or pixels.shape[0] != 1 or pixels.shape[1] != 3:
             raise ValueError("BCTHW video output requires shape [1,3,F,H,W]")
@@ -255,4 +239,4 @@ def video_chunk_to_uint8(pixels, *, layout="BCTHW", value_range=(-1, 1)):
         if high <= low:
             raise ValueError("Video value range must be increasing")
         pixels = ((pixels.float() - low) * (255 / (high - low))).clamp_(0, 255).round_().to(torch.uint8)
-    return pixels.contiguous()
+    return pixels.contiguous().cpu()

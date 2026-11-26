@@ -1,4 +1,3 @@
-import math
 import os
 from contextlib import closing
 
@@ -12,8 +11,9 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.networks.longcat_video_avatar.model import LongCatVideoAvatarModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.longcat_video_avatar.buckets import select_image_size
 from lightx2v.models.schedulers.longcat_video_avatar.scheduler import LongCatVideoAvatarScheduler
-from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
+from lightx2v.models.video_encoders.hf.wan.vae import WanVAE, convert_to_channels_last_3d
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
@@ -23,71 +23,6 @@ from lightx2v.utils.utils import wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 OVERLAP_FRAMES = 13
-
-# The release uses the same aspect-ratio buckets for single-GPU and SP2 inference.
-IMAGE_SIZES = {
-    "480p": (
-        (320, 1216),
-        (352, 1120),
-        (384, 1024),
-        (416, 960),
-        (448, 864),
-        (480, 832),
-        (512, 768),
-        (544, 736),
-        (576, 672),
-        (608, 640),
-        (640, 608),
-        (672, 576),
-        (704, 544),
-        (736, 544),
-        (768, 512),
-        (800, 480),
-        (832, 480),
-        (896, 448),
-        (960, 416),
-        (992, 384),
-        (1056, 384),
-        (1088, 352),
-        (1184, 320),
-        (1216, 320),
-        (1248, 320),
-        (1280, 320),
-    ),
-    "720p": (
-        (480, 1920),
-        (512, 1792),
-        (544, 1696),
-        (576, 1600),
-        (608, 1504),
-        (672, 1376),
-        (704, 1312),
-        (736, 1248),
-        (800, 1152),
-        (832, 1120),
-        (864, 1056),
-        (896, 1024),
-        (928, 992),
-        (960, 960),
-        (992, 928),
-        (1024, 896),
-        (1056, 864),
-        (1088, 832),
-        (1120, 832),
-        (1152, 800),
-        (1248, 736),
-        (1344, 672),
-        (1376, 672),
-        (1504, 608),
-        (1536, 608),
-        (1632, 576),
-        (1664, 544),
-        (1696, 544),
-        (1856, 512),
-        (1888, 480),
-        (1920, 480),
-    ),
-}
 
 
 @RUNNER_REGISTER("longcat_video_avatar")
@@ -103,25 +38,34 @@ class LongCatVideoAvatarRunner(DefaultRunner):
         if world_size != (config.get("parallel") or {}).get("seq_p_size", 1):
             raise ValueError("Launch one process per device configured for LongCat sequence parallelism")
         self.model = LongCatVideoAvatarModel(config, self.init_device)
-        if self.model.rank == 0:
-            from lightx2v.models.input_encoders.hf.longcat_video_avatar.audio import LongCatWhisperEncoder
+        self.spatial_alignment = tuple(stride * parts for stride, parts in zip(self._spatial_token_size(), self.model.spatial_split))
+        self.vae = WanVAE(
+            vae_path=config["vae_path"],
+            dtype=torch.bfloat16,
+            device=self.init_device,
+        )
+        if config.get("vae_decoder_channels_last_3d", False):
+            convert_to_channels_last_3d(self.vae.model.decoder)
+        if config.get("vae_use_compile", False):
+            self.vae.compile_decoder()
+        # The release normalizes the reference in FP32, then decodes in BF16.
+        mean, std = torch.tensor([config["vae_latents_mean"], config["vae_latents_std"]], dtype=torch.float32, device=self.init_device)
+        self.vae.scale = (mean.bfloat16(), std.bfloat16().reciprocal())
 
-            self.image_processor = VaeImageProcessor(vae_scale_factor=config["vae_scale_factor"])
+        self.text_tp_group = self.model.group if config.get("text_encoder_tensor_parallel") else None
+        if self.text_tp_group is not None or self.model.rank == 0:
             self.text_encoder = T5EncoderModel(
                 text_len=config["model_max_length"],
                 device=self.init_device,
                 checkpoint_path=config["t5_original_ckpt"],
                 tokenizer_path=config["t5_tokenizer_path"],
+                tp_group=self.text_tp_group,
             )
-            self.vae = WanVAE(
-                vae_path=config["vae_path"],
-                dtype=torch.bfloat16,
-                device=self.init_device,
-            )
-            # The release normalizes the reference in FP32, then decodes in BF16.
-            mean, std = torch.tensor([config["vae_latents_mean"], config["vae_latents_std"]], dtype=torch.float32, device=self.init_device)
+        if self.model.rank == 0:
+            from lightx2v.models.input_encoders.hf.longcat_video_avatar.audio import LongCatWhisperEncoder
+
+            self.image_processor = VaeImageProcessor(vae_scale_factor=config["vae_scale_factor"])
             self.reference_scale = (mean, std.reciprocal())
-            self.vae.scale = (mean.bfloat16(), std.bfloat16().reciprocal())
             vocal_path = config["vocal_separator_path"] if config["audio_vocal_separation"] else None
             self.audio_encoder = LongCatWhisperEncoder(config["audio_encoder_path"], self.init_device, vocal_checkpoint=vocal_path)
 
@@ -169,36 +113,44 @@ class LongCatVideoAvatarRunner(DefaultRunner):
             raise ValueError(f"num_frames must exceed {OVERLAP_FRAMES} when num_segments is greater than one")
         if not isinstance(info.size, (list, tuple)) or len(info.size) not in (0, 2):
             raise ValueError("size must be [height, width] or empty for automatic sizing")
-        token_h, token_w = self._spatial_token_size()
-        alignment = (token_h, token_w * self.model.width_shards)
+        alignment = self.spatial_alignment
+        if not info.image_path and not info.size:
+            height, width = (768, 1280) if info.resolution == "720p" else (480, 832)
+            if height % alignment[0] or width % alignment[1]:
+                height, width = select_image_size(info.resolution, max(alignment), height / width)
+            info.size = [height, width]
         if any(type(side) is not int or side <= 0 or side % stride for side, stride in zip(info.size, alignment)):
             raise ValueError(f"size must contain positive integer [height, width] divisible by {alignment}")
-        if not info.image_path and not info.size:
-            info.size = [768, 1280] if info.resolution == "720p" else [480, 832]
         return info
 
     def _run_input_encoder_local_s2v(self):
+        if self.model.rank != 0:
+            return {}
         info = self.input_info
         fps = self.config["fps"]
         total_frames = info.num_frames + (info.num_segments - 1) * (info.num_frames - OVERLAP_FRAMES)
         silent_background = bool(info.bbox and info.bbox.get("others"))
         audio, waveform, sample_rate = self.audio_encoder.prepare_tracks(info.audio_path, total_frames, fps, info.audio_type, silent_background)
-        if info.save_result_path and not info.return_result_tensor:
-            self.video_writer = StreamingVideoWriter(info.save_result_path, fps)
-            samples = math.ceil(total_frames * sample_rate / fps)
-            self.video_writer.set_audio(torch.from_numpy(waveform[..., :samples].copy(order="C")), sample_rate)
-        inputs = {"text": self.text_encoder.infer([info.prompt])[0], "audio": audio}
+        frame_size = info.size
+        inputs = {"audio": audio}
+        if self.text_tp_group is None:
+            inputs["text"] = self.text_encoder.infer([info.prompt])[0]
         if info.image_path:
             with Image.open(info.image_path) as image:
                 image = ImageOps.exif_transpose(image).convert("RGB")
                 ratio = image.height / image.width
-                height, width = info.size or min(IMAGE_SIZES[info.resolution], key=lambda shape: abs(round(shape[0] / shape[1], 2) - ratio))
+                frame_size = frame_size or select_image_size(info.resolution, max(self.spatial_alignment), ratio)
+                height, width = frame_size
                 if len(info.audio_path) == 2:
                     inputs["speaker_masks"] = self._speaker_masks(image, height, width, info.bbox or {})
                 pixels = self.image_processor.preprocess(image, height=height, width=width, resize_mode="crop")
             # Contiguous NCTHW selects the same BF16 cuDNN path as the reference VAE.
             pixels = pixels.unsqueeze(2).to(self.init_device, torch.bfloat16, memory_format=torch.contiguous_format)
             inputs["reference"] = self.vae.model.encode(pixels, self.reference_scale)
+        if info.save_result_path and not info.return_result_tensor:
+            self.video_writer = StreamingVideoWriter(info.save_result_path, fps)
+            self.video_writer.set_audio(torch.from_numpy(waveform), sample_rate, num_frames=total_frames)
+            self.video_writer.start(*frame_size)
         return inputs
 
     def _speaker_masks(self, image, height, width, bbox):
@@ -230,64 +182,87 @@ class LongCatVideoAvatarRunner(DefaultRunner):
             raise ValueError("Each person and the background must be visible in the selected crop and output size")
         return masks.to(torch.bfloat16)
 
-    def _on_primary(self, operation, *args):
+    def _run_and_broadcast(self, operation, *args):
         model = self.model
         if model.group is None:
             return operation(*args)
 
-        source = dist.get_global_rank(model.group, 0)
         metadata = [None]
-        if model.rank == 0:
-            try:
-                tensors = {key: tensor.contiguous() for key, tensor in operation(*args).items()}
-            except Exception as exc:
-                dist.broadcast_object_list([str(exc)], src=source, group=model.group)
-                raise
-            metadata[0] = {key: (tensor.shape, tensor.dtype) for key, tensor in tensors.items()}
-        dist.broadcast_object_list(metadata, src=source, group=model.group)
+        try:
+            tensors = operation(*args)
+            if model.rank == 0:
+                tensors = {key: tensor.contiguous() for key, tensor in tensors.items()}
+                metadata[0] = {key: (tensor.shape, tensor.dtype) for key, tensor in tensors.items()}
+        except Exception as exc:
+            if model.rank == 0:
+                dist.broadcast_object_list([str(exc)], src=0, group=model.group)
+            raise
+        dist.broadcast_object_list(metadata, src=0, group=model.group)
         if model.rank != 0:
             if isinstance(metadata[0], str):
                 raise RuntimeError(f"LongCat primary rank failed: {metadata[0]}")
             tensors = {key: torch.empty(shape, dtype=dtype, device=self.init_device) for key, (shape, dtype) in metadata[0].items()}
         for tensor in tensors.values():
-            dist.broadcast(tensor, src=source, group=model.group)
+            dist.broadcast(tensor, src=0, group=model.group)
         return tensors
 
     def _decode_chunks(self, latents):
-        if self.model.width_shards == 1 or self.video_segment_num == 1:
+        """Decode on every rank and yield the blended frames on rank 0."""
+        rows, cols = self.model.spatial_split
+        if (rows, cols) == (1, 1):
             yield from self.vae.decode_stream(latents)
             return
 
-        # The SP2 release blends two width tiles before re-encoding the overlap.
-        # Keep the existing primary-rank VAE and stream both tiles in frame order.
-        scale = self.config["vae_scale_factor"]
-        middle = latents.shape[-1] // 2
-        halo = min(64 // scale, middle)
-        blend_width = 2 * halo * scale
-        left_weight = torch.linspace(1, 0, blend_width, device=latents.device)
-        right_weight = torch.linspace(0, 1, blend_width, device=latents.device)
-        weight_sum = left_weight + right_weight
-        left = latents[..., : middle + halo].contiguous()
-        right = latents[..., middle - halo :].contiguous()
-        with closing(self.vae.decode_stream(left)) as left_chunks, closing(self.vae.decode_stream(right)) as right_chunks:
-            for left_frames, right_frames in zip(left_chunks, right_chunks, strict=True):
-                seam = (left_frames[..., -blend_width:].float() * left_weight + right_frames[..., :blend_width].float() * right_weight) / weight_sum
-                yield torch.cat((left_frames[..., :-blend_width], seam.to(left_frames.dtype), right_frames[..., blend_width:]), dim=-1)
+        vae = self.vae.model
+        scale = vae.spatial_compression_ratio
+        halo = (vae.tile_sample_min_height - vae.tile_sample_stride_height) // scale
+        height, width = latents.shape[-2:]
 
-    def _decode_segment(self, latents, segment_idx, result_chunks):
+        def axis_tile(length, parts, index):
+            core = length // parts
+            start = max(0, index * core - halo)
+            stop = min(length, (index + 1) * core + halo)
+            weights = torch.ones((stop - start) * scale, dtype=torch.float32, device=latents.device)
+            blend = min(2 * halo * scale, weights.numel())
+            if index > 0:
+                weights[:blend] = torch.linspace(0, 1, blend, device=latents.device)
+            if index + 1 < parts:
+                weights[-blend:] *= torch.linspace(1, 0, blend, device=latents.device)
+            return slice(start, stop), slice(start * scale, stop * scale), weights
+
+        rank, group = self.model.rank, self.model.group
+        row, col = divmod(rank, cols)
+        latent_y, pixel_y, weight_y = axis_tile(height, rows, row)
+        latent_x, pixel_x, weight_x = axis_tile(width, cols, col)
+        weight = weight_y[:, None] * weight_x
+        pixel_shape = (height * scale, width * scale)
+        weight_sum = weight.new_zeros(pixel_shape)
+        weight_sum[pixel_y, pixel_x] = weight
+        dist.reduce(weight_sum, dst=0, group=group)
+        if rank == 0:
+            weight_sum.clamp_min_(1e-6)
+
+        tile = latents[..., latent_y, latent_x].contiguous()
+        with closing(self.vae.decode_stream(tile)) as chunks:
+            for chunk in chunks:
+                # WanVAE clamps each tile before the FP32 overlap blend.
+                frames = weight.new_zeros((*chunk.shape[:-2], *pixel_shape))
+                frames[..., pixel_y, pixel_x] = chunk.float() * weight
+                dist.reduce(frames, dst=0, group=group)
+                if rank == 0:
+                    yield frames.div_(weight_sum).to(chunk.dtype)
+
+    def _decode_segment(self, latents, segment_idx, has_next_segment, result_chunks):
         info = self.input_info
-        next_segment = segment_idx + 1 < info.num_segments
-        if not (next_segment or self.video_writer or info.return_result_tensor):
-            return {}
-
         skip = OVERLAP_FRAMES if segment_idx else 0
         overlap_start = info.num_frames - OVERLAP_FRAMES
         tail = []
         position = 0
-        with closing(self._decode_chunks(latents[0].to(torch.bfloat16))) as chunks:
+        chunks = self._decode_chunks(latents[0].to(torch.bfloat16))
+        try:
             for chunk in chunks:
                 end = position + chunk.shape[2]
-                if next_segment and end > overlap_start:
+                if has_next_segment and end > overlap_start:
                     overlap = chunk[:, :, max(0, overlap_start - position) :]
                     # The release feeds truncated uint8 RGB back into the VAE after BF16 denormalization.
                     rgb = (overlap * 0.5 + 0.5).float().mul_(255).to(torch.uint8)
@@ -297,9 +272,17 @@ class LongCatVideoAvatarRunner(DefaultRunner):
                     if info.return_result_tensor:
                         result_chunks.append(wan_vae_to_comfy(frames.float()).cpu())
                     elif self.video_writer:
-                        self.video_writer.submit(video_chunk_to_uint8(frames))
+                        self.video_writer.submit(video_chunk_to_uint8(frames, device=frames.device))
                 position = end
-        if next_segment:
+        except Exception:
+            # Finish the reductions peers are waiting on before propagating a writer error.
+            if self.model.group is not None:
+                for _ in chunks:
+                    pass
+            raise
+        finally:
+            chunks.close()
+        if has_next_segment and self.model.rank == 0:
             # Center before dividing to match the PIL/NumPy normalization at every uint8 value.
             pixels = torch.cat(tail, dim=2).float(memory_format=torch.channels_last_3d).mul_(2).sub_(255).div_(255).bfloat16()
             return {"reference": self.vae.model.encode(pixels, self.vae.scale)}
@@ -324,8 +307,9 @@ class LongCatVideoAvatarRunner(DefaultRunner):
         result_chunks = []
         try:
             self.check_stop()
-            encoded = self._on_primary(self.run_input_encoder)
-            projected_text = self.model.pre_infer.project_text(encoded.pop("text"))
+            encoded = self._run_and_broadcast(self.run_input_encoder)
+            text = self.text_encoder.infer([input_info.prompt])[0] if self.text_tp_group is not None else encoded.pop("text")
+            projected_text = self.model.pre_infer.project_text(text)
             audio = encoded["audio"]
             radius = self.config["audio_window"] // 2
             indices = torch.arange(input_info.num_frames, device=self.init_device)[:, None] + torch.arange(-radius, radius + 1, device=self.init_device)
@@ -341,12 +325,14 @@ class LongCatVideoAvatarRunner(DefaultRunner):
                 self.inputs = self.model.prepare_condition(projected_text, segment_audio, encoded.get("speaker_masks"), rope=self.inputs["rope"] if index > 1 else None)
                 latents = self.run_segment(index)
                 self.check_stop()
+                has_next_segment = index + 1 < input_info.num_segments
                 if index:
                     latents = latents[:, :, 1:]
-                elif input_info.num_segments > 1:
+                elif has_next_segment:
                     anchor = latents[:, :, :1].clone()
-                outputs = self._on_primary(self._decode_segment, latents, index, result_chunks)
-                reference = outputs.get("reference")
+                if has_next_segment or input_info.save_result_path or input_info.return_result_tensor:
+                    outputs = self._run_and_broadcast(self._decode_segment, latents, index, has_next_segment, result_chunks)
+                    reference = outputs.get("reference")
             video = torch.cat(result_chunks) if result_chunks else None
         except BaseException:
             if self.video_writer:

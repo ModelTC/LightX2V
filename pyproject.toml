@@ -76,7 +76,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tbdub = ["scikit-image"]
-longcat-avatar = ["librosa>=0.11", "onnxruntime>=1.20"]
+longcat-avatar = ["librosa>=0.11", "onnxruntime-gpu>=1.20"]
 
 [project.urls]
 Homepage = "https://github.com/ModelTC/LightX2V"

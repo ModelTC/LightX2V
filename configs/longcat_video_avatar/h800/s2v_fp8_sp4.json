@@ -1,0 +1,30 @@
+{
+  "infer_steps": 8,
+  "enable_cfg": false,
+  "fps": 25,
+  "mix_steps": 4,
+  "mix_alpha": 1.0,
+  "premerge_lora": true,
+  "dit_quantized": true,
+  "dit_quant_scheme": "fp8-sgl",
+  "dit_quantized_ckpt": "/data/zhangbilang/models/meituan-longcat/LongCat-Video-Avatar-1.6/longcat_video_avatar_1.6_fp8.safetensors",
+  "text_encoder_tensor_parallel": true,
+  "cache_condition_kv": true,
+  "attn_type": "flash_attn3",
+  "use_compile": true,
+  "vae_use_compile": true,
+  "vae_decoder_channels_last_3d": true,
+  "audio_vocal_separation": true,
+  "parallel": {
+    "seq_p_size": 4,
+    "seq_p_attn_type": "ulysses",
+    "seq_p_nvlink": true
+  },
+  "request_defaults": {
+    "seed": 42,
+    "num_frames": 93,
+    "resolution": "480p",
+    "num_segments": 1,
+    "audio_type": "para"
+  }
+}
