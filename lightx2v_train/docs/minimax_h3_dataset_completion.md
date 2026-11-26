@@ -1,8 +1,18 @@
 # H3 数据迁移、整理与 8 卡补齐
 
-一个入口依次完成：**复制旧 teacher latent 目录到 miaohua → 整理统一 JSON → 8 卡补齐缺失视频和 AV latent**。后续数据全部使用 `/mnt/miaohua/gushiqiao/datasets/`。这里只处理 T2AV / I2AV，不启动训练；后续 PDMD 学生使用 4 步。
+先用单独的 rsync 命令复制旧目录，再用一个 bash 入口自动完成：**整理统一 JSON → 8 卡补齐缺失视频和 AV latent**。后续数据全部使用 `/mnt/miaohua/gushiqiao/datasets/`。这里只处理 T2AV / I2AV，不启动训练；后续 PDMD 学生使用 4 步。
 
-## 启动一次即可
+## 单独复制旧目录
+
+```bash
+rsync -aH --no-owner --no-group --partial --info=progress2 \
+  /mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_teacher_latents_5s \
+  /mnt/miaohua/gushiqiao/datasets/
+```
+
+源目录末尾不加 `/`，复制后得到 `datasets/minimax_h3_teacher_latents_5s/`。原目录保留；中断后重复同一 rsync 命令续传。复制成功后再运行下面的 bash。
+
+## Bash 自动整理与补齐
 
 先同步新版 `lightx2v_train/scripts/prepare_minimax_h3_dataset_8gpu.sh` 及配套 Python 脚本。在新机器运行：
 
@@ -15,25 +25,15 @@ nohup bash lightx2v_train/scripts/prepare_minimax_h3_dataset_8gpu.sh \
 echo $! > /mnt/miaohua/gushiqiao/datasets/h3_dataset_pipeline.pid
 ```
 
-需要 `rsync`、`unzip`、`flock`、`ffprobe` 和原有 H3 Python 环境。默认使用 0–7 卡，每卡独立 worker，单卡需容纳 BF16 H3 DiT。请在这 8 张卡可用时启动。
+复制需要 `rsync`；bash 流程需要 `unzip`、`flock`、`ffprobe` 和原有 H3 Python 环境。默认使用 0–7 卡，每卡独立 worker，单卡需容纳 BF16 H3 DiT。请在这 8 张卡可用时启动。
 
 ## 自动执行的步骤
 
-1. **复制旧目录**：
-
-   ```text
-   /mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_teacher_latents_5s/
-       ↓ rsync，可续传，保留源目录
-   /mnt/miaohua/gushiqiao/datasets/minimax_h3_teacher_latents_5s/
-   ```
-
-   复制成功后写完成标记。后续重跑跳过此步骤，不再访问旧数据目录。其余数据和两个 ZIP 使用你已搬到 miaohua 的版本。
-
-2. **整理**：自动解压 I2AV 图片和 teacher 视频 ZIP，关联 condition、图片、视频及 AV latent，检查 latent shape，复制引用的素材到 `fl2av_dataset/h3_self_gen/data/`，生成 `dataset.json` 和 `report.json`。
+1. **整理**：自动解压 I2AV 图片和 teacher 视频 ZIP，关联 condition、图片、视频及 AV latent，检查 latent shape，复制引用的素材到 `fl2av_dataset/h3_self_gen/data/`，生成 `dataset.json` 和 `report.json`。
 
    所有训练资产路径必须位于 miaohua 内；历史 provenance 可以保留旧路径作为追溯信息。关联不明确的记录不会强行配对。出现被拒绝的源记录时停止在整理阶段，报告位置会写入日志。
 
-3. **补齐**：整理成功后自动启动 8 个 GPU worker。完成后回写同一个 JSON，不需要手动启动第二次命令。
+2. **补齐**：整理成功后自动启动 8 个 GPU worker。完成后回写同一个 JSON，不需要手动启动第二次命令。
 
 | 当前记录 | 操作 |
 | --- | --- |
@@ -50,7 +50,7 @@ Teacher 使用原始 dense FL2AV H3，不加载 DCM / PDMD / MoE / LoRA。沿用
 ## 日志与输出
 
 ```bash
-# 整体阶段及复制进度
+# 整理与补齐阶段进度
  tail -f /mnt/miaohua/gushiqiao/datasets/h3_dataset_pipeline.log
 
 # 每卡详细进度，gpu0 可换成 gpu1～gpu7
@@ -66,13 +66,12 @@ Teacher 使用原始 dense FL2AV H3，不加载 DCM / PDMD / MoE / LoRA。沿用
 /mnt/miaohua/gushiqiao/datasets/fl2av_dataset/h3_self_gen/dataset.json
 ```
 
-阶段日志都在 `h3_self_gen/logs/`：`copy_teacher_latents.log`、`extract_images.log`、`organize.log`、`completion.log`，以及 `completion/gpu*.log`。最终报告中 `remaining` 为空、所有 worker 退出码为 0 才表示全部完成。
+阶段日志都在 `h3_self_gen/logs/`：`extract_images.log`、`organize.log`、`completion.log`，以及 `completion/gpu*.log`。最终报告中 `remaining` 为空、所有 worker 退出码为 0 才表示全部完成。
 
 ## 续跑
 
-中断后重复执行同一个入口：
+复制中断时重跑 rsync；整理或补齐中断时重跑 bash。Bash 完全不访问旧数据目录：
 
-- 复制未完成：rsync 续传；已完成：不再读取旧目录。
 - `dataset.json` 不存在：继续整理并复用已复制素材。
 - `dataset.json` 已存在：保留，不重新整理覆盖。
 - 补齐记录完成：跳过；部分完成：读取逐条进度继续。
@@ -86,7 +85,6 @@ Teacher 使用原始 dense FL2AV H3，不加载 DCM / PDMD / MoE / LoRA。沿用
 默认代码和 Python 环境沿用旧位置；**迁移的是数据目录**，不会搬动模型和环境。以下变量只在与你机器实际路径不符时覆盖：
 
 ```bash
-export H3_OLD_DATA_ROOT=/mnt/lm_data_afs/gushiqiao/datasets
 export H3_DATA_ROOT=/mnt/miaohua/gushiqiao/datasets
 export H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3
 export H3_FA3_KERNEL_PATH=/mnt/lm_data_afs/gushiqiao/cache/kernels/kernels--kernels-community--flash-attn3/snapshots/43f0bd269777115d94ff826e0d113ce9c1c9087b

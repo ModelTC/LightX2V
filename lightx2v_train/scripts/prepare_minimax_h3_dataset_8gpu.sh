@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Migrate once, organize once, then resume missing teacher/AV assets on eight GPUs.
+# Organize data already copied to miaohua, then resume missing assets on eight GPUs.
 set -Eeuo pipefail
 
 train_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python_bin="${H3_PYTHON:-python}"
-old_root="${H3_OLD_DATA_ROOT:-/mnt/lm_data_afs/gushiqiao/datasets}"
 data_root="${H3_DATA_ROOT:-/mnt/miaohua/gushiqiao/datasets}"
 dataset="$data_root/fl2av_dataset/h3_self_gen"
 teacher_cache="$data_root/minimax_h3_teacher_latents_5s"
@@ -21,19 +20,12 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-if [[ ! -f "$state/teacher_latents_copied" ]]; then
-    echo "[1/3] Copy teacher cache to $teacher_cache"
-    mkdir -p "$teacher_cache"
-    rsync -aH --no-owner --no-group --partial --info=progress2 \
-        "$old_root/minimax_h3_teacher_latents_5s/" "$teacher_cache/" \
-        2>&1 | tee -a "$logs/copy_teacher_latents.log"
-    touch "$state/teacher_latents_copied"
-else
-    echo '[1/3] Copy already completed; the old data directory is not accessed.'
-fi
-
 if [[ ! -f "$dataset/dataset.json" ]]; then
-    echo '[2/3] Extract images and organize data inside miaohua'
+    if [[ ! -f "$teacher_cache/metadata.jsonl" ]]; then
+        echo "Copy the teacher cache first: missing $teacher_cache/metadata.jsonl" >&2
+        exit 1
+    fi
+    echo '[1/2] Extract images and organize data inside miaohua'
     unzip -n "$data_root/h3_teacher_i2av_images_9458.zip" -d "$data_root" \
         > "$logs/extract_images.log" 2>&1
     "$python_bin" -u "$train_root/data_process/minimax_h3/organize_h3_dataset.py" \
@@ -41,7 +33,7 @@ if [[ ! -f "$dataset/dataset.json" ]]; then
         --teacher-latents "$teacher_cache" --extract-teacher-zip --check-latents \
         2>&1 | tee "$logs/organize.log"
 else
-    echo '[2/3] Existing dataset.json retained, including completed teacher assets.'
+    echo '[1/2] Existing dataset.json retained, including completed teacher assets.'
 fi
 
 # Only metadata provenance may retain historical paths. Training assets must
@@ -68,7 +60,7 @@ for row in rows:
 print(f'Validated {len(rows)} records; all populated training asset paths are inside {root}', flush=True)
 PY
 
-echo '[3/3] Complete teacher videos and AV latents: 30 sigma points / 29 evaluations, shifts 12/3'
+echo '[2/2] Complete teacher videos and AV latents: 30 sigma points / 29 evaluations, shifts 12/3'
 "$python_bin" -u "$train_root/data_process/minimax_h3/complete_h3_dataset.py" \
     --manifest "$dataset/dataset.json" --model-path "$model_path" \
     --condition-model-path "${H3_CONDITION_MODEL_PATH:-$model_path}" \
