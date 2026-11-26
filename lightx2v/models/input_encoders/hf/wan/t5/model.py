@@ -3,12 +3,15 @@ import gc
 import math
 import os
 import sys
+from functools import partial
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
+from torch.distributed.nn.functional import all_gather
 
 current_dir = Path(__file__).resolve().parent
 project_root = current_dir.parent.parent.parent.parent.parent.parent
@@ -197,6 +200,54 @@ class T5LayerNorm(nn.Module):
         return self.weight * x
 
 
+class T5ParallelOutput(nn.Linear):
+    """Shard output rows so each BF16 dot product keeps its full reduction dimension."""
+
+    def __init__(self, local_in, dim, dtype, tp_group):
+        size = tp_group.size()
+        super().__init__(local_in * size, dim // size, bias=False, dtype=dtype)
+        self.tp_group = tp_group
+
+    def forward(self, x):
+        x = torch.cat(all_gather(x, group=self.tp_group), dim=-1)
+        local_output = super().forward(x)
+        return torch.cat(all_gather(local_output, group=self.tp_group), dim=-1)
+
+
+def t5_linear_layers(quantized, quant_scheme, dtype, tp_group):
+    if not quantized:
+        linear_cls = nn.Linear
+    elif quant_scheme == "int8-npu":
+        from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8 as linear_cls
+    elif quant_scheme == "int8-metax":
+        from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8 as linear_cls
+    else:
+        quant_layers = {
+            "int8": VllmQuantLinearInt8,
+            "int8-vllm": VllmQuantLinearInt8,
+            "fp8": SglQuantLinearFp8,
+            "fp8-sgl": SglQuantLinearFp8,
+            "fp8-f16-accum": F16AccumQuantLinearFp8,
+            "fp8-musa": MusaQuantLinearFp8,
+            "fp8-vllm": VllmQuantLinearFp8,
+            "int8-torchao": TorchaoQuantLinearInt8,
+            "fp8-torchao": TorchaoQuantLinearFp8,
+            "int8-q8f": Q8FQuantLinearInt8,
+            "fp8-q8f": Q8FQuantLinearFp8,
+            "int8-triton": TritonQuantLinearInt8,
+            "fp8-triton": TritonQuantLinearFp8,
+            "int8-tmo": MluQuantLinearInt8,
+            "int8-iluvatar": IluvatarQuantLinearInt8,
+        }
+        if quant_scheme not in quant_layers:
+            raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
+        linear_cls = quant_layers[quant_scheme]
+
+    linear = partial(linear_cls, bias=False, dtype=dtype)
+    output_linear = linear if tp_group is None else partial(T5ParallelOutput, dtype=dtype, tp_group=tp_group)
+    return linear, output_linear
+
+
 class T5Attention(nn.Module):
     def __init__(
         self,
@@ -207,6 +258,7 @@ class T5Attention(nn.Module):
         quantized=False,
         quant_scheme=None,
         dtype=torch.bfloat16,
+        tp_group=None,
     ):
         assert dim_attn % num_heads == 0
         super(T5Attention, self).__init__()
@@ -215,51 +267,11 @@ class T5Attention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = dim_attn // num_heads
 
-        if quantized:
-            if quant_scheme in ["int8", "int8-vllm"]:
-                linear_cls = VllmQuantLinearInt8
-            elif quant_scheme in ["fp8", "fp8-sgl"]:
-                linear_cls = SglQuantLinearFp8
-            elif quant_scheme == "fp8-f16-accum":
-                linear_cls = F16AccumQuantLinearFp8
-            elif quant_scheme == "fp8-musa":
-                linear_cls = MusaQuantLinearFp8
-            elif quant_scheme == "fp8-vllm":
-                linear_cls = VllmQuantLinearFp8
-            elif quant_scheme == "int8-torchao":
-                linear_cls = TorchaoQuantLinearInt8
-            elif quant_scheme == "fp8-torchao":
-                linear_cls = TorchaoQuantLinearFp8
-            elif quant_scheme == "int8-q8f":
-                linear_cls = Q8FQuantLinearInt8
-            elif quant_scheme == "fp8-q8f":
-                linear_cls = Q8FQuantLinearFp8
-            elif quant_scheme == "int8-triton":
-                linear_cls = TritonQuantLinearInt8
-            elif quant_scheme == "fp8-triton":
-                linear_cls = TritonQuantLinearFp8
-            elif quant_scheme == "int8-tmo":
-                linear_cls = MluQuantLinearInt8
-            elif quant_scheme == "int8-npu":
-                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
-
-                linear_cls = NpuQuantLinearInt8
-            elif quant_scheme == "int8-iluvatar":
-                linear_cls = IluvatarQuantLinearInt8
-            elif quant_scheme == "int8-metax":
-                from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8
-
-                linear_cls = MetaxQuantLinearInt8
-            else:
-                raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
-        else:
-            linear_cls = nn.Linear
-
-        # layers
-        self.q = linear_cls(dim, dim_attn, bias=False, dtype=dtype)
-        self.k = linear_cls(dim, dim_attn, bias=False, dtype=dtype)
-        self.v = linear_cls(dim, dim_attn, bias=False, dtype=dtype)
-        self.o = linear_cls(dim_attn, dim, bias=False, dtype=dtype)
+        linear, output_linear = t5_linear_layers(quantized, quant_scheme, dtype, tp_group)
+        self.q = linear(dim, dim_attn)
+        self.k = linear(dim, dim_attn)
+        self.v = linear(dim, dim_attn)
+        self.o = output_linear(dim_attn, dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, context=None, mask=None, pos_bias=None):
@@ -305,55 +317,16 @@ class T5FeedForward(nn.Module):
         quantized=False,
         quant_scheme=None,
         dtype=torch.bfloat16,
+        tp_group=None,
     ):
         super(T5FeedForward, self).__init__()
         self.dim = dim
         self.dim_ffn = dim_ffn
 
-        if quantized:
-            if quant_scheme in ["int8", "int8-vllm"]:
-                linear_cls = VllmQuantLinearInt8
-            elif quant_scheme in ["fp8", "fp8-sgl"]:
-                linear_cls = SglQuantLinearFp8
-            elif quant_scheme == "fp8-f16-accum":
-                linear_cls = F16AccumQuantLinearFp8
-            elif quant_scheme == "fp8-musa":
-                linear_cls = MusaQuantLinearFp8
-            elif quant_scheme == "fp8-vllm":
-                linear_cls = VllmQuantLinearFp8
-            elif quant_scheme == "int8-torchao":
-                linear_cls = TorchaoQuantLinearInt8
-            elif quant_scheme == "fp8-torchao":
-                linear_cls = TorchaoQuantLinearFp8
-            elif quant_scheme == "int8-q8f":
-                linear_cls = Q8FQuantLinearInt8
-            elif quant_scheme == "fp8-q8f":
-                linear_cls = Q8FQuantLinearFp8
-            elif quant_scheme == "int8-triton":
-                linear_cls = TritonQuantLinearInt8
-            elif quant_scheme == "fp8-triton":
-                linear_cls = TritonQuantLinearFp8
-            elif quant_scheme == "int8-tmo":
-                linear_cls = MluQuantLinearInt8
-            elif quant_scheme == "int8-npu":
-                from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8
-
-                linear_cls = NpuQuantLinearInt8
-            elif quant_scheme == "int8-iluvatar":
-                linear_cls = IluvatarQuantLinearInt8
-            elif quant_scheme == "int8-metax":
-                from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8
-
-                linear_cls = MetaxQuantLinearInt8
-            else:
-                raise NotImplementedError(f"Unsupported T5 quant scheme: {quant_scheme}")
-        else:
-            linear_cls = nn.Linear
-        # layers
-        self.gate = nn.Sequential(linear_cls(dim, dim_ffn, bias=False, dtype=dtype), GELU())
-
-        self.fc1 = linear_cls(dim, dim_ffn, bias=False, dtype=dtype)
-        self.fc2 = linear_cls(dim_ffn, dim, bias=False, dtype=dtype)
+        linear, output_linear = t5_linear_layers(quantized, quant_scheme, dtype, tp_group)
+        self.gate = nn.Sequential(linear(dim, dim_ffn), GELU())
+        self.fc1 = linear(dim, dim_ffn)
+        self.fc2 = output_linear(dim_ffn, dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
@@ -377,6 +350,7 @@ class T5SelfAttention(nn.Module):
         quantized=False,
         quant_scheme=None,
         dtype=torch.bfloat16,
+        tp_group=None,
     ):
         super(T5SelfAttention, self).__init__()
         self.dim = dim
@@ -385,20 +359,17 @@ class T5SelfAttention(nn.Module):
         self.num_heads = num_heads
         self.num_buckets = num_buckets
         self.shared_pos = shared_pos
-
         # layers
         self.norm1 = T5LayerNorm(dim, dtype=dtype)
-        self.attn = T5Attention(dim, dim_attn, num_heads, dropout, quantized, quant_scheme, dtype)
+        self.attn = T5Attention(dim, dim_attn, num_heads, dropout, quantized, quant_scheme, dtype, tp_group)
         self.norm2 = T5LayerNorm(dim, dtype=dtype)
-        self.ffn = T5FeedForward(dim, dim_ffn, dropout, quantized, quant_scheme, dtype=dtype)
+        self.ffn = T5FeedForward(dim, dim_ffn, dropout, quantized, quant_scheme, dtype=dtype, tp_group=tp_group)
         self.pos_embedding = None if shared_pos else T5RelativeEmbedding(num_buckets, num_heads, bidirectional=True, dtype=dtype)
 
     def forward(self, x, mask=None, pos_bias=None):
         e = pos_bias if self.shared_pos else self.pos_embedding(x.size(1), x.size(1))
         x = fp16_clamp(x + self.attn(self.norm1(x), mask=mask, pos_bias=e))
-        x = fp16_clamp(x + self.ffn(self.norm2(x)))
-
-        return x
+        return fp16_clamp(x + self.ffn(self.norm2(x)))
 
 
 class T5CrossAttention(nn.Module):
@@ -498,8 +469,21 @@ class T5Encoder(nn.Module):
         lazy_load=False,
         lazy_load_path=None,
         rms_norm_type="sgl-kernel",
+        tp_group=None,
     ):
         super(T5Encoder, self).__init__()
+        self.tp_group = tp_group
+        if tp_group is not None:
+            size = tp_group.size()
+            if cpu_offload or quantized or isinstance(vocab, nn.Embedding):
+                raise ValueError("UMT5 tensor parallelism requires a resident dense encoder with its own vocabulary")
+            if any(width % size for width in (vocab, num_heads, dim_ffn, dim)):
+                raise ValueError(f"UMT5 vocabulary, attention heads, FFN and hidden widths must be divisible by TP size {size}")
+            vocab //= size
+            dim_attn //= size
+            dim_ffn //= size
+            num_heads //= size
+            self.vocab_start = tp_group.rank() * vocab
         self.cpu_offload = cpu_offload
         self.dim = dim
         self.dim_attn = dim_attn
@@ -551,6 +535,7 @@ class T5Encoder(nn.Module):
                         quantized,
                         quant_scheme,
                         dtype,
+                        tp_group,
                     )
                     for _ in range(num_layers)
                 ]
@@ -578,7 +563,13 @@ class T5Encoder(nn.Module):
                 block.load(weights)
 
     def forward_without_offload(self, ids, mask=None):
-        x = self.token_embedding(ids)
+        if self.tp_group is None:
+            x = self.token_embedding(ids)
+        else:
+            local_ids = ids - self.vocab_start
+            outside = (local_ids < 0) | (local_ids >= self.token_embedding.num_embeddings)
+            x = self.token_embedding(local_ids.masked_fill(outside, 0)).masked_fill_(outside.unsqueeze(-1), 0)
+            dist.all_reduce(x, group=self.tp_group)
         x = self.dropout(x)
         e = self.pos_embedding(x.size(1), x.size(1)) if self.shared_pos else None
 
@@ -867,6 +858,7 @@ class T5EncoderModel:
         load_from_rank0=False,
         dummy_model=False,
         rms_norm_type="sgl-kernel",
+        tp_group=None,
     ):
         self.text_len = text_len
         self.dtype = dtype
@@ -896,6 +888,7 @@ class T5EncoderModel:
                 lazy_load=lazy_load,
                 lazy_load_path=self.checkpoint_path,
                 rms_norm_type=rms_norm_type,
+                tp_group=tp_group,
             )
             .eval()
             .requires_grad_(False)
@@ -909,6 +902,13 @@ class T5EncoderModel:
             )
             if "shared.weight" in weights_dict:
                 weights_dict = remap_hf_umt5_weights(weights_dict, model.num_layers)
+            if tp_group is not None:
+                # Slice checkpoint rows before GPU loading. Relative position biases store heads in columns.
+                size, rank = tp_group.size(), tp_group.rank()
+                for name, weight in weights_dict.items():
+                    if weight.ndim == 2:
+                        axis = 1 if name.endswith("pos_embedding.embedding.weight") else 0
+                        weights_dict[name] = weight.chunk(size, dim=axis)[rank]
 
             if cpu_offload:
                 block_weights_dict = split_block_weights(weights_dict)

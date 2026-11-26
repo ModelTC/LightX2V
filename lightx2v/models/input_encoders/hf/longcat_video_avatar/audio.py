@@ -24,20 +24,37 @@ class KimVocalSeparator:
     def __init__(self, model_path, device):
         import onnxruntime as ort
 
+        self.window = torch.hann_window(self.n_fft, dtype=torch.float32).to(device)
+        device_id = self.window.device.index
         options = ort.SessionOptions()
-        options.intra_op_num_threads = 4
-        self.session = ort.InferenceSession(model_path, sess_options=options, providers=["CPUExecutionProvider"])
+        options.intra_op_num_threads = 1
+        options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+        cuda_options = {"device_id": device_id, "use_tf32": 0, "cudnn_conv_algo_search": "HEURISTIC"}
+        self.session = ort.InferenceSession(model_path, sess_options=options, providers=[("CUDAExecutionProvider", cuda_options)])
         self.input_name = self.session.get_inputs()[0].name
-        self.window = torch.hann_window(self.n_fft).to(device)
+        self.output_name = self.session.get_outputs()[0].name
+        # Release ORT's convolution workspace after the track so the DiT can use it.
+        self.release_workspace = ort.RunOptions()
+        self.release_workspace.add_run_config_entry("memory.enable_memory_arena_shrinkage", f"gpu:{device_id}")
 
-    def _separate_chunks(self, chunks):
-        waveform = torch.from_numpy(chunks).to(self.window.device).flatten(0, 1)
+    def _predict_spectrum(self, spectrum, last_batch):
+        predicted = torch.empty_like(spectrum)
+        binding = self.session.io_binding()
+        device_id = spectrum.device.index
+        binding.bind_input(self.input_name, "cuda", device_id, np.float32, spectrum.shape, spectrum.data_ptr())
+        binding.bind_output(self.output_name, "cuda", device_id, np.float32, predicted.shape, predicted.data_ptr())
+        # ORT reads the bound PyTorch buffer on its own stream and completes the run before returning.
+        torch.cuda.current_stream(spectrum.device).synchronize()
+        self.session.run_with_iobinding(binding, self.release_workspace if last_batch else None)
+        return predicted
+
+    def _separate_chunks(self, chunks, last_batch):
+        waveform = torch.from_numpy(chunks).to(self.window).flatten(0, 1)
         spectrum = torch.stft(waveform, self.n_fft, self.hop_length, window=self.window, return_complex=True)
         spectrum = torch.view_as_real(spectrum).permute(0, 3, 1, 2)
         spectrum = spectrum.reshape(len(chunks), 4, self.n_fft // 2 + 1, -1)[:, :, : self.frequency_bins].contiguous()
         spectrum[:, :, :3] = 0
-        predicted = self.session.run(None, {self.input_name: spectrum.cpu().numpy()})[0]
-        spectrum = torch.from_numpy(predicted).to(self.window.device)
+        spectrum = self._predict_spectrum(spectrum, last_batch)
         spectrum = F.pad(spectrum, (0, 0, 0, self.n_fft // 2 + 1 - self.frequency_bins))
         spectrum = spectrum.unflatten(1, (2, 2)).flatten(0, 1).permute(0, 2, 3, 1).contiguous()
         waveform = torch.istft(torch.view_as_complex(spectrum), self.n_fft, self.hop_length, window=self.window)
@@ -61,7 +78,7 @@ class KimVocalSeparator:
             batch_starts = starts[index : index + 2]
             pieces = [padded[:, start : start + self.chunk_samples] for start in batch_starts]
             chunks = np.stack([librosa.util.fix_length(piece, size=self.chunk_samples) for piece in pieces])
-            separated = self._separate_chunks(chunks)
+            separated = self._separate_chunks(chunks, last_batch=index + len(batch_starts) == len(starts))
             for start, piece, vocals in zip(batch_starts, pieces, separated):
                 length = piece.shape[-1]
                 window = np.hanning(length)
