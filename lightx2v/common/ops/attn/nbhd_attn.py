@@ -161,7 +161,7 @@ class NbhdAttnWeightFlashInfer(AttnWeightTemplate):
 
     @classmethod
     @torch.compiler.disable
-    def prepare_mask(cls, seqlen, head_num, head_dim):
+    def prepare_mask(cls, seqlen, head_num, head_dim, device):
         if seqlen == cls.seqlen:
             return
         block_num = (seqlen + cls.block_size - 1) // cls.block_size
@@ -171,7 +171,7 @@ class NbhdAttnWeightFlashInfer(AttnWeightTemplate):
         block_rowcol_size = torch.ones(block_num, dtype=torch.int32) * cls.block_size
         block_rowcol_size[-1] = seqlen - cls.block_size * (block_num - 1)
         block_rowcol_size = block_rowcol_size.unsqueeze(0).repeat(head_num, 1)
-        float_workspace_buffer = torch.empty(1024 * 1024 * 1024, dtype=torch.uint8, device="cuda:0")
+        float_workspace_buffer = torch.empty(1024 * 1024 * 1024, dtype=torch.uint8, device=device)
         cls.sparse_wrapper = flashinfer.sparse.VariableBlockSparseAttentionWrapper(float_workspace_buffer, backend="fa2")
         cls.sparse_wrapper.plan(
             block_mask_map=mask,
@@ -203,7 +203,7 @@ class NbhdAttnWeightFlashInfer(AttnWeightTemplate):
         k: [seqlen, head_num, head_dim]
         v: [seqlen, head_num, head_dim]
         """
-        self.prepare_mask(seqlen=q.shape[0], head_num=q.shape[1], head_dim=q.shape[2])
+        self.prepare_mask(seqlen=q.shape[0], head_num=q.shape[1], head_dim=q.shape[2], device=q.device)
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
