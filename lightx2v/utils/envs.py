@@ -31,7 +31,7 @@ def GET_RUNNING_FLAG():
 @lru_cache(maxsize=None)
 def GET_DTYPE():
     RUNNING_FLAG = os.getenv("DTYPE", "BF16")
-    assert RUNNING_FLAG in ["BF16", "FP16"]
+    assert RUNNING_FLAG in ["BF16", "FP16", "FP32"]
     return DTYPE_MAP[RUNNING_FLAG]
 
 
