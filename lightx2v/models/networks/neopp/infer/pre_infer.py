@@ -165,8 +165,10 @@ class NeoppPreInfer:
             if getattr(self, "_gen16_rope_device", None) != patch_embeds.device:
                 vision = self.config["vision_config"]
                 self.cos_cached_x, self.sin_cached_x = precompute_rope_freqs_sincos(
-                    self.rope_dim_part, vision["max_position_embeddings_vision"],
-                    base=vision["rope_theta_vision"], device=patch_embeds.device,
+                    self.rope_dim_part,
+                    vision["max_position_embeddings_vision"],
+                    base=vision["rope_theta_vision"],
+                    device=patch_embeds.device,
                 )
                 self.cos_cached_y, self.sin_cached_y = self.cos_cached_x, self.sin_cached_x
                 self._gen16_rope_device = patch_embeds.device

@@ -89,10 +89,10 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             if self.hc_streams != 2 or llm_config.get("hc_type") != "ihc":
                 raise ValueError("use_triton_ihc requires two-stream iHC")
             from lightx2v.models.networks.neopp.infer import ihc_triton
+
             self._ihc_read, self._ihc_write = ihc_triton.read, ihc_triton.write
         if llm_config.get("loop_split") is not None:
-            logger.info(f"NeoPP generation: {self.num_layers} physical layers, {len(self.generation_layers)} layer calls, "
-                        f"split={llm_config['loop_split']}, hc={llm_config.get('hc_type', 'none')}")
+            logger.info(f"NeoPP generation: {self.num_layers} physical layers, {len(self.generation_layers)} layer calls, split={llm_config['loop_split']}, hc={llm_config.get('hc_type', 'none')}")
         self.hidden_size = llm_config["hidden_size"]
         self.num_heads = llm_config["num_attention_heads"]
         self.num_kv_heads = llm_config["num_key_value_heads"]
@@ -104,6 +104,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             if config.get("attn_type") != "flash_attn2" or config.get("seq_parallel", False):
                 raise ValueError("HF dense FA2 requires flash_attn2 and non-sequence-parallel execution")
             from flash_attn import flash_attn_func
+
             self._hf_dense_fa2 = flash_attn_func
         self.use_triton_qknorm_rope = config.get("use_triton_qknorm_rope", True)
         self.version = config.get("version", "moe")
@@ -412,8 +413,11 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             # Match the checkpoint's single-batch FA2 route only within the
             # configured bound. Retain the upstream long-KV fallback outside it.
             attn_output = self._hf_dense_fa2(
-                query_states.unsqueeze(0), key_states.unsqueeze(0), value_states.unsqueeze(0),
-                softmax_scale=self.scaling, causal=False,
+                query_states.unsqueeze(0),
+                key_states.unsqueeze(0),
+                value_states.unsqueeze(0),
+                softmax_scale=self.scaling,
+                causal=False,
             ).reshape(seq_len_q, -1)
         else:
             attn_output = attn_w.cross_attn.apply(

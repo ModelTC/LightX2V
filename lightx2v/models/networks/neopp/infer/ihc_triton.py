@@ -1,4 +1,5 @@
 """Two-stream HY4 iHC kernels. The trained FP32 gate projection stays in PyTorch."""
+
 import torch
 import torch.nn.functional as F
 import triton
@@ -18,8 +19,15 @@ def _read_kernel(states, pre, out, D: tl.constexpr, BLOCK: tl.constexpr):
 
 @triton.jit
 def _write_kernel(
-    states, update, post, out, tokens: tl.constexpr, width: tl.constexpr,
-    stride_row, stride_stream, BLOCK: tl.constexpr,
+    states,
+    update,
+    post,
+    out,
+    tokens: tl.constexpr,
+    width: tl.constexpr,
+    stride_row,
+    stride_stream,
+    BLOCK: tl.constexpr,
 ):
     offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = offset < tokens * 2 * width
@@ -54,6 +62,15 @@ def write(states, update, post):
     out = states.new_empty(n, streams, d)
     block = 1024
     _write_kernel[(triton.cdiv(out.numel(), block),)](
-        states, update, post, out, n, d, states.stride(0), states.stride(1), block, enable_fp_fusion=False,
+        states,
+        update,
+        post,
+        out,
+        n,
+        d,
+        states.stride(0),
+        states.stride(1),
+        block,
+        enable_fp_fusion=False,
     )
     return out

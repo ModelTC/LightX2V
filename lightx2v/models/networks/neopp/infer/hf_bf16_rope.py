@@ -1,4 +1,5 @@
 """Fused generation Q/K normalization and rotary encoding with BF16 rounding."""
+
 import torch
 import triton
 import triton.language as tl
@@ -70,7 +71,22 @@ def fused_hf_bf16_rope(q, k, wqt, wqhw, wkt, wkhw, ct, st, ch, sh, cw, sw, eps=1
     assert q.is_contiguous() and k.is_contiguous() and q.dtype == k.dtype == torch.bfloat16
     assert d % 8 == 0 and d & (d - 1) == 0
     _kernel[(n, qh + kh)](
-        q, k, wqt, wqhw, wkt, wkhw,
-        ct.contiguous(), st.contiguous(), ch.contiguous(), sh.contiguous(), cw.contiguous(), sw.contiguous(),
-        qh, kh, d, eps, num_warps=1, enable_fp_fusion=False,
+        q,
+        k,
+        wqt,
+        wqhw,
+        wkt,
+        wkhw,
+        ct.contiguous(),
+        st.contiguous(),
+        ch.contiguous(),
+        sh.contiguous(),
+        cw.contiguous(),
+        sw.contiguous(),
+        qh,
+        kh,
+        d,
+        eps,
+        num_warps=1,
+        enable_fp_fusion=False,
     )

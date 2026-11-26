@@ -1,4 +1,5 @@
 """Generation loop and iHC operations for a physical-layer prompt KV cache."""
+
 import torch
 import torch.nn.functional as F
 

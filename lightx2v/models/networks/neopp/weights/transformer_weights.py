@@ -151,6 +151,7 @@ class NeoppAttentionWeights(WeightModule):
             )
             if config.get("hf_generation_bf16", False):
                 from lightx2v.models.networks.neopp.infer.hf_bf16_rope import fused_hf_bf16_rope
+
                 self.qk_norm._kernel = fused_hf_bf16_rope
         else:
             # Pure torch: 4 separate RMSNorm modules, logic expanded in transformer_infer.py.

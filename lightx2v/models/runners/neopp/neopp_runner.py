@@ -186,7 +186,8 @@ class NeoppRunner(DefaultRunner):
                         "past_key_values_uncond": self.full_uncond_kv,
                         "cos_sin_uncond": (cos_t_full, sin_t_full, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
                     }
-                    if self.full_uncond_kv is not None else None
+                    if self.full_uncond_kv is not None
+                    else None
                 ),
                 "past_key_values_cond": self.past_key_values_cond,
                 "past_key_values_uncond": self.past_key_values_uncond,
@@ -227,8 +228,13 @@ class NeoppRunner(DefaultRunner):
         self.model.cfg_norm = cfg_norm
 
     def set_kvcache(
-        self, to_x2v_cond_kv: torch.Tensor, to_x2v_uncond_kv: torch.Tensor = None,
-        *, image_guidance_scale=None, full_uncond_kv=None, full_uncond_offset=None,
+        self,
+        to_x2v_cond_kv: torch.Tensor,
+        to_x2v_uncond_kv: torch.Tensor = None,
+        *,
+        image_guidance_scale=None,
+        full_uncond_kv=None,
+        full_uncond_offset=None,
     ):
         if full_uncond_kv is not None and (not self.enable_cfg or self.config.get("cfg_parallel", False)):
             raise ValueError("Three-branch editing requires CFG enabled and a single CFG rank")
