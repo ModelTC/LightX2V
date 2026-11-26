@@ -117,19 +117,24 @@ async def follower_loop(runner, input_info):
 async def run_websocket_server(args, runner, input_info):
     app = FastAPI(title="LightX2V WS Live", version="0.1.0")
     session_lock = asyncio.Lock()
-    state = SimpleNamespace(session=None)
+    state = SimpleNamespace(session=None, websocket=None)
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "model_cls": args.model_cls, "busy": state.session is not None}
+        return {"status": "ok", "model_cls": args.model_cls, "busy": state.websocket is not None or state.session is not None}
 
     @app.websocket("/v1/live")
     async def live_ws(websocket: WebSocket):
-        await websocket.accept()
+        if state.websocket is not None or state.session is not None:
+            await websocket.close(code=1008, reason="another websocket connection is active")
+            return
+        # Reserve before awaiting the handshake so concurrent connections cannot both enter.
+        state.websocket = websocket
         session = None
         pump_task = None
         command_id = ""
         try:
+            await websocket.accept()
             while True:
                 command_id = ""
                 data = await websocket.receive_bytes()
@@ -194,19 +199,23 @@ async def run_websocket_server(args, runner, input_info):
             except Exception:
                 pass
         finally:
-            if session is not None:
-                if pump_task is not None:
-                    session.mark_pipeline_done(True, "")
-                    pump_task.cancel()
-                await session.stop_and_join()
-                try:
-                    await websocket.close()
-                except Exception:
-                    pass
-                session.close()
-                await sync_ranks()
-                if state.session is session:
-                    state.session = None
+            try:
+                if session is not None:
+                    if pump_task is not None:
+                        session.mark_pipeline_done(True, "")
+                        pump_task.cancel()
+                    await session.stop_and_join()
+                    try:
+                        await websocket.close()
+                    except Exception:
+                        pass
+                    session.close()
+                    await sync_ranks()
+                    if state.session is session:
+                        state.session = None
+            finally:
+                if state.websocket is websocket:
+                    state.websocket = None
 
     config = uvicorn.Config(app, host=args.ws_host, port=args.ws_port, log_level="info")
     server = uvicorn.Server(config)
