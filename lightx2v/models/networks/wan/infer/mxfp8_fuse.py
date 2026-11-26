@@ -26,7 +26,11 @@ except Exception as exc:
     cutlass_scaled_mxfp8_mm, cutlass_scaled_mxfp8_mm_residual_gate = None, None
     scaled_mxfp8_gelu_quant = None
     scaled_mxfp8_modulate_quant = None
-    _WAN_MXFP8_FFN_IMPORT_ERROR = exc
+    # Keep only the error for the messages below. Its traceback (and the chained ModuleNotFoundError's) holds the frames of
+    # whatever imported this module, and their locals then live as long as the process: build_runner() imports the runner
+    # module on first use, so the first runner it builds could never be freed.
+    exc.__context__ = None
+    _WAN_MXFP8_FFN_IMPORT_ERROR = exc.with_traceback(None)
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
