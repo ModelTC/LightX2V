@@ -53,7 +53,7 @@ class AmdSageAttn2Weight(AttnWeightTemplate):
         **kwargs,
     ):
         q, k, v = self._prepare_qkv(q, k, v)
-        output = self.sageattn(q, k, v, tensor_layout="NHD")
+        output = self.sageattn(q, k, v, tensor_layout="NHD", is_causal=kwargs.get("causal", False), sm_scale=kwargs.get("softmax_scale"))
         return output.reshape(q.shape[0] * q.shape[1], -1)
 
     def apply_with_lse(self, q, k, v, softmax_scale=None):
