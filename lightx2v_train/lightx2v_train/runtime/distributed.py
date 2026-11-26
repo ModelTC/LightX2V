@@ -1,4 +1,5 @@
 import os
+import random
 from datetime import timedelta
 
 import torch
@@ -110,6 +111,7 @@ def init_distributed(config=None):
     device_backend = init_backend()
     seed = (config or {}).get("runtime", {}).get("seed")
     if seed is not None:
+        random.seed(int(seed))
         torch.manual_seed(int(seed))
         device_backend.manual_seed_all(int(seed))
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
