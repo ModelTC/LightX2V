@@ -140,3 +140,10 @@ python scripts/minimax_h3_image/server/post_i2i.py
 ```
 
 The clients return a task ID and request `2048 × 2048` PNG output by default. Completed images are saved on the server under `$lightx2v_path/save_results/server_cache/outputs/`. Edit `prompt`, `size`, `seed`, and `save_result_path` in the clients as needed.
+
+
+### Output format and compression quality
+
+The output filename suffix selects PNG, JPEG (`.jpg`/`.jpeg`) or WebP. H3-Image accepts `output_compression` as an integer from 0 to 100 (default 95), through `--output_compression 80`, `pipeline.generate(output_compression=80, ...)`, startup JSON defaults or image-serving requests. JPEG/WebP honor the selected quality with both `save_image_method: pil` and `opencv`; PNG ignores it and retains the existing encoding defaults. Other image writers keep their previous defaults when no quality is passed.
+
+Synchronous image requests also use `save_result_path` as the format hint; an omitted path or suffix defaults to PNG. No `output_format` request field is required. JPEG/WebP encode directly from PIL/Tensor/NumPy results without an intermediate PNG roundtrip. Base64/URL metadata, actual download MIME type and presigned-upload Content-Type match the encoded bytes. Synchronous results remain in memory; URL responses materialize a downloadable file.

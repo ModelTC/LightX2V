@@ -5,6 +5,8 @@ import time
 
 from fastapi import HTTPException
 
+from lightx2v.utils.image_output import image_format_for_path
+
 from ...schema import TaskResponse
 from ...task_manager import TaskStatus, task_manager
 from ..deps import validate_image_urls
@@ -52,6 +54,10 @@ async def _watch_disconnect(request, task_id):
 async def run_image_task(request, message, *, timeout_seconds=600, poll_interval_seconds=0.5):
     if timeout_seconds <= 0 or poll_interval_seconds <= 0:
         raise HTTPException(status_code=400, detail="timeout_seconds and poll_interval_seconds must be > 0")
+    try:
+        image_format_for_path(message.get("save_result_path"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await submit_task(message, required_output="image", memory_result=True)
     waiting = asyncio.create_task(_wait_image(message.task_id, timeout_seconds, poll_interval_seconds))
     disconnected = asyncio.create_task(_watch_disconnect(request, message.task_id))
