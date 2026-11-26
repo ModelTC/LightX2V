@@ -3,8 +3,8 @@
 import torch
 from loguru import logger
 
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
+from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
 try:
     from sycl_kernels import cute_sdp
@@ -21,7 +21,7 @@ def _cute_sdp(q, k, v):
     return cute_sdp(q, k, v)
 
 
-@ATTN_WEIGHT_REGISTER("intel_xpu_cute_attn")
+@PLATFORM_ATTN_WEIGHT_REGISTER("intel_xpu_cute_attn")
 class IntelXpuCuteAttnWeight(AttnWeightTemplate):
     """CUTE self-attention adapter for LightX2V's varlen attention API."""
 

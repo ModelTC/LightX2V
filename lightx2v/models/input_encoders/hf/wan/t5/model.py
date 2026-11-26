@@ -221,6 +221,8 @@ def t5_linear_layers(quantized, quant_scheme, dtype, tp_group):
         from lightx2v_platform.ops.mm.ascend_npu.npu_q_linear import NpuQuantLinearInt8 as linear_cls
     elif quant_scheme == "int8-metax":
         from lightx2v_platform.ops.mm.metax_cuda.q_linear import MetaxQuantLinearInt8 as linear_cls
+    elif quant_scheme == "fp8-intel-xpu":
+        from lightx2v_platform.ops.mm.intel_xpu.q_linear import IntelXpuQuantLinearFp8 as linear_cls
     else:
         quant_layers = {
             "int8": VllmQuantLinearInt8,
