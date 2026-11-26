@@ -4,8 +4,11 @@ from dataclasses import dataclass
 import torch
 from diffusers import AutoencoderKLFlux2, Flux2Transformer2DModel
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
+from loguru import logger
+from torch.utils.checkpoint import checkpoint
 
 from lightx2v_train.runtime.attention import prepare_diffusers_attention
+from lightx2v_train.runtime.config import validate_block_indices
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
@@ -119,22 +122,33 @@ class Flux2ModelBase(BaseModel):
     def denoiser_module(self):
         return self.transformer
 
-    def fsdp2_shard_plan(self, fsdp_config):
-        reshard_config = fsdp_config["reshard_after_forward"]
-        return [
-            {
-                "modules": self.transformer.transformer_blocks,
-                "reshard_after_forward": reshard_config["block_reshard"],
-            },
-            {
-                "modules": self.transformer.single_transformer_blocks,
-                "reshard_after_forward": reshard_config["block_reshard"],
-            },
-            {
-                "module": self.transformer,
-                "reshard_after_forward": reshard_config["root_reshard"],
-            },
-        ]
+    def _transformer_blocks(self):
+        # The execution order is double-stream blocks followed by single-stream blocks.
+        return (*self.transformer.transformer_blocks, *self.transformer.single_transformer_blocks)
+
+    def enable_gradient_checkpointing(self):
+        option = "gradient_checkpointing_blocks"
+        indices = self.config.get("training", {}).get(option)
+        blocks = self._transformer_blocks()
+        if indices is None:
+            selected = set(range(len(blocks)))
+            super().enable_gradient_checkpointing()
+        else:
+            selected = validate_block_indices(indices, len(blocks), option)
+            if selected:
+                checkpointed = {blocks[index] for index in selected}
+
+                def checkpoint_selected(block, *args, **kwargs):
+                    # Module.__call__ runs FSDP2's pre-forward hooks in either path.
+                    if block in checkpointed:
+                        return checkpoint(block, *args, use_reentrant=False, **kwargs)
+                    return block(*args, **kwargs)
+
+                self.transformer.enable_gradient_checkpointing(gradient_checkpointing_func=checkpoint_selected)
+            else:
+                self.transformer.disable_gradient_checkpointing()
+
+        logger.info("[train] Flux2 {}={} (double-stream blocks first)", option, sorted(selected))
 
     @property
     def vae_scale_factor(self):

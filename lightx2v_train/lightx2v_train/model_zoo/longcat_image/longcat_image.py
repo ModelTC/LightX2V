@@ -6,12 +6,14 @@ from diffusers import AutoencoderKL, LongCatImagePipeline
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.transformers import LongCatImageTransformer2DModel
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import prepare_pos_ids
+from loguru import logger
 
 from lightx2v_train.model_capabilities import ConsistencyModelCapability, DistributionMatchingCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.longcat_image.capability_adapters import LongCatImageConsistencyModelCapability
 from lightx2v_train.runtime.attention import prepare_diffusers_attention
+from lightx2v_train.runtime.config import validate_block_indices
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
@@ -115,14 +117,23 @@ class LongCatImageModel(BaseModel):
             transformer_config = LongCatImageTransformer2DModel.load_config(model_path, subfolder="transformer")
             with torch.device("meta"):
                 transformer = LongCatImageTransformer2DModel.from_config(transformer_config)
-            return prepare_diffusers_attention(transformer, self.config)
+        else:
+            transformer = LongCatImageTransformer2DModel.from_pretrained(
+                model_path,
+                subfolder="transformer",
+                torch_dtype=self.transformer_param_dtype,
+            ).to(self.device)
 
-        transformer = LongCatImageTransformer2DModel.from_pretrained(
-            model_path,
-            subfolder="transformer",
-            torch_dtype=self.transformer_param_dtype,
-        ).to(self.device)
-        return prepare_diffusers_attention(transformer, self.config)
+        transformer = prepare_diffusers_attention(transformer, self.config)
+        self._apply_training_fusions(transformer)
+        return transformer
+
+    def _apply_training_fusions(self, transformer):
+        fusions = self._configured_training_fusions("longcat_image_fusions", full_sft_default=True)
+        if fusions != []:
+            from .training_fusions import configure_training_fusions
+
+            configure_training_fusions(transformer, fusions)
 
     def load_deferred_transformer_weights(self):
         """Read the base transformer after FSDP2 has created its local shards."""
@@ -136,22 +147,22 @@ class LongCatImageModel(BaseModel):
     def denoiser_module(self):
         return self.transformer
 
-    def fsdp2_shard_plan(self, fsdp_config):
-        reshard_config = fsdp_config["reshard_after_forward"]
-        return [
-            {
-                "modules": self.transformer.transformer_blocks,
-                "reshard_after_forward": reshard_config["block_reshard"],
-            },
-            {
-                "modules": self.transformer.single_transformer_blocks,
-                "reshard_after_forward": reshard_config["block_reshard"],
-            },
-            {
-                "module": self.transformer,
-                "reshard_after_forward": reshard_config["root_reshard"],
-            },
-        ]
+    def _transformer_blocks(self):
+        return (*self.transformer.transformer_blocks, *self.transformer.single_transformer_blocks)
+
+    def enable_gradient_checkpointing(self):
+        blocks = self._transformer_blocks()
+        option = "gradient_checkpointing_blocks"
+        indices = self.config.get("training", {}).get(option)
+        selected = validate_block_indices(indices, len(blocks), option) if indices is not None else set(range(len(blocks)))
+        if selected:
+            super().enable_gradient_checkpointing()
+        else:
+            self.transformer.disable_gradient_checkpointing()
+        checkpointed = {blocks[index] for index in selected}
+        self.transformer.use_checkpoint = [block in checkpointed for block in self.transformer.transformer_blocks]
+        self.transformer.use_single_checkpoint = [block in checkpointed for block in self.transformer.single_transformer_blocks]
+        logger.info("[train] gradient_checkpointing blocks={} count={}", sorted(selected), len(selected))
 
     @property
     def vae_scale_factor(self):

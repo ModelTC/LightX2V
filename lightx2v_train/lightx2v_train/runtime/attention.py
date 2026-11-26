@@ -18,6 +18,11 @@ def configured_attention_backend(config: Mapping | None) -> str | None:
     return policy
 
 
+def deterministic_training_attention_requested(config: Mapping) -> bool:
+    policy = config.get("runtime", {}).get("ops", {}).get("attention")
+    return config.get("training") is not None and isinstance(policy, Mapping) and bool(policy.get("deterministic", False))
+
+
 def prepare_diffusers_attention(module, config: Mapping | None = None):
     """Set module-local attention while restoring Diffusers' global default."""
     backend = get_backend().resolve_attention_backend(configured_attention_backend(config))

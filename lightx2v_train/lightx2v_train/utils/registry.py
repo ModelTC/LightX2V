@@ -4,31 +4,43 @@ from collections.abc import MutableMapping
 from lightx2v_train.utils.utils import is_cache_build
 
 
+def _qualified_name(target):
+    return f"{target.__module__}.{target.__qualname__}"
+
+
 class Register(MutableMapping):
-    def __init__(self, *args, **kwargs):
-        self._dict = dict(*args, **kwargs)
+    def __init__(self, *args, builtin_modules=None, **kwargs):
+        self._dict = {}
+        self._builtin_modules = builtin_modules or {}
+        self.update(dict(*args, **kwargs))
 
     def __call__(self, target_or_name):
         if callable(target_or_name):
             return self.register(target_or_name)
-        else:
-            return lambda x: self.register(x, key=target_or_name)
+
+        def decorate(target):
+            return self.register(target, key=target_or_name)
+
+        return decorate
 
     def register(self, target, key=None):
         if not callable(target):
-            raise Exception(f"Error: {target} must be callable!")
+            raise TypeError(f"{target!r} must be callable.")
 
         if key is None:
             key = target.__name__
 
+        builtin_module = self._builtin_modules.get(key)
+        if builtin_module is not None and target.__module__ != builtin_module:
+            raise ValueError(f"{key!r} belongs to built-in module {builtin_module!r}; cannot register {_qualified_name(target)}.")
         if key in self._dict:
-            raise Exception(f"{key} already exists.")
-
-        self[key] = target
+            previous = self._dict[key]
+            raise ValueError(f"{key!r} is already registered by {_qualified_name(previous)}; cannot register {_qualified_name(target)}.")
+        self._dict[key] = target
         return target
 
     def __setitem__(self, key, value):
-        self._dict[key] = value
+        self.register(value, key)
 
     def __getitem__(self, key):
         return self._dict[key]
@@ -42,36 +54,8 @@ class Register(MutableMapping):
     def __len__(self):
         return len(self._dict)
 
-    def __contains__(self, key):
-        return key in self._dict
-
-    def __str__(self):
-        return str(self._dict)
-
-    def keys(self):
-        return self._dict.keys()
-
-    def values(self):
-        return self._dict.values()
-
-    def items(self):
-        return self._dict.items()
-
-    def get(self, key, default=None):
-        return self._dict.get(key, default)
-
     def merge(self, other_register):
-        for key, value in other_register.items():
-            if key in self._dict:
-                raise Exception(f"{key} already exists in target register.")
-            self[key] = value
-
-
-MODEL_REGISTER = Register()
-TRAINER_REGISTER = Register()
-INFERENCER_REGISTER = Register()
-DATA_REGISTER = Register()
-SAMPLE_PROCESSOR_REGISTER = Register()
+        self.update(other_register)
 
 
 _MODEL_MODULES = {
@@ -132,8 +116,21 @@ _SAMPLE_PROCESSOR_MODULES = {
     "qwen_image_2_1": "lightx2v_train.model_zoo.qwen_image.data_process",
 }
 
+_DATA_MODULES = {
+    "image_dataset": "lightx2v_train.data.image_dataset",
+    "cache_dataset": "lightx2v_train.data.cache_dataset",
+    "prompt_dataset": "lightx2v_train.data.video_dataset",
+    "video_dataset": "lightx2v_train.data.video_dataset",
+}
 
-def _ensure_registered(name, register, module_map):
+MODEL_REGISTER = Register(builtin_modules=_MODEL_MODULES)
+TRAINER_REGISTER = Register(builtin_modules=_TRAINER_MODULES)
+INFERENCER_REGISTER = Register(builtin_modules=_INFERENCER_MODULES)
+DATA_REGISTER = Register(builtin_modules=_DATA_MODULES)
+SAMPLE_PROCESSOR_REGISTER = Register(builtin_modules=_SAMPLE_PROCESSOR_MODULES)
+
+
+def _load_builtin(name, register, module_map):
     if name in register:
         return
     module_name = module_map.get(name)
@@ -141,40 +138,29 @@ def _ensure_registered(name, register, module_map):
         importlib.import_module(module_name)
 
 
-def _ensure_data_registered(data_name):
-    if data_name in DATA_REGISTER:
-        return
-    if data_name == "image_dataset":
-        import lightx2v_train.data.image_dataset  # noqa: F401
-    elif data_name == "cache_dataset":
-        import lightx2v_train.data.cache_dataset  # noqa: F401
-    elif data_name in {"prompt_dataset", "video_dataset"}:
-        import lightx2v_train.data.video_dataset  # noqa: F401
-
-
 def build_model(config):
     name = config["model"]["name"]
-    _ensure_registered(name, MODEL_REGISTER, _MODEL_MODULES)
+    _load_builtin(name, MODEL_REGISTER, _MODEL_MODULES)
     if name not in MODEL_REGISTER:
-        available = ", ".join(sorted(MODEL_REGISTER.keys()))
+        available = ", ".join(sorted(MODEL_REGISTER))
         raise ValueError(f"Unknown model {name!r}. Available models: {available}")
     return MODEL_REGISTER[name](config)
 
 
 def build_trainer(config):
     name = "cache_build" if is_cache_build(config) else config["training"]["method"]
-    _ensure_registered(name, TRAINER_REGISTER, _TRAINER_MODULES)
+    _load_builtin(name, TRAINER_REGISTER, _TRAINER_MODULES)
     if name not in TRAINER_REGISTER:
-        available = ", ".join(sorted(TRAINER_REGISTER.keys()))
+        available = ", ".join(sorted(TRAINER_REGISTER))
         raise ValueError(f"Unknown trainer {name!r}. Available trainers: {available}")
     return TRAINER_REGISTER[name](config)
 
 
 def build_inferencer(config):
     name = config["inference"]["method"]
-    _ensure_registered(name, INFERENCER_REGISTER, _INFERENCER_MODULES)
+    _load_builtin(name, INFERENCER_REGISTER, _INFERENCER_MODULES)
     if name not in INFERENCER_REGISTER:
-        available = ", ".join(sorted(INFERENCER_REGISTER.keys()))
+        available = ", ".join(sorted(INFERENCER_REGISTER))
         raise ValueError(f"Unknown inferencer {name!r}. Available inferencers: {available}")
     return INFERENCER_REGISTER[name](config)
 
@@ -182,11 +168,11 @@ def build_inferencer(config):
 def build_sample_processor(config):
     processor_config = config.get("data", {}).get("processor", {})
     name = processor_config.get("name", config["model"]["name"])
-    _ensure_registered(name, SAMPLE_PROCESSOR_REGISTER, _SAMPLE_PROCESSOR_MODULES)
+    _load_builtin(name, SAMPLE_PROCESSOR_REGISTER, _SAMPLE_PROCESSOR_MODULES)
     if name not in SAMPLE_PROCESSOR_REGISTER:
         if "name" not in processor_config:
             return None
-        available = ", ".join(sorted(SAMPLE_PROCESSOR_REGISTER.keys()))
+        available = ", ".join(sorted(SAMPLE_PROCESSOR_REGISTER))
         raise ValueError(f"Unknown sample processor {name!r}. Available processors: {available}")
     return SAMPLE_PROCESSOR_REGISTER[name](config)
 
@@ -194,42 +180,38 @@ def build_sample_processor(config):
 def build_data(config, train_or_val, sample_processor=None):
     data_config = config.get("data", {})
     if train_or_val not in data_config:
-        available_splits = ", ".join(repr(k) for k in sorted(data_config.keys()))
+        available_splits = ", ".join(repr(k) for k in sorted(data_config))
         raise ValueError(f"config['data'] has no key {train_or_val!r}. Available keys: {available_splits}")
-    data_config_split = dict(data_config[train_or_val])
+    split_config = dict(data_config[train_or_val])
+
     if is_cache_build(config):
-        data_config_split.update(
+        split_config.update(
             prompt_dropout_rate=0.0,
             dataset_repeat=1,
             shuffle=False,
             drop_last=False,
             decode_retries=1,
         )
-        # Cache construction may target val/test. Those splits normally do not
-        # use a distributed sampler, but caching must still partition work
-        # across data-parallel ranks.
-        data_config_split["distributed_cache_build"] = True
-        data_config_split.pop("max_samples", None)
-    data_name = data_config_split.get("name", "image_dataset")
+        # Validation cache building also needs to partition samples across ranks.
+        split_config["distributed_cache_build"] = True
+        split_config.pop("max_samples", None)
+
+    data_name = split_config.get("name", "image_dataset")
     if train_or_val == "train" and data_name in {"prompt_dataset", "cache_dataset"}:
         generation_shapes = config.get("training", {}).get("dmd", {}).get("generation_shapes")
         if generation_shapes is not None:
-            data_config_split["generation_shapes"] = generation_shapes
-    _ensure_data_registered(data_name)
+            split_config["generation_shapes"] = generation_shapes
+
+    _load_builtin(data_name, DATA_REGISTER, _DATA_MODULES)
     if data_name not in DATA_REGISTER:
-        available_names = ", ".join(sorted(DATA_REGISTER.keys()))
+        available_names = ", ".join(sorted(DATA_REGISTER))
         raise ValueError(f"Unknown data {data_name!r}. Available data: {available_names}")
-    kwargs = (
-        {
-            "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
-            "sample_processor": sample_processor,
-        }
-        if data_name == "cache_dataset"
-        else {
+
+    kwargs = {}
+    if data_name in {"cache_dataset", "image_dataset", "video_dataset"}:
+        kwargs = {
             "sample_processor": sample_processor,
             "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
         }
-        if data_name in {"image_dataset", "video_dataset"}
-        else {}
-    )
-    return DATA_REGISTER[data_name](data_config_split, train_or_val=train_or_val, **kwargs)
+
+    return DATA_REGISTER[data_name](split_config, train_or_val=train_or_val, **kwargs)

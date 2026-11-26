@@ -29,8 +29,9 @@ from lightx2v_train.model_zoo.capability_adapters.common import (
     CommonTrainableCapability,
 )
 from lightx2v_train.runtime.backend import get_backend, get_device
+from lightx2v_train.runtime.config import validate_block_indices as validate_block_indices
 from lightx2v_train.runtime.distributed import is_main_process
-from lightx2v_train.runtime.fsdp import is_fsdp2_module
+from lightx2v_train.runtime.fsdp import build_block_shard_plan, is_fsdp2_module
 from lightx2v_train.runtime.sharded_loader import (
     load_fsdp2_safetensors,
     local_layout_from_template,
@@ -97,6 +98,20 @@ class BaseModel(CapabilityProvider):
 
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
+
+    def _configured_training_fusions(self, option, *, full_sft_default=False):
+        """Select this model's extra fusions for the current training mode."""
+        training = self.config.get("training")
+        if training is None:
+            return []
+        ops = self.config.get("runtime", {}).get("ops", {})
+        if training.get("train_type") == "full":
+            enabled = ops.get("enable_full_sft_fusions", full_sft_default)
+            if not isinstance(enabled, bool):
+                raise ValueError("runtime.ops.enable_full_sft_fusions must be a boolean.")
+            if not enabled:
+                return []
+        return ops.get(option, [])
 
     def load_deferred_transformer_weights(self):
         """Finish loading weights staged by meta initialization after FSDP2 wraps the model."""
@@ -205,8 +220,12 @@ class BaseModel(CapabilityProvider):
         if hasattr(denoiser, "set_is_last_backward"):
             denoiser.set_is_last_backward(enabled)
 
+    def _transformer_blocks(self):
+        """Return an indexable sequence of blocks in forward execution order."""
+        raise NotImplementedError(f"{self.__class__.__name__} must define _transformer_blocks() or provide a custom fsdp2_shard_plan().")
+
     def fsdp2_shard_plan(self, fsdp_config):
-        raise NotImplementedError(f"{self.__class__.__name__} must define fsdp2_shard_plan().")
+        return build_block_shard_plan(self.denoiser_module(), self._transformer_blocks(), fsdp_config)
 
     def log_model_structure(self):
         logger.info("[model] class={}", self.__class__.__name__)

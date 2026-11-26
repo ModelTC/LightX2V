@@ -4,12 +4,16 @@ from dataclasses import dataclass
 import torch
 from diffusers import AutoencoderKLQwenImage, QwenImagePipeline, QwenImageTransformer2DModel
 from diffusers.image_processor import VaeImageProcessor
+from loguru import logger
+from torch.utils.checkpoint import checkpoint
 
 from lightx2v_train.model_capabilities import ConsistencyModelCapability, DistributionMatchingCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyModelCapability
+from lightx2v_train.runtime.attention import configured_attention_backend, deterministic_training_attention_requested, prepare_diffusers_attention
 from lightx2v_train.runtime.backend import get_backend
+from lightx2v_train.runtime.config import validate_block_indices
 from lightx2v_train.runtime.fsdp import fsdp2_enabled
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
@@ -122,14 +126,93 @@ class QwenImageModel(BaseModel):
             transformer_config = QwenImageTransformer2DModel.load_config(model_path, subfolder="transformer")
             with torch.device("meta"):
                 # FSDP2 must wrap this skeleton before rank-local weights can load.
-                return QwenImageTransformer2DModel.from_config(transformer_config)
+                transformer = QwenImageTransformer2DModel.from_config(transformer_config)
+        else:
+            device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
+            transformer = QwenImageTransformer2DModel.from_pretrained(
+                model_path,
+                subfolder="transformer",
+                torch_dtype=self.transformer_param_dtype,
+            ).to(device)
 
-        device = get_backend().host_device if fsdp2_enabled(self.config) else self.device
-        return QwenImageTransformer2DModel.from_pretrained(
-            model_path,
-            subfolder="transformer",
-            torch_dtype=self.transformer_param_dtype,
-        ).to(device)
+        self._configure_attention_backend(transformer)
+        self._apply_training_fusions(transformer)
+        return transformer
+
+    def _apply_training_fusions(self, transformer):
+        fusions = self._configured_training_fusions("qwen_image_fusions")
+        deterministic = deterministic_training_attention_requested(self.config)
+        if (fusions or deterministic) and self.config["model"]["name"] == "qwen_image" and get_backend().name == "metax_cuda":
+            from .training_fusions import configure_training_fusions
+
+            deterministic = deterministic or self.config.get("training", {}).get("attention_backend") == "flash_deterministic"
+            configure_training_fusions(transformer, fusions, deterministic)
+
+    def _configure_attention_backend(self, transformer):
+        """Apply the selected attention backend before FSDP wrapping.
+
+        Diffusers' Qwen processor dispatches through its attention registry.  The
+        stock FlashAttention 2 entry does not expose the deterministic backward
+        flag, so the benchmark installs a small wrapper that passes
+        ``deterministic=True`` explicitly.  The cache used for this benchmark has
+        no padding mask; an all-true mask is also treated as no mask.
+        """
+        backend = self.config.get("training", {}).get("attention_backend")
+        if backend != "flash_deterministic":
+            if configured_attention_backend(self.config) is not None:
+                prepare_diffusers_attention(transformer, self.config)
+            return
+
+        try:
+            from diffusers.models.attention_dispatch import (
+                AttentionBackendName,
+                _AttentionBackendRegistry,
+            )
+            from flash_attn import flash_attn_func
+        except Exception as exc:  # pragma: no cover - exercised on GPU hosts
+            raise RuntimeError("training.attention_backend=flash_deterministic requires flash-attn and Diffusers' attention dispatch registry.") from exc
+
+        backend_name = AttentionBackendName.FLASH
+
+        def deterministic_flash_attention(
+            query,
+            key,
+            value,
+            attn_mask=None,
+            dropout_p=0.0,
+            is_causal=False,
+            scale=None,
+            window_size=(-1, -1),
+            return_lse=False,
+            _parallel_config=None,
+        ):
+            if _parallel_config is not None:
+                raise RuntimeError("flash_deterministic benchmark does not support context parallelism")
+            if attn_mask is not None:
+                if bool(torch.all(attn_mask)):
+                    attn_mask = None
+                else:
+                    raise RuntimeError("flash_deterministic requires an unmasked or all-true Qwen attention mask")
+            output = flash_attn_func(
+                q=query,
+                k=key,
+                v=value,
+                dropout_p=dropout_p,
+                softmax_scale=scale,
+                causal=is_causal,
+                window_size=window_size,
+                deterministic=True,
+                return_attn_probs=return_lse,
+            )
+            if return_lse:
+                output, lse, *_ = output
+                return output, lse
+            return output
+
+        _AttentionBackendRegistry._backends[backend_name] = deterministic_flash_attention
+        for block in transformer.transformer_blocks:
+            block.attn.processor._attention_backend = backend_name
+        logger.info("[attention] backend=flash deterministic_backward=true")
 
     def load_deferred_transformer_weights(self):
         """Load Qwen weights after FSDP2 has defined the local parameter shards."""
@@ -156,23 +239,46 @@ class QwenImageModel(BaseModel):
     def denoiser_module(self):
         return self.transformer
 
+    def _transformer_blocks(self):
+        return self.transformer.transformer_blocks
+
     def denoiser_prediction_type(self):
         # Qwen-Image follows x_t = (1 - t) * x_0 + t * noise and predicts
         # the corresponding velocity noise - x_0.
         return "velocity"
 
-    def fsdp2_shard_plan(self, fsdp_config):
-        reshard_config = fsdp_config["reshard_after_forward"]
-        return [
-            {
-                "modules": self.transformer.transformer_blocks,
-                "reshard_after_forward": reshard_config["block_reshard"],
-            },
-            {
-                "module": self.transformer,
-                "reshard_after_forward": reshard_config["root_reshard"],
-            },
-        ]
+    def enable_gradient_checkpointing(self):
+        """Use a list of block indices or a half-open start/end range."""
+        option = "gradient_checkpointing_blocks"
+        indices = self.config.get("training", {}).get(option)
+        blocks = self._transformer_blocks()
+        if isinstance(indices, dict):
+            start = int(indices.get("start", 0))
+            end = int(indices.get("end", len(blocks)))
+            if not 0 <= start <= end <= len(blocks):
+                raise ValueError(f"{option} range must satisfy 0 <= start <= end <= {len(blocks)}.")
+            indices = list(range(start, end))
+
+        if indices is None:
+            selected_indices = tuple(range(len(blocks)))
+            super().enable_gradient_checkpointing()
+        else:
+            selected_indices = tuple(sorted(validate_block_indices(indices, len(blocks), option)))
+            selected = {blocks[i] for i in selected_indices}
+
+            def checkpoint_selected(block, *args, **kwargs):
+                # Both paths run Module.__call__, including FSDP's unshard hooks.
+                if block in selected:
+                    return checkpoint(block, *args, use_reentrant=False, **kwargs)
+                return block(*args, **kwargs)
+
+            if selected:
+                self.transformer.enable_gradient_checkpointing(gradient_checkpointing_func=checkpoint_selected)
+            else:
+                self.transformer.disable_gradient_checkpointing()
+
+        self.transformer._lightx2v_gradient_checkpointing_blocks = selected_indices
+        logger.info("[train] gradient_checkpointing blocks={} count={} use_reentrant=false", selected_indices, len(selected_indices))
 
     def _latent_statistics(self, latents):
         config = self.vae.config
