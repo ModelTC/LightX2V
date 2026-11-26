@@ -1,0 +1,36 @@
+# FFN-only Dense2MoE adapted to H3 SwiGLU. No MoB, step distillation, or LoRA.
+# PDMD fake-score precision: FP32 student masters/AdamW, BF16 FSDP compute,
+# FP32 gradient reduction. Teacher and resident inference use BF16 + FA3.
+model_path: ${oc.env:H3_MODEL_PATH,/data/nvme6/gushiqiao/models/MiniMax-H3}
+condition_model_path: ${oc.env:H3_TEXT_MODEL_PATH,/data/nvme6/gushiqiao/models/Agnes-Video-H3-MoE/FL2VA}
+prompts: ${oc.env:H3_PROMPTS,/data/nvme6/gushiqiao/datasets/h3_dense2moe_prompts/metadata.jsonl}
+cache_dir: ${oc.env:H3_AV_CACHE,/data/nvme6/gushiqiao/datasets/h3_dense2moe_t2av_cache}
+output_dir: ${oc.env:H3_MOE_OUTPUT,/data/nvme6/gushiqiao/outputs/h3_dense2moe_t2av_cached}
+seed: 42
+attention_backend: _flash_3_hub
+attention_kernel_path: ${oc.env:H3_FA3_KERNEL,/data/nvme6/gushiqiao/models/MiniMax-H3/local_diffusers/.cache/kernels/kernels--kernels-community--flash-attn3/snapshots/43f0bd269777115d94ff826e0d113ce9c1c9087b}
+# Each prompt supplies its own height, width and frame count from metadata.
+flow_shift:
+  video: 12.0
+  audio: 3.0
+loss_weights:
+  video: 1.0
+  audio: 1.0
+learning_rate: 0.00002
+feature_weight: 1.0
+balance_weight: 0.01
+save_every: 100
+save_limit: 1
+iterations:
+  calibrate: 32
+  shared: 1000
+  moe: 2000
+moe:
+  layer_range: [3, 50]
+  shared_fraction: 0.25
+  experts: 12
+  top_k: 2
+benchmark:
+  prompt_index: 8559
+  warmup: 3
+  repeats: 10
