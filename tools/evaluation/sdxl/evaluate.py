@@ -17,6 +17,8 @@ MODEL = "sdxl"
 
 def nvidia_config(name):
     """Keep the original parity profile and BF16 measurements separate."""
+    if os.environ.get("PLATFORM") == "ascend_npu":
+        return HERE / "configs/ascend_npu" / name
     if os.environ.get("PLATFORM") == "metax_cuda":
         return HERE / "configs/metax" / name
     profile = os.environ.get("LIGHTX2V_EVAL_PRECISION_PROFILE", "native")
@@ -118,6 +120,10 @@ def resolve(paths, key, relative="", allow_symlinks=False):
 
 
 def verify_source(root, specification):
+    if "overlays" in specification:
+        sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+        from ascend_sources import verify
+        return verify(root, specification)
     if "files" in specification:
         for entry in specification["files"]:
             if sha256(root / entry["path"]) != entry.get("runtime_sha256", entry["sha256"]):
@@ -134,6 +140,11 @@ def verify_source(root, specification):
 def prepare_sources(destination):
     destination.mkdir(parents=True, exist_ok=True)
     for name, specification in read_json(nvidia_config("source-lock.json")).items():
+        if "overlays" in specification:
+            sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+            from ascend_sources import prepare
+            prepare(destination / name, specification)
+            continue
         if "files" in specification:
             import re
             import urllib.request
@@ -205,10 +216,15 @@ def seed_all():
     random.seed(42)
     np.random.seed(42)
     torch.manual_seed(42)
-    (torch.mlu if os.getenv("PLATFORM") == "cambricon_mlu" else torch.cuda).manual_seed_all(42)
+    (torch.npu if os.getenv("PLATFORM") == "ascend_npu" else torch.mlu if os.getenv("PLATFORM") == "cambricon_mlu" else torch.cuda).manual_seed_all(42)
 
 
 def runtime_device(torch):
+    if os.getenv("PLATFORM") == "ascend_npu":
+        import torch_npu
+        if not torch.npu.is_available() or torch.npu.device_count() != 1 or not os.environ.get("ASCEND_RT_VISIBLE_DEVICES"):
+            raise RuntimeError("NPU evaluation requires exactly one explicitly visible device")
+        return torch.device("npu")
     if os.getenv("PLATFORM") == "cambricon_mlu":
         import torch_mlu
         if not torch.mlu.is_available() or torch.mlu.device_count() != 1:
@@ -218,7 +234,7 @@ def runtime_device(torch):
 
 
 def synchronize(torch):
-    (torch.mlu if os.getenv("PLATFORM") == "cambricon_mlu" else torch.cuda).synchronize()
+    (torch.npu if os.getenv("PLATFORM") == "ascend_npu" else torch.mlu if os.getenv("PLATFORM") == "cambricon_mlu" else torch.cuda).synchronize()
 
 
 def generation_environment(gpu):
@@ -254,6 +270,16 @@ def environment():
                 "device": torch.mlu.get_device_name(0), "physical_card": os.getenv("MLU_PHYSICAL_CARD", "unknown"),
                 "torch_mlu": importlib.metadata.version("torch_mlu"), "deterministic": torch.are_deterministic_algorithms_enabled(),
                 "cpu_threads": torch.get_num_threads()}
+    if os.getenv("PLATFORM") == "ascend_npu":
+        return {
+            "python": sys.executable, "versions": versions, "platform": "ascend_npu",
+            "device": torch.npu.get_device_name(0), "torch_npu": importlib.metadata.version("torch_npu"),
+            "physical_card": os.environ["ASCEND_PHYSICAL_CARD"],
+            "visible_device": os.environ["ASCEND_RT_VISIBLE_DEVICES"],
+            "deterministic": torch.are_deterministic_algorithms_enabled(),
+            "precision_policy": read_json(nvidia_config("runtime.json"))["precision_policy"],
+            "request_hf32_conv": False, "request_hf32_matmul": False,
+        }
     if os.getenv("PLATFORM") == "metax_cuda":
         return {
             "python": sys.executable, "versions": versions, "platform": "metax_cuda",
@@ -357,7 +383,7 @@ def generate(args, paths):
             artifact = directory / ("output." + EXTENSION)
             seed_all()
             synchronize(torch)
-            (torch.mlu if device.type == "mlu" else torch.cuda).reset_peak_memory_stats()
+            (torch.npu if device.type == "npu" else torch.mlu if device.type == "mlu" else torch.cuda).reset_peak_memory_stats()
             started = time.perf_counter()
             record = {"id": fixture["id"], "index": index, "status": "FAILED"}
             try:
@@ -372,7 +398,7 @@ def generate(args, paths):
                     os.fsync(stream.fileno())
                 synchronize(torch)
                 record["e2e_latency_s"] = time.perf_counter() - started
-                record["peak_device_memory_bytes"] = (torch.mlu if device.type == "mlu" else torch.cuda).max_memory_allocated()
+                record["peak_device_memory_bytes"] = (torch.npu if device.type == "npu" else torch.mlu if device.type == "mlu" else torch.cuda).max_memory_allocated()
                 record.update(validate_output(artifact, fixture))
                 record.update(status="SUCCESS", artifact=str(artifact.relative_to(output)), sha256=sha256(artifact))
             except Exception as error:
@@ -946,6 +972,11 @@ def outputs_equal(first, second):
 
 
 def score(expected, generated, paths, output):
+    if os.getenv("PLATFORM") == "ascend_npu" and "metadata" in expected[0] and "tag" in expected[0]["metadata"]:
+        sys.path.insert(0, str(HERE / "scripts/platform/ascend_npu"))
+        from ascend_geneval_score import score_geneval
+
+        return score_geneval(expected, generated, paths, output)
     if os.getenv("PLATFORM") == "metax_cuda" and "metadata" in expected[0] and "tag" in expected[0]["metadata"]:
         sys.path.insert(0, str(HERE / "scripts/platform/metax"))
         from geneval_score import score_geneval
@@ -1038,7 +1069,7 @@ runpy.run_path(script, run_name='__main__')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign", "campaign-mlu", "campaign-metax", "score-metax-smoke"])
+    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign", "campaign-mlu", "campaign-metax", "score-metax-smoke", "campaign-ascend", "score-ascend-smoke"])
     parser.add_argument("--paths", type=Path)
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--dataset", choices=list(suite()["datasets"]))
@@ -1081,6 +1112,11 @@ def main():
         campaign(args, paths)
     elif args.command == "campaign-mlu":
         campaign_mlu(args, paths)
+    elif args.command in ("campaign-ascend", "score-ascend-smoke"):
+        sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+        from ascend_campaign import run_campaign, score_smoke
+
+        (run_campaign if args.command == "campaign-ascend" else score_smoke)(sys.modules[__name__], args, paths)
     elif args.command == "campaign-metax":
         sys.path.insert(0, str(HERE.parents[1] / "runtime"))
         from metax_campaign import run_campaign

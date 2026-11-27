@@ -112,3 +112,43 @@ Completed C500 BF16 measurements:
 
 [GenEval results](results/metax/bf16/geneval-results.json) and [Parti results](results/metax/bf16/parti-results.json) retain exact measured revisions, per-input timing/output hashes and closed-capture audits. The full COCO campaign is still running; its complete result is pending.
 <!-- metax-measured-results:end -->
+
+## Ascend NPU
+
+The Ascend entry preserves the inference PR's BF16/FP32 policy and the frozen
+dataset, quality definitions and end-to-end boundary above. Provision Python 3.10,
+a matching torch/torch_npu/CANN installation, and the inference PR's
+`scripts/sdxl/install_ascend.sh`. Install metric dependencies with
+`scripts/platform/ascend_npu/install_metrics.sh` in the metric environment.
+Source CANN's `set_env.sh` before running the host controller.
+
+```bash
+EVAL=tools/evaluation/sdxl
+PLATFORM=ascend_npu python "$EVAL/evaluate.py" prepare-sources --workspace /absolute/sources
+# Fill configs/ascend_npu/paths.json in a separate paths.local.json.
+PYTHON_BIN=/absolute/inference-env/bin/python bash "$EVAL/scripts/platform/ascend_npu/run_eval.sh" \
+  campaign-ascend --paths /absolute/paths.local.json --dataset geneval \
+  --backend lightx2v --card 0 --count 128 --output /absolute/results/new-campaign
+# Add --smoke, using a separate output directory, for actual quality/latency validation.
+```
+
+Include the four shared `tools/runtime/ascend_*.py` files with this evaluation
+directory. Source preparation reconstructs one pinned main checkout with the
+three slim inference overlays; it checks every runtime file hash. Inference and
+metric Python paths may differ. Each complete dataset stays on one physical NPU;
+different datasets can run concurrently on distinct idle cards. The host must
+expose `npu-smi` and real process ancestry. Virtual partitions, device sharing,
+foreign processes, query failures and missing samples stop the campaign.
+The 3-second query budget, 5-second maximum sample gap and 3,600 MiB idle-memory
+ceiling are explicit Ascend 910B settings, including the firmware reservation.
+All workers have a 3,300-second timeout plus verified cleanup. The host controller
+may live longer, retaining every bounded chunk and sample.
+
+Outputs include full coverage, quality, mean/median/P95 request latency, source
+and configuration fingerprints, physical PCI identity and closed resource
+evidence. Smoke reports remain labeled as smoke. Ascend runs the BF16 LightX2V
+backend; it does not assert native equality or A100 latency ratios. Publish
+sanitized completed measurements under `results/ascend_npu/` only after the full
+dataset has finished. Original NVIDIA, MLU and MetaX entries remain available.
+
+Run separate campaigns for `geneval`, `parti` and `coco`. GenEval retains the pinned official FP32 Mask2Former/CLIP evaluator, its six dimensions and weights. The scoped adapter changes only the evaluator device selection and availability assertion to NPU. MMCV 1.7.2 uses its released equivalent PyTorch grid-sample attention implementation; its original CPU extension is built from the SHA-checked source archive. Parti/COCO retain the original FP32 CLIP scoring.

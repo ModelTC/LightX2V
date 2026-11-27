@@ -15,3 +15,5 @@ For recovery of an interrupted campaign after a controller-only fix, an ignored 
 For updated BF16 inference, set `LIGHTX2V_EVAL_PRECISION_PROFILE=bf16`; the model, source and runtime locks are selected from `nvidia/bf16/`. Run `campaign --backend lightx2v` in a fresh output directory. The original default locks remain unchanged for earlier native-precision reproduction.
 
 MetaX uses its own `configs/metax/` model, runtime, source lock and paths. The source lock pins the matching inference PR commit. `mounts` and `output_root` configure host/container path visibility. These deployment paths belong in a local paths file.
+
+`ascend_npu/` owns the NPU-only source/model/runtime/dependency profile. It preserves the original precision policy and common dataset/weight locks. Machine paths stay in untracked local JSON files.
