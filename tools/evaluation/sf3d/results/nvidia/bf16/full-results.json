@@ -106,6 +106,9 @@
   "invalid_attempts": [],
   "formal_repetitions_per_input": 1,
   "measurement_worker_sha256": "69bdaaf142f64405344df41b1289325f7ae51ebe5f8ab18cf58740c278b8bc9c",
+  "measurement_evaluation_revision": "cdfbc32213c58a43443bdd7898fa02cf6488c58d",
+  "measurement_evaluation_file": "tools/evaluation/sf3d/evaluate.py",
+  "reproduction_note": "Check out measurement_evaluation_revision for the exact A100 measurement entrypoint and configurations. Later platform commits are not relabeled as measured code.",
   "source_lock": {
     "lightx2v": {
       "repository": "https://github.com/ModelTC/LightX2V.git",
@@ -137,8 +140,8 @@
   "weight_lock_sha256": "e486ec3997b72d3e3eceb3169d8bfab8da96bf81ff196ab19e3c5422ed93d1cd",
   "raw_evidence_namespace": "lightx2v-bf16-evaluation-20261127",
   "measurement_cohort": "full-v1",
-  "raw_evidence_file_count": 1102,
-  "raw_evidence_manifest_sha256": "7be34e8ca89f8a47443aa0045314a37f497edbd08fef5484af22986a89cc149f",
+  "raw_evidence_file_count": 1125,
+  "raw_evidence_manifest_sha256": "65bfa39d654246839604e655ec180f6df88dc6672c05126842318fa099924b71",
   "archived_resource_policy_recheck_sha256": "3009d464a5e06cab048cae02591b06f3184802b8d3621e37e2486822fcd2ca68",
   "previous_precision_quality_reference": {
     "source_lock": {
@@ -165,13 +168,13 @@
           "pointcloud_iou32": 0.06699366652315883
         },
         "bf16_minus_previous": {
-          "fscore_2pct": -3.143442531394758e-05,
-          "pointcloud_iou32": -3.9516515918908146e-05,
-          "fscore_5pct": -6.496073427197935e-05,
-          "fscore_1pct": -2.506895531158987e-05,
-          "chamfer_l1": 3.1717322439284157e-06,
           "count": 0,
-          "chamfer_l2": -7.391494113509478e-07
+          "pointcloud_iou32": -3.9516515918908146e-05,
+          "fscore_2pct": -3.143442531394758e-05,
+          "chamfer_l2": -7.391494113509478e-07,
+          "fscore_5pct": -6.496073427197935e-05,
+          "chamfer_l1": 3.1717322439284157e-06,
+          "fscore_1pct": -2.506895531158987e-05
         }
       }
     }
