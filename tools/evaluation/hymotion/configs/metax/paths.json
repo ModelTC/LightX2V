@@ -1,0 +1,20 @@
+{
+  "data": "/absolute/replace/data",
+  "weights": "/absolute/replace/weights",
+  "lightx2v": "/absolute/replace/lightx2v",
+  "native_python": "/absolute/replace/native_python",
+  "lightx2v_python": "/absolute/replace/lightx2v_python",
+  "metric_python": "/absolute/replace/metric_python",
+  "native": "/absolute/replace/native",
+  "qwen": "/absolute/replace/qwen",
+  "clip": "/absolute/replace/clip",
+  "momask": "/absolute/replace/momask",
+  "metric_assets": "/absolute/replace/metric_assets",
+  "metric_checkpoints": "/absolute/replace/metric_checkpoints",
+  "python": "python",
+  "output_root": "/absolute/replace/results",
+  "mounts": [
+    "/absolute/replace/workspace",
+    "/absolute/replace/assets"
+  ]
+}

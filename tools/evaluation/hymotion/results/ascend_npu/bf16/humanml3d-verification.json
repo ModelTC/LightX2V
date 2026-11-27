@@ -1,0 +1,664 @@
+{
+  "time": "2026-11-27T18:53:12.447514+00:00",
+  "tool_sha256": "8d8b2f1a85237bcfd5c81927383d350bcd0890c6c00d29ccc6d2a35be559087e",
+  "campaigns": [
+    {
+      "model": "hymotion",
+      "dataset": "humanml3d",
+      "formal_inputs": 4384,
+      "verified_inputs": 4384,
+      "status": "FULL_VERIFICATION_PASS",
+      "chunks": [
+        {
+          "start": 0,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 227,
+            "interval_observations": 224,
+            "raw_samples_sha256": "ccfdd22405c3c9b599883a4f37cd16df3f694ab86ff14805dfd5f5994f94e472",
+            "task_sha256": "196e07729192fa4d9f9359d4d449a645a878ff0ff4a102e202f939d8dad646f0",
+            "cleanup_sha256": "91630c7c64b48ee37f9f988c197b7e9435980bbf37d6302d653a58bfd4d94630",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "d574376521d8c9bf62bc435ae6e400d9ff227bd529f72a495836c7897a675de0",
+          "metadata_sha256": "358ae962edcf97a41c49b9782ddf2f34673ce96dee4039b2924ab0d9e7c2376d"
+        },
+        {
+          "start": 128,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 226,
+            "interval_observations": 223,
+            "raw_samples_sha256": "17e7da898a55c17d70ac9c6b2df6b4227791ce12f268be4d7b4edcf842b8946f",
+            "task_sha256": "1b9e1fc509348351be1685d7d9d7f54e71711645147b533b0cb1f59352461c8f",
+            "cleanup_sha256": "74fdf8a74f55a3f03814bd74ec5bfa9ca176381e6e65678bbfb22cfdc944af5c",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "87a70140a1dffa55265bee178afacfa113cfa4b64a36752aaa5a5940c0a02f38",
+          "metadata_sha256": "bfca6feeadde815ddb628cf569fb6ca9b8d1482747642b2b603b684f261630b7"
+        },
+        {
+          "start": 256,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 229,
+            "interval_observations": 226,
+            "raw_samples_sha256": "0e20d590ad2eb176ca7f56c0358acdf1a129b9ea4a9080475904116f2432abb9",
+            "task_sha256": "a505c03a5e24ce542547d48521655173827d4c0a94c0ebd986f459a5494c9edc",
+            "cleanup_sha256": "c74594319c83e1cb9ad5af3999274fea0d86bc08585e14b6479bd510c81909d5",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "baf88ecd935286441f569e56f8a6df23587c5e8d3ff514073d9e5b74b7557142",
+          "metadata_sha256": "8ecb715d8ffdb8752fa7284c00dbeb89e33564ffd75369a4e1ec48f5a088cb0d"
+        },
+        {
+          "start": 384,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 228,
+            "interval_observations": 225,
+            "raw_samples_sha256": "8f3c91abb63f65b561e11e0d2bfb65c4686d0ab8d8f7a06c69880e0f29d7dca6",
+            "task_sha256": "6ab513d8229e3c3fce7284e1f3ea87fe5d0fcbb0e918f1d9994ee41ace9f8354",
+            "cleanup_sha256": "a88af02841e7963df5979ed9cc68df3d7de4258437edb4b4d8c0d11072fce400",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "2a6a2270957cd1598c8915a89fd9ba4977a7ff37dba2385cb45f31a98243427b",
+          "metadata_sha256": "b1cbb93fd34fe789fccfed7ee34e2c6cb4247983d3f9f48ae41e7f3c53807350"
+        },
+        {
+          "start": 512,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 230,
+            "interval_observations": 227,
+            "raw_samples_sha256": "4e2d2e97a272e73a0d9c709e76030b89b25cb655312ce2a6bb46130506378bf6",
+            "task_sha256": "8241eb54d0b06ecf6d3c9b2f4db4d77ae7358d9255b1cfe0ac9f95d235b804ee",
+            "cleanup_sha256": "8d2a646fee52d86eaf913715f983cc47789219e0ae12b7f7f4f18564872ae7c8",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "f47bc3b8b52707f389a49b2cf8e6af2bdd9d8f96a29d6991d11d67296b8c06e9",
+          "metadata_sha256": "f567aebf831b335798b5610bba6198100df94fcd81f3252297fca420b7279e54"
+        },
+        {
+          "start": 640,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 228,
+            "interval_observations": 225,
+            "raw_samples_sha256": "a029f1623e1c786ff7c77971672987ae101e2e4272e0890fe691327e7e89227b",
+            "task_sha256": "b2b7094ff109b7aa3f8aa7717f95d2512bb3a93788611cdb757e87022bc1b2b0",
+            "cleanup_sha256": "18856c4441c161116a669fd1eb78ec5beab3078b6c699aa25e6b4604bd27cca6",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "a5a9eaa6f0713977bdeb5189f68161d2d857ad2a60ba071d58616c8c2e8339b5",
+          "metadata_sha256": "0eb1e84e749c8abdf39ccdb2794f3187734d2da67139f31bce0441e3f9e5c5be"
+        },
+        {
+          "start": 768,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 226,
+            "interval_observations": 223,
+            "raw_samples_sha256": "d9d80cc112845871c51db8e87c7d553fe17b2f023f3e533cce28909f798b0abe",
+            "task_sha256": "8a9e45810df6672d4bf09914290af097bd81f8b04e293c02f6123fc716e95c17",
+            "cleanup_sha256": "00274d4297a0da0d429ab9ad23f98070ed0bf76675cc431bb1b801b7c1eb9427",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "71f487ca9555b34426e2e6ac288241166167c8c92bf783b512563db451c4df4e",
+          "metadata_sha256": "14306df0d8b734a8aa93691e9dda242425f53c759221094691b511516cb30ee3"
+        },
+        {
+          "start": 896,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 229,
+            "interval_observations": 226,
+            "raw_samples_sha256": "c5649ae5cee9b073f5d8ab21dd0b03d90a3b253af5a6314c5a930ef4f2051ec3",
+            "task_sha256": "e192385d02d53da4f7106da060b8a9e770e046ff5b14f184edd4623980b56984",
+            "cleanup_sha256": "5bf548faf4008cd2c86fbedcce1b574ec7994df2b7bf6de82ab69e628c024936",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "05abe0ce3af0bb261580a8ba002f097b1fe02876bc1026db7c0fd74960e1b3d8",
+          "metadata_sha256": "21536e59fc5da818ed995d7a25b49327eab9f261b6c931e089337d96cb45b924"
+        },
+        {
+          "start": 1024,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 229,
+            "interval_observations": 226,
+            "raw_samples_sha256": "075a9302f872e067000332496eaf8ab38b996b3e9d7152b7abecef2c2658aeae",
+            "task_sha256": "4308f3c19e097aa814b1978c6a181aaacd75f8beb2f328d181a6b0b6eec9fbaa",
+            "cleanup_sha256": "2e8b62575385677ad056ef051f5f114d8380d4eb6cf3f1f461d2d73cd7b419aa",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "f7118477a59a5a77b5fda5f001c06ed7fa8aa13be800860002f479318adf9a13",
+          "metadata_sha256": "643f657627b5cd46a1d4682975eff969060df737e63de18c1fda11cd81aff0e5"
+        },
+        {
+          "start": 1152,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 230,
+            "interval_observations": 226,
+            "raw_samples_sha256": "262a2d1b0b503d2fb0fbd9691043a692a006108cace92624a2585d889bcefdb0",
+            "task_sha256": "b240f60b27dfccae192ef909f3c1cead4f8224e12d558e1279c0c2c53becda99",
+            "cleanup_sha256": "7b9c09f7b086aca6171b836a45fe238d494d1036bd50d6ca9d8c4ccae9af01b0",
+            "post_completion_capture_errors": [
+              {
+                "start": 5207212.284062623,
+                "end": 5207214.038302428,
+                "error": "ValueError: NPU host PID 4143300 is not visible in /proc"
+              }
+            ]
+          },
+          "samples_sha256": "89fc256874dbc206b4cef330c8bdf2a5d74ef0075979ab7c5affcbfd71296ffa",
+          "metadata_sha256": "dd0379a6a82ecdb9fba9d7393e73f788abbed8a5363b17b67421fbf3612652ce"
+        },
+        {
+          "start": 1280,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 230,
+            "interval_observations": 227,
+            "raw_samples_sha256": "70cca822091ca7df153462cd246d1221a4a584cfccf3b7c48e0ec6c094c92620",
+            "task_sha256": "a128ab4b248b72893f54ecb684c1fcc5e84c7f24f822fedc30ac647ffa75c345",
+            "cleanup_sha256": "cf2f6d21ec5a59309058aef1f3b03f834e1c34e8841825bbc324472ee7616a0e",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "a8cad1f032b0ba82e27ec4c371032e829b2ce5edf18ecc72908279df9473aca4",
+          "metadata_sha256": "53be141b65ca64096e651c9e3e875aee58143a005cfcfefa73009a811f38f753"
+        },
+        {
+          "start": 1408,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 231,
+            "interval_observations": 227,
+            "raw_samples_sha256": "7237a962dbfe813dc0173167bc2d3551e7947876197be341d17cb2ba8bda967a",
+            "task_sha256": "7fc6ebad8e1409ee765db99c26a3cdff7bc1484b6809d7075eaa9f44574791f4",
+            "cleanup_sha256": "5458b22f2822ff9fb3b4baa5c9c59cf98344456eee3e1f9f635b811967ddd8ad",
+            "post_completion_capture_errors": [
+              {
+                "start": 5208129.594071825,
+                "end": 5208131.3607404,
+                "error": "ValueError: NPU host PID 5724 is not visible in /proc"
+              }
+            ]
+          },
+          "samples_sha256": "609f5bc5e6505fdf2f3907bd88de431a6d3d2d911d0666b95fb9a8aa214446d0",
+          "metadata_sha256": "769e4e4262d574165c096d1bf83020f9b54afc134c24684d5656f981615c4afc"
+        },
+        {
+          "start": 1536,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 233,
+            "interval_observations": 229,
+            "raw_samples_sha256": "44aca6f6721b591375958e81e05eb0e84d7b5d43a1786a2d6881bd24d693128a",
+            "task_sha256": "ca884d12a038706745693d2d0c5206b34d4004d1d78775412d240fb37918af0c",
+            "cleanup_sha256": "70a9bfdf07a9b6a26521525129a5e31ec37a3cb5f8ad54945a13d699a00d1984",
+            "post_completion_capture_errors": [
+              {
+                "start": 5208593.52855031,
+                "end": 5208595.277970211,
+                "error": "ValueError: NPU host PID 36240 is not visible in /proc"
+              }
+            ]
+          },
+          "samples_sha256": "f1eef07b34c76a5ce1997714b245fca2a49ec3e2d1e51e2c64023dd4d784d09a",
+          "metadata_sha256": "f1e6283faa13fe29248717104cafdbbaa46d01e310bb169b0a58af175a0f436b"
+        },
+        {
+          "start": 1664,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 233,
+            "interval_observations": 230,
+            "raw_samples_sha256": "677d32ba9b56df5ec6498244a50568a7f398cb8b3422600fc0ab52a48635a4eb",
+            "task_sha256": "2bffdf4ae3670a80b59b2f0353667358fedbaef1600296a6652e63d5dea13de8",
+            "cleanup_sha256": "db48731ad2f4323a164d17a2741373ad088e73b1c56faaadb5b4868a55c3d932",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "1a12a8b63f1b023835d47fbf40965324d3a904884c09a0e75c7b5795c468a1ef",
+          "metadata_sha256": "49130a90b89a3c45caa7347b57ac611d980a2de0cb2642f62819bacc08ac1229"
+        },
+        {
+          "start": 1792,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 234,
+            "interval_observations": 231,
+            "raw_samples_sha256": "1211dfce9e354c61e2b6252caf41e9fbec806d96fcd60c7c60f74329d185e410",
+            "task_sha256": "845e3ff5a16685c69dcdc1ab2e14eafc77bc05961a082ed88c839397ca0ce7b9",
+            "cleanup_sha256": "d6e44b2e71164e70210be06da38106f5aa363d5990a4d38b81c6b7b09952033a",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "961d80bd1aec5551f57d5c1bc88ac4c1c639ffdab4334e0dcc1ae57b5211c12e",
+          "metadata_sha256": "63a72e49561556b03385fb04a842d6133f6481d834db266f79c6d8d6a8e34633"
+        },
+        {
+          "start": 1920,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 234,
+            "interval_observations": 231,
+            "raw_samples_sha256": "c14023500dd9271a05c2a4ad4be1bd1f5ad7ff4201a1f0b445656352138851b0",
+            "task_sha256": "d7b2298e79ad37704ccd3c6a2d6c3b910f6892be0405796aec9375b608d52e4e",
+            "cleanup_sha256": "8aabd91f89bedd4670d40e61f51483021f973c4d84c44d40dd1f539ea58ba48c",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "afa5dbec4e6cab4e86c0c09d7c5d66df52a1ecb129f51e25ce8cff0ee0875379",
+          "metadata_sha256": "c79162a708a1ccaccb244c1da7ef2d3ec0e76ebc939dd0f004dcf0681b8ecd40"
+        },
+        {
+          "start": 2048,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 233,
+            "interval_observations": 230,
+            "raw_samples_sha256": "ea853501b44b87ef7f8a48ea8a9a93ebd8e95932dda7276092cb549d31e909b1",
+            "task_sha256": "da09eba56d5a5c9f45d55efa5eabc94be52f4453fcca4d7780369ee3cc1e893a",
+            "cleanup_sha256": "12cc7338798e486f1c637a2ff7a3aaf81707e65cb93c50166a791711b8d1de9f",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "36269e8e8304bc1092b4c998117054267296862c83270c093586c1ea8d88f1cd",
+          "metadata_sha256": "6d77c0be42ee210c0329e70bf1b289fd0f1afd6a549817d9b39fc2fa3b667f4b"
+        },
+        {
+          "start": 2176,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 230,
+            "interval_observations": 227,
+            "raw_samples_sha256": "e20b291304fc24ec374e7c0bd5e8af379d0a3bb54c14d760cdf6628b50f7cc4e",
+            "task_sha256": "95392411358d5bf0d28206a377639acaaee671d1545c6858f97d8aabf7e9df81",
+            "cleanup_sha256": "3bee81d490eaf6782eff3cedf9185dc993908bc164f6355b2b39b29a82149ef7",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "93febcd72af0dc54d1dde1397c10712a86f6c36d18c7d3a92eed9cb16569ddea",
+          "metadata_sha256": "83b37a2acf41787cd6121c7d509b8c911056dbd19d8bef2aab345aa2d02464cc"
+        },
+        {
+          "start": 2304,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 230,
+            "interval_observations": 226,
+            "raw_samples_sha256": "6796821d9ec51a2280f48308b1f68be77c485473ec178665ddaca575914e40fa",
+            "task_sha256": "a03303c1aef3fbe70f9bd5dc79b65163831e1998177c6a4b5aa1549c7f178bda",
+            "cleanup_sha256": "00132ea0b073f76f2074af51317f7a4a6129511f08c9827a234c9082e4c81861",
+            "post_completion_capture_errors": [
+              {
+                "start": 5211364.187769723,
+                "end": 5211365.941975988,
+                "error": "ValueError: NPU host PID 195557 is not visible in /proc"
+              }
+            ]
+          },
+          "samples_sha256": "965426d1a7835afafb69a0f6f9f3caf40c3a869b563a7e7e0e2161ce4ce686d4",
+          "metadata_sha256": "3a2e3e22d4d13ae795eb152dc83652bf38e05e0e3d154f2811176cd56a2c1e48"
+        },
+        {
+          "start": 2432,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 231,
+            "interval_observations": 228,
+            "raw_samples_sha256": "b238eb5bc40f3de4e4c7e5ea65938c5413ee67bca3279eeabd8f7ef0ea24aa3d",
+            "task_sha256": "12fbb339d3daaca4c0539a8d2aa986e44e7151823f386d7737b6b522c95b49c3",
+            "cleanup_sha256": "2416356626ca29a4f71912c97dd9e100245121fb84ab590d3d54c4e53b727838",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "d59104e9a2e502b56d341f538d4698f5a70147e436afac0b93194a92c1e9eba7",
+          "metadata_sha256": "16e9eef158c7cc78398ba750859af4c17edca07241aae3745fa64042db79d13e"
+        },
+        {
+          "start": 2560,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 237,
+            "interval_observations": 233,
+            "raw_samples_sha256": "4dc0d5679bed216f68927c644bcb65c0d9052624ad1db06ab07356ad6474c2d7",
+            "task_sha256": "b80683dac747c596063c37cf3e2abf5cb42e1ca6102f197a557774872bbb3b4f",
+            "cleanup_sha256": "20a7856b20fd28a4c37fb4da8131f1d9afdee4dec37c35cc7b13359d3963d08f",
+            "post_completion_capture_errors": [
+              {
+                "start": 5212295.184446611,
+                "end": 5212296.972991826,
+                "error": "ValueError: NPU host PID 236782 is not visible in /proc"
+              }
+            ]
+          },
+          "samples_sha256": "038de3ba1fc43080b272e0e93bd117d638eb16b261f2a4ade3f1789d929f30fb",
+          "metadata_sha256": "98cd7e076c8d455667ee284658ce2ba898f2f9be23c26a292cde6e50a8253635"
+        },
+        {
+          "start": 2688,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 223,
+            "interval_observations": 220,
+            "raw_samples_sha256": "7058bbefedc945df66358c6f9c48540ddb147d21913ca5381a12f196ce43ab48",
+            "task_sha256": "f447578b92738301328d8828dd768778acd2514aefd5a523fc891062b32ac970",
+            "cleanup_sha256": "a68c32d2b7c649dcbd76bf50cbeb13ac5789505341280c5e50a39414601dc783",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "ffb8f07fce45cf6ee77f8e2a8e088210a7999456541511df3ad80df0d4b94c52",
+          "metadata_sha256": "8a4f1cab0850a989d8e1e84361975bc9e83bdd863766e9e042f5fc8e52e5be87"
+        },
+        {
+          "start": 2816,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 227,
+            "interval_observations": 224,
+            "raw_samples_sha256": "822d2ead1a9be9d70a01490b964f8ae03a9ed3b00242baacd857edaff5df02c6",
+            "task_sha256": "665fea826f4271ba57d4a836d2dda3d15c1db617e156917d86af13310fe020b6",
+            "cleanup_sha256": "1eee1b245637f17546c1337b0a9f44f8ed12f4d83cb4d164f50e75486432b5f2",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "65c82929fcb2ecee2989f287958a87c1224699ddcfc9d580dc6f86fa96653c5a",
+          "metadata_sha256": "15afcdb652c01b631e7a4b96cf3f171a8a980c0504d63ab6533564e36ae87727"
+        },
+        {
+          "start": 2944,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 225,
+            "interval_observations": 222,
+            "raw_samples_sha256": "5833a2e292fda766a4888ee35f46febfe0977066160cb599f89a9a76db8caf15",
+            "task_sha256": "1b329db72a99e648bb7940a1afe16ca1f00b04916601167115edbbeeb212cce4",
+            "cleanup_sha256": "2982f5bf9debd2da2e80aff13fbad38b11eb9500b5afaab0a67370e961476c73",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "3320928840e55a7be285a44cd8790099b9406f59eceea129f2797ce418dc084d",
+          "metadata_sha256": "6d169cae059384761289586e3c4dc23576252d4a6f146e42aa4307ba8c42339c"
+        },
+        {
+          "start": 3072,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 229,
+            "interval_observations": 226,
+            "raw_samples_sha256": "ef092b6fef52c433797b9f1eda769688f8927245d8a3a3612fd7d4a855cafeb0",
+            "task_sha256": "7d76ba52df94a6ac55cae2570c482a32822f3e4fab2f56c806ca9452133651fb",
+            "cleanup_sha256": "26345508a9114c20476561a1312e0823a64b9162f7fe6bbd4e2cb59f52764d76",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "06246b54e6409166cb6e38df26ed50eb95e9344a759e1957250ee76b7ea99785",
+          "metadata_sha256": "c890397ccf4bbbea6a7812bac922231548cc387dc2bf6883dcfb15f4e88c744c"
+        },
+        {
+          "start": 3200,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 232,
+            "interval_observations": 229,
+            "raw_samples_sha256": "fee5866cce5176be46fedf6d8f34c449a1b75287f77defbc766b92cee7f33a78",
+            "task_sha256": "82dbf3d34544334fb3125baba8d1c2bdebe01afe8e7b10fd2472dd572154211c",
+            "cleanup_sha256": "581a436da89e03dc446a3aa2f6d1f5d695190e6053e802b91e0385ce41653470",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "079f0fe8dd9135008f2c0755d5e2cd22920550cfc4254b6f2ce74feeec9a711e",
+          "metadata_sha256": "1e12e2dbd9d94df875b68dca5511977be6ab1197cdd27ed02f4003ffb8c84262"
+        },
+        {
+          "start": 3328,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 232,
+            "interval_observations": 229,
+            "raw_samples_sha256": "c4465ee151a3753176eced28fd58d63882e9c0886edd48171948c811c2aecf82",
+            "task_sha256": "583d72e991b3163a8606e23efca71416efba3757c07e97032e95b1f5be9cb0ca",
+            "cleanup_sha256": "b8b9a99e5af02cc03f068718148b5d46bc677096887590267fa719a31716ca8b",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "d2798e6a058fc838ce2800b2e1f45dd8d264fb96c5d6dabc485903cbf3736036",
+          "metadata_sha256": "ad5893a3c3ed0f916cedcb62aaf1104a3bc2c1ea90392b68d7e6c13b37bf38a0"
+        },
+        {
+          "start": 3456,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 231,
+            "interval_observations": 228,
+            "raw_samples_sha256": "5c021a2419f4e07d21760c2d4ba81b1d333a5c8a49f8d2cf5d4774f3b764d541",
+            "task_sha256": "4f03a5987779aa5e0a4dfc6d458cbbc66072be010476110a600f2b4f629cfe17",
+            "cleanup_sha256": "1823f8f44a7a156195ce914e69274ae881b0eea59bb9203b295c4e32580c1d22",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "7ac2d02828fb3f2748255e2a1d27a56790f6abbacf1994cec37644726c5c5ff6",
+          "metadata_sha256": "5d6d21736c8ff520788568e34e1cbf3ec81af493c599d4f68bf8398a05b49a2b"
+        },
+        {
+          "start": 3584,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 231,
+            "interval_observations": 228,
+            "raw_samples_sha256": "18b1cc6a9f75ffe79856dc8f657baabae8ae80a329aaed7f530295623654f8df",
+            "task_sha256": "768ea5fe4f952a23e79ff70298c3e2d53e43e9f508522aa9d45ea6f8fb542a5d",
+            "cleanup_sha256": "a9f72b25131cd3af18203ab8744ca1f4f8e7e2b5e3063c9dd80265d714123402",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "4fadf98bf4c6013cdfc0a23e2ae1d5ab4bc69ef98d3d07406814bd94ed7f0355",
+          "metadata_sha256": "f2013c3ea974fc408adc6f2da503bc2c2353ca29a058f5c4a092f552f8f70f12"
+        },
+        {
+          "start": 3712,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 234,
+            "interval_observations": 231,
+            "raw_samples_sha256": "d7783690419be87d97416d6bb4a052b1d562a8ace7493d68d3f90a9753496f11",
+            "task_sha256": "f1f1f1bd63786cf39283a4acf0021f990fcae9ca53a547a6e63167842623f0a4",
+            "cleanup_sha256": "8832c1de202cd055c3af1a846ea57043f564f6675669bd9bbf4bb0c412a92377",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "9413614c43db1ac6399ffe7250819fe434075ab8e88cb13e00c5a0cad3ded6aa",
+          "metadata_sha256": "f8826eb2669b4612d1bd37c919d852c789ecf42ac50c4f7ac640cc4cbb1aa03b"
+        },
+        {
+          "start": 3840,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 233,
+            "interval_observations": 230,
+            "raw_samples_sha256": "44b2aedcad917eb5b1dacf7ed0c37f90cf0e02f72b6c98baab9e811e59b7b332",
+            "task_sha256": "4c817521e8b0b078979e2b50792ae2bd8cf89255ffe7e71a2b7d8789ee6b087d",
+            "cleanup_sha256": "a49597a9417f3be404365438b1bee7bada11fab15ca37dab7804f9ffd9a98d14",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "9c0dbb3135f9e0dd69905d7a9524b3394a307ae697abf50635111bb7e25052ad",
+          "metadata_sha256": "16e81b3851d99cadb93bc7586b8a723edbfb627f28bc978fbe2c2ac0272b714e"
+        },
+        {
+          "start": 3968,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 234,
+            "interval_observations": 231,
+            "raw_samples_sha256": "76af7982b80fde54d9428cc91d8bc882d57ebda02e4687ffdbb1bb4fe3989176",
+            "task_sha256": "78b629cfe2f3853304d638cad7d1025a078bfb107d293c8b845653accd026af0",
+            "cleanup_sha256": "306f93203d8f52ef1dccbefc6f7272171ee82cb52e2624f7d5f4179da0af7fad",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "a69374ea5cfcc0098304b97a292e66d211f46d1de72436f6abe14471c3ef4c7f",
+          "metadata_sha256": "e1cf7e02d0e507a57cbde9081773f693e21ea2f0ac47c7fb26f931f0abab90f8"
+        },
+        {
+          "start": 4096,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 235,
+            "interval_observations": 231,
+            "raw_samples_sha256": "9625f9be880c6c949837e736399c4e501ad6b265cba25b19e7d46811b6367fe9",
+            "task_sha256": "0e8c47ba2de446a64434c5f85ef282278e9bf522fb46ceed79863b0a52f5acf2",
+            "cleanup_sha256": "74e68e748902b574a03d43609a2a7ca246383ff0ba38425fc89e0240dabf657d",
+            "post_completion_capture_errors": [
+              {
+                "start": 5217796.495030944,
+                "end": 5217798.260676574,
+                "error": "ValueError: NPU host PID 486243 is not visible in /proc"
+              }
+            ]
+          },
+          "samples_sha256": "ba0ed72d580e0f0da906cdd1be5bf771976564dede830d4c6a879cdfab549a41",
+          "metadata_sha256": "08fe60242226202d98644ef299f88b4956afa64cc13070571fb30b83ff92f4d0"
+        },
+        {
+          "start": 4224,
+          "count": 128,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 233,
+            "interval_observations": 230,
+            "raw_samples_sha256": "96918fa0acba3720031e7c2444dd97ce2a7d5dc29ff5f1a82a7c431a6fab4fcf",
+            "task_sha256": "3159e9b007c679a572debb8e9504cb48c1ac29ae899cb2e7b3bb89b2cce062d6",
+            "cleanup_sha256": "b63071c363cd99559dfd90e84ecba4672d6b6a00d8dc20d27b6ab37b17a5c6ee",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "989df10043a912e707d2bae6ff0fe7f78016aed64e1fa124b4f325abcbd07d7a",
+          "metadata_sha256": "905729a06e65c869eba55bdd42d8f697c7a95e0768ed1abdd648daa455f32053"
+        },
+        {
+          "start": 4352,
+          "count": 32,
+          "resources": {
+            "physical_card": 1,
+            "device": "Ascend-0000:19:00.0",
+            "observations": 87,
+            "interval_observations": 83,
+            "raw_samples_sha256": "9cb1e96530225e9e74e3573289cd3ab6173ef12cf669dcf78d7719eaa29d31a0",
+            "task_sha256": "cdef0613e75fcb31d335701e92e31bb82c0522cf2b2033e31f5a18d7b15f35c1",
+            "cleanup_sha256": "51c2b6d01e1fef7fa13857b4a9368e07f408c6a1fd1b7643a34d8992835baecc",
+            "post_completion_capture_errors": [
+              {
+                "start": 5218433.756020631,
+                "end": 5218435.524026623,
+                "error": "ValueError: NPU host PID 527903 is not visible in /proc"
+              }
+            ]
+          },
+          "samples_sha256": "eb0e2b8afd3541726225e9ae17d3ba5df7a1cfc35d4cd8336d4c1fa67314c70c",
+          "metadata_sha256": "7830959d3a49cc4a73f0324321308a66d365f73c6644d30940ce15a8f3f78746"
+        }
+      ],
+      "textured_glb_count": 0,
+      "inspected_texture_images": 0,
+      "quality": {
+        "r_precision_top1_top2_top3": [
+          0.0717008099094807,
+          0.11862791805621725,
+          0.17079561696045736
+        ],
+        "matching_score": 14.388595601045955,
+        "fid": 0.26276469299427063,
+        "diversity": 5.407174587249756,
+        "generated_count": 4384,
+        "evaluated_count": 4198,
+        "excluded_reference_length_count": 186,
+        "evaluator_batch_size": 32,
+        "seed": 42,
+        "representation": "HY native fixed skeleton FK, 30-to-20 FPS interpolation, authors' canonical retargeting and 263-D extraction",
+        "normalization": "authors' evaluator Comp_v6_KLD005 mean/std; matched central crop, multiple of 4, maximum 196",
+        "repetitions": 1,
+        "native_length_complete_fraction": 1.0,
+        "requested_length_complete_fraction": 0.9958941605839416
+      },
+      "latency": {
+        "count": 4384,
+        "mean_s": 3.011185984237478,
+        "median_s": 3.0282340310513973,
+        "p95_s": 3.1549474006053058
+      },
+      "score_resources": {
+        "physical_card": 1,
+        "device": "Ascend-0000:19:00.0",
+        "observations": 65,
+        "interval_observations": 61,
+        "raw_samples_sha256": "7c157aff3805c08c251f8a957398b34fa4cb34d4ee97c18d1525b042ece42acc",
+        "task_sha256": "d3616674591dd713a4027f1ead3f38a1d798d58ab05ea27b3014cf950d54feb7",
+        "cleanup_sha256": "7e463571e672a7d0f9f4375f9ed208e6b5726da1baa0d0ec6794aaa20b52d089",
+        "post_completion_capture_errors": [
+          {
+            "start": 5218564.362724832,
+            "end": 5218566.137670356,
+            "error": "ValueError: NPU host PID 538089 is not visible in /proc"
+          }
+        ]
+      },
+      "summary_sha256": "ef55c59c65833e5159364ae9dab2e6e10b9946944f60c5897a0263af67567385",
+      "quality_provenance_sha256": "e0bc6f8b1ad6f2734468184fd01039a07f4fbe7833f8abd90884eb42019210d0"
+    }
+  ],
+  "status": "FULL_VERIFICATION_PASS"
+}

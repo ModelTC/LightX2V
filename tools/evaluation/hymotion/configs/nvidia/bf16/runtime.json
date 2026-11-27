@@ -1,0 +1,27 @@
+{
+  "status": "implemented",
+  "device_api": "torch.cuda",
+  "single_gpu": true,
+  "batch_size": 1,
+  "seed": 42,
+  "chunk_size_max": 256,
+  "execution_timeout_seconds": 3300,
+  "resource_monitor": "pinned LightX2V tools/runtime/gpu_watch.py",
+  "native_and_lightx2v": "serial on the same physical GPU",
+  "mean_latency_ratio_max": 1.25,
+  "p95_latency_ratio_max": 1.5,
+  "precision_policy": {
+    "bf16": [
+      "Qwen3",
+      "CLIP",
+      "Motion MMDiT matrices and attention"
+    ],
+    "fp32": [
+      "normalization",
+      "time/RoPE frequencies",
+      "CFG and Euler state/update",
+      "motion decoding and skeleton geometry"
+    ]
+  },
+  "campaign_mode": "LightX2V BF16 only; no native equality or relative-latency gate"
+}

@@ -1,0 +1,359 @@
+{
+  "model": "hymotion",
+  "platform": "NVIDIA A100-SXM4-40GB",
+  "datasets": {
+    "humanml3d": {
+      "model": "hymotion",
+      "dataset": "humanml3d",
+      "coverage": 4384,
+      "repetitions": 1,
+      "output_difference_count": 0,
+      "output_difference_ids": [],
+      "native_quality": {
+        "r_precision_top1_top2_top3": [
+          0.5409718913768461,
+          0.74130538351596,
+          0.8323010957598856
+        ],
+        "matching_score": 2.8358684297173635,
+        "fid": 0.5617111584822112,
+        "diversity": 9.526968955993652,
+        "generated_count": 4384,
+        "evaluated_count": 4198,
+        "excluded_reference_length_count": 186,
+        "evaluator_batch_size": 32,
+        "seed": 42,
+        "representation": "HY native fixed skeleton FK, 30-to-20 FPS interpolation, authors' canonical retargeting and 263-D extraction",
+        "normalization": "authors' evaluator Comp_v6_KLD005 mean/std; matched central crop, multiple of 4, maximum 196",
+        "repetitions": 1,
+        "native_length_complete_fraction": 1.0,
+        "requested_length_complete_fraction": 0.9958941605839416
+      },
+      "lightx2v_quality": {
+        "r_precision_top1_top2_top3": [
+          0.5409718913768461,
+          0.74130538351596,
+          0.8323010957598856
+        ],
+        "matching_score": 2.8358684297173635,
+        "fid": 0.5617111584822112,
+        "diversity": 9.526968955993652,
+        "generated_count": 4384,
+        "evaluated_count": 4198,
+        "excluded_reference_length_count": 186,
+        "evaluator_batch_size": 32,
+        "seed": 42,
+        "representation": "HY native fixed skeleton FK, 30-to-20 FPS interpolation, authors' canonical retargeting and 263-D extraction",
+        "normalization": "authors' evaluator Comp_v6_KLD005 mean/std; matched central crop, multiple of 4, maximum 196",
+        "repetitions": 1,
+        "native_length_complete_fraction": 1.0,
+        "requested_length_complete_fraction": 0.9958941605839416
+      },
+      "quality_aligned": true,
+      "native_latency": {
+        "count": 4384,
+        "mean_s": 5.445463873801872,
+        "median_s": 5.483381253958214,
+        "p95_s": 5.781196673831436
+      },
+      "lightx2v_latency": {
+        "count": 4384,
+        "mean_s": 5.666172771277035,
+        "median_s": 5.709116418962367,
+        "p95_s": 6.006072180124465
+      },
+      "latency_ratios": {
+        "mean_s": 1.0405307798545855,
+        "median_s": 1.0411671475225628,
+        "p95_s": 1.0388977436645472
+      },
+      "latency_gate": {
+        "mean_ratio_max": 1.25,
+        "p95_ratio_max": 1.5
+      },
+      "latency_aligned": true,
+      "status": "PASS"
+    }
+  },
+  "environments": {
+    "humanml3d/native": {
+      "versions": {
+        "torch": "2.5.1",
+        "transformers": "4.53.3",
+        "tokenizers": "0.21.4",
+        "diffusers": "0.26.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-6d13b72c-2bac-94a2-f839-27bb7ce8f91d",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true
+    },
+    "humanml3d/lightx2v": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "tokenizers": "0.21.4",
+        "ftfy": "6.3.1",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-6d13b72c-2bac-94a2-f839-27bb7ce8f91d",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true
+    }
+  },
+  "resources": {
+    "humanml3d/native": {
+      "verified_chunks": 35,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 3.0,
+            "query_timeout_s": 2.5,
+            "sampler_sha256": "770478c604e0e84876342bebcd31810e44c5f8dddd5f160a1e1911630c292083"
+          },
+          "workers": 1
+        },
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 3.0,
+            "query_timeout_s": 2.5,
+            "sampler_sha256": "c7c6e66908d87bfbacecc84b1f56b12c62ee13af3e9a090ae7c85294364c8974"
+          },
+          "workers": 4
+        },
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 31
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 26211961344
+    },
+    "humanml3d/lightx2v": {
+      "verified_chunks": 35,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 3.0,
+            "query_timeout_s": 2.5,
+            "sampler_sha256": "c7c6e66908d87bfbacecc84b1f56b12c62ee13af3e9a090ae7c85294364c8974"
+          },
+          "workers": 4
+        },
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 32
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 24966123008
+    }
+  },
+  "invalid_attempts": [
+    {
+      "namespace": "hymotion-humanml3d-enospc-20261125-native3456",
+      "discarded_timing_attempts": 22,
+      "reason": "Resource monitoring became unavailable after system /tmp filesystem ENOSPC; task interval and cleanup proof could not be sealed. Preserve/exclude this entire incomplete batch; do not admit its timing or output as a formal sample.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-gpu6-foreign-before-first-chunk",
+      "discarded_timing_attempts": 7,
+      "reason": "ExternalGPUprocess entered GPU6 during first nativechunk. All7 recorded timings excluded; no complete verified chunks. Own worker terminated and GPUchildren exited. Full HYM comparison will run serially after SDXLGenEval on its fixedGPU3; no cross-card timing aggregation.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-lightx2v-000000-foreign-after-first-sample",
+      "discarded_timing_attempts": 1,
+      "reason": "ForeignGPUprocess2727239 entered GPU1 after five-minute idle preflight, during adapted model startup/first inference. Own task stopped; this interrupted timing excluded. No external task killed.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-lightx2v-000000-foreign-before-measurement",
+      "discarded_timing_attempts": 0,
+      "reason": "Foreign GPU process2582400 entered fixedGPU1 during model loading. Observer stopped only this task before formal inference; no dataset sample was measured. Native256 valid prefix preserved. Wait for a continuous idle period before next recovery.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-lightx2v-000000-foreign4048628",
+      "discarded_timing_attempts": 25,
+      "reason": "UnknownGPUprocess4048628enteredGPU2andGPU5simultaneously; ownworkerstopped,unknownprocessnotkilledandlaterabsent. Priorverifiedchunksretained.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-lightx2v-000000-nvml-timeout-load-v1",
+      "discarded_timing_attempts": 0,
+      "reason": "NVMLquery2.5stimeout duringadapted model-load; subsequentNoDataafterowncleanupnotrootcause. Noformalinputstarted. Native32verifiedrecordsretained.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-lightx2v-000000-nvml-timeout-second-wave",
+      "discarded_timing_attempts": 62,
+      "reason": "Resource query timed out after2s; original3s resource coverage requirement retained. Replay this interrupted batch only; all valid batches remain accepted. Query budget now2.5s and interval0.25s, still maxgap3s.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-lightx2v-000000-nvml-timeout-third-wave",
+      "discarded_timing_attempts": 123,
+      "reason": "NVML query timed out after2.5sec; entire interrupted worker excluded from accepted timing. No model failure recorded; raw partial outputs and monitoring evidence retained. Future workers use smaller chunks without relaxing3sec coverage policy.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-lightx2v-000096-cutover-1795540436824689371",
+      "discarded_timing_attempts": 0,
+      "reason": "Plannedowncontrollerstopafternative128sealed,beforeadaptedformalinput; switchtestedearlyCUDAstartup/count128.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-lightx2v-000128-persistent-observer-close-v1",
+      "discarded_timing_attempts": 35,
+      "reason": "Resource monitor unavailable; SIGTERM interrupted query process cleanup and closed-pipe final sampling failed. Original evidence retained; all observedownworkers terminal. Defaultsquery2.5/maxgap3 notmet, no timingsadmitted.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-native-000000-nvml-query-timeout-v1",
+      "discarded_timing_attempts": 74,
+      "reason": "Concurrent NVML acquisition query timeout2.5s; task, controller and all observed own children terminal. Source/timer unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-native-000512-nvml-query-timeout-5s-20261125",
+      "discarded_timing_attempts": 87,
+      "reason": "NVML query exceeded explicit5s deadline; current batch lacks full resource coverage. Controller stopped and known task PIDs absent. Preserve all emitted outputs; retain prior resource-sealed chunks unchanged.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-operator-stop-before-capture-trace",
+      "discarded_timing_attempts": 0,
+      "reason": "Owncontrollerinterruptedbeforecapture/workloadtoaddboundedquerydiagnostics. NoGPUworker/taskorformalinput;native32retained.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-superseded-gpu1-prefix",
+      "discarded_timing_attempts": 256,
+      "reason": "Valid native256 prefix on GPU1 superseded because external workloads repeatedly entered that card. Fresh full paired campaign moved to now-idleGPU6; never combine nativeGPU1 and adaptedGPU6 latency. Original valid source-locked outputs/timings/resources retained, not reclassified as resource-invalid.",
+      "accepted_formal_repetitions": 1
+    },
+    {
+      "namespace": "hymotion-humanml3d-superseded-prefix",
+      "discarded_timing_attempts": 526,
+      "reason": "Initial protocol found6/256 paired output mismatches: four duration-rounding bindings and two optional-ftfy CLIP cleanup differences. Model/tokenizer and evaluation binding corrected; retained this older protocol as evidence. New homogeneous complete campaign uses the corrected source.",
+      "accepted_formal_repetitions": 1
+    }
+  ],
+  "measurement_cohort": "full-v1",
+  "superseded_profiles": [],
+  "measurement_worker_sha256": "8fde98b9c56424d0c84c81f56a25c4d2860c18eefabd12d4d6bddccd156ab7e1",
+  "final_controller_sha256": "45e12164d67ebc43db49bbf28f1b6ff85b53d197715fefef48112acaac3be352",
+  "source_lock": {
+    "lightx2v": {
+      "repository": "https://github.com/ModelTC/LightX2V.git",
+      "revision": "9a5c15e4c53d13976c731c4cc709fd751679c6a2",
+      "pull_request": 1752
+    },
+    "native": {
+      "repository": "https://github.com/Tencent-Hunyuan/HY-Motion-1.0.git",
+      "revision": "4e426f5a1021cbcf7f375458c37b840ee7225229"
+    },
+    "momask": {
+      "repo": "EricGuo5513/momask-codes",
+      "revision": "94a6636c9c463b7a9414c3401a6f1b67e6c51824",
+      "files": [
+        {
+          "path": "models/t2m_eval_wrapper.py",
+          "sha256": "b03398ef2ee0087076a6e0cbe6317ba1548c23b1d58e03988d2a98a25de49692"
+        },
+        {
+          "path": "models/t2m_eval_modules.py",
+          "sha256": "6d4b069e06448828cbe8b4da609f6b0a186ec180a24b5b2e89098c2bb027e5fc"
+        },
+        {
+          "path": "utils/metrics.py",
+          "sha256": "83f8ecb93df83aafb708280c062973893f1a2565418f2abf961064d7cfca49d7",
+          "runtime_sha256": "2cc8f0f6871d31b03c33a9f10b6fcd90f5989763a269aac9dde07dd19ce16544",
+          "patch": "Clamp roundoff-induced negative squared Euclidean distances to zero before sqrt"
+        },
+        {
+          "path": "utils/word_vectorizer.py",
+          "sha256": "fbfb56d795f2b1ddb99bbf60a097a600a3dfd2275cc541b1dce0a57df787bbdf"
+        },
+        {
+          "path": "utils/motion_process.py",
+          "sha256": "ae517a71091a159392383de5460c5097a7469c1ba65c223edad91f94f7f11f29",
+          "runtime_sha256": "770bc215e49aa9396a29ae1de448c214ea17521d12f6daefbfe7ac8b52d9d09c",
+          "patch": "Replace removed numpy np.float alias with np.float64"
+        },
+        {
+          "path": "utils/paramUtil.py",
+          "sha256": "ec119ad7e3ab3bf17a49c582131a05a7bbf93c6d1d46e478b8c564941b5910e7"
+        },
+        {
+          "path": "common/skeleton.py",
+          "sha256": "6f6191dd105bc32ee417dafc6a2d463dc4a7fe9a1d6181250a924382af8659b1"
+        },
+        {
+          "path": "common/quaternion.py",
+          "sha256": "ae2e3d090eb39342bdcd0bdae7183bab3159bc100eea5725680dd25032f78c25",
+          "runtime_sha256": "17e96bb3af31952183453d4dc15f11f88bb940342f532f3860012aeecf1f85ad",
+          "patch": "Replace removed numpy np.float alias with np.float64"
+        },
+        {
+          "path": "utils/get_opt.py",
+          "sha256": "87addb92b0bb3b91f0bc02bff27b4105a218229be7cea55cce6526eba49cc37a"
+        },
+        {
+          "path": "prepare/download_evaluator.sh",
+          "sha256": "6c8653ab0a1e8d79949c02d10068124581a01a7d38162661a90f795629fffd30"
+        },
+        {
+          "path": "prepare/download_glove.sh",
+          "sha256": "3695a92054fd2f8451e49c5835b6b575fd07ed423d3c9abc20bdc609be357119"
+        }
+      ],
+      "data_loader_reference_sha256": "fcbc8e7b0079e17ef7573b6a70d5487e4b4f692632caebb506f6c28ea3e3b70c"
+    }
+  },
+  "weight_lock_sha256": "787b19100ca37c21d7fcc6bb4fd2b65f63772c15f505cb1b7799c8f5a8476a95",
+  "raw_evidence_manifest_sha256": "bc8fae2f5833030c7cc6c2b4e892ed1417066ec025b1568945a270768af66ce4",
+  "raw_evidence_file_count": 11174,
+  "raw_evidence_namespace": "lightx2v-evaluation-20261124",
+  "formal_repetitions_per_input_per_backend": 1,
+  "worker_recovery": "Request/timing/metric AST and configs identical to final code; original worker source fingerprints retained. Controller-only recovery uses explicit post-workload sample acknowledgement."
+}

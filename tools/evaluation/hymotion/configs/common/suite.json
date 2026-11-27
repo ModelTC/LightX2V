@@ -1,0 +1,15 @@
+{
+  "model": "hymotion",
+  "seed": 42,
+  "repetitions": 1,
+  "batch_size": 1,
+  "timing": "RNG reset and model load excluded. Start before request JSON decoding and input image read. End after GPU synchronization and durable final PNG/GLB/NPZ file fsync. Hashes, quality, output validation and benchmark logs excluded. One separate synthetic/upstream demo warmup per loaded process, never a dataset sample.",
+  "datasets": {
+    "humanml3d": {
+      "count": 4384,
+      "manifest": "configs/common/humanml3d.jsonl",
+      "sha256": "09eb74e806868c9d3e17627da6c99e19054d8ff94de421024a4f74d32a5eef4d",
+      "reference_manifest_sha256": "29cfb4ddb868b29c05580524ddd05399be30e08a315ccb18bebeaaa4e79bffc7"
+    }
+  }
+}

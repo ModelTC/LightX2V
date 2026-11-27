@@ -1,0 +1,22 @@
+{
+  "data": "/absolute/replace/data",
+  "weights": "/absolute/replace/hymotion-weights",
+  "lightx2v": "/absolute/replace/lightx2v",
+  "native_python": "/absolute/replace/native_python",
+  "lightx2v_python": "/absolute/replace/lightx2v_python",
+  "metric_python": "/absolute/replace/metric_python",
+  "native": "/absolute/replace/native",
+  "qwen": "/absolute/replace/Qwen3-8B",
+  "clip": "/absolute/replace/clip-vit-large-patch14",
+  "momask": "/absolute/replace/momask",
+  "metric_assets": "/absolute/replace/metric_assets",
+  "metric_checkpoints": "/absolute/replace/metric_checkpoints",
+  "python": "/absolute/replace/torch_mlu_python",
+  "output_root": "/absolute/replace/output-root",
+  "native_image": "lightx2v-mlu590-native-hymotion:20261127",
+  "mounts": {
+    "/absolute/replace/workspace": "ro",
+    "/absolute/replace/assets": "ro",
+    "/absolute/replace/output-root": "rw"
+  }
+}

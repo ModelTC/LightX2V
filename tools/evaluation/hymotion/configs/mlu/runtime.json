@@ -1,0 +1,17 @@
+{
+  "status": "smoke_ready",
+  "device_api": "torch.mlu",
+  "target_device": "MLU590",
+  "single_device": true,
+  "dtype": "BF16 matrix operations with FP32 numerical boundaries",
+  "batch_size": 1,
+  "seed": 42,
+  "steps": 50,
+  "cfg_scale": 5.0,
+  "image": "lightx2v-mlu590-full-pbr:20261127",
+  "resource_interval_s": 0.25,
+  "resource_query_timeout_s": 2.5,
+  "resource_max_gap_s": 3.0,
+  "idle_memory_mib_max": 256,
+  "execution_timeout_seconds": 3300
+}

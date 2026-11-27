@@ -1,0 +1,4 @@
+# Install with the matching MetaX PyTorch environment already provisioned.
+numpy==1.26.4
+scipy==1.15.3
+pyarrow==25.0.1

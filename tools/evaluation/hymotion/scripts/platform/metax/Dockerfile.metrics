@@ -1,0 +1,6 @@
+# Build a metric image from the corresponding inference PR's MetaX image.
+ARG INFERENCE_IMAGE
+FROM ${INFERENCE_IMAGE}
+COPY tools/evaluation/hymotion/configs/metax/requirements.txt /tmp/metax-metrics-requirements.txt
+RUN python3 -m pip install -r /tmp/metax-metrics-requirements.txt
+ENV LD_PRELOAD=/opt/maca/mxgpu_llvm/lib/libmxomp.so
