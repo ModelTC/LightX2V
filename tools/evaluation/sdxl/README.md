@@ -152,3 +152,26 @@ sanitized completed measurements under `results/ascend_npu/` only after the full
 dataset has finished. Original NVIDIA, MLU and MetaX entries remain available.
 
 Run separate campaigns for `geneval`, `parti` and `coco`. GenEval retains the pinned official FP32 Mask2Former/CLIP evaluator, its six dimensions and weights. The scoped adapter changes only the evaluator device selection and availability assertion to NPU. MMCV 1.7.2 uses its released equivalent PyTorch grid-sample attention implementation; its original CPU extension is built from the SHA-checked source archive. Parti/COCO retain the original FP32 CLIP scoring.
+
+
+### MLU host resource evidence
+
+Run `scripts/platform/mlu/run_observed.sh` on the host with Docker and cnmon.
+Pass `--dataset`, `--paths /absolute/host-paths.json`, `--output`, `--card`, and
+optionally `--image`. `--smoke` selects a declared partial fixture; it never
+claims full dataset completion. `--smoke --skip-score` checks one generation
+request only. Full runs retain the frozen dataset, request and scoring code.
+
+The paths file uses host absolute paths visible unchanged in the worker. Add
+`output_root` and `mounts`, a map of absolute host directories to `ro`/`rw`;
+mount source/data read-only and the chosen output root writable. `python` names
+the interpreter inside the image. Build the MLU inference environment described
+in the inference PR; SF3D requires its full CPU UV/texture extensions.
+
+The host cnmon observer records card UUID/PCI identity, host PID/start-tick
+ancestry and bounded queries. A held worker allows a post-workload observation;
+the controller checks the closed capture and task cleanup before accepting an
+interval. Missing/unknown inventory, partitions, foreign PIDs and observation
+gaps reject resource evidence. The local legacy MLU entry remains a measurement
+without this resource isolation claim. Native comparison is still a separately
+tracked capability; no BF16-versus-native exact equality is inferred.

@@ -17,6 +17,8 @@ MODEL = "sdxl"
 
 def nvidia_config(name):
     """Keep the original parity profile and BF16 measurements separate."""
+    if os.environ.get("PLATFORM") == "cambricon_mlu":
+        return HERE / "configs/mlu" / name
     if os.environ.get("PLATFORM") == "ascend_npu":
         return HERE / "configs/ascend_npu" / name
     if os.environ.get("PLATFORM") == "metax_cuda":
@@ -470,6 +472,10 @@ def completed_runs(root, dataset, backend, verify_artifacts=True):
         if metadata.get("platform") == "cambricon_mlu":
             if metadata.get("backend") != "lightx2v" or not metadata.get("environment", {}).get("physical_card"):
                 raise ValueError("MLU run lacks its physical single-card identity")
+            if (metadata_path.parent / "resources.json").exists():
+                resources = read_json(metadata_path.parent / "resources.json")
+                if not resources.get("resources_clear") or not resources.get("task_cleanup_verified") or resources.get("returncode") != 0:
+                    raise ValueError("MLU resources or cleanup unverified")
         else:
             resources = read_json(metadata_path.parent / "resources.json")
             if not resources["resources_clear"] or not resources.get("task_cleanup_verified") or resources.get("returncode") != 0:
@@ -1103,7 +1109,7 @@ runpy.run_path(script, run_name='__main__')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign", "campaign-mlu", "campaign-metax", "score-metax-smoke", "campaign-ascend", "score-ascend-smoke"])
+    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign", "campaign-mlu", "campaign-mlu-observed", "score-mlu-smoke", "campaign-metax", "score-metax-smoke", "campaign-ascend", "score-ascend-smoke"])
     parser.add_argument("--paths", type=Path)
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--dataset", choices=list(suite()["datasets"]))
@@ -1144,6 +1150,13 @@ def main():
         check_inputs(paths)
     elif args.command == "campaign":
         campaign(args, paths)
+    elif args.command in ("campaign-mlu-observed", "score-mlu-smoke"):
+        sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+        import mlu_campaign
+        if args.command == "campaign-mlu-observed":
+            mlu_campaign.run_campaign(sys.modules[__name__], args, paths)
+        else:
+            mlu_campaign.score_smoke(sys.modules[__name__], args, paths)
     elif args.command == "campaign-mlu":
         campaign_mlu(args, paths)
     elif args.command in ("campaign-ascend", "score-ascend-smoke"):
