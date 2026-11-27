@@ -100,3 +100,43 @@ The smoke plan uses one geometry/CLIPScore input, six GenEval prompts covering i
 Build the metric environment with `docker build --build-arg INFERENCE_IMAGE=<model-metax-image> -f tools/evaluation/sf3d/scripts/platform/metax/Dockerfile.metrics -t lightx2v-metax-metrics:20261127 .` and set `metric_image` in the local paths file. The metric image fixes the SDK OpenMP runtime for its dependencies.
 
 Complete C500 BF16 measurement: all 1,023 GSO inputs, mean end-to-end 0.685067 s, P95 0.778441 s, Chamfer-L1 0.121950 and F-score@1% 0.054851. All 1,023 GLBs retain UVs, 1024² base-color/normal textures and metallic/roughness materials. [Results and exact measured revisions](results/metax/bf16/full-results.json) include per-input timing/output hashes and closed-capture audit fingerprints.
+
+## Ascend NPU
+
+The Ascend entry preserves the inference PR's BF16/FP32 policy and the frozen
+dataset, quality definitions and end-to-end boundary above. Provision Python 3.10,
+a matching torch/torch_npu/CANN installation, and the inference PR's
+`scripts/sf3d/install_ascend.sh`. Install metric dependencies with
+`scripts/platform/ascend_npu/install_metrics.sh` in the metric environment.
+Source CANN's `set_env.sh` before running the host controller.
+
+```bash
+EVAL=tools/evaluation/sf3d
+PLATFORM=ascend_npu python "$EVAL/evaluate.py" prepare-sources --workspace /absolute/sources
+# Fill configs/ascend_npu/paths.json in a separate paths.local.json.
+PYTHON_BIN=/absolute/inference-env/bin/python bash "$EVAL/scripts/platform/ascend_npu/run_eval.sh" \
+  campaign-ascend --paths /absolute/paths.local.json --dataset gso \
+  --backend lightx2v --card 0 --count 128 --output /absolute/results/new-campaign
+# Add --smoke, using a separate output directory, for actual quality/latency validation.
+```
+
+Include the four shared `tools/runtime/ascend_*.py` files with this evaluation
+directory. Source preparation reconstructs one pinned main checkout with the
+three slim inference overlays; it checks every runtime file hash. Inference and
+metric Python paths may differ. Each complete dataset stays on one physical NPU;
+different datasets can run concurrently on distinct idle cards. The host must
+expose `npu-smi` and real process ancestry. Virtual partitions, device sharing,
+foreign processes, query failures and missing samples stop the campaign.
+The 3-second query budget, 5-second maximum sample gap and 3,600 MiB idle-memory
+ceiling are explicit Ascend 910B settings, including the firmware reservation.
+All workers have a 3,300-second timeout plus verified cleanup. The host controller
+may live longer, retaining every bounded chunk and sample.
+
+Outputs include full coverage, quality, mean/median/P95 request latency, source
+and configuration fingerprints, physical PCI identity and closed resource
+evidence. Smoke reports remain labeled as smoke. Ascend runs the BF16 LightX2V
+backend; it does not assert native equality or A100 latency ratios. Publish
+sanitized completed measurements under `results/ascend_npu/` only after the full
+dataset has finished. Original NVIDIA, MLU and MetaX entries remain available.
+
+SF3D retains UVs, base-color/normal textures and PBR materials. The pinned original CPU UV/rasterization extensions complement NPU BF16 neural inference and FP32 geometry; no texture stage is omitted.

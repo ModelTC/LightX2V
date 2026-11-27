@@ -43,18 +43,22 @@ class ProtocolTests(unittest.TestCase):
     def test_metax_config_does_not_replace_original_profiles(self):
         with patch.dict(os.environ, {"PLATFORM": "metax_cuda"}, clear=True):
             self.assertEqual(evaluation.nvidia_config("model.json"), ROOT / "configs/metax/model.json")
-        for platform in ("cuda", "mlu", "ascend_npu"):
+        for platform in ("cuda", "mlu"):
             for profile in ("native", "bf16"):
                 with patch.dict(os.environ, {"PLATFORM": platform, "LIGHTX2V_EVAL_PRECISION_PROFILE": profile}, clear=True):
                     relative = "configs/nvidia/model.json" if profile == "native" else "configs/nvidia/bf16/model.json"
                     self.assertEqual(evaluation.nvidia_config("model.json"), ROOT / relative)
 
-    def test_other_platforms_fail_closed(self):
+    def test_ascend_device_and_precision_policy(self):
         mlu = json.loads((ROOT / "configs" / "mlu" / "runtime.json").read_text())
         self.assertEqual(mlu["status"], "smoke_ready")
         for platform in ("ascend_npu",):
             value = json.loads((ROOT / "configs" / platform / "runtime.json").read_text())
-            self.assertEqual(value["status"], "not_implemented")
+            self.assertEqual(value["status"], "implemented")
+            self.assertEqual(value["device_api"], "torch.npu")
+            self.assertEqual(value["precision_policy"], json.loads((ROOT / "configs/metax/runtime.json").read_text())["precision_policy"])
+            with patch.dict(os.environ, {"PLATFORM": platform}, clear=True):
+                self.assertEqual(evaluation.nvidia_config("model.json"), ROOT / "configs/ascend_npu/model.json")
 
 
 if __name__ == "__main__":
