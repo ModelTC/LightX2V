@@ -1,3 +1,5 @@
+from lightx2v.models.networks.native_components.ascend import preserve_native_precision
+
 from .infer.text import encode_text
 from .weights.loader import load_hymotion
 
@@ -6,6 +8,7 @@ class HYMotionModel:
     def __init__(self, config):
         self.weights, self.text_weights = load_hymotion(config)
 
+    @preserve_native_precision
     def generate(self, prompt, seed, num_frames, steps, cfg_scale):
         if not isinstance(num_frames, int) or not 0 < num_frames < 5000:
             raise ValueError("HY-Motion requires an integer frame count in [1,4999]")

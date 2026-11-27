@@ -36,7 +36,7 @@ bash scripts/platforms/nvidia/run_hymotion.sh --num_frames 120
 
 支持 NVIDIA A100 和 MLU590 单卡，不量化、无 offload/cache。MLU590 使用 BF16 矩阵计算和 FP32 数值边界，保持 50 步 Euler、CFG=5、seed=42。执行
 `PLATFORM=cambricon_mlu MLU_VISIBLE_DEVICES=0 PYTHON_BIN=/path/to/torch_mlu/python bash scripts/platforms/mlu/run_hymotion.sh`
-启动。在已匹配 torch_mlu 与 torchvision 的环境中安装 `scripts/hymotion/requirements-mlu.txt`，不要运行 CUDA 专用的 `install_a100.sh`。Ascend 仍为占位入口。MLU590 实机 smoke 验证前，不应视为已验收。
+启动。在已匹配 torch_mlu 与 torchvision 的环境中安装 `scripts/hymotion/requirements-mlu.txt`，不要运行 CUDA 专用的 `install_a100.sh`。Ascend 的准备和入口见下文。MLU590 实机 smoke 验证前，不应视为已验收。
 
 CLIP 文本清理默认为 `clip_text_cleanup: basic`，复用 Transformers 的 BasicTokenizer，与原项目仅安装其 requirements.txt、没有额外 ftfy 时的行为一致。这样，其他模型安装 ftfy 不会悄然改变弯引号等 Unicode 输入的输出。若参考原项目环境显式安装了 ftfy，可在模型配置中设置 `clip_text_cleanup: ftfy` 对齐该清理方式。
 
@@ -47,3 +47,16 @@ CLIP 文本清理默认为 `clip_text_cleanup: basic`，复用 Transformers 的 
 Use a MetaX PyTorch/MACA environment and run `bash scripts/hymotion/install_metax.sh`. The installer preserves the installed MetaX PyTorch. Launch with `MACA_VISIBLE_DEVICES=0 CUDA_VISIBLE_DEVICES=0 PYTHON_BIN=python3 bash scripts/platforms/metax/run_hymotion.sh`, using the same model and input environment variables documented above. The BF16/FP32 computation boundaries match the NVIDIA configuration.
 
 Build an isolated image from this checkout with `docker build --build-arg METAX_BASE_IMAGE=<compatible-metax-development-image> -f dockerfiles/platforms/Dockerfile_metax_hymotion -t lightx2v-hymotion-metax .`. The validated runtime uses Python 3.10, MetaX PyTorch 2.8.0+metax3.5.3.9 and MACA SDK 3.5.3.18. Keep weights and generated outputs in external mounts.
+
+## Ascend NPU
+
+Use an isolated environment with matching PyTorch, torch_npu and CANN already
+installed. Source the CANN `set_env.sh`, then run
+`PYTHON_BIN=/path/to/python bash scripts/hymotion/install_ascend.sh`.
+The installer keeps the installed accelerator PyTorch. Run the same requests with
+`ASCEND_RT_VISIBLE_DEVICES=0 PYTHON_BIN=/path/to/python bash scripts/platforms/ascend_npu/run_hymotion.sh`
+and the model/input environment variables documented above.
+
+The original BF16 neural computation and FP32 numerical boundaries are preserved.
+The NPU request disables HF32 convolution/matmul and restores the previous flags
+afterwards. No weights or inputs are globally recast and no quantization is used.

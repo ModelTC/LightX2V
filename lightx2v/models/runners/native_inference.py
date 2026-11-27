@@ -15,6 +15,14 @@ def validate_a100_config(config):
         device = torch.device("cuda")
     elif platform == "cambricon_mlu" and getattr(torch, "mlu", None) is not None and torch.mlu.is_available():
         device = torch.device("mlu")
+    elif platform == "ascend_npu":
+        import torch_npu  # noqa: F401
+
+        if not torch.npu.is_available():
+            raise RuntimeError("PLATFORM=ascend_npu requires an available torch.npu device")
+        if not torch.npu.is_bf16_supported():
+            raise NotImplementedError("This inference implementation requires native NPU BF16 support")
+        device = torch.device("npu")
     else:
         raise RuntimeError(f"No available device for PLATFORM={platform!r}")
     if config.get("implementation_status", "implemented") != "implemented":
