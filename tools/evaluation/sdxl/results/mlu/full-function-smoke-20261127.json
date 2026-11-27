@@ -156,5 +156,56 @@
     "No new full-dataset accuracy or latency result",
     "Native precision and PR BF16 are separate precision experiments",
     "Other platform code inspected statically; no other-platform hardware run in this task"
-  ]
+  ],
+  "additional_scoring_smokes": {
+    "parti": {
+      "scope": "one generated input and CLIP score",
+      "count": 1,
+      "quality": {
+        "count": 1,
+        "clip_cosine_x100_mean": 15.35177081823349,
+        "clipscore_2_5_relu_cosine_mean": 0.38379427045583725
+      },
+      "mean_request_latency_s": 5.437624583020806,
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "score_resource_receipt_sha256": "5060002dd20e8e4dcdd9125b486235d4ad35b3fe04bd0a65e4fa04ab6bcf9b76"
+    },
+    "coco": {
+      "scope": "one generated input and CLIP score",
+      "count": 1,
+      "quality": {
+        "count": 1,
+        "clip_cosine_x100_mean": 31.867587566375732,
+        "clipscore_2_5_relu_cosine_mean": 0.7966896891593933
+      },
+      "mean_request_latency_s": 5.39003716991283,
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "score_resource_receipt_sha256": "ca95785547fdcd6e522973edff989eb2116cf2be4dc99ca04ba633c11179eb72"
+    },
+    "geneval": {
+      "scope": "scoring-only replay of six frozen legacy images, one per dimension",
+      "new_generation": false,
+      "new_generation_latency_claimed": false,
+      "formal_dataset_count": 553,
+      "quality": {
+        "count": 6,
+        "geneval_by_dimension": {
+          "color_attr": 0.0,
+          "colors": 1.0,
+          "counting": 1.0,
+          "position": 0.0,
+          "single_object": 1.0,
+          "two_object": 1.0
+        },
+        "geneval_overall": 0.6666666666666666
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "score_resource_receipt_sha256": "bd1eed5e2b9d677d5864c1060b1ace440add3232f9fe55e308187e44b99e802a",
+      "pillow": "12.3.0",
+      "evaluator_runtime_sha256": "f767660eeee7d2fc399912dbd0263c1cd9f945cb2b14bb4676054ee8a317f827"
+    }
+  }
 }

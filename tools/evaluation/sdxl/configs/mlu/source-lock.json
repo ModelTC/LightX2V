@@ -5,16 +5,43 @@
     "pull_request": 1754
   },
   "geneval": {
-    "repo": "djghosh13/geneval",
+    "repository": "https://github.com/djghosh13/geneval.git",
     "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
-    "files": [
+    "mlu_patches": [
       {
         "path": "evaluation/evaluate_images.py",
-        "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
-      },
-      {
-        "path": "evaluation/summary_scores.py",
-        "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+        "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46",
+        "runtime_sha256": "f767660eeee7d2fc399912dbd0263c1cd9f945cb2b14bb4676054ee8a317f827",
+        "replacements": [
+          {
+            "before": "import torch\nimport mmdet\nfrom mmdet.apis import inference_detector, init_detector\n\nimport open_clip\nfrom clip_benchmark.metrics import zeroshot_classification as zsc\n",
+            "after": "import torch\nimport mmdet\nfrom mmdet.apis import inference_detector, init_detector\nfrom mmcv.ops import RoIPool\nfrom mmcv.parallel import collate\nfrom mmdet.datasets import replace_ImageToTensor\nfrom mmdet.datasets.pipelines import Compose\n\nimport open_clip\nfrom clip_benchmark.metrics import zeroshot_classification as zsc\n"
+          },
+          {
+            "before": "    parser.add_argument(\"--outfile\", type=str, default=\"results.jsonl\")\n    parser.add_argument(\"--model-config\", type=str, default=None)\n    parser.add_argument(\"--model-path\", type=str, default=\"./\")\n    # Other arguments\n    parser.add_argument(\"--options\", nargs=\"*\", type=str, default=[])\n    args = parser.parse_args()\n",
+            "after": "    parser.add_argument(\"--outfile\", type=str, default=\"results.jsonl\")\n    parser.add_argument(\"--model-config\", type=str, default=None)\n    parser.add_argument(\"--model-path\", type=str, default=\"./\")\n    parser.add_argument(\"--device\", type=str, default=\"cuda\")\n    parser.add_argument(\"--clip-pretrained\", type=str, default=\"openai\")\n    parser.add_argument(\"--clip-backend\", choices=(\"open_clip\", \"transformers\"), default=\"open_clip\")\n    parser.add_argument(\"--trusted-clip-torchscript\", action=\"store_true\")\n    parser.add_argument(\"--start-index\", type=int, default=0)\n    parser.add_argument(\"--end-index\", type=int, default=None)\n    # Other arguments\n    parser.add_argument(\"--options\", nargs=\"*\", type=str, default=[])\n    args = parser.parse_args()\n"
+          },
+          {
+            "before": "        )\n    return args\n\nDEVICE = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nassert DEVICE == \"cuda\"\n\ndef timed(fn):\n    def wrapper(*args, **kwargs):\n",
+            "after": "        )\n    return args\n\nDEVICE = None\n\ndef timed(fn):\n    def wrapper(*args, **kwargs):\n"
+          },
+          {
+            "before": "    object_detector = init_detector(CONFIG_PATH, CKPT_PATH, device=DEVICE)\n\n    clip_arch = args.options.get('clip_model', \"ViT-L-14\")\n    clip_model, _, transform = open_clip.create_model_and_transforms(clip_arch, pretrained=\"openai\", device=DEVICE)\n    tokenizer = open_clip.get_tokenizer(clip_arch)\n\n    with open(os.path.join(os.path.dirname(__file__), \"object_names.txt\")) as cls_file:\n        classnames = [line.strip() for line in cls_file]\n",
+            "after": "    object_detector = init_detector(CONFIG_PATH, CKPT_PATH, device=DEVICE)\n\n    clip_arch = args.options.get('clip_model', \"ViT-L-14\")\n    if args.clip_backend == \"open_clip\":\n        clip_model, _, transform = open_clip.create_model_and_transforms(\n            clip_arch, pretrained=args.clip_pretrained, device=DEVICE,\n            weights_only=not args.trusted_clip_torchscript,\n        )\n        tokenizer = open_clip.get_tokenizer(clip_arch)\n    else:\n        from transformers import CLIPModel, CLIPProcessor\n\n        processor = CLIPProcessor.from_pretrained(args.clip_pretrained, local_files_only=True)\n        hf_model = CLIPModel.from_pretrained(args.clip_pretrained, local_files_only=True).eval().to(DEVICE)\n\n        class TransformersClipAdapter(torch.nn.Module):\n            def __init__(self, model):\n                super().__init__()\n                self.model = model\n\n            def encode_text(self, batch):\n                return self.model.get_text_features(**batch)\n\n            def encode_image(self, pixels):\n                return self.model.get_image_features(pixel_values=pixels)\n\n        clip_model = TransformersClipAdapter(hf_model).eval()\n        transform = lambda image: processor(images=image, return_tensors=\"pt\").pixel_values[0]\n        tokenizer = lambda texts: processor.tokenizer(texts, padding=True, return_tensors=\"pt\")\n\n    with open(os.path.join(os.path.dirname(__file__), \"object_names.txt\")) as cls_file:\n        classnames = [line.strip() for line in cls_file]\n"
+          },
+          {
+            "before": "\n\ndef evaluate_image(filepath, metadata):\n    result = inference_detector(object_detector, filepath)\n    bbox = result[0] if isinstance(result, tuple) else result\n    segm = result[1] if isinstance(result, tuple) and len(result) > 1 else None\n    image = ImageOps.exif_transpose(Image.open(filepath))\n",
+            "after": "\n\ndef evaluate_image(filepath, metadata):\n    result = inference_detector_portable(object_detector, filepath)\n    bbox = result[0] if isinstance(result, tuple) else result\n    segm = result[1] if isinstance(result, tuple) and len(result) > 1 else None\n    image = ImageOps.exif_transpose(Image.open(filepath))\n"
+          },
+          {
+            "before": "    }\n\n\ndef main(args):\n    full_results = []\n    for subfolder in os.listdir(args.imagedir):\n        folderpath = os.path.join(args.imagedir, subfolder)\n        if not os.path.isdir(folderpath) or not subfolder.isdigit():\n            continue\n        with open(os.path.join(folderpath, \"metadata.jsonl\")) as fp:\n            metadata = json.load(fp)\n",
+            "after": "    }\n\n\ndef inference_detector_portable(model, filepath):\n    \"\"\"Keep the official inference path while adding MLU tensor placement.\n\n    mmdetection 2.x only scatters inputs when ``Tensor.is_cuda`` is true.\n    Cambricon tensors have ``device.type == 'mlu'`` instead, so the upstream\n    helper leaves its image tensor on CPU.  CUDA and CPU continue to use the\n    untouched upstream helper; only MLU uses this minimal placement shim.\n    \"\"\"\n    device = next(model.parameters()).device\n    if device.type != \"mlu\":\n        return inference_detector(model, filepath)\n    cfg = model.cfg.copy()\n    cfg.data.test.pipeline = replace_ImageToTensor(cfg.data.test.pipeline)\n    pipeline = Compose(cfg.data.test.pipeline)\n    data = pipeline(dict(img_info=dict(filename=filepath), img_prefix=None))\n    data = collate([data], samples_per_gpu=1)\n    data[\"img_metas\"] = [meta.data[0] for meta in data[\"img_metas\"]]\n    data[\"img\"] = [image.data[0].to(device) for image in data[\"img\"]]\n    for module in model.modules():\n        assert not isinstance(module, RoIPool), \"MLU inference with RoIPool is unsupported\"\n    with torch.no_grad():\n        return model(return_loss=False, rescale=True, **data)[0]\n\n\ndef main(args):\n    full_results = []\n    for subfolder in os.listdir(args.imagedir):\n        folderpath = os.path.join(args.imagedir, subfolder)\n        if not os.path.isdir(folderpath) or not subfolder.isdigit():\n            continue\n        index = int(subfolder)\n        if index < args.start_index or (args.end_index is not None and index >= args.end_index):\n            continue\n        with open(os.path.join(folderpath, \"metadata.jsonl\")) as fp:\n            metadata = json.load(fp)\n"
+          },
+          {
+            "before": "\nif __name__ == \"__main__\":\n    args = parse_args()\n    object_detector, (clip_model, transform, tokenizer), classnames = load_models(args)\n    THRESHOLD = float(args.options.get('threshold', 0.3))\n    COUNTING_THRESHOLD = float(args.options.get('counting_threshold', 0.9))\n",
+            "after": "\nif __name__ == \"__main__\":\n    args = parse_args()\n    DEVICE = args.device\n    if DEVICE == \"auto\":\n        DEVICE = \"cuda\" if torch.cuda.is_available() else (\"mlu\" if hasattr(torch, \"mlu\") and torch.mlu.is_available() else \"cpu\")\n    if not (DEVICE.startswith(\"cuda\") or DEVICE.startswith(\"mlu\")):\n        raise RuntimeError(\"Official GenEval Mask2Former evaluation requires a CUDA or MLU accelerator\")\n    object_detector, (clip_model, transform, tokenizer), classnames = load_models(args)\n    THRESHOLD = float(args.options.get('threshold', 0.3))\n    COUNTING_THRESHOLD = float(args.options.get('counting_threshold', 0.9))\n"
+          }
+        ]
       }
     ]
   },

@@ -201,3 +201,20 @@ For completed full campaigns, `evaluate.py compare-mlu --dataset ...
 both qualities and the mean end-to-end latency ratio. It requires full coverage
 and valid host resource/cleanup evidence, and does not claim exact equality
 between native precision and PR BF16. Smoke results remain explicitly partial.
+
+
+GenEval's MLU source lock reconstructs the previously validated device-placement
+shim from the pinned upstream evaluator. Its exact runtime hash is preserved;
+matching/counting rules are unchanged. Do not replace this overlay with the
+CUDA evaluator file hash when importing NVIDIA package/evaluator locks.
+
+
+For GenEval use the dedicated scoring image/paths template
+`configs/mlu/paths-geneval.json` and provision the locked evaluator dependencies.
+`metric_image` selects this environment without changing the generation image.
+Build `scripts/platform/mlu/Dockerfile.geneval` with the existing MLU scoring
+base as `BASE_IMAGE`. It pins Pillow 12.3.0, matching A100: Pillow 13 rejects the
+upstream NumPy crop box through an ambiguous-truth-value API change. Keep the
+six-dimension check; a one-image smoke does not satisfy the GenEval aggregate
+protocol. Frozen existing images can be rescored separately with their origin
+recorded, without claiming new generation or full-dataset latency evidence.

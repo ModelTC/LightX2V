@@ -1,0 +1,6 @@
+# Score environment only; preserve torch_mlu hardware stack.
+Pillow==12.3.0
+open_clip_torch==2.20.0
+clip_benchmark==1.6.2
+pycocotools==2.0.10
+terminaltables==3.1.10
