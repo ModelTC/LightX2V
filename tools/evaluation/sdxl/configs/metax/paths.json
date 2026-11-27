@@ -18,6 +18,5 @@
     "/absolute/replace/workspace",
     "/absolute/replace/assets"
   ],
-  "metric_image": "lightx2v-metax-metrics:20261127",
-  "metric_pythonpath": "/absolute/replace/mmcv-1.7.2"
+  "metric_image": "lightx2v-metax-metrics:20261127"
 }
