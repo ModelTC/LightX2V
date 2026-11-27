@@ -34,8 +34,9 @@ def load_sf3d(config):
         raise FileNotFoundError("Prepare the fixed SF3D grid first: python scripts/sf3d/prepare_assets.py --model-path " + str(root))
     model = SF3D(cfg).eval()
     tensors = load_safetensors_from_path(str(root / "model.safetensors"))
-    dino = {k.removeprefix("image_tokenizer.model."): tensors.pop(k).to(device="cuda", dtype=torch.bfloat16) for k in list(tensors) if k.startswith("image_tokenizer.model.")}
-    clip = {k.removeprefix("image_estimator.model.visual."): tensors.pop(k).to(device="cuda", dtype=torch.bfloat16) for k in list(tensors) if k.startswith("image_estimator.model.visual.")}
+    device = "mlu" if config.get("device", "cuda").startswith("mlu") else "cuda"
+    dino = {k.removeprefix("image_tokenizer.model."): tensors.pop(k).to(device=device, dtype=torch.bfloat16) for k in list(tensors) if k.startswith("image_tokenizer.model.")}
+    clip = {k.removeprefix("image_estimator.model.visual."): tensors.pop(k).to(device=device, dtype=torch.bfloat16) for k in list(tensors) if k.startswith("image_estimator.model.visual.")}
     # CLIP's text tower is stored in the training checkpoint but never used by
     # single-image material estimation. List this intentional exclusion.
     unused_text = [k for k in tensors if k.startswith("image_estimator.model.")]
@@ -46,7 +47,7 @@ def load_sf3d(config):
         if key.startswith("global_estimator."):
             tensors.pop(key)
     model.load_state_dict(tensors, strict=True)
-    model = model.float().cuda()
+    model = model.float().to(device)
     # Keep the field decoder and all geometry buffers in FP32. Cast neural
     # features too, so positional tokens cannot promote BF16 residual streams.
     for name in ("camera_embedder", "image_tokenizer", "tokenizer", "backbone", "post_processor", "image_estimator"):

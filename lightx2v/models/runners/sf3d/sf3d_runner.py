@@ -19,8 +19,8 @@ class SF3DRunner(BaseRunner):
         return ".glb"
 
     def init_modules(self):
-        validate_a100_config(self.config)
-        if self.config.get("deterministic_algorithms", True):
+        self.device = validate_a100_config(self.config)
+        if self.device.type == "cuda" and self.config.get("deterministic_algorithms", True):
             # UV normals/tangents use scatter reductions. A fixed seed alone
             # does not make their CUDA accumulation order deterministic.
             os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
@@ -33,7 +33,7 @@ class SF3DRunner(BaseRunner):
         with Image.open(input_info.image_path) as source:
             image = source.convert("RGBA")
         image = resize_foreground(remove_background(image, self.background), self.config.get("foreground_ratio", 0.85))
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.autocast(self.device.type, dtype=torch.bfloat16):
             mesh, _ = self.model.generate(image, self.config.get("bake_resolution", 1024))
         if not len(mesh.vertices) or not len(mesh.faces) or not np.isfinite(mesh.vertices).all():
             raise FloatingPointError("SF3D produced an empty or non-finite mesh")

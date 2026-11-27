@@ -8,10 +8,24 @@ save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/sf3d/result.
 
 if [[ "${1:-}" == "--help" ]]; then
   echo "Usage: MODEL_PATH=/local/weights PYTHON_BIN=python [INPUT_PATH=one-image] bash scripts/platforms/mlu/run_sf3d.sh [lightx2v.infer arguments]"
-  echo "Preparation: scripts/sf3d/README.md; status: placeholder, exits without inference"
+  echo "Preparation: scripts/sf3d/README.md; MLU exports a geometry-only GLB"
   exit 0
 fi
 
 export PLATFORM=cambricon_mlu
-echo "This platform is a placeholder; A100 is the only implemented target." >&2
-exit 2
+export MLU_VISIBLE_DEVICES="${MLU_VISIBLE_DEVICES:-0}"
+export PYTHONPATH="${lightx2v_path}:${PYTHONPATH:-}"
+source "${lightx2v_path}/scripts/base/base.sh"
+export DTYPE=BF16
+mkdir -p -- "$(dirname -- "${save_result_path}")"
+cd -- "${lightx2v_path}"
+
+"${PYTHON_BIN:-python}" -c 'import torch_mlu; from lightx2v.infer import main; main()' \
+  --model_cls sf3d \
+  --task i23d \
+  --model_path "${model_path}" \
+  --config_json "${config_json}" \
+  --image_path "${INPUT_PATH:?Set INPUT_PATH to one image}" \
+  --save_result_path "${save_result_path}" \
+  --seed "${SEED:-42}" \
+  "$@"

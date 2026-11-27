@@ -20,10 +20,7 @@ from lightx2v.models.networks.sf3d.utils.mesh import Mesh
 try:
     from texture_baker import TextureBaker
 except ImportError:
-    import logging
-
-    logging.getLogger(__name__).warning("Could not import texture_baker. Please install it via `pip install texture-baker/`")
-    raise ImportError("texture_baker not found")
+    TextureBaker = None
 
 
 class SF3D(BaseModule):
@@ -69,7 +66,7 @@ class SF3D(BaseModule):
         self.bbox: Float[Tensor, "2 3"]
         self.register_buffer("bbox", torch.as_tensor([[-self.cfg.radius, -self.cfg.radius, -self.cfg.radius], [self.cfg.radius, self.cfg.radius, self.cfg.radius]], dtype=torch.float32))
         self.isosurface_helper = MarchingTetrahedraHelper(self.cfg.isosurface_resolution, self.cfg.tets_path)
-        self.baker = TextureBaker()
+        self.baker = TextureBaker() if TextureBaker is not None and get_device() != "mlu" else None
         self.image_processor = ImageProcessor()
 
     def triplane_to_meshes(self, triplanes: Float[Tensor, "B 3 Cp Hp Wp"]) -> list[Mesh]:

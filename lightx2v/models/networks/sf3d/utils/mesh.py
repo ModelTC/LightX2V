@@ -10,11 +10,7 @@ from lightx2v.models.networks.sf3d.utils.base import dot
 try:
     from uv_unwrapper import Unwrapper
 except ImportError:
-    import logging
-
-    logging.getLogger(__name__).warning("Could not import uv_unwrapper. Please install it via `pip install uv_unwrapper/`")
-    # Exit early to avoid further errors
-    raise ImportError("uv_unwrapper not found")
+    Unwrapper = None
 
 
 class Mesh:
@@ -24,7 +20,7 @@ class Mesh:
         self._v_nrm: Float[Tensor, "Nv 3"] | None = None
         self._v_tng: Float[Tensor, "Nv 3"] | None = None
         self._v_tex: Float[Tensor, "Nt 3"] | None = None
-        self.unwrapper = Unwrapper()
+        self.unwrapper = Unwrapper() if Unwrapper is not None else None
 
     @property
     def v_nrm(self):
@@ -120,6 +116,8 @@ class Mesh:
         self,
         island_padding: float = 0.02,
     ) -> Mesh:
+        if self.unwrapper is None:
+            raise RuntimeError("SF3D texture baking requires the optional uv_unwrapper extension")
         uv, indices = self.unwrapper(self.v_pos, self.v_nrm, self.t_pos_idx, island_padding)
 
         # Do store per vertex UVs.

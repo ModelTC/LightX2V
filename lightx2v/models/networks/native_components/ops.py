@@ -25,7 +25,12 @@ class Linear(nn.Module):
         self.native_requires_grad = native_requires_grad
 
     def forward(self, x):
-        dtype = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") else self.weight.dtype
+        device_type = self.weight.device.type
+        try:
+            autocast_enabled = torch.is_autocast_enabled(device_type)
+            dtype = torch.get_autocast_dtype(device_type) if autocast_enabled else self.weight.dtype
+        except (RuntimeError, TypeError):
+            dtype = self.weight.dtype
         if dtype not in self._ops:
             op = MM_WEIGHT_REGISTER["Default"]("weight", "bias" if self.bias is not None else None)
             tensors = {"weight": self.weight.to(dtype)}

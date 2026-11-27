@@ -14,6 +14,11 @@ def get_device():
     if os.environ.get("SF3D_USE_CPU", "0") == "1":
         return "cpu"
 
+    if os.environ.get("PLATFORM") == "cambricon_mlu":
+        if getattr(torch, "mlu", None) is None or not torch.mlu.is_available():
+            raise RuntimeError("PLATFORM=cambricon_mlu requires an available torch.mlu device")
+        return "mlu"
+
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda"

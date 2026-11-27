@@ -58,7 +58,7 @@ class PixelShuffleUpsampleNetwork(BaseModule):
 
 class _TruncExp(Function):
     @staticmethod
-    @conditional_decorator(custom_fwd, "cuda" in get_device(), cast_inputs=torch.float32, device_type="cuda")
+    @conditional_decorator(custom_fwd, get_device() == "cuda", cast_inputs=torch.float32, device_type=get_device())
     def forward(ctx, x):
         from lightx2v.models.networks.sf3d.infer.network import _TruncExp_forward
 

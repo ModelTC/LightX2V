@@ -127,6 +127,17 @@ def SF3D_generate_mesh(self, batch, bake_resolution: int) -> Tuple[List[trimesh.
     with torch.no_grad(), torch.autocast(device_type=device, enabled=False) if "cuda" in device else nullcontext():
         scene_codes = scene_codes.float()
         meshes = self.triplane_to_meshes(scene_codes)
+        if device == "mlu":
+            rets = []
+            for mesh in meshes:
+                vertices = convert_data(mesh.v_pos)
+                faces = convert_data(mesh.t_pos_idx)
+                tmesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+                tmesh.apply_transform(trimesh.transformations.rotation_matrix(np.radians(-90), [1, 0, 0]))
+                tmesh.apply_transform(trimesh.transformations.rotation_matrix(np.radians(90), [0, 1, 0]))
+                tmesh.invert()
+                rets.append(tmesh)
+            return (rets, global_dict)
         rets = []
         for i, mesh in enumerate(meshes):
             if mesh.v_pos.shape[0] == 0:
