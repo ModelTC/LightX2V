@@ -1,6 +1,6 @@
 # sf3d original-project / LightX2V evaluation
 
-The MLU590 entry currently runs one frozen GSO input through pinned inference PR #1753 and checks that a finite geometry GLB is written. It is a functional smoke only. It does not run the native comparison, score quality, or produce latency evidence. The MLU path omits UV unwrap and texture baking because the pinned extensions are CUDA-specific.
+The MLU590 entry runs the complete 1,023-object GSO fixture through pinned inference PR #1753 on one physical card, then computes the PR's geometry metrics and per-request latency summary. It does not claim a native A100 comparison. The MLU path omits UV unwrap and texture baking because the pinned extensions are CUDA-specific; texture metrics are not part of the geometry protocol.
 
 ```bash
 cp tools/evaluation/sf3d/configs/mlu/paths.json tools/evaluation/sf3d/configs/mlu/paths.local.json
@@ -14,7 +14,7 @@ This developer-only package calls the pinned original implementation and inferen
 
 ## Reproduce
 
-Use Python 3.10 on an otherwise idle NVIDIA A100 40 GB. Native and LightX2V can have separate Python environments; do not mix their torch/transformers installations. Keep outputs on a filesystem with sufficient space. CPU-only source preparation and input checking use the standard library.
+Use Python 3.10 on an otherwise idle NVIDIA A100 40 GB for the CUDA comparison. On MLU590, run the LightX2V-only campaign with the MLU environment and keep the full dataset on one card. Native and LightX2V can have separate Python environments; do not mix their torch/transformers installations. Keep outputs on a filesystem with sufficient space. CPU-only source preparation and input checking use the standard library.
 
 ```bash
 EVAL=tools/evaluation/sf3d
@@ -27,6 +27,10 @@ python3 "$EVAL/evaluate.py" check-inputs --paths paths.local.json
 bash "$EVAL/scripts/platform/nvidia/run_eval.sh" campaign \
   --paths paths.local.json --dataset gso \
   --gpu GPU-REPLACE-WITH-FULL-UUID --output /absolute/results/sf3d --count 256
+# For the full MLU590 LightX2V run, use the matching inference PR checkout:
+MLU_PHYSICAL_CARD=0 PYTHON_BIN=/path/to/torch_mlu/python \
+  bash "$EVAL/scripts/platform/mlu/run_eval.sh" \
+  --paths configs/mlu/paths.local.json --output /absolute/results/sf3d-mlu --count 64
 ```
 
 Run each model–dataset campaign on exactly one fixed GPU. Different campaigns may run on different idle GPUs. Native and LightX2V chunks alternate serially on that same device; no cross-card sharding. Resource capture/check reuse the pinned LightX2V `tools/runtime/gpu_watch.py`; the host must expose real GPU PIDs and their /proc ancestry. MPS, MIG and proxy attribution are unsupported. Execute the campaign from the GPU host, not an isolated PID namespace.
