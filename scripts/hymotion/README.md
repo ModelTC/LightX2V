@@ -45,3 +45,5 @@ CLIP 文本清理默认为 `clip_text_cleanup: basic`，复用 Transformers 的 
 ## MetaX C500
 
 Use a MetaX PyTorch/MACA environment and run `bash scripts/hymotion/install_metax.sh`. The installer preserves the installed MetaX PyTorch. Launch with `MACA_VISIBLE_DEVICES=0 CUDA_VISIBLE_DEVICES=0 PYTHON_BIN=python3 bash scripts/platforms/metax/run_hymotion.sh`, using the same model and input environment variables documented above. The BF16/FP32 computation boundaries match the NVIDIA configuration.
+
+Build an isolated image from this checkout with `docker build --build-arg METAX_BASE_IMAGE=<compatible-metax-development-image> -f dockerfiles/platforms/Dockerfile_metax_hymotion -t lightx2v-hymotion-metax .`. The validated runtime uses Python 3.10, MetaX PyTorch 2.8.0+metax3.5.3.9 and MACA SDK 3.5.3.18. Keep weights and generated outputs in external mounts.
