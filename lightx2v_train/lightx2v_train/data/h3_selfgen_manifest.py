@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from lightx2v_train.data.cache_dataset import _single_sample_collate
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
 from lightx2v_train.trainers.turbo.cursor import TurboCursorSampler
@@ -86,4 +87,4 @@ def build_manifest_loader(data_config, train_or_val="train", unconditional_promp
     options = dict(seed=data_config["seed"], num_replicas=get_data_parallel_world_size(), rank=get_data_parallel_rank())
     sampler = PhaseSampler(dataset, start, **options) if start else TurboCursorSampler(dataset, **options)
     # Each item is already a native single-sample H3 batch.
-    return DataLoader(dataset, batch_size=None, sampler=sampler, num_workers=data_config.get("num_workers", 2))
+    return DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=data_config.get("num_workers", 2), collate_fn=_single_sample_collate)

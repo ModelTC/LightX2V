@@ -5,6 +5,7 @@ from itertools import islice
 import torch
 
 from lightx2v_train.data.h3_selfgen_manifest import PDMDManifest, PhaseSampler
+from lightx2v_train.trainers.dmd.trainer import DmdTrainer
 from lightx2v_train.trainers.dense2moe.data import ManifestAVDataset
 from lightx2v_train.trainers.dense2moe.runtime import AVSample
 from lightx2v_train.trainers.dense2moe.trainer import Dense2MoETrainer
@@ -87,9 +88,12 @@ def test_pdmd_entrypoint_reads_cached_condition_only(tmp_path, monkeypatch):
     validate_official_pdmd_config(cfg)
     cfg["data"]["train"]["num_workers"] = 0
     loader = build_data(cfg, "train")
+    trainer = DmdTrainer.__new__(DmdTrainer)
+    trainer.set_data(loader)
     loader.sampler.configure_from_microbatch_offset(start_microbatch=0, gradient_accumulation_iters=1, fake_update_ratio=5)
     item = next(iter(loader))
     assert item["meta"]["target_height"] == 768
+    assert item["meta"]["video_latent_path"] is None
     assert item["conditioning"]["positive"]["keyframe_anchors"].item() == 0
 
 
@@ -116,6 +120,10 @@ def test_dmad_recipe_only_registers_paired_records(tmp_path, monkeypatch):
     from lightx2v_train.utils.registry import build_data
 
     base = dict(task="t2av", num_frames=124, teacher_video="v", teacher_video_latent="v.pt", teacher_audio_latent="a.pt")
+    condition = tmp_path / "condition.pt"
+    positive = {"prompt_embeds": torch.ones(1, 3, 4), "condition_video_latents": torch.ones(2, 96)}
+    torch.save({"conditioning": {"positive": positive}}, condition)
+    base.update(condition=str(condition), training_prompt="test", sample_id="sample", height=768, width=1344)
     manifest = tmp_path / "dataset.json"
     manifest.write_text(json.dumps([base, dict(base, task="i2av"), dict(base, teacher_video=None), dict(base, teacher_audio_latent=None)]))
     for key in ("H3_MODEL_PATH", "H3_PDMD_OUTPUT", "H3_STUDENT_INIT"):
@@ -124,6 +132,11 @@ def test_dmad_recipe_only_registers_paired_records(tmp_path, monkeypatch):
     cfg = load_config(Path(__file__).resolve().parents[3] / "configs/train/dmd/minimax_h3_manifest_pdmd4_dmad_fsdp32.yaml")
     validate_official_pdmd_config(cfg)
     loader = build_data(cfg, "train")
+    trainer = DmdTrainer.__new__(DmdTrainer)
+    trainer.set_data(loader)
+    item = next(iter(trainer.dataloader_train))
+    torch.testing.assert_close(item["conditioning"]["positive"], positive)
+    assert item["meta"]["audio_latent_path"] == "a.pt"
     assert len(loader.dataset) == 2 and loader.dataset.prompt_count == 0
     assert sorted(iter(loader.sampler)) == [0, 1]
     dmd = cfg["training"]["dmd"]
