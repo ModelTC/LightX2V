@@ -1,0 +1,119 @@
+{
+  "defaults": {
+    "seed": 831001,
+    "cfg_scale": null
+  },
+  "styles": {
+    "en_pop": "English, warm piano pop, expressive female voice, acoustic piano, rounded bass and light drums, lyrical memorable melody, unhurried phrasing, 88 BPM",
+    "zh_pop": "Mandarin, warm piano pop, expressive female voice, acoustic piano, rounded bass and light drums, lyrical melody, clear diction, unhurried phrasing, 88 BPM",
+    "pop_rock": "Mandarin, melodic pop rock, expressive female vocal, electric guitars, bass, live drums, energetic chorus, clear diction",
+    "instrumental": "Instrumental, warm solo piano, lyrical and gentle, no vocals, no singing, no choir, no spoken words.",
+    "acoustic": "English, warm pop ballad, expressive female voice, acoustic arrangement with fingerpicked acoustic guitar, upright bass and light hand percussion, lyrical memorable melody, unhurried phrasing, 88 BPM"
+  },
+  "functions": {
+    "1": {
+      "name": "01_score_melody_en",
+      "id": "city_lights",
+      "cot": "melody",
+      "style": "en_pop",
+      "lyrics_file": "lyrics_en.txt",
+      "abc_file": "melody_en.abc"
+    },
+    "2": {
+      "name": "02_text_en_full",
+      "id": "city_lights_full",
+      "cot": "full",
+      "style": "en_pop",
+      "lyrics_file": "lyrics_en.txt",
+      "abc_file": null
+    },
+    "3": {
+      "name": "03_text_en_melody",
+      "id": "city_lights_melody",
+      "cot": "melody",
+      "style": "en_pop",
+      "lyrics_file": "lyrics_en.txt",
+      "abc_file": null
+    },
+    "4": {
+      "name": "04_text_en_off",
+      "id": "city_lights_off",
+      "cot": "off",
+      "style": "en_pop",
+      "lyrics_file": "lyrics_en.txt",
+      "abc_file": null
+    },
+    "5": {
+      "name": "05_text_zh_full",
+      "id": "evening_zh_full",
+      "cot": "full",
+      "style": "zh_pop",
+      "lyrics_file": "lyrics_zh.txt",
+      "abc_file": null
+    },
+    "6": {
+      "name": "06_text_zh_melody",
+      "id": "evening_zh_melody",
+      "cot": "melody",
+      "style": "zh_pop",
+      "lyrics_file": "lyrics_zh.txt",
+      "abc_file": null
+    },
+    "7": {
+      "name": "07_text_zh_off",
+      "id": "evening_zh_off",
+      "cot": "off",
+      "style": "zh_pop",
+      "lyrics_file": "lyrics_zh.txt",
+      "abc_file": null
+    },
+    "8": {
+      "name": "08_cover_pop_rock",
+      "id": "short_cover_pop_rock",
+      "cot": "melody",
+      "style": "pop_rock",
+      "lyrics_file": "lyrics_cover_zh.txt",
+      "abc_file": "melody_cover_zh.abc"
+    },
+    "9": {
+      "name": "09_edit_before",
+      "id": "city_lights",
+      "cot": "full",
+      "style": "en_pop",
+      "lyrics_file": "lyrics_en.txt",
+      "abc_file": "score_en.abc"
+    },
+    "10": {
+      "name": "10_edit_after",
+      "id": "city_lights",
+      "cot": "full",
+      "style": "en_pop",
+      "lyrics_file": "lyrics_en.txt",
+      "abc_file": "score_en_edited.abc"
+    },
+    "11": {
+      "name": "11_instrumental",
+      "id": "instrumental",
+      "cot": "full",
+      "style": "instrumental",
+      "lyrics_file": null,
+      "abc_file": "score_instrumental.abc"
+    },
+    "12": {
+      "name": "12_full_song_zh",
+      "id": "lv_zhou_cover",
+      "cot": "melody",
+      "style": "pop_rock",
+      "lyrics_file": "lyrics_full_song_zh.txt",
+      "abc_file": "melody_full_song_zh.abc"
+    },
+    "13": {
+      "name": "13_arrangement_acoustic",
+      "id": "14_arrangement_acoustic",
+      "cot": "full",
+      "style": "acoustic",
+      "lyrics_file": "lyrics_en.txt",
+      "abc_file": "score_en.abc"
+    }
+  }
+}

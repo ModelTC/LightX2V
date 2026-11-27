@@ -11,6 +11,8 @@ class ModelEntry:
 
 
 RUNNER_MODULES = {
+    "yue2": ModelEntry("yue2.yue2_runner", "yue2.config.load_config"),
+    "seedvc": ModelEntry("seedvc.seedvc_runner", "seedvc.config.load_config"),
     "bagel": ModelEntry("bagel.bagel_runner"),
     "cosmos3": ModelEntry("cosmos3.cosmos3_runner", config="cosmos3.config.load_config"),
     "depth_anything3": ModelEntry("depth_anything3.depth_anything3_runner"),

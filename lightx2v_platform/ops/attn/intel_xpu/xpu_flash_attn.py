@@ -16,8 +16,8 @@ import warnings
 import torch
 import torch.nn.functional as F
 
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
+from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
 try:
     import sycl_kernels as _sycl_mod
@@ -71,7 +71,7 @@ def _sdp(q4d, k4d, v4d):
     return out.permute(0, 2, 1, 3)  # → [1, L_q, H, D]
 
 
-@ATTN_WEIGHT_REGISTER("intel_xpu_flash_attn")
+@PLATFORM_ATTN_WEIGHT_REGISTER("intel_xpu_flash_attn")
 class IntelXpuFlashAttnWeight(AttnWeightTemplate):
     """
     Flash Attention for Intel XPU.

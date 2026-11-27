@@ -6,11 +6,9 @@ import torch
 import torch.distributed as dist
 from safetensors import safe_open
 
-from lightx2v.common.ops.mm.mm_weight import MMWeightQuantTemplate as CommonMMWeightQuantTemplate
-from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate, MMWeightTemplate
-from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
+from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER, PLATFORM_RMS_WEIGHT_REGISTER
 
 try:
     import sycl_kernels
@@ -46,6 +44,9 @@ def _get_intel_tensor_parallel_class():
     """Build the subclass after the common TensorParallel class is registered."""
     global _INTEL_TENSOR_PARALLEL_CLASS
     if _INTEL_TENSOR_PARALLEL_CLASS is None:
+        # Imported lazily: platform ops register before the framework registry exists.
+        from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
+
         tensor_parallel_class = MM_WEIGHT_REGISTER["TensorParallel"]
 
         class IntelTensorParallelWeight(tensor_parallel_class):
@@ -75,7 +76,7 @@ def _get_intel_tensor_parallel_class():
     return _INTEL_TENSOR_PARALLEL_CLASS
 
 
-@MM_WEIGHT_REGISTER("IntelTensorParallel")
+@PLATFORM_MM_WEIGHT_REGISTER("IntelTensorParallel")
 class IntelTensorParallel:
     """Lazily construct the Intel XPU tensor-parallel MM wrapper."""
 
@@ -83,7 +84,7 @@ class IntelTensorParallel:
         return _get_intel_tensor_parallel_class()(*args, **kwargs)
 
 
-@MM_WEIGHT_REGISTER("int8-intel-xpu")
+@PLATFORM_MM_WEIGHT_REGISTER("int8-intel-xpu")
 class MMWeightInt8IntelXpu(MMWeightQuantTemplate):
     """Dynamic per-token W8A8 linear backed by the Intel XPU extension."""
 
@@ -135,8 +136,8 @@ class MMWeightInt8IntelXpu(MMWeightQuantTemplate):
         return output.reshape(*original_shape, self.weight.shape[0])
 
 
-@MM_WEIGHT_REGISTER("fp8-intel-xpu")
-class MMWeightFp8IntelXpu(CommonMMWeightQuantTemplate):
+@PLATFORM_MM_WEIGHT_REGISTER("fp8-intel-xpu")
+class MMWeightFp8IntelXpu(MMWeightQuantTemplate):
     """Per-output-channel FP8 linear backed by the Intel XPU extension."""
 
     def __init__(
@@ -164,6 +165,8 @@ class MMWeightFp8IntelXpu(CommonMMWeightQuantTemplate):
         )
         self.load_func = self.load_fp8_perchannel_sym
         self.weight_need_transpose = False
+        # The platform template fixes infer_dtype to BF16; follow DTYPE like the core template.
+        self.infer_dtype = GET_DTYPE()
 
     def apply(self, input_tensor):
         if sycl_kernels is not None:
@@ -199,6 +202,9 @@ def _get_tensor_parallel_rms_class():
     """Build the subclass after the common TensorParallelFP32 class is registered."""
     global _TENSOR_PARALLEL_RMS_CLASS
     if _TENSOR_PARALLEL_RMS_CLASS is None:
+        # Imported lazily: platform ops register before the framework registry exists.
+        from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
+
         tensor_parallel_rms_class = RMS_WEIGHT_REGISTER["TensorParallelFP32"]
 
         class TensorParallelRMSWeight(tensor_parallel_rms_class):
@@ -228,7 +234,7 @@ def _get_tensor_parallel_rms_class():
     return _TENSOR_PARALLEL_RMS_CLASS
 
 
-@RMS_WEIGHT_REGISTER("IntelTensorParallelFP32")
+@PLATFORM_RMS_WEIGHT_REGISTER("IntelTensorParallelFP32")
 class IntelTensorParallelRMSWeight:
     """Lazily construct the Intel XPU tensor-parallel RMSNorm wrapper."""
 

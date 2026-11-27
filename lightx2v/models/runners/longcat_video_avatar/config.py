@@ -53,15 +53,20 @@ def _validate_config(config):
         raise ValueError("mix_steps must be an integer in [1, 8]")
     if type(mix_alpha) not in (int, float) or not 0 <= mix_alpha <= 1:
         raise ValueError("mix_alpha must be a number in [0, 1]")
-    for key in ("enable_cfg", "dit_quantized", "t5_quantized", "cpu_offload", "lazy_load", "unload_modules", "lora_configs", "model_variant"):
+    if config.get("dit_quantized") and (config.get("dit_quant_scheme") != "fp8-sgl" or not config.get("dit_quantized_ckpt") or not config.get("premerge_lora")):
+        raise ValueError("LongCat FP8 requires dit_quant_scheme=fp8-sgl, dit_quantized_ckpt and premerge_lora=true")
+    for key in ("enable_cfg", "t5_quantized", "cpu_offload", "lazy_load", "unload_modules", "lora_configs", "model_variant"):
         if config.get(key):
-            raise ValueError(f"LongCat-Video-Avatar BF16 distillation does not support {key}")
+            raise ValueError(f"LongCat-Video-Avatar distillation does not support {key}")
     if config.get("feature_caching", "NoCaching") != "NoCaching":
         raise ValueError("LongCat-Video-Avatar requires feature_caching=NoCaching")
     parallel = config.get("parallel") or {}
-    if parallel.get("seq_p_size", 1) not in (1, 2) or any(parallel.get(key, 1) != 1 for key in ("cfg_p_size", "tensor_p_size", "pp_size")):
-        raise ValueError("LongCat-Video-Avatar supports one device or two-way sequence parallelism")
-    if parallel.get("seq_p_size") == 2 and parallel.get("seq_p_attn_type", "ulysses") != "ulysses":
-        raise ValueError("LongCat-Video-Avatar SP2 requires parallel.seq_p_attn_type=ulysses")
+    if any(parallel.get(key, 1) != 1 for key in ("cfg_p_size", "tensor_p_size", "pp_size")):
+        raise ValueError("LongCat-Video-Avatar supports sequence parallelism only")
+    size = parallel.get("seq_p_size", 1)
+    if type(size) is not int or size < 1 or config["num_heads"] % size:
+        raise ValueError(f"parallel.seq_p_size must be a positive divisor of the {config['num_heads']} attention heads")
+    if size > 1 and parallel.get("seq_p_attn_type", "ulysses") != "ulysses":
+        raise ValueError("LongCat-Video-Avatar sequence parallelism requires parallel.seq_p_attn_type=ulysses")
     if config["attn_type"] not in ("flash_attn2", "flash_attn3"):
         raise ValueError("LongCat-Video-Avatar attn_type must be flash_attn2 or flash_attn3")

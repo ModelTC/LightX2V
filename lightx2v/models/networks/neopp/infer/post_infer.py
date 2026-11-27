@@ -1,7 +1,7 @@
 class NeoppPostInfer:
     def __init__(self, config):
         self.config = config
-        self.t_eps = 0.02
+        self.t_eps = config.get("t_eps", 0.02)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

@@ -29,7 +29,7 @@ class NeoppModel(BaseTransformerModel):
         self.cfg_scale = self.config.get("cfg_scale", 4.0)
         self.cfg_norm = self.config.get("cfg_norm", "global")
         self.patch_size = self.config.get("patch_size", 16)
-        self.merge_size = 2
+        self.merge_size = 1 if self.config.get("gen_image_arch") == "patch2d16" else 2
         if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
@@ -107,6 +107,9 @@ class NeoppModel(BaseTransformerModel):
             pre_infer_out.image_embeds_cond = pre_infer_out.image_embeds
             pre_infer_out.image_embeds_uncond = pre_infer_out.image_embeds
 
+        if inputs.get("image_guidance_scale") is not None and self.enable_cfg and not self.config.get("cfg_parallel", False):
+            return self._infer_edit(inputs, pre_infer_out)
+
         if self.enable_cfg:
             t = self.scheduler.timesteps[self.scheduler.step_index]
             use_cfg = t >= self.cfg_interval[0] and t <= self.cfg_interval[1] and self.cfg_scale > 1
@@ -149,6 +152,31 @@ class NeoppModel(BaseTransformerModel):
         else:
             # ==================== No CFG Processing ====================
             return self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
+
+    def _infer_edit(self, inputs, pre_infer_out):
+        text_scale = self.cfg_scale
+        image_scale = inputs["image_guidance_scale"]
+        cond = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=True)
+        if text_scale == 1 and image_scale == 1:
+            return cond
+        t = self.scheduler.timesteps[self.scheduler.step_index]
+        start, end = self.cfg_interval
+        if start != 0 and not (start < t < end):
+            return cond
+
+        if image_scale == 1:
+            image_cond = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=False)
+            pred = image_cond + text_scale * (cond - image_cond)
+        elif text_scale == image_scale:
+            uncond = self._infer_cond_uncond(inputs["fully_unconditioned"], pre_infer_out, infer_condition=False)
+            pred = uncond + text_scale * (cond - uncond)
+        else:
+            image_cond = self._infer_cond_uncond(inputs, pre_infer_out, infer_condition=False)
+            uncond = self._infer_cond_uncond(inputs["fully_unconditioned"], pre_infer_out, infer_condition=False)
+            pred = uncond + text_scale * (cond - image_cond) + image_scale * (image_cond - uncond)
+        if text_scale > 1 or image_scale > 1:
+            pred = self.cfg_norm_func(pred, cond)
+        return pred
 
     def _infer_cond_uncond(self, inputs, pre_infer_out, infer_condition: bool):
         self.scheduler.infer_condition = infer_condition

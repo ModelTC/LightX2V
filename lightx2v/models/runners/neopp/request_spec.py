@@ -19,17 +19,10 @@ class NeoppSpec(MultiTaskSpec):
         runner.set_inference_params(args.index_offset_cond, args.index_offset_uncond, **options)
 
 
-SPECS = {
-    "neopp": NeoppSpec(
-        {
-            "t2i": dict(
-                without(COMMON, "return_result_tensor"),
-                size=Argument(input_info_default=[], type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
-            ),
-            "i2i": dict(
-                without(COMMON, "return_result_tensor"),
-                size=Argument(input_info_default=[], type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
-            ),
-        },
-    ),
-}
+NEO_IMAGE = dict(
+    without(COMMON, "return_result_tensor"),
+    size=Argument(input_info_default=[], type=list[int], help="Output size in pixels: HEIGHT WIDTH"),
+    num_loops=Argument(type=int, ge=1, le=16, strict=True, help="Override the checkpoint's generation core passes per denoising step (1-16)."),
+)
+
+SPECS = {"neopp": NeoppSpec({"t2i": NEO_IMAGE, "i2i": NEO_IMAGE})}

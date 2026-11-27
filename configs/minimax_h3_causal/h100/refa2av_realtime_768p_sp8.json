@@ -15,7 +15,7 @@
   "audio_vae_decode_overlap": true,
   "vae_rgb_pinned_memory": true,
   "video_streaming_encode": true,
-  "reference_image_resize_mode": "match",
+  "reference_image_resize_mode": "crop",
   "reference_condition_cache": true,
   "attn_type": "flash_attn3",
   "rms_type": "torch_native",

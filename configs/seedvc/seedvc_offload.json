@@ -1,0 +1,11 @@
+{
+  "model_cls": "seedvc",
+  "model_variant": "svc",
+  "cpu_offload": true,
+  "offload_granularity": "block",
+  "use_compile": false,
+  "warmup": false,
+  "request_defaults": {
+    "seed": 2026
+  }
+}

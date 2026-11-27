@@ -3,12 +3,18 @@ import torch
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 
 
+def lora_strengths_by_step(config):
+    """Return the (DMD, OPSD) strengths for each denoising step."""
+    alpha = config["mix_alpha"]
+    mix_steps = config["mix_steps"]
+    return [(alpha, 1.0 - alpha)] * mix_steps + [(0.0, 1.0)] * (config["infer_steps"] - mix_steps)
+
+
 class LongCatVideoAvatarScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.keep_latents_dtype_in_scheduler = True
-        self.mix_steps = config["mix_steps"]
-        self.mix_alpha = config["mix_alpha"]
+        self.lora_schedule = lora_strengths_by_step(config)
         train_steps = 1000
         stride = train_steps // self.infer_steps
         raw_sigmas = torch.linspace(1, 0, train_steps, dtype=torch.float32)[::stride]
@@ -35,23 +41,19 @@ class LongCatVideoAvatarScheduler(BaseScheduler):
         if anchor is not None:
             self.latents = torch.cat((anchor, self.latents), dim=2)
             self.num_cond_latents += 1
-        self.frame_timesteps = torch.zeros(self.latents.shape[2], device=device, dtype=torch.bfloat16)
         self.sigmas = self.sigmas.to(device)
         self.timesteps = self.timesteps.to(device)
 
     def step_pre(self, step_index):
         super().step_pre(step_index)
-        self.frame_timesteps[self.num_cond_latents :] = self.timesteps[step_index]
-        dmd = self.mix_alpha if step_index < self.mix_steps else 0.0
-        self.lora_strengths = (dmd, 1.0 - dmd)
+        self.lora_strengths = self.lora_schedule[step_index]
 
     def step_post(self):
         # The upstream pipeline negates the DiT prediction before its Euler step.
         sigma_delta = self.sigmas[self.step_index] - self.sigmas[self.step_index + 1]
-        self.latents[:, :, self.num_cond_latents :] += sigma_delta * self.noise_pred[:, :, self.num_cond_latents :]
+        self.latents[:, :, self.num_cond_latents :] += sigma_delta * self.noise_pred
         self.noise_pred = None
 
     def clear(self):
         self.latents = None
         self.noise_pred = None
-        self.frame_timesteps = None

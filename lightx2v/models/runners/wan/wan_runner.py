@@ -333,7 +333,13 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
         return image_encoder
 
+    def _t5_rank0_only(self):
+        return self.config.get("t5_rank0_only", False) and dist.is_initialized() and dist.get_world_size() > 1
+
     def load_text_encoder(self):
+        if self._t5_rank0_only() and dist.get_rank() != 0:
+            # Only global rank 0 holds T5; contexts are broadcast in run_text_encoder_batch.
+            return [None]
         # offload config
         t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload", False))
         if t5_offload:
@@ -679,6 +685,30 @@ class WanRunner(DisaggMixin, DefaultRunner):
         embeddings = self.text_encoders[0].infer(prompts)
         return torch.stack([torch.cat([value, value.new_zeros(self.config["text_len"] - value.size(0), value.size(1))]) for value in embeddings])
 
+    def _encode_text_contexts_on_rank0(self, prompts, negative_prompts):
+        enable_cfg = self.config.get("enable_cfg", False)
+        names = ["context", "context_null"] if enable_cfg else ["context"]
+        if dist.get_rank() == 0:
+            tensors = [self._encode_text_contexts(prompts)]
+            if enable_cfg:
+                tensors.append(self._encode_text_contexts(negative_prompts))
+            meta = [[(t.shape, t.dtype) for t in tensors]]
+        else:
+            tensors, meta = None, [None]
+        dist.broadcast_object_list(meta, src=0)
+        if tensors is None:
+            tensors = [torch.empty(shape, dtype=dtype, device=AI_DEVICE) for shape, dtype in meta[0]]
+        for tensor in tensors:
+            dist.broadcast(tensor, src=0)
+        output = dict(zip(names, tensors))
+        if not enable_cfg:
+            output["context_null"] = None
+        elif self.config.get("cfg_parallel", False):
+            # Keep the same per-rank keys as the regular CFG-parallel path.
+            cfg_p_rank = dist.get_rank(self.config["device_mesh"].get_group(mesh_dim="cfg_p"))
+            output.pop("context_null" if cfg_p_rank == 0 else "context")
+        return output
+
     def run_text_encoder_batch(self, prompts, negative_prompts=None):
         """Encode a caller-selected prompt batch with the usual Wan padding."""
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
@@ -688,7 +718,9 @@ class WanRunner(DisaggMixin, DefaultRunner):
             for prompt in prompts:
                 monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
 
-        if self.config.get("enable_cfg", False) and self.config.get("cfg_parallel", False):
+        if self._t5_rank0_only():
+            text_encoder_output = self._encode_text_contexts_on_rank0(prompts, negative_prompts)
+        elif self.config.get("enable_cfg", False) and self.config.get("cfg_parallel", False):
             cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:

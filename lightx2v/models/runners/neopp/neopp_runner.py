@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from PIL import Image
 
 from lightx2v.models.networks.lora_adapter import LoraAdapter
+from lightx2v.models.networks.neopp.infer.gen_loop import generation_layers
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
@@ -61,7 +62,7 @@ class NeoppRunner(DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
         self.patch_size = self.config.get("patch_size", 16)
-        self.merge_size = 2
+        self.merge_size = 1 if self.config.get("gen_image_arch") == "patch2d16" else 2
         self.noise_scale_mode = self.config.get("noise_scale_mode", "resolution")
         self.noise_scale = self.config.get("noise_scale", 1.0)
         self.noise_scale_base_image_seq_len = self.config.get("noise_scale_base_image_seq_len", 64)
@@ -71,6 +72,8 @@ class NeoppRunner(DefaultRunner):
         self.inv_freq_t = self._build_inv_freq(head_dim // 2, llm_config["rope_theta"])
         self.inv_freq_hw = self._build_inv_freq(head_dim // 4, llm_config["rope_theta_hw"])
         self.enable_cfg = self.config.get("enable_cfg", False)
+        self.full_uncond_kv = None
+        self.image_guidance_scale = None
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
         if self.config.get("seq_parallel", False):
@@ -142,6 +145,12 @@ class NeoppRunner(DefaultRunner):
             else:
                 cos_t_uncond = sin_t_uncond = cos_h_uncond = sin_h_uncond = cos_w_uncond = sin_w_uncond = None
 
+            if self.full_uncond_kv is not None:
+                # All passes have identical spatial coordinates. Only the
+                # temporal position differs with the conditioning prefix.
+                t_full = torch.full_like(indexes_cond[0], self.full_uncond_offset)
+                cos_t_full, sin_t_full = self._compute_rope(t_full.unsqueeze(0), self.inv_freq_t)
+
             if self.seq_p_group is not None:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
@@ -167,7 +176,27 @@ class NeoppRunner(DefaultRunner):
                     cos_w_uncond = _pad_and_chunk(cos_w_uncond)
                     sin_w_uncond = _pad_and_chunk(sin_w_uncond)
 
+                if self.full_uncond_kv is not None:
+                    cos_t_full = _pad_and_chunk(cos_t_full)
+                    sin_t_full = _pad_and_chunk(sin_t_full)
+
+            llm_config = self.config["llm_config"]
+            num_loops = self.input_info.num_loops
+            layers = generation_layers(llm_config, num_loops)
+            effective_loops = llm_config.get("num_loops", 1) if num_loops is None else num_loops
+            logger.info(f"Neo generation request: num_loops={effective_loops}, layer_calls={len(layers)}")
             return {
+                "generation_layers": layers,
+                "image_guidance_scale": self.image_guidance_scale,
+                "fully_unconditioned": (
+                    {
+                        "past_key_values_uncond": self.full_uncond_kv,
+                        "generation_layers": layers,
+                        "cos_sin_uncond": (cos_t_full, sin_t_full, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
+                    }
+                    if self.full_uncond_kv is not None
+                    else None
+                ),
                 "past_key_values_cond": self.past_key_values_cond,
                 "past_key_values_uncond": self.past_key_values_uncond,
                 "cos_sin_cond": (cos_t_cond, sin_t_cond, cos_h_cond, sin_h_cond, cos_w_cond, sin_w_cond),
@@ -206,7 +235,20 @@ class NeoppRunner(DefaultRunner):
         self.model.cfg_scale = cfg_scale
         self.model.cfg_norm = cfg_norm
 
-    def set_kvcache(self, to_x2v_cond_kv: torch.Tensor, to_x2v_uncond_kv: torch.Tensor = None):
+    def set_kvcache(
+        self,
+        to_x2v_cond_kv: torch.Tensor,
+        to_x2v_uncond_kv: torch.Tensor = None,
+        *,
+        image_guidance_scale=None,
+        full_uncond_kv=None,
+        full_uncond_offset=None,
+    ):
+        if full_uncond_kv is not None and (not self.enable_cfg or self.config.get("cfg_parallel", False)):
+            raise ValueError("Three-branch editing requires CFG enabled and a single CFG rank")
+        self.image_guidance_scale = image_guidance_scale
+        self.full_uncond_kv = full_uncond_kv.to(AI_DEVICE) if full_uncond_kv is not None else None
+        self.full_uncond_offset = full_uncond_offset
         cfg_p_rank = self._get_cfg_p_rank()
         if cfg_p_rank != 1:
             self.past_key_values_cond = to_x2v_cond_kv.to(AI_DEVICE)
@@ -223,6 +265,8 @@ class NeoppRunner(DefaultRunner):
         return None
 
     def clear_kvcache(self):
+        self.full_uncond_kv = None
+        self.image_guidance_scale = None
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
         self.inputs = {}

@@ -1,0 +1,18 @@
+{
+  "model_cls": "yue2",
+  "cpu_offload": true,
+  "use_compile": false,
+  "warmup": false,
+  "vae_core_frames": 1024,
+  "vae_halo_frames": 16,
+  "generation": {
+    "ode_steps": 32,
+    "ode_method": "midpoint",
+    "context": 24576
+  },
+  "request_defaults": {
+    "cot": "full",
+    "seed": 831001
+  },
+  "offload_granularity": "block"
+}
