@@ -187,3 +187,13 @@ For completed full campaigns, `evaluate.py compare-mlu --dataset ...
 both qualities and the mean end-to-end latency ratio. It requires full coverage
 and valid host resource/cleanup evidence, and does not claim exact equality
 between native precision and PR BF16. Smoke results remain explicitly partial.
+
+<!-- ascend-full-results-20261127 -->
+
+Complete Ascend 910B2C BF16 measurement (original FP32 scopes retained):
+
+- humanml3d: 4,384 inputs, mean end-to-end 3.011186 s, P95 3.154947 s. FID 0.262765, matching score 14.388596; 4,198 references meet the original metric eligibility rule, and all 4,384 inputs remain in latency coverage.
+
+[Full results, measured revisions and evidence fingerprints](results/ascend_npu/bf16/full-results.json) include every formal input’s latency and output SHA. Independent verification checks complete coverage, output hashes, original metric aggregation, NPU process attribution and cleanup. Raw artifacts and device observations remain outside git. No native equality or A100 latency ratio is claimed.
+
+<!-- /ascend-full-results-20261127 -->
