@@ -15,7 +15,7 @@
   "bake_resolution": 1024,
   "foreground_ratio": 0.85,
   "enable_cfg": false,
-  "deterministic_algorithms": false,
+  "deterministic_algorithms": true,
   "request_defaults": {
     "seed": 42
   }

@@ -60,7 +60,19 @@ import trimesh
 mesh = trimesh.load(output_path, force="mesh", process=False)
 if not len(mesh.vertices) or not len(mesh.faces) or not torch.isfinite(torch.as_tensor(mesh.vertices)).all():
     raise RuntimeError("SF3D wrote an empty or non-finite mesh")
-print(json.dumps({"status":"PASS", "device":"mlu:0", "vertices":len(mesh.vertices), "faces":len(mesh.faces), "textured":bool(getattr(mesh.visual, "material", None))}))
+import numpy as np
+material = getattr(mesh.visual, "material", None)
+uv = getattr(mesh.visual, "uv", None)
+resolution = config["bake_resolution"]
+if uv is None or uv.shape != (len(mesh.vertices), 2) or not np.isfinite(uv).all():
+    raise RuntimeError("SF3D output must retain finite UVs")
+if material is None or material.baseColorTexture is None or material.normalTexture is None:
+    raise RuntimeError("SF3D output must retain base-color and normal textures")
+if material.baseColorTexture.size != (resolution,resolution) or material.normalTexture.size != (resolution,resolution):
+    raise RuntimeError("SF3D texture resolution mismatch")
+if not all(v is not None and np.isfinite(v) and 0 <= v <= 1 for v in (material.roughnessFactor, material.metallicFactor)):
+    raise RuntimeError("SF3D output must retain valid PBR material factors")
+print(json.dumps({"status":"PASS", "device":"mlu:0", "vertices":len(mesh.vertices), "faces":len(mesh.faces), "textured":True, "texture_resolution":resolution}))
 '''
     try:
         result = subprocess.run(

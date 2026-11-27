@@ -985,6 +985,18 @@ def validate_output(path, fixture):
     mesh = trimesh.load(path, force="mesh", process=False)
     if not len(mesh.vertices) or not len(mesh.faces) or not np.isfinite(mesh.vertices).all():
         raise ValueError("Invalid final GLB")
+    if os.getenv("PLATFORM") == "cambricon_mlu":
+        material = getattr(mesh.visual, "material", None)
+        uv = getattr(mesh.visual, "uv", None)
+        if uv is None or uv.shape != (len(mesh.vertices), 2) or not np.isfinite(uv).all():
+            raise ValueError("MLU final GLB must retain finite per-vertex UVs")
+        if material is None or material.baseColorTexture is None or material.normalTexture is None:
+            raise ValueError("MLU final GLB must retain base-color and normal textures")
+        resolution = read_json(HERE / "configs/mlu/model.json")["bake_resolution"]
+        if material.baseColorTexture.size != (resolution, resolution) or material.normalTexture.size != (resolution, resolution):
+            raise ValueError("MLU final texture resolution differs from the frozen config")
+        if not all(value is not None and np.isfinite(value) and 0 <= value <= 1 for value in (material.roughnessFactor, material.metallicFactor)):
+            raise ValueError("MLU final GLB must retain valid roughness and metallic factors")
     return {"finite": True, "vertices": len(mesh.vertices), "faces": len(mesh.faces)}
 
 

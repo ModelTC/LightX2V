@@ -1,10 +1,10 @@
 {
-  "status": "smoke_ready",
+  "status": "single_sample_full_pbr_verified",
   "device_api": "torch.mlu",
   "target_device": "MLU590",
   "single_device": true,
   "dtype": "BF16",
   "batch_size": 1,
   "seed": 42,
-  "texture_baking": "disabled on MLU because the pinned UV and texture extensions are CUDA-specific"
+  "texture_baking": "complete UV and PBR output via upstream CPU extensions; neural material decoding on MLU; CPU work and transfers included in end-to-end timing"
 }

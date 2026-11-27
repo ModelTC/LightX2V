@@ -1,6 +1,6 @@
 # sf3d original-project / LightX2V evaluation
 
-The MLU590 entry runs the complete 1,023-object GSO fixture through pinned inference PR #1753 on one physical card, then computes the PR's geometry metrics and per-request latency summary. It does not claim a native A100 comparison. The MLU path omits UV unwrap and texture baking because the pinned extensions are CUDA-specific; texture metrics are not part of the geometry protocol.
+The MLU590 entry runs the complete 1,023-object GSO fixture through pinned inference PR #1753 on one physical card, then computes the PR's geometry metrics and per-request latency summary. It does not claim a native A100 comparison. The MLU path retains UV unwrap and full PBR texture baking through the upstream CPU extensions. Neural material decoding runs on MLU. CPU work and device transfers stay inside end-to-end timing. Output validation requires UVs, configured-resolution base-color/normal textures and valid metallic/roughness factors; texture quality metrics are not part of the geometry protocol. Old geometry-only timings do not measure this complete workload.
 
 ```bash
 cp tools/evaluation/sf3d/configs/mlu/paths.json tools/evaluation/sf3d/configs/mlu/paths.local.json
