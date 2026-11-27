@@ -12,3 +12,59 @@ python tools/runtime/gpu_watch.py check --samples /new/watch/samples.jsonl --tas
 check要求起止两侧采样、指定设备完整、起跑无GPU进程/利用率且显存≤256MiB、相邻采样完成间隔≤3s。外来GPU进程、身份/查询未知或覆盖缺失均不通过；两侧边界保守纳入。阈值可显式调整，不靠慢样本判竞争。
 MPS等代理可能合并多个调用者的进程归属，本版不支持；发现`M`/`M+C`类型会拒绝，但这不能替代部署核实。利用率来自历史采样窗，进程清单描述当前上下文，两者不保证同刻；利用率只用于起跑空闲检查，任务中的空清单加非零利用率不能证明是外来任务，也不证明归属。
 输出`resources_clear`只表示该区间未观察到竞争，退出码0才通过；不证明命令成功、清理完成、充分预热或质量。离散采样会漏短瞬时竞争，CPU/网络干扰不在覆盖内。
+
+
+## 可选的最小 NVML 采样入口
+
+`nvml_capture.py` 仅替换数据获取，复用指定 `gpu_watch.py` 的 capture/check、PID 祖先与区间判定。计算、图形、MPS 进程及 MIG 信息都必须可用；MIG/MPS 和未知查询不接受。当前实机验证为 Linux 整卡 A100。
+
+```bash
+python3 -m venv /absolute/monitor-env
+/absolute/monitor-env/bin/pip install -r tools/runtime/requirements-nvml.txt
+/absolute/monitor-env/bin/python tools/runtime/nvml_capture.py --policy tools/runtime/gpu_watch.py capture --devices GPU-完整UUID --output /absolute/watch --seconds 120
+/absolute/monitor-env/bin/python tools/runtime/nvml_capture.py --policy tools/runtime/gpu_watch.py check --samples /absolute/watch/samples.jsonl --task /absolute/task.json
+```
+
+每次 capture 使用一个独立 CPU 子进程，初始化 NVML 一次后逐次处理查询；每次查询仍沿用 capture 的超时，不创建 CUDA 上下文。绑定版本固定，缺失/不支持的接口会使采样失败。该入口不启动、终止、调度或预约 GPU 工作负载。原 XML 入口和所有判定参数保持可选且独立。
+
+Each evaluation capture stages an immutable sampler copy alongside its evidence. Timed-out NVML queries report the last started API (or Python startup/imports); the query deadline and resource policy are unchanged.
+
+The NVML adapter keeps one CPU-only query process for each capture and initializes the binding once. Every request still has the original hard deadline; a stalled/erroring query invalidates timing, and capture exit closes and reaps the observer. This avoids repeated driver initialization during model execution.
+
+Observer IPC diagnostics use the local resource scratch directory (default `/tmp`), independently of a process-wide `TMPDIR` that may point at network storage.
+
+Evaluation controllers default to a 2.5 s query deadline and 3 s maximum completed-sample gap. Explicit host overrides are `LIGHTX2V_EVAL_RESOURCE_QUERY_TIMEOUT` and `LIGHTX2V_EVAL_RESOURCE_MAX_GAP` (for example, `5` and `8` on a shared host with slow driver queries). Both the capture/check arguments and archived resource metadata record these actual values; sampling interval, PID attribution, idle checks and MPS/MIG exclusions remain independently enforced. Select and report one observer profile for the comparison; earlier accepted stricter-profile chunks retain their original metadata.
+
+## MetaX evaluation integration
+
+`metax_capture.py` reads the selected physical card with `mx-smi` and records
+host PID/start-tick ancestry, card identity, memory and utilization. Its verifier
+reuses the existing `gpu_watch.py` resource policy. Unknown process ancestry,
+missing samples or a competing GPU process invalidate the capture.
+
+`metax_campaign.py` is the model evaluation controller used by the MetaX
+`run_eval.sh` entries. Run it on the host with Docker access. Its observer is a
+non-root, read-only container with host PID visibility, dropped capabilities and
+no Docker socket. Generation and scoring run in separate bounded workers with
+an explicit completion acknowledgement. The controller checks the closed
+capture after observer exit and verifies worker cleanup before accepting a
+chunk. Model-specific inputs, source locks, quality functions and request timing
+remain in the corresponding `tools/evaluation/<model>/` package.
+
+
+## MLU evaluation integration
+
+`mlu_capture.py` converts cnmon full-card telemetry to the existing gpu_watch
+PID/start-tick ancestry format and reuses its interval verifier. JSON discovery
+uses an isolated explicit output path; observation does not write to caller cwd.
+Unknown/malformed process inventories and partitioned cards are rejected.
+
+`mlu_campaign.py` runs a dedicated bounded Docker worker with one exposed MLU
+card, while the CPU-only observer runs on the host with host /proc visibility.
+Completion acknowledgement preserves process identity through the far-side
+sample. Closed-capture verification and cleanup are required independently.
+`mlu_worker.py` initializes the actual MLU context before model preparation;
+model load, warmup and request timing remain owned by the model's evaluate.py.
+Use the per-model MLU run_observed.sh host entry. Standalone resource lifecycle
+probes have passed on MLU590 for both success and deliberate failure; this is
+not evidence of full-dataset quality or cross-platform speed parity.

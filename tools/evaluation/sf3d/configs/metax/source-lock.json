@@ -1,0 +1,11 @@
+{
+  "lightx2v": {
+    "repository": "https://github.com/LancelottJ/LightX2V.git",
+    "revision": "8bd4dab80a6d1ce3f7c8278dc3330ef4a2849c64",
+    "pull_request": 1753
+  },
+  "native": {
+    "repository": "https://github.com/Stability-AI/stable-fast-3d.git",
+    "revision": "ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2"
+  }
+}

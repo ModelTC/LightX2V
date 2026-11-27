@@ -1,0 +1,6 @@
+# Separate environment; keep installed torch/torchvision/torch_mlu and numpy hardware pins.
+transformers==4.42.3
+open_clip_torch==2.24.0
+gpytoolbox==0.3.8
+pynanoinstantmeshes==0.0.3
+scs==3.3.2

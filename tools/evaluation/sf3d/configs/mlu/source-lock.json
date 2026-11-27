@@ -1,0 +1,46 @@
+{
+  "lightx2v": {
+    "repository": "https://github.com/ModelTC/LightX2V.git",
+    "revision": "718d4132824519efd614a52f33f763644dc8aef7",
+    "pull_request": 1753
+  },
+  "native": {
+    "repository": "https://github.com/Stability-AI/stable-fast-3d.git",
+    "revision": "ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2",
+    "mlu_patches": [
+      {
+        "path": "sf3d/utils.py",
+        "sha256": "a7d830c32b3d6530cd8c6bae23e6751ac0dc6c9b416e70d8b320a71e9fe5db6f",
+        "runtime_sha256": "9bb315ccf57ecb5c429ba5ed381ef46c7ddd3128001de8890b111c8cc252047c",
+        "replacements": [
+          {
+            "before": "    device = \"cpu\"",
+            "after": "    if os.environ.get(\"PLATFORM\") == \"cambricon_mlu\":\n        return \"mlu\"\n    device = \"cpu\""
+          }
+        ]
+      },
+      {
+        "path": "sf3d/system.py",
+        "sha256": "15bac14e4eb78729aa26c9765cd6d8378ff53bf26b106f82051ffe5debc7b049",
+        "runtime_sha256": "11fc5362dec45909e8898b8e2c3a08c6b8cb93536c074fb704a208cf8efbfc57",
+        "replacements": [
+          {
+            "before": ") if \"cuda\" in device else nullcontext():",
+            "after": ") if \"cuda\" in device or device == \"mlu\" else nullcontext():"
+          }
+        ]
+      },
+      {
+        "path": "sf3d/models/mesh.py",
+        "sha256": "93dd6337ad81857b6d4a7b9e9547f9e30abb06ec900bcf1d04a158eae764af42",
+        "runtime_sha256": "585c712d62f051c3dfa72a0288a424928c45884c49709a7709a29eb368ceab9b",
+        "replacements": [
+          {
+            "before": "        self.unwrapper = Unwrapper()",
+            "after": "        self.unwrapper = Unwrapper()\n        if v_pos.device.type == \"mlu\":\n            from mlu_native import MLUUnwrapper\n            self.unwrapper = MLUUnwrapper(self.unwrapper)"
+          }
+        ]
+      }
+    ]
+  }
+}

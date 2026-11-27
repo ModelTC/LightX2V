@@ -1,0 +1,179 @@
+{
+  "time": "2026-11-27T14:44:54.941761+00:00",
+  "tool_sha256": "4d577c479c1b18b573a6f411b38f36b7df58776f5e893bf2043a4d4e729875d0",
+  "campaigns": [
+    {
+      "model": "sf3d",
+      "dataset": "gso",
+      "formal_inputs": 1023,
+      "verified_inputs": 1023,
+      "status": "FULL_VERIFICATION_PASS",
+      "chunks": [
+        {
+          "start": 0,
+          "count": 128,
+          "resources": {
+            "physical_card": 0,
+            "device": "Ascend-0000:66:00.0",
+            "observations": 72,
+            "interval_observations": 69,
+            "raw_samples_sha256": "3e5c6a1f908cd371bc60cdcdf78dc36e2c2c167e59b9fd7aa83c8160ceb8c378",
+            "task_sha256": "bbb8928876f1dd8da45ee6400abcdb6efe0235280421b06e1bb35276251cf32d",
+            "cleanup_sha256": "fe3408e9a143ea179e72e83bea0229b6367900138625d14b1af66c467eb4baf9",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "c92f6631234ae7749b475517a1ec83663801cf466c150c164cc637bfa1297e08",
+          "metadata_sha256": "19eca87966cfd0232d1a4b906347dcb4bfd281303ab771f5ddc9bd162f776429"
+        },
+        {
+          "start": 128,
+          "count": 128,
+          "resources": {
+            "physical_card": 0,
+            "device": "Ascend-0000:66:00.0",
+            "observations": 75,
+            "interval_observations": 72,
+            "raw_samples_sha256": "3cf9d3c5f8986e2b8ed6ee94cc8d6acaf4e3ab57c99446078e2db94959f5b70c",
+            "task_sha256": "45cbcef1fad9163a173ec285b71bf8bb87d0c838fa2d64a221d7aa254113a7c1",
+            "cleanup_sha256": "8eea684db30641ed9d8fce689e31493f7e2d2542220089c8f539829f3a6b8971",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "dda9709cc119a0b72d80056eedd51cf853b45e84294b0a65ff945b0ec1db4a34",
+          "metadata_sha256": "be1c6ea04f17d3ab5089af0961d78c389a65d36689b4e398b60e869e74536739"
+        },
+        {
+          "start": 256,
+          "count": 128,
+          "resources": {
+            "physical_card": 0,
+            "device": "Ascend-0000:66:00.0",
+            "observations": 72,
+            "interval_observations": 69,
+            "raw_samples_sha256": "6a7c8b1fc1365f795b9943411719e77d92fa953102e766f9f5f6aafef0a4fc09",
+            "task_sha256": "535e7bfcc9b9792d2d620b6f02c781bb28163efe062f1ddfb2dcd7b68c900cd6",
+            "cleanup_sha256": "c1a3a33656e637a75f5739118fd7b0e10d682c06ad0105fae2a5bf33cf2756f2",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "65a05b863e7c0fbddea8282db3b5c08a576fa290b8d954ad9aa3169f4aff43d6",
+          "metadata_sha256": "242d5cd1e475ebbccab6a631d934f75a4b51738dd369097e887bdafbe07b20f2"
+        },
+        {
+          "start": 384,
+          "count": 128,
+          "resources": {
+            "physical_card": 0,
+            "device": "Ascend-0000:66:00.0",
+            "observations": 70,
+            "interval_observations": 67,
+            "raw_samples_sha256": "9ebebc02d54ea67bec7b42e5e856ade6aa6cd52e99e87b2715c21b3a9ed56325",
+            "task_sha256": "124c0194a233b85f212d1fb6d423fbf39945305e4b90d1118bd3fc6ee5c433df",
+            "cleanup_sha256": "e31d28b36d5cae1c659ef328d0a5cc57b69087250de8a9d61a5f17b8adff31b0",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "18fba6dbadcbe3b136254e8f0471948d1f2e0c2b3656633a5178a4773aac7777",
+          "metadata_sha256": "2f18802b9a1e2e209fa70f6c776bf191742f3adb6b2c83810df21c6d5a0556e4"
+        },
+        {
+          "start": 512,
+          "count": 128,
+          "resources": {
+            "physical_card": 0,
+            "device": "Ascend-0000:66:00.0",
+            "observations": 74,
+            "interval_observations": 71,
+            "raw_samples_sha256": "b193a4834bf0f38a62b794d0929e488512dde0ce7cb9bfa63927cd476cf0b56e",
+            "task_sha256": "c4dc0c260d02f5adcebfed07c77940ad43c0a2053f082e35c7d1172598988b26",
+            "cleanup_sha256": "0a4ba754cac4e8d9bbf5dab9dd1a4d3c0090ecd7c9d6fade4e941089e01e0521",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "79370ee2c1b1873a26bde8889b9e23db479cac4d89dc0acced2f9ff461280ddf",
+          "metadata_sha256": "3e4e04ca992325e817f2b220c7e9eab082dcce7afaae70470322a6b39245a332"
+        },
+        {
+          "start": 640,
+          "count": 128,
+          "resources": {
+            "physical_card": 0,
+            "device": "Ascend-0000:66:00.0",
+            "observations": 69,
+            "interval_observations": 66,
+            "raw_samples_sha256": "0758f10666efd48750fcabbc66effae0885715189ed44622ff08f2dc6dfd3204",
+            "task_sha256": "7d9e8109b6a00196027b33e320ebc22346236cd1a9bb40161ccb238ab5629055",
+            "cleanup_sha256": "b0741526a2cc7fae17a2cca7841c63dc3c055898a736ee7171eb07cb44a53a59",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "8441e1b02890c13579e78870f66ac06a84591c91eded2afbbf8471a47437eb1b",
+          "metadata_sha256": "7806befb033657b5449306b1155f335b3193b0c8c52798127edbfefedc8d342e"
+        },
+        {
+          "start": 768,
+          "count": 128,
+          "resources": {
+            "physical_card": 0,
+            "device": "Ascend-0000:66:00.0",
+            "observations": 71,
+            "interval_observations": 68,
+            "raw_samples_sha256": "eb625d249f90d1c17948ce47a62aa9fcf6450133a2353d6f212833128883deed",
+            "task_sha256": "ffd7a3ee9cb6d20ea2ed59affd9506733d28705ec56a3377a7cb870af53bc1c3",
+            "cleanup_sha256": "1508085bf92f24a84025d5babe546399463cea3fad6b9c522aed0649afa2e8ba",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "9f60c5b7d7a620617ff45b0dc26aa060baadad4f499e2e443911ab741b7599fd",
+          "metadata_sha256": "587a5d56a33b232dd788a7a44b078b0fd407c2bffe96d4fceebf810364a7cb4f"
+        },
+        {
+          "start": 896,
+          "count": 127,
+          "resources": {
+            "physical_card": 0,
+            "device": "Ascend-0000:66:00.0",
+            "observations": 68,
+            "interval_observations": 65,
+            "raw_samples_sha256": "90d751403bbe8d4a30f66ca2032cebae905ce3c1ca77e292513b694b6b93de94",
+            "task_sha256": "5e5810dfdae8d3e62196ae655e03c973ca2e95310cc4073d3e53b70ad585483b",
+            "cleanup_sha256": "ff5f6134d71ed1c6ca54291935f4a9616aa0922278e197a403d7aba6a0a82c5e",
+            "post_completion_capture_errors": []
+          },
+          "samples_sha256": "73a99e05c2cedaa3acd4df513cba1822ded97af17c25c134118242387d91c570",
+          "metadata_sha256": "56f84205f34ee857357234bce5a4b85588a20c097ad03eab5e127979f780f3e6"
+        }
+      ],
+      "textured_glb_count": 1023,
+      "inspected_texture_images": 2046,
+      "quality": {
+        "count": 1023,
+        "chamfer_l1": 0.12194109946199902,
+        "chamfer_l2": 0.02448042870526428,
+        "fscore_1pct": 0.05484611244069423,
+        "fscore_2pct": 0.12435322709871788,
+        "fscore_5pct": 0.2897687027475942,
+        "pointcloud_iou32": 0.06696017458138953
+      },
+      "latency": {
+        "count": 1023,
+        "mean_s": 0.909567117425208,
+        "median_s": 0.8961006160825491,
+        "p95_s": 1.0739045445807276
+      },
+      "score_resources": {
+        "physical_card": 0,
+        "device": "Ascend-0000:66:00.0",
+        "observations": 168,
+        "interval_observations": 164,
+        "raw_samples_sha256": "502bb37f85977b1b1332aeb136ea452f5ef53f1a1f5145aeaa6355c0383d435f",
+        "task_sha256": "1cfa7b76f097cecccbe68b758ed793118ca3c21ba1f4cb9081ee58bdfe425c81",
+        "cleanup_sha256": "91aeedd7fdc20bf525fcc6aab194f67efdb98b95f35534583af944bb68463931",
+        "post_completion_capture_errors": [
+          {
+            "start": 5204123.348995653,
+            "end": 5204125.099901395,
+            "error": "ValueError: NPU host PID 3933651 is not visible in /proc"
+          }
+        ]
+      },
+      "summary_sha256": "22f20c53f615b54f47ab653fa1b29f8cf548c64be5ebbf38747640194b351d2c",
+      "quality_provenance_sha256": "4ccf341d2c7e48f87761afb89646a91e5b18408c952086a1ae1290f45e89efec"
+    }
+  ],
+  "status": "FULL_VERIFICATION_PASS"
+}

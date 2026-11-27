@@ -1,0 +1,15 @@
+{
+  "model": "sf3d",
+  "seed": 42,
+  "repetitions": 1,
+  "batch_size": 1,
+  "timing": "RNG reset and model load excluded. Start before request JSON decoding and input image read. End after GPU synchronization and durable final PNG/GLB/NPZ file fsync. Hashes, quality, output validation and benchmark logs excluded. One separate synthetic/upstream demo warmup per loaded process, never a dataset sample.",
+  "datasets": {
+    "gso": {
+      "count": 1023,
+      "manifest": "configs/common/gso.jsonl",
+      "sha256": "a6c524e48d495c15b6e3b259d0423fd202117c56e57d8278d1f25c46c9d8407e",
+      "reference_manifest_sha256": "5cc568a527d203a4164844c88c1ccc04ab828f94171579a2be95349f9159867c"
+    }
+  }
+}

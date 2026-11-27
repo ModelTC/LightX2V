@@ -1,0 +1,20 @@
+{
+  "data": "/absolute/replace/data",
+  "weights": "/absolute/replace/weights",
+  "lightx2v": "/absolute/replace/lightx2v",
+  "native_python": "/absolute/replace/native_python",
+  "lightx2v_python": "/absolute/replace/lightx2v_python",
+  "metric_python": "/absolute/replace/metric_python",
+  "native": "/absolute/replace/native",
+  "native_weights": "/absolute/replace/native_weights",
+  "tets": "/absolute/replace/tets",
+  "dino": "/absolute/replace/dino",
+  "openclip": "/absolute/replace/openclip",
+  "rembg": "/absolute/replace/rembg",
+  "python": "python",
+  "output_root": "/absolute/replace/results",
+  "mounts": [
+    "/absolute/replace/workspace",
+    "/absolute/replace/assets"
+  ]
+}
