@@ -23,9 +23,8 @@ class SDXLEulerScheduler:
         else:
             raise ValueError(f"Unsupported timestep spacing: {spacing}")
         sigmas = np.interp(timesteps, np.arange(n), training_sigmas)
-        # The native scheduler keeps sigmas on CPU. A CPU scalar and a CUDA
-        # zero-dimensional tensor follow different mixed-precision promotion
-        # paths; moving this cache to CUDA changes FP16 noise and Euler steps.
+        # Keep the official CPU FP32 schedule. Network inputs are explicitly
+        # cast to BF16 by the model; the sampling state remains FP32.
         self.sigmas = torch.tensor(np.concatenate((sigmas, [0])), dtype=torch.float32, device="cpu")
         self.timesteps = torch.tensor(timesteps, device=device)
         self.init_noise_sigma = (self.sigmas.max() ** 2 + 1).sqrt() if spacing == "leading" else self.sigmas.max()
@@ -36,6 +35,6 @@ class SDXLEulerScheduler:
     def step(self, noise, index, sample):
         sigma = self.sigmas[index]
         current = sample.float()
-        predicted = current - sigma * noise
+        predicted = current - sigma * noise.float()
         derivative = (current - predicted) / sigma
-        return (current + derivative * (self.sigmas[index + 1] - sigma)).to(noise.dtype)
+        return current + derivative * (self.sigmas[index + 1] - sigma)

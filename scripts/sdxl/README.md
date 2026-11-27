@@ -23,3 +23,5 @@ A100 单卡已实现；MLU、MetaX、Ascend 脚本与 JSON 为明确占位。暂
 refiner、LoRA、量化、并行、offload 或 feature cache。
 
 Both CLIP encoders use Transformers’ existing `CLIPTokenizerFast` implementation. Its Rust normalization matches the CLIP tokenizer used by the Transformers 5 CLIP tokenizer, including Unicode punctuation and literal HTML entities; the model does not maintain a separate tokenizer implementation.
+
+推理精度：两个 CLIP 文本编码器和 UNet 使用 BF16；归一化计算、时间频率、CFG 与 Euler 采样状态/更新、VAE 解码保留 FP32。检查点优先读取 `.fp16.safetensors`，其存储格式不限制加载后的计算精度。

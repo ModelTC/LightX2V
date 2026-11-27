@@ -16,5 +16,5 @@ class SDXLWeights:
         if self.configs["unet"]["block_out_channels"] != [320, 640, 1280]:
             raise ValueError("This adapter requires stabilityai/stable-diffusion-xl-base-1.0")
         for name in self.configs:
-            dtype = torch.float32 if name == "vae" else torch.float16
+            dtype = torch.float32 if name == "vae" else torch.bfloat16
             setattr(self, name, TensorWeights(load_tensors(root / name, dtype=dtype, variant="fp16"), native_requires_grad=True))

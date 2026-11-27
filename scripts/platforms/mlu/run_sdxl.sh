@@ -3,7 +3,7 @@ set -euo pipefail
 
 lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/weights/sdxl}"
-config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/mlu/sdxl_t2i_fp16.json}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/mlu/sdxl_t2i_bf16.json}"
 save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/sdxl/result.png}"
 
 if [[ "${1:-}" == "--help" ]]; then

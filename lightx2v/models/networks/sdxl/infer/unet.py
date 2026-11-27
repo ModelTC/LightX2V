@@ -9,7 +9,8 @@ from lightx2v.models.networks.native_components.ops import Attention
 
 def group_norm(w, p, x, eps=1e-5):
     weight, bias = w.group_norm(p)
-    return F.group_norm(x, 32, weight, bias, eps)
+    with torch.autocast(x.device.type, enabled=False):
+        return F.group_norm(x.float(), 32, weight, bias, eps).to(x.dtype)
 
 
 def resnet(w, p, x, temb=None, eps=1e-5):

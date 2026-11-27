@@ -40,14 +40,14 @@ class SDXLModel:
             negative, negative_pooled = torch.zeros_like(positive), torch.zeros_like(pooled)
         context = torch.cat((negative, positive)) if do_cfg else positive
         pooled = torch.cat((negative_pooled, pooled)) if do_cfg else pooled
-        time_ids = torch.tensor([[height, width, 0, 0, height, width]], device="cuda", dtype=torch.float16).repeat(2 if do_cfg else 1, 1)
+        time_ids = torch.tensor([[height, width, 0, 0, height, width]], device="cuda", dtype=torch.float32).repeat(2 if do_cfg else 1, 1)
         schedule = SDXLEulerScheduler(self.weights.scheduler_config, steps)
         generator = torch.Generator(device="cuda").manual_seed(seed)
-        latents = torch.randn((1, 4, height // 8, width // 8), device="cuda", dtype=torch.float16, generator=generator)
+        latents = torch.randn((1, 4, height // 8, width // 8), device="cuda", dtype=torch.float32, generator=generator)
         latents = latents * schedule.init_noise_sigma
         for i, t in enumerate(schedule.timesteps):
             model_input = schedule.scale_model_input(torch.cat((latents, latents)) if do_cfg else latents, i)
-            noise = self.unet_infer.infer(self.weights.unet, model_input, t, context, pooled, time_ids)
+            noise = self.unet_infer.infer(self.weights.unet, model_input.to(torch.bfloat16), t, context, pooled, time_ids).float()
             if do_cfg:
                 base, conditioned = noise.chunk(2)
                 noise = base + cfg_scale * (conditioned - base)

@@ -3,7 +3,7 @@ set -euo pipefail
 
 lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/weights/sdxl}"
-config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/nvidia/sdxl_t2i_fp16.json}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/nvidia/sdxl_t2i_bf16.json}"
 save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/sdxl/result.png}"
 
 if [[ "${1:-}" == "--help" ]]; then
@@ -16,7 +16,7 @@ export PLATFORM=cuda
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export PYTHONPATH="${PYTHONPATH:-}"
 source "${lightx2v_path}/scripts/base/base.sh"
-export DTYPE=FP16
+export DTYPE=BF16
 mkdir -p -- "$(dirname -- "${save_result_path}")"
 cd -- "${lightx2v_path}"
 
