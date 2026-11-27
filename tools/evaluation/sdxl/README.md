@@ -221,3 +221,15 @@ upstream NumPy crop box through an ambiguous-truth-value API change. Keep the
 six-dimension check; a one-image smoke does not satisfy the GenEval aggregate
 protocol. Frozen existing images can be rescored separately with their origin
 recorded, without claiming new generation or full-dataset latency evidence.
+
+<!-- ascend-full-results-20261127 -->
+
+Complete Ascend 910B2C BF16 measurement (original FP32 scopes retained):
+
+- geneval: 553 inputs, mean end-to-end 4.641460 s, P95 4.749956 s. GenEval 0.534247, including all six dimensions.
+- parti: 1,632 inputs, mean end-to-end 4.594178 s, P95 4.733826 s. CLIP cosine ×100 27.815064, CLIPScore 0.695377.
+- coco: 5,000 inputs, mean end-to-end 4.648103 s, P95 4.741775 s. CLIP cosine ×100 26.619274, CLIPScore 0.665482.
+
+[Full results, measured revisions and evidence fingerprints](results/ascend_npu/bf16/full-results.json) include every formal input’s latency and output SHA. Independent verification checks complete coverage, output hashes, original metric aggregation, NPU process attribution and cleanup. Raw artifacts and device observations remain outside git. No native equality or A100 latency ratio is claimed.
+
+<!-- /ascend-full-results-20261127 -->
