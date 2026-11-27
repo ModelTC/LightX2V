@@ -103,5 +103,12 @@ GenEval uses the pinned official evaluator and weights with MMCV 1.7.2 CPU exten
 Build the metric environment with `docker build --build-arg INFERENCE_IMAGE=<model-metax-image> -f tools/evaluation/sdxl/scripts/platform/metax/Dockerfile.metrics -t lightx2v-metax-metrics:20261127 .` and set `metric_image` in the local paths file. The image fixes the SDK OpenMP runtime for metric dependencies. GenEval additionally builds MMCV CPU extensions against that same MetaX PyTorch.
 
 <!-- metax-measured-results:start -->
-Complete C500 BF16 GenEval measurement: all 553 prompts, six dimension scores and overall 0.549463; mean end-to-end 5.688347 s and P95 5.747663 s. [GenEval results and exact measured revisions](results/metax/bf16/geneval-results.json) include per-input timing/output hashes, the metric runtime fingerprint and closed-capture audits. PartiPrompts and COCO full campaigns are still running; no complete result for those fixtures is claimed here.
+Completed C500 BF16 measurements:
+
+| Dataset | Inputs | Quality metric | Mean E2E (s) | P95 E2E (s) |
+| --- | ---: | --- | ---: | ---: |
+| GenEval | 553 | Overall 0.549463 | 5.688347 | 5.747663 |
+| PartiPrompts | 1,632 | CLIP cosine ×100 27.727707 | 5.629281 | 5.742524 |
+
+[GenEval results](results/metax/bf16/geneval-results.json) and [Parti results](results/metax/bf16/parti-results.json) retain exact measured revisions, per-input timing/output hashes and closed-capture audits. The full COCO campaign is still running; its complete result is pending.
 <!-- metax-measured-results:end -->
