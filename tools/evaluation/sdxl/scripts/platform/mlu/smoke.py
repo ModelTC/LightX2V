@@ -35,7 +35,7 @@ def main():
         raise ValueError(f"Pinned inference source mismatch: {actual}")
     subprocess.run(["git", "-C", paths["lightx2v"], "diff", "--exit-code", "HEAD", "--", "*.py", "*.sh", "*.json"], check=True, stdout=subprocess.DEVNULL)
 
-env = dict(os.environ, PLATFORM="cambricon_mlu", MLU_VISIBLE_DEVICES="0", DTYPE="BF16")
+    env = dict(os.environ, PLATFORM="cambricon_mlu", MLU_VISIBLE_DEVICES="0", DTYPE="BF16")
     code = r'''
 import json
 import torch_mlu
