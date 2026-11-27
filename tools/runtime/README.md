@@ -34,3 +34,19 @@ The NVML adapter keeps one CPU-only query process for each capture and initializ
 Observer IPC diagnostics use the local resource scratch directory (default `/tmp`), independently of a process-wide `TMPDIR` that may point at network storage.
 
 Evaluation controllers default to a 2.5 s query deadline and 3 s maximum completed-sample gap. Explicit host overrides are `LIGHTX2V_EVAL_RESOURCE_QUERY_TIMEOUT` and `LIGHTX2V_EVAL_RESOURCE_MAX_GAP` (for example, `5` and `8` on a shared host with slow driver queries). Both the capture/check arguments and archived resource metadata record these actual values; sampling interval, PID attribution, idle checks and MPS/MIG exclusions remain independently enforced. Select and report one observer profile for the comparison; earlier accepted stricter-profile chunks retain their original metadata.
+
+## MetaX evaluation integration
+
+`metax_capture.py` reads the selected physical card with `mx-smi` and records
+host PID/start-tick ancestry, card identity, memory and utilization. Its verifier
+reuses the existing `gpu_watch.py` resource policy. Unknown process ancestry,
+missing samples or a competing GPU process invalidate the capture.
+
+`metax_campaign.py` is the model evaluation controller used by the MetaX
+`run_eval.sh` entries. Run it on the host with Docker access. Its observer is a
+non-root, read-only container with host PID visibility, dropped capabilities and
+no Docker socket. Generation and scoring run in separate bounded workers with
+an explicit completion acknowledgement. The controller checks the closed
+capture after observer exit and verifies worker cleanup before accepting a
+chunk. Model-specific inputs, source locks, quality functions and request timing
+remain in the corresponding `tools/evaluation/<model>/` package.
