@@ -1,0 +1,3 @@
+Source port from Tencent HY-Motion-1.0 commit 4e426f5a1021cbcf7f375458c37b840ee7225229.
+Copyright Tencent. See LICENSE.txt. Original parameter names and motion geometry conventions are retained.
+Linear, normalization, attention and rotary computation bind to LightX2V registered operators.

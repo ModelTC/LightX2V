@@ -24,6 +24,7 @@ RUNNER_MODULES = {
     "hunyuan3d": ModelEntry("hunyuan3d.hunyuan3d_shape_runner", config="config.load_vae_only_config"),
     "hunyuan_image3": ModelEntry("hunyuan_image3.hunyuan_image3_runner", config="hunyuan_image3.config.load_config"),
     "hunyuan_video_1.5": ModelEntry("hunyuan_video.hunyuan_video_15_runner", config="hunyuan_video.config.load_config"),
+    "hymotion": ModelEntry("hymotion.hymotion_runner", config="hymotion.config.load_config"),
     "infinitetalk": ModelEntry("wan.wan_infinitetalk_runner", config="wan.config.load_config"),
     "lingbot_va": ModelEntry("wan.wan_lingbot_va_runner", config="wan.lingbot_va_config.load_config"),
     "lingbot_video": ModelEntry("lingbot_video.lingbot_video_runner", config="lingbot_video.config.load_config"),
