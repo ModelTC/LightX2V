@@ -1,0 +1,2 @@
+# Install inside an existing MetaX PyTorch/MACA environment.
+-r requirements-a100.txt

@@ -11,6 +11,8 @@ def validate_a100_config(config):
     platform = os.getenv("PLATFORM", "cuda")
     if platform == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
+    elif platform == "metax_cuda" and torch.cuda.is_available():
+        device = torch.device("cuda")
     elif platform == "cambricon_mlu" and getattr(torch, "mlu", None) is not None and torch.mlu.is_available():
         device = torch.device("mlu")
     else:
@@ -21,6 +23,8 @@ def validate_a100_config(config):
         raise ValueError("These mixed-precision adapters require inference_dtype=bf16 and DTYPE=BF16")
     if platform == "cuda" and not torch.cuda.is_bf16_supported():
         raise NotImplementedError("This inference implementation requires native BF16 support")
+    if platform == "metax_cuda" and not torch.cuda.is_bf16_supported():
+        raise NotImplementedError("This inference implementation requires native MetaX BF16 support")
     if platform == "cambricon_mlu":
         is_bf16_supported = getattr(torch.mlu, "is_bf16_supported", None)
         if is_bf16_supported is not None and not is_bf16_supported():

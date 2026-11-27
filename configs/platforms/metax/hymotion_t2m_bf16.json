@@ -1,7 +1,7 @@
 {
   "model_cls": "hymotion",
   "task": "t2m",
-  "implementation_status": "placeholder",
+  "implementation_status": "implemented",
   "parallel": false,
   "cpu_offload": false,
   "feature_caching": "NoCaching",
@@ -18,5 +18,6 @@
     "seed": 42,
     "num_frames": 120
   },
-  "inference_dtype": "bf16"
+  "inference_dtype": "bf16",
+  "clip_text_cleanup": "basic"
 }
