@@ -1,0 +1,15 @@
+# Validated with PyTorch 2.6.0 + CUDA 12.4 / torchvision 0.21.0.
+numpy==1.26.4
+transformers==4.53.3
+tokenizers==0.21.4
+safetensors==0.8.0
+einops==0.7.0
+loguru==0.8.0
+gguf==0.19.0
+opencv-python-headless==4.11.0.86
+imageio==2.37.4
+imageio-ffmpeg==0.8.1
+omegaconf==2.3.0
+ftfy==6.3.1
+pydantic>=2,<3
+pillow-heif>=1.0

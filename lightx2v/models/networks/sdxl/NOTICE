@@ -1,0 +1,3 @@
+Native SDXL base 1.0 inference adapter for LightX2V.
+Architecture and checkpoint conventions: Stability AI SDXL; Hugging Face Diffusers and Transformers (Apache-2.0).
+Model weights are not included; their original license continues to apply.

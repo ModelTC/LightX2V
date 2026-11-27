@@ -1,0 +1,3 @@
+# Package fixed inference assets and upstream attribution with the Python modules.
+recursive-include lightx2v/models/networks LICENSE* NOTICE THIRD_PARTY_LICENSES.txt
+recursive-include lightx2v/models/networks *.bin *.npy *.json

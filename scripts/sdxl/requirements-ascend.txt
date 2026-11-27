@@ -1,0 +1,2 @@
+# Use an existing matching PyTorch / torch_npu / CANN environment.
+-r requirements-a100.txt
