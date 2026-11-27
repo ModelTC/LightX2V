@@ -1,0 +1,6 @@
+# Build from the provisioned MLU scoring environment described in DATA.md.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG PYTHON_BIN=/torch/venv3/pytorch_infer/bin/python
+# Match A100's Pillow API; leave model generation in its existing image.
+RUN ${PYTHON_BIN} -m pip install --no-deps --no-cache-dir Pillow==12.3.0

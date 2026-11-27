@@ -1,0 +1,897 @@
+{
+  "lightx2v": {
+    "repository": "https://github.com/ModelTC/LightX2V.git",
+    "base_repository": "https://github.com/ModelTC/LightX2V.git",
+    "base_revision": "38d37b17e194f270a10b911c7bb403b644576ead",
+    "overlays": [
+      {
+        "repository": "https://github.com/LancelottJ/LightX2V.git",
+        "revision": "20b921abf707fca620e83c28f72ab7fe31898ce1",
+        "pull_request": 1752,
+        "files": [
+          "MANIFEST.in",
+          "configs/platforms/ascend_npu/hymotion_t2m_bf16.json",
+          "configs/platforms/metax/hymotion_t2m_bf16.json",
+          "configs/platforms/mlu/hymotion_t2m_bf16.json",
+          "configs/platforms/nvidia/hymotion_t2m_bf16.json",
+          "dockerfiles/platforms/Dockerfile_metax_hymotion",
+          "lightx2v/common/ops/attn/kernels/ulysses_layout.py",
+          "lightx2v/common/ops/norm/l2_normalize.py",
+          "lightx2v/models/networks/hymotion/LICENSE.txt",
+          "lightx2v/models/networks/hymotion/NOTICE",
+          "lightx2v/models/networks/hymotion/__init__.py",
+          "lightx2v/models/networks/hymotion/infer/__init__.py",
+          "lightx2v/models/networks/hymotion/infer/attention.py",
+          "lightx2v/models/networks/hymotion/infer/encoders.py",
+          "lightx2v/models/networks/hymotion/infer/hymotion_mmdit.py",
+          "lightx2v/models/networks/hymotion/infer/modulate_layers.py",
+          "lightx2v/models/networks/hymotion/infer/motion.py",
+          "lightx2v/models/networks/hymotion/infer/positional_encoding.py",
+          "lightx2v/models/networks/hymotion/infer/text.py",
+          "lightx2v/models/networks/hymotion/infer/token_refiner.py",
+          "lightx2v/models/networks/hymotion/model.py",
+          "lightx2v/models/networks/hymotion/utils/__init__.py",
+          "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/j_template.bin",
+          "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/kintree.bin",
+          "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/skinIndice.bin",
+          "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/skinWeights.bin",
+          "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/v_template.bin",
+          "lightx2v/models/networks/hymotion/utils/assets/stats/Mean.npy",
+          "lightx2v/models/networks/hymotion/utils/assets/stats/Std.npy",
+          "lightx2v/models/networks/hymotion/utils/body_model.py",
+          "lightx2v/models/networks/hymotion/utils/geometry.py",
+          "lightx2v/models/networks/hymotion/utils/loaders.py",
+          "lightx2v/models/networks/hymotion/utils/model_constants.py",
+          "lightx2v/models/networks/hymotion/utils/motion_process.py",
+          "lightx2v/models/networks/hymotion/utils/type_converter.py",
+          "lightx2v/models/networks/hymotion/weights/__init__.py",
+          "lightx2v/models/networks/hymotion/weights/bricks.py",
+          "lightx2v/models/networks/hymotion/weights/encoders.py",
+          "lightx2v/models/networks/hymotion/weights/hymotion_mmdit.py",
+          "lightx2v/models/networks/hymotion/weights/loader.py",
+          "lightx2v/models/networks/hymotion/weights/modulate_layers.py",
+          "lightx2v/models/networks/hymotion/weights/motion.py",
+          "lightx2v/models/networks/hymotion/weights/positional_encoding.py",
+          "lightx2v/models/networks/hymotion/weights/text.py",
+          "lightx2v/models/networks/hymotion/weights/token_refiner.py",
+          "lightx2v/models/networks/native_components/__init__.py",
+          "lightx2v/models/networks/native_components/ascend.py",
+          "lightx2v/models/networks/native_components/checkpoint.py",
+          "lightx2v/models/networks/native_components/clip.py",
+          "lightx2v/models/networks/native_components/ops.py",
+          "lightx2v/models/networks/native_components/tests/test_ascend.py",
+          "lightx2v/models/runners/hymotion/__init__.py",
+          "lightx2v/models/runners/hymotion/config.py",
+          "lightx2v/models/runners/hymotion/hymotion_runner.py",
+          "lightx2v/models/runners/hymotion/request_spec.py",
+          "lightx2v/models/runners/native_inference.py",
+          "lightx2v/models/runners/registry.py",
+          "lightx2v/models/schedulers/hymotion/__init__.py",
+          "lightx2v/models/schedulers/hymotion/flow.py",
+          "scripts/hymotion/README.md",
+          "scripts/hymotion/install_a100.sh",
+          "scripts/hymotion/install_ascend.sh",
+          "scripts/hymotion/install_metax.sh",
+          "scripts/hymotion/requirements-a100.txt",
+          "scripts/hymotion/requirements-ascend.txt",
+          "scripts/hymotion/requirements-metax.txt",
+          "scripts/hymotion/requirements-mlu.txt",
+          "scripts/platforms/ascend_npu/run_hymotion.sh",
+          "scripts/platforms/metax/run_hymotion.sh",
+          "scripts/platforms/mlu/run_hymotion.sh",
+          "scripts/platforms/nvidia/run_hymotion.sh",
+          "tests/test_native_metax_config.py"
+        ]
+      },
+      {
+        "repository": "https://github.com/LancelottJ/LightX2V.git",
+        "revision": "3584d0f03d38da0a1f16ab6abf991b6c7c075496",
+        "pull_request": 1753,
+        "files": [
+          "MANIFEST.in",
+          "configs/platforms/ascend_npu/sf3d_i23d_bf16.json",
+          "configs/platforms/metax/sf3d_i23d_bf16.json",
+          "configs/platforms/mlu/sf3d_i23d_bf16.json",
+          "configs/platforms/nvidia/sf3d_i23d_bf16.json",
+          "dockerfiles/platforms/Dockerfile_metax_sf3d",
+          "lightx2v/common/ops/attn/kernels/ulysses_layout.py",
+          "lightx2v/common/ops/norm/l2_normalize.py",
+          "lightx2v/models/networks/native_components/__init__.py",
+          "lightx2v/models/networks/native_components/ascend.py",
+          "lightx2v/models/networks/native_components/checkpoint.py",
+          "lightx2v/models/networks/native_components/ops.py",
+          "lightx2v/models/networks/native_components/tests/test_ascend.py",
+          "lightx2v/models/networks/sf3d/LICENSE.md",
+          "lightx2v/models/networks/sf3d/NOTICE",
+          "lightx2v/models/networks/sf3d/THIRD_PARTY_LICENSES.txt",
+          "lightx2v/models/networks/sf3d/__init__.py",
+          "lightx2v/models/networks/sf3d/infer/__init__.py",
+          "lightx2v/models/networks/sf3d/infer/backbone.py",
+          "lightx2v/models/networks/sf3d/infer/camera.py",
+          "lightx2v/models/networks/sf3d/infer/image_estimator.py",
+          "lightx2v/models/networks/sf3d/infer/modulation.py",
+          "lightx2v/models/networks/sf3d/infer/network.py",
+          "lightx2v/models/networks/sf3d/infer/system.py",
+          "lightx2v/models/networks/sf3d/infer/triplane.py",
+          "lightx2v/models/networks/sf3d/infer/vision.py",
+          "lightx2v/models/networks/sf3d/model.py",
+          "lightx2v/models/networks/sf3d/utils/__init__.py",
+          "lightx2v/models/networks/sf3d/utils/ascend.py",
+          "lightx2v/models/networks/sf3d/utils/base.py",
+          "lightx2v/models/networks/sf3d/utils/image.py",
+          "lightx2v/models/networks/sf3d/utils/isosurface.py",
+          "lightx2v/models/networks/sf3d/utils/mesh.py",
+          "lightx2v/models/networks/sf3d/utils/metax_texture_baker.py",
+          "lightx2v/models/networks/sf3d/utils/tests/test_ascend.py",
+          "lightx2v/models/networks/sf3d/weights/__init__.py",
+          "lightx2v/models/networks/sf3d/weights/backbone.py",
+          "lightx2v/models/networks/sf3d/weights/camera.py",
+          "lightx2v/models/networks/sf3d/weights/image.py",
+          "lightx2v/models/networks/sf3d/weights/image_estimator.py",
+          "lightx2v/models/networks/sf3d/weights/loader.py",
+          "lightx2v/models/networks/sf3d/weights/modulation.py",
+          "lightx2v/models/networks/sf3d/weights/network.py",
+          "lightx2v/models/networks/sf3d/weights/system.py",
+          "lightx2v/models/networks/sf3d/weights/triplane.py",
+          "lightx2v/models/runners/native_inference.py",
+          "lightx2v/models/runners/registry.py",
+          "lightx2v/models/runners/sf3d/__init__.py",
+          "lightx2v/models/runners/sf3d/config.py",
+          "lightx2v/models/runners/sf3d/request_spec.py",
+          "lightx2v/models/runners/sf3d/sf3d_runner.py",
+          "scripts/platforms/ascend_npu/run_sf3d.sh",
+          "scripts/platforms/metax/run_sf3d.sh",
+          "scripts/platforms/mlu/run_sf3d.sh",
+          "scripts/platforms/nvidia/run_sf3d.sh",
+          "scripts/sf3d/README.md",
+          "scripts/sf3d/build_cpu_extension.py",
+          "scripts/sf3d/install_a100.sh",
+          "scripts/sf3d/install_ascend.sh",
+          "scripts/sf3d/install_metax.sh",
+          "scripts/sf3d/prepare_assets.py",
+          "scripts/sf3d/requirements-a100.txt",
+          "scripts/sf3d/requirements-ascend.txt",
+          "scripts/sf3d/requirements-metax.txt",
+          "scripts/sf3d/requirements-mlu.txt",
+          "tests/test_native_metax_config.py",
+          "tests/test_sf3d_metax_texture_baker.py"
+        ]
+      },
+      {
+        "repository": "https://github.com/LancelottJ/LightX2V.git",
+        "revision": "ec43872062003d7b5ed2506f4a0c9ef8cfcbd50b",
+        "pull_request": 1754,
+        "files": [
+          "MANIFEST.in",
+          "configs/platforms/ascend_npu/sdxl_t2i_bf16.json",
+          "configs/platforms/metax/sdxl_t2i_bf16.json",
+          "configs/platforms/mlu/sdxl_t2i_bf16.json",
+          "configs/platforms/nvidia/sdxl_t2i_bf16.json",
+          "dockerfiles/platforms/Dockerfile_metax_sdxl",
+          "lightx2v/common/ops/attn/kernels/ulysses_layout.py",
+          "lightx2v/common/ops/norm/l2_normalize.py",
+          "lightx2v/models/networks/native_components/__init__.py",
+          "lightx2v/models/networks/native_components/ascend.py",
+          "lightx2v/models/networks/native_components/checkpoint.py",
+          "lightx2v/models/networks/native_components/clip.py",
+          "lightx2v/models/networks/native_components/ops.py",
+          "lightx2v/models/networks/native_components/tests/test_ascend.py",
+          "lightx2v/models/networks/sdxl/LICENSE",
+          "lightx2v/models/networks/sdxl/NOTICE",
+          "lightx2v/models/networks/sdxl/__init__.py",
+          "lightx2v/models/networks/sdxl/infer/__init__.py",
+          "lightx2v/models/networks/sdxl/infer/unet.py",
+          "lightx2v/models/networks/sdxl/infer/vae.py",
+          "lightx2v/models/networks/sdxl/model.py",
+          "lightx2v/models/networks/sdxl/weights/__init__.py",
+          "lightx2v/models/networks/sdxl/weights/loader.py",
+          "lightx2v/models/runners/native_inference.py",
+          "lightx2v/models/runners/registry.py",
+          "lightx2v/models/runners/sdxl/__init__.py",
+          "lightx2v/models/runners/sdxl/config.py",
+          "lightx2v/models/runners/sdxl/request_spec.py",
+          "lightx2v/models/runners/sdxl/sdxl_runner.py",
+          "lightx2v/models/schedulers/sdxl/__init__.py",
+          "lightx2v/models/schedulers/sdxl/euler.py",
+          "scripts/platforms/ascend_npu/run_sdxl.sh",
+          "scripts/platforms/metax/run_sdxl.sh",
+          "scripts/platforms/mlu/run_sdxl.sh",
+          "scripts/platforms/nvidia/run_sdxl.sh",
+          "scripts/sdxl/README.md",
+          "scripts/sdxl/install_a100.sh",
+          "scripts/sdxl/install_ascend.sh",
+          "scripts/sdxl/install_metax.sh",
+          "scripts/sdxl/requirements-a100.txt",
+          "scripts/sdxl/requirements-ascend.txt",
+          "scripts/sdxl/requirements-metax.txt",
+          "scripts/sdxl/requirements-mlu.txt",
+          "tests/test_native_metax_config.py"
+        ]
+      }
+    ],
+    "runtime_files": [
+      {
+        "path": "MANIFEST.in",
+        "sha256": "981d02eb55817ce44f9c166f1763cad8bfae69ffda765caf01c4558cf8b8400f"
+      },
+      {
+        "path": "configs/platforms/ascend_npu/hymotion_t2m_bf16.json",
+        "sha256": "b0627b935887ea87d2860f4b9a65e0780e14a9caf864dd0f3bd19d5b1f84d551"
+      },
+      {
+        "path": "configs/platforms/ascend_npu/sdxl_t2i_bf16.json",
+        "sha256": "c6f952ba729a872675f950f014254fd82e9ac466c0e501e5956ccb3e85334a16"
+      },
+      {
+        "path": "configs/platforms/ascend_npu/sf3d_i23d_bf16.json",
+        "sha256": "4595cb92fab659dfd8fb6844efaa51d4c0d1536e00ffd64e69b50e58c65edf70"
+      },
+      {
+        "path": "configs/platforms/metax/hymotion_t2m_bf16.json",
+        "sha256": "a7a6b0e928f26ddf4f884eaf3b7cac5b772557f293f3e8db0f800d322f1d7781"
+      },
+      {
+        "path": "configs/platforms/metax/sdxl_t2i_bf16.json",
+        "sha256": "c6f952ba729a872675f950f014254fd82e9ac466c0e501e5956ccb3e85334a16"
+      },
+      {
+        "path": "configs/platforms/metax/sf3d_i23d_bf16.json",
+        "sha256": "4595cb92fab659dfd8fb6844efaa51d4c0d1536e00ffd64e69b50e58c65edf70"
+      },
+      {
+        "path": "configs/platforms/mlu/hymotion_t2m_bf16.json",
+        "sha256": "4cfe69046ad31e806964d7fa4757574de06d575d4bb98b0bcc89a1d19fb6406f"
+      },
+      {
+        "path": "configs/platforms/mlu/sdxl_t2i_bf16.json",
+        "sha256": "e4f20382b7b68ad190bcd032ee3ac0bb104ba7d7c6cad61eba9132792493a53b"
+      },
+      {
+        "path": "configs/platforms/mlu/sf3d_i23d_bf16.json",
+        "sha256": "8f4d5bf6288179a0c19f3fa085d4824153f8e75ce5a4f71f77af3765690b02e0"
+      },
+      {
+        "path": "configs/platforms/nvidia/hymotion_t2m_bf16.json",
+        "sha256": "5c7467b1f337358117bc47867ebf0a5f50b1a4919e2516f5565bc939e246d3c2"
+      },
+      {
+        "path": "configs/platforms/nvidia/sdxl_t2i_bf16.json",
+        "sha256": "c6f952ba729a872675f950f014254fd82e9ac466c0e501e5956ccb3e85334a16"
+      },
+      {
+        "path": "configs/platforms/nvidia/sf3d_i23d_bf16.json",
+        "sha256": "4595cb92fab659dfd8fb6844efaa51d4c0d1536e00ffd64e69b50e58c65edf70"
+      },
+      {
+        "path": "dockerfiles/platforms/Dockerfile_metax_hymotion",
+        "sha256": "517112c468608582cf689d14ae72b5c1af120d1c6823b0d3d4c33b75185231cd"
+      },
+      {
+        "path": "dockerfiles/platforms/Dockerfile_metax_sdxl",
+        "sha256": "d11f5c0c139a01e2fbdcc350722e81a8c32ef551527990fbf2d2492b31ec0e85"
+      },
+      {
+        "path": "dockerfiles/platforms/Dockerfile_metax_sf3d",
+        "sha256": "e6ca64b6c758f4cd6de6400be484f12128585c68f727b7aa3e6154c71455098b"
+      },
+      {
+        "path": "lightx2v/common/ops/attn/kernels/ulysses_layout.py",
+        "sha256": "a53501f90e3230b0fe2a5acbeacc5df3c72ba05e4dd36171cb7551a0cba43d17"
+      },
+      {
+        "path": "lightx2v/common/ops/norm/l2_normalize.py",
+        "sha256": "4a05b4dfe817ce29d66fe55a3879540f203f5a730f3028e66470d17c8ad294ca"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/LICENSE.txt",
+        "sha256": "caa1427e866215dc3758a7e599a618d85883f46ba6dba7b57bcf1786e91eec3c"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/NOTICE",
+        "sha256": "2f2cd0cb0a144660f251801938b45ed3f61d8ea65ca2972f3bfc151af600bb88"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/infer/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/infer/attention.py",
+        "sha256": "9fa51d26cee65cd16e64252e869352443ea7de77252d045110706828e5d47cb3"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/infer/encoders.py",
+        "sha256": "bc4f39a0570d5a10cc2e4eeead19694854ba84b1114338319dee2e68faa4cbee"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/infer/hymotion_mmdit.py",
+        "sha256": "0a7aecb804a264f2e0009bd48ab1c277f674d629017edb74ede0ddffa6c0cd39"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/infer/modulate_layers.py",
+        "sha256": "86537459e85cec3f3c7b05f50eab3d946da2f8e03b7618fc56fe168e504e9f9c"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/infer/motion.py",
+        "sha256": "eea1f612ce2803d920e7f13bbcb99b7e6c09c61e7070bf68499ec1e08accba08"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/infer/positional_encoding.py",
+        "sha256": "bd245fe5d6f94f352c1e3f9a5a966830f3f7fd57a6c7d009620358812f6cb1ec"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/infer/text.py",
+        "sha256": "2c1d76361c0cbb8bd0244c4a33a46682b55b14d78b0406730480c02e67cb3eb9"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/infer/token_refiner.py",
+        "sha256": "39ffb10940af56fb621c756a6195a008773564ddf2519181d5de1d063ad4b570"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/model.py",
+        "sha256": "aea6984671706b568d00b56ae379d794e1ae56e90e9b2d8e5d0460e9ad519ed0"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/j_template.bin",
+        "sha256": "4f488cc9d0b650a816f5a8eda49eda7bc796f490e9130a6e0dec5be137d7b929"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/kintree.bin",
+        "sha256": "98a20fa3b53193790b63d9ac3a9c917f2f70fbe6e053dca495c75317ff4b756a"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/skinIndice.bin",
+        "sha256": "846794fb90ea01e069435ad242caefb3d5c2f913fef3255c247f48836ddc1bda"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/skinWeights.bin",
+        "sha256": "343eac2902627ee6b45b547eb7d9f1526562eca7ba178d1dc71f9e466f307a77"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/assets/dump_wooden/v_template.bin",
+        "sha256": "b9fbe1f34bfe8a07442d11166e169318022a18da8bc62ce0a9930dfdb3171050"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/assets/stats/Mean.npy",
+        "sha256": "a4bbe5f68881fe793d509f262ad3dc698a91f79158a9bde9d6f24d46ef9652bd"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/assets/stats/Std.npy",
+        "sha256": "6cc86d1ca4b47fbd0e84b677c4397e51b6615abcb34e38fdd9daabbe6a5685cc"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/body_model.py",
+        "sha256": "1bb887f4d674a4bc4fa3f20e2b1211d3ae97a78d7570ae7da53f31fb542c3935"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/geometry.py",
+        "sha256": "02cf36955fab1adc8897b555434690ba2d82ae5e0509494251de1d939ba5a67c"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/loaders.py",
+        "sha256": "65e1b9d771e78f6d2926b3574edda49a89dbddf7d33d7fdd97357db2d8f32867"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/model_constants.py",
+        "sha256": "e0e93a93a0f4180038826fcdeb1d451dd8eec1f45eb177d7bbe2ec4448c19289"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/motion_process.py",
+        "sha256": "dd7049aa1705d471afa67ec39b7f5da5ee107c74421ef9bbaf1d436ee69e3d70"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/utils/type_converter.py",
+        "sha256": "720a824a79d93e99f214191ea3aa5ff57968fc516beed4f3d6867c1d8ad30384"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/bricks.py",
+        "sha256": "4c270abdde2cb0f5d7b37f32733b55bfba604564e68cfbfc804d9f4fc965bc9f"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/encoders.py",
+        "sha256": "84dbcf62de41cbddadd7be6672381f55b10fdda67f457730ce60b08f87cc69c1"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/hymotion_mmdit.py",
+        "sha256": "e8dd35f18e2fec2dcf8280862872a6dd995b05087f5b5bf0ea26d965c574fdb6"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/loader.py",
+        "sha256": "08385c96b685aa857e84675fa8c1303a6855b25f08e654a999f6d108442f3810"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/modulate_layers.py",
+        "sha256": "e9ea41ca3e6c1cd945db809bd6f34789604b869c5d3325536765149001dea8b6"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/motion.py",
+        "sha256": "854830b223dc08ffb868cf130110998c1431ffcf7cd69e528ce7f7f7782ae0a7"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/positional_encoding.py",
+        "sha256": "73480859ae409233aea9292f0beac1ef87683f88b69cdff2a9f093ee31c2c0cd"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/text.py",
+        "sha256": "477396db0516151d49a285da686cda58c329ffbae714440e5e7d7862ecbc7cf1"
+      },
+      {
+        "path": "lightx2v/models/networks/hymotion/weights/token_refiner.py",
+        "sha256": "56d6faf695680984ceef34a11d061e855026aac2c9caaec231da3ac2c9e94264"
+      },
+      {
+        "path": "lightx2v/models/networks/native_components/__init__.py",
+        "sha256": "0437b9e98ec028b51f49793e28bfe88c7595337ae3c03592ffc7043cc3cff4a2"
+      },
+      {
+        "path": "lightx2v/models/networks/native_components/ascend.py",
+        "sha256": "a9f8b68edbf5f17125c926d6587d9739f9d8f59ffacb9cf1159797ba60b64a48"
+      },
+      {
+        "path": "lightx2v/models/networks/native_components/checkpoint.py",
+        "sha256": "dc1ddc4f9f6c6f7012e0bb28545c946d1379d2c69513694ba3f77470906cb397"
+      },
+      {
+        "path": "lightx2v/models/networks/native_components/clip.py",
+        "sha256": "3ce5b0451216d0925de66415fc110a44817f1646f4f9c8aa037d391f6203acda"
+      },
+      {
+        "path": "lightx2v/models/networks/native_components/ops.py",
+        "sha256": "230407e9a9e84bb83960874204dfcab35685eaa3882b0d990b96172d61f06f6c"
+      },
+      {
+        "path": "lightx2v/models/networks/native_components/tests/test_ascend.py",
+        "sha256": "a0d92b59b1a250e6b0ed28a0b4eaaaa6716dbe6ffce05a1dc7cb5ccc7adec44b"
+      },
+      {
+        "path": "lightx2v/models/networks/sdxl/LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      {
+        "path": "lightx2v/models/networks/sdxl/NOTICE",
+        "sha256": "d0a967de219d944b5fb7cee58a8819712472397502b2af02157f23d3703bdc4e"
+      },
+      {
+        "path": "lightx2v/models/networks/sdxl/__init__.py",
+        "sha256": "d372780985192981b63ee0cfb5a5511a6946abf7daa8abce5b6b07f5bdf511a5"
+      },
+      {
+        "path": "lightx2v/models/networks/sdxl/infer/__init__.py",
+        "sha256": "b16c7eccfa3903f2e4ef2c82f785221e203ff83ed9a1cbc390e854c62d4b8c85"
+      },
+      {
+        "path": "lightx2v/models/networks/sdxl/infer/unet.py",
+        "sha256": "11105c2248897a31a644a02cbb1838b367e184e02416c74dbdad827a3cd467e9"
+      },
+      {
+        "path": "lightx2v/models/networks/sdxl/infer/vae.py",
+        "sha256": "a85cc354d36c141bc5eea684772a6024d65381a872fafdb59c74f2730a6beba8"
+      },
+      {
+        "path": "lightx2v/models/networks/sdxl/model.py",
+        "sha256": "dd7de76e067025cab268b8a19e2df574cfc19a4b28dd9181b53d486fc34b3374"
+      },
+      {
+        "path": "lightx2v/models/networks/sdxl/weights/__init__.py",
+        "sha256": "3903edc2cb1523b8f95602eb2c217562693ee97234613e1fc819954eaf4df8f4"
+      },
+      {
+        "path": "lightx2v/models/networks/sdxl/weights/loader.py",
+        "sha256": "206d946dcc792fe5d4faaae31bf052aee387a78d35dc1a8bea96477f1d9f4e52"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/LICENSE.md",
+        "sha256": "7f5c6984fbbaa7f56690c39284f0d50f886b19bf76f2994309c3282dfe71257f"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/NOTICE",
+        "sha256": "22626a5fa8a23928358786cbe8f20777df476d7499daa80b1692c68649c4651a"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/THIRD_PARTY_LICENSES.txt",
+        "sha256": "7b384ee169ae8358ac8889d23a89bea7f2def5b41f24e0d8d0413b49b1af34c6"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/infer/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/infer/backbone.py",
+        "sha256": "ceb376178a2fe91a212921c4ab6366f6182d9fe52727dace2d424b1f152ad87d"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/infer/camera.py",
+        "sha256": "208d9e9ba822d1f36b06e951852f12e05100838971fb4acbd72ec21581403978"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/infer/image_estimator.py",
+        "sha256": "6ceb9b776fc3a12b00726d24a723fd53f6567a7d2de4ac73f6aa2041027a9fa1"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/infer/modulation.py",
+        "sha256": "3afb7c9e430779d5c2f5811b98a937a08e997c31cabe89102d95f0e96d3918d9"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/infer/network.py",
+        "sha256": "52d5a7aaf2ab936080d62194b3a4f96a24821d7ba0100ecd33db71d323ec824a"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/infer/system.py",
+        "sha256": "d6a98e1086408a50c13890bc0c04a6f999e6a3a09779224f0f4c36ad1d171fbd"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/infer/triplane.py",
+        "sha256": "a404e5e193bb62ef45e4c1cfb7c59809ee6d70cd1701466915b00acac14e597d"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/infer/vision.py",
+        "sha256": "42f15ec9ff586bf55a04678eb4b2b454bd82b6fed2b923e7d1cc1d278eba455d"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/model.py",
+        "sha256": "03e80fd099045e063dfed6c1ee821c51a852aacaeb36b692c2ea01428997bd54"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/utils/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/utils/ascend.py",
+        "sha256": "93b4033b8b31fd87efdd442d7cd7c850fc0a284924ace9d1388d094b6f877e9e"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/utils/base.py",
+        "sha256": "7e727211092f656cd452185a1bc2ad08e502ba153e22882e602f1768e15330d9"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/utils/image.py",
+        "sha256": "2400add1a731ec925cfe948840c41d11fc6c510d087bb204b6ba75e08c4fc473"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/utils/isosurface.py",
+        "sha256": "fc6aaec9a47bc470a51887d25ce02cd76aa3a11b0dba4a818d9cd35486915947"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/utils/mesh.py",
+        "sha256": "660baba6c78f5e52071641c7d9d86cd13d05aabde859b155b3ba583e6ea29a39"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/utils/metax_texture_baker.py",
+        "sha256": "8d7d0e0faddd7e31db818a46f59f12dd298cf751974e8245c7c8154e7bb66533"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/utils/tests/test_ascend.py",
+        "sha256": "f6087a7fbbe3899896169d1d986bda1e832982913cff06ebe260ca153bb54410"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/backbone.py",
+        "sha256": "050df4c4aabf83124026a7aa374264a0216e13659a18aa93ca0ca90c52637493"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/camera.py",
+        "sha256": "75fc9251c0cd178ccd94c59862cda02b673e9bcda57c1d40815c930932fea72f"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/image.py",
+        "sha256": "56c68b90cb321db9488fd1112f82d23259531c74ca4ac28fcae25d3bbff4180e"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/image_estimator.py",
+        "sha256": "42c3e5ee76afea414cca5a53e25543c9b647de5ed906e528258c89077702b42d"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/loader.py",
+        "sha256": "a06cb83870a28ec0fc6145244289385cd1ea791a4f4f6f7e3031e234a1fd9679"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/modulation.py",
+        "sha256": "0184adf903a017a98f5a74838cd9f7808b76de709cbdf8e4fa0a1388542992dd"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/network.py",
+        "sha256": "2a9cfa38bdfdbb22576c8580d0c4236ac06f49b374f864ade2737c266da2dbcf"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/system.py",
+        "sha256": "757121fe88b919b0526018cfd0e9db8d5152a5b44a8e5df12da84324227fc55e"
+      },
+      {
+        "path": "lightx2v/models/networks/sf3d/weights/triplane.py",
+        "sha256": "f147308b21c2d6b2542458802b406e6783a1142db33f3f70f0ed392513a26321"
+      },
+      {
+        "path": "lightx2v/models/runners/hymotion/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/runners/hymotion/config.py",
+        "sha256": "9028075a936bd34f734355e7676c92c786bd028e3ff1aa5d92f3d1d71d99fc66"
+      },
+      {
+        "path": "lightx2v/models/runners/hymotion/hymotion_runner.py",
+        "sha256": "70258f418157b37cbdb822ca10425d05f9bb9da653323305d77e08576724decc"
+      },
+      {
+        "path": "lightx2v/models/runners/hymotion/request_spec.py",
+        "sha256": "a6d4b0d7b62414164621e18bd4c84437704ab2ad1bf17fb4649d724fcad0441e"
+      },
+      {
+        "path": "lightx2v/models/runners/native_inference.py",
+        "sha256": "867625d7ef29c304ad48308b35df3db38ebd31ccd4fc9e2bbb8ddbcaa042e3c4"
+      },
+      {
+        "path": "lightx2v/models/runners/registry.py",
+        "sha256": "d200600b2a03cf0d3a6bbe82693267a190914c4e037a6ec9b17c882e318f1c87"
+      },
+      {
+        "path": "lightx2v/models/runners/sdxl/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/runners/sdxl/config.py",
+        "sha256": "32b76af6b87aba42154b5ad9c3cce582b032b4262c3ecc983b0e359e4a9c184b"
+      },
+      {
+        "path": "lightx2v/models/runners/sdxl/request_spec.py",
+        "sha256": "fd04d53315b06ca3450a9476757b352b321eb73520f73655ae2f562e5c586033"
+      },
+      {
+        "path": "lightx2v/models/runners/sdxl/sdxl_runner.py",
+        "sha256": "b1b27aa62ba4d3533d370d0145d1fb68335b433138628213099a8b3eb350b901"
+      },
+      {
+        "path": "lightx2v/models/runners/sf3d/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "lightx2v/models/runners/sf3d/config.py",
+        "sha256": "bdddcb3d176bd336ec6e9df5ca8b7bbcc884e17fa87dfbb7a9f223fd6fc92139"
+      },
+      {
+        "path": "lightx2v/models/runners/sf3d/request_spec.py",
+        "sha256": "af605c4cd75fe7ff54c5ecde145287057a6f245c237bd8734e7455ab73b627d7"
+      },
+      {
+        "path": "lightx2v/models/runners/sf3d/sf3d_runner.py",
+        "sha256": "5e4c36d6b1b0bdc72585397341874e7a17d95379a6684afca5a0724ea3defcce"
+      },
+      {
+        "path": "lightx2v/models/schedulers/hymotion/__init__.py",
+        "sha256": "00004efd1f432781dfbdaf8de19b40702d61cbdacc7f1eae5759cddde4ed9ed3"
+      },
+      {
+        "path": "lightx2v/models/schedulers/hymotion/flow.py",
+        "sha256": "6c4f0665385331fa177b24db90e9ba1c733382a204f2a0955ceef16b90135d0f"
+      },
+      {
+        "path": "lightx2v/models/schedulers/sdxl/__init__.py",
+        "sha256": "b5fd7ad482a251b63b07f0e4a64c19d150e5ae19464acd91861b184cc27f0181"
+      },
+      {
+        "path": "lightx2v/models/schedulers/sdxl/euler.py",
+        "sha256": "48f18c1f70ec1760fe66a05a3f949d56e0afada18307c8e8cd42a5aea5d3d2da"
+      },
+      {
+        "path": "scripts/hymotion/README.md",
+        "sha256": "3bc41698b3329f8e8f06a6f05312cc04a7754c1d477e35b5857b5266917a926b"
+      },
+      {
+        "path": "scripts/hymotion/install_a100.sh",
+        "sha256": "68b446b98f0388561b9c02efaca58edd3e28102e003fb0dd69d1095ffaed78bc"
+      },
+      {
+        "path": "scripts/hymotion/install_ascend.sh",
+        "sha256": "6bb50201cfc53198147e6d3cc58885f1ef9cbbecb3d8b1a116dc7dfb12a1a81a"
+      },
+      {
+        "path": "scripts/hymotion/install_metax.sh",
+        "sha256": "d15ac93f32553c8e132317a0c1add22ef22dfb52681d99e85fcc8b54ef614a4e"
+      },
+      {
+        "path": "scripts/hymotion/requirements-a100.txt",
+        "sha256": "2e30191c06dbc4d20de5582e24976c86b96af5ae78b26115f0715397972a2c2c"
+      },
+      {
+        "path": "scripts/hymotion/requirements-ascend.txt",
+        "sha256": "7e6fdd5728f5e931a452ac90234f13e7ceac0b842fd40b423f04ab37973033a4"
+      },
+      {
+        "path": "scripts/hymotion/requirements-metax.txt",
+        "sha256": "249e65bd20c3ba354f7dc3fe23ae02c89596fd76731af3428920194f3c8345ef"
+      },
+      {
+        "path": "scripts/hymotion/requirements-mlu.txt",
+        "sha256": "7c84a546ba7d9b635bca9624c2cbee38d3d1a79f0553358c74a80477448c9482"
+      },
+      {
+        "path": "scripts/platforms/ascend_npu/run_hymotion.sh",
+        "sha256": "6be1e7d423e30dfc91834ff8da67e97f08bb5573a1bdd63b16b6a58fdb5d5bfe"
+      },
+      {
+        "path": "scripts/platforms/ascend_npu/run_sdxl.sh",
+        "sha256": "40896f37ec6451519092fa23dc95c0e7242fc040bedd1fc4336b67bb38ebd335"
+      },
+      {
+        "path": "scripts/platforms/ascend_npu/run_sf3d.sh",
+        "sha256": "9811c4813a582d5c06cf6a6c8a2cb12a0025d440b29b35d71cd3deaad64c8410"
+      },
+      {
+        "path": "scripts/platforms/metax/run_hymotion.sh",
+        "sha256": "cb00aa5ceafba29979c91f9353bd9eb7c074a87f0e81cfc0df79180ea05428be"
+      },
+      {
+        "path": "scripts/platforms/metax/run_sdxl.sh",
+        "sha256": "0cbaaaab667f108f9bb34641825046bc5d748c0aec26980f25d8100d4afe174c"
+      },
+      {
+        "path": "scripts/platforms/metax/run_sf3d.sh",
+        "sha256": "3a4a2a5fa9867ed9ed2fadee2fea9d9437945afb11d2ece047d979cd2e7f23de"
+      },
+      {
+        "path": "scripts/platforms/mlu/run_hymotion.sh",
+        "sha256": "ea98858b983e89c84dad1c5f8c1219a0b34e3852cbf309a0e4c5c7fd34eb875d"
+      },
+      {
+        "path": "scripts/platforms/mlu/run_sdxl.sh",
+        "sha256": "beeba5586953f05df023d1b2f512fb337754d3a2b07e358da5628e9b60ed036d"
+      },
+      {
+        "path": "scripts/platforms/mlu/run_sf3d.sh",
+        "sha256": "f94a455d6e6f494e1484a9d0906662f16b62d300f4a8d29f41860ee1b83bf558"
+      },
+      {
+        "path": "scripts/platforms/nvidia/run_hymotion.sh",
+        "sha256": "5ef31d34f59f17f94c4f4f3aa90d321a0e731f95ff4c5114e186afc51ea78b28"
+      },
+      {
+        "path": "scripts/platforms/nvidia/run_sdxl.sh",
+        "sha256": "4ccfcf87ce612a46d1924ebc96f23101dff97e33ecb562c091dcbe1d2115786b"
+      },
+      {
+        "path": "scripts/platforms/nvidia/run_sf3d.sh",
+        "sha256": "a08f33781cc807d2f72675bc5c1ec5167b67f5e9e033c43cec5b652c6c08727b"
+      },
+      {
+        "path": "scripts/sdxl/README.md",
+        "sha256": "198134fc32ec239248f148cbacd403607481aa15b218dc7c8600bba8ee9dc886"
+      },
+      {
+        "path": "scripts/sdxl/install_a100.sh",
+        "sha256": "96e8c55589ec9a3635e12890756eb9dd6dfb9df5f61155e08d2aba099597615c"
+      },
+      {
+        "path": "scripts/sdxl/install_ascend.sh",
+        "sha256": "142f7bf73a7ea42f850140804decf79f2f38884188d49557d6c00cb1a79a91ee"
+      },
+      {
+        "path": "scripts/sdxl/install_metax.sh",
+        "sha256": "199d37521b799df4d5de02d990b2ecbd853a660443687f2a39b466f04550e988"
+      },
+      {
+        "path": "scripts/sdxl/requirements-a100.txt",
+        "sha256": "3e621c7d72a66e6e97b552e97c6c4162906e8a5d6a1995e662b2d1cb8c784f6d"
+      },
+      {
+        "path": "scripts/sdxl/requirements-ascend.txt",
+        "sha256": "7e6fdd5728f5e931a452ac90234f13e7ceac0b842fd40b423f04ab37973033a4"
+      },
+      {
+        "path": "scripts/sdxl/requirements-metax.txt",
+        "sha256": "249e65bd20c3ba354f7dc3fe23ae02c89596fd76731af3428920194f3c8345ef"
+      },
+      {
+        "path": "scripts/sdxl/requirements-mlu.txt",
+        "sha256": "bbc560ecb3699ff439b48f4c2b1b23a65f1e88c6d3d434d7dc14d6d5d254931f"
+      },
+      {
+        "path": "scripts/sf3d/README.md",
+        "sha256": "4d184201fce4975f246540aa90679b526d40a4fb7d155e42d664be1591859e60"
+      },
+      {
+        "path": "scripts/sf3d/build_cpu_extension.py",
+        "sha256": "93b5dffbd3ce205f95a31a27c3c8ea8087608e4f7c4c61c24df6406f27532ea6"
+      },
+      {
+        "path": "scripts/sf3d/install_a100.sh",
+        "sha256": "faa209bfdcc99e027f55bd83aecb803f3bcfd62000b79c5e46ce08a528b19de0"
+      },
+      {
+        "path": "scripts/sf3d/install_ascend.sh",
+        "sha256": "e5bd06e9bc5485f5939c7fd1f0b7d71d6c85ccd26521c4a29f73d1ba355c4fae"
+      },
+      {
+        "path": "scripts/sf3d/install_metax.sh",
+        "sha256": "b4d726250766f1b9b238d2c7843e1bd2c061a48c95fc7d79380070593ae7ad1d"
+      },
+      {
+        "path": "scripts/sf3d/prepare_assets.py",
+        "sha256": "dba7349758ff9c6a1fcd437b4debe1d0739e72f4adae7f61a51493fcfb0184c4"
+      },
+      {
+        "path": "scripts/sf3d/requirements-a100.txt",
+        "sha256": "47055e0cb8ec4ebd54c5d96380ad89a047f43194a915576e111e1f671967101f"
+      },
+      {
+        "path": "scripts/sf3d/requirements-ascend.txt",
+        "sha256": "7e6fdd5728f5e931a452ac90234f13e7ceac0b842fd40b423f04ab37973033a4"
+      },
+      {
+        "path": "scripts/sf3d/requirements-metax.txt",
+        "sha256": "249e65bd20c3ba354f7dc3fe23ae02c89596fd76731af3428920194f3c8345ef"
+      },
+      {
+        "path": "scripts/sf3d/requirements-mlu.txt",
+        "sha256": "5f5026da6edcf80f73f33abdb6aafe3ea0e76befc5ad2fa1f8de118c078b9741"
+      },
+      {
+        "path": "tests/test_native_metax_config.py",
+        "sha256": "2d28936019d5f64545272b7e676285aa27380b2d5d4e9bccf4d8fc73ae2c02a6"
+      },
+      {
+        "path": "tests/test_sf3d_metax_texture_baker.py",
+        "sha256": "f97e127f4c9b6716418bf3cf7e33c5b9b0f52b1e24f71ad7e80fbcb6d8167fdb"
+      }
+    ],
+    "registry_additions": [
+      "    \"hymotion\": ModelEntry(\"hymotion.hymotion_runner\", config=\"hymotion.config.load_config\"),",
+      "    \"sf3d\": ModelEntry(\"sf3d.sf3d_runner\", config=\"sf3d.config.load_config\"),",
+      "    \"sdxl\": ModelEntry(\"sdxl.sdxl_runner\", config=\"sdxl.config.load_config\"),"
+    ]
+  },
+  "native": {
+    "package": "diffusers",
+    "version": "0.40.0",
+    "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+    "package_files": [
+      {
+        "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+        "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+      },
+      {
+        "path": "diffusers/models/unets/unet_2d_condition.py",
+        "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+      },
+      {
+        "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+        "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+      },
+      {
+        "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+        "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+      }
+    ]
+  },
+  "geneval": {
+    "repo": "djghosh13/geneval",
+    "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+    "files": [
+      {
+        "path": "evaluation/evaluate_images.py",
+        "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+      },
+      {
+        "path": "evaluation/summary_scores.py",
+        "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+      }
+    ]
+  }
+}

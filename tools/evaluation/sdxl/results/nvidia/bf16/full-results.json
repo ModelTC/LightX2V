@@ -1,0 +1,591 @@
+{
+  "model": "sdxl",
+  "platform": "NVIDIA A100-SXM4-40GB",
+  "precision_profile": "bf16",
+  "execution_status": "COMPLETE",
+  "datasets": {
+    "geneval": {
+      "status": "COMPLETE",
+      "model": "sdxl",
+      "dataset": "geneval",
+      "backend": "lightx2v",
+      "precision_profile": "bf16",
+      "precision_policy": {
+        "bf16": [
+          "both CLIP text encoders",
+          "UNet matrices, convolutions and attention"
+        ],
+        "fp32": [
+          "normalization",
+          "time frequencies",
+          "CFG and Euler state/update",
+          "VAE decoding"
+        ]
+      },
+      "coverage": 553,
+      "repetitions": 1,
+      "gpu": "GPU-15906396-a9f4-ac97-178a-456434ca6eed",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "94522e29e16c680cc7a15569f7215c2d88c74c9d",
+          "pull_request": 1754
+        },
+        "native": {
+          "package": "diffusers",
+          "version": "0.40.0",
+          "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+          "package_files": [
+            {
+              "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+              "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+            },
+            {
+              "path": "diffusers/models/unets/unet_2d_condition.py",
+              "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+            },
+            {
+              "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+              "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+            },
+            {
+              "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+              "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+            }
+          ]
+        },
+        "geneval": {
+          "repo": "djghosh13/geneval",
+          "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+          "files": [
+            {
+              "path": "evaluation/evaluate_images.py",
+              "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+            },
+            {
+              "path": "evaluation/summary_scores.py",
+              "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+            }
+          ]
+        }
+      },
+      "quality": {
+        "count": 553,
+        "geneval_by_dimension": {
+          "color_attr": 0.14,
+          "colors": 0.8085106382978723,
+          "counting": 0.425,
+          "position": 0.09,
+          "single_object": 0.95,
+          "two_object": 0.7474747474747475
+        },
+        "geneval_overall": 0.52683089762877
+      },
+      "latency": {
+        "count": 553,
+        "mean_s": 4.053879584627652,
+        "median_s": 4.058514168020338,
+        "p95_s": 4.151056914636865
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "cross_precision_exact_alignment_claimed": false
+    },
+    "parti": {
+      "status": "COMPLETE",
+      "model": "sdxl",
+      "dataset": "parti",
+      "backend": "lightx2v",
+      "precision_profile": "bf16",
+      "precision_policy": {
+        "bf16": [
+          "both CLIP text encoders",
+          "UNet matrices, convolutions and attention"
+        ],
+        "fp32": [
+          "normalization",
+          "time frequencies",
+          "CFG and Euler state/update",
+          "VAE decoding"
+        ]
+      },
+      "coverage": 1632,
+      "repetitions": 1,
+      "gpu": "GPU-6d13b72c-2bac-94a2-f839-27bb7ce8f91d",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "94522e29e16c680cc7a15569f7215c2d88c74c9d",
+          "pull_request": 1754
+        },
+        "native": {
+          "package": "diffusers",
+          "version": "0.40.0",
+          "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+          "package_files": [
+            {
+              "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+              "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+            },
+            {
+              "path": "diffusers/models/unets/unet_2d_condition.py",
+              "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+            },
+            {
+              "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+              "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+            },
+            {
+              "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+              "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+            }
+          ]
+        },
+        "geneval": {
+          "repo": "djghosh13/geneval",
+          "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+          "files": [
+            {
+              "path": "evaluation/evaluate_images.py",
+              "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+            },
+            {
+              "path": "evaluation/summary_scores.py",
+              "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+            }
+          ]
+        }
+      },
+      "quality": {
+        "count": 1632,
+        "clip_cosine_x100_mean": 27.594456893355385,
+        "clipscore_2_5_relu_cosine_mean": 0.6898614223338846
+      },
+      "latency": {
+        "count": 1632,
+        "mean_s": 4.040779133944549,
+        "median_s": 4.046702947583981,
+        "p95_s": 4.151311794121284
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "cross_precision_exact_alignment_claimed": false
+    },
+    "coco": {
+      "status": "COMPLETE",
+      "model": "sdxl",
+      "dataset": "coco",
+      "backend": "lightx2v",
+      "precision_profile": "bf16",
+      "precision_policy": {
+        "bf16": [
+          "both CLIP text encoders",
+          "UNet matrices, convolutions and attention"
+        ],
+        "fp32": [
+          "normalization",
+          "time frequencies",
+          "CFG and Euler state/update",
+          "VAE decoding"
+        ]
+      },
+      "coverage": 5000,
+      "repetitions": 1,
+      "gpu": "GPU-4b2b3849-8af1-8751-5856-d039d418ae14",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "94522e29e16c680cc7a15569f7215c2d88c74c9d",
+          "pull_request": 1754
+        },
+        "native": {
+          "package": "diffusers",
+          "version": "0.40.0",
+          "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+          "package_files": [
+            {
+              "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+              "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+            },
+            {
+              "path": "diffusers/models/unets/unet_2d_condition.py",
+              "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+            },
+            {
+              "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+              "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+            },
+            {
+              "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+              "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+            }
+          ]
+        },
+        "geneval": {
+          "repo": "djghosh13/geneval",
+          "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+          "files": [
+            {
+              "path": "evaluation/evaluate_images.py",
+              "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+            },
+            {
+              "path": "evaluation/summary_scores.py",
+              "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+            }
+          ]
+        }
+      },
+      "quality": {
+        "count": 5000,
+        "clip_cosine_x100_mean": 26.638809301555156,
+        "clipscore_2_5_relu_cosine_mean": 0.6659702325388789
+      },
+      "latency": {
+        "count": 5000,
+        "mean_s": 4.057195258710743,
+        "median_s": 4.0563065420719795,
+        "p95_s": 4.1621595539676495
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "cross_precision_exact_alignment_claimed": false
+    }
+  },
+  "environments": {
+    "geneval": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-15906396-a9f4-ac97-178a-456434ca6eed",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true,
+      "cudnn_deterministic": true,
+      "cudnn_benchmark": false,
+      "cpu_threads": 8,
+      "generation_environment": {
+        "PLATFORM": "cuda",
+        "DTYPE": "BF16",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "CUBLAS_WORKSPACE_CONFIG": null,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PROFILING_DEBUG_LEVEL": "0",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      }
+    },
+    "parti": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-6d13b72c-2bac-94a2-f839-27bb7ce8f91d",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true,
+      "cudnn_deterministic": true,
+      "cudnn_benchmark": false,
+      "cpu_threads": 8,
+      "generation_environment": {
+        "PLATFORM": "cuda",
+        "DTYPE": "BF16",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "CUBLAS_WORKSPACE_CONFIG": null,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PROFILING_DEBUG_LEVEL": "0",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      }
+    },
+    "coco": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-4b2b3849-8af1-8751-5856-d039d418ae14",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true,
+      "cudnn_deterministic": true,
+      "cudnn_benchmark": false,
+      "cpu_threads": 8,
+      "generation_environment": {
+        "PLATFORM": "cuda",
+        "DTYPE": "BF16",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "CUBLAS_WORKSPACE_CONFIG": null,
+        "OMP_NUM_THREADS": "8",
+        "MKL_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "1",
+        "PROFILING_DEBUG_LEVEL": "0",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      }
+    }
+  },
+  "resources": {
+    "geneval": {
+      "verified_generation_chunks": 3,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 4
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 11109241344
+    },
+    "parti": {
+      "verified_generation_chunks": 7,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 8
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 11109241344
+    },
+    "coco": {
+      "verified_generation_chunks": 20,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 21
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 11109241344
+    }
+  },
+  "invalid_attempts": [],
+  "formal_repetitions_per_input": 1,
+  "measurement_worker_sha256": "6793cf50572581e5dbe5569d8034a1c4a058b0676d7a07ba87dcabadcf11d280",
+  "measurement_evaluation_revision": "4547b2b960e0d9fd15059f3069a52e8e05f89170",
+  "measurement_evaluation_file": "tools/evaluation/sdxl/evaluate.py",
+  "reproduction_note": "Check out measurement_evaluation_revision for the exact A100 measurement entrypoint and configurations. Later platform commits are not relabeled as measured code.",
+  "source_lock": {
+    "lightx2v": {
+      "repository": "https://github.com/ModelTC/LightX2V.git",
+      "revision": "94522e29e16c680cc7a15569f7215c2d88c74c9d",
+      "pull_request": 1754
+    },
+    "native": {
+      "package": "diffusers",
+      "version": "0.40.0",
+      "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+      "package_files": [
+        {
+          "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+          "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+        },
+        {
+          "path": "diffusers/models/unets/unet_2d_condition.py",
+          "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+        },
+        {
+          "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+          "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+        },
+        {
+          "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+          "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+        }
+      ]
+    },
+    "geneval": {
+      "repo": "djghosh13/geneval",
+      "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+      "files": [
+        {
+          "path": "evaluation/evaluate_images.py",
+          "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+        },
+        {
+          "path": "evaluation/summary_scores.py",
+          "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+        }
+      ]
+    }
+  },
+  "precision_policy": {
+    "bf16": [
+      "both CLIP text encoders",
+      "UNet matrices, convolutions and attention"
+    ],
+    "fp32": [
+      "normalization",
+      "time frequencies",
+      "CFG and Euler state/update",
+      "VAE decoding"
+    ]
+  },
+  "weight_lock_sha256": "5e96e8b0d2f8928721e3dcb753df8e7000cc446cc1a576a31694d25f2c64fb70",
+  "raw_evidence_namespace": "lightx2v-bf16-evaluation-20261127",
+  "measurement_cohort": "full-v1",
+  "raw_evidence_file_count": 8804,
+  "raw_evidence_manifest_sha256": "3fcfc16acf27ff671764541ccb6d4caf65679b6a3ec23165e24cf7dc3c969319",
+  "archived_resource_policy_recheck_sha256": "17639bb41c511f84780bd048d5802ba28ee8844888ab986ea09124a96d37f510",
+  "previous_precision_quality_reference": {
+    "source_lock": {
+      "lightx2v": {
+        "repository": "https://github.com/ModelTC/LightX2V.git",
+        "revision": "b008e1cf276a5ed0914c22f0124e98a265a3498c",
+        "pull_request": 1754
+      },
+      "native": {
+        "package": "diffusers",
+        "version": "0.40.0",
+        "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+        "package_files": [
+          {
+            "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+            "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+          },
+          {
+            "path": "diffusers/models/unets/unet_2d_condition.py",
+            "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+          },
+          {
+            "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+            "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+          },
+          {
+            "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+            "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+          }
+        ]
+      },
+      "geneval": {
+        "repo": "djghosh13/geneval",
+        "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+        "files": [
+          {
+            "path": "evaluation/evaluate_images.py",
+            "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+          },
+          {
+            "path": "evaluation/summary_scores.py",
+            "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+          }
+        ]
+      }
+    },
+    "note": "Earlier checkpoint-native/mixed-precision campaign; quality reference only. Timings and outputs are not combined, and exact parity is not claimed.",
+    "datasets": {
+      "geneval": {
+        "previous_quality": {
+          "count": 553,
+          "geneval_by_dimension": {
+            "color_attr": 0.15,
+            "colors": 0.8191489361702128,
+            "counting": 0.3875,
+            "position": 0.08,
+            "single_object": 0.95,
+            "two_object": 0.7171717171717171
+          },
+          "geneval_overall": 0.517303442223655
+        },
+        "bf16_minus_previous": {
+          "count": 0,
+          "geneval_overall": 0.009527455405115015,
+          "geneval_by_dimension": {
+            "two_object": 0.030303030303030387,
+            "color_attr": -0.009999999999999981,
+            "counting": 0.03749999999999998,
+            "colors": -0.010638297872340496,
+            "position": 0.009999999999999995,
+            "single_object": 0.0
+          }
+        }
+      },
+      "parti": {
+        "previous_quality": {
+          "count": 1632,
+          "clip_cosine_x100_mean": 27.582458617147427,
+          "clipscore_2_5_relu_cosine_mean": 0.6895614654286857
+        },
+        "bf16_minus_previous": {
+          "count": 0,
+          "clipscore_2_5_relu_cosine_mean": 0.00029995690519890594,
+          "clip_cosine_x100_mean": 0.011998276207958014
+        }
+      },
+      "coco": {
+        "previous_quality": {
+          "count": 5000,
+          "clip_cosine_x100_mean": 26.64686366200447,
+          "clipscore_2_5_relu_cosine_mean": 0.6661715915501119
+        },
+        "bf16_minus_previous": {
+          "count": 0,
+          "clipscore_2_5_relu_cosine_mean": -0.00020135901123297106,
+          "clip_cosine_x100_mean": -0.008054360449314402
+        }
+      }
+    }
+  }
+}

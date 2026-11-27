@@ -1,0 +1,22 @@
+{
+  "data": "/absolute/replace/data",
+  "weights": "/absolute/replace/weights",
+  "lightx2v": "/absolute/replace/lightx2v",
+  "native_python": "/absolute/replace/native_python",
+  "lightx2v_python": "/absolute/replace/lightx2v_python",
+  "metric_python": "/absolute/replace/metric_python",
+  "clip": "/absolute/replace/clip",
+  "geneval": "/absolute/replace/geneval",
+  "geneval_python": "/absolute/replace/geneval_python",
+  "geneval_weights": "/absolute/replace/geneval_weights",
+  "geneval_configs": "/absolute/replace/geneval_configs",
+  "geneval_config": "/absolute/replace/geneval_config",
+  "geneval_clip": "/absolute/replace/geneval_clip",
+  "python": "python",
+  "output_root": "/absolute/replace/results",
+  "mounts": [
+    "/absolute/replace/workspace",
+    "/absolute/replace/assets"
+  ],
+  "metric_image": "lightx2v-metax-metrics:20261127"
+}

@@ -1,0 +1,7 @@
+# Separate native environment; keep installed torch/torchvision/torch_mlu hardware stack.
+diffusers==0.40.0
+transformers==5.17.0
+tokenizers==0.23.3
+huggingface-hub==1.33.0
+regex==2026.11.25
+peft==0.22.0

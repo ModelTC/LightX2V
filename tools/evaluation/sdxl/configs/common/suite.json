@@ -1,0 +1,27 @@
+{
+  "model": "sdxl",
+  "seed": 42,
+  "repetitions": 1,
+  "batch_size": 1,
+  "timing": "RNG reset and model load excluded. Start before request JSON decoding and input image read. End after GPU synchronization and durable final PNG/GLB/NPZ file fsync. Hashes, quality, output validation and benchmark logs excluded. One separate synthetic/upstream demo warmup per loaded process, never a dataset sample.",
+  "datasets": {
+    "geneval": {
+      "count": 553,
+      "manifest": "configs/common/geneval.jsonl",
+      "sha256": "46e3c1edc0bc90115c07601648895855562b29204a12609ec1d9b66bf912424c",
+      "reference_manifest_sha256": "a46e5ac9b4ae1d6f6bdf6c888479f0f1973c0871f925a9ac3c7244637ffcefa8"
+    },
+    "parti": {
+      "count": 1632,
+      "manifest": "configs/common/parti.jsonl",
+      "sha256": "65a9ba8fc99b3dd3ad4f6594eb7bae173e4a242f04de2df61a2f8d52315942c9",
+      "reference_manifest_sha256": "92e6bb46bfcc5a2e90e9b1f53d52c04379dfbf2a07b8e64f2c4e2ae605c3cfe3"
+    },
+    "coco": {
+      "count": 5000,
+      "manifest": "configs/common/coco.jsonl",
+      "sha256": "0f492cd861502ec36b70d67bed818812fdadc6a5805ec85ec2e322ef36cfc767",
+      "reference_manifest_sha256": "5abfd2278cd51baa2f1513ce4a7bd8c10f9309c4ef65d62fc7edcd2e2ae2d120"
+    }
+  }
+}
