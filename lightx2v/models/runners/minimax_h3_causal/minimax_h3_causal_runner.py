@@ -455,7 +455,12 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             audio_decoder = None
             if is_recorder_rank and not self.reuse_input_audio:
                 self._init_audio_decode_graph()
-                audio_decoder = MiniMaxH3StreamingAudioDecoder(self.audio_vae, num_audio_latents=None, decode_graph=self.audio_decode_graph)
+                audio_decoder = MiniMaxH3StreamingAudioDecoder(
+                    self.audio_vae,
+                    num_audio_latents=None,
+                    decode_graph=self.audio_decode_graph,
+                    low_latency=self.generate_audio and self.config.get("live_audio_decode_low_latency", False),
+                )
                 decoders.callback(audio_decoder.close)
             try:
                 while True:

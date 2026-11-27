@@ -59,13 +59,14 @@ def decoder_context_latents(audio_vae) -> int:
 
 
 class MiniMaxH3StreamingAudioDecoder:
-    """Exact overlap-save decoding for MiniMax-H3's non-causal audio VAE."""
+    """Overlap-save audio decoding with optional left-context-only live output."""
 
-    def __init__(self, audio_vae, *, num_audio_latents: int | None, decode_graph=None) -> None:
+    def __init__(self, audio_vae, *, num_audio_latents: int | None, decode_graph=None, low_latency: bool = False) -> None:
         self.audio_vae = audio_vae
         self.decode_graph = decode_graph
         self.pending = None
         self.num_audio_latents = num_audio_latents
+        self.low_latency = low_latency
         self.context_latents = AUDIO_DECODER_CONTEXT_LATENTS
         self.hop_length = int(audio_vae.hop_length)
         self._latents: torch.Tensor | None = None
@@ -127,6 +128,11 @@ class MiniMaxH3StreamingAudioDecoder:
         latents = self.audio_vae.denormalize_latents(unpack_audio_tokens(audio_rows, length))
         self._latents = latents if self._latents is None else torch.cat((self._latents, latents), dim=-1)
         self._received += length
+        if self.low_latency:
+            # Live video emits its first two chunks together on the second push.
+            if self._received == length:
+                return []
+            return [self._decode_until(self._received)]
         stable_end = max(0, self._received - self.context_latents)
         if stable_end <= self._emitted:
             return []
