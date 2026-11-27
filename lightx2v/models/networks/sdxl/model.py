@@ -1,3 +1,5 @@
+from lightx2v.models.networks.native_components.ascend import preserve_native_precision
+
 from pathlib import Path
 
 import torch
@@ -29,6 +31,7 @@ class SDXLModel:
             hidden.append(feature)
         return torch.cat(hidden, dim=-1), pooled
 
+    @preserve_native_precision
     def generate(self, prompt, negative_prompt, seed, size, steps, cfg_scale, return_latents=False):
         height, width = size
         if height % 64 or width % 64 or min(height, width) < 128:

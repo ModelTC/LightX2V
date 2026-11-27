@@ -1,7 +1,7 @@
 {
   "model_cls": "sdxl",
   "task": "t2i",
-  "implementation_status": "placeholder",
+  "implementation_status": "implemented",
   "parallel": false,
   "cpu_offload": false,
   "feature_caching": "NoCaching",

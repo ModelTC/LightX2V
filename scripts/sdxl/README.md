@@ -33,3 +33,16 @@ Both CLIP encoders use Transformers’ existing `CLIPTokenizerFast` implementati
 Use a MetaX PyTorch/MACA environment and run `bash scripts/sdxl/install_metax.sh`. The installer preserves the installed MetaX PyTorch. Launch with `MACA_VISIBLE_DEVICES=0 CUDA_VISIBLE_DEVICES=0 PYTHON_BIN=python3 bash scripts/platforms/metax/run_sdxl.sh`, using the same model and input environment variables documented above. The BF16/FP32 computation boundaries match the NVIDIA configuration.
 
 Build an isolated image from this checkout with `docker build --build-arg METAX_BASE_IMAGE=<compatible-metax-development-image> -f dockerfiles/platforms/Dockerfile_metax_sdxl -t lightx2v-sdxl-metax .`. The validated runtime uses Python 3.10, MetaX PyTorch 2.8.0+metax3.5.3.9 and MACA SDK 3.5.3.18. Keep weights and generated outputs in external mounts.
+
+## Ascend NPU
+
+Use an isolated environment with matching PyTorch, torch_npu and CANN already
+installed. Source the CANN `set_env.sh`, then run
+`PYTHON_BIN=/path/to/python bash scripts/sdxl/install_ascend.sh`.
+The installer keeps the installed accelerator PyTorch. Run the same requests with
+`ASCEND_RT_VISIBLE_DEVICES=0 PYTHON_BIN=/path/to/python bash scripts/platforms/ascend_npu/run_sdxl.sh`
+and the model/input environment variables documented above.
+
+The original BF16 neural computation and FP32 numerical boundaries are preserved.
+The NPU request disables HF32 convolution/matmul and restores the previous flags
+afterwards. No weights or inputs are globally recast and no quantization is used.
