@@ -53,3 +53,20 @@ For bounded minimal NVML acquisition, install `nvidia-ml-py==12.550.52` in a sep
 Generation workers initialize their single visible CUDA primary context before CPU model preparation. This reduces the window in which another automatic device selector can mistake the loading worker for an idle card. Resource attribution and early/late samples still apply; model preparation remains outside request timing.
 
 GenEval scoring runs under `geneval_python` with its original literal evaluator launcher in the held worker PID. This preserves the pinned evaluator and arguments while keeping CUDA process ancestry available until the post-workload sample. COCO/Parti scoring continues under `metric_python`.
+
+## BF16 inference profile
+
+Set `LIGHTX2V_EVAL_PRECISION_PROFILE=bf16` and pass `campaign --backend lightx2v`
+to evaluate the updated inference PR with `configs/nvidia/bf16/` source/model/runtime
+locks. Use a new result directory and a local paths file without `worker_script`.
+`prepare-sources`, `check-inputs`, `run` and `score` select the same profile via
+that environment variable. The original default profile and its source locks remain
+available for reproducing the earlier native-precision comparison.
+
+The BF16 campaign generates each complete frozen dataset once and produces
+`summary.json`, per-input output/timing records, quality metrics and resource
+evidence. It runs no native-precision generation and makes no exact-output parity
+or cross-precision latency-ratio claim. Quality metric networks and dataset
+selection are unchanged; retained FP32 inference operations are recorded in
+`precision_policy`. `--backend` also selects a single backend in the default
+profile; omitting it preserves the original serial two-backend comparison.
