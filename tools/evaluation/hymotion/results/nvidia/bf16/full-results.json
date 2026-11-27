@@ -1,0 +1,393 @@
+{
+  "model": "hymotion",
+  "platform": "NVIDIA A100-SXM4-40GB",
+  "precision_profile": "bf16",
+  "execution_status": "COMPLETE",
+  "datasets": {
+    "humanml3d": {
+      "status": "COMPLETE",
+      "model": "hymotion",
+      "dataset": "humanml3d",
+      "backend": "lightx2v",
+      "precision_profile": "bf16",
+      "precision_policy": {
+        "bf16": [
+          "Qwen3",
+          "CLIP",
+          "Motion MMDiT matrices and attention"
+        ],
+        "fp32": [
+          "normalization",
+          "time/RoPE frequencies",
+          "CFG and Euler state/update",
+          "motion decoding and skeleton geometry"
+        ]
+      },
+      "coverage": 4384,
+      "repetitions": 1,
+      "gpu": "GPU-4c29e2a5-a5b0-5da3-dfed-42ceed83be6a",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "0f87be465bbc0b2edfe93602186499c686a273f5",
+          "pull_request": 1752
+        },
+        "native": {
+          "repository": "https://github.com/Tencent-Hunyuan/HY-Motion-1.0.git",
+          "revision": "4e426f5a1021cbcf7f375458c37b840ee7225229"
+        },
+        "momask": {
+          "repo": "EricGuo5513/momask-codes",
+          "revision": "94a6636c9c463b7a9414c3401a6f1b67e6c51824",
+          "files": [
+            {
+              "path": "models/t2m_eval_wrapper.py",
+              "sha256": "b03398ef2ee0087076a6e0cbe6317ba1548c23b1d58e03988d2a98a25de49692"
+            },
+            {
+              "path": "models/t2m_eval_modules.py",
+              "sha256": "6d4b069e06448828cbe8b4da609f6b0a186ec180a24b5b2e89098c2bb027e5fc"
+            },
+            {
+              "path": "utils/metrics.py",
+              "sha256": "83f8ecb93df83aafb708280c062973893f1a2565418f2abf961064d7cfca49d7",
+              "runtime_sha256": "2cc8f0f6871d31b03c33a9f10b6fcd90f5989763a269aac9dde07dd19ce16544",
+              "patch": "Clamp roundoff-induced negative squared Euclidean distances to zero before sqrt"
+            },
+            {
+              "path": "utils/word_vectorizer.py",
+              "sha256": "fbfb56d795f2b1ddb99bbf60a097a600a3dfd2275cc541b1dce0a57df787bbdf"
+            },
+            {
+              "path": "utils/motion_process.py",
+              "sha256": "ae517a71091a159392383de5460c5097a7469c1ba65c223edad91f94f7f11f29",
+              "runtime_sha256": "770bc215e49aa9396a29ae1de448c214ea17521d12f6daefbfe7ac8b52d9d09c",
+              "patch": "Replace removed numpy np.float alias with np.float64"
+            },
+            {
+              "path": "utils/paramUtil.py",
+              "sha256": "ec119ad7e3ab3bf17a49c582131a05a7bbf93c6d1d46e478b8c564941b5910e7"
+            },
+            {
+              "path": "common/skeleton.py",
+              "sha256": "6f6191dd105bc32ee417dafc6a2d463dc4a7fe9a1d6181250a924382af8659b1"
+            },
+            {
+              "path": "common/quaternion.py",
+              "sha256": "ae2e3d090eb39342bdcd0bdae7183bab3159bc100eea5725680dd25032f78c25",
+              "runtime_sha256": "17e96bb3af31952183453d4dc15f11f88bb940342f532f3860012aeecf1f85ad",
+              "patch": "Replace removed numpy np.float alias with np.float64"
+            },
+            {
+              "path": "utils/get_opt.py",
+              "sha256": "87addb92b0bb3b91f0bc02bff27b4105a218229be7cea55cce6526eba49cc37a"
+            },
+            {
+              "path": "prepare/download_evaluator.sh",
+              "sha256": "6c8653ab0a1e8d79949c02d10068124581a01a7d38162661a90f795629fffd30"
+            },
+            {
+              "path": "prepare/download_glove.sh",
+              "sha256": "3695a92054fd2f8451e49c5835b6b575fd07ed423d3c9abc20bdc609be357119"
+            }
+          ],
+          "data_loader_reference_sha256": "fcbc8e7b0079e17ef7573b6a70d5487e4b4f692632caebb506f6c28ea3e3b70c"
+        }
+      },
+      "quality": {
+        "r_precision_top1_top2_top3": [
+          0.5409718913768461,
+          0.7403525488327776,
+          0.83206288708909
+        ],
+        "matching_score": 2.802800946147059,
+        "fid": 0.49312498233970814,
+        "diversity": 9.22973918914795,
+        "generated_count": 4384,
+        "evaluated_count": 4198,
+        "excluded_reference_length_count": 186,
+        "evaluator_batch_size": 32,
+        "seed": 42,
+        "representation": "HY native fixed skeleton FK, 30-to-20 FPS interpolation, authors' canonical retargeting and 263-D extraction",
+        "normalization": "authors' evaluator Comp_v6_KLD005 mean/std; matched central crop, multiple of 4, maximum 196",
+        "repetitions": 1,
+        "native_length_complete_fraction": 1.0,
+        "requested_length_complete_fraction": 0.9958941605839416
+      },
+      "latency": {
+        "count": 4384,
+        "mean_s": 4.303014948585424,
+        "median_s": 4.338684741000179,
+        "p95_s": 4.599317007610807
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "cross_precision_exact_alignment_claimed": false
+    }
+  },
+  "environments": {
+    "humanml3d": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "tokenizers": "0.21.4",
+        "ftfy": "6.3.1",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-4c29e2a5-a5b0-5da3-dfed-42ceed83be6a",
+      "cudnn": 90100,
+      "deterministic": false,
+      "tf32_matmul": false,
+      "tf32_cudnn": true
+    }
+  },
+  "resources": {
+    "humanml3d": {
+      "verified_generation_chunks": 18,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 19
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 22607746560
+    }
+  },
+  "invalid_attempts": [
+    {
+      "namespace": "invalid/hymotion-loading-foreign-gpu0",
+      "discarded_timing_records": 0,
+      "accepted_formal_samples": 0,
+      "reason": "Resource-invalid attempt, preserved outside the formal campaign; see archived evidence"
+    },
+    {
+      "namespace": "invalid/hymotion-startup-foreign-gpu0-second",
+      "discarded_timing_records": 0,
+      "accepted_formal_samples": 0,
+      "reason": "Resource-invalid attempt, preserved outside the formal campaign; see archived evidence"
+    }
+  ],
+  "formal_repetitions_per_input": 1,
+  "measurement_worker_sha256": "30b0d08bb8e4289dcf55ebc5122879e515c347a97f83d3e10f26f4c092e499a1",
+  "measurement_evaluation_revision": "f26ecbbc002b6f124650553f34577c825c8fd744",
+  "measurement_evaluation_file": "tools/evaluation/hymotion/evaluate.py",
+  "reproduction_note": "Check out measurement_evaluation_revision for the exact A100 measurement entrypoint and configurations. Later platform commits are not relabeled as measured code.",
+  "source_lock": {
+    "lightx2v": {
+      "repository": "https://github.com/ModelTC/LightX2V.git",
+      "revision": "0f87be465bbc0b2edfe93602186499c686a273f5",
+      "pull_request": 1752
+    },
+    "native": {
+      "repository": "https://github.com/Tencent-Hunyuan/HY-Motion-1.0.git",
+      "revision": "4e426f5a1021cbcf7f375458c37b840ee7225229"
+    },
+    "momask": {
+      "repo": "EricGuo5513/momask-codes",
+      "revision": "94a6636c9c463b7a9414c3401a6f1b67e6c51824",
+      "files": [
+        {
+          "path": "models/t2m_eval_wrapper.py",
+          "sha256": "b03398ef2ee0087076a6e0cbe6317ba1548c23b1d58e03988d2a98a25de49692"
+        },
+        {
+          "path": "models/t2m_eval_modules.py",
+          "sha256": "6d4b069e06448828cbe8b4da609f6b0a186ec180a24b5b2e89098c2bb027e5fc"
+        },
+        {
+          "path": "utils/metrics.py",
+          "sha256": "83f8ecb93df83aafb708280c062973893f1a2565418f2abf961064d7cfca49d7",
+          "runtime_sha256": "2cc8f0f6871d31b03c33a9f10b6fcd90f5989763a269aac9dde07dd19ce16544",
+          "patch": "Clamp roundoff-induced negative squared Euclidean distances to zero before sqrt"
+        },
+        {
+          "path": "utils/word_vectorizer.py",
+          "sha256": "fbfb56d795f2b1ddb99bbf60a097a600a3dfd2275cc541b1dce0a57df787bbdf"
+        },
+        {
+          "path": "utils/motion_process.py",
+          "sha256": "ae517a71091a159392383de5460c5097a7469c1ba65c223edad91f94f7f11f29",
+          "runtime_sha256": "770bc215e49aa9396a29ae1de448c214ea17521d12f6daefbfe7ac8b52d9d09c",
+          "patch": "Replace removed numpy np.float alias with np.float64"
+        },
+        {
+          "path": "utils/paramUtil.py",
+          "sha256": "ec119ad7e3ab3bf17a49c582131a05a7bbf93c6d1d46e478b8c564941b5910e7"
+        },
+        {
+          "path": "common/skeleton.py",
+          "sha256": "6f6191dd105bc32ee417dafc6a2d463dc4a7fe9a1d6181250a924382af8659b1"
+        },
+        {
+          "path": "common/quaternion.py",
+          "sha256": "ae2e3d090eb39342bdcd0bdae7183bab3159bc100eea5725680dd25032f78c25",
+          "runtime_sha256": "17e96bb3af31952183453d4dc15f11f88bb940342f532f3860012aeecf1f85ad",
+          "patch": "Replace removed numpy np.float alias with np.float64"
+        },
+        {
+          "path": "utils/get_opt.py",
+          "sha256": "87addb92b0bb3b91f0bc02bff27b4105a218229be7cea55cce6526eba49cc37a"
+        },
+        {
+          "path": "prepare/download_evaluator.sh",
+          "sha256": "6c8653ab0a1e8d79949c02d10068124581a01a7d38162661a90f795629fffd30"
+        },
+        {
+          "path": "prepare/download_glove.sh",
+          "sha256": "3695a92054fd2f8451e49c5835b6b575fd07ed423d3c9abc20bdc609be357119"
+        }
+      ],
+      "data_loader_reference_sha256": "fcbc8e7b0079e17ef7573b6a70d5487e4b4f692632caebb506f6c28ea3e3b70c"
+    }
+  },
+  "precision_policy": {
+    "bf16": [
+      "Qwen3",
+      "CLIP",
+      "Motion MMDiT matrices and attention"
+    ],
+    "fp32": [
+      "normalization",
+      "time/RoPE frequencies",
+      "CFG and Euler state/update",
+      "motion decoding and skeleton geometry"
+    ]
+  },
+  "weight_lock_sha256": "787b19100ca37c21d7fcc6bb4fd2b65f63772c15f505cb1b7799c8f5a8476a95",
+  "raw_evidence_namespace": "lightx2v-bf16-evaluation-20261127",
+  "measurement_cohort": "full-v1",
+  "raw_evidence_file_count": 4712,
+  "raw_evidence_manifest_sha256": "3e3a39fe86504a5061fc43e66b046ed86209eebbbb19dc12c4ba2a2374363d2c",
+  "archived_resource_policy_recheck_sha256": "26be383f2bb8d73470cf1364dcd8b0f8b2c6ad4ae121c092f4a4754f612c2844",
+  "previous_precision_quality_reference": {
+    "source_lock": {
+      "lightx2v": {
+        "repository": "https://github.com/ModelTC/LightX2V.git",
+        "revision": "9a5c15e4c53d13976c731c4cc709fd751679c6a2",
+        "pull_request": 1752
+      },
+      "native": {
+        "repository": "https://github.com/Tencent-Hunyuan/HY-Motion-1.0.git",
+        "revision": "4e426f5a1021cbcf7f375458c37b840ee7225229"
+      },
+      "momask": {
+        "repo": "EricGuo5513/momask-codes",
+        "revision": "94a6636c9c463b7a9414c3401a6f1b67e6c51824",
+        "files": [
+          {
+            "path": "models/t2m_eval_wrapper.py",
+            "sha256": "b03398ef2ee0087076a6e0cbe6317ba1548c23b1d58e03988d2a98a25de49692"
+          },
+          {
+            "path": "models/t2m_eval_modules.py",
+            "sha256": "6d4b069e06448828cbe8b4da609f6b0a186ec180a24b5b2e89098c2bb027e5fc"
+          },
+          {
+            "path": "utils/metrics.py",
+            "sha256": "83f8ecb93df83aafb708280c062973893f1a2565418f2abf961064d7cfca49d7",
+            "runtime_sha256": "2cc8f0f6871d31b03c33a9f10b6fcd90f5989763a269aac9dde07dd19ce16544",
+            "patch": "Clamp roundoff-induced negative squared Euclidean distances to zero before sqrt"
+          },
+          {
+            "path": "utils/word_vectorizer.py",
+            "sha256": "fbfb56d795f2b1ddb99bbf60a097a600a3dfd2275cc541b1dce0a57df787bbdf"
+          },
+          {
+            "path": "utils/motion_process.py",
+            "sha256": "ae517a71091a159392383de5460c5097a7469c1ba65c223edad91f94f7f11f29",
+            "runtime_sha256": "770bc215e49aa9396a29ae1de448c214ea17521d12f6daefbfe7ac8b52d9d09c",
+            "patch": "Replace removed numpy np.float alias with np.float64"
+          },
+          {
+            "path": "utils/paramUtil.py",
+            "sha256": "ec119ad7e3ab3bf17a49c582131a05a7bbf93c6d1d46e478b8c564941b5910e7"
+          },
+          {
+            "path": "common/skeleton.py",
+            "sha256": "6f6191dd105bc32ee417dafc6a2d463dc4a7fe9a1d6181250a924382af8659b1"
+          },
+          {
+            "path": "common/quaternion.py",
+            "sha256": "ae2e3d090eb39342bdcd0bdae7183bab3159bc100eea5725680dd25032f78c25",
+            "runtime_sha256": "17e96bb3af31952183453d4dc15f11f88bb940342f532f3860012aeecf1f85ad",
+            "patch": "Replace removed numpy np.float alias with np.float64"
+          },
+          {
+            "path": "utils/get_opt.py",
+            "sha256": "87addb92b0bb3b91f0bc02bff27b4105a218229be7cea55cce6526eba49cc37a"
+          },
+          {
+            "path": "prepare/download_evaluator.sh",
+            "sha256": "6c8653ab0a1e8d79949c02d10068124581a01a7d38162661a90f795629fffd30"
+          },
+          {
+            "path": "prepare/download_glove.sh",
+            "sha256": "3695a92054fd2f8451e49c5835b6b575fd07ed423d3c9abc20bdc609be357119"
+          }
+        ],
+        "data_loader_reference_sha256": "fcbc8e7b0079e17ef7573b6a70d5487e4b4f692632caebb506f6c28ea3e3b70c"
+      }
+    },
+    "note": "Earlier checkpoint-native/mixed-precision campaign; quality reference only. Timings and outputs are not combined, and exact parity is not claimed.",
+    "datasets": {
+      "humanml3d": {
+        "previous_quality": {
+          "r_precision_top1_top2_top3": [
+            0.5409718913768461,
+            0.74130538351596,
+            0.8323010957598856
+          ],
+          "matching_score": 2.8358684297173635,
+          "fid": 0.5617111584822112,
+          "diversity": 9.526968955993652,
+          "generated_count": 4384,
+          "evaluated_count": 4198,
+          "excluded_reference_length_count": 186,
+          "evaluator_batch_size": 32,
+          "seed": 42,
+          "representation": "HY native fixed skeleton FK, 30-to-20 FPS interpolation, authors' canonical retargeting and 263-D extraction",
+          "normalization": "authors' evaluator Comp_v6_KLD005 mean/std; matched central crop, multiple of 4, maximum 196",
+          "repetitions": 1,
+          "native_length_complete_fraction": 1.0,
+          "requested_length_complete_fraction": 0.9958941605839416
+        },
+        "bf16_minus_previous": {
+          "evaluator_batch_size": 0,
+          "seed": 0,
+          "generated_count": 0,
+          "diversity": -0.2972297668457031,
+          "r_precision_top1_top2_top3": [
+            0.0,
+            -0.000952834683182413,
+            -0.00023820867079560326
+          ],
+          "representation": null,
+          "fid": -0.06858617614250306,
+          "normalization": null,
+          "repetitions": 0,
+          "native_length_complete_fraction": 0.0,
+          "matching_score": -0.033067483570304645,
+          "evaluated_count": 0,
+          "requested_length_complete_fraction": 0.0,
+          "excluded_reference_length_count": 0
+        }
+      }
+    }
+  }
+}
