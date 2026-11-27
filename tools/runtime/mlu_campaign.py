@@ -142,8 +142,8 @@ def run_container(evaluation, paths, runtime, image, card, command, evidence):
     return result
 
 def run_campaign(evaluation, args, paths):
-    if os.environ.get("PLATFORM") != "cambricon_mlu" or args.backend != "lightx2v":
-        raise ValueError("MLU campaign requires its platform and the LightX2V backend")
+    if os.environ.get("PLATFORM") != "cambricon_mlu" or args.backend not in ("lightx2v", "native"):
+        raise ValueError("MLU campaign requires its platform and an explicit backend")
     if args.card is None or not 0 <= args.card <= 255 or not 1 <= args.count <= 256:
         raise ValueError("Select one physical card and a chunk size in [1,256]")
     root = args.output.resolve()
@@ -151,7 +151,7 @@ def run_campaign(evaluation, args, paths):
     if not root.is_relative_to(Path(paths["output_root"]).resolve()):
         raise ValueError("Campaign output must be inside the mounted output_root")
     runtime = evaluation.read_json(evaluation.HERE / "configs/mlu/runtime.json")
-    image = args.image or runtime["image"]
+    image = args.image or (paths.get("native_image", runtime["image"]) if args.backend == "native" else runtime["image"])
     image_id = subprocess.check_output(["docker", "image", "inspect", "--format", "{{.Id}}", image], text=True).strip()
     metric_image_id = subprocess.check_output(["docker", "image", "inspect", "--format", "{{.Id}}", paths.get("metric_image", image)], text=True).strip()
     evaluation.verify_source(Path(paths["lightx2v"]), evaluation.read_json(evaluation.HERE / "configs/mlu/source-lock.json")["lightx2v"])
@@ -159,6 +159,7 @@ def run_campaign(evaluation, args, paths):
     indices = ([0] if args.skip_score else smoke_indices(evaluation, args.dataset)) if args.smoke else list(range(len(evaluation.inputs(args.dataset))))
     identity = {
         "model": evaluation.MODEL,
+        "backend": args.backend,
         "dataset": args.dataset,
         "physical_card": args.card,
         "smoke": args.smoke,
@@ -173,6 +174,8 @@ def run_campaign(evaluation, args, paths):
         "capture_sha256": digest(Path(__file__).with_name("mlu_capture.py")),
         "policy_sha256": digest(Path(__file__).with_name("gpu_watch.py")),
         "helpers_sha256": digest(Path(__file__).with_name("metax_campaign.py")),
+        "native_adapter_sha256": digest(Path(__file__).with_name("mlu_native.py")),
+        "native_sources_sha256": digest(Path(__file__).with_name("mlu_sources.py")),
         "source_lock": evaluation.read_json(evaluation.HERE / "configs/mlu/source-lock.json"),
         "image_id": image_id,
         "metric_image_id": metric_image_id,
@@ -182,7 +185,7 @@ def run_campaign(evaluation, args, paths):
     if campaign_file.exists() and read_json(campaign_file)["identity"] != identity:
         raise ValueError("Resume identity differs; preserve the existing campaign")
     write_json(campaign_file, {"status": "RUNNING", "identity": identity})
-    backend = root / "lightx2v"
+    backend = root / args.backend
     backend.mkdir(exist_ok=True)
     if args.smoke:
         write_json(backend / "smoke-plan.json", {"dataset": args.dataset, "indices": indices, "formal_dataset_count": len(evaluation.inputs(args.dataset))})
@@ -207,7 +210,7 @@ def run_campaign(evaluation, args, paths):
             "--paths",
             str(args.paths.resolve()),
             "--backend",
-            "lightx2v",
+            args.backend,
             "--dataset",
             args.dataset,
             "--start",
@@ -233,7 +236,7 @@ def run_campaign(evaluation, args, paths):
         "--paths",
         str(args.paths.resolve()),
         "--backend",
-        "lightx2v",
+        args.backend,
         "--dataset",
         args.dataset,
         "--run",
@@ -290,3 +293,24 @@ def score_smoke(evaluation, args, paths):
         args.run / "quality-provenance.json",
         {"scope": "smoke", "coverage": len(expected), "formal_dataset_count": plan["formal_dataset_count"], "evaluation_sha256": evaluation.sha256(evaluation.__file__)},
     )
+
+
+def compare(evaluation, args):
+    """Report native versus PR measurements using mean latency only."""
+    _, native = evaluation.completed_runs(args.native_run, args.dataset, 'native')
+    _, adapted = evaluation.completed_runs(args.lightx2v_run, args.dataset, 'lightx2v')
+    if {r['gpu'] for r in native.values()} != {r['gpu'] for r in adapted.values()}:
+        raise ValueError('Native and PR comparison must use the same physical MLU')
+    for root in (args.native_run,args.lightx2v_run):
+        for metadata in root.glob('chunks/*/run.json'):
+            resource=read_json(metadata.parent/'resources.json')
+            if not resource.get('resources_clear') or not resource.get('task_cleanup_verified') or resource.get('returncode')!=0:
+                raise ValueError('Comparison requires complete host resource evidence')
+    reference=evaluation.latency_summary(native)['mean_s']
+    candidate=evaluation.latency_summary(adapted)['mean_s']
+    result=dict(status='COMPARISON_COMPLETE',model=evaluation.MODEL,dataset=args.dataset,coverage=len(native),
+                native_quality=read_json(args.native_run/'quality.json'),lightx2v_quality=read_json(args.lightx2v_run/'quality.json'),
+                native_mean_latency_s=reference,lightx2v_mean_latency_s=candidate,mean_latency_ratio=candidate/reference,
+                cross_precision_exact_alignment_claimed=False)
+    evaluation.write_json(args.output,result)
+    print(json.dumps(result,indent=2),flush=True)
