@@ -50,3 +50,21 @@ an explicit completion acknowledgement. The controller checks the closed
 capture after observer exit and verifies worker cleanup before accepting a
 chunk. Model-specific inputs, source locks, quality functions and request timing
 remain in the corresponding `tools/evaluation/<model>/` package.
+
+
+## MLU evaluation integration
+
+`mlu_capture.py` converts cnmon full-card telemetry to the existing gpu_watch
+PID/start-tick ancestry format and reuses its interval verifier. JSON discovery
+uses an isolated explicit output path; observation does not write to caller cwd.
+Unknown/malformed process inventories and partitioned cards are rejected.
+
+`mlu_campaign.py` runs a dedicated bounded Docker worker with one exposed MLU
+card, while the CPU-only observer runs on the host with host /proc visibility.
+Completion acknowledgement preserves process identity through the far-side
+sample. Closed-capture verification and cleanup are required independently.
+`mlu_worker.py` initializes the actual MLU context before model preparation;
+model load, warmup and request timing remain owned by the model's evaluate.py.
+Use the per-model MLU run_observed.sh host entry. Standalone resource lifecycle
+probes have passed on MLU590 for both success and deliberate failure; this is
+not evidence of full-dataset quality or cross-platform speed parity.
