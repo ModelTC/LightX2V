@@ -17,7 +17,7 @@
   "vae_stitch_preallocate": true,
   "vae_decode_parallel": true,
   "vae_decode_overlap": true,
-  "reference_image_resize_mode": "match",
+  "reference_image_resize_mode": "crop",
   "reference_condition_cache": true,
   "attn_type": "sage_attn2",
   "rms_type": "torch_native",

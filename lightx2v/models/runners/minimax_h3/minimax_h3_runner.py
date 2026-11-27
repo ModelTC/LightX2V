@@ -37,7 +37,6 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     prepare_reference_image,
     prepare_reference_waveform,
     resample_reference_frames,
-    resolve_reference_image_size,
     trim_reference_num_frames,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -403,14 +402,9 @@ class MiniMaxH3Runner(DefaultRunner):
         for entry, kind in zip(entries, kinds):
             if kind == "image":
                 image = load_rgb_image(entry["image"])
-                height, width = resolve_reference_image_size(
-                    *image.size,
-                    target_width=self.request_width,
-                    target_height=self.request_height,
-                    mode=resize_mode,
-                )
-                logger.info(f"MiniMax-H3 reference image resized with {resize_mode!r}: {image.width}x{image.height} -> {width}x{height}")
-                references.append(MiniMaxH3PreparedReference("image", image=prepare_reference_image(image, height, width)))
+                prepared = prepare_reference_image(image, target_width=self.request_width, target_height=self.request_height, mode=resize_mode)
+                logger.info(f"MiniMax-H3 reference image resized with {resize_mode!r}: {image.width}x{image.height} -> {prepared.width}x{prepared.height}")
+                references.append(MiniMaxH3PreparedReference("image", image=prepared))
                 continue
             if kind == "video":
                 video = entry["video"]

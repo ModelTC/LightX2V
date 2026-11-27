@@ -17,6 +17,8 @@ from .packing import (
     FPS,
     FRAMES_PER_CHUNK,
     LATENTS_PER_CHUNK,
+    MAX_ASPECT_RATIO,
+    MIN_ASPECT_RATIO,
     TEXT_TAG,
     VIDEO_TAG,
     MiniMaxH3PackedSequence,
@@ -26,7 +28,7 @@ from .packing import (
 )
 
 REFERENCE_IMAGE_SHORT_EDGE = 2048
-REFERENCE_IMAGE_RESIZE_MODES = ("match", "max", "diffusers")
+REFERENCE_IMAGE_RESIZE_MODES = ("match", "max", "diffusers", "crop")
 DEFAULT_REFERENCE_IMAGE_RESIZE_MODE = "diffusers"
 QWEN_VIDEO_SAMPLE_FPS = 2
 QWEN_TEMPORAL_PATCH = 2
@@ -256,37 +258,32 @@ def build_ref2av_packed_sequence(
     )
 
 
-def resolve_reference_image_size(
-    width: int,
-    height: int,
-    *,
-    target_width: int,
-    target_height: int,
-    mode: str = DEFAULT_REFERENCE_IMAGE_RESIZE_MODE,
-    multiple: int = CANVAS_MULTIPLE,
-    max_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
-) -> tuple[int, int]:
-    if width <= 0 or height <= 0 or width > 4 * height or height > 4 * width:
-        raise ValueError(f"A reference image must be positive and within 1:4..4:1, got {width}x{height}")
-    if target_width <= 0 or target_height <= 0:
-        raise ValueError(f"The target canvas must be positive, got {target_width}x{target_height}")
-    if mode not in REFERENCE_IMAGE_RESIZE_MODES:
-        raise ValueError(f"reference_image_resize_mode must be one of {REFERENCE_IMAGE_RESIZE_MODES}, got {mode!r}")
+def prepare_reference_image(image: Image.Image, *, target_width: int, target_height: int, mode: str) -> Image.Image:
+    width, height = image.size
+    if min(width, height, target_width, target_height) <= 0:
+        raise ValueError(f"Reference and target dimensions must be positive, got {width}x{height} -> {target_width}x{target_height}")
 
-    if mode == "match":
-        scale = min(1.0, math.sqrt((target_width * target_height) / (width * height)))
-    elif mode == "max":
-        scale = min(1.0, max_short_edge / min(width, height))
+    if mode == "crop":
+        ratio = target_width / target_height
+        if not MIN_ASPECT_RATIO <= ratio <= MAX_ASPECT_RATIO:
+            raise ValueError(f"The reference crop target must be within 1:4..4:1, got {target_width}x{target_height}")
+        crop_width = min(width, max(1, round(height * ratio)))
+        crop_height = min(height, max(1, round(width / ratio)))
+        if (crop_width, crop_height) != image.size:
+            left, top = (width - crop_width) // 2, (height - crop_height) // 2
+            image = image.crop((left, top, left + crop_width, top + crop_height))
+        size = (target_width, target_height)
     else:
-        scale = max_short_edge / min(width, height)
-    return (
-        max(multiple, round(height * scale / multiple) * multiple),
-        max(multiple, round(width * scale / multiple) * multiple),
-    )
-
-
-def prepare_reference_image(image: Image.Image, height: int, width: int) -> Image.Image:
-    return image if image.size == (width, height) else image.resize((width, height), Image.Resampling.LANCZOS)
+        if not MIN_ASPECT_RATIO <= width / height <= MAX_ASPECT_RATIO:
+            raise ValueError(f"A reference image must be within 1:4..4:1, got {width}x{height}")
+        if mode == "match":
+            scale = min(1.0, math.sqrt((target_width * target_height) / (width * height)))
+        elif mode == "max":
+            scale = min(1.0, REFERENCE_IMAGE_SHORT_EDGE / min(width, height))
+        else:
+            scale = REFERENCE_IMAGE_SHORT_EDGE / min(width, height)
+        size = tuple(max(CANVAS_MULTIPLE, round(edge * scale / CANVAS_MULTIPLE) * CANVAS_MULTIPLE) for edge in image.size)
+    return image if image.size == size else image.resize(size, Image.Resampling.LANCZOS)
 
 
 def resample_reference_frames(frames: np.ndarray, fps: float) -> np.ndarray:
