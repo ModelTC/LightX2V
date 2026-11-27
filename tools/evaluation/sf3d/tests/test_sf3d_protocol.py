@@ -51,7 +51,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_ascend_device_and_precision_policy(self):
         mlu = json.loads((ROOT / "configs" / "mlu" / "runtime.json").read_text())
-        self.assertEqual(mlu["status"], "smoke_ready")
+        self.assertEqual(mlu["status"], "single_sample_full_pbr_verified")
         for platform in ("ascend_npu",):
             value = json.loads((ROOT / "configs" / platform / "runtime.json").read_text())
             self.assertEqual(value["status"], "implemented")
