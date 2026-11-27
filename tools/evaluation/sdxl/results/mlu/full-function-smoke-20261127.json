@@ -206,6 +206,60 @@
       "score_resource_receipt_sha256": "bd1eed5e2b9d677d5864c1060b1ace440add3232f9fe55e308187e44b99e802a",
       "pillow": "12.3.0",
       "evaluator_runtime_sha256": "f767660eeee7d2fc399912dbd0263c1cd9f945cb2b14bb4676054ee8a317f827"
+    },
+    "geneval_fresh": {
+      "scope": "six newly generated smoke prompts, one per official dimension",
+      "coverage": 6,
+      "formal_dataset_count": 553,
+      "full_dataset_rerun": false,
+      "quality": {
+        "count": 6,
+        "geneval_by_dimension": {
+          "color_attr": 0.0,
+          "colors": 1.0,
+          "counting": 1.0,
+          "position": 0.0,
+          "single_object": 1.0,
+          "two_object": 1.0
+        },
+        "geneval_overall": 0.6666666666666666
+      },
+      "mean_request_latency_s_over_smoke_inputs": 5.3965112120301155,
+      "physical_card": 0,
+      "generation_image_id": "sha256:eaea60a7eafd584b9c0122cc7b2f7a84f684709d293e8ca2b349e6b9c7c7b21e",
+      "scoring_image_id": "sha256:3e4ed0d796f6da161b3a85ca423e187c2b957e0c08c04189ca93d0c6cde56d82",
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "resource_receipts": [
+        {
+          "stage": "generate-000000",
+          "sha256": "e35157b0cf5bf1ac224fec842cab9acb67f0b873578b1ae45a9321fcff1bff30"
+        },
+        {
+          "stage": "generate-000080",
+          "sha256": "d1c04b86295f152d2d0e044419f17cd7f61dd7044dba4d8d9900dfce33981655"
+        },
+        {
+          "stage": "generate-000179",
+          "sha256": "6a863bb828c6268d2f88a4cde53e5b31e5df9f277be0a96c9c96567da9f70e08"
+        },
+        {
+          "stage": "generate-000259",
+          "sha256": "9b591969715e9e8bb9b604611d18ca52a92cd06883a6c725ac74d34597b0a270"
+        },
+        {
+          "stage": "generate-000353",
+          "sha256": "175575904c37179e94b2fd94781be910fce7d57cf01ac95b22e18a8bc29220e0"
+        },
+        {
+          "stage": "generate-000453",
+          "sha256": "6f2cb108dbc1d95d0ea460ab575ade968e7f0d422095edc15517d132fa5067f5"
+        },
+        {
+          "stage": "score",
+          "sha256": "251787c83e7651f6996d32decefb2c2a2c51953193efa852806964d8e4d1e9e0"
+        }
+      ]
     }
   }
 }
