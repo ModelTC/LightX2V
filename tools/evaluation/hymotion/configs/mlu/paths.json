@@ -1,3 +1,8 @@
 {
-  "status": "not_implemented"
+  "data": "/absolute/replace/data",
+  "weights": "/absolute/replace/hymotion-weights",
+  "qwen": "/absolute/replace/Qwen3-8B",
+  "clip": "/absolute/replace/clip-vit-large-patch14",
+  "lightx2v": "/absolute/replace/lightx2v",
+  "python": "/absolute/replace/torch_mlu_python"
 }

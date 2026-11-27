@@ -1,4 +1,23 @@
 {
-  "model": "hymotion",
-  "status": "not_implemented"
+  "model_cls": "hymotion",
+  "task": "t2m",
+  "implementation_status": "implemented",
+  "device_api": "torch.mlu",
+  "target_device": "MLU590",
+  "parallel": false,
+  "cpu_offload": false,
+  "feature_caching": "NoCaching",
+  "warmup": false,
+  "attn_type": "torch_sdpa",
+  "ln_norm_type": "torch",
+  "conv_type": "Default",
+  "dit_quant_scheme": "Default",
+  "infer_steps": 50,
+  "cfg_scale": 5.0,
+  "fps": 30,
+  "enable_cfg": true,
+  "request_defaults": {
+    "seed": 42,
+    "num_frames": 120
+  }
 }

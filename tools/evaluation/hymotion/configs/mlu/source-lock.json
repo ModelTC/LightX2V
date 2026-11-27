@@ -1,3 +1,7 @@
 {
-  "status": "not_implemented"
+  "lightx2v": {
+    "repository": "https://github.com/ModelTC/LightX2V.git",
+    "revision": "565c8b1c80f9f7ef74a7827fc82074ce672d49ab",
+    "pull_request": 1752
+  }
 }
