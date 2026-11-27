@@ -22,6 +22,9 @@ class FrameBindingTests(unittest.TestCase):
             def run_request(self, request):
                 calls.append(request)
 
+            def close(self):
+                pass
+
         modules = {}
         for name in ("lightx2v", "lightx2v.models", "lightx2v.models.runners", "lightx2v.utils", "lightx2v.models.runners.runner_factory", "lightx2v.utils.set_config"):
             module = types.ModuleType(name)
