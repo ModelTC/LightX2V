@@ -6,7 +6,7 @@ nvidia/model.json is the inference PR’s supported configuration. nvidia/source
 
 For GenEval, geneval_python selects the legacy detector environment; geneval_weights holds the detector .pth; geneval_configs is the mmdetection config tree; geneval_config is its complete mask2former_swin-s-p4-w7-224_lsj_8x2_50e_coco.py filename. geneval_clip is the cache directory holding the locked OpenAI ViT-L-14.pt checkpoint. metric_python for CLIPScore must have the necessary torch/transformers packages and the metric assets. Local configuration files are never imported as Python.
 
-Other platform JSONs are explicit unimplemented slots. There is no claim that their original reference runtime or operators have been validated.
+`mlu/` contains a functional-smoke config and local-path template for one inference-PR request. It is not a full evaluation environment or metric campaign. The MLU files do not validate the native Diffusers runtime. MetaX and Ascend remain unimplemented.
 
 `nvidia/runtime.json` also pins `generation_environment` for both implementations. String values are exported before worker/CUDA startup; `null` removes a variable, including any inherited value. The explicit campaign GPU overrides a parent device selection. In particular, SDXL uses the upstream default cuBLAS workspace and eight OMP/MKL threads. Actual values are retained in worker provenance and checked before generation and before accepting completed results. A numerical environment change requires a new campaign and fresh timings.
 

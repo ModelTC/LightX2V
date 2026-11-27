@@ -1,5 +1,15 @@
 # sdxl original-project / LightX2V evaluation
 
+The MLU590 entry currently runs one frozen GenEval prompt through pinned inference PR #1754 and checks for a finite 1024×1024 PNG. It is a functional smoke only. It does not score GenEval or produce latency evidence.
+
+```bash
+cp tools/evaluation/sdxl/configs/mlu/paths.json tools/evaluation/sdxl/configs/mlu/paths.local.json
+# Replace the path placeholders, then run from the LightX2V repository root.
+PYTHON_BIN=/path/to/torch_mlu/python bash tools/evaluation/sdxl/scripts/platform/mlu/run_eval.sh \
+  --paths tools/evaluation/sdxl/configs/mlu/paths.local.json \
+  --output /absolute/new-smoke-directory
+```
+
 This developer-only package calls the pinned original implementation and inference PR from `configs/nvidia/source-lock.json`. It does not copy model networks or modify the user-facing inference API. Each implementation runs the full frozen dataset once at batch size one.
 
 ## Reproduce
