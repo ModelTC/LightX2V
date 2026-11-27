@@ -9,6 +9,7 @@ from lightx2v.utils.registry_factory import (
     CONV2D_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    TENSOR_REGISTER,
 )
 
 
@@ -70,6 +71,21 @@ class NeoppDecoderLayerWeights(WeightModule):
             "input_layernorm_mot_gen",
             RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.input_layernorm_mot_gen.weight", eps=1e-6),
         )
+
+        llm = config["llm_config"]
+        if llm.get("hc_type", "none") == "ihc":
+            pre, core, _ = llm["loop_split"]
+            if pre <= block_index < pre + core:
+                for branch in ("hc_attn_mot_gen", "hc_ffn_mot_gen"):
+                    site = WeightModule()
+                    for name in ("proj_rw", "bias_pre", "alpha_pre", "bias_post", "alpha_post"):
+                        site.add_module(name, TENSOR_REGISTER["Default"](f"{prefix}.{branch}.{name}"))
+                    self.add_module(branch, site)
+            elif block_index == pre + core:
+                head = WeightModule()
+                for name in ("hc_fn", "hc_scale", "hc_base"):
+                    head.add_module(name, TENSOR_REGISTER["Default"](f"{prefix}.hc_readout_mot_gen.{name}"))
+                self.add_module("hc_readout_mot_gen", head)
 
         use_triton_qknorm_rope = config.get("use_triton_qknorm_rope", True)
         attn = NeoppAttentionWeights(config, block_index, mm_type, attn_type, use_triton_qknorm_rope, lora_path=lora_path)
@@ -133,6 +149,10 @@ class NeoppAttentionWeights(WeightModule):
                     f"{prefix}.k_norm_hw_mot_gen.weight",
                 ),
             )
+            if config.get("hf_generation_bf16", False):
+                from lightx2v.models.networks.neopp.infer.hf_bf16_rope import fused_hf_bf16_rope
+
+                self.qk_norm._kernel = fused_hf_bf16_rope
         else:
             # Pure torch: 4 separate RMSNorm modules, logic expanded in transformer_infer.py.
             self.add_module(
@@ -246,6 +266,10 @@ class NeoppFmHeadWeights(WeightModule):
         # (PixelShuffle + Conv2d) that decodes hidden states directly to RGB pixels,
         # instead of the legacy per-token MLP head (fm_head.0 / fm_head.2).
         self.use_pixel_head = bool(config.get("use_pixel_head", False)) if config is not None else False
+        if config and config.get("gen_image_arch") == "patch2d16":
+            for name, padding in (("conv0", 0), ("to_rgb", 2)):
+                prefix = f"fm_modules.fm_head.{name}"
+                self.add_module(name, CONV2D_WEIGHT_REGISTER["Default"](f"{prefix}.weight", f"{prefix}.bias", stride=1, padding=padding))
         if self.use_pixel_head:
             # Conv2d(k=3, p=1). in/out channels are inferred from PixelShuffle upstream,
             # weights carry the true shapes: conv1[1024,1024,3,3], conv2[192,256,3,3].

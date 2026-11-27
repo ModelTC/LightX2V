@@ -1,0 +1,23 @@
+{
+  "version": "dense",
+  "infer_steps": 50,
+  "attn_type": "flash_attn2",
+  "cfg_scale": 4.0,
+  "timestep_shift": 3.0,
+  "cfg_interval": [
+    0,
+    1
+  ],
+  "enable_cfg": true,
+  "use_triton_qknorm_rope": true,
+  "min_pixels": 65536,
+  "input_min_pixels": 262144,
+  "input_max_pixels": 4194304,
+  "input_total_pixels": 16777216,
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
+  "hf_generation_bf16": true,
+  "use_triton_ihc": true,
+  "hf_generation_dense_fa2_max_tokens": 5148
+}
