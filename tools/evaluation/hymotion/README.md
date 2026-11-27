@@ -136,3 +136,5 @@ sanitized completed measurements under `results/ascend_npu/` only after the full
 dataset has finished. Original NVIDIA, MLU and MetaX entries remain available.
 
 The original learned HumanML3D evaluator runs in FP32 on NPU, including its variable-length bidirectional GRUs. Preserve the `t2m/text_mot_match/model/finest.tar` layout under `metric_checkpoints`; it must resolve to the same hashed checkpoint under `metric_assets`. All 4,384 requests remain in latency coverage; the original 4,198-reference quality eligibility rule is unchanged.
+
+Complete C500 BF16 HumanML3D measurement: all 4,384 inputs generated and timed; 4,198 eligible references scored with the original 186 explicit reference-length exclusions. R-Precision@1 is 0.536922, FID 0.491118, mean end-to-end 2.841573 s and P95 3.103997 s. [Full results and exact measured revisions](results/metax/bf16/full-results.json) include per-input timing/output hashes and closed-capture audit fingerprints.

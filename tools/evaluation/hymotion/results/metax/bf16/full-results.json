@@ -1,0 +1,173 @@
+{
+  "model": "hymotion",
+  "platform": "MetaX C500",
+  "precision_profile": "bf16",
+  "execution_status": "COMPLETE",
+  "formal_repetitions_per_input": 1,
+  "measurement_evaluation_revision": "8f81712a3622e03adb5016e69cc67c9e6148418c",
+  "datasets": {
+    "humanml3d": {
+      "status": "COMPLETE",
+      "model": "hymotion",
+      "dataset": "humanml3d",
+      "platform": "metax_cuda",
+      "physical_card": 0,
+      "coverage": 4384,
+      "formal_dataset_count": 4384,
+      "precision_policy": {
+        "bf16": [
+          "Qwen3",
+          "CLIP",
+          "Motion MMDiT matrices and attention"
+        ],
+        "fp32": [
+          "normalization",
+          "time/RoPE frequencies",
+          "CFG and Euler state/update",
+          "motion decoding and skeleton geometry"
+        ]
+      },
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/LancelottJ/LightX2V.git",
+          "revision": "2972e46ed0b1da885dc29de81a1247738618249b",
+          "pull_request": 1752
+        },
+        "native": {
+          "repository": "https://github.com/Tencent-Hunyuan/HY-Motion-1.0.git",
+          "revision": "4e426f5a1021cbcf7f375458c37b840ee7225229"
+        },
+        "momask": {
+          "repo": "EricGuo5513/momask-codes",
+          "revision": "94a6636c9c463b7a9414c3401a6f1b67e6c51824",
+          "files": [
+            {
+              "path": "models/t2m_eval_wrapper.py",
+              "sha256": "b03398ef2ee0087076a6e0cbe6317ba1548c23b1d58e03988d2a98a25de49692"
+            },
+            {
+              "path": "models/t2m_eval_modules.py",
+              "sha256": "6d4b069e06448828cbe8b4da609f6b0a186ec180a24b5b2e89098c2bb027e5fc"
+            },
+            {
+              "path": "utils/metrics.py",
+              "sha256": "83f8ecb93df83aafb708280c062973893f1a2565418f2abf961064d7cfca49d7",
+              "runtime_sha256": "2cc8f0f6871d31b03c33a9f10b6fcd90f5989763a269aac9dde07dd19ce16544",
+              "patch": "Clamp roundoff-induced negative squared Euclidean distances to zero before sqrt"
+            },
+            {
+              "path": "utils/word_vectorizer.py",
+              "sha256": "fbfb56d795f2b1ddb99bbf60a097a600a3dfd2275cc541b1dce0a57df787bbdf"
+            },
+            {
+              "path": "utils/motion_process.py",
+              "sha256": "ae517a71091a159392383de5460c5097a7469c1ba65c223edad91f94f7f11f29",
+              "runtime_sha256": "770bc215e49aa9396a29ae1de448c214ea17521d12f6daefbfe7ac8b52d9d09c",
+              "patch": "Replace removed numpy np.float alias with np.float64"
+            },
+            {
+              "path": "utils/paramUtil.py",
+              "sha256": "ec119ad7e3ab3bf17a49c582131a05a7bbf93c6d1d46e478b8c564941b5910e7"
+            },
+            {
+              "path": "common/skeleton.py",
+              "sha256": "6f6191dd105bc32ee417dafc6a2d463dc4a7fe9a1d6181250a924382af8659b1"
+            },
+            {
+              "path": "common/quaternion.py",
+              "sha256": "ae2e3d090eb39342bdcd0bdae7183bab3159bc100eea5725680dd25032f78c25",
+              "runtime_sha256": "17e96bb3af31952183453d4dc15f11f88bb940342f532f3860012aeecf1f85ad",
+              "patch": "Replace removed numpy np.float alias with np.float64"
+            },
+            {
+              "path": "utils/get_opt.py",
+              "sha256": "87addb92b0bb3b91f0bc02bff27b4105a218229be7cea55cce6526eba49cc37a"
+            },
+            {
+              "path": "prepare/download_evaluator.sh",
+              "sha256": "6c8653ab0a1e8d79949c02d10068124581a01a7d38162661a90f795629fffd30"
+            },
+            {
+              "path": "prepare/download_glove.sh",
+              "sha256": "3695a92054fd2f8451e49c5835b6b575fd07ed423d3c9abc20bdc609be357119"
+            }
+          ],
+          "data_loader_reference_sha256": "fcbc8e7b0079e17ef7573b6a70d5487e4b4f692632caebb506f6c28ea3e3b70c"
+        }
+      },
+      "quality": {
+        "r_precision_top1_top2_top3": [
+          0.5369223439733206,
+          0.7439256788947117,
+          0.8280133396855646
+        ],
+        "matching_score": 2.807601341694636,
+        "fid": 0.4911177074238111,
+        "diversity": 9.181853294372559,
+        "generated_count": 4384,
+        "evaluated_count": 4198,
+        "excluded_reference_length_count": 186,
+        "evaluator_batch_size": 32,
+        "seed": 42,
+        "representation": "HY native fixed skeleton FK, 30-to-20 FPS interpolation, authors' canonical retargeting and 263-D extraction",
+        "normalization": "authors' evaluator Comp_v6_KLD005 mean/std; matched central crop, multiple of 4, maximum 196",
+        "repetitions": 1,
+        "native_length_complete_fraction": 1.0,
+        "requested_length_complete_fraction": 0.9958941605839416
+      },
+      "latency": {
+        "count": 4384,
+        "mean_s": 2.8415726737961995,
+        "median_s": 2.8628716215025634,
+        "p95_s": 3.103996896627359
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "image_id": "sha256:9229cd00ccd1d8bf2555e13db124196b9245b5358b87baade0175dde948938f2",
+      "backend": "lightx2v",
+      "precision_profile": "bf16",
+      "formal_repetitions_per_input": 1,
+      "failed_formal_inputs": 0,
+      "metric_image_id": "sha256:f20f021623c422bf02ac226a36db59e66d4fe921dae709a5b799eb080dab10c7",
+      "measurement_evaluation_revision": "8f81712a3622e03adb5016e69cc67c9e6148418c",
+      "measurement_evaluation_sha256": "46b5d95231d8820658ea907d835a36fb7cd10a142f55a46b508174571816f7cd",
+      "measurement_worker_sha256": "3ed743883d8ec9893cc2e606a595ee897e94df77e202ba4f5e59e2d7b3e028c1",
+      "measurement_controller_sha256": "ff24ba0a56dbecc0326961a7005b93784b741aca8b0a33125488744525380dc5",
+      "measurement_capture_sha256": "855b23b1e9eef8a7093f5d831468e733e025e4bc1a21d202c4664142b23124d7",
+      "suite_sha256": "4c94bd1176aa5c56bb2b5275943b96843635a6d05f93b77ba2324921c4d19e42",
+      "weight_lock_sha256": "787b19100ca37c21d7fcc6bb4fd2b65f63772c15f505cb1b7799c8f5a8476a95",
+      "environment": {
+        "versions": {
+          "torch": "2.8.0+metax3.5.3.9",
+          "transformers": "4.53.3",
+          "tokenizers": "0.21.4",
+          "ftfy": "6.3.1",
+          "diffusers": "0.35.2",
+          "numpy": "1.26.4",
+          "Pillow": "11.3.0",
+          "trimesh": "4.4.1",
+          "rembg": "2.0.57",
+          "open-clip-torch": "2.20.0",
+          "scipy": "1.15.3"
+        },
+        "platform": "metax_cuda",
+        "gpu": "MetaX C500",
+        "cuda": "11.6",
+        "physical_card": "MetaX-0000:08:00.0",
+        "visible_device": "0",
+        "deterministic": false,
+        "tf32_matmul": false,
+        "tf32_cudnn": true
+      },
+      "timing": "RNG reset and model load excluded. Start before request JSON decoding and input image read. End after GPU synchronization and durable final PNG/GLB/NPZ file fsync. Hashes, quality, output validation and benchmark logs excluded. One separate synthetic/upstream demo warmup per loaded process, never a dataset sample.",
+      "per_input_sha256": "a1544e2622be4f068e61c73b8e35b492e4e38d91d6ec6bb1b5988e12ec0cb141",
+      "raw_evidence_namespace": "metax-c500-20261127/hymotion-humanml3d",
+      "raw_evidence_file_count": 4691,
+      "raw_evidence_manifest_sha256": "c74c90dd9842b63ae74b894f3ef188c27a26630ebb7d8528ff566dd4dceaba16",
+      "archived_resource_policy_recheck_sha256": "be9c0f499d55a3c3eb15352bde48fbf7bab433fcc347a129f61a6565db37785a",
+      "resource_captures_verified": 19,
+      "comparison_scope": "MetaX BF16 quality and latency only; no native or cross-platform exact-output/latency-ratio claim",
+      "invalid_attempts": []
+    }
+  }
+}
