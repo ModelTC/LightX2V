@@ -122,6 +122,10 @@ def resolve(paths, key, relative="", allow_symlinks=False):
 
 
 def verify_source(root, specification):
+    if "mlu_patches" in specification:
+        sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+        from mlu_sources import verify
+        return verify(root, specification)
     if "overlays" in specification:
         sys.path.insert(0, str(HERE.parents[1] / "runtime"))
         from ascend_sources import verify
@@ -142,6 +146,11 @@ def verify_source(root, specification):
 def prepare_sources(destination):
     destination.mkdir(parents=True, exist_ok=True)
     for name, specification in read_json(nvidia_config("source-lock.json")).items():
+        if "mlu_patches" in specification:
+            sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+            from mlu_sources import prepare
+            prepare(destination / name, specification)
+            continue
         if "overlays" in specification:
             sys.path.insert(0, str(HERE.parents[1] / "runtime"))
             from ascend_sources import prepare
@@ -413,7 +422,7 @@ def completed_runs(root, dataset, backend, verify_artifacts=True):
         if metadata["manifest_sha256"] != suite()["datasets"][dataset]["sha256"] or metadata["source_lock"] != source_lock:
             raise ValueError("Execution used a different dataset or source lock")
         if metadata.get("platform") == "cambricon_mlu":
-            if metadata.get("backend") != "lightx2v" or not metadata.get("environment", {}).get("physical_card"):
+            if metadata.get("backend") not in ("lightx2v", "native") or not metadata.get("environment", {}).get("physical_card"):
                 raise ValueError("MLU run lacks its physical single-card identity")
             if (metadata_path.parent / "resources.json").exists():
                 resources = read_json(metadata_path.parent / "resources.json")
@@ -944,6 +953,10 @@ def load_adapter(backend, paths):
 
         infer.close = runner.close
         return infer
+    if os.getenv("PLATFORM") == "cambricon_mlu":
+        sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+        from mlu_native import load_sf3d
+        return load_sf3d(paths)
     sys.path.insert(0, paths["native"])
     os.chdir(paths["native"])
     import rembg
@@ -1084,7 +1097,7 @@ def geometry_scores(prediction, reference):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign", "campaign-mlu", "campaign-mlu-observed", "score-mlu-smoke", "campaign-metax", "score-metax-smoke", "campaign-ascend", "score-ascend-smoke"])
+    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign", "campaign-mlu", "campaign-mlu-observed", "score-mlu-smoke", "compare-mlu", "campaign-metax", "score-metax-smoke", "campaign-ascend", "score-ascend-smoke"])
     parser.add_argument("--paths", type=Path)
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--dataset", choices=list(suite()["datasets"]))
@@ -1108,6 +1121,11 @@ def main():
             raise ValueError("BF16 results cannot be presented as native-precision exact parity")
     if args.command == "prepare-sources":
         prepare_sources(args.workspace.resolve())
+        return
+    if args.command == "compare-mlu":
+        sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+        from mlu_campaign import compare as compare_mlu
+        compare_mlu(sys.modules[__name__], args)
         return
     if args.command == "compare":
         compare(args)
