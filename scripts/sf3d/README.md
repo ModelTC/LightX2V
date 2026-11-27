@@ -44,6 +44,10 @@ bash scripts/platforms/nvidia/run_sf3d.sh
 默认开启确定性推理，配合 SEED 控制生成结果。启动脚本会在 Python 启动前设置
 CUBLAS_WORKSPACE_CONFIG；使用 Python 接口时，此设置及确定性算法选项作用于整个进程。
 
-支持 NVIDIA A100 单卡。MLU 路径可运行模型并导出仅含几何网格的 GLB，当前跳过 UV 和纹理烘焙。在已匹配 torch_mlu 与 torchvision 的环境中安装 `scripts/sf3d/requirements-mlu.txt`，不安装 CUDA 专用几何扩展，也不要运行 CUDA 专用的 `install_a100.sh`。MetaX、Ascend 的脚本和配置仍为占位入口。
+支持 NVIDIA A100 单卡。MLU 路径可运行模型并导出仅含几何网格的 GLB，当前跳过 UV 和纹理烘焙。在已匹配 torch_mlu 与 torchvision 的环境中安装 `scripts/sf3d/requirements-mlu.txt`，不安装 CUDA 专用几何扩展，也不要运行 CUDA 专用的 `install_a100.sh`。Ascend 的脚本和配置仍为占位入口。
 
 推理精度：DINOv2、OpenCLIP、相机嵌入、双流 Transformer 和三平面上采样使用 BF16；归一化统计、材质分布参数、三平面采样坐标、几何/材质场解码和等值面提取保留 FP32。MLU 路径跳过 UV 和纹理烘焙。
+
+## MetaX C500
+
+Use a MetaX PyTorch/MACA environment and run `bash scripts/sf3d/install_metax.sh`. The installer preserves the installed MetaX PyTorch. It builds the released CPU `texture_baker` and `uv_unwrapper` extensions when needed. Set `SF3D_EXTENSION_SOURCE` to an existing checkout of the pinned SF3D source for offline installation. The MetaX path retains UVs and full PBR texture baking using the original CPU extension, with transfers and baking included in each request. Launch with `MACA_VISIBLE_DEVICES=0 CUDA_VISIBLE_DEVICES=0 PYTHON_BIN=python3 bash scripts/platforms/metax/run_sf3d.sh`, using the same model and input environment variables documented above. The BF16/FP32 computation boundaries match the NVIDIA configuration.

@@ -1,4 +1,5 @@
 # Source port; attribution and licensing: see the model directory LICENSE/NOTICE.
+import os
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, List, Literal, Optional, Tuple, Union  # noqa: UP035 - exported aliases used by the split infer modules
@@ -67,6 +68,12 @@ class SF3D(BaseModule):
         self.register_buffer("bbox", torch.as_tensor([[-self.cfg.radius, -self.cfg.radius, -self.cfg.radius], [self.cfg.radius, self.cfg.radius, self.cfg.radius]], dtype=torch.float32))
         self.isosurface_helper = MarchingTetrahedraHelper(self.cfg.isosurface_resolution, self.cfg.tets_path)
         self.baker = TextureBaker() if TextureBaker is not None and get_device() != "mlu" else None
+        if os.getenv("PLATFORM") == "metax_cuda":
+            from lightx2v.models.networks.sf3d.utils.metax_texture_baker import MetaXTextureBaker
+
+            if self.baker is None:
+                raise ImportError("MetaX textured mesh generation requires the CPU texture_baker extension")
+            self.baker = MetaXTextureBaker(self.baker)
         self.image_processor = ImageProcessor()
 
     def triplane_to_meshes(self, triplanes: Float[Tensor, "B 3 Cp Hp Wp"]) -> list[Mesh]:
