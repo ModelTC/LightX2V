@@ -1,0 +1,179 @@
+{
+  "model": "sf3d",
+  "platform": "NVIDIA A100-SXM4-40GB",
+  "precision_profile": "bf16",
+  "execution_status": "COMPLETE",
+  "datasets": {
+    "gso": {
+      "status": "COMPLETE",
+      "model": "sf3d",
+      "dataset": "gso",
+      "backend": "lightx2v",
+      "precision_profile": "bf16",
+      "precision_policy": {
+        "bf16": [
+          "DINOv2",
+          "OpenCLIP",
+          "camera embedder",
+          "two-stream transformer",
+          "triplane upsampling",
+          "image-estimation projections"
+        ],
+        "fp32": [
+          "normalization and distribution statistics",
+          "sampling coordinates and grid_sample",
+          "geometry/material field decoder",
+          "marching tetrahedra",
+          "UV and texture baking"
+        ]
+      },
+      "coverage": 1023,
+      "repetitions": 1,
+      "gpu": "GPU-4c29e2a5-a5b0-5da3-dfed-42ceed83be6a",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "3a83332abc931a8b2da9e4ade118834b8fa22f8a",
+          "pull_request": 1753
+        },
+        "native": {
+          "repository": "https://github.com/Stability-AI/stable-fast-3d.git",
+          "revision": "ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2"
+        }
+      },
+      "quality": {
+        "count": 1023,
+        "chamfer_l1": 0.12194013738467842,
+        "chamfer_l2": 0.02448168606034356,
+        "fscore_1pct": 0.054828401952972144,
+        "fscore_2pct": 0.12434900650665538,
+        "fscore_5pct": 0.2897501695285993,
+        "pointcloud_iou32": 0.06695415000723992
+      },
+      "latency": {
+        "count": 1023,
+        "mean_s": 0.9326187783140072,
+        "median_s": 0.9091388109372929,
+        "p95_s": 1.092989249085076
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "cross_precision_exact_alignment_claimed": false
+    }
+  },
+  "environments": {
+    "gso": {
+      "versions": {
+        "torch": "2.6.0",
+        "transformers": "4.53.3",
+        "numpy": "1.26.4",
+        "Pillow": "12.3.0",
+        "trimesh": "4.4.1",
+        "rembg": "2.0.57",
+        "open-clip-torch": "2.24.0",
+        "scipy": "1.15.3"
+      },
+      "cuda": "12.4",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "visible_device": "GPU-4c29e2a5-a5b0-5da3-dfed-42ceed83be6a",
+      "cudnn": 90100,
+      "deterministic": true,
+      "tf32_matmul": false,
+      "tf32_cudnn": true
+    }
+  },
+  "resources": {
+    "gso": {
+      "verified_generation_chunks": 4,
+      "all_resources_clear": true,
+      "all_own_cleanup_verified": true,
+      "quality_resources_clear": true,
+      "capture_sources": [
+        {
+          "configuration": {
+            "backend": "nvml",
+            "interval_s": 0.25,
+            "max_gap_s": 8.0,
+            "query_timeout_s": 5.0,
+            "sampler_sha256": "ba8f209ec15130274460160295de31b635fbc298899e98a091cf9dbc68066f36"
+          },
+          "workers": 5
+        }
+      ],
+      "peak_torch_allocated_vram_bytes": 3170350592
+    }
+  },
+  "invalid_attempts": [],
+  "formal_repetitions_per_input": 1,
+  "measurement_worker_sha256": "69bdaaf142f64405344df41b1289325f7ae51ebe5f8ab18cf58740c278b8bc9c",
+  "source_lock": {
+    "lightx2v": {
+      "repository": "https://github.com/ModelTC/LightX2V.git",
+      "revision": "3a83332abc931a8b2da9e4ade118834b8fa22f8a",
+      "pull_request": 1753
+    },
+    "native": {
+      "repository": "https://github.com/Stability-AI/stable-fast-3d.git",
+      "revision": "ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2"
+    }
+  },
+  "precision_policy": {
+    "bf16": [
+      "DINOv2",
+      "OpenCLIP",
+      "camera embedder",
+      "two-stream transformer",
+      "triplane upsampling",
+      "image-estimation projections"
+    ],
+    "fp32": [
+      "normalization and distribution statistics",
+      "sampling coordinates and grid_sample",
+      "geometry/material field decoder",
+      "marching tetrahedra",
+      "UV and texture baking"
+    ]
+  },
+  "weight_lock_sha256": "e486ec3997b72d3e3eceb3169d8bfab8da96bf81ff196ab19e3c5422ed93d1cd",
+  "raw_evidence_namespace": "lightx2v-bf16-evaluation-20261127",
+  "measurement_cohort": "full-v1",
+  "raw_evidence_file_count": 1102,
+  "raw_evidence_manifest_sha256": "7be34e8ca89f8a47443aa0045314a37f497edbd08fef5484af22986a89cc149f",
+  "archived_resource_policy_recheck_sha256": "3009d464a5e06cab048cae02591b06f3184802b8d3621e37e2486822fcd2ca68",
+  "previous_precision_quality_reference": {
+    "source_lock": {
+      "lightx2v": {
+        "repository": "https://github.com/ModelTC/LightX2V.git",
+        "revision": "63b592222d8f8b9d5d7f090fa3f601295d7ea962",
+        "pull_request": 1753
+      },
+      "native": {
+        "repository": "https://github.com/Stability-AI/stable-fast-3d.git",
+        "revision": "ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2"
+      }
+    },
+    "note": "Earlier checkpoint-native/mixed-precision campaign; quality reference only. Timings and outputs are not combined, and exact parity is not claimed.",
+    "datasets": {
+      "gso": {
+        "previous_quality": {
+          "count": 1023,
+          "chamfer_l1": 0.12193696565243449,
+          "chamfer_l2": 0.02448242520975491,
+          "fscore_1pct": 0.054853470908283734,
+          "fscore_2pct": 0.12438044093196933,
+          "fscore_5pct": 0.28981513026287126,
+          "pointcloud_iou32": 0.06699366652315883
+        },
+        "bf16_minus_previous": {
+          "fscore_2pct": -3.143442531394758e-05,
+          "pointcloud_iou32": -3.9516515918908146e-05,
+          "fscore_5pct": -6.496073427197935e-05,
+          "fscore_1pct": -2.506895531158987e-05,
+          "chamfer_l1": 3.1717322439284157e-06,
+          "count": 0,
+          "chamfer_l2": -7.391494113509478e-07
+        }
+      }
+    }
+  }
+}
