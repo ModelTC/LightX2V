@@ -1,0 +1,31 @@
+#!/bin/bash
+set -euo pipefail
+
+lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+model_path="${MODEL_PATH:-${lightx2v_path}/weights/sf3d}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/mlu/sf3d_i23d_bf16.json}"
+save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/sf3d/result.glb}"
+
+if [[ "${1:-}" == "--help" ]]; then
+  echo "Usage: MODEL_PATH=/local/weights PYTHON_BIN=python [INPUT_PATH=one-image] bash scripts/platforms/mlu/run_sf3d.sh [lightx2v.infer arguments]"
+  echo "Preparation: scripts/sf3d/README.md; MLU exports a complete UV/PBR textured GLB"
+  exit 0
+fi
+
+export PLATFORM=cambricon_mlu
+export MLU_VISIBLE_DEVICES="${MLU_VISIBLE_DEVICES:-0}"
+export PYTHONPATH="${lightx2v_path}:${PYTHONPATH:-}"
+source "${lightx2v_path}/scripts/base/base.sh"
+export DTYPE=BF16
+mkdir -p -- "$(dirname -- "${save_result_path}")"
+cd -- "${lightx2v_path}"
+
+"${PYTHON_BIN:-python}" -c 'import torch_mlu; from lightx2v.infer import main; main()' \
+  --model_cls sf3d \
+  --task i23d \
+  --model_path "${model_path}" \
+  --config_json "${config_json}" \
+  --image_path "${INPUT_PATH:?Set INPUT_PATH to one image}" \
+  --save_result_path "${save_result_path}" \
+  --seed "${SEED:-42}" \
+  "$@"

@@ -5,7 +5,20 @@ import math
 import torch
 import triton
 import triton.language as tl
-from triton.language.extra.cuda import libdevice
+try:
+    from triton.language.extra.cuda import libdevice
+except ImportError:
+    # Use Triton's portable primitives when the CUDA-only helper is absent.
+    class _Libdevice:
+        @staticmethod
+        def sqrt_rn(value):
+            return tl.sqrt(value)
+
+        @staticmethod
+        def div_rn(numerator, denominator):
+            return numerator / denominator
+
+    libdevice = _Libdevice()
 
 
 @triton.jit

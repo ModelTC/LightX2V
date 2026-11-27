@@ -1,0 +1,75 @@
+# Stable Fast 3D → LightX2V (A100)
+
+目标权重为 `stabilityai/stable-fast-3d`，revision
+`f0c9a8ffd62cb1bbc8a7a53c9f87a0be1b6be778`。
+代码移植自 `stability-ai/stable-fast-3d` commit
+`ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2`，模型目录保留其许可证。
+运行时不调用上游 SF3D、transformers 或 OpenCLIP 的神经网络实现。
+
+先执行 `bash scripts/sf3d/install_a100.sh`。另外需要 CUDA toolkit、C++ 编译器
+及两个 SF3D 几何扩展。已有编译环境可直接复用；新环境从上述固定 commit 构建：
+
+```bash
+git clone https://github.com/Stability-AI/stable-fast-3d.git /tmp/sf3d-geometry-build
+git -C /tmp/sf3d-geometry-build checkout ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2
+# 每个扩展的 setup.py 依赖工作目录，须分别进入目录构建。
+(cd /tmp/sf3d-geometry-build/texture_baker && TORCH_CUDA_ARCH_LIST=8.0 python -m pip install --no-build-isolation .)
+(cd /tmp/sf3d-geometry-build/uv_unwrapper && python -m pip install --no-build-isolation .)
+```
+
+只安装 `texture_baker` 和 `uv_unwrapper`，不安装上游 `sf3d` 神经网络包。
+背景去除使用 rembg 的 U2Net；首次使用需准备 `~/.u2net/u2net.onnx`，离线机器应预先复制。
+固定 tetrahedra 网格不提交到代码仓库。请先运行以下准备脚本；脚本固定上游版本并校验 SHA256，推理阶段只读取本地文件：
+
+```bash
+python scripts/sf3d/prepare_assets.py --model-path /path/to/stable-fast-3d
+# 已有网格时避免重复下载：添加 --source /existing/160_tets.npz
+```
+
+网格保存到权重目录的 `assets/160_tets.npz`，也可通过部署 JSON 的 `tets_path` 指定。
+
+本地权重目录只需 `config.yaml` 和 `model.safetensors`。DINOv2 和 OpenCLIP 视觉塔
+已在根检查点中，不再按 config.yaml 的远程/本地预训练路径重复下载。适配器严格加载单图网格生成所需的网络参数。
+
+```bash
+MODEL_PATH=/path/to/stable-fast-3d \
+INPUT_PATH=/path/to/one-image.jpg \
+SAVE_RESULT_PATH=save_results/sf3d/object.glb \
+bash scripts/platforms/nvidia/run_sf3d.sh
+```
+
+每次输入一张图，前景比例 0.85，条件图 512，isosurface=160，纹理 1024，remesh=none。
+输出为包含 PBR 纹理、法线、roughness 和 metallic 的 GLB 文件。
+
+默认开启确定性推理，配合 SEED 控制生成结果。启动脚本会在 Python 启动前设置
+CUBLAS_WORKSPACE_CONFIG；使用 Python 接口时，此设置及确定性算法选项作用于整个进程。
+
+支持 NVIDIA A100 单卡。MLU 路径输出完整 GLB，包含 UV、PBR 颜色纹理、法线纹理、roughness 和 metallic。UV 展开和纹理烘焙复用上游 CPU 扩展，材质场解码在 MLU 上运行；CPU 计算及传输计入端到端时延。在已匹配 torch_mlu 与 torchvision 的环境中安装 `scripts/sf3d/requirements-mlu.txt`，运行 `PYTHON_BIN=python bash scripts/sf3d/install_mlu.sh` 构建上游 CPU 扩展，也可设置 `SF3D_EXTENSION_SOURCE` 使用固定上游源码。Ascend 的脚本和配置仍为占位入口。
+
+推理精度：DINOv2、OpenCLIP、相机嵌入、双流 Transformer 和三平面上采样使用 BF16；归一化统计、材质分布参数、三平面采样坐标、几何/材质场解码和等值面提取保留 FP32。MLU 的 UV 和纹理烘焙也保留 FP32。
+
+## MetaX C500
+
+Use a MetaX PyTorch/MACA environment and run `bash scripts/sf3d/install_metax.sh`. The installer preserves the installed MetaX PyTorch. It builds the released CPU `texture_baker` and `uv_unwrapper` extensions when needed. Set `SF3D_EXTENSION_SOURCE` to an existing checkout of the pinned SF3D source for offline installation. The MetaX path retains UVs and full PBR texture baking using the original CPU extension, with transfers and baking included in each request. Launch with `MACA_VISIBLE_DEVICES=0 CUDA_VISIBLE_DEVICES=0 PYTHON_BIN=python3 bash scripts/platforms/metax/run_sf3d.sh`, using the same model and input environment variables documented above. The BF16/FP32 computation boundaries match the NVIDIA configuration.
+
+Build an isolated image from this checkout with `docker build --build-arg METAX_BASE_IMAGE=<compatible-metax-development-image> -f dockerfiles/platforms/Dockerfile_metax_sf3d -t lightx2v-sf3d-metax .`. The validated runtime uses Python 3.10, MetaX PyTorch 2.8.0+metax3.5.3.9 and MACA SDK 3.5.3.18. Keep weights and generated outputs in external mounts.
+
+## Ascend NPU
+
+Use an isolated environment with matching PyTorch, torch_npu and CANN already
+installed. Source the CANN `set_env.sh`, then run
+`PYTHON_BIN=/path/to/python bash scripts/sf3d/install_ascend.sh`.
+The installer keeps the installed accelerator PyTorch. Run the same requests with
+`ASCEND_RT_VISIBLE_DEVICES=0 PYTHON_BIN=/path/to/python bash scripts/platforms/ascend_npu/run_sf3d.sh`
+and the model/input environment variables documented above.
+
+The original BF16 neural computation and FP32 numerical boundaries are preserved.
+The NPU request disables HF32 convolution/matmul and restores the previous flags
+afterwards. No weights or inputs are globally recast and no quantization is used.
+
+Ascend uses the released CPU UV unwrapper and texture baker, returning their
+results to the original NPU devices. The 1024 texture dilation uses an equivalent
+fold overlap sum on NPU. UVs, albedo, normal maps and PBR material export remain
+part of the complete GLB output; CPU work and transfers belong in end-to-end timing.
+The installer builds CPU extensions from the same pinned upstream revision as the
+other platforms; set `SF3D_EXTENSION_SOURCE` to reuse a prepared source tree.

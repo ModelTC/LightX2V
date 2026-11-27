@@ -13,7 +13,17 @@ The public pre/post wrappers each launch one Triton kernel on the hot path.
 import torch
 import triton
 import triton.language as tl
-from triton.language.extra.cuda import libdevice
+try:
+    from triton.language.extra.cuda import libdevice
+except ImportError:
+    # This fused Ulysses backend is CUDA-only; keep the module importable on
+    # other Triton platforms whose regular layout paths do not call it.
+    class _Libdevice:
+        @staticmethod
+        def rsqrt(value):
+            return tl.rsqrt(value)
+
+    libdevice = _Libdevice()
 
 # Validation and launch-shape helpers
 
