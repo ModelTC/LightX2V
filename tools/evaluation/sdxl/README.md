@@ -103,14 +103,17 @@ GenEval uses the pinned official evaluator and weights with MMCV 1.7.2 CPU exten
 Build the metric environment with `docker build --build-arg INFERENCE_IMAGE=<model-metax-image> -f tools/evaluation/sdxl/scripts/platform/metax/Dockerfile.metrics -t lightx2v-metax-metrics:20261127 .` and set `metric_image` in the local paths file. The image fixes the SDK OpenMP runtime for metric dependencies. GenEval additionally builds MMCV CPU extensions against that same MetaX PyTorch.
 
 <!-- metax-measured-results:start -->
-Completed C500 BF16 measurements:
+Complete C500 BF16 measurements:
 
 | Dataset | Inputs | Quality metric | Mean E2E (s) | P95 E2E (s) |
 | --- | ---: | --- | ---: | ---: |
 | GenEval | 553 | Overall 0.549463 | 5.688347 | 5.747663 |
 | PartiPrompts | 1,632 | CLIP cosine ×100 27.727707 | 5.629281 | 5.742524 |
+| COCO | 5,000 | CLIP cosine ×100 26.593067 | 5.722419 | 5.841624 |
 
-[GenEval results](results/metax/bf16/geneval-results.json) and [Parti results](results/metax/bf16/parti-results.json) retain exact measured revisions, per-input timing/output hashes and closed-capture audits. The full COCO campaign is still running; its complete result is pending.
+[Full results](results/metax/bf16/full-results.json) retain the exact measured revisions, per-input timing/output hashes and closed resource-capture audits for all three complete fixtures. Each dataset stayed on one fixed physical C500; every formal input ran once.
+
+COCO retains one invalid worker-initialization attempt (exit 135) separately. It started no formal inputs in that chunk. After verified cleanup, the same source, image and card resumed with the first 256 valid inputs preserved. No failed formal inputs were omitted from the denominator.
 <!-- metax-measured-results:end -->
 
 ## Ascend NPU
