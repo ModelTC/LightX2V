@@ -140,3 +140,13 @@ sanitized completed measurements under `results/ascend_npu/` only after the full
 dataset has finished. Original NVIDIA, MLU and MetaX entries remain available.
 
 SF3D retains UVs, base-color/normal textures and PBR materials. The pinned original CPU UV/rasterization extensions complement NPU BF16 neural inference and FP32 geometry; no texture stage is omitted.
+
+<!-- ascend-full-results-20261127 -->
+
+Complete Ascend 910B2C BF16 measurement (original FP32 scopes retained):
+
+- gso: 1,023 inputs, mean end-to-end 0.909567 s, P95 1.073905 s. Chamfer-L1 0.121941, F-score@1% 0.054846; every GLB retains UVs, 1024-pixel base-color/normal textures and PBR materials.
+
+[Full results, measured revisions and evidence fingerprints](results/ascend_npu/bf16/full-results.json) include every formal input’s latency and output SHA. Independent verification checks complete coverage, output hashes, original metric aggregation, NPU process attribution and cleanup. Raw artifacts and device observations remain outside git. No native equality or A100 latency ratio is claimed.
+
+<!-- /ascend-full-results-20261127 -->

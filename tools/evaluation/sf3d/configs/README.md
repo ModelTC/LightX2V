@@ -6,7 +6,7 @@ nvidia/model.json is the inference PR’s supported configuration. nvidia/source
 
 For GenEval, geneval_python selects the legacy detector environment; geneval_weights holds the detector .pth; geneval_configs is the mmdetection config tree; geneval_config is its complete mask2former_swin-s-p4-w7-224_lsj_8x2_50e_coco.py filename. geneval_clip is the cache directory holding the locked OpenAI ViT-L-14.pt checkpoint. metric_python for CLIPScore/HumanML must have the necessary torch/transformers/pyarrow/SciPy packages and the metric assets. Local configuration files are never imported as Python.
 
-`mlu/` contains a functional-smoke config and local-path template for one inference-PR request. It is not a full evaluation environment or metric campaign. The MLU files do not validate the native SF3D runtime. MetaX and Ascend remain unimplemented.
+`mlu/` contains a functional-smoke config and local-path template for one inference-PR request. It is not a full evaluation environment or metric campaign. The MLU files do not validate the native SF3D runtime. MetaX and Ascend use their separate platform profiles documented below.
 
 For recovery of an interrupted campaign after a controller-only fix, an ignored local paths file may optionally set `worker_script` to the archived measured evaluate.py. The controller requires identical non-controller Python AST and identical JSON/JSONL configurations, retains that worker’s original SHA in measurement records and campaign identity, and records the new resource-bootstrap SHA separately. Changed model, timing, input or metric functions are rejected. This option does not rewrite or rebrand previous measurements. Fresh campaigns use the submitted evaluate.py itself.
 
