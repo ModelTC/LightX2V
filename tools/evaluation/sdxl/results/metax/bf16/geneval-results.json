@@ -1,0 +1,142 @@
+{
+  "status": "COMPLETE",
+  "model": "sdxl",
+  "dataset": "geneval",
+  "platform": "metax_cuda",
+  "physical_card": 4,
+  "coverage": 553,
+  "formal_dataset_count": 553,
+  "precision_policy": {
+    "bf16": [
+      "both CLIP text encoders",
+      "UNet matrices, convolutions and attention"
+    ],
+    "fp32": [
+      "normalization",
+      "time frequencies",
+      "CFG and Euler state/update",
+      "VAE decoding"
+    ]
+  },
+  "source_lock": {
+    "lightx2v": {
+      "repository": "https://github.com/LancelottJ/LightX2V.git",
+      "revision": "1488f17c12f80673f9266c88e20d80ca0d93bf4e",
+      "pull_request": 1754
+    },
+    "native": {
+      "package": "diffusers",
+      "version": "0.40.0",
+      "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+      "package_files": [
+        {
+          "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+          "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+        },
+        {
+          "path": "diffusers/models/unets/unet_2d_condition.py",
+          "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+        },
+        {
+          "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+          "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+        },
+        {
+          "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+          "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+        }
+      ]
+    },
+    "geneval": {
+      "repo": "djghosh13/geneval",
+      "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+      "files": [
+        {
+          "path": "evaluation/evaluate_images.py",
+          "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+        },
+        {
+          "path": "evaluation/summary_scores.py",
+          "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+        }
+      ]
+    }
+  },
+  "quality": {
+    "count": 553,
+    "geneval_by_dimension": {
+      "color_attr": 0.23,
+      "colors": 0.8617021276595744,
+      "counting": 0.3375,
+      "position": 0.11,
+      "single_object": 1.0,
+      "two_object": 0.7575757575757576
+    },
+    "geneval_overall": 0.5494629808725554
+  },
+  "latency": {
+    "count": 553,
+    "mean_s": 5.6883472872706,
+    "median_s": 5.688963510096073,
+    "p95_s": 5.747662880830466
+  },
+  "resources_clear": true,
+  "task_cleanup_verified": true,
+  "image_id": "sha256:9229cd00ccd1d8bf2555e13db124196b9245b5358b87baade0175dde948938f2",
+  "backend": "lightx2v",
+  "precision_profile": "bf16",
+  "formal_repetitions_per_input": 1,
+  "failed_formal_inputs": 0,
+  "metric_image_id": "sha256:f20f021623c422bf02ac226a36db59e66d4fe921dae709a5b799eb080dab10c7",
+  "measurement_evaluation_revision": "d16ff5869d6d2c3281433babea8a4e66eb6dc544",
+  "measurement_evaluation_sha256": "553d719719bbc137d63dca544a7f4042d0e76bda2dda434b8ead27e804e9d4d9",
+  "measurement_worker_sha256": "3ed743883d8ec9893cc2e606a595ee897e94df77e202ba4f5e59e2d7b3e028c1",
+  "measurement_controller_sha256": "ff24ba0a56dbecc0326961a7005b93784b741aca8b0a33125488744525380dc5",
+  "measurement_capture_sha256": "855b23b1e9eef8a7093f5d831468e733e025e4bc1a21d202c4664142b23124d7",
+  "suite_sha256": "79582c3e996d7e65350b7ff16b911a3ddead0154c75f844178b133a9243f4cb5",
+  "weight_lock_sha256": "5e96e8b0d2f8928721e3dcb753df8e7000cc446cc1a576a31694d25f2c64fb70",
+  "environment": {
+    "versions": {
+      "torch": "2.8.0+metax3.5.3.9",
+      "transformers": "4.53.3",
+      "diffusers": "0.35.2",
+      "numpy": "1.26.4",
+      "Pillow": "11.3.0",
+      "trimesh": "4.4.1",
+      "rembg": "2.0.57",
+      "open-clip-torch": "2.20.0",
+      "scipy": "1.15.3"
+    },
+    "platform": "metax_cuda",
+    "gpu": "MetaX C500",
+    "cuda": "11.6",
+    "physical_card": "MetaX-0000:32:00.0",
+    "visible_device": "4",
+    "generation_environment": {
+      "OMP_NUM_THREADS": "8",
+      "MKL_NUM_THREADS": "8",
+      "OPENBLAS_NUM_THREADS": "1",
+      "CUBLAS_WORKSPACE_CONFIG": null
+    },
+    "deterministic": false,
+    "tf32_matmul": false,
+    "tf32_cudnn": true
+  },
+  "timing": "RNG reset and model load excluded. Start before request JSON decoding and input image read. End after GPU synchronization and durable final PNG/GLB/NPZ file fsync. Hashes, quality, output validation and benchmark logs excluded. One separate synthetic/upstream demo warmup per loaded process, never a dataset sample.",
+  "per_input_sha256": "63e72b4b35cccf107a2633a5294896aaad87a2e4aeec8a62171683918d3162d4",
+  "raw_evidence_namespace": "metax-c500-20261127/sdxl-geneval",
+  "raw_evidence_file_count": 1726,
+  "raw_evidence_manifest_sha256": "3a6ccca4f07b8adc448d3c719c76f8afe4788c998ac3de05b4ba4ce18fa80e2c",
+  "archived_resource_policy_recheck_sha256": "9df4c5a4e3aec837d995a96ebc638370621202e17aabd3492dd2271039d86145",
+  "resource_captures_verified": 4,
+  "comparison_scope": "MetaX BF16 quality and latency only; no native or cross-platform exact-output/latency-ratio claim",
+  "invalid_attempts": [],
+  "metric_runtime": {
+    "backend": "MMCV multi_scale_deformable_attn_pytorch on MetaX",
+    "gen_eval_revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+    "mmcv_version": "1.7.2",
+    "mmcv_attention_source_sha256": "c3d1469a8a40df0e27dbea8809f66863d9d57243ecaa6b2d597afc9e095b9f83",
+    "evaluator_sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+  },
+  "metric_runtime_provenance_sha256": "668791b6edd108c82cd7c7949a2524c7269a821bfc6abc3ec4c900564de524ec"
+}

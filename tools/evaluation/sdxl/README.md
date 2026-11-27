@@ -101,3 +101,7 @@ The smoke plan uses one geometry/CLIPScore input, six GenEval prompts covering i
 GenEval uses the pinned official evaluator and weights with MMCV 1.7.2 CPU extensions. Its released `multi_scale_deformable_attn_pytorch` executes on MetaX tensors. The metric Dockerfile builds the released MMCV source against the installed MetaX PyTorch; an external MMCV source checkout is not required. A separate `metric_image` provides the FP32 Transformers CLIP evaluator through PyTorch SDPA. Both scoring backends retain their original metric definitions.
 
 Build the metric environment with `docker build --build-arg INFERENCE_IMAGE=<model-metax-image> -f tools/evaluation/sdxl/scripts/platform/metax/Dockerfile.metrics -t lightx2v-metax-metrics:20261127 .` and set `metric_image` in the local paths file. The image fixes the SDK OpenMP runtime for metric dependencies. GenEval additionally builds MMCV CPU extensions against that same MetaX PyTorch.
+
+<!-- metax-measured-results:start -->
+Complete C500 BF16 GenEval measurement: all 553 prompts, six dimension scores and overall 0.549463; mean end-to-end 5.688347 s and P95 5.747663 s. [GenEval results and exact measured revisions](results/metax/bf16/geneval-results.json) include per-input timing/output hashes, the metric runtime fingerprint and closed-capture audits. PartiPrompts and COCO full campaigns are still running; no complete result for those fixtures is claimed here.
+<!-- metax-measured-results:end -->
