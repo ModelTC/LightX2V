@@ -31,7 +31,7 @@ def load_hymotion(config):
     if set(missing) != geometry_buffers or unexpected:
         raise ValueError(f"HY-Motion checkpoint mismatch: missing={missing}, unexpected={unexpected}")
     weights = weights.eval().float().cuda()
-    bind_modules(weights.motion_transformer)
+    bind_modules(weights.motion_transformer, dtype=torch.bfloat16)
     weights.requires_grad_(False)
     text = HYTextWeights(
         config.get("qwen_model_path", os.getenv("QWEN_MODEL_PATH", str(root / "Qwen3-8B"))),

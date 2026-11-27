@@ -37,7 +37,7 @@ class HYTextWeights:
         self.qwen = TensorWeights(load_tensors(qwen_path, dtype=torch.bfloat16))
         # The language head is not part of text conditioning.
         self.qwen.tensors.pop("lm_head.weight", None)
-        self.clip = TensorWeights(load_tensors(clip_path, dtype=torch.float32))
+        self.clip = TensorWeights(load_tensors(clip_path, dtype=torch.bfloat16))
         self.clip.tensors = {k: v for k, v in self.clip.tensors.items() if k.startswith("text_model.")}
         self.tokenizer = AutoTokenizer.from_pretrained(qwen_path, padding_side="right", local_files_only=True)
         self.clip_tokenizer = load_clip_tokenizer(clip_path, clip_text_cleanup)

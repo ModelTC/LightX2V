@@ -17,5 +17,6 @@
   "request_defaults": {
     "seed": 42,
     "num_frames": 120
-  }
+  },
+  "inference_dtype": "bf16"
 }

@@ -95,11 +95,11 @@ def HunyuanMotionMMDiT_forward(self, x: Tensor, ctxt_input: Tensor, vtxt_input: 
     if self.with_long_skip_connection:
         origin_feat = motion_feat
     if self.insert_start_token:
-        start_token = self.start_token[None].repeat(motion_feat.shape[0], 1, 1)
+        start_token = self.start_token.to(motion_feat.dtype)[None].repeat(motion_feat.shape[0], 1, 1)
         motion_feat = torch.cat((start_token, motion_feat), dim=1)
         x_mask_temporal = torch.cat([torch.ones_like(x_mask_temporal[:, :1], dtype=torch.bool), x_mask_temporal], dim=1)
     timestep_feat = self.timestep_encoder(timesteps)
-    vtxt_feat = self.vtxt_encoder(vtxt_input.float())
+    vtxt_feat = self.vtxt_encoder(vtxt_input.to(motion_feat.dtype))
     adapter = timestep_feat + vtxt_feat
     motion_key_padding_mask = self._canonical_mask(x_mask_temporal).to(device)
     ctxt_key_padding_mask = self._canonical_mask(ctxt_mask_temporal).to(device)
@@ -119,7 +119,7 @@ def HunyuanMotionMMDiT_forward(self, x: Tensor, ctxt_input: Tensor, vtxt_input: 
         seq_mask = seq_mask.masked_fill(band, 0.0)
     else:
         raise ValueError(f"Unsupported mask mode: {self.mask_mode}")
-    ctxt_feat = self.ctxt_encoder(ctxt_input.float())
+    ctxt_feat = self.ctxt_encoder(ctxt_input.to(motion_feat.dtype))
     if hasattr(self, "text_refiner"):
         ctxt_feat = self.text_refiner(x=ctxt_feat, t=timesteps, mask=(ctxt_key_padding_mask == 0).to(device))
     bsz = x.shape[0]

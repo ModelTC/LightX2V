@@ -192,10 +192,10 @@ def MotionFlowMatching_generate(
     text_guidance_scale = cfg_scale if cfg_scale is not None else self.text_guidance_scale
     do_classifier_free_guidance = text_guidance_scale > 1.0 and (not self.uncondition_mode)
     if do_classifier_free_guidance is True:
-        silent_text_feat = self.null_vtxt_feat.expand(*vtxt_input.shape)
+        silent_text_feat = self.null_vtxt_feat.to(vtxt_input.dtype).expand(*vtxt_input.shape)
         vtxt_input = torch.cat([silent_text_feat, vtxt_input], dim=0)
         if self.enable_ctxt_null_feat:
-            silent_ctxt_input = self.null_ctxt_input.expand(*ctxt_input.shape)
+            silent_ctxt_input = self.null_ctxt_input.to(ctxt_input.dtype).expand(*ctxt_input.shape)
         else:
             silent_ctxt_input = ctxt_input
         ctxt_input = torch.cat([silent_ctxt_input, ctxt_input], dim=0)
@@ -204,9 +204,12 @@ def MotionFlowMatching_generate(
 
     def fn(t: Tensor, x: Tensor) -> Tensor:
         x_input = torch.cat([x] * 2, dim=0) if do_classifier_free_guidance else x
-        x_pred = self.motion_transformer(
-            x=x_input, ctxt_input=ctxt_input, vtxt_input=vtxt_input, timesteps=t.expand(x_input.shape[0]), x_mask_temporal=x_mask_temporal, ctxt_mask_temporal=ctxt_mask_temporal
-        )
+        # Matrix/attention work is BF16; integration and guidance stay FP32.
+        with torch.autocast(device.type, dtype=torch.bfloat16):
+            x_pred = self.motion_transformer(
+                x=x_input.to(torch.bfloat16), ctxt_input=ctxt_input, vtxt_input=vtxt_input, timesteps=t.expand(x_input.shape[0]), x_mask_temporal=x_mask_temporal, ctxt_mask_temporal=ctxt_mask_temporal
+            )
+        x_pred = x_pred.float()
         if do_classifier_free_guidance:
             x_pred_basic, x_pred_text = x_pred.chunk(2, dim=0)
             x_pred = x_pred_basic + text_guidance_scale * (x_pred_text - x_pred_basic)

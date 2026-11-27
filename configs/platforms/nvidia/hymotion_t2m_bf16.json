@@ -1,7 +1,7 @@
 {
   "model_cls": "hymotion",
   "task": "t2m",
-  "implementation_status": "placeholder",
+  "implementation_status": "implemented",
   "parallel": false,
   "cpu_offload": false,
   "feature_caching": "NoCaching",
@@ -12,10 +12,12 @@
   "dit_quant_scheme": "Default",
   "infer_steps": 50,
   "cfg_scale": 5.0,
+  "clip_text_cleanup": "basic",
   "fps": 30,
   "enable_cfg": true,
   "request_defaults": {
     "seed": 42,
     "num_frames": 120
-  }
+  },
+  "inference_dtype": "bf16"
 }

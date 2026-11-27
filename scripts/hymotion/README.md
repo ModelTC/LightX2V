@@ -38,3 +38,5 @@ bash scripts/platforms/nvidia/run_hymotion.sh --num_frames 120
 与同名脚本是显式占位，执行会说明未实现并退出。
 
 CLIP 文本清理默认为 `clip_text_cleanup: basic`，复用 Transformers 的 BasicTokenizer，与原项目仅安装其 requirements.txt、没有额外 ftfy 时的行为一致。这样，其他模型安装 ftfy 不会悄然改变弯引号等 Unicode 输入的输出。若参考原项目环境显式安装了 ftfy，可在模型配置中设置 `clip_text_cleanup: ftfy` 对齐该清理方式。
+
+推理精度：Qwen3、CLIP 文本编码器和 Motion MMDiT 的矩阵计算使用 BF16；归一化计算、时间/RoPE 频率、CFG/Euler 积分状态、动作反归一化及骨骼几何处理保留 FP32。

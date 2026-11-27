@@ -78,4 +78,7 @@ class TensorWeights:
     def group_norm(self, name):
         # There is no general GroupNorm registry in this base revision.
         # Weights stay separate from the model-specific group_norm call.
-        return self.tensor(name + ".weight"), self.optional(name + ".bias")
+        if name not in self.operators:
+            bias = self.optional(name + ".bias")
+            self.operators[name] = (self.tensor(name + ".weight").float(), None if bias is None else bias.float())
+        return self.operators[name]
