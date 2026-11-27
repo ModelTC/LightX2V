@@ -1,0 +1,152 @@
+{
+  "model": "sf3d",
+  "platform": "MLU590",
+  "scope": "one_input_functional_smoke",
+  "full_dataset_rerun": false,
+  "measurements": {
+    "lightx2v": {
+      "count": 1,
+      "fixture_id": "11pro_SL_TRX_FG__view0",
+      "physical_card": 0,
+      "mean_request_latency_s": 3.4586590081453323,
+      "artifact_sha256": "fc873107d071df37006790986a064716ba067b79b9f1fcd36f4ee55e58cbd660",
+      "measurement_worker_sha256": "a9fcd0bb8915b088ddb27dfeede5a606642455345f61efa8e254527c64288821",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "718d4132824519efd614a52f33f763644dc8aef7",
+          "pull_request": 1753
+        },
+        "native": {
+          "repository": "https://github.com/Stability-AI/stable-fast-3d.git",
+          "revision": "ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2"
+        }
+      },
+      "environment": {
+        "versions": {
+          "torch": "2.9.1+cpu",
+          "transformers": "4.53.3",
+          "diffusers": "0.36.0",
+          "numpy": "1.26.4",
+          "Pillow": "13.0.0",
+          "trimesh": "4.4.1",
+          "rembg": "2.0.57",
+          "scipy": "1.15.3"
+        },
+        "platform": "cambricon_mlu",
+        "device": "MLU590-M9D",
+        "physical_card": "0",
+        "torch_mlu": "1.31.1+torch2.9.1",
+        "deterministic": true
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "resource_receipt_sha256": "0b450fff3ab529a5e14e6fdcf7bf09298aa519840e8eb29a3e2340307304b341",
+      "quality": {
+        "count": 1,
+        "chamfer_l1": 0.10623024933329134,
+        "chamfer_l2": 0.01951130345198132,
+        "fscore_1pct": 0.07272958519026398,
+        "fscore_2pct": 0.1538484897431756,
+        "fscore_5pct": 0.35987786958006146,
+        "pointcloud_iou32": 0.0883054892601432
+      }
+    },
+    "native": {
+      "count": 1,
+      "fixture_id": "11pro_SL_TRX_FG__view0",
+      "physical_card": 4,
+      "mean_request_latency_s": 3.458584348205477,
+      "artifact_sha256": "21265a8af1d71678971afa9c5c0ec7d11c2e10ad1c15a26ed70f858eefc13d27",
+      "measurement_worker_sha256": "8e39176d9a0e960f0274a3ff2fbca818a98c64fb70ef32d0c980c6ec28b71d4d",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "718d4132824519efd614a52f33f763644dc8aef7",
+          "pull_request": 1753
+        },
+        "native": {
+          "repository": "https://github.com/Stability-AI/stable-fast-3d.git",
+          "revision": "ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2",
+          "mlu_patches": [
+            {
+              "path": "sf3d/utils.py",
+              "sha256": "a7d830c32b3d6530cd8c6bae23e6751ac0dc6c9b416e70d8b320a71e9fe5db6f",
+              "runtime_sha256": "9bb315ccf57ecb5c429ba5ed381ef46c7ddd3128001de8890b111c8cc252047c",
+              "replacements": [
+                {
+                  "before": "    device = \"cpu\"",
+                  "after": "    if os.environ.get(\"PLATFORM\") == \"cambricon_mlu\":\n        return \"mlu\"\n    device = \"cpu\""
+                }
+              ]
+            },
+            {
+              "path": "sf3d/system.py",
+              "sha256": "15bac14e4eb78729aa26c9765cd6d8378ff53bf26b106f82051ffe5debc7b049",
+              "runtime_sha256": "11fc5362dec45909e8898b8e2c3a08c6b8cb93536c074fb704a208cf8efbfc57",
+              "replacements": [
+                {
+                  "before": ") if \"cuda\" in device else nullcontext():",
+                  "after": ") if \"cuda\" in device or device == \"mlu\" else nullcontext():"
+                }
+              ]
+            },
+            {
+              "path": "sf3d/models/mesh.py",
+              "sha256": "93dd6337ad81857b6d4a7b9e9547f9e30abb06ec900bcf1d04a158eae764af42",
+              "runtime_sha256": "585c712d62f051c3dfa72a0288a424928c45884c49709a7709a29eb368ceab9b",
+              "replacements": [
+                {
+                  "before": "        self.unwrapper = Unwrapper()",
+                  "after": "        self.unwrapper = Unwrapper()\n        if v_pos.device.type == \"mlu\":\n            from mlu_native import MLUUnwrapper\n            self.unwrapper = MLUUnwrapper(self.unwrapper)"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "environment": {
+        "versions": {
+          "torch": "2.9.1+cpu",
+          "transformers": "4.42.3",
+          "diffusers": "0.36.0",
+          "numpy": "1.26.4",
+          "Pillow": "13.0.0",
+          "trimesh": "4.4.1",
+          "rembg": "2.0.57",
+          "open-clip-torch": "2.24.0",
+          "scipy": "1.15.3"
+        },
+        "platform": "cambricon_mlu",
+        "device": "MLU590-M9D",
+        "physical_card": "4",
+        "torch_mlu": "1.31.1+torch2.9.1",
+        "deterministic": false
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "resource_receipt_sha256": "3af3be96b9d79e4d7c1d3196f9b9d66223ff5d718d8d2389ea1a1419658f96dc",
+      "quality": {
+        "count": 1,
+        "chamfer_l1": 0.10622604039499242,
+        "chamfer_l2": 0.01945717957779274,
+        "fscore_1pct": 0.07107897507897508,
+        "fscore_2pct": 0.15269268292682925,
+        "fscore_5pct": 0.35923344042655,
+        "pointcloud_iou32": 0.0883054892601432
+      }
+    }
+  },
+  "limitations": [
+    "No new full-dataset accuracy or latency result",
+    "Native precision and PR BF16 are separate precision experiments",
+    "Other platform code inspected statically; no other-platform hardware run in this task"
+  ],
+  "output_contract": [
+    "finite mesh and per-vertex UVs",
+    "1024x1024 base-color texture",
+    "1024x1024 normal texture",
+    "roughness and metallic factors"
+  ],
+  "legacy_geometry_only_latency_comparable": false
+}

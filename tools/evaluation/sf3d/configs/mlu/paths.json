@@ -2,7 +2,21 @@
   "data": "/absolute/replace/data",
   "weights": "/absolute/replace/weights",
   "lightx2v": "/absolute/replace/lightx2v",
-  "python": "/absolute/replace/torch_mlu_python",
+  "native_python": "/absolute/replace/native_python",
+  "lightx2v_python": "/absolute/replace/lightx2v_python",
+  "metric_python": "/absolute/replace/metric_python",
+  "native": "/absolute/replace/native",
+  "native_weights": "/absolute/replace/native_weights",
   "tets": "/absolute/replace/160_tets.npz",
-  "rembg": "/absolute/replace/u2net"
+  "dino": "/absolute/replace/dino",
+  "openclip": "/absolute/replace/openclip",
+  "rembg": "/absolute/replace/u2net",
+  "python": "/absolute/replace/torch_mlu_python",
+  "output_root": "/absolute/replace/output-root",
+  "native_image": "lightx2v-mlu590-native-sf3d:20261127",
+  "mounts": {
+    "/absolute/replace/workspace": "ro",
+    "/absolute/replace/assets": "ro",
+    "/absolute/replace/output-root": "rw"
+  }
 }
