@@ -2,7 +2,7 @@
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 python_bin="${PYTHON_BIN:-python3}"
-"${python_bin}" -c 'import torch; assert "metax" in torch.__version__, "Use the MetaX PyTorch environment"' 
+"${python_bin}" -c 'import torch; assert "metax" in torch.__version__, "Use the MetaX PyTorch environment"'
 "${python_bin}" -m pip install setuptools wheel packaging ninja
 "${python_bin}" -m pip install -r "${root}/scripts/sf3d/requirements-metax.txt"
 
@@ -22,7 +22,8 @@ if ! "${python_bin}" -c 'from texture_baker import TextureBaker; from uv_unwrapp
     for extension in texture_baker uv_unwrapper; do
         (
             cd -- "${extension_source}/${extension}"
-            USE_CUDA=0 MAX_JOBS="${MAX_JOBS:-2}" "${python_bin}" -m pip install --no-build-isolation --no-deps .
+            USE_CUDA=0 MAX_JOBS="${MAX_JOBS:-2}" "${python_bin}" "${root}/scripts/sf3d/build_cpu_extension.py"
+            "${python_bin}" -m pip install --no-deps dist/*.whl
         )
     done
 fi
