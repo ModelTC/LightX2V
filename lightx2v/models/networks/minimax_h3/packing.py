@@ -6,7 +6,6 @@ contract.  The transformer consumes one unbatched sequence ordered as
 network makes the row order, rotary clock, and noise layout explicit.
 """
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -200,17 +199,9 @@ def causal_chunk_audio_range(chunk_index: int) -> tuple[int, int]:
     if chunk_index < 0:
         raise ValueError(f"chunk_index must be non-negative, got {chunk_index}")
 
-    def boundary(num_video_latents: int) -> int:
-        if num_video_latents <= 0:
-            return 0
-        span = temporal_position_span(num_video_latents)
-        rounded = round(span)
-        if math.isclose(span, rounded, abs_tol=1e-9, rel_tol=0):
-            return int(rounded)
-        return math.ceil(span)
-
-    start = chunk_index * LATENTS_PER_CHUNK
-    return boundary(start), boundary(start + LATENTS_PER_CHUNK)
+    # Five video latents span 17 frames at 24 fps: 85/3 audio latents.
+    # Integer ceil keeps the 29/28/28 cycle exact even in long live sessions.
+    return (85 * chunk_index + 2) // 3, (85 * (chunk_index + 1) + 2) // 3
 
 
 def build_t2av_packed_sequence(

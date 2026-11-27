@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 
 import torch
 
-from lightx2v.models.networks.minimax_h3.packing import AUDIO_CHANNELS, AUDIO_TAG, VIDEO_TAG, MiniMaxH3PackedSequence, _temporal_position_grid
+from lightx2v.models.networks.minimax_h3.packing import AUDIO_CHANNELS, AUDIO_TAG, VIDEO_TAG, MiniMaxH3PackedSequence, _temporal_position_grid, causal_chunk_audio_range
 from lightx2v.models.networks.minimax_h3.packing_ref2av import MiniMaxH3PreparedReference, _frame_position_grid
 
 
@@ -105,10 +105,8 @@ class MiniMaxH3CleanStreamingPlan:
         if chunk_index < 0:
             raise ValueError("Live chunk indices must be nonnegative")
         global_index = self.stream_start_idx + chunk_index
-        # Five latent frames span exactly 85/3 audio latents. Integer ceil
-        # preserves the global 29/28/28 phase across reference-image changes.
-        audio_start = (85 * global_index + 2) // 3
-        audio_end = (85 * (global_index + 1) + 2) // 3
+        # Preserve the output audio phase across reference-image changes.
+        audio_start, audio_end = causal_chunk_audio_range(global_index)
         video_start = chunk_index * self.policy.num_frame_per_chunk
         return video_start, video_start + self.policy.num_frame_per_chunk, audio_start, audio_end
 

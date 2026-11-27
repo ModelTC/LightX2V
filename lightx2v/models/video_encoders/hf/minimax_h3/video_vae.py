@@ -560,7 +560,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
             self.compiled_blocks[block_index] = compiled_block
         return compiled_block(hidden_states, rotary_emb)
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, *, temporal_position_offset: float = 0.0) -> torch.Tensor:
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 4, 1).reshape(batch_size, num_frames * height * width, num_channels)
         hidden_states = self.proj_in(hidden_states)
@@ -573,6 +573,9 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         hidden_states = torch.cat([hidden_states, register_tokens, cls_token], dim=1)
 
         grids = [2.0 * (torch.arange(0.5, size, dtype=torch.float32, device=hidden_states.device) / size) - 1.0 for size in (num_frames, height, width)]
+        if temporal_position_offset:
+            # Shift video time only; register/class tokens keep their zero positions.
+            grids[0] = grids[0] + temporal_position_offset
         position_ids = torch.stack(torch.meshgrid(*grids, indexing="ij"), dim=-1).flatten(0, 2)
         position_ids = position_ids.unsqueeze(0).expand(batch_size, -1, -1)
         suffix_ids = position_ids.new_zeros((batch_size, self.num_register_tokens + 1, 3))
@@ -1289,6 +1292,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         self,
         all_tiles: list[torch.Tensor],
         output_rank=0,
+        *,
+        temporal_position_offset=0.0,
     ) -> list[torch.Tensor] | None:
         """Decode balanced tiles and gather them on the requested output rank."""
         rank = dist.get_rank()
@@ -1302,7 +1307,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         local_start = sum(task_counts[:logical_rank])
         local_end = local_start + task_counts[logical_rank]
         local_tiles = all_tiles[local_start:local_end]
-        local_tiles = [self.decoder(self.post_quant_conv(tile)) for tile in local_tiles]
+        local_tiles = [self.decoder(self.post_quant_conv(tile), temporal_position_offset=temporal_position_offset) for tile in local_tiles]
 
         return self._gather_tiles(local_tiles, task_counts, self.decode_group, output_rank=output_rank)
 

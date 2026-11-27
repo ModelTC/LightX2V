@@ -22,7 +22,7 @@ from lightx2v.models.runners.minimax_h3_causal.motion import prepare_motions
 from lightx2v.models.runners.minimax_h3_causal.reference_cache import MiniMaxH3ReferenceCache
 from lightx2v.models.schedulers.minimax_h3_causal.clean_scheduler import MiniMaxH3CleanScheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
-from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
+from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3LiveVideoDecoder, MiniMaxH3StreamingVideoDecoder
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.vae_graph import MiniMaxH3VideoDecoderGraph
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.video_writer import MiniMaxH3StreamingVideoWriter
 from lightx2v.utils.profiler import ProfilingContext4DebugL2, no_sync_profiling
@@ -384,7 +384,7 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
         self.prepared_references = references
         self.inputs["text_encoder_output"] = self._encode_reference_conditions()
         self.model.reset_autoregressive_state()
-        # Only conditioning/KV restart. Motion, audio VAE context, video overlap
+        # Only conditioning/KV restart. Motion, audio VAE context, video history
         # and absolute action deadlines remain on the original live timeline.
         self.init_run(stream_start_idx=chunk_index)
         self._prefill_live_conditions()
@@ -444,9 +444,8 @@ class MiniMaxH3CausalRunner(H3AutoregressiveRunnerMixin, MiniMaxH3Runner):
             self.driving_audio = MiniMaxH3StreamingDrivingAudio(self.audio_vae, mono=self.config.get("audio_mono", False))
         emitted_chunk = 0
         with ExitStack() as decoders:
-            video_decoder = MiniMaxH3StreamingVideoDecoder(
+            video_decoder = MiniMaxH3LiveVideoDecoder(
                 self.video_vae,
-                self.request_num_frames,
                 output_uint8=True,
                 pinned_memory=self.config.get("vae_rgb_pinned_memory", False),
                 decode_graph=self.video_decode_graph,
