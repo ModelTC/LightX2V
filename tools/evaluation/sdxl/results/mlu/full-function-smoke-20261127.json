@@ -1,0 +1,160 @@
+{
+  "model": "sdxl",
+  "platform": "MLU590",
+  "scope": "one_input_functional_smoke",
+  "full_dataset_rerun": false,
+  "measurements": {
+    "lightx2v": {
+      "count": 1,
+      "fixture_id": "00000",
+      "physical_card": 0,
+      "mean_request_latency_s": 5.278632172150537,
+      "artifact_sha256": "d1f436957f279d01f771e8b105a52896e88e421955f5d8603322f1d0e860ed2f",
+      "measurement_worker_sha256": "00b9727a3388d07c5301c4ddf57ce2d6c3be1f4d9e7d25874f4cb37c67c821a1",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "ec43872062003d7b5ed2506f4a0c9ef8cfcbd50b",
+          "pull_request": 1754
+        },
+        "geneval": {
+          "repo": "djghosh13/geneval",
+          "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+          "files": [
+            {
+              "path": "evaluation/evaluate_images.py",
+              "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+            },
+            {
+              "path": "evaluation/summary_scores.py",
+              "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+            }
+          ]
+        },
+        "native": {
+          "package": "diffusers",
+          "version": "0.40.0",
+          "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+          "package_files": [
+            {
+              "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+              "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+            },
+            {
+              "path": "diffusers/models/unets/unet_2d_condition.py",
+              "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+            },
+            {
+              "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+              "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+            },
+            {
+              "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+              "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+            }
+          ]
+        }
+      },
+      "environment": {
+        "versions": {
+          "torch": "2.9.1+cpu",
+          "transformers": "4.53.3",
+          "diffusers": "0.36.0",
+          "numpy": "1.26.4",
+          "Pillow": "13.0.0",
+          "trimesh": "4.4.1",
+          "rembg": "2.0.57",
+          "scipy": "1.15.3"
+        },
+        "platform": "cambricon_mlu",
+        "device": "MLU590-M9D",
+        "physical_card": "0",
+        "torch_mlu": "1.31.1+torch2.9.1",
+        "deterministic": false,
+        "cpu_threads": 4
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "resource_receipt_sha256": "b802bdce55aa85936609d778f23bd7c873f9594448a82ccbb4d7ee14da84ad74"
+    },
+    "native": {
+      "count": 1,
+      "fixture_id": "00000",
+      "physical_card": 0,
+      "mean_request_latency_s": 5.062051906948909,
+      "artifact_sha256": "d12f9252380395b94b30f460d177d8a5d9c833c602cd3060535e6f77845cfae4",
+      "measurement_worker_sha256": "622fc800ec97febc249cac429da472d67355d031ff47f3dbe461484990e26a3f",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "ec43872062003d7b5ed2506f4a0c9ef8cfcbd50b",
+          "pull_request": 1754
+        },
+        "geneval": {
+          "repo": "djghosh13/geneval",
+          "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+          "files": [
+            {
+              "path": "evaluation/evaluate_images.py",
+              "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+            },
+            {
+              "path": "evaluation/summary_scores.py",
+              "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+            }
+          ]
+        },
+        "native": {
+          "package": "diffusers",
+          "version": "0.40.0",
+          "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+          "package_files": [
+            {
+              "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+              "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+            },
+            {
+              "path": "diffusers/models/unets/unet_2d_condition.py",
+              "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+            },
+            {
+              "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+              "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+            },
+            {
+              "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+              "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+            }
+          ]
+        }
+      },
+      "environment": {
+        "versions": {
+          "torch": "2.9.1+cpu",
+          "transformers": "5.17.0",
+          "diffusers": "0.40.0",
+          "numpy": "1.26.4",
+          "Pillow": "13.0.0",
+          "trimesh": "4.4.1",
+          "rembg": "2.0.57",
+          "open-clip-torch": "2.24.0",
+          "scipy": "1.15.3"
+        },
+        "platform": "cambricon_mlu",
+        "device": "MLU590-M9D",
+        "physical_card": "0",
+        "torch_mlu": "1.31.1+torch2.9.1",
+        "deterministic": false,
+        "cpu_threads": 4
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "resource_receipt_sha256": "1d36e1f6a1f4d399120fb20b64e7136c0d3a8213b75a65b0fab8e5daffa3c300"
+    }
+  },
+  "limitations": [
+    "No new full-dataset accuracy or latency result",
+    "Native precision and PR BF16 are separate precision experiments",
+    "Other platform code inspected statically; no other-platform hardware run in this task"
+  ]
+}

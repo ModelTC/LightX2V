@@ -2,5 +2,22 @@
   "data": "/absolute/replace/data",
   "weights": "/absolute/replace/sdxl-base-1.0",
   "lightx2v": "/absolute/replace/lightx2v",
-  "python": "/absolute/replace/torch_mlu_python"
+  "native_python": "/absolute/replace/native_python",
+  "lightx2v_python": "/absolute/replace/lightx2v_python",
+  "metric_python": "/absolute/replace/metric_python",
+  "clip": "/absolute/replace/clip",
+  "geneval": "/absolute/replace/geneval",
+  "geneval_python": "/absolute/replace/geneval_python",
+  "geneval_weights": "/absolute/replace/geneval_weights",
+  "geneval_configs": "/absolute/replace/geneval_configs",
+  "geneval_config": "/absolute/replace/geneval_config",
+  "geneval_clip": "/absolute/replace/geneval_clip",
+  "python": "/absolute/replace/torch_mlu_python",
+  "output_root": "/absolute/replace/output-root",
+  "native_image": "lightx2v-mlu590-native-sdxl:20261127",
+  "mounts": {
+    "/absolute/replace/workspace": "ro",
+    "/absolute/replace/assets": "ro",
+    "/absolute/replace/output-root": "rw"
+  }
 }
