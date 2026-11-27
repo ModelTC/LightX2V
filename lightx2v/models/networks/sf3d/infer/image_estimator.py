@@ -13,7 +13,8 @@ def ClipBasedHeadEstimator_forward(self, cond_image: Float[Tensor, "B 1 H W 3"],
         head_name = head_dict.name
         shared_head, d1_h, d2_h = self.heads[head_name]
         shared_features = shared_head(image_features)
-        d1, d2 = [head(shared_features).squeeze(-1) for head in [d1_h, d2_h]]
+        # Distribution parameters/moments are scalar statistics, not GEMMs.
+        d1, d2 = [head(shared_features).squeeze(-1).float() for head in [d1_h, d2_h]]
         if self.cfg.distribution == "normal":
             mean = d1
             var = d2

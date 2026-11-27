@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import torch
 from omegaconf import OmegaConf
 
 from lightx2v.models.networks.native_components.checkpoint import TensorWeights
@@ -33,8 +34,8 @@ def load_sf3d(config):
         raise FileNotFoundError("Prepare the fixed SF3D grid first: python scripts/sf3d/prepare_assets.py --model-path " + str(root))
     model = SF3D(cfg).eval()
     tensors = load_safetensors_from_path(str(root / "model.safetensors"))
-    dino = {k.removeprefix("image_tokenizer.model."): tensors.pop(k).cuda() for k in list(tensors) if k.startswith("image_tokenizer.model.")}
-    clip = {k.removeprefix("image_estimator.model.visual."): tensors.pop(k).cuda() for k in list(tensors) if k.startswith("image_estimator.model.visual.")}
+    dino = {k.removeprefix("image_tokenizer.model."): tensors.pop(k).to(device="cuda", dtype=torch.bfloat16) for k in list(tensors) if k.startswith("image_tokenizer.model.")}
+    clip = {k.removeprefix("image_estimator.model.visual."): tensors.pop(k).to(device="cuda", dtype=torch.bfloat16) for k in list(tensors) if k.startswith("image_estimator.model.visual.")}
     # CLIP's text tower is stored in the training checkpoint but never used by
     # single-image material estimation. List this intentional exclusion.
     unused_text = [k for k in tensors if k.startswith("image_estimator.model.")]
@@ -46,6 +47,15 @@ def load_sf3d(config):
             tensors.pop(key)
     model.load_state_dict(tensors, strict=True)
     model = model.float().cuda()
+    # Keep the field decoder and all geometry buffers in FP32. Cast neural
+    # features too, so positional tokens cannot promote BF16 residual streams.
+    for name in ("camera_embedder", "image_tokenizer", "tokenizer", "backbone", "post_processor", "image_estimator"):
+        module = getattr(model, name, None)
+        if module is not None:
+            module.to(dtype=torch.bfloat16)
+            for child in module.modules():
+                if isinstance(child, (torch.nn.LayerNorm, torch.nn.GroupNorm)):
+                    child.float()
     bind_modules(model)
     model.requires_grad_(False)
     model.image_tokenizer.weights = TensorWeights(dino)

@@ -50,7 +50,7 @@ def SF3D_query_triplane(self, positions: Float[Tensor, "*B N 3"], triplanes: Flo
         positions = positions[None, ...]
     assert triplanes.ndim == 5 and positions.ndim == 3
     positions = scale_tensor(positions, (-self.cfg.radius, self.cfg.radius), (-1, 1))
-    indices2D: Float[Tensor, "B 3 N 2"] = torch.stack((positions[..., [0, 1]], positions[..., [0, 2]], positions[..., [1, 2]]), dim=-3).to(triplanes.dtype)
+    indices2D: Float[Tensor, "B 3 N 2"] = torch.stack((positions[..., [0, 1]], positions[..., [0, 2]], positions[..., [1, 2]]), dim=-3).float()
     out: Float[Tensor, "B3 Cp 1 N"] = F.grid_sample(
         rearrange(triplanes, "B Np Cp Hp Wp -> (B Np) Cp Hp Wp", Np=3).float(), rearrange(indices2D, "B Np N Nd -> (B Np) () N Nd", Np=3).float(), align_corners=True, mode="bilinear"
     )
@@ -125,6 +125,7 @@ def SF3D_generate_mesh(self, batch, bake_resolution: int) -> Tuple[List[trimesh.
         global_dict.update(self.image_estimator(batch["rgb_cond"] * batch["mask_cond"]))
     device = get_device()
     with torch.no_grad(), torch.autocast(device_type=device, enabled=False) if "cuda" in device else nullcontext():
+        scene_codes = scene_codes.float()
         meshes = self.triplane_to_meshes(scene_codes)
         rets = []
         for i, mesh in enumerate(meshes):

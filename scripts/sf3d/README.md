@@ -45,3 +45,5 @@ bash scripts/platforms/nvidia/run_sf3d.sh
 CUBLAS_WORKSPACE_CONFIG；使用 Python 接口时，此设置及确定性算法选项作用于整个进程。
 
 支持 NVIDIA A100 单卡。MLU、MetaX、Ascend 的脚本和配置为占位入口，执行时会提示未实现。
+
+推理精度：DINOv2、OpenCLIP、相机嵌入、双流 Transformer 和三平面上采样使用 BF16；归一化统计、材质分布参数、三平面采样坐标、几何/材质场解码、等值面提取、UV 和纹理烘焙保留 FP32。纹理烘焙扩展要求 FP32 输入。

@@ -77,28 +77,29 @@ class LayerNorm(nn.Module):
     def __init__(self, weight=None, bias=None, eps=1e-5):
         super().__init__()
         self.op = LN_WEIGHT_REGISTER["torch"]("weight" if weight is not None else None, "bias" if bias is not None else None, eps=eps)
-        self.op.load({"weight": weight, "bias": bias})
+        self.op.load({"weight": None if weight is None else weight.float(), "bias": None if bias is None else bias.float()})
         self.register_buffer("weight", self.op.weight)
         self.register_buffer("bias", self.op.bias)
 
     def forward(self, x):
-        self.op.infer_dtype = x.dtype
-        self.op.sensitive_layer_dtype = x.dtype
-        return self.op.apply(x)
+        self.op.infer_dtype = torch.float32
+        self.op.sensitive_layer_dtype = torch.float32
+        with torch.autocast(x.device.type, enabled=False):
+            return self.op.apply(x.float()).to(x.dtype)
 
 
 class RMSNorm(nn.Module):
     def __init__(self, weight, eps=1e-6):
         super().__init__()
         self.op = RMS_WEIGHT_REGISTER["torch"]("weight", eps=eps)
-        self.op.load({"weight": weight})
+        self.op.load({"weight": weight.float()})
         self.register_buffer("weight", self.op.weight)
 
     def forward(self, x):
-        self.op.infer_dtype = x.dtype
-        # RMSWeight's equal-dtype branch performs FP32 accumulation.
-        self.op.sensitive_layer_dtype = x.dtype
-        return self.op.apply(x)
+        self.op.infer_dtype = torch.float32
+        self.op.sensitive_layer_dtype = torch.float32
+        with torch.autocast(x.device.type, enabled=False):
+            return self.op.apply(x.float()).to(x.dtype)
 
 
 class Attention:
@@ -116,12 +117,18 @@ class Attention:
         return y.reshape(b, n, h, d).transpose(1, 2)
 
 
-def bind_modules(module):
-    """Bind after strict state loading, while retaining checkpoint dtypes."""
+def bind_modules(module, dtype=None):
+    """Bind registered operators after loading; optionally cast matrix weights.
+
+    Normalization and non-matrix buffers (coordinates, frequencies, statistics)
+    retain FP32. Callers own the boundaries around sampling and geometry.
+    """
 
     def visit(parent):
         for name, child in list(parent.named_children()):
             replacement = None
+            if dtype is not None and isinstance(child, (nn.Linear, nn.Conv2d, nn.Embedding)):
+                child.to(dtype=dtype)
             if isinstance(child, nn.Linear):
                 replacement = Linear(child.weight.detach(), None if child.bias is None else child.bias.detach(), child.weight.requires_grad)
             elif isinstance(child, nn.Conv2d):

@@ -3,7 +3,7 @@ set -euo pipefail
 
 lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 model_path="${MODEL_PATH:-${lightx2v_path}/weights/sf3d}"
-config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/ascend_npu/sf3d_i23d_fp32.json}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/ascend_npu/sf3d_i23d_bf16.json}"
 save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/sf3d/result.glb}"
 
 if [[ "${1:-}" == "--help" ]]; then

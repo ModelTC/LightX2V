@@ -16,5 +16,6 @@
   "deterministic_algorithms": true,
   "request_defaults": {
     "seed": 42
-  }
+  },
+  "inference_dtype": "bf16"
 }
