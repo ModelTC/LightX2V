@@ -1,0 +1,112 @@
+{
+  "model": "sf3d",
+  "platform": "MetaX C500",
+  "precision_profile": "bf16",
+  "execution_status": "COMPLETE",
+  "formal_repetitions_per_input": 1,
+  "measurement_evaluation_revision": "517bdf1142c17809be16db801d164a1e77fa74ec",
+  "datasets": {
+    "gso": {
+      "status": "COMPLETE",
+      "model": "sf3d",
+      "dataset": "gso",
+      "platform": "metax_cuda",
+      "physical_card": 1,
+      "coverage": 1023,
+      "formal_dataset_count": 1023,
+      "precision_policy": {
+        "bf16": [
+          "DINOv2",
+          "OpenCLIP",
+          "camera embedder",
+          "two-stream transformer",
+          "triplane upsampling",
+          "image-estimation projections"
+        ],
+        "fp32": [
+          "normalization and distribution statistics",
+          "sampling coordinates and grid_sample",
+          "geometry/material field decoder",
+          "marching tetrahedra",
+          "UV and texture baking"
+        ]
+      },
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/LancelottJ/LightX2V.git",
+          "revision": "8bd4dab80a6d1ce3f7c8278dc3330ef4a2849c64",
+          "pull_request": 1753
+        },
+        "native": {
+          "repository": "https://github.com/Stability-AI/stable-fast-3d.git",
+          "revision": "ff21fc491b4dc5314bf6734c7c0dabd86b5f5bb2"
+        }
+      },
+      "quality": {
+        "count": 1023,
+        "chamfer_l1": 0.12195005428573488,
+        "chamfer_l2": 0.024487666708746112,
+        "fscore_1pct": 0.05485069458021259,
+        "fscore_2pct": 0.12439028560060994,
+        "fscore_5pct": 0.2897908252791906,
+        "pointcloud_iou32": 0.06697136827043099
+      },
+      "latency": {
+        "count": 1023,
+        "mean_s": 0.68506725155316,
+        "median_s": 0.6755790212191641,
+        "p95_s": 0.7784411705099046
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "image_id": "sha256:9229cd00ccd1d8bf2555e13db124196b9245b5358b87baade0175dde948938f2",
+      "backend": "lightx2v",
+      "precision_profile": "bf16",
+      "formal_repetitions_per_input": 1,
+      "failed_formal_inputs": 0,
+      "metric_image_id": "sha256:f20f021623c422bf02ac226a36db59e66d4fe921dae709a5b799eb080dab10c7",
+      "measurement_evaluation_revision": "517bdf1142c17809be16db801d164a1e77fa74ec",
+      "measurement_evaluation_sha256": "ef350445a8e4d3bdafcfa70a4622bdc8ce3f5d459b033c146429f0e2e0e7cfff",
+      "measurement_worker_sha256": "3ed743883d8ec9893cc2e606a595ee897e94df77e202ba4f5e59e2d7b3e028c1",
+      "measurement_controller_sha256": "ff24ba0a56dbecc0326961a7005b93784b741aca8b0a33125488744525380dc5",
+      "measurement_capture_sha256": "855b23b1e9eef8a7093f5d831468e733e025e4bc1a21d202c4664142b23124d7",
+      "suite_sha256": "008a62d906c69e4622d49c11287bd8c1478891fa59be98d01bd11a712c044c29",
+      "weight_lock_sha256": "e486ec3997b72d3e3eceb3169d8bfab8da96bf81ff196ab19e3c5422ed93d1cd",
+      "environment": {
+        "versions": {
+          "torch": "2.8.0+metax3.5.3.9",
+          "transformers": "4.53.3",
+          "diffusers": "0.35.2",
+          "numpy": "1.26.4",
+          "Pillow": "11.3.0",
+          "trimesh": "4.4.1",
+          "rembg": "2.0.57",
+          "open-clip-torch": "2.20.0",
+          "scipy": "1.15.3"
+        },
+        "platform": "metax_cuda",
+        "gpu": "MetaX C500",
+        "cuda": "11.6",
+        "physical_card": "MetaX-0000:09:00.0",
+        "visible_device": "1",
+        "deterministic": true,
+        "tf32_matmul": false,
+        "tf32_cudnn": true
+      },
+      "timing": "RNG reset and model load excluded. Start before request JSON decoding and input image read. End after GPU synchronization and durable final PNG/GLB/NPZ file fsync. Hashes, quality, output validation and benchmark logs excluded. One separate synthetic/upstream demo warmup per loaded process, never a dataset sample.",
+      "per_input_sha256": "4010db4cc713fffdc4f2696e1c79871d774302ffc500df4dc37cdf73572d85c8",
+      "raw_evidence_namespace": "metax-c500-20261127/sf3d-gso",
+      "raw_evidence_file_count": 1105,
+      "raw_evidence_manifest_sha256": "fd1e53c8ee3be13827816dcce7bbc531026c0e82fe1f841b554f756ad1744813",
+      "archived_resource_policy_recheck_sha256": "65ba6f9f4ed2de3133d3ec88d55c1718dacb9b8c705bb39380a33eca9163d6dc",
+      "resource_captures_verified": 5,
+      "comparison_scope": "MetaX BF16 quality and latency only; no native or cross-platform exact-output/latency-ratio claim",
+      "full_pbr_outputs_verified": 1023,
+      "texture_resolution": [
+        1024,
+        1024
+      ],
+      "texture_audit_sha256": "2b85b896b69b6a2a63302b7af1a00f7b309fb596b8fccb2d67b284ab359f82cf"
+    }
+  }
+}

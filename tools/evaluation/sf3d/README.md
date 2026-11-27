@@ -98,3 +98,5 @@ The resource observer runs as a non-root user in the host PID namespace, with a 
 The smoke plan uses one geometry/CLIPScore input, six GenEval prompts covering its six dimensions, or enough HumanML3D references for the unchanged 300-pair diversity metric. Smoke summaries explicitly retain the formal fixture count. Full summaries contain every frozen input, quality metrics, mean/median/P95 end-to-end latency, source/image fingerprints and resource evidence.
 
 Build the metric environment with `docker build --build-arg INFERENCE_IMAGE=<model-metax-image> -f tools/evaluation/sf3d/scripts/platform/metax/Dockerfile.metrics -t lightx2v-metax-metrics:20261127 .` and set `metric_image` in the local paths file. The metric image fixes the SDK OpenMP runtime for its dependencies.
+
+Complete C500 BF16 measurement: all 1,023 GSO inputs, mean end-to-end 0.685067 s, P95 0.778441 s, Chamfer-L1 0.121950 and F-score@1% 0.054851. All 1,023 GLBs retain UVs, 1024² base-color/normal textures and metallic/roughness materials. [Results and exact measured revisions](results/metax/bf16/full-results.json) include per-input timing/output hashes and closed-capture audit fingerprints.
