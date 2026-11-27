@@ -44,9 +44,9 @@ bash scripts/platforms/nvidia/run_sf3d.sh
 默认开启确定性推理，配合 SEED 控制生成结果。启动脚本会在 Python 启动前设置
 CUBLAS_WORKSPACE_CONFIG；使用 Python 接口时，此设置及确定性算法选项作用于整个进程。
 
-支持 NVIDIA A100 单卡。MLU 路径可运行模型并导出仅含几何网格的 GLB，当前跳过 UV 和纹理烘焙。在已匹配 torch_mlu 与 torchvision 的环境中安装 `scripts/sf3d/requirements-mlu.txt`，不安装 CUDA 专用几何扩展，也不要运行 CUDA 专用的 `install_a100.sh`。Ascend 的脚本和配置仍为占位入口。
+支持 NVIDIA A100 单卡。MLU 路径输出完整 GLB，包含 UV、PBR 颜色纹理、法线纹理、roughness 和 metallic。UV 展开和纹理烘焙复用上游 CPU 扩展，材质场解码在 MLU 上运行；CPU 计算及传输计入端到端时延。在已匹配 torch_mlu 与 torchvision 的环境中安装 `scripts/sf3d/requirements-mlu.txt`，运行 `PYTHON_BIN=python bash scripts/sf3d/install_mlu.sh` 构建上游 CPU 扩展，也可设置 `SF3D_EXTENSION_SOURCE` 使用固定上游源码。Ascend 的脚本和配置仍为占位入口。
 
-推理精度：DINOv2、OpenCLIP、相机嵌入、双流 Transformer 和三平面上采样使用 BF16；归一化统计、材质分布参数、三平面采样坐标、几何/材质场解码和等值面提取保留 FP32。MLU 路径跳过 UV 和纹理烘焙。
+推理精度：DINOv2、OpenCLIP、相机嵌入、双流 Transformer 和三平面上采样使用 BF16；归一化统计、材质分布参数、三平面采样坐标、几何/材质场解码和等值面提取保留 FP32。MLU 的 UV 和纹理烘焙也保留 FP32。
 
 ## MetaX C500
 

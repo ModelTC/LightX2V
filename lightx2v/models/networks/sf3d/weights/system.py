@@ -67,7 +67,7 @@ class SF3D(BaseModule):
         self.bbox: Float[Tensor, "2 3"]
         self.register_buffer("bbox", torch.as_tensor([[-self.cfg.radius, -self.cfg.radius, -self.cfg.radius], [self.cfg.radius, self.cfg.radius, self.cfg.radius]], dtype=torch.float32))
         self.isosurface_helper = MarchingTetrahedraHelper(self.cfg.isosurface_resolution, self.cfg.tets_path)
-        self.baker = TextureBaker() if TextureBaker is not None and get_device() != "mlu" else None
+        self.baker = TextureBaker() if TextureBaker is not None else None
         if os.getenv("PLATFORM") == "metax_cuda":
             from lightx2v.models.networks.sf3d.utils.metax_texture_baker import MetaXTextureBaker
 
@@ -80,6 +80,12 @@ class SF3D(BaseModule):
             if self.baker is None:
                 raise ImportError("Ascend textured mesh generation requires the CPU texture_baker extension")
             self.baker = AscendTextureBaker(self.baker)
+        if get_device() == "mlu":
+            from lightx2v.models.networks.sf3d.utils.mlu import MLUTextureBaker
+
+            if self.baker is None:
+                raise ImportError("MLU textured mesh generation requires the CPU texture_baker extension; run scripts/sf3d/install_mlu.sh")
+            self.baker = MLUTextureBaker(self.baker)
         self.image_processor = ImageProcessor()
 
     def triplane_to_meshes(self, triplanes: Float[Tensor, "B 3 Cp Hp Wp"]) -> list[Mesh]:

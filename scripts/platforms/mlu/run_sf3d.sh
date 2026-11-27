@@ -8,7 +8,7 @@ save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/sf3d/result.
 
 if [[ "${1:-}" == "--help" ]]; then
   echo "Usage: MODEL_PATH=/local/weights PYTHON_BIN=python [INPUT_PATH=one-image] bash scripts/platforms/mlu/run_sf3d.sh [lightx2v.infer arguments]"
-  echo "Preparation: scripts/sf3d/README.md; MLU exports a geometry-only GLB"
+  echo "Preparation: scripts/sf3d/README.md; MLU exports a complete UV/PBR textured GLB"
   exit 0
 fi
 

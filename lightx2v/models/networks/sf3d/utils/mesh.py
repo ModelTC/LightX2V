@@ -28,6 +28,13 @@ class Mesh:
                 raise ImportError("Ascend textured mesh generation requires the CPU uv_unwrapper extension")
             self.unwrapper = AscendUnwrapper(self.unwrapper)
 
+        if v_pos.device.type == "mlu":
+            from lightx2v.models.networks.sf3d.utils.mlu import MLUUnwrapper
+
+            if self.unwrapper is None:
+                raise ImportError("MLU textured mesh generation requires the CPU uv_unwrapper extension; run scripts/sf3d/install_mlu.sh")
+            self.unwrapper = MLUUnwrapper(self.unwrapper)
+
     @property
     def v_nrm(self):
         if self._v_nrm is None:
