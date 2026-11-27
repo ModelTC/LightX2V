@@ -6,7 +6,20 @@
   },
   "native": {
     "repository": "https://github.com/Tencent-Hunyuan/HY-Motion-1.0.git",
-    "revision": "4e426f5a1021cbcf7f375458c37b840ee7225229"
+    "revision": "4e426f5a1021cbcf7f375458c37b840ee7225229",
+    "mlu_patches": [
+      {
+        "path": "hymotion/utils/type_converter.py",
+        "sha256": "abb336b4c1cca2aca61180ae206bd766a9b1e5a039688d231956e2faba967f2e",
+        "runtime_sha256": "00236bd4ce7d045d2aa494a09fbb9f8d9c80eddcef4adb1710eca52b0625d639",
+        "replacements": [
+          {
+            "before": "    if next(module.parameters()).is_cuda:",
+            "after": "    if next(module.parameters()).device.type == \"mlu\":\n        return next(module.parameters()).device\n\n    if next(module.parameters()).is_cuda:"
+          }
+        ]
+      }
+    ]
   },
   "momask": {
     "repo": "EricGuo5513/momask-codes",

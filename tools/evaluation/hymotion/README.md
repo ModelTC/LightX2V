@@ -161,3 +161,29 @@ interval. Missing/unknown inventory, partitions, foreign PIDs and observation
 gaps reject resource evidence. The local legacy MLU entry remains a measurement
 without this resource isolation claim. Native comparison is still a separately
 tracked capability; no BF16-versus-native exact equality is inferred.
+
+
+### Independent upstream native comparison on MLU
+
+The observed host entry requires an explicit `--backend lightx2v` or
+`--backend native`. Use a separate output directory for each backend and the
+same physical card for a model/dataset comparison. `paths.native_image` selects
+a separate native software environment; keep the A100 native model's
+Transformers version (SF3D 4.42.3, HY-Motion 4.53.3, SDXL 5.17.0) and install
+`runtime-requirements-native-mlu.txt` without replacing torch/torchvision or
+torch_mlu. The native model keeps its original precision, while the PR keeps
+its BF16/FP32 precision boundaries. They are separate precision experiments.
+
+`PLATFORM=cambricon_mlu ... prepare-sources --workspace ...` reconstructs the
+pinned sources. SF3D's explicit hashed source overlay adds MLU device selection,
+the original FP32 geometry/material scope and CPU UV transport. CPU UV and
+baking retain upstream algorithms. Use `prepare_runtime.py` to provision the
+same offline constructor paths as the A100 native adapter. HY-Motion prepares
+its original graph on CPU and then moves it to MLU without dtype conversion.
+Its hashed device-helper overlay recognizes MLU instead of misclassifying it as CPU.
+
+For completed full campaigns, `evaluate.py compare-mlu --dataset ...
+--native-run .../native --lightx2v-run .../lightx2v --output report.json` reports
+both qualities and the mean end-to-end latency ratio. It requires full coverage
+and valid host resource/cleanup evidence, and does not claim exact equality
+between native precision and PR BF16. Smoke results remain explicitly partial.

@@ -1,0 +1,4 @@
+# Separate environment; keep installed torch/torchvision/torch_mlu and numpy hardware pins.
+transformers==4.53.3
+torchdiffeq==0.2.5
+transforms3d==0.4.2
