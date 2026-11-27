@@ -280,7 +280,9 @@ class AvatarTransformerInfer(BaseTransformerInfer):
         num_cond_latents = condition["num_cond_latents"]
         video, audio = modulation
         if num_cond_latents:
-            video = torch.cat((video[:1].expand(num_cond_latents, -1), video[-1:].expand(tokens.shape[0] - num_cond_latents, -1)))
+            # Select the condition or noise row without specializing on either group having length one.
+            rows = (torch.arange(tokens.shape[0], device=tokens.device) >= num_cond_latents).long()
+            video = video.index_select(0, rows)
         shift, scale, gate, ffn_shift, ffn_scale, ffn_gate = video.chunk(6, dim=-1)
         normalized = modulate(tokens, shift, scale).flatten(0, 1)
         attended, positions = self._self_attn(normalized, condition, tokens.shape[1], weights.self_attn, strengths, layer_cache)

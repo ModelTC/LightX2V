@@ -12,6 +12,7 @@
   "cache_condition_kv": true,
   "attn_type": "flash_attn3",
   "use_compile": true,
+  "warmup": true,
   "vae_use_compile": true,
   "vae_decoder_channels_last_3d": true,
   "audio_vocal_separation": true,
