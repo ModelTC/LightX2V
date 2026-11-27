@@ -1,0 +1,8 @@
+# Supply a MetaX PyTorch/MACA development image with Python 3.10 and a C++ compiler.
+ARG METAX_BASE_IMAGE
+FROM ${METAX_BASE_IMAGE}
+WORKDIR /opt/lightx2v
+COPY . .
+RUN PYTHON_BIN=python3 bash scripts/sdxl/install_metax.sh
+ENV PLATFORM=metax_cuda DTYPE=BF16 PYTHONDONTWRITEBYTECODE=1
+CMD ["bash", "scripts/platforms/metax/run_sdxl.sh"]
