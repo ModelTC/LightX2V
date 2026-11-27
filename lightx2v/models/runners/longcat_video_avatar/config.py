@@ -68,5 +68,7 @@ def _validate_config(config):
         raise ValueError(f"parallel.seq_p_size must be a positive divisor of the {config['num_heads']} attention heads")
     if size > 1 and parallel.get("seq_p_attn_type", "ulysses") != "ulysses":
         raise ValueError("LongCat-Video-Avatar sequence parallelism requires parallel.seq_p_attn_type=ulysses")
-    if config["attn_type"] not in ("flash_attn2", "flash_attn3"):
-        raise ValueError("LongCat-Video-Avatar attn_type must be flash_attn2 or flash_attn3")
+    if parallel.get("seq_p_nvlink") and parallel.get("seq_p_quant_scheme") is not None:
+        raise ValueError("LongCat-Video-Avatar quantized Ulysses communication requires seq_p_nvlink=false")
+    if config["attn_type"] not in ("flash_attn2", "flash_attn3", "sage_attn2"):
+        raise ValueError("LongCat-Video-Avatar attn_type must be flash_attn2, flash_attn3 or sage_attn2")

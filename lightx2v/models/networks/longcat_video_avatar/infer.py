@@ -120,8 +120,23 @@ class AvatarSelfAttention:
         self.attention = ATTN_WEIGHT_REGISTER[attn_type]()
         self.num_shards = num_shards
 
-    def apply_ulysses(self, ulysses, group, q, k, v, **kwargs):
-        output, _ = ulysses.apply(q, k, v, attention_module=self, seq_p_group=group, attention_kwargs=kwargs)
+    def apply_ulysses(self, ulysses, group, parallel, q, k, v, **kwargs):
+        prepost_backend = parallel.get("seq_p_prepost_backend", "torch")
+        if prepost_backend == "triton":
+            # RoPE produces dense Q/K. V is still a view of the fused projection.
+            v = v.contiguous()
+        output, _ = ulysses.apply(
+            q,
+            k,
+            v,
+            attention_module=self,
+            seq_p_group=group,
+            prepost_backend=prepost_backend,
+            a2a_backend=parallel.get("seq_p_a2a_backend", "torch"),
+            quant_scheme=parallel.get("seq_p_quant_scheme"),
+            tensor_fusion=parallel.get("seq_p_tensor_fusion", False),
+            attention_kwargs=kwargs,
+        )
         return output
 
     def apply(self, q, k, v, frame_tokens, num_cond_latents, layer_cache=None, **kwargs):
@@ -170,6 +185,7 @@ class AvatarTransformerInfer(BaseTransformerInfer):
         num_shards = math.prod(spatial_split)
         grouped = get_self_attention(attn_type, num_shards)
         self.attention = grouped.attention
+        self.speaker_softmax_scale = None if attn_type == "sage_attn2" else 1.0
         if attention_group is None:
             self.self_attention = grouped.apply
         elif config["parallel"].get("seq_p_nvlink", False):
@@ -177,7 +193,7 @@ class AvatarTransformerInfer(BaseTransformerInfer):
 
             self.self_attention = partial(nvlink_self_attention, group_name=attention_group.group_name, size=num_shards, attn_type=attn_type)
         else:
-            self.self_attention = partial(grouped.apply_ulysses, ATTN_WEIGHT_REGISTER["ulysses"](), attention_group)
+            self.self_attention = partial(grouped.apply_ulysses, ATTN_WEIGHT_REGISTER["ulysses"](), attention_group, config["parallel"])
         self.attention_group = attention_group
         self.spatial_split = spatial_split
         self.rope = ROPE_REGISTER["torch_real_rope"](layout="interleaved", compute_dtype=torch.float32)
@@ -187,14 +203,16 @@ class AvatarTransformerInfer(BaseTransformerInfer):
 
     def _speaker_scores(self, q, reference_k, masks):
         head_dim = q.shape[-1]
-        q = q * head_dim**-0.5
+        # FlashAttention uses the release's prescaled queries. SageAttention2 scales inside its kernel.
+        if self.speaker_softmax_scale is not None:
+            q = q * head_dim**-0.5
         scores = []
         # Each V channel collects the attention mass of one region, shared across heads.
         for regions in masks.split(head_dim):
             num_regions = regions.shape[0]
             values = F.pad(regions.T, (0, head_dim - num_regions)).contiguous()
             values = values[:, None, :].expand_as(reference_k)
-            mass = self.attention.apply(q, reference_k, values, softmax_scale=1.0)
+            mass = self.attention.apply(q, reference_k, values, softmax_scale=self.speaker_softmax_scale)
             mass = mass.unflatten(-1, (2, self.num_heads // 2, head_dim))[..., :num_regions]
             group_scores = (mass / regions.sum(dim=1)).mean(dim=2)
             scores.append((group_scores[:, 0] + group_scores[:, 1]) / 2)
