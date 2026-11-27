@@ -256,6 +256,38 @@ def verify_generation_environment(actual):
         raise ValueError("Generation environment differs from the pinned runtime profile")
 
 
+def verify_ascend_generation_environment(metadata, resources):
+    """Check the NPU provenance actually recorded by its held host worker."""
+    actual = metadata.get("environment", {})
+    runtime = read_json(HERE / "configs/ascend_npu/runtime.json")
+    if (
+        metadata.get("platform") != "ascend_npu"
+        or metadata.get("backend") != "lightx2v"
+        or metadata.get("seed") != runtime["seed"]
+        or actual.get("platform") != "ascend_npu"
+        or actual.get("precision_policy") != runtime["precision_policy"]
+        or actual.get("request_hf32_conv") is not False
+        or actual.get("request_hf32_matmul") is not False
+        or not actual.get("torch_npu")
+        or not actual.get("device")
+    ):
+        raise ValueError("Invalid Ascend generation precision/platform provenance")
+    launched = resources.get("environment", {})
+    card = resources.get("physical_card")
+    if (
+        type(card) is not int or card < 0
+        or actual.get("visible_device") != str(card)
+        or not actual.get("physical_card", "").startswith("Ascend-")
+        or launched.get("ASCEND_PHYSICAL_CARD") != actual["physical_card"]
+        or launched.get("ASCEND_RT_VISIBLE_DEVICES") != str(card)
+        or launched.get("PLATFORM") != "ascend_npu"
+        or launched.get("DTYPE") != "BF16"
+        or launched.get("HF_HUB_OFFLINE") != "1"
+        or launched.get("OMP_NUM_THREADS") != runtime["generation_environment"]["OMP_NUM_THREADS"]
+    ):
+        raise ValueError("Ascend generation launch profile or physical device differs")
+
+
 def environment():
     import torch
 
@@ -428,7 +460,9 @@ def completed_runs(root, dataset, backend, verify_artifacts=True):
         versions.add((metadata["evaluation_sha256"], metadata["manifest_sha256"], metadata["weight_lock_sha256"], json.dumps(metadata["source_lock"], sort_keys=True)))
         if metadata["status"] != "COMPLETE":
             raise ValueError(f"Unfinished/failed chunk: {metadata_path}")
-        if metadata.get("platform") != "cambricon_mlu":
+        if metadata.get("platform") == "ascend_npu":
+            verify_ascend_generation_environment(metadata, read_json(metadata_path.parent / "resources.json"))
+        elif metadata.get("platform") != "cambricon_mlu":
             verify_generation_environment(metadata["environment"].get("generation_environment"))
         source_lock = read_json(HERE / "configs/mlu/source-lock.json") if metadata.get("platform") == "cambricon_mlu" else read_json(nvidia_config("source-lock.json"))
         if metadata["manifest_sha256"] != suite()["datasets"][dataset]["sha256"] or metadata["source_lock"] != source_lock:
