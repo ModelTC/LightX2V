@@ -1,13 +1,13 @@
 # hymotion original-project / LightX2V evaluation
 
-The MLU590 entry currently runs one frozen HumanML3D request through pinned inference PR #1752 and checks the saved NPZ for finite arrays. It is a functional smoke only. It does not score HumanML3D quality or produce latency evidence.
+The MLU590 entry runs all 4,384 frozen HumanML3D test motions through inference PR #1752 on one physical card, then computes the official feature metrics and per-request latency summary. The 4,198 evaluator-eligible references remain explicitly identified by the scoring protocol.
 
 ```bash
 cp tools/evaluation/hymotion/configs/mlu/paths.json tools/evaluation/hymotion/configs/mlu/paths.local.json
-# Replace the path placeholders, then run from the LightX2V repository root.
-PYTHON_BIN=/path/to/torch_mlu/python bash tools/evaluation/hymotion/scripts/platform/mlu/run_eval.sh \
+# Replace the path placeholders and set the assigned host card number.
+MLU_PHYSICAL_CARD=0 PYTHON_BIN=/path/to/torch_mlu/python bash tools/evaluation/hymotion/scripts/platform/mlu/run_eval.sh \
   --paths tools/evaluation/hymotion/configs/mlu/paths.local.json \
-  --output /absolute/new-smoke-directory
+  --output /absolute/results/hymotion-mlu --count 64
 ```
 
 This developer-only package calls the pinned original implementation and inference PR from `configs/nvidia/source-lock.json`. It does not copy model networks or modify the user-facing inference API. Each implementation runs the full frozen dataset once at batch size one.
