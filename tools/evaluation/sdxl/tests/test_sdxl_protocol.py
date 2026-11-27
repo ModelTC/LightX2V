@@ -35,7 +35,9 @@ class ProtocolTests(unittest.TestCase):
                 evaluation.completed_runs(root, dataset, "native")
 
     def test_other_platforms_fail_closed(self):
-        for platform in ("mlu", "metax", "ascend_npu"):
+        mlu = json.loads((ROOT / "configs" / "mlu" / "runtime.json").read_text())
+        self.assertEqual(mlu["status"], "smoke_ready")
+        for platform in ("metax", "ascend_npu"):
             value = json.loads((ROOT / "configs" / platform / "runtime.json").read_text())
             self.assertEqual(value["status"], "not_implemented")
 
