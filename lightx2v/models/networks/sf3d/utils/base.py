@@ -108,7 +108,12 @@ def dilate_fill(img, mask, iterations=10):
         fill_color = (mean_color * new_mask_unfold).view(1, 3 * 3 * 3, -1)
 
         mask_conv = F.conv2d(newMask, mask_kernel, padding=1)  # Get the sum for each kernel patch
-        newImg = F.fold(fill_color, (img.shape[-2], img.shape[-1]), (3, 3)) / mask_conv.clamp(1)
+        if fill_color.device.type == "npu":
+            from lightx2v.models.networks.sf3d.utils.ascend import fold2d
+
+            newImg = fold2d(fill_color, (img.shape[-2], img.shape[-1]), (3, 3)) / mask_conv.clamp(1)
+        else:
+            newImg = F.fold(fill_color, (img.shape[-2], img.shape[-1]), (3, 3)) / mask_conv.clamp(1)
 
         diffMask = newMask - oldMask
 

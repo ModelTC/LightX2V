@@ -74,6 +74,12 @@ class SF3D(BaseModule):
             if self.baker is None:
                 raise ImportError("MetaX textured mesh generation requires the CPU texture_baker extension")
             self.baker = MetaXTextureBaker(self.baker)
+        if os.getenv("PLATFORM") == "ascend_npu":
+            from lightx2v.models.networks.sf3d.utils.ascend import AscendTextureBaker
+
+            if self.baker is None:
+                raise ImportError("Ascend textured mesh generation requires the CPU texture_baker extension")
+            self.baker = AscendTextureBaker(self.baker)
         self.image_processor = ImageProcessor()
 
     def triplane_to_meshes(self, triplanes: Float[Tensor, "B 3 Cp Hp Wp"]) -> list[Mesh]:

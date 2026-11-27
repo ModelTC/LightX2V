@@ -34,7 +34,7 @@ def load_sf3d(config):
         raise FileNotFoundError("Prepare the fixed SF3D grid first: python scripts/sf3d/prepare_assets.py --model-path " + str(root))
     model = SF3D(cfg).eval()
     tensors = load_safetensors_from_path(str(root / "model.safetensors"))
-    device = "mlu" if config.get("device", "cuda").startswith("mlu") else "cuda"
+    device = config["device"] if config.get("device", "").startswith("npu") else ("mlu" if config.get("device", "cuda").startswith("mlu") else "cuda")
     dino = {k.removeprefix("image_tokenizer.model."): tensors.pop(k).to(device=device, dtype=torch.bfloat16) for k in list(tensors) if k.startswith("image_tokenizer.model.")}
     clip = {k.removeprefix("image_estimator.model.visual."): tensors.pop(k).to(device=device, dtype=torch.bfloat16) for k in list(tensors) if k.startswith("image_estimator.model.visual.")}
     # CLIP's text tower is stored in the training checkpoint but never used by

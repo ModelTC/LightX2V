@@ -124,7 +124,7 @@ def SF3D_generate_mesh(self, batch, bake_resolution: int) -> Tuple[List[trimesh.
     if self.image_estimator is not None:
         global_dict.update(self.image_estimator(batch["rgb_cond"] * batch["mask_cond"]))
     device = get_device()
-    with torch.no_grad(), torch.autocast(device_type=device, enabled=False) if "cuda" in device else nullcontext():
+    with torch.no_grad(), torch.autocast(device_type=device, enabled=False) if "cuda" in device or device == "npu" else nullcontext():
         scene_codes = scene_codes.float()
         meshes = self.triplane_to_meshes(scene_codes)
         if device == "mlu":

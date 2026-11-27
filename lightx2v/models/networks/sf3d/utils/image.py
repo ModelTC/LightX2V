@@ -19,6 +19,13 @@ def get_device():
             raise RuntimeError("PLATFORM=cambricon_mlu requires an available torch.mlu device")
         return "mlu"
 
+    if os.environ.get("PLATFORM") == "ascend_npu":
+        import torch_npu  # noqa: F401
+
+        if not torch.npu.is_available():
+            raise RuntimeError("PLATFORM=ascend_npu requires an available torch.npu device")
+        return "npu"
+
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda"

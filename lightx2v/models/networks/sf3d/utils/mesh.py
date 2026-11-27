@@ -21,6 +21,12 @@ class Mesh:
         self._v_tng: Float[Tensor, "Nv 3"] | None = None
         self._v_tex: Float[Tensor, "Nt 3"] | None = None
         self.unwrapper = Unwrapper() if Unwrapper is not None else None
+        if v_pos.device.type == "npu":
+            from lightx2v.models.networks.sf3d.utils.ascend import AscendUnwrapper
+
+            if self.unwrapper is None:
+                raise ImportError("Ascend textured mesh generation requires the CPU uv_unwrapper extension")
+            self.unwrapper = AscendUnwrapper(self.unwrapper)
 
     @property
     def v_nrm(self):

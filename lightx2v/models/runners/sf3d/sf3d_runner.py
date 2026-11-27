@@ -25,6 +25,8 @@ class SF3DRunner(BaseRunner):
             # does not make their CUDA accumulation order deterministic.
             os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
             torch.use_deterministic_algorithms(True)
+        elif self.device.type == "npu" and self.config.get("deterministic_algorithms", True):
+            torch.use_deterministic_algorithms(True)
         self.model = SF3DModel(self.config)
         self.background = rembg.new_session(providers=["CPUExecutionProvider"])
 

@@ -14,7 +14,7 @@ from .ops import Conv2d, LayerNorm, Linear, RMSNorm
 
 def load_tensors(directory, dtype=None, device=None, variant=None):
     if device is None:
-        device = "mlu" if os.getenv("PLATFORM") == "cambricon_mlu" else "cuda"
+        device = "npu" if os.getenv("PLATFORM") == "ascend_npu" else ("mlu" if os.getenv("PLATFORM") == "cambricon_mlu" else "cuda")
     directory = Path(directory)
     index = sorted(directory.glob("*.safetensors.index.json"))
     if index:
