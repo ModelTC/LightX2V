@@ -148,5 +148,45 @@
     "1024x1024 normal texture",
     "roughness and metallic factors"
   ],
-  "legacy_geometry_only_latency_comparable": false
+  "legacy_geometry_only_latency_comparable": false,
+  "texture_content_validation": {
+    "uv_range": [
+      [
+        0.003333333181217313,
+        0.006666660308837891
+      ],
+      [
+        0.9923669099807739,
+        0.996666669845581
+      ]
+    ],
+    "baseColorTexture": {
+      "shape": [
+        1024,
+        1024,
+        3
+      ],
+      "min": 0,
+      "max": 255,
+      "channel_std": [
+        73.02991056827747,
+        87.58865696931196,
+        51.05463368406637
+      ]
+    },
+    "normalTexture": {
+      "shape": [
+        1024,
+        1024,
+        3
+      ],
+      "min": 0,
+      "max": 255,
+      "channel_std": [
+        62.879170593887196,
+        64.98071793000292,
+        115.00724192607198
+      ]
+    }
+  }
 }
