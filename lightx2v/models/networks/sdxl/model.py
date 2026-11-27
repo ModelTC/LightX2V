@@ -13,6 +13,7 @@ from .weights import SDXLWeights
 class SDXLModel:
     def __init__(self, config):
         self.config = config
+        self.device = torch.device(config.get("device", "cuda"))
         self.weights = SDXLWeights(config["model_path"])
         root = Path(config["model_path"])
         self.tokenizers = [CLIPTokenizerFast.from_pretrained(root / name, local_files_only=True) for name in ("tokenizer", "tokenizer_2")]
@@ -23,7 +24,7 @@ class SDXLModel:
     def encode(self, text):
         hidden, pooled = [], None
         for tokenizer, infer, w in zip(self.tokenizers, self.text_infers, (self.weights.text_encoder, self.weights.text_encoder_2)):
-            ids = tokenizer([text], padding="max_length", max_length=77, truncation=True, return_tensors="pt").input_ids.cuda()
+            ids = tokenizer([text], padding="max_length", max_length=77, truncation=True, return_tensors="pt").input_ids.to(self.device)
             feature, pooled = infer.infer(w, ids)
             hidden.append(feature)
         return torch.cat(hidden, dim=-1), pooled
@@ -40,10 +41,10 @@ class SDXLModel:
             negative, negative_pooled = torch.zeros_like(positive), torch.zeros_like(pooled)
         context = torch.cat((negative, positive)) if do_cfg else positive
         pooled = torch.cat((negative_pooled, pooled)) if do_cfg else pooled
-        time_ids = torch.tensor([[height, width, 0, 0, height, width]], device="cuda", dtype=torch.float32).repeat(2 if do_cfg else 1, 1)
-        schedule = SDXLEulerScheduler(self.weights.scheduler_config, steps)
-        generator = torch.Generator(device="cuda").manual_seed(seed)
-        latents = torch.randn((1, 4, height // 8, width // 8), device="cuda", dtype=torch.float32, generator=generator)
+        time_ids = torch.tensor([[height, width, 0, 0, height, width]], device=self.device, dtype=torch.float32).repeat(2 if do_cfg else 1, 1)
+        schedule = SDXLEulerScheduler(self.weights.scheduler_config, steps, device=self.device)
+        generator = torch.Generator(device=self.device).manual_seed(seed)
+        latents = torch.randn((1, 4, height // 8, width // 8), device=self.device, dtype=torch.float32, generator=generator)
         latents = latents * schedule.init_noise_sigma
         for i, t in enumerate(schedule.timesteps):
             model_input = schedule.scale_model_input(torch.cat((latents, latents)) if do_cfg else latents, i)

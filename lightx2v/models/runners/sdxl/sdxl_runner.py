@@ -13,7 +13,7 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 @RUNNER_REGISTER("sdxl")
 class SDXLRunner(BaseRunner):
     def init_modules(self):
-        validate_a100_config(self.config)
+        self.device = validate_a100_config(self.config)
         self.model = SDXLModel(self.config)
 
     @torch.inference_mode()

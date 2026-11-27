@@ -19,7 +19,9 @@ bash scripts/platforms/nvidia/run_sdxl.sh
 默认 1024×1024、30 步 Euler、CFG=5、seed=42。支持 `--negative_prompt`、
 `--size HEIGHT WIDTH`，尺寸至少 128 且为 64 的倍数。
 
-A100 单卡已实现；MLU、MetaX、Ascend 脚本与 JSON 为明确占位。暂不支持
+A100 单卡已实现。MLU590 使用 torch.mlu 单卡入口，以 BF16 运行文本编码器和 UNet，VAE 与采样数值状态保留 FP32；使用 1024×1024、30 步 Euler、CFG=5 和 seed=42。运行
+`PLATFORM=cambricon_mlu MLU_VISIBLE_DEVICES=0 PYTHON_BIN=/path/to/torch_mlu/python bash scripts/platforms/mlu/run_sdxl.sh`。
+在已匹配 torch_mlu 与 torchvision 的环境中安装 `scripts/sdxl/requirements-mlu.txt`，不要运行 CUDA 专用的 `install_a100.sh`。MetaX、Ascend 脚本与 JSON 仍为占位。MLU590 实机 smoke 验证前，不应视为已验收。暂不支持
 refiner、LoRA、量化、并行、offload 或 feature cache。
 
 Both CLIP encoders use Transformers’ existing `CLIPTokenizerFast` implementation. Its Rust normalization matches the CLIP tokenizer used by the Transformers 5 CLIP tokenizer, including Unicode punctuation and literal HTML entities; the model does not maintain a separate tokenizer implementation.
