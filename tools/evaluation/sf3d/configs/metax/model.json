@@ -1,4 +1,21 @@
 {
-  "model": "sf3d",
-  "status": "not_implemented"
+  "model_cls": "sf3d",
+  "task": "i23d",
+  "implementation_status": "implemented",
+  "parallel": false,
+  "cpu_offload": false,
+  "feature_caching": "NoCaching",
+  "warmup": false,
+  "attn_type": "torch_sdpa",
+  "ln_norm_type": "torch",
+  "conv_type": "Default",
+  "dit_quant_scheme": "Default",
+  "bake_resolution": 1024,
+  "foreground_ratio": 0.85,
+  "enable_cfg": false,
+  "deterministic_algorithms": true,
+  "request_defaults": {
+    "seed": 42
+  },
+  "inference_dtype": "bf16"
 }

@@ -51,7 +51,7 @@ The comparison requires complete one-to-one coverage, verified resource isolatio
 
 `run.json`, per-sample JSONL, immutable final outputs and hashes, commands, environments, original-source pins, resource samples and PID/start-tick/task cleanup records are retained outside git. `quality.json`, `latency.json` and `comparison.json` are generated from checked complete coverage. Large artifacts, datasets, weights, upstream repositories and local absolute paths never enter this PR. Sanitized full-run summaries may be published under `results/nvidia/` only after actual validation. CPU tests: `python -m unittest discover -s "$EVAL/tests"`.
 
-NVIDIA A100 wiring is implemented. MLU, MetaX and Ascend NPU are explicit placeholders whose launchers exit 2; see PLATFORMS.md. No target-device results are inferred from A100.
+NVIDIA A100 wiring is implemented. MetaX C500 is documented below; see PLATFORMS.md for the other platform entries. No target-device results are inferred from A100.
 
 Resource completion uses an explicit worker/controller acknowledgement: after all work and outputs complete, the worker retains its PID until capture obtains a post-workload sample. Process/CUDA teardown then occurs with separate cleanup verification. This prevents disappearing /proc lineage at interpreter exit from being mistaken for a competing process; unknown lineage within the measured workload still fails. The acknowledgement wait is outside per-input end-to-end latency.
 
@@ -79,3 +79,22 @@ or cross-precision latency-ratio claim. Quality metric networks and dataset
 selection are unchanged; retained FP32 inference operations are recorded in
 `precision_policy`. `--backend` also selects a single backend in the default
 profile; omitting it preserves the original serial two-backend comparison.
+
+## MetaX C500
+
+The MetaX entry evaluates the pinned BF16 LightX2V adapter on GSO (1,023 inputs). It reuses the frozen manifests, model requests, quality functions and request timing boundary. Each dataset stays on one physical card. SF3D includes full UV and PBR texture baking through the inference adapter's original CPU texture extension.
+
+Run the controller on a host with Docker, `mx-smi` and a compatible C500 driver. Provision an inference image with the matching model PR's MetaX installer and install `configs/metax/requirements.txt` in its metric environment. The controller uses `--image` or the image in `configs/metax/runtime.json`. Copy `configs/metax/paths.json` to a local paths file and replace its absolute paths. Every container mount listed in `mounts` is read-only, with `output_root` mounted writable. Preserve the same absolute paths inside the containers.
+
+```bash
+PYTHON_BIN=python3 bash tools/evaluation/sf3d/scripts/platform/metax/run_eval.sh \
+  --paths /absolute/paths.local.json --dataset gso \
+  --card 0 --output /absolute/results/new-run
+# Add --smoke in a separate directory to verify generation and actual scoring.
+```
+
+The resource observer runs as a non-root user in the host PID namespace, with a read-only filesystem and all capabilities dropped. It receives only its output directory, telemetry executable, driver library and read-only observation source. The host controller launches dedicated workers, collects before/after samples, acknowledges completion while the worker PID is alive, and verifies cleanup. Resource or coverage failures stop the campaign and preserve evidence. Resume accepts complete verified chunks with identical source, image, configuration, paths and card identity.
+
+The smoke plan uses one geometry/CLIPScore input, six GenEval prompts covering its six dimensions, or enough HumanML3D references for the unchanged 300-pair diversity metric. Smoke summaries explicitly retain the formal fixture count. Full summaries contain every frozen input, quality metrics, mean/median/P95 end-to-end latency, source/image fingerprints and resource evidence.
+
+Build the metric environment with `docker build --build-arg INFERENCE_IMAGE=<model-metax-image> -f tools/evaluation/sf3d/scripts/platform/metax/Dockerfile.metrics -t lightx2v-metax-metrics:20261127 .` and set `metric_image` in the local paths file. The metric image fixes the SDK OpenMP runtime for its dependencies.

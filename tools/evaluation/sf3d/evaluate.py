@@ -17,6 +17,8 @@ MODEL = "sf3d"
 
 def nvidia_config(name):
     """Keep the original parity profile and BF16 measurements separate."""
+    if os.environ.get("PLATFORM") == "metax_cuda":
+        return HERE / "configs/metax" / name
     profile = os.environ.get("LIGHTX2V_EVAL_PRECISION_PROFILE", "native")
     if profile not in ("native", "bf16"):
         raise ValueError("LIGHTX2V_EVAL_PRECISION_PROFILE must be native or bf16")
@@ -237,6 +239,16 @@ def environment():
             "physical_card": os.getenv("MLU_PHYSICAL_CARD", "unknown"),
             "torch_mlu": importlib.metadata.version("torch_mlu"),
             "deterministic": torch.are_deterministic_algorithms_enabled(),
+        }
+    if os.getenv("PLATFORM") == "metax_cuda":
+        return {
+            "python": sys.executable, "versions": versions, "platform": "metax_cuda",
+            "gpu": torch.cuda.get_device_name(0), "cuda": torch.version.cuda,
+            "physical_card": os.environ["METAX_PHYSICAL_CARD"],
+            "visible_device": os.environ["CUDA_VISIBLE_DEVICES"],
+            "deterministic": torch.are_deterministic_algorithms_enabled(),
+            "tf32_matmul": torch.backends.cuda.matmul.allow_tf32,
+            "tf32_cudnn": torch.backends.cudnn.allow_tf32,
         }
     return {
         "python": sys.executable,
@@ -1028,7 +1040,7 @@ def geometry_scores(prediction, reference):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign", "campaign-mlu"])
+    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign", "campaign-mlu", "campaign-metax", "score-metax-smoke"])
     parser.add_argument("--paths", type=Path)
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--dataset", choices=list(suite()["datasets"]))
@@ -1043,6 +1055,9 @@ def main():
     parser.add_argument("--p95-ratio", type=float, default=1.5)
     parser.add_argument("--gpu")
     parser.add_argument("--skip-score", action="store_true")
+    parser.add_argument("--card", type=int)
+    parser.add_argument("--image")
+    parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args()
     if os.environ.get("LIGHTX2V_EVAL_PRECISION_PROFILE") == "bf16":
         if args.command == "compare" or args.backend == "native":
@@ -1060,6 +1075,16 @@ def main():
         campaign(args, paths)
     elif args.command == "campaign-mlu":
         campaign_mlu(args, paths)
+    elif args.command == "campaign-metax":
+        sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+        from metax_campaign import run_campaign
+
+        run_campaign(sys.modules[__name__], args, paths)
+    elif args.command == "score-metax-smoke":
+        sys.path.insert(0, str(HERE.parents[1] / "runtime"))
+        from metax_campaign import score_smoke
+
+        score_smoke(sys.modules[__name__], args, paths)
     elif args.command == "run":
         generate(args, paths)
     elif args.command == "score":
