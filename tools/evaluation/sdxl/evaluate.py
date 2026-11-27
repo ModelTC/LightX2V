@@ -203,7 +203,20 @@ def seed_all():
     random.seed(42)
     np.random.seed(42)
     torch.manual_seed(42)
-    torch.cuda.manual_seed_all(42)
+    (torch.mlu if os.getenv("PLATFORM") == "cambricon_mlu" else torch.cuda).manual_seed_all(42)
+
+
+def runtime_device(torch):
+    if os.getenv("PLATFORM") == "cambricon_mlu":
+        import torch_mlu
+        if not torch.mlu.is_available() or torch.mlu.device_count() != 1:
+            raise RuntimeError("MLU evaluation requires exactly one visible MLU device")
+        return torch.device("mlu")
+    return torch.device("cuda")
+
+
+def synchronize(torch):
+    (torch.mlu if os.getenv("PLATFORM") == "cambricon_mlu" else torch.cuda).synchronize()
 
 
 def generation_environment(gpu):
@@ -234,6 +247,11 @@ def environment():
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             pass
+    if os.getenv("PLATFORM") == "cambricon_mlu":
+        return {"python": sys.executable, "versions": versions, "platform": "cambricon_mlu",
+                "device": torch.mlu.get_device_name(0), "physical_card": os.getenv("MLU_PHYSICAL_CARD", "unknown"),
+                "torch_mlu": importlib.metadata.version("torch_mlu"), "deterministic": torch.are_deterministic_algorithms_enabled(),
+                "cpu_threads": torch.get_num_threads()}
     return {
         "python": sys.executable,
         "versions": versions,
@@ -256,15 +274,18 @@ def generate(args, paths):
 
     if args.count < 1 or args.start < 0:
         raise ValueError("Invalid chunk")
-    if torch.cuda.device_count() != 1 or not os.environ.get("CUDA_VISIBLE_DEVICES"):
+    device = runtime_device(torch)
+    if device.type == "cuda" and (torch.cuda.device_count() != 1 or not os.environ.get("CUDA_VISIBLE_DEVICES")):
         raise RuntimeError("Exactly one explicitly visible GPU is required")
-    verify_generation_environment({key: os.environ.get(key) for key in read_json(nvidia_config("runtime.json"))["generation_environment"]})
+    if device.type == "mlu" and os.environ.get("MLU_VISIBLE_DEVICES") != "0":
+        raise RuntimeError("The MLU container must expose exactly one remapped device")
+    if device.type == "cuda":
+        verify_generation_environment({key: os.environ.get(key) for key in read_json(nvidia_config("runtime.json"))["generation_environment"]})
     torch.set_grad_enabled(False)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-    if MODEL == "sf3d":
-        torch.use_deterministic_algorithms(True)
-    source_lock = read_json(nvidia_config("source-lock.json"))
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+    source_lock = read_json(HERE / "configs/mlu/source-lock.json") if device.type == "mlu" else read_json(nvidia_config("source-lock.json"))
     key = "lightx2v" if args.backend == "lightx2v" else "native"
     if key in source_lock and "repository" in source_lock[key]:
         verify_source(Path(paths[key]), source_lock[key])
@@ -286,6 +307,7 @@ def generate(args, paths):
         "model": MODEL,
         "dataset": args.dataset,
         "backend": args.backend,
+        "platform": os.getenv("PLATFORM", "cuda"),
         "start": args.start,
         "count": len(selected),
         "seed": 42,
@@ -302,17 +324,18 @@ def generate(args, paths):
     seed_all()
     load_start = time.perf_counter()
     adapter = load_adapter(args.backend, paths)
-    torch.cuda.synchronize()
+    synchronize(torch)
     provenance["load_s"] = time.perf_counter() - load_start
     provenance["environment"] = environment()
-    verify_generation_environment(provenance["environment"]["generation_environment"])
+    if device.type == "cuda":
+        verify_generation_environment(provenance["environment"]["generation_environment"])
     # A separate synthetic/upstream demo input never contributes to dataset coverage.
     warmup = output / "warmup"
     warmup.mkdir()
     seed_all()
     with torch.inference_mode():
         adapter(warmup_input(paths), warmup / ("output." + EXTENSION))
-    torch.cuda.synchronize()
+    synchronize(torch)
     failed = 0
     with (output / "samples.jsonl").open("x") as log:
         for index, fixture in enumerate(selected, args.start):
@@ -320,8 +343,8 @@ def generate(args, paths):
             directory.mkdir()
             artifact = directory / ("output." + EXTENSION)
             seed_all()
-            torch.cuda.synchronize()
-            torch.cuda.reset_peak_memory_stats()
+            synchronize(torch)
+            (torch.mlu if device.type == "mlu" else torch.cuda).reset_peak_memory_stats()
             started = time.perf_counter()
             record = {"id": fixture["id"], "index": index, "status": "FAILED"}
             try:
@@ -334,13 +357,13 @@ def generate(args, paths):
                     adapter(request, artifact)
                 with artifact.open("rb") as stream:
                     os.fsync(stream.fileno())
-                torch.cuda.synchronize()
+                synchronize(torch)
                 record["e2e_latency_s"] = time.perf_counter() - started
-                record["peak_vram_bytes"] = torch.cuda.max_memory_allocated()
+                record["peak_device_memory_bytes"] = (torch.mlu if device.type == "mlu" else torch.cuda).max_memory_allocated()
                 record.update(validate_output(artifact, fixture))
                 record.update(status="SUCCESS", artifact=str(artifact.relative_to(output)), sha256=sha256(artifact))
             except Exception as error:
-                torch.cuda.synchronize()
+                synchronize(torch)
                 record.update(error=f"{type(error).__name__}: {error}", elapsed_until_failure_s=time.perf_counter() - started)
                 failed += 1
             log.write(json.dumps(record, allow_nan=False) + "\n")
@@ -348,6 +371,9 @@ def generate(args, paths):
             print(json.dumps({"index": index, "id": fixture["id"], "status": record["status"]}), flush=True)
     provenance.update(status="COMPLETE" if not failed else "FAILED", failed=failed)
     write_json(output / "run.json", provenance)
+    close = getattr(adapter, "close", None)
+    if close is not None:
+        close()
     if failed:
         raise RuntimeError(f"{failed} failed requests; retained in denominator")
 
@@ -363,12 +389,18 @@ def completed_runs(root, dataset, backend, verify_artifacts=True):
         versions.add((metadata["evaluation_sha256"], metadata["manifest_sha256"], metadata["weight_lock_sha256"], json.dumps(metadata["source_lock"], sort_keys=True)))
         if metadata["status"] != "COMPLETE":
             raise ValueError(f"Unfinished/failed chunk: {metadata_path}")
-        verify_generation_environment(metadata["environment"].get("generation_environment"))
-        if metadata["manifest_sha256"] != suite()["datasets"][dataset]["sha256"] or metadata["source_lock"] != read_json(nvidia_config("source-lock.json")):
+        if metadata.get("platform") != "cambricon_mlu":
+            verify_generation_environment(metadata["environment"].get("generation_environment"))
+        source_lock = read_json(HERE / "configs/mlu/source-lock.json") if metadata.get("platform") == "cambricon_mlu" else read_json(nvidia_config("source-lock.json"))
+        if metadata["manifest_sha256"] != suite()["datasets"][dataset]["sha256"] or metadata["source_lock"] != source_lock:
             raise ValueError("Execution used a different dataset or source lock")
-        resources = read_json(metadata_path.parent / "resources.json")
-        if not resources["resources_clear"] or not resources.get("task_cleanup_verified") or resources.get("returncode") != 0:
-            raise ValueError("Unverified resources or cleanup; latency inadmissible")
+        if metadata.get("platform") == "cambricon_mlu":
+            if metadata.get("backend") != "lightx2v" or not metadata.get("environment", {}).get("physical_card"):
+                raise ValueError("MLU run lacks its physical single-card identity")
+        else:
+            resources = read_json(metadata_path.parent / "resources.json")
+            if not resources["resources_clear"] or not resources.get("task_cleanup_verified") or resources.get("returncode") != 0:
+                raise ValueError("Unverified resources or cleanup; latency inadmissible")
         output_rows = rows(metadata_path.parent / "samples.jsonl")
         if len(output_rows) != metadata["count"]:
             raise ValueError("Missing chunk records")
@@ -379,7 +411,7 @@ def completed_runs(root, dataset, backend, verify_artifacts=True):
             if verify_artifacts and sha256(path) != record["sha256"]:
                 raise ValueError("Modified output artifact")
             record["path"] = str(path)
-            record["gpu"] = metadata["environment"]["visible_device"]
+            record["gpu"] = metadata["environment"].get("physical_card", metadata["environment"].get("visible_device", "unknown"))
             indexed[record["id"]] = record
     if len(versions) != 1 or set(indexed) != {entry["id"] for entry in expected}:
         raise ValueError("Incomplete coverage or mixed source/fixture versions")
@@ -791,6 +823,52 @@ def campaign(args, paths):
     compare(args)
 
 
+def campaign_mlu(args, paths):
+    import argparse as _argparse
+    if os.getenv("PLATFORM") != "cambricon_mlu" or args.backend != "lightx2v":
+        raise RuntimeError("MLU campaign requires PLATFORM=cambricon_mlu and backend=lightx2v")
+    if not 1 <= args.count <= 256:
+        raise ValueError("Chunk size must be in [1,256]")
+    check_inputs(paths)
+    records = inputs(args.dataset)
+    root = args.output.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    identity = {"model": MODEL, "dataset": args.dataset, "count": len(records), "chunk_size": args.count,
+                "platform": "cambricon_mlu", "physical_card": os.getenv("MLU_PHYSICAL_CARD", "unknown"),
+                "evaluation_sha256": sha256(__file__), "manifest_sha256": suite()["datasets"][args.dataset]["sha256"],
+                "source_lock": read_json(HERE / "configs/mlu/source-lock.json"), "paths": paths}
+    identity_path = root / "campaign.json"
+    if identity_path.exists() and read_json(identity_path) != identity:
+        raise ValueError("Resume identity differs; use a new output directory")
+    if not identity_path.exists():
+        write_json(identity_path, identity)
+    chunks = root / "chunks"
+    chunks.mkdir(exist_ok=True)
+    for start in range(0, len(records), args.count):
+        stop = min(len(records), start + args.count)
+        chunk = chunks / f"{start:06d}"
+        if (chunk / "run.json").exists():
+            metadata = read_json(chunk / "run.json")
+            if metadata.get("status") != "COMPLETE" or metadata.get("start") != start or metadata.get("count") != stop-start:
+                raise ValueError(f"Existing incomplete chunk requires investigation: {chunk}")
+            continue
+        generate(_argparse.Namespace(dataset=args.dataset, backend="lightx2v", start=start, count=stop-start, output=chunk), paths)
+        print(json.dumps({"dataset": args.dataset, "completed": stop, "total": len(records)}), flush=True)
+    expected, generated = completed_runs(root, args.dataset, "lightx2v")
+    quality = score(expected, generated, paths, root)
+    latency = latency_summary(generated)
+    write_json(root / "quality.json", quality)
+    write_json(root / "latency.json", latency)
+    write_json(root / "quality-provenance.json", {"evaluation_sha256": sha256(__file__),
+        "source_lock_sha256": sha256(HERE / "configs/mlu/source-lock.json"),
+        "weight_lock_sha256": sha256(HERE / "configs/common/weight-lock.json"),
+        "manifest_sha256": suite()["datasets"][args.dataset]["sha256"],
+        "quality_sha256": sha256(root / "quality.json"),
+        "outputs_sha256": hashlib.sha256(json.dumps([(item["id"], generated[item["id"]]["sha256"]) for item in expected]).encode()).hexdigest(),
+        "physical_card": os.getenv("MLU_PHYSICAL_CARD", "unknown")})
+    write_json(root / "campaign.json", {**identity, "status": "COMPLETE", "quality": quality, "latency": latency})
+
+
 EXTENSION = "png"
 
 
@@ -802,11 +880,13 @@ def load_adapter(backend, paths):
     import torch
 
     if backend == "lightx2v":
+        if os.getenv("PLATFORM") == "cambricon_mlu" and not os.getenv("MLU_PHYSICAL_CARD"):
+            raise ValueError("Set MLU_PHYSICAL_CARD to the assigned host card")
         sys.path.insert(0, paths["lightx2v"])
         from lightx2v.models.runners.runner_factory import build_runner
         from lightx2v.utils.set_config import build_startup_config
 
-        config = read_json(nvidia_config("model.json"))
+        config = read_json(HERE / "configs/mlu/model.json") if os.getenv("PLATFORM") == "cambricon_mlu" else read_json(nvidia_config("model.json"))
         config["model_path"] = paths["weights"]
         runner = build_runner(build_startup_config(config))
 
@@ -814,12 +894,14 @@ def load_adapter(backend, paths):
             request = dict(prompt=item["prompt"], seed=42, size=[1024, 1024], save_result_path=str(artifact))
             runner.run_request(runner.prepare_request(request))
 
+        infer.close = runner.close
         return infer
     from diffusers import StableDiffusionXLPipeline
 
     if importlib.metadata.version("diffusers") != "0.40.0":
         raise ValueError("Native Diffusers must match pinned 0.40.0")
-    pipeline = StableDiffusionXLPipeline.from_pretrained(paths["weights"], variant="fp16", torch_dtype=torch.float16, use_safetensors=True, local_files_only=True).to("cuda")
+    device = runtime_device(torch)
+    pipeline = StableDiffusionXLPipeline.from_pretrained(paths["weights"], variant="fp16", torch_dtype=torch.float16, use_safetensors=True, local_files_only=True).to(device)
     pipeline.set_progress_bar_config(disable=True)
 
     def require_finite(module, inputs, output):
@@ -829,7 +911,7 @@ def load_adapter(backend, paths):
     pipeline.vae.decoder.register_forward_hook(require_finite)
 
     def infer(item, artifact):
-        image = pipeline(prompt=item["prompt"], num_inference_steps=30, guidance_scale=5.0, generator=torch.Generator(device="cuda").manual_seed(42), height=1024, width=1024).images[0]
+        image = pipeline(prompt=item["prompt"], num_inference_steps=30, guidance_scale=5.0, generator=torch.Generator(device=device).manual_seed(42), height=1024, width=1024).images[0]
         image.save(artifact)
 
     return infer
@@ -861,15 +943,29 @@ def score(expected, generated, paths, output):
             (sample / "0.png").symlink_to(Path(generated[item["id"]]["path"]))
         report = output / "geneval-scores.jsonl"
         repo = Path(paths["geneval"])
-        verify_source(repo, read_json(nvidia_config("source-lock.json"))["geneval"])
+        geneval_lock = (read_json(HERE / "configs/mlu/source-lock.json") if os.getenv("PLATFORM") == "cambricon_mlu" else read_json(nvidia_config("source-lock.json")))["geneval"]
+        if os.getenv("PLATFORM") == "cambricon_mlu":
+            actual_revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            if actual_revision != geneval_lock["revision"]:
+                raise ValueError("Geneval source revision differs from its MLU lock")
+        verify_source(repo, geneval_lock)
         # The official CLI has no CLIP cache option. Route this constructor's
         # existing cache_dir parameter without changing evaluator mathematics.
-        launcher = """import functools, runpy, sys, open_clip
+        launcher = """import functools, inspect, runpy, sys, open_clip
 cache, script, *arguments = sys.argv[1:]
-open_clip.create_model_and_transforms = functools.partial(open_clip.create_model_and_transforms, cache_dir=cache)
+create_model = open_clip.create_model_and_transforms
+def create_model_compat(*args, **kwargs):
+    if "weights_only" not in inspect.signature(create_model).parameters:
+        kwargs.pop("weights_only", None)
+    return create_model(*args, **kwargs)
+open_clip.create_model_and_transforms = functools.partial(create_model_compat, cache_dir=cache)
 sys.argv = [script, *arguments]
 runpy.run_path(script, run_name='__main__')
 """
+        geneval_env = dict(os.environ)
+        geneval_env["PYTHONPATH"] = os.pathsep.join(filter(None, [
+            paths["geneval_configs"], paths.get("geneval_vendor", ""), geneval_env.get("PYTHONPATH", "")
+        ]))
         subprocess.run(
             [
                 paths["geneval_python"],
@@ -882,11 +978,13 @@ runpy.run_path(script, run_name='__main__')
                 str(report.resolve()),
                 "--model-path",
                 paths["geneval_weights"],
-                "--model-config",
+            "--model-config",
                 paths["geneval_config"],
+            "--device", "mlu" if os.getenv("PLATFORM") == "cambricon_mlu" else "cuda",
             ],
             check=True,
             timeout=3300,
+            env=geneval_env,
         )
         entries = rows(report)
         if len(entries) != len(expected) or len({entry["filename"] for entry in entries}) != len(expected):
@@ -903,14 +1001,15 @@ runpy.run_path(script, run_name='__main__')
     from PIL import Image
     from transformers import CLIPModel, CLIPProcessor
 
-    model = CLIPModel.from_pretrained(paths["clip"], torch_dtype=torch.float32, local_files_only=True).cuda().eval()
+    device = runtime_device(torch)
+    model = CLIPModel.from_pretrained(paths["clip"], torch_dtype=torch.float32, local_files_only=True).to(device).eval()
     processor = CLIPProcessor.from_pretrained(paths["clip"], local_files_only=True)
     values = []
     with (output / "clip-scores.jsonl").open("x") as log, torch.inference_mode():
         for item in expected:
             with Image.open(generated[item["id"]]["path"]) as image:
                 tensors = processor(text=[item["prompt"]], images=[image.convert("RGB")], return_tensors="pt", padding=True, truncation=True, max_length=77)
-            result = model(**{key: value.cuda() for key, value in tensors.items()})
+            result = model(**{key: value.to(device) for key, value in tensors.items()})
             cosine = float((result.image_embeds.float() * result.text_embeds.float()).sum(-1).item())
             if not np.isfinite(cosine):
                 raise ValueError("Non-finite CLIP score")
@@ -921,7 +1020,7 @@ runpy.run_path(script, run_name='__main__')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign"])
+    parser.add_argument("command", choices=["prepare-sources", "check-inputs", "run", "score", "compare", "campaign", "campaign-mlu"])
     parser.add_argument("--paths", type=Path)
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--dataset", choices=list(suite()["datasets"]))
@@ -959,6 +1058,8 @@ def main():
         check_inputs(paths)
     elif args.command == "campaign":
         campaign(args, paths)
+    elif args.command == "campaign-mlu":
+        campaign_mlu(args, paths)
     elif args.command == "run":
         generate(args, paths)
     elif args.command == "score":

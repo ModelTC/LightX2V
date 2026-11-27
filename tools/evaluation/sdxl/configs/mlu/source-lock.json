@@ -3,5 +3,19 @@
     "repository": "https://github.com/ModelTC/LightX2V.git",
     "revision": "954a4b89c74fe08cadd7305aede97fae901d35d6",
     "pull_request": 1754
+  },
+  "geneval": {
+    "repo": "djghosh13/geneval",
+    "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+    "files": [
+      {
+        "path": "evaluation/evaluate_images.py",
+        "sha256": "f767660eeee7d2fc399912dbd0263c1cd9f945cb2b14bb4676054ee8a317f827"
+      },
+      {
+        "path": "evaluation/summary_scores.py",
+        "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+      }
+    ]
   }
 }
