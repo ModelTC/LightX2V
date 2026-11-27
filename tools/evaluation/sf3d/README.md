@@ -48,3 +48,20 @@ NVIDIA telemetry, worker logs and completion acknowledgements use local `/tmp` d
 For bounded minimal NVML acquisition, install `nvidia-ml-py==12.550.52` in a separate Python environment, export `LIGHTX2V_EVAL_RESOURCE_BACKEND=nvml` and `LIGHTX2V_EVAL_RESOURCE_PYTHON=/absolute/monitor-env/bin/python`. The shared `tools/runtime/nvml_capture.py` calls the pinned inference source’s existing `gpu_watch` capture/check and ancestry policy. It reads UUID, memory, utilization, compute/graphics and MPS inventories; missing APIs, MIG or MPS fail closed. The 2.5 s query budget and 3 s maximum gap are unchanged. Include that shared file when copying this evaluation package. The default XML backend needs no extra binding.
 
 Generation workers initialize their single visible CUDA primary context before CPU model preparation. This reduces the window in which another automatic device selector can mistake the loading worker for an idle card. Resource attribution and early/late samples still apply; model preparation remains outside request timing.
+
+## BF16 inference profile
+
+Set `LIGHTX2V_EVAL_PRECISION_PROFILE=bf16` and pass `campaign --backend lightx2v`
+to evaluate the updated inference PR with `configs/nvidia/bf16/` source/model/runtime
+locks. Use a new result directory and a local paths file without `worker_script`.
+`prepare-sources`, `check-inputs`, `run` and `score` select the same profile via
+that environment variable. The original default profile and its source locks remain
+available for reproducing the earlier native-precision comparison.
+
+The BF16 campaign generates each complete frozen dataset once and produces
+`summary.json`, per-input output/timing records, quality metrics and resource
+evidence. It runs no native-precision generation and makes no exact-output parity
+or cross-precision latency-ratio claim. Quality metric networks and dataset
+selection are unchanged; retained FP32 inference operations are recorded in
+`precision_policy`. `--backend` also selects a single backend in the default
+profile; omitting it preserves the original serial two-backend comparison.
