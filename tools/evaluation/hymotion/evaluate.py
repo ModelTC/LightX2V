@@ -15,6 +15,56 @@ HERE = Path(__file__).resolve().parent
 MODEL = "hymotion"
 
 
+def nvidia_config(name):
+    """Keep the original parity profile and BF16 measurements separate."""
+    profile = os.environ.get("LIGHTX2V_EVAL_PRECISION_PROFILE", "native")
+    if profile not in ("native", "bf16"):
+        raise ValueError("LIGHTX2V_EVAL_PRECISION_PROFILE must be native or bf16")
+    directory = HERE / "configs/nvidia"
+    return (directory / "bf16" if profile == "bf16" else directory) / name
+
+
+def campaign_backends(args):
+    backend = getattr(args, "backend", None)
+    if os.environ.get("LIGHTX2V_EVAL_PRECISION_PROFILE") == "bf16" and backend != "lightx2v":
+        raise ValueError("The BF16 profile requires campaign --backend lightx2v; native precision is a different experiment")
+    return (backend,) if backend else ("native", "lightx2v")
+
+
+def single_backend_summary(root, dataset, backend):
+    """Full quality/latency report, without claiming cross-precision equality."""
+    expected, generated = completed_runs(root / backend, dataset, backend)
+    quality_path = root / backend / "quality.json"
+    provenance = read_json(root / backend / "quality-provenance.json")
+    resource = read_json(root / "resources" / f"{backend}-score" / "resources.json")
+    if not resource.get("resources_clear") or not resource.get("task_cleanup_verified") or resource.get("returncode") != 0:
+        raise ValueError("Quality execution resources or cleanup are unverified")
+    if provenance["quality_sha256"] != sha256(quality_path) or provenance["source_lock_sha256"] != sha256(nvidia_config("source-lock.json")):
+        raise ValueError("Quality result/source provenance differs")
+    output_digest = hashlib.sha256(json.dumps([(item["id"], generated[item["id"]]["sha256"]) for item in expected]).encode()).hexdigest()
+    if provenance["outputs_sha256"] != output_digest:
+        raise ValueError("Scored output set differs from the complete generated set")
+    result = {
+        "status": "COMPLETE",
+        "model": MODEL,
+        "dataset": dataset,
+        "backend": backend,
+        "precision_profile": os.environ.get("LIGHTX2V_EVAL_PRECISION_PROFILE", "native"),
+        "precision_policy": read_json(nvidia_config("runtime.json")).get("precision_policy"),
+        "coverage": len(generated),
+        "repetitions": 1,
+        "gpu": next(iter(generated.values()))["gpu"],
+        "source_lock": read_json(nvidia_config("source-lock.json")),
+        "quality": read_json(quality_path),
+        "latency": latency_summary(generated),
+        "resources_clear": True,
+        "task_cleanup_verified": True,
+        "cross_precision_exact_alignment_claimed": False,
+    }
+    write_json(root / "summary.json", result)
+    print(json.dumps(result, indent=2), flush=True)
+
+
 def read_json(path):
     return json.loads(Path(path).read_text())
 
@@ -81,7 +131,7 @@ def verify_source(root, specification):
 
 def prepare_sources(destination):
     destination.mkdir(parents=True, exist_ok=True)
-    for name, specification in read_json(HERE / "configs/nvidia/source-lock.json").items():
+    for name, specification in read_json(nvidia_config("source-lock.json")).items():
         if "files" in specification:
             import re
             import urllib.request
@@ -190,7 +240,7 @@ def generate(args, paths):
     torch.backends.cudnn.deterministic = True
     if MODEL == "sf3d":
         torch.use_deterministic_algorithms(True)
-    source_lock = read_json(HERE / "configs/nvidia/source-lock.json")
+    source_lock = read_json(nvidia_config("source-lock.json"))
     key = "lightx2v" if args.backend == "lightx2v" else "native"
     if key in source_lock and "repository" in source_lock[key]:
         verify_source(Path(paths[key]), source_lock[key])
@@ -288,7 +338,7 @@ def completed_runs(root, dataset, backend, verify_artifacts=True):
         versions.add((metadata["evaluation_sha256"], metadata["manifest_sha256"], metadata["weight_lock_sha256"], json.dumps(metadata["source_lock"], sort_keys=True)))
         if metadata["status"] != "COMPLETE":
             raise ValueError(f"Unfinished/failed chunk: {metadata_path}")
-        if metadata["manifest_sha256"] != suite()["datasets"][dataset]["sha256"] or metadata["source_lock"] != read_json(HERE / "configs/nvidia/source-lock.json"):
+        if metadata["manifest_sha256"] != suite()["datasets"][dataset]["sha256"] or metadata["source_lock"] != read_json(nvidia_config("source-lock.json")):
             raise ValueError("Execution used a different dataset or source lock")
         resources = read_json(metadata_path.parent / "resources.json")
         if not resources["resources_clear"] or not resources.get("task_cleanup_verified") or resources.get("returncode") != 0:
@@ -601,12 +651,14 @@ def checked_worker_script(paths):
 def campaign(args, paths):
     import uuid
 
+    backends = campaign_backends(args)
+
     if not args.gpu or not args.gpu.startswith("GPU-") or str(uuid.UUID(args.gpu[4:])) != args.gpu[4:]:
         raise ValueError("Pass exactly one full GPU UUID")
     if not 1 <= args.count <= 256:
         raise ValueError("Chunk size must be in [1,256]")
     watch_tool = Path(paths["lightx2v"]) / "tools/runtime/gpu_watch.py"
-    verify_source(Path(paths["lightx2v"]), read_json(HERE / "configs/nvidia/source-lock.json")["lightx2v"])
+    verify_source(Path(paths["lightx2v"]), read_json(nvidia_config("source-lock.json"))["lightx2v"])
     records = inputs(args.dataset)
     count = len(records)
     check_inputs(paths)
@@ -622,6 +674,9 @@ def campaign(args, paths):
         "evaluate_sha256": sha256(worker_script),
         "paths": {key: value for key, value in paths.items() if key != "worker_script"},
     }
+    if len(backends) == 1:
+        identity["backends"] = list(backends)
+        identity["precision_profile"] = os.environ.get("LIGHTX2V_EVAL_PRECISION_PROFILE", "native")
     identity_path = root / "campaign.json"
     if identity_path.exists():
         previous = read_json(identity_path)
@@ -648,7 +703,7 @@ def campaign(args, paths):
         PYTHONDONTWRITEBYTECODE="1",
         TOKENIZERS_PARALLELISM="false",
     )
-    covered = {backend: set() for backend in ("native", "lightx2v")}
+    covered = {backend: set() for backend in backends}
     for backend in covered:
         for chunk in sorted((root / backend / "chunks").glob("*")):
             metadata = read_json(chunk / "run.json")
@@ -662,7 +717,7 @@ def campaign(args, paths):
                 raise ValueError(f"Mixed recorded campaign: {chunk}")
             if (
                 metadata["evaluation_sha256"] != sha256(worker_script)
-                or metadata["source_lock"] != read_json(HERE / "configs/nvidia/source-lock.json")
+                or metadata["source_lock"] != read_json(nvidia_config("source-lock.json"))
                 or metadata["manifest_sha256"] != suite()["datasets"][args.dataset]["sha256"]
             ):
                 raise ValueError(f"Recorded worker/source/fixture differs: {chunk}")
@@ -675,7 +730,7 @@ def campaign(args, paths):
             covered[backend].update(indices)
     for start in range(0, count, args.count):
         stop = min(count, start + args.count)
-        for backend in ("native", "lightx2v"):
+        for backend in backends:
             cursor = start
             while cursor < stop:
                 if cursor in covered[backend]:
@@ -706,12 +761,15 @@ def campaign(args, paths):
                 covered[backend].update(range(begin, cursor))
     if args.skip_score:
         return
-    for backend in ("native", "lightx2v"):
+    for backend in backends:
         output = root / backend
         if (output / "quality.json").exists():
             continue
         command = [paths["metric_python"], str(worker_script), "score", "--paths", str(args.paths.resolve()), "--dataset", args.dataset, "--backend", backend, "--run", str(output)]
         observed_execution(command, env, sys.executable, watch_tool, root / "resources" / f"{backend}-score", output, args.gpu)
+    if len(backends) == 1:
+        single_backend_summary(root, args.dataset, backends[0])
+        return
     args.native_run, args.lightx2v_run = root / "native", root / "lightx2v"
     args.output = root / "comparison.json"
     compare(args)
@@ -733,7 +791,7 @@ def load_adapter(backend, paths):
         from lightx2v.models.runners.runner_factory import build_runner
         from lightx2v.utils.set_config import build_startup_config
 
-        config = read_json(HERE / "configs/nvidia/model.json")
+        config = read_json(nvidia_config("model.json"))
         config.update(model_path=paths["weights"], qwen_model_path=paths["qwen"], clip_model_path=paths["clip"])
         runner = build_runner(build_startup_config(config))
 
@@ -796,7 +854,7 @@ def score(expected, generated, paths, output):
     import numpy as np
     import torch
 
-    verify_source(Path(paths["momask"]), read_json(HERE / "configs/nvidia/source-lock.json")["momask"])
+    verify_source(Path(paths["momask"]), read_json(nvidia_config("source-lock.json"))["momask"])
     sys.path.insert(0, paths["momask"])
     from common.skeleton import Skeleton
     from models.t2m_eval_wrapper import EvaluatorModelWrapper
@@ -973,6 +1031,9 @@ def main():
     parser.add_argument("--gpu")
     parser.add_argument("--skip-score", action="store_true")
     args = parser.parse_args()
+    if os.environ.get("LIGHTX2V_EVAL_PRECISION_PROFILE") == "bf16":
+        if args.command == "compare" or args.backend == "native":
+            raise ValueError("BF16 results cannot be presented as native-precision exact parity")
     if args.command == "prepare-sources":
         prepare_sources(args.workspace.resolve())
         return
@@ -1002,7 +1063,7 @@ def main():
             args.run / "quality-provenance.json",
             {
                 "evaluation_sha256": sha256(__file__),
-                "source_lock_sha256": sha256(HERE / "configs/nvidia/source-lock.json"),
+                "source_lock_sha256": sha256(nvidia_config("source-lock.json")),
                 "weight_lock_sha256": sha256(HERE / "configs/common/weight-lock.json"),
                 "manifest_sha256": suite()["datasets"][args.dataset]["sha256"],
                 "quality_sha256": sha256(args.run / "quality.json"),
